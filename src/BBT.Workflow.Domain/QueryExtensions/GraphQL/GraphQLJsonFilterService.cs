@@ -186,7 +186,7 @@ public static class GraphQLJsonFilterService
                 if (schemaContext != null && !schemaContext.IsFieldSortable(jsonPath))
                 {
                     throw new SchemaFilterValidationException(
-                        $"Field '{jsonPath}' is not sortable.");
+                        schemaContext.ExplainRejection(jsonPath, "sortable"));
                 }
 
                 var accessor = BuildJsonTextAccessorForOrderBy(jsonPath);
@@ -505,7 +505,7 @@ public static class GraphQLJsonFilterService
         var conditions = new List<string>();
 
         if (schemaContext != null && !schemaContext.IsFieldFilterable(sanitizedField))
-            throw new SchemaFilterValidationException($"Field '{sanitizedField}' is not filterable.");
+            throw new SchemaFilterValidationException(schemaContext.ExplainRejection(sanitizedField, "filterable"));
 
         var operatorList = condition.GetOperators().ToList();
         if (operatorList.Exists(static o => o.Operator == "includes"))

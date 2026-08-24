@@ -1,12 +1,15 @@
 using BBT.Aether.Domain.EntityFrameworkCore;
 using BBT.Workflow.Aspects;
 using BBT.Workflow.BackgroundJobs.Options;
+using System.ComponentModel.DataAnnotations;
 using BBT.Workflow.Caching;
 using BBT.Workflow.DefinitionContext;
+using BBT.Workflow.Definitions.Schemas;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.ExceptionHandling;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
+using BBT.Workflow.Security;
 using BBT.Workflow.Shared.Merging;
 using BBT.Workflow.Validation;
 using Microsoft.EntityFrameworkCore;
@@ -38,6 +41,7 @@ public sealed class InstanceDataWriteService(
     IWorkflowContext workflowContext,
     IServiceProvider serviceProvider,
     IJsonSchemaValidator jsonSchemaValidator,
+    ISensitiveDataCipher cipher,
     IOptions<WorkflowExecutionOptions> executionOptions,
     ILogger<InstanceDataWriteService> logger) : IInstanceDataWriteService
 {
@@ -86,19 +90,35 @@ public sealed class InstanceDataWriteService(
         {
             var head = await ReadHeadAsync(context, instance.Id, cancellationToken);
             var writeOptions = executionOptions.Value.InstanceDataWrite;
+
+            // The head arrives as raw jsonb text and may hold ciphertext. Everything downstream —
+            // the merge, the dedup hash and schema validation — has to see PLAINTEXT, so the head
+            // is decrypted before it is merged. Merging ciphertext would corrupt the document and
+            // hash-comparing ciphertext would defeat the dedup outright (fresh nonce per value).
+            var plaintextHead = DecryptHead(head);
             var plan = PlanAppend(
-                head, delta, versionStrategy, writeOptions.LegacyAppendPipeline, writeOptions.PreserveNumericPrecision);
+                plaintextHead, delta, versionStrategy, writeOptions.LegacyAppendPipeline, writeOptions.PreserveNumericPrecision);
 
             if (plan.IsDuplicate)
             {
                 return null;
             }
 
-            await ValidateAgainstSchemaAsync(plan.Content, cancellationToken);
+            // Validation runs on plaintext so 'format: email' and 'maxLength' still judge the real
+            // value, and only then is the content encrypted for storage.
+            var sensitiveFields = await ValidateAndResolveSensitiveFieldsAsync(plan.Content, cancellationToken);
+            var storedContent = cipher.Encrypt(plan.Content, sensitiveFields);
 
             // A strategy append always sits at or above the head → it takes the latest flag.
             // VersionNo is line-scoped: the next ordinal WITHIN the target Version string.
-            var row = new InstanceData(Guid.NewGuid(), instance.Id, plan.Version, plan.Content, isLatest: true)
+            // The hash stays over plaintext — see the InstanceData ctor for why.
+            var row = new InstanceData(
+                Guid.NewGuid(),
+                instance.Id,
+                plan.Version,
+                storedContent,
+                InstanceData.ComputeDataHash(plan.Content),
+                isLatest: true)
             {
                 VersionNo = await ReadLineMaxAsync(context, instance.Id, plan.Version, cancellationToken) + 1
             };
@@ -149,9 +169,16 @@ public sealed class InstanceDataWriteService(
             var takesLatest = head is null
                 || InstanceDataVersionComparer.CompareVersionStrings(version, head.Version) >= 0;
 
-            await ValidateAgainstSchemaAsync(data, cancellationToken);
+            var sensitiveFields = await ValidateAndResolveSensitiveFieldsAsync(data, cancellationToken);
+            var storedData = cipher.Encrypt(data, sensitiveFields);
 
-            var row = new InstanceData(id, instance.Id, version, data, takesLatest)
+            var row = new InstanceData(
+                id,
+                instance.Id,
+                version,
+                storedData,
+                InstanceData.ComputeDataHash(data),
+                takesLatest)
             {
                 VersionNo = await ReadLineMaxAsync(context, instance.Id, version, cancellationToken) + 1
             };
@@ -396,15 +423,36 @@ public sealed class InstanceDataWriteService(
     }
 
     /// <summary>
-    /// Validates the content against the current workflow's master schema when one is
-    /// configured — the same contract the old aggregate mutation methods enforced. No workflow
-    /// in context (publish, system paths) → skip.
+    /// Decrypts the head row read under the lock, so the merge and the dedup hash both operate on
+    /// plaintext. Returns the head unchanged when it holds no ciphertext.
     /// </summary>
-    private async Task ValidateAgainstSchemaAsync(JsonData content, CancellationToken cancellationToken)
+    private InstanceDataHeadRow? DecryptHead(InstanceDataHeadRow? head)
     {
+        if (head is null || !ISensitiveDataCipher.ContainsCiphertext(head.Data))
+            return head;
+
+        return new InstanceDataHeadRow
+        {
+            Version = head.Version,
+            DataHash = head.DataHash,
+            Data = cipher.Decrypt(new JsonData(head.Data)).Json
+        };
+    }
+
+    /// <summary>
+    /// Validates the content against the current workflow's master schema when one is configured —
+    /// the same contract the old aggregate mutation methods enforced — and returns that schema's
+    /// <c>x-sensitive</c> map so the caller can encrypt without loading the schema a second time.
+    /// No workflow in context (publish, system paths) → nothing to validate and nothing to encrypt.
+    /// </summary>
+    private async Task<IReadOnlyDictionary<string, SensitiveFieldMetadata>> ValidateAndResolveSensitiveFieldsAsync(
+        JsonData content,
+        CancellationToken cancellationToken)
+    {
+        var empty = new Dictionary<string, SensitiveFieldMetadata>();
         var workflow = workflowContext.Workflow;
         if (workflow?.Schema is null)
-            return;
+            return empty;
 
         // Resolved lazily: IComponentCacheStore lives in the Application module, which non-HTTP
         // hosts (workers, DbMigrator) do not load — and in those hosts the workflow context is
@@ -413,23 +461,53 @@ public sealed class InstanceDataWriteService(
         if (componentCacheStore is null)
         {
             logger.InstanceDataSchemaLoadFailed(workflow.Schema.Key, "IComponentCacheStore is not registered in this host");
-            return;
+            return empty;
         }
 
         var schemaResult = await componentCacheStore.GetSchemaAsync(workflow.Schema, cancellationToken);
         if (!schemaResult.IsSuccess)
         {
             logger.InstanceDataSchemaLoadFailed(workflow.Schema.Key, schemaResult.Error.Message);
-            return;
+            return empty;
         }
 
-        var validationResult = jsonSchemaValidator.Validate(schemaResult.Value!.Schema, content.JsonElement);
-        if (!validationResult.IsSuccess)
-        {
-            throw new SchemaValidationException(
-                validationResult.Error.Message ?? "Schema Validation Error",
-                validationResult.Error.ValidationErrors?.ToList().AsReadOnly());
-        }
+        var schema = schemaResult.Value!;
+        var sensitiveFields = SensitiveSchemaCache.GetOrParse(
+            schema.Domain, schema.Key, schema.Version, schema.Schema);
+
+        var validationResult = jsonSchemaValidator.Validate(schema.Schema, content.JsonElement);
+        if (validationResult.IsSuccess)
+            return sensitiveFields;
+
+        // Validation messages routinely quote the offending value back at the caller ("'a@b.c'
+        // does not match format 'email'"), and this exception becomes both a log record and an
+        // API problem-details body. Scrub against the very content that failed: the accessor's
+        // scrubber was built from the PREVIOUS latest data and cannot know an incoming value.
+        var scrubber = SensitiveDataScrubber.Create(content.JsonElement, sensitiveFields);
+
+        throw new SchemaValidationException(
+            scrubber.Scrub(validationResult.Error.Message) ?? "Schema Validation Error",
+            ScrubValidationErrors(validationResult.Error.ValidationErrors, scrubber));
+    }
+
+    /// <summary>
+    /// Applies the scrubber to each validation error's message, preserving member names (which are
+    /// property paths, not values, and therefore safe).
+    /// </summary>
+    private static IReadOnlyList<ValidationResult>? ScrubValidationErrors(
+        IEnumerable<ValidationResult>? validationErrors,
+        SensitiveDataScrubber scrubber)
+    {
+        if (validationErrors is null)
+            return null;
+
+        if (scrubber.IsEmpty)
+            return validationErrors.ToList().AsReadOnly();
+
+        return validationErrors
+            .Select(error => new ValidationResult(scrubber.Scrub(error.ErrorMessage), error.MemberNames))
+            .ToList()
+            .AsReadOnly();
     }
 
     private static string SanitizeIdentifier(string identifier)

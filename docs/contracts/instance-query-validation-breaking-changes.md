@@ -28,6 +28,9 @@ return 200 and now does not.
 | `GET /monitor/.../stats/instances` | Filter ignored → counters counted everything | HTTP 400 | Monitoring counters |
 | `GetInstancesTask` (`sort` / `filter`) | Invalid value ignored, task ran unfiltered | Task returns `Result.Fail` | **Error boundary fires; instance can end up `Faulted`** |
 
+> The 400s above are the **boundary validator's** rejections. Rejections raised deeper — master-schema
+> policy and the builder fail-closed guards — still answer **500**; see §5 *Known issue*.
+
 The last row is the dangerous one. The others break a request. That one breaks a *running workflow*,
 with no code change, purely by deploying the runtime.
 
@@ -268,7 +271,7 @@ trip. The machine-readable sub-code is on each error's `code` (`filter.unknownOp
 
 ## 5. Exception types (extension and task authors)
 
-Two distinct fail-closed exceptions, both mapping to HTTP 400:
+Two distinct fail-closed exceptions:
 
 | Exception | Meaning | Logged as |
 | --- | --- | --- |
@@ -277,6 +280,40 @@ Two distinct fail-closed exceptions, both mapping to HTTP 400:
 
 Do not collapse these into one type. `InstanceQueryAppService` catches only the first; conflating
 them would fire the drift alarm on every routine policy rejection and make the signal worthless.
+
+### Known issue: these answer HTTP 500, not 400
+
+The HTTP status is derived from `Error.Prefix` (`ErrorNormalizer.MapPrefixToStatusCode`), **not** from
+the `Validation:` segment of the error code. `ResultExtensions.TryAsync` wraps any thrown exception as
+`Prefix = "failure"`, which has no status mapping, so it falls through to 500:
+
+```json
+{
+  "type": "https://httpstatuses.com/500/failure/Validation/900010",
+  "title": "Internal Server Error",
+  "status": 500,
+  "detail": "Field 'parent.child' is not filterable.",
+  "errorCode": "failure.Validation:900010",
+  "prefix": "failure",
+  "code": "Validation:900010"
+}
+```
+
+This is **pre-existing** — reproducible on 0.0.75 and 0.0.78 — and is not introduced by this release.
+It applies to every deep fail-closed guard, including the new ones.
+
+Consequently the surfaces split:
+
+| Rejected by | Mechanism | Status |
+| --- | --- | --- |
+| `InstanceQueryValidator` (boundary, §1–3 above) | `Result.Fail(Error.Validation(...))` → `Prefix = "validation"` | **400** ✅ |
+| Master-schema policy (`x-filterable`, `x-sortable`, `x-filterOperators`) | `throw SchemaFilterValidationException` → `Prefix = "failure"` | **500** ❌ |
+| Builder fail-closed guards | `throw FilterCompilationException` → `Prefix = "failure"` | **500** ❌ |
+
+Fixing it means surfacing those two as a failed `Result` rather than an exception, which requires
+lifting the repository call out of `ResultExtensions.TryAsync`. That is a deliberate change to the
+public error contract — clients keying on `status: 500` for these cases would need to move to 400 —
+so it is tracked separately rather than folded into this release.
 
 ## 6. New log events
 

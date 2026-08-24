@@ -1,3 +1,4 @@
+using BBT.Workflow.Application.Security;
 using BBT.Workflow.BackgroundJobs.Options;
 using BBT.Workflow.BackgroundJobs.Recovery;
 using BBT.Workflow.Execution.ErrorHandling;
@@ -7,7 +8,10 @@ using BBT.Workflow.Scripting.Functions;
 using BBT.Workflow.Scripting.Helpers;
 using BBT.Workflow.Scripting.Related;
 using BBT.Workflow.Scripting.Sandbox;
+using BBT.Workflow.Security;
+using Dapr.Client;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 using BBT.Workflow.Tasks.Coordinator;
 using BBT.Workflow.Tasks.Evaluation;
 using BBT.Workflow.Tasks.Evaluators;
@@ -297,8 +301,20 @@ public static class TaskServiceCollectionExtensions
         // In-process on purpose: secret material stays off Redis (see ScriptSecretCache docs).
         services.TryAddSingleton<IScriptSecretCache, ScriptSecretCache>();
 
-        // Script services - scoped for per-request isolation (requires DaprClient to be registered)
-        services.TryAddScoped<IScriptServices, ScriptServices>();
+        // Carries the sensitive-value scrubber for the work in flight. Scoped and mutable:
+        // populated when a script context is built, read synchronously by the logger decorator.
+        services.TryAddScoped<ISensitiveDataScrubberAccessor, SensitiveDataScrubberAccessor>();
+
+        // Script services - scoped for per-request isolation (requires DaprClient to be registered).
+        // The logger is wrapped so every .csx LogInformation/LogError call is redacted against the
+        // instance's x-sensitive fields; scripts are the platform's largest PII-in-logs vector.
+        services.TryAddScoped<IScriptServices>(sp => new ScriptServices(
+            sp.GetRequiredService<DaprClient>(),
+            new ScrubbingLogger<ScriptServices>(
+                sp.GetRequiredService<ILogger<ScriptServices>>(),
+                sp.GetRequiredService<ISensitiveDataScrubberAccessor>()),
+            sp.GetRequiredService<IConfiguration>(),
+            sp.GetRequiredService<IScriptSecretCache>()));
 
         services.TryAddScoped<IScriptEngine, ScriptEngine>();
 

@@ -660,6 +660,13 @@ public abstract class ScriptBase
     /// LogTrace("User {userId} at {time}", args: new object[] { userId, DateTime.Now });
     /// </code>
     /// </example>
+    /// <remarks>
+    /// Instance data logged from a script is redacted automatically: any value whose master-schema
+    /// property is marked <c>x-sensitive</c> with <c>redactInLogs</c> is replaced by its masking
+    /// pattern, in both the rendered message and the structured properties. That redaction is a
+    /// safety net, not a licence — prefer logging identifiers (instance id, state, transition key)
+    /// over payload values, because a value the schema does not mark as sensitive is logged as-is.
+    /// </remarks>
     protected void LogTrace(
         string message,
         [CallerFilePath] string? file = null,

@@ -5,11 +5,11 @@ namespace BBT.Workflow.Definitions.Schemas;
 /// <summary>
 /// Parses custom JSON Schema extensions (x-filterOperators, x-sortable, x-displayFormat)
 /// from a workflow's master schema into a <see cref="SchemaFilterContext"/>.
-/// Follows the same recursive property-walking pattern as <see cref="SchemaRolesParser"/>.
+/// Traversal is delegated to <see cref="SchemaAnnotationWalker"/> so this resolver agrees with
+/// every other vocabulary parser about what a property path is.
 /// </summary>
 public static class SchemaFilterMetadataResolver
 {
-    private const string PropertiesKey = "properties";
     private const string TypeKey = "type";
     private const string FilterOperatorsKey = "x-filterOperators";
     private const string SortableKey = "x-sortable";
@@ -21,51 +21,32 @@ public static class SchemaFilterMetadataResolver
     /// </summary>
     public static SchemaFilterContext? Resolve(JsonElement schemaRoot)
     {
-        if (schemaRoot.ValueKind != JsonValueKind.Object)
-            return null;
-
         var fields = new Dictionary<string, SchemaFieldMetadata>(StringComparer.Ordinal);
-        ParsePropertiesRecursive(schemaRoot, string.Empty, fields);
+
+        foreach (var node in SchemaAnnotationWalker.Walk(schemaRoot))
+        {
+            fields[node.Path] = new SchemaFieldMetadata
+            {
+                Type = ReadStringProperty(node.Schema, TypeKey) ?? "string",
+                FilterOperators = ReadStringArrayProperty(node.Schema, FilterOperatorsKey),
+                Sortable = ReadBooleanProperty(node.Schema, SortableKey),
+                DisplayFormat = ReadStringProperty(node.Schema, DisplayFormatKey),
+                EncryptedAtRest = ReadEncryptAtRest(node.Schema),
+            };
+        }
 
         return fields.Count > 0 ? new SchemaFilterContext(fields) : null;
     }
 
-    private static void ParsePropertiesRecursive(
-        JsonElement node,
-        string pathPrefix,
-        Dictionary<string, SchemaFieldMetadata> result)
-    {
-        if (node.ValueKind != JsonValueKind.Object)
-            return;
-
-        if (!node.TryGetProperty(PropertiesKey, out var properties) || properties.ValueKind != JsonValueKind.Object)
-            return;
-
-        foreach (var property in properties.EnumerateObject())
-        {
-            var path = string.IsNullOrEmpty(pathPrefix) ? property.Name : $"{pathPrefix}.{property.Name}";
-            var propValue = property.Value;
-
-            if (propValue.ValueKind != JsonValueKind.Object)
-                continue;
-
-            var type = ReadStringProperty(propValue, TypeKey) ?? "string";
-            var filterOperators = ReadStringArrayProperty(propValue, FilterOperatorsKey);
-            var sortable = ReadBooleanProperty(propValue, SortableKey);
-            var displayFormat = ReadStringProperty(propValue, DisplayFormatKey);
-
-            result[path] = new SchemaFieldMetadata
-            {
-                Type = type,
-                FilterOperators = filterOperators,
-                Sortable = sortable,
-                DisplayFormat = displayFormat,
-            };
-
-            if (propValue.TryGetProperty(PropertiesKey, out _))
-                ParsePropertiesRecursive(propValue, path, result);
-        }
-    }
+    /// <summary>
+    /// Reads <c>x-sensitive.encryptAtRest</c>. Same walk, so the filter metadata and the encryption
+    /// metadata can never disagree about which path they describe.
+    /// </summary>
+    private static bool ReadEncryptAtRest(JsonElement schema)
+        => schema.TryGetProperty(SensitiveSchemaParser.SensitiveKey, out var sensitive) &&
+           sensitive.ValueKind == JsonValueKind.Object &&
+           ReadBooleanProperty(sensitive, "enabled") &&
+           ReadBooleanProperty(sensitive, "encryptAtRest");
 
     private static string? ReadStringProperty(JsonElement element, string propertyName)
     {

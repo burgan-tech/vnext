@@ -20,7 +20,8 @@ internal static class JsonSchemaVocabularySanitizer
         "x-labels",
         "x-errorMessages",
         "x-enum",
-        "x-validation"
+        "x-validation",
+        "x-sensitive"
     ];
 
     public static JsonElement RemoveVocabularyKeywords(JsonElement schema)

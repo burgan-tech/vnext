@@ -5,6 +5,7 @@ using System.Text.RegularExpressions;
 using BBT.Aether;
 using BBT.Aether.Domain.Entities;
 using BBT.Workflow.Definitions;
+using BBT.Workflow.Security;
 
 namespace BBT.Workflow.Instances;
 
@@ -17,16 +18,40 @@ public sealed class InstanceData : Entity<Guid>, IHasVersion, IHasEtag
     {
     }
 
+    /// <summary>
+    /// Creates a row from plaintext content, hashing that content for change detection.
+    /// </summary>
     internal InstanceData(
         Guid id,
         Guid instanceId,
         string version,
-        JsonData data, bool isLatest) : base(id)
+        JsonData data, bool isLatest)
+        : this(id, instanceId, version, data, ComputeDataHash(data), isLatest)
+    {
+    }
+
+    /// <summary>
+    /// Creates a row whose stored payload and content hash are supplied separately.
+    /// <para>
+    /// This is what encryption needs: <paramref name="storedData"/> carries ciphertext while
+    /// <paramref name="dataHash"/> is computed over the <b>plaintext</b>. Keeping the hash on
+    /// plaintext is what preserves the no-change dedup — GCM uses a fresh nonce per value, so two
+    /// encryptions of identical content produce different ciphertext and a ciphertext hash would
+    /// never match, making every append look like a change.
+    /// </para>
+    /// </summary>
+    internal InstanceData(
+        Guid id,
+        Guid instanceId,
+        string version,
+        JsonData storedData,
+        string dataHash,
+        bool isLatest) : base(id)
     {
         InstanceId = instanceId;
         SetVersion(version);
-        Data = data;
-        DataHash = ComputeDataHash(data);
+        StoredData = storedData;
+        DataHash = dataHash;
         EnteredAt = DateTime.UtcNow;
         ETag = Ulid.NewUlid().ToString();
         IsLatest = isLatest;
@@ -72,9 +97,27 @@ public sealed class InstanceData : Entity<Guid>, IHasVersion, IHasEtag
     public string DataHash { get; private set; }
 
     /// <summary>
-    /// <see cref="JsonData"/>
+    /// The payload exactly as it sits in the <c>Data</c> jsonb column — ciphertext for any field
+    /// the master schema marks <c>encryptAtRest</c>, plaintext otherwise. This is the EF-mapped
+    /// property; almost nothing should read it. Use <see cref="Data"/>.
     /// </summary>
-    public JsonData Data { get; private set; }
+    public JsonData StoredData { get; private set; }
+
+    private JsonData? _plaintextData;
+
+    /// <summary>
+    /// The decrypted payload. This is the property every consumer uses, and the single seam where
+    /// ciphertext becomes plaintext.
+    /// <para>
+    /// Decryption is lazy and memoised, driven purely by the self-describing ciphertext marker, so
+    /// it costs one substring check for the overwhelmingly common unencrypted row. Putting it here
+    /// rather than at the repository boundary is deliberate: the row is also handed back to the
+    /// aggregate immediately after a write (<c>Instance.AcceptPersistedData</c>), from where the
+    /// remaining pipeline steps and the transition response read it — a repository-level decrypt
+    /// would miss exactly that path.
+    /// </para>
+    /// </summary>
+    public JsonData Data => _plaintextData ??= SensitiveDataCipherAccessor.Current.Decrypt(StoredData);
 
     /// <summary>
     /// Entered at
@@ -132,7 +175,7 @@ public sealed class InstanceData : Entity<Guid>, IHasVersion, IHasEtag
             IsLatest = IsLatest,
             ETag = ETag,
             DataHash = DataHash,
-            Data = Data,
+            StoredData = StoredData,
             EnteredAt = EnteredAt
         };
 

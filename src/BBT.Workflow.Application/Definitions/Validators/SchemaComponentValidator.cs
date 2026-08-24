@@ -1,4 +1,5 @@
 using System.Text.Json;
+using BBT.Workflow.Definitions.Schemas;
 using BBT.Workflow.Runtime;
 
 namespace BBT.Workflow.Definitions.Validators;
@@ -36,7 +37,10 @@ public sealed class SchemaComponentValidator : IComponentValidator
             if (schema.Schema.ValueKind == JsonValueKind.Undefined || schema.Schema.ValueKind == JsonValueKind.Null)
             {
                 result.AddError("Schema definition is required.", $"{nameof(SchemaDefinition)}.{nameof(SchemaDefinition.Schema)}");
+                return result;
             }
+
+            ValidateSensitiveAnnotations(schema.Schema, result);
 
             return result;
         }
@@ -44,6 +48,21 @@ public sealed class SchemaComponentValidator : IComponentValidator
         {
             result.AddError($"Invalid JSON format for schema: {ex.Message}", nameof(SchemaDefinition));
             return result;
+        }
+    }
+
+    /// <summary>
+    /// Rejects unusable <c>x-sensitive</c> annotations at publish time. This is the only place a
+    /// bad security marker is visible to the author: at runtime an encrypted-and-filterable field
+    /// matches nothing without erroring, and an unreachable annotation simply never fires.
+    /// </summary>
+    private static void ValidateSensitiveAnnotations(JsonElement schemaRoot, ComponentValidationResult result)
+    {
+        foreach (var problem in SensitiveSchemaParser.Validate(schemaRoot))
+        {
+            result.AddError(
+                $"{SensitiveSchemaParser.SensitiveKey} at '{problem.Path}': {problem.Message}",
+                $"{nameof(SchemaDefinition)}.{nameof(SchemaDefinition.Schema)}.{problem.Path}");
         }
     }
 }

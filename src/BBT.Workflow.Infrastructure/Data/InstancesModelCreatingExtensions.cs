@@ -249,12 +249,17 @@ public static class InstancesModelCreatingExtensions
                 .HasDefaultValue("99914b932bd37a50b983c5e7c90ae93b") // Default Value: {}
                 .HasMaxLength(WorkflowConstants.MaxDataHashLength);
 
-            b.OwnsOne(p => p.Data, d =>
+            // Data is a computed, lazily-decrypted view over StoredData — never persisted.
+            b.Ignore(p => p.Data);
+
+            // StoredData keeps the original "Data" column name, so encryption needs NO migration:
+            // the ciphertext marker lives in-band inside the existing jsonb document.
+            b.OwnsOne(p => p.StoredData, d =>
             {
                 d.Ignore(g => g.JsonElement);
                 d.Property(g => g.Json)
                     .HasColumnType("jsonb")
-                    .HasColumnName(nameof(InstanceData.Data));
+                    .HasColumnName("Data");
             });
 
             b.HasIndex(p => p.InstanceId);

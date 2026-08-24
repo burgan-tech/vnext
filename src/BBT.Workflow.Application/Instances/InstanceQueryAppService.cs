@@ -302,19 +302,26 @@ public sealed class InstanceQueryAppService(
                     // `createdAt eq "notadate"`, surfacing as ArgumentException/FormatException) or
                     // a fail-closed guard in the builders (FilterCompilationException). Both mean
                     // the validator's rules and the SQL builder's rules have drifted, which is why
-                    // this logs at Error; the caller still gets a 400, not a 500, because the
-                    // request is unservable either way.
+                    // this logs at Error.
+                    //
+                    // KNOWN ISSUE — this path answers HTTP 500, not 400. ResultExtensions.TryAsync
+                    // catches whatever is thrown here and wraps it as Prefix = "failure", and the
+                    // status comes from the prefix (ErrorNormalizer.MapPrefixToStatusCode), never
+                    // from the "Validation:" segment of the code. Throwing cannot produce a 400 from
+                    // inside TryAsync; only a returned Result.Fail(Error.Validation(...)) can, which
+                    // is why the boundary validator above does answer 400. Correcting it requires
+                    // lifting this out of TryAsync so it can return a failed Result.
                     //
                     // SchemaFilterValidationException is deliberately NOT caught here: it is a
                     // master-schema policy decision (field not filterable, operator not in
                     // x-filterOperators) that the boundary validator intentionally does not
                     // duplicate. Treating it as drift would fire this alarm on every routine
-                    // policy rejection. It already carries its own 400-mapping code and passes
-                    // through untouched.
+                    // policy rejection. It passes through untouched, carrying
+                    // WorkflowErrorCodes.SchemaFilterValidation.
                     logger.InstanceFilterCompilationFailed(ex, input.Domain, input.Workflow);
 
                     if (ex is FilterCompilationException)
-                        throw; // Already a UserFriendlyException with InstanceFilterInvalid.
+                        throw; // Already carries InstanceFilterInvalid; re-wrapping would only lose the stack.
 
                     throw new UserFriendlyException(
                         WorkflowErrorCodes.InstanceFilterInvalid,

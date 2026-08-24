@@ -5,17 +5,19 @@ using BBT.Workflow.Definitions;
 namespace BBT.Workflow.Definitions.Schemas;
 
 /// <summary>
-/// Parses the "roles" vocabulary from a JSON Schema (master schema).
+/// Parses the "x-roles" vocabulary from a JSON Schema (master schema).
 /// Extracts per-property role grants: path → RoleGrant[] for field-level visibility.
+/// Traversal is delegated to <see cref="SchemaAnnotationWalker"/> so this parser agrees with
+/// every other vocabulary parser about what a property path is.
 /// </summary>
 public static class SchemaRolesParser
 {
-    private const string PropertiesKey = "properties";
     private const string RolesKey = "x-roles";
 
     /// <summary>
     /// Parses the schema and returns a map of property path to role grants.
-    /// Path format: dot-separated (e.g. "amount", "internalNotes", "nested.field").
+    /// Path format: dot-separated, with "[]" for array item schemas
+    /// (e.g. "amount", "nested.field", "cards[].number").
     /// Properties without "x-roles" are not included (treated as visible to all).
     /// </summary>
     /// <param name="schemaRoot">The root JsonElement of the schema (object with optional "properties").</param>
@@ -23,39 +25,21 @@ public static class SchemaRolesParser
     public static IReadOnlyDictionary<string, IReadOnlyList<RoleGrant>> ParsePropertyRoles(JsonElement schemaRoot)
     {
         var result = new Dictionary<string, IReadOnlyList<RoleGrant>>(StringComparer.Ordinal);
-        if (schemaRoot.ValueKind != JsonValueKind.Object)
-            return result;
 
-        ParsePropertyRolesRecursive(schemaRoot, string.Empty, result);
-        return result;
-    }
-
-    private static void ParsePropertyRolesRecursive(
-        JsonElement node,
-        string pathPrefix,
-        Dictionary<string, IReadOnlyList<RoleGrant>> result)
-    {
-        if (node.ValueKind != JsonValueKind.Object)
-            return;
-
-        if (!node.TryGetProperty(PropertiesKey, out var properties) || properties.ValueKind != JsonValueKind.Object)
-            return;
-
-        foreach (var property in properties.EnumerateObject())
+        foreach (var node in SchemaAnnotationWalker.Walk(schemaRoot))
         {
-            var path = string.IsNullOrEmpty(pathPrefix) ? property.Name : $"{pathPrefix}.{property.Name}";
-            var propValue = property.Value;
-
-            if (propValue.TryGetProperty(RolesKey, out var rolesElement) && rolesElement.ValueKind == JsonValueKind.Array)
+            if (!node.Schema.TryGetProperty(RolesKey, out var rolesElement) ||
+                rolesElement.ValueKind != JsonValueKind.Array)
             {
-                var grants = ParseRoleGrants(rolesElement);
-                if (grants.Count > 0)
-                    result[path] = grants;
+                continue;
             }
 
-            if (propValue.ValueKind == JsonValueKind.Object && propValue.TryGetProperty(PropertiesKey, out _))
-                ParsePropertyRolesRecursive(propValue, path, result);
+            var grants = ParseRoleGrants(rolesElement);
+            if (grants.Count > 0)
+                result[node.Path] = grants;
         }
+
+        return result;
     }
 
     private static IReadOnlyList<RoleGrant> ParseRoleGrants(JsonElement rolesArray)

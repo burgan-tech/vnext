@@ -16,6 +16,7 @@ describe the stable mental model, boundaries, failure modes, and change-safety r
 | [Runtime](runtime/task-executors-and-invokers.md) | Task execution, invokers, scripting, remote runtime integration. |
 | [Contracts](contracts/api-and-service-contracts.md) | API shapes, validation, compatibility, error behavior. |
 | [Integration](integration/forge-fanout-task-implementation.md) | Implementation specs for consumer products (Forge Studio, CLI, SDKs) that build against runtime features. |
+| [Security](security/sensitive-data-protection.md) | Sensitive-data annotation, log redaction, masking; query-filter hardening. |
 | [Specs](specs/00-docs-rebuild-master-spec.md) | Rewrite scope, rollout specs, migration and deprecation plan. |
 | [Archive](archive/README.md) | Legacy docs moved aside during the documentation rebuild. |
 
@@ -44,6 +45,7 @@ describe the stable mental model, boundaries, failure modes, and change-safety r
 21. Read [Trace Lanes](runtime/trace-lanes.md) before changing how transition, post-commit or subflow spans are parented, or before adding a span that represents a top-level operation. Covers the anchor-vs-predecessor split that keeps chained hops siblings, the one-lane-per-instance model, and why the lane never travels in a request header.
 22. Read [FanOut Task](domain/fan-out-task.md) before authoring or changing a task type `21` (`FanOutTask`) — the config schema, the four join policies (including the empty-batch rule), the `IFanOutMapping` contract, the zero-script default-binding limitation, the single-write invariant, error codes for partial-failure branching, and the two-level concurrency bulkhead.
 23. Read [Forge Studio — FanOutTask Implementation Spec](integration/forge-fanout-task-implementation.md) before changing how a designer tool (Forge Studio) authors, validates or renders a task type `21`. Covers the config form field-by-field, the designer-side rules the runtime can only catch at parse/execution time, canvas guidance, and the `vnext-meta` / `vnext-schema` gaps consumers depend on.
+24. Read [Sensitive Data Protection](security/sensitive-data-protection.md) before annotating a schema field as sensitive, or before adding any log/diagnostic path that can carry instance data. Covers the `x-sensitive` vocabulary, why encrypted-and-filterable is rejected at publish time, value-based log scrubbing, and the documented gaps (exception messages, ClickHouse egress).
 
 ## Documentation Rules
 

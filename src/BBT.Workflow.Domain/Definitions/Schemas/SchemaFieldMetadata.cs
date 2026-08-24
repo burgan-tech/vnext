@@ -27,6 +27,17 @@ public sealed class SchemaFieldMetadata
     public string? DisplayFormat { get; init; }
 
     /// <summary>
+    /// Whether the value is stored encrypted (from <c>x-sensitive.encryptAtRest</c>).
+    /// <para>
+    /// Carried here purely so a rejected filter can say WHY. Filtering runs as raw SQL over the
+    /// <c>Data</c> jsonb, so a predicate against ciphertext matches nothing; publish-time
+    /// validation already refuses to combine encryption with filter/sort metadata, and this flag
+    /// turns the resulting "not filterable" into an explanation instead of a puzzle.
+    /// </para>
+    /// </summary>
+    public bool EncryptedAtRest { get; init; }
+
+    /// <summary>
     /// A field is filterable only when x-filterOperators is present and non-empty.
     /// </summary>
     public bool IsFilterable => FilterOperators.Count > 0;
