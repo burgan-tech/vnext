@@ -311,8 +311,11 @@ jobs:
           path: ${{ matrix.key }}-sbom.spdx.json
           retention-days: 90
 
+      # v3 bundles grype 0.74, whose vulnerability-DB feed is discontinued — it fails
+      # with "db was built N weeks ago" and produces no SARIF, so scans were silently
+      # empty (the validate-SARIF guard below was masking exactly this).
       - name: Security scan
-        uses: anchore/scan-action@v3
+        uses: anchore/scan-action@v7
         id: scan
         with:
           image: ${{ env.IMAGE_BASE }}/${{ matrix.image }}:${{ needs.prepare.outputs.version }}
