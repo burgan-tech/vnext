@@ -239,8 +239,10 @@ jobs:
           path: ${{ matrix.image }}-sbom.spdx.json
           retention-days: 14
 
+      # v3's bundled grype can no longer load its vulnerability DB (discontinued feed);
+      # v7 is input-compatible (image / fail-build / output-format, sarif output).
       - name: Security scan
-        uses: anchore/scan-action@v3
+        uses: anchore/scan-action@v7
         id: scan
         with:
           image: ${{ env.IMAGE_BASE }}/${{ matrix.image }}:${{ needs.prepare.outputs.version }}
