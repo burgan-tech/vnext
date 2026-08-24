@@ -4,14 +4,23 @@
 # subsequent push rebuilds and republishes the images for that channel. When several
 # publish-* labels are present the highest channel wins: rc > beta > alpha.
 #
-# Version scheme: {common.props base X.Y.Z}-{channel}.pr{PR number}.{run number}
-# (e.g. 0.0.84-alpha.pr123.7), plus a moving `pr-{N}` convenience tag per service.
+# Version scheme: {next stable version}-{channel}.pr{PR number}.{run number}
+# (e.g. 0.0.86-alpha.pr123.7 while v0.0.85 is the latest stable tag), plus a moving
+# `pr-{N}` convenience tag per service. The base is one patch above the highest
+# stable v-tag so the prerelease previews — and semver-sorts below — the upcoming
+# release; common.props is only the fallback when no stable tag exists.
 # The versioned tag is the canonical reference — a cancelled run can leave `pr-{N}`
 # pointing at different builds across services.
 #
-# Scope is deliberately narrow: Docker images to GHCR only. No git tag, no GitHub
-# Release, no NuGet/npm publish, no signing/SBOM/scan — those belong to the release
-# pipeline (build-and-publish-images.yml).
+# Each PR gets ONE GitHub prerelease (tag `pr-{N}`), updated in place on every push
+# and deleted by pr-prerelease-cleanup.yml when the PR closes — so the Releases page
+# shows at most one entry per open PR and stable releases stay "Latest".
+#
+# Images get the same supply-chain treatment as release images: cosign keyless
+# signature by digest, SBOM artifact and Anchore vulnerability scan with SARIF
+# upload. Scope is deliberately narrow otherwise: no NuGet/npm publish and no
+# GitHub build-provenance attestation — those belong to the release pipeline
+# (build-and-publish-images.yml).
 #
 # Security note: adding a label requires only triage permission, and the images are
 # built from the UNREVIEWED PR head. The prerelease tag namespace (`-{channel}.prN.`)
@@ -90,13 +99,25 @@ jobs:
           CHANNEL: ${{ steps.channel.outputs.channel }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          BASE=$(grep '<Version>' ./common.props | sed 's/.*<Version>\(.*\)<\/Version>.*/\1/' | head -n 1)
+          # Preview the NEXT release: one patch above the highest stable v-tag, so the
+          # prerelease semver-sorts below the version it previews (0.0.86-alpha... <
+          # 0.0.86). common.props cannot be the primary source — on master it lags the
+          # release branch, which would base the alpha on an already-shipped version.
+          git fetch --quiet origin '+refs/tags/v*:refs/tags/v*'
+          LATEST=$(git tag -l 'v*' | sed 's/^v//' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1)
+          if [ -n "$LATEST" ]; then
+            BASE="${LATEST%.*}.$(( ${LATEST##*.} + 1 ))"
+            echo "Latest stable tag: v$LATEST -> next version base: $BASE"
+          else
+            BASE=$(grep '<Version>' ./common.props | sed 's/.*<Version>\(.*\)<\/Version>.*/\1/' | head -n 1)
+            # Tolerate a prerelease suffix someone may have committed into common.props.
+            BASE="${BASE%%-*}"
+            echo "No stable v-tag found; falling back to common.props base: $BASE"
+          fi
           if [ -z "$BASE" ]; then
-            echo "::error::Could not read <Version> from common.props"
+            echo "::error::Could not determine version base"
             exit 1
           fi
-          # Tolerate a prerelease suffix someone may have committed into common.props.
-          BASE="${BASE%%-*}"
           VERSION="${BASE}-${CHANNEL}.pr${PR_NUMBER}.${{ github.run_number }}"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Publishing version: $VERSION"
@@ -108,6 +129,8 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write
+      security-events: write
     strategy:
       fail-fast: false
       matrix:
@@ -163,6 +186,7 @@ jobs:
       # provenance/sbom off keeps each push a single plain manifest (no attestation
       # index), so every GHCR version stays tagged and cleanup by tag is safe.
       - name: Build and push Docker image
+        id: push
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -178,16 +202,87 @@ jobs:
           build-args: |
             VERSION=${{ needs.prepare.outputs.version }}
 
-  comment:
+      - name: Resolve image digest
+        id: digest
+        run: |
+          DIGEST="${{ steps.push.outputs.digest }}"
+          if [ -z "$DIGEST" ]; then
+            echo "::error::Could not resolve image digest"
+            exit 1
+          fi
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+          echo "Resolved digest: $DIGEST"
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign image by digest (immutable reference)
+        env:
+          IMAGE_REF: ${{ env.IMAGE_BASE }}/${{ matrix.image }}
+          DIGEST: ${{ steps.digest.outputs.digest }}
+        run: |
+          cosign sign --yes "${IMAGE_REF}@${DIGEST}"
+
+      - name: Generate SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ env.IMAGE_BASE }}/${{ matrix.image }}:${{ needs.prepare.outputs.version }}
+          format: spdx-json
+          output-file: ${{ matrix.image }}-sbom.spdx.json
+
+      # Shorter retention than release SBOMs (90d) — PR builds are frequent and
+      # short-lived.
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-${{ matrix.image }}-${{ needs.prepare.outputs.version }}
+          path: ${{ matrix.image }}-sbom.spdx.json
+          retention-days: 14
+
+      - name: Security scan
+        uses: anchore/scan-action@v3
+        id: scan
+        with:
+          image: ${{ env.IMAGE_BASE }}/${{ matrix.image }}:${{ needs.prepare.outputs.version }}
+          fail-build: false
+          output-format: sarif
+
+      - name: Validate SARIF output
+        id: validate_sarif
+        if: always() && steps.scan.outputs.sarif != ''
+        run: |
+          SARIF_FILE="${{ steps.scan.outputs.sarif }}"
+          if [ -f "$SARIF_FILE" ] && [ -s "$SARIF_FILE" ] && jq empty "$SARIF_FILE" 2>/dev/null; then
+            echo "valid=true" >> $GITHUB_OUTPUT
+          else
+            echo "::warning::SARIF file is missing, empty, or contains invalid JSON – skipping upload"
+            echo "valid=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Upload SARIF results
+        if: always() && steps.validate_sarif.outputs.valid == 'true'
+        uses: github/codeql-action/upload-sarif@v3
+        continue-on-error: true
+        with:
+          sarif_file: ${{ steps.scan.outputs.sarif }}
+          category: ${{ matrix.image }}
+
+  announce:
     needs: [prepare, build]
-    # Comment on build failure too, so the sticky comment reflects broken state instead
-    # of going silently stale; skip only cancelled runs (a newer push will re-comment).
+    # Announce build failure too, so the sticky comment reflects broken state instead
+    # of going silently stale; skip only cancelled runs (a newer push will re-announce).
     if: ${{ !cancelled() && needs.prepare.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
+      contents: write
       pull-requests: write
     steps:
-      - name: Upsert sticky PR comment
+      # One per-PR prerelease on the Releases page (tag pr-{N}), updated in place on
+      # every push, plus a sticky PR comment — both from the same body so they never
+      # drift. The release/tag is deleted by pr-prerelease-cleanup.yml when the PR
+      # closes. The pr-{N} git tag can never collide with real releases: the release
+      # pipeline only creates and walks v-prefixed tags.
+      - name: Upsert per-PR prerelease and sticky comment
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CHANNEL: ${{ needs.prepare.outputs.channel }}
@@ -198,6 +293,8 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           MARKER='<!-- pr-prerelease-images -->'
+          TAG="pr-$PR"
+          RELEASE_URL="https://github.com/$REPO/releases/tag/$TAG"
 
           if [ "$BUILD_RESULT" = "success" ]; then
             STATUS="✅ **Build succeeded**"
@@ -213,6 +310,7 @@ jobs:
           - **Channel**: \`$CHANNEL\`
           - **Version**: \`$VERSION\`
           - **Commit**: $HEAD_SHA
+          - **Release**: $RELEASE_URL
 
           \`\`\`bash
           docker pull ghcr.io/$REPO/execution:$VERSION
@@ -225,6 +323,20 @@ jobs:
           \`\`\`
 
           The moving tag \`pr-$PR\` also points at the newest build of this PR. A cancelled run can leave it inconsistent across services — the versioned tag above is the canonical reference."
+
+          # Only move the release when images actually pushed; a failed build keeps the
+          # previous (still pullable) release and the comment carries the failure.
+          if [ "$BUILD_RESULT" = "success" ]; then
+            TITLE="PR #$PR prerelease — $VERSION"
+            if gh release view "$TAG" -R "$REPO" >/dev/null 2>&1; then
+              gh api -X PATCH "repos/$REPO/git/refs/tags/$TAG" -f sha="$HEAD_SHA" -F force=true
+              gh release edit "$TAG" -R "$REPO" --title "$TITLE" --notes "$BODY" --prerelease
+              echo "Updated release $TAG"
+            else
+              gh release create "$TAG" -R "$REPO" --target "$HEAD_SHA" --title "$TITLE" --notes "$BODY" --prerelease
+              echo "Created release $TAG"
+            fi
+          fi
 
           CID=$(gh api "repos/$REPO/issues/$PR/comments" --paginate \
                 --jq ".[] | select(.body | startswith(\"$MARKER\")) | .id" | head -n 1)
