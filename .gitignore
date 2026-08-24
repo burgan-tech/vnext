@@ -306,3 +306,6 @@ sonar-project.properties
 
 # .csproj cache files
 BBT.Workflow.*.csproj.cache
+
+# BenchmarkDotNet run output
+BenchmarkDotNet.Artifacts/

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using BBT.Aether.Guids;
@@ -436,6 +437,68 @@ public sealed class TaskExecutionEngineTests
     }
 
     /// <summary>
+    /// B8 regression: the audit request stored on <see cref="InstanceTask.Request"/> carries a task
+    /// REFERENCE (key/version/domain/flow/type), not the full task definition. Guards against a
+    /// regression back to embedding the whole <see cref="WorkflowTask"/> (including mapping/config)
+    /// on every execution. <see cref="TaskExecutorContext.InputResponse"/> must still round-trip
+    /// unchanged alongside it.
+    /// </summary>
+    [Fact]
+    public async Task ExecuteAsync_Should_StoreTaskReference_NotDefinition_InRequestPayload()
+    {
+        var task = WorkflowTaskFactory.CreateHttpTask("mock-api");
+        _taskFactory.CreateExecutionTaskAsync(Arg.Any<IReference>(), Arg.Any<CancellationToken>())
+            .Returns(Result<WorkflowTask>.Ok(task));
+
+        // Real executors stamp InputResponse on the context (TaskExecutorBase); replicate that
+        // here so the test can assert it round-trips unchanged into the audit payload.
+        var executor = Substitute.For<ITaskExecutor>();
+        executor.ExecuteAsync(Arg.Any<TaskExecutorContext>(), Arg.Any<CancellationToken>())
+            .Returns(callInfo =>
+            {
+                callInfo.Arg<TaskExecutorContext>().InputResponse = new ScriptResponse { Key = "input-marker" };
+                return Result<StandardTaskResponse>.Ok(new StandardTaskResponse
+                {
+                    IsSuccess = true,
+                    StatusCode = 200,
+                    Data = new Dictionary<string, object> { ["result"] = "ok" }
+                });
+            });
+        _executorRegistry.GetExecutor(Arg.Any<TaskType>())
+            .Returns(Result<ITaskExecutor>.Ok(executor));
+
+        var onExecute = OnExecuteTask.Create(1, task, ScriptCode.FromNative(string.Empty));
+
+        var strategy = new CapturingPersistenceStrategy();
+        UsePersistenceStrategy(strategy);
+
+        var result = await CreateEngine().ExecuteAsync(
+            onExecute, Guid.NewGuid(), TaskTrigger.OnEntry, TaskExecutionOrigin.Flow,
+            CreateScriptContext(), CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        strategy.CompletedInstanceTask.ShouldNotBeNull();
+
+        using var requestDoc = JsonDocument.Parse(strategy.CompletedInstanceTask!.Request.Json);
+        var root = requestDoc.RootElement;
+
+        root.TryGetProperty("task", out var taskElement).ShouldBeTrue();
+        taskElement.GetProperty("key").GetString().ShouldBe(task.Key);
+        taskElement.GetProperty("version").GetString().ShouldBe(task.Version);
+        taskElement.GetProperty("domain").GetString().ShouldBe(task.Domain);
+        taskElement.GetProperty("flow").GetString().ShouldBe(task.Flow);
+        taskElement.GetProperty("type").GetString().ShouldBe(task.GetTaskType().ToString());
+
+        // Definition-only field (task config, incl. any mapping script code) must NOT leak
+        // into the audit request — only the reference fields above are carried.
+        taskElement.TryGetProperty("config", out _).ShouldBeFalse();
+
+        // InputResponse still round-trips unchanged alongside the reference.
+        root.TryGetProperty("inputResponse", out var inputResponseElement).ShouldBeTrue();
+        inputResponseElement.GetProperty("key").GetString().ShouldBe("input-marker");
+    }
+
+    /// <summary>
     /// Test double that records whether the completion persist ran to completion, with an
     /// optional delay so an un-awaited (fire-and-forget) call is observably incomplete when
     /// ExecuteAsync returns.
@@ -456,6 +519,27 @@ public sealed class TaskExecutionEngineTests
             if (completionDelay > TimeSpan.Zero)
                 await Task.Delay(completionDelay, cancellationToken);
             CompletionFinished = true;
+        }
+    }
+
+    /// <summary>
+    /// Test double that captures the <see cref="InstanceTask"/> instance passed to
+    /// <see cref="HandleCompletionAsync"/>, so tests can inspect its <see cref="InstanceTask.Request"/>
+    /// after a successful execution (the engine sets Request via <c>SetRequest</c> before completion).
+    /// </summary>
+    private sealed class CapturingPersistenceStrategy : ITaskPersistenceStrategy
+    {
+        public InstanceTask? CompletedInstanceTask { get; private set; }
+
+        public bool CanHandle(TaskExecutionOrigin origin) => true;
+
+        public Task<InstanceTask> HandleCreationAsync(InstanceTask instanceTask, CancellationToken cancellationToken = default)
+            => Task.FromResult(instanceTask);
+
+        public Task HandleCompletionAsync(InstanceTask instanceTask, CancellationToken cancellationToken = default)
+        {
+            CompletedInstanceTask = instanceTask;
+            return Task.CompletedTask;
         }
     }
 }

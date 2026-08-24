@@ -7,6 +7,7 @@ using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Tasks.Notification;
 using BBT.Workflow.Instances;
+using BBT.Workflow.Monitoring;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks;
@@ -87,7 +88,8 @@ public sealed class NotificationTaskExecutorTests
             channelResolver,
             stateBuilder,
             scriptEngine,
-            NullLogger<NotificationTaskExecutor>.Instance);
+            NullLogger<NotificationTaskExecutor>.Instance,
+            Substitute.For<IWorkflowMetrics>());
     }
 
     private static IStateChannelMessageBuilder CreateDefaultStateBuilder()
@@ -133,6 +135,12 @@ public sealed class NotificationTaskExecutorTests
                 Arg.Any<IEnumerable<string>?>(),
                 Arg.Any<CancellationToken>())
             .Returns(mapping);
+
+        // The non-state-channel path now goes through GetOrCompileMappingAsync -> CompileToFactoryAsync
+        // (Task 5, Katman 1) instead of CompileToInstanceAsync directly.
+        engine.CompileToFactoryAsync<INotificationMapping>(
+                Arg.Any<ScriptCode>(), Arg.Any<ScriptSettings?>(), Arg.Any<CancellationToken>())
+            .Returns((Func<INotificationMapping>)(() => mapping));
 
         if (stateMapping is not null)
         {
@@ -463,6 +471,9 @@ public sealed class NotificationTaskExecutorTests
                 Arg.Any<IEnumerable<string>?>(),
                 Arg.Any<CancellationToken>())
             .Returns(mapping);
+        scriptEngine.CompileToFactoryAsync<INotificationMapping>(
+                Arg.Any<ScriptCode>(), Arg.Any<ScriptSettings?>(), Arg.Any<CancellationToken>())
+            .Returns((Func<INotificationMapping>)(() => mapping));
 
         var task = CreateTask(channels: ["sms", "email"], includeStateChannel: false);
         var context = CreateContext(task, mappingCode: "// non-state script");

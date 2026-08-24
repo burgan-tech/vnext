@@ -81,7 +81,16 @@ public sealed class InstanceData : Entity<Guid>, IHasVersion, IHasEtag
     /// </summary>
     public DateTime EnteredAt { get; private set; }
 
-    public dynamic? Attributes => Data.JsonElement.ToDynamic();
+    private dynamic? _attributes;
+
+    /// <summary>
+    /// Row-scoped memo: this row is immutable once constructed, so its dynamic attribute tree is
+    /// materialized at most once and shared across every subsequent read. Benign race: concurrent
+    /// first accesses may each build a tree — content-equivalent, last write wins; a mutation made
+    /// on the losing tree during that first-access window is not observed by later readers (the
+    /// shared-tree mutation-visibility contract starts once the field is published).
+    /// </summary>
+    public dynamic? Attributes => _attributes ??= Data.JsonElement.ToDynamic();
 
     private void SetVersion(string version)
     {
@@ -105,6 +114,13 @@ public sealed class InstanceData : Entity<Guid>, IHasVersion, IHasEtag
         return Convert.ToHexString(hashBytes).ToLowerInvariant();
     }
 
+    /// <summary>
+    /// Wrapper snapshot: copies the scalar row fields (so <see cref="MarkAsNotLatest"/> on either
+    /// side stays isolated — <see cref="IsLatest"/>/<see cref="VersionNo"/> are mutated on the
+    /// row) while SHARING the immutable <see cref="JsonData"/> by reference. The payload is the
+    /// expensive part (parse/normalize memos live on it) and it never changes after construction,
+    /// so per-snapshot re-parsing bought nothing.
+    /// </summary>
     internal InstanceData CreateSnapshot()
     {
         var snapshot = new InstanceData
@@ -116,7 +132,7 @@ public sealed class InstanceData : Entity<Guid>, IHasVersion, IHasEtag
             IsLatest = IsLatest,
             ETag = ETag,
             DataHash = DataHash,
-            Data = new JsonData(Data.Json),
+            Data = Data,
             EnteredAt = EnteredAt
         };
 

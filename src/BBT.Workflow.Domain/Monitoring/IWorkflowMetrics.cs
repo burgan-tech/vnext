@@ -480,13 +480,21 @@ public interface IWorkflowMetrics
     void RecordScriptRuntimeError(string scriptType, string language, string errorType);
 
     /// <summary>
+    /// Records a compile-or-fetch call against the script type cache.
+    /// </summary>
+    /// <param name="result">Cache outcome: "hit" or "miss"</param>
+    /// <param name="status">Call status (success/failure category)</param>
+    void RecordScriptCompilation(string result, string status);
+
+    /// <summary>
     /// Records script compilation duration.
     /// </summary>
     /// <param name="scriptType">Type of script compiled</param>
     /// <param name="language">Script language</param>
     /// <param name="status">Compilation status</param>
     /// <param name="durationSeconds">Duration in seconds</param>
-    void RecordScriptCompilationDuration(string scriptType, string language, string status, double durationSeconds);
+    /// <param name="cache">Cache outcome for this call: "hit", "miss", or "unknown"</param>
+    void RecordScriptCompilationDuration(string scriptType, string language, string status, double durationSeconds, string cache = "unknown");
 
     /// <summary>
     /// Records script execution duration.

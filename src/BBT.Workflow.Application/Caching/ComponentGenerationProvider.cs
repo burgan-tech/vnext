@@ -46,7 +46,11 @@ public sealed class ComponentGenerationProvider(
                 return entry.Token;
             }
         }
-        catch (Exception ex)
+        // Cancellation is excluded from every degradation branch below: fabricating a token for an
+        // abandoned caller would hand it a resolution key and let it keep doing work (component
+        // resolution, script compilation) nobody is waiting for. Real infrastructure failures keep
+        // failing open exactly as before.
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             logger.ComponentCacheOperationFailed(ex, CacheActivityHelper.OperationGenerationGet, redisKey);
 
@@ -65,7 +69,7 @@ public sealed class ComponentGenerationProvider(
             await distributedCache.SetAsync(redisKey, new ComponentGenerationEntry(token), EntryOptions(), cancellationToken);
             logger.ComponentCacheGenerationBootstrapped(componentTypeKey, domain, key, token);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             // The token is still usable for this call; it just will not be shared with other callers,
             // so they resolve from the backend too. Correct, only slower.
@@ -98,7 +102,9 @@ public sealed class ComponentGenerationProvider(
             WriteMemo(redisKey, token);
             return token;
         }
-        catch (Exception writeException)
+        // A cancelled bump propagates: the write did not land, so reporting a fresh token would tell
+        // the caller its publish took effect cluster-wide when it did not.
+        catch (Exception writeException) when (writeException is not OperationCanceledException)
         {
             try
             {
@@ -107,6 +113,10 @@ public sealed class ComponentGenerationProvider(
                 await distributedCache.RemoveAsync(redisKey, cancellationToken);
                 logger.ComponentCacheGenerationBumpFellBackToRemove(writeException, componentTypeKey, domain, key);
             }
+            // This compensation stays fully best-effort — including on cancellation. Letting an
+            // OperationCanceledException out here would replace the original write failure with a
+            // cancellation and lose the diagnosis; the pre-bump token simply survives (documented
+            // stale window below).
             catch (Exception removeException)
             {
                 // The previous token survives, so previously cached resolutions stay reachable. This is

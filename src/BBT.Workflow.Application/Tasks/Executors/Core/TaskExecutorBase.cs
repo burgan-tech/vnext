@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
+using BBT.Workflow.Monitoring;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks.Coordinator;
 using Microsoft.Extensions.Logging;
@@ -21,10 +22,13 @@ namespace BBT.Workflow.Tasks.Executors;
 /// 7. CreateResponse - Build StandardTaskResponse
 /// </summary>
 /// <typeparam name="TTask">The specific WorkflowTask type this executor handles.</typeparam>
-public abstract class TaskExecutorBase<TTask>(ILogger logger) : ITaskExecutor
+public abstract class TaskExecutorBase<TTask>(ILogger logger, IWorkflowMetrics metrics) : ITaskExecutor
     where TTask : WorkflowTask
 {
     protected readonly ILogger Logger = logger;
+    protected readonly IWorkflowMetrics Metrics = metrics;
+
+    private const string ScriptLanguage = "csharp";
 
     /// <inheritdoc />
     public abstract TaskType TaskType { get; }
@@ -52,9 +56,26 @@ public abstract class TaskExecutorBase<TTask>(ILogger logger) : ITaskExecutor
 
         // 2. PrepareInput (virtual - custom per executor)
         Result<ScriptResponse?> inputResult;
+        var hasMapping = context.OnExecuteTask?.Mapping?.HasMappingCode == true;
         using (TaskExecutionActivityHelper.StartActivity(TaskExecutionActivityHelper.OperationPrepareInput, taskKey, taskTypeStr))
         {
-            inputResult = await PrepareInputAsync(task, context, cancellationToken);
+            var phaseStart = Stopwatch.GetTimestamp();
+            try
+            {
+                inputResult = await PrepareInputAsync(task, context, cancellationToken);
+            }
+            catch (Exception ex) when (hasMapping && ex is not OperationCanceledException)
+            {
+                Metrics.RecordScriptRuntimeError("task-input", ScriptLanguage, ex.GetType().Name);
+                throw;
+            }
+            if (hasMapping)
+            {
+                Metrics.RecordScriptExecutionDuration(
+                    "task-input", ScriptLanguage,
+                    inputResult.IsSuccess ? "success" : "failure",
+                    Stopwatch.GetElapsedTime(phaseStart).TotalSeconds);
+            }
         }
         if (!inputResult.IsSuccess)
         {
@@ -114,7 +135,23 @@ public abstract class TaskExecutorBase<TTask>(ILogger logger) : ITaskExecutor
         Result<object?> outputResult;
         using (TaskExecutionActivityHelper.StartActivity(TaskExecutionActivityHelper.OperationProcessOutput, taskKey, taskTypeStr))
         {
-            outputResult = await ProcessOutputAsync(task, invokeResult.Value!, context, cancellationToken);
+            var phaseStart = Stopwatch.GetTimestamp();
+            try
+            {
+                outputResult = await ProcessOutputAsync(task, invokeResult.Value!, context, cancellationToken);
+            }
+            catch (Exception ex) when (hasMapping && ex is not OperationCanceledException)
+            {
+                Metrics.RecordScriptRuntimeError("task-output", ScriptLanguage, ex.GetType().Name);
+                throw;
+            }
+            if (hasMapping)
+            {
+                Metrics.RecordScriptExecutionDuration(
+                    "task-output", ScriptLanguage,
+                    outputResult.IsSuccess ? "success" : "failure",
+                    Stopwatch.GetElapsedTime(phaseStart).TotalSeconds);
+            }
         }
         if (!outputResult.IsSuccess)
         {
@@ -277,6 +314,42 @@ public abstract class TaskExecutorBase<TTask>(ILogger logger) : ITaskExecutor
             ExecutionDurationMs = executionDurationMs,
             TaskType = TaskType.ToString()
         });
+    }
+
+    /// <summary>
+    /// Compiles the task's mapping once per task execution and hands out a FRESH instance per call.
+    /// The compiled factory is memoized on the <see cref="TaskExecutorContext"/> (keyed by mapping +
+    /// target type), so PrepareInput and ProcessOutput/Invoke asking for the same mapping share a
+    /// single engine call instead of each paying their own compile-cache lookup; instance-per-phase
+    /// semantics are unchanged — a user script holding instance fields observes exactly today's
+    /// behaviour, one fresh instance per phase.
+    /// </summary>
+    /// <remarks>
+    /// No lock guards the memo dictionary: a single task execution runs its phases sequentially on
+    /// one <see cref="TaskExecutorContext"/> within one thread (the pipeline does not fan phases of
+    /// the SAME task out concurrently), so there is no concurrent writer to race against.
+    /// CONSTRAINT: this helper compiles <c>context.OnExecuteTask.Mapping</c> and NOTHING else. A
+    /// call site holding a different <see cref="ScriptCode"/> (e.g. CacheAside's SourceMapping, the
+    /// notification state-channel mapping) must NOT route through here — it would silently compile
+    /// the wrong script; keep such sites on the engine's <c>CompileToInstanceAsync</c> overloads.
+    /// </remarks>
+    protected static async Task<T> GetOrCompileMappingAsync<T>(
+        IScriptEngine scriptEngine,
+        TaskExecutorContext context,
+        CancellationToken cancellationToken)
+        where T : class
+    {
+        var mapping = context.OnExecuteTask.Mapping;
+        var key = (mapping, typeof(T));
+        context.CompiledMappingFactories ??= new Dictionary<(ScriptCode, Type), object>();
+        if (!context.CompiledMappingFactories.TryGetValue(key, out var boxed))
+        {
+            boxed = await scriptEngine.CompileToFactoryAsync<T>(
+                mapping, context.ScriptContext.Workflow?.Scripts, cancellationToken);
+            context.CompiledMappingFactories[key] = boxed;
+        }
+
+        return ((Func<T>)boxed)();
     }
 
     /// <summary>

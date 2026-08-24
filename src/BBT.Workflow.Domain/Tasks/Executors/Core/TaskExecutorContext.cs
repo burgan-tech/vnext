@@ -36,5 +36,13 @@ public sealed record TaskExecutorContext(
     /// and before output mapping (ProcessOutputAsync). Null if invocation never ran.
     /// </summary>
     public string? RawInvocationResultJson { get; set; }
+
+    /// <summary>
+    /// Per-execution compiled-mapping factory memo, keyed by (mapping, target type) — see
+    /// <c>TaskExecutorBase.GetOrCompileMappingAsync</c>. Boxed as <see cref="object"/> because a
+    /// record cannot declare a dictionary whose value type varies by the generic <c>T</c> callers
+    /// ask for; each entry is actually a <c>Func&lt;T&gt;</c> for that entry's target type.
+    /// </summary>
+    public Dictionary<(ScriptCode Mapping, Type Target), object>? CompiledMappingFactories { get; set; }
 }
 

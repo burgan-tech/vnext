@@ -50,7 +50,7 @@ public sealed class FanOutTaskExecutor : TaskExecutorBase<FanOutTask>
         FanOutConcurrencyLimiter concurrencyLimiter,
         IWorkflowMetrics metrics,
         ILogger<FanOutTaskExecutor> logger)
-        : base(logger)
+        : base(logger, metrics)
     {
         _scriptEngine = scriptEngine;
         _taskFactory = taskFactory;
@@ -185,11 +185,8 @@ public sealed class FanOutTaskExecutor : TaskExecutorBase<FanOutTask>
             return Result<IFanOutMapping?>.Ok(null);
         }
 
-        return await ResultExtensions.TryAsync<IFanOutMapping?>(async ct =>
-                await _scriptEngine.CompileToInstanceAsync<IFanOutMapping>(
-                    mapping,
-                    flowScripts: context.ScriptContext.Workflow?.Scripts,
-                    cancellationToken: ct),
+        return await ResultExtensions.TryAsync<IFanOutMapping?>(
+            async ct => await GetOrCompileMappingAsync<IFanOutMapping>(_scriptEngine, context, ct),
             cancellationToken,
             ex => Error.Failure(
                 WorkflowErrorCodes.TaskExecution,
@@ -572,9 +569,12 @@ public sealed class FanOutTaskExecutor : TaskExecutorBase<FanOutTask>
     {
         // The branch is DISCARDED, never merged back. MergeParallelBranch would collide N item
         // responses on the single inner task key (MergeDictionary throws on a duplicate), and the
-        // batch's write point is the output handler, not the items. It is also not disposed:
-        // ScriptContext.Dispose clears the RelatedInstanceAccessor memo, which ForBranch SHARES
-        // with the parent context — disposing a branch would evict the batch context's memo.
+        // batch's write point is the output handler, not the items. Branch creation is copy-on-
+        // write (Body shared until the item's first write, dictionaries container-copied), so the
+        // per-item cost is small. It is also not disposed: the RelatedInstanceAccessor memo is
+        // SHARED with the batch context via ForBranch — branch Dispose is owned-parts-only now
+        // and leaves that memo alone, but not disposing keeps the batch's memo independent of
+        // Dispose's gating.
         var branch = context.ScriptContext.CreateParallelBranch();
 
         // Own DI scope per item, for the same reason TaskCoordinator gives its parallel task
