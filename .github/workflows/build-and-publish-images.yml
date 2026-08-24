@@ -7,23 +7,8 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version (e.g. 0.0.80). Required for a prerelease; on a stable run it pins the version instead of walking to the next free patch — use with force_publish to re-publish a shipped release whose packages failed.'
+        description: 'Version (e.g. 0.0.80). Pins the version instead of walking to the next free patch — use with force_publish to re-publish a shipped release whose packages failed.'
         required: false
-        type: string
-      prerelease_type:
-        description: 'Prerelease channel'
-        required: false
-        default: 'none'
-        type: choice
-        options:
-          - none
-          - alpha
-          - beta
-          - rc
-      prerelease_number:
-        description: 'Prerelease number (e.g. 1 -> v0.0.50-alpha.1)'
-        required: false
-        default: '1'
         type: string
       force_publish:
         description: 'Force publish images even if they exist'
@@ -55,7 +40,6 @@ jobs:
       packages: read
     outputs:
       version: ${{ steps.version.outputs.version }}
-      is_prerelease: ${{ steps.version.outputs.is_prerelease }}
     steps:
       - name: Generate GitHub App Token
         id: generate_token
@@ -77,46 +61,11 @@ jobs:
         id: version
         env:
           INPUT_VERSION: ${{ inputs.version }}
-          INPUT_PRERELEASE_TYPE: ${{ inputs.prerelease_type }}
-          INPUT_PRERELEASE_NUMBER: ${{ inputs.prerelease_number }}
           INPUT_FORCE_PUBLISH: ${{ inputs.force_publish }}
         run: |
           BRANCH_NAME="${{ github.ref_name }}"
-          IS_PRERELEASE="false"
 
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" && -n "$INPUT_PRERELEASE_TYPE" && "$INPUT_PRERELEASE_TYPE" != "none" ]]; then
-            echo "Prerelease workflow_dispatch detected (type=$INPUT_PRERELEASE_TYPE)"
-
-            if [ -z "$INPUT_VERSION" ]; then
-              echo "Error: 'version' input is required when prerelease_type is not 'none'"
-              exit 1
-            fi
-
-            if [[ ! "$INPUT_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-              echo "Error: 'version' must match X.Y.Z (got: $INPUT_VERSION)"
-              exit 1
-            fi
-
-            if [[ ! "$INPUT_PRERELEASE_NUMBER" =~ ^[0-9]+$ ]]; then
-              echo "Error: 'prerelease_number' must be a non-negative integer (got: $INPUT_PRERELEASE_NUMBER)"
-              exit 1
-            fi
-
-            VERSION="${INPUT_VERSION}-${INPUT_PRERELEASE_TYPE}.${INPUT_PRERELEASE_NUMBER}"
-            TAG="v${VERSION}"
-            IS_PRERELEASE="true"
-
-            if git tag -l "$TAG" | grep -q "^$TAG$"; then
-              if [[ "$INPUT_FORCE_PUBLISH" == "true" ]]; then
-                echo "Warning: Tag $TAG already exists but force_publish=true, continuing"
-              else
-                echo "Error: Tag $TAG already exists. Bump prerelease_number or set force_publish=true."
-                exit 1
-              fi
-            fi
-
-            echo "Resolved prerelease version: $VERSION"
-          elif [[ "${{ github.event_name }}" == "workflow_dispatch" && -n "$INPUT_VERSION" ]]; then
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && -n "$INPUT_VERSION" ]]; then
             # Re-publish an EXACT stable version. The branch path below deliberately walks to the
             # first unused patch, so it can never target a version that already shipped — which is
             # exactly what is needed when a release succeeded but one publish job failed (e.g. the
@@ -176,11 +125,9 @@ jobs:
           fi
 
           echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "is_prerelease=$IS_PRERELEASE" >> $GITHUB_OUTPUT
-          echo "Using version: $VERSION (prerelease=$IS_PRERELEASE)"
+          echo "Using version: $VERSION"
 
       - name: Update version in common.props and commit
-        if: steps.version.outputs.is_prerelease != 'true'
         run: |
           VERSION="${{ steps.version.outputs.version }}"
 
@@ -284,7 +231,7 @@ jobs:
           images: ${{ env.IMAGE_BASE }}/${{ matrix.image }}
           tags: |
             type=raw,value=${{ needs.prepare.outputs.version }}
-            type=raw,value=latest,enable=${{ needs.prepare.outputs.is_prerelease != 'true' }}
+            type=raw,value=latest
             type=ref,event=branch
             type=sha,prefix={{branch}}-
 
@@ -628,7 +575,7 @@ jobs:
           name: Release v${{ needs.prepare.outputs.version }}
           body_path: changelog.md
           draft: false
-          prerelease: ${{ needs.prepare.outputs.is_prerelease == 'true' }}
+          prerelease: false
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -636,7 +583,6 @@ jobs:
   trigger-helm:
     needs: [prepare, release]
     runs-on: ubuntu-latest
-    if: needs.prepare.outputs.is_prerelease != 'true'
     steps:
       - name: Generate GitHub App Token
         id: generate_token
