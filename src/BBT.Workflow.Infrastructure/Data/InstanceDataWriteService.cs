@@ -7,6 +7,7 @@ using BBT.Workflow.Definitions;
 using BBT.Workflow.ExceptionHandling;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
+using BBT.Workflow.Shared.Merging;
 using BBT.Workflow.Validation;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -51,20 +52,17 @@ public sealed class InstanceDataWriteService(
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<WorkflowDbContext, SemaphoreSlim>
         ContextGates = new();
 
-    /// <summary>
-    /// Striped per-instance gates taken BEFORE the context is even resolved:
-    /// <c>GetDbContextAsync</c> itself can touch the shared connection (context/schema
-    /// materialization in the ambient UnitOfWork), so two branches of the same instance must
-    /// not enter it concurrently either ("A second operation was started on this context").
-    /// Striping bounds memory; a hash collision merely serializes two unrelated instances
-    /// in-process, which the row lock would have done across processes anyway.
-    /// </summary>
-    private static readonly SemaphoreSlim[] InstanceGates =
-        Enumerable.Range(0, 64).Select(_ => new SemaphoreSlim(1, 1)).ToArray();
-
-    private static SemaphoreSlim InstanceGate(Guid instanceId) =>
-        InstanceGates[(instanceId.GetHashCode() & int.MaxValue) % InstanceGates.Length];
-
+    // The striped per-instance gate (InstanceWriteGate) is taken BEFORE the context is even
+    // resolved: GetDbContextAsync itself can touch the shared connection (context/schema
+    // materialization in the ambient UnitOfWork), so two branches of the same instance must not
+    // enter it concurrently either ("A second operation was started on this context instance").
+    //
+    // It lives in InstanceWriteGate rather than here because this service is NOT the only writer
+    // of an instance's state: SubProcessTaskExecutor.CreateCorrelationAsync read-modify-writes the
+    // same parent aggregate from a parallel fan-out branch, and a per-item correlation write and
+    // this data append genuinely overlap. Both MUST take the same semaphore — a private gate array
+    // here would serialize this service against itself and against nothing else, and the collision
+    // would come straight back. Splitting it back into two arrays reintroduces the bug.
     /// <inheritdoc />
     public async Task<InstanceData?> AppendAsync(
         Instance instance,
@@ -72,16 +70,8 @@ public sealed class InstanceDataWriteService(
         VersionStrategy? versionStrategy,
         CancellationToken cancellationToken = default)
     {
-        var instanceGate = InstanceGate(instance.Id);
-        await instanceGate.WaitAsync(cancellationToken);
-        try
-        {
-            return await AppendCoreAsync(instance, delta, versionStrategy, cancellationToken);
-        }
-        finally
-        {
-            instanceGate.Release();
-        }
+        using var gate = await InstanceWriteGate.AcquireAsync(instance.Id, cancellationToken);
+        return await AppendCoreAsync(instance, delta, versionStrategy, cancellationToken);
     }
 
     private async Task<InstanceData?> AppendCoreAsync(
@@ -95,7 +85,9 @@ public sealed class InstanceDataWriteService(
         return await RunLockedAsync(context, instance.Id, cancellationToken, async () =>
         {
             var head = await ReadHeadAsync(context, instance.Id, cancellationToken);
-            var plan = PlanAppend(head, delta, versionStrategy);
+            var writeOptions = executionOptions.Value.InstanceDataWrite;
+            var plan = PlanAppend(
+                head, delta, versionStrategy, writeOptions.LegacyAppendPipeline, writeOptions.PreserveNumericPrecision);
 
             if (plan.IsDuplicate)
             {
@@ -124,16 +116,8 @@ public sealed class InstanceDataWriteService(
         JsonData data,
         CancellationToken cancellationToken = default)
     {
-        var instanceGate = InstanceGate(instance.Id);
-        await instanceGate.WaitAsync(cancellationToken);
-        try
-        {
-            return await AppendExplicitCoreAsync(instance, id, version, data, cancellationToken);
-        }
-        finally
-        {
-            instanceGate.Release();
-        }
+        using var gate = await InstanceWriteGate.AcquireAsync(instance.Id, cancellationToken);
+        return await AppendExplicitCoreAsync(instance, id, version, data, cancellationToken);
     }
 
     private async Task<InstanceData> AppendExplicitCoreAsync(
@@ -185,8 +169,66 @@ public sealed class InstanceDataWriteService(
     /// a delta-only duplicate never matches raw), and the semantic version. Pure so the contract
     /// is unit-testable; <see cref="AppendAsync"/> calls it under the row lock and then assigns
     /// the line-scoped VersionNo from the target version line's current maximum.
+    /// <para>
+    /// <paramref name="legacyPipeline"/> is the <c>InstanceDataWrite:LegacyAppendPipeline</c>
+    /// kill-switch (B9): true routes to the original multi-pass <see cref="PlanAppendLegacy"/>;
+    /// false (default) takes the single-pass <see cref="JsonCanonicalizer.MergeAndCanonicalize"/>
+    /// path, which is byte-parity proven against it (see
+    /// <c>JsonCanonicalizerParityTests</c> and <c>InstanceDataWriteServicePipelineTests</c>).
+    /// </para>
+    /// <para>
+    /// <paramref name="preserveNumericPrecision"/> is the <c>InstanceDataWrite:PreserveNumericPrecision</c>
+    /// opt-in (see <see cref="BBT.Workflow.BackgroundJobs.Options.InstanceDataWriteOptions"/>):
+    /// it only selects the <see cref="JsonNumberPolicy"/> passed into the canonicalizer on this
+    /// (non-legacy) path, and is ignored whenever <paramref name="legacyPipeline"/> is true.
+    /// </para>
     /// </summary>
     internal static AppendPlan PlanAppend(
+        InstanceDataHeadRow? head,
+        JsonData delta,
+        VersionStrategy? versionStrategy,
+        bool legacyPipeline,
+        bool preserveNumericPrecision = false)
+    {
+        if (legacyPipeline)
+        {
+            return PlanAppendLegacy(head, delta, versionStrategy);
+        }
+
+        if (head is null)
+        {
+            // Nothing to merge yet — this IS the legacy head-null result already (delta passed
+            // through untouched). Deliberately NOT routed through JsonCanonicalizer: that path
+            // replicates JsonData.Merge's Expando round-trip (camelCase + number reformat), which
+            // the legacy head-null branch never invokes (it skips Merge entirely). Canonicalizing
+            // against an empty base would therefore silently reformat the very first row of every
+            // instance — a real byte-parity break, not a hypothetical one; pinned by
+            // InstanceDataWriteServicePipelineTests.Append_NewPipeline_ProducesSameRow_AsLegacy_WhenHeadIsNull.
+            return new AppendPlan(delta, WorkflowConstants.DefaultVersion, IsDuplicate: false);
+        }
+
+        var numberPolicy = preserveNumericPrecision
+            ? JsonNumberPolicy.PreservePrecision
+            : JsonNumberPolicy.Legacy;
+        var baseElement = new JsonData(head.Data).JsonElement;
+        var result = JsonCanonicalizer.MergeAndCanonicalize(baseElement, delta.JsonElement, numberPolicy);
+
+        // No-change dedup on the MERGED result, same rule as legacy — the canonicalizer's hash
+        // is byte-parity proven equal to ComputeDataHash(legacy merged content), so this compares
+        // correctly even across a duplicate written by the OTHER pipeline.
+        var isDuplicate = string.Equals(result.DataHash, head.DataHash, StringComparison.OrdinalIgnoreCase);
+
+        var content = JsonData.FromNormalized(result.NormalizedJson);
+        var version = InstanceData.IncrementVersion(head.Version, versionStrategy ?? VersionStrategy.None);
+        return new AppendPlan(content, version, isDuplicate);
+    }
+
+    /// <summary>
+    /// Original multi-pass append plan (<c>JsonData.Merge</c> → <c>NormalizedJson</c> →
+    /// <c>ComputeDataHash</c>), preserved verbatim as the kill-switch fallback and as the
+    /// byte-parity oracle's production twin.
+    /// </summary>
+    internal static AppendPlan PlanAppendLegacy(
         InstanceDataHeadRow? head,
         JsonData delta,
         VersionStrategy? versionStrategy)

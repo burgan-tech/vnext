@@ -251,14 +251,23 @@ internal sealed class ScriptContextBuilder(
     /// Builds ScriptTransitionRequest from persisted InstanceTransition when available.
     /// Header keys are normalized to lowercase.
     /// </summary>
+    /// <remarks>
+    /// B10c: Data/Header materialization (JsonElement → dynamic ExpandoObject) is deferred to first
+    /// property access via the lazy <see cref="ScriptTransitionRequest"/> constructor. Most builds
+    /// never read <see cref="ScriptContext.CurrentTransition"/>, so this avoids parsing the persisted
+    /// transition body/header on every ScriptContext build. Captures <c>_instanceTransition</c> into a
+    /// local so the factories are stable even if the builder's field were ever reassigned before the
+    /// lazy value is realized.
+    /// </remarks>
     private ScriptTransitionRequest? BuildScriptTransitionRequest()
     {
-        if (_instanceTransition == null)
+        var instanceTransition = _instanceTransition;
+        if (instanceTransition == null)
             return null;
 
-        var data = _instanceTransition.Body.JsonElement.ToDynamic();
-        var header = ToHeaderDynamic(_instanceTransition.Header.JsonElement);
-        return new ScriptTransitionRequest(data, header);
+        return new ScriptTransitionRequest(
+            () => instanceTransition.Body.JsonElement.ToDynamic(),
+            () => ToHeaderDynamic(instanceTransition.Header.JsonElement));
     }
 
     /// <summary>

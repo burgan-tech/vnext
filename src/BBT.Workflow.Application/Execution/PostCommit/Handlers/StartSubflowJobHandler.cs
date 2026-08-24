@@ -65,6 +65,13 @@ public sealed class StartSubflowJobHandler(
             // Build script context for subflow mapping
             await using var scriptContext = await CreateScriptContextAsync(context, instance, cancellationToken);
 
+            // Open the subflow's own trace lane, anchored on the enclosing
+            // PostCommit.StartSubflowJob span — same reasoning as the forward handler: the child
+            // instance's hops go flat underneath this span, and ParentLane records where the
+            // resume belongs. Covers the sync case too, where StartAsync runs the subflow to
+            // completion inline.
+            using var childLane = WorkflowTraceLane.EnterChildLane();
+
             // Start the subflow (Result pattern - no try-catch needed)
             var startResult = await subflowStarter.StartAsync(
                 context.Workflow,

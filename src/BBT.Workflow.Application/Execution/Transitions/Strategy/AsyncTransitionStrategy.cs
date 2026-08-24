@@ -1,7 +1,8 @@
 using System.Diagnostics;
-using BBT.Aether.Aspects;
+using BBT.Aether.BackgroundJob;
 using BBT.Aether.Results;
 using BBT.Aether.Uow;
+using BBT.Workflow.BackgroundJobs;
 using BBT.Workflow.BackgroundJobs.Payloads;
 using BBT.Workflow.Execution.Continuations;
 using BBT.Workflow.Execution.Events;
@@ -68,7 +69,6 @@ public sealed class AsyncTransitionStrategy(
     /// This also guarantees correct behavior when callers bypass the AppService
     /// pre-validation guard and invoke the workflow execution service directly.
     /// </remarks>
-    [Trace]
     public Task<Result<TransitionExecutionContext>> ExecuteAsync(
         WorkflowExecutionContext context,
         CancellationToken cancellationToken)
@@ -116,6 +116,11 @@ public sealed class AsyncTransitionStrategy(
             ctx.InstanceId, sourceStateKey, context.TransitionKey, jobId);
         EnrichTelemetry(activity, ctx, jobName.Value);
 
+        // Set inside the under-lock callback, read after it: the handle is non-null only when the
+        // direct path recorded the job with arming deferred, i.e. when this method still owes the
+        // scheduler a call.
+        IBackgroundJobArmHandle? armHandle = null;
+
         // The accept's ONE distributed lock. Admission takes the status lock on ctx.LockKey,
         // performs the kind's status flip, and runs the callback below while still holding it —
         // the duplicate-job guard is a check-then-insert with no database constraint behind it,
@@ -148,6 +153,7 @@ public sealed class AsyncTransitionStrategy(
 
                 if (enqueueResult.IsSuccess)
                 {
+                    armHandle = enqueueResult.Value.ArmHandle;
                     LogEnqueueSuccess(context, jobName.Value);
                     return Result.Ok();
                 }
@@ -156,6 +162,15 @@ public sealed class AsyncTransitionStrategy(
                 return Result.Fail(enqueueResult.Error);
             },
             cancellationToken);
+
+        // Arm OUTSIDE the lock: one scheduler call, no database access — the handle carries the
+        // payload from the enqueue. Only after a successful accept, so a compensated flip never
+        // leaves an armed job behind. A null handle means the outbox relay owns delivery instead.
+        if (acceptResult.IsSuccess && armHandle is not null)
+        {
+            await armHandle.ArmAsync(cancellationToken);
+            logger.TransitionJobArmedAfterLock(armHandle.JobId);
+        }
 
         var result = acceptResult.IsSuccess
             ? Result<TransitionExecutionContext>.Ok(ctx)
@@ -170,7 +185,7 @@ public sealed class AsyncTransitionStrategy(
     /// to <see cref="ITransitionEnqueueGateway"/> — both within a single RequiresNew unit of work so
     /// the intent and the delivery action (Dapr schedule or outbox row) commit atomically.
     /// </summary>
-    private async Task<Result<string>> EnqueueAndSaveJobAsync(
+    private async Task<Result<TransitionEnqueueOutcome>> EnqueueAndSaveJobAsync(
         WorkflowExecutionContext context,
         TransitionExecutionContext transContext,
         JobName jobName,
@@ -190,11 +205,15 @@ public sealed class AsyncTransitionStrategy(
             true,
             cancellationToken);
 
-        await enqueueGateway.EnqueueAsync(directPayload, outboxEvent, cancellationToken);
+        // deferArming: the row must commit under the status lock so the duplicate-job guard's next
+        // reader sees it, but the scheduler round-trip must not — it was the dominant term of the
+        // lock hold under load. The caller arms once AcceptAsync has released the lock.
+        var outcome = await enqueueGateway.EnqueueAsync(
+            directPayload, outboxEvent, deferArming: true, cancellationToken: cancellationToken);
 
         await uow.CommitAsync(cancellationToken);
 
-        return Result<string>.Ok(jobName.Value);
+        return Result<TransitionEnqueueOutcome>.Ok(outcome);
     }
 
     /// <summary>
@@ -225,6 +244,12 @@ public sealed class AsyncTransitionStrategy(
             CallerSync = false,
             TraceParent = activity?.Id,
             TraceState = activity?.TraceStateString,
+            // Anchor = the request's lane (the ASP.NET server span), so this hop and every hop the
+            // chain adds after it are siblings under the APM transaction rather than nested.
+            TraceRoot = WorkflowTraceLane.Current,
+            ParentTraceRoot = WorkflowTraceLane.ParentLane,
+            ChainDepth = transContext.ChainDepth,
+            LaneSeq = WorkflowTraceLane.NextSeq(),
             CorrelationId = transContext.CorrelationId,
             Stage = context.Data?.Stage,
             SubflowChainReserved = subflowChainReserved
@@ -260,6 +285,9 @@ public sealed class AsyncTransitionStrategy(
             ExecutionActor = context.Actor.ToString(),
             TraceParent = activity?.Id,
             TraceState = activity?.TraceStateString,
+            TraceRoot = WorkflowTraceLane.Current,
+            ParentTraceRoot = WorkflowTraceLane.ParentLane,
+            LaneSeq = WorkflowTraceLane.NextSeq(),
             CorrelationId = transContext.CorrelationId,
             ChainDepth = transContext.ChainDepth,
             SubflowChainReserved = subflowChainReserved

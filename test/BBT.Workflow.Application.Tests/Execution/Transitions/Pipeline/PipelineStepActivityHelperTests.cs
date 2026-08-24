@@ -9,6 +9,8 @@ using BBT.Workflow.Execution.Pipeline;
 using Shouldly;
 using Xunit;
 
+// The detail level this class switches is process-global; see TracingDetailLevelCollection.
+
 namespace BBT.Workflow.Application.Tests.Execution.Transitions.Pipeline;
 
 /// <summary>
@@ -16,6 +18,7 @@ namespace BBT.Workflow.Application.Tests.Execution.Transitions.Pipeline;
 /// created (a created-but-export-filtered '[' span would orphan every child started inside the
 /// step body); in Verbose mode the step span exists with the '[{Order}] {StepName}' convention.
 /// </summary>
+[Collection(TracingDetailLevelCollection.Name)]
 public sealed class PipelineStepActivityHelperTests : IDisposable
 {
     private readonly ActivityListener _listener;

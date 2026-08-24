@@ -1,6 +1,7 @@
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Logging;
+using BBT.Workflow.Monitoring;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks.Mapping;
 using Microsoft.Extensions.Logging;
@@ -19,8 +20,9 @@ public sealed class SoapTaskExecutor : TaskExecutorBase<SoapTask>
     public SoapTaskExecutor(
         IRemoteInvokerService remoteInvoker,
         IScriptEngine scriptEngine,
-        ILogger<SoapTaskExecutor> logger)
-        : base(logger)
+        ILogger<SoapTaskExecutor> logger,
+        IWorkflowMetrics metrics)
+        : base(logger, metrics)
     {
         _remoteInvoker = remoteInvoker;
         _scriptEngine = scriptEngine;
@@ -43,10 +45,7 @@ public sealed class SoapTaskExecutor : TaskExecutorBase<SoapTask>
 
         var result = await ResultExtensions.TryAsync<ScriptResponse?>(async ct =>
         {
-            var scriptRunner = await _scriptEngine.CompileToInstanceAsync<IMapping>(
-                mapping,
-                flowScripts: context.ScriptContext.Workflow?.Scripts,
-                cancellationToken: ct);
+            var scriptRunner = await GetOrCompileMappingAsync<IMapping>(_scriptEngine, context, ct);
 
             return await scriptRunner.InputHandler(task, context.ScriptContext);
         }, cancellationToken, ex => Error.Failure(
@@ -120,10 +119,7 @@ public sealed class SoapTaskExecutor : TaskExecutorBase<SoapTask>
 
         var result = await ResultExtensions.TryAsync<object?>(async ct =>
         {
-            var scriptRunner = await _scriptEngine.CompileToInstanceAsync<IMapping>(
-                mapping,
-                flowScripts: context.ScriptContext.Workflow?.Scripts,
-                cancellationToken: ct);
+            var scriptRunner = await GetOrCompileMappingAsync<IMapping>(_scriptEngine, context, ct);
 
             var outputResponse = await scriptRunner.OutputHandler(context.ScriptContext);
             return outputResponse.Data;

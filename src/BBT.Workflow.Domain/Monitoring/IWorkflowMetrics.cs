@@ -480,13 +480,21 @@ public interface IWorkflowMetrics
     void RecordScriptRuntimeError(string scriptType, string language, string errorType);
 
     /// <summary>
+    /// Records a compile-or-fetch call against the script type cache.
+    /// </summary>
+    /// <param name="result">Cache outcome: "hit" or "miss"</param>
+    /// <param name="status">Call status (success/failure category)</param>
+    void RecordScriptCompilation(string result, string status);
+
+    /// <summary>
     /// Records script compilation duration.
     /// </summary>
     /// <param name="scriptType">Type of script compiled</param>
     /// <param name="language">Script language</param>
     /// <param name="status">Compilation status</param>
     /// <param name="durationSeconds">Duration in seconds</param>
-    void RecordScriptCompilationDuration(string scriptType, string language, string status, double durationSeconds);
+    /// <param name="cache">Cache outcome for this call: "hit", "miss", or "unknown"</param>
+    void RecordScriptCompilationDuration(string scriptType, string language, string status, double durationSeconds, string cache = "unknown");
 
     /// <summary>
     /// Records script execution duration.
@@ -564,6 +572,34 @@ public interface IWorkflowMetrics
     /// <param name="workflowType">Type of workflow</param>
     /// <param name="count">Number of active instances</param>
     void SetActiveWorkflowInstances(string workflowType, int count);
+
+    #endregion
+
+    #region Fan-Out Metrics
+
+    /// <summary>
+    /// Records one settled fan-out batch: its size, its outcome counters and its wall-clock
+    /// duration.
+    /// </summary>
+    /// <remarks>
+    /// Batch-level ONLY, deliberately. Per-item duration is not recorded here because every
+    /// fan-out item IS a full task execution through <c>ITaskExecutionEngine</c>, which already
+    /// records it via <see cref="RecordTaskDuration"/> / <see cref="RecordTaskCompleted"/>;
+    /// emitting a second per-item timing would double-count the same work.
+    /// </remarks>
+    /// <param name="taskKey">Key of the fan-out task.</param>
+    /// <param name="workflowKey">Workflow identifier the batch ran in.</param>
+    /// <param name="total">Number of items in the batch.</param>
+    /// <param name="succeeded">Number of items that succeeded.</param>
+    /// <param name="failed">Number of items that failed.</param>
+    /// <param name="durationSeconds">Wall-clock duration of the whole batch in seconds.</param>
+    void RecordFanOutBatch(
+        string taskKey,
+        string workflowKey,
+        int total,
+        int succeeded,
+        int failed,
+        double durationSeconds);
 
     #endregion
 

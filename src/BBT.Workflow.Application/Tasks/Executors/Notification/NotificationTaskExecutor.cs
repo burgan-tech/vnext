@@ -2,6 +2,7 @@ using System.Text.Json;
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Logging;
+using BBT.Workflow.Monitoring;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks.Notification;
 using Dapr.Client;
@@ -23,8 +24,9 @@ public sealed class NotificationTaskExecutor(
     INotificationChannelResolver channelResolver,
     IStateChannelMessageBuilder stateChannelBuilder,
     IScriptEngine scriptEngine,
-    ILogger<NotificationTaskExecutor> logger)
-    : TaskExecutorBase<NotificationTask>(logger)
+    ILogger<NotificationTaskExecutor> logger,
+    IWorkflowMetrics metrics)
+    : TaskExecutorBase<NotificationTask>(logger, metrics)
 {
     private const string StateChannel = "state";
 
@@ -58,8 +60,7 @@ public sealed class NotificationTaskExecutor(
         if (mappingScript is not null && mappingScript.HasMappingCode)
         {
             if (hasNonStateChannels)
-                mapping = await scriptEngine.CompileToInstanceAsync<INotificationMapping>(
-                    mappingScript, flowScripts: flowScripts, cancellationToken: cancellationToken);
+                mapping = await GetOrCompileMappingAsync<INotificationMapping>(scriptEngine, context, cancellationToken);
 
             if (hasStateChannel)
                 stateMapping = await TryCompileStateMappingAsync(mappingScript, flowScripts, cancellationToken);
@@ -173,6 +174,10 @@ public sealed class NotificationTaskExecutor(
             bindingRequest.Metadata.TryAdd("Content-Type", "application/json");
             foreach (var kvp in message.Metadata)
                 bindingRequest.Metadata.TryAdd(kvp.Key, kvp.Value);
+
+            // Output bindings bypass HttpClient's DiagnosticsHandler — stamp the live trace context
+            // so the notification channel shows up under this task in the trace.
+            DaprTraceMetadata.StampBinding(bindingRequest.Metadata);
 
             await daprClient.InvokeBindingAsync(bindingRequest, cancellationToken);
 

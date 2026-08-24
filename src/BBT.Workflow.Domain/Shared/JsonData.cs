@@ -52,8 +52,30 @@ public class JsonData : ValueObject
         }
     }
     
+    // Boxed deliberately: JsonElement is a multi-word struct, so a Nullable<JsonElement> field
+    // write is NOT atomic — a torn read would be possible when parallel COW branches race the
+    // first access on a SHARED JsonData (snapshots share rows since Katman 2). An object-reference
+    // publish is atomic; the unbox on read is negligible next to the parse it replaces.
+    private object? _jsonElementBoxed;
+
+    /// <summary>
+    /// Parsed once per instance (Json is assigned only in constructors). Benign race: concurrent
+    /// first accesses may parse twice; both results are equivalent standalone elements and the
+    /// last (reference-atomic) publish wins — no torn value is ever observable.
+    /// </summary>
     public JsonElement JsonElement =>
-        JsonSerializer.Deserialize<JsonElement>(Json, JsonSerializerConstants.JsonOptions)!;
+        (JsonElement)(_jsonElementBoxed ??=
+            JsonSerializer.Deserialize<JsonElement>(Json, JsonSerializerConstants.JsonOptions)!);
+
+    /// <summary>
+    /// Canonicalizer çıktısı için: json ZATEN kanonik/normalize — NormalizedJson yeniden hesaplanmaz.
+    /// </summary>
+    internal static JsonData FromNormalized(string normalizedJson)
+    {
+        var data = new JsonData(normalizedJson);
+        data._normalizedJson = normalizedJson;
+        return data;
+    }
 
     public JsonData Merge(JsonData newData)
     {

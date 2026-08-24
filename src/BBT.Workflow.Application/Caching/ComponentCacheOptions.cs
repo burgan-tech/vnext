@@ -113,4 +113,28 @@ public sealed class ComponentCacheOptions
     /// can exist.
     /// </remarks>
     public bool PurgeLegacyKeysOnPublish { get; set; } = true;
+
+    /// <summary>
+    /// Gets or sets whether the in-process (L1) envelope cache in front of the distributed cache is
+    /// enabled. Default is true.
+    /// </summary>
+    /// <remarks>
+    /// Correctness is carried by the key scheme, not by this flag: full-version bodies are immutable,
+    /// and resolution entries embed the generation token in their key, so a publish bump makes stale
+    /// L1 entries unreachable exactly as it does for L2. Disabling this restores the previous
+    /// behavior of one distributed-cache read per envelope access.
+    /// </remarks>
+    public bool L1Enabled { get; set; } = true;
+
+    /// <summary>
+    /// Gets or sets the memory budget in megabytes for the L1 envelope cache, shared across all
+    /// component types in the process. Default is 64.
+    /// </summary>
+    /// <remarks>
+    /// Entries are stored as serialized bytes and sized by their byte length, so this bounds actual
+    /// payload memory. When the budget is exceeded, least-recently-used entries are compacted away —
+    /// an eviction is a re-fetch from the distributed cache, never an error.
+    /// </remarks>
+    [Range(8, 2048)]
+    public int L1SizeLimitMb { get; set; } = 64;
 }

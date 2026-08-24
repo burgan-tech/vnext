@@ -9,6 +9,7 @@ using BBT.Workflow.Execution.Bindings;
 using BBT.Workflow.Gateway;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
+using BBT.Workflow.Monitoring;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks.Mapping;
@@ -43,8 +44,9 @@ public sealed class SubProcessTaskExecutor : TriggerTaskExecutorBase<SubProcessT
         IGuidGenerator guidGenerator,
         IConfiguration configuration,
         IDomainDiscoveryResolver endpointResolver,
-        ILogger<SubProcessTaskExecutor> logger)
-        : base(scriptEngine, runtimeInfoProvider, remoteInvoker, logger)
+        ILogger<SubProcessTaskExecutor> logger,
+        IWorkflowMetrics metrics)
+        : base(scriptEngine, runtimeInfoProvider, remoteInvoker, logger, metrics)
     {
         _instanceCommandGateway = instanceCommandGateway;
         _instanceRepository = instanceRepository;
@@ -392,7 +394,22 @@ public sealed class SubProcessTaskExecutor : TriggerTaskExecutorBase<SubProcessT
                     task.TriggerFlow,
                     task.TriggerVersion);
 
-                var trackedInstance = await _instanceRepository.GetAsync(context.ScriptContext.Instance.Id, true, ct);
+                // The whole read-modify-write of the PARENT aggregate goes under the shared
+                // per-instance gate. N fan-out items can be launching subprocesses off the same
+                // parent concurrently; each has its own DI scope but the ambient (AsyncLocal)
+                // UnitOfWork hands them all the same schema-bound DbContext, and a Npgsql
+                // connection cannot run two commands at once — unguarded, one item loses its
+                // correlation to "A second operation was started on this context instance", and
+                // that subprocess is then untracked and never finalized.
+                //
+                // It is the SAME gate InstanceDataWriteService takes, deliberately: a per-item
+                // correlation write and the parent's data append really do overlap, and two
+                // separate striped arrays would not serialize against each other at all.
+                // Splitting the gate back in two reintroduces the bug.
+                var instanceId = context.ScriptContext.Instance.Id;
+                using var gate = await InstanceWriteGate.AcquireAsync(instanceId, ct);
+
+                var trackedInstance = await _instanceRepository.GetAsync(instanceId, true, ct);
                 trackedInstance.AddCorrelation(correlation);
                 await _instanceRepository.UpdateAsync(trackedInstance, true, ct);
             },

@@ -40,6 +40,26 @@ public static class TelemetryConstants
         public const string HandlerName = "vnext.handler.name";
         public const string TaskKey = "vnext.task.key";
         public const string TaskType = "vnext.task.type";
+
+        /// <summary>Stable identity of one fan-out item within its batch.</summary>
+        public const string FanOutItemKey = "vnext.fanout.item.key";
+
+        /// <summary>Zero-based position of a fan-out item in its batch.</summary>
+        public const string FanOutItemIndex = "vnext.fanout.item.index";
+
+        /// <summary>
+        /// The batch's readability label for one item (<c>FanOutTask.ItemAlias</c>), or a neutral
+        /// substitute when the task declares none. Always present, so a trace query can group on it
+        /// without having to handle a missing attribute.
+        /// </summary>
+        public const string FanOutItemAlias = "vnext.fanout.item.alias";
+
+        /// <summary>
+        /// Milliseconds a fan-out item spent queueing for its concurrency slots before execution
+        /// began. Separates "the batch is slow because it is throttled" from "the batch is slow
+        /// because one item is slow" without correlating two spans.
+        /// </summary>
+        public const string FanOutItemQueueWaitMs = "vnext.fanout.item.queue_wait_ms";
         public const string Layer = "vnext.layer";
         public const string SpanCategory = "vnext.span.category";
         public const string StateFrom = "vnext.state.from";
@@ -82,6 +102,45 @@ public static class TelemetryConstants
         public const string TerminationOrigin = "vnext.termination.origin";
         public const string TerminationInitiator = "vnext.termination.initiator";
         public const string TerminationCascadeId = "vnext.termination.cascade_id";
+
+        /// <summary>
+        /// True when the span was parented to its trace lane anchor (see
+        /// <c>WorkflowTraceLane</c>), false when it fell back to the ambient/predecessor parent.
+        /// Lets a query separate flat-laned traces from legacy ones during a rolling deploy.
+        /// </summary>
+        public const string TraceLane = "vnext.trace.lane";
+
+        /// <summary>The lane anchor's span id — groups a trace's lanes when it has more than one.</summary>
+        public const string TraceLaneAnchor = "vnext.trace.lane.anchor";
+
+        /// <summary>
+        /// Set when an anchor was rejected for belonging to a different trace. The span keeps its
+        /// ambient parent and links the anchor instead, so a stale or forged anchor cannot
+        /// teleport it into a foreign trace.
+        /// </summary>
+        public const string TraceLaneMismatch = "vnext.trace.lane.mismatch";
+
+        /// <summary>
+        /// Span id of the immediate logical predecessor (hop N for hop N+1). Primary causality tag:
+        /// the chain can be reconstructed by self-join even in a UI that hides ActivityLinks.
+        /// </summary>
+        public const string HopPredecessor = "vnext.hop.predecessor";
+
+        /// <summary>
+        /// Monotonic ordinal of a hop within its lane. Needed because <c>ChainDepth</c> resets to 0
+        /// at subflow resume, long-poll resume, timeout and retry boundaries, so it cannot order a
+        /// lane on its own.
+        /// </summary>
+        public const string LaneSeq = "vnext.lane.seq";
+
+        /// <summary>Chain depth of the transition hop, promoted onto the lane span.</summary>
+        public const string ChainDepth = "vnext.chain.depth";
+
+        /// <summary>
+        /// Set when the ambient Dapr scheduler-callback span was demoted to an ActivityLink because
+        /// the span continues a different (originating) trace.
+        /// </summary>
+        public const string DaprCallback = "vnext.dapr.callback";
     }
 
     /// <summary>

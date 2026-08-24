@@ -64,4 +64,17 @@ public record FlowCompletedInput
     /// (sync=true). The parent resume keeps the chain synchronous when set.
     /// </summary>
     public bool Sync { get; init; }
+
+    /// <summary>
+    /// Trace lane anchor (W3C traceparent) of the completing subflow. See <c>WorkflowTraceLane</c>.
+    /// <para>
+    /// Carried in this internal-only body rather than a header, exactly like <c>CorrelationId</c>:
+    /// public endpoints must not be able to inject a lane, or a caller could graft its spans onto
+    /// an unrelated trace. <c>FlatLaneActivity</c>'s trace-id check is the backstop.
+    /// </para>
+    /// </summary>
+    public string? TraceRoot { get; init; }
+
+    /// <summary>The enclosing lane's anchor, so the subflow's resume returns to the parent's lane.</summary>
+    public string? ParentTraceRoot { get; init; }
 }

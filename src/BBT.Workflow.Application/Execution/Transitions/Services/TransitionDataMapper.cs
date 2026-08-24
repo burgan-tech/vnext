@@ -1,5 +1,7 @@
+using System.Diagnostics;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Instances;
+using BBT.Workflow.Monitoring;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
 using BBT.Aether.Results;
@@ -13,7 +15,8 @@ namespace BBT.Workflow.Execution.Transitions.Services;
 public sealed class TransitionDataMapper(
     IScriptEngine scriptEngine,
     IScriptContextFactory scriptContextFactory,
-    IInstanceRepository instanceRepository) : ITransitionDataMapper
+    IInstanceRepository instanceRepository,
+    IWorkflowMetrics workflowMetrics) : ITransitionDataMapper
 {
     /// <inheritdoc />
     /// <summary>
@@ -59,7 +62,20 @@ public sealed class TransitionDataMapper(
                 var scriptContext = await BuildScriptContextAsync(
                     payload, transition, workflow, instance, runtimeInfoProvider, headers, ct);
 
-                return await mappingInstance.Handler(scriptContext);
+                var executeStart = Stopwatch.GetTimestamp();
+                try
+                {
+                    var mapped = await mappingInstance.Handler(scriptContext);
+                    workflowMetrics.RecordScriptExecutionDuration(
+                        "transition-mapping", "csharp", "success",
+                        Stopwatch.GetElapsedTime(executeStart).TotalSeconds);
+                    return mapped;
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    workflowMetrics.RecordScriptRuntimeError("transition-mapping", "csharp", ex.GetType().Name);
+                    throw; // TryAsync continues to apply the existing error mapping (CreateMappingError)
+                }
             },
             cancellationToken,
             CreateMappingError);

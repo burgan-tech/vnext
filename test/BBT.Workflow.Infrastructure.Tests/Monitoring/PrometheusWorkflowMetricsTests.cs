@@ -490,5 +490,33 @@ public sealed class PrometheusWorkflowMetricsTests
     }
 
     #endregion
+
+    #region Script Engine Metrics Tests
+
+    [Fact]
+    public void RecordScriptCompilation_ShouldNotThrow()
+    {
+        // Act & Assert
+        Should.NotThrow(() => _metrics.RecordScriptCompilation("hit", "success"));
+        Should.NotThrow(() => _metrics.RecordScriptCompilation("miss", "success"));
+    }
+
+    [Fact]
+    public void RecordScriptCompilationDuration_WithCacheLabel_ShouldNotThrow()
+    {
+        // Act & Assert
+        Should.NotThrow(() => _metrics.RecordScriptCompilationDuration(
+            "compilation", "csharp", "success", 0.12, "miss"));
+    }
+
+    [Fact]
+    public void RecordScriptExecutionDurationAndRuntimeError_ShouldNotThrow()
+    {
+        // Act & Assert
+        Should.NotThrow(() => _metrics.RecordScriptExecutionDuration("task-input", "csharp", "success", 0.05));
+        Should.NotThrow(() => _metrics.RecordScriptRuntimeError("condition", "csharp", "NullReferenceException"));
+    }
+
+    #endregion
 }
 

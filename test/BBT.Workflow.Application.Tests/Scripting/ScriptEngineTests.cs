@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
@@ -19,6 +20,12 @@ public class ScriptEngineTests : ApplicationTestBase<ApplicationEntryPoint>
 {
     private readonly IScriptEngine _scriptEngine;
 
+    // Field (not a local in AddApplication) so tests can verify vault call counts.
+    private readonly Mock<DaprClient> _mockDaprClient = new();
+
+    // Field (not a local in AddApplication) so tests can verify metrics recording calls.
+    private readonly Mock<IWorkflowMetrics> _mockWorkflowMetrics = new();
+
     public ScriptEngineTests()
     {
         _scriptEngine = GetRequiredService<IScriptEngine>();
@@ -26,19 +33,16 @@ public class ScriptEngineTests : ApplicationTestBase<ApplicationEntryPoint>
 
     protected override void AddApplication(IServiceCollection services)
     {
-        // Mock DaprClient for testing
-        var mockDaprClient = new Mock<DaprClient>();
-        
         // Setup GetSecretAsync to return a mock secret value
-        mockDaprClient
+        _mockDaprClient
             .Setup(x => x.GetSecretAsync(
-                It.IsAny<string>(), 
-                It.IsAny<string>(), 
-                It.IsAny<IReadOnlyDictionary<string, string>>(), 
+                It.IsAny<string>(),
+                It.IsAny<string>(),
+                It.IsAny<IReadOnlyDictionary<string, string>>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new Dictionary<string, string> { { "test_key", "mock_secret_value" } });
 
-        services.AddSingleton(mockDaprClient.Object);
+        services.AddSingleton(_mockDaprClient.Object);
         
         // Mock Logger for IScriptServices
         var mockLogger = new Mock<ILogger<ScriptServices>>();
@@ -49,8 +53,7 @@ public class ScriptEngineTests : ApplicationTestBase<ApplicationEntryPoint>
         services.AddSingleton(mockConfiguration.Object);
         
         // Mock IWorkflowMetrics
-        var mockWorkflowMetrics = new Mock<IWorkflowMetrics>();
-        services.AddSingleton(mockWorkflowMetrics.Object);
+        services.AddSingleton(_mockWorkflowMetrics.Object);
         
         base.AddApplication(services);
     }
@@ -206,21 +209,30 @@ public class ScriptEngineTests : ApplicationTestBase<ApplicationEntryPoint>
 
         // Act
         var instance = await _scriptEngine.CompileToInstanceAsync<IMapping>(code, references, usings);
-        
+
         var httpTask = WorkflowTaskFactory.CreateHttpTask();
-        var response = await instance.InputHandler(
-            task: httpTask,
-            context: new ScriptContext.Builder(Mock.Of<ILogger<ScriptContext>>())
-                .SetWorkflow(WorkflowFactory.CreateDefault())
-                .SetInstance(InstanceFactory.CreateDefault())
-                .SetTransition(TransitionFactory.CreateDefault())
-                .SetRuntime(Mock.Of<IRuntimeInfoProvider>())
-                .SetDefinitions(new Dictionary<string, object>())
-                .Build());
+        var context = new ScriptContext.Builder(Mock.Of<ILogger<ScriptContext>>())
+            .SetWorkflow(WorkflowFactory.CreateDefault())
+            .SetInstance(InstanceFactory.CreateDefault())
+            .SetTransition(TransitionFactory.CreateDefault())
+            .SetRuntime(Mock.Of<IRuntimeInfoProvider>())
+            .SetDefinitions(new Dictionary<string, object>())
+            .Build();
+        var response = await instance.InputHandler(task: httpTask, context: context);
+        var secondResponse = await instance.InputHandler(task: httpTask, context: context);
 
         // Assert
         Assert.NotNull(response);
         Assert.Equal("Got secret: mock_secret_value", response.Data);
+        Assert.Equal("Got secret: mock_secret_value", secondResponse.Data);
+
+        // The singleton ScriptSecretCache sits between ScriptBase and DaprClient: two GetSecret
+        // calls for the same bundle must produce exactly one vault round-trip.
+        _mockDaprClient.Verify(x => x.GetSecretAsync(
+            It.IsAny<string>(),
+            It.IsAny<string>(),
+            It.IsAny<IReadOnlyDictionary<string, string>>(),
+            It.IsAny<CancellationToken>()), Times.Once());
     }
 
     [Fact]
@@ -402,6 +414,53 @@ public class ScriptEngineTests : ApplicationTestBase<ApplicationEntryPoint>
 
         Assert.NotNull(response);
         Assert.Contains("<root>", response.Data?.ToString());
+    }
+
+    [Fact]
+    public async Task CompileTwice_RecordsMissThenHit_AndKeepsDeprecatedCounter()
+    {
+        // Arrange - class name carries a GUID nonce so this test's source is unique and cannot
+        // be served as a hit by the process-wide singleton evaluator cache from another test.
+        var nonce = Guid.NewGuid().ToString("N");
+        var code = $$"""
+                   using System.Threading.Tasks;
+                   using BBT.Workflow.Scripting;
+                   using BBT.Workflow.Definitions;
+
+                   public class TransitionMappingTest_{{nonce}} : ITransitionMapping
+                   {
+                       public Task<dynamic> Handler(ScriptContext context)
+                       {
+                           return Task.FromResult((dynamic)"ok");
+                       }
+                   }
+                   """;
+
+        var references = new List<MetadataReference>
+        {
+            MetadataReference.CreateFromFile(typeof(IMapping).Assembly.Location)
+        };
+
+        // Act
+        await _scriptEngine.CompileToInstanceAsync<ITransitionMapping>(code, references);
+        await _scriptEngine.CompileToInstanceAsync<ITransitionMapping>(code, references);
+
+        // Assert - new counter: 1 miss + 1 hit
+        _mockWorkflowMetrics.Verify(m => m.RecordScriptCompilation("miss", "success"), Times.Once);
+        _mockWorkflowMetrics.Verify(m => m.RecordScriptCompilation("hit", "success"), Times.Once);
+
+        // Histogram: cache-labelled, one record each (5-arg Verify - CS0854: optional args are not
+        // allowed in expression trees, so ALL five args must be explicit)
+        _mockWorkflowMetrics.Verify(m => m.RecordScriptCompilationDuration(
+            "compilation", "csharp", "success", It.IsAny<double>(), "miss"), Times.Once);
+        _mockWorkflowMetrics.Verify(m => m.RecordScriptCompilationDuration(
+            "compilation", "csharp", "success", It.IsAny<double>(), "hit"), Times.Once);
+
+        // DEPRECATED metric keeps flowing exactly as before (dashboard regression guarantee)
+        _mockWorkflowMetrics.Verify(m => m.RecordScriptExecution("compilation", "csharp", "success"), Times.Exactly(2));
+
+        // Gauge fed
+        _mockWorkflowMetrics.Verify(m => m.SetCacheEntries("script-types", It.Is<int>(n => n >= 1)), Times.AtLeastOnce);
     }
 }
 

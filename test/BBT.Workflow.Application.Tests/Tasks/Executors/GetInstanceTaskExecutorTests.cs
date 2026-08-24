@@ -7,6 +7,7 @@ using BBT.Workflow.Definitions;
 using BBT.Workflow.Discovery;
 using BBT.Workflow.Gateway;
 using BBT.Workflow.Instances;
+using BBT.Workflow.Monitoring;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks;
@@ -32,7 +33,7 @@ public sealed class GetInstanceTaskExecutorTests
             .SetInstance(instance)
             .Build();
 
-        return new TaskExecutorContext(task, onExecute, scriptContext, null, TaskTrigger.OnExecute);
+        return new TaskExecutorContext(task, onExecute, scriptContext, null, TaskTrigger.OnExecute, TaskExecutionOrigin.Flow);
     }
 
     private static GetInstanceTaskExecutor CreateExecutor(
@@ -46,7 +47,8 @@ public sealed class GetInstanceTaskExecutorTests
             remoteInvoker ?? Substitute.For<IRemoteInvokerService>(),
             gateway,
             endpointResolver ?? Substitute.For<IDomainDiscoveryResolver>(),
-            NullLogger<GetInstanceTaskExecutor>.Instance);
+            NullLogger<GetInstanceTaskExecutor>.Instance,
+            Substitute.For<IWorkflowMetrics>());
 
     private static GetInstanceOutput SampleOutput() => new()
     {

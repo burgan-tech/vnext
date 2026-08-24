@@ -4,6 +4,7 @@ using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution.ErrorHandling;
 using BBT.Workflow.Logging;
+using BBT.Workflow.Monitoring;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
 using Microsoft.Extensions.Logging;
@@ -19,8 +20,9 @@ public abstract class TriggerTaskExecutorBase<TTask>(
     IScriptEngine scriptEngine,
     IRuntimeInfoProvider runtimeInfoProvider,
     IRemoteInvokerService remoteInvoker,
-    ILogger logger)
-    : TaskExecutorBase<TTask>(logger)
+    ILogger logger,
+    IWorkflowMetrics metrics)
+    : TaskExecutorBase<TTask>(logger, metrics)
     where TTask : WorkflowTask
 {
     protected readonly IScriptEngine ScriptEngine = scriptEngine;
@@ -58,10 +60,7 @@ public abstract class TriggerTaskExecutorBase<TTask>(
 
         var result = await ResultExtensions.TryAsync<ScriptResponse?>(async ct =>
         {
-            var scriptRunner = await ScriptEngine.CompileToInstanceAsync<IMapping>(
-                mapping,
-                flowScripts: context.ScriptContext.Workflow?.Scripts,
-                cancellationToken: ct);
+            var scriptRunner = await GetOrCompileMappingAsync<IMapping>(ScriptEngine, context, ct);
 
             return await scriptRunner.InputHandler(task, context.ScriptContext);
         }, cancellationToken, ex => Error.Failure(
@@ -98,10 +97,7 @@ public abstract class TriggerTaskExecutorBase<TTask>(
 
         var result = await ResultExtensions.TryAsync<object?>(async ct =>
         {
-            var scriptRunner = await ScriptEngine.CompileToInstanceAsync<IMapping>(
-                mapping,
-                flowScripts: context.ScriptContext.Workflow?.Scripts,
-                cancellationToken: ct);
+            var scriptRunner = await GetOrCompileMappingAsync<IMapping>(ScriptEngine, context, ct);
 
             var outputResponse = await scriptRunner.OutputHandler(context.ScriptContext);
             return outputResponse.Data;

@@ -80,6 +80,15 @@ public static class TaskServiceCollectionExtensions
     /// </summary>
     private static IServiceCollection AddTaskExecutors(this IServiceCollection services)
     {
+        // FanOut global bulkhead (process-level ceiling across all fan-out batches). A
+        // misconfigured MaxConcurrentItems <= 0 would deadlock every fan-out batch in the
+        // process on its first item, so validate at startup instead of at first use.
+        services.AddOptions<FanOutOptions>()
+            .BindConfiguration(FanOutOptions.SectionName)
+            .ValidateDataAnnotations()
+            .ValidateOnStart();
+        services.TryAddSingleton<FanOutConcurrencyLimiter>();
+
         // Remote invoker service for Dapr invocation
         services.TryAddScoped<IRemoteInvokerService, RemoteInvokerService>();
 
@@ -118,6 +127,10 @@ public static class TaskServiceCollectionExtensions
         services.AddTaskExecutor<GetInstanceDataTaskExecutor>();
         services.AddTaskExecutor<GetInstancesTaskExecutor>();
         services.AddTaskExecutor<GetInstanceTaskExecutor>();
+
+        // FanOut executor: runs the referenced inner task once per resolved item, in parallel,
+        // and joins the outcomes into a single output (one instance-data write per batch).
+        services.AddTaskExecutor<FanOutTaskExecutor>();
 
         return services;
     }
@@ -275,6 +288,14 @@ public static class TaskServiceCollectionExtensions
             new ScriptHelperRegistry(
                 sp.GetRequiredService<IEvaluator>(),
                 sp.GetRequiredService<ScriptSandboxOptions>()));
+
+        // Secret bundle cache options — module-local, BindSection pattern like Sandbox/Helpers.
+        services.TryAddSingleton(sp => BindSection<SecretCacheOptions>(sp, SecretCacheOptions.SectionName));
+        // Defensive: normally registered by the application module already.
+        services.TryAddSingleton(TimeProvider.System);
+        // Singleton on purpose: ScriptServices is scoped, but the cache must outlive request scopes.
+        // In-process on purpose: secret material stays off Redis (see ScriptSecretCache docs).
+        services.TryAddSingleton<IScriptSecretCache, ScriptSecretCache>();
 
         // Script services - scoped for per-request isolation (requires DaprClient to be registered)
         services.TryAddScoped<IScriptServices, ScriptServices>();

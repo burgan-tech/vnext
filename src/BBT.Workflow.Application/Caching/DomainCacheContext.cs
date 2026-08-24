@@ -33,7 +33,8 @@ public class DomainCacheContext : IDomainCacheContext, IDisposable
         IComponentGenerationProvider generationProvider,
         IOptions<ComponentCacheOptions> options,
         TimeProvider timeProvider,
-        ILoggerFactory loggerFactory)
+        ILoggerFactory loggerFactory,
+        IComponentL1Cache l1Cache)
     {
         Workflows = new CacheSet<Definitions.Workflow>(
             distributedCache,
@@ -41,7 +42,8 @@ public class DomainCacheContext : IDomainCacheContext, IDisposable
             generationProvider,
             options,
             timeProvider,
-            loggerFactory.CreateLogger<CacheSet<Definitions.Workflow>>());
+            loggerFactory.CreateLogger<CacheSet<Definitions.Workflow>>(),
+            l1Cache);
 
         Tasks = new CacheSet<WorkflowTask>(
             distributedCache,
@@ -49,7 +51,8 @@ public class DomainCacheContext : IDomainCacheContext, IDisposable
             generationProvider,
             options,
             timeProvider,
-            loggerFactory.CreateLogger<CacheSet<WorkflowTask>>());
+            loggerFactory.CreateLogger<CacheSet<WorkflowTask>>(),
+            l1Cache);
 
         Schemas = new CacheSet<SchemaDefinition>(
             distributedCache,
@@ -57,7 +60,8 @@ public class DomainCacheContext : IDomainCacheContext, IDisposable
             generationProvider,
             options,
             timeProvider,
-            loggerFactory.CreateLogger<CacheSet<SchemaDefinition>>());
+            loggerFactory.CreateLogger<CacheSet<SchemaDefinition>>(),
+            l1Cache);
 
         Functions = new CacheSet<Function>(
             distributedCache,
@@ -65,7 +69,8 @@ public class DomainCacheContext : IDomainCacheContext, IDisposable
             generationProvider,
             options,
             timeProvider,
-            loggerFactory.CreateLogger<CacheSet<Function>>());
+            loggerFactory.CreateLogger<CacheSet<Function>>(),
+            l1Cache);
 
         Views = new CacheSet<View>(
             distributedCache,
@@ -73,7 +78,8 @@ public class DomainCacheContext : IDomainCacheContext, IDisposable
             generationProvider,
             options,
             timeProvider,
-            loggerFactory.CreateLogger<CacheSet<View>>());
+            loggerFactory.CreateLogger<CacheSet<View>>(),
+            l1Cache);
 
         Extensions = new CacheSet<Extension>(
             distributedCache,
@@ -81,7 +87,8 @@ public class DomainCacheContext : IDomainCacheContext, IDisposable
             generationProvider,
             options,
             timeProvider,
-            loggerFactory.CreateLogger<CacheSet<Extension>>());
+            loggerFactory.CreateLogger<CacheSet<Extension>>(),
+            l1Cache);
 
         Mappings = new CacheSet<Mapping>(
             distributedCache,
@@ -89,7 +96,8 @@ public class DomainCacheContext : IDomainCacheContext, IDisposable
             generationProvider,
             options,
             timeProvider,
-            loggerFactory.CreateLogger<CacheSet<Mapping>>());
+            loggerFactory.CreateLogger<CacheSet<Mapping>>(),
+            l1Cache);
 
         _setsByComponentTypeKey = new Dictionary<string, ICacheSet>(StringComparer.OrdinalIgnoreCase)
         {
