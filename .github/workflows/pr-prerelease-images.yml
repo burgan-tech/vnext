@@ -9,9 +9,13 @@
 # The versioned tag is the canonical reference — a cancelled run can leave `pr-{N}`
 # pointing at different builds across services.
 #
-# Scope is deliberately narrow: Docker images to GHCR only. No git tag, no GitHub
-# Release, no NuGet/npm publish, no signing/SBOM/scan — those belong to the release
-# pipeline (build-and-publish-images.yml).
+# Each PR gets ONE GitHub prerelease (tag `pr-{N}`), updated in place on every push
+# and deleted by pr-prerelease-cleanup.yml when the PR closes — so the Releases page
+# shows at most one entry per open PR and stable releases stay "Latest".
+#
+# Scope is deliberately narrow otherwise: Docker images to GHCR only. No NuGet/npm
+# publish, no signing/SBOM/scan — those belong to the release pipeline
+# (build-and-publish-images.yml).
 #
 # Security note: adding a label requires only triage permission, and the images are
 # built from the UNREVIEWED PR head. The prerelease tag namespace (`-{channel}.prN.`)
@@ -178,16 +182,22 @@ jobs:
           build-args: |
             VERSION=${{ needs.prepare.outputs.version }}
 
-  comment:
+  announce:
     needs: [prepare, build]
-    # Comment on build failure too, so the sticky comment reflects broken state instead
-    # of going silently stale; skip only cancelled runs (a newer push will re-comment).
+    # Announce build failure too, so the sticky comment reflects broken state instead
+    # of going silently stale; skip only cancelled runs (a newer push will re-announce).
     if: ${{ !cancelled() && needs.prepare.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
+      contents: write
       pull-requests: write
     steps:
-      - name: Upsert sticky PR comment
+      # One per-PR prerelease on the Releases page (tag pr-{N}), updated in place on
+      # every push, plus a sticky PR comment — both from the same body so they never
+      # drift. The release/tag is deleted by pr-prerelease-cleanup.yml when the PR
+      # closes. The pr-{N} git tag can never collide with real releases: the release
+      # pipeline only creates and walks v-prefixed tags.
+      - name: Upsert per-PR prerelease and sticky comment
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CHANNEL: ${{ needs.prepare.outputs.channel }}
@@ -198,6 +208,8 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           MARKER='<!-- pr-prerelease-images -->'
+          TAG="pr-$PR"
+          RELEASE_URL="https://github.com/$REPO/releases/tag/$TAG"
 
           if [ "$BUILD_RESULT" = "success" ]; then
             STATUS="✅ **Build succeeded**"
@@ -213,6 +225,7 @@ jobs:
           - **Channel**: \`$CHANNEL\`
           - **Version**: \`$VERSION\`
           - **Commit**: $HEAD_SHA
+          - **Release**: $RELEASE_URL
 
           \`\`\`bash
           docker pull ghcr.io/$REPO/execution:$VERSION
@@ -225,6 +238,20 @@ jobs:
           \`\`\`
 
           The moving tag \`pr-$PR\` also points at the newest build of this PR. A cancelled run can leave it inconsistent across services — the versioned tag above is the canonical reference."
+
+          # Only move the release when images actually pushed; a failed build keeps the
+          # previous (still pullable) release and the comment carries the failure.
+          if [ "$BUILD_RESULT" = "success" ]; then
+            TITLE="PR #$PR prerelease — $VERSION"
+            if gh release view "$TAG" -R "$REPO" >/dev/null 2>&1; then
+              gh api -X PATCH "repos/$REPO/git/refs/tags/$TAG" -f sha="$HEAD_SHA" -F force=true
+              gh release edit "$TAG" -R "$REPO" --title "$TITLE" --notes "$BODY" --prerelease
+              echo "Updated release $TAG"
+            else
+              gh release create "$TAG" -R "$REPO" --target "$HEAD_SHA" --title "$TITLE" --notes "$BODY" --prerelease
+              echo "Created release $TAG"
+            fi
+          fi
 
           CID=$(gh api "repos/$REPO/issues/$PR/comments" --paginate \
                 --jq ".[] | select(.body | startswith(\"$MARKER\")) | .id" | head -n 1)
