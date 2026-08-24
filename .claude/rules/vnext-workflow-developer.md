@@ -230,11 +230,21 @@ A sixth profile is **composed on top of** the base, never selected instead of it
   `HasLiveTransitionOwnerAsync` — the `updateData` handoff probe. A mid-chain `updateData` is
   therefore more likely to take over (idempotent flip, same short lock) than to drop.
 - **Both modes must keep producing the SAME trace shape.** `Scheduled` hops get
-  `TransitionJob.Execute` (`BackgroundJobActivityHelper`); inline hops get `Transition.Hop`
+  `TransitionJob.Execute/…` (`BackgroundJobActivityHelper`); inline hops get `Transition.Hop/…`
   (`TransitionHopActivity`). Both go through `FlatLaneActivity` — anchor-parented, predecessor
   linked, `LaneSeq` advanced, `ActivityKind.Consumer` so apm-server still counts a transaction.
   Hop 0 gets no span of its own (the caller's span is it); sync chains get none at all.
   `TransitionPipelineTests` pins all three cases — if you touch the chain loop, run them.
+- **Span names are `{prefix}/{domain}/{flow}/{transition}`, built ONLY by `TransitionSpanName`.**
+  Every segment is definition-level; never append anything per-instance (instance id, correlation
+  id, job name) — apm-server groups transactions by name, so an unbounded name turns one
+  transaction into millions. Those stay in tags.
+- **A same-domain trigger task must open a child lane.** `TriggerTaskExecutorBase.RouteAsync` calls
+  `EnterChildLane()` on the local branch, so a StartTrigger / DirectTrigger / GetInstance(s) /
+  GetInstanceData / SubProcess dispatched in-process anchors the target instance on the
+  `Task.Execute` span instead of the caller's lane. The remote branch must NOT — the invoker
+  already stamps the lane into the request. `IsSameDomain` is private to the base to keep the two
+  inseparable. Guide: `docs/runtime/trace-lanes.md`.
 - **One delivery path: the scheduler.** The outbox continuation (`TransitionContinuationRequested`
   + Inbox relay + `transitions/{key}/enqueue`) is GONE. `ITransitionEnqueueGateway` retries the
   scheduler briefly (3 attempts, non-configurable — the accept calls it under the status lock) and

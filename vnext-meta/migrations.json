@@ -72,10 +72,10 @@
       "component": "telemetry",
       "path": "span.Transition.Hop",
       "since": "0.0.80",
-      "severity": "warning",
-      "title": "Inline chain hops emit Transition.Hop instead of TransitionJob.Execute",
-      "description": "A chained hop running inline emits a Transition.Hop span rather than the TransitionJob.Execute span it emitted when each hop was its own job. The lane shape is unchanged — anchor-parented, predecessor linked, LaneSeq ordered, ActivityKind.Consumer so apm-server still classifies it as a transaction — but the span NAME differs, deliberately, so \"how many transition jobs ran\" stays answerable from traces.",
-      "action": "Add Transition.Hop to any dashboard, alert or trace query that filters on TransitionJob.Execute and needs to keep counting chained hops. See docs/architecture/async-transition-execution-modes.md."
+      "severity": "error",
+      "title": "Transition span names now carry domain/flow/transition",
+      "description": "Both transition-hop spans are renamed to {prefix}/{domain}/{flow}/{transition} — TransitionJob.Execute/... for a hop that ran as a scheduler job, and the new Transition.Hop/... for one that ran inline inside an already-executing job. The lane shape is unchanged (anchor-parented, predecessor linked, LaneSeq ordered, ActivityKind.Consumer so apm-server still classifies it as a transaction); only the names change. Every name segment is a definition-level identifier, so transaction cardinality stays bounded.",
+      "action": "Dashboards, alerts and trace queries filtering on the exact name \"TransitionJob.Execute\" match nothing after this change — switch to a prefix match. Add the \"Transition.Hop\" prefix alongside it to keep counting chained hops once a domain runs with AutoTransitionMode: Inline. See docs/architecture/async-transition-execution-modes.md."
     },
     {
       "id": "outbox-continuation-path-removed",
@@ -87,6 +87,17 @@
       "title": "Transactional-outbox continuation path removed",
       "description": "The TransitionContinuationRequested contract, its Inbox relay handler and the internal POST .../transitions/{key}/enqueue endpoint are gone. The scheduler is the only delivery path. A failed enqueue is retried briefly (3 attempts) and then reported: the chained continuation faults the instance, and an async accept fails instead of returning 202 for work that may never be delivered.",
       "action": "Before upgrading, verify no TransitionContinuationRequested rows are pending in the outbox — nothing consumes them afterwards. Such rows only ever appeared as a direct-enqueue fallback, so the table is normally empty. See docs/architecture/async-transition-execution-modes.md."
+    },
+    {
+      "id": "same-domain-trigger-task-child-lane",
+      "type": "behavior",
+      "component": "telemetry",
+      "path": "span.Task.Execute",
+      "since": "0.0.80",
+      "severity": "info",
+      "title": "Same-domain trigger tasks now nest under their Task.Execute span",
+      "description": "A trigger-family task (StartTrigger, DirectTrigger, GetInstance, GetInstances, GetInstanceData, SubProcess) targeting the runtime's own domain dispatches in-process. Its target instance's spans previously anchored to the CALLING instance's trace lane and appeared as siblings of the caller's own hops. The local branch now opens a child lane on the Task.Execute span, so the triggered work is nested underneath the task that triggered it — the same shape a subflow handoff already had. Cross-domain routing is unchanged.",
+      "action": "No action required. Traces gain a level of nesting under Task.Execute for locally triggered instances; queries that selected those spans by the root instance id tag (vnext.root.instance.id) are unaffected. See docs/runtime/trace-lanes.md."
     }
   ]
 }

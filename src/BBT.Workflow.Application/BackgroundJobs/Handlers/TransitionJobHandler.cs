@@ -11,6 +11,7 @@ using BBT.Workflow.Execution.Services;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Scripting;
+using BBT.Workflow.Telemetry;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -42,7 +43,11 @@ public sealed class TransitionJobHandler(
         using var lane = WorkflowTraceLane.Reset(args.TraceRoot, args.ParentTraceRoot, args.LaneSeq);
 
         // Restore trace context from the original request for distributed tracing correlation
-        using var activity = BackgroundJobActivityHelper.StartFlatLaneActivity("TransitionJob.Execute", args);
+        // Name carries domain/flow/transition so a chain is readable without opening each span.
+        using var activity = BackgroundJobActivityHelper.StartFlatLaneActivity(
+            TransitionSpanName.Build(
+                TransitionSpanName.JobPrefix, args.Domain, args.Workflow, args.TransitionKey),
+            args);
 
         // Payload from a build that predates the lane: make THIS hop the anchor for its own
         // descendants, which reproduces the pre-lane nesting exactly instead of half-flattening.

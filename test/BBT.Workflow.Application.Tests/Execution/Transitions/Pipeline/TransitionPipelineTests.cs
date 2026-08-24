@@ -1284,7 +1284,9 @@ public class TransitionPipelineTests
                     ActivitySamplingResult.AllDataAndRecorded,
                 ActivityStarted = activity =>
                 {
-                    if (activity.OperationName == TransitionHopActivity.ActivityName)
+                    // Prefix match: the full name now carries /{domain}/{flow}/{transition}.
+                    if (activity.OperationName.StartsWith(
+                            TransitionHopActivity.ActivityName, StringComparison.Ordinal))
                         Hops.Add(activity);
                 }
             };

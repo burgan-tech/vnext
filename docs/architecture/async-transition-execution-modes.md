@@ -119,9 +119,9 @@ deferred:
 Both modes produce the **same trace shape**, and that is deliberate — switching modes must
 not move dashboards.
 
-In `Scheduled` mode each hop is a job and gets a `TransitionJob.Execute` span from
+In `Scheduled` mode each hop is a job and gets a `TransitionJob.Execute/...` span from
 `BackgroundJobActivityHelper.StartFlatLaneActivity`. In `Inline` mode each continuation gets
-a `Transition.Hop` span from `TransitionHopActivity`. Both go through `FlatLaneActivity`,
+a `Transition.Hop/...` span from `TransitionHopActivity`. Both go through `FlatLaneActivity`,
 the single home of the lane parenting policy, so both are:
 
 - **parented to the lane anchor**, with the predecessor hop attached as an `ActivityLink`.
@@ -138,13 +138,32 @@ Two deliberate differences from the job path:
 
 - `messaging.*` tags and the job name are absent — there is no broker and no job behind an
   inline hop.
-- The span is named `Transition.Hop`, **not** `TransitionJob.Execute`, so "how many
+- The span's prefix is `Transition.Hop`, **not** `TransitionJob.Execute`, so "how many
   transition jobs ran" stays answerable from traces.
 
-> **Dashboards:** anything filtering on `TransitionJob.Execute` must add `Transition.Hop`
-> to keep counting chained hops once a domain runs in `Inline` mode.
+### Span names carry domain/flow/transition
 
-Hop 0 never gets a span of its own — the caller's span (`TransitionJob.Execute` on the async
+Both spans are named `{prefix}/{domain}/{flow}/{transition}` — e.g.
+`TransitionJob.Execute/banking/loan-application/approve` — following the convention the
+`SubFlow.*` spans already use. Without it a five-hop chain is five identically-named spans,
+readable only by opening each one and reading its tags.
+
+All three segments are **definition-level** identifiers, so the name stays low-cardinality
+and safe as an APM transaction name. Nothing per-instance is ever appended (instance id,
+correlation id, job name): apm-server groups transactions by name, and an unbounded name
+turns one transaction into millions. Those stay in tags, where they already are.
+
+> **Dashboards — two changes, both breaking for exact-name filters:**
+>
+> 1. A filter written as `name == "TransitionJob.Execute"` now matches **nothing**. Switch to
+>    a prefix match (`name : "TransitionJob.Execute/*"`), or group by the prefix.
+> 2. Add the `Transition.Hop` prefix alongside it to keep counting chained hops once a domain
+>    runs in `Inline` mode.
+>
+> `TransitionSpanName` is the single place both names are built, so a query written against
+> its two prefix constants stays correct.
+
+Hop 0 never gets a span of its own — the caller's span (`TransitionJob.Execute/...` on the async
 path) already represents it. Sync chains get no hop spans at all: they have always chained
 in-process without them, and adding them would invent transactions that never existed.
 

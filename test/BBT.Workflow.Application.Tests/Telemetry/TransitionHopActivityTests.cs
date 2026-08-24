@@ -129,10 +129,25 @@ public sealed class TransitionHopActivityTests : IDisposable
     [Fact]
     public void Hop_name_is_distinct_from_the_job_span()
     {
-        // "How many transition JOBS ran" must stay answerable from traces, so an inline hop is
-        // never named TransitionJob.Execute.
+        // "How many transition JOBS ran" must stay answerable from traces, so an inline hop never
+        // shares the job path's prefix.
         TransitionHopActivity.ActivityName.ShouldBe("Transition.Hop");
-        TransitionHopActivity.ActivityName.ShouldNotBe("TransitionJob.Execute");
+        TransitionHopActivity.ActivityName.ShouldNotBe(TransitionSpanName.JobPrefix);
+    }
+
+    [Fact]
+    public void Hop_name_carries_domain_flow_and_transition()
+    {
+        // Without this, a five-hop chain is five identically-named spans and the trace tree is
+        // readable only by opening each one.
+        using var lane = WorkflowTraceLane.Reset(TraceParent(AnchorSpanId));
+        var context = CreateContext();
+
+        using var hop = TransitionHopActivity.Start(context, laneSeq: 1, null, null);
+
+        hop.ShouldNotBeNull();
+        hop!.OperationName.ShouldBe(
+            $"Transition.Hop/{context.Domain}/{context.WorkflowKey}/{context.TransitionKey}");
     }
 
     [Fact]

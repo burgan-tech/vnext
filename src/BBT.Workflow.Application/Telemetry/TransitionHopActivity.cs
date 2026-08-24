@@ -24,11 +24,12 @@ namespace BBT.Workflow.Telemetry;
 public static class TransitionHopActivity
 {
     /// <summary>
-    /// Span name for an inline chain hop. Deliberately distinct from the job path's
-    /// <c>TransitionJob.Execute</c>: there is no job here, and naming it otherwise would make
+    /// Name PREFIX for an inline chain hop; the full name adds <c>/{domain}/{flow}/{transition}</c>
+    /// via <see cref="TransitionSpanName.Build"/>. Deliberately distinct from the job path's
+    /// <c>TransitionJob.Execute</c>: there is no job here, and sharing the prefix would make
     /// "how many transition jobs ran" unanswerable from traces.
     /// </summary>
-    public const string ActivityName = "Transition.Hop";
+    public const string ActivityName = TransitionSpanName.HopPrefix;
 
     /// <summary>
     /// Starts the hop span.
@@ -65,7 +66,8 @@ public static class TransitionHopActivity
         // payload across the scheduler.
         var activity = FlatLaneActivity.Start(
             PipelineStepActivityHelper.ActivitySource,
-            ActivityName,
+            TransitionSpanName.Build(
+                ActivityName, context.Domain, context.WorkflowKey, context.TransitionKey),
             ActivityKind.Consumer,
             anchorTraceParent: null,
             predecessorTraceParent: predecessorTraceParent,
