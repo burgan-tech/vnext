@@ -22,4 +22,8 @@
         <InternalsVisibleTo Include="BBT.Workflow.Application.Tests" />
     </ItemGroup>
 
+    <ItemGroup>
+        <InternalsVisibleTo Include="BBT.Workflow.Application.Tests" />
+    </ItemGroup>
+
 </Project>
