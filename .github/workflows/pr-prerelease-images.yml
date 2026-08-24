@@ -16,8 +16,10 @@
 # and deleted by pr-prerelease-cleanup.yml when the PR closes — so the Releases page
 # shows at most one entry per open PR and stable releases stay "Latest".
 #
-# Scope is deliberately narrow otherwise: Docker images to GHCR only. No NuGet/npm
-# publish, no signing/SBOM/scan — those belong to the release pipeline
+# Images get the same supply-chain treatment as release images: cosign keyless
+# signature by digest, SBOM artifact and Anchore vulnerability scan with SARIF
+# upload. Scope is deliberately narrow otherwise: no NuGet/npm publish and no
+# GitHub build-provenance attestation — those belong to the release pipeline
 # (build-and-publish-images.yml).
 #
 # Security note: adding a label requires only triage permission, and the images are
@@ -127,6 +129,8 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write
+      security-events: write
     strategy:
       fail-fast: false
       matrix:
@@ -182,6 +186,7 @@ jobs:
       # provenance/sbom off keeps each push a single plain manifest (no attestation
       # index), so every GHCR version stays tagged and cleanup by tag is safe.
       - name: Build and push Docker image
+        id: push
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -196,6 +201,71 @@ jobs:
           cache-to: type=gha,mode=max
           build-args: |
             VERSION=${{ needs.prepare.outputs.version }}
+
+      - name: Resolve image digest
+        id: digest
+        run: |
+          DIGEST="${{ steps.push.outputs.digest }}"
+          if [ -z "$DIGEST" ]; then
+            echo "::error::Could not resolve image digest"
+            exit 1
+          fi
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+          echo "Resolved digest: $DIGEST"
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign image by digest (immutable reference)
+        env:
+          IMAGE_REF: ${{ env.IMAGE_BASE }}/${{ matrix.image }}
+          DIGEST: ${{ steps.digest.outputs.digest }}
+        run: |
+          cosign sign --yes "${IMAGE_REF}@${DIGEST}"
+
+      - name: Generate SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ env.IMAGE_BASE }}/${{ matrix.image }}:${{ needs.prepare.outputs.version }}
+          format: spdx-json
+          output-file: ${{ matrix.image }}-sbom.spdx.json
+
+      # Shorter retention than release SBOMs (90d) — PR builds are frequent and
+      # short-lived.
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-${{ matrix.image }}-${{ needs.prepare.outputs.version }}
+          path: ${{ matrix.image }}-sbom.spdx.json
+          retention-days: 14
+
+      - name: Security scan
+        uses: anchore/scan-action@v3
+        id: scan
+        with:
+          image: ${{ env.IMAGE_BASE }}/${{ matrix.image }}:${{ needs.prepare.outputs.version }}
+          fail-build: false
+          output-format: sarif
+
+      - name: Validate SARIF output
+        id: validate_sarif
+        if: always() && steps.scan.outputs.sarif != ''
+        run: |
+          SARIF_FILE="${{ steps.scan.outputs.sarif }}"
+          if [ -f "$SARIF_FILE" ] && [ -s "$SARIF_FILE" ] && jq empty "$SARIF_FILE" 2>/dev/null; then
+            echo "valid=true" >> $GITHUB_OUTPUT
+          else
+            echo "::warning::SARIF file is missing, empty, or contains invalid JSON – skipping upload"
+            echo "valid=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Upload SARIF results
+        if: always() && steps.validate_sarif.outputs.valid == 'true'
+        uses: github/codeql-action/upload-sarif@v3
+        continue-on-error: true
+        with:
+          sarif_file: ${{ steps.scan.outputs.sarif }}
+          category: ${{ matrix.image }}
 
   announce:
     needs: [prepare, build]
