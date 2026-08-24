@@ -14,6 +14,7 @@ using BBT.Workflow.Definitions;
 using BBT.Workflow.Functions.Contracts;
 using BBT.Workflow.Functions.Validation;
 using BBT.Workflow.Instances;
+using BBT.Workflow.Monitoring;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks;
@@ -129,7 +130,8 @@ public sealed class FunctionAppServiceScopeTests : IDisposable
             functionAccessPolicy: new FunctionAccessPolicy(
                 Substitute.For<ICurrentUser>(),
                 Substitute.For<ITransitionAuthorizationManager>()),
-            functionRequestValidationService: _functionRequestValidationService);
+            functionRequestValidationService: _functionRequestValidationService,
+            workflowMetrics: Substitute.For<IWorkflowMetrics>());
     }
 
     public void Dispose()

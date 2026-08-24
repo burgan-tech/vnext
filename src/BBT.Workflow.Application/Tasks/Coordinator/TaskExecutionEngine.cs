@@ -616,9 +616,12 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
         // 8. Execute task
         var executeResult = await executorResult.Value!.ExecuteAsync(executorContext, cancellationToken);
 
+        // B8: task TANIMI (mapping ScriptCode dahil) transition record'a kopyalanmaz — tanım zaten
+        // component store'dadır; referans yeterli. Monitor tarafı Request'i JsonElement passthrough
+        // gösterir (alan-parse etmez — keşifle doğrulandı), "Task" anahtarı korunur.
         var requestPayload = new
         {
-            Task = task,
+            Task = new { task.Key, task.Version, task.Domain, task.Flow, Type = task.GetTaskType().ToString() },
             executorContext.InputResponse
         };
         var requestJson = new JsonData(JsonSerializer.Serialize(

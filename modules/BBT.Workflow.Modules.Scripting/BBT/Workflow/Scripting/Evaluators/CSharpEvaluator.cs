@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -111,14 +112,15 @@ public class CSharpEvaluator : IEvaluator
     internal long CompileInvocationCount => Interlocked.Read(ref _compileInvocationCount);
 
     /// <inheritdoc />
-    public Task<T> CompileToInstanceAsync<T>(
+    public Task<EvaluatorCompilation<T>> CompileToInstanceAsync<T>(
         string code,
         IScriptServices? services = null,
         IEnumerable<MetadataReference>? extraReferences = null,
         IEnumerable<string>? usingDirectives = null,
         CancellationToken cancellationToken = default,
         AssemblyLoadContext? loadContext = null,
-        IReadOnlyList<string>? sandboxGrant = null)
+        IReadOnlyList<string>? sandboxGrant = null,
+        string? precomputedCacheKey = null)
     {
         if (string.IsNullOrWhiteSpace(code))
             throw new ArgumentException("Code cannot be null or empty", nameof(code));
@@ -130,10 +132,10 @@ public class CSharpEvaluator : IEvaluator
 
         // The load context is part of the compilation identity (a type compiled into helper set A's
         // context must never be served to a caller compiling against helper set B), so the scope is
-        // derived from loadContext itself rather than taken as a separate parameter.
-        var cacheScope = GetCacheScope(loadContext);
-        var cacheKey = GenerateCacheKey(
-            code, typeof(T), extraReferences, usingDirectives, sandboxGrant, cacheScope);
+        // derived from loadContext itself rather than taken as a separate parameter — that derivation
+        // now lives inside BuildProfile, reached via GenerateCacheKey below.
+        var cacheKey = precomputedCacheKey ?? GenerateCacheKey(
+            code, typeof(T), extraReferences, usingDirectives, sandboxGrant, loadContext);
 
         // Fast path: an already-materialised entry is the overwhelmingly common case (every script in
         // every transition after the first). Check it before GetOrAdd so the closure below — which
@@ -141,11 +143,26 @@ public class CSharpEvaluator : IEvaluator
         // allocated on every cache hit. Mirrors ScriptHelperRegistry.GetOrBuildHelpers.
         if (_typeCache.TryGetValue(cacheKey, out var existing) && existing.IsValueCreated)
         {
-            return Task.FromResult(CreateAndInjectServices<T>(existing.Value.CompiledType, services));
+            return Task.FromResult(new EvaluatorCompilation<T>(
+                CreateAndInjectServices<T>(existing.Value.CompiledType, services), false, TimeSpan.Zero));
         }
 
+        // The flag/duration live in this call's closure: the factory body runs at most once per cache
+        // key (Lazy ExecutionAndPublication), and only the call whose lambda actually created the
+        // stored Lazy has its locals written — so exactly one caller reports Compiled=true per emit,
+        // no matter which thread triggers materialisation.
+        var compiledHere = false;
+        var compileDuration = TimeSpan.Zero;
         var lazy = _typeCache.GetOrAdd(cacheKey, _ => new Lazy<CompiledScript>(
-            () => CompileAndLoad<T>(code, cacheKey, extraReferences, usingDirectives, sandboxGrant, loadContext),
+            () =>
+            {
+                var compileTimer = Stopwatch.StartNew();
+                var result = CompileAndLoad<T>(code, cacheKey, extraReferences, usingDirectives, sandboxGrant, loadContext);
+                compileTimer.Stop();
+                compiledHere = true;
+                compileDuration = compileTimer.Elapsed;
+                return result;
+            },
             LazyThreadSafetyMode.ExecutionAndPublication));
 
         CompiledScript compiled;
@@ -162,7 +179,8 @@ public class CSharpEvaluator : IEvaluator
             throw;
         }
 
-        return Task.FromResult(CreateAndInjectServices<T>(compiled.CompiledType, services));
+        return Task.FromResult(new EvaluatorCompilation<T>(
+            CreateAndInjectServices<T>(compiled.CompiledType, services), compiledHere, compileDuration));
     }
 
     /// <inheritdoc />
@@ -210,17 +228,7 @@ public class CSharpEvaluator : IEvaluator
     /// <param name="services">Optional services to inject</param>
     /// <returns>The created instance with services injected</returns>
     private static T CreateAndInjectServices<T>(Type compiledType, IScriptServices? services)
-    {
-        var instance = (T)Activator.CreateInstance(compiledType)!;
-        
-        // Inject services if the instance is a ScriptBase and services are provided
-        if (instance is ScriptBase scriptBase && services != null)
-        {
-            scriptBase.SetServices(services);
-        }
-        
-        return instance;
-    }
+        => ScriptActivator.Create<T>(compiledType, services);
 
     /// <summary>
     /// Compiles the code and loads it into the target context, returning the type to cache.
@@ -438,58 +446,59 @@ public class CSharpEvaluator : IEvaluator
     }
 
     /// <summary>
-    /// Generates a stable cache key from the code and configuration.
+    /// Builds the profile half of the cache key: everything EXCEPT the source and target type —
+    /// sandbox flag, load-context scope, sorted grant, sorted usings, sorted reference displays.
+    /// Deterministic and order-insensitive so callers may compute it once per stable input set
+    /// (helper set / grant profile) and reuse it across compiles.
+    /// </summary>
+    public string BuildProfile(
+        IEnumerable<MetadataReference>? extraReferences,
+        IEnumerable<string>? usingDirectives,
+        IReadOnlyList<string>? sandboxGrant,
+        AssemblyLoadContext? loadContext)
+    {
+        var cacheScope = GetCacheScope(loadContext);
+        var sb = new StringBuilder();
+        sb.Append("sbx:").Append(_sandbox.Enabled ? '1' : '0');
+        if (!string.IsNullOrEmpty(cacheScope)) sb.Append("|alc:").Append(cacheScope);
+        if (sandboxGrant != null)
+            foreach (var grant in sandboxGrant.OrderBy(g => g, StringComparer.OrdinalIgnoreCase))
+                sb.Append("|@@").Append(grant);
+        if (usingDirectives != null)
+            foreach (var directive in usingDirectives.OrderBy(u => u))
+                sb.Append('|').Append(directive);
+        if (extraReferences != null)
+            foreach (var reference in extraReferences.OrderBy(r => r.Display))
+                sb.Append('|').Append(reference.Display);
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// Combines a source hash (SHA-256 hex of the exact source text), the target type and a
+    /// <see cref="BuildProfile"/> result into the final cache key. THE single key algorithm:
+    /// the raw-string path routes through here too, so a precomputed key can never diverge.
+    /// </summary>
+    public string ComputeCacheKey(string sourceHashHex, Type targetType, string profile)
+    {
+        var material = string.Concat(sourceHashHex, "|", targetType.AssemblyQualifiedName, "|", profile);
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(material)));
+    }
+
+    /// <summary>
+    /// Generates a stable cache key from the code and configuration: the single source of truth for
+    /// the raw-string compile path, composed from <see cref="BuildProfile"/> and
+    /// <see cref="ComputeCacheKey"/> so it can never diverge from a caller's precomputed key.
     /// </summary>
     private string GenerateCacheKey(
         string code,
         Type targetType,
         IEnumerable<MetadataReference>? extraReferences,
         IEnumerable<string>? usingDirectives,
-        IReadOnlyList<string>? sandboxGrant = null,
-        string? cacheScope = null)
+        IReadOnlyList<string>? sandboxGrant,
+        AssemblyLoadContext? loadContext)
     {
-        var sb = new StringBuilder();
-        sb.Append(code);
-        sb.Append('|');
-        sb.Append(targetType.AssemblyQualifiedName);
-
-        // Sandbox state is part of the compilation identity.
-        sb.Append("|sbx:").Append(_sandbox.Enabled ? '1' : '0');
-
-        if (!string.IsNullOrEmpty(cacheScope))
-        {
-            sb.Append("|alc:").Append(cacheScope);
-        }
-
-        if (sandboxGrant != null)
-        {
-            foreach (var grant in sandboxGrant.OrderBy(g => g, StringComparer.OrdinalIgnoreCase))
-            {
-                sb.Append("|@@").Append(grant);
-            }
-        }
-
-        if (usingDirectives != null)
-        {
-            foreach (var directive in usingDirectives.OrderBy(u => u))
-            {
-                sb.Append('|');
-                sb.Append(directive);
-            }
-        }
-
-        if (extraReferences != null)
-        {
-            foreach (var reference in extraReferences.OrderBy(r => r.Display))
-            {
-                sb.Append('|');
-                sb.Append(reference.Display);
-            }
-        }
-
-        var bytes = Encoding.UTF8.GetBytes(sb.ToString());
-        var hash = SHA256.HashData(bytes);
-        return Convert.ToHexString(hash);
+        var sourceHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(code)));
+        return ComputeCacheKey(sourceHash, targetType, BuildProfile(extraReferences, usingDirectives, sandboxGrant, loadContext));
     }
 
     /// <summary>

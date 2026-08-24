@@ -89,7 +89,10 @@ public class InstanceDataWriteServiceTests
     [Fact]
     public void PlanAppend_NoHead_StartsTheChainAtDefaultVersion()
     {
-        var plan = InstanceDataWriteService.PlanAppend(null, new JsonData("{\"a\":1}"), VersionStrategy.IncreasePatch);
+        // Exercises the default (new, single-pass) pipeline — legacyPipeline: false — since that
+        // is what actually runs in production. Byte-parity with the legacy pipeline is pinned
+        // separately in InstanceDataWriteServicePipelineTests.
+        var plan = InstanceDataWriteService.PlanAppend(null, new JsonData("{\"a\":1}"), VersionStrategy.IncreasePatch, legacyPipeline: false);
 
         plan.IsDuplicate.ShouldBeFalse();
         plan.Version.ShouldBe("1.0.0");
@@ -103,7 +106,7 @@ public class InstanceDataWriteServiceTests
         // never matches the head raw — merged it does, and no new version may be written.
         var head = CreateHeadRow("{\"a\":1,\"rr_doc1\":true}", "1.2.3");
 
-        var plan = InstanceDataWriteService.PlanAppend(head, new JsonData("{\"rr_doc1\":true}"), VersionStrategy.IncreaseMinor);
+        var plan = InstanceDataWriteService.PlanAppend(head, new JsonData("{\"rr_doc1\":true}"), VersionStrategy.IncreaseMinor, legacyPipeline: false);
 
         plan.IsDuplicate.ShouldBeTrue();
     }
@@ -113,7 +116,7 @@ public class InstanceDataWriteServiceTests
     {
         var head = CreateHeadRow("{\"a\":1}", "1.2.3");
 
-        var plan = InstanceDataWriteService.PlanAppend(head, new JsonData("{\"b\":2}"), VersionStrategy.IncreasePatch);
+        var plan = InstanceDataWriteService.PlanAppend(head, new JsonData("{\"b\":2}"), VersionStrategy.IncreasePatch, legacyPipeline: false);
 
         plan.IsDuplicate.ShouldBeFalse();
         // Full-merge model: the new row carries the complete state, not the delta.
@@ -127,7 +130,7 @@ public class InstanceDataWriteServiceTests
     {
         var head = CreateHeadRow("{\"a\":1}", "1.2.3");
 
-        var plan = InstanceDataWriteService.PlanAppend(head, new JsonData("{\"a\":2}"), versionStrategy: null);
+        var plan = InstanceDataWriteService.PlanAppend(head, new JsonData("{\"a\":2}"), versionStrategy: null, legacyPipeline: false);
 
         plan.IsDuplicate.ShouldBeFalse();
         plan.Version.ShouldBe("1.2.3");
