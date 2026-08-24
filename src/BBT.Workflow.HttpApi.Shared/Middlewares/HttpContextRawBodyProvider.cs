@@ -22,7 +22,14 @@ public sealed class HttpContextRawBodyProvider(IHttpContextAccessor httpContextA
         if (items != null
             && items.TryGetValue(RawRequestBodyBufferingMiddleware.RawBodyItemsKey, out var value))
         {
-            return value as string;
+            return value switch
+            {
+                // Middleware stores the capture lazily; the UTF-16 conversion happens here,
+                // on first actual read, and is cached inside the capture.
+                RawRequestBodyCapture capture => capture.Text,
+                string text => text,
+                _ => null
+            };
         }
 
         return null;
