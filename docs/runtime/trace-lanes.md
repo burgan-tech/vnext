@@ -30,8 +30,14 @@ PATCH .../instances/{id}/transitions/{key}      ← APM transaction, anchors the
 ```
 
 A new lane opens **only** at a subflow handoff, never at a service boundary. So depth is
-`O(subflow nesting)`, independent of chain length. Inside each lane item the previous structure is
-unchanged: `transition/{key}` → `Task.Execute.{key}` → HTTP/Dapr client span.
+`O(subflow nesting)`, independent of chain length. Inside each lane item the structure is:
+`transition/{key}` → (`OnExit.{state}` / `OnEntry.{state}` lifecycle groups) → `Task.Execute.{key}`
+→ (`Task.PrepareInput` / `Task.Invoke` / `Task.ProcessOutput` phases) → HTTP/Dapr client span →
+`Execution.Invoke.{type}/{key}` (server) → `Task.Invoke.{type}/{key}` (invoker). The arming of
+scheduled/auto/timeout continuations is visible as events on the arming transition's span
+(`transition.scheduled`, `transition.auto.selected`, `flow.timeout.scheduled`) — the continuation
+itself stays where this lane model puts it (sibling hop, or a linked new trace for deferred jobs).
+See `docs/monitoring/correlation-and-tracing.md` § "Span inventory on the task path".
 
 ## Moving parts
 

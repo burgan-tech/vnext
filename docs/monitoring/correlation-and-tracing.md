@@ -204,8 +204,14 @@ baggage. Do not re-add them to a log scope.
   path is visible in APM (they were previously log-only).
 - **Detail level**: `Telemetry:Tracing:DetailLevel` — `"Business"` (default) keeps production
   traces focused on service boundaries and business spans; `"Verbose"` additionally emits
-  task-phase spans (`BBT.Workflow.Tasks`), cache spans (`BBT.Workflow.Cache`), EF Core and Dapr
-  state-store spans. Read once at startup — changing it requires a restart.
+  pipeline-step spans (`[{order}] {Step}`, `BBT.Workflow.Pipeline`), cache spans
+  (`BBT.Workflow.Cache`), EF Core and Dapr state-store spans. Read once at startup — changing it
+  requires a restart. Task-phase spans (`Task.PrepareInput` / `Task.Invoke` /
+  `Task.ProcessOutput`), `FanOut.Item` and the `OnExit.{state}` / `OnEntry.{state}` lifecycle
+  groups are **business-level** and exist in both modes: the phases are the only spans carrying a
+  binding's mapping cost and a script task's compile+run time (`Task.Invoke` is the script itself).
+  `Task.PrepareInput`/`Task.ProcessOutput` are created only when the task has mapping code — the
+  phase is a no-op otherwise. The dev compose env files set `Verbose` by default.
 
 ## Verifying against Elastic APM locally
 
@@ -254,8 +260,40 @@ background-job spans attach directly to `transition/{key}`. Never rename an alwa
 to a `[`-prefixed name. Post-commit jobs get an always-exported `PostCommit.{JobType}` span so
 subflow/subprocess starts have a visible parent.
 
+## Span inventory on the task path
+
+One task invocation, Business mode, reads top-down as:
+
+```
+transition/{key}                          [Trace] aspect (Orchestration) — carries
+│                                         vnext.state.from/to and the state.changed,
+│                                         transition.scheduled, transition.auto.selected events
+├── OnExit.{state} / OnEntry.{state}      lifecycle groups for the state's own tasks
+└── Task.Execute.{taskKey}                [Trace] aspect; vnext.task.trigger says whose task it is
+    ├── Task.PrepareInput                 input binding's mapping run (only when mapping exists)
+    ├── Task.Invoke                       the actual work — a script task's script runs HERE
+    │   └── HTTP/gRPC client → daprd …    transport
+    │       └── Execution.Invoke.{type}/{key}   Execution server span (task-named)
+    │           └── Task.Invoke.{type}/{key}    invoker span — error status carries the
+    │                                           invocation's own verdict (error.code / error.type)
+    └── Task.ProcessOutput                output binding (only when mapping exists)
+```
+
+Arming is event-only by design: `transition.scheduled` / `flow.timeout.scheduled` (armed key,
+`executeAt`, job name) and `transition.auto.selected` (winner, evaluated count) sit on the arming
+transition's span, while the continuation stays where the lane model puts it — auto hops as lane
+siblings with `vnext.hop.predecessor`, timers as a new trace with an `ActivityLink` back.
+
 ## What to check when a trace looks broken
 
+0. Transition/task spans missing entirely, or one job/server span being **renamed once per task**
+   (its name ends up `Task.Execute.{lastTaskKey}`) → PostSharp weaving is off. The `[Trace]`
+   aspects own `transition/{key}` and `Task.Execute.{key}`; without weaving they produce no span
+   and the `SetDisplayName` calls land on the ambient span instead. Dev containers control this
+   with `SKIP_POSTSHARP` in `etc/docker/.env.*.dev` (weaving is ON by default there; see
+   `docs/monitoring/changes/docker-watch-path-static-web-assets.md`). Note `dotnet watch`
+   hot-reload patches are never woven — a hot-patched [Trace] method loses its span until the
+   next full rebuild.
 1. Spans missing entirely → is the OTLP endpoint reachable? Remember: config overrides env for
    the endpoint — `Telemetry:Otlp:Endpoint` must stay unset in appsettings.
 2. Job spans in their own trace → expected for timer/timeout/ack jobs (follow the link); a
@@ -272,13 +310,13 @@ subflow/subprocess starts have a visible parent.
 4. Logs missing the request id on the async path → the originating request never carried/received
    an `X-Request-Id` (gateway plugin disabled?); the middleware generates one per request, so
    at minimum the start request's own logs always have one.
-5. Spans re-rooted to the top of the trace (e.g. `TaskCoordinator.Execute` not under
+5. Spans re-rooted to the top of the trace (e.g. `Task.Execute.{key}` not under
    `transition/{key}`) → their parent was created but filtered at export. See "Diagnostic spans
    and the Business filter" above — some span in the chain violates the creation rule.
 6. A subtree that renders correctly in OpenObserve but hangs off the root in Elastic → the parent
    span id exists on the wire but no document for it reached the backend. Confirm by fetching the
    orphan's `parent.id` from Elasticsearch and searching the trace for that `span.id`; if it is
    absent, find who owns that span. For the Orchestration → Execution hop the owner is the Dapr
-   sidecar — see "Verifying against Elastic APM locally". Task-phase spans (`Task.PrepareInput` /
-   `Task.Invoke` / `Task.ProcessOutput`) are Verbose-only by design, so run with
-   `DetailLevel: "Verbose"` while diagnosing or those levels are simply not there to nest under.
+   sidecar — see "Verifying against Elastic APM locally". Pipeline-step spans (`[{order}] {Step}`)
+   are Verbose-only by design, so run with `DetailLevel: "Verbose"` while diagnosing or those
+   levels are simply not there to nest under.
