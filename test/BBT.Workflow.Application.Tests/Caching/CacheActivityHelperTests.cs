@@ -67,12 +67,28 @@ public sealed class CacheActivityHelperTests : IDisposable
             Assert.NotNull(activity);
         }
 
-        // Assert: span exists even though DetailLevel is Business, not Verbose
+        // Assert: span exists even though DetailLevel is Business, not Verbose, and its name
+        // carries the cache key so a reader sees WHAT was read without opening the span.
         var span = Assert.Single(collected);
-        Assert.Equal("Cache.Get", span.DisplayName);
+        Assert.Equal("Cache.Get/wf:domain:key:res:gen1:latest", span.DisplayName);
         Assert.False(span.DisplayName.StartsWith("["));
+        Assert.Equal("wf:domain:key:res:gen1:latest", span.GetTagItem("cache.key"));
         Assert.Equal(TelemetryConstants.SpanCategories.Business,
             span.GetTagItem(TelemetryConstants.TagNames.SpanCategory));
+    }
+
+    [Fact]
+    public void StartActivity_WithoutCacheKey_KeepsBareOperationName()
+    {
+        // A keyless operation (warmup, batch) must not degrade into a trailing-slash name.
+        var collected = new List<Activity>();
+        using var listener = CreateListener(collected);
+
+        using (CacheActivityHelper.StartActivity(CacheActivityHelper.OperationWarmup))
+        {
+        }
+
+        Assert.Equal("Cache.Warmup", Assert.Single(collected).DisplayName);
     }
 
     [Fact]

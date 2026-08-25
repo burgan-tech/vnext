@@ -42,7 +42,8 @@ public sealed class TransitionLockScopeFactory(
         LockAcquireWait wait,
         CancellationToken cancellationToken = default)
     {
-        using var activity = PipelineStepActivityHelper.StartOperationActivity("Lock.Acquire");
+        // Key in the span name — see InstanceStatusLock.AcquireAsync for the rationale.
+        using var activity = PipelineStepActivityHelper.StartOperationActivity($"Lock.Acquire/{lockKey}");
         activity?.SetTag(TelemetryConstants.TagNames.LockKey, lockKey);
         activity?.SetTag(TelemetryConstants.TagNames.LockLeaseSeconds, _leaseSeconds);
         activity?.SetTag(TelemetryConstants.TagNames.LockKind, LockKind);
@@ -157,7 +158,7 @@ internal sealed class TransitionLockScope : ITransitionLockScope
     {
         if (_handle is not null)
         {
-            using var activity = PipelineStepActivityHelper.StartOperationActivity("Lock.Release");
+            using var activity = PipelineStepActivityHelper.StartOperationActivity($"Lock.Release/{LockKey}");
             activity?.SetTag(TelemetryConstants.TagNames.LockKey, LockKey);
             activity?.SetTag(TelemetryConstants.TagNames.LockKind, _kind);
             await _handle.DisposeAsync();

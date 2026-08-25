@@ -45,14 +45,23 @@ public static class CacheActivityHelper
     /// <summary>
     /// Starts a new activity as a child of the current activity for a cache operation.
     /// Returns null if no listener is registered — zero allocation in that case.
+    /// <para>
+    /// When a cache key is supplied the span is named <c>{operation}/{cacheKey}</c>, so a reader
+    /// sees WHICH component a read or write touched straight from the tree instead of having to
+    /// open the span for its <c>cache.key</c> tag. The tag is still written, because that is what
+    /// queries and aggregations group on. A keyless operation (warmup, batch) keeps the bare
+    /// operation name rather than growing a trailing slash.
+    /// </para>
     /// </summary>
     public static Activity? StartActivity(
         string operationName,
         string? cacheKey = null,
         string? componentType = null)
     {
+        var spanName = string.IsNullOrEmpty(cacheKey) ? operationName : $"{operationName}/{cacheKey}";
+
         var activity = ActivitySource.StartActivity(
-            operationName,
+            spanName,
             ActivityKind.Client,
             Activity.Current?.Context ?? default);
 

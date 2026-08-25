@@ -62,8 +62,10 @@ public sealed class InstanceStatusLockActivityTests : IDisposable
     /// concurrently running span (e.g. from <c>TransitionLockScopeFactoryActivityTests</c>, same
     /// source) never counts as this test's own.
     /// </summary>
-    private static bool IsSpan(Activity activity, string displayName, string lockKey) =>
-        activity.DisplayName == displayName &&
+    // The lock key is part of the span NAME (Lock.Acquire/{key}) so the tree shows which key a hop
+    // contended on without opening the span; it stays on the tag too, for querying.
+    private static bool IsSpan(Activity activity, string operationName, string lockKey) =>
+        activity.DisplayName == $"{operationName}/{lockKey}" &&
         Equals(activity.GetTagItem(TelemetryConstants.TagNames.LockKey), lockKey);
 
     [Fact]

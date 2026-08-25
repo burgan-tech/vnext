@@ -27,7 +27,9 @@ public sealed class InstanceStatusLock(
         string lockKey,
         CancellationToken cancellationToken = default)
     {
-        using var activity = PipelineStepActivityHelper.StartOperationActivity("Lock.Acquire");
+        // The key is in the span NAME, not only the tag: a contended hop is the thing you look for
+        // in a tree, and reading which key it fought over should not require opening the span.
+        using var activity = PipelineStepActivityHelper.StartOperationActivity($"Lock.Acquire/{lockKey}");
         activity?.SetTag(TelemetryConstants.TagNames.LockKey, lockKey);
         activity?.SetTag(TelemetryConstants.TagNames.LockLeaseSeconds, _leaseSeconds);
         activity?.SetTag(TelemetryConstants.TagNames.LockKind, LockKind);

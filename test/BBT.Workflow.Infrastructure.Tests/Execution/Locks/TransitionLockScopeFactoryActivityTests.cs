@@ -67,8 +67,9 @@ public sealed class TransitionLockScopeFactoryActivityTests : IDisposable
     /// below matches on <see cref="TelemetryConstants.TagNames.LockKey"/> in addition to
     /// <c>DisplayName</c> so a concurrently running span never counts as this test's own.
     /// </summary>
-    private static bool IsSpan(Activity activity, string displayName, string lockKey) =>
-        activity.DisplayName == displayName &&
+    // The lock key is part of the span NAME (Lock.Acquire/{key}); see InstanceStatusLockActivityTests.
+    private static bool IsSpan(Activity activity, string operationName, string lockKey) =>
+        activity.DisplayName == $"{operationName}/{lockKey}" &&
         Equals(activity.GetTagItem(TelemetryConstants.TagNames.LockKey), lockKey);
 
     [Fact]
