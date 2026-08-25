@@ -578,6 +578,14 @@ public sealed class ScriptEngine(
         CancellationToken cancellationToken,
         string? precomputedCacheKey = null)
     {
+        // MUST be captured before starting the Script.Compile span below: that span is started
+        // with an EXPLICIT parent context (Activity.Current?.Context), so its own Activity.Parent
+        // is null and a lazy re-resolve of the target from Activity.Current afterward would never
+        // walk past it to the task-key-carrying ancestor — see ScriptCompileTelemetry's class
+        // remarks on capture-before-span ordering. Every Record call below threads this same
+        // captured value through explicitly so the accumulator keeps landing on the task span
+        // regardless of what becomes Activity.Current while this method runs.
+        var telemetryTarget = ScriptCompileTelemetry.FindTargetActivity();
         using var compileActivity = ScriptActivityHelper.StartCompileActivity();
         var stopwatch = Stopwatch.StartNew();
         const string scriptType = "compilation";
@@ -611,12 +619,20 @@ public sealed class ScriptEngine(
             workflowMetrics.RecordScriptExecution(scriptType, language, "success");
             workflowMetrics.RecordScriptCompilation(cache, "success");
             workflowMetrics.RecordScriptCompilationDuration(scriptType, language, "success", durationSeconds, cache);
-            ScriptCompileTelemetry.Record(compilation.Compiled, stopwatch.Elapsed.TotalMilliseconds, "success");
+            ScriptCompileTelemetry.Record(compilation.Compiled, stopwatch.Elapsed.TotalMilliseconds, "success", telemetryTarget);
             // The type cache never evicts, so its size only changes on a miss; skipping the gauge on
             // hits avoids ConcurrentDictionary.Count's all-stripe lock on the hot path.
             if (compilation.Compiled)
             {
                 workflowMetrics.SetCacheEntries("script-types", _evaluator.CachedTypeCount);
+
+                // Script identity, tagged only on the cold path (cache miss) so the hit hot path
+                // stays allocation-free: the evaluator cache key when the caller precomputed one,
+                // else a SHA-256 prefix of the source good enough to correlate spans without
+                // hashing the full source into the tag value.
+                var scriptKey = precomputedCacheKey ?? Convert.ToHexString(
+                    SHA256.HashData(Encoding.UTF8.GetBytes(code)))[..16];
+                compileActivity?.SetTag(TelemetryConstants.TagNames.ScriptKey, scriptKey);
             }
 
             return compilation.Instance;
@@ -631,7 +647,7 @@ public sealed class ScriptEngine(
             workflowMetrics.RecordScriptCompilation("miss", "compilation_error");
             workflowMetrics.RecordScriptCompilationError(scriptType, language, ex.GetType().Name);
             workflowMetrics.RecordScriptCompilationDuration(scriptType, language, "compilation_error", durationSeconds, "miss");
-            ScriptCompileTelemetry.Record(cacheMiss: true, stopwatch.Elapsed.TotalMilliseconds, "compilation_error");
+            ScriptCompileTelemetry.Record(cacheMiss: true, stopwatch.Elapsed.TotalMilliseconds, "compilation_error", telemetryTarget);
             ScriptActivityHelper.SetCompileResult(compileActivity, cacheMiss: true, "compilation_error");
 
             throw;
@@ -646,7 +662,7 @@ public sealed class ScriptEngine(
             workflowMetrics.RecordScriptCompilation("miss", "invalid_operation");
             workflowMetrics.RecordScriptCompilationError(scriptType, language, ex.GetType().Name);
             workflowMetrics.RecordScriptCompilationDuration(scriptType, language, "invalid_operation", durationSeconds, "miss");
-            ScriptCompileTelemetry.Record(cacheMiss: true, stopwatch.Elapsed.TotalMilliseconds, "invalid_operation");
+            ScriptCompileTelemetry.Record(cacheMiss: true, stopwatch.Elapsed.TotalMilliseconds, "invalid_operation", telemetryTarget);
             ScriptActivityHelper.SetCompileResult(compileActivity, cacheMiss: true, "invalid_operation");
 
             throw;
@@ -662,7 +678,7 @@ public sealed class ScriptEngine(
             // fire before lookup, but counting it as a miss is an accepted simplification.
             workflowMetrics.RecordScriptCompilation("miss", "cancelled");
             workflowMetrics.RecordScriptCompilationDuration(scriptType, language, "cancelled", durationSeconds, "miss");
-            ScriptCompileTelemetry.Record(cacheMiss: true, stopwatch.Elapsed.TotalMilliseconds, "cancelled");
+            ScriptCompileTelemetry.Record(cacheMiss: true, stopwatch.Elapsed.TotalMilliseconds, "cancelled", telemetryTarget);
             ScriptActivityHelper.SetCompileResult(compileActivity, cacheMiss: true, "cancelled");
 
             throw;
@@ -677,7 +693,7 @@ public sealed class ScriptEngine(
             workflowMetrics.RecordScriptCompilation("miss", "unexpected_error");
             workflowMetrics.RecordScriptCompilationError(scriptType, language, ex.GetType().Name);
             workflowMetrics.RecordScriptCompilationDuration(scriptType, language, "unexpected_error", durationSeconds, "miss");
-            ScriptCompileTelemetry.Record(cacheMiss: true, stopwatch.Elapsed.TotalMilliseconds, "unexpected_error");
+            ScriptCompileTelemetry.Record(cacheMiss: true, stopwatch.Elapsed.TotalMilliseconds, "unexpected_error", telemetryTarget);
             ScriptActivityHelper.SetCompileResult(compileActivity, cacheMiss: true, "unexpected_error");
 
             throw;

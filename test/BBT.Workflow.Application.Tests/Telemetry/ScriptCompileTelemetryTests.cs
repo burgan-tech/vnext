@@ -124,4 +124,43 @@ public sealed class ScriptCompileTelemetryTests : IDisposable
         Activity.Current = null;
         Should.NotThrow(() => ScriptCompileTelemetry.Record(cacheMiss: true, durationMs: 1, status: "success"));
     }
+
+    /// <summary>
+    /// Pins the fix for the accumulator-relocation bug: <c>ScriptEngine.CompileCoreAsync</c> now
+    /// resolves the target span via <see cref="ScriptCompileTelemetry.FindTargetActivity"/>
+    /// BEFORE starting the <c>Script.Compile</c> span, and passes it explicitly to
+    /// <see cref="ScriptCompileTelemetry.Record"/>. Without that capture-before-span ordering, a
+    /// <c>Script.Compile</c>-style span started with an EXPLICIT parent context (as
+    /// <c>ScriptActivityHelper.StartCompileActivity</c> does) has <c>Activity.Parent == null</c>,
+    /// so resolving the target lazily from <c>Activity.Current</c> after that span becomes current
+    /// would walk zero ancestors and land the accumulator tags on the compile span itself instead
+    /// of the task-key-carrying span.
+    /// </summary>
+    [Fact]
+    public void Record_WithExplicitTarget_LandsOnCapturedSpan_NotOnAnExplicitParentContextChildMadeCurrent()
+    {
+        using var task = StartTaskActivity();
+
+        // Capture the target BEFORE the compile-style child span exists and becomes Current —
+        // exactly what CompileCoreAsync must do.
+        var capturedTarget = ScriptCompileTelemetry.FindTargetActivity();
+        capturedTarget.ShouldBeSameAs(task);
+
+        // Script.Compile is started with an EXPLICIT parent context (mirrors
+        // ScriptActivityHelper.StartCompileActivity's `Activity.Current?.Context`), so this span's
+        // own Activity.Parent is null — a lazy re-resolve from Current would never reach `task`.
+        using var compileSpan = _source.StartActivity(
+            "Script.Compile", ActivityKind.Internal, task.Context);
+        compileSpan.ShouldNotBeNull();
+        Activity.Current = compileSpan;
+
+        ScriptCompileTelemetry.Record(cacheMiss: true, durationMs: 42, status: "success", target: capturedTarget);
+
+        task.GetTagItem(TelemetryConstants.TagNames.ScriptCompileCount).ShouldBe(1);
+        task.GetTagItem(TelemetryConstants.TagNames.ScriptCompileMissCount).ShouldBe(1);
+        compileSpan!.GetTagItem(TelemetryConstants.TagNames.ScriptCompileCount).ShouldBeNull();
+
+        var evt = task.Events.ShouldHaveSingleItem();
+        evt.Name.ShouldBe(ScriptCompileTelemetry.CompileEventName);
+    }
 }
