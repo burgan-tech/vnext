@@ -49,6 +49,8 @@ public sealed class SubflowOutputMappingService(
                 .WithBody(childInstanceData?.Deserialize<Dictionary<string, object>>() ?? new Dictionary<string, object>())
                 .BuildAsync(cancellationToken);
 
+            using var scriptActivity = ScriptActivityHelper.StartExecuteActivity("subflowOutputMapping");
+
             var mappingInstance = await scriptEngine.CompileToInstanceAsync<object>(
                 subFlowConfig.Mapping,
                 flowScripts: parentWorkflow.Scripts,

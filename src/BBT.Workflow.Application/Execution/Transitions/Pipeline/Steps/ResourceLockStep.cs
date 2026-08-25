@@ -56,6 +56,8 @@ public sealed class ResourceLockStep(
     {
         try
         {
+            using var scriptActivity = ScriptActivityHelper.StartExecuteActivity("lockKey");
+
             var mapping = await scriptEngine.CompileToInstanceAsync<ITransitionMapping>(
                 lockDef.KeyExpression,
                 flowScripts: context.Workflow.Scripts,
