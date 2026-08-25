@@ -39,6 +39,10 @@ public sealed class TransitionLockScopeFactory(
         LockAcquireWait wait,
         CancellationToken cancellationToken = default)
     {
+        using var activity = PipelineStepActivityHelper.StartOperationActivity("Lock.Acquire");
+        activity?.SetTag(TelemetryConstants.TagNames.LockKey, lockKey);
+        activity?.SetTag(TelemetryConstants.TagNames.LockLeaseSeconds, _leaseSeconds);
+
         var attempts = Math.Max(1, wait.MaxAttempts);
 
         for (var attempt = 1; attempt <= attempts; attempt++)
@@ -53,6 +57,7 @@ public sealed class TransitionLockScopeFactory(
                 logger.LogDebug("Transition lock acquired for {LockKey} (lease={LeaseSeconds}s, attempt={Attempt})",
                     lockKey, _leaseSeconds, attempt);
 
+                activity?.SetTag(TelemetryConstants.TagNames.LockAcquired, true);
                 return new TransitionLockScope(lockKey, handle, _leaseSeconds, logger);
             }
 
@@ -73,6 +78,7 @@ public sealed class TransitionLockScopeFactory(
         }
 
         logger.InstanceLockFailed(lockKey);
+        activity?.SetTag(TelemetryConstants.TagNames.LockAcquired, false);
         return TransitionLockScope.NotAcquired(lockKey);
     }
 }
