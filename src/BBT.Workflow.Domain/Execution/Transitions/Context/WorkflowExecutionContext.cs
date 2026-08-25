@@ -47,6 +47,24 @@ public sealed class WorkflowExecutionContext
     [System.Text.Json.Serialization.JsonIgnore]
     public Definitions.Workflow? ResolvedWorkflow { get; set; }
 
+    /// <summary>
+    /// Set by a caller that already validated this request's payload against the transition's
+    /// schema, so the execution entry below runs policy validation only instead of resolving the
+    /// schema and re-validating the same bytes.
+    /// <para>
+    /// Only the START path sets it: it must validate before the instance row is persisted, which is
+    /// earlier than any execution entry runs. A plain transition request leaves it false and is
+    /// validated once, by whichever execution entry it reaches (the async strategy before it
+    /// enqueues, the pipeline on the sync path).
+    /// </para>
+    /// <para>
+    /// Transport-only, like <see cref="ResolvedWorkflow"/>: never serialized, never mapped into
+    /// <c>TransitionJobPayload</c>. A hop must never inherit another hop's claim to have validated.
+    /// </para>
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool PayloadSchemaValidated { get; set; }
+
     /// <summary>Gets or sets the transition key to execute.</summary>
     [Enrich(Name = "vnext.transition.key")]
     public string TransitionKey { get; set; } = default!;

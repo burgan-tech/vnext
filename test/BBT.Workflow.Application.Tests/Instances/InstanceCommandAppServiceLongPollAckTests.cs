@@ -85,7 +85,6 @@ public class InstanceCommandAppServiceLongPollAckTests : IDisposable
             transitionDataMapper: Substitute.For<ITransitionDataMapper>(),
             transitionValidationService: Substitute.For<ITransitionValidationService>(),
             transitionAdmissionService: Substitute.For<ITransitionAdmissionService>(),
-            transitionContextFactory: Substitute.For<ITransitionContextFactory>(),
             representationEtagService: Substitute.For<IRepresentationEtagService>(),
             schemaFieldFilterService: Substitute.For<ISchemaFieldFilterService>(),
             instanceExtensionService: Substitute.For<IInstanceExtensionService>(),

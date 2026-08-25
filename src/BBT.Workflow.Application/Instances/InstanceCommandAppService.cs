@@ -52,7 +52,6 @@ public sealed class InstanceCommandAppService(
     ITransitionDataMapper transitionDataMapper,
     ITransitionValidationService transitionValidationService,
     ITransitionAdmissionService transitionAdmissionService,
-    ITransitionContextFactory transitionContextFactory,
     IRepresentationEtagService representationEtagService,
     ISchemaFieldFilterService schemaFieldFilterService,
     IInstanceExtensionService instanceExtensionService,
@@ -389,6 +388,13 @@ public sealed class InstanceCommandAppService(
     {
         var context = input.ToExecutionContext(data.Instance.Id, data.Workflow.StartTransition.Key);
 
+        // The definition and the payload verdict both travel with the request: the start already
+        // resolved this flow, and it already validated the payload against the start transition's
+        // schema — necessarily so, because that check has to happen before the instance row is
+        // persisted, which is earlier than any execution entry runs.
+        context.ResolvedWorkflow = data.Workflow;
+        context.PayloadSchemaValidated = true;
+
         // Creation is the reservation: a sub-item is persisted Busy at creation (IsSubItem seed
         // in CreateAndPrepareInstanceAsync), and this request — the one that just created the
         // row — owns it. Without this, the child's own start transition classifies as Normal
@@ -626,20 +632,12 @@ public sealed class InstanceCommandAppService(
 
         var context = BuildTransitionContext(resolvedInstance, transitionKey, input, workflowDefinition!);
 
-        // Pre-dispatch validation guard: validate schema + state-machine policy BEFORE
-        // dispatching to the execution service. This guarantees consistent 400 Bad Request
-        // behaviour for both sync=true and sync=false callers — the async path would otherwise
-        // accept the request, flip the instance to Busy and discover the schema violation
-        // later in the background job (leaving the instance Faulted). The same check is also
-        // performed inside AsyncTransitionStrategy as defense in depth for callers that
-        // bypass the AppService and invoke WorkflowExecutionService directly.
-        var preValidation = await ValidateTransitionRequestAsync(
-            context, resolvedInstance, workflowDefinition!, cancellationToken);
-        if (!preValidation.IsSuccess)
-        {
-            logger.TransitionValidationFailed(resolvedInstance.Id, transitionKey, preValidation.Error.Code);
-            return Result<TransitionOutput>.Fail(preValidation.Error);
-        }
+        // No validation here. Validation belongs to the execution entry, and both entries run it
+        // before any side effect: the async strategy validates before it flips Busy and enqueues,
+        // the sync pipeline before it admits. Validating here as well meant every request resolved
+        // its schema twice and built a whole execution context that was then thrown away — and it
+        // bought nothing, because the 400-before-side-effect guarantee it was written for is the
+        // execution entry's guarantee too. The Busy fast-fail above is a different check and stays.
 
         return await workflowExecutionService
             .ExecuteTransitionAsync(context, cancellationToken)
@@ -653,32 +651,6 @@ public sealed class InstanceCommandAppService(
             });
     }
 
-    /// <summary>
-    /// Pre-dispatch schema + state-machine validation for a transition request.
-    /// Builds the execution context from pre-loaded instance and workflow (zero DB calls)
-    /// and runs the same <see cref="ITransitionValidationService.ValidateAsync"/>
-    /// that the sync pipeline uses, so both sync=true and sync=false callers get the same
-    /// validation error contract before any state mutation or background-job enqueue.
-    /// </summary>
-    private async Task<Result> ValidateTransitionRequestAsync(
-        WorkflowExecutionContext context,
-        Instance instance,
-        Definitions.Workflow workflow,
-        CancellationToken cancellationToken)
-    {
-        var contextResult = transitionContextFactory.CreateFromPreloaded(context, workflow, instance);
-        if (!contextResult.IsSuccess)
-            return Result.Fail(contextResult.Error);
-
-        // Busy-as-mutex: reject a Busy instance BEFORE spending validation work — a request
-        // that cannot be admitted should not fetch schemas or evaluate specifications.
-        // No-op for exempt kinds (cancel/exit/updateData/owner re-entry).
-        var admission = transitionAdmissionService.CheckAdmission(contextResult.Value!);
-        if (!admission.IsSuccess)
-            return Result.Fail(admission.Error);
-
-        return await transitionValidationService.ValidateAsync(contextResult.Value!, cancellationToken);
-    }
 
     /// <summary>
     /// Builds execution context for transition using instance's Flow and FlowVersion (not from request).

@@ -114,8 +114,17 @@ public class TransitionPipeline
         if (!admission.IsSuccess)
             return Result<TransitionExecutionContext>.Fail(admission.Error);
 
-        // 3) Policy validation (schema is intake-only; see CreateAndValidateContextAsync).
-        var validationResult = await _validationService.ValidatePolicyAsync(context, cancellationToken);
+        // 3) Validation. Policy always: state-machine specifications read the CURRENT state, which
+        //    changes between hops. Schema only for a request whose payload nobody has validated yet
+        //    — this is the sync path's single validation point, the async path having validated at
+        //    its accept. A job re-entry (IsPreReserved) carries a payload the accept already
+        //    validated, and the start path validates before it persists the instance row and says
+        //    so with PayloadSchemaValidated; both skip it rather than re-read the schema component
+        //    and re-run the validator over identical bytes.
+        var payloadAlreadyValidated = workflowContext.PayloadSchemaValidated || context.IsPreReserved;
+        var validationResult = payloadAlreadyValidated
+            ? await _validationService.ValidatePolicyAsync(context, cancellationToken)
+            : await _validationService.ValidateAsync(context, cancellationToken);
         if (!validationResult.IsSuccess)
             return Result<TransitionExecutionContext>.Fail(validationResult.Error);
 

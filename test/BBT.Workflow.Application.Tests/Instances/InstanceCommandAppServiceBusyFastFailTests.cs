@@ -81,7 +81,6 @@ public class InstanceCommandAppServiceBusyFastFailTests : IDisposable
             transitionDataMapper: Substitute.For<ITransitionDataMapper>(),
             transitionValidationService: Substitute.For<ITransitionValidationService>(),
             transitionAdmissionService: _admissionService,
-            transitionContextFactory: Substitute.For<ITransitionContextFactory>(),
             representationEtagService: Substitute.For<IRepresentationEtagService>(),
             schemaFieldFilterService: Substitute.For<ISchemaFieldFilterService>(),
             instanceExtensionService: Substitute.For<IInstanceExtensionService>(),
