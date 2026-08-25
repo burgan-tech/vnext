@@ -205,9 +205,24 @@ public class TransitionPipeline
         CancellationToken cancellationToken)
     {
         var context = initialContext;
+        var hop = 0;
 
         while (true)
         {
+            hop++;
+
+            // The transaction span already names the FIRST transition (the job span is
+            // "TransitionJob.Execute/{key}"; on the sync path the route carries the key), so hop 1
+            // needs no span of its own — that redundancy is exactly what the old `transition/{key}`
+            // node was. A chained hop is a DIFFERENT transition running under the same transaction,
+            // so it gets a group span; without one, two transitions' step spans would sit side by
+            // side under one parent with nothing to tell them apart. It also gives
+            // TransitionExecutor.EnrichTelemetry a per-hop span to tag, instead of every hop
+            // overwriting the transaction's tags.
+            using var hopActivity = hop == 1
+                ? null
+                : PipelineStepActivityHelper.StartOperationActivity($"Transition.{context.TransitionKey}");
+
             // Guard: Prevent infinite chain loops
             if (context.ChainDepth > MaxChainDepth)
             {

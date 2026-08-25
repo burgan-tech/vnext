@@ -44,7 +44,14 @@ public sealed class TransitionExecutor
     /// <param name="context">The validated, profiled transition execution context.</param>
     /// <param name="cancellationToken">A cancellation token.</param>
     /// <returns>Ok on success; Fail with the originating error on an unhandled step failure.</returns>
-    [Trace]
+    // Deliberately NOT [Trace]: the aspect's span was the `transition/{key}` node, and it carried no
+    // information its parent lacks — the transaction span is now named after the transition
+    // (TransitionJobHandler: "TransitionJob.Execute/{key}"; sync: the route already names the key),
+    // so the node was one indirection between the transaction and its step spans. Dropping the
+    // aspect also makes the shape independent of whether PostSharp weaving is active: with weaving
+    // off the aspect produced no span at all and EnrichTelemetry's rename landed on the ambient
+    // job/server span instead. A CHAINED hop still gets its own group span — TransitionPipeline
+    // opens `Transition.{key}` for hop 2 onwards, where the transaction's name no longer applies.
     public async Task<Result> ExecuteOneAsync(
         TransitionExecutionContext context,
         CancellationToken cancellationToken)
@@ -199,7 +206,11 @@ public sealed class TransitionExecutor
             activity.SetBaggage(TelemetryConstants.TagNames.RootInstanceId, rootId.ToString());
         }
 
-        activity.SetDisplayName($"transition/{context.TransitionKey}");
+        // No SetDisplayName here. The span these tags land on is not ours to rename: it is the
+        // transaction (job span named "TransitionJob.Execute/{key}", or the HTTP server span whose
+        // route already carries the key) or, for a chained hop, TransitionPipeline's
+        // `Transition.{key}` group span. Renaming it to `transition/{key}` overwrote the caller's
+        // own identity — and on a multi-hop inline chain the last hop won.
     }
 
     /// <summary>
