@@ -79,7 +79,14 @@ public sealed class SubProcessTaskExecutor : TriggerTaskExecutorBase<SubProcessT
 
         if (isSameDomain)
         {
-            result = await ExecuteLocalAsync(task, context, subFlowInstanceId, correlationId, cancellationToken);
+            var scoped = await RunLocalScopedAsync(
+                task,
+                targetFlow: task.TriggerFlow,
+                targetInstance: subFlowInstanceId.ToString(),
+                async ct => Result<TaskInvocationResult>.Ok(
+                    await ExecuteLocalAsync(task, context, subFlowInstanceId, correlationId, ct)),
+                cancellationToken);
+            result = scoped.Value!;
         }
         else
         {

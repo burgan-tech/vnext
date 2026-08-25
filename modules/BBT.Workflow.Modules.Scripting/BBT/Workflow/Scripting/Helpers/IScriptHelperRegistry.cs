@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.Runtime.Loader;
 using System.Threading;
+using System.Threading.Tasks;
 using Microsoft.CodeAnalysis;
 
 namespace BBT.Workflow.Scripting.Helpers;
@@ -47,7 +48,12 @@ public interface IScriptHelperRegistry
     /// <param name="cancellationToken">Checked before the build starts so an abandoned caller does not
     /// kick off an expensive shared compile. It does NOT cancel a build in progress: the helper set is a
     /// process-wide artifact, so one caller going away must not fail the build other callers await.</param>
-    HelperSet GetOrBuildHelpers(
+    /// <remarks>
+    /// Async single-flight: concurrent callers of the same set AWAIT one shared build instead of
+    /// blocking thread-pool threads on it — a helper-set compile takes seconds, and the blocked
+    /// waiters were a measured thread-pool-starvation source during cold bursts.
+    /// </remarks>
+    Task<HelperSet> GetOrBuildHelpersAsync(
         IReadOnlyList<HelperSource> helpers,
         IReadOnlyList<string>? allowedAssemblies,
         IEnumerable<MetadataReference> contractReferences,

@@ -163,6 +163,14 @@ public interface ITransitionAdmissionService
     /// from inside <paramref name="underLock"/> — they acquire the same key and the status lock is
     /// a single-attempt, non-reentrant TryAcquire, so the nested call would fail to acquire.
     /// </para>
+    /// <para>
+    /// EXCEPTION — <see cref="AdmissionKind.Unconditional"/> (updateData): the callback runs with
+    /// NO lock held and <see cref="AcceptFlip.None"/>, mirroring the sync path, which never locked
+    /// this kind. updateData is status-neutral (nothing to flip) and must accept parallel requests
+    /// (the duplicate-job guard does not apply to it; job identity is unique per enqueue), so
+    /// there is nothing left for the lock to serialize. Its instance-data writes are serialized
+    /// downstream by the per-instance write funnel.
+    /// </para>
     /// </summary>
     Task<Result> AcceptAsync(
         TransitionExecutionContext context,
