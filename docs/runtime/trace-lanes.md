@@ -30,8 +30,10 @@ PATCH .../instances/{id}/transitions/{key}      ← APM transaction, anchors the
 ```
 
 A new lane opens **only** at a subflow handoff, never at a service boundary. So depth is
-`O(subflow nesting)`, independent of chain length. Inside each lane item the previous structure is
-unchanged: `transition/{key}` → `Task.Execute.{key}` → HTTP/Dapr client span.
+`O(subflow nesting)`, independent of chain length. Inside each lane item the structure is
+`TransitionJob.Execute/{key}` → `Step.*` → `Task.Execute.{key}` → HTTP/Dapr client span. The lane
+span itself is named after the transition it runs, and there is no separate `transition/{key}`
+node any more — see [Trace Span Tree](trace-span-tree.md).
 
 ## Moving parts
 
@@ -98,8 +100,9 @@ single filter that selects a whole business request).
 
 ## Known cosmetic effect
 
-On the **sync** path `PostCommit.*` is now a sibling of the still-open `transition/{key}` span, so it
-renders as overlapping it. Valid OpenTelemetry, and the price of having post-commit work at lane level.
+On the **sync** path `PostCommit.*` is now a sibling of the still-open transaction span (the HTTP
+server span, or the job span on the async path), so it renders as overlapping it. Valid
+OpenTelemetry, and the price of having post-commit work at lane level.
 
 ## Related
 

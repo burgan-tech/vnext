@@ -20,41 +20,59 @@ Full design rationale, decisions, and work breakdown: see
 ## Target span tree
 
 ```
-POST /transitions/{key}   (or TransitionJob / lane anchor)
-├─ Lock.Acquire                          admission / pipeline status lock
+TransitionJob.Execute/start-login          the transaction (async path)
+   └─ or the HTTP server span (sync path — its route already carries the key)
+├─ Lock.Acquire/vnext:{domain}:{flow}:{id}   admission / pipeline status lock
 ├─ Transition.LoadContext                TransitionContextFactory
-│  ├─ Cache.Get {componentKey}           CacheSet (existing; L1/L2 tags)
+│  ├─ Cache.Get/{cacheKey}               CacheSet (L1/L2 tags)
 │  └─ Instance.Load                      GetActiveAsync
 ├─ Transition.Validate                   schema + policy
-├─ Step.SetBusy … Step.FinalizeTransition   all executed steps (always on now)
+├─ Step.SetBusy … Step.FinalizeTransition   steps that DID something
 │  ├─ Step.ResourceLock
 │  │  └─ Script.Execute                  lock script
 │  ├─ Step.RunOnExecuteTasks             group span
-│  │  └─ Task.Execute {taskKey}          per-task wrapper
-│  │     ├─ Task.PrepareInput            existing
-│  │     │  ├─ Script.Compile            cold/hit tag
+│  │  └─ Task.Execute.{taskKey}          Aether [Trace] aspect
+│  │     ├─ Task.PrepareInput
+│  │     │  ├─ Script.Compile            cache-hit tag
 │  │     │  └─ Script.Execute            input mapping
-│  │     ├─ Task.Invoke                  existing
-│  │     └─ Task.ProcessOutput           existing → Script.* children
+│  │     ├─ Task.Invoke
+│  │     └─ Task.ProcessOutput           → Script.* children
 │  ├─ Step.ChangeState
 │  │  └─ Instance.AppendData             data persist
 │  ├─ Step.RunOnEntryTasks / Step.RunOnExitTasks   tasks visible one by one
-│  └─ Step.HandleSubFlow → Subflow.*     existing → Script.* mapping children
-├─ Lock.Release
-└─ PostCommit.Execute                    existing → job enqueue children
+│  └─ Step.HandleSubFlow → Subflow.*     → Script.* mapping children
+├─ Transition.{key}                      ONLY for a chained hop (2nd+ in one call)
+│  └─ Step.* …                           that hop's own steps
+├─ Lock.Release/{lockKey}
+└─ PostCommit.Execute                    → job enqueue children
 ```
 
-This is copied verbatim from §4 of the design spec above. Two things worth calling out that the
-diagram doesn't show directly:
+Four things worth calling out that the diagram doesn't show directly:
 
-- **Every step span exists now**, not just the ones that used to matter for verbose debugging.
-  A step's children (task spans, subflow starts, job enqueues, HttpClient calls) re-parent from
-  the top-level transition span to that step's span — this is the biggest behavioral change in
-  the plan, and the reason the parenting/lane invariants (see
-  [Trace Lanes](trace-lanes.md)) were re-verified as part of the rollout.
-- `Cache.Get` under `Transition.LoadContext` is one example call site. The same `Cache.*` spans
-  appear anywhere a `CacheSet<T>.GetByVersionAsync` / `SetAsync` / `InvalidateAsync` runs —
-  including inside script/task execution when a mapping resolves a component.
+- **The transaction names the transition.** The job span is
+  `TransitionJob.Execute/{transitionKey}`, so APM groups by transition instead of showing every
+  job under one `TransitionJob.Execute` name. There is no `transition/{key}` span underneath any
+  more: it carried nothing its parent lacked, so `TransitionExecutor.ExecuteOneAsync` lost its
+  `[Trace]` aspect and `EnrichTelemetry` no longer renames its parent. Its tags still land on the
+  transaction. A side benefit: the shape no longer depends on PostSharp weaving being active —
+  with weaving off, the old rename landed on the ambient job/server span.
+- **A chained hop still gets a node.** When one call runs several transitions (an inline
+  auto-chain, or a sync request whose continuations run in-process), hop 2 onwards gets a
+  `Transition.{key}` group span from `TransitionPipeline` — the transaction's name only describes
+  the first hop. That span is also what `EnrichTelemetry` tags for those hops, so they no longer
+  overwrite the transaction's tags.
+- **Only steps that did something appear.** A step whose applicability guard did not match
+  (no lock defined, no OnEntry tasks, not a subflow state, …) reports
+  `StepOutcome.ContinueNoWork()` and its span is dropped from export. Flow control is unchanged —
+  `NoWork` behaves exactly like `Continue`. Deliberately still recorded:
+  `RunAutomaticTransitionsStep`'s no-winner exit, because it evaluated rules (scripts ran).
+- **Names carry their subject.** `Cache.Get/{cacheKey}` and `Lock.Acquire/{lockKey}` put the
+  operation's subject in the span name so the tree is readable without opening spans; the
+  `cache.key` / `vnext.lock.key` tags stay for querying. A step's children (task spans, subflow
+  starts, job enqueues, HttpClient calls) parent to that step's span, which is why the
+  parenting/lane invariants (see [Trace Lanes](trace-lanes.md)) are re-verified on every change
+  here. `Cache.*` spans appear anywhere a `CacheSet<T>` read/write runs, not only under
+  `Transition.LoadContext`.
 
 ## Span reference
 
@@ -64,13 +82,15 @@ level; nothing in this table is gated behind `AetherTracingRuntime.IsVerbose`.
 
 | Span name | ActivitySource | Key tags | Notes |
 |---|---|---|---|
-| `Step.{Name}` | `BBT.Workflow.Pipeline` | `vnext.step.order`, `vnext.step.outcome` (continue / stop / skipTo:{order}), `span.category=business` | One per executed pipeline step (`PipelineStepActivityHelper.StartStepActivity`). Trailing `Step` trimmed from the class name for display. Always-on since Task 3. |
+| `TransitionJob.Execute/{transitionKey}` | `BBT.Workflow.BackgroundJobs` | lane tags (`vnext.trace.lane`, `.anchor`, `vnext.hop.predecessor`, `vnext.lane.seq`) + the payload's job tags | The transaction on the async path (`TransitionJobHandler`). Naming it after the transition is what made the old `transition/{key}` child redundant. |
+| `Transition.{key}` | `BBT.Workflow.Pipeline` | `span.category=business` + everything `EnrichTelemetry` stamps (flow, instance, correlation, chain depth) | Group span for a CHAINED hop only — `TransitionPipeline` opens it from hop 2 onwards. Hop 1 needs none: the transaction is already named after it. |
+| `Step.{Name}` | `BBT.Workflow.Pipeline` | `vnext.step.order`, `vnext.step.outcome` (continue / stop / skipTo:{order}), `span.category=business` | One per pipeline step **that did work** (`PipelineStepActivityHelper.StartStepActivity`). A step reporting `StepOutcome.ContinueNoWork()` has its span dropped from export (Recorded cleared), so non-applicable steps leave no trace. Trailing `Step` trimmed from the class name for display. |
 | `Transition.LoadContext` | `BBT.Workflow.Pipeline` | `span.category=business` | Wraps `TransitionContextFactory`; child `Cache.Get`/`Instance.Load` spans attach automatically. `CreateFromPreloaded` is deliberately left unwrapped (no fresh load happened). |
 | `Instance.Load` | `BBT.Workflow.Pipeline` | `span.category=business` | Wraps `instanceRepository.GetActiveAsync`. |
 | `Transition.Validate` | `BBT.Workflow.Pipeline` | `span.category=business`, `ActivityStatusCode.Error` + message on failure | Wraps schema validation + `TransitionExecutionPolicy`. |
 | `Instance.AppendData` | `BBT.Workflow.Pipeline` | `vnext.data.version`, `vnext.data.size_bytes` | Wraps the v2 append/persist funnel. Size is the serialized UTF-8 byte count — the payload itself is never attached to a span. |
-| `Lock.Acquire` | `BBT.Workflow.Pipeline` | `vnext.lock.key`, `vnext.lock.acquired` (false on Busy/409), `vnext.lock.lease_seconds`, `vnext.lock.kind` (`status` \| `chain`) | Emitted by both `InstanceStatusLock` (`kind=status`) and `TransitionLockScopeFactory` (`kind=chain`). A failed acquire is a span with `acquired=false`, not an exception span. |
-| `Lock.Release` | `BBT.Workflow.Pipeline` | `vnext.lock.key`, `vnext.lock.kind` (`status` \| `chain`) | Fires from the shared `TransitionLockScope.DisposeAsync`. `kind` is carried on the scope from whichever funnel constructed it. |
+| `Lock.Acquire/{lockKey}` | `BBT.Workflow.Pipeline` | `vnext.lock.key`, `vnext.lock.acquired` (false on Busy/409), `vnext.lock.lease_seconds`, `vnext.lock.kind` (`status` \| `chain`) | Emitted by both `InstanceStatusLock` (`kind=status`) and `TransitionLockScopeFactory` (`kind=chain`). A failed acquire is a span with `acquired=false`, not an exception span. |
+| `Lock.Release/{lockKey}` | `BBT.Workflow.Pipeline` | `vnext.lock.key`, `vnext.lock.kind` (`status` \| `chain`) | Fires from the shared `TransitionLockScope.DisposeAsync`. `kind` is carried on the scope from whichever funnel constructed it. |
 | `Task.PrepareInput` | `BBT.Workflow.Tasks` | `vnext.task.key`, `vnext.task.type` | Always-on since Task 4. Nests under `Task.Execute.{key}`. |
 | `Task.Invoke` | `BBT.Workflow.Tasks` | `vnext.task.key`, `vnext.task.type` | Same as above. |
 | `Task.ProcessOutput` | `BBT.Workflow.Tasks` | `vnext.task.key`, `vnext.task.type` | Same as above; its own `Script.*` children (output mapping). |
@@ -80,9 +100,9 @@ level; nothing in this table is gated behind `AetherTracingRuntime.IsVerbose`.
 | `Script.Compile` | `BBT.Workflow.Scripting` | `vnext.script.cache.hit`, `vnext.script.key` (miss-only, see below), `span.category=business` | Covers one compile call, hits included (sub-ms, tagged rather than skipped). **Reverses** the 2026-08 script-perf decision — see "Compile-span decision reversal" below. `vnext.script.key` (the evaluator's precomputed cache key when the caller has one, else a SHA-256 prefix of the source) is tagged **only when `compilation.Compiled` is true** (an actual cache miss) — the hit hot path never computes or sets it, keeping it allocation-free. |
 | `Script.ResolveHelpers` | `BBT.Workflow.Scripting` | `vnext.script.helper.count` | Covers a helper-set resolve + compile — the previously-invisible ~2s cold cost noted in the script-perf work. |
 | `Script.Execute` | `BBT.Workflow.Scripting` | `vnext.script.kind` ∈ `lockKey` \| `subflowInputMapping` \| `subflowOutputMapping` | Wraps one script invocation at a call site with no existing delimiting span. Task input/output mappings are deliberately **not** wrapped separately — `Task.PrepareInput`/`Task.ProcessOutput` already delimit them. The `subflowOutputMapping` span also covers the downstream `AppendAsync`/`UpdateAsync` persistence; Task 9's `Instance.AppendData` child now makes that timing decomposable. **Controller ruling**: `Script.Execute` deliberately carries no `vnext.script.key` — the `vnext.script.kind` tag plus the parent span's context (the enclosing step/subflow span) are enough to identify which script ran; only `Script.Compile`'s cold path gets a script-identity tag (see above). |
-| `Cache.Get` | `BBT.Workflow.Cache` | `cache.key`, `cache.hit`, `cache.l1.hit`, `cache.negative`, `cache.coalesced`, `cache.generation`, `cache.store=dapr`, `cache.component_type`, `span.category=business` | `CacheSet<T>.GetByVersionAsync`/`GetLatestByNameAsync` read path (`GetResolvedAsync` / `GetFullVersionAsync`). See "Cache span verification" below. |
-| `Cache.Set` | `BBT.Workflow.Cache` | same shape as `Cache.Get` plus `cache.generation` from the bump | `CacheSet<T>.SetAsync`. Also covers the warm-resolutions pass (no separate `Cache.Warmup` span — see note below). |
-| `Cache.Remove` | `BBT.Workflow.Cache` | `cache.generation` | `CacheSet<T>.InvalidateAsync`. |
+| `Cache.Get/{cacheKey}` | `BBT.Workflow.Cache` | `cache.key`, `cache.hit`, `cache.l1.hit`, `cache.negative`, `cache.coalesced`, `cache.generation`, `cache.store=dapr`, `cache.component_type`, `span.category=business` | `CacheSet<T>.GetByVersionAsync`/`GetLatestByNameAsync` read path (`GetResolvedAsync` / `GetFullVersionAsync`). See "Cache span verification" below. |
+| `Cache.Set/{cacheKey}` | `BBT.Workflow.Cache` | same shape as `Cache.Get` plus `cache.generation` from the bump | `CacheSet<T>.SetAsync`. Also covers the warm-resolutions pass (no separate `Cache.Warmup` span — see note below). |
+| `Cache.Remove/{cacheKey}` | `BBT.Workflow.Cache` | `cache.generation` | `CacheSet<T>.InvalidateAsync`. |
 | `Subflow.*` | `BBT.Workflow.SubFlow` | subflow-specific | Pre-existed (`SubFlowActivityHelper`: start/forward/complete/fault/cancel). Own `Script.*` children for input/output mapping. |
 | `PostCommit.*` | `BBT.Workflow.BackgroundJobs` | job-specific | Pre-existed (`PostCommitExecutor` reuses `BackgroundJobActivityHelper.ActivitySource`). Own job-enqueue children. |
 
