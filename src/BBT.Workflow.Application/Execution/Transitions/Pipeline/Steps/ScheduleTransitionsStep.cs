@@ -196,6 +196,17 @@ public sealed class ScheduleTransitionsStep(
             true,
             cancellationToken);
 
+        // The arming is this transition's own work, so it shows inside transition/{key}; the
+        // firing deliberately opens a NEW trace hours-to-days later and links back to this span
+        // (TransitionTimerJobHandler) — this event is the visible half on the arming side.
+        Activity.Current?.AddEvent(new ActivityEvent("transition.scheduled",
+            tags: new ActivityTagsCollection
+            {
+                { TelemetryConstants.TagNames.TransitionKey, info.Payload.TransitionKey },
+                { "executeAt", info.ExecuteAt.ToString("O") },
+                { TelemetryConstants.TagNames.JobName, info.JobName.Value }
+            }));
+
         return Result.Ok();
     }
 
