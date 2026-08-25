@@ -104,6 +104,18 @@ public sealed class TransitionAdmissionService(
         Func<AcceptFlip, CancellationToken, Task<Result>> underLock,
         CancellationToken cancellationToken = default)
     {
+        // updateData accepts UNCONDITIONALLY and in PARALLEL — no lock, mirroring the sync path
+        // (TransitionPipeline's Unconditional case never locked). The lock's only job here is to
+        // serialize the status flip with the duplicate-job guard, and updateData has neither: it
+        // is status-neutral (flip = None), and the guard does not apply to it — N simultaneous
+        // updateData requests with the same logical identity are LEGITIMATE, each carrying its
+        // own payload, and the enqueue is collision-free by construction (job id/name are unique
+        // per request). Instance-data writes are serialized downstream by the per-instance write
+        // funnel. Taking the lock anyway made N parallel notifiers fight over the parent's key
+        // and pushed every loser into its error-boundary retry ladder for nothing.
+        if (Classify(context) == AdmissionKind.Unconditional)
+            return await underLock(AcceptFlip.None, cancellationToken);
+
         await using var scope = await statusLock.AcquireAsync(context.LockKey, cancellationToken);
         if (!scope.IsAcquired)
             return Result.Fail(WorkflowErrors.InstanceLockConflict(context.InstanceId));

@@ -76,7 +76,12 @@ public sealed class GetInstanceTaskExecutor : TriggerTaskExecutorBase<GetInstanc
 
         if (isSameDomain)
         {
-            return await ExecuteLocalAsync(task, instanceIdentifier, context, cancellationToken);
+            return await RunLocalScopedAsync(
+                task,
+                targetFlow: task.TriggerFlow,
+                targetInstance: instanceIdentifier,
+                ct => ExecuteLocalAsync(task, instanceIdentifier, context, ct),
+                cancellationToken);
         }
 
         return await ExecuteRemoteAsync(task, instanceIdentifier, context, cancellationToken);

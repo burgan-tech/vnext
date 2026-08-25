@@ -422,7 +422,7 @@ public sealed class ScriptEngine(
 
             // Build the referenced helper set first (sandboxed, cached by content hash), referencing the
             // runtime-owned contract assemblies and importing the default namespaces.
-            helperSet = _helperRegistry.GetOrBuildHelpers(
+            helperSet = await _helperRegistry.GetOrBuildHelpersAsync(
                 helperSources,
                 MergeDefaultGrant(grant),
                 DefaultReferences.Value,
@@ -607,6 +607,7 @@ public sealed class ScriptEngine(
             workflowMetrics.RecordScriptExecution(scriptType, language, "success");
             workflowMetrics.RecordScriptCompilation(cache, "success");
             workflowMetrics.RecordScriptCompilationDuration(scriptType, language, "success", durationSeconds, cache);
+            ScriptCompileTelemetry.Record(compilation.Compiled, stopwatch.Elapsed.TotalMilliseconds, "success");
             // The type cache never evicts, so its size only changes on a miss; skipping the gauge on
             // hits avoids ConcurrentDictionary.Count's all-stripe lock on the hot path.
             if (compilation.Compiled)
@@ -626,6 +627,7 @@ public sealed class ScriptEngine(
             workflowMetrics.RecordScriptCompilation("miss", "compilation_error");
             workflowMetrics.RecordScriptCompilationError(scriptType, language, ex.GetType().Name);
             workflowMetrics.RecordScriptCompilationDuration(scriptType, language, "compilation_error", durationSeconds, "miss");
+            ScriptCompileTelemetry.Record(cacheMiss: true, stopwatch.Elapsed.TotalMilliseconds, "compilation_error");
 
             throw;
         }
@@ -639,6 +641,7 @@ public sealed class ScriptEngine(
             workflowMetrics.RecordScriptCompilation("miss", "invalid_operation");
             workflowMetrics.RecordScriptCompilationError(scriptType, language, ex.GetType().Name);
             workflowMetrics.RecordScriptCompilationDuration(scriptType, language, "invalid_operation", durationSeconds, "miss");
+            ScriptCompileTelemetry.Record(cacheMiss: true, stopwatch.Elapsed.TotalMilliseconds, "invalid_operation");
 
             throw;
         }
@@ -653,6 +656,7 @@ public sealed class ScriptEngine(
             // fire before lookup, but counting it as a miss is an accepted simplification.
             workflowMetrics.RecordScriptCompilation("miss", "cancelled");
             workflowMetrics.RecordScriptCompilationDuration(scriptType, language, "cancelled", durationSeconds, "miss");
+            ScriptCompileTelemetry.Record(cacheMiss: true, stopwatch.Elapsed.TotalMilliseconds, "cancelled");
 
             throw;
         }
@@ -666,6 +670,7 @@ public sealed class ScriptEngine(
             workflowMetrics.RecordScriptCompilation("miss", "unexpected_error");
             workflowMetrics.RecordScriptCompilationError(scriptType, language, ex.GetType().Name);
             workflowMetrics.RecordScriptCompilationDuration(scriptType, language, "unexpected_error", durationSeconds, "miss");
+            ScriptCompileTelemetry.Record(cacheMiss: true, stopwatch.Elapsed.TotalMilliseconds, "unexpected_error");
 
             throw;
         }

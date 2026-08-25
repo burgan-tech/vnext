@@ -234,6 +234,14 @@ A sixth profile is **composed on top of** the base, never selected instead of it
 - **cancel/exit/timeout flip Busy at the accept**, not in the pipeline. They stay exempt from the
   Busy 409, but they do change the status, so they take the same lock as everything else. The job
   re-enters `IsPreReserved` and `TransitionPipeline` skips the second `TakeOverAsync`.
+- **updateData (`Unconditional`) takes NO lock and NO duplicate-job guard — on either path.** It is
+  status-neutral (flip = None, nothing to serialize) and must accept parallel requests: N
+  simultaneous updateData accepts share the same logical job identity yet are all legitimate, each
+  carrying its own payload, so the guard's dedupe would *lose data* for this kind. Job id/name are
+  unique per enqueue, so lock-free insert cannot collide; instance-data writes are serialized
+  downstream by the per-instance write funnel. Before this exemption, N parallel notifiers
+  (subprocess → parent `document-ready-update`) fought over the parent's status lock and every
+  loser burned an error-boundary retry backoff for a lock that protected nothing.
 - There is **no duplicate transition-record guard** downstream. Duplicate *requests* are stopped
   only by the accept-time active-job guard; duplicate *hops* by the per-hop policy checks.
 
