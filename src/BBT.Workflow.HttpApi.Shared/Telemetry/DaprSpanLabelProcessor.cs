@@ -36,11 +36,27 @@ public sealed class DaprSpanLabelProcessor : BaseProcessor<Activity>
     }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// Also folds the key into the span NAME (<c>GetState sys-flows:sample:north-star:gen</c>) —
+    /// the whole point of the label is reading the waterfall without opening each span. Done at
+    /// OnEnd only: the instrumentation writes its own DisplayName in its start handler, and its
+    /// order relative to processor OnStart is an implementation detail; after OnEnd nobody touches
+    /// the name before export. The long <c>dapr.proto.runtime.v1.Dapr/</c> prefix is dropped from
+    /// the name — <c>rpc.service</c>/<c>rpc.method</c> tags still carry it. Known trade-off: lock
+    /// keys embed the instance id, so span-name cardinality rises; these are child spans (not
+    /// Elastic transactions) and readability was explicitly chosen — reverting is deleting the
+    /// rename, the tag stays.
+    /// </remarks>
     public override void OnEnd(Activity activity)
     {
         if (activity.GetTagItem(TelemetryConstants.TagNames.DaprKey) is null)
         {
             TryStamp(activity);
+        }
+
+        if (activity.GetTagItem(TelemetryConstants.TagNames.DaprKey) is string key)
+        {
+            activity.DisplayName = $"{ShortMethodName(activity)} {key}";
         }
     }
 
@@ -50,6 +66,17 @@ public sealed class DaprSpanLabelProcessor : BaseProcessor<Activity>
         {
             activity.SetTag(TelemetryConstants.TagNames.DaprKey, key);
         }
+    }
+
+    /// <summary>
+    /// The bare gRPC method (<c>GetState</c>, <c>TryLockAlpha1</c>) from the method path the
+    /// instrumentation put into the DisplayName.
+    /// </summary>
+    private static string ShortMethodName(Activity activity)
+    {
+        var name = activity.DisplayName;
+        var lastSlash = name.LastIndexOf('/');
+        return lastSlash >= 0 && lastSlash < name.Length - 1 ? name[(lastSlash + 1)..] : name;
     }
 
     private static bool IsDaprClientSpan(Activity activity) =>

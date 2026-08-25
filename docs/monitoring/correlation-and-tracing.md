@@ -293,7 +293,12 @@ instance status lock takes/releases at admission and settlement. They are export
 mode too — deliberately, since `AddGrpcClientInstrumentation` also produces the
 Orchestration→Execution `InvokeService` span whose absence detaches the Execution subtree (#887).
 
-Each state/lock span carries **`vnext.dapr.key`** — the cache key or lock resource it targets:
+Each state/lock span carries **`vnext.dapr.key`** — the cache key or lock resource it targets —
+and its NAME folds the key in (`GetState sys-flows:sample:north-star:gen`,
+`TryLockAlpha1 vnext:{domain}:{flow}:{id}`), so the waterfall reads without opening spans. Known
+trade-off: lock keys embed the instance id, so span-name cardinality rises; these are child spans
+(not Elastic transactions), and reverting is deleting the rename in `DaprSpanLabelProcessor.OnEnd`
+— the tag stays. Key shapes:
 `{type}:{domain}:{key}:gen` is a component generation-token read, a resolution key is the
 component payload itself, `vnext:{domain}:{flow}:{id}` is the instance status lock. The key lives
 in the protobuf body, out of the instrumentation's reach, so it travels via the `DaprCallLabel`

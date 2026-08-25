@@ -49,6 +49,36 @@ public sealed class DaprSpanLabelProcessorTests
     }
 
     [Fact]
+    public void ALabelledSpan_GetsTheKeyFoldedIntoItsName_AtOnEnd()
+    {
+        // The whole point of the label: the waterfall must say what was read without opening the
+        // span. The long dapr.proto... prefix is dropped — rpc.service/rpc.method still carry it.
+        using var activity = new Activity("Grpc.Net.Client.GrpcOut").Start();
+        activity.DisplayName = "dapr.proto.runtime.v1.Dapr/GetState";
+
+        using (DaprCallLabel.Use("sys-flows:sample:north-star:gen"))
+        {
+            _processor.OnStart(activity);
+            _processor.OnEnd(activity);
+        }
+
+        activity.DisplayName.ShouldBe("GetState sys-flows:sample:north-star:gen");
+    }
+
+    [Fact]
+    public void AnUnlabelledDaprSpan_KeepsItsName_AtOnEnd()
+    {
+        // e.g. InvokeService or Aether-internal scheduler traffic: no ambient, no rename.
+        using var activity = new Activity("Grpc.Net.Client.GrpcOut").Start();
+        activity.DisplayName = "dapr.proto.runtime.v1.Dapr/InvokeService";
+
+        _processor.OnEnd(activity);
+
+        activity.DisplayName.ShouldBe("dapr.proto.runtime.v1.Dapr/InvokeService");
+        activity.GetTagItem("vnext.dapr.key").ShouldBeNull();
+    }
+
+    [Fact]
     public void ADaprMethodNamedSpan_StartedInsideALabelScope_CarriesTheKey()
     {
         using var activity = new Activity("dapr.proto.runtime.v1.Dapr/GetState").Start();
