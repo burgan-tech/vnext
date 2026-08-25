@@ -190,7 +190,7 @@ public sealed class EfCoreInstanceRepository(
         // Only record business-specific instance metrics here
         workflowMetrics.RecordInstanceCreated(entity.Flow, runtimeInfoProvider.Domain);
 
-        // Transfer to data sinks (e.g., ClickHouse) if enabled
+        // Transfer to registered data sinks if any
         try
         {
             await dataSinkManager.HandleInsertAsync(result, cancellationToken);
@@ -366,8 +366,23 @@ public sealed class EfCoreInstanceRepository(
         string identifier,
         CancellationToken cancellationToken = default)
     {
-        var dbSet = await GetDbSetAsync();
-        return await QueryStateFingerprintAsync(dbSet.AsNoTracking(), identifier, cancellationToken);
+        // Highest-QPS query in the system (the long-poll 304 path): served through compiled
+        // queries so the LINQ-to-SQL translation and query-cache lookup are paid once per
+        // schema instead of on every poll. QueryStateFingerprintAsync remains the uncompiled
+        // reference implementation exercised by the integration tests.
+        var context = await GetDbContextAsync();
+        var compiled = CompiledFingerprintQueries.For(context);
+
+        if (Guid.TryParse(identifier, out var instanceId))
+        {
+            var byId = await compiled.StateById(context, instanceId, cancellationToken);
+            if (byId is not null)
+                return byId;
+        }
+
+        // Key is not unique across terminal/historical rows; OrderByDescending(CreatedAt)
+        // keeps the fallback deterministic, mirroring QueryStateFingerprintAsync.
+        return await compiled.StateByKey(context, identifier, cancellationToken);
     }
 
     /// <summary>
@@ -467,8 +482,22 @@ public sealed class EfCoreInstanceRepository(
         string identifier,
         CancellationToken cancellationToken = default)
     {
-        var dbSet = await GetDbSetAsync();
-        return await QueryDataFingerprintAsync(dbSet.AsNoTracking(), identifier, cancellationToken);
+        // Polled by the data-function ETag path; compiled for the same reason as
+        // GetStateFingerprintAsync. QueryDataFingerprintAsync remains the uncompiled
+        // reference implementation exercised by the integration tests.
+        var context = await GetDbContextAsync();
+        var compiled = CompiledFingerprintQueries.For(context);
+
+        if (Guid.TryParse(identifier, out var instanceId))
+        {
+            var byId = await compiled.DataById(context, instanceId, cancellationToken);
+            if (byId is not null)
+                return byId;
+        }
+
+        // Key is not unique across terminal/historical rows; OrderByDescending(CreatedAt)
+        // keeps the fallback deterministic, mirroring QueryDataFingerprintAsync.
+        return await compiled.DataByKey(context, identifier, cancellationToken);
     }
 
     /// <summary>
@@ -504,6 +533,101 @@ public sealed class EfCoreInstanceRepository(
             i.FlowVersion,
             i.EffectiveState,
             i.ChildCorrelations.Any(c => !c.IsCompleted && c.SubFlowType == SubFlowType.SubFlow)));
+
+    /// <summary>
+    /// Compiled forms of the poll-path fingerprint queries. A compiled query skips the
+    /// per-execution LINQ translation and query-cache lookup — worthwhile only here, on the
+    /// fixed-shape single-row projections executed on every state/data poll.
+    /// <para>
+    /// The cache is keyed per <see cref="IModel"/> and never shared across models: a compiled
+    /// query binds to the model of the first context it executes against, and schema-per-flow
+    /// bakes the schema name into each compiled model (<see cref="Data.SchemaAwareModelCacheKeyFactory"/>).
+    /// One static delegate would therefore silently run every tenant's polls against the first
+    /// tenant's schema. Keyed weakly so an entry is dropped together with its model if EF evicts
+    /// the model from its own cache; the table is bounded by the live schema count.
+    /// </para>
+    /// <para>
+    /// The projections below MUST mirror <see cref="ProjectStateFingerprint"/> /
+    /// <see cref="ProjectDataFingerprint"/> term for term: fingerprints feed ETags, and a
+    /// diverging term invalidates every outstanding ETag fleet-wide (see the remarks on
+    /// <see cref="ProjectStateFingerprint"/>). The uncompiled forms stay the reference
+    /// implementations run by the integration tests.
+    /// </para>
+    /// </summary>
+    internal sealed class CompiledFingerprintQueries
+    {
+        private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<
+            Microsoft.EntityFrameworkCore.Metadata.IModel, CompiledFingerprintQueries> PerModel = new();
+
+        public static CompiledFingerprintQueries For(WorkflowDbContext context)
+            => PerModel.GetValue(context.Model, static _ => new CompiledFingerprintQueries());
+
+        public readonly Func<WorkflowDbContext, Guid, CancellationToken, Task<InstanceStateFingerprint?>> StateById =
+            EF.CompileAsyncQuery((WorkflowDbContext context, Guid id, CancellationToken ct) =>
+                context.Set<Instance>()
+                    .AsNoTracking()
+                    .Where(i => i.Id == id)
+                    .Select(i => new InstanceStateFingerprint(
+                        i.Id,
+                        i.Key,
+                        i.EffectiveState,
+                        i.Status,
+                        i.FlowVersion,
+                        i.ChildCorrelations.Any(c => !c.IsCompleted && c.SubFlowType == SubFlowType.SubFlow),
+                        i.ChildCorrelations.Count,
+                        i.ChildCorrelations.Count(c => c.IsCompleted),
+                        i.ChildCorrelations.Select(c => c.CompletedAt).Max(),
+                        i.ChildCorrelations.Select(c => c.SubFlowStateChangedAt).Max()))
+                    .FirstOrDefault());
+
+        public readonly Func<WorkflowDbContext, string, CancellationToken, Task<InstanceStateFingerprint?>> StateByKey =
+            EF.CompileAsyncQuery((WorkflowDbContext context, string key, CancellationToken ct) =>
+                context.Set<Instance>()
+                    .AsNoTracking()
+                    .Where(i => i.Key == key)
+                    .OrderByDescending(i => i.CreatedAt)
+                    .Select(i => new InstanceStateFingerprint(
+                        i.Id,
+                        i.Key,
+                        i.EffectiveState,
+                        i.Status,
+                        i.FlowVersion,
+                        i.ChildCorrelations.Any(c => !c.IsCompleted && c.SubFlowType == SubFlowType.SubFlow),
+                        i.ChildCorrelations.Count,
+                        i.ChildCorrelations.Count(c => c.IsCompleted),
+                        i.ChildCorrelations.Select(c => c.CompletedAt).Max(),
+                        i.ChildCorrelations.Select(c => c.SubFlowStateChangedAt).Max()))
+                    .FirstOrDefault());
+
+        public readonly Func<WorkflowDbContext, Guid, CancellationToken, Task<InstanceDataFingerprint?>> DataById =
+            EF.CompileAsyncQuery((WorkflowDbContext context, Guid id, CancellationToken ct) =>
+                context.Set<Instance>()
+                    .AsNoTracking()
+                    .Where(i => i.Id == id)
+                    .Select(i => new InstanceDataFingerprint(
+                        i.Id,
+                        i.Key,
+                        i.DataList.Where(d => d.IsLatest).Select(d => d.ETag).FirstOrDefault(),
+                        i.FlowVersion,
+                        i.EffectiveState,
+                        i.ChildCorrelations.Any(c => !c.IsCompleted && c.SubFlowType == SubFlowType.SubFlow)))
+                    .FirstOrDefault());
+
+        public readonly Func<WorkflowDbContext, string, CancellationToken, Task<InstanceDataFingerprint?>> DataByKey =
+            EF.CompileAsyncQuery((WorkflowDbContext context, string key, CancellationToken ct) =>
+                context.Set<Instance>()
+                    .AsNoTracking()
+                    .Where(i => i.Key == key)
+                    .OrderByDescending(i => i.CreatedAt)
+                    .Select(i => new InstanceDataFingerprint(
+                        i.Id,
+                        i.Key,
+                        i.DataList.Where(d => d.IsLatest).Select(d => d.ETag).FirstOrDefault(),
+                        i.FlowVersion,
+                        i.EffectiveState,
+                        i.ChildCorrelations.Any(c => !c.IsCompleted && c.SubFlowType == SubFlowType.SubFlow)))
+                    .FirstOrDefault());
+    }
 
     /// <inheritdoc />
     public async Task<Instance?> FindByIdentifierWithFullHistoryAsync(string identifier,

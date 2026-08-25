@@ -39,9 +39,11 @@ public static class InstanceWriteGate
 {
     /// <summary>
     /// Number of stripes. Bounded so the gate costs a fixed amount of memory regardless of how
-    /// many instances the process has seen.
+    /// many instances the process has seen. Sized so that unrelated instances rarely share a
+    /// stripe under realistic concurrency — the gate is held across a multi-round-trip database
+    /// write, so a collision serializes real latency, and a semaphore costs well under 100 bytes.
     /// </summary>
-    private const int StripeCount = 64;
+    private const int StripeCount = 256;
 
     private static readonly SemaphoreSlim[] Gates =
         Enumerable.Range(0, StripeCount).Select(_ => new SemaphoreSlim(1, 1)).ToArray();

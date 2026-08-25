@@ -2,6 +2,11 @@
   <PropertyGroup>
     <LangVersion>latest</LangVersion>
     <Version>0.0.84</Version>
+    <!-- Worker-SDK hosts (inbox/outbox/db-migrator) default to Workstation GC, unlike the Web-SDK
+         hosts; force Server GC everywhere so throughput-oriented GC applies to all services and
+         benchmarks (which already set it) measure the GC production actually runs. -->
+    <ServerGarbageCollection>true</ServerGarbageCollection>
+    <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
     <NoWarn>$(NoWarn);CS1591;CS8618;EF1001;CS1570</NoWarn>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
   </PropertyGroup>

@@ -137,9 +137,8 @@ public static class WorkflowInfrastructureModuleServiceCollectionExtensions
         services.AddHostedService<SystemHealthMonitoringHostedService>();
         services.AddHostedService<SensitiveDataCipherHostedService>();
         
-        // DataSink Integration (replaces ClickHouse integration)
+        // DataSink Integration (no sinks are registered by default; concrete sinks plug in here)
         services.AddDataSinkServices();
-        services.AddClickHouseDataSinks();
         services.RegisterDataSinks();
         
         // Schema Migration Orchestration

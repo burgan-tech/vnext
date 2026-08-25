@@ -259,7 +259,20 @@ public static class InstancesModelCreatingExtensions
                 d.Ignore(g => g.JsonElement);
                 d.Property(g => g.Json)
                     .HasColumnType("jsonb")
-                    .HasColumnName("Data");
+                    .HasColumnName(nameof(InstanceData.Data));
+
+                // Partial GIN index serving the attribute (JSONB containment) filters. The equals
+                // path already emits "Data" @> {param} (GraphQLJsonFilterService.BuildEqualsCondition),
+                // which without this index is a sequential scan over InstancesData. jsonb_path_ops
+                // only supports @> — smaller and faster than the default opclass, and the ->> text
+                // accessors used by like/comparison operators cannot use a GIN index either way.
+                // Partial on IsLatest = true: every attribute-filter query joins the latest data row,
+                // and history rows (the bulk of the table) stay out of the index.
+                d.HasIndex(g => g.Json)
+                    .HasMethod("gin")
+                    .HasOperators("jsonb_path_ops")
+                    .HasFilter("\"IsLatest\" = true")
+                    .HasDatabaseName("IX_InstancesData_Data_Gin");
             });
 
             b.HasIndex(p => p.InstanceId);
