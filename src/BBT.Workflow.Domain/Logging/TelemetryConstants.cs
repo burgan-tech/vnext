@@ -163,6 +163,36 @@ public static class TelemetryConstants
 
         /// <summary>Target instance of a trigger-family task's local (in-process) invocation.</summary>
         public const string TriggerTargetInstance = "vnext.trigger.target.instance";
+
+        /// <summary>Lifecycle order of a pipeline step span (see LifecycleOrder).</summary>
+        public const string StepOrder = "vnext.step.order";
+
+        /// <summary>Flow-control outcome of a pipeline step: continue | stop | skipTo:{order}.</summary>
+        public const string StepOutcome = "vnext.step.outcome";
+
+        /// <summary>Distributed status-lock key (vnext:{domain}:{flow}:{id}).</summary>
+        public const string LockKey = "vnext.lock.key";
+
+        /// <summary>Whether the single-attempt status-lock acquire succeeded.</summary>
+        public const string LockAcquired = "vnext.lock.acquired";
+
+        /// <summary>Lease seconds requested for the status lock.</summary>
+        public const string LockLeaseSeconds = "vnext.lock.lease_seconds";
+
+        /// <summary>What a script span was executing: lockKey | subflowInputMapping | subflowOutputMapping | compilation.</summary>
+        public const string ScriptKind = "vnext.script.kind";
+
+        /// <summary>True when the compile was served from the type cache (no Roslyn work).</summary>
+        public const string ScriptCacheHit = "vnext.script.cache.hit";
+
+        /// <summary>Number of helper components resolved into a compile's helper set.</summary>
+        public const string ScriptHelperCount = "vnext.script.helper.count";
+
+        /// <summary>SemVer version of the instance-data row being appended.</summary>
+        public const string DataVersion = "vnext.data.version";
+
+        /// <summary>Serialized byte size of the instance-data payload being appended.</summary>
+        public const string DataSizeBytes = "vnext.data.size_bytes";
     }
 
     /// <summary>
