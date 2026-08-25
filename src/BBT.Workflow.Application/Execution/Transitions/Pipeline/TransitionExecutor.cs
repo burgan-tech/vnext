@@ -136,16 +136,20 @@ public sealed class TransitionExecutor
         TransitionExecutionContext context,
         CancellationToken cancellationToken)
     {
-        // Verbose-only step span. In Business mode NO step Activity may exist: a created-but-
-        // export-filtered span would orphan every child started inside the step body (see
-        // PipelineStepActivityHelper).
         using var stepActivity = PipelineStepActivityHelper.StartStepActivity(step);
         try
         {
-            return await step.ExecuteAsync(context, cancellationToken);
+            var result = await step.ExecuteAsync(context, cancellationToken);
+            if (result.IsSuccess)
+                PipelineStepActivityHelper.SetStepOutcome(stepActivity, result.Value!);
+            else
+                stepActivity?.SetStatus(ActivityStatusCode.Error, result.Error.Message);
+
+            return result;
         }
         catch (Exception ex)
         {
+            stepActivity?.SetStatus(ActivityStatusCode.Error, ex.Message);
             _logger.LogError(ex, "Unhandled exception in step {StepName}", step.Name);
             return Result<StepOutcome>.Fail(Error.Failure(ex.GetType().Name, ex.Message));
         }
