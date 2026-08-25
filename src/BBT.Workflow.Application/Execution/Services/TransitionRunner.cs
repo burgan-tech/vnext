@@ -146,6 +146,9 @@ public sealed class TransitionRunner(
         WorkflowExecutionContext context,
         CancellationToken cancellationToken)
     {
+        // The context is handed in as the carrier: it may already hold the definition the intake
+        // resolved, and when it does not, the scope's own load lands on it so the pipeline's
+        // context factory reuses it instead of resolving the same flow a third time.
         return scopeFactory.ExecuteWithWorkflowAsync(context.Domain, context.WorkflowKey, context.WorkflowVersion,
             async (sp, ct) =>
             {
@@ -168,7 +171,7 @@ public sealed class TransitionRunner(
                     
                     return coreResult;
                 }
-            }, cancellationToken);
+            }, cancellationToken, carrier: context);
     }
 
     /// <summary>

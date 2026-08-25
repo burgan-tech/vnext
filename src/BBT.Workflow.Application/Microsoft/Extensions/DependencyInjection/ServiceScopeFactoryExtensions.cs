@@ -2,6 +2,7 @@ using BBT.Aether.DependencyInjection;
 using BBT.Aether.MultiSchema;
 using BBT.Aether.Results;
 using BBT.Workflow.Caching;
+using BBT.Workflow.Execution;
 using BBT.Workflow.Instances;
 
 namespace Microsoft.Extensions.DependencyInjection;
@@ -135,13 +136,15 @@ public static class ServiceScopeFactoryExtensions
         string workflowKey,
         string? workflowVersion,
         Func<IServiceProvider, CancellationToken, Task<Result<T>>> action,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        WorkflowExecutionContext? carrier = null)
     {
         return scopeFactory.ExecuteInScopeAsync(
             (sp, ct) => WithWorkflowScopeAsync(
                 sp, domain, workflowKey, workflowVersion, ct,
                 () => action(sp, ct),
-                Result<T>.Fail),
+                Result<T>.Fail,
+                carrier),
             cancellationToken);
     }
 
@@ -251,17 +254,30 @@ public static class ServiceScopeFactoryExtensions
         string? workflowVersion,
         CancellationToken ct,
         Func<Task<TResult>> action,
-        Func<Error, TResult> onWorkflowLoadFailed)
+        Func<Error, TResult> onWorkflowLoadFailed,
+        WorkflowExecutionContext? carrier = null)
     {
         var currentSchema = sp.GetRequiredService<ICurrentSchema>();
         var componentCacheStore = sp.GetRequiredService<IComponentCacheStore>();
 
         using (currentSchema.Change(workflowKey))
         {
-            var workflowResult = await componentCacheStore.GetFlowAsync(domain, workflowKey, workflowVersion, ct);
+            // The caller may already have resolved this exact definition (the intake did, before
+            // dispatching). Reuse it, and otherwise publish what we load back onto the carrier so
+            // the layers inside the scope — the context factory above all — do not resolve it a
+            // third time. The load stays INSIDE the schema scope: on a cache miss it reaches the
+            // database, which is schema-bound.
+            var carried = carrier?.ResolvedWorkflow;
+            if (carried is null)
+            {
+                var workflowResult = await componentCacheStore.GetFlowAsync(domain, workflowKey, workflowVersion, ct);
 
-            if (!workflowResult.IsSuccess)
-                return onWorkflowLoadFailed(workflowResult.Error);
+                if (!workflowResult.IsSuccess)
+                    return onWorkflowLoadFailed(workflowResult.Error);
+
+                if (carrier is not null)
+                    carrier.ResolvedWorkflow = workflowResult.Value!;
+            }
 
             return await action();
         }

@@ -27,7 +27,26 @@ public sealed class WorkflowExecutionContext
     /// <summary>Gets or sets the workflow version (optional, uses latest if not specified).</summary>
     [Enrich(Name = "vnext.flow.version")]
     public string? WorkflowVersion { get; set; }
-    
+
+    /// <summary>
+    /// The definition already resolved for THIS context's own coordinates
+    /// (<see cref="Domain"/> / <see cref="WorkflowKey"/> / <see cref="WorkflowVersion"/>), carried so
+    /// the layers below do not resolve it again.
+    /// <para>
+    /// A request resolves its flow at intake and the runner resolves it again to open the workflow
+    /// scope, and the context factory a third time — each paying a generation-token round trip and a
+    /// full deserialize of the definition. Because the value is only ever set from a resolution made
+    /// with these same three fields, a consumer asking with them cannot get a different definition
+    /// than it would have loaded itself; no version-spelling comparison is needed.
+    /// </para>
+    /// <para>
+    /// Transport-only: never serialized and never mapped into <c>TransitionJobPayload</c>, so a job
+    /// re-entry resolves the definition fresh rather than inheriting a stale one across a hop.
+    /// </para>
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public Definitions.Workflow? ResolvedWorkflow { get; set; }
+
     /// <summary>Gets or sets the transition key to execute.</summary>
     [Enrich(Name = "vnext.transition.key")]
     public string TransitionKey { get; set; } = default!;

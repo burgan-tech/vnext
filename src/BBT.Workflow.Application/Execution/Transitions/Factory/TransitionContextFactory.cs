@@ -62,12 +62,25 @@ public sealed class TransitionContextFactory(
         WorkflowExecutionContext input,
         CancellationToken cancellationToken)
     {
-        return componentCacheStore.GetFlowAsync(
-                input.Domain, input.WorkflowKey, input.WorkflowVersion, cancellationToken)
+        return ResolveWorkflowAsync(input, cancellationToken)
             .BindAsync(workflow =>
                 LoadInstanceAsync(input.InstanceId, cancellationToken)
                     .MapAsync(instance => (workflow, instance)));
     }
+
+    /// <summary>
+    /// Uses the definition the caller already resolved for these coordinates when it supplied one,
+    /// otherwise resolves it. The carried value was produced from this same context's
+    /// Domain/WorkflowKey/WorkflowVersion, so reusing it cannot yield a different definition than
+    /// resolving here would — it only avoids repeating the generation-token read and the deserialize.
+    /// </summary>
+    private Task<Result<Definitions.Workflow>> ResolveWorkflowAsync(
+        WorkflowExecutionContext input,
+        CancellationToken cancellationToken)
+        => input.ResolvedWorkflow is { } carried
+            ? Task.FromResult(Result<Definitions.Workflow>.Ok(carried))
+            : componentCacheStore.GetFlowAsync(
+                input.Domain, input.WorkflowKey, input.WorkflowVersion, cancellationToken);
 
     /// <summary>
     /// Loads the active instance by identifier, wrapped in its own span so instance-load

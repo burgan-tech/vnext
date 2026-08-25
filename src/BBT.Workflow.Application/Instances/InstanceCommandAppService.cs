@@ -624,7 +624,7 @@ public sealed class InstanceCommandAppService(
             workflowDefinition = workflowResult.Value;
         }
 
-        var context = BuildTransitionContext(resolvedInstance, transitionKey, input);
+        var context = BuildTransitionContext(resolvedInstance, transitionKey, input, workflowDefinition!);
 
         // Pre-dispatch validation guard: validate schema + state-machine policy BEFORE
         // dispatching to the execution service. This guarantees consistent 400 Bad Request
@@ -686,7 +686,8 @@ public sealed class InstanceCommandAppService(
     private static WorkflowExecutionContext BuildTransitionContext(
         Instance resolvedInstance,
         string transitionKey,
-        TransitionInput input)
+        TransitionInput input,
+        Definitions.Workflow workflow)
     {
         return new WorkflowExecutionContext
         {
@@ -694,6 +695,9 @@ public sealed class InstanceCommandAppService(
             InstanceId = resolvedInstance.Id.ToString(),
             WorkflowKey = resolvedInstance.Flow,
             WorkflowVersion = resolvedInstance.FlowVersion,
+            // Carried, not re-resolved downstream: this is the very definition the layers below
+            // would look up with the three coordinates above.
+            ResolvedWorkflow = workflow,
             TransitionKey = transitionKey,
             TriggerType = TriggerType.Manual,
             Actor = input.Actor,
