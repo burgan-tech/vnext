@@ -1,6 +1,7 @@
 using BBT.Workflow.Caching;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Scripting.Related;
+using BBT.Workflow.Security;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -23,7 +24,8 @@ public sealed class ScriptContextFactory(
     IRequestRawBodyProvider? rawBodyProvider = null,
     IRelatedInstanceReader? relatedInstanceReader = null,
     IInstanceCorrelationRepository? correlationRepository = null,
-    IOptions<RelatedAccessOptions>? relatedAccessOptions = null) : IScriptContextFactory
+    IOptions<RelatedAccessOptions>? relatedAccessOptions = null,
+    ISensitiveDataScrubberAccessor? scrubberAccessor = null) : IScriptContextFactory
 {
     /// <summary>
     /// Creates a new fluent builder for constructing ScriptContext instances.
@@ -39,6 +41,7 @@ public sealed class ScriptContextFactory(
             rawBodyProvider,
             relatedInstanceReader,
             correlationRepository,
-            relatedAccessOptions);
+            relatedAccessOptions,
+            scrubberAccessor);
     }
 }

@@ -75,6 +75,31 @@ public sealed class SchemaFilterContext
     }
 
     /// <summary>
+    /// Whether the field's value is stored encrypted, and therefore can never be matched by a
+    /// SQL predicate over the jsonb column.
+    /// </summary>
+    public bool IsFieldEncrypted(string fieldPath)
+    {
+        var metadata = GetFieldMetadata(fieldPath);
+        return metadata is not null && metadata.EncryptedAtRest;
+    }
+
+    /// <summary>
+    /// Explains why a field cannot be filtered or sorted. Encryption is called out by name because
+    /// otherwise "not filterable" sends the author looking for a missing x-filterOperators that
+    /// they are in fact forbidden from adding.
+    /// </summary>
+    /// <param name="fieldPath">The rejected field path.</param>
+    /// <param name="operation">Either "filterable" or "sortable".</param>
+    /// <returns>An author-facing message.</returns>
+    public string ExplainRejection(string fieldPath, string operation)
+        => IsFieldEncrypted(fieldPath)
+            ? $"Field '{fieldPath}' is not {operation}: it is encrypted at rest " +
+              "(x-sensitive.encryptAtRest), so it is stored as ciphertext and no SQL predicate " +
+              "over it can match. Encrypted fields cannot be filtered, sorted or aggregated."
+            : $"Field '{fieldPath}' is not {operation}.";
+
+    /// <summary>
     /// Maps an internal filter operator name to its schema-facing equivalent.
     /// </summary>
     public static string ToSchemaOperator(string internalOperator)

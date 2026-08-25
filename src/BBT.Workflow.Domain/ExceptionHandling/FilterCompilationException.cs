@@ -15,8 +15,18 @@ namespace BBT.Workflow.ExceptionHandling;
 /// executable, i.e. a defect in the runtime rather than in the caller's request.
 /// </para>
 /// <para>
-/// Both map to HTTP 400 because the caller cannot be served either way, but only this one is worth
-/// an Error-level log: conflating them would fire a drift alarm on every routine policy rejection.
+/// Only this one is worth an Error-level log: conflating the two would fire a drift alarm on every
+/// routine policy rejection.
+/// </para>
+/// <para>
+/// KNOWN ISSUE — both currently surface as HTTP <b>500</b>, not 400. The status is derived from
+/// <c>Error.Prefix</c> (<c>ErrorNormalizer.MapPrefixToStatusCode</c>), and <c>ResultExtensions.TryAsync</c>
+/// wraps any thrown exception as <c>Prefix = "failure"</c>, which has no mapping. The
+/// <c>Validation:</c> segment of the <em>code</em> has no effect on the status. Only a returned
+/// <c>Result.Fail(Error.Validation(...))</c> produces <c>Prefix = "validation"</c> ⇒ 400, which is
+/// why the boundary validator's rejections answer 400 while these throws do not. Fixing it means
+/// surfacing these as a failed Result instead of an exception — a deliberate change to the public
+/// error contract, not a comment-level fix.
 /// </para>
 /// </remarks>
 public sealed class FilterCompilationException(string message)

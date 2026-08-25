@@ -3504,4 +3504,27 @@ public static partial class WorkflowLogs
         string cacheKey);
 
     #endregion
+
+    #region Sensitive Data Encryption
+
+    /// <summary>
+    /// Logged once at startup when the instance-data cipher is installed.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 90001,
+        Level = LogLevel.Information,
+        Message = "Instance data encryption configured. Enabled={Enabled}, ActiveKeyId={ActiveKeyId}")]
+    public static partial void SensitiveDataEncryptionConfigured(this ILogger logger, bool enabled, string activeKeyId);
+
+    /// <summary>
+    /// Logged when key material could not be loaded while encryption is disabled — tolerated, but
+    /// it is the failure that will surface the moment encryption is switched on.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 90041,
+        Level = LogLevel.Warning,
+        Message = "Instance data encryption keys could not be loaded (encryption is disabled): {Reason}")]
+    public static partial void SensitiveDataEncryptionKeysUnavailable(this ILogger logger, string reason);
+
+    #endregion
 }

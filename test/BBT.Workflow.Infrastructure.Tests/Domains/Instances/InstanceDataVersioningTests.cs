@@ -8,6 +8,7 @@ using BBT.Workflow.BackgroundJobs.Options;
 using BBT.Workflow.Data;
 using BBT.Workflow.DefinitionContext;
 using BBT.Workflow.Instances;
+using BBT.Workflow.Security;
 using BBT.Workflow.Validation;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -68,6 +69,7 @@ public sealed class InstanceDataVersioningTests : IAsyncLifetime
         new NullWorkflowContext(),
         new ServiceCollection().BuildServiceProvider(),
         Substitute.For<IJsonSchemaValidator>(),
+        NullSensitiveDataCipher.Instance,
         Options.Create(new WorkflowExecutionOptions()),
         NullLogger<InstanceDataWriteService>.Instance);
 

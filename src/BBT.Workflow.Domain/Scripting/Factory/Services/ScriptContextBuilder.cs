@@ -5,7 +5,9 @@ using BBT.Workflow.Caching;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Runtime;
+using BBT.Workflow.Definitions.Schemas;
 using BBT.Workflow.Scripting.Related;
+using BBT.Workflow.Security;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -23,7 +25,8 @@ internal sealed class ScriptContextBuilder(
     IRequestRawBodyProvider? rawBodyProvider = null,
     IRelatedInstanceReader? relatedInstanceReader = null,
     IInstanceCorrelationRepository? correlationRepository = null,
-    IOptions<RelatedAccessOptions>? relatedAccessOptions = null) : IScriptContextBuilder
+    IOptions<RelatedAccessOptions>? relatedAccessOptions = null,
+    ISensitiveDataScrubberAccessor? scrubberAccessor = null) : IScriptContextBuilder
 {
     private IRuntimeInfoProvider? _runtimeInfoProvider;
     private Definitions.Workflow? _workflow;
@@ -227,7 +230,9 @@ internal sealed class ScriptContextBuilder(
             builder.SetInstance(instance);
             builder.SetRelated(BuildRelatedAccessor(instance));
         }
-        
+
+        await PublishSensitiveDataScrubberAsync(workflow, instance, cancellationToken);
+
         var scriptTransitionRequest = BuildScriptTransitionRequest();
 
         // Build the ScriptContext using the domain builder
@@ -325,6 +330,50 @@ internal sealed class ScriptContextBuilder(
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Publishes a <see cref="SensitiveDataScrubber"/> for this instance so log redaction can
+    /// happen later, synchronously, from places that cannot await a schema load.
+    /// <para>
+    /// This is the one point in the request where both halves are in hand: the master schema
+    /// (which says WHICH fields are sensitive) and the instance data (which says WHAT their
+    /// values are). Value-based scrubbing needs both.
+    /// </para>
+    /// <para>
+    /// Best-effort by design. A workflow with no master schema costs nothing, an unannotated
+    /// schema is memoized as empty, and a schema that fails to load leaves the previous scrubber
+    /// in place rather than failing the script context — losing redaction on a log line must
+    /// never fail a transition.
+    /// </para>
+    /// </summary>
+    private async Task PublishSensitiveDataScrubberAsync(
+        Definitions.Workflow? workflow,
+        Instance? instance,
+        CancellationToken cancellationToken)
+    {
+        if (scrubberAccessor == null || workflow?.Schema == null || instance == null)
+            return;
+
+        var latestData = instance.LatestData;
+        if (latestData == null)
+            return;
+
+        var schemaResult = await componentCacheStore.GetSchemaAsync(workflow.Schema, cancellationToken);
+        if (!schemaResult.IsSuccess || schemaResult.Value == null)
+            return;
+
+        var schema = schemaResult.Value;
+        var sensitiveFields = SensitiveSchemaCache.GetOrParse(
+            schema.Domain,
+            schema.Key,
+            schema.Version,
+            schema.Schema);
+
+        if (sensitiveFields.Count == 0)
+            return;
+
+        scrubberAccessor.Set(SensitiveDataScrubber.Create(latestData.Data.JsonElement, sensitiveFields));
     }
 
     /// <summary>

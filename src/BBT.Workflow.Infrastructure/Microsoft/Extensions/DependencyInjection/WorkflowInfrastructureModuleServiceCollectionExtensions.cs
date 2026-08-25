@@ -15,9 +15,11 @@ using BBT.Workflow.Remote.Extensions;
 using BBT.Workflow.Schemas;
 using BBT.Workflow.Security;
 using BBT.Workflow.Scripting;
+using Dapr.Client;
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Options;
 
 namespace Microsoft.Extensions.DependencyInjection;
 
@@ -113,8 +115,27 @@ public static class WorkflowInfrastructureModuleServiceCollectionExtensions
         services.AddSingleton<WorkflowDatabaseInterceptor>();
         services.AddSingleton<WorkflowTransactionInterceptor>();
         
+        // Instance-data encryption at rest. Keys are loaded once at startup and the cipher is
+        // installed process-wide, because decryption happens behind a property getter that cannot
+        // await. Defaults to disabled: x-sensitive still drives masking and log redaction without it.
+        services.AddOptions<DataEncryptionOptions>().BindConfiguration(DataEncryptionOptions.SectionName);
+        services.TryAddSingleton<IDataEncryptionKeyProvider>(sp =>
+        {
+            var encryptionOptions = sp.GetRequiredService<IOptions<DataEncryptionOptions>>();
+            return encryptionOptions.Value.KeySource == DataEncryptionKeySource.DaprSecretStore
+                ? new DaprDataEncryptionKeyProvider(sp.GetRequiredService<DaprClient>(), encryptionOptions)
+                : new ConfigurationDataEncryptionKeyProvider(encryptionOptions);
+        });
+
+        // Injected into the write funnel for the ENCRYPT direction, which needs per-request schema
+        // context. The decrypt direction goes through SensitiveDataCipherAccessor instead.
+        services.TryAddSingleton<ISensitiveDataCipher>(sp => new SensitiveDataCipher(
+            sp.GetRequiredService<IDataEncryptionKeyProvider>(),
+            sp.GetRequiredService<IOptions<DataEncryptionOptions>>().Value.Enabled));
+
         // Hosted Services
         services.AddHostedService<SystemHealthMonitoringHostedService>();
+        services.AddHostedService<SensitiveDataCipherHostedService>();
         
         // DataSink Integration (no sinks are registered by default; concrete sinks plug in here)
         services.AddDataSinkServices();
@@ -122,6 +143,9 @@ public static class WorkflowInfrastructureModuleServiceCollectionExtensions
         
         // Schema Migration Orchestration
         services.AddScoped<ISchemaMigrationOrchestrator, SchemaMigrationOrchestrator>();
+
+        // Encryption maintenance: backfill and key rotation are one pass over the current schema.
+        services.AddScoped<IInstanceDataEncryptionMaintenanceService, InstanceDataEncryptionMaintenanceService>();
         
         return services;
     }
