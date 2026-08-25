@@ -87,6 +87,42 @@ public sealed class PipelineStepActivityHelperTests : IDisposable
         Assert.Equal("skipTo:110", collected.Single().GetTagItem(TelemetryConstants.TagNames.StepOutcome));
     }
 
+    [Fact]
+    public void SetStepOutcome_Stop_RecordsStopTag()
+    {
+        var collected = new List<Activity>();
+        using var listener = CreateListener("BBT.Workflow.Pipeline", collected);
+        using (var activity = PipelineStepActivityHelper.StartStepActivity(new FakeStep(5, "HandleCancelPreflightStep")))
+        {
+            PipelineStepActivityHelper.SetStepOutcome(activity, StepOutcome.Stop());
+        }
+
+        Assert.Equal("stop", collected.Single().GetTagItem(TelemetryConstants.TagNames.StepOutcome));
+    }
+
+    [Fact]
+    public void SetStepError_RecordsErrorStatusAndMessage()
+    {
+        // Covers TransitionExecutor.ExecuteStepWithBoundaryAsync's two error paths (failed Result and
+        // unhandled exception), both of which delegate to SetStepError with the failure message.
+        var collected = new List<Activity>();
+        using var listener = CreateListener("BBT.Workflow.Pipeline", collected);
+        using (var activity = PipelineStepActivityHelper.StartStepActivity(new FakeStep(20, "CreateTransitionRecordStep")))
+        {
+            PipelineStepActivityHelper.SetStepError(activity, "boom");
+        }
+
+        var span = collected.Single();
+        Assert.Equal(ActivityStatusCode.Error, span.Status);
+        Assert.Equal("boom", span.StatusDescription);
+    }
+
+    [Fact]
+    public void SetStepError_NullActivity_IsNoOp()
+    {
+        Should.NotThrow(() => PipelineStepActivityHelper.SetStepError(null, "boom"));
+    }
+
     private sealed class FakeStep : ITransitionStep
     {
         public FakeStep(int order, string name)

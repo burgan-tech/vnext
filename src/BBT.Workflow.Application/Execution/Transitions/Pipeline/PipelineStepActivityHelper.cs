@@ -45,6 +45,12 @@ public static class PipelineStepActivityHelper
         activity.SetTag(TelemetryConstants.TagNames.StepOutcome, value);
     }
 
+    /// <summary>Records a step failure (result error or unhandled exception) as the span's error status.</summary>
+    public static void SetStepError(Activity? activity, string message)
+    {
+        activity?.SetStatus(ActivityStatusCode.Error, message);
+    }
+
     /// <summary>
     /// Starts a business-level span for a pipeline-scoped operation that is not a step
     /// (e.g. Transition.LoadContext, Transition.Validate, Instance.Load, Instance.AppendData).

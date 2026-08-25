@@ -143,13 +143,13 @@ public sealed class TransitionExecutor
             if (result.IsSuccess)
                 PipelineStepActivityHelper.SetStepOutcome(stepActivity, result.Value!);
             else
-                stepActivity?.SetStatus(ActivityStatusCode.Error, result.Error.Message);
+                PipelineStepActivityHelper.SetStepError(stepActivity, result.Error.Message);
 
             return result;
         }
         catch (Exception ex)
         {
-            stepActivity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+            PipelineStepActivityHelper.SetStepError(stepActivity, ex.Message);
             _logger.LogError(ex, "Unhandled exception in step {StepName}", step.Name);
             return Result<StepOutcome>.Fail(Error.Failure(ex.GetType().Name, ex.Message));
         }
