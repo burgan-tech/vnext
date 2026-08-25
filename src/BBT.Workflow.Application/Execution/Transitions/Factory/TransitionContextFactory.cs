@@ -1,5 +1,6 @@
 using BBT.Workflow.Caching;
 using BBT.Workflow.Definitions;
+using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Runtime;
@@ -19,14 +20,20 @@ public sealed class TransitionContextFactory(
     /// Creates a TransitionExecutionContext from the input.
     /// Railway chain: Validate Domain → Rehydrate Instance → Resolve State/Transition → Build Context
     /// </summary>
-    public Task<Result<TransitionExecutionContext>> CreateAsync(
+    public async Task<Result<TransitionExecutionContext>> CreateAsync(
         WorkflowExecutionContext input,
         CancellationToken cancellationToken)
     {
-        return ValidateDomain(input.Domain)
+        using var activity = PipelineStepActivityHelper.StartOperationActivity("Transition.LoadContext");
+        var result = await ValidateDomain(input.Domain)
             .BindAsync(_ => RehydrateInstanceAsync(input, cancellationToken))
             .ThenAsync(data => Task.FromResult(ResolveStateAndTransition(data, input)))
             .MapAsync(data => BuildExecutionContext(data, input));
+
+        if (!result.IsSuccess)
+            activity?.SetStatus(ActivityStatusCode.Error, result.Error.Message);
+
+        return result;
     }
 
     /// <summary>
@@ -58,8 +65,22 @@ public sealed class TransitionContextFactory(
         return componentCacheStore.GetFlowAsync(
                 input.Domain, input.WorkflowKey, input.WorkflowVersion, cancellationToken)
             .BindAsync(workflow =>
-                instanceRepository.GetActiveAsync(input.InstanceId, cancellationToken)
+                LoadInstanceAsync(input.InstanceId, cancellationToken)
                     .MapAsync(instance => (workflow, instance)));
+    }
+
+    /// <summary>
+    /// Loads the active instance by identifier, wrapped in its own span so instance-load
+    /// latency is attributable independent of the flow-cache lookup that precedes it.
+    /// </summary>
+    private async Task<Result<Instance>> LoadInstanceAsync(string instanceId, CancellationToken cancellationToken)
+    {
+        using var activity = PipelineStepActivityHelper.StartOperationActivity("Instance.Load");
+        var result = await instanceRepository.GetActiveAsync(instanceId, cancellationToken);
+        if (!result.IsSuccess)
+            activity?.SetStatus(ActivityStatusCode.Error, result.Error.Message);
+
+        return result;
     }
 
     /// <summary>

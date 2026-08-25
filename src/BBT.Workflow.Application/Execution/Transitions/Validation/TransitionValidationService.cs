@@ -1,6 +1,7 @@
 using BBT.Workflow.Caching;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Definitions.Policies;
+using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Runtime;
@@ -26,14 +27,23 @@ public class TransitionValidationService(
         TransitionExecutionContext context,
         CancellationToken cancellationToken = default)
     {
+        using var activity = PipelineStepActivityHelper.StartOperationActivity("Transition.Validate");
+
         // 1. Schema Validation
         var schemaResult = await ValidateSchemaAsync(context, cancellationToken);
         if (!schemaResult.IsSuccess)
+        {
+            activity?.SetStatus(ActivityStatusCode.Error, schemaResult.Error.Message);
             return schemaResult;
+        }
 
         // 2. State Machine Validation using Specification Pattern
         // Includes: Actor authorization, state transition rules, SubFlow bypass, etc.
-        return await ValidatePolicyAsync(context, cancellationToken);
+        var policyResult = await ValidatePolicyAsync(context, cancellationToken);
+        if (!policyResult.IsSuccess)
+            activity?.SetStatus(ActivityStatusCode.Error, policyResult.Error.Message);
+
+        return policyResult;
     }
 
     /// <inheritdoc />
