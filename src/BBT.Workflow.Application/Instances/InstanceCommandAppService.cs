@@ -607,30 +607,34 @@ public sealed class InstanceCommandAppService(
             }
         }
 
-        // 2) Admitted (or no snapshot row) — resolve the full instance.
-        var instanceResult = await instanceRepository.GetActiveAsync(instance, cancellationToken);
-        if (!instanceResult.IsSuccess)
-            return Result<TransitionOutput>.Fail(instanceResult.Error);
-
-        var resolvedInstance = instanceResult.Value!;
-
-        // The definition loaded above already belongs to this instance in the normal case; load
-        // only when there was no snapshot, or when the two identifier resolutions disagreed —
-        // the workflow must always match the instance's own Flow, never the request's.
-        if (workflowDefinition is null || workflowDefinition.Key != resolvedInstance.Flow)
+        // 2) Admitted. The intake does NOT materialize the aggregate: everything left to do here —
+        //    build the dispatch context, stamp the response headers — reads Id/Flow/FlowVersion/Key,
+        //    all of which the projection above already carries. The execution entry loads the
+        //    aggregate for real, in its own scope and DbContext; loading it here as well was a
+        //    second ~20 ms round trip for a copy that could not be handed across that boundary.
+        // Reproduced verbatim from the aggregate load this replaces (EfCoreInstanceRepository's
+        // GetResultAsync): same code, same message. WorkflowErrors.InstanceNotFound is a DIFFERENT
+        // code (NotFoundInstanceData) despite the name, and using it here would silently change the
+        // error a client sees for an unknown instance.
+        if (snapshot is null)
         {
-            var workflowResult = await LoadWorkflowAsync(
-                input.Domain,
-                resolvedInstance.Flow,
-                resolvedInstance.FlowVersion,
-                cancellationToken);
-            if (!workflowResult.IsSuccess)
-                return Result<TransitionOutput>.Fail(workflowResult.Error);
-
-            workflowDefinition = workflowResult.Value;
+            return Result<TransitionOutput>.Fail(Error.NotFound(
+                WorkflowErrorCodes.InstanceNotFound,
+                $"Instance with ID {instance} not found",
+                instance));
         }
 
-        var context = BuildTransitionContext(resolvedInstance, transitionKey, input, workflowDefinition!);
+        // Terminal check the aggregate load used to perform (GetActiveAsync). IsTerminal, not
+        // IsCompleted: Faulted and Passive are terminal for admission too.
+        if (snapshot.IsTerminal)
+        {
+            return Result<TransitionOutput>.Fail(Error.Validation(
+                WorkflowErrorCodes.InstanceCompleted,
+                $"Instance {instance} is already completed with status: {snapshot.Status.Code}",
+                instance));
+        }
+
+        var context = BuildTransitionContext(snapshot, transitionKey, input, workflowDefinition!);
 
         // No validation here. Validation belongs to the execution entry, and both entries run it
         // before any side effect: the async strategy validates before it flips Busy and enqueues,
@@ -641,12 +645,12 @@ public sealed class InstanceCommandAppService(
 
         return await workflowExecutionService
             .ExecuteTransitionAsync(context, cancellationToken)
-            .OnSuccess(output => AddTransitionHeader(output, resolvedInstance.Flow, resolvedInstance.FlowVersion))
+            .OnSuccess(output => AddTransitionHeader(output, snapshot.Flow!, snapshot.FlowVersion))
             .ThenAsync(output =>
             {
                 if (input.Sync)
                     return EnrichSyncOutputAsync(output, output.Id, workflowDefinition, input.Extensions, new AuthorizationRequestContext(input.Headers), cancellationToken);
-                output.Key = resolvedInstance.Key;
+                output.Key = snapshot.Key;
                 return Task.FromResult(Result<TransitionOutput>.Ok(output));
             });
     }
@@ -656,7 +660,7 @@ public sealed class InstanceCommandAppService(
     /// Builds execution context for transition using instance's Flow and FlowVersion (not from request).
     /// </summary>
     private static WorkflowExecutionContext BuildTransitionContext(
-        Instance resolvedInstance,
+        InstanceExecutionSnapshot snapshot,
         string transitionKey,
         TransitionInput input,
         Definitions.Workflow workflow)
@@ -664,9 +668,11 @@ public sealed class InstanceCommandAppService(
         return new WorkflowExecutionContext
         {
             Domain = input.Domain,
-            InstanceId = resolvedInstance.Id.ToString(),
-            WorkflowKey = resolvedInstance.Flow,
-            WorkflowVersion = resolvedInstance.FlowVersion,
+            InstanceId = snapshot.Id.ToString(),
+            // The instance's OWN bound flow, never the request's — same rule as before, now read
+            // from the projection that resolved the identifier.
+            WorkflowKey = snapshot.Flow!,
+            WorkflowVersion = snapshot.FlowVersion,
             // Carried, not re-resolved downstream: this is the very definition the layers below
             // would look up with the three coordinates above.
             ResolvedWorkflow = workflow,
