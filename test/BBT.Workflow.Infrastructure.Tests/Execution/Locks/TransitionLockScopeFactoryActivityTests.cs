@@ -92,6 +92,7 @@ public sealed class TransitionLockScopeFactoryActivityTests : IDisposable
         var span = Assert.Single(collected, a => IsSpan(a, "Lock.Acquire", key));
         span.GetTagItem(TelemetryConstants.TagNames.LockAcquired).ShouldBe(true);
         span.GetTagItem(TelemetryConstants.TagNames.LockLeaseSeconds).ShouldBe(42);
+        span.GetTagItem(TelemetryConstants.TagNames.LockKind).ShouldBe("chain");
         span.Status.ShouldBe(ActivityStatusCode.Unset);
     }
 
@@ -150,6 +151,7 @@ public sealed class TransitionLockScopeFactoryActivityTests : IDisposable
         await scope.DisposeAsync();
 
         collected.Count(a => IsSpan(a, "Lock.Acquire", key)).ShouldBe(1);
-        collected.Count(a => IsSpan(a, "Lock.Release", key)).ShouldBe(1);
+        var releaseSpan = Assert.Single(collected, a => IsSpan(a, "Lock.Release", key));
+        releaseSpan.GetTagItem(TelemetryConstants.TagNames.LockKind).ShouldBe("chain");
     }
 }

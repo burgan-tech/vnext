@@ -86,6 +86,7 @@ public sealed class InstanceStatusLockActivityTests : IDisposable
         var span = Assert.Single(collected, a => IsSpan(a, "Lock.Acquire", key));
         span.GetTagItem(TelemetryConstants.TagNames.LockAcquired).ShouldBe(false);
         span.GetTagItem(TelemetryConstants.TagNames.LockLeaseSeconds).ShouldBe(5);
+        span.GetTagItem(TelemetryConstants.TagNames.LockKind).ShouldBe("status");
 
         // Contention is an expected outcome, not a failure — the span must not carry error status.
         span.Status.ShouldBe(ActivityStatusCode.Unset);
@@ -113,6 +114,7 @@ public sealed class InstanceStatusLockActivityTests : IDisposable
 
         var acquireSpan = Assert.Single(collected, a => IsSpan(a, "Lock.Acquire", key));
         acquireSpan.GetTagItem(TelemetryConstants.TagNames.LockAcquired).ShouldBe(true);
+        acquireSpan.GetTagItem(TelemetryConstants.TagNames.LockKind).ShouldBe("status");
 
         // Release span only appears once the scope is disposed.
         collected.Any(a => IsSpan(a, "Lock.Release", key)).ShouldBeFalse();
@@ -121,6 +123,7 @@ public sealed class InstanceStatusLockActivityTests : IDisposable
 
         var releaseSpan = Assert.Single(collected, a => IsSpan(a, "Lock.Release", key));
         releaseSpan.GetTagItem(TelemetryConstants.TagNames.LockKey).ShouldBe(key);
+        releaseSpan.GetTagItem(TelemetryConstants.TagNames.LockKind).ShouldBe("status");
         await handle.Received(1).DisposeAsync();
     }
 }

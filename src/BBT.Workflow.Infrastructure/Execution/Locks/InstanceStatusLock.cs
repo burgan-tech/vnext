@@ -19,6 +19,9 @@ public sealed class InstanceStatusLock(
 {
     private readonly int _leaseSeconds = Math.Max(1, executionOptions.Value.StatusLockLeaseSeconds);
 
+    /// <summary>This funnel's value for <see cref="TelemetryConstants.TagNames.LockKind"/>.</summary>
+    private const string LockKind = "status";
+
     /// <inheritdoc />
     public async Task<ITransitionLockScope> AcquireAsync(
         string lockKey,
@@ -27,6 +30,7 @@ public sealed class InstanceStatusLock(
         using var activity = PipelineStepActivityHelper.StartOperationActivity("Lock.Acquire");
         activity?.SetTag(TelemetryConstants.TagNames.LockKey, lockKey);
         activity?.SetTag(TelemetryConstants.TagNames.LockLeaseSeconds, _leaseSeconds);
+        activity?.SetTag(TelemetryConstants.TagNames.LockKind, LockKind);
 
         // Single attempt by design (review decision): a held lock means a concurrent hop is
         // mid-flip; callers surface that as a conflict (409) or proceed unguarded, and the
@@ -39,7 +43,7 @@ public sealed class InstanceStatusLock(
         activity?.SetTag(TelemetryConstants.TagNames.LockAcquired, handle is not null);
 
         if (handle is not null)
-            return new TransitionLockScope(lockKey, handle, _leaseSeconds, logger);
+            return new TransitionLockScope(lockKey, handle, _leaseSeconds, logger, LockKind);
 
         logger.StatusLockAcquireFailed(lockKey);
         return TransitionLockScope.NotAcquired(lockKey);

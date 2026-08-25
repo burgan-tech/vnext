@@ -179,6 +179,14 @@ public static class TelemetryConstants
         /// <summary>Lease seconds requested for the status lock.</summary>
         public const string LockLeaseSeconds = "vnext.lock.lease_seconds";
 
+        /// <summary>
+        /// Which lock funnel a <c>Lock.Acquire</c>/<c>Lock.Release</c> span belongs to: <c>status</c>
+        /// (the short-lease status check-and-set, <c>InstanceStatusLock</c>) or <c>chain</c> (the
+        /// auto-chain-budget lock, <c>TransitionLockScopeFactory</c>). Without this tag the two
+        /// funnels' spans are indistinguishable by name alone.
+        /// </summary>
+        public const string LockKind = "vnext.lock.kind";
+
         /// <summary>What a script span was executing: lockKey | subflowInputMapping | subflowOutputMapping | compilation.</summary>
         public const string ScriptKind = "vnext.script.kind";
 
@@ -187,6 +195,14 @@ public static class TelemetryConstants
 
         /// <summary>Number of helper components resolved into a compile's helper set.</summary>
         public const string ScriptHelperCount = "vnext.script.helper.count";
+
+        /// <summary>
+        /// Short identity of the compiled script: the evaluator cache key when the caller
+        /// precomputed one, else a SHA-256 prefix of the source. Tagged on <c>Script.Compile</c>
+        /// only when compilation actually ran (cache miss) — a cache hit never computes or sets
+        /// this tag, keeping the hot path allocation-free.
+        /// </summary>
+        public const string ScriptKey = "vnext.script.key";
 
         /// <summary>SemVer version of the instance-data row being appended.</summary>
         public const string DataVersion = "vnext.data.version";
