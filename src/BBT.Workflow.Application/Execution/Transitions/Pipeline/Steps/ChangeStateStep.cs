@@ -95,6 +95,10 @@ public sealed class ChangeStateStep(
                 { TelemetryConstants.TagNames.StateFrom, fromState },
                 { TelemetryConstants.TagNames.StateTo, context.Target.Key }
             }));
+        // Also as tags: in Business mode Activity.Current is transition/{key}, so the state
+        // transition is queryable straight off the business span, not only via the event.
+        Activity.Current?.SetTag(TelemetryConstants.TagNames.StateFrom, fromState);
+        Activity.Current?.SetTag(TelemetryConstants.TagNames.StateTo, context.Target.Key);
 
         return Result<StepOutcome>.Ok(StepOutcome.Continue());
     }

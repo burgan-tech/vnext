@@ -64,6 +64,18 @@ public static class TelemetryConstants
         public const string SpanCategory = "vnext.span.category";
         public const string StateFrom = "vnext.state.from";
         public const string StateTo = "vnext.state.to";
+
+        /// <summary>The state whose OnExit/OnEntry lifecycle tasks a span groups.</summary>
+        public const string StateKey = "vnext.state.key";
+
+        /// <summary>
+        /// Which lifecycle phase queued a task (onExecute / onExit / onEntry / extension) — lets a
+        /// Task.Execute span say whose task it is without a grouping span.
+        /// </summary>
+        public const string TaskTrigger = "vnext.task.trigger";
+
+        /// <summary>The transition an auto-evaluation selected as the next hop.</summary>
+        public const string NextTransition = "vnext.next.transition";
         public const string JobName = "vnext.job.name";
         /// <summary>
         /// Parent instance ID for subflow/subprocess correlation in traces and logs.
