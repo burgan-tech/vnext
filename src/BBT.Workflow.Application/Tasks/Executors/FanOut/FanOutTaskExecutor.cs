@@ -135,6 +135,15 @@ public sealed class FanOutTaskExecutor : TaskExecutorBase<FanOutTask>
             batchTimedOut,
             itemResults);
 
+        // Batch shape on the ambient Task.Invoke span: with one span per item the tree already
+        // shows WHICH item was slow, but not how big the batch was or how much of it failed —
+        // and that is the first thing asked about a batch whose items are individually fine.
+        var batchActivity = Activity.Current;
+        batchActivity?.SetTag(TelemetryConstants.TagNames.FanOutItemCount, itemResults.Count);
+        batchActivity?.SetTag(TelemetryConstants.TagNames.FanOutSucceededCount, succeeded);
+        batchActivity?.SetTag(TelemetryConstants.TagNames.FanOutFailedCount, itemResults.Count - succeeded);
+        batchActivity?.SetTag(TelemetryConstants.TagNames.FanOutTimedOut, batchTimedOut);
+
         // Recorded HERE — as soon as the batch has settled and its counters are final — rather
         // than on the return paths below. The output handler is author code that can fail, and a
         // batch that ran must still be counted exactly once whatever the handler does with it.

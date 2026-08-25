@@ -47,10 +47,22 @@ public class TransitionValidationService(
     }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// Spanned like <see cref="ValidateAsync"/> even though it does no I/O: it runs on every hop of
+    /// an auto-chain, and a trace that shows the schema-bearing validation but not this one reads
+    /// as if the later hops validated nothing.
+    /// </remarks>
     public Task<Result> ValidatePolicyAsync(
         TransitionExecutionContext context,
         CancellationToken cancellationToken = default)
-        => Task.FromResult(transitionExecutionPolicy.Validate(context));
+    {
+        using var activity = PipelineStepActivityHelper.StartOperationActivity("Transition.ValidatePolicy");
+        var result = transitionExecutionPolicy.Validate(context);
+        if (!result.IsSuccess)
+            activity?.SetStatus(ActivityStatusCode.Error, result.Error.Message);
+
+        return Task.FromResult(result);
+    }
 
     /// <inheritdoc />
     /// <summary>

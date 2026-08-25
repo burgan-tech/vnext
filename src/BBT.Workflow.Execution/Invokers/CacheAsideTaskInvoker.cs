@@ -92,8 +92,12 @@ public sealed class CacheAsideTaskInvoker : ITaskInvoker<CacheAsideBinding>
         {
             try
             {
+                // The hit/miss decision is the whole point of this task type; without a span for it
+                // a reader can only infer the outcome from whether a source-task span follows.
+                using var readActivity = InvokerActivityHelper.StartCacheAsideActivity("Read", binding.Key);
                 var entry = await _stateStore.GetAsync(
                     storeName!, binding.Key, binding.Consistency, metadata: null, cancellationToken);
+                InvokerActivityHelper.SetCacheHit(readActivity, entry.Found);
 
                 if (entry.Found)
                 {
@@ -144,6 +148,7 @@ public sealed class CacheAsideTaskInvoker : ITaskInvoker<CacheAsideBinding>
         {
             try
             {
+                using var writeActivity = InvokerActivityHelper.StartCacheAsideActivity("Write", binding.Key);
                 await _stateStore.SetAsync(
                     storeName!, binding.Key, sourceResult.Data, binding.TtlInSeconds, binding.Consistency,
                     concurrency: null, etag: null, metadata: null, cancellationToken);

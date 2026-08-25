@@ -155,6 +155,18 @@ public static class TelemetryConstants
         /// <summary>Total wall-clock milliseconds spent inside script compilation calls.</summary>
         public const string ScriptCompileTotalMs = "vnext.script.compile.total_ms";
 
+        /// <summary>Number of items in a fan-out batch.</summary>
+        public const string FanOutItemCount = "vnext.fanout.item.count";
+
+        /// <summary>Number of fan-out items that succeeded.</summary>
+        public const string FanOutSucceededCount = "vnext.fanout.succeeded.count";
+
+        /// <summary>Number of fan-out items that failed.</summary>
+        public const string FanOutFailedCount = "vnext.fanout.failed.count";
+
+        /// <summary>True when the batch hit its deadline before every item settled.</summary>
+        public const string FanOutTimedOut = "vnext.fanout.timed_out";
+
         /// <summary>Target domain of a trigger-family task's local (in-process) invocation.</summary>
         public const string TriggerTargetDomain = "vnext.trigger.target.domain";
 

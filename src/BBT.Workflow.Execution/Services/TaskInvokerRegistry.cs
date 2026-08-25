@@ -54,6 +54,11 @@ public sealed class TaskInvokerRegistry : ITaskInvokerRegistry
             });
         }
         
+        // One span per invocation, at the single place every task type passes through — including
+        // a cache-aside miss calling back in for its source task, which is how that inner task
+        // becomes visible without instrumenting each invoker.
+        using var activity = InvokerActivityHelper.StartInvokeActivity(envelope.TaskType, envelope.TaskKey);
+
         try
         {
             var result = await invoker.InvokeAsync(
@@ -62,6 +67,9 @@ public sealed class TaskInvokerRegistry : ITaskInvokerRegistry
                 cancellationToken);
             
             stopwatch.Stop();
+
+            if (!result.IsSuccess)
+                InvokerActivityHelper.SetError(activity, result.ErrorMessage);
             
             // Enrich result with timing if not already set
             if (result.ExecutionDurationMs == 0)
@@ -85,6 +93,7 @@ public sealed class TaskInvokerRegistry : ITaskInvokerRegistry
         catch (Exception ex)
         {
             stopwatch.Stop();
+            InvokerActivityHelper.SetError(activity, ex.Message);
             _logger.LogError(ex, "Task invocation failed for {TaskKey} of type {TaskType}",
                 envelope.TaskKey, envelope.TaskType);
 
