@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using BBT.Workflow.Logging;
-using BBT.Aether.Telemetry;
 
 namespace BBT.Workflow.Caching;
 
@@ -8,6 +7,13 @@ namespace BBT.Workflow.Caching;
 /// Provides centralized tracing for distributed cache operations (get, set, invalidate, warmup).
 /// Creates child spans under the current activity so Dapr state store timing is correctly
 /// positioned in traces instead of appearing as detached spans at the bottom.
+/// <para>
+/// Cache spans are ALWAYS created (Business and Verbose alike; Task 10, following the
+/// <c>PipelineStepActivityHelper</c> precedent from Task 3). L1/L2 hit visibility is a business
+/// signal, not a verbose-only diagnostic — component cache reads are on the hot path of every
+/// transition's context load. Names deliberately avoid the legacy <c>[</c> prefix so Aether's
+/// BusinessSpanFilterProcessor never suppresses them at export in Business mode.
+/// </para>
 /// </summary>
 public static class CacheActivityHelper
 {
@@ -45,9 +51,6 @@ public static class CacheActivityHelper
         string? cacheKey = null,
         string? componentType = null)
     {
-        if (!AetherTracingRuntime.IsVerbose)
-            return null;
-
         var activity = ActivitySource.StartActivity(
             operationName,
             ActivityKind.Client,
@@ -57,7 +60,7 @@ public static class CacheActivityHelper
         {
             activity.SetTag(TagCacheStore, "dapr");
             activity.SetTag(TelemetryConstants.TagNames.Layer, TelemetryConstants.Layers.Orchestration);
-            activity.SetTag(TelemetryConstants.TagNames.SpanCategory, TelemetryConstants.SpanCategories.Diagnostic);
+            activity.SetTag(TelemetryConstants.TagNames.SpanCategory, TelemetryConstants.SpanCategories.Business);
             if (!string.IsNullOrEmpty(cacheKey))
                 activity.SetTag(TagCacheKey, cacheKey);
             if (!string.IsNullOrEmpty(componentType))
