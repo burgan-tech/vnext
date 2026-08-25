@@ -6,8 +6,9 @@ namespace BBT.Workflow.Scripting;
 
 /// <summary>
 /// Accumulates script-compilation cost onto the nearest task span so the compiler's share of a
-/// task's duration is visible in traces WITHOUT a dedicated compile span (deliberate decision:
-/// compile visibility is attribute/event-level, the span tree stays business-shaped).
+/// task's duration is visible in traces even without inspecting the dedicated <c>Script.Compile</c>
+/// span (see <see cref="ScriptActivityHelper"/>) — the accumulator stays for span-tag-level queries
+/// and back-compat with dashboards built before that span existed.
 /// <para>
 /// Every compilation funnels through <c>ScriptEngine.CompileCoreAsync</c>, which calls
 /// <see cref="Record"/>. The target span is resolved as: the first activity from

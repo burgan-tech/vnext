@@ -418,6 +418,8 @@ public sealed class ScriptEngine(
         }
         else
         {
+            using var resolveActivity = ScriptActivityHelper.StartResolveHelpersActivity(effective.Helpers!.Count);
+
             helperSources = await ResolveHelperSourcesAsync(effective.Helpers!, cancellationToken);
 
             // Build the referenced helper set first (sandboxed, cached by content hash), referencing the
@@ -576,6 +578,7 @@ public sealed class ScriptEngine(
         CancellationToken cancellationToken,
         string? precomputedCacheKey = null)
     {
+        using var compileActivity = ScriptActivityHelper.StartCompileActivity();
         var stopwatch = Stopwatch.StartNew();
         const string scriptType = "compilation";
         const string language = "csharp";
@@ -601,6 +604,7 @@ public sealed class ScriptEngine(
             stopwatch.Stop();
             var durationSeconds = stopwatch.Elapsed.TotalSeconds;
             var cache = compilation.Compiled ? "miss" : "hit";
+            ScriptActivityHelper.SetCompileResult(compileActivity, compilation.Compiled, "success");
 
             // DEPRECATED (vnext-meta/deprecations.json): script_executions_total keeps its historical
             // compile-path semantics until consumers migrate — do not remove or repurpose here.
@@ -628,6 +632,7 @@ public sealed class ScriptEngine(
             workflowMetrics.RecordScriptCompilationError(scriptType, language, ex.GetType().Name);
             workflowMetrics.RecordScriptCompilationDuration(scriptType, language, "compilation_error", durationSeconds, "miss");
             ScriptCompileTelemetry.Record(cacheMiss: true, stopwatch.Elapsed.TotalMilliseconds, "compilation_error");
+            ScriptActivityHelper.SetCompileResult(compileActivity, cacheMiss: true, "compilation_error");
 
             throw;
         }
@@ -642,6 +647,7 @@ public sealed class ScriptEngine(
             workflowMetrics.RecordScriptCompilationError(scriptType, language, ex.GetType().Name);
             workflowMetrics.RecordScriptCompilationDuration(scriptType, language, "invalid_operation", durationSeconds, "miss");
             ScriptCompileTelemetry.Record(cacheMiss: true, stopwatch.Elapsed.TotalMilliseconds, "invalid_operation");
+            ScriptActivityHelper.SetCompileResult(compileActivity, cacheMiss: true, "invalid_operation");
 
             throw;
         }
@@ -657,6 +663,7 @@ public sealed class ScriptEngine(
             workflowMetrics.RecordScriptCompilation("miss", "cancelled");
             workflowMetrics.RecordScriptCompilationDuration(scriptType, language, "cancelled", durationSeconds, "miss");
             ScriptCompileTelemetry.Record(cacheMiss: true, stopwatch.Elapsed.TotalMilliseconds, "cancelled");
+            ScriptActivityHelper.SetCompileResult(compileActivity, cacheMiss: true, "cancelled");
 
             throw;
         }
@@ -671,6 +678,7 @@ public sealed class ScriptEngine(
             workflowMetrics.RecordScriptCompilationError(scriptType, language, ex.GetType().Name);
             workflowMetrics.RecordScriptCompilationDuration(scriptType, language, "unexpected_error", durationSeconds, "miss");
             ScriptCompileTelemetry.Record(cacheMiss: true, stopwatch.Elapsed.TotalMilliseconds, "unexpected_error");
+            ScriptActivityHelper.SetCompileResult(compileActivity, cacheMiss: true, "unexpected_error");
 
             throw;
         }
