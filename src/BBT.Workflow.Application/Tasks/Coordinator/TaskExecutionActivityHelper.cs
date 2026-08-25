@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using BBT.Aether.Telemetry;
 using BBT.Workflow.Logging;
 
 namespace BBT.Workflow.Tasks.Coordinator;
@@ -89,8 +88,18 @@ public static class TaskExecutionActivityHelper
     }
 
     /// <summary>
-    /// Starts a new activity as a child of the current activity for an executor phase.
-    /// When taskKey/taskType are provided, enriches the span with standard tags for filtering.
+    /// Starts a new activity as a child of the current activity for an executor phase
+    /// (PrepareInput = the task's input binding/mapping, Invoke = the actual work — for a script
+    /// task the script run itself, ProcessOutput = the output binding/mapping).
+    /// <para>
+    /// NOT gated on verbose tracing: these phases are the only place a binding's mapping cost and
+    /// a script's compile-plus-run time appear as spans, so they are business-level. Noise is
+    /// controlled at the call site instead — <c>TaskExecutorBase</c> opens PrepareInput and
+    /// ProcessOutput only when the task actually has mapping code (the phase is a no-op
+    /// otherwise), while Invoke is opened for every task. Names carry no '[' prefix, so the
+    /// Business export filter keeps them (see the creation rule in
+    /// docs/monitoring/correlation-and-tracing.md).
+    /// </para>
     /// </summary>
     /// <param name="operationName">The name of the operation (e.g. Task.PrepareInput, Task.Invoke, Task.ProcessOutput).</param>
     /// <param name="taskKey">Optional task key for span tags.</param>
@@ -101,9 +110,6 @@ public static class TaskExecutionActivityHelper
         string? taskKey = null,
         string? taskType = null)
     {
-        if (!AetherTracingRuntime.IsVerbose)
-            return null;
-
         var parentContext = Activity.Current?.Context ?? default;
 
         var activity = ActivitySource.StartActivity(
@@ -118,11 +124,25 @@ public static class TaskExecutionActivityHelper
             if (!string.IsNullOrEmpty(taskType))
                 activity.SetTag(TelemetryConstants.TagNames.TaskType, taskType);
             activity.SetTag(TelemetryConstants.TagNames.Layer, TelemetryConstants.Layers.Orchestration);
-            activity.SetTag(TelemetryConstants.TagNames.SpanCategory, TelemetryConstants.SpanCategories.Diagnostic);
+            activity.SetTag(TelemetryConstants.TagNames.SpanCategory, TelemetryConstants.SpanCategories.Business);
         }
 
         return activity;
     }
+
+    /// <summary>
+    /// Starts the span for one fan-out item (slot acquisition plus inner-task execution).
+    /// <para>
+    /// NOT gated on verbose tracing, for two reasons: the span separates "queued behind the
+    /// bulkhead" from "the item itself is slow" via <c>vnext.fanout.item.queue_wait_ms</c> — the
+    /// first question an operator asks about a slow batch — and per-item failures set their error
+    /// status here, so without it item outcomes are invisible in the default Business mode.
+    /// </para>
+    /// </summary>
+    /// <param name="taskKey">The fan-out task's key.</param>
+    /// <param name="taskType">The fan-out task's type name.</param>
+    public static Activity? StartFanOutItemActivity(string taskKey, string taskType)
+        => StartActivity(OperationFanOutItem, taskKey, taskType);
 
     /// <summary>
     /// Sets span Status=Error and records standard error tags (error.type, error.code).
