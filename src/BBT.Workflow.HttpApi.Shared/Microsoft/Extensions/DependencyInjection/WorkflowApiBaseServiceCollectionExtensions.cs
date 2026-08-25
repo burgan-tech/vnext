@@ -253,13 +253,21 @@ public static class WorkflowApiBaseServiceCollectionExtensions
                         // filtering causes, documented on PipelineStepActivityHelper.
                         .AddGrpcClientInstrumentation()
                         .AddProcessor(serviceProvider =>
-                            new RequestIdSpanProcessor(serviceProvider.GetRequiredService<ICorrelationIdProvider>()))));
+                            new RequestIdSpanProcessor(serviceProvider.GetRequiredService<ICorrelationIdProvider>()))
+                        // Moves the DaprCallLabel ambient (cache/lock key, set by the labelling
+                        // decorators below) onto the Dapr gRPC client span — the key lives in the
+                        // protobuf body, out of the instrumentation's reach.
+                        .AddProcessor(new DaprSpanLabelProcessor())));
         return services;
     }
 
     public static IServiceCollection AddDistributedCache(this IServiceCollection services, IConfiguration configuration)
     {
         services.AddDaprDistributedCache(configuration["DAPR_STATE_STORE_NAME"]!);
+        // Labelling only: publishes the cache key so DaprSpanLabelProcessor can tag the
+        // GetState/SaveState span the call produces.
+        services.DecorateLast<BBT.Aether.DistributedCache.IDistributedCacheService>(
+            inner => new LabellingDistributedCacheService(inner));
         return services;
     }
 
@@ -268,12 +276,43 @@ public static class WorkflowApiBaseServiceCollectionExtensions
         var lockStoreName = configuration["DAPR_LOCK_STORE_NAME"]!;
 
         services.AddDaprDistributedLock(lockStoreName);
+        // Labelling only: publishes the lock resource id so DaprSpanLabelProcessor can tag the
+        // TryLockAlpha1/UnlockAlpha1 span the call produces.
+        services.DecorateLast<BBT.Aether.DistributedLock.IDistributedLockService>(
+            inner => new LabellingDistributedLockService(inner));
         services.AddSingleton<
             BBT.Workflow.Infrastructure.Execution.Locks.IPostgreSqlDistributedLockService,
             BBT.Workflow.Infrastructure.Execution.Locks.NpgsqlDistributedLockService>();
 
         services.AddResourceLock(lockStoreName);
         return services;
+    }
+
+    /// <summary>
+    /// Wraps the LAST registration of <typeparamref name="TService"/> in a decorator, preserving
+    /// the original lifetime and construction (factory, type, or instance). Local substitute for
+    /// Scrutor's Decorate — the repo does not take that dependency for one call site.
+    /// </summary>
+    private static void DecorateLast<TService>(
+        this IServiceCollection services,
+        Func<TService, TService> decorate)
+        where TService : class
+    {
+        var descriptor = services.Last(d => d.ServiceType == typeof(TService));
+
+        Func<IServiceProvider, TService> innerFactory = descriptor switch
+        {
+            { ImplementationFactory: { } factory } => sp => (TService)factory(sp),
+            { ImplementationInstance: { } instance } => _ => (TService)instance,
+            { ImplementationType: { } type } => sp => (TService)ActivatorUtilities.CreateInstance(sp, type),
+            _ => throw new InvalidOperationException(
+                $"Cannot decorate {typeof(TService).Name}: the registration carries no factory, instance, or type.")
+        };
+
+        services[services.IndexOf(descriptor)] = ServiceDescriptor.Describe(
+            typeof(TService),
+            sp => decorate(innerFactory(sp)),
+            descriptor.Lifetime);
     }
 
     /// <summary>

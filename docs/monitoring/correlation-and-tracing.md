@@ -284,6 +284,24 @@ Arming is event-only by design: `transition.scheduled` / `flow.timeout.scheduled
 transition's span, while the continuation stays where the lane model puts it — auto hops as lane
 siblings with `vnext.hop.predecessor`, timers as a new trace with an `ActivityLink` back.
 
+### Dapr sidecar spans and `vnext.dapr.key`
+
+The gRPC client spans named `dapr.proto.runtime.v1.Dapr/GetState`, `/SaveState`,
+`/TryLockAlpha1`, `/UnlockAlpha1` are real sidecar round-trips: the distributed cache is the Dapr
+state store (`AddDaprDistributedCache`), every component lookup reads a generation token, and the
+instance status lock takes/releases at admission and settlement. They are exported in Business
+mode too — deliberately, since `AddGrpcClientInstrumentation` also produces the
+Orchestration→Execution `InvokeService` span whose absence detaches the Execution subtree (#887).
+
+Each state/lock span carries **`vnext.dapr.key`** — the cache key or lock resource it targets:
+`{type}:{domain}:{key}:gen` is a component generation-token read, a resolution key is the
+component payload itself, `vnext:{domain}:{flow}:{id}` is the instance status lock. The key lives
+in the protobuf body, out of the instrumentation's reach, so it travels via the `DaprCallLabel`
+ambient (set by the labelling decorators around `IDistributedCacheService` /
+`IDistributedLockService` and by `DaprResourceLockService`) and is stamped at span start by
+`DaprSpanLabelProcessor`. A span without the tag means the call did not come through those seams
+(e.g. Aether-internal scheduler traffic).
+
 ## What to check when a trace looks broken
 
 0. Transition/task spans missing entirely, or one job/server span being **renamed once per task**

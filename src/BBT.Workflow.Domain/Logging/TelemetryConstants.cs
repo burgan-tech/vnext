@@ -76,6 +76,14 @@ public static class TelemetryConstants
 
         /// <summary>The transition an auto-evaluation selected as the next hop.</summary>
         public const string NextTransition = "vnext.next.transition";
+
+        /// <summary>
+        /// The cache/lock key a Dapr sidecar data-plane call (GetState/SaveState/TryLock/Unlock)
+        /// targets. Stamped onto the gRPC client span by <c>DaprSpanLabelProcessor</c> from the
+        /// <c>DaprCallLabel</c> ambient — the key lives in the protobuf body, out of the
+        /// instrumentation's reach, so without this tag every GetState span looks identical.
+        /// </summary>
+        public const string DaprKey = "vnext.dapr.key";
         public const string JobName = "vnext.job.name";
         /// <summary>
         /// Parent instance ID for subflow/subprocess correlation in traces and logs.
