@@ -42,7 +42,7 @@ public sealed class RunOnExitTasksStep(
         // Skip if no OnExit tasks
         if (!HasOnExitTasks(context))
         {
-            return Result<StepOutcome>.Ok(StepOutcome.Continue());
+            return Result<StepOutcome>.Ok(StepOutcome.ContinueNoWork());
         }
 
         // Railway chain: Build context -> Get successful tasks -> Execute remaining -> Apply changes -> Persist

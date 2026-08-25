@@ -41,7 +41,7 @@ public sealed class RunOnExecuteTasksStep(
         // Skip if no OnExecute tasks
         if (!HasOnExecuteTasks(context))
         {
-            return Result<StepOutcome>.Ok(StepOutcome.Continue());
+            return Result<StepOutcome>.Ok(StepOutcome.ContinueNoWork());
         }
 
         // Railway chain: Build context -> Get completed tasks -> Execute remaining -> Apply changes -> Persist

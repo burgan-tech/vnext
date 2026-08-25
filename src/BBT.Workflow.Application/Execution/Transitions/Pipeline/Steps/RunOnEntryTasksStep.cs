@@ -40,7 +40,7 @@ public sealed class RunOnEntryTasksStep(
         // Skip if no OnEntry tasks
         if (!HasOnEntryTasks(context))
         {
-            return Result<StepOutcome>.Ok(StepOutcome.Continue());
+            return Result<StepOutcome>.Ok(StepOutcome.ContinueNoWork());
         }
 
         // Railway chain: Build context -> Get successful tasks -> Execute remaining -> Apply changes -> Persist

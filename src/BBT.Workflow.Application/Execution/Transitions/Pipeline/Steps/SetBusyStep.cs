@@ -28,7 +28,7 @@ public sealed class SetBusyStep(
         // is acquired at the continuation boundary instead.
         if (context.IsUpdateDataTransition())
         {
-            return Result<StepOutcome>.Ok(StepOutcome.Continue());
+            return Result<StepOutcome>.Ok(StepOutcome.ContinueNoWork());
         }
 
         // Skip if instance is already Busy (admission reserve or chained auto transitions).
@@ -37,7 +37,7 @@ public sealed class SetBusyStep(
             logger.LogDebug(
                 "Instance {InstanceId} is already Busy, skipping SetBusyStep",
                 context.InstanceId);
-            return Result<StepOutcome>.Ok(StepOutcome.Continue());
+            return Result<StepOutcome>.Ok(StepOutcome.ContinueNoWork());
         }
 
         // Skip if instance is completed (should not happen, but defensive)
@@ -46,13 +46,13 @@ public sealed class SetBusyStep(
             logger.LogDebug(
                 "Instance {InstanceId} is already completed, skipping SetBusyStep",
                 context.InstanceId);
-            return Result<StepOutcome>.Ok(StepOutcome.Continue());
+            return Result<StepOutcome>.Ok(StepOutcome.ContinueNoWork());
         }
 
         // Skip for SubFlow resume - status is managed by ClearBusyOnResumeStep
         if (context.Directives.IsSubFlowResume)
         {
-            return Result<StepOutcome>.Ok(StepOutcome.Continue());
+            return Result<StepOutcome>.Ok(StepOutcome.ContinueNoWork());
         }
 
         // Mark Busy and persist (admission normally does this up front; this is the in-pipeline

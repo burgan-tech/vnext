@@ -28,7 +28,7 @@ public sealed class HandleFinishStep(
         // Check applicability - skip if not finish scenario
         if (!IsFinishScenario(context))
         {
-            return Result<StepOutcome>.Ok(StepOutcome.Continue());
+            return Result<StepOutcome>.Ok(StepOutcome.ContinueNoWork());
         }
 
         // Railway chain: Update status -> Extract events -> Persist -> Mark finish

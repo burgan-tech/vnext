@@ -39,7 +39,7 @@ public sealed class ScheduleTransitionsStep(
         // Skip if no scheduled transitions
         if (!HasScheduledTransitions(context))
         {
-            return Result<StepOutcome>.Ok(StepOutcome.Continue());
+            return Result<StepOutcome>.Ok(StepOutcome.ContinueNoWork());
         }
 
         // Process each scheduled transition

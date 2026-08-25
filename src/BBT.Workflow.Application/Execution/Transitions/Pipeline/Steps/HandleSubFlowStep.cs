@@ -28,7 +28,7 @@ public sealed class HandleSubFlowStep(
         // Early return if not applicable
         if (!IsApplicable(context))
         {
-            return Result<StepOutcome>.Ok(StepOutcome.Continue());
+            return Result<StepOutcome>.Ok(StepOutcome.ContinueNoWork());
         }
 
         // updateData never starts, restarts or parks on a subflow: its $self transition through
@@ -38,7 +38,7 @@ public sealed class HandleSubFlowStep(
         // subflow from a data update would be catastrophic.
         if (context.IsUpdateDataTransition())
         {
-            return Result<StepOutcome>.Ok(StepOutcome.Continue());
+            return Result<StepOutcome>.Ok(StepOutcome.ContinueNoWork());
         }
 
         // Idempotent re-entry: already in this SubFlow state with active correlation - do not start subflow again

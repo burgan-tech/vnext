@@ -32,7 +32,7 @@ public sealed class CreateTransitionRecordStep(
         // Skip for SubFlow resume - transition record already exists
         if (context.Directives.IsSubFlowResume)
         {
-            return Result<StepOutcome>.Ok(StepOutcome.Continue());
+            return Result<StepOutcome>.Ok(StepOutcome.ContinueNoWork());
         }
 
         // Build transition info

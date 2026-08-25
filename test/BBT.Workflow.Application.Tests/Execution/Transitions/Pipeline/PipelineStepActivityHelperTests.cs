@@ -101,6 +101,38 @@ public sealed class PipelineStepActivityHelperTests : IDisposable
     }
 
     [Fact]
+    public void SetStepOutcome_NoWork_DropsTheSpanFromExport()
+    {
+        // A step whose applicability guard did not match took no lock, ran no task and wrote no
+        // data. Clearing Recorded is the same mechanism Aether's BusinessSpanFilterProcessor uses:
+        // exporters skip the span, so a transition no longer carries a dozen zero-duration spans
+        // for steps that never applied.
+        var collected = new List<Activity>();
+        using var listener = CreateListener("BBT.Workflow.Pipeline", collected);
+        using (var activity = PipelineStepActivityHelper.StartStepActivity(new FakeStep(25, "ResourceLockStep")))
+        {
+            PipelineStepActivityHelper.SetStepOutcome(activity, StepOutcome.ContinueNoWork());
+        }
+
+        var span = collected.Single();
+        span.Recorded.ShouldBeFalse();
+    }
+
+    [Fact]
+    public void SetStepOutcome_Continue_KeepsTheSpanRecorded()
+    {
+        // Guards the inverse: a step that DID work must stay exportable.
+        var collected = new List<Activity>();
+        using var listener = CreateListener("BBT.Workflow.Pipeline", collected);
+        using (var activity = PipelineStepActivityHelper.StartStepActivity(new FakeStep(25, "ResourceLockStep")))
+        {
+            PipelineStepActivityHelper.SetStepOutcome(activity, StepOutcome.Continue());
+        }
+
+        collected.Single().Recorded.ShouldBeTrue();
+    }
+
+    [Fact]
     public void SetStepError_RecordsErrorStatusAndMessage()
     {
         // Covers TransitionExecutor.ExecuteStepWithBoundaryAsync's two error paths (failed Result and

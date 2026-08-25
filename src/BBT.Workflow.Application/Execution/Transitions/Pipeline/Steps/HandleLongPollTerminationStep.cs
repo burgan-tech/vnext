@@ -41,7 +41,7 @@ public sealed class HandleLongPollTerminationStep(
     {
         if (!IsApplicable(context))
         {
-            return Result<StepOutcome>.Ok(StepOutcome.Continue());
+            return Result<StepOutcome>.Ok(StepOutcome.ContinueNoWork());
         }
 
         // Role gate: the long-poll stop belongs to the role that drove the transition into this state.
@@ -51,7 +51,7 @@ public sealed class HandleLongPollTerminationStep(
         // signal and the acknowledge check, so arm → signal → ack all agree on the owning role.
         if (!await OwnsLongPollAsync(context, cancellationToken))
         {
-            return Result<StepOutcome>.Ok(StepOutcome.Continue());
+            return Result<StepOutcome>.Ok(StepOutcome.ContinueNoWork());
         }
 
         var token = guidGenerator.Create();

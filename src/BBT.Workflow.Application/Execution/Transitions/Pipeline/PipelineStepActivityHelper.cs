@@ -35,10 +35,27 @@ public static class PipelineStepActivityHelper
         return activity;
     }
 
-    /// <summary>Records the step's flow-control outcome (continue | stop | skipTo:{order}).</summary>
+    /// <summary>
+    /// Records the step's flow-control outcome (continue | stop | skipTo:{order}).
+    /// <para>
+    /// A step that reported <see cref="StepOutcome.NoWork"/> loses its span instead: its
+    /// applicability guard did not match, so nothing happened — no lock, no task, no data write —
+    /// and a zero-duration span per non-applicable step is what made the tree hard to read. The
+    /// span is dropped by clearing <c>Recorded</c>, the same mechanism Aether's
+    /// BusinessSpanFilterProcessor uses: exporters skip it, while it stays valid in-process so a
+    /// child started inside the step (there is none, by definition) would still parent correctly.
+    /// </para>
+    /// </summary>
     public static void SetStepOutcome(Activity? activity, StepOutcome outcome)
     {
         if (activity is null) return;
+
+        if (outcome.NoWork)
+        {
+            activity.ActivityTraceFlags &= ~ActivityTraceFlags.Recorded;
+            return;
+        }
+
         var value = outcome.StopPipeline ? "stop"
             : outcome.SkipToOrder is { } order ? $"skipTo:{order}"
             : "continue";
