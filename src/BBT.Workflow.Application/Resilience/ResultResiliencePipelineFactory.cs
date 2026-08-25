@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using BBT.Aether.Results;
 using BBT.Workflow.Resilience;
 using Microsoft.Extensions.Logging;
@@ -59,6 +60,19 @@ public sealed class ResultResiliencePipelineFactory : IResultResiliencePipelineF
                         errorCode,
                         errorMessage);
 
+                    // Mark the retry on the active span (Task.Execute / Trigger.Local): the
+                    // Polly delay is otherwise an unexplained hole in the trace timeline — the
+                    // "dead wait" seen when a DirectTrigger spins on a Busy target instance.
+                    Activity.Current?.AddEvent(new ActivityEvent("result.retry", tags: new ActivityTagsCollection
+                    {
+                        { "operation", operationName },
+                        { "retry.attempt", args.AttemptNumber },
+                        { "retry.max", options.MaxRetryAttempts },
+                        { "retry.delay_ms", (long)args.RetryDelay.TotalMilliseconds },
+                        { "error.code", errorCode },
+                        { "error.message", errorMessage }
+                    }));
+
                     return ValueTask.CompletedTask;
                 }
             })
@@ -94,6 +108,19 @@ public sealed class ResultResiliencePipelineFactory : IResultResiliencePipelineF
                         args.RetryDelay.TotalMilliseconds,
                         errorCode,
                         errorMessage);
+
+                    // Mark the retry on the active span (Task.Execute / Trigger.Local): the
+                    // Polly delay is otherwise an unexplained hole in the trace timeline — the
+                    // "dead wait" seen when a DirectTrigger spins on a Busy target instance.
+                    Activity.Current?.AddEvent(new ActivityEvent("result.retry", tags: new ActivityTagsCollection
+                    {
+                        { "operation", operationName },
+                        { "retry.attempt", args.AttemptNumber },
+                        { "retry.max", options.MaxRetryAttempts },
+                        { "retry.delay_ms", (long)args.RetryDelay.TotalMilliseconds },
+                        { "error.code", errorCode },
+                        { "error.message", errorMessage }
+                    }));
 
                     return ValueTask.CompletedTask;
                 }

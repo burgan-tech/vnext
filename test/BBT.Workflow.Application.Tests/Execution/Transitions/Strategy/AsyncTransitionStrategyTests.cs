@@ -336,6 +336,47 @@ public class AsyncTransitionStrategyTests
             Times.Never);
     }
 
+    [Fact]
+    public async Task ExecuteAsync_UpdateData_ShouldSkipTheDuplicateJobGuard_AndAcceptInParallel()
+    {
+        // updateData must accept EVERY request: two parallel accepts share the same logical job
+        // identity (instance, source state, transition key) yet are both legitimate — each carries
+        // its own payload, and deduping one would lose a caller's data. Physical collision is
+        // impossible (job id/name are unique per enqueue), so the guard is not even consulted.
+        var (wfCtx, _) = SetupSuccessfulContext();
+        _acceptFlip = AcceptFlip.None;
+        _mockAdmissionService
+            .Setup(x => x.Classify(It.IsAny<TransitionExecutionContext>()))
+            .Returns(AdmissionKind.Unconditional);
+        _mockJobRepository
+            .Setup(x => x.AnyActiveTransitionJobAsync(
+                It.IsAny<Guid>(),
+                It.IsAny<JobType>(),
+                It.IsAny<string>(),
+                It.IsAny<string>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true); // an active twin exists — must NOT reject this accept
+
+        var result = await _strategy.ExecuteAsync(wfCtx, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        _mockJobRepository.Verify(
+            x => x.AnyActiveTransitionJobAsync(
+                It.IsAny<Guid>(),
+                It.IsAny<JobType>(),
+                It.IsAny<string>(),
+                It.IsAny<string>(),
+                It.IsAny<CancellationToken>()),
+            Times.Never);
+        _mockEnqueueGateway.Verify(
+            x => x.EnqueueAsync(
+                It.IsAny<TransitionJobPayload>(),
+                It.IsAny<TransitionContinuationRequested>(),
+                It.IsAny<bool>(),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
     #endregion
 
     #region Subflow chain claim

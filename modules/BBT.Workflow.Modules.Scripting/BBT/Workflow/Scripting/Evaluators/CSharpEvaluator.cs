@@ -44,13 +44,21 @@ public class CSharpEvaluator : IEvaluator
     /// <summary>
     /// Cached compiled scripts indexed by cache key.
     ///
-    /// The value is a <see cref="Lazy{T}"/> so concurrent callers with the same key compile exactly
-    /// once. This is a correctness requirement, not an optimisation: the assembly's simple name is
-    /// derived from the cache key, and an <see cref="AssemblyLoadContext"/> cannot hold two
-    /// assemblies with the same simple name, so a second concurrent load into a shared helper
-    /// context throws.
+    /// The value is a <see cref="Lazy{T}"/> of <see cref="Task{TResult}"/> so concurrent callers
+    /// with the same key compile exactly once. Single-flight is a correctness requirement, not an
+    /// optimisation: the assembly's simple name is derived from the cache key, and an
+    /// <see cref="AssemblyLoadContext"/> cannot hold two assemblies with the same simple name, so a
+    /// second concurrent load into a shared helper context throws.
+    ///
+    /// The inner value is a <b>Task</b> (async single-flight), not the compiled script itself:
+    /// with a plain <c>Lazy&lt;CompiledScript&gt;</c> every waiter blocked a thread-pool thread in
+    /// <c>lazy.Value</c> while the Roslyn emit ran on the creator's thread. During a cold burst
+    /// (fresh deployment, several parallel flows) those blocked waiters starved the pool and
+    /// unrelated async continuations stalled in lockstep — measured as spans reporting hundreds of
+    /// ms of "compile time" with zero misses. Waiters now await; the emit runs once per key on a
+    /// dedicated pool work item.
     /// </summary>
-    private readonly ConcurrentDictionary<string, Lazy<CompiledScript>> _typeCache = new();
+    private readonly ConcurrentDictionary<string, Lazy<Task<CompiledScript>>> _typeCache = new();
 
     /// <summary>
     /// Cached metadata references - created once and reused for all compilations.
@@ -140,47 +148,81 @@ public class CSharpEvaluator : IEvaluator
         // Fast path: an already-materialised entry is the overwhelmingly common case (every script in
         // every transition after the first). Check it before GetOrAdd so the closure below — which
         // captures code/cacheKey/extraReferences/usingDirectives/sandboxGrant/loadContext — is not
-        // allocated on every cache hit. Mirrors ScriptHelperRegistry.GetOrBuildHelpers.
-        if (_typeCache.TryGetValue(cacheKey, out var existing) && existing.IsValueCreated)
+        // allocated on every cache hit. Mirrors ScriptHelperRegistry.GetOrBuildHelpersAsync.
+        // IsCompletedSuccessfully is REQUIRED alongside IsValueCreated: a still-running task must go
+        // through the slow path (awaiting there, never blocking), and a faulted task served from here
+        // would bypass the poisoned-entry eviction below and be replayed forever.
+        if (_typeCache.TryGetValue(cacheKey, out var existing)
+            && existing.IsValueCreated
+            && existing.Value.IsCompletedSuccessfully)
         {
             return Task.FromResult(new EvaluatorCompilation<T>(
-                CreateAndInjectServices<T>(existing.Value.CompiledType, services), false, TimeSpan.Zero));
+                CreateAndInjectServices<T>(existing.Value.Result.CompiledType, services), false, TimeSpan.Zero));
         }
 
-        // The flag/duration live in this call's closure: the factory body runs at most once per cache
-        // key (Lazy ExecutionAndPublication), and only the call whose lambda actually created the
-        // stored Lazy has its locals written — so exactly one caller reports Compiled=true per emit,
-        // no matter which thread triggers materialisation.
+        return CompileToInstanceSlowAsync<T>(
+            code, cacheKey, services, extraReferences, usingDirectives, sandboxGrant, loadContext);
+    }
+
+    /// <summary>
+    /// Slow path of <see cref="CompileToInstanceAsync{T}"/>: async single-flight per cache key.
+    /// Split into a separate method so the argument guards in the public entry stay synchronous
+    /// (an empty-code call throws, it does not return a faulted task) and the closure below is not
+    /// allocated on the hit path.
+    /// </summary>
+    private async Task<EvaluatorCompilation<T>> CompileToInstanceSlowAsync<T>(
+        string code,
+        string cacheKey,
+        IScriptServices? services,
+        IEnumerable<MetadataReference>? extraReferences,
+        IEnumerable<string>? usingDirectives,
+        IReadOnlyList<string>? sandboxGrant,
+        AssemblyLoadContext? loadContext)
+    {
+        // The flag/duration live in this call's closure: the OUTER factory body runs at most once per
+        // cache key (Lazy ExecutionAndPublication), and only the call whose lambda actually created
+        // the stored Lazy has its locals written — so exactly one caller reports Compiled=true per
+        // emit, no matter which thread materialises the Lazy or which caller awaits first.
+        // compiledHere is set in the synchronous part (under the Lazy's publication lock, so it is
+        // written before any awaiter can observe the task); the timer runs inside the task body.
         var compiledHere = false;
         var compileDuration = TimeSpan.Zero;
-        var lazy = _typeCache.GetOrAdd(cacheKey, _ => new Lazy<CompiledScript>(
+        var lazy = _typeCache.GetOrAdd(cacheKey, _ => new Lazy<Task<CompiledScript>>(
             () =>
             {
-                var compileTimer = Stopwatch.StartNew();
-                var result = CompileAndLoad<T>(code, cacheKey, extraReferences, usingDirectives, sandboxGrant, loadContext);
-                compileTimer.Stop();
                 compiledHere = true;
-                compileDuration = compileTimer.Elapsed;
-                return result;
+                // Task.Run, not inline execution: the Roslyn emit is CPU-bound and must not run on
+                // the thread that happened to materialise the Lazy (often a request thread mid-
+                // pipeline). Waiters await the same task instead of blocking in Lazy.Value — that
+                // blocking is what starved the thread pool during cold bursts.
+                return Task.Run(() =>
+                {
+                    var compileTimer = Stopwatch.StartNew();
+                    var result = CompileAndLoad<T>(code, cacheKey, extraReferences, usingDirectives, sandboxGrant, loadContext);
+                    compileTimer.Stop();
+                    compileDuration = compileTimer.Elapsed;
+                    return result;
+                });
             },
             LazyThreadSafetyMode.ExecutionAndPublication));
 
         CompiledScript compiled;
         try
         {
-            compiled = lazy.Value;
+            compiled = await lazy.Value.ConfigureAwait(false);
         }
         catch
         {
-            // Lazy<T> caches the exception as well as the value, and this evaluator is a singleton:
-            // without eviction one transient failure would be replayed for the rest of the process
-            // lifetime. Remove only the entry we observed — never one another caller has published.
-            _typeCache.TryRemove(new KeyValuePair<string, Lazy<CompiledScript>>(cacheKey, lazy));
+            // The Lazy caches its (now faulted) task and this evaluator is a singleton: without
+            // eviction one transient failure would be replayed for the rest of the process lifetime.
+            // Every awaiter that observes the fault may evict — the KVP-form TryRemove is idempotent
+            // and only ever removes the entry we observed, never one another caller has re-published.
+            _typeCache.TryRemove(new KeyValuePair<string, Lazy<Task<CompiledScript>>>(cacheKey, lazy));
             throw;
         }
 
-        return Task.FromResult(new EvaluatorCompilation<T>(
-            CreateAndInjectServices<T>(compiled.CompiledType, services), compiledHere, compileDuration));
+        return new EvaluatorCompilation<T>(
+            CreateAndInjectServices<T>(compiled.CompiledType, services), compiledHere, compileDuration);
     }
 
     /// <inheritdoc />

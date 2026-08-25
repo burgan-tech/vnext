@@ -46,7 +46,7 @@ public sealed class DirectTriggerTask : WorkflowTask
     /// <summary>
     /// Sync of the transition request
     /// </summary>
-    public bool TriggerSync { get; private set; } = true;
+    public bool TriggerSync { get; private set; } = false;
 
     /// <summary>
     /// Version of the target workflow (optional)
