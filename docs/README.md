@@ -44,6 +44,7 @@ describe the stable mental model, boundaries, failure modes, and change-safety r
 21. Read [Trace Lanes](runtime/trace-lanes.md) before changing how transition, post-commit or subflow spans are parented, or before adding a span that represents a top-level operation. Covers the anchor-vs-predecessor split that keeps chained hops siblings, the one-lane-per-instance model, and why the lane never travels in a request header.
 22. Read [FanOut Task](domain/fan-out-task.md) before authoring or changing a task type `21` (`FanOutTask`) — the config schema, the four join policies (including the empty-batch rule), the `IFanOutMapping` contract, the zero-script default-binding limitation, the single-write invariant, error codes for partial-failure branching, and the two-level concurrency bulkhead.
 23. Read [Forge Studio — FanOutTask Implementation Spec](integration/forge-fanout-task-implementation.md) before changing how a designer tool (Forge Studio) authors, validates or renders a task type `21`. Covers the config form field-by-field, the designer-side rules the runtime can only catch at parse/execution time, canvas guidance, and the `vnext-meta` / `vnext-schema` gaps consumers depend on.
+24. Read [End-to-End Trace/Span Tree](runtime/trace-span-tree.md) before adding, renaming, or gating a span, or before registering a new `ActivitySource`. Covers the full span-name → source → tags reference, the `AdditionalSources` same-commit registration rule, and the 2026-08-25 reversal of the "no compile span" decision.
 
 ## Documentation Rules
 

@@ -1,47 +1,70 @@
 using System.Diagnostics;
-using BBT.Aether.Telemetry;
 using BBT.Workflow.Logging;
 
 namespace BBT.Workflow.Execution.Pipeline;
 
 /// <summary>
-/// Starts diagnostic spans for transition pipeline steps — but ONLY in Verbose detail level.
+/// Starts business-level spans for transition pipeline steps and other pipeline-scoped
+/// operations (context load, validation, instance load, data append).
 /// <para>
-/// In Business mode a step span must not exist at all: Aether's Business filter suppresses
-/// <c>[</c>-prefixed spans at <c>OnEnd</c> (export time), which means a created-but-filtered step
-/// Activity still becomes <c>Activity.Current</c> for the whole step body — every child started
-/// inside the step (task coordinator spans, subflow starts, background-job enqueues, outbound
-/// HttpClient calls) then points at a parent span id that is never exported, and trace UIs
-/// re-root the entire subtree. Gating CREATION on <see cref="AetherTracingRuntime.IsVerbose"/>
-/// keeps <c>Activity.Current</c> on the transition span in Business mode, so all children attach
-/// to the pipeline where they belong.
+/// Step spans are ALWAYS created (Business and Verbose alike). Names deliberately avoid the
+/// legacy <c>[</c> prefix: Aether's BusinessSpanFilterProcessor suppresses <c>[</c>-prefixed
+/// DisplayNames at export in Business mode, which both hid the spans and re-rooted their
+/// children. Prefix-free names are exported everywhere, so the step's children (task spans,
+/// subflow starts, HttpClient calls) attach to a parent that really exists in the trace.
 /// </para>
 /// </summary>
 public static class PipelineStepActivityHelper
 {
-    /// <summary>
-    /// ActivitySource for pipeline-step spans. Registered in Telemetry:Tracing:AdditionalSources;
-    /// only emits when DetailLevel is Verbose.
-    /// </summary>
+    /// <summary>ActivitySource for pipeline spans. Registered in Telemetry:Tracing:AdditionalSources.</summary>
     public static readonly ActivitySource ActivitySource = new("BBT.Workflow.Pipeline");
 
-    /// <summary>
-    /// Starts the diagnostic span for a pipeline step, named with the established
-    /// <c>[{Order}] {StepName}</c> convention. Returns null in Business mode so the step leaves
-    /// no hole in the parent chain.
-    /// </summary>
+    /// <summary>Starts the span for a pipeline step, named <c>Step.{Name}</c> (trailing "Step" trimmed).</summary>
     public static Activity? StartStepActivity(ITransitionStep step)
     {
-        if (!AetherTracingRuntime.IsVerbose)
-        {
-            return null;
-        }
-
         var activity = ActivitySource.StartActivity(
-            $"[{step.Order}] {step.Name}",
+            $"Step.{TrimStepSuffix(step.Name)}",
             ActivityKind.Internal,
             Activity.Current?.Context ?? default);
-        activity?.SetTag(TelemetryConstants.TagNames.SpanCategory, TelemetryConstants.SpanCategories.Diagnostic);
+        if (activity != null)
+        {
+            activity.SetTag(TelemetryConstants.TagNames.StepOrder, step.Order);
+            activity.SetTag(TelemetryConstants.TagNames.SpanCategory, TelemetryConstants.SpanCategories.Business);
+        }
+
         return activity;
     }
+
+    /// <summary>Records the step's flow-control outcome (continue | stop | skipTo:{order}).</summary>
+    public static void SetStepOutcome(Activity? activity, StepOutcome outcome)
+    {
+        if (activity is null) return;
+        var value = outcome.StopPipeline ? "stop"
+            : outcome.SkipToOrder is { } order ? $"skipTo:{order}"
+            : "continue";
+        activity.SetTag(TelemetryConstants.TagNames.StepOutcome, value);
+    }
+
+    /// <summary>Records a step failure (result error or unhandled exception) as the span's error status.</summary>
+    public static void SetStepError(Activity? activity, string message)
+    {
+        activity?.SetStatus(ActivityStatusCode.Error, message);
+    }
+
+    /// <summary>
+    /// Starts a business-level span for a pipeline-scoped operation that is not a step
+    /// (e.g. Transition.LoadContext, Transition.Validate, Instance.Load, Instance.AppendData).
+    /// </summary>
+    public static Activity? StartOperationActivity(string operationName)
+    {
+        var activity = ActivitySource.StartActivity(
+            operationName,
+            ActivityKind.Internal,
+            Activity.Current?.Context ?? default);
+        activity?.SetTag(TelemetryConstants.TagNames.SpanCategory, TelemetryConstants.SpanCategories.Business);
+        return activity;
+    }
+
+    private static string TrimStepSuffix(string name)
+        => name.EndsWith("Step", StringComparison.Ordinal) ? name[..^4] : name;
 }

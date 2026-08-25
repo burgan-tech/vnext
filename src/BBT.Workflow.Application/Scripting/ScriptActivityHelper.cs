@@ -1,0 +1,69 @@
+using System.Diagnostics;
+using BBT.Workflow.Logging;
+
+namespace BBT.Workflow.Scripting;
+
+/// <summary>
+/// Spans for the script engine: compilation (cold cost incl. helper-set builds) and execution.
+/// <para>
+/// NOTE: this reverses the earlier "no compile span" decision (2026-08 script-perf work) — a
+/// user decision on 2026-08-25 (see docs/superpowers/specs/2026-08-25-trace-span-tree-design.md).
+/// The <see cref="ScriptCompileTelemetry"/> accumulator tags and <c>script.compile</c> event are
+/// kept alongside for query compatibility.
+/// </para>
+/// </summary>
+public static class ScriptActivityHelper
+{
+    /// <summary>ActivitySource for script spans. Registered in Telemetry:Tracing:AdditionalSources.</summary>
+    public static readonly ActivitySource ActivitySource = new("BBT.Workflow.Scripting");
+
+    /// <summary>Starts the span covering one compile call (cache hits included — sub-ms, tagged).</summary>
+    public static Activity? StartCompileActivity()
+    {
+        var activity = ActivitySource.StartActivity(
+            "Script.Compile", ActivityKind.Internal, Activity.Current?.Context ?? default);
+        activity?.SetTag(TelemetryConstants.TagNames.SpanCategory, TelemetryConstants.SpanCategories.Business);
+        return activity;
+    }
+
+    /// <summary>Stamps the compile outcome; any non-success status marks the span as error.</summary>
+    public static void SetCompileResult(Activity? activity, bool cacheMiss, string status)
+    {
+        if (activity is null) return;
+        activity.SetTag(TelemetryConstants.TagNames.ScriptCacheHit, !cacheMiss);
+        if (!string.Equals(status, "success", StringComparison.Ordinal))
+            activity.SetStatus(ActivityStatusCode.Error, status);
+    }
+
+    /// <summary>
+    /// Starts the span covering one script invocation at a call site that no existing parent span
+    /// delimits (lock-key scripts, subflow mappings). Task input/output mappings are deliberately
+    /// NOT wrapped — Task.PrepareInput / Task.ProcessOutput already delimit them.
+    /// </summary>
+    public static Activity? StartExecuteActivity(string scriptKind)
+    {
+        var activity = ActivitySource.StartActivity(
+            "Script.Execute", ActivityKind.Internal, Activity.Current?.Context ?? default);
+        if (activity != null)
+        {
+            activity.SetTag(TelemetryConstants.TagNames.ScriptKind, scriptKind);
+            activity.SetTag(TelemetryConstants.TagNames.SpanCategory, TelemetryConstants.SpanCategories.Business);
+        }
+
+        return activity;
+    }
+
+    /// <summary>Starts the span covering a helper-set resolve + compile (the invisible ~2s cold cost).</summary>
+    public static Activity? StartResolveHelpersActivity(int helperCount)
+    {
+        var activity = ActivitySource.StartActivity(
+            "Script.ResolveHelpers", ActivityKind.Internal, Activity.Current?.Context ?? default);
+        if (activity != null)
+        {
+            activity.SetTag(TelemetryConstants.TagNames.ScriptHelperCount, helperCount);
+            activity.SetTag(TelemetryConstants.TagNames.SpanCategory, TelemetryConstants.SpanCategories.Business);
+        }
+
+        return activity;
+    }
+}
