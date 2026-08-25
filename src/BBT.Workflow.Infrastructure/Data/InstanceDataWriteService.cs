@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Text;
 using BBT.Aether.Domain.EntityFrameworkCore;
 using BBT.Workflow.Aspects;
 using BBT.Workflow.BackgroundJobs.Options;
@@ -5,6 +7,7 @@ using BBT.Workflow.Caching;
 using BBT.Workflow.DefinitionContext;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.ExceptionHandling;
+using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Shared.Merging;
@@ -89,6 +92,11 @@ public sealed class InstanceDataWriteService(
             var plan = PlanAppend(
                 head, delta, versionStrategy, writeOptions.LegacyAppendPipeline, writeOptions.PreserveNumericPrecision);
 
+            // Version and size are only known now (PlanAppend needs the head read under the row
+            // lock) — the span starts here rather than at method entry, per Task 9.
+            using var activity = StartAppendActivity(
+                plan.Version, Encoding.UTF8.GetByteCount(plan.Content.NormalizedJson));
+
             if (plan.IsDuplicate)
             {
                 return null;
@@ -127,6 +135,10 @@ public sealed class InstanceDataWriteService(
         JsonData data,
         CancellationToken cancellationToken)
     {
+        // Version and data are already known at entry — unlike AppendCoreAsync, no head read is
+        // needed to know what is being written.
+        using var activity = StartAppendActivity(version, Encoding.UTF8.GetByteCount(data.NormalizedJson));
+
         var context = await dbContextProvider.GetDbContextAsync();
 
         var result = await RunLockedAsync<InstanceData>(context, instance.Id, cancellationToken, async () =>
@@ -434,6 +446,21 @@ public sealed class InstanceDataWriteService(
 
     private static string SanitizeIdentifier(string identifier)
         => identifier.Replace("\"", "", StringComparison.Ordinal);
+
+    /// <summary>
+    /// Starts the <c>Instance.AppendData</c> span around an instance-data append, tagged with
+    /// the semantic version and the serialized (UTF-8) byte size of the row being written —
+    /// never the payload content itself. Extracted from <see cref="AppendCoreAsync"/> /
+    /// <see cref="AppendExplicitCoreAsync"/> so the wiring is unit-testable without constructing
+    /// this Npgsql-backed service (DbContext, transactions, row locks).
+    /// </summary>
+    internal static Activity? StartAppendActivity(string version, long sizeBytes)
+    {
+        var activity = PipelineStepActivityHelper.StartOperationActivity("Instance.AppendData");
+        activity?.SetTag(TelemetryConstants.TagNames.DataVersion, version);
+        activity?.SetTag(TelemetryConstants.TagNames.DataSizeBytes, sizeBytes);
+        return activity;
+    }
 }
 
 /// <summary>
