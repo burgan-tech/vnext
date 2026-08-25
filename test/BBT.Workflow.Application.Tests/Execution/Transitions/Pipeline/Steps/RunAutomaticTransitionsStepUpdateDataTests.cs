@@ -1,4 +1,6 @@
 using System;
+using System.Diagnostics;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using BBT.Workflow.Definitions;
@@ -80,6 +82,42 @@ public class RunAutomaticTransitionsStepUpdateDataTests
         result.IsSuccess.ShouldBeTrue();
         await _evaluator.ReceivedWithAnyArgs()
             .EvaluateAsync(default!, default!, default);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_SatisfiedCondition_EmitsTheAutoSelectedEventOnTheAmbientSpan()
+    {
+        // The selection is the transition's own work: the selected hop runs elsewhere (flat-lane
+        // sibling, linked), so this event is the only in-span record of "this transition chose X".
+        using var ambient = new Activity("transition/regular").Start();
+        var context = CreateContext("regular-transition");
+        _evaluator.EvaluateAsync(default!, default!, default)
+            .ReturnsForAnyArgs(BBT.Aether.Results.Result<AutoConditionEvaluation>.Ok(
+                new AutoConditionEvaluation { TransitionKey = "auto-next", Status = AutoConditionStatus.Satisfied }));
+
+        await _step.ExecuteAsync(context, CancellationToken.None);
+
+        var selected = ambient.Events.ShouldHaveSingleItem();
+        selected.Name.ShouldBe("transition.auto.selected");
+        selected.Tags.ShouldContain(tag =>
+            tag.Key == "vnext.next.transition" && Equals(tag.Value, "auto-next"));
+        selected.Tags.ShouldContain(tag => tag.Key == "evaluated.count");
+        Activity.Current = null;
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_NoSatisfiedCondition_EmitsNoEvent()
+    {
+        using var ambient = new Activity("transition/regular").Start();
+        var context = CreateContext("regular-transition");
+        _evaluator.EvaluateAsync(default!, default!, default)
+            .ReturnsForAnyArgs(BBT.Aether.Results.Result<AutoConditionEvaluation>.Ok(
+                new AutoConditionEvaluation { TransitionKey = "auto-next", Status = AutoConditionStatus.NotSatisfied }));
+
+        await _step.ExecuteAsync(context, CancellationToken.None);
+
+        ambient.Events.ShouldBeEmpty();
+        Activity.Current = null;
     }
 
     private static TransitionExecutionContext CreateContext(string transitionKey)
