@@ -137,6 +137,8 @@ internal sealed class TransitionLockScope : ITransitionLockScope
     {
         if (_handle is not null)
         {
+            using var activity = PipelineStepActivityHelper.StartOperationActivity("Lock.Release");
+            activity?.SetTag(TelemetryConstants.TagNames.LockKey, LockKey);
             await _handle.DisposeAsync();
             _logger.LogDebug("Transition lock released for {LockKey}", LockKey);
         }
