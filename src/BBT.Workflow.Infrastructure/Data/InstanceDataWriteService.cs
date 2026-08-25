@@ -4,7 +4,6 @@ using BBT.Aether.Domain.EntityFrameworkCore;
 using BBT.Workflow.Aspects;
 using BBT.Workflow.BackgroundJobs.Options;
 using BBT.Workflow.Caching;
-using BBT.Workflow.DefinitionContext;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.ExceptionHandling;
 using BBT.Workflow.Execution.Pipeline;
@@ -38,7 +37,6 @@ namespace BBT.Workflow.Data;
 /// </summary>
 public sealed class InstanceDataWriteService(
     IAetherDbContextProvider<WorkflowDbContext> dbContextProvider,
-    IWorkflowContext workflowContext,
     IServiceProvider serviceProvider,
     IJsonSchemaValidator jsonSchemaValidator,
     IOptions<WorkflowExecutionOptions> executionOptions,
@@ -71,16 +69,18 @@ public sealed class InstanceDataWriteService(
         Instance instance,
         JsonData delta,
         VersionStrategy? versionStrategy,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Definitions.Workflow? workflow = null)
     {
         using var gate = await InstanceWriteGate.AcquireAsync(instance.Id, cancellationToken);
-        return await AppendCoreAsync(instance, delta, versionStrategy, cancellationToken);
+        return await AppendCoreAsync(instance, delta, versionStrategy, workflow, cancellationToken);
     }
 
     private async Task<InstanceData?> AppendCoreAsync(
         Instance instance,
         JsonData delta,
         VersionStrategy? versionStrategy,
+        Definitions.Workflow? workflow,
         CancellationToken cancellationToken)
     {
         var context = await dbContextProvider.GetDbContextAsync();
@@ -102,7 +102,7 @@ public sealed class InstanceDataWriteService(
                 return null;
             }
 
-            await ValidateAgainstSchemaAsync(plan.Content, cancellationToken);
+            await ValidateAgainstSchemaAsync(workflow, plan.Content, cancellationToken);
 
             // A strategy append always sits at or above the head → it takes the latest flag.
             // VersionNo is line-scoped: the next ordinal WITHIN the target Version string.
@@ -122,10 +122,11 @@ public sealed class InstanceDataWriteService(
         Guid id,
         string version,
         JsonData data,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Definitions.Workflow? workflow = null)
     {
         using var gate = await InstanceWriteGate.AcquireAsync(instance.Id, cancellationToken);
-        return await AppendExplicitCoreAsync(instance, id, version, data, cancellationToken);
+        return await AppendExplicitCoreAsync(instance, id, version, data, workflow, cancellationToken);
     }
 
     private async Task<InstanceData> AppendExplicitCoreAsync(
@@ -133,6 +134,7 @@ public sealed class InstanceDataWriteService(
         Guid id,
         string version,
         JsonData data,
+        Definitions.Workflow? workflow,
         CancellationToken cancellationToken)
     {
         // Version and data are already known at entry — unlike AppendCoreAsync, no head read is
@@ -161,7 +163,7 @@ public sealed class InstanceDataWriteService(
             var takesLatest = head is null
                 || InstanceDataVersionComparer.CompareVersionStrings(version, head.Version) >= 0;
 
-            await ValidateAgainstSchemaAsync(data, cancellationToken);
+            await ValidateAgainstSchemaAsync(workflow, data, cancellationToken);
 
             var row = new InstanceData(id, instance.Id, version, data, takesLatest)
             {
@@ -408,19 +410,26 @@ public sealed class InstanceDataWriteService(
     }
 
     /// <summary>
-    /// Validates the content against the current workflow's master schema when one is
-    /// configured — the same contract the old aggregate mutation methods enforced. No workflow
-    /// in context (publish, system paths) → skip.
+    /// Validates the content against the workflow's master schema when one is configured — the
+    /// same contract the old aggregate mutation methods enforced.
     /// </summary>
-    private async Task ValidateAgainstSchemaAsync(JsonData content, CancellationToken cancellationToken)
+    /// <remarks>
+    /// The definition arrives as an argument from the caller, which already holds it (the pipeline
+    /// context, the script context, the start path's own load). It used to be read from an ambient
+    /// scope, and a caller running outside such a scope silently skipped validation; passing it
+    /// explicitly keeps that outcome visible at each call site instead of hiding it here.
+    /// </remarks>
+    private async Task ValidateAgainstSchemaAsync(
+        Definitions.Workflow? workflow,
+        JsonData content,
+        CancellationToken cancellationToken)
     {
-        var workflow = workflowContext.Workflow;
         if (workflow?.Schema is null)
             return;
 
         // Resolved lazily: IComponentCacheStore lives in the Application module, which non-HTTP
-        // hosts (workers, DbMigrator) do not load — and in those hosts the workflow context is
-        // always empty, so this line is never reached. The null-check is a belt-and-braces skip.
+        // hosts (workers, DbMigrator) do not load. Those hosts never pass a workflow, so this line
+        // is not reached there; the null-check is a belt-and-braces skip.
         var componentCacheStore = serviceProvider.GetService<IComponentCacheStore>();
         if (componentCacheStore is null)
         {

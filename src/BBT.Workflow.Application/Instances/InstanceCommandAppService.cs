@@ -15,7 +15,6 @@ using BBT.Workflow.BackgroundJobs.Handlers;
 using BBT.Workflow.BackgroundJobs.Payloads;
 using BBT.Workflow.Caching;
 using BBT.Workflow.CurrentUser;
-using BBT.Workflow.DefinitionContext;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.Pipeline;
@@ -54,7 +53,6 @@ public sealed class InstanceCommandAppService(
     ITransitionValidationService transitionValidationService,
     ITransitionAdmissionService transitionAdmissionService,
     ITransitionContextFactory transitionContextFactory,
-    IWorkflowContext workflowContext,
     IRepresentationEtagService representationEtagService,
     ISchemaFieldFilterService schemaFieldFilterService,
     IInstanceExtensionService instanceExtensionService,
@@ -252,33 +250,26 @@ public sealed class InstanceCommandAppService(
     }
 
     /// <summary>
-    /// Step 2: Loads the workflow definition from cache and sets it in WorkflowContext.
-    /// Note: TransitionRunner will also set it in its isolated scope.
+    /// Step 2: Loads the workflow definition from the component cache.
     /// </summary>
+    /// <remarks>
+    /// This used to short-circuit on a scope-held definition (the retired <c>IWorkflowContext</c>),
+    /// but that memo compared the KEY only — a request pinning a version silently got whatever
+    /// version the scope happened to hold. The component cache already answers a repeat read from
+    /// its in-process layer, so the memo bought little and risked the wrong definition.
+    /// </remarks>
     private async Task<Result<Definitions.Workflow>> LoadWorkflowAsync(
         string domain,
         string workflow,
         string? version,
         CancellationToken cancellationToken)
     {
-        var workflowInScope = workflowContext.Workflow;
-        if (workflowInScope != null && workflowInScope.Key == workflow)
-        {
-            return Result<Definitions.Workflow>.Ok(workflowInScope);
-        }
-
         var workflowResult = await componentCacheStore.GetFlowAsync(
             domain, workflow, version, cancellationToken);
 
-        if (!workflowResult.IsSuccess)
-            return Result<Definitions.Workflow>.Fail(workflowResult.Error);
-
-        var workflowDefinition = workflowResult.Value!;
-
-        // Set workflow in current scope's context
-        workflowContext.SetWorkflow(workflowDefinition);
-
-        return Result<Definitions.Workflow>.Ok(workflowDefinition);
+        return workflowResult.IsSuccess
+            ? Result<Definitions.Workflow>.Ok(workflowResult.Value!)
+            : Result<Definitions.Workflow>.Fail(workflowResult.Error);
     }
 
     /// <summary>
@@ -379,7 +370,8 @@ public sealed class InstanceCommandAppService(
                         data.Instance,
                         new JsonData(mappedData),
                         data.Workflow.StartTransition.VersionStrategy,
-                        cancellationToken);
+                        cancellationToken,
+                        data.Workflow);
                 }
             })
             .MapAsync(_ => data);

@@ -8,7 +8,6 @@ using BBT.Aether.Uow.EntityFrameworkCore;
 using BBT.Workflow;
 using BBT.Workflow.BackgroundJobs.Handlers;
 using BBT.Workflow.Data;
-using BBT.Workflow.DefinitionContext;
 using BBT.Workflow.Headers;
 using BBT.Workflow.Monitoring;
 using BBT.Workflow.HttpApi.Shared.Telemetry;
@@ -76,7 +75,6 @@ public static class WorkflowApiBaseServiceCollectionExtensions
 
         services.AddEndpointsApiExplorer();
         services.AddAetherApiVersioning(apiTitle: "vNext API");
-        services.AddScoped<IWorkflowContext, WorkflowContext>();
 
         // Raw request body capture for signature verification (JWS/mTLS): expose the original payload to
         // mappings via ScriptContext.RawBody. Replaces the ambient-only default registered in the Application layer.

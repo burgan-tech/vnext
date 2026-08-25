@@ -70,7 +70,8 @@ public sealed class SubflowOutputMappingService(
                     parentInstance,
                     new JsonData(JsonSerializer.Serialize(outputMappingResult!.Data)),
                     parentState.VersionStrategy,
-                    cancellationToken);
+                    cancellationToken,
+                    parentWorkflow);
             }
 
             if (scriptContext.Mutations.HasChanges)

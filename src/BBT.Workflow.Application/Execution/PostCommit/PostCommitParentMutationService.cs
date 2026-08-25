@@ -1,7 +1,6 @@
 using BBT.Aether.Results;
 using BBT.Aether.Uow;
 using BBT.Workflow.BackgroundJobs;
-using BBT.Workflow.DefinitionContext;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Instances;
@@ -17,7 +16,6 @@ public sealed class PostCommitParentMutationService(
     IUnitOfWorkManager uowManager,
     IInstanceRepository instanceRepository,
     IInstanceStatusLock instanceStatusLock,
-    IWorkflowContext workflowContext,
     IStateNotificationScheduler stateNotificationScheduler,
     ILogger<PostCommitParentMutationService> logger) : IPostCommitParentMutationService
 {
@@ -119,9 +117,9 @@ public sealed class PostCommitParentMutationService(
         PostCommitParentSnapshot source,
         Instance instance)
     {
-        var workflow = workflowContext.Workflow
-                       ?? throw new InvalidOperationException(
-                           "A workflow scope is required for post-commit parent settlement.");
+        // The definition travels on the snapshot: the settlement runs after the originating scope
+        // handed off its lock, so re-resolving here would repeat a read the caller already made.
+        var workflow = source.Workflow;
         var freshState = workflow.FindState(instance.GetCurrentState);
 
         return new TransitionExecutionContext

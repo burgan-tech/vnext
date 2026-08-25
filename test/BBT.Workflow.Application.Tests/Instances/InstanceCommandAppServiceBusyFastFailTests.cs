@@ -10,7 +10,6 @@ using BBT.Aether.Uow;
 using BBT.Aether.Users;
 using BBT.Workflow.Authorization;
 using BBT.Workflow.Caching;
-using BBT.Workflow.DefinitionContext;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.LongPoll;
@@ -83,7 +82,6 @@ public class InstanceCommandAppServiceBusyFastFailTests : IDisposable
             transitionValidationService: Substitute.For<ITransitionValidationService>(),
             transitionAdmissionService: _admissionService,
             transitionContextFactory: Substitute.For<ITransitionContextFactory>(),
-            workflowContext: Substitute.For<IWorkflowContext>(),
             representationEtagService: Substitute.For<IRepresentationEtagService>(),
             schemaFieldFilterService: Substitute.For<ISchemaFieldFilterService>(),
             instanceExtensionService: Substitute.For<IInstanceExtensionService>(),

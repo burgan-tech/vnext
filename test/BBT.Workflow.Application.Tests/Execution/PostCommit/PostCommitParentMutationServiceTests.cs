@@ -6,7 +6,6 @@ using System.Threading.Tasks;
 using BBT.Aether.Results;
 using BBT.Aether.Uow;
 using BBT.Workflow.BackgroundJobs;
-using BBT.Workflow.DefinitionContext;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.Pipeline;
@@ -42,7 +41,8 @@ public sealed class PostCommitParentMutationServiceTests
             "trace",
             headers,
             routes,
-            null);
+            null,
+            CreateWorkflow(State.Create("state", StateType.Intermediate, StateSubType.None, VersionStrategy.IncreaseMinor.Code)));
         headers["userId"] = "mutated";
         routes["route"] = "mutated";
 
@@ -151,12 +151,11 @@ public sealed class PostCommitParentMutationServiceTests
         var authoritative = CreateBusyInstance();
         authoritative.ChangeState(CreateNotifyingState("callback-settled", StateSubType.None));
         authoritative.Active();
-        var fixture = CreateFixture(
-            authoritative,
-            workflow: CreateWorkflow(CreateNotifyingState("callback-settled", StateSubType.None)));
+        var workflow = CreateWorkflow(CreateNotifyingState("callback-settled", StateSubType.None));
+        var fixture = CreateFixture(authoritative, workflow: workflow);
 
         var result = await fixture.Service.SettleAsync(
-            CreateSnapshot(authoritative.Id),
+            CreateSnapshot(authoritative.Id, workflow),
             CreateContinuations(resolvedStatus: InstanceStatus.Active),
             CancellationToken.None);
 
@@ -173,12 +172,11 @@ public sealed class PostCommitParentMutationServiceTests
     {
         var authoritative = CreateBusyInstance();
         authoritative.ChangeState(CreateNotifyingState("freshly-resolved", StateSubType.None));
-        var fixture = CreateFixture(
-            authoritative,
-            workflow: CreateWorkflow(CreateNotifyingState("freshly-resolved", StateSubType.None)));
+        var workflow = CreateWorkflow(CreateNotifyingState("freshly-resolved", StateSubType.None));
+        var fixture = CreateFixture(authoritative, workflow: workflow);
 
         var result = await fixture.Service.SettleAsync(
-            CreateSnapshot(authoritative.Id),
+            CreateSnapshot(authoritative.Id, workflow),
             CreateContinuations(resolvedStatus: InstanceStatus.Active),
             CancellationToken.None);
 
@@ -300,16 +298,12 @@ public sealed class PostCommitParentMutationServiceTests
                 return Task.FromResult(authoritative);
             });
 
-        var workflowContext = Substitute.For<IWorkflowContext>();
-        workflowContext.Workflow.Returns(workflow);
-        workflowContext.HasWorkflow.Returns(true);
         var notificationScheduler = Substitute.For<IStateNotificationScheduler>();
 
         var service = new PostCommitParentMutationService(
             uowManager,
             repository,
             statusLock,
-            workflowContext,
             notificationScheduler,
             NullLogger<PostCommitParentMutationService>.Instance);
 
@@ -323,7 +317,9 @@ public sealed class PostCommitParentMutationServiceTests
         return instance;
     }
 
-    private static PostCommitParentSnapshot CreateSnapshot(Guid instanceId) => new(
+    private static PostCommitParentSnapshot CreateSnapshot(
+        Guid instanceId,
+        Definitions.Workflow? workflow = null) => new(
         Domain,
         WorkflowKey,
         WorkflowVersion,
@@ -333,7 +329,9 @@ public sealed class PostCommitParentMutationServiceTests
         "trace-id",
         new Dictionary<string, string?> { ["userId"] = "42" },
         new Dictionary<string, string?> { ["route"] = "value" },
-        null);
+        null,
+        workflow ?? CreateWorkflow(
+            State.Create("state", StateType.Intermediate, StateSubType.None, VersionStrategy.IncreaseMinor.Code)));
 
     private static ContinuationSet CreateContinuations(
         InstanceStatus? resolvedStatus = null) => new(

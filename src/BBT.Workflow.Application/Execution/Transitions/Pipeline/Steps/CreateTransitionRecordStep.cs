@@ -159,7 +159,8 @@ public sealed class CreateTransitionRecordStep(
                 context.Instance,
                 new JsonData(mappedData),
                 transition?.VersionStrategy,
-                cancellationToken);
+                cancellationToken,
+                context.Workflow);
 
             if (transition?.Mapping is not null)
             {

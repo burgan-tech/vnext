@@ -2,7 +2,6 @@ using BBT.Aether.DependencyInjection;
 using BBT.Aether.MultiSchema;
 using BBT.Aether.Results;
 using BBT.Workflow.Caching;
-using BBT.Workflow.DefinitionContext;
 using BBT.Workflow.Instances;
 
 namespace Microsoft.Extensions.DependencyInjection;
@@ -234,8 +233,8 @@ public static class ServiceScopeFactoryExtensions
     #region Private Helpers
 
     /// <summary>
-    /// Core workflow setup: activates the schema, loads the workflow from cache, sets it in
-    /// <see cref="IWorkflowContext"/>, then delegates to <paramref name="action"/>.
+    /// Core workflow setup: activates the schema scope, loads the workflow from cache, then
+    /// delegates to <paramref name="action"/>.
     /// </summary>
     /// <typeparam name="TResult">The return type of the action.</typeparam>
     /// <param name="sp">The scoped service provider.</param>
@@ -256,7 +255,6 @@ public static class ServiceScopeFactoryExtensions
     {
         var currentSchema = sp.GetRequiredService<ICurrentSchema>();
         var componentCacheStore = sp.GetRequiredService<IComponentCacheStore>();
-        var workflowContext = sp.GetRequiredService<IWorkflowContext>();
 
         using (currentSchema.Change(workflowKey))
         {
@@ -264,8 +262,6 @@ public static class ServiceScopeFactoryExtensions
 
             if (!workflowResult.IsSuccess)
                 return onWorkflowLoadFailed(workflowResult.Error);
-
-            workflowContext.SetWorkflow(workflowResult.Value!);
 
             return await action();
         }

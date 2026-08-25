@@ -140,7 +140,7 @@ public sealed class TransitionRunner(
     /// This ensures complete isolation from any ambient UoW.
     /// Before commit, stages deferred domain events collected during pipeline execution.
     /// Durable hooks run after commit from the UoW completion callback.
-    /// Uses ExecuteWithWorkflowAsync extension for automatic workflow loading and IWorkflowContext setup.
+    /// Uses the ExecuteWithWorkflowAsync extension for scope + workflow loading.
     /// </summary>
     private Task<Result<TransitionCoreOutput>> ExecuteWithScopeAsync(
         WorkflowExecutionContext context,

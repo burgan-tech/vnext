@@ -512,7 +512,7 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
 
         var delta = new JsonData(JsonSerializer.Serialize(response.Data, JsonSerializerConstants.JsonOptions));
         var persisted = await _instanceDataWriteService.AppendAsync(
-            context.Instance, delta, VersionStrategy.IncreasePatch, cancellationToken);
+            context.Instance, delta, VersionStrategy.IncreasePatch, cancellationToken, context.Workflow);
 
         // The service refreshed the aggregate it was given (the snapshot). Nothing else to do:
         // the live aggregate in the pipeline scope is fixed up by EF when it shares the
