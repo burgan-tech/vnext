@@ -16,7 +16,40 @@ public sealed class DaprSpanLabelProcessorTests
     private readonly DaprSpanLabelProcessor _processor = new();
 
     [Fact]
-    public void ADaprSpan_StartedInsideALabelScope_CarriesTheKey()
+    public void TheLegacyGrpcActivity_StartedInsideALabelScope_CarriesTheKey()
+    {
+        // Grpc.Net.Client creates a legacy activity whose OperationName is fixed at
+        // "Grpc.Net.Client.GrpcOut" — the instrumentation only renames DisplayName to the method
+        // path (possibly after processor OnStart). Matching must catch this shape.
+        using var activity = new Activity("Grpc.Net.Client.GrpcOut").Start();
+
+        using (DaprCallLabel.Use("flow:core:my-workflow:gen"))
+        {
+            _processor.OnStart(activity);
+        }
+
+        activity.GetTagItem("vnext.dapr.key").ShouldBe("flow:core:my-workflow:gen");
+    }
+
+    [Fact]
+    public void ADisplayNameRenamedDaprSpan_IsStampedAtOnEnd_WhenOnStartMissed()
+    {
+        // Ordering fallback: if the span was not matchable at start, OnEnd re-checks against the
+        // DisplayName the instrumentation set — the ambient is still in scope because the activity
+        // stops inside the awaited Dapr call.
+        using var activity = new Activity("SomethingElse").Start();
+        activity.DisplayName = "dapr.proto.runtime.v1.Dapr/GetState";
+
+        using (DaprCallLabel.Use("flow:core:my-workflow:gen"))
+        {
+            _processor.OnEnd(activity);
+        }
+
+        activity.GetTagItem("vnext.dapr.key").ShouldBe("flow:core:my-workflow:gen");
+    }
+
+    [Fact]
+    public void ADaprMethodNamedSpan_StartedInsideALabelScope_CarriesTheKey()
     {
         using var activity = new Activity("dapr.proto.runtime.v1.Dapr/GetState").Start();
 
