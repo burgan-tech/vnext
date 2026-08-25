@@ -48,7 +48,9 @@ public class RawRequestBodyBufferingMiddlewareTests
 
         await middleware.InvokeAsync(context);
 
-        context.Items[RawRequestBodyBufferingMiddleware.RawBodyItemsKey].ShouldBe(Body);
+        var capture = context.Items[RawRequestBodyBufferingMiddleware.RawBodyItemsKey]
+            .ShouldBeOfType<RawRequestBodyCapture>();
+        capture.Text.ShouldBe(Body);
         downstreamBody.ShouldBe(Body); // stream was rewound for downstream binding
     }
 

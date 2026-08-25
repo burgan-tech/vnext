@@ -141,6 +141,28 @@ public static class TelemetryConstants
         /// the span continues a different (originating) trace.
         /// </summary>
         public const string DaprCallback = "vnext.dapr.callback";
+
+        /// <summary>
+        /// Number of script compilations (hits + misses) that ran while this span was current.
+        /// Accumulated onto the nearest task span (the span carrying <see cref="TaskKey"/>) so the
+        /// compiler cost of a task is queryable without a dedicated compile span.
+        /// </summary>
+        public const string ScriptCompileCount = "vnext.script.compile.count";
+
+        /// <summary>Number of those compilations that were cache misses (actually compiled).</summary>
+        public const string ScriptCompileMissCount = "vnext.script.compile.miss.count";
+
+        /// <summary>Total wall-clock milliseconds spent inside script compilation calls.</summary>
+        public const string ScriptCompileTotalMs = "vnext.script.compile.total_ms";
+
+        /// <summary>Target domain of a trigger-family task's local (in-process) invocation.</summary>
+        public const string TriggerTargetDomain = "vnext.trigger.target.domain";
+
+        /// <summary>Target flow of a trigger-family task's local (in-process) invocation.</summary>
+        public const string TriggerTargetFlow = "vnext.trigger.target.flow";
+
+        /// <summary>Target instance of a trigger-family task's local (in-process) invocation.</summary>
+        public const string TriggerTargetInstance = "vnext.trigger.target.instance";
     }
 
     /// <summary>

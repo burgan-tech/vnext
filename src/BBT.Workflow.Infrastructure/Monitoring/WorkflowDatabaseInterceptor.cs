@@ -1,7 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using System.Collections.Concurrent;
 using System.Data.Common;
-using System.Diagnostics;
 
 namespace BBT.Workflow.Monitoring;
 
@@ -12,6 +12,20 @@ namespace BBT.Workflow.Monitoring;
 public sealed class WorkflowDatabaseInterceptor : DbCommandInterceptor
 {
     private readonly IWorkflowMetrics _workflowMetrics;
+
+    /// <summary>
+    /// Upper bound on the classification cache. EF reuses a small set of SQL texts per query shape,
+    /// so the cache converges quickly; the cap only guards against unbounded growth from dynamic SQL
+    /// (raw filter queries produce a new text per filter shape).
+    /// </summary>
+    private const int ClassificationCacheLimit = 2048;
+
+    /// <summary>
+    /// Query classification per SQL text. Classifying walks the (potentially multi-KB) command text,
+    /// while every execution of the same query shape reuses the exact classification — so it is
+    /// computed once per distinct text instead of twice per command (Executing + Executed).
+    /// </summary>
+    private static readonly ConcurrentDictionary<string, (string QueryType, string TableName)> ClassificationCache = new();
 
     public WorkflowDatabaseInterceptor(IWorkflowMetrics workflowMetrics)
     {
@@ -27,11 +41,11 @@ public sealed class WorkflowDatabaseInterceptor : DbCommandInterceptor
         InterceptionResult<DbDataReader> result,
         CancellationToken cancellationToken = default)
     {
-        var context = CreateExecutionContext(command, eventData);
-        
+        var (queryType, tableName) = Classify(command);
+
         // Record query start
-        _workflowMetrics.RecordDbQuery(context.QueryType, context.TableName, "started");
-        
+        _workflowMetrics.RecordDbQuery(queryType, tableName, "started");
+
         return base.ReaderExecutingAsync(command, eventData, result, cancellationToken);
     }
 
@@ -44,12 +58,12 @@ public sealed class WorkflowDatabaseInterceptor : DbCommandInterceptor
         DbDataReader result,
         CancellationToken cancellationToken = default)
     {
-        var context = CreateExecutionContext(command, eventData);
-        
+        var (queryType, tableName) = Classify(command);
+
         // Record successful query
-        _workflowMetrics.RecordDbQuery(context.QueryType, context.TableName, "success");
-        _workflowMetrics.RecordDbQueryDuration(context.QueryType, context.TableName, eventData.Duration.TotalSeconds);
-        
+        _workflowMetrics.RecordDbQuery(queryType, tableName, "success");
+        _workflowMetrics.RecordDbQueryDuration(queryType, tableName, eventData.Duration.TotalSeconds);
+
         return base.ReaderExecutedAsync(command, eventData, result, cancellationToken);
     }
 
@@ -61,13 +75,13 @@ public sealed class WorkflowDatabaseInterceptor : DbCommandInterceptor
         CommandErrorEventData eventData,
         CancellationToken cancellationToken = default)
     {
-        var context = CreateExecutionContext(command, eventData);
-        
+        var (queryType, tableName) = Classify(command);
+
         // Record failed query
-        _workflowMetrics.RecordDbQuery(context.QueryType, context.TableName, "error");
-        _workflowMetrics.RecordDbError(context.QueryType, context.TableName, eventData.Exception.GetType().Name);
-        _workflowMetrics.RecordDbQueryDuration(context.QueryType, context.TableName, eventData.Duration.TotalSeconds);
-        
+        _workflowMetrics.RecordDbQuery(queryType, tableName, "error");
+        _workflowMetrics.RecordDbError(queryType, tableName, eventData.Exception.GetType().Name);
+        _workflowMetrics.RecordDbQueryDuration(queryType, tableName, eventData.Duration.TotalSeconds);
+
         return base.CommandFailedAsync(command, eventData, cancellationToken);
     }
 
@@ -80,9 +94,9 @@ public sealed class WorkflowDatabaseInterceptor : DbCommandInterceptor
         InterceptionResult<object> result,
         CancellationToken cancellationToken = default)
     {
-        var context = CreateExecutionContext(command, eventData);
-        _workflowMetrics.RecordDbQuery(context.QueryType, context.TableName, "started");
-        
+        var (queryType, tableName) = Classify(command);
+        _workflowMetrics.RecordDbQuery(queryType, tableName, "started");
+
         return base.ScalarExecutingAsync(command, eventData, result, cancellationToken);
     }
 
@@ -95,11 +109,11 @@ public sealed class WorkflowDatabaseInterceptor : DbCommandInterceptor
         object? result,
         CancellationToken cancellationToken = default)
     {
-        var context = CreateExecutionContext(command, eventData);
-        
-        _workflowMetrics.RecordDbQuery(context.QueryType, context.TableName, "success");
-        _workflowMetrics.RecordDbQueryDuration(context.QueryType, context.TableName, eventData.Duration.TotalSeconds);
-        
+        var (queryType, tableName) = Classify(command);
+
+        _workflowMetrics.RecordDbQuery(queryType, tableName, "success");
+        _workflowMetrics.RecordDbQueryDuration(queryType, tableName, eventData.Duration.TotalSeconds);
+
         return base.ScalarExecutedAsync(command, eventData, result, cancellationToken);
     }
 
@@ -112,9 +126,9 @@ public sealed class WorkflowDatabaseInterceptor : DbCommandInterceptor
         InterceptionResult<int> result,
         CancellationToken cancellationToken = default)
     {
-        var context = CreateExecutionContext(command, eventData);
-        _workflowMetrics.RecordDbQuery(context.QueryType, context.TableName, "started");
-        
+        var (queryType, tableName) = Classify(command);
+        _workflowMetrics.RecordDbQuery(queryType, tableName, "started");
+
         return base.NonQueryExecutingAsync(command, eventData, result, cancellationToken);
     }
 
@@ -127,11 +141,11 @@ public sealed class WorkflowDatabaseInterceptor : DbCommandInterceptor
         int result,
         CancellationToken cancellationToken = default)
     {
-        var context = CreateExecutionContext(command, eventData);
-        
-        _workflowMetrics.RecordDbQuery(context.QueryType, context.TableName, "success");
-        _workflowMetrics.RecordDbQueryDuration(context.QueryType, context.TableName, eventData.Duration.TotalSeconds);
-        
+        var (queryType, tableName) = Classify(command);
+
+        _workflowMetrics.RecordDbQuery(queryType, tableName, "success");
+        _workflowMetrics.RecordDbQueryDuration(queryType, tableName, eventData.Duration.TotalSeconds);
+
         return base.NonQueryExecutedAsync(command, eventData, result, cancellationToken);
     }
 
@@ -139,166 +153,106 @@ public sealed class WorkflowDatabaseInterceptor : DbCommandInterceptor
     // For now, we'll focus on command-level metrics. Transaction metrics can be added with a separate interceptor if needed.
 
     /// <summary>
-    /// Creates execution context from command and event data for metrics recording
+    /// Resolves (query type, table name) metric labels for a command, serving repeats from the cache.
     /// </summary>
-    private static DatabaseExecutionContext CreateExecutionContext(DbCommand command, CommandEventData eventData)
+    private static (string QueryType, string TableName) Classify(DbCommand command)
     {
-        var sql = command.CommandText?.Trim() ?? string.Empty;
-        var queryType = ExtractQueryType(sql);
-        var tableName = ExtractTableName(sql, queryType);
-        
-        return new DatabaseExecutionContext
+        var sql = command.CommandText ?? string.Empty;
+
+        if (ClassificationCache.TryGetValue(sql, out var cached))
+            return cached;
+
+        (string, string) classification;
+        try
         {
-            QueryType = queryType,
-            TableName = tableName,
-            CommandText = sql
-        };
+            var span = sql.AsSpan().Trim();
+            var queryType = ExtractQueryType(span);
+            classification = (queryType, ExtractTableName(span, queryType));
+        }
+        catch
+        {
+            // If parsing fails, return a safe default
+            classification = ("Other", "Unknown");
+        }
+
+        if (ClassificationCache.Count < ClassificationCacheLimit)
+            ClassificationCache.TryAdd(sql, classification);
+
+        return classification;
     }
 
     /// <summary>
     /// Extracts the query type (SELECT, INSERT, UPDATE, DELETE) from SQL command text
     /// </summary>
-    private static string ExtractQueryType(string sql)
+    private static string ExtractQueryType(ReadOnlySpan<char> sql)
     {
-        if (string.IsNullOrWhiteSpace(sql))
+        if (sql.IsEmpty)
             return "Unknown";
 
-        var trimmedSql = sql.Trim().ToUpperInvariant();
-        
-        if (trimmedSql.StartsWith("SELECT"))
+        if (sql.StartsWith("SELECT", StringComparison.OrdinalIgnoreCase))
             return "SELECT";
-        if (trimmedSql.StartsWith("INSERT"))
+        if (sql.StartsWith("INSERT", StringComparison.OrdinalIgnoreCase))
             return "INSERT";
-        if (trimmedSql.StartsWith("UPDATE"))
+        if (sql.StartsWith("UPDATE", StringComparison.OrdinalIgnoreCase))
             return "UPDATE";
-        if (trimmedSql.StartsWith("DELETE"))
+        if (sql.StartsWith("DELETE", StringComparison.OrdinalIgnoreCase))
             return "DELETE";
-        if (trimmedSql.StartsWith("CREATE"))
+        if (sql.StartsWith("CREATE", StringComparison.OrdinalIgnoreCase))
             return "CREATE";
-        if (trimmedSql.StartsWith("ALTER"))
+        if (sql.StartsWith("ALTER", StringComparison.OrdinalIgnoreCase))
             return "ALTER";
-        if (trimmedSql.StartsWith("DROP"))
+        if (sql.StartsWith("DROP", StringComparison.OrdinalIgnoreCase))
             return "DROP";
-        
+
         return "Other";
     }
 
     /// <summary>
     /// Extracts the primary table name from SQL command text
     /// </summary>
-    private static string ExtractTableName(string sql, string queryType)
+    private static string ExtractTableName(ReadOnlySpan<char> sql, string queryType)
     {
-        if (string.IsNullOrWhiteSpace(sql))
+        if (sql.IsEmpty)
             return "Unknown";
 
-        try
+        return queryType switch
         {
-            var upperSql = sql.ToUpperInvariant();
-            
-            return queryType switch
-            {
-                "SELECT" => ExtractTableFromSelect(upperSql),
-                "INSERT" => ExtractTableFromInsert(upperSql),
-                "UPDATE" => ExtractTableFromUpdate(upperSql),
-                "DELETE" => ExtractTableFromDelete(upperSql),
-                _ => "Multiple"
-            };
-        }
-        catch
-        {
-            // If parsing fails, return a safe default
+            "SELECT" => ExtractTableAfterKeyword(sql, " FROM "),
+            "INSERT" => ExtractTableAfterKeyword(sql, " INTO "),
+            "UPDATE" => ExtractTableAfterKeyword(sql, "UPDATE "),
+            "DELETE" => ExtractTableAfterKeyword(sql, " FROM "),
+            _ => "Multiple"
+        };
+    }
+
+    /// <summary>
+    /// Returns the first identifier following <paramref name="keyword"/>, uppercased to keep the
+    /// metric label values identical to the previous whole-text-uppercase implementation.
+    /// </summary>
+    private static string ExtractTableAfterKeyword(ReadOnlySpan<char> sql, ReadOnlySpan<char> keyword)
+    {
+        var keywordIndex = sql.IndexOf(keyword, StringComparison.OrdinalIgnoreCase);
+        if (keywordIndex == -1)
             return "Unknown";
-        }
-    }
 
-    private static string ExtractTableFromSelect(string sql)
-    {
-        var fromIndex = sql.IndexOf(" FROM ", StringComparison.Ordinal);
-        if (fromIndex == -1) return "Unknown";
-        
-        var afterFrom = sql.Substring(fromIndex + 6).Trim();
-        var words = afterFrom.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        
-        if (words.Length > 0)
-        {
-            var tableName = words[0].Trim('[', ']', '"', '`');
-            // Remove schema prefix if present
-            var dotIndex = tableName.LastIndexOf('.');
-            if (dotIndex > 0)
-                tableName = tableName.Substring(dotIndex + 1);
-            return tableName;
-        }
-        
-        return "Unknown";
-    }
+        var afterKeyword = sql[(keywordIndex + keyword.Length)..].TrimStart();
+        if (afterKeyword.IsEmpty)
+            return "Unknown";
 
-    private static string ExtractTableFromInsert(string sql)
-    {
-        var intoIndex = sql.IndexOf(" INTO ", StringComparison.Ordinal);
-        if (intoIndex == -1) return "Unknown";
-        
-        var afterInto = sql.Substring(intoIndex + 6).Trim();
-        var words = afterInto.Split(' ', '(', StringSplitOptions.RemoveEmptyEntries);
-        
-        if (words.Length > 0)
-        {
-            var tableName = words[0].Trim('[', ']', '"', '`');
-            var dotIndex = tableName.LastIndexOf('.');
-            if (dotIndex > 0)
-                tableName = tableName.Substring(dotIndex + 1);
-            return tableName;
-        }
-        
-        return "Unknown";
-    }
+        // The identifier ends at the first whitespace or opening parenthesis (INSERT INTO t (...)).
+        var end = 0;
+        while (end < afterKeyword.Length && !char.IsWhiteSpace(afterKeyword[end]) && afterKeyword[end] != '(')
+            end++;
 
-    private static string ExtractTableFromUpdate(string sql)
-    {
-        var updateIndex = sql.IndexOf("UPDATE ", StringComparison.Ordinal);
-        if (updateIndex == -1) return "Unknown";
-        
-        var afterUpdate = sql.Substring(updateIndex + 7).Trim();
-        var words = afterUpdate.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        
-        if (words.Length > 0)
-        {
-            var tableName = words[0].Trim('[', ']', '"', '`');
-            var dotIndex = tableName.LastIndexOf('.');
-            if (dotIndex > 0)
-                tableName = tableName.Substring(dotIndex + 1);
-            return tableName;
-        }
-        
-        return "Unknown";
-    }
+        var token = afterKeyword[..end].Trim(['[', ']', '"', '`']);
+        if (token.IsEmpty)
+            return "Unknown";
 
-    private static string ExtractTableFromDelete(string sql)
-    {
-        var fromIndex = sql.IndexOf(" FROM ", StringComparison.Ordinal);
-        if (fromIndex == -1) return "Unknown";
-        
-        var afterFrom = sql.Substring(fromIndex + 6).Trim();
-        var words = afterFrom.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        
-        if (words.Length > 0)
-        {
-            var tableName = words[0].Trim('[', ']', '"', '`');
-            var dotIndex = tableName.LastIndexOf('.');
-            if (dotIndex > 0)
-                tableName = tableName.Substring(dotIndex + 1);
-            return tableName;
-        }
-        
-        return "Unknown";
-    }
-}
+        // Remove schema prefix if present
+        var dotIndex = token.LastIndexOf('.');
+        if (dotIndex > 0 && dotIndex < token.Length - 1)
+            token = token[(dotIndex + 1)..].Trim(['[', ']', '"', '`']);
 
-/// <summary>
-/// Context information for database operation execution
-/// </summary>
-internal record DatabaseExecutionContext
-{
-    public required string QueryType { get; init; }
-    public required string TableName { get; init; }
-    public required string CommandText { get; init; }
+        return token.ToString().ToUpperInvariant();
+    }
 }

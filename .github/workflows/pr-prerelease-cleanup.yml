@@ -1,0 +1,37 @@
+# Deletes the per-PR prerelease (GitHub Release + git tag `pr-{N}`) created by
+# pr-prerelease-images.yml when the PR closes (merged or not).
+#
+# Runs for every closed same-repo PR and no-ops when there is nothing to delete, so
+# cleanup still happens when the publish-* label was removed before closing.
+#
+# GHCR image versions are deliberately NOT deleted here — the versioned tags
+# ({base}-{channel}.pr{N}.{run}) may still be deployed somewhere; prune them
+# manually from the Packages page when they are no longer needed.
+name: PR Prerelease Cleanup
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions: {}
+
+jobs:
+  cleanup:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Delete per-PR prerelease and tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          TAG="pr-$PR"
+          if gh release view "$TAG" -R "$REPO" >/dev/null 2>&1; then
+            gh release delete "$TAG" -R "$REPO" --cleanup-tag --yes
+            echo "Deleted release and tag $TAG"
+          else
+            echo "No release $TAG — nothing to clean up"
+          fi

@@ -61,7 +61,12 @@ public sealed class StartTriggerTaskExecutor : TriggerTaskExecutorBase<StartTask
 
         if (isSameDomain)
         {
-            return await ExecuteLocalAsync(task, context, cancellationToken);
+            return await RunLocalScopedAsync(
+                task,
+                targetFlow: task.TriggerFlow,
+                targetInstance: null,
+                ct => ExecuteLocalAsync(task, context, ct),
+                cancellationToken);
         }
 
         return await ExecuteRemoteAsync(task, context, cancellationToken);

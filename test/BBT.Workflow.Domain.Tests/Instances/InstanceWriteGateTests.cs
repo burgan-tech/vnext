@@ -40,7 +40,7 @@ public sealed class InstanceWriteGateTests
             var index = InstanceWriteGate.StripeIndexOf(id);
 
             index.ShouldBeGreaterThanOrEqualTo(0);
-            index.ShouldBeLessThan(64);
+            index.ShouldBeLessThan(256);
             InstanceWriteGate.StripeIndexOf(id).ShouldBe(index);
         }
     }

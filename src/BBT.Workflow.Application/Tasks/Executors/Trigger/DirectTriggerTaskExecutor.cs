@@ -85,7 +85,12 @@ public sealed class DirectTriggerTaskExecutor : TriggerTaskExecutorBase<DirectTr
 
         if (isSameDomain)
         {
-            return await ExecuteLocalAsync(task, instanceIdentifier, context, cancellationToken);
+            return await RunLocalScopedAsync(
+                task,
+                targetFlow: task.TriggerFlow,
+                targetInstance: instanceIdentifier,
+                ct => ExecuteLocalAsync(task, instanceIdentifier, context, ct),
+                cancellationToken);
         }
 
         return await ExecuteRemoteAsync(task, context, cancellationToken);
