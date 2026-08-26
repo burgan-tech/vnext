@@ -1,3 +1,4 @@
+using System.Linq;
 using BBT.Aether.AspNetCore.Dapr;
 using BBT.Aether.AspNetCore.Threads;
 using BBT.Workflow.Logging;
@@ -57,7 +58,30 @@ builder.WebHost.ConfigureKestrel(options =>
     // port the app listens on; reusing it would collide with the sidecar) -- so Kestrel:GrpcPort
     // is genuinely new information and stays a real, standalone config key. Do not reintroduce
     // Kestrel:HttpPort as a mirror of the hosting URL.
-    foreach (var (httpPort, loopbackOnly) in ResolveHttpBindings(builder.Configuration))
+    var httpBindings = ResolveHttpBindings(builder.Configuration).ToList();
+    var grpcPort = builder.Configuration.GetValue<int>("Kestrel:GrpcPort", 4212);
+
+    // Fail fast on a same-port collision between the HTTP/1.1 and gRPC (HTTP/2-only h2c)
+    // endpoints, rather than letting Kestrel throw an opaque address-in-use IOException
+    // (or, worse, silently binding one protocol and dropping the other) at StartAsync.
+    // This is a real, not hypothetical, misconfiguration: Kestrel:GrpcPort and the HTTP
+    // port both ultimately come from operator-controlled config (Helm values / env vars /
+    // launchSettings) with no shared source of truth enforcing they differ -- e.g. Helm's
+    // execution.dapr.appPort (which does NOT feed Kestrel:GrpcPort -- see
+    // charts/vnext/values.yaml's execution.grpcPort for why they're separate keys) has
+    // already collided with the HTTP port here once. A clear exception naming both ports
+    // turns a crash-loop with a confusing low-level error into an immediate, actionable
+    // one.
+    if (httpBindings.Any(b => b.Port == grpcPort))
+    {
+        throw new InvalidOperationException(
+            $"Execution's Kestrel HTTP/1.1 port ({grpcPort}, from {WebHostDefaults.ServerUrlsKey}) " +
+            $"and its gRPC (HTTP/2-only h2c) port (Kestrel:GrpcPort, also {grpcPort}) resolve to the " +
+            $"SAME port. Kestrel cannot bind both Http1 and Http2 protocols on one cleartext port -- " +
+            $"give Kestrel:GrpcPort a value different from the app's HTTP hosting URL port.");
+    }
+
+    foreach (var (httpPort, loopbackOnly) in httpBindings)
     {
         if (loopbackOnly)
         {
@@ -73,7 +97,6 @@ builder.WebHost.ConfigureKestrel(options =>
         }
     }
 
-    var grpcPort = builder.Configuration.GetValue<int>("Kestrel:GrpcPort", 4212);
     options.ListenAnyIP(grpcPort, listenOptions => listenOptions.Protocols = HttpProtocols.Http2);
 });
 
