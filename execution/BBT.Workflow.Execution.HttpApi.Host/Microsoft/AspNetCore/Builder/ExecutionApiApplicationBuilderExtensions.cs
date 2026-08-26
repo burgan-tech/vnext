@@ -1,3 +1,4 @@
+using BBT.Workflow.Execution.Invocation;
 using Prometheus;
 
 namespace Microsoft.AspNetCore.Builder;
@@ -28,6 +29,9 @@ public static class ExecutionApiApplicationBuilderExtensions
         app.UseAppResponseCompression();
         app.UseCloudEvents();
         app.MapSubscribeHandler();
+        // gRPC surface of the task-invoke endpoint (see TaskInvokerGrpcService), served on the
+        // same Kestrel endpoint as the HTTP controller via HTTP/2 (Kestrel:EndpointDefaults:Protocols).
+        app.MapGrpcService<TaskInvokerGrpcService>();
         app.UseHttpsRedirection();
         app.UseCorrelationId();
         app.UseParentInstanceIdEnrichment();

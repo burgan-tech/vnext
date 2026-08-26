@@ -45,6 +45,14 @@ public static class ExecutionApiServiceCollectionExtensions
         services.AddSingleton<IRuntimeInfoProvider, RuntimeInfoProvider>();
         services.AddScoped<TaskInvokeHandler>();
 
+        services.AddGrpc(options =>
+        {
+            // Aligned with the sidecar's http-max-request-size: "64" (MB). Task payloads carry
+            // full instance data and can be large; the default 4 MB receive cap would fail them.
+            options.MaxReceiveMessageSize = 64 * 1024 * 1024;
+            options.MaxSendMessageSize = 64 * 1024 * 1024;
+        });
+
         return services;
     }
     

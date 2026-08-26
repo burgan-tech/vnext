@@ -36,6 +36,8 @@
         <GrpcToolsPackageVersion>2.83.0</GrpcToolsPackageVersion>
         <!-- Google.Protobuf: generated message runtime (ByteString, message base classes) -->
         <GoogleProtobufPackageVersion>3.36.0</GoogleProtobufPackageVersion>
+        <!-- Grpc.AspNetCore: server-side gRPC hosting for the Execution host's TaskInvoker service -->
+        <GrpcAspNetCorePackageVersion>2.83.0</GrpcAspNetCorePackageVersion>
 
         <!-- Microsot Test SDK packages -->
         <TestSdkPackageVersion>18.0.1</TestSdkPackageVersion>
