@@ -152,6 +152,30 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Compare-and-set Active → Busy as ONE set-based UPDATE (no aggregate load): the guard is the
+    /// WHERE clause, so the returned flag is the authoritative outcome under the caller's status
+    /// lock. Busy() raises no domain events, which is what makes the set-based write legal here —
+    /// do NOT copy this pattern for event-raising status changes (Complete/Fault/Cancel).
+    /// Emits the status-change gauge metric the tracked-update path used to emit.
+    /// </summary>
+    /// <returns>True when exactly this call flipped Active → Busy; false when the instance was
+    /// missing, already Busy, or terminal (Completed/Faulted/Passive).</returns>
+    Task<bool> TryMarkBusyAsync(Guid instanceId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Compare-and-set Busy → Active; the set-based counterpart of <see cref="TryMarkBusyAsync"/>
+    /// with the same event/metric rules.
+    /// </summary>
+    /// <returns>True when exactly this call flipped Busy → Active.</returns>
+    Task<bool> TryReleaseBusyAsync(Guid instanceId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Writes the long-poll acknowledge token as one set-based UPDATE — the arm is a single
+    /// column, so saving the whole aggregate for it was pure overhead. Raises no events.
+    /// </summary>
+    Task ArmLongPollAckAsync(Guid instanceId, Guid token, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Checks if an active instance exists with the specified key, excluding the given instance ID.
     /// </summary>
     /// <param name="key">The key to check for duplicates.</param>

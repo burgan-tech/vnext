@@ -55,8 +55,12 @@ public sealed class HandleLongPollTerminationStep(
         }
 
         var token = guidGenerator.Create();
+        // In-memory arm keeps the pipeline's aggregate consistent; the persistence is ONE
+        // set-based UPDATE of the token column instead of saving the whole aggregate. The full
+        // save's incidental flush of other pending changes is covered by the job insert below
+        // (autoSave: true).
         context.Instance.ArmLongPollAck(token);
-        await instanceRepository.UpdateAsync(context.Instance, true, cancellationToken);
+        await instanceRepository.ArmLongPollAckAsync(context.InstanceId, token, cancellationToken);
 
         await ScheduleFallbackAsync(context, token, cancellationToken);
 
