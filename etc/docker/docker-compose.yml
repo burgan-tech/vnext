@@ -63,13 +63,18 @@ services:
       "./daprd",
       "--config", "/dapr-config.yaml",
       "--app-id", "vnext-execution-app",
-      # app-port must match app-protocol: 4212 (gRPC-only h2c Kestrel endpoint) when
-      # app-protocol is grpc, 4202 (HTTP/1.1 endpoint) when app-protocol is http/unset.
-      # See the Kestrel comment in execution/BBT.Workflow.Execution.HttpApi.Host/Program.cs --
-      # this app now serves two separate cleartext ports, one per protocol, and the two
-      # flags below must always be changed together.
-      "--app-port", "4212",
-      "--app-protocol", "grpc",
+      # Default (this state): HTTP/1.1 invocation, app-port 4202 -- app-protocol omitted
+      # (http is Dapr's default). This app also serves a second, gRPC-only h2c Kestrel
+      # endpoint on 4212 (see the Kestrel comment in
+      # execution/BBT.Workflow.Execution.HttpApi.Host/Program.cs), but the sidecar below
+      # doesn't use it while app-protocol stays http/unset.
+      #
+      # To turn gRPC proxy-mode invocation ON: set "--app-port" to "4212", add
+      # "--app-protocol", "grpc" back below, AND set ExecutionApi__Transport=grpc on the
+      # orchestration side (env or appsettings). All three must change together -- gRPC
+      # is a documented KNOWN LIMITATION (breaks trace continuity), see
+      # docs/runtime/dapr-invocation-transport.md.
+      "--app-port", "4202",
       "--resources-path", "./components",
       "--dapr-grpc-port", "43111",
       "--dapr-http-port", "43110",
