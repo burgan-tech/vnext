@@ -102,9 +102,19 @@ the switch is a Helm value rather than a code path, rollback is a config flip an
 with the caveat that an old, HTTP-only Orchestration cannot reach a `grpc`-flipped Execution, so
 both ship in the same Helm release and the flip is atomic per environment, not engineered around.
 
-The wire payload stays JSON-in-bytes rather than being modelled in protobuf — `TaskEnvelope.Binding`
-is a `JsonElement` and `TaskInvokeResponse.Data` is `object?`, and re-modelling either in proto
-would change serialization semantics, which this migration is explicitly not allowed to do.
+Today's wire contract, unchanged by this design, is plain JSON: the request is
+`TaskInvokeRequest { Envelope, TraceContext }`, the response is
+`TaskInvokeResponse { Success, ErrorMessage, Result, ExecutionDurationMs }`. The payload stays
+JSON-in-bytes under proxy mode rather than being modelled in protobuf — `TaskEnvelope.Binding` is a
+`JsonElement` and `TaskInvokeResponse.Data` is `object?`, and re-modelling either in proto would
+change serialization semantics, which this migration is explicitly not allowed to do.
+
+Orchestration's current client for this hop, `RemoteInvokerService`, is configured with
+`ExecutionApi:AppId` and `ExecutionApi:InvocationTimeoutSeconds = 60`, and it performs no
+transport retry by design: the sidecar resiliency policy for this call is circuit-breaker-only,
+because retrying would re-invoke tasks that can have side effects — a decision recorded in the
+class's own remarks, not an oversight. Proxy mode does not touch either of these: the same app-id,
+the same 60-second budget, and the same no-retry policy carry over to the gRPC path unchanged.
 
 Full design (proto contract, `RemoteInvokerService`'s transport switch, error mapping, context
 propagation, and success criteria): see
