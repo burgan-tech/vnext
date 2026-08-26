@@ -42,10 +42,17 @@ public sealed class ScheduleTransitionsStep(
             return Result<StepOutcome>.Ok(StepOutcome.ContinueNoWork());
         }
 
+        // ONE context build for the whole step: the build materializes the instance snapshot and
+        // latest data, which used to be paid once PER scheduled transition. Each timer evaluation
+        // gets a cheap copy-on-write branch retargeted to its own transition instead.
+        var scheduledTransitions = context.Target!.ScheduledTransitions.ToList();
+        var baseScriptContext = await BuildScriptContextAsync(context, scheduledTransitions[0], cancellationToken);
+
         // Process each scheduled transition
-        foreach (var scheduledTransition in context.Target!.ScheduledTransitions)
+        foreach (var scheduledTransition in scheduledTransitions)
         {
-            var result = await ScheduleTransitionAsync(context, scheduledTransition, cancellationToken);
+            var result = await ScheduleTransitionAsync(
+                context, baseScriptContext, scheduledTransition, cancellationToken);
             if (!result.IsSuccess)
             {
                 return Result<StepOutcome>.Fail(result.Error);
@@ -66,6 +73,7 @@ public sealed class ScheduleTransitionsStep(
     /// </summary>
     private async Task<Result> ScheduleTransitionAsync(
         TransitionExecutionContext context,
+        ScriptContext baseScriptContext,
         Transition scheduledTransition,
         CancellationToken cancellationToken)
     {
@@ -76,9 +84,10 @@ public sealed class ScheduleTransitionsStep(
             return Result.Ok(); // Skip, not an error
         }
 
-        // Railway chain: Build context -> Evaluate timer -> Build payload -> Enqueue -> Persist
-        return await Result.Ok(scheduledTransition)
-            .MapAsync(transition => BuildScriptContextAsync(context, transition, cancellationToken))
+        // Railway chain: Branch context -> Evaluate timer -> Build payload -> Enqueue -> Persist.
+        // The branch is a copy-on-write view of the step's single build, retargeted so the timer
+        // script sees ITS transition — not a fresh (expensive) context per timer.
+        return await Result.Ok(baseScriptContext.CreateBranchFor(scheduledTransition))
             .BindAsync(scriptContext => EvaluateTimerAsync(scheduledTransition, scriptContext, cancellationToken))
             .Map(timerSchedule => BuildSchedulingInfo(context, scheduledTransition, timerSchedule))
             .ThenAsync(info => EnqueueAndPersistAsync(info, cancellationToken));

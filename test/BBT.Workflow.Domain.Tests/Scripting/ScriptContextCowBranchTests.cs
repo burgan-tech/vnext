@@ -4,6 +4,7 @@ using System.Linq;
 using System.Reflection;
 using System.Text.Json;
 using System.Threading.Tasks;
+using BBT.Workflow.Definitions;
 using BBT.Workflow.Runtime;
 using Microsoft.Extensions.Logging;
 using Moq;
@@ -48,6 +49,22 @@ public class ScriptContextCowBranchTests
 
         var branch = parent.CreateParallelBranch();
 
+        Assert.Same((object)parent.Body!, (object)branch.Body!);
+    }
+
+    [Fact]
+    public void BranchFor_RetargetsTransition_ParentKeepsItsOwn()
+    {
+        // ScheduleTransitionsStep evaluates several transition-scoped timer scripts against ONE
+        // built context: each branch must see ITS transition while the parent stays untouched.
+        var parent = ParentContext();
+        var scheduled = Transition.Create("auto-cancel", "waiting", "cancelled", TriggerType.Scheduled, "Patch");
+
+        var branch = parent.CreateBranchFor(scheduled);
+
+        Assert.Same(scheduled, branch.Transition);
+        Assert.NotSame(scheduled, parent.Transition);
+        // Still a COW branch: unwritten payload is shared by reference.
         Assert.Same((object)parent.Body!, (object)branch.Body!);
     }
 
@@ -217,6 +234,9 @@ public class ScriptContextCowBranchTests
 
         writers.ShouldBe(new[]
         {
+            // CreateBranchFor: CreateParallelBranch + Transition retarget, for evaluating several
+            // transition-scoped scripts (scheduled-transition timers) against one built context.
+            "CreateBranchFor",
             "CreateParallelBranch",
             "Dispose",
             "DisposeAsync",

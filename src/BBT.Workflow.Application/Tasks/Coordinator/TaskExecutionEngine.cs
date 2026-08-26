@@ -435,11 +435,12 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
     private static async Task<InstanceTask> PersistCreationAsync(
         ITaskPersistenceStrategy? strategy,
         InstanceTask instanceTask,
+        bool skipJournalProbe,
         CancellationToken cancellationToken)
     {
         if (strategy == null)
             return instanceTask;
-        return await strategy.HandleCreationAsync(instanceTask, cancellationToken);
+        return await strategy.HandleCreationAsync(instanceTask, skipJournalProbe, cancellationToken);
     }
 
     /// <summary>
@@ -589,7 +590,8 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
             task.Key, taskType, context.Instance?.Id);
 
         // 5. Persist creation
-        instanceTask = await PersistCreationAsync(persistenceStrategy, instanceTask, cancellationToken);
+        instanceTask = await PersistCreationAsync(
+            persistenceStrategy, instanceTask, options.SkipJournalProbe, cancellationToken);
 
         // 6. Get executor
         var executorResult = _executorRegistry.GetExecutor(taskType);

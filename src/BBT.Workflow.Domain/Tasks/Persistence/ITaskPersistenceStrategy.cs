@@ -26,8 +26,16 @@ public interface ITaskPersistenceStrategy
     /// Handles the creation and initial persistence of an InstanceTask if required.
     /// </summary>
     /// <param name="instanceTask">The InstanceTask to be persisted.</param>
+    /// <param name="skipLookup">
+    /// When true, the strategy may insert without probing for an existing row — the caller
+    /// guarantees none can exist (the transition record was inserted by this very pipeline run).
+    /// On retries this MUST be false so the previous attempt's row is found and reused.
+    /// </param>
     /// <param name="cancellationToken">Cancellation token for async operation control.</param>
-    Task<InstanceTask> HandleCreationAsync(InstanceTask instanceTask, CancellationToken cancellationToken = default);
+    Task<InstanceTask> HandleCreationAsync(
+        InstanceTask instanceTask,
+        bool skipLookup = false,
+        CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Handles the completion and final persistence of an InstanceTask if required.

@@ -28,6 +28,18 @@ public interface IInstanceTaskRepository : IRepository<InstanceTask, Guid>
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Gets all instance tasks for a SET of transitions in one query. Read-only (AsNoTracking),
+    /// ordered by <c>StartedAt</c>. Exists so timeline-style readers batch instead of issuing one
+    /// query per transition (the Monitor instance timeline used to be an N+1).
+    /// </summary>
+    /// <param name="transitionIds">The transition IDs.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>All matching tasks; group by <see cref="InstanceTask.TransitionId"/> caller-side.</returns>
+    Task<List<InstanceTask>> GetByTransitionIdsAsync(
+        IReadOnlyCollection<Guid> transitionIds,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Gets a single instance task by its unique identifier.
     /// Non-tracking (AsNoTracking) — intended for read-only monitoring queries only.
     /// </summary>
@@ -72,8 +84,18 @@ public interface IInstanceTaskRepository : IRepository<InstanceTask, Guid>
         Guid transitionId,
         CancellationToken cancellationToken = default);
 
-    /// <summary>Read-only: per-task execution aggregation across the current schema (additive, monitor-only).</summary>
-    Task<List<TaskExecutionStat>> GetTaskStatsAsync(CancellationToken cancellationToken = default);
+    /// <summary>
+    /// Read-only: per-task execution aggregation across the current schema (additive, monitor-only).
+    /// </summary>
+    /// <param name="since">
+    /// Lower bound on <c>StartedAt</c>. Bounds the aggregation's scan — without it the GROUP BY
+    /// reads the whole (append-only, unbounded) table. Null means unbounded, for callers that
+    /// explicitly want the all-time view.
+    /// </param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<List<TaskExecutionStat>> GetTaskStatsAsync(
+        DateTime? since = null,
+        CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Read-only: returns all tasks belonging to the given instance, joined with their parent

@@ -176,7 +176,10 @@ public sealed class RunOnExitTasksStep(
             TaskExecutionOrigin.Flow,
             scriptContext,
             successfulTaskIds,
-            cancellationToken);
+            // A freshly inserted transition record cannot have journal rows, so the engine skips
+            // its per-task idempotency probe; a retry (reused record) keeps it.
+            skipJournalProbe: IsFreshTransitionRecord(context),
+            cancellationToken: cancellationToken);
     }
 
     /// <summary>
@@ -209,4 +212,12 @@ public sealed class RunOnExitTasksStep(
 
         return await builder.BuildAsync(cancellationToken);
     }
+
+    /// <summary>
+    /// True when CreateTransitionRecordStep INSERTED the record in this run (see
+    /// <see cref="CreateTransitionRecordStep.TransitionRecordFreshKey"/>); false on retries.
+    /// </summary>
+    private static bool IsFreshTransitionRecord(TransitionExecutionContext context)
+        => context.Items.TryGetValue(CreateTransitionRecordStep.TransitionRecordFreshKey, out var fresh)
+           && fresh is true;
 }

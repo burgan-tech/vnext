@@ -37,6 +37,7 @@ public sealed class TaskCoordinatorTests
                 Arg.Any<TaskTrigger>(),
                 Arg.Any<TaskExecutionOrigin>(),
                 Arg.Any<ScriptContext>(),
+                Arg.Any<TaskEngineExecutionOptions>(),
                 Arg.Any<CancellationToken>())
             .Returns(async call =>
             {

@@ -68,13 +68,30 @@ public class TaskPersistenceStrategyTests
         var strategy = CreateStandardStrategy();
 
         // Act
-        var persisted = await strategy.HandleCreationAsync(_instanceTask, CancellationToken.None);
+        var persisted = await strategy.HandleCreationAsync(_instanceTask, cancellationToken: CancellationToken.None);
 
         // Assert
         await _mockRepository.Received(1).InsertAsync(_instanceTask, true, CancellationToken.None);
         persisted.ShouldBeSameAs(_instanceTask);
         _unitOfWorkManager.Received(1).Begin(Arg.Is<UnitOfWorkOptions>(options =>
             options.Scope == UnitOfWorkScopeOption.RequiresNew && options.IsTransactional));
+        await _unitOfWork.Received(1).CommitAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task StandardTaskPersistenceStrategy_HandleCreationAsync_WithSkipLookup_InsertsWithoutProbing()
+    {
+        // A freshly inserted transition record cannot have journal rows, so the caller may skip
+        // the idempotency probe entirely — the guaranteed-empty SELECT per task is the cost this
+        // flag exists to remove.
+        var strategy = CreateStandardStrategy();
+
+        var persisted = await strategy.HandleCreationAsync(
+            _instanceTask, skipLookup: true, cancellationToken: CancellationToken.None);
+
+        persisted.ShouldBeSameAs(_instanceTask);
+        await _mockRepository.DidNotReceiveWithAnyArgs().FindByTransitionAndTaskAsync(default, default!, default);
+        await _mockRepository.Received(1).InsertAsync(_instanceTask, true, CancellationToken.None);
         await _unitOfWork.Received(1).CommitAsync(CancellationToken.None);
     }
 
@@ -89,7 +106,7 @@ public class TaskPersistenceStrategyTests
             .Returns(existing);
         var strategy = CreateStandardStrategy();
 
-        var persisted = await strategy.HandleCreationAsync(_instanceTask, CancellationToken.None);
+        var persisted = await strategy.HandleCreationAsync(_instanceTask, cancellationToken: CancellationToken.None);
 
         persisted.ShouldBeSameAs(existing);
         await _mockRepository.DidNotReceiveWithAnyArgs().InsertAsync(default!, default, default);
@@ -131,7 +148,7 @@ public class TaskPersistenceStrategyTests
         var strategy = new ExtensionTaskPersistenceStrategy();
 
         // Act
-        await strategy.HandleCreationAsync(_instanceTask, CancellationToken.None);
+        await strategy.HandleCreationAsync(_instanceTask, cancellationToken: CancellationToken.None);
 
         // Assert
         // No exception should be thrown and method should complete successfully

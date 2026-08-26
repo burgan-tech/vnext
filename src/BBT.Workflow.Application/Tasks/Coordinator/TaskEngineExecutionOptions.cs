@@ -20,6 +20,23 @@ public sealed record TaskEngineExecutionOptions
     public static readonly TaskEngineExecutionOptions Default = new();
 
     /// <summary>
+    /// Preset for tasks running under a FRESHLY INSERTED transition record: identical to
+    /// <see cref="Default"/> except the per-task journal idempotency probe is skipped — a new
+    /// record id cannot have <c>InstanceTask</c> rows, so the lookup can never find one.
+    /// </summary>
+    public static readonly TaskEngineExecutionOptions FreshTransitionRecord = new() { SkipJournalProbe = true };
+
+    /// <summary>
+    /// When true, task-journal creation skips the <c>FindByTransitionAndTaskAsync</c> idempotency
+    /// probe and inserts directly. Only safe when the caller KNOWS no journal row can exist for
+    /// this transition record — i.e. the record was inserted by this very pipeline run
+    /// (<c>CreateTransitionRecordStep</c> sets the signal). On the retry path the probe must stay:
+    /// it is what finds and reuses the previous attempt's rows, including legacy rows without an
+    /// <c>ExecutionKey</c>.
+    /// </summary>
+    public bool SkipJournalProbe { get; init; }
+
+    /// <summary>
     /// When true, the task output is NOT appended to instance data (collect-only execution).
     /// FanOut items use this so the batch has a single write point at the end instead of N racing writes.
     /// </summary>
