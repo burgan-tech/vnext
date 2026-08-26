@@ -96,6 +96,7 @@ level; nothing in this table is gated behind `AetherTracingRuntime.IsVerbose`.
 | `Uow.Commit` | `BBT.Workflow.Pipeline` | — | The transaction commit in `TransitionRunner`; sat outside every span, so a slow commit read as time spent nowhere. |
 | `Events.PublishDeferred` | `BBT.Workflow.Pipeline` | — | Staging deferred domain events onto the bus before the commit. |
 | `Cache.GenerationGet/{redisKey}` | `BBT.Workflow.Cache` | `cache.component_type`, `cache.store` | The generation-token read that precedes EVERY component resolution. The caller's `Cache.Get` sits after it, not around it, so this round trip was previously attributed to nothing. |
+| `Db.{VERB}` | `OpenTelemetry.Instrumentation.EntityFrameworkCore` | `db.statement` (text, `@p0` placeholders — parameter VALUES stay behind `OTEL_DOTNET_EXPERIMENTAL_EFCORE_ENABLE_TRACE_DB_QUERY_PARAMETERS`, false unless set) | One span per EF Core command, so a DB region resolves into the commands it actually ran. `VERB` is `SELECT`/`INSERT`/`UPDATE`/`DELETE`/`MERGE`, or `Query` when the first token is none of those. Renamed from the default DisplayName, which is the **database name** — a single transition showed fifteen siblings all called `Aether_WorkflowDb`. Reads as a check on the documented include strategy: `Instance.Load` should contain exactly three `Db.SELECT` children (instance + `DataList` + `ChildCorrelations`, split queries). |
 | `Transition.ValidatePolicy` | `BBT.Workflow.Pipeline` | `span.category=business`, error status + message on failure | Wraps `ValidatePolicyAsync`. No I/O, but it runs on every auto-chain hop — without it a trace shows the schema-bearing validation and nothing for the later hops. |
 | `Invoke.{taskType}/{taskKey}` | `BBT.Workflow.Execution.Invokers` | `vnext.task.key`, `vnext.task.type`, error status on a failed invocation | Execution-side, at `TaskInvokerRegistry.InvokeAsync` — the one place every task type passes through. A cache-aside MISS calls back into the registry for its source task, so that inner task gets its own span here without per-invoker instrumentation. |
 | `CacheAside.Read/{cacheKey}` | `BBT.Workflow.Execution.Invokers` | `cache.hit` | The hit/miss decision, made explicit instead of inferred from whether a source-task span follows. |
@@ -190,6 +191,29 @@ compatibility with existing dashboards/alerts built against them.
 
 Rationale for the reversal and the full decision record: §1 ("Decisions taken") of
 [`docs/superpowers/specs/2026-08-25-trace-span-tree-design.md`](../superpowers/specs/2026-08-25-trace-span-tree-design.md).
+
+## EF Core instrumentation: the worker-poll cost (measured)
+
+Enabling `AddEntityFrameworkCoreInstrumentation` buys the DB layer inside every pipeline span, and
+charges for it outside them. Measured on a local run, 100 **idle** seconds with no traffic:
+
+| | |
+|---|---|
+| EF spans nested correctly under pipeline spans | all of them, in `vnext-app` |
+| EF commands that became their own ROOT transaction | 21 — **entirely** `vnext-inbox-worker` / `vnext-worker-outbox` |
+| Idle rate | ~13 root traces/min ≈ **18k/day per pod-set** |
+
+The cause is not health checks. The Inbox and Outbox workers poll their tables on a timer with no
+ambient `Activity`, so each poll's `SELECT` starts a trace of its own — a single-span trace that
+says a poll happened. In the transaction list these outrank real work by name frequency.
+
+Nothing is wrong with the data; the question is whether it is worth storing. Two options, neither
+applied here because dropping spans is the environment owner's call:
+
+- `EntityFrameworkInstrumentationOptions.Filter` — skip commands whose `Activity.Current` is null,
+  i.e. instrument DB work that belongs to a traced operation and never *start* a trace for one.
+- Leave it, and filter at the collector by `service.name` + span name, the same way the Dapr
+  internals are handled (see [Trace Lanes](trace-lanes.md)).
 
 ## Related pages
 
