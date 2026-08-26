@@ -9,8 +9,6 @@ using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks;
 using Dapr.Client;
 using Grpc.Core;
-using Grpc.Core.Interceptors;
-using Grpc.Net.Client;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
@@ -45,13 +43,14 @@ public sealed class RemoteInvokerService : IRemoteInvokerService
     private readonly ILogger<RemoteInvokerService> _logger;
     private readonly ICorrelationIdProvider _correlationIdProvider;
     private readonly bool _useGrpcTransport;
-    private readonly Lazy<TaskInvoker.TaskInvokerClient> _grpcClient;
+    private readonly GrpcTaskInvokerClientProvider _grpcClientProvider;
 
     public RemoteInvokerService(
         DaprClient daprClient,
         IConfiguration configuration,
         ILogger<RemoteInvokerService> logger,
-        ICorrelationIdProvider correlationIdProvider)
+        ICorrelationIdProvider correlationIdProvider,
+        GrpcTaskInvokerClientProvider grpcClientProvider)
     {
         _daprClient = daprClient;
         _executionServiceAppId = configuration["ExecutionApi:AppId"] ?? "vnext-execution";
@@ -63,51 +62,13 @@ public sealed class RemoteInvokerService : IRemoteInvokerService
         _useGrpcTransport = string.Equals(
             configuration["ExecutionApi:Transport"], "grpc", StringComparison.OrdinalIgnoreCase);
 
-        // Lazy on purpose: opening the channel to the Dapr sidecar has a cost (and, on some
-        // hosts, a dependency on the sidecar's gRPC port being reachable at all) that
-        // environments running the default "http" transport must not pay for or depend on.
-        _grpcClient = new Lazy<TaskInvoker.TaskInvokerClient>(() =>
-        {
-            // Dapr.Client.CreateInvocationInvoker(appId) resolves the sidecar's gRPC endpoint
-            // and wires the appId/api-token interceptor for us, but it offers no hook to pass
-            // GrpcChannelOptions — and without one, Grpc.Net.Client defaults
-            // MaxReceiveMessageSize to 4 MB, well under what a large instance-data payload
-            // needs. So the channel is built by hand here, replicating exactly what
-            // CreateInvocationInvoker does internally (GrpcChannel.ForAddress +
-            // InvocationInterceptor), with our own 64 MB options applied.
-            var channel = GrpcChannel.ForAddress(ResolveDaprGrpcEndpoint(), new GrpcChannelOptions
-            {
-                // Aligned with the sidecar's http-max-request-size: "64" (MB) and the
-                // server's AddGrpc limits — the three must agree or large payloads fail
-                // on whichever hop has the smallest cap.
-                MaxReceiveMessageSize = 64 * 1024 * 1024,
-                MaxSendMessageSize = 64 * 1024 * 1024
-            });
-            var daprApiToken = Environment.GetEnvironmentVariable("DAPR_API_TOKEN") ?? string.Empty;
-            var invoker = channel.Intercept(new InvocationInterceptor(_executionServiceAppId, daprApiToken));
-            return new TaskInvoker.TaskInvokerClient(invoker);
-        });
-    }
-
-    /// <summary>
-    /// Resolves the Dapr sidecar's gRPC endpoint the same way
-    /// <see cref="DaprClient.CreateInvocationInvoker(string, string?, string?)"/> does internally
-    /// (<c>DAPR_GRPC_ENDPOINT</c>, else <c>localhost:DAPR_GRPC_PORT</c>, else the sidecar
-    /// default port 50001) — duplicated here because that resolution logic lives on an
-    /// internal type in Dapr.Common and isn't reachable from this assembly.
-    /// </summary>
-    private static string ResolveDaprGrpcEndpoint()
-    {
-        var configuredEndpoint = Environment.GetEnvironmentVariable("DAPR_GRPC_ENDPOINT");
-        if (!string.IsNullOrWhiteSpace(configuredEndpoint))
-        {
-            var uri = new Uri(configuredEndpoint);
-            return new UriBuilder { Scheme = uri.Scheme, Host = uri.Host, Port = uri.Port }.ToString();
-        }
-
-        var portValue = Environment.GetEnvironmentVariable("DAPR_GRPC_PORT");
-        var port = string.IsNullOrWhiteSpace(portValue) ? 50001 : int.Parse(portValue);
-        return new UriBuilder { Scheme = "http", Host = "localhost", Port = port }.ToString();
+        // Process-lifetime channel/client holder, injected as a DI singleton (registered in
+        // TaskServiceCollectionExtensions) rather than built here — this class (RemoteInvokerService)
+        // is scoped, so a channel owned by an instance field here would open a new
+        // SocketsHttpHandler/HTTP-2 connection per request scope with nothing to dispose it.
+        // The provider is itself lazy internally, so merely holding the reference here does not
+        // open a channel for the default "http" transport.
+        _grpcClientProvider = grpcClientProvider;
     }
 
     /// <inheritdoc />
@@ -315,7 +276,7 @@ public sealed class RemoteInvokerService : IRemoteInvokerService
             if (!string.IsNullOrEmpty(traceContext.RequestId))
                 metadata.Add(TelemetryConstants.HeaderNames.RequestId, traceContext.RequestId);
 
-            var reply = await _grpcClient.Value.InvokeAsync(
+            var reply = await _grpcClientProvider.Client.InvokeAsync(
                 new InvokeRequest
                 {
                     TaskType = taskType,
@@ -357,15 +318,31 @@ public sealed class RemoteInvokerService : IRemoteInvokerService
         catch (RpcException ex)
         {
             stopwatch.Stop();
-            _logger.LogError("gRPC invocation of task {TaskKey} failed: {Status} {Detail}",
-                taskKey, ex.StatusCode, ex.Status.Detail);
+
+            // ex.StatusCode == Cancelled here can ONLY be our own timeout: the parent-cancelled
+            // case was already intercepted and rethrown by the catch clause above, and
+            // Grpc.Net.Client's GrpcChannelOptions.ThrowOperationCanceledOnCancellation defaults
+            // to false, so BOTH the linked CTS's CancelAfter and the explicit CallOptions.deadline
+            // surface as RpcException(Cancelled) — not OperationCanceledException the way the
+            // HTTP/Dapr path throws. Log it with the same [timeout.layer=remote] tag the HTTP
+            // path's own-timeout branch uses so it's grep-able the same way regardless of transport.
+            if (ex.StatusCode is StatusCode.DeadlineExceeded or StatusCode.Cancelled)
+                _logger.LogError(
+                    "gRPC invocation timeout after {Seconds}s. TaskType: {TaskType}, TaskKey: {TaskKey} [timeout.layer=remote]",
+                    _invocationTimeoutSeconds, taskType, taskKey);
+            else
+                _logger.LogError("gRPC invocation of task {TaskKey} failed: {Status} {Detail}",
+                    taskKey, ex.StatusCode, ex.Status.Detail);
 
             return Result<TaskInvocationResult>.Ok(
                 MapRpcFailure(ex, stopwatch.ElapsedMilliseconds, taskType, _invocationTimeoutSeconds));
         }
         catch (OperationCanceledException) when (!parentToken.IsCancellationRequested)
         {
-            // Own per-invocation timeout — not caused by parent pipeline cancellation
+            // Own per-invocation timeout surfacing as a raw OperationCanceledException instead
+            // of RpcException(Cancelled) — not the path Grpc.Net.Client takes by default (see the
+            // RpcException catch above), but kept as a defensive fallback in case that ever
+            // changes. Not caused by parent pipeline cancellation.
             stopwatch.Stop();
             _logger.LogError(
                 "gRPC invocation timeout after {Seconds}s. TaskType: {TaskType}, TaskKey: {TaskKey} [timeout.layer=remote]",
@@ -383,20 +360,50 @@ public sealed class RemoteInvokerService : IRemoteInvokerService
             stopwatch.Stop();
             throw;
         }
+        catch (Exception ex)
+        {
+            // Parity with the HTTP path's catch-all: anything that isn't a transport-level
+            // RpcException/OperationCanceledException still becomes a task failure the error
+            // boundary can act on, instead of an unhandled exception. Covers, among others: a
+            // malformed reply (TaskInvokePayload.Deserialize / JsonException), a null
+            // response.Result, and a failure while lazily building the gRPC channel/client
+            // (GrpcTaskInvokerClientProvider.Client — e.g. a malformed DAPR_GRPC_ENDPOINT).
+            stopwatch.Stop();
+            _logger.LogError("Failed to invoke remote task {TaskKey}: {Error}",
+                taskKey, ex.Message);
+
+            return Result<TaskInvocationResult>.Ok(TaskInvocationResult.Failure(
+                error: ex.Message,
+                statusCode: 500,
+                executionDurationMs: stopwatch.ElapsedMilliseconds,
+                taskType: taskType));
+        }
     }
 
     /// <summary>
     /// Maps a gRPC transport failure to the same <see cref="TaskInvocationResult"/> shapes the
     /// HTTP path produces for the equivalent failure, so the error boundary sees one contract
-    /// regardless of transport: <see cref="StatusCode.DeadlineExceeded"/> → 408 (matches the
-    /// HTTP path's own-timeout result), everything else → 500 (matches the HTTP path's generic
-    /// transport-failure result). Internal (not public) so
-    /// <c>BBT.Workflow.Application.Tests</c> can exercise it directly via
+    /// regardless of transport: <see cref="StatusCode.DeadlineExceeded"/> AND
+    /// <see cref="StatusCode.Cancelled"/> both → 408 (matches the HTTP path's own-timeout
+    /// result), everything else → 500 (matches the HTTP path's generic transport-failure
+    /// result).
+    /// <para>
+    /// <see cref="StatusCode.Cancelled"/> maps to 408, not 500: Grpc.Net.Client's
+    /// <c>GrpcChannelOptions.ThrowOperationCanceledOnCancellation</c> defaults to false, so our
+    /// own per-invocation timeout (the linked CTS's <c>CancelAfter</c> or the explicit
+    /// <c>CallOptions.deadline</c>) surfaces as <c>RpcException(Cancelled)</c>, not
+    /// <see cref="OperationCanceledException"/>. This method is only reached from the catch
+    /// clause ordered AFTER the parent-cancellation catch
+    /// (<c>catch (RpcException) when (parentToken.IsCancellationRequested)</c>), so a
+    /// <see cref="StatusCode.Cancelled"/> arriving here can only be our own timeout, never the
+    /// parent's — that case was already rethrown before this method could be called.
+    /// </para>
+    /// Internal (not public) so <c>BBT.Workflow.Application.Tests</c> can exercise it directly via
     /// <c>InternalsVisibleTo</c> without a live gRPC call.
     /// </summary>
     internal static TaskInvocationResult MapRpcFailure(
         RpcException ex, long elapsedMs, string taskType, int timeoutSeconds)
-        => ex.StatusCode == StatusCode.DeadlineExceeded
+        => ex.StatusCode is StatusCode.DeadlineExceeded or StatusCode.Cancelled
             ? TaskInvocationResult.Failure(
                 error: $"Dapr invocation timeout after {timeoutSeconds}s",
                 statusCode: 408,
