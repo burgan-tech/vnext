@@ -101,14 +101,17 @@ public class EfCoreInstanceTaskRepository(
     /// <inheritdoc />
     public async Task MarkCompletedAsync(InstanceTask instanceTask, CancellationToken cancellationToken = default)
     {
+        // The JsonData members are OwnsOne-mapped, and SetProperty cannot target an owned
+        // navigation — it must target the owned type's scalar (t.X.Json), which maps to the
+        // single jsonb column each owned instance occupies.
         await (await GetDbSetAsync())
             .Where(t => t.Id == instanceTask.Id)
             .ExecuteUpdateAsync(setters => setters
                     .SetProperty(t => t.Status, instanceTask.Status)
                     .SetProperty(t => t.BusinessStatus, instanceTask.BusinessStatus)
-                    .SetProperty(t => t.Response, instanceTask.Response)
-                    .SetProperty(t => t.Request, instanceTask.Request)
-                    .SetProperty(t => t.InvocationResult, instanceTask.InvocationResult)
+                    .SetProperty(t => t.Response.Json, instanceTask.Response.Json)
+                    .SetProperty(t => t.Request.Json, instanceTask.Request.Json)
+                    .SetProperty(t => t.InvocationResult.Json, instanceTask.InvocationResult.Json)
                     .SetProperty(t => t.FinishedAt, instanceTask.FinishedAt)
                     .SetProperty(t => t.Duration, instanceTask.Duration),
                 cancellationToken);
