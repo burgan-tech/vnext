@@ -99,6 +99,22 @@ public class EfCoreInstanceTaskRepository(
     }
 
     /// <inheritdoc />
+    public async Task MarkCompletedAsync(InstanceTask instanceTask, CancellationToken cancellationToken = default)
+    {
+        await (await GetDbSetAsync())
+            .Where(t => t.Id == instanceTask.Id)
+            .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(t => t.Status, instanceTask.Status)
+                    .SetProperty(t => t.BusinessStatus, instanceTask.BusinessStatus)
+                    .SetProperty(t => t.Response, instanceTask.Response)
+                    .SetProperty(t => t.Request, instanceTask.Request)
+                    .SetProperty(t => t.InvocationResult, instanceTask.InvocationResult)
+                    .SetProperty(t => t.FinishedAt, instanceTask.FinishedAt)
+                    .SetProperty(t => t.Duration, instanceTask.Duration),
+                cancellationToken);
+    }
+
+    /// <inheritdoc />
     public async Task<List<InstanceTask>> GetByTransitionIdsAsync(
         IReadOnlyCollection<Guid> transitionIds,
         CancellationToken cancellationToken = default)

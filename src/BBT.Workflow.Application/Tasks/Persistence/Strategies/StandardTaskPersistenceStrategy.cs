@@ -64,6 +64,9 @@ public sealed class StandardTaskPersistenceStrategy(
 
     /// <summary>
     /// Handles the completion and final persistence of an InstanceTask to the database.
+    /// One set-based UPDATE of the completion columns instead of attaching the (detached — it was
+    /// created in a different scope) entity and rewriting every column including the jsonb
+    /// payloads. Runs once per executed task, so this is the hottest task-journal write.
     /// </summary>
     /// <param name="instanceTask">The InstanceTask to be updated in the database.</param>
     /// <param name="cancellationToken">Cancellation token for async operation control.</param>
@@ -74,7 +77,7 @@ public sealed class StandardTaskPersistenceStrategy(
             Scope = UnitOfWorkScopeOption.RequiresNew,
             IsTransactional = true
         });
-        await instanceTaskRepository.UpdateAsync(instanceTask, true, cancellationToken);
+        await instanceTaskRepository.MarkCompletedAsync(instanceTask, cancellationToken);
         await uow.CommitAsync(cancellationToken);
     }
 }
