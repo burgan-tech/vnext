@@ -111,10 +111,19 @@ expected SETTINGS frame"*, and Kestrel itself logs `Http2DisabledWithHttp1AndNoT
 use HTTP/1.1."* The config is honored; the protocol simply cannot be negotiated without TLS.)
 
 So Execution's `Program.cs` opens two explicit `ListenAnyIP` endpoints: an HTTP/1.1-only port
-(`Kestrel:HttpPort`, default `4202` — the existing controller, health probes, swagger) and an
-Http2-only h2c port (`Kestrel:GrpcPort`, default `4212` — the gRPC `TaskInvoker` service). Both
-keys are plain configuration (overridable via env vars, e.g. `Kestrel__GrpcPort`, or
-`appsettings.{Environment}.json`), not hardcoded in code. A comment at the Kestrel configuration
+(the existing controller, health probes, swagger) and an Http2-only h2c port (`Kestrel:GrpcPort`,
+default `4212` — the gRPC `TaskInvoker` service). The HTTP/1.1 port is deliberately **not** a
+second bespoke key — registering any code-based `Listen*` endpoint makes Kestrel discard the
+hosting URLs wholesale, so `Program.cs` parses the port back out of the hosting-URL configuration
+(`ASPNETCORE_URLS`/`--urls`) instead, keeping that variable — the platform's long-standing way of
+declaring this port, set by `vnext.commonEnvVars` in Helm and by `applicationUrl` in
+launchSettings — the single source of truth (default `4202` only when no hosting URL is
+configured at all). `Kestrel:GrpcPort` stays a real, standalone key because the app's gRPC listen
+port is new information with no pre-existing environment variable — it is not, and cannot be,
+`DAPR_GRPC_PORT`: that is the *sidecar's* own API port, carried identically to every service by
+`vnext.commonEnvVars`, which the app calls *out* to Dapr on; an app listening there would collide
+with its own sidecar. `Kestrel:GrpcPort` is plain configuration (overridable via env vars, e.g.
+`Kestrel__GrpcPort`, or `appsettings.{Environment}.json`), not hardcoded in code. A comment at the Kestrel configuration
 site in `Program.cs` quotes the constraint so it is not "simplified" back to one port.
 
 Which delivery path actually works is decided by **two things that must move together**:
@@ -179,9 +188,10 @@ above) rather than left as an open gap, once the precise mechanism was confirmed
 
 ### Pass 2 — two ports (4202 HTTP/1.1, 4212 h2c gRPC): verified end-to-end for business correctness
 
-With the fix in place — `Kestrel:HttpPort=4202` (Http1 only), `Kestrel:GrpcPort=4212` (Http2 only),
-sidecar `--app-port 4212` + `--app-protocol grpc` — startup no longer logs any Kestrel HTTP/2
-warning. Direct, independent confirmation of both ports before running any test:
+With the fix in place — HTTP/1.1 on `4202` (from `ASPNETCORE_URLS`, Http1 only),
+`Kestrel:GrpcPort=4212` (Http2 only), sidecar `--app-port 4212` + `--app-protocol grpc` — startup
+no longer logs any Kestrel HTTP/2 warning. Direct, independent confirmation of both ports before
+running any test:
 
 ```
 $ curl -s -o /dev/null -w "%{http_version} %{http_code}\n" http://localhost:4202/health
@@ -351,7 +361,8 @@ Setting `app-protocol: grpc` without moving `app-port` to `4212` reproduces Pass
 (h2c dial against an HTTP/1.1-only port, near-instant transport-layer failure, task result silently
 becomes `{success:false, statusCode:500}`). Setting `app-port: 4212` without `app-protocol: grpc`
 breaks the sidecar's own startup TCP-listen probe against a port that never speaks HTTP/1.1. Both
-values are plain configuration on the Execution side (`Kestrel:HttpPort`/`Kestrel:GrpcPort` in
-`appsettings.json`, overridable per-environment), not hardcoded, so Helm can also relocate the ports
-themselves if `4202`/`4212` collide with something else in a given cluster — as long as the two
-Dapr annotations are updated to match.
+ports are relocatable — the HTTP/1.1 port via `ASPNETCORE_URLS`/`--urls` (the platform's existing
+mechanism, not a Kestrel-specific key), the gRPC port via `Kestrel:GrpcPort` in `appsettings.json`
+(overridable per-environment) — so Helm can also relocate the ports themselves if `4202`/`4212`
+collide with something else in a given cluster — as long as the two Dapr annotations are updated
+to match.
