@@ -100,7 +100,7 @@ public sealed class ComponentCacheOptions
     /// enable it deliberately, and only if the extra read is shown to matter.
     /// </remarks>
     [Range(0, 60)]
-    public int GenerationMemoSeconds { get; set; } = 0;
+    public int GenerationMemoSeconds { get; set; } = 5;
 
     /// <summary>
     /// Gets or sets whether publishing also deletes cache keys written by the pre-generation key
