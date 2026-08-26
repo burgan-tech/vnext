@@ -155,6 +155,15 @@ public static class TelemetryConstants
         /// <summary>Total wall-clock milliseconds spent inside script compilation calls.</summary>
         public const string ScriptCompileTotalMs = "vnext.script.compile.total_ms";
 
+        /// <summary>Continuation mode realized after a hop: Inline (in-process chain) or Enqueue (job).</summary>
+        public const string ContinuationMode = "vnext.continuation.mode";
+
+        /// <summary>True when the continuation produced another in-process hop.</summary>
+        public const string ContinuationHasNext = "vnext.continuation.has_next";
+
+        /// <summary>Resting status a transition settled the instance into.</summary>
+        public const string SettledStatus = "vnext.settle.status";
+
         /// <summary>Number of items in a fan-out batch.</summary>
         public const string FanOutItemCount = "vnext.fanout.item.count";
 

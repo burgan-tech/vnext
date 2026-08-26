@@ -80,11 +80,11 @@ processors:
   #
   # This hides a symptom rather than fixing the missing HttpClient span; the underlying hole
   # lives in the cache/lock client construction path. Remove this processor when that is fixed.
-  filter/drop-dapr-statestore-spans:
+  filter/dapr-internals:
     error_mode: ignore
     traces:
       span:
-        - 'instrumentation_scope.name == "dapr-diagnostics" and IsMatch(name, "/(GetState|GetBulkState|SaveState|DeleteState|DeleteBulkState|QueryStateAlpha1|TryLockAlpha1|UnlockAlpha1)$")'
+        - 'IsMatch(name, "^/?dapr\\.proto\\.runtime\\.v1\\.Dapr/")'
 
 # Configure pipelines. Pipeline defines a path the data follows in the Collector
 # starting from reception, then further processing or modification and finally
@@ -95,7 +95,7 @@ service:
   pipelines:
     traces:
       receivers: [otlp]
-      processors: [filter/drop-dapr-statestore-spans, batch]
+      processors: [filter/dapr-internals, batch]
       exporters: [debug, otlphttp/openobserve-traces, otlp/elastic]
     metrics:
       receivers: [otlp]

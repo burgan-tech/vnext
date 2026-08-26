@@ -5,6 +5,7 @@ using BBT.Aether.Users;
 using BBT.Workflow.CurrentUser;
 using BBT.Workflow.Execution.PostCommit;
 using BBT.Workflow.Instances;
+using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Logging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -165,9 +166,18 @@ public sealed class TransitionRunner(
                     if (!coreResult.IsSuccess)
                         return Result<TransitionCoreOutput>.Fail(coreResult.Error);
 
-                    await PublishDeferredEventsAsync(sp, uowManager, coreResult.Value!, ct);
-                    
-                    await uow.CommitAsync(ct);
+                    using (PipelineStepActivityHelper.StartOperationActivity("Events.PublishDeferred"))
+                    {
+                        await PublishDeferredEventsAsync(sp, uowManager, coreResult.Value!, ct);
+                    }
+
+                    // The transaction commit — everything the hop wrote reaching the database at
+                    // once. It sat outside every span, so a slow commit read as time the hop spent
+                    // nowhere.
+                    using (PipelineStepActivityHelper.StartOperationActivity("Uow.Commit"))
+                    {
+                        await uow.CommitAsync(ct);
+                    }
                     
                     return coreResult;
                 }

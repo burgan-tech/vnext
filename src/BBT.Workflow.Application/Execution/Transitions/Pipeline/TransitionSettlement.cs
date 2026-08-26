@@ -1,6 +1,7 @@
 using BBT.Workflow.BackgroundJobs;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Instances;
+using BBT.Workflow.Logging;
 using Microsoft.Extensions.Logging;
 
 namespace BBT.Workflow.Execution.Pipeline;
@@ -27,6 +28,12 @@ internal static class TransitionSettlement
         CancellationToken cancellationToken,
         IInstanceStatusLock? statusLock = null)
     {
+        // The resting-status flip closes a transition: a status write, its lock, and the state
+        // notification. It ran unnamed at the very end of the pipeline, so a trace showed the last
+        // step finishing and then a stretch of nothing before the hop ended.
+        using var activity = PipelineStepActivityHelper.StartOperationActivity("Transition.Settle");
+        activity?.SetTag(TelemetryConstants.TagNames.SettledStatus, resolvedStatus?.Code ?? "none");
+
         if (context.OwnsStatus &&
             context.Instance.IsBusy &&
             resolvedStatus is not null &&
