@@ -246,6 +246,90 @@ public sealed class EfCoreInstanceRepository(
     // Transaction metrics are now automatically handled by WorkflowDatabaseInterceptor
     // No need for manual transaction tracking helpers
 
+    /// <inheritdoc />
+    public async Task<bool> TryMarkBusyAsync(Guid instanceId, CancellationToken cancellationToken = default)
+        => await TryTransitionStatusAsync(instanceId, InstanceStatus.Active, InstanceStatus.Busy, cancellationToken);
+
+    /// <inheritdoc />
+    public async Task<bool> TryReleaseBusyAsync(Guid instanceId, CancellationToken cancellationToken = default)
+        => await TryTransitionStatusAsync(instanceId, InstanceStatus.Busy, InstanceStatus.Active, cancellationToken);
+
+    /// <summary>
+    /// The shared CAS: guard in the WHERE, single UPDATE, no aggregate load. ModifiedAt is set
+    /// explicitly because ExecuteUpdate bypasses the audit interceptor — without it the computed
+    /// LastTouchedAt column would stop advancing. ModifiedBy is deliberately NOT re-stamped: a
+    /// Busy flip is a system operation (same rule as InstanceJobs.MarkAsProcessedAsync).
+    /// </summary>
+    private async Task<bool> TryTransitionStatusAsync(
+        Guid instanceId,
+        InstanceStatus expected,
+        InstanceStatus next,
+        CancellationToken cancellationToken)
+    {
+        var affected = await (await GetDbSetAsync())
+            .Where(i => i.Id == instanceId && i.Status == expected)
+            .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(i => i.Status, next)
+                    .SetProperty(i => i.ModifiedAt, DateTime.UtcNow),
+                cancellationToken);
+
+        if (affected != 1)
+        {
+            return false;
+        }
+
+        // The tracked-update path emitted this from the change tracker; the set-based path must
+        // keep the status gauges honest itself. One narrow projection — still far cheaper than
+        // the aggregate load the CAS replaced.
+        var flow = await (await GetDbSetAsync())
+            .AsNoTracking()
+            .Where(i => i.Id == instanceId)
+            .Select(i => i.Flow)
+            .FirstOrDefaultAsync(cancellationToken);
+        if (flow is not null)
+        {
+            workflowMetrics.UpdateInstanceStatusMetrics(flow, expected.Code, next.Code);
+        }
+
+        return true;
+    }
+
+    /// <inheritdoc />
+    public async Task ArmLongPollAckAsync(Guid instanceId, Guid token, CancellationToken cancellationToken = default)
+    {
+        await (await GetDbSetAsync())
+            .Where(i => i.Id == instanceId)
+            .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(i => i.LongPollAckToken, token)
+                    .SetProperty(i => i.ModifiedAt, DateTime.UtcNow),
+                cancellationToken);
+    }
+
+    /// <summary>
+    /// The include-free variant of <see cref="FindByIdentifierAsync"/>: same id-then-key
+    /// resolution, no DataList/correlation loads. Serves GetResultAsync(includeDetails: false).
+    /// </summary>
+    private async Task<Instance?> FindLeanByIdentifierAsync(
+        string? identifier,
+        CancellationToken cancellationToken)
+    {
+        var query = await GetQueryableAsync();
+
+        if (Guid.TryParse(identifier, out var instanceId))
+        {
+            var response = await query.FirstOrDefaultAsync(p => p.Id == instanceId, cancellationToken);
+            if (response != null)
+            {
+                return MarkIfPartiallyLoaded(response);
+            }
+        }
+
+        return MarkIfPartiallyLoaded(await query
+            .Where(p => p.Key == identifier)
+            .OrderByDescending(p => p.CreatedAt)
+            .FirstOrDefaultAsync(cancellationToken));
+    }
+
     public async Task<Instance?> FindByIdentifierAsync(
         string? identifier,
         CancellationToken cancellationToken = default)
@@ -1354,7 +1438,11 @@ public sealed class EfCoreInstanceRepository(
     public async Task<Result<Instance>> GetResultAsync(string identifier, bool includeDetails = true,
         CancellationToken cancellationToken = default)
     {
-        var instance = await FindByIdentifierAsync(identifier, cancellationToken);
+        // includeDetails used to be accepted and ignored — every caller paid the full
+        // DataList + ChildCorrelations split-query load. False now really means lean.
+        var instance = includeDetails
+            ? await FindByIdentifierAsync(identifier, cancellationToken)
+            : await FindLeanByIdentifierAsync(identifier, cancellationToken);
 
         if (instance is null)
         {

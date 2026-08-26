@@ -35,6 +35,22 @@ public sealed class EfCoreInstanceJobRepository(
                 cancellationToken);
     }
 
+    public async Task MarkManyAsProcessedAsync(IReadOnlyCollection<Guid> jobIds,
+        CancellationToken cancellationToken = default)
+    {
+        if (jobIds.Count == 0)
+        {
+            return;
+        }
+
+        await (await GetDbSetAsync())
+            .Where(p => jobIds.Contains(p.Id) && p.IsActive == true)
+            .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(j => j.IsActive, false)
+                    .SetProperty(j => j.ModifiedAt, DateTime.UtcNow),
+                cancellationToken);
+    }
+
     public async Task<InstanceJob?> FindByJobIdAsReadOnlyAsync(Guid jobId,
         CancellationToken cancellationToken = default)
     {

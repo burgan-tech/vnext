@@ -6,6 +6,14 @@ public interface IInstanceJobRepository : IRepository<InstanceJob, Guid>
 {
     Task<List<InstanceJob>> GetListActiveAsync(Guid instanceId, CancellationToken cancellationToken = default);
     Task MarkAsProcessedAsync(Guid instanceId, string jobName, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Closes a SET of jobs in one statement (<c>WHERE Id IN (...) AND IsActive</c>): the
+    /// cancellation loops decide per job via the scheduler, then settle the winners together
+    /// instead of one tracked update per row. IsActive in the WHERE keeps it idempotent and
+    /// aligned with the partial index.
+    /// </summary>
+    Task MarkManyAsProcessedAsync(IReadOnlyCollection<Guid> jobIds, CancellationToken cancellationToken = default);
     Task<InstanceJob?> FindByJobIdAsReadOnlyAsync(Guid jobId, CancellationToken cancellationToken = default);
 
     /// <summary>

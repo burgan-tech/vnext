@@ -18,28 +18,20 @@ public sealed class InstanceBusyManager(
         await using var uow = uowManager.Begin(
             new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew, IsTransactional = true });
 
-        // This method is called with the instance status lock held. Read inside the isolated UoW
-        // so the decision below is based on the database state observed under that lock, rather
-        // than on an entity tracked by the caller's ambient UoW before the lock was acquired.
-        var result = await instanceRepository.GetResultAsync(
-            instanceId.ToString(), includeDetails: false, cancellationToken);
-
-        if (!result.IsSuccess || result.Value is null)
-        {
-            logger.InstanceNotFoundForBusyMarker(instanceId);
-            return false;
-        }
-
-        var instance = result.Value;
-        if (instance.IsBusy || instance.IsCompleted)
-            return false;
-
-        instance.Busy();
-        await instanceRepository.UpdateAsync(instance, false, cancellationToken);
+        // Called with the instance status lock held. The old shape loaded the aggregate to check
+        // IsBusy/IsCompleted and then wrote Status — but the guard reduces to "Status == Active"
+        // (Busy is excluded by IsBusy; Completed/Faulted/Passive by IsCompleted), so the whole
+        // read-check-write is one compare-and-set: guard in the WHERE, decision from the database
+        // state under the lock, no aggregate load at all.
+        var flipped = await instanceRepository.TryMarkBusyAsync(instanceId, cancellationToken);
         await uow.CommitAsync(cancellationToken);
 
-        logger.InstanceMarkedBusy(instanceId);
-        return true;
+        if (flipped)
+        {
+            logger.InstanceMarkedBusy(instanceId);
+        }
+
+        return flipped;
     }
 
     /// <inheritdoc />
@@ -50,6 +42,8 @@ public sealed class InstanceBusyManager(
         await using (var uow = uowManager.Begin(
                          new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew, IsTransactional = true }))
         {
+            // The load stays: the subflow propagation below walks the correlation navigation.
+            // Only the WRITE is set-based now — the tracked-update path rewrote the full row.
             instance = await instanceRepository.FindWithActiveSubFlowAsync(instanceId, cancellationToken);
 
             if (instance is null)
@@ -57,11 +51,12 @@ public sealed class InstanceBusyManager(
 
             if (instance is { IsBusy: false, IsCompleted: false })
             {
-                instance.Busy();
-                await instanceRepository.UpdateAsync(instance, false, cancellationToken);
-                await uow.CommitAsync(cancellationToken);
+                if (await instanceRepository.TryMarkBusyAsync(instanceId, cancellationToken))
+                {
+                    logger.InstanceMarkedBusy(instance.Id);
+                }
 
-                logger.InstanceMarkedBusy(instance.Id);
+                await uow.CommitAsync(cancellationToken);
             }
         }
 
@@ -87,8 +82,11 @@ public sealed class InstanceBusyManager(
             if (current.IsBusy)
                 return BusyMarkOutcome.AlreadyBusy;
 
-            current.Busy();
-            await instanceRepository.UpdateAsync(current, false, cancellationToken);
+            // Set-based CAS; the WHERE re-verifies Active, so a racer that slipped past the
+            // in-memory check above still resolves to AlreadyBusy instead of a double flip.
+            if (!await instanceRepository.TryMarkBusyAsync(instanceId, cancellationToken))
+                return BusyMarkOutcome.AlreadyBusy;
+
             await uow.CommitAsync(cancellationToken);
 
             logger.InstanceMarkedBusy(current.Id);
@@ -106,21 +104,12 @@ public sealed class InstanceBusyManager(
         await using var uow = uowManager.Begin(
             new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew, IsTransactional = true });
 
-        var result = await instanceRepository.GetResultAsync(
-            instanceId.ToString(), includeDetails: false, cancellationToken);
-
-        if (!result.IsSuccess || result.Value is null)
-            return false;
-
-        var instance = result.Value;
-        if (!instance.IsBusy || instance.IsCompleted)
-            return false;
-
-        instance.Active();
-        await instanceRepository.UpdateAsync(instance, false, cancellationToken);
+        // Same compare-and-set collapse as MarkBusyAsync: the "IsBusy && !IsCompleted" guard
+        // reduces to "Status == Busy" (Busy and the terminal statuses are mutually exclusive).
+        var flipped = await instanceRepository.TryReleaseBusyAsync(instanceId, cancellationToken);
         await uow.CommitAsync(cancellationToken);
 
-        return true;
+        return flipped;
     }
 
     /// <inheritdoc />
