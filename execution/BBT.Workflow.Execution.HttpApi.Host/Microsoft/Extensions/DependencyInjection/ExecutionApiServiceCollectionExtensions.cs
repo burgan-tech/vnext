@@ -1,3 +1,4 @@
+using BBT.Workflow.Execution.Invocation;
 using BBT.Workflow.Runtime;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Prometheus;
@@ -40,9 +41,10 @@ public static class ExecutionApiServiceCollectionExtensions
             .AddExecutionHealthChecks()
             .AddDaprNotification(configuration)
             .AddTaskInvokers(configuration);
-        
+
         services.AddSingleton<IRuntimeInfoProvider, RuntimeInfoProvider>();
-        
+        services.AddScoped<TaskInvokeHandler>();
+
         return services;
     }
     
