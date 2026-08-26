@@ -27,9 +27,17 @@ ThreadPoolHelper.ConfigureThreadPool();
 //
 // UNCONDITIONAL, not gated on Kestrel:GrpcPort / the transport flag, for two reasons: the
 // transport is chosen by the ORCHESTRATION side's config, which this process cannot see (so a
-// local gate would be guessing), and the decorator is a strict no-op for well-formed input -- a
-// single valid traceparent is delegated to the inner propagator untouched. Gating it would add a
-// config coupling that buys nothing.
+// local gate would be guessing), and the decorator is a no-op for well-formed input -- any value
+// arriving as a single string with no comma (which every valid traceparent is, since a valid one
+// cannot contain one) short-circuits before allocating anything and is delegated untouched.
+// Gating it would add a config coupling that buys nothing.
+//
+// It reports via the BBT.Workflow.Telemetry meter (counter
+// workflow_traceparent_extractions_total, tagged by outcome), registered in this host's
+// Telemetry:Metrics:AdditionalMeters. Only outcomes where the decorator CHANGED something are
+// counted, so a sustained outcome=repaired of zero means Dapr fixed its hop and this can be
+// deleted, while any outcome=unparseable/trace_id_mismatch means the malformation changed shape
+// and the workaround has stopped covering it.
 //
 // MUST stay ABOVE WebApplication.CreateBuilder: ASP.NET Core's web-host bootstrap captures
 // DistributedContextPropagator.Current into DI as a singleton INSTANCE (TryAddSingleton) while the

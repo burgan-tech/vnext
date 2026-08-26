@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Diagnostics;
+using System.Diagnostics.Metrics;
 using BBT.Workflow.HttpApi.Shared.Telemetry;
 using Shouldly;
 using Xunit;
@@ -237,6 +238,194 @@ public sealed class DuplicateTolerantTraceContextPropagatorTests
         actual["traceparent"].ShouldBe(activity.Id);
     }
 
+    [Fact]
+    public void A_multi_value_carrier_with_exactly_one_element_is_handed_over_as_that_element()
+    {
+        // Reachable only through a getter that really yields a one-element enumerable --
+        // Carrier.Getter (like ASP.NET Core) collapses Length <= 1 into fieldValue, so this
+        // branch would look dead if tested through it.
+        Subject.ExtractTraceIdAndState(
+            Carrier.Multi(CapturedFirstValue),
+            Carrier.MultiOnlyGetter,
+            out var traceId,
+            out var traceState);
+
+        traceId.ShouldBe(CapturedFirstValue);
+        ActivityContext.TryParse(traceId, traceState, isRemote: true, out var context).ShouldBeTrue();
+        context.TraceId.ToHexString().ShouldBe(CapturedTraceId);
+        context.SpanId.ToHexString().ShouldBe("52e645eaa63e82cb");
+    }
+
+    [Fact]
+    public void A_getter_populating_both_shapes_does_not_double_count_the_header()
+    {
+        // BothShapesGetter reports the duplicated header in BOTH out-parameters. Without the
+        // dedupe guard the parts list would hold four entries instead of two -- still one trace
+        // id, so it would not fail loudly, it would just be wrong about what it saw.
+        Subject.ExtractTraceIdAndState(
+            Carrier.Multi(CapturedFirstValue, CapturedLastValue),
+            Carrier.BothShapesGetter,
+            out var bothId,
+            out var bothState);
+
+        Subject.ExtractTraceIdAndState(
+            Carrier.Single(CapturedDuplicatedTraceParent),
+            Carrier.Getter,
+            out var joinedId,
+            out var joinedState);
+
+        bothId.ShouldBe(joinedId);
+        bothState.ShouldBe(joinedState);
+        bothId.ShouldBe(CapturedLastValue);
+    }
+
+    [Fact]
+    public void Three_comma_joined_parts_sharing_a_trace_id_collapse_to_the_last()
+    {
+        const string third = "00-1c00cbe047937c981316a9a85f69bad6-a1b2c3d4e5f60718-01";
+
+        Subject.ExtractTraceIdAndState(
+            Carrier.Single($"{CapturedDuplicatedTraceParent},{third}"),
+            Carrier.Getter,
+            out var traceId,
+            out var traceState);
+
+        traceId.ShouldBe(third);
+        ActivityContext.TryParse(traceId, traceState, isRemote: true, out var context).ShouldBeTrue();
+        context.TraceId.ToHexString().ShouldBe(CapturedTraceId);
+        context.SpanId.ToHexString().ShouldBe("a1b2c3d4e5f60718");
+    }
+
+    [Theory]
+    // A future version may append fields beyond the first four; a version-00 parser must tolerate
+    // that on those versions rather than rejecting the whole header.
+    [InlineData("01-1c00cbe047937c981316a9a85f69bad6-52e645eaa63e82cb-01")]
+    [InlineData("01-1c00cbe047937c981316a9a85f69bad6-52e645eaa63e82cb-01-somethingnew")]
+    public void A_future_version_prefix_is_tolerated_and_still_collapses(string futureVersionValue)
+    {
+        Subject.ExtractTraceIdAndState(
+            Carrier.Single($"{futureVersionValue},{CapturedLastValue}"),
+            Carrier.Getter,
+            out var traceId,
+            out var traceState);
+
+        // Both parts parsed and agreed on the trace id, so the last one wins -- rather than the
+        // whole header being written off as unparseable.
+        traceId.ShouldBe(CapturedLastValue);
+        ActivityContext.TryParse(traceId, traceState, isRemote: true, out var context).ShouldBeTrue();
+        context.TraceId.ToHexString().ShouldBe(CapturedTraceId);
+    }
+
+    [Fact]
+    public void A_whitespace_padded_single_value_is_delegated_untouched_like_any_other()
+    {
+        // The fast path keys on "single string, no comma", so padding is NOT stripped: the value
+        // reaches the inner propagator exactly as it arrived and is judged there. This keeps the
+        // no-op guarantee absolute rather than "no-op except when we decide to tidy up".
+        var padded = $"  {CapturedFirstValue}  ";
+        var carrier = Carrier.Single(padded);
+
+        Subject.ExtractTraceIdAndState(carrier, Carrier.Getter, out var actualId, out var actualState);
+        Default.ExtractTraceIdAndState(carrier, Carrier.Getter, out var expectedId, out var expectedState);
+
+        actualId.ShouldBe(expectedId);
+        actualState.ShouldBe(expectedState);
+    }
+
+    [Fact]
+    public void The_outcome_counter_fires_on_repair_and_stays_silent_on_the_no_op_path()
+    {
+        // The counter is the only thing that distinguishes "Dapr fixed it upstream" from "the
+        // malformation changed shape" -- both otherwise look like silence -- so its wiring is
+        // worth pinning, including that it does NOT fire for well-formed traffic.
+        List<KeyValuePair<string, object?>> Observe(Action act)
+        {
+            List<KeyValuePair<string, object?>> tags = [];
+            using var listener = new MeterListener();
+            listener.InstrumentPublished = (instrument, l) =>
+            {
+                if (instrument.Meter.Name == DuplicateTolerantTraceContextPropagator.MeterName)
+                {
+                    l.EnableMeasurementEvents(instrument);
+                }
+            };
+            listener.SetMeasurementEventCallback<long>((_, _, measurementTags, _) =>
+            {
+                foreach (var tag in measurementTags)
+                {
+                    tags.Add(tag);
+                }
+            });
+            listener.Start();
+            act();
+            listener.RecordObservableInstruments();
+            return tags;
+        }
+
+        Observe(() => Subject.ExtractTraceIdAndState(
+            Carrier.Single(CapturedDuplicatedTraceParent), Carrier.Getter, out _, out _))
+            .ShouldContain(new KeyValuePair<string, object?>("outcome", "repaired"));
+
+        Observe(() => Subject.ExtractTraceIdAndState(
+            Carrier.Single($"{CapturedFirstValue},00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"),
+            Carrier.Getter, out _, out _))
+            .ShouldContain(new KeyValuePair<string, object?>("outcome", "trace_id_mismatch"));
+
+        Observe(() => Subject.ExtractTraceIdAndState(
+            Carrier.Single("garbage,alsogarbage"), Carrier.Getter, out _, out _))
+            .ShouldContain(new KeyValuePair<string, object?>("outcome", "unparseable"));
+
+        Observe(() => Subject.ExtractTraceIdAndState(
+                Carrier.Single(CapturedDuplicatedTraceParent),
+                (object? _, string _, out string? v, out IEnumerable<string>? vs) =>
+                    throw new InvalidOperationException("carrier exploded"),
+                out _, out _))
+            .ShouldContain(new KeyValuePair<string, object?>("outcome", "error"));
+
+        // The no-op path must be completely silent.
+        Observe(() => Subject.ExtractTraceIdAndState(
+            Carrier.Single(CapturedFirstValue), Carrier.Getter, out _, out _))
+            .ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void Fields_the_decorator_does_not_own_are_left_entirely_alone()
+    {
+        // Worth pinning explicitly: on .NET 10 CreateDefaultPropagator() (and the ambient
+        // DistributedContextPropagator.Current) is W3CPropagator, which reads ONLY traceparent and
+        // tracestate -- it has no legacy Request-Id fallback, so a carrier carrying Request-Id and
+        // Correlation-Context but no traceparent must extract to nothing. The decorator must not
+        // invent a context from those fields, and must not start or stop asking for any field.
+        var carrier = Carrier.WithHeaders(
+            ("Request-Id", "|abcdef.1."),
+            ("Correlation-Context", "k1=v1"));
+
+        List<string> askedBySubject = [];
+        List<string> askedByDefault = [];
+
+        Subject.ExtractTraceIdAndState(
+            carrier, Recording(askedBySubject), out var actualId, out var actualState);
+        Default.ExtractTraceIdAndState(
+            carrier, Recording(askedByDefault), out var expectedId, out var expectedState);
+
+        // Same answer...
+        actualId.ShouldBe(expectedId);
+        actualState.ShouldBe(expectedState);
+        actualId.ShouldBeNull();
+
+        // ...reached by asking for exactly the same fields, in the same order. This is what makes
+        // "delegation, not reimplementation" a checked property rather than a claim.
+        askedBySubject.ShouldBe(askedByDefault);
+        askedBySubject.ShouldNotBeEmpty();
+
+        static DistributedContextPropagator.PropagatorGetterCallback Recording(List<string> log) =>
+            (object? c, string fieldName, out string? fieldValue, out IEnumerable<string>? fieldValues) =>
+            {
+                log.Add(fieldName);
+                Carrier.Getter(c, fieldName, out fieldValue, out fieldValues);
+            };
+    }
+
     /// <summary>
     /// Minimal stand-in for an HTTP header collection, exercising both carrier shapes the
     /// <see cref="DistributedContextPropagator.PropagatorGetterCallback"/> contract allows:
@@ -261,6 +450,58 @@ public sealed class DuplicateTolerantTraceContextPropagatorTests
         /// <summary>Multi-value shape: sets <c>fieldValues</c>, leaves <c>fieldValue</c> null.</summary>
         public static Carrier Multi(params string?[] traceParents) =>
             new() { Headers = { ["traceparent"] = traceParents } };
+
+        /// <summary>A carrier holding arbitrary headers and no <c>traceparent</c> at all.</summary>
+        public static Carrier WithHeaders(params (string Name, string Value)[] headers)
+        {
+            var carrier = new Carrier();
+            foreach (var (name, value) in headers)
+            {
+                carrier.Headers[name] = [value];
+            }
+
+            return carrier;
+        }
+
+        /// <summary>
+        /// A getter that ALWAYS uses the multi-value shape, even for a single element. The
+        /// contract permits this and <see cref="Getter"/> (which mirrors ASP.NET Core by
+        /// collapsing one element to <c>fieldValue</c>) can never produce it, so this exists to
+        /// reach the one-element-enumerable branch.
+        /// </summary>
+        public static void MultiOnlyGetter(
+            object? carrier,
+            string fieldName,
+            out string? fieldValue,
+            out IEnumerable<string>? fieldValues)
+        {
+            fieldValue = null;
+            fieldValues = carrier is Carrier typed && typed.Headers.TryGetValue(fieldName, out var values)
+                ? values.Select(value => value!)
+                : null;
+        }
+
+        /// <summary>
+        /// A getter that populates BOTH out-parameters with the same header — the shape the
+        /// dedupe guard exists for. If both were consumed, a duplicated header would be counted
+        /// twice.
+        /// </summary>
+        public static void BothShapesGetter(
+            object? carrier,
+            string fieldName,
+            out string? fieldValue,
+            out IEnumerable<string>? fieldValues)
+        {
+            fieldValue = null;
+            fieldValues = null;
+            if (carrier is not Carrier typed || !typed.Headers.TryGetValue(fieldName, out var values))
+            {
+                return;
+            }
+
+            fieldValue = string.Join(',', values);
+            fieldValues = values.Select(value => value!);
+        }
 
         /// <summary>
         /// Mirrors ASP.NET Core's own header getter: one value goes out as <c>fieldValue</c>,

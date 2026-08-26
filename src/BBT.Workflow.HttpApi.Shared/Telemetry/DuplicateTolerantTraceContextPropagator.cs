@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Diagnostics.Metrics;
 
 namespace BBT.Workflow.HttpApi.Shared.Telemetry;
 
@@ -48,6 +49,42 @@ public sealed class DuplicateTolerantTraceContextPropagator : DistributedContext
     /// <summary>Length of the version and trace-flags fields of a <c>traceparent</c>, in hex characters.</summary>
     private const int ByteFieldLength = 2;
 
+    /// <summary>
+    /// Name of the <see cref="System.Diagnostics.Metrics.Meter"/> this type publishes on. Must be
+    /// listed in the host's <c>Telemetry:Metrics:AdditionalMeters</c> for the counter below to be
+    /// exported (Aether feeds that list straight into <c>metrics.AddMeter</c>).
+    /// </summary>
+    public const string MeterName = "BBT.Workflow.Telemetry";
+
+    private static readonly Meter Meter = new(MeterName, "1.0.0");
+
+    /// <summary>
+    /// Counts only the requests where this decorator actually changed the outcome, tagged by
+    /// <c>outcome</c>. Deliberately NOT incremented on the untouched path, so the metric stays
+    /// silent (and free) for well-formed traffic and is alertable in both directions:
+    /// <list type="bullet">
+    /// <item><c>repaired</c> — a duplicated header was collapsed. Sustained <c>0</c> while gRPC
+    /// proxy mode is enabled means Dapr fixed its AppCallback hop and this decorator is now dead
+    /// code that can be removed.</item>
+    /// <item><c>trace_id_mismatch</c> / <c>unparseable</c> — the malformation changed shape. Both
+    /// degrade to rooting a new trace, i.e. the original bug returns, so any non-zero value here
+    /// is the signal that this workaround has stopped covering reality.</item>
+    /// <item><c>error</c> — the carrier or inner propagator threw and extraction was degraded to
+    /// "no incoming trace context".</item>
+    /// </list>
+    /// Without this, "Dapr fixed it upstream" and "the malformation changed shape" are
+    /// indistinguishable — both look like silence.
+    /// </summary>
+    private static readonly Counter<long> ExtractionOutcomes = Meter.CreateCounter<long>(
+        "workflow_traceparent_extractions_total",
+        unit: "extractions",
+        description: "traceparent extractions where the duplicate-tolerant propagator changed the outcome, by outcome.");
+
+    private static readonly KeyValuePair<string, object?> OutcomeRepaired = new("outcome", "repaired");
+    private static readonly KeyValuePair<string, object?> OutcomeTraceIdMismatch = new("outcome", "trace_id_mismatch");
+    private static readonly KeyValuePair<string, object?> OutcomeUnparseable = new("outcome", "unparseable");
+    private static readonly KeyValuePair<string, object?> OutcomeError = new("outcome", "error");
+
     private readonly DistributedContextPropagator _inner;
 
     /// <summary>
@@ -92,16 +129,11 @@ public sealed class DuplicateTolerantTraceContextPropagator : DistributedContext
         out string? traceId,
         out string? traceState)
     {
-        if (getter is null)
-        {
-            _inner.ExtractTraceIdAndState(carrier, getter, out traceId, out traceState);
-            return;
-        }
-
         // The getter callback is wrapped rather than the result post-processed, so that all actual
         // parsing stays the inner propagator's job: we only decide which single string it gets to
-        // see for "traceparent". Every other field (the legacy "Request-Id" fallback included)
-        // passes through byte-for-byte.
+        // see for "traceparent". Every other field the inner propagator asks for -- "tracestate"
+        // for the W3C propagator that is the .NET default, "Request-Id" for the legacy one --
+        // passes through byte-for-byte, and we neither add nor suppress a lookup.
         void NormalizingGetter(
             object? innerCarrier,
             string fieldName,
@@ -117,9 +149,10 @@ public sealed class DuplicateTolerantTraceContextPropagator : DistributedContext
 
             if (!TryNormalizeTraceParent(fieldValue, fieldValues, out var normalized))
             {
-                // Untouched: the input needed no correction. This is the overwhelmingly common
-                // path (every well-formed request) and the reason installing this propagator
-                // process-wide is safe.
+                // Untouched: the input needed no correction. Guaranteed for any value delivered
+                // as a single string containing no comma -- i.e. every well-formed traceparent,
+                // since a valid one never contains a comma. That is the reason installing this
+                // propagator process-wide is safe.
                 return;
             }
 
@@ -131,12 +164,21 @@ public sealed class DuplicateTolerantTraceContextPropagator : DistributedContext
 
         try
         {
-            _inner.ExtractTraceIdAndState(carrier, NormalizingGetter, out traceId, out traceState);
+            // A null getter means there is nothing to read and therefore nothing to normalize;
+            // hand it straight to the inner propagator. Kept INSIDE the try so that every path
+            // out of this method -- including the inner propagator's own handling of a null
+            // getter -- is covered by the catch below, rather than one narrow path being exempt.
+            _inner.ExtractTraceIdAndState(
+                carrier,
+                getter is null ? null : NormalizingGetter,
+                out traceId,
+                out traceState);
         }
         catch (Exception)
         {
             // A propagator that throws breaks every request that flows through it. Degrade to
             // "no incoming trace context" instead, which the runtime already knows how to handle.
+            ExtractionOutcomes.Add(1, OutcomeError);
             traceId = null;
             traceState = null;
         }
@@ -162,6 +204,17 @@ public sealed class DuplicateTolerantTraceContextPropagator : DistributedContext
     {
         normalized = null;
 
+        // FAST PATH -- the overwhelmingly common shape: one header value, delivered as a single
+        // string, containing no comma. A well-formed traceparent never contains a comma, so this
+        // covers every normal request, and returning here allocates nothing at all: no List, no
+        // string[], no enumerator. That makes "this decorator is invisible on well-formed traffic"
+        // a property of the code rather than a claim in a comment -- which matters because the
+        // propagator is process-global and sits in front of EVERY inbound request.
+        if (fieldValues is null && fieldValue is not null && !fieldValue.Contains(','))
+        {
+            return false;
+        }
+
         // Duplication reaches us in either carrier shape: as one comma-joined string (what Dapr's
         // AppCallback hop actually produces today, because the duplicate is appended into a single
         // header value) or as two separate header values (what a strictly-conforming HTTP stack
@@ -176,10 +229,9 @@ public sealed class DuplicateTolerantTraceContextPropagator : DistributedContext
             }
         }
 
-        // fieldValue is consulted only when the multi-value shape produced nothing, so a getter
+        // fieldValue is consulted ONLY when the multi-value shape produced nothing, so a getter
         // that populates both shapes cannot make us count the same header twice.
-        var fromSingleValueShape = parts.Count == 0;
-        if (fromSingleValueShape)
+        if (parts.Count == 0)
         {
             if (fieldValue is null)
             {
@@ -198,16 +250,14 @@ public sealed class DuplicateTolerantTraceContextPropagator : DistributedContext
 
         if (parts.Count == 1)
         {
-            if (fromSingleValueShape && string.Equals(parts[0], fieldValue, StringComparison.Ordinal))
-            {
-                // Exactly one value, delivered as a single string, needing no rewriting at all.
-                // The strict zero-change path.
-                return false;
-            }
-
-            // One logical value that arrived in the multi-value shape, or with surrounding
-            // whitespace. Hand over the single canonical string; the inner propagator still owns
-            // deciding whether it is valid.
+            // One logical value that arrived in the multi-value shape, or as a single string that
+            // carried a stray comma or surrounding whitespace. (A clean single string never gets
+            // here — the fast path above already returned it untouched.) Hand over the canonical
+            // string; the inner propagator still owns deciding whether it is actually valid.
+            //
+            // Deliberately NOT counted as "repaired": this is not the Dapr duplication, and
+            // counting it would break the "repaired == 0 ⇒ the workaround is dead code" reading
+            // of the metric.
             normalized = parts[0];
             return true;
         }
@@ -220,6 +270,7 @@ public sealed class DuplicateTolerantTraceContextPropagator : DistributedContext
         {
             if (!TryGetTraceId(part, out var partTraceId))
             {
+                ExtractionOutcomes.Add(1, OutcomeUnparseable);
                 return true; // normalized stays null -> absent.
             }
 
@@ -230,6 +281,7 @@ public sealed class DuplicateTolerantTraceContextPropagator : DistributedContext
             else if (!string.Equals(agreedTraceId, partTraceId, StringComparison.OrdinalIgnoreCase))
             {
                 // Different traces. Per W3C we must not pick a winner between unrelated traces.
+                ExtractionOutcomes.Add(1, OutcomeTraceIdMismatch);
                 return true; // absent.
             }
         }
@@ -257,6 +309,7 @@ public sealed class DuplicateTolerantTraceContextPropagator : DistributedContext
         // is what taking the first value would produce. This also matches how HTTP header lists
         // behave generally: values are appended, so the hop nearest the app wrote last.
         normalized = parts[^1];
+        ExtractionOutcomes.Add(1, OutcomeRepaired);
         return true;
     }
 
