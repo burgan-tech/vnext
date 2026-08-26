@@ -276,6 +276,25 @@ public sealed class RemoteInvokerService : IRemoteInvokerService
             if (!string.IsNullOrEmpty(traceContext.RequestId))
                 metadata.Add(TelemetryConstants.HeaderNames.RequestId, traceContext.RequestId);
 
+            // NOT sending explicit traceparent/tracestate metadata here — deliberately.
+            // .NET's HttpClient DiagnosticsHandler (which Grpc.Net.Client's channel runs on)
+            // already auto-injects "traceparent" into every outgoing gRPC call from
+            // Activity.Current, independent of any OTel package. Confirmed by inspecting the raw
+            // gRPC metadata Execution actually receives: "traceparent" IS present on every call —
+            // but always as TWO comma-joined values (same trace id, two different span ids), which
+            // is invalid per the W3C spec (a receiver seeing more than one traceparent value MUST
+            // treat it as absent). The duplication happens upstream of this method, on the Dapr
+            // sidecar's app-bound hop, not from anything this class sends — adding our own value
+            // here was tried and only produces a THIRD (still-invalid) value, confirming this is
+            // not fixable from the client side. Execution falls back to the trace context carried
+            // in the request body (TaskTraceContext.TraceParent/TraceState, populated from
+            // Activity.Current below) via TaskInvokeHandler.RestoreActivityFromBodyIfDetached,
+            // which adds an ActivityLink connecting the two traces — real trace-tree merging is
+            // not possible from there (ASP.NET Core's hosting Activity for the inbound request is
+            // already started, with its ParentId fixed, before that handler code runs). See
+            // docs/runtime/dapr-invocation-transport.md, "gRPC proxy mode: trace continuity",
+            // for the full evidence and this limitation's writeup.
+
             var reply = await _grpcClientProvider.Client.InvokeAsync(
                 new InvokeRequest
                 {
