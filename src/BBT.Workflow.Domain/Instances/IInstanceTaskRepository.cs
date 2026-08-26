@@ -40,6 +40,18 @@ public interface IInstanceTaskRepository : IRepository<InstanceTask, Guid>
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Persists a task's completion (or fault) as ONE set-based UPDATE of exactly the columns the
+    /// completion path mutates — <c>Status</c>, <c>BusinessStatus</c>, <c>Response</c>,
+    /// <c>Request</c>, <c>InvocationResult</c>, <c>FinishedAt</c>, <c>Duration</c> — taken from the
+    /// (detached) entity's current values. Replaces attaching the entity and full-row-updating
+    /// every column including the jsonb payloads. Bypasses the repository's UpdateAsync override,
+    /// so no data-sink fan-out fires (no sink is registered today; wire sinks here if that changes).
+    /// </summary>
+    /// <param name="instanceTask">The mutated task whose values are written.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task MarkCompletedAsync(InstanceTask instanceTask, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Gets a single instance task by its unique identifier.
     /// Non-tracking (AsNoTracking) — intended for read-only monitoring queries only.
     /// </summary>

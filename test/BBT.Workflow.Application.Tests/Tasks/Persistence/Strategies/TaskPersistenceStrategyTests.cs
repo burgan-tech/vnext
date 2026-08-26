@@ -122,8 +122,9 @@ public class TaskPersistenceStrategyTests
         // Act
         await strategy.HandleCompletionAsync(_instanceTask, CancellationToken.None);
 
-        // Assert
-        await _mockRepository.Received(1).UpdateAsync(_instanceTask, true, CancellationToken.None);
+        // Assert — one set-based completion write, never a full-row attach-and-update
+        await _mockRepository.Received(1).MarkCompletedAsync(_instanceTask, CancellationToken.None);
+        await _mockRepository.DidNotReceiveWithAnyArgs().UpdateAsync(default!, default, default);
         _unitOfWorkManager.Received(1).Begin(Arg.Is<UnitOfWorkOptions>(options =>
             options.Scope == UnitOfWorkScopeOption.RequiresNew && options.IsTransactional));
         await _unitOfWork.Received(1).CommitAsync(CancellationToken.None);
