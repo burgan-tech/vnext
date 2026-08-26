@@ -28,7 +28,15 @@
         <!-- Instrumentation packages that only ship as prerelease. Kept on the same 1.15.x line
              Aether already pulls for OpenTelemetry.Instrumentation.Process. -->
         <OpenTelemetryInstrumentationPrereleasePackageVersion>1.15.1-beta.1</OpenTelemetryInstrumentationPrereleasePackageVersion>
-      
+
+        <!-- gRPC packages for the orchestration->execution proxy-mode transport (Dapr gRPC proxy) -->
+        <!-- Grpc.Net.Client: gRPC client channel used by orchestration to call Execution -->
+        <GrpcPackageVersion>2.83.0</GrpcPackageVersion>
+        <!-- Grpc.Tools: MSBuild proto codegen (protoc + grpc plugin) -->
+        <GrpcToolsPackageVersion>2.83.0</GrpcToolsPackageVersion>
+        <!-- Google.Protobuf: generated message runtime (ByteString, message base classes) -->
+        <GoogleProtobufPackageVersion>3.36.0</GoogleProtobufPackageVersion>
+
         <!-- Microsot Test SDK packages -->
         <TestSdkPackageVersion>18.0.1</TestSdkPackageVersion>
         <NSubstitutePackageVersion>5.3.0</NSubstitutePackageVersion>
