@@ -63,7 +63,12 @@ services:
       "./daprd",
       "--config", "/dapr-config.yaml",
       "--app-id", "vnext-execution-app",
-      "--app-port", "4202",
+      # app-port must match app-protocol: 4212 (gRPC-only h2c Kestrel endpoint) when
+      # app-protocol is grpc, 4202 (HTTP/1.1 endpoint) when app-protocol is http/unset.
+      # See the Kestrel comment in execution/BBT.Workflow.Execution.HttpApi.Host/Program.cs --
+      # this app now serves two separate cleartext ports, one per protocol, and the two
+      # flags below must always be changed together.
+      "--app-port", "4212",
       "--app-protocol", "grpc",
       "--resources-path", "./components",
       "--dapr-grpc-port", "43111",
