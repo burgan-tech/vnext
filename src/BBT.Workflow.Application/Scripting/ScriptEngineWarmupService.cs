@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using BBT.Workflow.Logging;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
@@ -20,7 +21,7 @@ namespace BBT.Workflow.Scripting;
 /// </para>
 /// </summary>
 public sealed class ScriptEngineWarmupService(
-    IScriptEngine scriptEngine,
+    IServiceScopeFactory scopeFactory,
     ILogger<ScriptEngineWarmupService> logger) : BackgroundService
 {
     /// <summary>Configuration switch; default true.</summary>
@@ -48,6 +49,13 @@ public sealed class ScriptEngineWarmupService(
     {
         try
         {
+            // IScriptEngine is scoped (a hosted service is a singleton and cannot inject it
+            // directly), so the probe compiles inside its own short-lived scope. What the warmup
+            // actually heats survives the scope by design: the IEvaluator singleton's type cache,
+            // the static compilation templates, and the process-wide Roslyn load + JIT.
+            using var scope = scopeFactory.CreateScope();
+            var scriptEngine = scope.ServiceProvider.GetRequiredService<IScriptEngine>();
+
             var stopwatch = Stopwatch.StartNew();
             await scriptEngine.CompileToInstanceAsync<IMapping>(ProbeSource, cancellationToken: stoppingToken);
             stopwatch.Stop();
