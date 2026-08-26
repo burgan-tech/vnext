@@ -50,7 +50,7 @@ public static class OrchestrationApiServiceCollectionExtensions
             .AddExceptionHandling()
             .AddRuntimeMiddleware()
             .AddHeaderService()
-            .AddHostedServices()
+            .AddHostedServices(configuration)
             .AddAppHealthChecks()
             .AddOrchestrationDbHealthCheck(configuration);
         return services;
@@ -116,13 +116,22 @@ public static class OrchestrationApiServiceCollectionExtensions
         return services;
     }
 
-    private static IServiceCollection AddHostedServices(this IServiceCollection services)
+    private static IServiceCollection AddHostedServices(this IServiceCollection services, IConfiguration configuration)
     {
         // Add any Orchestration-specific hosted services
         #if DEBUG
         services.AddHostedService<MultiSchemaMigrationHostedService>();
         #endif
         services.AddHostedService<DomainDiscoveryInitializationHostedService>();
+
+        // Pays the Roslyn cold cost (assembly load + JIT + reference materialization, ~seconds) at
+        // startup instead of inside the first real transition's input mapping. Orchestration only —
+        // it is the host that compiles mapping scripts.
+        if (configuration.GetValue(BBT.Workflow.Scripting.ScriptEngineWarmupService.EnabledConfigKey, true))
+        {
+            services.AddHostedService<BBT.Workflow.Scripting.ScriptEngineWarmupService>();
+        }
+
         return services;
     }
 }

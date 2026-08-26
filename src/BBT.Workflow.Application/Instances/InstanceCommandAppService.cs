@@ -508,6 +508,15 @@ public sealed class InstanceCommandAppService(
                 cancellationToken);
 
             logger.WorkflowTimeoutScheduled(instance.Id, effectiveTimeout.Timer.Duration, timeoutAt.UtcDateTime);
+
+            // The arming is this request's own work, so it shows on the ambient span; the firing
+            // deliberately opens a NEW trace later and links back (FlowTimeoutJobHandler).
+            activity?.AddEvent(new ActivityEvent("flow.timeout.scheduled",
+                tags: new ActivityTagsCollection
+                {
+                    { "executeAt", timeoutAt.ToString("O") },
+                    { TelemetryConstants.TagNames.JobName, jobName.Value }
+                }));
         }
         catch (Exception ex)
         {

@@ -332,11 +332,11 @@ public sealed class FanOutTaskExecutor : TaskExecutorBase<FanOutTask>
 
         // One span per item, opened BEFORE the slot waits so the trace separates "queued behind
         // the bulkhead" from "the item itself is slow" — the first question an operator asks about
-        // a slow batch. It is also what stops the N items from fighting over one ambient span:
-        // TaskExecutionEngine renames Activity.Current in place, so without a span of its own each
-        // item would rename the batch's.
-        using var activity = TaskExecutionActivityHelper.StartActivity(
-            TaskExecutionActivityHelper.OperationFanOutItem, task.Key, TaskType.ToString());
+        // a slow batch. It also gives each item's inner Task.Execute span its own parent: without
+        // it, an environment where the [Trace] aspect produces no span (weaving off) would have
+        // every item renaming the batch's ambient span in place.
+        using var activity = TaskExecutionActivityHelper.StartFanOutItemActivity(
+            task.Key, TaskType.ToString());
         activity?.SetTag(TelemetryConstants.TagNames.FanOutItemKey, item.ItemKey);
         activity?.SetTag(TelemetryConstants.TagNames.FanOutItemIndex, item.Index);
         activity?.SetTag(TelemetryConstants.TagNames.FanOutItemAlias, AliasOf(task));
@@ -444,10 +444,10 @@ public sealed class FanOutTaskExecutor : TaskExecutorBase<FanOutTask>
         FanOutItemResult settled,
         Activity? activity)
     {
-        // The inner execution renamed this span (TaskExecutionEngine sets the display name of
-        // Activity.Current rather than starting its own), so the fan-out identity is re-asserted
-        // here — a trace of N identically named siblings does not tell an operator which item
-        // is the straggler.
+        // With the [Trace] aspect woven, the inner execution owns its own Task.Execute span and
+        // this one keeps its name; without weaving, TaskExecutionEngine's SetDisplayName lands on
+        // this span instead. Either way the fan-out identity is (re-)asserted here — a trace of N
+        // identically named siblings does not tell an operator which item is the straggler.
         if (activity is not null)
         {
             activity.DisplayName =

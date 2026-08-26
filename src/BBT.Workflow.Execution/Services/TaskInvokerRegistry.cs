@@ -41,28 +41,30 @@ public sealed class TaskInvokerRegistry : ITaskInvokerRegistry
         CancellationToken cancellationToken = default)
     {
         var stopwatch = Stopwatch.StartNew();
-        
+        using var activity = InvokerActivityHelper.StartInvokeActivity(envelope);
+
         if (!_invokers.TryGetValue(envelope.TaskType, out var invoker))
         {
             var error = $"No invoker registered for task type: {envelope.TaskType}";
             _logger.LogError(error);
-            
+            InvokerActivityHelper.RecordInvokerNotFound(activity, error);
+
             return TaskInvocationResult.Failure(error, metadata: new Dictionary<string, object>
             {
                 ["RequestedTaskType"] = envelope.TaskType,
                 ["AvailableTaskTypes"] = _invokers.Keys.ToArray()
             });
         }
-        
+
         try
         {
             var result = await invoker.InvokeAsync(
                 envelope.TaskKey,
                 envelope.Binding,
                 cancellationToken);
-            
+
             stopwatch.Stop();
-            
+
             // Enrich result with timing if not already set
             if (result.ExecutionDurationMs == 0)
             {
@@ -79,7 +81,8 @@ public sealed class TaskInvokerRegistry : ITaskInvokerRegistry
                     Metadata = result.Metadata
                 };
             }
-            
+
+            InvokerActivityHelper.RecordResult(activity, result);
             return result;
         }
         catch (Exception ex)
@@ -87,6 +90,7 @@ public sealed class TaskInvokerRegistry : ITaskInvokerRegistry
             stopwatch.Stop();
             _logger.LogError(ex, "Task invocation failed for {TaskKey} of type {TaskType}",
                 envelope.TaskKey, envelope.TaskType);
+            InvokerActivityHelper.RecordException(activity, ex);
 
             return TaskInvocationResult.Failure(
                 ex.Message,

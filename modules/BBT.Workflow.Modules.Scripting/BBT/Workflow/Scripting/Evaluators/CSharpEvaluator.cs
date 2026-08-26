@@ -187,6 +187,9 @@ public class CSharpEvaluator : IEvaluator
         // written before any awaiter can observe the task); the timer runs inside the task body.
         var compiledHere = false;
         var compileDuration = TimeSpan.Zero;
+        // ReSharper disable once InlineTemporaryVariable — see EvaluatorCompilation.Waited: reaching
+        // the slow path at all means this caller did not find a completed entry, so a caller that did
+        // NOT compile here necessarily awaited (or raced) someone else's in-flight compile.
         var lazy = _typeCache.GetOrAdd(cacheKey, _ => new Lazy<Task<CompiledScript>>(
             () =>
             {
@@ -222,7 +225,8 @@ public class CSharpEvaluator : IEvaluator
         }
 
         return new EvaluatorCompilation<T>(
-            CreateAndInjectServices<T>(compiled.CompiledType, services), compiledHere, compileDuration);
+            CreateAndInjectServices<T>(compiled.CompiledType, services), compiledHere, compileDuration,
+            Waited: !compiledHere);
     }
 
     /// <inheritdoc />
@@ -291,13 +295,26 @@ public class CSharpEvaluator : IEvaluator
 
         var syntaxTree = CSharpSyntaxTree.ParseText(code, options: ParseOptions);
 
-        // Add using directives if provided
+        // MERGE the supplied using directives with the author's own — never replace them.
+        // WithUsings would overwrite the compilation unit's using list, silently dropping every
+        // using the script author wrote (including aliases and `using static`); the symptom is an
+        // inexplicable CS0246 for a namespace the author clearly imported. Only directives whose
+        // plain name is not already present are appended.
         if (usingDirectives != null && usingDirectives.Any())
         {
-            var root = syntaxTree.GetRoot();
-            var usings = usingDirectives.Select(u => SyntaxFactory.UsingDirective(SyntaxFactory.ParseName(u)));
-            var newRoot = ((CompilationUnitSyntax)root).WithUsings(SyntaxFactory.List(usings));
-            syntaxTree = syntaxTree.WithRootAndOptions(newRoot, syntaxTree.Options);
+            var root = (CompilationUnitSyntax)syntaxTree.GetRoot();
+            var existingNames = new HashSet<string>(
+                root.Usings.Select(u => u.Name?.ToString() ?? string.Empty),
+                StringComparer.Ordinal);
+            var toAdd = usingDirectives
+                .Where(u => !existingNames.Contains(u))
+                .Select(u => SyntaxFactory.UsingDirective(SyntaxFactory.ParseName(u)))
+                .ToArray();
+
+            if (toAdd.Length > 0)
+            {
+                syntaxTree = syntaxTree.WithRootAndOptions(root.AddUsings(toAdd), syntaxTree.Options);
+            }
         }
 
         // The WHOLE cache key, not a prefix: a later change reuses an already-loaded assembly by
@@ -311,51 +328,44 @@ public class CSharpEvaluator : IEvaluator
 
         var image = EmitToImage(compilation, CancellationToken.None);
 
-        // Use the shared collectible context when supplied (so mappings resolve helper types),
-        // otherwise a fresh per-script collectible context (so we CAN unload it below when no
-        // implementing type is found).
-        var context = loadContext ?? new ScriptAssemblyLoadContext(assemblyName);
+        // Use the shared helper context when supplied (so mappings resolve helper types), otherwise
+        // the process-wide shared script context. A per-script collectible context bought nothing:
+        // _typeCache pins every CompiledScript for the process lifetime (and ScriptActivator's static
+        // factory table roots the compiled Type besides), so no script context was ever actually
+        // unloaded — each one only paid its own loader heap and creation cost. One shared context
+        // carries every no-helper script; assembly simple names are the full cache-key hash, so
+        // collisions are impossible and the reuse scan below stays exact.
+        var context = loadContext ?? SharedScriptContext;
 
-        // Reuse over reload — but only for a shared context. An assembly already loaded here under
-        // this name IS this compilation (the name is the full hash of the compilation inputs), and a
-        // shared context cannot unload a single assembly, so if an earlier attempt loaded it and then
-        // failed before caching the type, reloading would throw for the rest of the process lifetime.
-        // A `loadContext is null` context was just created a few lines above, so the scan can only
-        // ever return null there — skip it. `context.Assemblies` accumulates every script assembly
-        // ever loaded for the process lifetime (see LoadContextScopes above), so scanning it on every
-        // compile into a context that provably cannot contain a match is an unbounded, pointless cost.
+        // Reuse over reload. An assembly already loaded here under this name IS this compilation
+        // (the name is the full hash of the compilation inputs), and a shared context cannot unload
+        // a single assembly, so if an earlier attempt loaded it and then failed before caching the
+        // type, reloading would throw for the rest of the process lifetime.
         Assembly assembly;
-        if (loadContext is null)
+        var loaded = FindLoadedAssembly(context, assemblyName);
+        if (loaded is not null)
         {
-            assembly = context.LoadFromStream(new MemoryStream(image));
+            assembly = loaded;
         }
         else
         {
-            var loaded = FindLoadedAssembly(context, assemblyName);
-            if (loaded is not null)
+            try
             {
-                assembly = loaded;
+                assembly = context.LoadFromStream(new MemoryStream(image));
             }
-            else
+            catch (FileLoadException)
             {
-                try
+                // Close the scan/load race across evaluator instances. If another caller loaded
+                // this exact full-cache-key assembly after our scan, that assembly is the desired
+                // result and can be reused safely. If no exact match exists, this is an unrelated
+                // loader failure; preserve it for the normal permanent-failure path.
+                loaded = FindLoadedAssembly(context, assemblyName);
+                if (loaded is null)
                 {
-                    assembly = context.LoadFromStream(new MemoryStream(image));
+                    throw;
                 }
-                catch (FileLoadException)
-                {
-                    // Close the scan/load race across evaluator instances. If another caller loaded
-                    // this exact full-cache-key assembly after our scan, that assembly is the desired
-                    // result and can be reused safely. If no exact match exists, this is an unrelated
-                    // loader failure; preserve it for the normal permanent-failure path.
-                    loaded = FindLoadedAssembly(context, assemblyName);
-                    if (loaded is null)
-                    {
-                        throw;
-                    }
 
-                    assembly = loaded;
-                }
+                assembly = loaded;
             }
         }
 
@@ -366,11 +376,9 @@ public class CSharpEvaluator : IEvaluator
 
         if (matchedType == null)
         {
-            if (loadContext is null && context is ScriptAssemblyLoadContext owned)
-            {
-                owned.Unload();
-            }
-
+            // The assembly stays loaded in the shared context — consistent with _typeCache never
+            // evicting; a retry of the same source finds and reuses it via the scan above and fails
+            // with the same diagnostic.
             var available = string.Join(", ", types.Select(t => t.FullName));
             throw new InvalidOperationException(
                 $"No type implementing {typeof(T).FullName} found.\nAvailable types: {available}");
@@ -379,11 +387,33 @@ public class CSharpEvaluator : IEvaluator
         return new CompiledScript(context, matchedType);
     }
 
+    /// <summary>
+    /// The process-wide load context for scripts compiled without a helper set. One context instead
+    /// of one per script: nothing ever unloaded the per-script contexts (see the load-site comment),
+    /// so they only multiplied loader heaps. Deliberately non-collectible — collectibility was
+    /// decorative under the pinning described above.
+    /// </summary>
+    private static readonly AssemblyLoadContext SharedScriptContext =
+        new("SharedScripts", isCollectible: false);
+
     private static Assembly? FindLoadedAssembly(AssemblyLoadContext context, string assemblyName)
     {
         return context.Assemblies.FirstOrDefault(assembly =>
             string.Equals(assembly.GetName().Name, assemblyName, StringComparison.Ordinal));
     }
+
+    /// <summary>
+    /// Template compilations keyed by reference-set identity (see <see cref="CreateCompilation"/>).
+    /// Deriving a per-script compilation from a template via <c>AddSyntaxTrees</c> lets Roslyn share
+    /// the template's ReferenceManager — the resolved metadata and assembly symbols for the whole
+    /// reference set — instead of rebuilding them on every compile, which is the dominant per-miss
+    /// cost once the process is warm. Bounded: reference sets are per profile (grant / helper set),
+    /// not per script; the cap below only guards against a caller feeding fresh reference instances
+    /// per call, where caching would grow without ever hitting.
+    /// </summary>
+    private static readonly ConcurrentDictionary<string, CSharpCompilation> TemplateCache = new();
+
+    private const int TemplateCacheCap = 128;
 
     /// <summary>
     /// Builds a Roslyn compilation, selecting the sandboxed reference set when the sandbox is enabled
@@ -405,13 +435,56 @@ public class CSharpEvaluator : IEvaluator
             references = references.Concat(extraReferences);
         }
 
+        var referenceList = references.Distinct().ToArray();
+
+        // Identity key over the exact reference INSTANCES plus the options bits. Reference instances
+        // are stable per profile (the default set, the cached sandbox set, the engine's defaults, a
+        // helper set's image reference), so the same profile maps to the same template. An unstable
+        // caller (fresh CreateFromFile per call) produces a new key each time — the cap below stops
+        // that from growing the cache unboundedly; such calls just build a standalone compilation.
+        var templateKey = BuildTemplateKey(referenceList);
+        if (TemplateCache.TryGetValue(templateKey, out var template))
+        {
+            return DeriveFromTemplate(template, assemblyName, trees);
+        }
+
+        var options = new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+            .WithOptimizationLevel(OptimizationLevel.Release)
+            .WithAllowUnsafe(_sandbox.AllowUnsafe);
+
+        if (TemplateCache.Count < TemplateCacheCap)
+        {
+            template = TemplateCache.GetOrAdd(
+                templateKey,
+                _ => CSharpCompilation.Create("ScriptTemplate", references: referenceList, options: options));
+            return DeriveFromTemplate(template, assemblyName, trees);
+        }
+
         return CSharpCompilation.Create(
             assemblyName: assemblyName,
             syntaxTrees: trees,
-            references: references.Distinct(),
-            options: new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
-                .WithOptimizationLevel(OptimizationLevel.Release)
-                .WithAllowUnsafe(_sandbox.AllowUnsafe));
+            references: referenceList,
+            options: options);
+    }
+
+    private static CSharpCompilation DeriveFromTemplate(
+        CSharpCompilation template,
+        string assemblyName,
+        IReadOnlyList<SyntaxTree> trees)
+        => template
+            .WithAssemblyName(assemblyName)
+            .AddSyntaxTrees(trees);
+
+    private string BuildTemplateKey(MetadataReference[] referenceList)
+    {
+        var sb = new StringBuilder(referenceList.Length * 12);
+        sb.Append(_sandbox.AllowUnsafe ? "u1" : "u0");
+        foreach (var reference in referenceList)
+        {
+            sb.Append('|').Append(RuntimeHelpers.GetHashCode(reference));
+        }
+
+        return sb.ToString();
     }
 
     /// <summary>
@@ -427,13 +500,15 @@ public class CSharpEvaluator : IEvaluator
 
         if (violations.Count > 0)
         {
-            throw new ScriptCompilationException(
+            throw new ScriptSandboxViolationException(
                 "Sandbox violations:\n  - " + string.Join("\n  - ", violations));
         }
     }
 
     /// <summary>
-    /// Emits the compilation to an in-memory image, throwing on compile errors.
+    /// Emits the compilation to an in-memory image, throwing <see cref="ScriptCompilationException"/>
+    /// on compile errors — a typed failure, so callers (and their metrics) can tell "the script is
+    /// broken" apart from infrastructure faults instead of pattern-matching InvalidOperationException.
     /// </summary>
     private static byte[] EmitToImage(Compilation compilation, CancellationToken cancellationToken)
     {
@@ -446,7 +521,7 @@ public class CSharpEvaluator : IEvaluator
                 .Where(d => d.Severity == DiagnosticSeverity.Error)
                 .Select(d => d.ToString()));
 
-            throw new InvalidOperationException($"Compilation failed:\n{errors}");
+            throw new ScriptCompilationException($"Compilation failed:\n{errors}");
         }
 
         return ms.ToArray();

@@ -45,6 +45,11 @@ public sealed class RunOnExitTasksStep(
             return Result<StepOutcome>.Ok(StepOutcome.Continue());
         }
 
+        // Business-level lifecycle group: the state's exit tasks render under OnExit.{state}
+        // instead of blending into the transition's own OnExecute tasks.
+        using var lifecycleActivity = PipelineStepActivityHelper.StartLifecycleActivity(
+            "OnExit", context.Current.Key, context.Current.OnExits.Count);
+
         // Railway chain: Build context -> Get successful tasks -> Execute remaining -> Apply changes -> Persist
         var scriptContext = await BuildScriptContextAsync(context, cancellationToken);
         

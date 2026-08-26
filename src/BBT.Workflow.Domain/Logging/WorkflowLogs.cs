@@ -3320,6 +3320,31 @@ public static partial class WorkflowLogs
         this ILogger logger,
         string reason);
 
+    /// <summary>
+    /// Logs that the startup script-engine warmup finished: Roslyn assemblies are loaded, the
+    /// compiler pipeline is JIT'd and the default reference set is materialized, so the first real
+    /// mapping compile no longer pays that one-time cost.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 60015,
+        Level = LogLevel.Information,
+        Message = "Script engine warmup compiled the probe script in {DurationMs} ms")]
+    public static partial void ScriptEngineWarmupCompleted(
+        this ILogger logger,
+        long durationMs);
+
+    /// <summary>
+    /// Logs that the startup script-engine warmup failed. Non-fatal by design: the first real
+    /// compile simply pays the cold cost the warmup would have absorbed.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 60016,
+        Level = LogLevel.Warning,
+        Message = "Script engine warmup failed; the first real compile pays the cold cost")]
+    public static partial void ScriptEngineWarmupFailed(
+        this ILogger logger,
+        Exception exception);
+
     #endregion
 
     #region Function Contract (800xx)

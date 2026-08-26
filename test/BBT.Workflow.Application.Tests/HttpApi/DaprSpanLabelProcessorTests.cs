@@ -1,0 +1,134 @@
+using System.Diagnostics;
+using BBT.Workflow.HttpApi.Shared.Telemetry;
+using BBT.Workflow.Logging;
+using Shouldly;
+using Xunit;
+
+namespace BBT.Workflow.Application.Tests.HttpApi;
+
+/// <summary>
+/// Pins the labelling contract of <see cref="DaprSpanLabelProcessor"/>: a Dapr gRPC client span
+/// starting while a <see cref="DaprCallLabel"/> ambient is set gets the key as
+/// <c>vnext.dapr.key</c>; any other span, or a Dapr span with no ambient, stays untouched.
+/// </summary>
+public sealed class DaprSpanLabelProcessorTests
+{
+    private readonly DaprSpanLabelProcessor _processor = new();
+
+    [Fact]
+    public void TheLegacyGrpcActivity_StartedInsideALabelScope_CarriesTheKey()
+    {
+        // Grpc.Net.Client creates a legacy activity whose OperationName is fixed at
+        // "Grpc.Net.Client.GrpcOut" — the instrumentation only renames DisplayName to the method
+        // path (possibly after processor OnStart). Matching must catch this shape.
+        using var activity = new Activity("Grpc.Net.Client.GrpcOut").Start();
+
+        using (DaprCallLabel.Use("flow:core:my-workflow:gen"))
+        {
+            _processor.OnStart(activity);
+        }
+
+        activity.GetTagItem("vnext.dapr.key").ShouldBe("flow:core:my-workflow:gen");
+    }
+
+    [Fact]
+    public void ADisplayNameRenamedDaprSpan_IsStampedAtOnEnd_WhenOnStartMissed()
+    {
+        // Ordering fallback: if the span was not matchable at start, OnEnd re-checks against the
+        // DisplayName the instrumentation set — the ambient is still in scope because the activity
+        // stops inside the awaited Dapr call.
+        using var activity = new Activity("SomethingElse").Start();
+        activity.DisplayName = "dapr.proto.runtime.v1.Dapr/GetState";
+
+        using (DaprCallLabel.Use("flow:core:my-workflow:gen"))
+        {
+            _processor.OnEnd(activity);
+        }
+
+        activity.GetTagItem("vnext.dapr.key").ShouldBe("flow:core:my-workflow:gen");
+    }
+
+    [Fact]
+    public void ALabelledSpan_GetsTheKeyFoldedIntoItsName_AtOnEnd()
+    {
+        // The whole point of the label: the waterfall must say what was read without opening the
+        // span. The long dapr.proto... prefix is dropped — rpc.service/rpc.method still carry it.
+        using var activity = new Activity("Grpc.Net.Client.GrpcOut").Start();
+        activity.DisplayName = "dapr.proto.runtime.v1.Dapr/GetState";
+
+        using (DaprCallLabel.Use("sys-flows:sample:north-star:gen"))
+        {
+            _processor.OnStart(activity);
+            _processor.OnEnd(activity);
+        }
+
+        activity.DisplayName.ShouldBe("GetState sys-flows:sample:north-star:gen");
+    }
+
+    [Fact]
+    public void AnUnlabelledDaprSpan_KeepsItsName_AtOnEnd()
+    {
+        // e.g. InvokeService or Aether-internal scheduler traffic: no ambient, no rename.
+        using var activity = new Activity("Grpc.Net.Client.GrpcOut").Start();
+        activity.DisplayName = "dapr.proto.runtime.v1.Dapr/InvokeService";
+
+        _processor.OnEnd(activity);
+
+        activity.DisplayName.ShouldBe("dapr.proto.runtime.v1.Dapr/InvokeService");
+        activity.GetTagItem("vnext.dapr.key").ShouldBeNull();
+    }
+
+    [Fact]
+    public void ADaprMethodNamedSpan_StartedInsideALabelScope_CarriesTheKey()
+    {
+        using var activity = new Activity("dapr.proto.runtime.v1.Dapr/GetState").Start();
+
+        using (DaprCallLabel.Use("flow:core:my-workflow:gen"))
+        {
+            _processor.OnStart(activity);
+        }
+
+        activity.GetTagItem("vnext.dapr.key").ShouldBe("flow:core:my-workflow:gen");
+    }
+
+    [Fact]
+    public void ADaprSpan_WithNoAmbientLabel_StaysUntagged()
+    {
+        using var activity = new Activity("dapr.proto.runtime.v1.Dapr/GetState").Start();
+
+        _processor.OnStart(activity);
+
+        activity.GetTagItem("vnext.dapr.key").ShouldBeNull();
+    }
+
+    [Fact]
+    public void ANonDaprSpan_InsideALabelScope_StaysUntagged()
+    {
+        // The ambient may legitimately be set while other children start (e.g. the System.Net.Http
+        // span under the gRPC call) — only the Dapr method span carries the key.
+        using var activity = new Activity("POST").Start();
+
+        using (DaprCallLabel.Use("some-key"))
+        {
+            _processor.OnStart(activity);
+        }
+
+        activity.GetTagItem("vnext.dapr.key").ShouldBeNull();
+    }
+
+    [Fact]
+    public void NestedScopes_UnwindToThePreviousLabel()
+    {
+        using (DaprCallLabel.Use("outer-lock-key"))
+        {
+            using (DaprCallLabel.Use("inner-cache-key"))
+            {
+                DaprCallLabel.Current.ShouldBe("inner-cache-key");
+            }
+
+            DaprCallLabel.Current.ShouldBe("outer-lock-key");
+        }
+
+        DaprCallLabel.Current.ShouldBeNull();
+    }
+}

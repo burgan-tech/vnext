@@ -250,6 +250,25 @@ public sealed class FanOutTaskExecutorObservabilityTests
     }
 
     [Fact]
+    public async Task ItemSpans_AreEmittedInBusinessMode_Too()
+    {
+        // The span carries the queue-wait tag and the per-item error status — exactly what an
+        // operator needs from a slow or failing batch in the default production configuration.
+        // Verbose-gating it made vnext.fanout.item.* unavailable where it mattered most.
+        using var trace = new FanOutTraceCapture(AetherTracingDetailLevel.Business);
+
+        var harness = new FanOutHarness(
+            instanceData: FanOutHarness.Documents(3),
+            maxDop: 1);
+
+        await harness.ExecuteAsync();
+
+        var itemSpans = trace.ItemSpans();
+        itemSpans.Count.ShouldBe(3);
+        itemSpans.ShouldAllBe(span => (string?)span.GetTagItem("vnext.span.category") == "business");
+    }
+
+    [Fact]
     public void TheTaskActivitySourceName_MatchesTheLiteralTheTraceCaptureListensOn()
     {
         // FanOutTraceCapture cannot reference the helper's ActivitySource from inside its listener
@@ -272,9 +291,9 @@ public sealed class FanOutTaskExecutorObservabilityTests
 }
 
 /// <summary>
-/// Puts the executor's item spans within reach of an assertion: switches the tracing runtime to
-/// Verbose (nothing below it creates task spans at all) and records every stopped activity from
-/// the task <c>ActivitySource</c>.
+/// Puts the executor's item spans within reach of an assertion: pins the tracing runtime to the
+/// requested detail level (item spans are business-level and exist in BOTH modes) and records
+/// every stopped activity from the task <c>ActivitySource</c>.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -303,9 +322,9 @@ internal sealed class FanOutTraceCapture : IDisposable
     private readonly ConcurrentBag<Activity> _stopped = new();
     private readonly Activity _root;
 
-    public FanOutTraceCapture()
+    public FanOutTraceCapture(AetherTracingDetailLevel detailLevel = AetherTracingDetailLevel.Verbose)
     {
-        AetherTracingRuntime.Configure(AetherTracingDetailLevel.Verbose);
+        AetherTracingRuntime.Configure(detailLevel);
 
         // Ambient root, so every item span started on this test's async context lands in one trace
         // that ItemSpans can filter on. Activity.Current is AsyncLocal, so a sibling test class

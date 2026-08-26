@@ -43,6 +43,11 @@ public sealed class RunOnEntryTasksStep(
             return Result<StepOutcome>.Ok(StepOutcome.Continue());
         }
 
+        // Business-level lifecycle group: the target state's entry tasks render under
+        // OnEntry.{state} instead of blending into the transition's own OnExecute tasks.
+        using var lifecycleActivity = PipelineStepActivityHelper.StartLifecycleActivity(
+            "OnEntry", context.Target!.Key, context.Target.OnEntries.Count);
+
         // Railway chain: Build context -> Get successful tasks -> Execute remaining -> Apply changes -> Persist
         var scriptContext = await BuildScriptContextAsync(context, cancellationToken);
         

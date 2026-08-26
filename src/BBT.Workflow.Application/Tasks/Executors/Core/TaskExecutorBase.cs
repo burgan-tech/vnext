@@ -55,9 +55,12 @@ public abstract class TaskExecutorBase<TTask>(ILogger logger, IWorkflowMetrics m
         var taskTypeStr = context.Task.GetTaskType().ToString();
 
         // 2. PrepareInput (virtual - custom per executor)
+        // The PrepareInput/ProcessOutput spans exist only when the task has mapping code: they
+        // are the input/output binding's visibility, and without mapping the phase is a no-op —
+        // an empty span would be noise. Invoke below is opened unconditionally.
         Result<ScriptResponse?> inputResult;
         var hasMapping = context.OnExecuteTask?.Mapping?.HasMappingCode == true;
-        using (TaskExecutionActivityHelper.StartActivity(TaskExecutionActivityHelper.OperationPrepareInput, taskKey, taskTypeStr))
+        using (hasMapping ? TaskExecutionActivityHelper.StartActivity(TaskExecutionActivityHelper.OperationPrepareInput, taskKey, taskTypeStr) : null)
         {
             var phaseStart = Stopwatch.GetTimestamp();
             try
@@ -133,7 +136,7 @@ public abstract class TaskExecutorBase<TTask>(ILogger logger, IWorkflowMetrics m
 
         // 6. ProcessOutput (virtual - custom per executor)
         Result<object?> outputResult;
-        using (TaskExecutionActivityHelper.StartActivity(TaskExecutionActivityHelper.OperationProcessOutput, taskKey, taskTypeStr))
+        using (hasMapping ? TaskExecutionActivityHelper.StartActivity(TaskExecutionActivityHelper.OperationProcessOutput, taskKey, taskTypeStr) : null)
         {
             var phaseStart = Stopwatch.GetTimestamp();
             try
