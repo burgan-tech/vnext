@@ -226,11 +226,12 @@ public sealed class MonitorInstanceQueryService(
         Dictionary<Guid, List<MonitorInstanceTaskResponse>> tasksByTransition = new();
         if (input.IncludeTasks)
         {
-            foreach (var t in transitions)
-            {
-                var tasks = await instanceTaskRepository.GetByTransitionIdAsync(t.Id, cancellationToken);
-                tasksByTransition[t.Id] = tasks.Select(MapTask).ToList();
-            }
+            // One batched query for the whole timeline instead of one per transition (N+1).
+            var allTasks = await instanceTaskRepository.GetByTransitionIdsAsync(
+                transitions.Select(t => t.Id).ToList(), cancellationToken);
+            tasksByTransition = allTasks
+                .GroupBy(t => t.TransitionId)
+                .ToDictionary(g => g.Key, g => g.Select(MapTask).ToList());
         }
 
         var items = transitions.Select(t =>

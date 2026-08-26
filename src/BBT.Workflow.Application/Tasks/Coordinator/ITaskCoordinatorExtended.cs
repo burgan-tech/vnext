@@ -42,6 +42,12 @@ public interface ITaskCoordinatorExtended : ITaskCoordinator
     /// <param name="taskTrigger">The trigger type that initiated the task execution.</param>
     /// <param name="context">The script execution context containing instance data and task responses.</param>
     /// <param name="completedTaskIds">Collection of task IDs to skip (already completed).</param>
+    /// <param name="skipJournalProbe">
+    /// True when the transition record was freshly inserted by this pipeline run
+    /// (<c>CreateTransitionRecordStep</c>'s <c>TransitionRecordCreatedFresh</c> item): no
+    /// <c>InstanceTask</c> journal row can exist for its id, so the engine skips the per-task
+    /// idempotency probe. MUST stay false on retries, where the probe reuses previous rows.
+    /// </param>
     /// <param name="cancellationToken">Cancellation token for async operation control.</param>
     /// <returns>A Result containing detailed execution information including task errors.</returns>
     Task<Result<TasksExecutionResult>> ExecuteWithDetailsAsync(
@@ -51,5 +57,6 @@ public interface ITaskCoordinatorExtended : ITaskCoordinator
         TaskExecutionOrigin origin,
         ScriptContext context,
         IEnumerable<string> completedTaskIds,
+        bool skipJournalProbe = false,
         CancellationToken cancellationToken = default);
 }

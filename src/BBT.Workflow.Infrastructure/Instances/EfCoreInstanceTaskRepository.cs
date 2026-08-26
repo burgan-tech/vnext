@@ -99,6 +99,43 @@ public class EfCoreInstanceTaskRepository(
     }
 
     /// <inheritdoc />
+    public async Task MarkCompletedAsync(InstanceTask instanceTask, CancellationToken cancellationToken = default)
+    {
+        // The JsonData members are OwnsOne-mapped, and SetProperty cannot target an owned
+        // navigation — it must target the owned type's scalar (t.X.Json), which maps to the
+        // single jsonb column each owned instance occupies.
+        await (await GetDbSetAsync())
+            .Where(t => t.Id == instanceTask.Id)
+            .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(t => t.Status, instanceTask.Status)
+                    .SetProperty(t => t.BusinessStatus, instanceTask.BusinessStatus)
+                    .SetProperty(t => t.Response.Json, instanceTask.Response.Json)
+                    .SetProperty(t => t.Request.Json, instanceTask.Request.Json)
+                    .SetProperty(t => t.InvocationResult.Json, instanceTask.InvocationResult.Json)
+                    .SetProperty(t => t.FinishedAt, instanceTask.FinishedAt)
+                    .SetProperty(t => t.Duration, instanceTask.Duration),
+                cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async Task<List<InstanceTask>> GetByTransitionIdsAsync(
+        IReadOnlyCollection<Guid> transitionIds,
+        CancellationToken cancellationToken = default)
+    {
+        if (transitionIds.Count == 0)
+        {
+            return [];
+        }
+
+        var dbSet = await GetDbSetAsync();
+        return await dbSet
+            .AsNoTracking()
+            .Where(t => transitionIds.Contains(t.TransitionId))
+            .OrderBy(t => t.StartedAt)
+            .ToListAsync(cancellationToken);
+    }
+
+    /// <inheritdoc />
     public async Task<InstanceTask?> GetByIdAsReadOnlyAsync(
         Guid id,
         CancellationToken cancellationToken = default)
@@ -149,10 +186,21 @@ public class EfCoreInstanceTaskRepository(
     }
 
     /// <inheritdoc />
-    public async Task<List<TaskExecutionStat>> GetTaskStatsAsync(CancellationToken cancellationToken = default)
+    public async Task<List<TaskExecutionStat>> GetTaskStatsAsync(
+        DateTime? since = null,
+        CancellationToken cancellationToken = default)
     {
         var dbSet = await GetDbSetAsync();
-        var counts = await dbSet.AsNoTracking()
+        var query = dbSet.AsNoTracking();
+
+        // Bounds the aggregation's scan; served by IX_InstanceTasks_StartedAt_Brin (rows are
+        // inserted in StartedAt order, so the BRIN range map stays tiny).
+        if (since is { } lowerBound)
+        {
+            query = query.Where(t => t.StartedAt >= lowerBound);
+        }
+
+        var counts = await query
             .GroupBy(t => t.TaskId)
             .Select(g => new
             {

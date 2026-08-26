@@ -596,6 +596,11 @@ namespace BBT.Workflow.Migrations
 
                     NpgsqlIndexBuilderExtensions.IncludeProperties(b.HasIndex("TransitionId", "Status"), new[] { "TaskId", "BusinessStatus", "StartedAt" });
 
+                    b.HasIndex("StartedAt")
+                        .HasDatabaseName("IX_InstanceTasks_StartedAt_Brin");
+
+                    NpgsqlIndexBuilderExtensions.HasMethod(b.HasIndex("StartedAt"), "brin");
+
                     b.ToTable("InstanceTasks", "public");
                 });
 

@@ -62,16 +62,20 @@ Dev ortamında PostSharp'ın çalışabilmesi için `NETStandard.Library.Ref 2.1
 
 ### Kullanım
 
-**Default (PostSharp kapalı):** Ek ayar gerekmez, container `SkipPostSharp=true` ile başlar.
+**Default (PostSharp AÇIK — orchestration/execution):** `etc/docker/.env.orchestration.dev` ve
+`.env.execution.dev` dosyaları `SKIP_POSTSHARP=false` set eder; compose `env_file` değerleri
+Dockerfile `ENV`'ini ezdiği için container weaving açık başlar. Bunun nedeni trace bütünlüğü:
+`transition/{key}` ve `Task.Execute.{key}` span'larını `[Trace]` aspect'i üretir — weaving
+kapalıyken bu span'lar hiç oluşmaz ve `SetDisplayName` çağrıları ambient job/server span'ının
+adını her task'ta üzerine yazar (trace'te task'lar kaybolur). Bkz.
+`docs/monitoring/correlation-and-tracing.md` § "What to check", madde 0.
 
-**PostSharp açmak için:** `docker-compose.dev.yml`'de ilgili servise environment variable ekle:
+**PostSharp'ı kapatmak için** (watch-rebuild hızı trace'ten önemliyse): ilgili `.env.*.dev`
+dosyasında `SKIP_POSTSHARP=true` yap. Monitoring ve DbMigrator container'larında `Dockerfile.dev`
+default'u (`true`) geçerlidir — `[Trace]` kodu çalıştırmadıkları için weaving'e ihtiyaçları yok.
 
-```yaml
-services:
-  vnext-app:
-    environment:
-      - SKIP_POSTSHARP=false
-```
+Not: `dotnet watch`'un hot-reload patch'leri weave edilmez; `[Trace]`'li bir metoda dokunan
+hot-reload sonrası aspect span'ı bir sonraki tam rebuild'e kadar kaybolabilir.
 
 Veya tek seferlik:
 

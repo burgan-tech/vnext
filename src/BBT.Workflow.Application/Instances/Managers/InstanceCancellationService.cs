@@ -56,14 +56,14 @@ public sealed class InstanceCancellationService(
                 return Result.Ok();
             }
 
-            var processedJobCount = 0;
+            var cancelledJobIds = new List<Guid>(jobs.Count);
             foreach (var job in jobs)
             {
                 try
                 {
-                    if (await ProcessJobCancellationAsync(job, instance.Id, cancellationToken))
+                    if (await TryCancelInSchedulerAsync(job, instance.Id, cancellationToken))
                     {
-                        processedJobCount++;
+                        cancelledJobIds.Add(job.Id);
                     }
                 }
                 catch (Exception ex)
@@ -72,7 +72,11 @@ public sealed class InstanceCancellationService(
                 }
             }
 
-            logger.InstanceCanceledJobsProcessed(instanceId, processedJobCount);
+            // The scheduler verdicts are per job; the row closes are one statement for all winners
+            // instead of a tracked update per row.
+            await instanceJobRepository.MarkManyAsProcessedAsync(cancelledJobIds, cancellationToken);
+
+            logger.InstanceCanceledJobsProcessed(instanceId, cancelledJobIds.Count);
 
             return Result.Ok();
         }
@@ -130,14 +134,14 @@ public sealed class InstanceCancellationService(
                 return Result.Ok();
             }
 
-            var processedJobCount = 0;
+            var cancelledJobIds = new List<Guid>(jobsToCancel.Count);
             foreach (var job in jobsToCancel)
             {
                 try
                 {
-                    if (await ProcessJobCancellationAsync(job, instance.Id, cancellationToken))
+                    if (await TryCancelInSchedulerAsync(job, instance.Id, cancellationToken))
                     {
-                        processedJobCount++;
+                        cancelledJobIds.Add(job.Id);
                     }
                 }
                 catch (Exception ex)
@@ -146,8 +150,10 @@ public sealed class InstanceCancellationService(
                 }
             }
 
+            await instanceJobRepository.MarkManyAsProcessedAsync(cancelledJobIds, cancellationToken);
+
             logger.StateTransitionsJobsCanceled(
-                processedJobCount,
+                cancelledJobIds.Count,
                 instanceId,
                 string.Join(", ", transitionKeys));
 
@@ -191,7 +197,12 @@ public sealed class InstanceCancellationService(
         }
     }
 
-    private async Task<bool> ProcessJobCancellationAsync(
+    /// <summary>
+    /// Asks the scheduler to cancel a waiting job. Returns whether the job may be CLOSED — the
+    /// row settle itself is batched by the callers via MarkManyAsProcessedAsync, one statement
+    /// for all winners instead of a tracked update per job.
+    /// </summary>
+    private async Task<bool> TryCancelInSchedulerAsync(
         InstanceJob job,
         Guid instanceId,
         CancellationToken cancellationToken)
@@ -203,8 +214,6 @@ public sealed class InstanceCancellationService(
             return false;
         }
 
-        job.MarkAsProcessed();
-        await instanceJobRepository.UpdateAsync(job, false, cancellationToken);
         return true;
     }
 }

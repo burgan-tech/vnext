@@ -109,6 +109,10 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
             activity.SetTag(TelemetryConstants.TagNames.Flow, context.Workflow?.Key);
             activity.SetTag(TelemetryConstants.TagNames.Layer, TelemetryConstants.Layers.Orchestration);
             activity.SetTag(TelemetryConstants.TagNames.SpanCategory, TelemetryConstants.SpanCategories.Business);
+            // Which lifecycle phase queued this task — OnExecute tasks sit directly under the
+            // transition span, so without this tag they are indistinguishable from OnExit/OnEntry
+            // ones when the grouping span is absent (e.g. a task queried by key across traces).
+            activity.SetTag(TelemetryConstants.TagNames.TaskTrigger, taskTrigger.ToString());
         }
 
         _logger.LogInformation(
@@ -435,11 +439,12 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
     private static async Task<InstanceTask> PersistCreationAsync(
         ITaskPersistenceStrategy? strategy,
         InstanceTask instanceTask,
+        bool skipJournalProbe,
         CancellationToken cancellationToken)
     {
         if (strategy == null)
             return instanceTask;
-        return await strategy.HandleCreationAsync(instanceTask, cancellationToken);
+        return await strategy.HandleCreationAsync(instanceTask, skipJournalProbe, cancellationToken);
     }
 
     /// <summary>
@@ -589,7 +594,8 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
             task.Key, taskType, context.Instance?.Id);
 
         // 5. Persist creation
-        instanceTask = await PersistCreationAsync(persistenceStrategy, instanceTask, cancellationToken);
+        instanceTask = await PersistCreationAsync(
+            persistenceStrategy, instanceTask, options.SkipJournalProbe, cancellationToken);
 
         // 6. Get executor
         var executorResult = _executorRegistry.GetExecutor(taskType);

@@ -73,6 +73,10 @@ public sealed class ExecutionController(
         activity?.SetTag(TelemetryConstants.TagNames.TaskType, envelope.TaskType);
         activity?.SetTag(TelemetryConstants.TagNames.Layer, TelemetryConstants.Layers.Execution);
         activity?.SetTag(TelemetryConstants.TagNames.SpanCategory, TelemetryConstants.SpanCategories.Business);
+        // Name the server span by the task it carries — otherwise every invocation renders as the
+        // same route template and task identity is tag-only. Exactly one invocation per request
+        // owns this span; cardinality is bounded by the task definitions.
+        activity?.SetDisplayName($"Execution.Invoke.{envelope.TaskType}/{envelope.TaskKey}");
         if (!string.IsNullOrEmpty(traceContext?.RequestId))
             activity?.SetTag(TelemetryConstants.TagNames.RequestId, traceContext.RequestId);
 

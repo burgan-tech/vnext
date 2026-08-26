@@ -30,8 +30,12 @@ public sealed class ExtensionTaskPersistenceStrategy : ITaskPersistenceStrategy
     /// No database operation is performed as Extension tasks should not be persisted.
     /// </summary>
     /// <param name="instanceTask">The InstanceTask (not persisted for Extension tasks).</param>
+    /// <param name="skipLookup">Ignored — nothing is persisted, so there is nothing to probe.</param>
     /// <param name="cancellationToken">Cancellation token for async operation control.</param>
-    public Task<InstanceTask> HandleCreationAsync(InstanceTask instanceTask, CancellationToken cancellationToken = default)
+    public Task<InstanceTask> HandleCreationAsync(
+        InstanceTask instanceTask,
+        bool skipLookup = false,
+        CancellationToken cancellationToken = default)
     {
         // Extension tasks are not persisted to database
         return Task.FromResult(instanceTask);

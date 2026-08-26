@@ -133,6 +133,8 @@ public sealed class PostCommitExecutor(
                         traceState: Activity.Current?.TraceStateString);
                     jobActivity?.SetTag(TelemetryConstants.TagNames.SpanCategory, TelemetryConstants.SpanCategories.Business);
                     jobActivity?.SetTag(TelemetryConstants.TagNames.InstanceId, context.InstanceId.ToString());
+                    if (job is ForwardToSubflowJob forwardJob)
+                        jobActivity?.SetTag(TelemetryConstants.TagNames.TransitionKey, forwardJob.TransitionKey);
 
                     var execResult = await DispatchAsync(job, serviceProvider, context, cancellationToken);
 

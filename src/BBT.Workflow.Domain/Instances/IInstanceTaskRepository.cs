@@ -28,6 +28,30 @@ public interface IInstanceTaskRepository : IRepository<InstanceTask, Guid>
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Gets all instance tasks for a SET of transitions in one query. Read-only (AsNoTracking),
+    /// ordered by <c>StartedAt</c>. Exists so timeline-style readers batch instead of issuing one
+    /// query per transition (the Monitor instance timeline used to be an N+1).
+    /// </summary>
+    /// <param name="transitionIds">The transition IDs.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>All matching tasks; group by <see cref="InstanceTask.TransitionId"/> caller-side.</returns>
+    Task<List<InstanceTask>> GetByTransitionIdsAsync(
+        IReadOnlyCollection<Guid> transitionIds,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Persists a task's completion (or fault) as ONE set-based UPDATE of exactly the columns the
+    /// completion path mutates — <c>Status</c>, <c>BusinessStatus</c>, <c>Response</c>,
+    /// <c>Request</c>, <c>InvocationResult</c>, <c>FinishedAt</c>, <c>Duration</c> — taken from the
+    /// (detached) entity's current values. Replaces attaching the entity and full-row-updating
+    /// every column including the jsonb payloads. Bypasses the repository's UpdateAsync override,
+    /// so no data-sink fan-out fires (no sink is registered today; wire sinks here if that changes).
+    /// </summary>
+    /// <param name="instanceTask">The mutated task whose values are written.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task MarkCompletedAsync(InstanceTask instanceTask, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Gets a single instance task by its unique identifier.
     /// Non-tracking (AsNoTracking) — intended for read-only monitoring queries only.
     /// </summary>
@@ -72,8 +96,18 @@ public interface IInstanceTaskRepository : IRepository<InstanceTask, Guid>
         Guid transitionId,
         CancellationToken cancellationToken = default);
 
-    /// <summary>Read-only: per-task execution aggregation across the current schema (additive, monitor-only).</summary>
-    Task<List<TaskExecutionStat>> GetTaskStatsAsync(CancellationToken cancellationToken = default);
+    /// <summary>
+    /// Read-only: per-task execution aggregation across the current schema (additive, monitor-only).
+    /// </summary>
+    /// <param name="since">
+    /// Lower bound on <c>StartedAt</c>. Bounds the aggregation's scan — without it the GROUP BY
+    /// reads the whole (append-only, unbounded) table. Null means unbounded, for callers that
+    /// explicitly want the all-time view.
+    /// </param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<List<TaskExecutionStat>> GetTaskStatsAsync(
+        DateTime? since = null,
+        CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Read-only: returns all tasks belonging to the given instance, joined with their parent

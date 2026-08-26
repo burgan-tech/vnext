@@ -105,7 +105,7 @@ public sealed class MonitorStatsController(IMonitorStatsService statsService) : 
         return FromResult(result);
     }
 
-    /// <summary>Returns fault statistics: total faulted count, by-state and by-task breakdown, time-window trend (P10).</summary>
+    /// <summary>Returns fault statistics: total faulted count, by-state breakdown, by-task breakdown (last 24 hours), time-window trend (P10).</summary>
     /// <response code="200">Fault stats returned.</response>
     [HttpGet("{domain}/workflows/{workflow}/stats/faults")]
     [ProducesResponseType(typeof(MonitorFaultStatsResponse), StatusCodes.Status200OK)]
@@ -114,7 +114,7 @@ public sealed class MonitorStatsController(IMonitorStatsService statsService) : 
         => FromResult(await statsService.GetFaultStatsAsync(
             new MonitorGetWorkflowStatsInput { Domain = domain, Workflow = workflow }, cancellationToken));
 
-    /// <summary>Returns per-task execution stats: count, avg duration, success/failure rates (P11).</summary>
+    /// <summary>Returns per-task execution stats over the last 24 hours: count, success/failure rates (P11). The window bounds an otherwise unbounded aggregation over the task journal.</summary>
     /// <response code="200">Task stats returned.</response>
     [HttpGet("{domain}/workflows/{workflow}/stats/tasks")]
     [ProducesResponseType(typeof(MonitorTaskStatsResponse), StatusCodes.Status200OK)]

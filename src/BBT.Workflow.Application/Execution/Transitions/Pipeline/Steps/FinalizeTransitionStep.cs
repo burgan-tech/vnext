@@ -75,10 +75,13 @@ public sealed class FinalizeTransitionStep(
     /// Loads the transition record from repository.
     /// </summary>
     private async Task<Result<InstanceTransition?>> LoadTransitionRecordAsync(
-        Guid recordId, 
+        Guid recordId,
         CancellationToken cancellationToken)
     {
-        var transition = await instanceTransitionRepository.GetAsync(recordId, true, cancellationToken);
+        // Read-only on purpose: Completed() below only computes the values UpdateCompletedAsync
+        // writes set-based. A tracked load made the ambient UoW's later flush rewrite the same
+        // row a second time on every transition.
+        var transition = await instanceTransitionRepository.FindAsReadOnlyAsync(recordId, cancellationToken);
         return Result<InstanceTransition?>.Ok(transition);
     }
 

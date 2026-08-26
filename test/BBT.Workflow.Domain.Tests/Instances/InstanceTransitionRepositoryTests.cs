@@ -96,13 +96,24 @@ public abstract class InstanceTransitionRepositoryTests<TEntry> : DomainTestBase
         await Repository.InsertAsync(transition);
 
         // Act
-        transition.Completed("CompletedState");
+        transition.Completed(
+            "CompletedState",
+            effectiveState: "sub-effective",
+            effectiveStateType: StateType.Intermediate,
+            effectiveStateSubType: StateSubType.Success,
+            stage: "review");
         await Repository.UpdateCompletedAsync(transition, CancellationToken.None);
 
-        // Assert
+        // Assert — ALL columns Completed() mutates must be written by the set-based statement
+        // itself. Three of them used to survive only via a tracked-entity flush, which both hid
+        // the gap and double-wrote the row; this pin keeps the statement self-sufficient.
         var updated = await Repository.GetAsync(transition.Id);
         updated.ShouldNotBeNull();
         updated.ToState.ShouldBe("CompletedState");
+        updated.EffectiveState.ShouldBe("sub-effective");
+        updated.EffectiveStateType.ShouldBe(StateType.Intermediate);
+        updated.EffectiveStateSubType.ShouldBe(StateSubType.Success);
+        updated.Stage.ShouldBe("review");
         updated.FinishedAt.ShouldNotBeNull();
         updated.Duration.ShouldNotBeNull();
     }

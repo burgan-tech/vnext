@@ -43,6 +43,11 @@ public sealed class RunOnEntryTasksStep(
             return Result<StepOutcome>.Ok(StepOutcome.Continue());
         }
 
+        // Business-level lifecycle group: the target state's entry tasks render under
+        // OnEntry.{state} instead of blending into the transition's own OnExecute tasks.
+        using var lifecycleActivity = PipelineStepActivityHelper.StartLifecycleActivity(
+            "OnEntry", context.Target!.Key, context.Target.OnEntries.Count);
+
         // Railway chain: Build context -> Get successful tasks -> Execute remaining -> Apply changes -> Persist
         var scriptContext = await BuildScriptContextAsync(context, cancellationToken);
         
@@ -174,7 +179,10 @@ public sealed class RunOnEntryTasksStep(
             TaskExecutionOrigin.Flow,
             scriptContext,
             successfulTaskIds,
-            cancellationToken);
+            // A freshly inserted transition record cannot have journal rows, so the engine skips
+            // its per-task idempotency probe; a retry (reused record) keeps it.
+            skipJournalProbe: IsFreshTransitionRecord(context),
+            cancellationToken: cancellationToken);
     }
 
     /// <summary>
@@ -207,4 +215,12 @@ public sealed class RunOnEntryTasksStep(
 
         return await builder.BuildAsync(cancellationToken);
     }
+
+    /// <summary>
+    /// True when CreateTransitionRecordStep INSERTED the record in this run (see
+    /// <see cref="CreateTransitionRecordStep.TransitionRecordFreshKey"/>); false on retries.
+    /// </summary>
+    private static bool IsFreshTransitionRecord(TransitionExecutionContext context)
+        => context.Items.TryGetValue(CreateTransitionRecordStep.TransitionRecordFreshKey, out var fresh)
+           && fresh is true;
 }

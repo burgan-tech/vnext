@@ -21,6 +21,8 @@ public sealed class DaprResourceLockService(
     public async Task<bool> AcquireAsync(
         string resourceKey, string owner, int ttlSeconds, CancellationToken cancellationToken)
     {
+        // Labels the TryLockAlpha1 gRPC span with the resource key (vnext.dapr.key).
+        using var label = DaprCallLabel.Use(resourceKey);
         var response = await daprClient.Lock(
             lockStoreName, resourceKey, owner, ttlSeconds, cancellationToken);
 
@@ -46,6 +48,7 @@ public sealed class DaprResourceLockService(
     public async Task<bool> ReleaseAsync(
         string resourceKey, string owner, CancellationToken cancellationToken)
     {
+        using var label = DaprCallLabel.Use(resourceKey);
         var response = await daprClient.Unlock(
             lockStoreName, resourceKey, owner, cancellationToken);
 
@@ -80,6 +83,7 @@ public sealed class DaprResourceLockService(
     public async Task<bool> ExtendAsync(
         string resourceKey, string owner, int ttlSeconds, CancellationToken cancellationToken)
     {
+        using var label = DaprCallLabel.Use(resourceKey);
         var response = await daprClient.Lock(
             lockStoreName, resourceKey, owner, ttlSeconds, cancellationToken);
 

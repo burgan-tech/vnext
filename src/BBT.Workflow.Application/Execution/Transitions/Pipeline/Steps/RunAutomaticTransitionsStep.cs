@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using BBT.Aether.Results;
 using BBT.Workflow.Logging;
 using Microsoft.Extensions.Logging;
@@ -80,7 +81,17 @@ public sealed class RunAutomaticTransitionsStep(
         }
 
         logger.AutoTransitionSelected(winner.TransitionKey, context.Target!.Key, context.InstanceId);
-        
+
+        // The selection is this transition's own work, so it shows inside transition/{key}; the
+        // selected hop itself runs as a flat-lane sibling, linked back via vnext.hop.predecessor —
+        // this event is the visible half on the selecting side.
+        Activity.Current?.AddEvent(new ActivityEvent("transition.auto.selected",
+            tags: new ActivityTagsCollection
+            {
+                { TelemetryConstants.TagNames.NextTransition, winner.TransitionKey },
+                { "evaluated.count", evaluations.Count }
+            }));
+
         // Request next transition for sync dispatch chain
         context.Directives.RequestNextTransition(
             new NextTransitionRequest(winner.TransitionKey, "auto"));

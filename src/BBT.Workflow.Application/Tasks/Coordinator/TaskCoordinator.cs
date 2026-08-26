@@ -124,7 +124,7 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
             origin,
             context,
             completedTaskIds: [],
-            cancellationToken);
+            cancellationToken: cancellationToken);
     }
 
     /// <inheritdoc />
@@ -135,8 +135,15 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
         TaskExecutionOrigin origin,
         ScriptContext context,
         IEnumerable<string> completedTaskIds,
+        bool skipJournalProbe = false,
         CancellationToken cancellationToken = default)
     {
+        // One shared options instance per call: fresh-record executions skip the guaranteed-empty
+        // journal probe, everything else keeps the engine's default (probing) behavior.
+        var engineOptions = skipJournalProbe
+            ? TaskEngineExecutionOptions.FreshTransitionRecord
+            : TaskEngineExecutionOptions.Default;
+
         // No span of its own: the coordinator is a pure fan-out wrapper. Its former
         // "TaskCoordinator.Execute" span added a level between transition/{key} and
         // Task.Execute.{key} without carrying information neither of those already has.
@@ -179,7 +186,7 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
             {
                 // Single task - execute directly
                 var result = await _executionEngine.ExecuteAsync(
-                    groupTasks[0], instanceTransitionId, taskTrigger, origin, context, cancellationToken);
+                    groupTasks[0], instanceTransitionId, taskTrigger, origin, context, engineOptions, cancellationToken);
 
                 var processResult = ProcessTaskResult(result, groupTasks[0], executedTasks, totalStopwatch);
                 if (processResult.HasValue)
@@ -189,7 +196,7 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
             {
                 // Multiple tasks with same Order - execute in parallel with cancellation
                 var parallelResult = await ExecuteTaskGroupInParallelAsync(
-                    groupTasks, instanceTransitionId, taskTrigger, origin, context, cancellationToken);
+                    groupTasks, instanceTransitionId, taskTrigger, origin, context, engineOptions, cancellationToken);
 
                 if (!parallelResult.IsSuccess)
                 {
@@ -288,6 +295,7 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
         TaskTrigger taskTrigger,
         TaskExecutionOrigin origin,
         ScriptContext context,
+        TaskEngineExecutionOptions engineOptions,
         CancellationToken cancellationToken)
     {
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -315,7 +323,7 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
                 var scopedEngine = scope.ServiceProvider.GetRequiredService<ITaskExecutionEngine>();
 
                 var result = await scopedEngine.ExecuteAsync(
-                    task, instanceTransitionId, taskTrigger, origin, branchContext, linkedToken);
+                    task, instanceTransitionId, taskTrigger, origin, branchContext, engineOptions, linkedToken);
 
                 if (!result.IsSuccess)
                 {
