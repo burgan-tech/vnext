@@ -5,6 +5,7 @@ using System.Runtime.Loader;
 using System.Threading;
 using System.Threading.Tasks;
 using BBT.Workflow.Scripting.Evaluators;
+using BBT.Workflow.Scripting.Sandbox;
 using Shouldly;
 using Xunit;
 
@@ -100,12 +101,12 @@ public sealed class CSharpEvaluatorConcurrencyTests
         var evaluator = new CSharpEvaluator();
         const string broken = "public class Broken { this is not valid C# }";
 
-        await Should.ThrowAsync<InvalidOperationException>(
+        await Should.ThrowAsync<ScriptCompilationException>(
             () => evaluator.CompileToInstanceAsync<object>(broken));
         evaluator.CachedTypeCount.ShouldBe(0);
 
         // A cached Lazy would replay the first exception forever; the entry must be gone.
-        await Should.ThrowAsync<InvalidOperationException>(
+        await Should.ThrowAsync<ScriptCompilationException>(
             () => evaluator.CompileToInstanceAsync<object>(broken));
         evaluator.CachedTypeCount.ShouldBe(0);
     }

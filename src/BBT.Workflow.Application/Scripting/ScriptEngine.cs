@@ -7,8 +7,8 @@ using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting.Evaluators;
 using BBT.Workflow.Scripting.Functions;
 using BBT.Workflow.Scripting.Helpers;
+using BBT.Workflow.Scripting.Sandbox;
 using Microsoft.CodeAnalysis;
-using Microsoft.CodeAnalysis.Scripting;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using System.Collections.Concurrent;
@@ -313,7 +313,7 @@ public sealed class ScriptEngine(
     /// mid-flight by any single caller's token.
     /// </param>
     /// <returns>A task containing the compiled instance of type T</returns>
-    /// <exception cref="CompilationErrorException">Thrown when the code contains compilation errors</exception>
+    /// <exception cref="Sandbox.ScriptCompilationException">Thrown when the code contains compilation errors</exception>
     /// <exception cref="InvalidOperationException">Thrown when the code cannot be compiled to the target type</exception>
     /// <exception cref="OperationCanceledException">Thrown when <paramref name="cancellationToken"/> is already cancelled at entry</exception>
     public Task<T> CompileToInstanceAsync<T>(
@@ -599,15 +599,20 @@ public sealed class ScriptEngine(
                 precomputedCacheKey);
 
             stopwatch.Stop();
-            var durationSeconds = stopwatch.Elapsed.TotalSeconds;
-            var cache = compilation.Compiled ? "miss" : "hit";
+            // Three outcomes, not two: a single-flight WAITER's wall time is someone else's compile,
+            // so labelling it "hit" made hit latency look like multi-second compile time during cold
+            // bursts. Misses report the evaluator's own emit duration (clean compile time, free of
+            // Task.Run queueing and await overhead); waits and hits report their observed wall time.
+            var cache = compilation.Compiled ? "miss" : compilation.Waited ? "wait" : "hit";
+            var reportedDuration = compilation.Compiled ? compilation.CompileDuration : stopwatch.Elapsed;
+            var durationSeconds = reportedDuration.TotalSeconds;
 
             // DEPRECATED (vnext-meta/deprecations.json): script_executions_total keeps its historical
             // compile-path semantics until consumers migrate — do not remove or repurpose here.
             workflowMetrics.RecordScriptExecution(scriptType, language, "success");
             workflowMetrics.RecordScriptCompilation(cache, "success");
             workflowMetrics.RecordScriptCompilationDuration(scriptType, language, "success", durationSeconds, cache);
-            ScriptCompileTelemetry.Record(compilation.Compiled, stopwatch.Elapsed.TotalMilliseconds, "success");
+            ScriptCompileTelemetry.Record(compilation.Compiled, reportedDuration.TotalMilliseconds, "success");
             // The type cache never evicts, so its size only changes on a miss; skipping the gauge on
             // hits avoids ConcurrentDictionary.Count's all-stripe lock on the hot path.
             if (compilation.Compiled)
@@ -617,12 +622,30 @@ public sealed class ScriptEngine(
 
             return compilation.Instance;
         }
-        catch (CompilationErrorException ex)
+        catch (ScriptSandboxViolationException ex)
         {
             stopwatch.Stop();
             var durationSeconds = stopwatch.Elapsed.TotalSeconds;
 
-            // Record compilation error
+            // The code is FORBIDDEN, not broken — a distinct label so a sandbox-policy problem is
+            // never diagnosed as an authoring error (or vice versa).
+            workflowMetrics.RecordScriptExecution(scriptType, language, "sandbox_violation");
+            workflowMetrics.RecordScriptCompilation("miss", "sandbox_violation");
+            workflowMetrics.RecordScriptCompilationError(scriptType, language, ex.GetType().Name);
+            workflowMetrics.RecordScriptCompilationDuration(scriptType, language, "sandbox_violation", durationSeconds, "miss");
+            ScriptCompileTelemetry.Record(cacheMiss: true, stopwatch.Elapsed.TotalMilliseconds, "sandbox_violation");
+            _logger.ScriptSandboxViolation(ex.Message);
+
+            throw;
+        }
+        catch (ScriptCompilationException ex)
+        {
+            stopwatch.Stop();
+            var durationSeconds = stopwatch.Elapsed.TotalSeconds;
+
+            // Record compilation error. (The former catch here was CompilationErrorException from
+            // the Roslyn scripting API — dead code, since the evaluator drives CSharpCompilation
+            // directly and throws its own typed exception.)
             workflowMetrics.RecordScriptExecution(scriptType, language, "compilation_error");
             workflowMetrics.RecordScriptCompilation("miss", "compilation_error");
             workflowMetrics.RecordScriptCompilationError(scriptType, language, ex.GetType().Name);
