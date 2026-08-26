@@ -120,6 +120,125 @@ Full design (proto contract, `RemoteInvokerService`'s transport switch, error ma
 propagation, and success criteria): see
 [`docs/superpowers/specs/2026-08-26-execution-grpc-transport-spec.md`](../superpowers/specs/2026-08-26-execution-grpc-transport-spec.md).
 
-## Verification (filled by Task 6)
+## Verification
 
-_Pending: the observed trace tree from the first end-to-end gRPC run lands here._
+Performed 2026-08-26 against a locally built runtime (`dotnet run --launch-profile http`, all
+four apps) with `vnext-execution-dapr` recreated with `--app-protocol grpc` and orchestration's
+`ExecutionApi:Transport` set to `grpc`. MoneyTransfer integration test suite
+(`vnext-example/tests/Core.IntegrationTests`, filter `MoneyTransferTests`) run against
+`localhost:4201`, traces read from Elastic (`localhost:9200`, `.ds-traces-apm*`).
+
+### What verified
+
+**The orchestration-side gRPC client hop is real and wired correctly.** In the post-flip trace
+(`f221ac72916add2600e156cec6102935`), `Task.Invoke` (span `779f3f9d7a65a66a`, `BBT.Workflow.Tasks`)
+has a child span `bbt.workflow.execution.v1.TaskInvoker/Invoke`
+(`OpenTelemetry.Instrumentation.GrpcNetClient`) exactly where the old
+`Dapr invoke vnext-execution-app` / `CallLocal/vnext-execution-app/api/v1/execution/invoke/http/...`
+HttpClient chain used to sit in the pre-flip baseline trace
+(`6b85c250d727e7bdd98a620f0e019563`). Underneath it sits a `POST` span (`System.Net.Http`,
+`localhost:42111`, HTTP 200) — the actual HTTP/2 frame to the orchestration sidecar's gRPC port —
+confirming `RemoteInvokerService` is genuinely dialing gRPC via `DaprClient.CreateInvocationInvoker`
+when `Transport: grpc` is set, not silently falling back to HTTP. This part of Task 2–5's work is
+proven correct.
+
+Span tree observed (post-flip, orchestration side, trimmed to the invocation branch):
+
+```
+Task.Execute.execute-transfer (BBT.Aether.Aspects)
+└─ Task.Invoke (BBT.Workflow.Tasks)
+   └─ bbt.workflow.execution.v1.TaskInvoker/Invoke (OpenTelemetry.Instrumentation.GrpcNetClient) [outcome=failure]
+      └─ POST (System.Net.Http, localhost:42111, HTTP 200)  ← reaches orchestration's own sidecar fine
+         └─ /bbt.workflow.execution.v1.TaskInvoker/Invoke (dapr-diagnostics, service=vnext-app) [outcome=failure]
+            └─ /bbt.workflow.execution.v1.TaskInvoker/Invoke (dapr-diagnostics, service=vnext-execution-app) [outcome=failure, duration=106µs, NO CHILDREN]
+```
+
+### What did NOT verify — a real, reproduced gap, not worked around
+
+**The call never reaches Execution's application code.** The expected shape (per the task brief)
+is Execution's server transaction being the gRPC method with `Invoke.{taskType}/{taskKey}` spans
+hanging beneath it — mirroring the pre-flip baseline's
+`POST api/v{version}/execution/invoke/{type}/{key}` → `Invoke.http/execute-transfer` → outbound
+`POST` chain. Instead, the Execution-side transaction
+(`/bbt.workflow.execution.v1.TaskInvoker/Invoke`, `service.name=vnext-execution-app`,
+`framework=dapr-diagnostics`) has **zero children** and completes in **106µs** — far too fast to
+have reached the task invoker, DB, or the outbound HTTP call the HTTP-transport path makes at this
+same point. No `Microsoft.AspNetCore`/`Grpc.AspNetCore` server transaction and no
+`Invoke.http/execute-transfer` span ever appear anywhere in this trace.
+
+Root cause, confirmed directly (not inferred from the trace alone):
+
+- Execution's own log (`execution.log`) shows, at startup:
+  ```
+  warn: Microsoft.AspNetCore.Server.Kestrel[64]
+        HTTP/2 is not enabled for 127.0.0.1:4202. The endpoint is configured to use HTTP/1.1 and
+        HTTP/2, but TLS is not enabled. HTTP/2 requires TLS application protocol negotiation.
+        Connections to this endpoint will use HTTP/1.1.
+  ```
+  (Event `Http2DisabledWithHttp1AndNoTls`, logged for both `127.0.0.1:4202` and `[::1]:4202`.)
+- Reproduced independently of any Dapr/Aether code: `curl --http2-prior-knowledge http://localhost:4202/health`
+  fails with *"Remote peer returned unexpected data while we expected SETTINGS frame. Perhaps, peer
+  does not support HTTP/2 properly."* — i.e. that endpoint genuinely serves HTTP/1.1 only.
+- Cause: `appsettings.json`'s `Kestrel:EndpointDefaults:Protocols = Http1AndHttp2` (added in Task 4)
+  only applies to endpoints declared under `Kestrel:Endpoints`. When the app is started the way this
+  repo's own local-dev instructions require — `dotnet run --launch-profile http`, which supplies
+  `applicationUrl: http://localhost:4202` from `launchSettings.json` (i.e. via `ASPNETCORE_URLS`,
+  not `Kestrel:Endpoints`) — Kestrel synthesizes the listening endpoint straight from that URL and
+  does **not** apply `EndpointDefaults` to it. The endpoint silently downgrades to HTTP/1.1-only,
+  confirmed by the warning above. `host.orb.local` (the sidecar's `--app-channel-address`) reaches
+  this same loopback-bound endpoint — the same one the HTTP-transport path uses successfully — so
+  the sidecar's h2c dial lands on a socket that cannot speak HTTP/2, and the proxy-mode call fails
+  at the transport layer before any application code runs. `RemoteInvokerService`'s gRPC error
+  mapping (by design, see spec) turns that transport failure into a task-level failure result
+  (`transferResult: {"success":false,"statusCode":500}`), which the workflow then legitimately
+  fault-transitions on — the instance's own behavior is correct; the failure is upstream of it.
+
+  This is a **local-dev-only gap** in how Task 4's Kestrel config was validated (the design doc
+  states "Kestrel serves HTTP/1.1 ... and h2c gRPC on the same port," which is the intent, but that
+  was evidently never checked against the `--launch-profile http` startup path this task's own
+  instructions mandate). It has not been patched here — per this task's explicit instructions, an
+  unmet expectation here is a finding to report, not a workaround to write. A fix belongs in Task 4
+  scope (e.g. an explicit `Kestrel:Endpoints:Http:Url` config entry, or `ConfigureEndpointDefaults`
+  called in code) and should be tracked separately.
+
+**Test evidence.** `MoneyTransferTests`, gRPC transport flipped: `Failed! Failed: 2, Passed: 3,
+Total: 5` — both failures (`HappyPath_ReachesTransferCompleted`,
+`ExecutingTransfer_RecordsTheProvidersResultInInstanceData`) are exactly the two tests that reach
+the `execute-transfer` DaprService task; the three tests that never reach that task
+(`SubmitDetails_RejectsAPayloadThatViolatesTheTransitionSchema`, `AwaitingPushApproval_ArmsTheTimeoutTimer`,
+`Cancel_MovesTheTransferToCancelled`) passed. This is the expected fingerprint of a transport-layer
+failure isolated to the gRPC hop, not test flakiness — reinforced by the fact the same suite passed
+`5/5` immediately before the flip (HTTP) and immediately after the rollback (HTTP again, see below).
+
+**Orphan-span comparison (Step 3's other assertion).** Pre-flip HTTP baseline trace
+(`6b85c250d727e7bdd98a620f0e019563`, 118 docs): 3 orphan spans, all `POST`/`System.Net.Http`
+external spans whose `parent.id` does not resolve within the trace (pre-existing — deferred
+pub/sub-publish spans, unrelated to transport). Post-flip trace
+(`f221ac72916add2600e156cec6102935`, 83 docs): 2 orphan spans, same shape. No new orphan pattern was
+introduced by the transport flip; the lower absolute count in the second trace simply reflects the
+shorter pipeline run (it aborted at the failed task instead of completing the flow).
+
+### Rollback proof (Step 4)
+
+Reverted both switches in the running environment — `ExecutionApi:Transport: "http"`,
+`vnext-execution-dapr` recreated without `--app-protocol` (defaults to `http`) — rebuilt and
+restarted orchestration, reran the identical filter:
+
+```
+Passed!  - Failed: 0, Passed: 5, Skipped: 0, Total: 5, Duration: 5 s
+```
+
+Confirms the HTTP path is fully intact and the rollback is config-only in both directions: the same
+orchestration binary, same Execution binary, unchanged — only `ExecutionApi:Transport` and the
+sidecar's `--app-protocol` flag moved. Both switches were then restored to `grpc` (the committed
+local-dev state) and orchestration restarted once more; `/health` returns 200 in that final state.
+
+### Bottom line
+
+Config flip mechanics (Task 6's own deliverable) work as designed and are proven safe to flip in
+both directions. The gRPC client path (Task 2/3's `RemoteInvokerService` + proxy-mode dial) is
+proven real, not a silent HTTP fallback. What is **not** proven is a successful end-to-end gRPC task
+invocation in this local-dev environment — it is blocked by the Kestrel binding gap above, which
+predates this task and sits in Task 4's Program.cs/appsettings.json, not in the two files this task
+touched. Anyone relying on "gRPC works locally" from this repo state should not assume that until
+that gap is closed and this test is rerun.

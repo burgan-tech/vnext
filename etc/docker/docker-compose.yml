@@ -64,6 +64,7 @@ services:
       "--config", "/dapr-config.yaml",
       "--app-id", "vnext-execution-app",
       "--app-port", "4202",
+      "--app-protocol", "grpc",
       "--resources-path", "./components",
       "--dapr-grpc-port", "43111",
       "--dapr-http-port", "43110",
