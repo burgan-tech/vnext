@@ -422,6 +422,13 @@ public static class InstancesModelCreatingExtensions
                 .IsUnique()
                 .HasFilter("\"ExecutionKey\" IS NOT NULL")
                 .HasDatabaseName("UX_InstanceTasks_ExecutionKey");
+
+            // BRIN on StartedAt: bounds the Monitor task-stats aggregation (time-windowed
+            // GROUP BY over this table) without a fat btree. Rows are inserted in StartedAt
+            // order, which is exactly the physical correlation BRIN needs to stay tiny.
+            b.HasIndex(p => p.StartedAt)
+                .HasDatabaseName("IX_InstanceTasks_StartedAt_Brin")
+                .HasMethod("brin");
         });
 
         builder.Entity<InstanceAction>(b =>
