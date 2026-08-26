@@ -1,6 +1,8 @@
+using System.Diagnostics;
 using System.Linq;
 using BBT.Aether.AspNetCore.Dapr;
 using BBT.Aether.AspNetCore.Threads;
+using BBT.Workflow.HttpApi.Shared.Telemetry;
 using BBT.Workflow.Logging;
 using Dapr.Client;
 using Dapr.Extensions.Configuration;
@@ -8,6 +10,36 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
 
 ThreadPoolHelper.ConfigureThreadPool();
+
+// PROCESS-GLOBAL MUTATION, deliberately here in Program.cs rather than hidden inside
+// AddExecutionApiModule(): replacing DistributedContextPropagator.Current changes how EVERY
+// inbound request in this process is parented, so the next reader should meet it at the top of
+// the entry point, not discover it three DI extensions deep.
+//
+// Works around a Dapr defect. On the gRPC proxy-mode hop (ExecutionApi:Transport = grpc on the
+// orchestration side + --app-protocol grpc on this app's sidecar), the callee sidecar's app-bound
+// AppCallback hop re-issues its own gRPC call to the app and APPENDS its own span to the incoming
+// traceparent instead of replacing it, so the app receives two comma-joined values sharing one
+// trace id. That is invalid per W3C, ASP.NET Core correctly discards it, and every task
+// invocation ends up split across two disconnected traces. The propagator runs before hosting
+// starts the request Activity -- and Activity.ParentId is immutable once started -- so this is
+// the only seam from which the trace can still be made whole.
+//
+// UNCONDITIONAL, not gated on Kestrel:GrpcPort / the transport flag, for two reasons: the
+// transport is chosen by the ORCHESTRATION side's config, which this process cannot see (so a
+// local gate would be guessing), and the decorator is a strict no-op for well-formed input -- a
+// single valid traceparent is delegated to the inner propagator untouched. Gating it would add a
+// config coupling that buys nothing.
+//
+// MUST stay ABOVE WebApplication.CreateBuilder: ASP.NET Core's web-host bootstrap captures
+// DistributedContextPropagator.Current into DI as a singleton INSTANCE (TryAddSingleton) while the
+// builder is being constructed, and hosting resolves the propagator from there. Assigning after
+// CreateBuilder leaves the captured instance -- and therefore request parenting -- unchanged.
+//
+// See docs/runtime/dapr-invocation-transport.md for the captured header, the investigation, and
+// the live before/after trace evidence.
+DistributedContextPropagator.Current =
+    new DuplicateTolerantTraceContextPropagator(DistributedContextPropagator.Current);
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Configuration.SetBasePath(Directory.GetCurrentDirectory());

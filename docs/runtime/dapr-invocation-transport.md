@@ -8,11 +8,13 @@
 | DaprServiceTask → external domain apps | HTTP API (unchanged) | gRPC→HTTP invocation is deprecated for removal; targets are HTTP apps |
 | App → sidecar state/lock/pubsub calls | SDK-chosen (unchanged) | Deferred — evaluate after the above lands |
 
-> **Known limitation, confirmed with evidence:** gRPC proxy mode is business-correct
-> (`MoneyTransferTests` `5/5`) but produces **two disconnected traces per task invocation**, not
-> one — root-caused to Dapr's AppCallback hop delivering a duplicated, W3C-invalid `traceparent` to
-> the app, external to this codebase. See "KNOWN LIMITATION" under Verification below before
-> enabling gRPC anywhere trace-tree wholeness matters.
+> **Formerly a known limitation, now fixed (2026-08-26):** gRPC proxy mode used to produce **two
+> disconnected traces per task invocation** — root-caused to Dapr's AppCallback hop delivering a
+> duplicated, W3C-invalid `traceparent` to the app. Dapr still sends that malformed header, but the
+> Execution host now tolerates it via `DuplicateTolerantTraceContextPropagator`, and gRPC
+> invocations produce **one whole trace tree**, verified live. Business correctness unchanged
+> (`MoneyTransferTests` `5/5` on both transports). See "RESOLVED (was: KNOWN LIMITATION)" under
+> Verification for the evidence and the reasoning behind the fix's placement.
 
 ## The three hops (why "protocol: http" in Helm was never the knob)
 
@@ -226,28 +228,31 @@ This is exactly the shape Step 3 of the original brief asked for — the server 
 gRPC method, not `POST api/v{version}/execution/invoke/{type}/{key}`, and `Invoke.{taskType}/{taskKey}`
 hangs beneath it.
 
-### KNOWN LIMITATION — gRPC proxy mode produces TWO disconnected traces per task invocation
+### RESOLVED (was: KNOWN LIMITATION) — gRPC proxy mode split every task invocation into two traces
 
-**Confirmed with direct evidence, root-caused to a specific mechanism, and not fixable from this
-codebase.** Every task invocation over gRPC proxy mode yields two separate top-level traces where
-the HTTP path produces one continuous trace. This is a real, verified regression in trace-tree
-integrity — the entire reason this branch (`feature/trace-span-tree`) exists — and is documented
-here prominently, not buried, so anyone deciding whether to enable gRPC locally or in an environment
-understands the trade explicitly.
+**Status: fixed and verified live on 2026-08-26.** gRPC proxy-mode invocations now produce **one
+whole trace tree**, with Execution's server transaction parented inside the caller's trace. The
+underlying Dapr defect is unchanged — the sidecar still delivers a malformed, W3C-invalid
+`traceparent` — but the runtime now tolerates it instead of discarding it. The investigation that
+got here is preserved below, unedited in substance, because the *reason* the mitigation lives where
+it lives is the valuable part.
 
-**The shape.** Orchestration's own trace (e.g. `93ddf309ef6bcad9201cf60f4cec3bdb`) contains the
-gRPC client span (`bbt.workflow.execution.v1.TaskInvoker/Invoke`, `GrpcNetClient` instrumentation,
-correctly parented under `Task.Invoke`) and the two sidecar-side `dapr-diagnostics` spans (caller's
-own sidecar, then the callee's sidecar) — and **no `Microsoft.AspNetCore` transaction at all**.
-Execution's real work — `Microsoft.AspNetCore POST /bbt.workflow.execution.v1.TaskInvoker/Invoke`
-→ `Invoke.http/execute-transfer` → the outbound provider call — lands in a **separate, freshly-rooted
-trace** (e.g. `0f21fe1b6eb06dfe3a6d4dc5bed24a1b`, `parent: None`), with `user_agent: grpc-go/1.73.0`
-confirming the request that reached Execution's ASP.NET Core pipeline came from the Dapr sidecar's
-own Go gRPC client, not a raw proxy of the original stream. Timestamps (~40ms apart) and durations
-match — this is one logical call, split into two traces, not two different calls. Repeats
-identically on every `execute-transfer` invocation observed, both before and after the fix below.
+#### What was broken
 
-**Root cause, confirmed empirically, not guessed — three things were tested in order:**
+Every task invocation over gRPC proxy mode yielded two separate top-level traces where the HTTP
+path produces one continuous trace. Orchestration's own trace (e.g.
+`93ddf309ef6bcad9201cf60f4cec3bdb`) contained the gRPC client span
+(`bbt.workflow.execution.v1.TaskInvoker/Invoke`, `GrpcNetClient` instrumentation, correctly
+parented under `Task.Invoke`) and the two sidecar-side `dapr-diagnostics` spans — and **no
+`Microsoft.AspNetCore` transaction at all**. Execution's real work —
+`Microsoft.AspNetCore POST /bbt.workflow.execution.v1.TaskInvoker/Invoke` →
+`Invoke.http/execute-transfer` → the outbound provider call — landed in a **separate,
+freshly-rooted** trace (e.g. `0f21fe1b6eb06dfe3a6d4dc5bed24a1b`, `parent: None`), with
+`user_agent: grpc-go/1.73.0` confirming the request reaching Execution's ASP.NET Core pipeline came
+from the Dapr sidecar's own Go gRPC client, not a raw proxy of the original stream. Timestamps
+(~40ms apart) and durations matched — one logical call, split into two traces.
+
+#### Root cause, confirmed empirically — three things were tested in order
 
 1. *Hypothesis: the caller never sends `traceparent` on the wire.* Disproven directly. A temporary
    diagnostic on Execution's gRPC service (`context.RequestHeaders`) showed `traceparent` present
@@ -257,56 +262,181 @@ identically on every `execute-transfer` invocation observed, both before and aft
 2. *Hypothesis: sending it explicitly (from `TaskTraceContext.TraceParent`/`TraceState`, already
    populated from `Activity.Current` in `RemoteInvokerService.CreateTraceContext`) fixes it.*
    Tested and disproven. Adding an explicit `metadata.Add("traceparent", ...)` in
-   `InvokeOverGrpcAsync` did not help, because of finding 3 below — it only adds a second value to
-   an already-broken header.
-3. **The actual defect: `traceparent` arrives duplicated on every call, regardless of whether this
-   codebase sends it explicitly.** The raw value Execution receives looks like:
+   `InvokeOverGrpcAsync` did not help, because of finding 3 — it only adds a second value to an
+   already-broken header.
+3. **The actual defect: `traceparent` arrives duplicated on every call**, regardless of whether
+   this codebase sends it explicitly. The raw value Execution receives looks like:
    ```
    traceparent = 00-1c00cbe047937c981316a9a85f69bad6-52e645eaa63e82cb-01,00-1c00cbe047937c981316a9a85f69bad6-5c6c3f4a64d19975-01
    ```
    Same trace id, two different span ids, comma-joined into one value. This happens upstream of
    anything this codebase controls — on the Dapr sidecar's app-bound (AppCallback) hop, which
    re-issues its own gRPC call to the app rather than proxying the original HTTP/2 stream, and
-   evidently stamps its own span alongside forwarding the original rather than replacing it. A
+   evidently stamps its own context alongside forwarding the original rather than replacing it. A
    value with more than one `traceparent` is **invalid per the W3C Trace Context spec** — a
    compliant receiver MUST treat it as if no trace context was present — which is exactly what
-   ASP.NET Core's built-in hosting instrumentation does: it starts a fresh root `Activity`, becoming
-   the disconnected trace above. This is Dapr's own AppCallback behavior, external to this
-   repository, and not something `RemoteInvokerService` or the Execution gRPC service can correct
-   by sending headers differently — per the decision this investigation was scoped to, this means
-   **stop trying to force it at the transport level.**
+   ASP.NET Core's built-in hosting instrumentation does: it starts a fresh root `Activity`.
 
-**What already works, and its real limit.** `TaskInvokeHandler.HandleAsync` calls
-`RestoreActivityFromBodyIfDetached(traceContext)`, using the trace context carried in the *request
-body* (`TaskTraceContext.TraceParent`/`TraceState` — a clean, single, valid value, captured from
-`Activity.Current` on the orchestration side before it ever touches the wire) as a fallback,
-independent of the broken wire header. Confirmed working, live, in Elastic: the disconnected trace's
-`Microsoft.AspNetCore` transaction carries `labels.vnext_trace_mismatch: "true"` and
-`span.links: [{trace.id: "<caller's trace>", span.id: "<caller's span>"}]` — proof the fallback ran
-and correctly linked the two traces. **But it cannot merge them into one tree**, and the reason is
-structural, not a bug in that code: `Activity.ParentId` is fixed at `Activity.Start()` and cannot be
-changed afterward, and ASP.NET Core's hosting layer has **already started** the `Microsoft.AspNetCore`
-transaction's `Activity` — reading (and discarding, per point 3) the malformed incoming
-`traceparent` — before `TaskInvokeHandler`'s code ever runs. By the time the fallback executes,
-`Activity.Current` is a non-null, already-rooted activity; the branch that could parent a *new*
-activity onto the caller's context (`ambient is null`) is dead code on this path. The only thing
-left to do at that point is exactly what the code already does: link, don't re-parent.
+**This remains true.** Dapr still sends the malformed header; nothing below changes that. What
+changed is that the runtime no longer throws the whole value away.
 
-**Net effect: the two traces are navigable from each other** (via the `span.links` entry, visible
-in Elastic/APM UIs that render trace links) **but remain two separate trace trees**, not one. This
-does not affect business correctness — `MoneyTransferTests` passes `5/5` — but it is a real,
-verified gap against this branch's own goal of a single, whole trace tree per request, and it is
-external to this codebase's ability to fix without either (a) Dapr changing its AppCallback
-trace-context forwarding behavior, or (b) a workaround this investigation did not find and was
-explicitly told to stop searching for once the root cause was confirmed external.
+#### Why the body-based fallback could never close it
 
-**Orphan-span comparison**, now on the caller's successful trace: pre-flip HTTP baseline
-(`6b85c250d727e7bdd98a620f0e019563`, 118 docs): 3 orphan spans (pre-existing, deferred
-pub/sub-publish `POST` spans, unrelated to transport). Post-fix gRPC trace
-(`93ddf309ef6bcad9201cf60f4cec3bdb`, 114 docs): 3 orphan spans, same shape — no new *in-trace*
-orphan pattern. The real regression is not an in-trace orphan; it is that Execution's entire real
-span subtree is missing from the caller's trace altogether, landing in a second trace instead — the
-`span.links` connection is the only bridge between them.
+`TaskInvokeHandler.HandleAsync` calls `RestoreActivityFromBodyIfDetached(traceContext)`, using the
+trace context carried in the *request body* (`TaskTraceContext.TraceParent`/`TraceState` — a clean,
+single, valid value captured from `Activity.Current` on the orchestration side before it ever
+touches the wire) as a fallback. It was confirmed working live: the disconnected trace's
+`Microsoft.AspNetCore` transaction carried `labels.vnext_trace_mismatch: "true"` and
+`span.links: [{trace.id, span.id}]` pointing at the caller.
+
+**But it cannot merge two traces into one**, for a structural reason rather than a bug in that
+code: `Activity.ParentId` is fixed at `Activity.Start()` and cannot be changed afterward, and
+ASP.NET Core's hosting layer has **already started** the `Microsoft.AspNetCore` transaction's
+`Activity` — reading, and discarding, the malformed incoming `traceparent` — before
+`TaskInvokeHandler`'s code ever runs. By the time the fallback executes, `Activity.Current` is a
+non-null, already-rooted activity. The only thing available at that point is exactly what the code
+already does: link, don't re-parent. That fallback stays in place as a defence in depth; on the
+fixed path it simply never fires, because the wire context now matches.
+
+#### The mitigation: a duplicate-tolerant propagator
+
+`src/BBT.Workflow.HttpApi.Shared/Telemetry/DuplicateTolerantTraceContextPropagator.cs`, installed in
+`execution/BBT.Workflow.Execution.HttpApi.Host/Program.cs`.
+
+**Why a propagator is the only seam.** ASP.NET Core's hosting layer builds the incoming request's
+`Activity` from `DistributedContextPropagator.Current` *before* any application code runs. A
+propagator therefore runs strictly earlier than every middleware, filter and handler — it is the
+last point at which the malformed value can still be corrected, and the immutability of
+`Activity.ParentId` rules out everything later.
+
+It wraps the propagator that would otherwise be in force and delegates `Fields`, `Inject` and
+`ExtractBaggage` **verbatim**; only `ExtractTraceIdAndState` is corrected. The rules:
+
+| Input | Behavior |
+|---|---|
+| Single well-formed value | Delegated **untouched** — zero behavior change on every normal request |
+| Multiple values, all sharing one trace-id | Collapsed to the **last** value |
+| Values with **differing** trace-ids | Treated as **absent** (W3C: an uninterpretable value must not be guessed at) |
+| Anything else malformed, or a throwing carrier | Treated as **absent**, never throws |
+| Duplication as one comma-joined string **or** as separate header values | Both handled identically |
+
+**Which duplicate wins, and why — determined empirically, not by guesswork.** The two span ids in
+the captured header were identified against the real trace they came from
+(`1c00cbe047937c981316a9a85f69bad6`) in Elastic:
+
+```
+Task.Invoke                                                        0904b2437acd8f3c
+└─ bbt.workflow.execution.v1.TaskInvoker/Invoke   (GrpcNetClient)  bfa61e1b2e7cd43a
+   └─ POST                                        (System.Net.Http) 52e645eaa63e82cb   <- FIRST value
+      └─ /...TaskInvoker/Invoke      (dapr-diagnostics, CALLER sidecar) 5c6c3f4a64d19975   <- LAST value
+         └─ /...TaskInvoker/Invoke   (dapr-diagnostics, CALLEE sidecar) 366bc7bc14789e4d
+```
+
+So the **first** value is the app's own outbound `System.Net.Http` client span, and the **last** is
+the **caller** sidecar's span. The callee sidecar's own span (`366bc7bc…`) appears in **neither** —
+the AppCallback hop appends the context it *received* rather than the one it *created* — so "hang
+the app's server span under the callee sidecar", the ideal, is simply not reachable from this
+header. The last value is the deepest node the header actually offers: it makes the app's server
+span a **sibling** of the callee sidecar transaction rather than skipping a level up to the HTTP
+client span, which is what taking the first value would produce. Either choice preserves the
+trace-id — which is what makes the tree whole; the span-id choice only decides which node it hangs
+under. The general HTTP rule points the same way: header lists append, so the hop nearest the app
+wrote last.
+
+**Registration is unconditional and deliberately visible in `Program.cs`,** not tucked inside
+`AddExecutionApiModule()`. Two decisions worth stating:
+
+- *Visible, because it is a process-global mutation.* `DistributedContextPropagator.Current`
+  changes how **every** inbound request in the process is parented. Hiding that three DI extensions
+  deep would be a trap for the next reader.
+- *Unconditional, not gated on the gRPC transport.* The transport is chosen by the **orchestration**
+  side's `ExecutionApi:Transport`, which the Execution process cannot see — a local gate would be
+  guessing at another service's configuration. And the decorator is a strict no-op for well-formed
+  input, so gating buys nothing and costs a config coupling.
+- *It must stay above `WebApplication.CreateBuilder`.* ASP.NET Core's web-host bootstrap captures
+  `DistributedContextPropagator.Current` into DI as a singleton **instance** while the builder is
+  being constructed, and hosting resolves the propagator from there. Assigning after
+  `CreateBuilder` leaves the captured instance — and therefore request parenting — unchanged.
+
+Unit tests: `test/BBT.Workflow.Application.Tests/Telemetry/DuplicateTolerantTraceContextPropagatorTests.cs`
+(23 cases, built on the exact captured header above rather than a synthetic one), including a
+delegation-parity test against the default propagator for both `Inject` and the well-formed
+extraction path.
+
+#### Live verification — before and after
+
+Both measured on the same `MoneyTransferTests` scenario, in gRPC proxy mode, in the same
+environment. Query: Elastic `http://localhost:9200`, indices `.ds-traces-apm*,traces-apm*`.
+
+**BEFORE** — Execution's `Microsoft.AspNetCore` transaction (`user_agent: grpc-go/1.73.0`), every
+pre-fix gRPC run:
+
+```
+2026-08-26T14:38:50.407Z  trace=df0a6dbbb3f8839821b7e913f980a64e  parent=None
+2026-08-26T14:36:40.336Z  trace=3f42ac2641d9c9b3af9e8b2627e58dd0  parent=None   mismatch=true  links=true
+2026-08-26T14:36:38.862Z  trace=d9d25015bc322b66eb5e3a58a931fb42  parent=None   mismatch=true  links=true
+2026-08-26T14:31:43.510Z  trace=259258acd8af87a584ffd6bbdcbd50f4  parent=None   mismatch=true  links=true
+2026-08-26T14:31:42.070Z  trace=27aed8d7eb1030de8cf881ec30413063  parent=None   mismatch=true  links=true
+2026-08-26T14:25:13.303Z  trace=9c799562f3c435f7baaeeefa67b0a477  parent=None
+```
+
+`parent=None` on every row, and every one of those `trace.id`s differs from the caller's — separate
+root traces. The caller's trace `1c00cbe047937c981316a9a85f69bad6` held **84** documents and
+contained no Execution-side application span at all.
+
+**AFTER** — same query, post-fix run:
+
+```
+2026-08-26T15:56:27.356Z  trace=6f2ad3d6f165566dd2351fb26a00ece5  parent=6f12c508746c4c8e  mismatch=None  links=false
+2026-08-26T15:56:25.856Z  trace=265f5094c2139ef7be78e1f58a58d66b  parent=58809a2dbf411aa7  mismatch=None  links=false
+```
+
+Non-null `parent.id`, and the `trace.id` is the **caller's own trace**. The `vnext_trace_mismatch`
+label and the `span.links` bridge are both gone — the body fallback no longer needs to fire. The
+caller's trace grew from 84 to **117** documents: Execution's ~33 spans moved *into* it.
+
+The full spine of trace `6f2ad3d6f165566dd2351fb26a00ece5`, one tree end to end:
+
+```
+[txn] PATCH .../instances/{instance}/transitions/{transitionKey}   vnext-app            e202fc3e1eae5e1f (root)
+└─ [txn] TransitionJob.Execute/approve-push                        vnext-app            11c96f47088b3b9e
+   └─ … Task.Invoke                                                vnext-app            cd472f0268fcdf82
+      └─ bbt.workflow.execution.v1.TaskInvoker/Invoke  (GrpcNetClient)                   cf60d3a73760d6f2
+         └─ POST                                       (System.Net.Http)                 f88921d6de8baf30
+            └─ /...TaskInvoker/Invoke        (dapr-diagnostics, CALLER sidecar)          6f12c508746c4c8e
+               ├─ [txn] /...TaskInvoker/Invoke (dapr-diagnostics, CALLEE sidecar)        2350f467daa48110
+               └─ [txn] POST /...TaskInvoker/Invoke  (Microsoft.AspNetCore,
+                        vnext-execution-app, ua=grpc-go/1.73.0)                          dbd6e64139561034   <-- THE FIX
+                  └─ Invoke.http/execute-transfer  (BBT.Workflow.Execution.Invokers)     eeebf66a5329bb41
+                     └─ POST  (System.Net.Http, outbound to MockLab)
+```
+
+The app's server transaction lands as a sibling of the callee sidecar transaction under the caller
+sidecar's span — exactly the placement the "last value wins" analysis predicts, confirming the
+choice behaves as reasoned rather than by luck.
+
+**Orphan spans: unchanged.** 3 orphans in the post-fix trace (`System.Net.Http POST`, the
+pre-existing deferred pub/sub-publish spans), the same 3 as the pre-fix HTTP baseline
+(`6b85c250d727e7bdd98a620f0e019563`, 118 docs) and the same 3 as the pre-fix gRPC trace. The fix
+introduces no new orphan pattern.
+
+**Business correctness, both transports:** `MoneyTransferTests` `Failed: 0, Passed: 5` over gRPC
+(2026-08-26T15:56Z) and `Failed: 0, Passed: 5` again after reverting to the HTTP default
+(2026-08-26T16:0xZ). gRPC remains **opt-in**; the committed state is `ExecutionApi:Transport = http`
+with the sidecar on `--app-port 4202` and no `--app-protocol`.
+
+#### What is still true
+
+- Dapr still sends a duplicated, W3C-invalid `traceparent` on the AppCallback hop. This is a Dapr
+  defect, external to this repository, and the propagator is a **tolerance layer**, not a cure. If
+  Dapr's behavior changes to send a single valid value, the propagator becomes inert on its own
+  (single well-formed value → delegated untouched) and needs no removal.
+- The app's server span hangs under the **caller** sidecar's span, not the callee's, because the
+  callee sidecar's span id is not present in the header at all. This is a cosmetic one-level
+  difference in the tree, not a break in it.
+- If Dapr ever starts appending values from *different* traces, the propagator treats the header as
+  absent and the old split-trace behavior returns — deliberately, since guessing between unrelated
+  traces would be worse than a clean re-root.
 
 ### Rollback proof (Step 4), re-run after the fix
 
@@ -335,17 +465,19 @@ ports probed directly) before being verified through the test suite (`5/5`). Bus
 end-to-end correctness over gRPC is now proven: `MoneyTransferTests` passes, Execution's real
 task-invoker work happens, with correct data, on the correct port, via the correct protocol.
 
-**Distributed trace continuity across the gRPC hop is disproven, with a confirmed, external root
-cause, not an open question.** Every task invocation over gRPC yields two disconnected traces
-instead of one (see the KNOWN LIMITATION section above) — root-caused to Dapr's AppCallback hop
-delivering a duplicated, W3C-invalid `traceparent` value to the app regardless of what this
-codebase sends, which is outside this repository's ability to fix. The existing
-`ActivityLink`/`span.links` fallback already connects the two traces for manual navigation but
-cannot merge them into one tree, for a structural reason (`Activity.ParentId` is immutable once
-ASP.NET Core's hosting layer has started the request's `Activity`, which happens before any of this
-codebase's own code runs). This does not block business functionality but is a real, verified gap
-against this branch's own goal of a whole trace tree per request — visible here explicitly rather
-than left implicit, so it factors into the decision to enable gRPC in any environment.
+**Distributed trace continuity across the gRPC hop is now proven, having first been disproven and
+then fixed.** The investigation correctly root-caused the split to Dapr's AppCallback hop delivering
+a duplicated, W3C-invalid `traceparent` — external to this repository — and correctly concluded that
+nothing at or after `TaskInvokeHandler` could repair it, because `Activity.ParentId` is immutable
+once ASP.NET Core's hosting layer has started the request's `Activity`. What that reasoning missed is
+that `DistributedContextPropagator.Current` runs *before* hosting starts that `Activity`, and is
+therefore a seam that does exist. `DuplicateTolerantTraceContextPropagator` (installed in the
+Execution host's `Program.cs`) collapses the duplicated header to a single valid value while leaving
+well-formed input untouched. Verified live: Execution's `Microsoft.AspNetCore` transaction now
+carries the caller's `trace.id` and a non-null `parent.id`, the caller's trace grew from 84 to 117
+documents as Execution's spans moved into it, and the `span.links` / `vnext_trace_mismatch` fallback
+no longer fires. Dapr's defect is unchanged; the runtime now tolerates it. Full before/after evidence
+in the "RESOLVED (was: KNOWN LIMITATION)" section above.
 
 ### For Task 7 (Helm)
 
