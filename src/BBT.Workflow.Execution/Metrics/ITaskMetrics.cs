@@ -47,6 +47,11 @@ public interface ITaskMetrics
     /// <param name="componentName">The name of the conversation component (LLM provider).</param>
     /// <param name="status">The status of the invocation (success, failure, cancelled).</param>
     void RecordDaprConversationInvocation(string componentName, string status);
+
+    /// <summary>
+    /// Records a Python task invocation by execution mode.
+    /// </summary>
+    void RecordPythonInvocation(string executionMode, string status);
 }
 
 /// <summary>
@@ -64,5 +69,5 @@ public sealed class NullTaskMetrics : ITaskMetrics
     public void RecordNotificationInvocation(string bindingName, string bindingKind, string status) { }
     public void RecordStateStoreOperation(string storeName, string command, string status) { }
     public void RecordDaprConversationInvocation(string componentName, string status) { }
+    public void RecordPythonInvocation(string executionMode, string status) { }
 }
-

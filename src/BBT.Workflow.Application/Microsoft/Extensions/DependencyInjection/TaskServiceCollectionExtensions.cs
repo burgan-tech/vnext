@@ -109,6 +109,7 @@ public static class TaskServiceCollectionExtensions
         services.AddTaskExecutor<DaprHttpEndpointTaskExecutor>();
         services.AddTaskExecutor<DaprPubSubTaskExecutor>();
         services.AddTaskExecutor<DaprConversationTaskExecutor>();
+        services.AddTaskExecutor<PythonTaskExecutor>();
         services.AddTaskExecutor<StateStoreTaskExecutor>();
 
         // Cache-Aside (read-through) executor: cache get/set is dispatched to the Execution service via

@@ -1,20 +1,36 @@
-# Development image with SDK for hot reload
-FROM mcr.microsoft.com/dotnet/sdk:10.0-alpine
+# Development image with SDK, hot reload, and the same CPython environment as production.
+FROM mcr.microsoft.com/dotnet/sdk:10.0.203-noble
 
-# Install debugger for development
-RUN apk add --no-cache curl bash unzip && \
-    curl -sSL https://aka.ms/getvsdbgsh | bash /dev/stdin -v latest -l /vsdbg
+ENV DEBIAN_FRONTEND=noninteractive \
+    SKIP_POSTSHARP=true \
+    PYTHONNET_PYDLL=libpython3.12.so.1.0 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_INDEX=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    OMP_NUM_THREADS=1 \
+    OPENBLAS_NUM_THREADS=1 \
+    MKL_NUM_THREADS=1 \
+    Python__Enabled=true
 
-# PostSharp targeting pack: NETStandard.Library.Ref 2.1.0
-RUN dotnet restore --packages /root/.nuget/packages "NETStandard.Library.Ref" --version 2.1.0 2>/dev/null || true && \
-    mkdir -p /var/tmp/postsharp/NuGetFallback && \
-    cp -r /root/.nuget/packages/netstandard.library.ref /var/tmp/postsharp/NuGetFallback/ 2>/dev/null || true
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        bash curl unzip wget libpython3.12 python3.12 python3.12-venv util-linux \
+    && curl -sSL https://aka.ms/getvsdbgsh | bash /dev/stdin -v latest -l /vsdbg \
+    && rm -rf /var/lib/apt/lists/*
 
-ENV SKIP_POSTSHARP=true
+RUN dotnet restore --packages /root/.nuget/packages "NETStandard.Library.Ref" --version 2.1.0 2>/dev/null || true
+RUN mkdir -p /var/tmp/postsharp/NuGetFallback \
+    && cp -r /root/.nuget/packages/netstandard.library.ref /var/tmp/postsharp/NuGetFallback/ 2>/dev/null || true
+
+WORKDIR /opt/vnext-python
+COPY execution/python/requirements.lock ./requirements.lock
+RUN python3.12 -m venv /opt/vnext-python/venv \
+    && env -u PIP_NO_INDEX /opt/vnext-python/venv/bin/python -m pip install \
+        --no-cache-dir --only-binary=:all: --require-hashes -r requirements.lock \
+    && /opt/vnext-python/venv/bin/python -c "import numpy, pandas, sklearn" \
+    && /opt/vnext-python/venv/bin/python -m pip uninstall -y pip setuptools wheel
+COPY execution/python/runner.py execution/python/vnext_runner.py ./
 
 WORKDIR /app
-
 EXPOSE 5000
-
-# Shell form: runtime'da SKIP_POSTSHARP environment variable çözümlenir
 CMD bash -c "dotnet watch run --project execution/BBT.Workflow.Execution.HttpApi.Host/BBT.Workflow.Execution.HttpApi.Host.csproj --urls http://+:5000 /p:SkipPostSharp=$SKIP_POSTSHARP"

@@ -37,6 +37,7 @@ external calls from strongly typed bindings.
 | Trigger | `StartTriggerTaskExecutor`, `DirectTriggerTaskExecutor`, `SubProcessTaskExecutor` | Remote trigger invokers |
 | Data query | `GetInstancesTaskExecutor`, `GetInstanceDataTaskExecutor` | Remote data invokers |
 | Script | `ScriptTaskExecutor` | Executes in Orchestration through scripting module |
+| Python | `PythonTaskExecutor` | `PythonTaskInvoker` selects an explicit Python.NET, process, or container runtime ([details](python-task.md)) |
 | Human/notification | Human and notification executors | May remain application-owned depending on side effect type |
 
 ## Failure Modes
@@ -53,6 +54,10 @@ external calls from strongly typed bindings.
 Execution controller begins a log scope with domain, workflow key, instance id, task key,
 and task type from the trace context and envelope. Executors should preserve correlation
 and task metadata when sending remote envelopes.
+
+Python is the first task family with a second runtime registry behind its invoker. The
+`PythonTaskInvoker` resolves exactly one configured `IPythonExecutionRuntime`; a disabled or
+unavailable requested mode is a task failure and never causes a silent mode fallback.
 
 ## Change Safety
 
@@ -71,4 +76,4 @@ and task metadata when sending remote envelopes.
 - `execution/BBT.Workflow.Execution.HttpApi.Host/Controllers/Executions/ExecutionController.cs`
 - `src/BBT.Workflow.Execution/Invokers/`
 - `src/BBT.Workflow.Execution/Services/TaskInvokerRegistry.cs`
-
+- `src/BBT.Workflow.Execution/Python/PythonRuntimeRegistry.cs`

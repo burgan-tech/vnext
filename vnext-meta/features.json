@@ -1,6 +1,27 @@
 {
   "runtimeVersion": "0.0.80",
   "engine": {
+    "pythonTask": {
+      "since": "0.0.80",
+      "status": "experimental",
+      "description": "Built-in trusted-code PythonTask (TaskType=22, JSON discriminator '22', Execution route 'python') invokes CPython through one explicit mode: pythonNet, process, or container. PythonTask does not execute Orchestration InputHandler/OutputHandler mappings. The only script contract is main(input), with config.input and the return value transported only as strict JSON; NAT and B64 ScriptCode are accepted while REF and filesystem loading are rejected. Disabled or unavailable modes never fall back. Python.NET is in-process and not a security sandbox; process mode uses an isolated interpreter plus Linux resource limits; container mode creates and removes one hardened runner container per invocation through an explicit Docker Engine or Kubernetes Job/attach driver and is opt-in. Runtime package installation is disabled and both standard runtimes and the multi-arch runner image consume the same transitive hash lock. AllowedModules is a governance policy rather than a security boundary.",
+      "schemaPath": "task.type=22",
+      "relatedConfig": [
+        "Python:Enabled",
+        "Python:DefaultMode",
+        "Python:EnabledModes",
+        "Python:MaxTimeoutSeconds",
+        "Python:MaxCodeBytes",
+        "Python:MaxInputBytes",
+        "Python:MaxOutputBytes",
+        "Python:MaxStdoutBytes",
+        "Python:MaxStderrBytes",
+        "Python:AllowedModules",
+        "Python:PythonNet",
+        "Python:Process",
+        "Python:Container"
+      ]
+    },
     "customScriptHelpers": {
       "since": "0.0.58",
       "status": "experimental",

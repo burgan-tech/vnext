@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using BBT.Workflow.BackgroundJobs.Options;
 using Microsoft.Extensions.Configuration;
 using Shouldly;
@@ -36,5 +37,23 @@ public class WorkflowExecutionOptionsValidatorTests
 
         result.Failed.ShouldBeTrue();
         result.FailureMessage.ShouldContain("StatusLockLeaseSeconds");
+    }
+
+    [Fact]
+    public void Validate_PythonTimeoutMustFitInsideDaprInvocationTimeout()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Python:MaxTimeoutSeconds"] = "50",
+                ["ExecutionApi:InvocationTimeoutSeconds"] = "50"
+            })
+            .Build();
+        var validator = new WorkflowExecutionOptionsValidator(configuration);
+
+        var result = validator.Validate(null, new WorkflowExecutionOptions());
+
+        result.Failed.ShouldBeTrue();
+        result.FailureMessage.ShouldContain("must be smaller than ExecutionApi:InvocationTimeoutSeconds");
     }
 }
