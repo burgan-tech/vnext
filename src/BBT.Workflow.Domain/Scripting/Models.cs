@@ -784,6 +784,20 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
     }
 
     /// <summary>
+    /// A <see cref="CreateParallelBranch"/> whose <see cref="Transition"/> is retargeted to the
+    /// supplied transition. Exists for callers that evaluate several transition-scoped scripts
+    /// against ONE built context (e.g. a state's scheduled-transition timers): the expensive
+    /// context build happens once and each evaluation gets a cheap copy-on-write branch that sees
+    /// its own transition. Same COW semantics as the parallel branch it wraps.
+    /// </summary>
+    public ScriptContext CreateBranchFor(Transition transition)
+    {
+        var branch = CreateParallelBranch();
+        branch.Transition = transition;
+        return branch;
+    }
+
+    /// <summary>
     /// Deterministically merges one completed parallel branch into this context.
     /// The coordinator calls this method in task definition order.
     /// </summary>

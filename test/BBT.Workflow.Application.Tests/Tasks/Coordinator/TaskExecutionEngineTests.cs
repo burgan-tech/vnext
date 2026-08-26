@@ -137,7 +137,7 @@ public sealed class TaskExecutionEngineTests
             .Returns(Result<ITaskExecutor>.Fail(new Error("500", "no executor registered")));
 
         var strategy = Substitute.For<ITaskPersistenceStrategy>();
-        strategy.HandleCreationAsync(Arg.Any<InstanceTask>(), Arg.Any<CancellationToken>())
+        strategy.HandleCreationAsync(Arg.Any<InstanceTask>(), Arg.Any<bool>(), Arg.Any<CancellationToken>())
             .Returns(callInfo => callInfo.Arg<InstanceTask>());
         strategy.HandleCompletionAsync(Arg.Any<InstanceTask>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromException(new InvalidOperationException("journal write failed")));
@@ -296,7 +296,7 @@ public sealed class TaskExecutionEngineTests
             .Returns(Result<ITaskExecutor>.Ok(executor));
 
         var strategy = Substitute.For<ITaskPersistenceStrategy>();
-        strategy.HandleCreationAsync(Arg.Any<InstanceTask>(), Arg.Any<CancellationToken>())
+        strategy.HandleCreationAsync(Arg.Any<InstanceTask>(), Arg.Any<bool>(), Arg.Any<CancellationToken>())
             .Returns(callInfo => callInfo.Arg<InstanceTask>());
         UsePersistenceStrategy(strategy);
 
@@ -315,7 +315,7 @@ public sealed class TaskExecutionEngineTests
         result.IsSuccess.ShouldBeTrue();
         await _taskFactory.DidNotReceiveWithAnyArgs().CreateExecutionTaskAsync(default!, default);
         await strategy.Received().HandleCreationAsync(
-            Arg.Is<InstanceTask>(t => t.TaskId == "fan-out-docs#3"), Arg.Any<CancellationToken>());
+            Arg.Is<InstanceTask>(t => t.TaskId == "fan-out-docs#3"), Arg.Any<bool>(), Arg.Any<CancellationToken>());
 
         // The prepared instance — not a factory-loaded one — is what actually reached the executor.
         await executor.Received(1).ExecuteAsync(
@@ -510,7 +510,7 @@ public sealed class TaskExecutionEngineTests
 
         public bool CanHandle(TaskExecutionOrigin origin) => true;
 
-        public Task<InstanceTask> HandleCreationAsync(InstanceTask instanceTask, CancellationToken cancellationToken = default)
+        public Task<InstanceTask> HandleCreationAsync(InstanceTask instanceTask, bool skipLookup = false, CancellationToken cancellationToken = default)
             => Task.FromResult(instanceTask);
 
         public async Task HandleCompletionAsync(InstanceTask instanceTask, CancellationToken cancellationToken = default)
@@ -533,7 +533,7 @@ public sealed class TaskExecutionEngineTests
 
         public bool CanHandle(TaskExecutionOrigin origin) => true;
 
-        public Task<InstanceTask> HandleCreationAsync(InstanceTask instanceTask, CancellationToken cancellationToken = default)
+        public Task<InstanceTask> HandleCreationAsync(InstanceTask instanceTask, bool skipLookup = false, CancellationToken cancellationToken = default)
             => Task.FromResult(instanceTask);
 
         public Task HandleCompletionAsync(InstanceTask instanceTask, CancellationToken cancellationToken = default)
