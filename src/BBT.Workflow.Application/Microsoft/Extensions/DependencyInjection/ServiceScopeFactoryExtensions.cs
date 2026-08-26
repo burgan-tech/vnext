@@ -129,6 +129,11 @@ public static class ServiceScopeFactoryExtensions
     /// <param name="workflowVersion">Optional workflow version; null resolves to the latest version.</param>
     /// <param name="action">The async operation to execute once the workflow is loaded.</param>
     /// <param name="cancellationToken">Cancellation token for the operation.</param>
+    /// <param name="carrier">
+    /// Optional context carrying a workflow already resolved for these coordinates; supplying it skips
+    /// the cache lookup, and leaving it null lets the loaded workflow be published back onto the
+    /// context for the layers downstream. See the private helper for the full contract.
+    /// </param>
     /// <returns>A <see cref="Result{T}"/> containing the operation outcome or a workflow loading error.</returns>
     public static Task<Result<T>> ExecuteWithWorkflowAsync<T>(
         this IServiceScopeFactory scopeFactory,
@@ -247,6 +252,12 @@ public static class ServiceScopeFactoryExtensions
     /// <param name="ct">Cancellation token.</param>
     /// <param name="action">The operation to execute after the workflow is loaded.</param>
     /// <param name="onWorkflowLoadFailed">Called when the workflow cannot be loaded; maps the error to TResult.</param>
+    /// <param name="carrier">
+    /// Optional context carrying a workflow the caller has already resolved for these exact
+    /// coordinates. When supplied, the cache lookup is skipped and the definition is reused; when the
+    /// caller has none, the workflow loaded here is published back onto it so the layers downstream
+    /// resolve it once instead of once each.
+    /// </param>
     private static async Task<TResult> WithWorkflowScopeAsync<TResult>(
         IServiceProvider sp,
         string domain,
