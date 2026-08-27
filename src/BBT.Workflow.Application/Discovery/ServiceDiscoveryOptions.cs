@@ -39,9 +39,11 @@ public sealed class ServiceDiscoveryOptions
     public string RegistryFlow { get; set; } = string.Empty;
 
     /// <summary>
-    /// Timeout in seconds for HTTP requests (default: 30 seconds).
+    /// Timeout in seconds for HTTP requests (default: 5 seconds).
+    /// With the endpoint cache removed, this timeout now sits in front of every cross-domain
+    /// resolution instead of a rare cache miss, so it is kept short deliberately.
     /// </summary>
-    public int TimeoutSeconds { get; set; } = 30;
+    public int TimeoutSeconds { get; set; } = 5;
 
     /// <summary>
     /// Maximum retry attempts for failed requests (default: 3).
