@@ -56,11 +56,10 @@ public sealed class ScriptEngineWarmupService(
             using var scope = scopeFactory.CreateScope();
             var scriptEngine = scope.ServiceProvider.GetRequiredService<IScriptEngine>();
 
-            var stopwatch = Stopwatch.StartNew();
+            var startTimestamp = Stopwatch.GetTimestamp();
             await scriptEngine.CompileToInstanceAsync<IMapping>(ProbeSource, cancellationToken: stoppingToken);
-            stopwatch.Stop();
 
-            logger.ScriptEngineWarmupCompleted(stopwatch.ElapsedMilliseconds);
+            logger.ScriptEngineWarmupCompleted((long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds);
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
         {

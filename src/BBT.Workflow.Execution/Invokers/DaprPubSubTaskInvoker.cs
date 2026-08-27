@@ -58,7 +58,7 @@ public sealed class DaprPubSubTaskInvoker : ITaskInvoker<DaprPubSubBinding>
         DaprPubSubBinding binding,
         CancellationToken cancellationToken)
     {
-        var stopwatch = Stopwatch.StartNew();
+        var startTimestamp = Stopwatch.GetTimestamp();
 
         try
         {
@@ -88,12 +88,11 @@ public sealed class DaprPubSubTaskInvoker : ITaskInvoker<DaprPubSubBinding>
                 metadata,
                 cancellationToken);
 
-            stopwatch.Stop();
             _metrics.RecordDaprPubSubPublish(binding.PubSubName, binding.TopicName, "success");
 
             return TaskInvocationResult.Success(
                 data: new { Published = true, Message = "Event published successfully" },
-                executionDurationMs: stopwatch.ElapsedMilliseconds,
+                executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
                 taskType: TaskType,
                 metadata: new Dictionary<string, object>
                 {
@@ -103,14 +102,13 @@ public sealed class DaprPubSubTaskInvoker : ITaskInvoker<DaprPubSubBinding>
         }
         catch (TaskCanceledException ex) when (cancellationToken.IsCancellationRequested)
         {
-            stopwatch.Stop();
             _metrics.RecordDaprPubSubPublish(binding.PubSubName, binding.TopicName, "cancelled");
             _logger.LogWarning("Dapr PubSub operation was cancelled: {PubSubName}/{Topic}",
                 binding.PubSubName, binding.TopicName);
 
             return TaskInvocationResult.Failure(
                 error: "Dapr PubSub operation was cancelled",
-                executionDurationMs: stopwatch.ElapsedMilliseconds,
+                executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
                 taskType: TaskType,
                 metadata: new Dictionary<string, object>
                 {
@@ -123,14 +121,13 @@ public sealed class DaprPubSubTaskInvoker : ITaskInvoker<DaprPubSubBinding>
         }
         catch (Exception ex)
         {
-            stopwatch.Stop();
             _metrics.RecordDaprPubSubPublish(binding.PubSubName, binding.TopicName, "failure");
             _logger.LogError(ex, "Dapr PubSub publish failed: {PubSubName}/{Topic}",
                 binding.PubSubName, binding.TopicName);
 
             return TaskInvocationResult.Failure(
                 error: ex.Message,
-                executionDurationMs: stopwatch.ElapsedMilliseconds,
+                executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
                 taskType: TaskType,
                 metadata: new Dictionary<string, object>
                 {

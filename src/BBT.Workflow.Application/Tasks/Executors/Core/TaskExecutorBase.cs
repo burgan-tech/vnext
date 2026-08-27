@@ -34,7 +34,7 @@ public abstract class TaskExecutorBase<TTask>(ILogger logger) : ITaskExecutor
         TaskExecutorContext context,
         CancellationToken cancellationToken = default)
     {
-        var stopwatch = Stopwatch.StartNew();
+        var startTimestamp = Stopwatch.GetTimestamp();
         var taskKey = context.Task.Key;
 
         Logger.LogDebug("Executing task {TaskKey} with executor {Executor}",
@@ -58,11 +58,10 @@ public abstract class TaskExecutorBase<TTask>(ILogger logger) : ITaskExecutor
         }
         if (!inputResult.IsSuccess)
         {
-            stopwatch.Stop();
             Logger.LogError("Task {TaskKey} input preparation failed: {Error}",
                 taskKey, inputResult.Error.Message);
             return Result<StandardTaskResponse>.Fail(inputResult.Error);
-            // return CreateErrorResponse(inputResult.Error, stopwatch.ElapsedMilliseconds);
+            // return CreateErrorResponse(inputResult.Error, (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds);
         }
         
         context.InputResponse = inputResult.Value;
@@ -71,11 +70,10 @@ public abstract class TaskExecutorBase<TTask>(ILogger logger) : ITaskExecutor
         var preProcessResult = await PreProcessAsync(task, context, cancellationToken);
         if (!preProcessResult.IsSuccess)
         {
-            stopwatch.Stop();
             Logger.LogError("Task {TaskKey} pre-processing failed: {Error}",
                 taskKey, preProcessResult.Error.Message);
             return Result<StandardTaskResponse>.Fail(preProcessResult.Error);
-            // return CreateErrorResponse(preProcessResult.Error, stopwatch.ElapsedMilliseconds);
+            // return CreateErrorResponse(preProcessResult.Error, (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds);
         }
 
         // 4. Invoke (abstract or virtual)
@@ -86,10 +84,9 @@ public abstract class TaskExecutorBase<TTask>(ILogger logger) : ITaskExecutor
         }
         if (!invokeResult.IsSuccess)
         {
-            stopwatch.Stop();
             Logger.LogError("Task {TaskKey} invocation failed: {Error}",
                 taskKey, invokeResult.Error.Message);
-            return CreateErrorResponse(invokeResult.Error, stopwatch.ElapsedMilliseconds);
+            return CreateErrorResponse(invokeResult.Error, (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds);
         }
 
         context.RawInvocationResultJson = JsonSerializer.Serialize(invokeResult.Value!, JsonSerializerConstants.JsonOptions);
@@ -103,11 +100,10 @@ public abstract class TaskExecutorBase<TTask>(ILogger logger) : ITaskExecutor
         var postProcessResult = await PostProcessAsync(task, invokeResult.Value!, context, cancellationToken);
         if (!postProcessResult.IsSuccess)
         {
-            stopwatch.Stop();
             Logger.LogError("Task {TaskKey} post-processing failed: {Error}",
                 taskKey, postProcessResult.Error.Message);
             return Result<StandardTaskResponse>.Fail(postProcessResult.Error);
-            // return CreateErrorResponse(postProcessResult.Error, stopwatch.ElapsedMilliseconds);
+            // return CreateErrorResponse(postProcessResult.Error, (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds);
         }
 
         // 6. ProcessOutput (virtual - custom per executor)
@@ -118,11 +114,10 @@ public abstract class TaskExecutorBase<TTask>(ILogger logger) : ITaskExecutor
         }
         if (!outputResult.IsSuccess)
         {
-            stopwatch.Stop();
             Logger.LogError("Task {TaskKey} output processing failed: {Error}",
                 taskKey, outputResult.Error.Message);
             return Result<StandardTaskResponse>.Fail(outputResult.Error);
-            // return CreateErrorResponse(outputResult.Error, stopwatch.ElapsedMilliseconds);
+            // return CreateErrorResponse(outputResult.Error, (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds);
         }
         
         if (context.TaskTrigger == TaskTrigger.Extension)
@@ -130,10 +125,9 @@ public abstract class TaskExecutorBase<TTask>(ILogger logger) : ITaskExecutor
             context.ScriptContext.SetOutputResponse(outputResult.Value, taskKey.ToVariableName());
         }
 
-        stopwatch.Stop();
 
         // 7. CreateResponse
-        return CreateSuccessResponse(task, invokeResult.Value!, outputResult.Value, stopwatch.ElapsedMilliseconds);
+        return CreateSuccessResponse(task, invokeResult.Value!, outputResult.Value, (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds);
     }
 
     /// <summary>
