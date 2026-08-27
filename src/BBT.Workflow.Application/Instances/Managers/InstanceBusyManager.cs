@@ -13,7 +13,7 @@ public sealed class InstanceBusyManager(
     ILogger<InstanceBusyManager> logger) : IInstanceBusyManager
 {
     /// <inheritdoc />
-    public async Task<bool> MarkBusyAsync(Guid instanceId, CancellationToken cancellationToken = default)
+    public async Task<bool> MarkBusyAsync(Guid instanceId, string flow, CancellationToken cancellationToken = default)
     {
         await using var uow = uowManager.Begin(
             new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew, IsTransactional = true });
@@ -23,7 +23,7 @@ public sealed class InstanceBusyManager(
         // (Busy is excluded by IsBusy; Completed/Faulted/Passive by IsCompleted), so the whole
         // read-check-write is one compare-and-set: guard in the WHERE, decision from the database
         // state under the lock, no aggregate load at all.
-        var flipped = await instanceRepository.TryMarkBusyAsync(instanceId, cancellationToken);
+        var flipped = await instanceRepository.TryMarkBusyAsync(instanceId, flow, cancellationToken);
         await uow.CommitAsync(cancellationToken);
 
         if (flipped)
@@ -51,7 +51,7 @@ public sealed class InstanceBusyManager(
 
             if (instance is { IsBusy: false, IsCompleted: false })
             {
-                if (await instanceRepository.TryMarkBusyAsync(instanceId, cancellationToken))
+                if (await instanceRepository.TryMarkBusyAsync(instanceId, instance.Flow, cancellationToken))
                 {
                     logger.InstanceMarkedBusy(instance.Id);
                 }
@@ -84,7 +84,7 @@ public sealed class InstanceBusyManager(
 
             // Set-based CAS; the WHERE re-verifies Active, so a racer that slipped past the
             // in-memory check above still resolves to AlreadyBusy instead of a double flip.
-            if (!await instanceRepository.TryMarkBusyAsync(instanceId, cancellationToken))
+            if (!await instanceRepository.TryMarkBusyAsync(instanceId, current.Flow, cancellationToken))
                 return BusyMarkOutcome.AlreadyBusy;
 
             await uow.CommitAsync(cancellationToken);
@@ -99,14 +99,14 @@ public sealed class InstanceBusyManager(
     }
 
     /// <inheritdoc />
-    public async Task<bool> TryReleaseAsync(Guid instanceId, CancellationToken cancellationToken = default)
+    public async Task<bool> TryReleaseAsync(Guid instanceId, string flow, CancellationToken cancellationToken = default)
     {
         await using var uow = uowManager.Begin(
             new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew, IsTransactional = true });
 
         // Same compare-and-set collapse as MarkBusyAsync: the "IsBusy && !IsCompleted" guard
         // reduces to "Status == Busy" (Busy and the terminal statuses are mutually exclusive).
-        var flipped = await instanceRepository.TryReleaseBusyAsync(instanceId, cancellationToken);
+        var flipped = await instanceRepository.TryReleaseBusyAsync(instanceId, flow, cancellationToken);
         await uow.CommitAsync(cancellationToken);
 
         return flipped;
@@ -129,7 +129,7 @@ public sealed class InstanceBusyManager(
             return;
         }
 
-        await TryReleaseAsync(instanceId, cancellationToken);
+        await TryReleaseAsync(instanceId, instance.Flow, cancellationToken);
     }
 
     /// <summary>

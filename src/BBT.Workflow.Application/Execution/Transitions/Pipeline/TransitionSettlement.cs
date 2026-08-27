@@ -51,12 +51,17 @@ internal static class TransitionSettlement
 
             await using var _ = scope;
 
-            context.Instance.Active();
-            logger.LogDebug(
-                "Instance {InstanceId} resolved to Active after chain settlement",
-                context.InstanceId);
-
-            await instanceRepository.UpdateAsync(context.Instance, true, cancellationToken);
+            // One set-based CAS instead of the tracked full-row save. resolvedStatus only ever
+            // carries Active (ResolveAvailableStep / ClearBusyOnResumeStep) and the old write was
+            // Active() unconditionally, so Busy → Active CAS is behavior-identical; a lost CAS
+            // means the row is no longer Busy and the flip is moot. Pending tracked changes still
+            // commit with the enclosing unit of work.
+            if (await instanceRepository.TryReleaseBusyAsync(context.Instance, cancellationToken))
+            {
+                logger.LogDebug(
+                    "Instance {InstanceId} resolved to Active after chain settlement",
+                    context.InstanceId);
+            }
         }
 
         if (scheduleNotification && context.Target?.HasStateNotifications == true)

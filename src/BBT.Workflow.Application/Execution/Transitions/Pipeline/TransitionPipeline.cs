@@ -174,7 +174,7 @@ public class TransitionPipeline
                 // (Long-poll acknowledge resume is intentionally NOT re-marked: a redundant
                 // resume that no-ops must not strand an already-advanced instance in Busy.)
                 if (context.Directives.IsSubFlowResume)
-                    await _busyMarker.MarkBusyAsync(context.InstanceId, cancellationToken);
+                    await _busyMarker.MarkBusyAsync(context.InstanceId, context.Instance.Flow, cancellationToken);
 
                 context.OwnsStatus = true;
                 return await RunChainAsync(context, cancellationToken);
@@ -450,8 +450,12 @@ public class TransitionPipeline
         await using var faultUow = _uowManager.Begin(
             new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew });
 
-        // Reload in the new scope so we operate on a clean, tracked entity.
-        var instance = await _instanceRepository.FindAsync(context.InstanceId, true, cancellationToken)
+        // Reload in the new scope so we operate on a clean, tracked entity. Narrow shape on
+        // purpose: Fault() walks the correlations for the child-fault cascade and puts LatestData
+        // in the event payload — FindWithAllCorrelationsAndDataAsync covers both as split queries,
+        // where FindAsync(id, includeDetails: true) produced one cartesian JOIN over
+        // DataList × Correlations.
+        var instance = await _instanceRepository.FindWithAllCorrelationsAndDataAsync(context.InstanceId, cancellationToken)
                        ?? context.Instance;
 
         if (!instance.HasActiveIncident)

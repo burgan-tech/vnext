@@ -30,7 +30,7 @@ public interface IInstanceBusyManager
     /// flip need it: releasing a Busy that was already held by someone else would free another
     /// owner's instance.
     /// </returns>
-    Task<bool> MarkBusyAsync(Guid instanceId, CancellationToken cancellationToken = default);
+    Task<bool> MarkBusyAsync(Guid instanceId, string flow, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Marks an instance as Busy and propagates down the active SubFlow chain via the
@@ -52,7 +52,7 @@ public interface IInstanceBusyManager
     /// to Active. No-ops when the instance is not Busy or is Completed. Must be called under
     /// the short status lock and only by the accept path that performed the reserve.
     /// </summary>
-    Task<bool> TryReleaseAsync(Guid instanceId, CancellationToken cancellationToken = default);
+    Task<bool> TryReleaseAsync(Guid instanceId, string flow, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Compensating mirror of <see cref="MarkBusyWithPropagationAsync"/>: walks the active SubFlow

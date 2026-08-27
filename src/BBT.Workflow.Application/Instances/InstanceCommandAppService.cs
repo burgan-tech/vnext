@@ -130,12 +130,16 @@ public sealed class InstanceCommandAppService(
         // Key path: only a non-terminal (Active/Busy) row occupies the key. A plain
         // FindByIdentifierAsync(key) uses FirstOrDefault with no status filter, so when terminal
         // history rows share the key it can return an arbitrary (possibly completed) row and let a
-        // second active instance be created. FindActiveByKeyAsync is the deterministic check.
-        // Id path: the PK is unique, so FindByIdentifierAsync is already deterministic.
+        // second active instance be created. FindActiveByKeyLeanAsync is the deterministic check.
+        // Id path: the PK is unique, so the lean identifier lookup is already deterministic.
+        // Both probes are include-free: only Id/Key/Status are read below.
         var existingInstance = !instanceKey.IsNullOrWhiteSpace()
-            ? await instanceRepository.FindActiveByKeyAsync(instanceKey, cancellationToken)
+            ? await instanceRepository.FindActiveByKeyLeanAsync(instanceKey, cancellationToken)
             : instanceId.HasValue
-                ? await instanceRepository.FindByIdentifierAsync(instanceId.Value.ToString(), cancellationToken)
+                ? (await instanceRepository.GetResultAsync(
+                    instanceId.Value.ToString(), includeDetails: false, cancellationToken)) is { IsSuccess: true } leanResult
+                    ? leanResult.Value
+                    : null
                 : null;
 
         if (existingInstance is null)

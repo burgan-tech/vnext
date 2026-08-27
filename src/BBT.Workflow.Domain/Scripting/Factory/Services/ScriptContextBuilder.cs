@@ -46,7 +46,6 @@ internal sealed class ScriptContextBuilder(
     private string? _workflowVersion;
     private IReference? _workflowReference;
     private Guid? _instanceId;
-    private bool _noTracking;
     private string? _transitionKey;
     private InstanceTransition? _instanceTransition;
 
@@ -86,10 +85,9 @@ internal sealed class ScriptContextBuilder(
         return this;
     }
 
-    public IScriptContextBuilder WithInstance(Guid instanceId, bool noTracking = false)
+    public IScriptContextBuilder WithInstance(Guid instanceId)
     {
         _instanceId = instanceId;
-        _noTracking = noTracking;
         _instance = null; // Clear direct instance if set
         return this;
     }
@@ -312,14 +310,14 @@ internal sealed class ScriptContextBuilder(
 
         if (_instanceId.HasValue)
         {
-            var instance = _noTracking
-                ? await instanceRepository.FindByIdentifierAsReadOnlyAsync(_instanceId.Value.ToString(), cancellationToken)
-                : await instanceRepository.FindByIdentifierAsync(_instanceId.Value.ToString(),
-                    cancellationToken);
-            
+            // Always a no-tracking load: the builder immediately snapshots the aggregate, so a
+            // change-tracked load bought nothing and cost the tracker a full-graph attach.
+            var instance = await instanceRepository.FindByIdentifierAsReadOnlyAsync(
+                _instanceId.Value.ToString(), cancellationToken);
+
             if (instance == null)
                 throw new InvalidOperationException($"Instance with ID {_instanceId.Value} not found.");
-            
+
             _instance = instance.CreateSnapshot();
             return _instance;
         }

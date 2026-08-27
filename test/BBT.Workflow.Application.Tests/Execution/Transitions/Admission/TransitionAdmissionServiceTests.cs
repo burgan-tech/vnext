@@ -237,7 +237,7 @@ public class TransitionAdmissionServiceTests
         await _statusLock.Received(1)
             .AcquireAsync(context.LockKey, Arg.Any<CancellationToken>());
         await _busyManager.Received(1)
-            .MarkBusyAsync(context.InstanceId, Arg.Any<CancellationToken>());
+            .MarkBusyAsync(context.InstanceId, Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -251,7 +251,7 @@ public class TransitionAdmissionServiceTests
         result.IsSuccess.ShouldBeFalse();
         result.Error.Code.ShouldBe(WorkflowErrorCodes.ConflictWorkflow);
         await _busyManager.DidNotReceive()
-            .MarkBusyAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>());
+            .MarkBusyAsync(Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
 
     #endregion
@@ -325,13 +325,13 @@ public class TransitionAdmissionServiceTests
         var context = CreateContext();
         SetupAcquiredLock();
         _busyManager
-            .TryReleaseAsync(context.InstanceId, Arg.Any<CancellationToken>())
+            .TryReleaseAsync(context.InstanceId, Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(true);
 
         await CreateService().ReleaseReservationAsync(context, CancellationToken.None);
 
         await _busyManager.Received(1)
-            .TryReleaseAsync(context.InstanceId, Arg.Any<CancellationToken>());
+            .TryReleaseAsync(context.InstanceId, Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -340,7 +340,7 @@ public class TransitionAdmissionServiceTests
         var context = CreateContext();
         SetupAcquiredLock();
         _busyManager
-            .TryReleaseAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>())
+            .TryReleaseAsync(Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns<Task<bool>>(_ => throw new InvalidOperationException("boom"));
 
         // Compensation must never mask the original failure.
@@ -487,7 +487,7 @@ public class TransitionAdmissionServiceTests
         // everything else and do their work under it, instead of flipping later in the pipeline.
         SetupAcquiredLock();
         var context = CreateContext(transitionKey);
-        _busyManager.MarkBusyAsync(context.InstanceId, Arg.Any<CancellationToken>()).Returns(true);
+        _busyManager.MarkBusyAsync(context.InstanceId, Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(true);
 
         var seen = AcceptFlip.None;
         var result = await CreateService().AcceptAsync(
@@ -495,7 +495,7 @@ public class TransitionAdmissionServiceTests
 
         result.IsSuccess.ShouldBeTrue();
         seen.ShouldBe(AcceptFlip.TakenOver);
-        await _busyManager.Received(1).MarkBusyAsync(context.InstanceId, Arg.Any<CancellationToken>());
+        await _busyManager.Received(1).MarkBusyAsync(context.InstanceId, Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -505,7 +505,7 @@ public class TransitionAdmissionServiceTests
         // free another owner's instance.
         SetupAcquiredLock();
         var context = CreateContext("cancel");
-        _busyManager.MarkBusyAsync(context.InstanceId, Arg.Any<CancellationToken>()).Returns(false);
+        _busyManager.MarkBusyAsync(context.InstanceId, Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(false);
 
         var seen = AcceptFlip.Reserved;
         await CreateService().AcceptAsync(
@@ -526,7 +526,7 @@ public class TransitionAdmissionServiceTests
 
         result.IsSuccess.ShouldBeTrue();
         seen.ShouldBe(AcceptFlip.None);
-        await _busyManager.DidNotReceive().MarkBusyAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>());
+        await _busyManager.DidNotReceive().MarkBusyAsync(Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
         await _busyManager.DidNotReceive().TryMarkBusyWithPropagationAsync(
             Arg.Any<Guid>(), Arg.Any<CancellationToken>());
     }
@@ -560,7 +560,7 @@ public class TransitionAdmissionServiceTests
             context, (_, _) => Task.FromResult(Result.Fail(Error.Validation("x", "boom"))));
 
         result.IsSuccess.ShouldBeFalse();
-        await _busyManager.Received(1).TryReleaseAsync(context.InstanceId, Arg.Any<CancellationToken>());
+        await _busyManager.Received(1).TryReleaseAsync(context.InstanceId, Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -575,7 +575,7 @@ public class TransitionAdmissionServiceTests
         await Should.ThrowAsync<InvalidOperationException>(() => CreateService().AcceptAsync(
             context, (_, _) => throw new InvalidOperationException("boom")));
 
-        await _busyManager.Received(1).TryReleaseAsync(context.InstanceId, Arg.Any<CancellationToken>());
+        await _busyManager.Received(1).TryReleaseAsync(context.InstanceId, Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -588,7 +588,7 @@ public class TransitionAdmissionServiceTests
         await CreateService().AcceptAsync(
             context, (_, _) => Task.FromResult(Result.Fail(Error.Validation("x", "boom"))));
 
-        await _busyManager.DidNotReceive().TryReleaseAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>());
+        await _busyManager.DidNotReceive().TryReleaseAsync(Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
         await _busyManager.DidNotReceive().ReleaseWithPropagationAsync(
             Arg.Any<Guid>(), Arg.Any<CancellationToken>());
     }

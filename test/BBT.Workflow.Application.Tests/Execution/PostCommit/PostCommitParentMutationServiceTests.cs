@@ -70,7 +70,7 @@ public sealed class PostCommitParentMutationServiceTests
         result.Value.Status.ShouldBe(InstanceStatus.Active);
         authoritative.Status.ShouldBe(InstanceStatus.Active);
         sourceInstance.Status.ShouldBe(InstanceStatus.Busy);
-        calls.ShouldBe(["lock", "uow", "reload", "update", "commit", "unlock"]);
+        calls.ShouldBe(["lock", "uow", "reload", "settle", "commit", "unlock"]);
         await fixture.StatusLock.Received(1).AcquireAsync(
             $"vnext:{Domain}:{WorkflowKey}:{authoritative.Id}",
             Arg.Any<CancellationToken>());
@@ -296,6 +296,15 @@ public sealed class PostCommitParentMutationServiceTests
             {
                 calls.Add("update");
                 return Task.FromResult(authoritative);
+            });
+        // The settlement flip is an aggregate-aware CAS now: on success the repository applies
+        // Active() in memory and aligns the tracker baseline — the mock mimics that contract.
+        repository.TryReleaseBusyAsync(authoritative, Arg.Any<CancellationToken>())
+            .Returns(_ =>
+            {
+                calls.Add("settle");
+                authoritative.Active();
+                return Task.FromResult(true);
             });
 
         var notificationScheduler = Substitute.For<IStateNotificationScheduler>();

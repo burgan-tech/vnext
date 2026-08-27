@@ -80,6 +80,14 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Include-free variant of <see cref="FindActiveByKeyAsync"/> for existence/status probes
+    /// (e.g. the start idempotency check): same non-terminal filter and ordering, but no
+    /// DataList or correlation loads.
+    /// </summary>
+    Task<Instance?> FindActiveByKeyLeanAsync(string key,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Loads a read-only (no-tracking) instance with the full <see cref="Instance.DataList"/>
     /// history. Dedicated to <c>GetInstanceHistoryAsync</c> where detached entities are sufficient.
     /// </summary>
@@ -156,18 +164,35 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
     /// WHERE clause, so the returned flag is the authoritative outcome under the caller's status
     /// lock. Busy() raises no domain events, which is what makes the set-based write legal here —
     /// do NOT copy this pattern for event-raising status changes (Complete/Fault/Cancel).
-    /// Emits the status-change gauge metric the tracked-update path used to emit.
+    /// Emits the status-change gauge metric the tracked-update path used to emit; <paramref name="flow"/>
+    /// feeds that metric so the statement stays a single round-trip (every caller already holds it).
     /// </summary>
     /// <returns>True when exactly this call flipped Active → Busy; false when the instance was
     /// missing, already Busy, or terminal (Completed/Faulted/Passive).</returns>
-    Task<bool> TryMarkBusyAsync(Guid instanceId, CancellationToken cancellationToken = default);
+    Task<bool> TryMarkBusyAsync(Guid instanceId, string flow, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Compare-and-set Busy → Active; the set-based counterpart of <see cref="TryMarkBusyAsync"/>
+    /// Compare-and-set Busy → Active; the set-based counterpart of <see cref="TryMarkBusyAsync(Guid,string,CancellationToken)"/>
     /// with the same event/metric rules.
     /// </summary>
     /// <returns>True when exactly this call flipped Busy → Active.</returns>
-    Task<bool> TryReleaseBusyAsync(Guid instanceId, CancellationToken cancellationToken = default);
+    Task<bool> TryReleaseBusyAsync(Guid instanceId, string flow, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Aggregate-aware variant of <see cref="TryMarkBusyAsync(Guid,string,CancellationToken)"/> for
+    /// callers holding the change-tracked instance (pipeline steps, settlement): on a successful CAS
+    /// it applies <c>Busy()</c> in memory AND aligns the change tracker's baseline for the status
+    /// column, so a later SaveChanges in the same unit of work does not write the status a second
+    /// time. On a lost race the aggregate is left untouched.
+    /// </summary>
+    Task<bool> TryMarkBusyAsync(Instance instance, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Aggregate-aware counterpart of <see cref="TryReleaseBusyAsync(Guid,string,CancellationToken)"/>:
+    /// CAS Busy → Active, then <c>Active()</c> in memory with the same change-tracker baseline
+    /// alignment as <see cref="TryMarkBusyAsync(Instance,CancellationToken)"/>.
+    /// </summary>
+    Task<bool> TryReleaseBusyAsync(Instance instance, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Writes the long-poll acknowledge token as one set-based UPDATE — the arm is a single

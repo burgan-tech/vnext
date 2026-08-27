@@ -416,7 +416,12 @@ public sealed class SubProcessTaskExecutor : TriggerTaskExecutorBase<SubProcessT
                 var instanceId = context.ScriptContext.Instance.Id;
                 using var gate = await InstanceWriteGate.AcquireAsync(instanceId, ct);
 
-                var trackedInstance = await _instanceRepository.GetAsync(instanceId, true, ct);
+                // Correlation-only shape: AddCorrelation needs the correlation navigation and
+                // nothing else — GetAsync(id, includeDetails: true) also dragged the full
+                // DataList in through a single cartesian JOIN.
+                var trackedInstance = await _instanceRepository.FindWithAllCorrelationsAsync(instanceId, ct)
+                    ?? throw new InvalidOperationException(
+                        $"Instance {instanceId} not found while creating the SubProcess correlation");
                 trackedInstance.AddCorrelation(correlation);
                 await _instanceRepository.UpdateAsync(trackedInstance, true, ct);
             },

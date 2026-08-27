@@ -206,7 +206,7 @@ public sealed class SubProcessCorrelationConcurrencyTests
 
             var repository = Substitute.For<IInstanceRepository>();
             repository
-                .GetAsync(Arg.Any<Guid>(), Arg.Any<bool>(), Arg.Any<CancellationToken>())
+                .FindWithAllCorrelationsAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>())
                 .Returns(_ => EnterAsync(onEnter));
             repository
                 .UpdateAsync(Arg.Any<Instance>(), Arg.Any<bool>(), Arg.Any<CancellationToken>())
@@ -266,7 +266,7 @@ public sealed class SubProcessCorrelationConcurrencyTests
 
         public Task DrainAsync() => Task.WhenAll(_issued);
 
-        private async Task<Instance> EnterAsync(Func<Task>? onEnter)
+        private async Task<Instance?> EnterAsync(Func<Task>? onEnter)
         {
             Tracker.Enter();
 

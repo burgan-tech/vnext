@@ -171,7 +171,7 @@ public sealed class TransitionAdmissionService(
                 // cancel / exit / timeout: exempt from the Busy 409, but they DO set the status,
                 // so they take the same lock as everything else and flip under it. Idempotent —
                 // only a flip we actually performed may be compensated.
-                var flipped = await busyManager.MarkBusyAsync(context.InstanceId, cancellationToken);
+                var flipped = await busyManager.MarkBusyAsync(context.InstanceId, context.Instance.Flow, cancellationToken);
                 logger.InstanceBusyReserved(context.InstanceId, context.TransitionKey);
                 return Result<AcceptFlip>.Ok(flipped ? AcceptFlip.TakenOver : AcceptFlip.None);
             }
@@ -229,7 +229,7 @@ public sealed class TransitionAdmissionService(
             {
                 case AcceptFlip.Reserved:
                 case AcceptFlip.TakenOver:
-                    if (await busyManager.TryReleaseAsync(context.InstanceId, cancellationToken))
+                    if (await busyManager.TryReleaseAsync(context.InstanceId, context.Instance.Flow, cancellationToken))
                         logger.InstanceStatusSettled(context.InstanceId, InstanceStatus.Active.Code);
                     break;
 
@@ -285,7 +285,7 @@ public sealed class TransitionAdmissionService(
         // Unconditional flip: exempt from the Busy 409, but the flip itself is serialized under
         // the same short lock as every reserve/settle. Idempotent when already Busy; a Completed
         // instance is left untouched — HandleCancelPreflightStep surfaces the terminal error.
-        await busyManager.MarkBusyAsync(context.InstanceId, cancellationToken);
+        await busyManager.MarkBusyAsync(context.InstanceId, context.Instance.Flow, cancellationToken);
         logger.InstanceBusyReserved(context.InstanceId, context.TransitionKey);
         return Result.Ok();
     }
@@ -346,7 +346,7 @@ public sealed class TransitionAdmissionService(
                 return;
             }
 
-            var released = await busyManager.TryReleaseAsync(context.InstanceId, cancellationToken);
+            var released = await busyManager.TryReleaseAsync(context.InstanceId, context.Instance.Flow, cancellationToken);
             if (released)
                 logger.InstanceStatusSettled(context.InstanceId, InstanceStatus.Active.Code);
         }

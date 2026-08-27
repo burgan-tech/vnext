@@ -50,7 +50,7 @@ public sealed class InstanceBusyManagerTests
             .ReturnsAsync(Result<Instance>.Fail(Error.NotFound("instance-not-found", "Instance not found")));
 
         // Act
-        await CreateSut().MarkBusyAsync(instanceId);
+        await CreateSut().MarkBusyAsync(instanceId, "test-flow");
 
         // Assert — the authoritative read happens inside the isolated UoW, but no write occurs
         _uowManager.Verify(m => m.Begin(It.IsAny<UnitOfWorkOptions>()), Times.Once);
@@ -70,7 +70,7 @@ public sealed class InstanceBusyManagerTests
             .ReturnsAsync(Result.Ok(instance));
 
         // Act
-        await CreateSut().MarkBusyAsync(instanceId);
+        await CreateSut().MarkBusyAsync(instanceId, "test-flow");
 
         // Assert
         _uowManager.Verify(m => m.Begin(It.IsAny<UnitOfWorkOptions>()), Times.Once);
@@ -86,17 +86,17 @@ public sealed class InstanceBusyManagerTests
         // The manager is a compare-and-set now: no aggregate load, the guard lives in the
         // repository's WHERE clause and the flag is the authoritative outcome.
         _instanceRepository
-            .Setup(r => r.TryMarkBusyAsync(instanceId, It.IsAny<CancellationToken>()))
+            .Setup(r => r.TryMarkBusyAsync(instanceId, It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(true);
 
         // Act
-        var flipped = await CreateSut().MarkBusyAsync(instanceId);
+        var flipped = await CreateSut().MarkBusyAsync(instanceId, "test-flow");
 
         // Assert — UoW opened with RequiresNew, CAS + commit called
         flipped.ShouldBeTrue();
         _uowManager.Verify(m => m.Begin(It.Is<UnitOfWorkOptions>(o =>
             o.Scope == UnitOfWorkScopeOption.RequiresNew)), Times.Once);
-        _instanceRepository.Verify(r => r.TryMarkBusyAsync(instanceId, It.IsAny<CancellationToken>()), Times.Once);
+        _instanceRepository.Verify(r => r.TryMarkBusyAsync(instanceId, It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Once);
         _uow.Verify(u => u.CommitAsync(It.IsAny<CancellationToken>()), Times.Once);
     }
 
@@ -132,7 +132,7 @@ public sealed class InstanceBusyManagerTests
             .ReturnsAsync(instance);
 
         _instanceRepository
-            .Setup(r => r.TryMarkBusyAsync(instanceId, It.IsAny<CancellationToken>()))
+            .Setup(r => r.TryMarkBusyAsync(instanceId, It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(true);
 
         // Act
@@ -140,7 +140,7 @@ public sealed class InstanceBusyManagerTests
 
         // Assert — UoW opened, CAS write, gateway NOT called
         _uowManager.Verify(m => m.Begin(It.IsAny<UnitOfWorkOptions>()), Times.Once);
-        _instanceRepository.Verify(r => r.TryMarkBusyAsync(instanceId, It.IsAny<CancellationToken>()), Times.Once);
+        _instanceRepository.Verify(r => r.TryMarkBusyAsync(instanceId, It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Once);
         _uow.Verify(u => u.CommitAsync(It.IsAny<CancellationToken>()), Times.Once);
         _instanceCommandGateway.Verify(g => g.MarkBusyAsync(It.IsAny<MarkBusyInput>(), It.IsAny<CancellationToken>()), Times.Never);
     }
@@ -254,7 +254,7 @@ public sealed class InstanceBusyManagerTests
             .ReturnsAsync(instance);
 
         _instanceRepository
-            .Setup(r => r.TryMarkBusyAsync(instanceId, It.IsAny<CancellationToken>()))
+            .Setup(r => r.TryMarkBusyAsync(instanceId, It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(true);
 
         // Act
@@ -264,7 +264,7 @@ public sealed class InstanceBusyManagerTests
         outcome.ShouldBe(BusyMarkOutcome.Marked);
         _uowManager.Verify(m => m.Begin(It.Is<UnitOfWorkOptions>(o =>
             o.Scope == UnitOfWorkScopeOption.RequiresNew)), Times.Once);
-        _instanceRepository.Verify(r => r.TryMarkBusyAsync(instanceId, It.IsAny<CancellationToken>()), Times.Once);
+        _instanceRepository.Verify(r => r.TryMarkBusyAsync(instanceId, It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Once);
         _uow.Verify(u => u.CommitAsync(It.IsAny<CancellationToken>()), Times.Once);
     }
 
@@ -327,13 +327,13 @@ public sealed class InstanceBusyManagerTests
             .Setup(r => r.FindWithActiveSubFlowAsync(leafId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(leaf);
         _instanceRepository
-            .Setup(r => r.TryReleaseBusyAsync(leafId, It.IsAny<CancellationToken>()))
+            .Setup(r => r.TryReleaseBusyAsync(leafId, It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(true);
 
         await CreateSut().ReleaseWithPropagationAsync(leafId);
 
         // The settle is a set-based CAS in the repository; the in-memory copy is untouched.
-        _instanceRepository.Verify(r => r.TryReleaseBusyAsync(leafId, It.IsAny<CancellationToken>()), Times.Once);
+        _instanceRepository.Verify(r => r.TryReleaseBusyAsync(leafId, It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Once);
         _uow.Verify(u => u.CommitAsync(It.IsAny<CancellationToken>()), Times.Once);
         _instanceCommandGateway.Verify(g => g.ReleaseBusyAsync(
             It.IsAny<MarkBusyInput>(), It.IsAny<CancellationToken>()), Times.Never);

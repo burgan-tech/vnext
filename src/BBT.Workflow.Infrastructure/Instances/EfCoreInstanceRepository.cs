@@ -247,21 +247,52 @@ public sealed class EfCoreInstanceRepository(
     // No need for manual transaction tracking helpers
 
     /// <inheritdoc />
-    public async Task<bool> TryMarkBusyAsync(Guid instanceId, CancellationToken cancellationToken = default)
-        => await TryTransitionStatusAsync(instanceId, InstanceStatus.Active, InstanceStatus.Busy, cancellationToken);
+    public async Task<bool> TryMarkBusyAsync(Guid instanceId, string flow, CancellationToken cancellationToken = default)
+        => await TryTransitionStatusAsync(instanceId, flow, InstanceStatus.Active, InstanceStatus.Busy, cancellationToken);
 
     /// <inheritdoc />
-    public async Task<bool> TryReleaseBusyAsync(Guid instanceId, CancellationToken cancellationToken = default)
-        => await TryTransitionStatusAsync(instanceId, InstanceStatus.Busy, InstanceStatus.Active, cancellationToken);
+    public async Task<bool> TryReleaseBusyAsync(Guid instanceId, string flow, CancellationToken cancellationToken = default)
+        => await TryTransitionStatusAsync(instanceId, flow, InstanceStatus.Busy, InstanceStatus.Active, cancellationToken);
+
+    /// <inheritdoc />
+    public async Task<bool> TryMarkBusyAsync(Instance instance, CancellationToken cancellationToken = default)
+    {
+        if (!await TryTransitionStatusAsync(
+                instance.Id, instance.Flow, InstanceStatus.Active, InstanceStatus.Busy, cancellationToken))
+        {
+            return false;
+        }
+
+        instance.Busy();
+        await AlignStatusBaselineAsync(instance);
+        return true;
+    }
+
+    /// <inheritdoc />
+    public async Task<bool> TryReleaseBusyAsync(Instance instance, CancellationToken cancellationToken = default)
+    {
+        if (!await TryTransitionStatusAsync(
+                instance.Id, instance.Flow, InstanceStatus.Busy, InstanceStatus.Active, cancellationToken))
+        {
+            return false;
+        }
+
+        instance.Active();
+        await AlignStatusBaselineAsync(instance);
+        return true;
+    }
 
     /// <summary>
     /// The shared CAS: guard in the WHERE, single UPDATE, no aggregate load. ModifiedAt is set
     /// explicitly because ExecuteUpdate bypasses the audit interceptor — without it the computed
     /// LastTouchedAt column would stop advancing. ModifiedBy is deliberately NOT re-stamped: a
     /// Busy flip is a system operation (same rule as InstanceJobs.MarkAsProcessedAsync).
+    /// The status gauge metric is fed from the caller-supplied flow so the CAS stays a single
+    /// round-trip (it used to re-read the Flow column just for the metric).
     /// </summary>
     private async Task<bool> TryTransitionStatusAsync(
         Guid instanceId,
+        string flow,
         InstanceStatus expected,
         InstanceStatus next,
         CancellationToken cancellationToken)
@@ -278,20 +309,29 @@ public sealed class EfCoreInstanceRepository(
             return false;
         }
 
-        // The tracked-update path emitted this from the change tracker; the set-based path must
-        // keep the status gauges honest itself. One narrow projection — still far cheaper than
-        // the aggregate load the CAS replaced.
-        var flow = await (await GetDbSetAsync())
-            .AsNoTracking()
-            .Where(i => i.Id == instanceId)
-            .Select(i => i.Flow)
-            .FirstOrDefaultAsync(cancellationToken);
-        if (flow is not null)
+        workflowMetrics.UpdateInstanceStatusMetrics(flow, expected.Code, next.Code);
+        return true;
+    }
+
+    /// <summary>
+    /// After a set-based status flip on a change-tracked aggregate, the tracker's snapshot still
+    /// carries the OLD status while the in-memory mutation above set the NEW one — a later
+    /// SaveChanges in the same unit of work would then write the status a second time. Aligning
+    /// the baseline to the current value marks the column clean; every other pending change is
+    /// left exactly as tracked. No-op for detached aggregates.
+    /// </summary>
+    private async Task AlignStatusBaselineAsync(Instance instance)
+    {
+        var dbContext = await GetDbContextAsync();
+        var entry = dbContext.Entry(instance);
+        if (entry.State == EntityState.Detached)
         {
-            workflowMetrics.UpdateInstanceStatusMetrics(flow, expected.Code, next.Code);
+            return;
         }
 
-        return true;
+        var status = entry.Property(nameof(Instance.Status));
+        status.OriginalValue = instance.Status;
+        status.IsModified = false;
     }
 
     /// <inheritdoc />
@@ -367,6 +407,21 @@ public sealed class EfCoreInstanceRepository(
         // Only non-terminal instances occupy a key (Active or Busy). Terminal rows
         // (Completed/Faulted/Passive) are ignored. OrderByDescending(CreatedAt) keeps the
         // result deterministic even if legacy data left more than one live row for a key.
+        return MarkIfPartiallyLoaded(await query
+            .Where(i => i.Key == key
+                        && (i.Status == InstanceStatus.Active || i.Status == InstanceStatus.Busy))
+            .OrderByDescending(i => i.CreatedAt)
+            .FirstOrDefaultAsync(cancellationToken));
+    }
+
+    /// <inheritdoc />
+    public async Task<Instance?> FindActiveByKeyLeanAsync(string key,
+        CancellationToken cancellationToken = default)
+    {
+        // Include-free twin of FindActiveByKeyAsync for existence/status probes: same WHERE and
+        // ordering, no DataList/correlation loads.
+        var query = await GetQueryableAsync();
+
         return MarkIfPartiallyLoaded(await query
             .Where(i => i.Key == key
                         && (i.Status == InstanceStatus.Active || i.Status == InstanceStatus.Busy))
