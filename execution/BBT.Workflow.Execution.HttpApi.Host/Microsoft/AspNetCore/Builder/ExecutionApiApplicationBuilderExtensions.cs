@@ -1,5 +1,4 @@
 using BBT.Workflow.Execution.Invocation;
-using Prometheus;
 
 namespace Microsoft.AspNetCore.Builder;
 
@@ -47,8 +46,6 @@ public static class ExecutionApiApplicationBuilderExtensions
             useSwagger: !app.Environment.IsProduction(),
             useSwaggerUi: !app.Environment.IsProduction());
         app.UseRouting();
-        app.UseHttpMetrics();
-        app.MapMetrics(); 
         app.MapControllers();
         app.MapAppHealthChecks();
 

@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using BBT.Workflow.Definitions;
-using BBT.Workflow.Monitoring;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks.Evaluators;
 using Microsoft.CodeAnalysis;
@@ -14,7 +13,11 @@ using Xunit;
 
 namespace BBT.Workflow.Application.Tests.Tasks.Evaluators;
 
-public sealed class ScriptConditionEvaluatorMetricsTests
+/// <summary>
+/// Behavior pins for <see cref="ScriptConditionEvaluator"/> (formerly the metrics tests — the
+/// prometheus metrics were removed, the evaluation semantics they rode along stay pinned).
+/// </summary>
+public sealed class ScriptConditionEvaluatorBehaviorTests
 {
     private sealed class FakeConditionMapping(bool result, Exception? throwOnHandle) : IConditionMapping
     {
@@ -38,12 +41,11 @@ public sealed class ScriptConditionEvaluatorMetricsTests
     }
 
     [Fact]
-    public async Task EvaluateAsync_Success_RecordsExecutionDuration()
+    public async Task EvaluateAsync_Success_ReturnsHandlerVerdict()
     {
         var mapping = new FakeConditionMapping(true, null);
-        var engine = MockEngine(mapping);
-        var metrics = Substitute.For<IWorkflowMetrics>();
-        var evaluator = new ScriptConditionEvaluator(engine, NullLogger<ScriptConditionEvaluator>.Instance, metrics);
+        var evaluator = new ScriptConditionEvaluator(
+            MockEngine(mapping), NullLogger<ScriptConditionEvaluator>.Instance);
 
         var script = ScriptCode.FromNative("return true;");
         var context = new ScriptContext.Builder(NullLogger<ScriptContext>.Instance).Build();
@@ -52,29 +54,21 @@ public sealed class ScriptConditionEvaluatorMetricsTests
 
         result.IsSuccess.ShouldBeTrue();
         result.Value.ShouldBeTrue();
-        metrics.Received(1).RecordScriptExecutionDuration(
-            "condition", "csharp", "success", Arg.Is<double>(d => d >= 0));
-        metrics.DidNotReceiveWithAnyArgs().RecordScriptRuntimeError(default!, default!, default!);
     }
 
     [Fact]
-    public async Task EvaluateAsync_HandlerThrows_RecordsRuntimeErrorAndFailsWithoutThrowing()
+    public async Task EvaluateAsync_HandlerThrows_FailsWithoutThrowing()
     {
         var mapping = new FakeConditionMapping(false, new InvalidOperationException("boom"));
-        var engine = MockEngine(mapping);
-        var metrics = Substitute.For<IWorkflowMetrics>();
-        var evaluator = new ScriptConditionEvaluator(engine, NullLogger<ScriptConditionEvaluator>.Instance, metrics);
+        var evaluator = new ScriptConditionEvaluator(
+            MockEngine(mapping), NullLogger<ScriptConditionEvaluator>.Instance);
 
         var script = ScriptCode.FromNative("throw;");
         var context = new ScriptContext.Builder(NullLogger<ScriptContext>.Instance).Build();
 
         var result = await evaluator.EvaluateAsync(script, context, CancellationToken.None);
 
-        // TryAsync swallows the exception into a failed Result - existing behavior preserved.
+        // TryAsync swallows the exception into a failed Result — existing behavior preserved.
         result.IsSuccess.ShouldBeFalse();
-        metrics.Received(1).RecordScriptRuntimeError(
-            "condition", "csharp", nameof(InvalidOperationException));
-        metrics.DidNotReceiveWithAnyArgs().RecordScriptExecutionDuration(
-            default!, default!, default!, default);
     }
 }

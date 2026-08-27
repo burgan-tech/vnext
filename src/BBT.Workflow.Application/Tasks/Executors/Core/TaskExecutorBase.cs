@@ -3,7 +3,6 @@ using System.Text;
 using System.Text.Json;
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
-using BBT.Workflow.Monitoring;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks.Coordinator;
 using Microsoft.Extensions.Logging;
@@ -22,13 +21,10 @@ namespace BBT.Workflow.Tasks.Executors;
 /// 7. CreateResponse - Build StandardTaskResponse
 /// </summary>
 /// <typeparam name="TTask">The specific WorkflowTask type this executor handles.</typeparam>
-public abstract class TaskExecutorBase<TTask>(ILogger logger, IWorkflowMetrics metrics) : ITaskExecutor
+public abstract class TaskExecutorBase<TTask>(ILogger logger) : ITaskExecutor
     where TTask : WorkflowTask
 {
     protected readonly ILogger Logger = logger;
-    protected readonly IWorkflowMetrics Metrics = metrics;
-
-    private const string ScriptLanguage = "csharp";
 
     /// <inheritdoc />
     public abstract TaskType TaskType { get; }
@@ -56,26 +52,9 @@ public abstract class TaskExecutorBase<TTask>(ILogger logger, IWorkflowMetrics m
 
         // 2. PrepareInput (virtual - custom per executor)
         Result<ScriptResponse?> inputResult;
-        var hasMapping = context.OnExecuteTask?.Mapping?.HasMappingCode == true;
         using (TaskExecutionActivityHelper.StartActivity(TaskExecutionActivityHelper.OperationPrepareInput, taskKey, taskTypeStr))
         {
-            var phaseStart = Stopwatch.GetTimestamp();
-            try
-            {
-                inputResult = await PrepareInputAsync(task, context, cancellationToken);
-            }
-            catch (Exception ex) when (hasMapping && ex is not OperationCanceledException)
-            {
-                Metrics.RecordScriptRuntimeError("task-input", ScriptLanguage, ex.GetType().Name);
-                throw;
-            }
-            if (hasMapping)
-            {
-                Metrics.RecordScriptExecutionDuration(
-                    "task-input", ScriptLanguage,
-                    inputResult.IsSuccess ? "success" : "failure",
-                    Stopwatch.GetElapsedTime(phaseStart).TotalSeconds);
-            }
+            inputResult = await PrepareInputAsync(task, context, cancellationToken);
         }
         if (!inputResult.IsSuccess)
         {
@@ -135,23 +114,7 @@ public abstract class TaskExecutorBase<TTask>(ILogger logger, IWorkflowMetrics m
         Result<object?> outputResult;
         using (TaskExecutionActivityHelper.StartActivity(TaskExecutionActivityHelper.OperationProcessOutput, taskKey, taskTypeStr))
         {
-            var phaseStart = Stopwatch.GetTimestamp();
-            try
-            {
-                outputResult = await ProcessOutputAsync(task, invokeResult.Value!, context, cancellationToken);
-            }
-            catch (Exception ex) when (hasMapping && ex is not OperationCanceledException)
-            {
-                Metrics.RecordScriptRuntimeError("task-output", ScriptLanguage, ex.GetType().Name);
-                throw;
-            }
-            if (hasMapping)
-            {
-                Metrics.RecordScriptExecutionDuration(
-                    "task-output", ScriptLanguage,
-                    outputResult.IsSuccess ? "success" : "failure",
-                    Stopwatch.GetElapsedTime(phaseStart).TotalSeconds);
-            }
+            outputResult = await ProcessOutputAsync(task, invokeResult.Value!, context, cancellationToken);
         }
         if (!outputResult.IsSuccess)
         {

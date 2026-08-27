@@ -1,5 +1,4 @@
 using Microsoft.Extensions.Diagnostics.HealthChecks;
-using Prometheus;
 
 namespace Microsoft.Extensions.DependencyInjection;
 
@@ -12,14 +11,13 @@ public static class HealthChecksServiceCollectionExtensions
 {
     /// <summary>
     /// Adds the base health checks shared by all Workflow application hosts:
-    /// a "self" liveness check (tagged "live") and Prometheus forwarding.
+    /// a "self" liveness check (tagged "live").
     /// Does NOT include a database check — add that per-host where needed.
     /// </summary>
     public static IServiceCollection AddAppHealthChecks(this IServiceCollection services)
     {
         services
             .AddHealthChecks()
-            .ForwardToPrometheus()
             .AddCheck("self", () => HealthCheckResult.Healthy(), tags: ["live"]);
 
         return services;

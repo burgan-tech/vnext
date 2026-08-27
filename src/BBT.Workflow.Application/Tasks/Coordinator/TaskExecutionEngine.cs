@@ -7,7 +7,6 @@ using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution.ErrorHandling;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
-using BBT.Workflow.Monitoring;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks.Executors;
 using BBT.Workflow.Tasks.Factory;
@@ -30,7 +29,6 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
     private readonly ITaskFactory _taskFactory;
     private readonly ITaskPersistenceStrategyFactory _persistenceStrategyFactory;
     private readonly IGuidGenerator _guidGenerator;
-    private readonly IWorkflowMetrics _workflowMetrics;
     private readonly IErrorBoundaryResolver _boundaryResolver;
     private readonly IErrorActionExecutor _actionExecutor;
     private readonly IExecutionErrorFactory _errorFactory;
@@ -45,7 +43,6 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
         ITaskFactory taskFactory,
         ITaskPersistenceStrategyFactory persistenceStrategyFactory,
         IGuidGenerator guidGenerator,
-        IWorkflowMetrics workflowMetrics,
         IErrorBoundaryResolver boundaryResolver,
         IErrorActionExecutor actionExecutor,
         IExecutionErrorFactory errorFactory,
@@ -56,7 +53,6 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
         _taskFactory = taskFactory;
         _persistenceStrategyFactory = persistenceStrategyFactory;
         _guidGenerator = guidGenerator;
-        _workflowMetrics = workflowMetrics;
         _boundaryResolver = boundaryResolver;
         _actionExecutor = actionExecutor;
         _errorFactory = errorFactory;
@@ -480,8 +476,6 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
         if (strategy != null)
             await strategy.HandleCompletionAsync(instanceTask, cancellationToken);
 
-        _workflowMetrics.RecordTaskFailed(taskType, workflowKey, stopwatch.Elapsed.TotalSeconds);
-        _workflowMetrics.FinishTaskExecution(taskType, workflowKey);
 
         _logger.LogError("Task {TaskKey} failed: {Error}", instanceTask.TaskId, errorMessage);
     }
@@ -582,8 +576,6 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
         var persistenceStrategy = GetPersistenceStrategy(origin);
 
         // 4. Record metrics start
-        _workflowMetrics.RecordTaskExecuted(taskTypeStr, workflowKey);
-        _workflowMetrics.StartTaskExecution(taskTypeStr, workflowKey);
 
         _logger.LogDebug(
             "Executing task {TaskKey} of type {TaskType} for instance {InstanceId} (retry attempt)",
@@ -673,13 +665,10 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
         // Record metrics
         if (response.IsSuccess)
         {
-            _workflowMetrics.RecordTaskCompleted(taskTypeStr, workflowKey, stopwatch.Elapsed.TotalSeconds);
         }
         else
         {
-            _workflowMetrics.RecordTaskFailed(taskTypeStr, workflowKey, stopwatch.Elapsed.TotalSeconds);
         }
-        _workflowMetrics.FinishTaskExecution(taskTypeStr, workflowKey);
 
         // 11. Handle business failure
         // response.IsSuccess is already overridden by AcceptedStatusCodes in TaskExecutorBase,

@@ -1,4 +1,3 @@
-using Prometheus;
 
 namespace Microsoft.AspNetCore.Builder;
 
@@ -41,8 +40,6 @@ public static class OutboxWorkerApplicationBuilderExtensions
         app.UseRouting();
         app.UseSchemaResolution();
         app.UseAetherUnitOfWork();
-        app.UseHttpMetrics();
-        app.MapMetrics(); 
         app.MapControllers();
         app.UseDaprScheduledJobHandler();
         app.MapAppHealthChecks();

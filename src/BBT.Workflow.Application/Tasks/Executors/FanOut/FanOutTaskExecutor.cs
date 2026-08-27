@@ -2,7 +2,6 @@ using System.Diagnostics;
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Logging;
-using BBT.Workflow.Monitoring;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks.Coordinator;
 using BBT.Workflow.Tasks.Factory;
@@ -19,7 +18,7 @@ namespace BBT.Workflow.Tasks.Executors;
 /// <remarks>
 /// <para>
 /// <strong>Parallelism is this executor's business; writing is the single writer's business.</strong>
-/// Every item runs through the full task engine (retry, error boundary, journal, metrics) with
+/// Every item runs through the full task engine (retry, error boundary, journal) with
 /// <see cref="TaskEngineExecutionOptions.SuppressDataApply"/>, on its own DI scope and its own
 /// discarded branch <see cref="ScriptContext"/>. Nothing an item does reaches instance data; the
 /// batch's single output — the mapping's <c>OutputHandler</c>, or the default packaging — is the
@@ -38,7 +37,6 @@ public sealed class FanOutTaskExecutor : TaskExecutorBase<FanOutTask>
     private readonly ITaskFactory _taskFactory;
     private readonly IServiceScopeFactory _serviceScopeFactory;
     private readonly FanOutConcurrencyLimiter _concurrencyLimiter;
-    private readonly IWorkflowMetrics _metrics;
 
     /// <summary>
     /// Initializes a new instance of <see cref="FanOutTaskExecutor"/>.
@@ -48,15 +46,13 @@ public sealed class FanOutTaskExecutor : TaskExecutorBase<FanOutTask>
         ITaskFactory taskFactory,
         IServiceScopeFactory serviceScopeFactory,
         FanOutConcurrencyLimiter concurrencyLimiter,
-        IWorkflowMetrics metrics,
         ILogger<FanOutTaskExecutor> logger)
-        : base(logger, metrics)
+        : base(logger)
     {
         _scriptEngine = scriptEngine;
         _taskFactory = taskFactory;
         _serviceScopeFactory = serviceScopeFactory;
         _concurrencyLimiter = concurrencyLimiter;
-        _metrics = metrics;
     }
 
     /// <inheritdoc />
@@ -506,13 +502,6 @@ public sealed class FanOutTaskExecutor : TaskExecutorBase<FanOutTask>
             (long)elapsed.TotalMilliseconds,
             instanceId);
 
-        _metrics.RecordFanOutBatch(
-            task.Key,
-            context.ScriptContext.Workflow?.Key ?? UnknownWorkflow,
-            result.Total,
-            result.Succeeded,
-            result.Failed,
-            elapsed.TotalSeconds);
     }
 
     private static Guid InstanceIdOf(TaskExecutorContext context) =>

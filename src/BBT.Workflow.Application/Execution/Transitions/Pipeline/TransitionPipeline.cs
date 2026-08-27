@@ -174,7 +174,7 @@ public class TransitionPipeline
                 // (Long-poll acknowledge resume is intentionally NOT re-marked: a redundant
                 // resume that no-ops must not strand an already-advanced instance in Busy.)
                 if (context.Directives.IsSubFlowResume)
-                    await _busyMarker.MarkBusyAsync(context.InstanceId, context.Instance.Flow, cancellationToken);
+                    await _busyMarker.MarkBusyAsync(context.InstanceId, cancellationToken);
 
                 context.OwnsStatus = true;
                 return await RunChainAsync(context, cancellationToken);

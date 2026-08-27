@@ -9,7 +9,6 @@ using BBT.Workflow.Definitions;
 using BBT.Workflow.Definitions.GraphQL;
 using BBT.Workflow.Filtering;
 using BBT.Workflow.Infrastructure.Instances;
-using BBT.Workflow.Monitoring;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Security;
 using BBT.Workflow.BackgroundJobs.Options;
@@ -23,7 +22,6 @@ namespace BBT.Workflow.Instances;
 public sealed class EfCoreInstanceRepository(
     IAetherDbContextProvider<WorkflowDbContext> dbContext,
     IServiceProvider serviceProvider,
-    IWorkflowMetrics workflowMetrics,
     IRuntimeInfoProvider runtimeInfoProvider,
     IDataSinkManager dataSinkManager,
      ICurrentSchema currentSchema,
@@ -188,7 +186,6 @@ public sealed class EfCoreInstanceRepository(
 
         // Database metrics are automatically recorded by WorkflowDatabaseInterceptor
         // Only record business-specific instance metrics here
-        workflowMetrics.RecordInstanceCreated(entity.Flow, runtimeInfoProvider.Domain);
 
         // Transfer to registered data sinks if any
         try
@@ -247,18 +244,18 @@ public sealed class EfCoreInstanceRepository(
     // No need for manual transaction tracking helpers
 
     /// <inheritdoc />
-    public async Task<bool> TryMarkBusyAsync(Guid instanceId, string flow, CancellationToken cancellationToken = default)
-        => await TryTransitionStatusAsync(instanceId, flow, InstanceStatus.Active, InstanceStatus.Busy, cancellationToken);
+    public async Task<bool> TryMarkBusyAsync(Guid instanceId, CancellationToken cancellationToken = default)
+        => await TryTransitionStatusAsync(instanceId, InstanceStatus.Active, InstanceStatus.Busy, cancellationToken);
 
     /// <inheritdoc />
-    public async Task<bool> TryReleaseBusyAsync(Guid instanceId, string flow, CancellationToken cancellationToken = default)
-        => await TryTransitionStatusAsync(instanceId, flow, InstanceStatus.Busy, InstanceStatus.Active, cancellationToken);
+    public async Task<bool> TryReleaseBusyAsync(Guid instanceId, CancellationToken cancellationToken = default)
+        => await TryTransitionStatusAsync(instanceId, InstanceStatus.Busy, InstanceStatus.Active, cancellationToken);
 
     /// <inheritdoc />
     public async Task<bool> TryMarkBusyAsync(Instance instance, CancellationToken cancellationToken = default)
     {
         if (!await TryTransitionStatusAsync(
-                instance.Id, instance.Flow, InstanceStatus.Active, InstanceStatus.Busy, cancellationToken))
+                instance.Id, InstanceStatus.Active, InstanceStatus.Busy, cancellationToken))
         {
             return false;
         }
@@ -272,7 +269,7 @@ public sealed class EfCoreInstanceRepository(
     public async Task<bool> TryReleaseBusyAsync(Instance instance, CancellationToken cancellationToken = default)
     {
         if (!await TryTransitionStatusAsync(
-                instance.Id, instance.Flow, InstanceStatus.Busy, InstanceStatus.Active, cancellationToken))
+                instance.Id, InstanceStatus.Busy, InstanceStatus.Active, cancellationToken))
         {
             return false;
         }
@@ -287,12 +284,9 @@ public sealed class EfCoreInstanceRepository(
     /// explicitly because ExecuteUpdate bypasses the audit interceptor — without it the computed
     /// LastTouchedAt column would stop advancing. ModifiedBy is deliberately NOT re-stamped: a
     /// Busy flip is a system operation (same rule as InstanceJobs.MarkAsProcessedAsync).
-    /// The status gauge metric is fed from the caller-supplied flow so the CAS stays a single
-    /// round-trip (it used to re-read the Flow column just for the metric).
     /// </summary>
     private async Task<bool> TryTransitionStatusAsync(
         Guid instanceId,
-        string flow,
         InstanceStatus expected,
         InstanceStatus next,
         CancellationToken cancellationToken)
@@ -309,7 +303,6 @@ public sealed class EfCoreInstanceRepository(
             return false;
         }
 
-        workflowMetrics.UpdateInstanceStatusMetrics(flow, expected.Code, next.Code);
         return true;
     }
 
@@ -1722,25 +1715,21 @@ public sealed class EfCoreInstanceRepository(
     private async Task HandleStatusChangeMetrics(Instance entity, InstanceStatus oldStatus, InstanceStatus newStatus)
     {
         // Update status transition metrics (handles all status gauge changes)
-        workflowMetrics.UpdateInstanceStatusMetrics(entity.Flow, oldStatus.Code, newStatus.Code);
 
         // Record specific completion events with duration
         if (newStatus.Equals(InstanceStatus.Completed))
         {
             var durationSeconds = entity.Duration?.TotalSeconds;
-            workflowMetrics.RecordInstanceCompleted(entity.Flow, runtimeInfoProvider.Domain, durationSeconds);
         }
 
         // Record specific error events with duration
         if (newStatus.Equals(InstanceStatus.Faulted))
         {
             var durationSeconds = entity.Duration?.TotalSeconds;
-            workflowMetrics.RecordError("instance_faulted", "High", "Instance");
 
             // Record duration for faulted instances
             if (durationSeconds.HasValue)
             {
-                workflowMetrics.RecordInstanceDuration(entity.Flow, "Faulted", durationSeconds.Value);
             }
         }
 

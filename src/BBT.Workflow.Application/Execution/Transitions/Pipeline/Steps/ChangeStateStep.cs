@@ -1,5 +1,4 @@
 using BBT.Workflow.Instances;
-using BBT.Workflow.Monitoring;
 using BBT.Workflow.Logging;
 using Microsoft.Extensions.Logging;
 using System.Diagnostics;
@@ -13,7 +12,6 @@ namespace BBT.Workflow.Execution.Pipeline.Steps;
 /// </summary>
 public sealed class ChangeStateStep(
     IInstanceRepository instanceRepository,
-    IWorkflowMetrics workflowMetrics,
     ILogger<ChangeStateStep> logger) : ITransitionStep
 {
     /// <inheritdoc />
@@ -115,10 +113,6 @@ public sealed class ChangeStateStep(
     /// </summary>
     private void RecordTransitionMetric(TransitionExecutionContext context, StateTransitionInfo info)
     {
-        workflowMetrics.RecordStateTransition(
-            context.Workflow.Key,
-            info.FromState,
-            info.ToState);
     }
 
     /// <summary>
@@ -172,9 +166,6 @@ public sealed class ChangeStateStep(
     /// </summary>
     private void RecordStateEntryMetric(TransitionExecutionContext context)
     {
-        workflowMetrics.RecordStateEntry(
-            context.Workflow.Key,
-            context.Instance.GetCurrentState);
     }
 
     /// <summary>

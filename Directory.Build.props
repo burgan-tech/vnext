@@ -47,7 +47,6 @@
         <xunitPackageVersion>2.9.3</xunitPackageVersion>
         <xunitRunnerPackageVersion>3.0.1</xunitRunnerPackageVersion>
         <MoqPackageVersion>4.20.72</MoqPackageVersion>
-        <PrometheusVersion>8.2.1</PrometheusVersion>
         <TestcontainersPackageVersion>4.10.0</TestcontainersPackageVersion>
 
     </PropertyGroup>

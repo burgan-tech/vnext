@@ -2,7 +2,6 @@ using BBT.Aether.MultiSchema;
 using BBT.Workflow.Caching;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Logging;
-using BBT.Workflow.Monitoring;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting.Evaluators;
 using BBT.Workflow.Scripting.Functions;
@@ -39,7 +38,6 @@ namespace BBT.Workflow.Scripting;
 public sealed class ScriptEngine(
     IEvaluator evaluator,
     IScriptServices scriptServices,
-    IWorkflowMetrics workflowMetrics,
     IScriptHelperRegistry helperRegistry,
     ScriptHelpersOptions helpersOptions,
     IServiceProvider serviceProvider,
@@ -621,15 +619,11 @@ public sealed class ScriptEngine(
 
             // DEPRECATED (vnext-meta/deprecations.json): script_executions_total keeps its historical
             // compile-path semantics until consumers migrate — do not remove or repurpose here.
-            workflowMetrics.RecordScriptExecution(scriptType, language, "success");
-            workflowMetrics.RecordScriptCompilation(cache, "success");
-            workflowMetrics.RecordScriptCompilationDuration(scriptType, language, "success", durationSeconds, cache);
             ScriptCompileTelemetry.Record(compilation.Compiled, reportedDuration.TotalMilliseconds, "success", telemetryTarget);
             // The type cache never evicts, so its size only changes on a miss; skipping the gauge on
             // hits avoids ConcurrentDictionary.Count's all-stripe lock on the hot path.
             if (compilation.Compiled)
             {
-                workflowMetrics.SetCacheEntries("script-types", _evaluator.CachedTypeCount);
 
                 // Script identity, tagged only on the cold path (cache miss) so the hit hot path
                 // stays allocation-free: the evaluator cache key when the caller precomputed one,
@@ -649,10 +643,6 @@ public sealed class ScriptEngine(
 
             // The code is FORBIDDEN, not broken — a distinct label so a sandbox-policy problem is
             // never diagnosed as an authoring error (or vice versa).
-            workflowMetrics.RecordScriptExecution(scriptType, language, "sandbox_violation");
-            workflowMetrics.RecordScriptCompilation("miss", "sandbox_violation");
-            workflowMetrics.RecordScriptCompilationError(scriptType, language, ex.GetType().Name);
-            workflowMetrics.RecordScriptCompilationDuration(scriptType, language, "sandbox_violation", durationSeconds, "miss");
             ScriptCompileTelemetry.Record(cacheMiss: true, stopwatch.Elapsed.TotalMilliseconds, "sandbox_violation");
             _logger.ScriptSandboxViolation(ex.Message);
 
@@ -666,10 +656,6 @@ public sealed class ScriptEngine(
             // Record compilation error. (The former catch here was CompilationErrorException from
             // the Roslyn scripting API — dead code, since the evaluator drives CSharpCompilation
             // directly and throws its own typed exception.)
-            workflowMetrics.RecordScriptExecution(scriptType, language, "compilation_error");
-            workflowMetrics.RecordScriptCompilation("miss", "compilation_error");
-            workflowMetrics.RecordScriptCompilationError(scriptType, language, ex.GetType().Name);
-            workflowMetrics.RecordScriptCompilationDuration(scriptType, language, "compilation_error", durationSeconds, "miss");
             ScriptCompileTelemetry.Record(cacheMiss: true, stopwatch.Elapsed.TotalMilliseconds, "compilation_error", telemetryTarget);
             ScriptActivityHelper.SetCompileResult(compileActivity, cacheMiss: true, "compilation_error");
 
@@ -681,10 +667,6 @@ public sealed class ScriptEngine(
             var durationSeconds = stopwatch.Elapsed.TotalSeconds;
 
             // Record invalid operation as compilation error
-            workflowMetrics.RecordScriptExecution(scriptType, language, "invalid_operation");
-            workflowMetrics.RecordScriptCompilation("miss", "invalid_operation");
-            workflowMetrics.RecordScriptCompilationError(scriptType, language, ex.GetType().Name);
-            workflowMetrics.RecordScriptCompilationDuration(scriptType, language, "invalid_operation", durationSeconds, "miss");
             ScriptCompileTelemetry.Record(cacheMiss: true, stopwatch.Elapsed.TotalMilliseconds, "invalid_operation", telemetryTarget);
             ScriptActivityHelper.SetCompileResult(compileActivity, cacheMiss: true, "invalid_operation");
 
@@ -696,11 +678,8 @@ public sealed class ScriptEngine(
             var durationSeconds = stopwatch.Elapsed.TotalSeconds;
 
             // Record cancelled compilation
-            workflowMetrics.RecordScriptExecution(scriptType, language, "cancelled");
             // A failing call by definition did not come from the cache; OperationCanceledException can
             // fire before lookup, but counting it as a miss is an accepted simplification.
-            workflowMetrics.RecordScriptCompilation("miss", "cancelled");
-            workflowMetrics.RecordScriptCompilationDuration(scriptType, language, "cancelled", durationSeconds, "miss");
             ScriptCompileTelemetry.Record(cacheMiss: true, stopwatch.Elapsed.TotalMilliseconds, "cancelled", telemetryTarget);
             ScriptActivityHelper.SetCompileResult(compileActivity, cacheMiss: true, "cancelled");
 
@@ -712,10 +691,6 @@ public sealed class ScriptEngine(
             var durationSeconds = stopwatch.Elapsed.TotalSeconds;
 
             // Record unexpected compilation error
-            workflowMetrics.RecordScriptExecution(scriptType, language, "unexpected_error");
-            workflowMetrics.RecordScriptCompilation("miss", "unexpected_error");
-            workflowMetrics.RecordScriptCompilationError(scriptType, language, ex.GetType().Name);
-            workflowMetrics.RecordScriptCompilationDuration(scriptType, language, "unexpected_error", durationSeconds, "miss");
             ScriptCompileTelemetry.Record(cacheMiss: true, stopwatch.Elapsed.TotalMilliseconds, "unexpected_error", telemetryTarget);
             ScriptActivityHelper.SetCompileResult(compileActivity, cacheMiss: true, "unexpected_error");
 

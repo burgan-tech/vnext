@@ -8,7 +8,6 @@ using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution.ErrorHandling;
 using BBT.Workflow.Instances;
-using BBT.Workflow.Monitoring;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks.Executors;
@@ -35,7 +34,6 @@ public sealed class TaskExecutionEngineTests
     private readonly ITaskFactory _taskFactory = Substitute.For<ITaskFactory>();
     private readonly ITaskPersistenceStrategyFactory _persistenceStrategyFactory = Substitute.For<ITaskPersistenceStrategyFactory>();
     private readonly IGuidGenerator _guidGenerator = Substitute.For<IGuidGenerator>();
-    private readonly IWorkflowMetrics _workflowMetrics = Substitute.For<IWorkflowMetrics>();
     private readonly IInstanceDataWriteService _instanceDataWriteService = Substitute.For<IInstanceDataWriteService>();
 
     // Real error-handling collaborators so boundary resolution is authentic.
@@ -53,7 +51,6 @@ public sealed class TaskExecutionEngineTests
         _taskFactory,
         _persistenceStrategyFactory,
         _guidGenerator,
-        _workflowMetrics,
         _boundaryResolver,
         _actionExecutor,
         _errorFactory,

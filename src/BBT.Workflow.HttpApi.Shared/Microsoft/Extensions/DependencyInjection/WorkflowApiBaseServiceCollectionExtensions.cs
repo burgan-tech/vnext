@@ -9,7 +9,6 @@ using BBT.Workflow;
 using BBT.Workflow.BackgroundJobs.Handlers;
 using BBT.Workflow.Data;
 using BBT.Workflow.Headers;
-using BBT.Workflow.Monitoring;
 using BBT.Workflow.HttpApi.Shared.Telemetry;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Schemas;
@@ -133,11 +132,6 @@ public static class WorkflowApiBaseServiceCollectionExtensions
                 // a separate compiled model is cached per schema, table names are fully qualified,
                 // no session-level directive is ever sent — PgBouncer transaction-mode safe.
                 options.ReplaceService<IModelCacheKeyFactory, SchemaAwareModelCacheKeyFactory>();
-
-                options.AddInterceptors(
-                    sp.GetRequiredService<WorkflowDatabaseInterceptor>(),
-                    sp.GetRequiredService<WorkflowTransactionInterceptor>()
-                );
             });
 
         services.AddAetherUnitOfWorkMiddleware();

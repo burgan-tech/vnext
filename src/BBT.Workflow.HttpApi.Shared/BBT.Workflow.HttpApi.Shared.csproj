@@ -12,8 +12,6 @@
     <PackageReference Include="Dapr.Extensions.Configuration" Version="$(DaprPackageVersion)" />
     <PackageReference Include="AspNetCore.HealthChecks.NpgSql" Version="$(HealthChecksPackageVersion)" />
     <PackageReference Include="Dapr.AspNetCore" Version="$(DaprPackageVersion)" />
-    <PackageReference Include="prometheus-net.AspNetCore" Version="$(PrometheusVersion)" />
-    <PackageReference Include="prometheus-net.AspNetCore.HealthChecks" Version="$(PrometheusVersion)" />
     <!-- Exports the Grpc.Net.Client span that Dapr.Client's gRPC calls create. Without it that
          activity is still created and still becomes the parent of the System.Net.Http span, but is
          never exported — see AddTelemetry for why that breaks the trace tree. -->

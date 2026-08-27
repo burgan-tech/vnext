@@ -1,7 +1,6 @@
 using BBT.Workflow.Execution.Invocation;
 using BBT.Workflow.Runtime;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
-using Prometheus;
 
 namespace Microsoft.Extensions.DependencyInjection;
 
@@ -59,8 +58,7 @@ public static class ExecutionApiServiceCollectionExtensions
     private static IServiceCollection AddExecutionHealthChecks(this IServiceCollection services)
     {
         var healthChecksBuilder = services
-            .AddHealthChecks()
-            .ForwardToPrometheus();
+            .AddHealthChecks();
             
         // Add standard health checks for Workflow APIs
         healthChecksBuilder

@@ -82,7 +82,7 @@ public class TransitionPipelineTests
 
         // Default: busy marker flips the instance
         _mockBusyMarker
-            .MarkBusyAsync(Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .MarkBusyAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>())
             .Returns(true);
 
         // Default: validation succeeds
@@ -465,7 +465,7 @@ public class TransitionPipelineTests
         await _mockAdmissionService.Received(1)
             .ReserveAsync(context, Arg.Any<CancellationToken>());
         await _mockBusyMarker.DidNotReceive()
-            .MarkBusyAsync(Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+            .MarkBusyAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>());
     }
 
     #endregion

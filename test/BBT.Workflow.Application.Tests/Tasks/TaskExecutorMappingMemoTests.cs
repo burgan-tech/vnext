@@ -3,7 +3,6 @@ using System.Threading;
 using System.Threading.Tasks;
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
-using BBT.Workflow.Monitoring;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks.Executors;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -24,8 +23,8 @@ namespace BBT.Workflow.Tasks;
 /// </summary>
 public class TaskExecutorMappingMemoTests
 {
-    private sealed class MemoProbeExecutor(Microsoft.Extensions.Logging.ILogger logger, IWorkflowMetrics metrics, IScriptEngine scriptEngine)
-        : TaskExecutorBase<ScriptTask>(logger, metrics)
+    private sealed class MemoProbeExecutor(Microsoft.Extensions.Logging.ILogger logger, IScriptEngine scriptEngine)
+        : TaskExecutorBase<ScriptTask>(logger)
     {
         public override TaskType TaskType => TaskType.Script;
 
@@ -52,7 +51,7 @@ public class TaskExecutorMappingMemoTests
 
         var context = TestTaskContexts.ScriptTaskWithMapping();
 
-        var probe = new MemoProbeExecutor(NullLogger.Instance, Mock.Of<IWorkflowMetrics>(), engine.Object);
+        var probe = new MemoProbeExecutor(NullLogger.Instance, engine.Object);
         var a = await probe.CallGetOrCompile(context);
         var b = await probe.CallGetOrCompile(context);
 

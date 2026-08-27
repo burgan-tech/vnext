@@ -1,7 +1,6 @@
 using BBT.Aether.Results;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
-using BBT.Workflow.Monitoring;
 using BBT.Workflow.Scripting;
 
 namespace BBT.Workflow.Execution.Pipeline.Steps;
@@ -11,8 +10,7 @@ namespace BBT.Workflow.Execution.Pipeline.Steps;
 /// Updates the transition record and performs cleanup operations.
 /// </summary>
 public sealed class FinalizeTransitionStep(
-    IInstanceTransitionRepository instanceTransitionRepository,
-    IWorkflowMetrics workflowMetrics) : ITransitionStep
+    IInstanceTransitionRepository instanceTransitionRepository) : ITransitionStep
 {
     /// <inheritdoc />
     public int Order => LifecycleOrder.Finalize;
@@ -92,10 +90,6 @@ public sealed class FinalizeTransitionStep(
     {
         if (transition?.Duration.HasValue == true)
         {
-            workflowMetrics.RecordStateDuration(
-                context.Workflow.Key,
-                transition.FromState,
-                transition.Duration.Value.TotalSeconds);
         }
     }
 

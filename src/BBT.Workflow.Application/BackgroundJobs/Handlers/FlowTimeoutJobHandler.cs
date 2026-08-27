@@ -9,7 +9,6 @@ using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Execution.Services;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
-using BBT.Workflow.Monitoring;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Shared;
 using Microsoft.Extensions.Logging;
@@ -26,7 +25,6 @@ public sealed class FlowTimeoutJobHandler(
     IInstanceRepository instanceRepository,
     IInstanceJobRepository jobRepository,
     IComponentCacheStore componentCacheStore,
-    IWorkflowMetrics workflowMetrics,
     IWorkflowExecutionService workflowExecutionService,
     IRuntimeInfoProvider runtimeInfoProvider,
     ILogger<FlowTimeoutJobHandler> logger,
@@ -153,8 +151,6 @@ public sealed class FlowTimeoutJobHandler(
                         await instanceRepository.FindAsync(p => p.Id == args.InstanceId, true, cancellationToken);
                     var durationSeconds = updatedInstance?.Duration?.TotalSeconds;
 
-                    workflowMetrics.RecordInstanceTimedOut(instance.Flow, runtimeInfoProvider.Domain, currentStatus,
-                        durationSeconds);
 
                     activity?.SetStatus(ActivityStatusCode.Ok);
                 }

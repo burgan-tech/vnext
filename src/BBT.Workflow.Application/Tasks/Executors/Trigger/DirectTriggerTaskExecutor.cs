@@ -7,7 +7,6 @@ using BBT.Workflow.Execution.Bindings;
 using BBT.Workflow.Gateway;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
-using BBT.Workflow.Monitoring;
 using BBT.Workflow.Resilience;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
@@ -41,9 +40,8 @@ public sealed class DirectTriggerTaskExecutor : TriggerTaskExecutorBase<DirectTr
         IInstanceQueryGateway instanceQueryGateway,
         IDomainDiscoveryResolver endpointResolver,
         IResultResiliencePipelineFactory resilienceFactory,
-        ILogger<DirectTriggerTaskExecutor> logger,
-        IWorkflowMetrics metrics)
-        : base(scriptEngine, runtimeInfoProvider, remoteInvoker, logger, metrics)
+        ILogger<DirectTriggerTaskExecutor> logger)
+        : base(scriptEngine, runtimeInfoProvider, remoteInvoker, logger)
     {
         _instanceCommandGateway = instanceCommandGateway;
         _instanceQueryGateway = instanceQueryGateway;

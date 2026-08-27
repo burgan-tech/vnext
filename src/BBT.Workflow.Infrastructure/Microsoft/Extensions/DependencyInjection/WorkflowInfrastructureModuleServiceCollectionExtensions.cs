@@ -4,12 +4,10 @@ using BBT.Workflow.Data;
 using BBT.Workflow.Execution.PostCommit;
 using BBT.Workflow.Infrastructure.DataSink;
 using BBT.Workflow.Infrastructure.Execution.PostCommit;
-using BBT.Workflow.Infrastructure.HostedServices;
 using BBT.Workflow.Infrastructure.Security;
 using BBT.Workflow.Infrastructure.Scripting;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Instances.Events;
-using BBT.Workflow.Monitoring;
 using BBT.Workflow.Remote.Extensions;
 using BBT.Workflow.Schemas;
 using BBT.Workflow.Security;
@@ -101,14 +99,6 @@ public static class WorkflowInfrastructureModuleServiceCollectionExtensions
         
         // Instance Gateways - route between local and remote execution
         services.AddInstanceGatewayServices();
-        
-        // Monitoring
-        services.AddSingleton<IWorkflowMetrics, PrometheusWorkflowMetrics>();
-        services.AddSingleton<WorkflowDatabaseInterceptor>();
-        services.AddSingleton<WorkflowTransactionInterceptor>();
-        
-        // Hosted Services
-        services.AddHostedService<SystemHealthMonitoringHostedService>();
         
         // DataSink Integration (no sinks are registered by default; concrete sinks plug in here)
         services.AddDataSinkServices();

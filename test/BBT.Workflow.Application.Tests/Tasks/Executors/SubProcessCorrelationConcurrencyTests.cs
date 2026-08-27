@@ -11,7 +11,6 @@ using BBT.Workflow.Discovery;
 using BBT.Workflow.Execution;
 using BBT.Workflow.Gateway;
 using BBT.Workflow.Instances;
-using BBT.Workflow.Monitoring;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks;
@@ -224,8 +223,7 @@ public sealed class SubProcessCorrelationConcurrencyTests
                 Substitute.For<IGuidGenerator>(),
                 new ConfigurationBuilder().Build(),
                 Substitute.For<IDomainDiscoveryResolver>(),
-                logger,
-                Substitute.For<IWorkflowMetrics>());
+                logger);
 
             _task = SubProcessTask.Create(JsonSerializer.SerializeToElement(new
             {

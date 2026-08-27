@@ -9,7 +9,6 @@ using BBT.Workflow.Execution.Bindings;
 using BBT.Workflow.Gateway;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
-using BBT.Workflow.Monitoring;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks.Mapping;
@@ -44,9 +43,8 @@ public sealed class SubProcessTaskExecutor : TriggerTaskExecutorBase<SubProcessT
         IGuidGenerator guidGenerator,
         IConfiguration configuration,
         IDomainDiscoveryResolver endpointResolver,
-        ILogger<SubProcessTaskExecutor> logger,
-        IWorkflowMetrics metrics)
-        : base(scriptEngine, runtimeInfoProvider, remoteInvoker, logger, metrics)
+        ILogger<SubProcessTaskExecutor> logger)
+        : base(scriptEngine, runtimeInfoProvider, remoteInvoker, logger)
     {
         _instanceCommandGateway = instanceCommandGateway;
         _instanceRepository = instanceRepository;

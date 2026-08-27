@@ -1,4 +1,3 @@
-using Prometheus;
 
 namespace Microsoft.AspNetCore.Builder;
 
@@ -42,9 +41,6 @@ public static class OrchestrationApiApplicationBuilderExtensions
         app.UseRouting();
         app.UseSchemaResolution();
         app.UseAetherUnitOfWork();
-        app.UseWorkflowHttpMetrics();
-        app.UseHttpMetrics();
-        app.MapMetrics();
         app.UseHttpBodyLogging();
         app.MapControllers();
         app.UseDaprScheduledJobHandler();

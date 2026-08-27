@@ -7,7 +7,6 @@ using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Tasks.Notification;
 using BBT.Workflow.Instances;
-using BBT.Workflow.Monitoring;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks;
@@ -88,8 +87,7 @@ public sealed class NotificationTaskExecutorTests
             channelResolver,
             stateBuilder,
             scriptEngine,
-            NullLogger<NotificationTaskExecutor>.Instance,
-            Substitute.For<IWorkflowMetrics>());
+            NullLogger<NotificationTaskExecutor>.Instance);
     }
 
     private static IStateChannelMessageBuilder CreateDefaultStateBuilder()
