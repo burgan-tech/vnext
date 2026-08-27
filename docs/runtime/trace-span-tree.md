@@ -192,6 +192,29 @@ compatibility with existing dashboards/alerts built against them.
 Rationale for the reversal and the full decision record: §1 ("Decisions taken") of
 [`docs/superpowers/specs/2026-08-25-trace-span-tree-design.md`](../superpowers/specs/2026-08-25-trace-span-tree-design.md).
 
+## Three memo layers on the script path, three ways of reporting a hit
+
+The script path has three caches, and a reader following a trace needs a different signal from
+each of them to tell "this work was skipped" from "this work never happened":
+
+| Memo | Miss | Hit |
+|---|---|---|
+| Compile cache (`ScriptEvaluator`'s type cache) | `Script.Compile/{identity}` span | Same `Script.Compile/{identity}` span, `vnext.script.cache.hit = true` |
+| Per-transition `ScriptContext` memo (`TransitionExecutionContext.GetOrBuildScriptContextAsync`) | The `ScriptContext.Build` span tree | No span — `vnext.script.context.memo.hits` incremented on `Activity.Current` (the enclosing span) |
+| Per-execution mapping-factory memo (`TaskExecutorBase.GetOrCompileMappingAsync`) | `Script.Compile` span (the engine ran) | No span — `vnext.script.mapping.memo.hits` incremented on `Activity.Current` (the enclosing span) |
+
+The compile cache can afford a span on both branches because it already has one on the miss path,
+and tagging it a second way costs nothing extra. The other two only ever had a span for the miss:
+before this counter, a hit produced no evidence at all — a trace showing no `ScriptContext.Build`
+child and no `Script.Compile` span was ambiguous between "this reused work" and "this work was
+never required in the first place."
+
+A span per hit was considered and rejected: a 100-item FanOut batch reusing the same compiled
+mapping would add 100 near-instant hit spans to the tree for a fact that a single number already
+answers — "how often did we avoid the work?" `Activity.IncrementCounterTag` (see
+`BBT.Workflow.Domain/Logging/ActivityCounterExtensions.cs`) sets that number on the span that was
+already there, starting at 1 and accumulating on repeat calls within the same span.
+
 ## EF Core instrumentation: the worker-poll cost (measured)
 
 Enabling `AddEntityFrameworkCoreInstrumentation` buys the DB layer inside every pipeline span, and

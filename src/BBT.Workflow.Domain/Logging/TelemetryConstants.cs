@@ -225,6 +225,21 @@ public static class TelemetryConstants
         /// </summary>
         public const string ScriptKey = "vnext.script.key";
 
+        /// <summary>
+        /// How many times a transition reused its already-built <c>ScriptContext</c> instead of building
+        /// one. Set on the enclosing span. A miss produces the <c>ScriptContext.Build</c> span tree; a hit
+        /// produced nothing at all before this counter, so the tree could not distinguish "reused" from
+        /// "never needed".
+        /// </summary>
+        public const string ScriptContextMemoHits = "vnext.script.context.memo.hits";
+
+        /// <summary>
+        /// How many times a task execution reused an already-compiled mapping factory. Set on the
+        /// enclosing span. On a hit the script engine is never called, so no <c>Script.Compile</c> span
+        /// exists — this counter is the only evidence the compile was avoided.
+        /// </summary>
+        public const string MappingFactoryMemoHits = "vnext.script.mapping.memo.hits";
+
         /// <summary>SemVer version of the instance-data row being appended.</summary>
         public const string DataVersion = "vnext.data.version";
 

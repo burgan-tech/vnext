@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
+using BBT.Workflow.Logging;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks.Coordinator;
 using Microsoft.Extensions.Logging;
@@ -310,6 +311,13 @@ public abstract class TaskExecutorBase<TTask>(ILogger logger) : ITaskExecutor
             boxed = await scriptEngine.CompileToFactoryAsync<T>(
                 mapping, context.ScriptContext.Workflow?.Scripts, cancellationToken);
             context.CompiledMappingFactories[key] = boxed;
+        }
+        else
+        {
+            // A memo hit means the engine is never called, so no Script.Compile span is produced at all.
+            // Without this counter the trace shows no compile and no reuse — indistinguishable from a task
+            // that has no mapping.
+            Activity.Current.IncrementCounterTag(TelemetryConstants.TagNames.MappingFactoryMemoHits);
         }
 
         return ((Func<T>)boxed)();
