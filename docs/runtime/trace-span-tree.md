@@ -26,6 +26,8 @@ TransitionJob.Execute/start-login          the transaction (async path)
 ├─ Transition.LoadContext                TransitionContextFactory
 │  ├─ Cache.Get/{cacheKey}               CacheSet (L1/L2 tags)
 │  └─ Instance.Load                      GetActiveAsync
+│     ├─ Instance.Query.Prepare          names the pre-SELECT leading gap
+│     └─ Db.SELECT × 3                   instance + DataList + ChildCorrelations
 ├─ Transition.Validate                   schema + policy
 ├─ Step.SetBusy … Step.FinalizeTransition   steps that DID something
 │  ├─ Step.ResourceLock
@@ -91,6 +93,7 @@ level; nothing in this table is gated behind `AetherTracingRuntime.IsVerbose`.
 | `Step.{Name}` | `BBT.Workflow.Pipeline` | `vnext.step.order`, `vnext.step.outcome` (continue / stop / skipTo:{order}), `span.category=business` | One per pipeline step **that did work** (`PipelineStepActivityHelper.StartStepActivity`). A step reporting `StepOutcome.ContinueNoWork()` has its span dropped from export (Recorded cleared), so non-applicable steps leave no trace. Trailing `Step` trimmed from the class name for display. |
 | `Transition.LoadContext` | `BBT.Workflow.Pipeline` | `span.category=business` | Wraps `TransitionContextFactory`; child `Cache.Get`/`Instance.Load` spans attach automatically. `CreateFromPreloaded` is deliberately left unwrapped (no fresh load happened). |
 | `Instance.Load` | `BBT.Workflow.Pipeline` | `span.category=business` | Wraps `instanceRepository.GetActiveAsync`. |
+| `Instance.Query.Prepare` | `BBT.Workflow.Pipeline` | `span.category=business` | Wraps the `WithDetailsAsync()` awaited by `EfCoreInstanceRepository.FindByIdentifierAsync` / `FindActiveByKeyAsync` / `FindByIdentifierAsReadOnlyAsync` (via the shared private `PrepareDetailedQueryAsync` helper) — child of `Instance.Load`, sibling and immediate predecessor of the `Db.SELECT` spans. Started with `PipelineStepActivityHelper.ActivitySource.StartActivity` directly (implicit-parent overload), not `StartOperationActivity` — the same explicit-parent-context defect noted for `Discovery.Resolve` applies here too and fixing it is out of scope for this span. See "Reading the Instance.Query.Prepare span" below. |
 | `Transition.Validate` | `BBT.Workflow.Pipeline` | `span.category=business`, `ActivityStatusCode.Error` + message on failure | Wraps schema validation + `TransitionExecutionPolicy`. |
 | `Instance.AppendData` | `BBT.Workflow.Pipeline` | `vnext.data.version`, `vnext.data.size_bytes` | Wraps the v2 append/persist funnel. Size is the serialized UTF-8 byte count — the payload itself is never attached to a span. |
 | `Lock.Acquire/{lockKey}` | `BBT.Workflow.Pipeline` | `vnext.lock.key`, `vnext.lock.acquired` (false on Busy/409), `vnext.lock.lease_seconds`, `vnext.lock.kind` (`status` \| `chain`) | Emitted by both `InstanceStatusLock` (`kind=status`) and `TransitionLockScopeFactory` (`kind=chain`). A failed acquire is a span with `acquired=false`, not an exception span. |
@@ -121,6 +124,37 @@ level; nothing in this table is gated behind `AetherTracingRuntime.IsVerbose`.
 | `Cache.Remove/{cacheKey}` | `BBT.Workflow.Cache` | `cache.generation` | `CacheSet<T>.InvalidateAsync`. |
 | `Subflow.*` | `BBT.Workflow.SubFlow` | subflow-specific | Pre-existed (`SubFlowActivityHelper`: start/forward/complete/fault/cancel). Own `Script.*` children for input/output mapping. |
 | `PostCommit.*` | `BBT.Workflow.BackgroundJobs` | job-specific | Pre-existed (`PostCommitExecutor` reuses `BackgroundJobActivityHelper.ActivitySource`). Own job-enqueue children. |
+
+### Reading the `Instance.Query.Prepare` span
+
+**Why it exists.** Live measurement across 300 `Instance.Load` spans found the gap to its
+`Db.SELECT` children almost entirely **leading** (mean lead 0.60ms, between-children 0.26ms,
+**trail 0.03ms**) — not materialization, not a miscalculation. `Db.SELECT` is EF's
+command-level instrumentation (`CommandExecuting`→`CommandExecuted`) and simply does not start
+until the command is issued, so everything before the first command — DbContext/connection
+acquisition — was invisible. The lead was p50 0.63ms but p90 2.40ms and max 88ms, with the large
+values scattered over time rather than clustered at startup, consistent with connection
+acquisition under pool pressure — a hypothesis the spans up to this point could not confirm.
+`Instance.Query.Prepare` wraps exactly that window (`WithDetailsAsync()`, before any query
+executes), splitting the leading gap into "DbContext/connection acquisition" (this span) versus
+"everything else" (whatever lead remains between this span's end and the first `Db.SELECT`).
+
+**How to read a measurement once this span is live:**
+
+- **`Instance.Query.Prepare` dominates the lead** (its own duration accounts for most of the gap
+  between `Instance.Load`'s start and the first `Db.SELECT`) → the cost is DbContext/connection
+  acquisition. The connection-pool hypothesis stands; the follow-up is Npgsql pool metrics plus
+  pool sizing, not more spans.
+- **`Instance.Query.Prepare` is near zero and a lead still remains** between its end and the
+  first `Db.SELECT` → the cost is EF query compilation, or a connection opened lazily at
+  execution time rather than during `WithDetailsAsync()`. The follow-up is a compiled-query or
+  pool-warmup investigation, not more spans.
+
+**Baseline (record here so a future reader can tell whether things moved):** measured 2026-08-28,
+300 live `Instance.Load` spans, pre-`Instance.Query.Prepare` — lead p50 **0.63ms**, p90
+**2.40ms**, max **88ms**; trail **0.03ms**. Once this span has meaningful production volume, redo
+the same percentile breakdown on `Instance.Query.Prepare` itself (not just the residual lead) and
+update this baseline with the split.
 
 ### A constant that doesn't mean a span
 

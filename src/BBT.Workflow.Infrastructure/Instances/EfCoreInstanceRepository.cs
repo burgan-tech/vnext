@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using BBT.Aether;
 using BBT.Aether.Domain.EntityFrameworkCore;
@@ -7,8 +8,10 @@ using BBT.Workflow.Data;
 using BBT.Workflow.DataSink;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Definitions.GraphQL;
+using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Filtering;
 using BBT.Workflow.Infrastructure.Instances;
+using BBT.Workflow.Logging;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Security;
 using BBT.Workflow.BackgroundJobs.Options;
@@ -339,6 +342,36 @@ public sealed class EfCoreInstanceRepository(
     }
 
     /// <summary>
+    /// Awaits the detailed (DataList + open-correlation) query inside an
+    /// <c>Instance.Query.Prepare</c> span.
+    /// </summary>
+    /// <remarks>
+    /// Live measurement across 300 <c>Instance.Load</c> spans found the gap to their
+    /// <c>Db.SELECT</c> children almost entirely leading (mean lead 0.60ms vs. trail 0.03ms):
+    /// <c>Db.SELECT</c> is EF's command-level instrumentation (CommandExecuting→CommandExecuted)
+    /// and simply does not start until the command is issued, so everything before that —
+    /// DbContext/connection acquisition — was invisible. This span names that window so it can
+    /// be told apart from query compilation or execution; see
+    /// <c>docs/runtime/trace-span-tree.md</c> for how to read it.
+    /// <para>
+    /// Uses <see cref="PipelineStepActivityHelper.ActivitySource"/> directly with the implicit-parent
+    /// <see cref="ActivitySource.StartActivity(string, ActivityKind)"/> overload rather than
+    /// <see cref="PipelineStepActivityHelper.StartOperationActivity"/>: that helper passes an
+    /// explicit parent context, which nulls <see cref="Activity.Parent"/> and severs the baggage
+    /// chain (same defect worked around in <c>DomainDiscoveryResolver</c>; fixing the helper itself
+    /// is out of scope here).
+    /// </para>
+    /// </remarks>
+    private async Task<IQueryable<Instance>> PrepareDetailedQueryAsync()
+    {
+        using var activity = PipelineStepActivityHelper.ActivitySource.StartActivity(
+            "Instance.Query.Prepare", ActivityKind.Internal);
+        activity?.SetTag(TelemetryConstants.TagNames.SpanCategory, TelemetryConstants.SpanCategories.Business);
+
+        return await WithDetailsAsync();
+    }
+
+    /// <summary>
     /// The include-free variant of <see cref="FindByIdentifierAsync"/>: same id-then-key
     /// resolution, no DataList/correlation loads. Serves GetResultAsync(includeDetails: false).
     /// </summary>
@@ -367,7 +400,7 @@ public sealed class EfCoreInstanceRepository(
         string? identifier,
         CancellationToken cancellationToken = default)
     {
-        var query = (await WithDetailsAsync())
+        var query = (await PrepareDetailedQueryAsync())
             .AsSplitQuery();
 
         if (Guid.TryParse(identifier, out var instanceId))
@@ -394,7 +427,7 @@ public sealed class EfCoreInstanceRepository(
     public async Task<Instance?> FindActiveByKeyAsync(string key,
         CancellationToken cancellationToken = default)
     {
-        var query = (await WithDetailsAsync())
+        var query = (await PrepareDetailedQueryAsync())
             .AsSplitQuery();
 
         // Only non-terminal instances occupy a key (Active or Busy). Terminal rows
@@ -425,7 +458,7 @@ public sealed class EfCoreInstanceRepository(
     public async Task<Instance?> FindByIdentifierAsReadOnlyAsync(string identifier,
         CancellationToken cancellationToken = default)
     {
-        var query = (await WithDetailsAsync())
+        var query = (await PrepareDetailedQueryAsync())
             .AsNoTracking()
             .AsSplitQuery();
 
