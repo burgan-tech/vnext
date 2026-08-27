@@ -195,6 +195,11 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
 
                 await Task.Delay(delay, cancellationToken);
                 attempt++;
+
+                // Only attempt 1 can know no journal row exists yet. From here on the probe must
+                // run: it is what finds and reuses the previous attempt's row instead of inserting
+                // a second one under the same ExecutionKey (UX_InstanceTasks_ExecutionKey).
+                options = options with { SkipJournalProbe = false };
             }
 
             totalStopwatch.Stop();

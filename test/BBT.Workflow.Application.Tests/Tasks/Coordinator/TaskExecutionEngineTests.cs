@@ -434,6 +434,84 @@ public sealed class TaskExecutionEngineTests
     }
 
     /// <summary>
+    /// Production regression: <c>Npgsql.PostgresException 23505</c> on
+    /// <c>UX_InstanceTasks_ExecutionKey</c> ("online_document_subprocess", FanOut-driven same-domain
+    /// subprocesses with a per-item Retry boundary on a fresh transition record). Attempt 1 legitimately
+    /// skips the journal idempotency probe (<see cref="TaskEngineExecutionOptions.SkipJournalProbe"/> is
+    /// true for a transition record this pipeline run just inserted, so no prior row can exist). But the
+    /// engine forwarded that SAME <see cref="TaskEngineExecutionOptions"/> instance, unchanged, into every
+    /// retry attempt — so the retry also skipped the probe and re-inserted a journal row keyed on the same
+    /// <c>ExecutionKey</c> (SHA256 of transitionId+taskId), colliding with attempt 1's row under the
+    /// filtered unique index. Both <see cref="TaskEngineExecutionOptions.SkipJournalProbe"/> and
+    /// <see cref="ITaskPersistenceStrategy.HandleCreationAsync"/>'s <c>skipLookup</c> parameter document
+    /// that only the FIRST attempt may skip the probe — from the retry onward the probe must run, since
+    /// it is what finds and reuses the previous attempt's row instead of inserting a duplicate.
+    /// </summary>
+    [Fact]
+    public async Task ExecuteAsync_WhenRetrying_Should_Restore_TheJournalProbe()
+    {
+        var task = WorkflowTaskFactory.CreateHttpTask("mock-api");
+        _taskFactory.CreateExecutionTaskAsync(Arg.Any<IReference>(), Arg.Any<CancellationToken>())
+            .Returns(Result<WorkflowTask>.Ok(task));
+
+        var executor = Substitute.For<ITaskExecutor>();
+        var callCount = 0;
+        executor.ExecuteAsync(Arg.Any<TaskExecutorContext>(), Arg.Any<CancellationToken>())
+            .Returns(_ =>
+            {
+                callCount++;
+                return callCount == 1
+                    ? Result<StandardTaskResponse>.Fail(new Error("500", "transient boom"))
+                    : Result<StandardTaskResponse>.Ok(new StandardTaskResponse
+                    {
+                        IsSuccess = true,
+                        StatusCode = 200,
+                        Data = new Dictionary<string, object> { ["result"] = "ok" }
+                    });
+            });
+        _executorRegistry.GetExecutor(Arg.Any<TaskType>())
+            .Returns(Result<ITaskExecutor>.Ok(executor));
+
+        var skipLookupCalls = new List<bool>();
+        var strategy = Substitute.For<ITaskPersistenceStrategy>();
+        strategy.HandleCreationAsync(Arg.Any<InstanceTask>(), Arg.Any<bool>(), Arg.Any<CancellationToken>())
+            .Returns(callInfo =>
+            {
+                skipLookupCalls.Add(callInfo.ArgAt<bool>(1));
+                return Task.FromResult(callInfo.Arg<InstanceTask>());
+            });
+        UsePersistenceStrategy(strategy);
+
+        // Wildcard Retry rule with no delay/jitter: exactly one retry (two attempts total),
+        // without the test actually sleeping.
+        var errorBoundary = ErrorBoundary.Builder()
+            .OnErrorRetry(new RetryPolicy
+            {
+                MaxRetries = 1,
+                InitialDelay = TimeSpan.FromMilliseconds(1),
+                UseJitter = false
+            })
+            .Build();
+
+        var onExecute = OnExecuteTask.Create(1, task, ScriptCode.FromNative(string.Empty), errorBoundary);
+
+        // The fresh-transition-record option: attempt 1 is allowed to skip the probe.
+        var options = new TaskEngineExecutionOptions { SkipJournalProbe = true };
+
+        var result = await CreateEngine().ExecuteAsync(
+            onExecute, Guid.NewGuid(), TaskTrigger.OnExecute, TaskExecutionOrigin.Flow,
+            CreateScriptContext(), options, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue("the retry should succeed on the second attempt");
+        skipLookupCalls.Count.ShouldBe(2, "one journal-creation call per attempt");
+        skipLookupCalls[0].ShouldBeTrue(
+            "attempt 1 is the only one that can know no journal row exists yet - the perf win must survive");
+        skipLookupCalls[1].ShouldBeFalse(
+            "from the retry onward the probe must return - it is what finds and reuses attempt 1's row " +
+            "instead of inserting a second one under the same ExecutionKey (UX_InstanceTasks_ExecutionKey)");
+    }
+
+    /// <summary>
     /// B8 regression: the audit request stored on <see cref="InstanceTask.Request"/> carries a task
     /// REFERENCE (key/version/domain/flow/type), not the full task definition. Guards against a
     /// regression back to embedding the whole <see cref="WorkflowTask"/> (including mapping/config)
