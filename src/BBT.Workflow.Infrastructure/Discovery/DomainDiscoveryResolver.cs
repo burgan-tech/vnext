@@ -1,7 +1,9 @@
+using System.Diagnostics;
 using System.Net;
 using System.Net.Http.Json;
 using BBT.Workflow;
 using BBT.Aether.Results;
+using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Logging;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -19,21 +21,45 @@ public sealed class DomainDiscoveryResolver(
     ILogger<DomainDiscoveryResolver> logger) : IDomainDiscoveryResolver
 {
     /// <inheritdoc />
+    /// <remarks>
+    /// Wrapped in a <c>Discovery.Resolve/{domain}</c> span (source
+    /// <see cref="PipelineStepActivityHelper.ActivitySource"/>, already registered in every host's
+    /// <c>Telemetry:Tracing:AdditionalSources</c>). This resolver is called from 32 sites across both
+    /// hosts; a span here parents to whatever is ambient at each call site with no per-call-site
+    /// changes, and the discovery HTTP call becomes its child instead of an unattributed HttpClient
+    /// span. Started with the implicit-parent overload deliberately: an explicit
+    /// <c>Activity.Current?.Context</c> leaves <c>Activity.Parent</c> null and severs the baggage
+    /// chain (fixed for the event-hook span on this branch; not reintroduced here).
+    /// </remarks>
     public async Task<Result<DiscoveryEndpoint>> GetEndpointAsync(
         string domain,
         EndpointKind preferredKind = EndpointKind.Url,
         CancellationToken cancellationToken = default)
     {
+        using var activity = PipelineStepActivityHelper.ActivitySource.StartActivity(
+            $"Discovery.Resolve/{domain}", ActivityKind.Internal);
+        activity?.SetTag(TelemetryConstants.TagNames.DiscoveryDomain, domain);
+        activity?.SetTag(TelemetryConstants.TagNames.DiscoveryEndpointKind, preferredKind.ToString());
+        activity?.SetTag(TelemetryConstants.TagNames.SpanCategory, TelemetryConstants.SpanCategories.Business);
+
         var options = serviceDiscoveryOptions.Value;
 
         // If disabled, return failure (no fallback)
         if (!options.Enabled)
         {
+            const string reason = "Service discovery is disabled";
+            activity?.SetStatus(ActivityStatusCode.Error, reason);
             return Result<DiscoveryEndpoint>.Fail(
-                WorkflowErrors.DomainDiscoveryFailed(domain, "Service discovery is disabled"));
+                WorkflowErrors.DomainDiscoveryFailed(domain, reason));
         }
 
-        return await QuerySingleDomainAsync(domain, preferredKind, cancellationToken);
+        var result = await QuerySingleDomainAsync(domain, preferredKind, cancellationToken);
+        if (!result.IsSuccess)
+        {
+            activity?.SetStatus(ActivityStatusCode.Error, result.Error.Message);
+        }
+
+        return result;
     }
 
     /// <summary>

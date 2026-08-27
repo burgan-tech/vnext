@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
@@ -7,6 +8,8 @@ using System.Threading;
 using System.Threading.Tasks;
 using BBT.Workflow;
 using BBT.Workflow.Discovery;
+using BBT.Workflow.Execution.Pipeline;
+using BBT.Workflow.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using NSubstitute;
@@ -22,12 +25,17 @@ namespace BBT.Workflow.Infrastructure.Tests.Discovery;
 /// Follows the inline stub-<see cref="HttpMessageHandler"/> pattern established by
 /// <c>RemoteRelatedInstanceReaderTests.RoutingHandler</c>; there is no shared mocking library for
 /// <see cref="HttpClient"/> in this codebase.
+/// <para>
+/// Also pins the <c>Discovery.Resolve/{domain}</c> span (see <see cref="DomainDiscoveryResolverSpanTests"/>
+/// below): the resolver is called from 32 sites, and a span inside <c>GetEndpointAsync</c> parents to
+/// whatever is ambient so it shows up under every caller with no per-call-site changes.
+/// </para>
 /// </summary>
 public sealed class DomainDiscoveryResolverTests
 {
     private const string Domain = "lending";
 
-    private static (DomainDiscoveryResolver Resolver, RoutingHandler Handler) CreateSut(
+    internal static (DomainDiscoveryResolver Resolver, RoutingHandler Handler) CreateSut(
         Func<HttpRequestMessage, HttpResponseMessage>? respond = null,
         ServiceDiscoveryOptions? options = null)
     {
@@ -50,7 +58,7 @@ public sealed class DomainDiscoveryResolverTests
         return (resolver, handler);
     }
 
-    private static HttpResponseMessage SuccessResponse(string domain = Domain, string? appId = "lending-app")
+    internal static HttpResponseMessage SuccessResponse(string domain = Domain, string? appId = "lending-app")
     {
         var body = $$"""
             {
@@ -153,7 +161,7 @@ public sealed class DomainDiscoveryResolverTests
         handler.Requests.ShouldAllBe(r => !r.Headers.Contains("If-None-Match"));
     }
 
-    private sealed class RoutingHandler(Func<HttpRequestMessage, HttpResponseMessage> respond) : HttpMessageHandler
+    internal sealed class RoutingHandler(Func<HttpRequestMessage, HttpResponseMessage> respond) : HttpMessageHandler
     {
         public List<HttpRequestMessage> Requests { get; } = [];
 
@@ -163,5 +171,124 @@ public sealed class DomainDiscoveryResolverTests
             Requests.Add(request);
             return Task.FromResult(respond(request));
         }
+    }
+}
+
+/// <summary>
+/// Pins the <c>Discovery.Resolve/{domain}</c> span emitted by <see cref="DomainDiscoveryResolver.GetEndpointAsync"/>.
+/// <para>
+/// Before this span existed, cross-domain endpoint resolution was invisible in the trace: no span of
+/// its own, and the discovery HTTP call showed up as an unattributed HttpClient span wherever it
+/// happened to be ambient. The resolver is called from 32 sites, so a span inside
+/// <c>GetEndpointAsync</c> (rather than at each call site) makes every one of them attributable with
+/// no per-call-site edits.
+/// </para>
+/// <para>
+/// Reuses <see cref="PipelineStepActivityHelper.ActivitySource"/> (<c>BBT.Workflow.Pipeline</c>) —
+/// already registered in every host's <c>Telemetry:Tracing:AdditionalSources</c> — rather than a new
+/// <see cref="ActivitySource"/>, so the span cannot be silently invisible for lack of registration.
+/// </para>
+/// </summary>
+public sealed class DomainDiscoveryResolverSpanTests : IDisposable
+{
+    private readonly List<Activity> _collected = new();
+    private readonly ActivityListener _listener;
+
+    public DomainDiscoveryResolverSpanTests()
+    {
+        _listener = new ActivityListener
+        {
+            // Hardcoded name literal rather than dereferencing PipelineStepActivityHelper.ActivitySource.Name:
+            // the first access to that static field in a test process runs the class's static
+            // constructor, which itself calls `new ActivitySource(...)` and notifies already-registered
+            // listeners synchronously — including this one, on the very field being assigned. Referencing
+            // the field back from inside that callback observes it before assignment completes and throws.
+            ShouldListenTo = s => s.Name == "BBT.Workflow.Pipeline",
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStopped = _collected.Add
+        };
+        ActivitySource.AddActivityListener(_listener);
+    }
+
+    public void Dispose()
+    {
+        _listener.Dispose();
+        Activity.Current = null;
+    }
+
+    // Each test uses a domain name unique to itself, never "lending" (the constant used by the
+    // sibling DomainDiscoveryResolverTests class): xUnit runs different test classes in parallel by
+    // default, and the ActivityListener here is scoped to the ActivitySource, not to this test's own
+    // resolver instance — a same-named "Discovery.Resolve/lending" span from a concurrently running
+    // DomainDiscoveryResolverTests test would land in this class's _collected list too.
+
+    [Fact]
+    public async Task Successful_resolution_emits_exactly_one_span_named_after_the_domain()
+    {
+        const string domain = "span-emit-probe";
+        var (resolver, _) = DomainDiscoveryResolverTests.CreateSut(
+            _ => DomainDiscoveryResolverTests.SuccessResponse(domain, "span-emit-probe-app"));
+
+        var result = await resolver.GetEndpointAsync(domain, EndpointKind.Url, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+
+        var spans = _collected.Where(a => a.DisplayName == $"Discovery.Resolve/{domain}").ToList();
+        spans.Count.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task Successful_resolution_tags_domain_and_endpoint_kind()
+    {
+        const string domain = "span-tags-probe";
+        var (resolver, _) = DomainDiscoveryResolverTests.CreateSut(
+            _ => DomainDiscoveryResolverTests.SuccessResponse(domain, "span-tags-probe-app"));
+
+        await resolver.GetEndpointAsync(domain, EndpointKind.Url, CancellationToken.None);
+
+        var span = _collected.Single(a => a.DisplayName == $"Discovery.Resolve/{domain}");
+        span.GetTagItem(TelemetryConstants.TagNames.DiscoveryDomain).ShouldBe(domain);
+        span.GetTagItem(TelemetryConstants.TagNames.DiscoveryEndpointKind).ShouldBe(EndpointKind.Url.ToString());
+        (span.Status is ActivityStatusCode.Unset or ActivityStatusCode.Ok).ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task Failed_resolution_NotFound_producesAnErrorSpan()
+    {
+        const string domain = "span-notfound-probe";
+        var (resolver, _) = DomainDiscoveryResolverTests.CreateSut(
+            _ => new HttpResponseMessage(HttpStatusCode.NotFound) { Content = new StringContent("not found") });
+
+        var result = await resolver.GetEndpointAsync(domain, EndpointKind.Url, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeFalse();
+
+        var span = _collected.Single(a => a.DisplayName == $"Discovery.Resolve/{domain}");
+        span.Status.ShouldBe(ActivityStatusCode.Error);
+    }
+
+    [Fact]
+    public async Task Span_parents_to_the_ambient_activity()
+    {
+        const string domain = "span-parent-probe";
+        var ambient = new Activity("Transition.Validate");
+        ambient.SetIdFormat(ActivityIdFormat.W3C);
+        ambient.Start();
+
+        try
+        {
+            var (resolver, _) = DomainDiscoveryResolverTests.CreateSut(
+                _ => DomainDiscoveryResolverTests.SuccessResponse(domain, "span-parent-probe-app"));
+
+            await resolver.GetEndpointAsync(domain, EndpointKind.Url, CancellationToken.None);
+        }
+        finally
+        {
+            ambient.Stop();
+            Activity.Current = null;
+        }
+
+        var span = _collected.Single(a => a.DisplayName == $"Discovery.Resolve/{domain}");
+        span.ParentId.ShouldBe(ambient.Id);
     }
 }

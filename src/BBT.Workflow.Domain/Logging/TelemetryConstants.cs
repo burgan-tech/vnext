@@ -257,6 +257,12 @@ public static class TelemetryConstants
         /// <c>DurablePostCommit</c> (inside the UoW commit, under Uow.Commit).
         /// </summary>
         public const string HookMode = "vnext.hook.mode";
+
+        /// <summary>Domain whose endpoint is being resolved from service discovery. Set on every Discovery.Resolve span.</summary>
+        public const string DiscoveryDomain = "vnext.discovery.domain";
+
+        /// <summary>Endpoint kind requested from service discovery (Url or AppId). Set on every Discovery.Resolve span.</summary>
+        public const string DiscoveryEndpointKind = "vnext.discovery.endpoint_kind";
     }
 
     /// <summary>
