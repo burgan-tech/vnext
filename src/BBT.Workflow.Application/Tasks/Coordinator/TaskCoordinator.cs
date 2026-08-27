@@ -153,7 +153,7 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
         var tasks = onExecuteTasks.ToList();
         var completedSet = completedTaskIds.ToHashSet(StringComparer.OrdinalIgnoreCase);
         var executedTasks = new List<TaskExecutionSummary>();
-        var totalStopwatch = Stopwatch.StartNew();
+        var totalStartTimestamp = Stopwatch.GetTimestamp();
 
         if (!tasks.Any())
         {
@@ -195,7 +195,7 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
                 var result = await _executionEngine.ExecuteAsync(
                     groupTasks[0], instanceTransitionId, taskTrigger, origin, context, groupOptions[0], cancellationToken);
 
-                var processResult = ProcessTaskResult(result, groupTasks[0], executedTasks, totalStopwatch);
+                var processResult = ProcessTaskResult(result, groupTasks[0], executedTasks, totalStartTimestamp);
                 if (processResult.HasValue)
                     return processResult.Value;
             }
@@ -207,7 +207,6 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
 
                 if (!parallelResult.IsSuccess)
                 {
-                    totalStopwatch.Stop();
                     return parallelResult;
                 }
 
@@ -217,14 +216,12 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
                 // If any task in parallel group failed with blocking action, stop
                 if (!groupResult.IsSuccess)
                 {
-                    totalStopwatch.Stop();
                     return parallelResult;
                 }
             }
 
         }
 
-        totalStopwatch.Stop();
 
         if (skippedCount > 0)
         {
@@ -236,8 +233,8 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
         var hasBusinessFailures = executedTasks.Any(t => !t.IsSuccess);
         return Result<TasksExecutionResult>.Ok(
             hasBusinessFailures
-                ? TasksExecutionResult.SuccessWithFailedTasks(executedTasks, totalStopwatch.ElapsedMilliseconds)
-                : TasksExecutionResult.Success(executedTasks, totalStopwatch.ElapsedMilliseconds));
+                ? TasksExecutionResult.SuccessWithFailedTasks(executedTasks, (long)Stopwatch.GetElapsedTime(totalStartTimestamp).TotalMilliseconds)
+                : TasksExecutionResult.Success(executedTasks, (long)Stopwatch.GetElapsedTime(totalStartTimestamp).TotalMilliseconds));
     }
 
     /// <summary>
@@ -247,23 +244,22 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
         Result<TasksExecutionResult> taskResult,
         OnExecuteTask onExecuteTask,
         List<TaskExecutionSummary> executedTasks,
-        Stopwatch totalStopwatch)
+        long totalStartTimestamp)
     {
         // Infrastructure error
         if (!taskResult.IsSuccess)
         {
-            totalStopwatch.Stop();
             var infraError = _errorFactory.CreateFromError(
                 taskResult.Error,
                 onExecuteTask.Task.Key,
                 "Unknown",
-                totalStopwatch.ElapsedMilliseconds);
+                (long)Stopwatch.GetElapsedTime(totalStartTimestamp).TotalMilliseconds);
 
             return Result<TasksExecutionResult>.Ok(TasksExecutionResult.Failure(
                 onExecuteTask,
                 infraError,
                 executedTasks,
-                totalStopwatch.ElapsedMilliseconds));
+                (long)Stopwatch.GetElapsedTime(totalStartTimestamp).TotalMilliseconds));
         }
 
         var result = taskResult.Value!;
@@ -271,7 +267,6 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
         // Business error with blocking action
         if (!result.IsSuccess)
         {
-            totalStopwatch.Stop();
             return Result<TasksExecutionResult>.Ok(new TasksExecutionResult
             {
                 IsSuccess = false,
@@ -281,7 +276,7 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
                 TaskError = result.TaskError,
                 BoundaryAction = result.BoundaryAction,
                 ExecutedTasks = executedTasks,
-                TotalExecutionDurationMs = totalStopwatch.ElapsedMilliseconds
+                TotalExecutionDurationMs = (long)Stopwatch.GetElapsedTime(totalStartTimestamp).TotalMilliseconds
             });
         }
 
@@ -308,7 +303,7 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         var linkedToken = linkedCts.Token;
         var executedTasks = new List<TaskExecutionSummary>();
-        var stopwatch = Stopwatch.StartNew();
+        var startTimestamp = Stopwatch.GetTimestamp();
 
         _logger.LogDebug(
             "Executing {TaskCount} tasks in parallel for instance {InstanceId}",
@@ -338,12 +333,12 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
                         result.Error,
                         task.Task.Key,
                         "Unknown",
-                        stopwatch.ElapsedMilliseconds);
+                        (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds);
                     result = Result<TasksExecutionResult>.Ok(
                         TasksExecutionResult.Failure(
                             task,
                             infrastructureError,
-                            totalDurationMs: stopwatch.ElapsedMilliseconds));
+                            totalDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds));
                 }
 
                 if (!result.Value!.IsSuccess)
@@ -375,7 +370,6 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
             foreach (var outcome in results)
                 context.MergeParallelBranch(outcome.Context);
 
-            stopwatch.Stop();
 
             // If there was a failure, return it with error boundary info
             if (firstFailure != null && firstFailedTask != null)
@@ -398,7 +392,7 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
                     TaskError = firstFailure.TaskError,
                     BoundaryAction = firstFailure.BoundaryAction,
                     ExecutedTasks = executedTasks,
-                    TotalExecutionDurationMs = stopwatch.ElapsedMilliseconds
+                    TotalExecutionDurationMs = (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds
                 });
             }
 
@@ -414,12 +408,11 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
             var hasBusinessFailures = executedTasks.Any(t => !t.IsSuccess);
             return Result<TasksExecutionResult>.Ok(
                 hasBusinessFailures
-                    ? TasksExecutionResult.SuccessWithFailedTasks(executedTasks, stopwatch.ElapsedMilliseconds)
-                    : TasksExecutionResult.Success(executedTasks, stopwatch.ElapsedMilliseconds));
+                    ? TasksExecutionResult.SuccessWithFailedTasks(executedTasks, (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds)
+                    : TasksExecutionResult.Success(executedTasks, (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds));
         }
         catch (Exception ex)
         {
-            stopwatch.Stop();
             _logger.LogError(ex, "Parallel task execution failed unexpectedly");
 
             if (firstFailure != null && firstFailedTask != null)
@@ -433,7 +426,7 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
                     TaskError = firstFailure.TaskError,
                     BoundaryAction = firstFailure.BoundaryAction,
                     ExecutedTasks = executedTasks,
-                    TotalExecutionDurationMs = stopwatch.ElapsedMilliseconds
+                    TotalExecutionDurationMs = (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds
                 });
             }
 

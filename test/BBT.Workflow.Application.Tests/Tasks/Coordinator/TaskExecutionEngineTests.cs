@@ -575,6 +575,68 @@ public sealed class TaskExecutionEngineTests
     }
 
     /// <summary>
+    /// Production regression (UX_InstanceTasks_ExecutionKey 23505): the fresh-transition-record
+    /// guarantee only covers the FIRST attempt. The error-aware retry loop re-executes the same
+    /// (TransitionId, TaskId) identity, so every retry attempt must run the journal idempotency
+    /// probe again (skipLookup=false) and reuse attempt #1's row — keeping the skip would insert
+    /// a second row with the same ExecutionKey.
+    /// </summary>
+    [Fact]
+    public async Task ExecuteAsync_WithFreshTransitionRecordAndRetry_ShouldProbeJournalOnRetryAttempts()
+    {
+        var task = WorkflowTaskFactory.CreateHttpTask("mock-api");
+        _taskFactory.CreateExecutionTaskAsync(Arg.Any<IReference>(), Arg.Any<CancellationToken>())
+            .Returns(Result<WorkflowTask>.Ok(task));
+
+        var executor = Substitute.For<ITaskExecutor>();
+        executor.ExecuteAsync(Arg.Any<TaskExecutorContext>(), Arg.Any<CancellationToken>())
+            .Returns(Result<StandardTaskResponse>.Fail(new Error("500", "transient boom")));
+        _executorRegistry.GetExecutor(Arg.Any<TaskType>())
+            .Returns(Result<ITaskExecutor>.Ok(executor));
+
+        var strategy = new SkipLookupRecordingPersistenceStrategy();
+        UsePersistenceStrategy(strategy);
+
+        var errorBoundary = ErrorBoundary.WithRules(new ErrorHandlerRule
+        {
+            Action = ErrorAction.Retry,
+            ErrorCodes = ["*"],
+            Priority = 1,
+            RetryPolicy = new RetryPolicy { MaxRetries = 1, UseJitter = false, InitialDelay = TimeSpan.Zero }
+        });
+        var onExecute = OnExecuteTask.Create(1, task, ScriptCode.FromNative(string.Empty), errorBoundary);
+
+        await CreateEngine().ExecuteAsync(
+            onExecute, Guid.NewGuid(), TaskTrigger.OnEntry, TaskExecutionOrigin.Flow,
+            CreateScriptContext(), TaskEngineExecutionOptions.FreshTransitionRecord, CancellationToken.None);
+
+        // Attempt #1 may skip the probe (fresh record); every retry attempt must probe and reuse.
+        strategy.SkipLookupCalls.Count.ShouldBe(2);
+        strategy.SkipLookupCalls[0].ShouldBeTrue();
+        strategy.SkipLookupCalls[1].ShouldBeFalse();
+    }
+
+    /// <summary>
+    /// Test double recording the <c>skipLookup</c> argument of every creation persist, so the
+    /// fresh-record retry regression test can pin the per-attempt probe decision.
+    /// </summary>
+    private sealed class SkipLookupRecordingPersistenceStrategy : ITaskPersistenceStrategy
+    {
+        public List<bool> SkipLookupCalls { get; } = [];
+
+        public bool CanHandle(TaskExecutionOrigin origin) => true;
+
+        public Task<InstanceTask> HandleCreationAsync(InstanceTask instanceTask, bool skipLookup = false, CancellationToken cancellationToken = default)
+        {
+            SkipLookupCalls.Add(skipLookup);
+            return Task.FromResult(instanceTask);
+        }
+
+        public Task HandleCompletionAsync(InstanceTask instanceTask, CancellationToken cancellationToken = default)
+            => Task.CompletedTask;
+    }
+
+    /// <summary>
     /// Test double that records whether the completion persist ran to completion, with an
     /// optional delay so an un-awaited (fire-and-forget) call is observably incomplete when
     /// ExecuteAsync returns.
