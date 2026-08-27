@@ -46,8 +46,10 @@ public static class ExecutionApiServiceCollectionExtensions
 
         services.AddGrpc(options =>
         {
-            // Aligned with the sidecar's http-max-request-size: "64" (MB). Task payloads carry
-            // full instance data and can be large; the default 4 MB receive cap would fail them.
+            // Aligned with the sidecar's http-max-request-size: "64" (MB). Envelopes no longer
+            // carry the instance data (dead-weight removal from TaskTraceContext), so typical
+            // payloads are small; the headroom stays for large authored bindings and large
+            // downstream responses on the send side.
             options.MaxReceiveMessageSize = 64 * 1024 * 1024;
             options.MaxSendMessageSize = 64 * 1024 * 1024;
         });

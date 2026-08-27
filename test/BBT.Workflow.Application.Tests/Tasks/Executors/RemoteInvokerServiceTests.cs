@@ -67,9 +67,7 @@ public class RemoteInvokerServiceTests
         instanceId: Guid.NewGuid(),
         domain: "test",
         workflowKey: "test-flow",
-        workflowVersion: "1.0.0",
-        headers: null,
-        instanceDataJson: null);
+        workflowVersion: "1.0.0");
 
     private void SetupDaprCreateRequest()
     {

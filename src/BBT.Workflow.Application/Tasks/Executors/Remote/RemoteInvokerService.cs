@@ -459,8 +459,6 @@ public sealed class RemoteInvokerService : IRemoteInvokerService
             workflowKey: workflow?.Key ?? string.Empty,
             workflowVersion: workflow?.Version ?? string.Empty,
             correlationId: correlationId,
-            headers: headers,
-            instanceDataJson: instance?.LatestData?.Data?.Json,
             traceParent: activity?.Id,
             traceState: activity?.TraceStateString,
             sub: subject,
