@@ -43,7 +43,7 @@ public class TaskComponentValidatorTests
 
     /// <summary>
     /// Issue #399: the external (orchestrator-executed) HTTP task type publishes like any other —
-    /// discriminator "21" is a known TaskType and the shared HTTP config shape deserializes.
+    /// discriminator "22" is a known TaskType and the shared HTTP config shape deserializes.
     /// </summary>
     [Fact]
     public void Validate_ShouldReturnSuccess_ForExternalHttpTask()
@@ -51,7 +51,7 @@ public class TaskComponentValidatorTests
         // Arrange
         var taskJson = """
         {
-            "type": "21",
+            "type": "22",
             "config": {
                 "url": "https://google.com",
                 "method": "GET"

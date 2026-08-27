@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using BBT.Workflow.Definitions;
+using BBT.Workflow.Monitoring;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks.Executors;
@@ -132,7 +133,8 @@ public sealed class ExternalHttpTaskExecutorTests
             invoker,
             Substitute.For<IScriptEngine>(),
             remoteInvoker,
-            NullLogger<ExternalHttpTaskExecutor>.Instance);
+            NullLogger<ExternalHttpTaskExecutor>.Instance,
+            Substitute.For<IWorkflowMetrics>());
     }
 
     private static TaskExecutorContext CreateContext(ExternalHttpTask task)
@@ -149,7 +151,7 @@ public sealed class ExternalHttpTaskExecutorTests
             .SetWorkflow(workflow)
             .Build();
 
-        return new TaskExecutorContext(task, onExecute, scriptContext, null, TaskTrigger.OnExecute);
+        return new TaskExecutorContext(task, onExecute, scriptContext, null, TaskTrigger.OnExecute,TaskExecutionOrigin.Flow);
     }
 
     private sealed class SingleClientFactory(HttpMessageHandler handler) : IHttpClientFactory

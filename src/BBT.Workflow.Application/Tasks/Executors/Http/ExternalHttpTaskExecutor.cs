@@ -3,6 +3,7 @@ using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution.Bindings;
 using BBT.Workflow.Logging;
+using BBT.Workflow.Monitoring;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks.Mapping;
 using Microsoft.Extensions.Logging;
@@ -10,7 +11,7 @@ using Microsoft.Extensions.Logging;
 namespace BBT.Workflow.Tasks.Executors;
 
 /// <summary>
-/// Executor for local HTTP tasks (<see cref="TaskType.ExternalHttp"/>, discriminator "21"):
+/// Executor for local HTTP tasks (<see cref="TaskType.ExternalHttp"/>, discriminator "22"):
 /// the user-defined URL is invoked directly by the Orchestrator process instead of being
 /// routed through the Execution service's <c>/execution/invoke/{type}/{key}</c> hop.
 /// <para>
@@ -39,8 +40,9 @@ public sealed class ExternalHttpTaskExecutor : TaskExecutorBase<HttpTask>
         IExternalHttpTaskInvoker localInvoker,
         IScriptEngine scriptEngine,
         IRemoteInvokerService remoteInvoker,
-        ILogger<ExternalHttpTaskExecutor> logger)
-        : base(logger)
+        ILogger<ExternalHttpTaskExecutor> logger,
+        IWorkflowMetrics metrics)
+        : base(logger, metrics)
     {
         _localInvoker = localInvoker;
         _scriptEngine = scriptEngine;

@@ -182,7 +182,7 @@ public sealed class ExternalHttpTaskInvokerTests
     /// <summary>
     /// The reserved trace-header guard also lives in the shared send core: a stale traceparent or
     /// forged x-request-id in the binding's headers must not detach the downstream service from
-    /// the live trace — for type 21 exactly as for type 6.
+    /// the live trace — for type 22 exactly as for type 6.
     /// </summary>
     [Fact]
     public async Task InvokeAsync_ReservedTraceHeadersInBinding_AreNotCopiedToRequest()

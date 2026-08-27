@@ -10,7 +10,7 @@ namespace BBT.Workflow.Execution;
 /// <summary>
 /// The single implementation of an HTTP task call, shared by both hosts: the Execution service's
 /// <c>HttpTaskInvoker</c> (type 6, reached through <c>/execution/invoke</c>) and the Orchestrator's
-/// <c>ExternalHttpTaskInvoker</c> (type 21, in-process) delegate here, so the two task types cannot
+/// <c>ExternalHttpTaskInvoker</c> (type 22, in-process) delegate here, so the two task types cannot
 /// drift behaviorally — header/Content-Type splitting, body resolution, named-client selection by
 /// <c>validateSsl</c>, per-request timeout, response parsing and accepted-status-code matching are
 /// defined exactly once.
@@ -84,7 +84,7 @@ public static class HttpTaskInvocation
     /// <param name="cancellationToken">Caller cancellation; a fire during the request yields a
     /// failed result with <c>Cancelled = true</c> metadata.</param>
     /// <param name="traceContext">Explicit workflow correlation source for
-    /// <see cref="ApplyTrustedCorrelationHeaders"/>. The Orchestrator's in-process task (type 21)
+    /// <see cref="ApplyTrustedCorrelationHeaders"/>. The Orchestrator's in-process task (type 22)
     /// MUST pass it: ambient Activity baggage is not reliable there, because intermediate task
     /// spans are created from <see cref="System.Diagnostics.ActivityContext"/> which severs the
     /// managed parent chain baggage lookups walk. The Execution host passes null — its request
@@ -222,7 +222,7 @@ public static class HttpTaskInvocation
 
     /// <summary>
     /// Stamps the trusted workflow correlation headers onto an outbound HTTP request. Shared by
-    /// both HTTP task types (6 remote, 21 orchestrator-executed) via <see cref="SendAsync"/>, and
+    /// both HTTP task types (6 remote, 22 orchestrator-executed) via <see cref="SendAsync"/>, and
     /// by the Execution host's other invokers (Dapr, SOAP, direct trigger) via
     /// <c>InvokerHelpers</c>. Two precedence rules:
     /// <list type="bullet">

@@ -10,7 +10,7 @@ namespace BBT.Workflow.Tasks.Executors;
 /// In-process implementation of <see cref="IExternalHttpTaskInvoker"/> for the Orchestration host.
 /// Delegates the HTTP call to <see cref="HttpTaskInvocation"/> — the single send implementation
 /// shared with the Execution service's <c>HttpTaskInvoker</c> — so the two HTTP task types (6 and
-/// 21) cannot drift behaviorally. This wrapper only adds the orchestrator's logging and maps the
+/// 22) cannot drift behaviorally. This wrapper only adds the orchestrator's logging and maps the
 /// wire-side result type to the orchestrator-side <see cref="TaskInvocationResult"/> twin.
 /// </summary>
 public sealed class ExternalHttpTaskInvoker(

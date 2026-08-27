@@ -5,18 +5,18 @@ using Xunit;
 namespace BBT.Workflow.Definitions;
 
 /// <summary>
-/// Pins the contract of the external (orchestrator-executed) HTTP task type: discriminator "21"
+/// Pins the contract of the external (orchestrator-executed) HTTP task type: discriminator "22"
 /// materializes a <see cref="ExternalHttpTask"/> that shares HttpTask's whole configuration and
 /// scripting surface, while keeping its own runtime type identity through cloning.
 /// </summary>
 public class ExternalHttpTaskTests
 {
     [Fact]
-    public void Deserialize_Type21_MaterializesExternalHttpTask_WithInheritedConfig()
+    public void Deserialize_Type22_MaterializesExternalHttpTask_WithInheritedConfig()
     {
         var json = """
         {
-            "type": "21",
+            "type": "22",
             "config": {
                 "url": "https://google.com",
                 "method": "GET",

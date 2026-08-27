@@ -4,7 +4,7 @@ using System.Text.Json.Serialization;
 namespace BBT.Workflow.Definitions;
 
 /// <summary>
-/// HTTP task executed directly by the Orchestrator process (type discriminator "21").
+/// HTTP task executed directly by the Orchestrator process (type discriminator "22").
 /// The orchestrator performs the HTTP call in-process instead of routing the invocation
 /// through the Execution service's <c>/execution/invoke/{type}/{key}</c> hop.
 /// </summary>
