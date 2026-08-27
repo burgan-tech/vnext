@@ -626,7 +626,7 @@ public sealed class TaskExecutionEngineTests
 
         public bool CanHandle(TaskExecutionOrigin origin) => true;
 
-        public Task<InstanceTask> HandleCreationAsync(InstanceTask instanceTask, bool skipLookup = false, CancellationToken cancellationToken = default)
+        public Task<InstanceTask> HandleCreationAsync(InstanceTask instanceTask, TaskTrigger taskTrigger, int order, bool skipLookup = false, CancellationToken cancellationToken = default)
         {
             SkipLookupCalls.Add(skipLookup);
             return Task.FromResult(instanceTask);
