@@ -2394,6 +2394,30 @@ public static partial class WorkflowLogs
         string domain,
         string baseUrl);
 
+    /// <summary>
+    /// Logs when this pod skipped domain registration because it did not acquire the
+    /// once-per-rollout registration lock. Another replica already owns (or will own) it; this
+    /// pod starts normally without registering.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 50008,
+        Level = LogLevel.Information,
+        Message = "Domain registration skipped for '{Domain}' - lock not acquired, another replica owns this rollout's registration")]
+    public static partial void DomainRegistrationSkippedNotLockOwner(
+        this ILogger logger,
+        string domain);
+
+    /// <summary>
+    /// Logs when this pod acquired the registration lock and will perform the registration.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 50009,
+        Level = LogLevel.Information,
+        Message = "Domain registration lock acquired for '{Domain}' - this pod will register")]
+    public static partial void DomainRegistrationClaimed(
+        this ILogger logger,
+        string domain);
+
     #endregion
 
     #region Specification Validation

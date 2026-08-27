@@ -43,26 +43,26 @@ public sealed class DomainRegistrationService(
 
         logger.LogInformation("Service discovery is enabled. Starting domain registration...");
 
-        var vNextApiBaseUrl = configuration[VNextApiBaseUrlKey];
+        var identity = GetRegistrationIdentity();
 
-        if (string.IsNullOrWhiteSpace(vNextApiBaseUrl))
+        if (string.IsNullOrWhiteSpace(identity.BaseUrl))
         {
             throw new InvalidConfigurationException(
                 $"Service discovery is enabled, but '{VNextApiBaseUrlKey}' is not configured. " +
                 "Either disable service discovery or configure the base URL.");
         }
 
-        if (IsLocalhostBaseUrl(vNextApiBaseUrl) && !hostEnvironment.IsDevelopment())
+        if (IsLocalhostBaseUrl(identity.BaseUrl) && !hostEnvironment.IsDevelopment())
         {
             throw new InvalidConfigurationException(
-                $"Invalid configuration: '{VNextApiBaseUrlKey}' points to localhost ('{vNextApiBaseUrl}') " +
+                $"Invalid configuration: '{VNextApiBaseUrlKey}' points to localhost ('{identity.BaseUrl}') " +
                 $"in environment '{hostEnvironment.EnvironmentName}'. " +
                 "Use a reachable base URL in non-development environments.");
         }
 
-        var domainName = runtimeInfoProvider.Domain;
-        var baseUrl = vNextApiBaseUrl.TrimEnd('/');
-        var healthUrl = $"{baseUrl}/health";
+        var domainName = identity.DomainName;
+        var baseUrl = identity.BaseUrl;
+        var healthUrl = identity.HealthUrl;
         var appId = configuration["DAPR_APP_ID"];
         
         logger.LogInformation(
@@ -123,6 +123,17 @@ public sealed class DomainRegistrationService(
             var reason = "Request timed out. Registry might be slow or unavailable.";
             throw new DomainRegistrationFailedException(domainName, requestUrl, reason);
         }
+    }
+
+    /// <inheritdoc />
+    public DomainRegistrationIdentity GetRegistrationIdentity()
+    {
+        var domainName = runtimeInfoProvider.Domain;
+        var vNextApiBaseUrl = configuration[VNextApiBaseUrlKey];
+        var baseUrl = string.IsNullOrWhiteSpace(vNextApiBaseUrl) ? string.Empty : vNextApiBaseUrl.TrimEnd('/');
+        var healthUrl = string.IsNullOrEmpty(baseUrl) ? string.Empty : $"{baseUrl}/health";
+
+        return new DomainRegistrationIdentity(domainName, baseUrl, healthUrl);
     }
 
     private static bool IsLocalhostBaseUrl(string baseUrl)
