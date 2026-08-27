@@ -283,6 +283,17 @@ public static class TelemetryConstants
         /// the gateway and by Aether's correlation middleware; forwarded on every internal hop.
         /// </summary>
         public const string RequestId = "X-Request-Id";
+        /// <summary>
+        /// Request header carrying the caller's W3C trace id (the 32-hex <c>trace.id</c> of the
+        /// ambient <see cref="System.Diagnostics.Activity"/>) as a flat value.
+        /// <para>
+        /// This is NOT a replacement for <c>traceparent</c>: the runtime already propagates the
+        /// full W3C trace context on outbound HTTP, and stamping <c>traceparent</c> by hand would
+        /// duplicate the header. This one exists so a dependency can log and query the caller's
+        /// <c>trace.id</c> through a plain header enricher, without having to parse traceparent.
+        /// </para>
+        /// </summary>
+        public const string TraceId = "X-Trace-Id";
     }
 
     /// <summary>

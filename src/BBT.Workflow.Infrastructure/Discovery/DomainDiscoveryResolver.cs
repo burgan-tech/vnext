@@ -90,6 +90,8 @@ public sealed class DomainDiscoveryResolver(
 
     /// <summary>
     /// Queries a single domain from the discovery registry.
+    /// Targets <see cref="ServiceDiscoveryOptions.DiscoveryEndpointTemplate"/>, which by default is
+    /// the discovery domain's cached <c>domain-lookup</c> function rather than a direct instance read.
     /// </summary>
     private async Task<Result<DiscoveryEndpoint>> QuerySingleDomainAsync(
         string domain,
@@ -106,9 +108,7 @@ public sealed class DomainDiscoveryResolver(
 
         logger.QueryingSingleDomain(domain);
 
-        var endpointTemplate = options.DiscoveryEndpointTemplate;
-        var relativePath = string.Format(endpointTemplate, domain);
-        var requestUrl = options.BaseUrl.TrimEnd('/') + relativePath;
+        var requestUrl = BuildSingleDomainUrl(options, domain);
 
         try
         {
@@ -159,6 +159,17 @@ public sealed class DomainDiscoveryResolver(
             return Result<DiscoveryEndpoint>.Fail(
                 WorkflowErrors.DomainDiscoveryFailed(domain, ex.Message));
         }
+    }
+
+    /// <summary>
+    /// Builds the single-domain registry URL from <see cref="ServiceDiscoveryOptions.DiscoveryEndpointTemplate"/>.
+    /// The domain is URL-encoded: the default template carries it as a query-string value
+    /// (<c>?key={0}</c>), so an unencoded name would break the request rather than 404.
+    /// </summary>
+    private static string BuildSingleDomainUrl(ServiceDiscoveryOptions options, string domain)
+    {
+        var relativePath = string.Format(options.DiscoveryEndpointTemplate, Uri.EscapeDataString(domain));
+        return options.BaseUrl.TrimEnd('/') + relativePath;
     }
 
     /// <summary>
@@ -350,10 +361,7 @@ public sealed class DomainDiscoveryResolver(
             return ETagCheckResult.Failed();
         }
 
-        // Use the old endpoint template for single domain check
-        var endpointTemplate = options.DiscoveryEndpointTemplate;
-        var relativePath = string.Format(endpointTemplate, domain);
-        var requestUrl = options.BaseUrl.TrimEnd('/') + relativePath;
+        var requestUrl = BuildSingleDomainUrl(options, domain);
 
         try
         {
@@ -426,6 +434,21 @@ public sealed class DomainDiscoveryResolver(
             else if (!string.IsNullOrWhiteSpace(dto.ETag))
             {
                 responseETag = dto.ETag.Trim('"');
+            }
+
+            // The cached domain-lookup function answers 200 with the registration on every call -
+            // it has no conditional-request support, so the 304 branch above never fires for it.
+            // Comparing the returned eTag against the cached one restores the "nothing changed"
+            // outcome, which is what keeps a resolution from rewriting the bulk cache every time.
+            if (!string.IsNullOrWhiteSpace(cachedETag) &&
+                !string.IsNullOrWhiteSpace(responseETag) &&
+                string.Equals(cachedETag.Trim('"'), responseETag, StringComparison.Ordinal))
+            {
+                logger.LogDebug(
+                    "Discovery registration for domain '{Domain}' is unchanged (eTag match)",
+                    domain);
+
+                return ETagCheckResult.NotModified();
             }
 
             return ETagCheckResult.Success(endpoint, responseETag);

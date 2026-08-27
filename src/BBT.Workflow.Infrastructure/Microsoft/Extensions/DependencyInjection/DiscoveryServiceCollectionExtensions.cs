@@ -38,6 +38,9 @@ public static class DiscoveryServiceCollectionExtensions
 
         var options = optionsSection.Get<ServiceDiscoveryOptions>() ?? new ServiceDiscoveryOptions();
 
+        // Outbound trace-id stamping for every discovery call (registration + resolution).
+        services.AddTransient<DiscoveryTraceHeaderHandler>();
+
         // Register HttpClient with Polly policies
         services.AddHttpClient(DomainRegistrationService.HttpClientName, (sp, client) =>
             {
@@ -75,6 +78,7 @@ public static class DiscoveryServiceCollectionExtensions
 
                 return handler;
             })
+            .AddHttpMessageHandler<DiscoveryTraceHeaderHandler>()
             .AddPolicyHandler(GetTimeoutPolicy(options))
             .AddPolicyHandler(GetRetryPolicy(options))
             .AddPolicyHandler(GetCircuitBreakerPolicy(options));
