@@ -177,9 +177,13 @@ public sealed class ScriptCode : ValueObject
     /// empty-string <see cref="ContentHash"/>. Only a truly anonymous inline script falls through to
     /// a hash prefix, which at least tells two of them apart.
     /// <para>
-    /// Cheap on purpose: <see cref="Location"/> is already a materialized string, so the common path
-    /// allocates nothing. This is why the span NAME can carry identity on every compile while
-    /// <c>vnext.script.key</c> stays miss-only — that tag hashes, this does not.
+    /// Cheap on purpose: <see cref="Location"/> is already a materialized string, so obtaining this
+    /// identity itself allocates nothing — no hashing, no parsing. The span NAME built from it
+    /// (<c>$"Script.Compile/{identity}"</c> in <see cref="BBT.Workflow.Scripting.ScriptActivityHelper.StartCompileActivity"/>)
+    /// still does one small string-interpolation allocation, built unconditionally before
+    /// <c>StartActivity</c> is called, so it happens even with no listener attached. That single
+    /// allocation is why the NAME can afford to carry identity on every compile while
+    /// <c>vnext.script.key</c> stays miss-only — that tag hashes on top, this does not.
     /// </para>
     /// </remarks>
     [JsonIgnore]

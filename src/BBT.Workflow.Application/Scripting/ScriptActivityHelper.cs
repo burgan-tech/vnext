@@ -24,7 +24,13 @@ public static class ScriptActivityHelper
     /// <param name="identity">
     /// <see cref="BBT.Workflow.Definitions.ScriptCode.TraceIdentity"/> when the caller has a
     /// <c>ScriptCode</c>. The raw-string compile overloads have none, and fall back to the bare
-    /// <c>Script.Compile</c> name.
+    /// <c>Script.Compile</c> name. Obtaining <c>identity</c> itself is free (already a materialized
+    /// string); the <c>$"Script.Compile/{identity}"</c> interpolation below is the one small
+    /// allocation on this path, and it happens unconditionally — before
+    /// <see cref="ActivitySource.StartActivity(string,ActivityKind,ActivityContext)"/> is called, so
+    /// even with no listener attached. Negligible in absolute terms (the broader compile path
+    /// already does comparable work, e.g. <c>ScriptCompileTelemetry.FindTargetActivity</c>'s span
+    /// walk), just not literally allocation-free.
     /// </param>
     public static Activity? StartCompileActivity(string? identity = null)
     {

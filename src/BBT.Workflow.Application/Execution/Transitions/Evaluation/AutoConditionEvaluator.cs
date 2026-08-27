@@ -66,6 +66,13 @@ public sealed class AutoConditionEvaluator(
         return ResultExtensions.TryAsync(
             async ct =>
             {
+                // NOTE: this call site is invoked once per candidate transition by
+                // Step.RunAutomaticTransitions, so every memo hit here increments the SAME
+                // enclosing span's counter tag via Activity.IncrementCounterTag (unsynchronized
+                // read-modify-write — sound today because this loop runs single-flow). If
+                // auto-transition evaluation is ever parallelized, this is the site that would
+                // race: count hits locally per branch and set the tag once at the join, per the
+                // rule already documented on IncrementCounterTag itself.
                 var scriptContext = await context.GetOrBuildScriptContextAsync(
                     innerCt => CreateScriptContextAsync(context, innerCt),
                     ct);

@@ -124,8 +124,13 @@ evaluation.
 - The runtime's `APP_DOMAIN` was overridden for the process only (see Environment note above); the
   underlying compile-cache mechanism is unrelated to domain configuration, so this does not affect
   the validity of the result.
-- Only six identities were observed (bounded by what `MoneyTransferTests` exercises). This is a
-  representative sample of the mechanism (`ScriptEvaluator`'s process-lifetime type cache is
-  identity-agnostic — it doesn't special-case auto-transition rules vs. task mappings), not
-  exhaustive coverage of every script in the codebase. The mechanism itself, not the specific
-  script, is what determines cold-start-only behavior.
+- Only six identities were observed (bounded by what `MoneyTransferTests` exercises), and **all six
+  are plain compiles — this run did not exercise the helper-set compile path at all.**
+  `money-transfer` declares no `"helpers"` in any of its component JSON (verified by grep across
+  its Tasks/Workflows/Schemas/Functions/Views), so none of its scripts touch the helper-set
+  resolution/compile route — the one whose profile is memoised in a `ConditionalWeakTable` keyed on
+  `helperSet.Reference`, and the one this repo's own docs blame for a "~2 s cold cost." The verdict
+  above (cold-start-only, no unstable cache key) holds for the **plain compile path** measured here;
+  it should not be read as covering helper-set compiles, which remain unmeasured by this experiment.
+  A future run aimed at that path needs a flow whose components declare `helpers` — e.g.
+  `account-opening` or `otp-auth` in vnext-example, both of which do.
