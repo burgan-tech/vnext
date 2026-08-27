@@ -74,11 +74,6 @@ public sealed class ServiceDiscoveryOptions
     public string InternalOperationHeader { get; set; } = "X-Internal-Operation";
 
     /// <summary>
-    /// Cache duration in seconds for discovered endpoints (default: 300 = 5 minutes).
-    /// </summary>
-    public int DiscoveryCacheSeconds { get; set; } = 300;
-
-    /// <summary>
     /// Discovery API endpoint template for resolving a single domain endpoint.
     /// <c>{0}</c> = domain name, URL-encoded by the resolver before formatting.
     /// <para>
