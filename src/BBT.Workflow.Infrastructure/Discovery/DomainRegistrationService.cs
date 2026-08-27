@@ -85,7 +85,7 @@ public sealed class DomainRegistrationService(
         var registryBaseUrl = options.BaseUrl.TrimEnd('/');
         var registryDomain = options.Domain;
         var registryFlow= options.RegistryFlow;
-        var requestUrl = $"{registryBaseUrl}/{registryDomain}/workflows/{registryFlow}/instances/start?sync=false";
+        var requestUrl = $"{registryBaseUrl}/{registryDomain}/workflows/{registryFlow}/instances/start?sync=true";
 
         try
         {

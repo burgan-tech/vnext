@@ -25,12 +25,13 @@ public static class OrchestrationApiServiceCollectionExtensions
     public static IServiceCollection AddOrchestrationApiModule(this IServiceCollection services)
     {
         var configuration = services.GetConfiguration();
-        
+
         services
             .AddFunctionHandlers()
             .AddDomainModule()
             .AddApplicationModule()
-            .AddInfrastructureModule(configuration) // Infrastructure manages its own dependencies including URL templates
+            .AddInfrastructureModule(
+                configuration) // Infrastructure manages its own dependencies including URL templates
             .AddAspNetCoreModules(configuration)
             .AddFormUrlEncodedJsonElementInput()
             .AddResultResilience(configuration)
@@ -95,8 +96,8 @@ public static class OrchestrationApiServiceCollectionExtensions
             configuration.GetSection(HealthCheckCacheOptions.SectionName));
 
         var connectionString = configuration.GetConnectionString("Default")
-            ?? throw new InvalidOperationException(
-                "Connection string 'Default' is required for the database health check.");
+                               ?? throw new InvalidOperationException(
+                                   "Connection string 'Default' is required for the database health check.");
 
         // Singleton: TTL state + SemaphoreSlim must survive across probes.
         services.TryAddSingleton<CachedHealthCheck>(sp =>
@@ -119,11 +120,12 @@ public static class OrchestrationApiServiceCollectionExtensions
     private static IServiceCollection AddHostedServices(this IServiceCollection services, IConfiguration configuration)
     {
         // Add any Orchestration-specific hosted services
-        #if DEBUG
+#if DEBUG
         services.AddHostedService<MultiSchemaMigrationHostedService>();
-        #endif
+#endif
         services.AddHostedService<DomainDiscoveryInitializationHostedService>();
 
+#if DEBUG
         // Pays the Roslyn cold cost (assembly load + JIT + reference materialization, ~seconds) at
         // startup instead of inside the first real transition's input mapping. Orchestration only —
         // it is the host that compiles mapping scripts.
@@ -131,7 +133,7 @@ public static class OrchestrationApiServiceCollectionExtensions
         {
             services.AddHostedService<BBT.Workflow.Scripting.ScriptEngineWarmupService>();
         }
-
+#endif
         return services;
     }
 }
