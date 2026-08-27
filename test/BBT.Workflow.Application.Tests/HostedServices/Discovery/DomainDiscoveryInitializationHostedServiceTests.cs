@@ -26,32 +26,40 @@ namespace BBT.Workflow.Application.Tests.HostedServices.Discovery;
 /// <c>RunAsync</c> directly is a plain async method call with normal, deterministic semantics.
 /// </para>
 /// <para>
-/// The four behaviors below are the whole contract:
+/// The five behaviors below are the whole contract:
 /// <list type="number">
 /// <item>lock acquired → registration runs;</item>
 /// <item>lock NOT acquired → registration is skipped, no exception (a replica that lost the race
 /// must start normally, not abort);</item>
 /// <item>lock acquired and registration throws → the lock is released (so another replica can try
 /// immediately) and the exception still propagates (this pod aborts startup and is restarted);</item>
-/// <item>lock acquired and registration succeeds → the lock is <b>NOT</b> released. This is the
-/// counter-intuitive, load-bearing case: the lease is left to expire so the next replica in the
-/// same rollout (which starts seconds-to-minutes later, not concurrently) does not see a free lock
-/// and re-register.</item>
+/// <item>lock acquired and registration succeeds → the lock is <b>NOT</b> released — neither via
+/// <c>ReleaseAsync</c> nor via <c>DisposeAsync</c> (the regression a well-meaning "tidy this into
+/// <c>await using</c>" refactor would introduce). This is the counter-intuitive, load-bearing case:
+/// the lease is left to expire so the next replica in the same rollout (which starts
+/// seconds-to-minutes later, not concurrently) does not see a free lock and re-register;</item>
+/// <item>service discovery disabled → the lock is never attempted and registration is never
+/// called, so a disabled pod cannot strand the lease for a later enabled one.</item>
 /// </list>
 /// </para>
 /// </summary>
 public sealed class DomainDiscoveryInitializationHostedServiceTests
 {
     private static readonly DomainRegistrationIdentity Identity =
-        new("lending", "https://lending.internal.test", "https://lending.internal.test/health");
+        new("lending", "https://lending.internal.test", "https://lending.internal.test/health", Enabled: true);
+
+    private static readonly DomainRegistrationIdentity DisabledIdentity =
+        new("lending", "https://lending.internal.test", "https://lending.internal.test/health", Enabled: false);
 
     private static (
         DomainDiscoveryInitializationHostedService Sut,
         IDomainRegistrationService Registration,
-        IDistributedLockService LockService) CreateSut(IDistributedLockHandle? acquiredHandle)
+        IDistributedLockService LockService) CreateSut(
+        IDistributedLockHandle? acquiredHandle,
+        DomainRegistrationIdentity? identity = null)
     {
         var registrationService = Substitute.For<IDomainRegistrationService>();
-        registrationService.GetRegistrationIdentity().Returns(Identity);
+        registrationService.GetRegistrationIdentity().Returns(identity ?? Identity);
         registrationService.RegisterDomainAsync(Arg.Any<CancellationToken>()).Returns(Task.CompletedTask);
 
         var lockService = Substitute.For<IDistributedLockService>();
@@ -122,7 +130,29 @@ public sealed class DomainDiscoveryInitializationHostedServiceTests
 
         // The heart of the design: the lease is left to expire on success. Releasing here would
         // let the next replica in the same rollout (seconds-to-minutes later) re-acquire and
-        // re-register, defeating the once-per-rollout guard entirely.
+        // re-register, defeating the once-per-rollout guard entirely. Both release paths are
+        // pinned: ReleaseAsync directly, and DisposeAsync — the method a "tidy this into `await
+        // using var handle = ...`" refactor would call instead, which would silently reintroduce
+        // the same regression without this assertion catching it.
         await handle.DidNotReceive().ReleaseAsync(Arg.Any<CancellationToken>());
+        await handle.DidNotReceive().DisposeAsync();
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenDiscoveryDisabled_SkipsLockAndRegistration()
+    {
+        var (sut, registration, lockService) = CreateSut(acquiredHandle: null, identity: DisabledIdentity);
+
+        // Must not throw either: a pod with discovery disabled starts normally.
+        await sut.RunAsync(CancellationToken.None);
+
+        // No lock attempt at all — not just a skipped registration call. Taking the lock here
+        // would let a disabled pod strand the once-per-rollout lease: during an
+        // Enabled:false->true config rollout the base URL is unchanged, so the lock key is
+        // identical, and a still-disabled pod winning the lease would make the newly-enabled pod
+        // skip with nothing left to re-register until the next deploy.
+        await lockService.DidNotReceive().TryAcquireLockAsync(
+            Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
+        await registration.DidNotReceive().RegisterDomainAsync(Arg.Any<CancellationToken>());
     }
 }

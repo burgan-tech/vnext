@@ -133,7 +133,7 @@ public sealed class DomainRegistrationService(
         var baseUrl = string.IsNullOrWhiteSpace(vNextApiBaseUrl) ? string.Empty : vNextApiBaseUrl.TrimEnd('/');
         var healthUrl = string.IsNullOrEmpty(baseUrl) ? string.Empty : $"{baseUrl}/health";
 
-        return new DomainRegistrationIdentity(domainName, baseUrl, healthUrl);
+        return new DomainRegistrationIdentity(domainName, baseUrl, healthUrl, serviceDiscoveryOptions.Value.Enabled);
     }
 
     private static bool IsLocalhostBaseUrl(string baseUrl)

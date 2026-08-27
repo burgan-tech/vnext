@@ -2418,6 +2418,50 @@ public static partial class WorkflowLogs
         this ILogger logger,
         string domain);
 
+    /// <summary>
+    /// Logs when domain registration is skipped entirely (no lock attempt, no registration call)
+    /// because service discovery is disabled for this pod.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 50012,
+        Level = LogLevel.Debug,
+        Message = "Domain registration skipped for '{Domain}' - service discovery is disabled")]
+    public static partial void DomainRegistrationSkippedDisabled(
+        this ILogger logger,
+        string domain);
+
+    /// <summary>
+    /// Logs when the domain discovery initialization hosted service starts running.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 50013,
+        Level = LogLevel.Information,
+        Message = "Starting domain discovery initialization...")]
+    public static partial void DomainDiscoveryInitializationStarted(
+        this ILogger logger);
+
+    /// <summary>
+    /// Logs when the domain discovery initialization hosted service completes successfully.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 50014,
+        Level = LogLevel.Information,
+        Message = "Domain discovery initialization completed successfully")]
+    public static partial void DomainDiscoveryInitializationSucceeded(
+        this ILogger logger);
+
+    /// <summary>
+    /// Logs when domain discovery initialization fails. This is always fatal to startup: the
+    /// caller rethrows so the host aborts and the pod is restarted.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 50015,
+        Level = LogLevel.Critical,
+        Message = "Domain discovery initialization failed. Application startup will be aborted.")]
+    public static partial void DomainDiscoveryInitializationFailed(
+        this ILogger logger,
+        Exception exception);
+
     #endregion
 
     #region Specification Validation

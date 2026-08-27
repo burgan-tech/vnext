@@ -14,7 +14,13 @@ namespace BBT.Workflow.Discovery;
 /// <param name="HealthUrl">
 /// <c>{BaseUrl}/health</c>, or empty when <paramref name="BaseUrl"/> is empty.
 /// </param>
-public readonly record struct DomainRegistrationIdentity(string DomainName, string BaseUrl, string HealthUrl);
+/// <param name="Enabled">
+/// The current value of <c>ServiceDiscovery:Enabled</c>. Surfaced here — rather than read
+/// separately from options by callers — so a once-per-rollout registration guard (which must skip
+/// the lock entirely when discovery is disabled, not just skip the HTTP call) can never disagree
+/// with what <see cref="IDomainRegistrationService.RegisterDomainAsync"/> itself will do.
+/// </param>
+public readonly record struct DomainRegistrationIdentity(string DomainName, string BaseUrl, string HealthUrl, bool Enabled);
 
 /// <summary>
 /// Service responsible for registering the current domain with the service registry.

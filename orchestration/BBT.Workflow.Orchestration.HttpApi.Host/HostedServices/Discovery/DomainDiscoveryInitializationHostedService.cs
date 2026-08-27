@@ -48,7 +48,7 @@ public sealed class DomainDiscoveryInitializationHostedService(
     {
         try
         {
-            logger.LogInformation("Starting domain discovery initialization...");
+            logger.DomainDiscoveryInitializationStarted();
 
             await using var scope = scopeFactory.CreateAsyncScope();
             var registrationService = scope.ServiceProvider.GetRequiredService<IDomainRegistrationService>();
@@ -56,7 +56,21 @@ public sealed class DomainDiscoveryInitializationHostedService(
 
             // The key is derived from what will actually be registered (see BuildLockKey), never
             // recomputed independently, so it can never drift from the real registration content.
+            // Enabled is carried on the same identity for the same reason: reading it separately
+            // from options here could disagree with what RegisterDomainAsync itself decides.
             var identity = registrationService.GetRegistrationIdentity();
+
+            if (!identity.Enabled)
+            {
+                // Skip before touching the lock at all. Taking the lock here would let a
+                // discovery-disabled pod hold the lease having registered nothing — harmless most
+                // of the time, but during an Enabled:false->true rollout the base URL is unchanged,
+                // so the key is identical: a still-disabled pod could win the lease and the
+                // newly-enabled pod would then skip, with nothing to re-register until next deploy.
+                logger.DomainRegistrationSkippedDisabled(identity.DomainName);
+                return;
+            }
+
             var lockKey = BuildLockKey(identity);
 
             // Single attempt by design: a replica that does not get the lock must not wait and
@@ -83,17 +97,18 @@ public sealed class DomainDiscoveryInitializationHostedService(
                 throw;
             }
 
-            // Deliberately NOT released here. The lease is a once-per-window guard, not a mutex:
-            // replicas in this rollout start seconds-to-minutes apart, not simultaneously, so
-            // releasing on success would let the very next one see a free lock and re-register,
-            // defeating the guard entirely. The lease is left to expire on its own.
+            // Deliberately NOT released here (and not wrapped in `await using`, which would
+            // release via DisposeAsync on the same path). The lease is a once-per-window guard,
+            // not a mutex: replicas in this rollout start seconds-to-minutes apart, not
+            // simultaneously, so releasing on success would let the very next one see a free lock
+            // and re-register, defeating the guard entirely. The lease is left to expire on its own.
 
-            logger.LogInformation("Domain discovery initialization completed successfully");
+            logger.DomainDiscoveryInitializationSucceeded();
         }
         catch (Exception ex)
         {
             // All domain discovery initialization failures are critical and abort application startup
-            logger.LogCritical(ex, "Domain discovery initialization failed. Application startup will be aborted.");
+            logger.DomainDiscoveryInitializationFailed(ex);
             throw;
         }
     }
