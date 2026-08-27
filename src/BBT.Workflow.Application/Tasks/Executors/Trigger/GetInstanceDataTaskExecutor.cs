@@ -7,6 +7,7 @@ using BBT.Workflow.Execution.Bindings;
 using BBT.Workflow.Gateway;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
+using BBT.Workflow.Monitoring;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks.Mapping;
@@ -33,8 +34,9 @@ public sealed class GetInstanceDataTaskExecutor : TriggerTaskExecutorBase<GetIns
         IRemoteInvokerService remoteInvoker,
         IInstanceQueryGateway instanceQueryGateway,
         IDomainDiscoveryResolver endpointResolver,
-        ILogger<GetInstanceDataTaskExecutor> logger)
-        : base(scriptEngine, runtimeInfoProvider, remoteInvoker, logger)
+        ILogger<GetInstanceDataTaskExecutor> logger,
+        IWorkflowMetrics metrics)
+        : base(scriptEngine, runtimeInfoProvider, remoteInvoker, logger, metrics)
     {
         _instanceQueryGateway = instanceQueryGateway;
         _endpointResolver = endpointResolver;
@@ -73,7 +75,12 @@ public sealed class GetInstanceDataTaskExecutor : TriggerTaskExecutorBase<GetIns
 
         if (isSameDomain)
         {
-            return await ExecuteLocalAsync(task, instanceIdentifier, context, cancellationToken);
+            return await RunLocalScopedAsync(
+                task,
+                targetFlow: task.TriggerFlow,
+                targetInstance: instanceIdentifier,
+                ct => ExecuteLocalAsync(task, instanceIdentifier, context, ct),
+                cancellationToken);
         }
 
         return await ExecuteRemoteAsync(task, instanceIdentifier, context, cancellationToken);

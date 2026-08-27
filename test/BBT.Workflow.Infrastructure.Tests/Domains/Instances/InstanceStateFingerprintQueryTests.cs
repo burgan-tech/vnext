@@ -6,6 +6,7 @@ using BBT.Aether.MultiSchema;
 using BBT.Workflow.Data;
 using BBT.Workflow.Instances;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
 using Shouldly;
 using Testcontainers.PostgreSql;
 using Xunit;
@@ -237,6 +238,73 @@ public sealed class InstanceStateFingerprintQueryTests : IAsyncLifetime
         byKey.ShouldBeNull();
     }
 
+    /// <summary>
+    /// The compiled poll-path queries must produce the exact same fingerprint as the uncompiled
+    /// reference projection — a diverging member invalidates every outstanding ETag fleet-wide.
+    /// </summary>
+    [Fact]
+    public async Task CompiledQueries_MatchUncompiledReference()
+    {
+        var instance = Instance.Create(Guid.NewGuid(), Flow, FlowVersion, "fp-compiled-parity");
+        instance.SetEffectiveState("review");
+
+        var completed = CreateCorrelation(instance.Id, subFlowType: "S");
+        completed.ApplyTerminalOutcome(
+            SubItemTerminalOutcome.Completed, new DateTime(2026, 6, 7, 8, 9, 10, DateTimeKind.Utc));
+        instance.AddCorrelation(completed);
+        instance.AddCorrelation(CreateCorrelation(instance.Id, subFlowType: "S"));
+
+        await SeedAsync(instance);
+
+        await using var ctx = CreateContext();
+        var compiled = EfCoreInstanceRepository.CompiledFingerprintQueries.For(ctx);
+        var reference = await QueryAsync(ctx, instance.Id.ToString());
+
+        reference.ShouldNotBeNull();
+        (await compiled.StateById(ctx, instance.Id, CancellationToken.None)).ShouldBe(reference);
+        (await compiled.StateByKey(ctx, "fp-compiled-parity", CancellationToken.None)).ShouldBe(reference);
+        (await compiled.StateById(ctx, Guid.NewGuid(), CancellationToken.None)).ShouldBeNull();
+    }
+
+    /// <summary>
+    /// A compiled query binds to the model of the first context it runs against, and
+    /// schema-per-flow bakes the schema name into each compiled model. The per-model cache in
+    /// <see cref="EfCoreInstanceRepository.CompiledFingerprintQueries"/> must therefore hand each
+    /// schema its own delegates — one shared delegate would silently serve every tenant from the
+    /// first tenant's schema.
+    /// </summary>
+    [Fact]
+    public async Task CompiledQueries_AreScopedPerSchemaModel()
+    {
+        var tenantInstance = Instance.Create(Guid.NewGuid(), Flow, FlowVersion, "fp-tenant-only");
+        tenantInstance.SetEffectiveState("review");
+
+        await using (var setupCtx = CreateContext("tenant_fp"))
+        {
+            await setupCtx.Database.ExecuteSqlRawAsync("CREATE SCHEMA IF NOT EXISTS tenant_fp");
+            var creator = setupCtx.GetService<Microsoft.EntityFrameworkCore.Storage.IRelationalDatabaseCreator>();
+            await creator.CreateTablesAsync();
+
+            setupCtx.Instances.Add(tenantInstance);
+            await setupCtx.SaveChangesAsync();
+        }
+
+        await using var tenantCtx = CreateContext("tenant_fp");
+        await using var publicCtx = CreateContext();
+
+        var tenantCompiled = EfCoreInstanceRepository.CompiledFingerprintQueries.For(tenantCtx);
+        var publicCompiled = EfCoreInstanceRepository.CompiledFingerprintQueries.For(publicCtx);
+
+        tenantCompiled.ShouldNotBeSameAs(publicCompiled);
+
+        var fromTenant = await tenantCompiled.StateById(tenantCtx, tenantInstance.Id, CancellationToken.None);
+        fromTenant.ShouldNotBeNull();
+        fromTenant!.Key.ShouldBe("fp-tenant-only");
+
+        // The same id through the public-schema delegates must not see the tenant's row.
+        (await publicCompiled.StateById(publicCtx, tenantInstance.Id, CancellationToken.None)).ShouldBeNull();
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     private static Task<InstanceStateFingerprint?> QueryAsync(WorkflowDbContext ctx, string identifier) =>
@@ -270,11 +338,15 @@ public sealed class InstanceStateFingerprintQueryTests : IAsyncLifetime
         }
     }
 
-    private WorkflowDbContext CreateContext()
+    private WorkflowDbContext CreateContext(string schema = "public")
     {
+        // Mirror production model caching: SchemaAwareModelCacheKeyFactory compiles one model per
+        // schema. Without it EF's default cache (keyed by context type alone) would hand the
+        // second schema the first schema's model.
         var options = new DbContextOptionsBuilder<WorkflowDbContext>()
             .UseNpgsql(_connectionString)
+            .ReplaceService<Microsoft.EntityFrameworkCore.Infrastructure.IModelCacheKeyFactory, SchemaAwareModelCacheKeyFactory>()
             .Options;
-        return new WorkflowDbContext(options, new StaticCurrentSchema("public"));
+        return new WorkflowDbContext(options, new StaticCurrentSchema(schema));
     }
 }

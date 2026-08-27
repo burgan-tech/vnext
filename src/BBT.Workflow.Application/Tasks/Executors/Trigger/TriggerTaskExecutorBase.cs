@@ -1,11 +1,14 @@
+using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution.ErrorHandling;
 using BBT.Workflow.Logging;
+using BBT.Workflow.Monitoring;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
+using BBT.Workflow.Tasks.Coordinator;
 using Microsoft.Extensions.Logging;
 
 namespace BBT.Workflow.Tasks.Executors;
@@ -19,8 +22,9 @@ public abstract class TriggerTaskExecutorBase<TTask>(
     IScriptEngine scriptEngine,
     IRuntimeInfoProvider runtimeInfoProvider,
     IRemoteInvokerService remoteInvoker,
-    ILogger logger)
-    : TaskExecutorBase<TTask>(logger)
+    ILogger logger,
+    IWorkflowMetrics metrics)
+    : TaskExecutorBase<TTask>(logger, metrics)
     where TTask : WorkflowTask
 {
     protected readonly IScriptEngine ScriptEngine = scriptEngine;
@@ -58,10 +62,7 @@ public abstract class TriggerTaskExecutorBase<TTask>(
 
         var result = await ResultExtensions.TryAsync<ScriptResponse?>(async ct =>
         {
-            var scriptRunner = await ScriptEngine.CompileToInstanceAsync<IMapping>(
-                mapping,
-                flowScripts: context.ScriptContext.Workflow?.Scripts,
-                cancellationToken: ct);
+            var scriptRunner = await GetOrCompileMappingAsync<IMapping>(ScriptEngine, context, ct);
 
             return await scriptRunner.InputHandler(task, context.ScriptContext);
         }, cancellationToken, ex => Error.Failure(
@@ -98,10 +99,7 @@ public abstract class TriggerTaskExecutorBase<TTask>(
 
         var result = await ResultExtensions.TryAsync<object?>(async ct =>
         {
-            var scriptRunner = await ScriptEngine.CompileToInstanceAsync<IMapping>(
-                mapping,
-                flowScripts: context.ScriptContext.Workflow?.Scripts,
-                cancellationToken: ct);
+            var scriptRunner = await GetOrCompileMappingAsync<IMapping>(ScriptEngine, context, ct);
 
             var outputResponse = await scriptRunner.OutputHandler(context.ScriptContext);
             return outputResponse.Data;
@@ -116,6 +114,71 @@ public abstract class TriggerTaskExecutorBase<TTask>(
                 TaskType.ToString(),
                 context.ScriptContext.Instance?.Id ?? Guid.Empty,
                 result.Error.Message ?? "Unknown error");
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Runs a LOCAL (same-domain, in-process) invocation inside its own span AND its own trace
+    /// lane, so the invocation is visible under <c>Task.Execute.*</c> and everything the
+    /// invocation enqueues stays there too.
+    /// <para>
+    /// Two problems this solves, both observed in production traces:
+    /// (1) the local branch produced no span at all — unlike the remote branch, whose Dapr/HTTP
+    /// client span makes the request visible — so the target and cost of the invocation were
+    /// unreadable; (2) transition jobs accepted by the invocation stamped
+    /// <see cref="WorkflowTraceLane.Current"/> as their lane anchor, which at that moment was the
+    /// <em>executing instance's</em> lane, so the triggered work surfaced as siblings of the
+    /// current instance's hops instead of under the task that caused it.
+    /// </para>
+    /// <para>
+    /// The fix mirrors the subflow handoff: <see cref="WorkflowTraceLane.EnterChildLane"/> makes
+    /// the just-started <c>Trigger.Local.*</c> span the lane anchor for the triggered instance's
+    /// hops (flat underneath it, exactly like a subflow's lane under its forward span). For
+    /// read-only tasks (GetInstance/GetInstances/GetInstanceData) the child lane is a harmless
+    /// no-op — they enqueue nothing — kept uniform so every trigger-family local call behaves
+    /// identically.
+    /// </para>
+    /// </summary>
+    /// <param name="task">The task being executed (supplies key/type/target tags).</param>
+    /// <param name="targetFlow">Target workflow, when known.</param>
+    /// <param name="targetInstance">Target instance identifier, when known.</param>
+    /// <param name="action">The local invocation body.</param>
+    /// <param name="cancellationToken">Cancellation token, forwarded to the body.</param>
+    protected async Task<Result<TaskInvocationResult>> RunLocalScopedAsync(
+        TTask task,
+        string? targetFlow,
+        string? targetInstance,
+        Func<CancellationToken, Task<Result<TaskInvocationResult>>> action,
+        CancellationToken cancellationToken)
+    {
+        using var activity = TaskExecutionActivityHelper.StartLocalTriggerActivity(
+            task.Key,
+            TaskType.ToString(),
+            GetTargetDomain(task),
+            targetFlow,
+            targetInstance);
+
+        // Anchor AFTER starting the span: EnterChildLane reads Activity.Current, and the anchor
+        // must be this invocation's span — not the surrounding Task.Execute — so multiple local
+        // invocations inside one task each own their triggered work.
+        using var lane = WorkflowTraceLane.EnterChildLane();
+
+        var result = await action(cancellationToken);
+
+        if (activity is not null)
+        {
+            if (!result.IsSuccess)
+            {
+                activity.SetStatus(ActivityStatusCode.Error, result.Error.Message);
+            }
+            else if (result.Value is { IsSuccess: false } failure)
+            {
+                // Business failure: keep span status OK (flow continues via boundaries/auto
+                // transitions) but record the status code for filtering.
+                activity.SetTag("http.response.status_code", failure.StatusCode);
+            }
         }
 
         return result;

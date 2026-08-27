@@ -67,8 +67,8 @@ public sealed class CSharpEvaluatorConcurrencyTests
 
         var results = await Task.WhenAll(tasks);
 
-        results.ShouldAllBe(r => r != null);
-        results.Select(r => r.GetType()).Distinct().Count().ShouldBe(1);
+        results.ShouldAllBe(r => r.Instance != null);
+        results.Select(r => r.Instance.GetType()).Distinct().Count().ShouldBe(1);
         evaluator.CachedTypeCount.ShouldBe(1);
 
         // The assertions above pass even if the Lazy de-duplication regressed away: the assembly-reuse
@@ -85,9 +85,9 @@ public sealed class CSharpEvaluatorConcurrencyTests
     {
         var evaluator = new CSharpEvaluator();
 
-        var instance = await evaluator.CompileToInstanceAsync<object>(SampleScript);
+        var outcome = await evaluator.CompileToInstanceAsync<object>(SampleScript);
 
-        var name = instance.GetType().Assembly.GetName().Name;
+        var name = outcome.Instance.GetType().Assembly.GetName().Name;
         name.ShouldNotBeNull();
         name.ShouldStartWith("Script_");
         // SHA-256 rendered as hex. A truncated name would make the reuse rule probabilistic.
@@ -123,7 +123,7 @@ public sealed class CSharpEvaluatorConcurrencyTests
 
         var result = await second.CompileToInstanceAsync<object>(SampleScript, loadContext: context);
 
-        result.ShouldNotBeNull();
+        result.Instance.ShouldNotBeNull();
         second.CachedTypeCount.ShouldBe(1);
     }
 
@@ -150,8 +150,8 @@ public sealed class CSharpEvaluatorConcurrencyTests
         var b = await evaluator.CompileToInstanceAsync<object>(SampleScript, loadContext: contextB);
 
         evaluator.CachedTypeCount.ShouldBe(2);
-        AssemblyLoadContext.GetLoadContext(a.GetType().Assembly).ShouldBeSameAs(contextA);
-        AssemblyLoadContext.GetLoadContext(b.GetType().Assembly).ShouldBeSameAs(contextB);
+        AssemblyLoadContext.GetLoadContext(a.Instance.GetType().Assembly).ShouldBeSameAs(contextA);
+        AssemblyLoadContext.GetLoadContext(b.Instance.GetType().Assembly).ShouldBeSameAs(contextB);
     }
 
     [Fact]
@@ -187,5 +187,68 @@ public sealed class CSharpEvaluatorConcurrencyTests
         var retry = await Should.ThrowAsync<InvalidOperationException>(
             () => evaluator.CompileToInstanceAsync<INotImplementedByScript>(SampleScript, loadContext: context));
         retry.Message.ShouldContain("No type implementing");
+    }
+
+    [Fact]
+    public void CompileToInstanceAsync_WithEmptyCode_ShouldThrowSynchronously()
+    {
+        // The argument guard runs in the synchronous part of the method — an empty-code call throws
+        // at the call site, it does not return a faulted task. Pinned so the async-single-flight
+        // split (sync validate + async slow path) never regresses the guard into a task fault.
+        var evaluator = new CSharpEvaluator();
+
+        Should.Throw<ArgumentException>(() => { _ = evaluator.CompileToInstanceAsync<object>("   "); });
+    }
+
+    [Fact]
+    public async Task CompileToInstanceAsync_ShouldReturnBeforeTheCompileCompletes()
+    {
+        // The observable form of "waiters do not block": the method hands back a still-running task
+        // instead of blocking the calling thread until the Roslyn emit finishes. With the old
+        // blocking Lazy this call did not return until the compile was done, and during cold bursts
+        // the blocked callers starved the thread pool.
+        var evaluator = new CSharpEvaluator();
+        var heavyScript = "public class HeavyMapping {\n"
+            + string.Join("\n", Enumerable.Range(0, 400).Select(i => $"    public int Value{i} => {i};"))
+            + "\n}";
+
+        var pending = evaluator.CompileToInstanceAsync<object>(heavyScript);
+
+        // Immediately after the synchronous return the emit is still running on the pool.
+        pending.IsCompleted.ShouldBeFalse("the call must not block until the compile completes");
+
+        var result = await pending;
+        result.Compiled.ShouldBeTrue();
+        result.Instance.ShouldNotBeNull();
+    }
+
+    [Fact]
+    public async Task CompileToInstanceAsync_WhenContentChanges_ShouldCompileFreshAndKeepTheOldTypeUsable()
+    {
+        // The version-bump contract: a domain package publish (1.0.0-pkg.1.0.1 -> 1.0.0-pkg.1.0.2)
+        // changes the mapping's decoded content while its authored name/reference stays the same.
+        // The cache key is content-addressed, so the new content MUST compile fresh — a stale cached
+        // type served for new content would silently run the old version's logic — and the old
+        // entry must remain intact and usable for anything still holding it.
+        var evaluator = new CSharpEvaluator();
+        const string v1 = "public class VersionedMapping { public int Value => 1; }";
+        const string v2 = "public class VersionedMapping { public int Value => 2; }";
+
+        var first = await evaluator.CompileToInstanceAsync<object>(v1);
+        var second = await evaluator.CompileToInstanceAsync<object>(v2);
+
+        second.Compiled.ShouldBeTrue("changed content must be a fresh compile, never a cache hit");
+        evaluator.CachedTypeCount.ShouldBe(2);
+        evaluator.CompileInvocationCount.ShouldBe(2);
+        second.Instance.GetType().ShouldNotBeSameAs(first.Instance.GetType());
+
+        // Both versions stay independently executable — the new publish does not corrupt the old.
+        first.Instance.GetType().GetProperty("Value")!.GetValue(first.Instance).ShouldBe(1);
+        second.Instance.GetType().GetProperty("Value")!.GetValue(second.Instance).ShouldBe(2);
+
+        // And the unchanged content is still a hit afterwards.
+        var firstAgain = await evaluator.CompileToInstanceAsync<object>(v1);
+        firstAgain.Compiled.ShouldBeFalse();
+        evaluator.CompileInvocationCount.ShouldBe(2);
     }
 }

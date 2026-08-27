@@ -1,5 +1,7 @@
+using System.Diagnostics;
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
+using BBT.Workflow.Monitoring;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks.Evaluation;
 using Microsoft.Extensions.Logging;
@@ -15,16 +17,19 @@ public sealed class ScriptConditionEvaluator : IConditionEvaluator
 {
     private readonly IScriptEngine _scriptEngine;
     private readonly ILogger<ScriptConditionEvaluator> _logger;
+    private readonly IWorkflowMetrics _metrics;
 
     /// <summary>
     /// Initializes a new instance of ScriptConditionEvaluator.
     /// </summary>
     public ScriptConditionEvaluator(
         IScriptEngine scriptEngine,
-        ILogger<ScriptConditionEvaluator> logger)
+        ILogger<ScriptConditionEvaluator> logger,
+        IWorkflowMetrics metrics)
     {
         _scriptEngine = scriptEngine;
         _logger = logger;
+        _metrics = metrics;
     }
 
     /// <inheritdoc />
@@ -42,9 +47,21 @@ public sealed class ScriptConditionEvaluator : IConditionEvaluator
                     script,
                     flowScripts: context.Workflow?.Scripts,
                     cancellationToken: ct);
-            
-                var result = await scriptRunner.Handler(context);
-                return result;
+
+                var executeStart = Stopwatch.GetTimestamp();
+                try
+                {
+                    var result = await scriptRunner.Handler(context);
+                    _metrics.RecordScriptExecutionDuration(
+                        "condition", "csharp", "success",
+                        Stopwatch.GetElapsedTime(executeStart).TotalSeconds);
+                    return result;
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    _metrics.RecordScriptRuntimeError("condition", "csharp", ex.GetType().Name);
+                    throw;
+                }
             }, cancellationToken)
             .OnFailure(error => _logger.LogError(
                 "Condition script evaluation failed: {Error}",

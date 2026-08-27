@@ -54,6 +54,72 @@
       "title": "updateData no longer re-runs the state's OnEntry/OnExit or re-arms its timers",
       "description": "updateData previously ran the full pipeline: the current state's OnExit tasks ran, its OnEntry tasks ran a second time, and the state's scheduled transitions were cancelled and re-armed - restarting every timeout from zero. Those four steps (CancelScheduledJobs, OnExit, OnEntry, Schedule) are now excluded for updateData, whose target is fixed to the reserved $self key and which therefore leaves and enters no state. The transition's own onExecute tasks, the data write and the auto-transition evaluation are unchanged. This applies to updateData ONLY. Other transitions declaring target $self - shared transitions in particular - are unaffected and keep running the full state lifecycle, as do transitions naming the current state literally, including self-loops.",
       "action": "If a workflow relied on updateData re-running the current state's OnEntry to refresh something, move that logic into the transition's own onExecutionTasks. If it relied on updateData resetting the state's scheduled-transition timer, model the reset explicitly. Only the workflow-level updateData transition is affected, so no search of state transitions is needed. Note the converse for $self shared transitions, which are unchanged: because they still cancel and re-arm the state's scheduled transitions, a frequently invoked one on a state with a short timeout defers that timeout on every call."
+    },
+    {
+      "id": "script-metrics-hit-miss-and-execution",
+      "type": "behavior",
+      "component": "runtime",
+      "path": "prometheus.script_*",
+      "since": "0.0.85",
+      "severity": "info",
+      "title": "Script metrics: cache hit/miss split and true execution metrics added",
+      "description": "New metrics: script_compilations_total{result=hit|miss,status}; script_execution_duration_seconds{script_type,language,status} and script_runtime_errors_total{script_type,language,error_type} are now recorded at execution funnels (task-input, task-output, condition, transition-mapping, function); script_compilation_duration_seconds gained a 'cache' label (existing aggregate queries unaffected); workflow_cache_entries gained cache_name='script-types'. script_executions_total is deprecated but unchanged.",
+      "action": "Point compile-rate panels at rate(script_compilations_total[5m]); read clean compile latency with {cache=\"miss\"}; use script_execution_duration_seconds_count for true execution counts. No urgent action: old metric still emits."
+    },
+    {
+      "id": "task-audit-request-carries-reference-not-definition",
+      "type": "behavior",
+      "component": "runtime",
+      "path": "instanceTask.request.task",
+      "since": "0.0.85",
+      "severity": "info",
+      "title": "Task audit request now stores a task reference instead of the full definition",
+      "description": "InstanceTask.Request previously embedded the entire task definition (including mapping script code) on every execution. It now stores { key, version, domain, flow, type }; the definition lives in the component store. InputResponse is unchanged. Monitoring passes Request through as raw JSON, so no monitor field parsing is affected.",
+      "action": "If any external consumer parsed request.task.* definition fields (e.g. config, mapping code), resolve the definition from the component store by the embedded reference instead."
+    },
+    {
+      "id": "script-context-shared-tree-visibility",
+      "type": "behavior",
+      "component": "runtime",
+      "path": "scriptContext.instance.data",
+      "since": "0.0.85",
+      "severity": "warning",
+      "title": "Instance data reads share one materialized tree per data version",
+      "description": "context.Instance.Data previously materialized a fresh dynamic tree on EVERY access, so script-side mutations of it were silently lost. Reads are now memoized per data version: a mutation becomes visible to subsequent reads within the same transition (it is still NEVER persisted — persistence remains delta-only via ScriptResponse.Data). Similarly, parallel-branch task response VALUES are now shared by reference between parent and branch (containers stay isolated); in-place mutation of a pre-existing response value inside a branch is visible to the parent after join.",
+      "action": "Scripts must not mutate context.Instance.Data or pre-existing task response values in place and rely on the old silent-discard; return deltas via ScriptResponse.Data as documented."
+    },
+    {
+      "id": "script-context-setbody-preserves-expando-keys",
+      "type": "behavior",
+      "component": "runtime",
+      "path": "scriptContext.setBody",
+      "since": "0.0.85",
+      "severity": "info",
+      "title": "SetBody preserves ExpandoObject/list keys as authored instead of camelCasing them",
+      "description": "SetBody (and the WithBody builder path) with an ExpandoObject/List input now clones structurally and PRESERVES dictionary keys as authored; previously such input was serialized with the global options whose DictionaryKeyPolicy camelCased keys. Anonymous-object/POCO inputs still camelCase (unchanged). This aligns SetBody with SetStandardResponse (which never camelCased dict keys) and with instance-data trees (camelCase at persist).",
+      "action": "Scripts relying on SetBody camelCasing PascalCase expando keys must camelCase their own keys."
+    },
+    {
+      "id": "parallel-merge-conflict-order-insensitive",
+      "type": "behavior",
+      "component": "runtime",
+      "path": "scriptContext.mergeParallelBranch",
+      "since": "0.0.85",
+      "severity": "info",
+      "title": "Parallel-branch merge conflict detection is now structural and order-insensitive",
+      "description": "Parallel-branch merge conflict detection now compares JsonElement values structurally (JsonElement.DeepEquals — object property order ignored); previously the comparison was serialized-text based and order-sensitive, so reordered-but-structurally-equal outputs threw a false conflict. Same-content different-order now merges.",
+      "action": "None expected; conflict semantics for genuinely different content unchanged."
+    },
+    {
+      "id": "script-body-cycles-throw-instead-of-being-dropped",
+      "type": "behavior",
+      "component": "runtime",
+      "path": "scriptContext.setBody",
+      "since": "0.0.85",
+      "severity": "info",
+      "title": "Self-referencing script values now fail fast instead of being silently truncated",
+      "description": "Body/branch cloning moved from a JSON round-trip to a structural clone. The old round-trip used ReferenceHandler.IgnoreCycles, so a script that assigned an ExpandoObject into itself (directly or transitively) had the repeated reference silently replaced with null and the task continued with truncated data. The structural clone instead detects the runaway nesting and throws InvalidOperationException at depth 256, so the task fails visibly through the normal error boundary rather than persisting quietly corrupted content. Acyclic values — every value that originates from JSON — are unaffected.",
+      "action": "Scripts must not build self-referencing dynamic values. If a mapping legitimately nests deeper than 256 levels, flatten it; if a task starts failing with this message, inspect the mapping for a value assigned into itself instead of into a delta."
     }
   ]
 }

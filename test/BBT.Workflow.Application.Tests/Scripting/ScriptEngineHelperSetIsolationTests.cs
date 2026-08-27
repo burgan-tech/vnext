@@ -84,9 +84,18 @@ public class ScriptEngineHelperSetIsolationTests
         var currentSchema = new Mock<ICurrentSchema>();
         currentSchema.Setup(x => x.Change(It.IsAny<string>())).Returns(Mock.Of<IDisposable>());
 
+        // Task 4 (A7): the helper-resolution branch now reads generation tokens to guard its memo. A
+        // fixed, never-changing token per (domain, key) is sufficient here — this test is about
+        // load-context isolation between two distinct domains, not about the memo/invalidation itself.
+        var generationProvider = new Mock<IComponentGenerationProvider>();
+        generationProvider
+            .Setup(p => p.GetAsync(RuntimeSysSchemaInfo.Mappings, It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync("gen-fixed");
+
         var services = new ServiceCollection();
         services.AddSingleton(componentStore.Object);
         services.AddSingleton(currentSchema.Object);
+        services.AddSingleton(generationProvider.Object);
         using var serviceProvider = services.BuildServiceProvider();
 
         var engine = new ScriptEngine(

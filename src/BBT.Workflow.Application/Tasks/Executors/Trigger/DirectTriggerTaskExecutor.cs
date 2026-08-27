@@ -7,6 +7,7 @@ using BBT.Workflow.Execution.Bindings;
 using BBT.Workflow.Gateway;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
+using BBT.Workflow.Monitoring;
 using BBT.Workflow.Resilience;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
@@ -40,8 +41,9 @@ public sealed class DirectTriggerTaskExecutor : TriggerTaskExecutorBase<DirectTr
         IInstanceQueryGateway instanceQueryGateway,
         IDomainDiscoveryResolver endpointResolver,
         IResultResiliencePipelineFactory resilienceFactory,
-        ILogger<DirectTriggerTaskExecutor> logger)
-        : base(scriptEngine, runtimeInfoProvider, remoteInvoker, logger)
+        ILogger<DirectTriggerTaskExecutor> logger,
+        IWorkflowMetrics metrics)
+        : base(scriptEngine, runtimeInfoProvider, remoteInvoker, logger, metrics)
     {
         _instanceCommandGateway = instanceCommandGateway;
         _instanceQueryGateway = instanceQueryGateway;
@@ -83,7 +85,12 @@ public sealed class DirectTriggerTaskExecutor : TriggerTaskExecutorBase<DirectTr
 
         if (isSameDomain)
         {
-            return await ExecuteLocalAsync(task, instanceIdentifier, context, cancellationToken);
+            return await RunLocalScopedAsync(
+                task,
+                targetFlow: task.TriggerFlow,
+                targetInstance: instanceIdentifier,
+                ct => ExecuteLocalAsync(task, instanceIdentifier, context, ct),
+                cancellationToken);
         }
 
         return await ExecuteRemoteAsync(task, context, cancellationToken);

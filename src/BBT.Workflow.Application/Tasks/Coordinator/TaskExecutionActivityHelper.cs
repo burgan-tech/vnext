@@ -34,6 +34,61 @@ public static class TaskExecutionActivityHelper
     public const string OperationProcessOutput = "Task.ProcessOutput";
 
     /// <summary>
+    /// Operation name for one fan-out item's slot acquisition plus inner-task execution.
+    /// </summary>
+    public const string OperationFanOutItem = "FanOut.Item";
+
+    /// <summary>
+    /// Operation name for a trigger-family task's local (in-process, same-domain) invocation.
+    /// </summary>
+    public const string OperationTriggerLocal = "Trigger.Local";
+
+    /// <summary>
+    /// Starts the span for a trigger-family task's LOCAL (same-domain, in-process) invocation.
+    /// <para>
+    /// NOT gated on verbose tracing: the remote branch of these tasks produces a Dapr/HTTP client
+    /// span, so without this span the local branch is the only invocation shape that leaves no
+    /// trace at all — the request would be invisible under <c>Task.Execute.*</c> and its cost
+    /// indistinguishable from engine overhead. One span per task invocation; business category.
+    /// </para>
+    /// This span is also the intended <c>WorkflowTraceLane</c> child-lane anchor for the work the
+    /// invocation enqueues (see <c>TriggerTaskExecutorBase.RunLocalScopedAsync</c>).
+    /// </summary>
+    /// <param name="taskKey">The task key (becomes part of the display name).</param>
+    /// <param name="taskType">The task type name (StartTrigger, DirectTrigger, …).</param>
+    /// <param name="targetDomain">Target domain of the invocation.</param>
+    /// <param name="targetFlow">Target workflow, when known.</param>
+    /// <param name="targetInstance">Target instance identifier, when known.</param>
+    public static Activity? StartLocalTriggerActivity(
+        string taskKey,
+        string taskType,
+        string? targetDomain,
+        string? targetFlow = null,
+        string? targetInstance = null)
+    {
+        var activity = ActivitySource.StartActivity(
+            $"{OperationTriggerLocal}.{taskKey}",
+            ActivityKind.Internal,
+            Activity.Current?.Context ?? default);
+
+        if (activity != null)
+        {
+            activity.SetTag(TelemetryConstants.TagNames.TaskKey, taskKey);
+            activity.SetTag(TelemetryConstants.TagNames.TaskType, taskType);
+            activity.SetTag(TelemetryConstants.TagNames.Layer, TelemetryConstants.Layers.Orchestration);
+            activity.SetTag(TelemetryConstants.TagNames.SpanCategory, TelemetryConstants.SpanCategories.Business);
+            if (!string.IsNullOrEmpty(targetDomain))
+                activity.SetTag(TelemetryConstants.TagNames.TriggerTargetDomain, targetDomain);
+            if (!string.IsNullOrEmpty(targetFlow))
+                activity.SetTag(TelemetryConstants.TagNames.TriggerTargetFlow, targetFlow);
+            if (!string.IsNullOrEmpty(targetInstance))
+                activity.SetTag(TelemetryConstants.TagNames.TriggerTargetInstance, targetInstance);
+        }
+
+        return activity;
+    }
+
+    /// <summary>
     /// Starts a new activity as a child of the current activity for an executor phase.
     /// When taskKey/taskType are provided, enriches the span with standard tags for filtering.
     /// </summary>

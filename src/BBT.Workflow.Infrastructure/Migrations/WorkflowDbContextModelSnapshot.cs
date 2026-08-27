@@ -739,6 +739,13 @@ namespace BBT.Workflow.Migrations
 
                             b1.HasKey("InstanceDataId");
 
+                            b1.HasIndex("Json")
+                                .HasDatabaseName("IX_InstancesData_Data_Gin")
+                                .HasFilter("\"IsLatest\" = true");
+
+                            NpgsqlIndexBuilderExtensions.HasMethod(b1.HasIndex("Json"), "gin");
+                            NpgsqlIndexBuilderExtensions.HasOperators(b1.HasIndex("Json"), new[] { "jsonb_path_ops" });
+
                             b1.ToTable("InstancesData", "public");
 
                             b1.WithOwner()

@@ -1,5 +1,5 @@
 using System.Text.Json;
-using Microsoft.AspNetCore.Http;
+using BBT.Workflow.Payloads;
 
 namespace BBT.Workflow.Orchestration.Controllers.Instances;
 
@@ -10,9 +10,6 @@ namespace BBT.Workflow.Orchestration.Controllers.Instances;
 /// </summary>
 internal static class PayloadModeDetector
 {
-    /// <summary>Header name that explicitly overrides auto-detection.</summary>
-    private const string HeaderName = "x-vnext-payload-mode";
-
     /// <summary>
     /// Returns <c>true</c> when the body should be treated as a standard payload,
     /// <c>false</c> when it is a free-form payload that needs normalization.
@@ -22,18 +19,27 @@ internal static class PayloadModeDetector
     /// <list type="number">
     ///   <item><c>x-vnext-payload-mode: standard</c> → standard</item>
     ///   <item><c>x-vnext-payload-mode: raw</c> → free-form</item>
-    ///   <item>Body contains top-level <c>attributes</c> property → standard</item>
-    ///   <item>Body absent or no <c>attributes</c> property → free-form</item>
+    ///   <item>Body absent or not a JSON object → standard</item>
+    ///   <item>Otherwise the envelope vocabulary decides — see
+    ///         <see cref="PayloadEnvelope.IsStandardShape"/>.</item>
     /// </list>
+    /// Getting this wrong is not cosmetic: a free-form classification wraps the whole body under
+    /// <c>attributes</c>, so the transition/start schema would be evaluated against the envelope
+    /// fields and reject a valid request.
     /// </remarks>
     internal static bool IsStandard(IHeaderDictionary headers, JsonElement? body)
     {
-        if (headers.TryGetValue(HeaderName, out var mode))
-            return !string.Equals(mode, "raw", StringComparison.OrdinalIgnoreCase);
+        var fromHeader = headers.TryGetValue(PayloadEnvelope.ModeHeaderName, out var mode)
+            ? PayloadEnvelope.ResolveModeFromHeader(mode.ToString())
+            : null;
+
+        if (fromHeader.HasValue)
+            return fromHeader.Value;
 
         if (body is null || body.Value.ValueKind != JsonValueKind.Object)
             return true;
 
-        return body.Value.TryGetProperty("attributes", out _);
+        return PayloadEnvelope.IsStandardShape(
+            body.Value.EnumerateObject().Select(property => property.Name));
     }
 }

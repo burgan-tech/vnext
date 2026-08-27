@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Dynamic;
 using System.Text.Json;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Instances;
@@ -7,6 +8,7 @@ using BBT.Workflow.Runtime;
 using Microsoft.Extensions.Logging;
 using Moq;
 using NSubstitute;
+using Shouldly;
 using Xunit;
 
 namespace BBT.Workflow.Scripting;
@@ -502,6 +504,120 @@ public class ScriptContextTests
         Assert.Contains("lastName", json);
         Assert.DoesNotContain("FirstName", json);
         Assert.DoesNotContain("LastName", json);
+    }
+
+    /// <summary>
+    /// A parallel branch must keep the transport-metadata dictionaries usable the way domain mappings
+    /// actually use them: LATE-BOUND <c>ContainsKey</c> through <c>dynamic</c>.
+    /// </summary>
+    /// <remarks>
+    /// The assertions go through a <c>dynamic</c> local on purpose. A JSON round-trip turns a
+    /// <c>Dictionary&lt;string, string&gt;</c> into an <c>ExpandoObject</c>, whose <c>ContainsKey</c>
+    /// is an explicit interface member the C# runtime binder cannot see — so a statically typed
+    /// assertion would pass while every real mapping threw <c>RuntimeBinderException</c>. Only the
+    /// late-bound call pins the binder behavior.
+    /// </remarks>
+    [Fact]
+    public void CreateParallelBranch_ShouldKeepHeadersLateBoundContainsKeyCallable()
+    {
+        var context = BranchSourceContext();
+
+        var branch = context.CreateParallelBranch();
+
+        dynamic headers = branch.Headers!;
+        ((bool)headers.ContainsKey("clientid")).ShouldBeTrue();
+        ((bool)headers.ContainsKey("missing-header")).ShouldBeFalse();
+        ((string)headers["clientid"]).ShouldBe("mobile");
+    }
+
+    [Fact]
+    public void CreateParallelBranch_ShouldKeepRouteValuesLateBoundContainsKeyCallable()
+    {
+        var context = BranchSourceContext();
+
+        var branch = context.CreateParallelBranch();
+
+        dynamic routeValues = branch.RouteValues!;
+        ((bool)routeValues.ContainsKey("instance")).ShouldBeTrue();
+        ((string)routeValues["instance"]).ShouldBe("42");
+    }
+
+    [Fact]
+    public void CreateParallelBranch_ShouldKeepQueryParametersLateBoundContainsKeyCallable()
+    {
+        var context = BranchSourceContext();
+
+        var branch = context.CreateParallelBranch();
+
+        dynamic queryParameters = branch.QueryParameters!;
+        ((bool)queryParameters.ContainsKey("version")).ShouldBeTrue();
+        ((string)queryParameters["version"]).ShouldBe("3");
+    }
+
+    [Fact]
+    public void CreateParallelBranch_ShouldCloneTransportMetadata_NotAliasIt()
+    {
+        var context = BranchSourceContext();
+
+        var branch = context.CreateParallelBranch();
+
+        var branchHeaders = (IDictionary<string, string>)branch.Headers!;
+        branchHeaders["clientid"] = "web";
+        branchHeaders["branch-only"] = "yes";
+
+        var parentHeaders = (IDictionary<string, string>)context.Headers!;
+        parentHeaders["clientid"].ShouldBe("mobile");
+        parentHeaders.ContainsKey("branch-only").ShouldBeFalse();
+    }
+
+    /// <summary>
+    /// Header lookups are case-insensitive by contract, so the source comparer has to survive the
+    /// clone — a silent downgrade to the ordinal default would make <c>Accept-Language</c> stop
+    /// resolving <c>accept-language</c>.
+    /// </summary>
+    [Fact]
+    public void CreateParallelBranch_ShouldPreserveTheSourceComparer()
+    {
+        var context = BranchSourceContext();
+
+        var branch = context.CreateParallelBranch();
+
+        dynamic headers = branch.Headers!;
+        ((bool)headers.ContainsKey("ClientId")).ShouldBeTrue();
+        ((bool)headers.ContainsKey("ACCEPT-LANGUAGE")).ShouldBeTrue();
+    }
+
+    /// <summary>
+    /// <c>Body</c> is a genuine dynamic payload and must keep round-tripping into a member-accessible
+    /// shape — the transport-metadata fix must not be widened onto it.
+    /// </summary>
+    [Fact]
+    public void CreateParallelBranch_ShouldStillRoundTripBodyAsDynamic()
+    {
+        var context = BranchSourceContext();
+
+        var branch = context.CreateParallelBranch();
+
+        dynamic body = branch.Body!;
+        ((string)body.name).ShouldBe("initial");
+        Assert.IsType<ExpandoObject>(branch.Body);
+    }
+
+    private static ScriptContext BranchSourceContext()
+    {
+        var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["clientid"] = "mobile",
+            ["accept-language"] = "tr-TR"
+        };
+
+        return new ScriptContext.Builder(Mock.Of<ILogger<ScriptContext>>())
+            .SetBody(new { Name = "initial" })
+            .SetHeaders(headers)
+            .SetRouteValues(new Dictionary<string, string> { ["instance"] = "42" })
+            .SetQueryParameters(new Dictionary<string, string> { ["version"] = "3" })
+            .SetRuntime(Substitute.For<IRuntimeInfoProvider>())
+            .Build();
     }
 }
 

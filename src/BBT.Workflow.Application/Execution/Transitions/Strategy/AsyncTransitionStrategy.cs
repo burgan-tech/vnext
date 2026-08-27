@@ -121,15 +121,25 @@ public sealed class AsyncTransitionStrategy(
         // scheduler a call.
         IBackgroundJobArmHandle? armHandle = null;
 
+        // updateData (Unconditional) accepts every request, in parallel: no duplicate-job dedupe.
+        // Two simultaneous updateData requests share the same logical identity (instance, source
+        // state, transition key) yet are BOTH legitimate — each carries its own payload, and
+        // dropping one would lose a caller's data. Physical collision is impossible anyway: the
+        // job id/name above are unique per enqueue. Admission runs this kind's accept lock-free
+        // for the same reason, so the guard would also be an unserialized check-then-insert here.
+        var admissionKind = admissionService.Classify(ctx);
+
         // The accept's ONE distributed lock. Admission takes the status lock on ctx.LockKey,
         // performs the kind's status flip, and runs the callback below while still holding it —
         // the duplicate-job guard is a check-then-insert with no database constraint behind it,
         // so it has to share the critical section with the flip rather than get a lock of its own.
+        // (Exception: Unconditional/updateData — no flip, no guard, no lock; see above.)
         var acceptResult = await admissionService.AcceptAsync(
             ctx,
             async (flip, ct) =>
             {
-                if (await jobRepository.AnyActiveTransitionJobAsync(
+                if (admissionKind != AdmissionKind.Unconditional
+                    && await jobRepository.AnyActiveTransitionJobAsync(
                         ctx.InstanceId,
                         JobType.AsyncTransition,
                         jobName.SourceState,

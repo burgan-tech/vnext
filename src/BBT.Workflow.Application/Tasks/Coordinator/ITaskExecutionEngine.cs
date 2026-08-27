@@ -31,4 +31,26 @@ public interface ITaskExecutionEngine
         TaskExecutionOrigin origin,
         ScriptContext context,
         CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Executes a single task with per-call execution options (collect-only mode, journal key
+    /// override, prepared task). The options-less overload forwards here with
+    /// <see cref="TaskEngineExecutionOptions.Default"/>.
+    /// </summary>
+    /// <param name="onExecuteTask">The task configuration to execute.</param>
+    /// <param name="instanceTransitionId">The instance transition context.</param>
+    /// <param name="taskTrigger">The trigger type that initiated execution.</param>
+    /// <param name="origin">The component that initiated execution.</param>
+    /// <param name="context">The script context containing instance data.</param>
+    /// <param name="options">Per-call execution options.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>Result containing execution result with error boundary info.</returns>
+    Task<Result<TasksExecutionResult>> ExecuteAsync(
+        OnExecuteTask onExecuteTask,
+        Guid? instanceTransitionId,
+        TaskTrigger taskTrigger,
+        TaskExecutionOrigin origin,
+        ScriptContext context,
+        TaskEngineExecutionOptions options,
+        CancellationToken cancellationToken);
 }

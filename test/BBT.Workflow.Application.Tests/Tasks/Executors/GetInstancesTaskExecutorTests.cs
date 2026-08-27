@@ -10,6 +10,7 @@ using BBT.Workflow.Discovery;
 using BBT.Workflow.Execution;
 using BBT.Workflow.Gateway;
 using BBT.Workflow.Instances;
+using BBT.Workflow.Monitoring;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks.Executors;
@@ -31,7 +32,7 @@ public sealed class GetInstancesTaskExecutorTests
             .SetInstance(instance)
             .Build();
 
-        return new TaskExecutorContext(task, onExecute, scriptContext, null, TaskTrigger.OnExecute);
+        return new TaskExecutorContext(task, onExecute, scriptContext, null, TaskTrigger.OnExecute, TaskExecutionOrigin.Flow);
     }
 
     private static GetInstancesTaskExecutor CreateExecutor(
@@ -43,7 +44,8 @@ public sealed class GetInstancesTaskExecutorTests
             Substitute.For<IRemoteInvokerService>(),
             gateway,
             Substitute.For<IDomainDiscoveryResolver>(),
-            NullLogger<GetInstancesTaskExecutor>.Instance);
+            NullLogger<GetInstancesTaskExecutor>.Instance,
+            Substitute.For<IWorkflowMetrics>());
 
     [Fact]
     public async Task ExecuteAsync_WhenListReturnsGroups_ReturnsGroupedMetadata_AndPassesThroughResponse()
@@ -239,7 +241,8 @@ public sealed class GetInstancesTaskExecutorTests
             remoteInvoker,
             Substitute.For<IInstanceQueryGateway>(),
             Substitute.For<IDomainDiscoveryResolver>(),
-            NullLogger<GetInstancesTaskExecutor>.Instance);
+            NullLogger<GetInstancesTaskExecutor>.Instance,
+            Substitute.For<IWorkflowMetrics>());
 
         var result = await executor.ExecuteAsync(CreateContext(task), CancellationToken.None);
 

@@ -514,10 +514,17 @@ public sealed class PrometheusWorkflowMetrics : IWorkflowMetrics
             .Inc();
     }
 
-    public void RecordScriptCompilationDuration(string scriptType, string language, string status, double durationSeconds)
+    public void RecordScriptCompilation(string result, string status)
+    {
+        WorkflowMetrics.ScriptCompilations
+            .WithLabels(result, status)
+            .Inc();
+    }
+
+    public void RecordScriptCompilationDuration(string scriptType, string language, string status, double durationSeconds, string cache = "unknown")
     {
         WorkflowMetrics.ScriptCompilationDuration
-            .WithLabels(scriptType, language, status)
+            .WithLabels(scriptType, language, status, cache)
             .Observe(durationSeconds);
     }
 
@@ -631,6 +638,38 @@ public sealed class PrometheusWorkflowMetrics : IWorkflowMetrics
         WorkflowMetrics.SubFlowErrorPropagation
             .WithLabels(parentWorkflow, childWorkflow, propagated.ToString().ToLower())
             .Inc();
+    }
+
+    #endregion
+
+    #region Fan-Out Metrics
+
+    public void RecordFanOutBatch(
+        string taskKey,
+        string workflowKey,
+        int total,
+        int succeeded,
+        int failed,
+        double durationSeconds)
+    {
+        WorkflowMetrics.FanOutBatchSize
+            .WithLabels(taskKey, workflowKey)
+            .Observe(total);
+
+        WorkflowMetrics.FanOutBatchDuration
+            .WithLabels(taskKey, workflowKey)
+            .Observe(durationSeconds);
+
+        // Per-item duration is NOT recorded here: every item is a full task execution through the
+        // engine, which already observes workflow_task_duration_seconds for it. Only the failure
+        // COUNT is fan-out-specific, and it is incremented in one batch-sized step rather than
+        // per item so the recording stays a single call per batch.
+        if (failed > 0)
+        {
+            WorkflowMetrics.FanOutItemFailures
+                .WithLabels(taskKey, workflowKey)
+                .Inc(failed);
+        }
     }
 
     #endregion

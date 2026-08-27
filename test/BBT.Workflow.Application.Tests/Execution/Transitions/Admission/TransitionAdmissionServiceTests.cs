@@ -593,6 +593,55 @@ public class TransitionAdmissionServiceTests
             Arg.Any<Guid>(), Arg.Any<CancellationToken>());
     }
 
+    [Fact]
+    public async Task AcceptAsync_UpdateData_ShouldRunLockFree()
+    {
+        // updateData is status-neutral and must accept parallel requests: there is no flip to
+        // serialize and the duplicate-job guard does not apply, so the accept never touches the
+        // status lock — mirroring the sync path, which never locked this kind either.
+        var context = CreateContext("update-parent-data");
+
+        var seen = AcceptFlip.Reserved;
+        var result = await CreateService().AcceptAsync(
+            context, (flip, _) => { seen = flip; return Task.FromResult(Result.Ok()); });
+
+        result.IsSuccess.ShouldBeTrue();
+        seen.ShouldBe(AcceptFlip.None);
+        await _statusLock.DidNotReceive().AcquireAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task AcceptAsync_UpdateData_WhenAnotherAcceptHoldsTheLock_ShouldStillAccept()
+    {
+        // THE behavioral change: N subprocesses notifying the parent simultaneously used to make
+        // the losers fail with Instance:100002 and burn their error-boundary retry backoff.
+        // A held status lock is now irrelevant to updateData — it is not even consulted.
+        SetupFailedLock();
+        var context = CreateContext("update-parent-data");
+        var ran = false;
+
+        var result = await CreateService().AcceptAsync(
+            context, (_, _) => { ran = true; return Task.FromResult(Result.Ok()); });
+
+        result.IsSuccess.ShouldBeTrue();
+        ran.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task AcceptAsync_UpdateData_OnBusyInstance_ShouldStillAccept()
+    {
+        var context = CreateContext("update-parent-data");
+        context.Instance.Busy();
+        var ran = false;
+
+        var result = await CreateService().AcceptAsync(
+            context, (_, _) => { ran = true; return Task.FromResult(Result.Ok()); });
+
+        result.IsSuccess.ShouldBeTrue();
+        ran.ShouldBeTrue();
+        await _statusLock.DidNotReceive().AcquireAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
     #endregion
 
     private static TransitionExecutionContext CreateContext(

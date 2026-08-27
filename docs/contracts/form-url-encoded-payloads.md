@@ -49,8 +49,9 @@ JSON when `x-vnext-payload-mode: standard` is supplied.
 
 ## Raw payload
 
-When the form has no top-level `attributes` field, it is treated as a raw payload and the whole
-object is passed through the existing raw-payload normalization:
+When the form carries at least one field that is **not** an envelope field (`key`, `tags`, `stage`,
+`attributes`), it is treated as a raw payload and the whole object is passed through the existing
+raw-payload normalization:
 
 ```text
 amount=100&approved=true&currency=TRY
@@ -128,11 +129,22 @@ The existing `x-vnext-payload-mode` header has the same precedence for form and 
 
 - `x-vnext-payload-mode: standard` forces standard envelope handling.
 - `x-vnext-payload-mode: raw` forces raw handling.
-- Without the header, a top-level lowercase `attributes` path selects standard mode; otherwise the
-  payload is raw.
+- Without the header, the top-level field names decide, using the envelope vocabulary
+  `key` / `tags` / `stage` / `attributes`:
+  1. a top-level `attributes` path (matched case-insensitively) selects standard mode, whatever
+     else sits beside it;
+  2. otherwise a non-empty body whose top-level fields are **all** envelope metadata
+     (`key`, `tags`, `stage`) is standard — the envelope's fields are individually optional, so a
+     body such as `key=…&tags[]=…` is a valid envelope that simply carries no business data;
+  3. anything else — including an empty body — is raw.
 
-Use the standard override when sending a standard envelope without an `attributes` field, such as
-an input containing only `key`.
+Because auto-detection reserves those four names at the top level, a *raw* payload whose own
+fields are named exactly `key`, `tags` and/or `stage` and nothing else is indistinguishable from an
+envelope. Send `x-vnext-payload-mode: raw` for that case.
+
+> Getting the mode wrong is not cosmetic: a raw classification wraps the whole body under
+> `attributes`, so a transition or start schema is evaluated against `key`/`tags` instead of the
+> business payload and rejects an otherwise valid request.
 
 ## Rejected forms
 
