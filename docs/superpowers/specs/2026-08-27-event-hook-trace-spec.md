@@ -17,7 +17,7 @@ Repos: vnext (`/Users/U0B006/Documents/repos/burgan-tech/vnext`) + **aether** (`
 - `TransitionRunner` wraps event staging in `Events.PublishDeferred` and the commit in `Uow.Commit`.
 - `HookedDistributedEventBus` (vnext Infrastructure) stamps `TraceParent`/`TraceState` onto
   traceable payloads at publish time (line ~87) — the cross-hop identity ALREADY travels.
-- Hooks run in two modes (`EventHookMode`): `Immediate` (inside `PublishAsync`, i.e. under
+- Hooks run in two modes (`EventHookMode`): `HandledOrFallback` (inside `PublishAsync`, i.e. under
   `Events.PublishDeferred`) and `DurablePostCommit` (registered via `ambient.OnCompleted`, invoked
   by `CompositeUnitOfWork.CommitAsync` → `InvokeCompletedHandlersAsync` at
   `CompositeUnitOfWork.cs:313` — i.e. INSIDE `uow.CommitAsync`, hence inside the `Uow.Commit`
@@ -52,7 +52,7 @@ Aether-first-merge (see the outbox Faz-1 precedent).
 
 - **One span per hook invocation, named after the hook** (`EventHook.{name}`, trailing
   `EventHook`/`Hook` trimmed for display, full name in a tag). It lands under whatever is ambient —
-  `Uow.Commit` for `DurablePostCommit`, `Events.PublishDeferred` for `Immediate` — with no
+  `Uow.Commit` for `DurablePostCommit`, `Events.PublishDeferred` for `HandledOrFallback` — with no
   re-parenting tricks. Volume is not a concern: hooks per event are few (contrast with the
   FanOut/memo-counter decision, where per-hit spans were rejected for volume).
 - **The hook span's ActivitySource is named `BBT.Workflow.Instances.Events`** — deliberately: that

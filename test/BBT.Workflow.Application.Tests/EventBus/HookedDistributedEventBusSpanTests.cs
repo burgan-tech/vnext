@@ -170,10 +170,27 @@ public sealed class HookedDistributedEventBusSpanTests : IDisposable
         // re-parenting machinery.
         var ambient = new Activity("Events.PublishDeferred");
         ambient.SetIdFormat(ActivityIdFormat.W3C);
+        ambient.AddBaggage("probe.baggage", "value");
         ambient.Start();
+
+        string? baggageSeenInsideHook = null;
         try
         {
-            var invoker = StubInvoker("ParentProbeEventHook", EventHookResult.Ok());
+            var invoker = Substitute.For<IEventHookInvoker>();
+            invoker.EventType.Returns(typeof(ProbeEvent));
+            invoker.HookName.Returns("ParentProbeEventHook");
+            invoker.InvokeAsync(Arg.Any<object>(), Arg.Any<EventHookContext>(), Arg.Any<CancellationToken>())
+                .Returns(_ =>
+                {
+                    // Captured DURING the hook call, while the hook span is Activity.Current.
+                    // GetBaggageItem walks Activity.Parent, so this only sees the ambient baggage
+                    // if the hook span was started with an IMPLICIT parent (Activity.Current) —
+                    // starting it with an explicit parent context sets Parent to null and severs
+                    // the chain even though ParentId still matches, which is exactly what the
+                    // ParentId-only assertion below would fail to catch.
+                    baggageSeenInsideHook = Activity.Current?.GetBaggageItem("probe.baggage");
+                    return EventHookResult.Ok();
+                });
             var bus = BuildBus(invoker);
 
             await bus.PublishAsync(new ProbeEvent(), useOutbox: true);
@@ -186,5 +203,6 @@ public sealed class HookedDistributedEventBusSpanTests : IDisposable
 
         var hookSpan = _collected.Single(a => a.DisplayName.StartsWith("EventHook.", StringComparison.Ordinal));
         hookSpan.ParentId.ShouldBe(ambient.Id);
+        baggageSeenInsideHook.ShouldBe("value");
     }
 }

@@ -339,10 +339,14 @@ public sealed class HookedDistributedEventBus : IDistributedEventBus
             // for DurablePostCommit (OnCompleted runs inside CommitAsync), Events.PublishDeferred for
             // HandledOrFallback. This is what attributes a hook's remote calls to the hook: those
             // client spans become THIS span's children instead of hanging directly under the commit.
+            //
+            // Deliberately the implicit-parent overload (name + kind only): passing an explicit parent
+            // context (even Activity.Current?.Context) sets Activity.Parent to null, and GetBaggageItem
+            // walks the Parent chain — so an explicit parent silently severs baggage (e.g. RootInstanceId)
+            // from everything inside the hook, even though the span's displayed parent id is identical.
             using var hookActivity = HookActivitySource.StartActivity(
                 $"EventHook.{TrimHookSuffix(hookName)}",
-                ActivityKind.Internal,
-                Activity.Current?.Context ?? default);
+                ActivityKind.Internal);
             hookActivity?.SetTag(TelemetryConstants.TagNames.EventName, eventType.Name);
             hookActivity?.SetTag(TelemetryConstants.TagNames.HookName, hookName);
             hookActivity?.SetTag(TelemetryConstants.TagNames.HookMode, GetEventHookMode(eventType)?.ToString());
