@@ -193,6 +193,16 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
 
                 await Task.Delay(delay, cancellationToken);
                 attempt++;
+
+                // The fresh-transition-record guarantee ("no journal row can exist for this id")
+                // dies with attempt #1: this very loop re-executes the SAME (TransitionId, TaskId)
+                // identity, so a retry MUST run the idempotency probe and reuse the first
+                // attempt's journal row — skipping it inserts a second row with the same
+                // ExecutionKey and trips UX_InstanceTasks_ExecutionKey (seen in production).
+                if (options.SkipJournalProbe)
+                {
+                    options = options with { SkipJournalProbe = false };
+                }
             }
 
 

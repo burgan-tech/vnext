@@ -32,7 +32,10 @@ public sealed record TaskEngineExecutionOptions
     /// this transition record — i.e. the record was inserted by this very pipeline run
     /// (<c>CreateTransitionRecordStep</c> sets the signal). On the retry path the probe must stay:
     /// it is what finds and reuses the previous attempt's rows, including legacy rows without an
-    /// <c>ExecutionKey</c>.
+    /// <c>ExecutionKey</c>. The guarantee only covers the FIRST attempt: the engine's error-aware
+    /// retry loop re-executes the same (TransitionId, TaskId) identity, so it downgrades this flag
+    /// after attempt #1 — a retry that kept skipping the probe would insert a second row with the
+    /// same ExecutionKey and trip <c>UX_InstanceTasks_ExecutionKey</c>.
     /// </summary>
     public bool SkipJournalProbe { get; init; }
 
