@@ -79,7 +79,7 @@ public sealed class RemoteInvokerService : IRemoteInvokerService
         TaskTraceContext traceContext,
         CancellationToken cancellationToken = default)
     {
-        var stopwatch = Stopwatch.StartNew();
+        var startTimestamp = Stopwatch.GetTimestamp();
 
         _logger.LogDebug("Invoking remote task {TaskKey} of type {TaskType} on {AppId}",
             taskKey, taskType, _executionServiceAppId);
@@ -97,7 +97,7 @@ public sealed class RemoteInvokerService : IRemoteInvokerService
 
         if (_useGrpcTransport)
             return await InvokeOverGrpcAsync(
-                taskType, taskKey, request, traceContext, stopwatch, invocationCts.Token, cancellationToken);
+                taskType, taskKey, request, traceContext, startTimestamp, invocationCts.Token, cancellationToken);
 
         try
         {
@@ -161,7 +161,6 @@ public sealed class RemoteInvokerService : IRemoteInvokerService
             var response = await _daprClient.InvokeMethodAsync<TaskInvokeResponse>(
                 httpRequest, invocationCts.Token);
 
-            stopwatch.Stop();
 
             var remoteResult = new TaskInvocationResult
             {
@@ -173,7 +172,7 @@ public sealed class RemoteInvokerService : IRemoteInvokerService
                 Headers = response.Result.Headers,
                 TaskType = response.Result.TaskType,
                 Metadata = response.Result.Metadata,
-                ExecutionDurationMs = stopwatch.ElapsedMilliseconds
+                ExecutionDurationMs = (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds
             };
 
             return Result<TaskInvocationResult>.Ok(remoteResult);
@@ -182,7 +181,6 @@ public sealed class RemoteInvokerService : IRemoteInvokerService
             invocationCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
         {
             // Own per-invocation timeout — not caused by parent pipeline cancellation
-            stopwatch.Stop();
             _logger.LogError(
                 "Dapr invocation timeout after {Seconds}s. TaskType: {TaskType}, TaskKey: {TaskKey} [timeout.layer=remote]",
                 _invocationTimeoutSeconds, taskType, taskKey);
@@ -190,25 +188,23 @@ public sealed class RemoteInvokerService : IRemoteInvokerService
             return Result<TaskInvocationResult>.Ok(TaskInvocationResult.Failure(
                 error: $"Dapr invocation timeout after {_invocationTimeoutSeconds}s",
                 statusCode: 408,
-                executionDurationMs: stopwatch.ElapsedMilliseconds,
+                executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
                 taskType: taskType));
         }
         catch (OperationCanceledException)
         {
             // Parent pipeline cancelled — propagate so the pipeline handles it correctly
-            stopwatch.Stop();
             throw;
         }
         catch (Exception ex)
         {
-            stopwatch.Stop();
             _logger.LogError("Failed to invoke remote task {TaskKey}: {Error}",
                 taskKey, ex.Message);
 
             return Result<TaskInvocationResult>.Ok(TaskInvocationResult.Failure(
                 error: ex.Message,
                 statusCode: 500,
-                executionDurationMs: stopwatch.ElapsedMilliseconds,
+                executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
                 taskType: taskType));
         }
     }
@@ -221,7 +217,7 @@ public sealed class RemoteInvokerService : IRemoteInvokerService
     /// <param name="taskKey">The task key being invoked, used for logging only.</param>
     /// <param name="request">The envelope/trace-context request body, serialized as the RPC payload.</param>
     /// <param name="traceContext">Source of the metadata (gRPC's equivalent of HTTP headers) sent with the call.</param>
-    /// <param name="stopwatch">Already-started timer shared with the caller for execution-duration reporting.</param>
+    /// <param name="startTimestamp">Already-started timer shared with the caller for execution-duration reporting.</param>
     /// <param name="invocationToken">
     /// The linked token that carries our own per-invocation timeout on top of
     /// <paramref name="parentToken"/> — the call is made against this one.
@@ -235,7 +231,7 @@ public sealed class RemoteInvokerService : IRemoteInvokerService
         string taskKey,
         TaskInvokeRequest request,
         TaskTraceContext traceContext,
-        Stopwatch stopwatch,
+        long startTimestamp,
         CancellationToken invocationToken,
         CancellationToken parentToken)
     {
@@ -307,7 +303,6 @@ public sealed class RemoteInvokerService : IRemoteInvokerService
                     deadline: DateTime.UtcNow.AddSeconds(_invocationTimeoutSeconds),
                     cancellationToken: invocationToken));
 
-            stopwatch.Stop();
             var response = TaskInvokePayload.Deserialize<TaskInvokeResponse>(reply.PayloadJson);
 
             var remoteResult = new TaskInvocationResult
@@ -320,7 +315,7 @@ public sealed class RemoteInvokerService : IRemoteInvokerService
                 Headers = response.Result.Headers,
                 TaskType = response.Result.TaskType,
                 Metadata = response.Result.Metadata,
-                ExecutionDurationMs = stopwatch.ElapsedMilliseconds
+                ExecutionDurationMs = (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds
             };
 
             return Result<TaskInvocationResult>.Ok(remoteResult);
@@ -331,12 +326,10 @@ public sealed class RemoteInvokerService : IRemoteInvokerService
             // Grpc.Net.Client surfaces our own token's cancellation as RpcException(Cancelled)
             // rather than OperationCanceledException, so this case must be caught here too —
             // the "which token fired" check is what makes the distinction, not the exception type.
-            stopwatch.Stop();
             throw new OperationCanceledException(parentToken);
         }
         catch (RpcException ex)
         {
-            stopwatch.Stop();
 
             // ex.StatusCode == Cancelled here can ONLY be our own timeout: the parent-cancelled
             // case was already intercepted and rethrown by the catch clause above, and
@@ -354,7 +347,7 @@ public sealed class RemoteInvokerService : IRemoteInvokerService
                     taskKey, ex.StatusCode, ex.Status.Detail);
 
             return Result<TaskInvocationResult>.Ok(
-                MapRpcFailure(ex, stopwatch.ElapsedMilliseconds, taskType, _invocationTimeoutSeconds));
+                MapRpcFailure(ex, (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds, taskType, _invocationTimeoutSeconds));
         }
         catch (OperationCanceledException) when (!parentToken.IsCancellationRequested)
         {
@@ -362,7 +355,6 @@ public sealed class RemoteInvokerService : IRemoteInvokerService
             // of RpcException(Cancelled) — not the path Grpc.Net.Client takes by default (see the
             // RpcException catch above), but kept as a defensive fallback in case that ever
             // changes. Not caused by parent pipeline cancellation.
-            stopwatch.Stop();
             _logger.LogError(
                 "gRPC invocation timeout after {Seconds}s. TaskType: {TaskType}, TaskKey: {TaskKey} [timeout.layer=remote]",
                 _invocationTimeoutSeconds, taskType, taskKey);
@@ -370,13 +362,12 @@ public sealed class RemoteInvokerService : IRemoteInvokerService
             return Result<TaskInvocationResult>.Ok(TaskInvocationResult.Failure(
                 error: $"Dapr invocation timeout after {_invocationTimeoutSeconds}s",
                 statusCode: 408,
-                executionDurationMs: stopwatch.ElapsedMilliseconds,
+                executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
                 taskType: taskType));
         }
         catch (OperationCanceledException)
         {
             // Parent pipeline cancelled — propagate so the pipeline handles it correctly
-            stopwatch.Stop();
             throw;
         }
         catch (Exception ex)
@@ -387,14 +378,13 @@ public sealed class RemoteInvokerService : IRemoteInvokerService
             // malformed reply (TaskInvokePayload.Deserialize / JsonException), a null
             // response.Result, and a failure while lazily building the gRPC channel/client
             // (GrpcTaskInvokerClientProvider.Client — e.g. a malformed DAPR_GRPC_ENDPOINT).
-            stopwatch.Stop();
             _logger.LogError("Failed to invoke remote task {TaskKey}: {Error}",
                 taskKey, ex.Message);
 
             return Result<TaskInvocationResult>.Ok(TaskInvocationResult.Failure(
                 error: ex.Message,
                 statusCode: 500,
-                executionDurationMs: stopwatch.ElapsedMilliseconds,
+                executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
                 taskType: taskType));
         }
     }

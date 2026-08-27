@@ -585,7 +585,7 @@ public sealed class ScriptEngine(
         // regardless of what becomes Activity.Current while this method runs.
         var telemetryTarget = ScriptCompileTelemetry.FindTargetActivity();
         using var compileActivity = ScriptActivityHelper.StartCompileActivity();
-        var stopwatch = Stopwatch.StartNew();
+        var startTimestamp = Stopwatch.GetTimestamp();
         const string scriptType = "compilation";
         const string language = "csharp";
 
@@ -607,13 +607,12 @@ public sealed class ScriptEngine(
                 MergeDefaultGrant(sandboxGrant),
                 precomputedCacheKey);
 
-            stopwatch.Stop();
             // Three outcomes, not two: a single-flight WAITER's wall time is someone else's compile,
             // so labelling it "hit" made hit latency look like multi-second compile time during cold
             // bursts. Misses report the evaluator's own emit duration (clean compile time, free of
             // Task.Run queueing and await overhead); waits and hits report their observed wall time.
             var cache = compilation.Compiled ? "miss" : compilation.Waited ? "wait" : "hit";
-            var reportedDuration = compilation.Compiled ? compilation.CompileDuration : stopwatch.Elapsed;
+            var reportedDuration = compilation.Compiled ? compilation.CompileDuration : Stopwatch.GetElapsedTime(startTimestamp);
             var durationSeconds = reportedDuration.TotalSeconds;
             ScriptActivityHelper.SetCompileResult(compileActivity, compilation.Compiled, "success");
 
@@ -638,60 +637,55 @@ public sealed class ScriptEngine(
         }
         catch (ScriptSandboxViolationException ex)
         {
-            stopwatch.Stop();
-            var durationSeconds = stopwatch.Elapsed.TotalSeconds;
+            var durationSeconds = Stopwatch.GetElapsedTime(startTimestamp).TotalSeconds;
 
             // The code is FORBIDDEN, not broken — a distinct label so a sandbox-policy problem is
             // never diagnosed as an authoring error (or vice versa).
-            ScriptCompileTelemetry.Record(cacheMiss: true, stopwatch.Elapsed.TotalMilliseconds, "sandbox_violation");
+            ScriptCompileTelemetry.Record(cacheMiss: true, Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds, "sandbox_violation");
             _logger.ScriptSandboxViolation(ex.Message);
 
             throw;
         }
         catch (ScriptCompilationException ex)
         {
-            stopwatch.Stop();
-            var durationSeconds = stopwatch.Elapsed.TotalSeconds;
+            var durationSeconds = Stopwatch.GetElapsedTime(startTimestamp).TotalSeconds;
 
             // Record compilation error. (The former catch here was CompilationErrorException from
             // the Roslyn scripting API — dead code, since the evaluator drives CSharpCompilation
             // directly and throws its own typed exception.)
-            ScriptCompileTelemetry.Record(cacheMiss: true, stopwatch.Elapsed.TotalMilliseconds, "compilation_error", telemetryTarget);
+            ScriptCompileTelemetry.Record(cacheMiss: true, Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds, "compilation_error", telemetryTarget);
             ScriptActivityHelper.SetCompileResult(compileActivity, cacheMiss: true, "compilation_error");
 
             throw;
         }
         catch (InvalidOperationException ex)
         {
-            stopwatch.Stop();
-            var durationSeconds = stopwatch.Elapsed.TotalSeconds;
+            var durationSeconds = Stopwatch.GetElapsedTime(startTimestamp).TotalSeconds;
 
             // Record invalid operation as compilation error
-            ScriptCompileTelemetry.Record(cacheMiss: true, stopwatch.Elapsed.TotalMilliseconds, "invalid_operation", telemetryTarget);
+            ScriptCompileTelemetry.Record(cacheMiss: true, Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds, "invalid_operation", telemetryTarget);
             ScriptActivityHelper.SetCompileResult(compileActivity, cacheMiss: true, "invalid_operation");
 
             throw;
         }
         catch (OperationCanceledException)
         {
-            stopwatch.Stop();
-            var durationSeconds = stopwatch.Elapsed.TotalSeconds;
+            var durationSeconds = Stopwatch.GetElapsedTime(startTimestamp).TotalSeconds;
 
             // Record cancelled compilation
             // A failing call by definition did not come from the cache; OperationCanceledException can
             // fire before lookup, but counting it as a miss is an accepted simplification.
-            ScriptCompileTelemetry.Record(cacheMiss: true, stopwatch.Elapsed.TotalMilliseconds, "cancelled", telemetryTarget);
+            ScriptCompileTelemetry.Record(cacheMiss: true, Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds, "cancelled", telemetryTarget);
             ScriptActivityHelper.SetCompileResult(compileActivity, cacheMiss: true, "cancelled");
 
             throw;
         }
         catch (Exception ex)
         {
-            stopwatch.Stop();
-            var durationSeconds = stopwatch.Elapsed.TotalSeconds;
+            var durationSeconds = Stopwatch.GetElapsedTime(startTimestamp).TotalSeconds;
 
             // Record unexpected compilation error
-            ScriptCompileTelemetry.Record(cacheMiss: true, stopwatch.Elapsed.TotalMilliseconds, "unexpected_error", telemetryTarget);
+            ScriptCompileTelemetry.Record(cacheMiss: true, Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds, "unexpected_error", telemetryTarget);
             ScriptActivityHelper.SetCompileResult(compileActivity, cacheMiss: true, "unexpected_error");
 
             throw;

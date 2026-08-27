@@ -200,10 +200,9 @@ public class CSharpEvaluator : IEvaluator
                 // blocking is what starved the thread pool during cold bursts.
                 return Task.Run(() =>
                 {
-                    var compileTimer = Stopwatch.StartNew();
+                    var compileTimerStartTimestamp = Stopwatch.GetTimestamp();
                     var result = CompileAndLoad<T>(code, cacheKey, extraReferences, usingDirectives, sandboxGrant, loadContext);
-                    compileTimer.Stop();
-                    compileDuration = compileTimer.Elapsed;
+                    compileDuration = Stopwatch.GetElapsedTime(compileTimerStartTimestamp);
                     return result;
                 });
             },

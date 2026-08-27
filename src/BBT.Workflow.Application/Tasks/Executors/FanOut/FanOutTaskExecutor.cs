@@ -64,7 +64,7 @@ public sealed class FanOutTaskExecutor : TaskExecutorBase<FanOutTask>
         TaskExecutorContext context,
         CancellationToken cancellationToken)
     {
-        var stopwatch = Stopwatch.StartNew();
+        var startTimestamp = Stopwatch.GetTimestamp();
 
         if (task.ItemTask is null)
         {
@@ -143,7 +143,7 @@ public sealed class FanOutTaskExecutor : TaskExecutorBase<FanOutTask>
         // Recorded HERE — as soon as the batch has settled and its counters are final — rather
         // than on the return paths below. The output handler is author code that can fail, and a
         // batch that ran must still be counted exactly once whatever the handler does with it.
-        ObserveBatchOutcome(task, context, fanOutResult, stopwatch.Elapsed);
+        ObserveBatchOutcome(task, context, fanOutResult, Stopwatch.GetElapsedTime(startTimestamp));
 
         var outputResult = await BuildOutputAsync(task, mapping, context, fanOutResult, cancellationToken);
         if (!outputResult.IsSuccess)
@@ -152,13 +152,12 @@ public sealed class FanOutTaskExecutor : TaskExecutorBase<FanOutTask>
         }
 
         var join = FanOutJoinEvaluator.Evaluate(task.JoinPolicy, task.MinSuccess, itemResults, batchTimedOut);
-        stopwatch.Stop();
 
         if (join.IsSuccess)
         {
             return Result<TaskInvocationResult>.Ok(TaskInvocationResult.Success(
                 data: outputResult.Value,
-                executionDurationMs: stopwatch.ElapsedMilliseconds,
+                executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
                 taskType: TaskType.ToString()));
         }
 
@@ -171,7 +170,7 @@ public sealed class FanOutTaskExecutor : TaskExecutorBase<FanOutTask>
             Data = outputResult.Value,
             ErrorMessage = join.ErrorMessage,
             StatusCode = 500,
-            ExecutionDurationMs = stopwatch.ElapsedMilliseconds,
+            ExecutionDurationMs = (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
             TaskType = TaskType.ToString()
         });
     }
@@ -329,7 +328,7 @@ public sealed class FanOutTaskExecutor : TaskExecutorBase<FanOutTask>
         FanOutBatchCancellation cancellation,
         OnceLatch saturationLatch)
     {
-        var stopwatch = Stopwatch.StartNew();
+        var startTimestamp = Stopwatch.GetTimestamp();
         var degreeSlotHeld = false;
         var globalSlotHeld = false;
         FanOutBatchCancellation.ItemWindow? window = null;
@@ -357,13 +356,13 @@ public sealed class FanOutTaskExecutor : TaskExecutorBase<FanOutTask>
 
             activity?.SetTag(
                 TelemetryConstants.TagNames.FanOutItemQueueWaitMs,
-                (long)stopwatch.Elapsed.TotalMilliseconds);
+                (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds);
 
             // Opened only now that the slots are held: the per-item deadline measures execution,
             // not time spent queueing behind other items.
             window = cancellation.OpenItemWindow();
 
-            settled = await RunItemAsync(task, template, mapping, context, item, cancellation, window, stopwatch);
+            settled = await RunItemAsync(task, template, mapping, context, item, cancellation, window, startTimestamp);
         }
         catch (OperationCanceledException) when (cancellation.CallerCancelled)
         {
@@ -377,13 +376,13 @@ public sealed class FanOutTaskExecutor : TaskExecutorBase<FanOutTask>
         catch (OperationCanceledException)
         {
             var (code, message) = cancellation.Classify(item, window);
-            settled = new FanOutItemResult(item.Index, item.ItemKey, false, null, code, message, stopwatch.Elapsed);
+            settled = new FanOutItemResult(item.Index, item.ItemKey, false, null, code, message, Stopwatch.GetElapsedTime(startTimestamp));
         }
         catch (Exception ex)
         {
             settled = new FanOutItemResult(
                 item.Index, item.ItemKey, false, null, FanOutErrorCodes.ItemFailed,
-                $"FanOut item {item.ItemKey} threw: {ScriptDiagnostics.Explain(ex)}", stopwatch.Elapsed);
+                $"FanOut item {item.ItemKey} threw: {ScriptDiagnostics.Explain(ex)}", Stopwatch.GetElapsedTime(startTimestamp));
         }
         finally
         {
@@ -552,7 +551,7 @@ public sealed class FanOutTaskExecutor : TaskExecutorBase<FanOutTask>
     /// Runs the inner task for one item on an isolated branch context and DI scope.
     /// </summary>
     /// <remarks>
-    /// Takes the item's running stopwatch (<c>elapsed</c>) so it can stamp the duration itself and
+    /// Takes the item's start timestamp (<c>startTimestamp</c>) so it can stamp the duration itself and
     /// return a COMPLETE result, instead of returning a half-built one for the caller to finish.
     /// </remarks>
     private async Task<FanOutItemResult> RunItemAsync(
@@ -563,7 +562,7 @@ public sealed class FanOutTaskExecutor : TaskExecutorBase<FanOutTask>
         FanOutItem item,
         FanOutBatchCancellation cancellation,
         FanOutBatchCancellation.ItemWindow window,
-        Stopwatch elapsed)
+        long startTimestamp)
     {
         // The branch is DISCARDED, never merged back. MergeParallelBranch would collide N item
         // responses on the single inner task key (MergeDictionary throws on a duplicate), and the
@@ -617,7 +616,7 @@ public sealed class FanOutTaskExecutor : TaskExecutorBase<FanOutTask>
             options,
             window.Token);
 
-        return MapEngineOutcome(item, engineResult, elapsed.Elapsed, cancellation, window);
+        return MapEngineOutcome(item, engineResult, Stopwatch.GetElapsedTime(startTimestamp), cancellation, window);
     }
 
     /// <summary>

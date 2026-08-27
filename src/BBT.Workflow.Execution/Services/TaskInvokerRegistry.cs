@@ -40,7 +40,7 @@ public sealed class TaskInvokerRegistry : ITaskInvokerRegistry
         TaskEnvelope envelope,
         CancellationToken cancellationToken = default)
     {
-        var stopwatch = Stopwatch.StartNew();
+        var startTimestamp = Stopwatch.GetTimestamp();
         
         if (!_invokers.TryGetValue(envelope.TaskType, out var invoker))
         {
@@ -66,7 +66,6 @@ public sealed class TaskInvokerRegistry : ITaskInvokerRegistry
                 envelope.Binding,
                 cancellationToken);
             
-            stopwatch.Stop();
 
             if (!result.IsSuccess)
                 InvokerActivityHelper.SetError(activity, result.ErrorMessage);
@@ -82,7 +81,7 @@ public sealed class TaskInvokerRegistry : ITaskInvokerRegistry
                     Data = result.Data,
                     ErrorMessage = result.ErrorMessage,
                     Headers = result.Headers,
-                    ExecutionDurationMs = stopwatch.ElapsedMilliseconds,
+                    ExecutionDurationMs = (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
                     TaskType = envelope.TaskType,
                     Metadata = result.Metadata
                 };
@@ -92,7 +91,6 @@ public sealed class TaskInvokerRegistry : ITaskInvokerRegistry
         }
         catch (Exception ex)
         {
-            stopwatch.Stop();
             InvokerActivityHelper.SetError(activity, ex.Message);
             _logger.LogError(ex, "Task invocation failed for {TaskKey} of type {TaskType}",
                 envelope.TaskKey, envelope.TaskType);

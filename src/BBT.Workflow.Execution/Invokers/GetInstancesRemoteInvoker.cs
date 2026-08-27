@@ -80,7 +80,7 @@ public sealed class GetInstancesRemoteInvoker : ITaskInvoker<GetInstancesBinding
         GetInstancesBinding binding,
         CancellationToken cancellationToken)
     {
-        var stopwatch = Stopwatch.StartNew();
+        var startTimestamp = Stopwatch.GetTimestamp();
 
         try
         {
@@ -88,33 +88,30 @@ public sealed class GetInstancesRemoteInvoker : ITaskInvoker<GetInstancesBinding
             var request = CreateDaprRequest(binding, appId);
 
             using var response = await _daprClient.InvokeMethodWithResponseAsync(request, cancellationToken);
-            stopwatch.Stop();
 
-            return await ProcessResponseAsync(binding, response, stopwatch.ElapsedMilliseconds, cancellationToken);
+            return await ProcessResponseAsync(binding, response, (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds, cancellationToken);
         }
         catch (TaskCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            stopwatch.Stop();
             _metrics.RecordTaskExecution(TaskType, "cancelled");
             _logger.LogWarning("GetInstances Dapr invocation was cancelled for task {TaskKey}: {Domain}/{Workflow}",
                 taskKey, binding.Domain, binding.Workflow);
 
             return TaskInvocationResult.Failure(
                 error: "GetInstances remote invocation was cancelled",
-                executionDurationMs: stopwatch.ElapsedMilliseconds,
+                executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
                 taskType: TaskType,
                 metadata: CreateMetadata(binding, cancelled: true));
         }
         catch (Exception ex)
         {
-            stopwatch.Stop();
             _metrics.RecordTaskExecution(TaskType, "failure");
             _logger.LogError(ex, "GetInstances Dapr invocation failed for task {TaskKey}: {Domain}/{Workflow}",
                 taskKey, binding.Domain, binding.Workflow);
 
             return TaskInvocationResult.Failure(
                 error: ex.Message,
-                executionDurationMs: stopwatch.ElapsedMilliseconds,
+                executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
                 taskType: TaskType,
                 metadata: CreateMetadata(binding, exceptionType: ex.GetType().Name));
         }
@@ -125,7 +122,7 @@ public sealed class GetInstancesRemoteInvoker : ITaskInvoker<GetInstancesBinding
         GetInstancesBinding binding,
         CancellationToken cancellationToken)
     {
-        var stopwatch = Stopwatch.StartNew();
+        var startTimestamp = Stopwatch.GetTimestamp();
 
         try
         {
@@ -133,46 +130,42 @@ public sealed class GetInstancesRemoteInvoker : ITaskInvoker<GetInstancesBinding
             var request = CreateHttpRequest(binding);
 
             using var response = await httpClient.SendAsync(request, cancellationToken);
-            stopwatch.Stop();
 
-            return await ProcessResponseAsync(binding, response, stopwatch.ElapsedMilliseconds, cancellationToken);
+            return await ProcessResponseAsync(binding, response, (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds, cancellationToken);
         }
         catch (TaskCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            stopwatch.Stop();
             _metrics.RecordTaskExecution(TaskType, "cancelled");
             _logger.LogWarning("GetInstances HTTP invocation was cancelled for task {TaskKey}: {Domain}/{Workflow}",
                 taskKey, binding.Domain, binding.Workflow);
 
             return TaskInvocationResult.Failure(
                 error: "GetInstances remote invocation was cancelled",
-                executionDurationMs: stopwatch.ElapsedMilliseconds,
+                executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
                 taskType: TaskType,
                 metadata: CreateMetadata(binding, cancelled: true));
         }
         catch (HttpRequestException ex)
         {
-            stopwatch.Stop();
             _metrics.RecordTaskExecution(TaskType, "failure");
             _logger.LogError(ex, "GetInstances HTTP invocation failed for task {TaskKey}: {Domain}/{Workflow}",
                 taskKey, binding.Domain, binding.Workflow);
 
             return TaskInvocationResult.Failure(
                 error: ex.Message,
-                executionDurationMs: stopwatch.ElapsedMilliseconds,
+                executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
                 taskType: TaskType,
                 metadata: CreateMetadata(binding, exceptionType: ex.GetType().Name));
         }
         catch (Exception ex)
         {
-            stopwatch.Stop();
             _metrics.RecordTaskExecution(TaskType, "failure");
             _logger.LogError(ex, "GetInstances HTTP invocation failed for task {TaskKey}: {Domain}/{Workflow}",
                 taskKey, binding.Domain, binding.Workflow);
 
             return TaskInvocationResult.Failure(
                 error: ex.Message,
-                executionDurationMs: stopwatch.ElapsedMilliseconds,
+                executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
                 taskType: TaskType,
                 metadata: CreateMetadata(binding, exceptionType: ex.GetType().Name));
         }
