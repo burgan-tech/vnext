@@ -22,11 +22,13 @@ public sealed class InstanceTask : Entity<Guid>, IHasCreatedAt
     public InstanceTask(
         Guid id,
         Guid transitionId,
-        string taskId) : base(id)
+        string taskId,
+        TaskTrigger taskTrigger,
+        int order) : base(id)
     {
         TransitionId = transitionId;
         TaskId = taskId;
-        ExecutionKey = CreateExecutionKey(transitionId, taskId);
+        ExecutionKey = CreateExecutionKey(transitionId, taskId, taskTrigger, order);
         StartedAt = DateTime.UtcNow;
         CreatedAt = DateTime.UtcNow;
         Status = TaskStatus.Waiting;
@@ -47,14 +49,38 @@ public sealed class InstanceTask : Entity<Guid>, IHasCreatedAt
     public string TaskId { get; private set; }
 
     /// <summary>
-    /// Stable idempotency key for this task definition within the transition.
-    /// Legacy rows remain null; new journal rows are protected by a filtered unique index.
+    /// Stable idempotency key for this task OCCURRENCE within the transition — not for the
+    /// (transition, task) pair. The same task key can legitimately appear more than once in a
+    /// single transition's <c>onExecute</c> list (e.g. run twice with different mappings), and it
+    /// can separately appear under different hooks of the same transition (onExecute / onEntry /
+    /// onExit) via shared task references. Hashing only (transitionId, taskId) collapsed all of
+    /// those into one key, so the second occurrence's INSERT hit
+    /// <c>UX_InstanceTasks_ExecutionKey</c> and faulted the instance — previously this was masked
+    /// because the idempotency probe (<c>IInstanceTaskRepository.FindByTransitionAndTaskAsync</c>,
+    /// implemented in Infrastructure) found the first row and both occurrences silently shared one
+    /// journal row. Folding in <see cref="TaskTrigger"/> and <c>order</c> makes the key identify
+    /// one occurrence: order alone is not enough since the same task key can repeat across hooks
+    /// at the same order. Legacy rows (written before this change) remain null; new journal rows
+    /// are protected by a filtered unique index.
     /// </summary>
+    /// <remarks>
+    /// Deploy-window note: rows written before this change hash only (transitionId, taskId) — the
+    /// OLD shape. A task journaled before the deploy and retried after it computes a NEW-shape key,
+    /// so the idempotency probe will not find the old row and inserts a second one. That is a
+    /// duplicate AUDIT row for in-flight instances straddling the deploy, not a fault: the two hash
+    /// shapes are computed from different source strings and cannot collide, so no 23505 results.
+    /// </remarks>
     public string? ExecutionKey { get; private set; }
 
-    public static string CreateExecutionKey(Guid transitionId, string taskId)
+    /// <summary>
+    /// Computes the occurrence-scoped execution key. The source string format is
+    /// <c>{transitionId:N}:{taskId}:{(int)taskTrigger}:{order}</c> — stable and documented because
+    /// any change to it shifts every NEW row's key relative to rows already on disk (see the
+    /// deploy-window note on <see cref="ExecutionKey"/>).
+    /// </summary>
+    public static string CreateExecutionKey(Guid transitionId, string taskId, TaskTrigger taskTrigger, int order)
     {
-        var source = Encoding.UTF8.GetBytes($"{transitionId:N}:{taskId}");
+        var source = Encoding.UTF8.GetBytes($"{transitionId:N}:{taskId}:{(int)taskTrigger}:{order}");
         return Convert.ToHexString(SHA256.HashData(source));
     }
 

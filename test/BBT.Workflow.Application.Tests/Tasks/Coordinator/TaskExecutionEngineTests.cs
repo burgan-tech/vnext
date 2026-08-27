@@ -134,7 +134,7 @@ public sealed class TaskExecutionEngineTests
             .Returns(Result<ITaskExecutor>.Fail(new Error("500", "no executor registered")));
 
         var strategy = Substitute.For<ITaskPersistenceStrategy>();
-        strategy.HandleCreationAsync(Arg.Any<InstanceTask>(), Arg.Any<bool>(), Arg.Any<CancellationToken>())
+        strategy.HandleCreationAsync(Arg.Any<InstanceTask>(), Arg.Any<TaskTrigger>(), Arg.Any<int>(), Arg.Any<bool>(), Arg.Any<CancellationToken>())
             .Returns(callInfo => callInfo.Arg<InstanceTask>());
         strategy.HandleCompletionAsync(Arg.Any<InstanceTask>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromException(new InvalidOperationException("journal write failed")));
@@ -293,7 +293,7 @@ public sealed class TaskExecutionEngineTests
             .Returns(Result<ITaskExecutor>.Ok(executor));
 
         var strategy = Substitute.For<ITaskPersistenceStrategy>();
-        strategy.HandleCreationAsync(Arg.Any<InstanceTask>(), Arg.Any<bool>(), Arg.Any<CancellationToken>())
+        strategy.HandleCreationAsync(Arg.Any<InstanceTask>(), Arg.Any<TaskTrigger>(), Arg.Any<int>(), Arg.Any<bool>(), Arg.Any<CancellationToken>())
             .Returns(callInfo => callInfo.Arg<InstanceTask>());
         UsePersistenceStrategy(strategy);
 
@@ -312,7 +312,8 @@ public sealed class TaskExecutionEngineTests
         result.IsSuccess.ShouldBeTrue();
         await _taskFactory.DidNotReceiveWithAnyArgs().CreateExecutionTaskAsync(default!, default);
         await strategy.Received().HandleCreationAsync(
-            Arg.Is<InstanceTask>(t => t.TaskId == "fan-out-docs#3"), Arg.Any<bool>(), Arg.Any<CancellationToken>());
+            Arg.Is<InstanceTask>(t => t.TaskId == "fan-out-docs#3"),
+            TaskTrigger.OnEntry, 1, Arg.Any<bool>(), Arg.Any<CancellationToken>());
 
         // The prepared instance — not a factory-loaded one — is what actually reached the executor.
         await executor.Received(1).ExecuteAsync(
@@ -441,8 +442,8 @@ public sealed class TaskExecutionEngineTests
     /// true for a transition record this pipeline run just inserted, so no prior row can exist). But the
     /// engine forwarded that SAME <see cref="TaskEngineExecutionOptions"/> instance, unchanged, into every
     /// retry attempt — so the retry also skipped the probe and re-inserted a journal row keyed on the same
-    /// <c>ExecutionKey</c> (SHA256 of transitionId+taskId), colliding with attempt 1's row under the
-    /// filtered unique index. Both <see cref="TaskEngineExecutionOptions.SkipJournalProbe"/> and
+    /// <c>ExecutionKey</c> (SHA256 of transitionId+taskId+trigger+order), colliding with attempt 1's
+    /// row under the filtered unique index. Both <see cref="TaskEngineExecutionOptions.SkipJournalProbe"/> and
     /// <see cref="ITaskPersistenceStrategy.HandleCreationAsync"/>'s <c>skipLookup</c> parameter document
     /// that only the FIRST attempt may skip the probe — from the retry onward the probe must run, since
     /// it is what finds and reuses the previous attempt's row instead of inserting a duplicate.
@@ -474,10 +475,10 @@ public sealed class TaskExecutionEngineTests
 
         var skipLookupCalls = new List<bool>();
         var strategy = Substitute.For<ITaskPersistenceStrategy>();
-        strategy.HandleCreationAsync(Arg.Any<InstanceTask>(), Arg.Any<bool>(), Arg.Any<CancellationToken>())
+        strategy.HandleCreationAsync(Arg.Any<InstanceTask>(), Arg.Any<TaskTrigger>(), Arg.Any<int>(), Arg.Any<bool>(), Arg.Any<CancellationToken>())
             .Returns(callInfo =>
             {
-                skipLookupCalls.Add(callInfo.ArgAt<bool>(1));
+                skipLookupCalls.Add(callInfo.ArgAt<bool>(3));
                 return Task.FromResult(callInfo.Arg<InstanceTask>());
             });
         UsePersistenceStrategy(strategy);
@@ -585,7 +586,7 @@ public sealed class TaskExecutionEngineTests
 
         public bool CanHandle(TaskExecutionOrigin origin) => true;
 
-        public Task<InstanceTask> HandleCreationAsync(InstanceTask instanceTask, bool skipLookup = false, CancellationToken cancellationToken = default)
+        public Task<InstanceTask> HandleCreationAsync(InstanceTask instanceTask, TaskTrigger taskTrigger, int order, bool skipLookup = false, CancellationToken cancellationToken = default)
             => Task.FromResult(instanceTask);
 
         public async Task HandleCompletionAsync(InstanceTask instanceTask, CancellationToken cancellationToken = default)
@@ -608,7 +609,7 @@ public sealed class TaskExecutionEngineTests
 
         public bool CanHandle(TaskExecutionOrigin origin) => true;
 
-        public Task<InstanceTask> HandleCreationAsync(InstanceTask instanceTask, bool skipLookup = false, CancellationToken cancellationToken = default)
+        public Task<InstanceTask> HandleCreationAsync(InstanceTask instanceTask, TaskTrigger taskTrigger, int order, bool skipLookup = false, CancellationToken cancellationToken = default)
             => Task.FromResult(instanceTask);
 
         public Task HandleCompletionAsync(InstanceTask instanceTask, CancellationToken cancellationToken = default)

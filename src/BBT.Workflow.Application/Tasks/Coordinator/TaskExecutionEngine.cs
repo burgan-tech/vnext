@@ -436,12 +436,14 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
     private static async Task<InstanceTask> PersistCreationAsync(
         ITaskPersistenceStrategy? strategy,
         InstanceTask instanceTask,
+        TaskTrigger taskTrigger,
+        int order,
         bool skipJournalProbe,
         CancellationToken cancellationToken)
     {
         if (strategy == null)
             return instanceTask;
-        return await strategy.HandleCreationAsync(instanceTask, skipJournalProbe, cancellationToken);
+        return await strategy.HandleCreationAsync(instanceTask, taskTrigger, order, skipJournalProbe, cancellationToken);
     }
 
     /// <summary>
@@ -571,11 +573,19 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
         Activity.Current?.SetTag(TelemetryConstants.TagNames.TaskType, taskTypeStr);
 
         // 2. Create instance task for tracking. The journal key may be overridden so sibling
-        //    executions of the same inner task (FanOut items) get distinct journal identities.
+        //    executions of the same inner task (FanOut items) get distinct journal identities
+        //    (e.g. "fan-out-docs#3"). ExecutionKey additionally folds in taskTrigger + Order so a
+        //    non-FanOut task key that legitimately repeats within the same hook (or across hooks
+        //    of the same transition) still gets a distinct key per occurrence — the two
+        //    disambiguators compose rather than compete: JournalTaskKey already makes the FanOut
+        //    case unique by itself, trigger+order is what fixes the plain-duplicate-entry case
+        //    (the production bug — same task key twice in one transition's onExecute list).
         var instanceTask = new InstanceTask(
             _guidGenerator.Create(),
             instanceTransitionId ?? Guid.Empty,
-            options.JournalTaskKey ?? task.Key);
+            options.JournalTaskKey ?? task.Key,
+            taskTrigger,
+            onExecuteTask.Order);
 
         // 3. Get persistence strategy
         var persistenceStrategy = GetPersistenceStrategy(origin);
@@ -588,7 +598,7 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
 
         // 5. Persist creation
         instanceTask = await PersistCreationAsync(
-            persistenceStrategy, instanceTask, options.SkipJournalProbe, cancellationToken);
+            persistenceStrategy, instanceTask, taskTrigger, onExecuteTask.Order, options.SkipJournalProbe, cancellationToken);
 
         // 6. Get executor
         var executorResult = _executorRegistry.GetExecutor(taskType);

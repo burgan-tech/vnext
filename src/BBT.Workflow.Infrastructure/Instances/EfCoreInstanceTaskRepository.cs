@@ -23,16 +23,22 @@ public class EfCoreInstanceTaskRepository(
     public async Task<InstanceTask?> FindByTransitionAndTaskAsync(
         Guid transitionId,
         string taskId,
+        TaskTrigger taskTrigger,
+        int order,
         CancellationToken cancellationToken = default)
     {
         var dbSet = await GetDbSetAsync();
-        var executionKey = InstanceTask.CreateExecutionKey(transitionId, taskId);
+        var executionKey = InstanceTask.CreateExecutionKey(transitionId, taskId, taskTrigger, order);
 
-        // ExecutionKey is the deterministic hash of (TransitionId, TaskId), so any row matching
-        // the pair either carries exactly this key or a NULL key (row created before the
-        // ExecutionKey migration). Filtering on the key lets the planner resolve the common case
-        // through UX_InstanceTasks_ExecutionKey as a point lookup; the OR arm keeps legacy rows
-        // reachable via the (TransitionId, ...) prefix of the covering index.
+        // ExecutionKey is the deterministic hash of (TransitionId, TaskId, TaskTrigger, Order) —
+        // i.e. one OCCURRENCE, since the same task key can legitimately appear more than once in a
+        // transition (same or different hook, same or different order). Any row matching the
+        // occurrence either carries exactly this key or a NULL key (legacy row created before the
+        // ExecutionKey migration — those rows predate the trigger/order fold too, so they can only
+        // be matched by the pre-existing (TransitionId, TaskId) shape below). Filtering on the key
+        // lets the planner resolve the common case through UX_InstanceTasks_ExecutionKey as a
+        // point lookup; the OR arm keeps legacy rows reachable via the (TransitionId, ...) prefix
+        // of the covering index. Keep this legacy NULL fallback as-is.
         return await dbSet
             .Where(task => task.ExecutionKey == executionKey ||
                            (task.TransitionId == transitionId &&

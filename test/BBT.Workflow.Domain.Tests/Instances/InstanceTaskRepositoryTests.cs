@@ -31,7 +31,7 @@ public abstract class InstanceTaskRepositoryTests<TEntry> : DomainTestBase<TEntr
     {
         // Arrange
         var transition = await CreateTestTransitionAsync();
-        var task = new InstanceTask(Guid.NewGuid(), transition.Id, "test-task");
+        var task = new InstanceTask(Guid.NewGuid(), transition.Id, "test-task", TaskTrigger.OnExecute, 1);
         await Repository.InsertAsync(task, true);
 
         // Act — mirror the completion path: request/invocation captured, then completed.
@@ -61,7 +61,7 @@ public abstract class InstanceTaskRepositoryTests<TEntry> : DomainTestBase<TEntr
     {
         // Arrange
         var transition = await CreateTestTransitionAsync();
-        var task = new InstanceTask(Guid.NewGuid(), transition.Id, "test-task");
+        var task = new InstanceTask(Guid.NewGuid(), transition.Id, "test-task", TaskTrigger.OnExecute, 1);
         await Repository.InsertAsync(task, true);
 
         // Act

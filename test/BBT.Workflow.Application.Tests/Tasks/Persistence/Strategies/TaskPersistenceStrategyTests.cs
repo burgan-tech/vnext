@@ -26,7 +26,7 @@ public class TaskPersistenceStrategyTests
     public TaskPersistenceStrategyTests()
     {
         _mockRepository = Substitute.For<IInstanceTaskRepository>();
-        _instanceTask = new InstanceTask(Guid.NewGuid(), Guid.NewGuid(), "test-task");
+        _instanceTask = new InstanceTask(Guid.NewGuid(), Guid.NewGuid(), "test-task", TaskTrigger.OnExecute, 1);
         _mockRepository.InsertAsync(
                 Arg.Any<InstanceTask>(),
                 Arg.Any<bool>(),
@@ -68,7 +68,8 @@ public class TaskPersistenceStrategyTests
         var strategy = CreateStandardStrategy();
 
         // Act
-        var persisted = await strategy.HandleCreationAsync(_instanceTask, cancellationToken: CancellationToken.None);
+        var persisted = await strategy.HandleCreationAsync(
+            _instanceTask, TaskTrigger.OnExecute, 1, cancellationToken: CancellationToken.None);
 
         // Assert
         await _mockRepository.Received(1).InsertAsync(_instanceTask, true, CancellationToken.None);
@@ -87,10 +88,10 @@ public class TaskPersistenceStrategyTests
         var strategy = CreateStandardStrategy();
 
         var persisted = await strategy.HandleCreationAsync(
-            _instanceTask, skipLookup: true, cancellationToken: CancellationToken.None);
+            _instanceTask, TaskTrigger.OnExecute, 1, skipLookup: true, cancellationToken: CancellationToken.None);
 
         persisted.ShouldBeSameAs(_instanceTask);
-        await _mockRepository.DidNotReceiveWithAnyArgs().FindByTransitionAndTaskAsync(default, default!, default);
+        await _mockRepository.DidNotReceiveWithAnyArgs().FindByTransitionAndTaskAsync(default, default!, default, default, default);
         await _mockRepository.Received(1).InsertAsync(_instanceTask, true, CancellationToken.None);
         await _unitOfWork.Received(1).CommitAsync(CancellationToken.None);
     }
@@ -98,15 +99,19 @@ public class TaskPersistenceStrategyTests
     [Fact]
     public async Task StandardTaskPersistenceStrategy_HandleCreationAsync_WhenJournalExists_ReusesIt()
     {
-        var existing = new InstanceTask(Guid.NewGuid(), _instanceTask.TransitionId, _instanceTask.TaskId);
+        var existing = new InstanceTask(
+            Guid.NewGuid(), _instanceTask.TransitionId, _instanceTask.TaskId, TaskTrigger.OnExecute, 1);
         _mockRepository.FindByTransitionAndTaskAsync(
                 _instanceTask.TransitionId,
                 _instanceTask.TaskId,
+                TaskTrigger.OnExecute,
+                1,
                 CancellationToken.None)
             .Returns(existing);
         var strategy = CreateStandardStrategy();
 
-        var persisted = await strategy.HandleCreationAsync(_instanceTask, cancellationToken: CancellationToken.None);
+        var persisted = await strategy.HandleCreationAsync(
+            _instanceTask, TaskTrigger.OnExecute, 1, cancellationToken: CancellationToken.None);
 
         persisted.ShouldBeSameAs(existing);
         await _mockRepository.DidNotReceiveWithAnyArgs().InsertAsync(default!, default, default);
@@ -149,7 +154,8 @@ public class TaskPersistenceStrategyTests
         var strategy = new ExtensionTaskPersistenceStrategy();
 
         // Act
-        await strategy.HandleCreationAsync(_instanceTask, cancellationToken: CancellationToken.None);
+        await strategy.HandleCreationAsync(
+            _instanceTask, TaskTrigger.OnExecute, 1, cancellationToken: CancellationToken.None);
 
         // Assert
         // No exception should be thrown and method should complete successfully

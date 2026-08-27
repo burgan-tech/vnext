@@ -32,6 +32,12 @@ public sealed class StandardTaskPersistenceStrategy(
     /// Handles the creation and initial persistence of an InstanceTask to the database.
     /// </summary>
     /// <param name="instanceTask">The InstanceTask to be inserted into the database.</param>
+    /// <param name="taskTrigger">
+    /// The hook this occurrence runs under. Folded into the idempotency probe's key alongside
+    /// <paramref name="order"/> so the probe targets this specific occurrence, not just the
+    /// (transition, task) pair — see <see cref="InstanceTask.ExecutionKey"/>.
+    /// </param>
+    /// <param name="order">The occurrence's execution order within its hook.</param>
     /// <param name="skipLookup">
     /// True when the transition record was freshly inserted by this pipeline run — no journal row
     /// can exist for its id, so the idempotency probe below would be a guaranteed-empty SELECT
@@ -41,6 +47,8 @@ public sealed class StandardTaskPersistenceStrategy(
     /// <param name="cancellationToken">Cancellation token for async operation control.</param>
     public async Task<InstanceTask> HandleCreationAsync(
         InstanceTask instanceTask,
+        TaskTrigger taskTrigger,
+        int order,
         bool skipLookup = false,
         CancellationToken cancellationToken = default)
     {
@@ -55,6 +63,8 @@ public sealed class StandardTaskPersistenceStrategy(
             : await instanceTaskRepository.FindByTransitionAndTaskAsync(
                 instanceTask.TransitionId,
                 instanceTask.TaskId,
+                taskTrigger,
+                order,
                 cancellationToken);
 
         var journal = existing ?? await instanceTaskRepository.InsertAsync(instanceTask, true, cancellationToken);

@@ -9,12 +9,17 @@ namespace BBT.Workflow.Instances;
 public interface IInstanceTaskRepository : IRepository<InstanceTask, Guid>
 {
     /// <summary>
-    /// Finds the durable journal row for a task definition within a transition.
-    /// The returned entity is tracked so the caller can update the same row on retry.
+    /// Finds the durable journal row for a task OCCURRENCE within a transition — identified by
+    /// (transitionId, taskId, taskTrigger, order), not just (transitionId, taskId). A task key can
+    /// legitimately appear more than once in the same hook (parallel/sequential re-use) and across
+    /// different hooks (onExecute/onEntry/onExit) of the same transition; each occurrence needs its
+    /// own probe. The returned entity is tracked so the caller can update the same row on retry.
     /// </summary>
     Task<InstanceTask?> FindByTransitionAndTaskAsync(
         Guid transitionId,
         string taskId,
+        TaskTrigger taskTrigger,
+        int order,
         CancellationToken cancellationToken = default);
 
     /// <summary>
