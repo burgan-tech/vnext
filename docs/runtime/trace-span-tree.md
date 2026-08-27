@@ -245,6 +245,9 @@ applied here because dropping spans is the environment owner's call:
 
 ## Related pages
 
+- [Event Trace Chain](event-trace-chain.md) — how `EventHook.{name}` (this page) connects to the
+  outbox → pub/sub → inbox handoff, verified live evidence, and the Aether release gate for
+  outbox-side trace continuity.
 - [Trace Lanes](trace-lanes.md) — the anchor/predecessor split that keeps chained hops and
   subflow handoffs siblings instead of a deep nest; the parenting model every span in this plan's
   tree relies on.
