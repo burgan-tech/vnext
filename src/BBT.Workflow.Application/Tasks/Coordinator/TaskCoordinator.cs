@@ -182,11 +182,18 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
         {
             var groupTasks = group.ToList();
 
+            // A hook (onExecute/onEntry/onExit) may legitimately list the same task key twice at
+            // the same order. Resolved once per group, from the definition's own shape, so the
+            // single-task and parallel paths below apply the identical decision — the suffix must
+            // not depend on which path happens to run the group.
+            LogDuplicateTaskKeysIfAny(group.Key, groupTasks, taskTrigger, context.Instance?.Id, context.Transition?.Key);
+            var groupOptions = ResolveGroupEngineOptions(groupTasks, engineOptions);
+
             if (groupTasks.Count == 1)
             {
                 // Single task - execute directly
                 var result = await _executionEngine.ExecuteAsync(
-                    groupTasks[0], instanceTransitionId, taskTrigger, origin, context, engineOptions, cancellationToken);
+                    groupTasks[0], instanceTransitionId, taskTrigger, origin, context, groupOptions[0], cancellationToken);
 
                 var processResult = ProcessTaskResult(result, groupTasks[0], executedTasks, totalStopwatch);
                 if (processResult.HasValue)
@@ -196,7 +203,7 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
             {
                 // Multiple tasks with same Order - execute in parallel with cancellation
                 var parallelResult = await ExecuteTaskGroupInParallelAsync(
-                    groupTasks, instanceTransitionId, taskTrigger, origin, context, engineOptions, cancellationToken);
+                    groupTasks, instanceTransitionId, taskTrigger, origin, context, groupOptions, cancellationToken);
 
                 if (!parallelResult.IsSuccess)
                 {
@@ -295,7 +302,7 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
         TaskTrigger taskTrigger,
         TaskExecutionOrigin origin,
         ScriptContext context,
-        TaskEngineExecutionOptions engineOptions,
+        IReadOnlyList<TaskEngineExecutionOptions> engineOptionsPerTask,
         CancellationToken cancellationToken)
     {
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -311,7 +318,7 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
         TasksExecutionResult? firstFailure = null;
         OnExecuteTask? firstFailedTask = null;
 
-        var executionTasks = tasks.Select(async task =>
+        var executionTasks = tasks.Select(async (task, index) =>
         {
             var branchContext = context.CreateParallelBranch();
             try
@@ -323,7 +330,7 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
                 var scopedEngine = scope.ServiceProvider.GetRequiredService<ITaskExecutionEngine>();
 
                 var result = await scopedEngine.ExecuteAsync(
-                    task, instanceTransitionId, taskTrigger, origin, branchContext, engineOptions, linkedToken);
+                    task, instanceTransitionId, taskTrigger, origin, branchContext, engineOptionsPerTask[index], linkedToken);
 
                 if (!result.IsSuccess)
                 {
@@ -431,6 +438,97 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
             }
 
             return Result<TasksExecutionResult>.Fail(Error.Failure("ParallelExecutionFailed", ex.Message));
+        }
+    }
+
+    /// <summary>
+    /// Resolves the per-task <see cref="TaskEngineExecutionOptions"/> for one Order group. A task
+    /// key that appears only once in the group keeps <paramref name="baseOptions"/> unchanged — no
+    /// journal-key churn for the overwhelmingly common case. A task key that REPEATS within the
+    /// group gets a positional suffix on EVERY occurrence ("key#0", "key#1", … by position among
+    /// that key's occurrences) so <c>InstanceTask.ExecutionKey</c> (which folds in
+    /// <c>options.JournalTaskKey ?? task.Key</c>, see <c>TaskExecutionEngine</c>) is distinct per
+    /// occurrence instead of colliding on <c>UX_InstanceTasks_ExecutionKey</c> when two entries
+    /// share both key and order (a legitimate hook shape — see
+    /// <see cref="WorkflowLogs.DuplicateTaskKeyAtSameOrder"/> for the accompanying warning).
+    /// Suffixing only the second-onward occurrence would leave a confusing asymmetric pair in the
+    /// journal ("script-task" next to "script-task#1"); suffixing all of them reads correctly.
+    /// A <see cref="TaskEngineExecutionOptions.JournalTaskKey"/> the caller already set (FanOut sets
+    /// its own, e.g. "fan-out-docs#3") is never overwritten.
+    /// </summary>
+    /// <remarks>
+    /// Called for every group regardless of size (including groups of one) so the decision comes
+    /// from the definition's own shape rather than from which execution path — single-task or
+    /// parallel — happens to run the group.
+    /// </remarks>
+    internal static IReadOnlyList<TaskEngineExecutionOptions> ResolveGroupEngineOptions(
+        IReadOnlyList<OnExecuteTask> groupTasks,
+        TaskEngineExecutionOptions baseOptions)
+    {
+        var result = new TaskEngineExecutionOptions[groupTasks.Count];
+
+        if (groupTasks.Count == 1)
+        {
+            result[0] = baseOptions;
+            return result;
+        }
+
+        var keyCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var task in groupTasks)
+        {
+            keyCounts[task.Task.Key] = keyCounts.GetValueOrDefault(task.Task.Key) + 1;
+        }
+
+        var seenPerKey = new Dictionary<string, int>(StringComparer.Ordinal);
+        for (var i = 0; i < groupTasks.Count; i++)
+        {
+            var task = groupTasks[i];
+            var options = baseOptions;
+
+            if (keyCounts[task.Task.Key] > 1 && string.IsNullOrEmpty(options.JournalTaskKey))
+            {
+                var position = seenPerKey.GetValueOrDefault(task.Task.Key);
+                seenPerKey[task.Task.Key] = position + 1;
+                options = options with { JournalTaskKey = $"{task.Task.Key}#{position}" };
+            }
+
+            result[i] = options;
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Emits <see cref="WorkflowLogs.DuplicateTaskKeyAtSameOrder"/> once per task key that repeats
+    /// within this Order group. A hook listing the same task key twice at the same order now
+    /// executes correctly (see <see cref="ResolveGroupEngineOptions"/>) but is still almost
+    /// certainly an authoring mistake, so it is surfaced as a warning rather than silently accepted
+    /// or rejected outright — <c>WorkflowValidationResult</c> has no warning severity to carry this
+    /// at definition-validation time (only hard errors), so it is logged here at execution time.
+    /// </summary>
+    private void LogDuplicateTaskKeysIfAny(
+        int order,
+        IReadOnlyList<OnExecuteTask> groupTasks,
+        TaskTrigger taskTrigger,
+        Guid? instanceId,
+        string? transitionKey)
+    {
+        if (groupTasks.Count < 2)
+            return;
+
+        var duplicates = groupTasks
+            .GroupBy(t => t.Task.Key, StringComparer.Ordinal)
+            .Where(g => g.Count() > 1);
+
+        foreach (var duplicate in duplicates)
+        {
+            _logger.DuplicateTaskKeyAtSameOrder(
+                transitionKey ?? "N/A",
+                taskTrigger.ToString(),
+                duplicate.Key,
+                duplicate.Count(),
+                order,
+                instanceId);
         }
     }
 }

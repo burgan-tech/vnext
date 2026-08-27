@@ -966,6 +966,34 @@ public static partial class WorkflowLogs
 
     #endregion
 
+    #region Task Coordinator
+
+    /// <summary>
+    /// Logs when a hook's onExecute/onEntry/onExit task list carries the same task key more than
+    /// once at the SAME order. <see cref="TaskCoordinator"/> now gives each occurrence a distinct
+    /// journal identity (a positional <c>#index</c> suffix), so this no longer faults the instance —
+    /// but two entries sharing both key and order is still almost certainly an authoring mistake
+    /// (duplicated line, copy-paste) rather than an intentional design, so it is surfaced as a
+    /// Warning for the author to fix, not rejected. <see cref="WorkflowValidationResult"/> only
+    /// carries hard errors (see <c>ValidationErrors</c>/<c>AddError</c>) with no warning severity,
+    /// so this is logged here at execution time instead of being folded into
+    /// <c>WorkflowValidator</c> — do not downgrade this to a validation error.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10155,
+        Level = LogLevel.Warning,
+        Message = "Duplicate task key at the same order in transition {TransitionKey}, hook {Hook}: task '{TaskKey}' appears {OccurrenceCount} times at order {Order}. This is usually an authoring mistake — give the entries distinct orders if they are meant to run as separate steps. InstanceId={InstanceId}")]
+    public static partial void DuplicateTaskKeyAtSameOrder(
+        this ILogger logger,
+        string transitionKey,
+        string hook,
+        string taskKey,
+        int occurrenceCount,
+        int order,
+        Guid? instanceId);
+
+    #endregion
+
     #region SubFlow
 
     /// <summary>
