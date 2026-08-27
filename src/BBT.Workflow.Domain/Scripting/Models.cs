@@ -605,6 +605,8 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(instance);
 
+        using var activity = ScriptContextActivity.Start("ScriptContext.RefreshInstance");
+        ScriptContextActivity.TagInstanceShape(activity, instance);
         var snapshot = instance.CreateSnapshot();
         Instance = snapshot;
         Incident = new ScriptIncidentInfo
@@ -665,9 +667,10 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
             return null;
         }
 
-        var serializedContent = JsonSerializer.Serialize(content, jsonOptions);
-        using var document = JsonDocument.Parse(serializedContent);
-        return document.RootElement.ToDynamic();
+        // SerializeToElement instead of Serialize + Parse: same tree, minus a full string
+        // allocation and a re-parse per response/output/body write.
+        var element = JsonSerializer.SerializeToElement(content, jsonOptions);
+        return element.ToDynamic();
     }
 
     /// <summary>
@@ -679,6 +682,17 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
     /// <param name="jsonOptions">The JSON serialization options to use.</param>
     private dynamic? MergeToBody(object? content, JsonSerializerOptions jsonOptions)
     {
+        using var activity = ScriptContextActivity.Start("ScriptContext.MergeBody");
+        activity?.SetTag("vnext.script.context.body_had_value", Body is not null);
+        activity?.SetTag("vnext.script.context.content_shape", content switch
+        {
+            null => "null",
+            ExpandoObject => "expando",
+            List<object?> => "list",
+            JsonElement => "json-element",
+            _ => "object"
+        });
+
         // If the content is already ToDynamic-shaped (Expando/List/leaf) the serialize+parse
         // round-trip adds nothing — but it must NEVER be aliased into Body either: the input may
         // be the memoized Instance.Data tree, and ExpandoObjectMergeStrategy mutates its merge
@@ -713,6 +727,7 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
         if (_cowParent is null || _owned.HasFlag(OwnedParts.Body))
             return;
 
+        using var activity = ScriptContextActivity.Start("ScriptContext.CloneBranchBody");
         Body = DynamicCloner.DeepClone(Body);
         _owned |= OwnedParts.Body;
     }
@@ -729,6 +744,10 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
     public ScriptContext CreateParallelBranch()
     {
         ThrowIfDisposed();
+
+        using var activity = ScriptContextActivity.Start("ScriptContext.CreateParallelBranch");
+        ScriptContextActivity.TagInstanceShape(activity, Instance);
+        activity?.SetTag("vnext.script.context.has_body", Body is not null);
 
         var branch = new ScriptContext(logger)
         {

@@ -508,7 +508,10 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
             return;
         }
 
-        var delta = new JsonData(JsonSerializer.Serialize(response.Data, JsonSerializerConstants.JsonOptions));
+        // Materialize the persisted text and the parsed element together. The append pipeline reads
+        // delta.JsonElement immediately, so constructing JsonData from a string would force a parse
+        // of the payload we just serialized.
+        var delta = JsonData.FromMaterializedObject(response.Data, JsonSerializerConstants.JsonOptions);
         var persisted = await _instanceDataWriteService.AppendAsync(
             context.Instance, delta, VersionStrategy.IncreasePatch, cancellationToken, context.Workflow);
 
@@ -632,9 +635,9 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
             JsonSerializerConstants.JsonOptions));
         instanceTask.SetRequest(requestJson);
 
-        if (executorContext.RawInvocationResultJson != null)
+        if (executorContext.RawInvocationResult is { } rawInvocationResult)
         {
-            instanceTask.SetInvocationResult(new JsonData(executorContext.RawInvocationResultJson));
+            instanceTask.SetInvocationResult(rawInvocationResult);
         }
 
 

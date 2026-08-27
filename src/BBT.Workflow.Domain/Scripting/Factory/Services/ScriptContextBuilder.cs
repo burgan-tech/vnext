@@ -98,7 +98,7 @@ internal sealed class ScriptContextBuilder(
         {
             return this;
         }
-        _instance = instance.CreateSnapshot();
+        _instance = CreateInstanceSnapshot(instance);
         _instanceId = null; // Clear async retrieval property
         return this;
     }
@@ -201,6 +201,11 @@ internal sealed class ScriptContextBuilder(
 
     public async Task<ScriptContext> BuildAsync(CancellationToken cancellationToken = default)
     {
+        using var activity = ScriptContextActivity.Start("ScriptContext.Build");
+        activity?.SetTag("vnext.script.context.has_direct_workflow", _workflow is not null);
+        activity?.SetTag("vnext.script.context.has_direct_instance", _instance is not null);
+        activity?.SetTag("vnext.script.context.has_body", _body is not null);
+
         var builder = new ScriptContext.Builder(logger);
         // Resolve workflow if needed
         var workflow = await ResolveWorkflowAsync(cancellationToken);
@@ -318,11 +323,18 @@ internal sealed class ScriptContextBuilder(
             if (instance == null)
                 throw new InvalidOperationException($"Instance with ID {_instanceId.Value} not found.");
 
-            _instance = instance.CreateSnapshot();
+            _instance = CreateInstanceSnapshot(instance);
             return _instance;
         }
 
         return null;
+    }
+
+    private static Instance CreateInstanceSnapshot(Instance instance)
+    {
+        using var activity = ScriptContextActivity.Start("ScriptContext.SnapshotInstance");
+        ScriptContextActivity.TagInstanceShape(activity, instance);
+        return instance.CreateSnapshot();
     }
 
     /// <summary>

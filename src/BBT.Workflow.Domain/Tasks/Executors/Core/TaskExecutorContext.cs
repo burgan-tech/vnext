@@ -32,10 +32,12 @@ public sealed record TaskExecutorContext(
     public ScriptResponse? InputResponse { get; set; }
 
     /// <summary>
-    /// Holds the raw invocation result as serialized JSON, captured after InvokeAsync
-    /// and before output mapping (ProcessOutputAsync). Null if invocation never ran.
+    /// Holds the raw invocation result captured after InvokeAsync and before output mapping
+    /// (ProcessOutputAsync), already materialized in its journal representation. Null if invocation
+    /// never ran. Keeping JsonData instead of the original object graph avoids extending the graph's
+    /// lifetime through output processing while preserving exactly one serialization.
     /// </summary>
-    public string? RawInvocationResultJson { get; set; }
+    public JsonData? RawInvocationResult { get; set; }
 
     /// <summary>
     /// Per-execution compiled-mapping factory memo, keyed by (mapping, target type) — see
@@ -45,4 +47,3 @@ public sealed record TaskExecutorContext(
     /// </summary>
     public Dictionary<(ScriptCode Mapping, Type Target), object>? CompiledMappingFactories { get; set; }
 }
-

@@ -89,7 +89,13 @@ public abstract class TaskExecutorBase<TTask>(ILogger logger) : ITaskExecutor
             return CreateErrorResponse(invokeResult.Error, (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds);
         }
 
-        context.RawInvocationResultJson = JsonSerializer.Serialize(invokeResult.Value!, JsonSerializerConstants.JsonOptions);
+        // Materialize the audit payload once while the invocation result is already hot. Carrying
+        // the full object graph until the journal write extends its lifetime without reducing the
+        // number of serializations; JsonData keeps only the persisted text and parses lazily if a
+        // later consumer actually requests JsonElement.
+        context.RawInvocationResult = invokeResult.Value is null
+            ? new JsonData("null")
+            : new JsonData(invokeResult.Value);
 
         // Note: Business errors (HTTP 4xx/5xx) are NOT intercepted here.
         // The invocation result (including IsSuccess=false, StatusCode, Metadata/ExceptionType)
@@ -338,4 +344,3 @@ public abstract class TaskExecutorBase<TTask>(ILogger logger) : ITaskExecutor
         context.SetStandardResponse(response, variableKey);
     }
 }
-
