@@ -371,11 +371,13 @@ public sealed class ScriptEngine(
                 var key = _evaluator.ComputeCacheKey(sourceHash, typeof(T), profile);
 
                 return await CompileCoreAsync<T>(
-                    body, null, null, null, grant, cancellationToken, precomputedCacheKey: key);
+                    body, null, null, null, grant, cancellationToken, precomputedCacheKey: key,
+                    scriptIdentity: scriptCode.TraceIdentity);
             }
 
             return await CompileCoreAsync<T>(
-                body, extraReferences, usingDirectives, null, grant, cancellationToken);
+                body, extraReferences, usingDirectives, null, grant, cancellationToken,
+                scriptIdentity: scriptCode.TraceIdentity);
         }
 
         if (!_helpersOptions.Enabled)
@@ -462,11 +464,13 @@ public sealed class ScriptEngine(
             var key = _evaluator.ComputeCacheKey(sourceHash, typeof(T), helperProfile);
 
             return await CompileCoreAsync<T>(
-                body, refs, usings, helperSet.LoadContext, grant, cancellationToken, precomputedCacheKey: key);
+                body, refs, usings, helperSet.LoadContext, grant, cancellationToken, precomputedCacheKey: key,
+                scriptIdentity: scriptCode.TraceIdentity);
         }
 
         return await CompileCoreAsync<T>(
-            body, refs, usings, helperSet.LoadContext, grant, cancellationToken);
+            body, refs, usings, helperSet.LoadContext, grant, cancellationToken,
+            scriptIdentity: scriptCode.TraceIdentity);
     }
 
     /// <inheritdoc />
@@ -574,7 +578,8 @@ public sealed class ScriptEngine(
         AssemblyLoadContext? loadContext,
         IReadOnlyList<string>? sandboxGrant,
         CancellationToken cancellationToken,
-        string? precomputedCacheKey = null)
+        string? precomputedCacheKey = null,
+        string? scriptIdentity = null)
     {
         // MUST be captured before starting the Script.Compile span below: that span is started
         // with an EXPLICIT parent context (Activity.Current?.Context), so its own Activity.Parent
@@ -584,7 +589,7 @@ public sealed class ScriptEngine(
         // captured value through explicitly so the accumulator keeps landing on the task span
         // regardless of what becomes Activity.Current while this method runs.
         var telemetryTarget = ScriptCompileTelemetry.FindTargetActivity();
-        using var compileActivity = ScriptActivityHelper.StartCompileActivity();
+        using var compileActivity = ScriptActivityHelper.StartCompileActivity(scriptIdentity);
         var startTimestamp = Stopwatch.GetTimestamp();
         const string scriptType = "compilation";
         const string language = "csharp";

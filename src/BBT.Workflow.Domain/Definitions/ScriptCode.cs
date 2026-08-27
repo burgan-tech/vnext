@@ -168,6 +168,29 @@ public sealed class ScriptCode : ValueObject
             System.Text.Encoding.UTF8.GetBytes(DecodedCode)));
 
     /// <summary>
+    /// Short, human-readable identity used to NAME this script's <c>Script.Compile</c> span.
+    /// </summary>
+    /// <remarks>
+    /// Precedence is authored-first: an explicit <see cref="Location"/> is what a person recognizes,
+    /// so it wins. A reference-encoded script without one falls back to the reference, because its
+    /// <see cref="DecodedCode"/> is empty and every such script would otherwise share the
+    /// empty-string <see cref="ContentHash"/>. Only a truly anonymous inline script falls through to
+    /// a hash prefix, which at least tells two of them apart.
+    /// <para>
+    /// Cheap on purpose: <see cref="Location"/> is already a materialized string, so the common path
+    /// allocates nothing. This is why the span NAME can carry identity on every compile while
+    /// <c>vnext.script.key</c> stays miss-only — that tag hashes, this does not.
+    /// </para>
+    /// </remarks>
+    [JsonIgnore]
+    public string TraceIdentity =>
+        !string.IsNullOrWhiteSpace(Location) && !Location.Equals(DefaultLocation, StringComparison.Ordinal)
+            ? Location
+            : IsReference && CodeReference is not null
+                ? CodeReference.ToString()
+                : $"inline:{ContentHash[..Math.Min(8, ContentHash.Length)]}";
+
+    /// <summary>
     /// Creates a ScriptCode instance with native (plain text) encoding.
     /// </summary>
     public static ScriptCode FromNative(string code, string? location = null, MappingType? type = null)

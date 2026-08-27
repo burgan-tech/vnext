@@ -17,11 +17,22 @@ public static class ScriptActivityHelper
     /// <summary>ActivitySource for script spans. Registered in Telemetry:Tracing:AdditionalSources.</summary>
     public static readonly ActivitySource ActivitySource = new("BBT.Workflow.Scripting");
 
-    /// <summary>Starts the span covering one compile call (cache hits included — sub-ms, tagged).</summary>
-    public static Activity? StartCompileActivity()
+    /// <summary>
+    /// Starts the span covering one compile call, named <c>Script.Compile/{identity}</c> so the tree
+    /// says WHICH script compiled without the reader opening the span.
+    /// </summary>
+    /// <param name="identity">
+    /// <see cref="BBT.Workflow.Definitions.ScriptCode.TraceIdentity"/> when the caller has a
+    /// <c>ScriptCode</c>. The raw-string compile overloads have none, and fall back to the bare
+    /// <c>Script.Compile</c> name.
+    /// </param>
+    public static Activity? StartCompileActivity(string? identity = null)
     {
         var activity = ActivitySource.StartActivity(
-            "Script.Compile", ActivityKind.Internal, Activity.Current?.Context ?? default);
+            string.IsNullOrEmpty(identity) ? "Script.Compile" : $"Script.Compile/{identity}",
+            ActivityKind.Internal,
+            Activity.Current?.Context ?? default);
+
         activity?.SetTag(TelemetryConstants.TagNames.SpanCategory, TelemetryConstants.SpanCategories.Business);
         return activity;
     }
