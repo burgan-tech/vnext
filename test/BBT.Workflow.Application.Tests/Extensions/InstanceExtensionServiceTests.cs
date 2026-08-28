@@ -1,4 +1,23 @@
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Text.Json;
+using System.Threading;
+using System.Threading.Tasks;
+using BBT.Aether.MultiSchema;
+using BBT.Aether.Results;
+using BBT.Workflow.Caching;
+using BBT.Workflow.Definitions;
+using BBT.Workflow.Execution.ErrorHandling;
+using BBT.Workflow.Extentions;
 using BBT.Workflow.Logging;
+using BBT.Workflow.Runtime;
+using BBT.Workflow.Scripting;
+using BBT.Workflow.Tasks.Coordinator;
+using BBT.Workflow.Tasks.Evaluation;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
+using NSubstitute;
 using Shouldly;
 using Xunit;
 
@@ -8,6 +27,16 @@ namespace BBT.Workflow.Extensions;
 /// Unit tests for fail-fast extension execution behavior.
 /// Tests verify error codes, error factory methods, and target tracking.
 /// </summary>
+/// <remarks>
+/// Also pins the fix for the Preprod fault (trace <c>7873ad4e6c7a9db31c3b6401cd2c54fc</c>): two
+/// extensions on one workflow referencing the SAME task filed their result under the same
+/// task-derived variable name. Sequentially this silently overwrote one extension's output with
+/// the other's; run in parallel (same <c>Order</c>) it threw
+/// <c>InvalidOperationException: Parallel tasks produced conflicting output for key '...'</c> out
+/// of <c>ScriptContext.MergeDictionary</c>. The fix keys each execution's response by the
+/// EXTENSION (<see cref="TaskEngineExecutionOptions.ResponseVariableKey"/>), not the task — see
+/// <c>InstanceExtensionService.ExecuteExtensionsInternalAsync</c>.
+/// </remarks>
 public class InstanceExtensionServiceTests
 {
     [Fact]
@@ -63,5 +92,271 @@ public class InstanceExtensionServiceTests
         // Assert - Error.Validation creates an error with Type = Validation
         // This ensures proper HTTP status code mapping (400 for validation errors)
         error.Code.ShouldStartWith("Extension:");
+    }
+
+    /// <summary>
+    /// Contract 1 (the silent path): two extensions reference the SAME task at DIFFERENT
+    /// <c>Order</c> values with DIFFERENT <c>Mapping</c>s. Each runs in its own single-task group
+    /// (no parallel merge involved), so before the fix the second extension's write to the shared
+    /// task-derived key silently overwrote the first's — both extensions' entries in the response
+    /// end up holding the SECOND extension's mapped value. After the fix each extension's own
+    /// value survives under its own key.
+    /// </summary>
+    [Fact]
+    public async Task ProcessExtensionsAsync_TwoExtensionsSameTaskDifferentMappingDifferentOrder_EachGetsOwnMappedOutput()
+    {
+        var engine = Substitute.For<ITaskExecutionEngine>();
+        var errorFactory = new ExecutionErrorFactory(new ErrorNormalizer());
+        StubEngineWithMarkerOutputs(engine, errorFactory);
+
+        var extensionA = CreateExtension("extension-a", taskKey: "shared-task", order: 1, mappingMarker: "mapped-by-a");
+        var extensionB = CreateExtension("extension-b", taskKey: "shared-task", order: 2, mappingMarker: "mapped-by-b");
+
+        var componentCacheStore = CreateComponentCacheStore(extensionA, extensionB);
+        var service = CreateService(componentCacheStore, CreateTaskCoordinator(engine));
+        using var scriptContext = CreateScriptContext();
+        var workflow = WorkflowFactory.CreateDefault();
+
+        var result = await service.ProcessExtensionsAsync(
+            null, scriptContext, workflow, ExtensionScope.Everywhere, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue(result.IsSuccess ? null : result.Error.Message);
+        result.Value!["extensionA"].ToString().ShouldBe("mapped-by-a");
+        result.Value!["extensionB"].ToString().ShouldBe("mapped-by-b");
+    }
+
+    /// <summary>
+    /// Contract 2 (the fault this fixes): two extensions reference the SAME task at the SAME
+    /// <c>Order</c> — the parallel path (<c>TaskCoordinator.ExecuteTaskGroupInParallelAsync</c>).
+    /// Before the fix both wrote their (different) mapped output under the identical task-derived
+    /// key; merging the second parallel branch into the first threw
+    /// <c>InvalidOperationException: "Parallel tasks produced conflicting output for key '...'"</c>
+    /// out of <c>ScriptContext.MergeDictionary</c> (Preprod trace
+    /// <c>7873ad4e6c7a9db31c3b6401cd2c54fc</c>). <c>TaskCoordinator</c>'s parallel path catches
+    /// that exception and returns it as a failed <see cref="Result"/> rather than letting it
+    /// escape as a raw throw, so the assertion below names the fault by asserting SUCCESS with the
+    /// underlying exception text surfaced as the failure message if this regresses — the custom
+    /// message on <c>ShouldBeTrue</c> is what shows the exact production exception text when this
+    /// test fails pre-fix.
+    /// </summary>
+    [Fact]
+    public async Task ProcessExtensionsAsync_TwoExtensionsSameTaskSameOrder_ParallelExecutionSucceedsWithoutConflictingOutputException()
+    {
+        var engine = Substitute.For<ITaskExecutionEngine>();
+        var errorFactory = new ExecutionErrorFactory(new ErrorNormalizer());
+        StubEngineWithMarkerOutputs(engine, errorFactory);
+
+        var extensionA = CreateExtension("extension-a", taskKey: "shared-task", order: 1, mappingMarker: "mapped-by-a");
+        var extensionB = CreateExtension("extension-b", taskKey: "shared-task", order: 1, mappingMarker: "mapped-by-b");
+
+        var componentCacheStore = CreateComponentCacheStore(extensionA, extensionB);
+        var service = CreateService(componentCacheStore, CreateTaskCoordinator(engine));
+        using var scriptContext = CreateScriptContext();
+        var workflow = WorkflowFactory.CreateDefault();
+
+        var result = await service.ProcessExtensionsAsync(
+            null, scriptContext, workflow, ExtensionScope.Everywhere, CancellationToken.None);
+
+        // Absence of the production throw, asserted explicitly: a failure here means the parallel
+        // merge collided again, and the custom message surfaces the exact
+        // "Parallel tasks produced conflicting output for key '...'" text from the underlying
+        // InvalidOperationException.
+        result.IsSuccess.ShouldBeTrue(result.IsSuccess ? null : $"{result.Error.Code}: {result.Error.Message}");
+        result.Value!["extensionA"].ToString().ShouldBe("mapped-by-a");
+        result.Value!["extensionB"].ToString().ShouldBe("mapped-by-b");
+    }
+
+    /// <summary>
+    /// Contract 3: <c>InstanceExtensionService.FindFailedExtensionKey</c>-equivalent
+    /// behavior must name the EXTENSION that actually failed. Two extensions share a task; the
+    /// first (order 1) succeeds, the second (order 2) fails. Before the fix, failure attribution
+    /// checked the shared TASK's output key — which the first (successful) extension had already
+    /// written — so the check found "not missing" for both entries and fell through to
+    /// misattribute the failure to the first (successful) extension.
+    /// </summary>
+    [Fact]
+    public async Task ProcessExtensionsAsync_TwoExtensionsShareTaskAndOneFails_NamesTheFailingExtension()
+    {
+        var engine = Substitute.For<ITaskExecutionEngine>();
+        var errorFactory = new ExecutionErrorFactory(new ErrorNormalizer());
+        StubEngineWithMarkerOutputs(engine, errorFactory, failMarkers: ["mapped-by-b"]);
+
+        var extensionA = CreateExtension("extension-a", taskKey: "shared-task", order: 1, mappingMarker: "mapped-by-a");
+        var extensionB = CreateExtension("extension-b", taskKey: "shared-task", order: 2, mappingMarker: "mapped-by-b");
+
+        var componentCacheStore = CreateComponentCacheStore(extensionA, extensionB);
+        var service = CreateService(componentCacheStore, CreateTaskCoordinator(engine));
+        using var scriptContext = CreateScriptContext();
+        var workflow = WorkflowFactory.CreateDefault();
+
+        var result = await service.ProcessExtensionsAsync(
+            null, scriptContext, workflow, ExtensionScope.Everywhere, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Target.ShouldBe("extension-b");
+    }
+
+    /// <summary>
+    /// Contract 4 (regression guard): a single extension referencing a task it does not share with
+    /// anyone must keep working exactly as before — the common case the fix must not disturb.
+    /// </summary>
+    [Fact]
+    public async Task ProcessExtensionsAsync_OneExtensionOneTask_UnchangedBehavior()
+    {
+        var engine = Substitute.For<ITaskExecutionEngine>();
+        var errorFactory = new ExecutionErrorFactory(new ErrorNormalizer());
+        StubEngineWithMarkerOutputs(engine, errorFactory);
+
+        var extensionOnly = CreateExtension("extension-only", taskKey: "solo-task", order: 1, mappingMarker: "solo-value");
+
+        var componentCacheStore = CreateComponentCacheStore(extensionOnly);
+        var service = CreateService(componentCacheStore, CreateTaskCoordinator(engine));
+        using var scriptContext = CreateScriptContext();
+        var workflow = WorkflowFactory.CreateDefault();
+
+        var result = await service.ProcessExtensionsAsync(
+            null, scriptContext, workflow, ExtensionScope.Everywhere, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue(result.IsSuccess ? null : result.Error.Message);
+        result.Value!.Count.ShouldBe(1);
+        result.Value!["extensionOnly"].ToString().ShouldBe("solo-value");
+    }
+
+    /// <summary>
+    /// Stubs <see cref="ITaskExecutionEngine.ExecuteAsync(OnExecuteTask, System.Guid?, TaskTrigger, TaskExecutionOrigin, ScriptContext, TaskEngineExecutionOptions, CancellationToken)"/>
+    /// to mirror what <c>TaskExecutorBase.ExecuteAsync</c> does for an Extension-triggered task:
+    /// file the response under <c>options.ResponseVariableKey ?? task.Task.Key.ToVariableName()</c>
+    /// via <c>ScriptContext.SetOutputResponse</c>. The value written is the task's own
+    /// <c>Mapping.Code</c> (used purely as a per-extension marker string here, standing in for
+    /// "whatever that extension's own Mapping produced"), so two extensions sharing a task but
+    /// authoring different Mappings are asserted to keep different outputs — deduplication would
+    /// collapse them onto one value, which the tests must catch.
+    /// </summary>
+    private static void StubEngineWithMarkerOutputs(
+        ITaskExecutionEngine engine,
+        IExecutionErrorFactory errorFactory,
+        HashSet<string>? failMarkers = null)
+    {
+        engine.ExecuteAsync(
+                Arg.Any<OnExecuteTask>(),
+                Arg.Any<System.Guid?>(),
+                Arg.Any<TaskTrigger>(),
+                Arg.Any<TaskExecutionOrigin>(),
+                Arg.Any<ScriptContext>(),
+                Arg.Any<TaskEngineExecutionOptions>(),
+                Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                var task = call.Arg<OnExecuteTask>();
+                var ctx = call.Arg<ScriptContext>();
+                var options = call.Arg<TaskEngineExecutionOptions>();
+                var marker = task.Mapping.Code;
+
+                if (failMarkers is not null && failMarkers.Contains(marker))
+                {
+                    var error = errorFactory.CreateFromException(
+                        new System.InvalidOperationException($"Task '{task.Task.Key}' failed for marker '{marker}'"),
+                        task.Task.Key,
+                        "Http",
+                        0);
+
+                    return Task.FromResult(Result<TasksExecutionResult>.Ok(
+                        TasksExecutionResult.Failure(task, error)));
+                }
+
+                var key = options.ResponseVariableKey ?? task.Task.Key.ToVariableName();
+                ctx.SetOutputResponse(marker, key);
+
+                return Task.FromResult(Result<TasksExecutionResult>.Ok(
+                    TasksExecutionResult.Success([TaskExecutionSummary.Success(task.Task.Key, "Http")])));
+            });
+    }
+
+    /// <summary>
+    /// Builds a REAL <see cref="TaskCoordinator"/> (not a substitute) over the given stub engine,
+    /// so the tests exercise the actual grouping/parallel-merge/optionsRefiner-composition logic
+    /// that produced the Preprod fault, not a re-implementation of it.
+    /// </summary>
+    private static TaskCoordinator CreateTaskCoordinator(ITaskExecutionEngine engine)
+    {
+        var services = new ServiceCollection().AddSingleton(engine).BuildServiceProvider();
+        return new TaskCoordinator(
+            engine,
+            services.GetRequiredService<IServiceScopeFactory>(),
+            Substitute.For<IConditionEvaluator>(),
+            Substitute.For<ITimerEvaluator>(),
+            new ExecutionErrorFactory(new ErrorNormalizer()),
+            NullLogger<TaskCoordinator>.Instance);
+    }
+
+    private static IComponentCacheStore CreateComponentCacheStore(params Extension[] extensions)
+    {
+        var componentCacheStore = Substitute.For<IComponentCacheStore>();
+        componentCacheStore
+            .GetAllExtensionsAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Result<IEnumerable<Extension>>.Ok(extensions.ToList()));
+        return componentCacheStore;
+    }
+
+    private static InstanceExtensionService CreateService(
+        IComponentCacheStore componentCacheStore,
+        ITaskCoordinatorExtended taskCoordinator)
+    {
+        var runtimeInfoProvider = Substitute.For<IRuntimeInfoProvider>();
+        runtimeInfoProvider.Domain.Returns("bank");
+
+        return new InstanceExtensionService(
+            componentCacheStore,
+            taskCoordinator,
+            runtimeInfoProvider,
+            Substitute.For<ICurrentSchema>(),
+            Substitute.For<IServiceScopeFactory>(),
+            NullLogger<InstanceExtensionService>.Instance);
+    }
+
+    private static ScriptContext CreateScriptContext() =>
+        new ScriptContext.Builder(NullLogger<ScriptContext>.Instance)
+            .SetRuntime(Substitute.For<IRuntimeInfoProvider>())
+            .Build();
+
+    /// <summary>
+    /// Builds an <see cref="Extension"/> via JSON deserialization — its constructor is private, so
+    /// this is the only construction route available to tests (same approach as
+    /// <c>ComponentCacheStoreTests.CreateMockExtension</c>). <paramref name="mappingMarker"/> is
+    /// stored verbatim as the OnExecuteTask's <c>Mapping.Code</c>; it is never decoded/compiled by
+    /// these tests, only read back by the stub engine as a per-extension identity marker.
+    /// </summary>
+    private static Extension CreateExtension(
+        string extensionKey,
+        string taskKey,
+        int order,
+        string mappingMarker,
+        string taskDomain = "bank",
+        string taskVersion = "1.0.0")
+    {
+        var json = $$"""
+        {
+            "type": 1,
+            "scope": 3,
+            "task": {
+                "order": {{order}},
+                "task": {
+                    "key": "{{taskKey}}",
+                    "domain": "{{taskDomain}}",
+                    "version": "{{taskVersion}}",
+                    "flow": "sys-tasks"
+                },
+                "mapping": {
+                    "location": "inline",
+                    "code": "{{mappingMarker}}"
+                }
+            }
+        }
+        """;
+
+        var extension = JsonSerializer.Deserialize<Extension>(json,
+            new JsonSerializerOptions { PropertyNameCaseInsensitive = true })!;
+        extension.SetReference(new Reference(extensionKey, "bank", "sys-extensions", "1.0.0"));
+        return extension;
     }
 }
