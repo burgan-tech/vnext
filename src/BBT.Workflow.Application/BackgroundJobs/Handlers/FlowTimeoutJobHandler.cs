@@ -146,12 +146,9 @@ public sealed class FlowTimeoutJobHandler(
                         return;
                     }
 
-                    // Re-read instance to get updated Duration for metrics (set by HandleFinishStep if Finish state)
-                    var updatedInstance =
-                        await instanceRepository.FindAsync(p => p.Id == args.InstanceId, true, cancellationToken);
-                    var durationSeconds = updatedInstance?.Duration?.TotalSeconds;
-
-
+                    // NOTE: the post-pipeline instance re-read that used to live here fed the
+                    // removed prometheus timeout metric and nothing else — a full-detail
+                    // cartesian load per timeout with no remaining consumer.
                     activity?.SetStatus(ActivityStatusCode.Ok);
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)

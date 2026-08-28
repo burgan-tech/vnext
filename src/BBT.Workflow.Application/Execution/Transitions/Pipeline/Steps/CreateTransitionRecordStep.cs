@@ -210,8 +210,8 @@ public sealed class CreateTransitionRecordStep(
         InstanceTransition instanceTransition,
         bool isReusedRecord)
     {
-        context.Items["TransitionRecordId"] = instanceTransition.Id;
-        context.Items["InstanceTransition"] = instanceTransition;
+        context.Items[WellKnownItems.TransitionRecordId] = instanceTransition.Id;
+        context.Items[WellKnownItems.InstanceTransition] = instanceTransition;
         // A FRESH record id cannot have InstanceTask journal rows yet, so the task engine may skip
         // its per-task idempotency probe; a reused (retry) record keeps the probe, which is what
         // lets already-persisted task rows be found and reused instead of duplicated.

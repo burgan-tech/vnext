@@ -24,9 +24,10 @@ public sealed class FinalizeTransitionStep(
         
         if (recordId != Guid.Empty)
         {
-            // Railway chain: Load -> Complete -> Record metric -> Persist
+            // Prefer the record created/reused earlier in this pipeline. Resume and recovery
+            // paths may not carry it, so retain the repository read as a fallback.
             await Result.Ok(recordId)
-                .BindAsync(id => LoadTransitionRecordAsync(id, cancellationToken))
+                .BindAsync(id => ResolveTransitionRecordAsync(context, id, cancellationToken))
                 .Tap(transition => transition?.Completed(
                     context.Instance.GetCurrentState,
                     context.Instance.EffectiveState,
@@ -70,17 +71,26 @@ public sealed class FinalizeTransitionStep(
     }
 
     /// <summary>
-    /// Loads the transition record from repository.
+    /// Resolves the transition record already carried by the pipeline, falling back to a
+    /// read-only repository lookup for resume/recovery paths that only carry its identifier.
     /// </summary>
-    private async Task<Result<InstanceTransition?>> LoadTransitionRecordAsync(
+    private async Task<Result<InstanceTransition?>> ResolveTransitionRecordAsync(
+        TransitionExecutionContext context,
         Guid recordId,
         CancellationToken cancellationToken)
     {
+        if (context.Items.TryGetValue(WellKnownItems.InstanceTransition, out var value)
+            && value is InstanceTransition carriedTransition
+            && carriedTransition.Id == recordId)
+        {
+            return Result<InstanceTransition?>.Ok(carriedTransition);
+        }
+
         // Read-only on purpose: Completed() below only computes the values UpdateCompletedAsync
         // writes set-based. A tracked load made the ambient UoW's later flush rewrite the same
         // row a second time on every transition.
-        var transition = await instanceTransitionRepository.FindAsReadOnlyAsync(recordId, cancellationToken);
-        return Result<InstanceTransition?>.Ok(transition);
+        var loadedTransition = await instanceTransitionRepository.FindAsReadOnlyAsync(recordId, cancellationToken);
+        return Result<InstanceTransition?>.Ok(loadedTransition);
     }
 
     /// <summary>

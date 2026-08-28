@@ -146,6 +146,13 @@ public sealed class RunOnEntryTasksStep(
         TransitionExecutionContext context,
         CancellationToken cancellationToken)
     {
+        // A transition record inserted by this pipeline run cannot have task journal rows yet.
+        // Keep the lookup only for retries, where the original transition record is reused.
+        if (IsFreshTransitionRecord(context))
+        {
+            return [];
+        }
+
         var transitionId = GetTransitionRecordId(context);
         if (!transitionId.HasValue)
         {

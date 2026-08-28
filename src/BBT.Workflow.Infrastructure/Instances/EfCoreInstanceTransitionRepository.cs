@@ -77,6 +77,15 @@ public class EfCoreInstanceTransitionRepository(
                     .SetProperty(p => p.Duration, transition.Duration),
                 cancellationToken
             );
+
+        // The normal pipeline now finalizes the already-carried transition instance. Because
+        // ExecuteUpdate bypasses change tracking, mark that tracked instance synchronized so a
+        // later ambient SaveChanges does not issue a duplicate UPDATE for the same completion.
+        var entry = context.Entry(transition);
+        if (entry.State != EntityState.Detached)
+        {
+            entry.State = EntityState.Unchanged;
+        }
     }
 
     /// <inheritdoc />
