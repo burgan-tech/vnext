@@ -88,6 +88,16 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Include-free lookup by primary key with NO key-string fallback — the id counterpart of
+    /// <see cref="FindActiveByKeyLeanAsync"/>. Use when the caller holds a typed <see cref="Guid"/>
+    /// id (e.g. the start idempotency probe): the generic identifier resolvers would compare
+    /// <see cref="Instance.Key"/> against the id string after a miss, which is both meaningless
+    /// for a typed id and an extra full-row query.
+    /// </summary>
+    Task<Instance?> FindLeanByIdAsync(Guid id,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Loads a read-only (no-tracking) instance with the full <see cref="Instance.DataList"/>
     /// history. Dedicated to <c>GetInstanceHistoryAsync</c> where detached entities are sufficient.
     /// </summary>
