@@ -112,7 +112,7 @@ public sealed class HttpTaskExecutor : TaskExecutorBase<HttpTask>
         TaskExecutorContext context,
         CancellationToken cancellationToken)
     {
-        UpdateScriptContextWithResponse(task.Key, invocationResult, context.ScriptContext);
+        UpdateScriptContextWithResponse(task.Key, invocationResult, context.ScriptContext, context.ResponseVariableKey);
 
         var mapping = context.OnExecuteTask.Mapping;
         if (mapping is null || !mapping.HasMappingCode)

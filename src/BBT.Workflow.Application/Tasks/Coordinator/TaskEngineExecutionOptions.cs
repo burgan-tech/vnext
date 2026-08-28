@@ -72,4 +72,25 @@ public sealed record TaskEngineExecutionOptions
     /// actually exists; infrastructure failures leave it null.
     /// </summary>
     public bool CaptureResponse { get; init; }
+
+    /// <summary>
+    /// Overrides the script-context variable name this task's response is filed under — both the
+    /// <c>TaskResponse</c> merge (<c>TaskExecutorBase.UpdateScriptContextWithResponse</c>) and, for
+    /// Extension-triggered tasks, the raw <c>OutputResponse</c> entry (<c>SetOutputResponse</c>).
+    /// Null means "derive from the task key" via <c>taskKey.ToVariableName()</c> — today's
+    /// behavior, unchanged for every caller that does not set this.
+    /// </summary>
+    /// <remarks>
+    /// WHY: an extension's output belongs to the EXTENSION, not to the task it happens to
+    /// reference. Two extensions can point at the same task key while applying different
+    /// <c>Mapping</c>s to interpret the response differently — keying purely off <c>taskKey</c>
+    /// makes the second extension's write silently clobber the first's entry, in both
+    /// <c>TaskResponse</c> and <c>OutputResponse</c>. The Preprod crash traced back to the
+    /// <c>TaskResponse</c> merge specifically, so both sites must honor this, not just one. Never
+    /// gate the new key on the trigger type (<c>TaskTrigger.Extension</c>) alone — custom Functions
+    /// share that trigger value and read their output by task key (see
+    /// <c>FunctionAppService.cs</c>); this option, left null by every caller except the extension
+    /// path, is the only thing that may change the key.
+    /// </remarks>
+    public string? ResponseVariableKey { get; init; }
 }

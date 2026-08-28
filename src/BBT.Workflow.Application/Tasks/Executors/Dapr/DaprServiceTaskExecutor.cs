@@ -118,7 +118,7 @@ public sealed class DaprServiceTaskExecutor : TaskExecutorBase<DaprServiceTask>
             return Result<object?>.Ok(invocationResult.Data);
         }
 
-        UpdateScriptContextWithResponse(task.Key, invocationResult, context.ScriptContext);
+        UpdateScriptContextWithResponse(task.Key, invocationResult, context.ScriptContext, context.ResponseVariableKey);
 
         var result = await ResultExtensions.TryAsync<object?>(async ct =>
         {

@@ -163,7 +163,7 @@ public sealed class CacheAsideTaskExecutor : TaskExecutorBase<CacheAsideTask>
         }
 
         // Expose the cached/raw result on the script context so the mapping's OutputHandler can read it.
-        UpdateScriptContextWithResponse(task.Key, invocationResult, context.ScriptContext);
+        UpdateScriptContextWithResponse(task.Key, invocationResult, context.ScriptContext, context.ResponseVariableKey);
 
         return await ResultExtensions.TryAsync<object?>(async ct =>
         {

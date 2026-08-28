@@ -48,6 +48,15 @@ public interface ITaskCoordinatorExtended : ITaskCoordinator
     /// <c>InstanceTask</c> journal row can exist for its id, so the engine skips the per-task
     /// idempotency probe. MUST stay false on retries, where the probe reuses previous rows.
     /// </param>
+    /// <param name="optionsRefiner">
+    /// Optional per-task override applied AFTER the built-in duplicate-task-key
+    /// <see cref="TaskEngineExecutionOptions.JournalTaskKey"/> disambiguation, so the two compose
+    /// instead of competing. Lets a caller (e.g. the extension path) layer a per-task
+    /// <see cref="TaskEngineExecutionOptions.ResponseVariableKey"/> — or any other option — on top
+    /// of what this call would otherwise resolve, without having to duplicate the grouping/ordering
+    /// logic itself. Receives the task definition and the options resolved for it so far, and
+    /// returns the options to actually use for that task.
+    /// </param>
     /// <param name="cancellationToken">Cancellation token for async operation control.</param>
     /// <returns>A Result containing detailed execution information including task errors.</returns>
     Task<Result<TasksExecutionResult>> ExecuteWithDetailsAsync(
@@ -58,5 +67,6 @@ public interface ITaskCoordinatorExtended : ITaskCoordinator
         ScriptContext context,
         IEnumerable<string> completedTaskIds,
         bool skipJournalProbe = false,
+        Func<OnExecuteTask, TaskEngineExecutionOptions, TaskEngineExecutionOptions>? optionsRefiner = null,
         CancellationToken cancellationToken = default);
 }

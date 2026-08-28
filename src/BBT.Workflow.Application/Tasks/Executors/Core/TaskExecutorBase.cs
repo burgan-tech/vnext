@@ -129,7 +129,11 @@ public abstract class TaskExecutorBase<TTask>(ILogger logger) : ITaskExecutor
         
         if (context.TaskTrigger == TaskTrigger.Extension)
         {
-            context.ScriptContext.SetOutputResponse(outputResult.Value, taskKey.ToVariableName());
+            // The Extension-trigger gate is unchanged (pre-existing); only the KEY inside it can
+            // move, and only when the caller opted in via ResponseVariableKey — never inferred from
+            // the trigger itself, since custom Functions also run with TaskTrigger.Extension and
+            // must keep reading their output by task key (see TaskEngineExecutionOptions).
+            context.ScriptContext.SetOutputResponse(outputResult.Value, context.ResponseVariableKey ?? taskKey.ToVariableName());
         }
 
 
@@ -330,12 +334,21 @@ public abstract class TaskExecutorBase<TTask>(ILogger logger) : ITaskExecutor
     /// <param name="taskKey">The task key used to generate the variable name.</param>
     /// <param name="result">The task invocation result (can be null).</param>
     /// <param name="context">The script context to update.</param>
+    /// <param name="responseVariableKey">
+    /// Caller-supplied override for the variable name (from
+    /// <c>TaskExecutorContext.ResponseVariableKey</c>). Null means "derive from
+    /// <paramref name="taskKey"/>" — today's behavior. This is the site the Preprod crash traced
+    /// back to (the <c>TaskResponse</c> merge): two extensions sharing a task key overwrote each
+    /// other's entry here, so this parameter must be honored on every call site, not just the
+    /// Extension-only <c>OutputResponse</c> write in <see cref="ExecuteAsync"/>.
+    /// </param>
     protected static void UpdateScriptContextWithResponse(
         string taskKey,
         TaskInvocationResult? result,
-        ScriptContext context)
+        ScriptContext context,
+        string? responseVariableKey = null)
     {
-        var variableKey = taskKey.ToVariableName();
+        var variableKey = responseVariableKey ?? taskKey.ToVariableName();
         var response = new StandardTaskResponse
         {
             IsSuccess = result?.IsSuccess == true,

@@ -102,7 +102,7 @@ public sealed class ScriptTaskExecutor : TaskExecutorBase<ScriptTask>
         }
         
         // Update script context with response for output handler
-        UpdateScriptContextWithResponse(task.Key, result.Value, context.ScriptContext);
+        UpdateScriptContextWithResponse(task.Key, result.Value, context.ScriptContext, context.ResponseVariableKey);
 
         return result;
     }

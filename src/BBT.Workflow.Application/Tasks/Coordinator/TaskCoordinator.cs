@@ -136,6 +136,7 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
         ScriptContext context,
         IEnumerable<string> completedTaskIds,
         bool skipJournalProbe = false,
+        Func<OnExecuteTask, TaskEngineExecutionOptions, TaskEngineExecutionOptions>? optionsRefiner = null,
         CancellationToken cancellationToken = default)
     {
         // One shared options instance per call: fresh-record executions skip the guaranteed-empty
@@ -188,6 +189,21 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
             // not depend on which path happens to run the group.
             LogDuplicateTaskKeysIfAny(group.Key, groupTasks, taskTrigger, context.Instance?.Id, context.Transition?.Key);
             var groupOptions = ResolveGroupEngineOptions(groupTasks, engineOptions);
+
+            // Caller-supplied per-task override (e.g. the extension path setting a distinct
+            // ResponseVariableKey per extension). Applied AFTER the duplicate-key JournalTaskKey
+            // disambiguation above so the two disambiguators compose instead of competing — the
+            // refiner only ever adds to what ResolveGroupEngineOptions already resolved, never
+            // races it.
+            if (optionsRefiner is not null)
+            {
+                var refined = new TaskEngineExecutionOptions[groupTasks.Count];
+                for (var i = 0; i < groupTasks.Count; i++)
+                {
+                    refined[i] = optionsRefiner(groupTasks[i], groupOptions[i]);
+                }
+                groupOptions = refined;
+            }
 
             if (groupTasks.Count == 1)
             {

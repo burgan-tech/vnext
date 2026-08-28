@@ -94,4 +94,54 @@ public sealed class TaskCoordinatorGroupEngineOptionsTests
         resolved[0].JournalTaskKey.ShouldBe("fan-out-docs#3");
         resolved[1].JournalTaskKey.ShouldBe("fan-out-docs#3");
     }
+
+    /// <summary>
+    /// A <see cref="TaskEngineExecutionOptions.ResponseVariableKey"/> the caller already set (the
+    /// extension path's per-task override) must survive this helper untouched — including for a
+    /// repeated task key, where the <see cref="TaskEngineExecutionOptions.JournalTaskKey"/>
+    /// disambiguation must still happen ALONGSIDE it, not instead of it. Mirrors
+    /// <see cref="ResolveGroupEngineOptions_PreSetJournalTaskKey_IsNeverOverwritten"/> for the new
+    /// field: the helper's `options with { JournalTaskKey = ... }` only ever touches that one
+    /// property, so every other caller-set field (this one included) rides through unchanged.
+    /// </summary>
+    [Fact]
+    public void ResolveGroupEngineOptions_PreSetResponseVariableKey_IsNeverOverwritten_EvenWithDuplicateTaskKeys()
+    {
+        var groupTasks = new List<OnExecuteTask>
+        {
+            OnExecuteTask.Create(0, WorkflowTaskFactory.CreateHttpTask("script-task"), ScriptCode.FromNative(string.Empty)),
+            OnExecuteTask.Create(0, WorkflowTaskFactory.CreateHttpTask("script-task"), ScriptCode.FromNative(string.Empty)),
+        };
+        var presetOptions = TaskEngineExecutionOptions.Default with { ResponseVariableKey = "extension-output-key" };
+
+        var resolved = TaskCoordinator.ResolveGroupEngineOptions(groupTasks, presetOptions);
+
+        // ResponseVariableKey survives untouched on every occurrence...
+        resolved[0].ResponseVariableKey.ShouldBe("extension-output-key");
+        resolved[1].ResponseVariableKey.ShouldBe("extension-output-key");
+        // ...while the JournalTaskKey duplicate-suffix logic still runs alongside it.
+        resolved[0].JournalTaskKey.ShouldBe("script-task#0");
+        resolved[1].JournalTaskKey.ShouldBe("script-task#1");
+    }
+
+    /// <summary>
+    /// The helper must never INVENT a <see cref="TaskEngineExecutionOptions.ResponseVariableKey"/>
+    /// on its own — it is opt-in only. A group with no caller-set value (the overwhelming common
+    /// case: every onExecute/onEntry/onExit task) keeps it null even when the JournalTaskKey
+    /// disambiguation fires for a duplicate key.
+    /// </summary>
+    [Fact]
+    public void ResolveGroupEngineOptions_NoResponseVariableKeySet_NeverInventsOne()
+    {
+        var groupTasks = new List<OnExecuteTask>
+        {
+            OnExecuteTask.Create(0, WorkflowTaskFactory.CreateHttpTask("script-task"), ScriptCode.FromNative(string.Empty)),
+            OnExecuteTask.Create(0, WorkflowTaskFactory.CreateHttpTask("script-task"), ScriptCode.FromNative(string.Empty)),
+        };
+
+        var resolved = TaskCoordinator.ResolveGroupEngineOptions(groupTasks, TaskEngineExecutionOptions.Default);
+
+        resolved[0].ResponseVariableKey.ShouldBeNull();
+        resolved[1].ResponseVariableKey.ShouldBeNull();
+    }
 }

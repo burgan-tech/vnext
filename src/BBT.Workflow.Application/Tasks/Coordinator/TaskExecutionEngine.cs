@@ -615,9 +615,15 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
                 onExecuteTask, infraError, [], (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds));
         }
 
-        // 7. Create executor context
+        // 7. Create executor context. ResponseVariableKey threads options.ResponseVariableKey down
+        // to TaskExecutorBase's two response-key derivation points (see TaskEngineExecutionOptions
+        // for why); Domain's TaskExecutorContext carries it as a plain string since it cannot
+        // reference this Application-layer options type.
         var executorContext = new TaskExecutorContext(
-            task, onExecuteTask, context, instanceTransitionId, taskTrigger, origin);
+            task, onExecuteTask, context, instanceTransitionId, taskTrigger, origin)
+        {
+            ResponseVariableKey = options.ResponseVariableKey
+        };
 
         // 8. Execute task
         var executeResult = await executorResult.Value!.ExecuteAsync(executorContext, cancellationToken);

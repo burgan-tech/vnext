@@ -46,4 +46,13 @@ public sealed record TaskExecutorContext(
     /// ask for; each entry is actually a <c>Func&lt;T&gt;</c> for that entry's target type.
     /// </summary>
     public Dictionary<(ScriptCode Mapping, Type Target), object>? CompiledMappingFactories { get; set; }
+
+    /// <summary>
+    /// Overrides the script-context variable name this task's response/output is filed under. Null
+    /// means "derive from the task key" (today's behavior). Populated from the Application-layer
+    /// <c>TaskEngineExecutionOptions.ResponseVariableKey</c> by the execution engine when it builds
+    /// this context; kept as a plain string here rather than referencing that type, since Domain
+    /// must not depend on Application.
+    /// </summary>
+    public string? ResponseVariableKey { get; init; }
 }
