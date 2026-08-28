@@ -220,6 +220,50 @@ public sealed class TaskCoordinatorDuplicateTaskKeyTests
             .ShouldBeFalse();
     }
 
+    /// <summary>
+    /// After the extension-response-key fix, two extensions sharing a task Reference at the same
+    /// order file their outputs under their OWN keys (<c>TaskEngineExecutionOptions.ResponseVariableKey</c>,
+    /// set per-extension by <c>InstanceExtensionService</c>'s <c>optionsRefiner</c>) — this is a
+    /// documented, intentional authoring pattern (see <c>InstanceExtensionService.ExecuteExtensionsInternalAsync</c>),
+    /// not a mistake. It also cannot collide in the task journal: <c>ExtensionTaskPersistenceStrategy</c>
+    /// never persists an <c>InstanceTask</c> row for Extension-origin executions, so the
+    /// <c>JournalTaskKey</c> "#0"/"#1" suffixing <c>ResolveGroupEngineOptions</c> still computes has
+    /// nothing to disambiguate for this hook. The warning (which reads as "this is usually an
+    /// authoring mistake — give the entries distinct orders") must not fire for
+    /// <see cref="TaskTrigger.Extension"/> — for that hook, distinct orders would be advice with no
+    /// remedy to give, aimed at a shape that was never broken.
+    /// </summary>
+    [Fact]
+    public async Task ExecuteWithDetailsAsync_DuplicateTaskKeySameOrder_ExtensionHook_DoesNotLogWarning()
+    {
+        var engine = Substitute.For<ITaskExecutionEngine>();
+        var extensionTaskFirst = WorkflowTaskFactory.CreateHttpTask("shared-task");
+        var extensionTaskSecond = WorkflowTaskFactory.CreateHttpTask("shared-task");
+        var definitions = new[]
+        {
+            OnExecuteTask.Create(0, extensionTaskFirst, ScriptCode.FromNative(string.Empty)),
+            OnExecuteTask.Create(0, extensionTaskSecond, ScriptCode.FromNative(string.Empty))
+        };
+
+        var observedOptions = new ConcurrentDictionary<OnExecuteTask, TaskEngineExecutionOptions>();
+        StubEngine(engine, observedOptions);
+
+        var logger = Substitute.For<ILogger<TaskCoordinator>>();
+        logger.IsEnabled(Arg.Any<LogLevel>()).Returns(true);
+        var services = new ServiceCollection().AddSingleton(engine).BuildServiceProvider();
+        var coordinator = CreateCoordinator(engine, services, logger);
+        var context = CreateContext();
+
+        await coordinator.ExecuteWithDetailsAsync(
+            definitions, null, TaskTrigger.Extension, TaskExecutionOrigin.Extension, context);
+
+        logger.ReceivedCalls()
+            .Any(call => call.GetMethodInfo().Name == nameof(ILogger.Log)
+                         && call.GetArguments()[1] is EventId id
+                         && id.Id == 10155)
+            .ShouldBeFalse();
+    }
+
     private static void StubEngine(
         ITaskExecutionEngine engine,
         ConcurrentDictionary<OnExecuteTask, TaskEngineExecutionOptions> observedOptions)

@@ -978,6 +978,12 @@ public static partial class WorkflowLogs
     /// carries hard errors (see <c>ValidationErrors</c>/<c>AddError</c>) with no warning severity,
     /// so this is logged here at execution time instead of being folded into
     /// <c>WorkflowValidator</c> — do not downgrade this to a validation error.
+    /// <c>TaskCoordinator.LogDuplicateTaskKeysIfAny</c> never calls this for the Extension hook:
+    /// two extensions sharing one task Reference is a supported pattern (each carries its own
+    /// <c>Mapping</c> and files its output under its own key, not the task's), and this warning's
+    /// remedy ("give the entries distinct orders") targets a journal-key collision that cannot
+    /// happen there — Extension-origin task executions are never persisted to the journal at all
+    /// (<c>ExtensionTaskPersistenceStrategy</c>).
     /// </summary>
     [LoggerMessage(
         EventId = 10155,

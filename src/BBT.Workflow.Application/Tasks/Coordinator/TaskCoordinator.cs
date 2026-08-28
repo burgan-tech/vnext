@@ -515,6 +515,21 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
     /// or rejected outright — <c>WorkflowValidationResult</c> has no warning severity to carry this
     /// at definition-validation time (only hard errors), so it is logged here at execution time.
     /// </summary>
+    /// <remarks>
+    /// Never fires for <see cref="TaskTrigger.Extension"/>. Two extensions sharing one task
+    /// Reference at the same order is a documented, intentional pattern (see
+    /// <c>InstanceExtensionService.ExecuteExtensionsInternalAsync</c>): each extension owns its own
+    /// <c>OnExecuteTask</c> — with its own <c>Mapping</c>/<c>ErrorBoundary</c> — and files its
+    /// output under its own <c>ResponseVariableKey</c>, so the two writes never collide. The
+    /// remedy this warning carries ("give the entries distinct orders") would also be actively
+    /// wrong advice for this hook: it targets the journal-key collision that
+    /// <see cref="ResolveGroupEngineOptions"/>'s "#0"/"#1" suffixing exists to prevent, but
+    /// <c>ExtensionTaskPersistenceStrategy</c> never persists an <c>InstanceTask</c> row for
+    /// Extension-origin executions in the first place — there is no journal entry to collide, so
+    /// there is nothing for that suffixing to disambiguate here. For every OTHER hook (transition
+    /// OnEntry/OnExit/OnExecute/Manual) the duplicate is still almost certainly a copy-paste
+    /// mistake and must keep warning with the current remedy.
+    /// </remarks>
     private void LogDuplicateTaskKeysIfAny(
         int order,
         IReadOnlyList<OnExecuteTask> groupTasks,
@@ -522,7 +537,7 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
         Guid? instanceId,
         string? transitionKey)
     {
-        if (groupTasks.Count < 2)
+        if (groupTasks.Count < 2 || taskTrigger == TaskTrigger.Extension)
             return;
 
         var duplicates = groupTasks
