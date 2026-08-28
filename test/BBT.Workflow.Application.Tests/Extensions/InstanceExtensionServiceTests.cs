@@ -223,6 +223,43 @@ public class InstanceExtensionServiceTests
     }
 
     /// <summary>
+    /// Regression guard for the fix-round-1 finding: <c>WorkflowValidator</c> has no uniqueness
+    /// check on a workflow's <c>Extensions</c>, so the SAME extension reference can legally be
+    /// listed twice. <c>FetchExtensionsFromReferencesAsync</c> resolves references in parallel, and
+    /// <c>CacheSet._inFlightResolutions</c> coalesces two concurrent identical resolutions into ONE
+    /// <c>Lazy&lt;Task&lt;Result&lt;T&gt;&gt;&gt;</c> — both fetches hand back the SAME
+    /// <c>Extension</c> instance, hence the SAME <c>OnExecuteTask</c> instance (no equality
+    /// override), i.e. a genuine duplicate KEY. This test simulates that by handing the SAME
+    /// <see cref="Extension"/> object to the resolved list twice. A <c>Dictionary.ToDictionary</c>
+    /// build of the extension/task map throws <c>ArgumentException</c> on that duplicate key,
+    /// which would break every read of such a workflow — a regression versus pre-fix behavior
+    /// (both executions produced identical values, so the merge's equivalence check silently
+    /// accepted them). The fix's last-wins loop must not throw and must still resolve correctly.
+    /// </summary>
+    [Fact]
+    public async Task ProcessExtensionsAsync_SameExtensionReferenceListedTwice_ResolvesToSameInstanceAndSucceeds()
+    {
+        var engine = Substitute.For<ITaskExecutionEngine>();
+        var errorFactory = new ExecutionErrorFactory(new ErrorNormalizer());
+        StubEngineWithMarkerOutputs(engine, errorFactory);
+
+        var extension = CreateExtension("extension-a", taskKey: "solo-task", order: 1, mappingMarker: "solo-value");
+
+        // The SAME instance twice — this is what CacheSet coalescing hands back, not two extensions
+        // that merely look alike.
+        var componentCacheStore = CreateComponentCacheStore(extension, extension);
+        var service = CreateService(componentCacheStore, CreateTaskCoordinator(engine));
+        using var scriptContext = CreateScriptContext();
+        var workflow = WorkflowFactory.CreateDefault();
+
+        var result = await service.ProcessExtensionsAsync(
+            null, scriptContext, workflow, ExtensionScope.Everywhere, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue(result.IsSuccess ? null : result.Error.Message);
+        result.Value!["extensionA"].ToString().ShouldBe("solo-value");
+    }
+
+    /// <summary>
     /// Stubs <see cref="ITaskExecutionEngine.ExecuteAsync(OnExecuteTask, System.Guid?, TaskTrigger, TaskExecutionOrigin, ScriptContext, TaskEngineExecutionOptions, CancellationToken)"/>
     /// to mirror what <c>TaskExecutorBase.ExecuteAsync</c> does for an Extension-triggered task:
     /// file the response under <c>options.ResponseVariableKey ?? task.Task.Key.ToVariableName()</c>

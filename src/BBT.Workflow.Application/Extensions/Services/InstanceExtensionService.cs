@@ -221,9 +221,24 @@ public sealed class InstanceExtensionService(
         // (sequential orders) or collide during the parallel merge with
         // InvalidOperationException: "Parallel tasks produced conflicting output for key '...'"
         // (same order) — the Preprod fault this fixes.
-        var responseKeyByTask = executableExtensions.ToDictionary(
-            ext => ext.Task,
-            ext => ext.Key.ToVariableName());
+        //
+        // Built with a plain last-wins loop, NOT ToDictionary: WorkflowValidator has no uniqueness
+        // check on Extensions, so a workflow can legally list the SAME extension reference twice.
+        // FetchExtensionsFromReferencesAsync resolves references in parallel, and
+        // CacheSet._inFlightResolutions coalesces concurrent identical resolutions into one
+        // Lazy<Task<Result<T>>> — so both fetches hand back the SAME Extension instance, hence the
+        // SAME OnExecuteTask instance (OnExecuteTask is a sealed class with no equality override,
+        // so this is a genuine duplicate KEY, not just a duplicate value). ToDictionary throws
+        // ArgumentException on that duplicate key, breaking a read that worked before this fix
+        // (both executions produced identical values pre-fix, so the merge's JsonEquivalent check
+        // accepted them). Last-wins never throws, and is also semantically correct here: a
+        // duplicated reference belongs to one extension, so every entry maps to the same key
+        // anyway.
+        var responseKeyByTask = new Dictionary<OnExecuteTask, string>();
+        foreach (var ext in executableExtensions)
+        {
+            responseKeyByTask[ext.Task] = ext.Key.ToVariableName();
+        }
 
         // Execute tasks with fail-fast behavior.
         // Note: if a task has AcceptedStatusCodes and the response status code matches,
@@ -242,7 +257,12 @@ public sealed class InstanceExtensionService(
             skipJournalProbe: false,
             optionsRefiner: (task, options) => options with
             {
-                ResponseVariableKey = responseKeyByTask[task]
+                // TryGetValue, not the indexer: a task not found here would be a caller bug
+                // (TaskCoordinator only ToList/Where/GroupBy's the same instances, never clones
+                // them), but degrading to null — which falls back to today's task-key behavior in
+                // TaskExecutorBase — is the right failure mode rather than a thrown
+                // KeyNotFoundException.
+                ResponseVariableKey = responseKeyByTask.TryGetValue(task, out var key) ? key : null
             },
             cancellationToken: cancellationToken);
 
