@@ -108,7 +108,11 @@ public sealed class InstanceDataWriteService(
             // VersionNo is line-scoped: the next ordinal WITHIN the target Version string.
             var row = new InstanceData(Guid.NewGuid(), instance.Id, plan.Version, plan.Content, isLatest: true)
             {
-                VersionNo = await ReadLineMaxAsync(context, instance.Id, plan.Version, cancellationToken) + 1
+                // A new semantic-version line always starts at one. Only same-version appends
+                // need MAX(VersionNo), which removes one query from every version increment.
+                VersionNo = head is null || !string.Equals(plan.Version, head.Version, StringComparison.Ordinal)
+                    ? 1
+                    : await ReadLineMaxAsync(context, instance.Id, plan.Version, cancellationToken) + 1
             };
 
             await PersistAsync(context, instance, row, demoteStaleLatest: head is not null, cancellationToken);
@@ -359,8 +363,8 @@ public sealed class InstanceDataWriteService(
     /// <summary>
     /// Reads the target version line's current maximum VersionNo under the lock. VersionNo is
     /// line-scoped: an ordinal WITHIN one semantic Version string (1-based), not an
-    /// instance-global sequence — each new Version line restarts at 1 and same-version appends
-    /// (<c>VersionStrategy.None</c>) continue their own line.
+    /// instance-global sequence. Strategy appends whose planned version differs from the head
+    /// start directly at 1; only same-version appends reach this query.
     /// </summary>
     private async Task<long> ReadLineMaxAsync(
         WorkflowDbContext context,

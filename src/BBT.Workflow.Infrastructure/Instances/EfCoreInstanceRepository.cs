@@ -455,6 +455,18 @@ public sealed class EfCoreInstanceRepository(
             .FirstOrDefaultAsync(cancellationToken));
     }
 
+    /// <inheritdoc />
+    public async Task<Instance?> FindLeanByIdAsync(Guid id,
+        CancellationToken cancellationToken = default)
+    {
+        // Pure PK probe: no includes, no key-string fallback. See the interface doc — the
+        // identifier resolvers' key fallback is wasted work when the caller holds a typed Guid.
+        var query = await GetQueryableAsync();
+
+        return MarkIfPartiallyLoaded(await query
+            .FirstOrDefaultAsync(i => i.Id == id, cancellationToken));
+    }
+
     public async Task<Instance?> FindByIdentifierAsReadOnlyAsync(string identifier,
         CancellationToken cancellationToken = default)
     {
