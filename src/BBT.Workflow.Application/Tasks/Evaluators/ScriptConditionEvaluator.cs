@@ -43,8 +43,7 @@ public sealed class ScriptConditionEvaluator : IConditionEvaluator
                     script,
                     flowScripts: context.Workflow?.Scripts,
                     cancellationToken: ct);
-
-                var executeStart = Stopwatch.GetTimestamp();
+                
                 try
                 {
                     var result = await scriptRunner.Handler(context);

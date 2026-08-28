@@ -59,8 +59,7 @@ public sealed class TransitionDataMapper(
                 var mappingInstance = await CompileMappingScriptAsync(transition, workflow.Scripts, ct);
                 var scriptContext = await BuildScriptContextAsync(
                     payload, transition, workflow, instance, runtimeInfoProvider, headers, ct);
-
-                var executeStart = Stopwatch.GetTimestamp();
+                
                 try
                 {
                     var mapped = await mappingInstance.Handler(scriptContext);
