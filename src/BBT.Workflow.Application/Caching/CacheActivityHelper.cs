@@ -27,13 +27,32 @@ public static class CacheActivityHelper
 
     public const string OperationGet = "Cache.Get";
     public const string OperationSet = "Cache.Set";
+
+    /// <summary>
+    /// The write-back that follows a read miss, as opposed to <see cref="OperationSet"/>, which is an
+    /// explicit publish. They are deliberately separate names: one is traffic the cache creates for
+    /// itself on the read path and belongs under the <c>Cache.Get</c> that caused it, the other is a
+    /// caller writing on purpose. Merging them would make the read path's cost unattributable.
+    /// </summary>
+    public const string OperationWrite = "Cache.Write";
+
     public const string OperationRemove = "Cache.Remove";
     public const string OperationWarmup = "Cache.Warmup";
     public const string OperationGenerationGet = "Cache.GenerationGet";
     public const string OperationGenerationSet = "Cache.GenerationSet";
 
+    /// <summary>The in-process (L1) envelope cache answered the read.</summary>
+    public const string SourceL1 = "l1";
+
+    /// <summary>The distributed store answered the read; L1 either missed or is disabled.</summary>
+    public const string SourceL2 = "l2";
+
+    /// <summary>Neither cache layer answered — the value came from the backing store.</summary>
+    public const string SourceBackend = "backend";
+
     private const string TagCacheKey = "cache.key";
     private const string TagCacheHit = "cache.hit";
+    private const string TagCacheSource = "cache.source";
     private const string TagCacheL1Hit = "cache.l1.hit";
     private const string TagCacheNegative = "cache.negative";
     private const string TagCacheCoalesced = "cache.coalesced";
@@ -85,6 +104,20 @@ public static class CacheActivityHelper
     public static void SetCacheHit(Activity? activity, bool hit)
     {
         activity?.SetTag(TagCacheHit, hit);
+    }
+
+    /// <summary>
+    /// Records which layer actually answered the read — <see cref="SourceL1"/>, <see cref="SourceL2"/>
+    /// or <see cref="SourceBackend"/>.
+    /// </summary>
+    /// <remarks>
+    /// Complements rather than replaces <c>cache.hit</c> / <c>cache.l1.hit</c>: those two still say
+    /// whether the cache answered at all and which tier, but deriving "served from the backend" from
+    /// them requires reading a combination. One tag states it, so a query can group by it directly.
+    /// </remarks>
+    public static void SetSource(Activity? activity, string source)
+    {
+        activity?.SetTag(TagCacheSource, source);
     }
 
     /// <summary>

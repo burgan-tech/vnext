@@ -21,17 +21,38 @@ namespace BBT.Workflow.Application.Tests.Caching;
 [Collection(TracingDetailLevelCollection.Name)]
 public sealed class CacheActivityHelperTests : IDisposable
 {
+    /// <summary>
+    /// Root source for the per-test ambient activity. Cache spans inherit its trace id, which is
+    /// what keeps <c>Assert.Single</c> honest: the listener below is process-wide, so without this
+    /// anchor a cache span emitted by a test running concurrently in another collection lands in
+    /// this test's list and the assertion fails for reasons that have nothing to do with it.
+    /// </summary>
+    private static readonly ActivitySource TestSource = new("CacheActivityHelperTests");
+
     private readonly AetherTracingDetailLevel _originalLevel = AetherTracingRuntime.DetailLevel;
     private readonly List<ActivityListener> _listeners = new();
+    private readonly Activity _root;
 
     public CacheActivityHelperTests()
     {
         AetherTracingRuntime.Configure(AetherTracingDetailLevel.Business);
+
+        // Registered before the root is started: an ActivitySource with no listener returns null.
+        var rootListener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == "CacheActivityHelperTests",
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded
+        };
+        ActivitySource.AddActivityListener(rootListener);
+        _listeners.Add(rootListener);
+
+        _root = TestSource.StartActivity("test-root")!;
     }
 
     public void Dispose()
     {
         AetherTracingRuntime.Configure(_originalLevel);
+        _root.Dispose();
         foreach (var listener in _listeners)
         {
             listener.Dispose();
@@ -46,7 +67,8 @@ public sealed class CacheActivityHelperTests : IDisposable
         {
             ShouldListenTo = source => source.Name == "BBT.Workflow.Cache",
             Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
-            ActivityStopped = collected.Add
+            // Only this test's spans — see the TestSource remark.
+            ActivityStopped = a => { if (a.TraceId == _root.TraceId) collected.Add(a); }
         };
         ActivitySource.AddActivityListener(listener);
         _listeners.Add(listener);
