@@ -42,7 +42,7 @@ public sealed class InstanceExtensionService(
 
         // Process core system extensions first (runtime-wide, always included)
         // Fail-fast: if core extensions fail, return error immediately
-        var coreResult = await ProcessCoreExtensionsAsync(requestedSet, scriptContext, currentScope, context, cancellationToken);
+        var coreResult = await ProcessCoreExtensionsAsync(requestedSet, scriptContext, workflow.Key, currentScope, context, cancellationToken);
         if (!coreResult.IsSuccess)
         {
             return Result<Dictionary<string, object>>.Fail(coreResult.Error);
@@ -74,6 +74,7 @@ public sealed class InstanceExtensionService(
     private async Task<Result> ProcessCoreExtensionsAsync(
         HashSet<string>? extensionRequested,
         ScriptContext scriptContext,
+        string workflowKey,
         ExtensionScope currentScope,
         ExtensionProcessingContext context,
         CancellationToken cancellationToken)
@@ -87,6 +88,7 @@ public sealed class InstanceExtensionService(
             null,
             scriptContext,
             coreExtensionsResult.Value,
+            workflowKey,
             currentScope,
             context,
             cancellationToken);
@@ -116,6 +118,7 @@ public sealed class InstanceExtensionService(
             extensionRequested,
             scriptContext,
             filteredExtensions,
+            workflow.Key,
             currentScope,
             context,
             cancellationToken);
@@ -198,6 +201,7 @@ public sealed class InstanceExtensionService(
         HashSet<string>? extensionRequested,
         ScriptContext scriptContext,
         List<Extension> extensions,
+        string workflowKey,
         ExtensionScope currentScope,
         ExtensionProcessingContext context,
         CancellationToken cancellationToken)
@@ -234,9 +238,22 @@ public sealed class InstanceExtensionService(
         // accepted them). Last-wins never throws, and is also semantically correct here: a
         // duplicated reference belongs to one extension, so every entry maps to the same key
         // anyway.
+        // A key already present here means the SAME OnExecuteTask instance came around twice —
+        // which only happens when the SAME extension reference is listed more than once (see the
+        // CacheSet-coalescing note above). That is a genuinely different shape from two DIFFERENT
+        // extensions sharing a task Reference (each owns its own OnExecuteTask instance and never
+        // collides here): it is one extension's task running twice for one output slot, still able
+        // to throw the parallel-merge conflict this whole fix exists to prevent. The last-wins
+        // write below already tolerates it without throwing; this only adds the diagnostic that
+        // TaskCoordinator.LogDuplicateTaskKeysIfAny cannot provide for Extension-origin executions.
         var responseKeyByTask = new Dictionary<OnExecuteTask, string>();
         foreach (var ext in executableExtensions)
         {
+            if (responseKeyByTask.ContainsKey(ext.Task))
+            {
+                logger.DuplicateExtensionReference(ext.Key, workflowKey);
+            }
+
             responseKeyByTask[ext.Task] = ext.Key.ToVariableName();
         }
 
@@ -255,14 +272,22 @@ public sealed class InstanceExtensionService(
             scriptContext,
             completedTaskIds: [],
             skipJournalProbe: false,
-            optionsRefiner: (task, options) => options with
+            optionsRefiner: (task, options) =>
             {
                 // TryGetValue, not the indexer: a task not found here would be a caller bug
                 // (TaskCoordinator only ToList/Where/GroupBy's the same instances, never clones
                 // them), but degrading to null — which falls back to today's task-key behavior in
                 // TaskExecutorBase — is the right failure mode rather than a thrown
-                // KeyNotFoundException.
-                ResponseVariableKey = responseKeyByTask.TryGetValue(task, out var key) ? key : null
+                // KeyNotFoundException. Unreachable today, but a miss here means the extension's
+                // output files under the task-derived key while ExtractExtensionResponse only ever
+                // reads by the extension's own key — silent data loss — so it is logged rather than
+                // left to fail quietly if this assumption is ever broken.
+                if (!responseKeyByTask.TryGetValue(task, out var key))
+                {
+                    logger.ExtensionResponseKeyMappingMissing(task.Task.Key, scriptContext.Instance?.Id);
+                }
+
+                return options with { ResponseVariableKey = key };
             },
             cancellationToken: cancellationToken);
 

@@ -55,9 +55,27 @@ Extension hook: `ExtensionTaskPersistenceStrategy` never persists an `InstanceTa
 distinct. It matters only for transition hooks (`onExecute`/`onEntry`/`onExit`), where task
 executions are journaled. Because of this, `TaskCoordinator`'s duplicate-task-key-at-same-order
 warning (`WorkflowLogs.DuplicateTaskKeyAtSameOrder`, EventId 10155) — whose remedy is "give the
-entries distinct orders" — is suppressed for the Extension hook entirely: for a transition hook a
-repeated key is almost certainly a copy-paste mistake, but for the Extension hook it is the
-supported shape described above, and the remedy would be advice with no problem to fix.
+entries distinct orders" — is suppressed for `TaskExecutionOrigin.Extension` executions: for a
+transition hook a repeated key is almost certainly a copy-paste mistake, but for the Extension
+origin it is the supported shape described above, and the remedy would be advice with no problem to
+fix.
+
+The suppression is keyed on `TaskExecutionOrigin.Extension`, deliberately **not**
+`TaskTrigger.Extension` — custom functions (`FunctionAppService.cs`) execute through the same
+`TaskTrigger.Extension` trigger but with `TaskExecutionOrigin.Function`, and a multi-task function
+(`FunctionAppService.GetSingleTaskVariableKey` exists precisely to distinguish single-task from
+multi-task functions) has no per-entry response-key override to save it from a duplicated task key
+at the same order — that shape is still a plain authoring mistake and the warning still fires for
+it.
+
+A second, distinct shape is **not** suppressed and should not be confused with the one above: the
+SAME extension reference listed twice in a workflow's `Extensions` (see "Two extensions may
+legitimately share one task definition" — `WorkflowValidator` has no uniqueness check on
+`Extensions`). That collapses onto the SAME `OnExecuteTask` instance, not two different ones, and
+`InstanceExtensionService`'s last-wins `responseKeyByTask` build detects it — logged as
+`WorkflowLogs.DuplicateExtensionReference` (EventId 20102) with the remedy "remove the duplicate
+reference" (distinct orders would not help; the sequential path overwrites silently regardless of
+order at `ScriptContext.SetOutputResponse`).
 
 ## Why this is written down: the Preprod fault
 

@@ -16,6 +16,7 @@ using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks.Coordinator;
 using BBT.Workflow.Tasks.Evaluation;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using Shouldly;
@@ -260,6 +261,97 @@ public class InstanceExtensionServiceTests
     }
 
     /// <summary>
+    /// Fix-round-2 finding: the last-wins <c>responseKeyByTask</c> loop detects a duplicated
+    /// extension reference "for free" (the key it is about to write is already present) — this pins
+    /// that it now also logs <c>WorkflowLogs.DuplicateExtensionReference</c> (EventId 20102) naming
+    /// the extension and the workflow, rather than silently tolerating the duplicate with no
+    /// diagnostic at all. This is a DIFFERENT shape from two distinct extensions sharing a task
+    /// (which must NOT log this warning — see the next test): here it is the SAME extension listed
+    /// twice, so the task still runs once per occurrence for one output slot and can still throw the
+    /// parallel-merge conflict — "give them distinct orders" is not a valid remedy for this shape.
+    /// </summary>
+    [Fact]
+    public async Task ProcessExtensionsAsync_SameExtensionReferenceListedTwice_LogsDuplicateExtensionReferenceWarning()
+    {
+        var engine = Substitute.For<ITaskExecutionEngine>();
+        var errorFactory = new ExecutionErrorFactory(new ErrorNormalizer());
+        StubEngineWithMarkerOutputs(engine, errorFactory);
+
+        var extension = CreateExtension("extension-a", taskKey: "solo-task", order: 1, mappingMarker: "solo-value");
+
+        var componentCacheStore = CreateComponentCacheStore(extension, extension);
+        var logger = Substitute.For<ILogger<InstanceExtensionService>>();
+        logger.IsEnabled(Arg.Any<LogLevel>()).Returns(true);
+        var service = CreateService(componentCacheStore, CreateTaskCoordinator(engine), logger);
+        using var scriptContext = CreateScriptContext();
+        var workflow = WorkflowFactory.CreateDefault(key: "duplicate-ref-flow");
+
+        var result = await service.ProcessExtensionsAsync(
+            null, scriptContext, workflow, ExtensionScope.Everywhere, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue(result.IsSuccess ? null : result.Error.Message);
+
+        var fields = LoggedFields(logger, 20102);
+        fields["ExtensionKey"].ShouldBe("extension-a");
+        fields["WorkflowKey"].ShouldBe("duplicate-ref-flow");
+    }
+
+    /// <summary>
+    /// Regression guard: two DIFFERENT extensions legitimately sharing one task Reference (the
+    /// documented, supported pattern this whole fix protects) must NOT trip the duplicate-extension
+    /// warning — only the SAME extension listed twice should.
+    /// </summary>
+    [Fact]
+    public async Task ProcessExtensionsAsync_TwoExtensionsSameTaskDifferentOrder_DoesNotLogDuplicateExtensionReferenceWarning()
+    {
+        var engine = Substitute.For<ITaskExecutionEngine>();
+        var errorFactory = new ExecutionErrorFactory(new ErrorNormalizer());
+        StubEngineWithMarkerOutputs(engine, errorFactory);
+
+        var extensionA = CreateExtension("extension-a", taskKey: "shared-task", order: 1, mappingMarker: "mapped-by-a");
+        var extensionB = CreateExtension("extension-b", taskKey: "shared-task", order: 2, mappingMarker: "mapped-by-b");
+
+        var componentCacheStore = CreateComponentCacheStore(extensionA, extensionB);
+        var logger = Substitute.For<ILogger<InstanceExtensionService>>();
+        logger.IsEnabled(Arg.Any<LogLevel>()).Returns(true);
+        var service = CreateService(componentCacheStore, CreateTaskCoordinator(engine), logger);
+        using var scriptContext = CreateScriptContext();
+        var workflow = WorkflowFactory.CreateDefault();
+
+        var result = await service.ProcessExtensionsAsync(
+            null, scriptContext, workflow, ExtensionScope.Everywhere, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue(result.IsSuccess ? null : result.Error.Message);
+
+        logger.ReceivedCalls()
+            .Any(call => call.GetMethodInfo().Name == nameof(ILogger.Log)
+                         && call.GetArguments()[1] is EventId id
+                         && id.Id == 20102)
+            .ShouldBeFalse();
+    }
+
+    /// <summary>
+    /// Reads the structured fields of the single logged entry carrying <paramref name="eventId"/>,
+    /// through the state object every <c>LoggerMessage</c>-generated entry exposes (same approach as
+    /// <c>TaskCoordinatorDuplicateTaskKeyTests.LoggedFields</c>).
+    /// </summary>
+    private static IReadOnlyDictionary<string, object?> LoggedFields(ILogger logger, int eventId)
+    {
+        var matches = logger.ReceivedCalls()
+            .Where(call => call.GetMethodInfo().Name == nameof(ILogger.Log)
+                           && call.GetArguments()[1] is EventId id
+                           && id.Id == eventId)
+            .ToList();
+
+        matches.Count.ShouldBe(1, $"expected exactly one log entry with EventId {eventId}");
+
+        var state = (IReadOnlyList<KeyValuePair<string, object?>>)matches[0].GetArguments()[2]!;
+        return state
+            .Where(field => field.Key != "{OriginalFormat}")
+            .ToDictionary(field => field.Key, field => field.Value);
+    }
+
+    /// <summary>
     /// Stubs <see cref="ITaskExecutionEngine.ExecuteAsync(OnExecuteTask, System.Guid?, TaskTrigger, TaskExecutionOrigin, ScriptContext, TaskEngineExecutionOptions, CancellationToken)"/>
     /// to mirror what <c>TaskExecutorBase.ExecuteAsync</c> does for an Extension-triggered task:
     /// file the response under <c>options.ResponseVariableKey ?? task.Task.Key.ToVariableName()</c>
@@ -337,7 +429,8 @@ public class InstanceExtensionServiceTests
 
     private static InstanceExtensionService CreateService(
         IComponentCacheStore componentCacheStore,
-        ITaskCoordinatorExtended taskCoordinator)
+        ITaskCoordinatorExtended taskCoordinator,
+        ILogger<InstanceExtensionService>? logger = null)
     {
         var runtimeInfoProvider = Substitute.For<IRuntimeInfoProvider>();
         runtimeInfoProvider.Domain.Returns("bank");
@@ -348,7 +441,7 @@ public class InstanceExtensionServiceTests
             runtimeInfoProvider,
             Substitute.For<ICurrentSchema>(),
             Substitute.For<IServiceScopeFactory>(),
-            NullLogger<InstanceExtensionService>.Instance);
+            logger ?? NullLogger<InstanceExtensionService>.Instance);
     }
 
     private static ScriptContext CreateScriptContext() =>

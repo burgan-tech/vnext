@@ -264,6 +264,50 @@ public sealed class TaskCoordinatorDuplicateTaskKeyTests
             .ShouldBeFalse();
     }
 
+    /// <summary>
+    /// Pins the fix-round distinction: the suppression must be gated on
+    /// <see cref="TaskExecutionOrigin.Extension"/>, NOT <see cref="TaskTrigger.Extension"/>. Custom
+    /// functions (<c>FunctionAppService.cs</c>) execute through the SAME <c>TaskTrigger.Extension</c>
+    /// trigger but with <see cref="TaskExecutionOrigin.Function"/> — a multi-task function listing
+    /// the same task key twice at the same order has no per-entry response-key override to save it
+    /// (that override is <c>InstanceExtensionService</c>'s own <c>optionsRefiner</c>, never applied
+    /// on the function path), so it is still a plain authoring mistake and must still warn. Before
+    /// the origin-based fix, this test fails: the trigger-only gate (<c>taskTrigger ==
+    /// TaskTrigger.Extension</c>) suppresses it right alongside the genuinely-safe Extension-origin
+    /// case above, silently losing the only diagnostic for a real duplicate.
+    /// </summary>
+    [Fact]
+    public async Task ExecuteWithDetailsAsync_DuplicateTaskKeySameOrder_FunctionOrigin_LogsWarning()
+    {
+        var engine = Substitute.For<ITaskExecutionEngine>();
+        var functionTaskFirst = WorkflowTaskFactory.CreateHttpTask("shared-task");
+        var functionTaskSecond = WorkflowTaskFactory.CreateHttpTask("shared-task");
+        var definitions = new[]
+        {
+            OnExecuteTask.Create(0, functionTaskFirst, ScriptCode.FromNative(string.Empty)),
+            OnExecuteTask.Create(0, functionTaskSecond, ScriptCode.FromNative(string.Empty))
+        };
+
+        var observedOptions = new ConcurrentDictionary<OnExecuteTask, TaskEngineExecutionOptions>();
+        StubEngine(engine, observedOptions);
+
+        var logger = Substitute.For<ILogger<TaskCoordinator>>();
+        logger.IsEnabled(Arg.Any<LogLevel>()).Returns(true);
+        var services = new ServiceCollection().AddSingleton(engine).BuildServiceProvider();
+        var coordinator = CreateCoordinator(engine, services, logger);
+        var context = CreateContext();
+
+        // Same trigger as the Extension-origin test above (TaskTrigger.Extension — functions share
+        // it), but Function origin, not Extension origin.
+        await coordinator.ExecuteWithDetailsAsync(
+            definitions, null, TaskTrigger.Extension, TaskExecutionOrigin.Function, context);
+
+        var fields = LoggedFields(logger, 10155);
+        fields["TaskKey"].ShouldBe("shared-task");
+        fields["OccurrenceCount"].ShouldBe(2);
+        fields["Order"].ShouldBe(0);
+    }
+
     private static void StubEngine(
         ITaskExecutionEngine engine,
         ConcurrentDictionary<OnExecuteTask, TaskEngineExecutionOptions> observedOptions)

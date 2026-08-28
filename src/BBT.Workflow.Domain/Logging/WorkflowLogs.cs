@@ -978,12 +978,20 @@ public static partial class WorkflowLogs
     /// carries hard errors (see <c>ValidationErrors</c>/<c>AddError</c>) with no warning severity,
     /// so this is logged here at execution time instead of being folded into
     /// <c>WorkflowValidator</c> — do not downgrade this to a validation error.
-    /// <c>TaskCoordinator.LogDuplicateTaskKeysIfAny</c> never calls this for the Extension hook:
-    /// two extensions sharing one task Reference is a supported pattern (each carries its own
-    /// <c>Mapping</c> and files its output under its own key, not the task's), and this warning's
-    /// remedy ("give the entries distinct orders") targets a journal-key collision that cannot
-    /// happen there — Extension-origin task executions are never persisted to the journal at all
-    /// (<c>ExtensionTaskPersistenceStrategy</c>).
+    /// <c>TaskCoordinator.LogDuplicateTaskKeysIfAny</c> gates this off of
+    /// <see cref="TaskExecutionOrigin"/>, NOT <see cref="TaskTrigger"/>: it never calls this for
+    /// <see cref="TaskExecutionOrigin.Extension"/> (two extensions sharing one task Reference is a
+    /// supported pattern — each carries its own <c>Mapping</c> and files its output under its own
+    /// key, not the task's; this warning's remedy of "give the entries distinct orders" targets a
+    /// journal-key collision that cannot happen there, since
+    /// <c>ExtensionTaskPersistenceStrategy</c> never persists an <c>InstanceTask</c> row for
+    /// Extension-origin executions at all). Custom functions execute through
+    /// <c>TaskTrigger.Extension</c> too (<c>FunctionAppService.cs</c>) but with
+    /// <see cref="TaskExecutionOrigin.Function"/> — a multi-task function
+    /// (<c>FunctionAppService.GetSingleTaskVariableKey</c>) listing the same task twice at the same
+    /// order is still an authoring mistake with no per-entry response-key override to save it, so
+    /// this warning MUST still fire for that shape. Gating on the trigger instead of the origin
+    /// would silently swallow it.
     /// </summary>
     [LoggerMessage(
         EventId = 10155,
@@ -2687,6 +2695,49 @@ public static partial class WorkflowLogs
     public static partial void ExtensionProcessingFailedNonBlocking(
         this ILogger logger,
         string errorCode);
+
+    /// <summary>
+    /// Logs when the SAME extension reference is listed more than once in a workflow's
+    /// <c>Extensions</c> (or in the runtime's core-extension set). Unlike two DIFFERENT extensions
+    /// sharing one task Reference (a supported pattern, see <see cref="DuplicateTaskKeyAtSameOrder"/>
+    /// remarks), this is the SAME <c>Extension</c> — and therefore the SAME <c>OnExecuteTask</c>
+    /// instance — appearing twice. <c>InstanceExtensionService.ExecuteExtensionsInternalAsync</c>'s
+    /// last-wins <c>responseKeyByTask</c> build detects this for free: the key it is about to write
+    /// is already present. The task still executes once per occurrence for the one output slot and
+    /// can still throw the parallel-merge conflict this whole fix exists to prevent, so unlike the
+    /// task-coordinator warning above, the remedy here is NOT "give them distinct orders" — the
+    /// sequential path silently overwrites at <c>ScriptContext.SetOutputResponse</c> regardless of
+    /// order, so distinct orders would not fix this shape. The only correct remedy is removing the
+    /// duplicate reference.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20102,
+        Level = LogLevel.Warning,
+        Message = "Duplicate extension reference '{ExtensionKey}' in workflow '{WorkflowKey}': the same Extension is listed more than once, so its task executes once per occurrence for one output slot and the merge can still throw a parallel-output conflict. Remove the duplicate reference — giving the entries distinct orders does not fix this, the sequential path overwrites silently regardless of order.")]
+    public static partial void DuplicateExtensionReference(
+        this ILogger logger,
+        string extensionKey,
+        string workflowKey);
+
+    /// <summary>
+    /// Logs when <c>InstanceExtensionService</c>'s per-task <c>optionsRefiner</c> cannot find the
+    /// executing task in its <c>responseKeyByTask</c> map, so <c>ResponseVariableKey</c> falls back
+    /// to <c>null</c>. <c>TaskCoordinator</c> only ever hands back the SAME <c>OnExecuteTask</c>
+    /// instances it was given (ToList/Where/GroupBy, never cloned), so this branch is unreachable
+    /// today — but a null <c>ResponseVariableKey</c> makes the task's output file under the
+    /// task-derived key instead of the extension's, and <c>ExtractExtensionResponse</c> only ever
+    /// reads by the EXTENSION's key — so the extension's result is silently dropped, exactly the
+    /// silent-data-loss class the extension-response-key fix exists to eliminate. Logged so this
+    /// cannot pass unnoticed if the assumption it depends on is ever broken.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20103,
+        Level = LogLevel.Warning,
+        Message = "Extension task '{TaskKey}' had no entry in the per-extension response-key map; falling back to the task-derived key. This extension's own read will not find it there, so its output is silently dropped. InstanceId={InstanceId}")]
+    public static partial void ExtensionResponseKeyMappingMissing(
+        this ILogger logger,
+        string taskKey,
+        Guid? instanceId);
 
     #endregion
 

@@ -187,7 +187,7 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
             // the same order. Resolved once per group, from the definition's own shape, so the
             // single-task and parallel paths below apply the identical decision — the suffix must
             // not depend on which path happens to run the group.
-            LogDuplicateTaskKeysIfAny(group.Key, groupTasks, taskTrigger, context.Instance?.Id, context.Transition?.Key);
+            LogDuplicateTaskKeysIfAny(group.Key, groupTasks, taskTrigger, origin, context.Instance?.Id, context.Transition?.Key);
             var groupOptions = ResolveGroupEngineOptions(groupTasks, engineOptions);
 
             // Caller-supplied per-task override (e.g. the extension path setting a distinct
@@ -516,28 +516,38 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
     /// at definition-validation time (only hard errors), so it is logged here at execution time.
     /// </summary>
     /// <remarks>
-    /// Never fires for <see cref="TaskTrigger.Extension"/>. Two extensions sharing one task
-    /// Reference at the same order is a documented, intentional pattern (see
-    /// <c>InstanceExtensionService.ExecuteExtensionsInternalAsync</c>): each extension owns its own
-    /// <c>OnExecuteTask</c> — with its own <c>Mapping</c>/<c>ErrorBoundary</c> — and files its
-    /// output under its own <c>ResponseVariableKey</c>, so the two writes never collide. The
-    /// remedy this warning carries ("give the entries distinct orders") would also be actively
+    /// Gated on <see cref="TaskExecutionOrigin.Extension"/> — NOT <see cref="TaskTrigger.Extension"/>.
+    /// Two extensions sharing one task Reference at the same order is a documented, intentional
+    /// pattern (see <c>InstanceExtensionService.ExecuteExtensionsInternalAsync</c>): each extension
+    /// owns its own <c>OnExecuteTask</c> — with its own <c>Mapping</c>/<c>ErrorBoundary</c> — and
+    /// files its output under its own <c>ResponseVariableKey</c>, so the two writes never collide.
+    /// The remedy this warning carries ("give the entries distinct orders") would also be actively
     /// wrong advice for this hook: it targets the journal-key collision that
     /// <see cref="ResolveGroupEngineOptions"/>'s "#0"/"#1" suffixing exists to prevent, but
     /// <c>ExtensionTaskPersistenceStrategy</c> never persists an <c>InstanceTask</c> row for
     /// Extension-origin executions in the first place — there is no journal entry to collide, so
-    /// there is nothing for that suffixing to disambiguate here. For every OTHER hook (transition
-    /// OnEntry/OnExit/OnExecute/Manual) the duplicate is still almost certainly a copy-paste
-    /// mistake and must keep warning with the current remedy.
+    /// there is nothing for that suffixing to disambiguate here.
+    ///
+    /// Custom functions (<c>FunctionAppService.cs</c>) execute through the SAME
+    /// <see cref="TaskTrigger.Extension"/> trigger but with <see cref="TaskExecutionOrigin.Function"/>
+    /// — a multi-task function (<c>FunctionAppService.GetSingleTaskVariableKey</c> exists precisely
+    /// to distinguish single-task from multi-task functions) has no per-entry response-key override,
+    /// so a duplicated task key at the same order there is still a plain authoring mistake. Gating
+    /// on <c>taskTrigger</c> instead of <c>origin</c> would silently swallow that case too — do not
+    /// revert to the trigger check.
+    ///
+    /// For every OTHER hook (transition OnEntry/OnExit/OnExecute/Manual) the duplicate is still
+    /// almost certainly a copy-paste mistake and must keep warning with the current remedy.
     /// </remarks>
     private void LogDuplicateTaskKeysIfAny(
         int order,
         IReadOnlyList<OnExecuteTask> groupTasks,
         TaskTrigger taskTrigger,
+        TaskExecutionOrigin origin,
         Guid? instanceId,
         string? transitionKey)
     {
-        if (groupTasks.Count < 2 || taskTrigger == TaskTrigger.Extension)
+        if (groupTasks.Count < 2 || origin == TaskExecutionOrigin.Extension)
             return;
 
         var duplicates = groupTasks
