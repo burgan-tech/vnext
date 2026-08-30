@@ -271,6 +271,21 @@ public static class TelemetryConstants
 
         /// <summary>Endpoint kind requested from service discovery (Url or AppId). Set on every Discovery.Resolve span.</summary>
         public const string DiscoveryEndpointKind = "vnext.discovery.endpoint_kind";
+
+        /// <summary>Execution chain id correlating hops within one auto-chain/subflow run.</summary>
+        public const string ChainId = "vnext.chain.id";
+
+        /// <summary>Name of the pipeline execution profile resolved for the transition (e.g. Manual, AutoChain).</summary>
+        public const string PipelineProfile = "vnext.pipeline.profile";
+
+        /// <summary>Causation id linking a hop to the execution chain that produced it.</summary>
+        public const string CausationId = "vnext.causation.id";
+
+        /// <summary>Vendor-neutral messaging message id, following OpenTelemetry semantic conventions.</summary>
+        public const string MessagingMessageId = "messaging.message.id";
+
+        /// <summary>Delivery attempt count for a redelivered message or job.</summary>
+        public const string DeliveryAttempt = "vnext.delivery.attempt";
     }
 
     /// <summary>
