@@ -13,9 +13,9 @@ namespace BBT.Workflow.Execution.Events;
 /// <c>InstanceJob</c> guard and (later) the chain token.
 /// </summary>
 /// <remarks>
-/// Intentionally has NO <c>[EventHook]</c>: events without a registered hook are always
-/// published to the inner bus / outbox (see <c>HookedDistributedEventBus</c>), which is
-/// exactly the desired distributed delivery for a continuation.
+/// Published through <c>TraceStampingDistributedEventBus</c>, which only stamps trace context and
+/// delegates — every event rides the outbox, which is exactly the desired distributed delivery for
+/// a continuation.
 /// </remarks>
 [EventName("transition.continuation.requested")]
 public sealed class TransitionContinuationRequested : IDistributedEvent, ILaneAwareDistributedEvent

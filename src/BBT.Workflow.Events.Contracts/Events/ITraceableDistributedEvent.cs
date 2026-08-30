@@ -4,7 +4,7 @@ namespace BBT.Workflow.Events;
 /// Distributed events that carry W3C trace context and the originating request id across the
 /// outbox → pub/sub → inbox hop, so consumers can continue the publisher's trace instead of
 /// starting a disconnected one and can keep log correlation to the client request.
-/// Properties are settable so <c>HookedDistributedEventBus</c> can stamp them centrally at
+/// Properties are settable so <c>TraceStampingDistributedEventBus</c> can stamp them centrally at
 /// publish time (while the publisher's Activity is still ambient) without every raise site
 /// having to care about diagnostics.
 /// </summary>

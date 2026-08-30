@@ -194,7 +194,8 @@ public sealed class TransitionRunner(
 
     /// <summary>
     /// Stages deferred domain events via IDistributedEventBus before UoW commit.
-    /// Each event passes through HookedDistributedEventBus; durable hooks are registered for post-commit execution.
+    /// Each event passes through TraceStampingDistributedEventBus, which stamps trace context and
+    /// delegates — every event rides the outbox.
     /// Events include pre-extracted metadata from AddDistributedEvent time.
     /// </summary>
     private async Task PublishDeferredEventsAsync(

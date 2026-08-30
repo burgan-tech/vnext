@@ -1,5 +1,4 @@
 using BBT.Aether.Events;
-using BBT.Workflow.Events.Hooks;
 using BBT.Workflow.Events;
 
 namespace BBT.Workflow.Instances.Events;
@@ -7,7 +6,6 @@ namespace BBT.Workflow.Instances.Events;
 /// <summary>
 /// Event published when a SubFlow or SubProcess instance is canceled, notifying the parent instance.
 /// </summary>
-[EventHook(EventHookMode.DurablePostCommit)]
 [EventName("instance.sub.canceled")]
 public class InstanceSubCanceledEvent : IDistributedEvent, ITraceableDistributedEvent, ISubflowTerminalEvent
 {

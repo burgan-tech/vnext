@@ -246,17 +246,8 @@ public static class TelemetryConstants
         /// <summary>Serialized byte size of the instance-data payload being appended.</summary>
         public const string DataSizeBytes = "vnext.data.size_bytes";
 
-        /// <summary>Short CLR name of the event whose hook is executing (e.g. <c>InstanceSubFaultedEvent</c>).</summary>
+        /// <summary>Short CLR name of the event being relayed (e.g. <c>InstanceSubFaultedEvent</c>).</summary>
         public const string EventName = "vnext.event.name";
-
-        /// <summary>Full name of the executing hook (untrimmed, e.g. <c>InstanceSubFaultedEventHook</c>).</summary>
-        public const string HookName = "vnext.hook.name";
-
-        /// <summary>
-        /// Hook execution mode: <c>HandledOrFallback</c> (at publish, under Events.PublishDeferred) or
-        /// <c>DurablePostCommit</c> (inside the UoW commit, under Uow.Commit).
-        /// </summary>
-        public const string HookMode = "vnext.hook.mode";
 
         /// <summary>Outcome of a subflow-terminal relay attempt: <c>relayed</c> | <c>failed</c> | <c>skipped</c>.</summary>
         public const string RelayOutcome = "vnext.relay.outcome";
