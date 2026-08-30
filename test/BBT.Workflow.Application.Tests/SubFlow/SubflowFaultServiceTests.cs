@@ -5,6 +5,7 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using BBT.Aether.Events;
 using BBT.Aether.Results;
 using BBT.Aether.Uow;
 using BBT.Workflow.BackgroundJobs.Options;
@@ -38,11 +39,19 @@ public sealed class SubflowFaultServiceTests
     private readonly Mock<ITransitionLockScopeFactory> _lockScopeFactory = new();
     private readonly Mock<ISubItemTerminalGuard> _terminalGuard = new();
     private readonly Mock<ITransitionLockScope> _lockScope = new();
+    private readonly Mock<IDistributedEventBus> _eventBus = new();
     private readonly Mock<ILogger<SubflowFaultService>> _logger = new();
 
     public SubflowFaultServiceTests()
     {
         _uow.Setup(u => u.CommitAsync(It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        _eventBus
+            .Setup(x => x.PublishAsync(
+                It.IsAny<InstanceSubFaultedEvent>(),
+                It.IsAny<string>(),
+                It.IsAny<bool>(),
+                It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
         _uow.Setup(u => u.DisposeAsync())
             .Returns(ValueTask.CompletedTask);
@@ -659,6 +668,7 @@ public sealed class SubflowFaultServiceTests
             executor,
             _lockScopeFactory.Object,
             _terminalGuard.Object,
+            _eventBus.Object,
             Options.Create(new WorkflowExecutionOptions()),
             _logger.Object);
     }

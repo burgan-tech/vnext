@@ -86,7 +86,8 @@ internal sealed class InstanceSubCompletedEventHandler(
                 // Relay the lane so the parent resume on the receiving side lands at the parent
                 // instance's level rather than nesting under the relay endpoint.
                 TraceRoot = eventData.TraceRoot,
-                ParentTraceRoot = eventData.ParentTraceRoot
+                ParentTraceRoot = eventData.ParentTraceRoot,
+                RearmAttempt = eventData.RearmAttempt
             };
 
             var route = $"api/v1/{eventData.Domain}/workflows/{eventData.Flow}/instances/{eventData.InstanceId}/complete";

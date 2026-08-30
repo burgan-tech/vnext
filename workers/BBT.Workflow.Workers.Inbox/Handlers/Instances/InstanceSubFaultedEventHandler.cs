@@ -103,7 +103,8 @@ internal sealed class InstanceSubFaultedEventHandler(
                 // worker with an inline sync chain; idempotent guards make duplicates no-ops.
                 Sync = false,
                 TraceRoot = eventData.TraceRoot,
-                ParentTraceRoot = eventData.ParentTraceRoot
+                ParentTraceRoot = eventData.ParentTraceRoot,
+                RearmAttempt = eventData.RearmAttempt
             };
 
             var route = $"api/v1/{eventData.Domain}/workflows/{eventData.Flow}/instances/{eventData.InstanceId}/sub/fault";

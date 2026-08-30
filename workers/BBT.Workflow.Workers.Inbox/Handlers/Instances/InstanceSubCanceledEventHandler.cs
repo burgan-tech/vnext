@@ -79,7 +79,8 @@ internal sealed class InstanceSubCanceledEventHandler(
                 Termination = new TerminationContext(
                     eventData.TerminationOrigin,
                     eventData.InitiatorInstanceId,
-                    eventData.CascadeId)
+                    eventData.CascadeId),
+                RearmAttempt = eventData.RearmAttempt
             };
             var route = $"api/v1/{eventData.Domain}/workflows/{eventData.Flow}/instances/{eventData.InstanceId}/sub/cancel";
             await forwarder.ForwardAsync(

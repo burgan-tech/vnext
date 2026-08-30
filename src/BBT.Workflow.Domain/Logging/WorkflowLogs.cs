@@ -1584,6 +1584,36 @@ public static partial class WorkflowLogs
         string eventName,
         string error);
 
+    /// <summary>
+    /// Logs when a terminal-revert re-publishes the subflow terminal event as a durable-delivery
+    /// rearm, inside the same UoW as the revert. Closes the window where the lock-free duplicate
+    /// ACK consumed the original durable delivery before a phase-2 resume failure reopened the
+    /// correlation.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40127,
+        Level = LogLevel.Warning,
+        Message = "Subflow terminal settlement reverted; durable delivery re-armed (attempt {Attempt}) for sub {SubInstanceId} -> parent {ParentInstanceId}")]
+    public static partial void SubflowTerminalRearmed(
+        this ILogger logger,
+        Guid parentInstanceId,
+        Guid subInstanceId,
+        int attempt);
+
+    /// <summary>
+    /// Logs when a terminal-revert's rearm budget is exhausted — the correlation was reverted but
+    /// no fresh durable delivery was published, so manual intervention may be required.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40128,
+        Level = LogLevel.Error,
+        Message = "Subflow terminal re-arm budget exhausted ({Attempt}) for sub {SubInstanceId} -> parent {ParentInstanceId}; manual intervention required")]
+    public static partial void SubflowTerminalRearmExhausted(
+        this ILogger logger,
+        Guid parentInstanceId,
+        Guid subInstanceId,
+        int attempt);
+
     #endregion
 
     #region Instance Management

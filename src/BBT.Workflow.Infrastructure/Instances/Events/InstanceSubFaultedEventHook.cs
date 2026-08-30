@@ -126,7 +126,8 @@ public sealed class InstanceSubFaultedEventHook(
                 : null,
             Sync = eventData.Sync,
             TraceRoot = eventData.TraceRoot,
-            ParentTraceRoot = eventData.ParentTraceRoot
+            ParentTraceRoot = eventData.ParentTraceRoot,
+            RearmAttempt = eventData.RearmAttempt
         };
     }
 }

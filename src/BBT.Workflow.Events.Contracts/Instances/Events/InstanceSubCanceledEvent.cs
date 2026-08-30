@@ -59,4 +59,10 @@ public class InstanceSubCanceledEvent : IDistributedEvent, ITraceableDistributed
 
     /// <summary>Originating request id (X-Request-Id value) for log correlation.</summary>
     public string? RequestId { get; set; }
+
+    /// <summary>
+    /// How many times a terminal-revert has re-published this event as a durable-delivery rearm.
+    /// <c>null</c>/<c>0</c> for an original delivery. See <c>InstanceSubCompletedEvent.RearmAttempt</c>.
+    /// </summary>
+    public int? RearmAttempt { get; init; }
 }

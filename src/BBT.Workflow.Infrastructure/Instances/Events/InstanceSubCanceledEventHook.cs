@@ -97,6 +97,7 @@ public sealed class InstanceSubCanceledEventHook(
         Termination = new TerminationContext(
             eventData.TerminationOrigin,
             eventData.InitiatorInstanceId,
-            eventData.CascadeId)
+            eventData.CascadeId),
+        RearmAttempt = eventData.RearmAttempt
     };
 }

@@ -100,4 +100,12 @@ public class InstanceSubCompletedEvent : IDistributedEvent, ILaneAwareDistribute
 
     /// <summary>W3C traceparent of the enclosing lane, so a subflow resume returns to the parent instance's lane.</summary>
     public string? ParentTraceRoot { get; set; }
+
+    /// <summary>
+    /// How many times a terminal-revert has re-published this event as a durable-delivery rearm,
+    /// after the original delivery was consumed by the lock-free duplicate ACK and a later
+    /// phase-2 resume failure reopened the correlation. <c>null</c>/<c>0</c> for an original
+    /// delivery. Capped at a small attempt budget by the publisher.
+    /// </summary>
+    public int? RearmAttempt { get; init; }
 }
