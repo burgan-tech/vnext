@@ -9,7 +9,7 @@ namespace BBT.Workflow.Instances.Events;
 /// </summary>
 [EventHook(EventHookMode.DurablePostCommit)]
 [EventName("instance.sub.canceled")]
-public class InstanceSubCanceledEvent : IDistributedEvent, ITraceableDistributedEvent
+public class InstanceSubCanceledEvent : IDistributedEvent, ITraceableDistributedEvent, ISubflowTerminalEvent
 {
     /// <summary>The ID of the parent instance.</summary>
     [EventSubject]

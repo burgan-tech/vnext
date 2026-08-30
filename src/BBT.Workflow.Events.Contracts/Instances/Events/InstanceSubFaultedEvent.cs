@@ -17,7 +17,7 @@ namespace BBT.Workflow.Instances.Events;
 /// </remarks>
 [EventHook(EventHookMode.DurablePostCommit)]
 [EventName("instance.sub.faulted")]
-public class InstanceSubFaultedEvent : IDistributedEvent, ILaneAwareDistributedEvent
+public class InstanceSubFaultedEvent : IDistributedEvent, ILaneAwareDistributedEvent, ISubflowTerminalEvent
 {
     /// <summary>
     /// The ID of the Parent instance

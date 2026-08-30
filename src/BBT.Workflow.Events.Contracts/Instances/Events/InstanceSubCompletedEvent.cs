@@ -17,7 +17,7 @@ namespace BBT.Workflow.Instances.Events;
 /// </remarks>
 [EventHook(EventHookMode.DurablePostCommit)]
 [EventName("instance.sub.completed")]
-public class InstanceSubCompletedEvent : IDistributedEvent, ILaneAwareDistributedEvent
+public class InstanceSubCompletedEvent : IDistributedEvent, ILaneAwareDistributedEvent, ISubflowTerminalEvent
 {
     /// <summary>
     /// The ID of the Parent instance
