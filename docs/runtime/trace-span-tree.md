@@ -19,6 +19,13 @@ Full design rationale, decisions, and work breakdown: see
 
 ## Target span tree
 
+> **Stale note:** the `EventHook.{name}` nodes below (and the `EventHook.{name}` row in
+> [Span reference](#span-reference)) describe the per-event `EventHook`/`HookedDistributedEventBus`
+> model, which has since been removed outright — every distributed event now rides the
+> transactional outbox instead. See
+> [Event Publish Modes § Purpose](event-publish-modes.md#purpose) for the current model. Kept here
+> as historical record of the tree at the time this page was written, not as current behavior.
+
 ```
 TransitionJob.Execute/start-login          the transaction (async path)
    └─ or the HTTP server span (sync path — its route already carries the key)
@@ -103,7 +110,7 @@ level; nothing in this table is gated behind `AetherTracingRuntime.IsVerbose`.
 | `Transition.Settle` | `BBT.Workflow.Pipeline` | `vnext.settle.status` | The resting-status flip that closes a transition — status write, its lock, the state notification. |
 | `Uow.Commit` | `BBT.Workflow.Pipeline` | — | The transaction commit in `TransitionRunner`; sat outside every span, so a slow commit read as time spent nowhere. |
 | `Events.PublishDeferred` | `BBT.Workflow.Pipeline` | — | Staging deferred domain events onto the bus before the commit. |
-| `EventHook.{name}` | `BBT.Workflow.Instances.Events` | `vnext.event.name`, `vnext.hook.name`, `vnext.hook.mode` | One span per hook invocation (`HookedDistributedEventBus.ExecuteHooksAsync`), named after the hook with the conventional `EventHook`/`Hook` suffix trimmed (`vnext.hook.name` keeps the untrimmed name). Its parent tells you the mode: under `Uow.Commit` means `DurablePostCommit` (hook ran after the ambient UoW committed); under `Events.PublishDeferred` means `HandledOrFallback` (hook ran at publish time). No re-parenting — the span simply opens under whatever is ambient. Error status + message on a failed or throwing hook; the failure still stays swallowed (hooks never fail the publish). |
+| `EventHook.{name}` | `BBT.Workflow.Instances.Events` | `vnext.event.name`, `vnext.hook.name`, `vnext.hook.mode` | **Stale — `HookedDistributedEventBus`/`EventHook` no longer exist; see the note under [Target span tree](#target-span-tree) and [Event Publish Modes § Purpose](event-publish-modes.md#purpose).** One span per hook invocation (`HookedDistributedEventBus.ExecuteHooksAsync`), named after the hook with the conventional `EventHook`/`Hook` suffix trimmed (`vnext.hook.name` keeps the untrimmed name). Its parent tells you the mode: under `Uow.Commit` means `DurablePostCommit` (hook ran after the ambient UoW committed); under `Events.PublishDeferred` means `HandledOrFallback` (hook ran at publish time). No re-parenting — the span simply opens under whatever is ambient. Error status + message on a failed or throwing hook; the failure still stays swallowed (hooks never fail the publish). |
 | `Cache.GenerationGet/{redisKey}` | `BBT.Workflow.Cache` | `cache.component_type`, `cache.store` | The generation-token read that precedes EVERY component resolution. The caller's `Cache.Get` sits after it, not around it, so this round trip was previously attributed to nothing. |
 | `Db.{VERB}` | `OpenTelemetry.Instrumentation.EntityFrameworkCore` | `db.statement` (text, `@p0` placeholders — parameter VALUES stay behind `OTEL_DOTNET_EXPERIMENTAL_EFCORE_ENABLE_TRACE_DB_QUERY_PARAMETERS`, false unless set) | One span per EF Core command, so a DB region resolves into the commands it actually ran. `VERB` is `SELECT`/`INSERT`/`UPDATE`/`DELETE`/`MERGE`, or `Query` when the first token is none of those. Renamed from the default DisplayName, which is the **database name** — a single transition showed fifteen siblings all called `Aether_WorkflowDb`. Reads as a check on the documented include strategy: `Instance.Load` should contain exactly three `Db.SELECT` children (instance + `DataList` + `ChildCorrelations`, split queries). |
 | `Transition.ValidatePolicy` | `BBT.Workflow.Pipeline` | `span.category=business`, error status + message on failure | Wraps `ValidatePolicyAsync`. No I/O, but it runs on every auto-chain hop — without it a trace shows the schema-bearing validation and nothing for the later hops. |
@@ -257,10 +264,11 @@ answers — "how often did we avoid the work?" `Activity.IncrementCounterTag` (s
 `BBT.Workflow.Domain/Logging/ActivityCounterExtensions.cs`) sets that number on the span that was
 already there, starting at 1 and accumulating on repeat calls within the same span.
 
-## EF Core instrumentation: the worker-poll cost (measured)
+## EF Core instrumentation: the worker-poll cost (RESOLVED)
 
 Enabling `AddEntityFrameworkCoreInstrumentation` buys the DB layer inside every pipeline span, and
-charges for it outside them. Measured on a local run, 100 **idle** seconds with no traffic:
+charges for it outside them. Measured on a local run, 100 **idle** seconds with no traffic, before
+the fix below existed:
 
 | | |
 |---|---|
@@ -272,19 +280,41 @@ The cause is not health checks. The Inbox and Outbox workers poll their tables o
 ambient `Activity`, so each poll's `SELECT` starts a trace of its own — a single-span trace that
 says a poll happened. In the transaction list these outrank real work by name frequency.
 
-Nothing is wrong with the data; the question is whether it is worth storing. Two options, neither
-applied here because dropping spans is the environment owner's call:
+**Resolved** by `IdlePollSpanProcessor` (`src/BBT.Workflow.HttpApi.Shared/Telemetry/`), an
+OpenTelemetry `BaseProcessor<Activity>` that clears `ActivityTraceFlags.Recorded` on any span whose
+`DisplayName` starts with `Db.` **and** has no parent (`activity.Parent is null &&
+activity.ParentSpanId == default`) — the same export-drop technique
+`PipelineStepActivityHelper.SetStepOutcome` already uses for no-work pipeline steps: exporters skip
+the span, but it stays valid in-process, so nothing downstream misbehaves. It is registered
+(`WorkflowApiBaseServiceCollectionExtensions`) only where
+`Telemetry:Tracing:DropRootDbSpans` is `true` in that host's config — currently the two worker
+`appsettings.json` files (`workers/BBT.Workflow.Workers.Inbox`, `workers/BBT.Workflow.Workers.Outbox`)
+— so Orchestration and Execution, which have no idle poll loop, are left untouched. The processor is
+a blunt, host-scoped filter by design: it drops every rootless `Db.*` span in a gated host, not just
+poll-loop ones, on the reasoning that a rootless DB command in these two hosts is idle noise by
+construction once real work roots its own episode (`Outbox.Process`, see
+[Related pages](#related-pages) below) rather than running ambient. No new measurement has been
+taken against this fix; the table above remains the pre-fix baseline for reference, not a
+before/after comparison.
 
-- `EntityFrameworkInstrumentationOptions.Filter` — skip commands whose `Activity.Current` is null,
-  i.e. instrument DB work that belongs to a traced operation and never *start* a trace for one.
-- Leave it, and filter at the collector by `service.name` + span name, the same way the Dapr
-  internals are handled (see [Trace Lanes](trace-lanes.md)).
+The two options this section previously weighed — an `EntityFrameworkInstrumentationOptions.Filter`
+skipping commands with no ambient `Activity`, or a collector-side filter by `service.name` + span
+name (the pattern already used for Dapr internals, see [Trace Lanes](trace-lanes.md)) — were both
+superseded by the processor-level drop above, which needed no exporter-side collector change and no
+loss of in-process validity for the span.
 
 ## Related pages
 
 - [Event Trace Chain](event-trace-chain.md) — how `EventHook.{name}` (this page) connects to the
-  outbox → pub/sub → inbox handoff, verified live evidence, and the Aether release gate for
-  outbox-side trace continuity.
+  outbox → pub/sub → inbox handoff, verified live evidence, and the current state of outbox-side
+  trace continuity: `Outbox.Process` now **roots its own trace** and attaches the originating
+  transition's context as an `ActivityLink` rather than re-parenting onto it — a deliberate
+  linked-root model, not the rejoin this page's evidence was gated on. The Inbox side mirrors this
+  split: command events keep re-parenting onto the producer's trace (`EventTraceMode.ContinueTrace`),
+  while the seven `Instance*` fact events now root their own delivery trace and link the producer
+  instead (`EventTraceMode.LinkedDelivery`). See
+  [Event Publish Modes § Observability contract](event-publish-modes.md#observability-contract) for
+  the full tag reference.
 - [Trace Lanes](trace-lanes.md) — the anchor/predecessor split that keeps chained hops and
   subflow handoffs siblings instead of a deep nest; the parenting model every span in this plan's
   tree relies on.

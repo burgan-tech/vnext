@@ -164,7 +164,7 @@ keep it from polluting a transition's trace:
   `^/health$`-style entries. Without it, every nudge delivery would mint its own ASP.NET Core
   server span in the Outbox worker — a one-span trace fired on a timer, structurally identical to
   the idle-poll `Db.*` noise this same worker already suppresses (see
-  [Trace/Span Tree § EF Core instrumentation](trace-span-tree.md#ef-core-instrumentation-the-worker-poll-cost-measured)).
+  [Trace/Span Tree § EF Core instrumentation](trace-span-tree.md#ef-core-instrumentation-the-worker-poll-cost-resolved)).
 - **Dapr sidecar spans are a separate, unaddressed layer** — the two mechanisms above only cover
   spans vnext's own code emits. The Dapr sidecar still instruments its own hop for the wakeup
   topic (`pubsub/{env}.aether.outbox.wakeup.v1`) independently of the app-level server span, so a
@@ -190,6 +190,33 @@ keep it from polluting a transition's trace:
 - **Inbox backup role**: the three sub-terminal Inbox handlers (`InstanceSubCompletedEventHandler`,
   `InstanceSubFaultedEventHandler`, `InstanceSubCanceledEventHandler`) tag
   `vnext.delivery.role = backup` on their activity right after `EventTraceScope.Start(...)`.
+- **Inbox delivery trace shape**: every Inbox handler calls `EventTraceScope.Start(...)` with an
+  explicit `EventTraceMode` — there is no default, so each call site states its classification.
+  - `ContinueTrace` covers the three **command** events (`TransitionContinuationRequested`,
+    `ChildSubflowCancelRequested`, `ChildSubflowFaultRequested`) and is unchanged from before this
+    work: the handler span parents onto the event's own `TraceParent`, joining the producing
+    transition's trace exactly as it always has.
+  - `LinkedDelivery` covers the seven **fact** events (`InstanceCanceledEvent`,
+    `InstanceCompletedCleanupEvent`, `InstanceFaultedCleanupEvent`, `InstanceSubStateChangedEvent`,
+    and the three sub-terminal events `InstanceSubCompletedEvent`/`InstanceSubFaultedEvent`/
+    `InstanceSubCanceledEvent`). Instead of joining the producer's trace, the handler **roots a
+    brand-new trace** for its span and attaches the producer's `TraceParent` — plus the ambient
+    pub/sub delivery span, when its trace id differs — as `ActivityLink`s rather than as the
+    parent. This is a deliberate episode separation: a fact's delivery machinery (pubsub → inbox →
+    Dapr invoke → settlement) no longer drags the entire business trace it is reporting on into one
+    tree. Forcing the genuine root requires clearing `Activity.Current` around the `StartActivity`
+    call — a default `ActivityContext` parent alone does not do it, .NET falls back to the ambient
+    activity — and `EventTraceScope.Dispose` restores the ambient afterward.
+  - A `LinkedDelivery` root is stamped `messaging.message.id` and `vnext.causation.id` (both from
+    the CloudEvent envelope id, since the root is now a trace entry point and must be findable by
+    the message that produced it), plus `vnext.delivery.attempt` when the event carries a
+    rearm/redelivery count (the three sub-terminal events' `RearmAttempt`) — omitted entirely when
+    the event carries none. `ContinueTrace` stamps none of these tags, byte-for-byte parity with
+    the pre-split behavior.
+  - `WorkflowTraceLane.Reset(...)` side effects are **identical in both modes** — this is what
+    keeps a genuine backup-settled subflow resume anchored into the parent's trace regardless of
+    which mode delivered it. This is independent of the relay-specific "Inbox backup role" bullet
+    above; both can apply to the same sub-terminal handler span at once.
 - **Health signal**: watch backup deliveries by outcome, not just volume. A backup delivery that
   actually **settles** the parent (the relay missed it) is a real signal the relay path degraded —
   investigate it. A backup delivery that resolves as `AlreadySettled` is expected, ordinary noise
