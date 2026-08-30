@@ -199,6 +199,43 @@ this path. The crash-between-commit-and-relay window is instead covered end-to-e
 backup delivery (see [Latency](#latency-unvalidated-design-budget---measured-in-verification)
 above) — there is no separate arming mechanism to reason about.
 
+## Verification (2026-08-30, local stack)
+
+Verified against the local stack (all four hosts started with `--launch-profile http`, infra via
+`etc/docker/run-docker.sh`) using vnext-example's `Core.IntegrationTests` and a standalone load
+probe. Single run, single machine — see the caveat at the end.
+
+- **Integration — Subflow + ChainBusy suites**: 20/20 green against the local stack; FuturePay
+  added 6/6 once MockLab was up. The initial reds seen before MockLab started were an environment
+  gap, not a regression.
+- **Relay primary-path evidence**: 11/11 subflow terminal relays observed on Orchestration matched
+  1:1 with their Inbox backup deliveries. Duplicate absorption was confirmed via the terminal-guard
+  span outcome (`AlreadySettled` as an activity tag) rather than a plaintext log line — noted as an
+  observability gap; a log-level signal for `AlreadySettled` would make this auditable without
+  pulling spans.
+- **Wakeup signal**: Outbox worker lease→publish deltas measured 2–40 ms during bursts, with no
+  idle-poll wait observed between arriving work items. Previous behavior (poll-only) carried up to
+  the configured 5 s idle interval per pickup.
+- **Worker-kill resilience**: with the Outbox worker stopped, a subflow-completion integration test
+  still passed — the relay alone carried the parent resume. After restarting the worker, the
+  accumulated backlog drained fully: 476 processed / 0 pending in `sys_queues.OutboxMessages`.
+- **Load probe** (`api-tests/subflow-orchestration/terminal-relay-load.py`, 30 instances,
+  concurrency 6, gap measured from server-side `InstanceTransitions` timestamps): 30/30 instances
+  completed, 0 stuck. Child-terminal → parent-resume gap: p50 50.6 ms, p95 64.4 ms, p99 65.9 ms,
+  max 66.3 ms — all three verdicts PASS against the p99 ≤ 250 ms objective, with roughly 4×
+  margin. Queue-row cost: 360 outbox rows + 360 inbox rows for 30 instances (12 + 12 rows per
+  instance across all events), consistent with the queue-row-throughput risk called out in
+  [Accepted risks](#accepted-risks).
+
+These results confirm the design budget in
+[Latency](#latency-unvalidated-design-budget---measured-in-verification) for this local run; that
+table's numbers remain the forward-looking **budget** for environments this run did not exercise —
+production-scale broker delay, multi-replica contention, and cross-region hops.
+
+- **Caveat**: all numbers above come from a single local run on one M-series dev machine with every
+  service running locally (no container image, no broker latency, no replica contention).
+  Production-grade histograms under real broker delay and replica contention remain future work.
+
 ## Related
 
 - [End-to-End Trace/Span Tree](trace-span-tree.md) — span-name → source → tags reference,
