@@ -303,6 +303,61 @@ name (the pattern already used for Dapr internals, see [Trace Lanes](trace-lanes
 superseded by the processor-level drop above, which needed no exporter-side collector change and no
 loss of in-process validity for the span.
 
+## Verification (2026-08-30, local stack)
+
+Acceptance run against the local four-host stack, all apps restarted onto the new build at
+**2026-08-30T15:30:14Z** — that instant is the cutover used to split "pre-change" from
+"post-cutover" evidence below.
+
+Traffic: the vnext-example Subflow+ChainBusy integration subset (22/22 green) plus a
+15-instance/5-concurrency `terminal-relay-load.py` run (15/15 completed; relay gap p50 53.4 ms /
+p95 63.6 ms / p99 69.4 ms — all verdicts PASS, unchanged from the pre-change baseline of p99
+65.9 ms, i.e. the trace work cost no measurable latency).
+
+All nine acceptance checks passed:
+
+1. **Business-trace purity** — 5 sampled traces containing `TransitionJob.Execute*`: zero
+   `Outbox.Process` / `EventBus.PublishEnvelope` / `EventBus.PublishToBroker` /
+   `POST internal/outbox-wakeup` / fact `*.Handle` spans leaked into any of them.
+2. **`Outbox.Process`** — 328 spans, all trace roots (0 parented), all carrying links.
+3. **Fact deliveries** — 327 `Instance*.Handle` spans, all roots, all with links.
+4. **Command continuation** — `TransitionContinuationRequested` never fires in the flows
+   available to this run (0 occurrences in 24h; the runtime takes the direct Dapr job-payload
+   path instead), so continuation was verified on its sibling `ContinueTrace` command,
+   `ChildSubflowCancelRequested.Handle`: post-cutover it has a parent and shares its trace with
+   the producing app's spans. Recorded here honestly: this check passed via the substitute
+   command, not via the originally-named `TransitionContinuationRequested` path, which this run
+   had no traffic to exercise.
+5. **Relay same-tree** — 3 sampled relay traces each contain `Subflow.TerminalRelay` ×2,
+   `SubFlow.Completion` ×2, `SubFlow.Resume` ×2, and zero `*.Handle` spans: the flow's own
+   settlement work stayed inside the flow trace while the duplicate backup delivery moved out.
+6. **Idle noise** — 2-minute buckets: pre-cutover every bucket had exactly 12 root `Db.*` spans
+   per worker (and those were the only worker spans present); post-cutover every bucket has
+   **zero** root `Db.*` spans, including during heavy traffic, and zero worker spans while idle.
+7. **Wakeup isolation** — 0 `POST internal/outbox-wakeup` spans post-cutover. The Dapr
+   **sidecar**'s `pubsub/…aether.outbox.wakeup…` spans still exist (241 of them), but 10/10
+   sampled are standalone traces with zero occurrences inside business traces — the documented
+   collector-filter knob remains the way to remove them at the source.
+8. **Duration containment** — the recorded pre-change baseline trace
+   (`c4b324894c9f9f8236841b820b09f8e3`, 367 spans) had 14 violations where a child span started
+   7–44 ms after its parent had already ended, every one of them event-plumbing (`*.Handle`
+   under `Events.PublishDeferred`, `Outbox.Process` under `EventBus.Publish`). After the change:
+   0 plumbing violations across 5 business traces and 3 delivery traces. Nine remaining
+   "violations" are the deliberate trace-lane flattening (`PostCommit.*` / `TransitionJob.*` /
+   `SubFlow.Resume` anchored to their lane anchor rather than nested, see [Trace
+   Lanes](trace-lanes.md)) — by design, unchanged by this work, and present in the baseline
+   shape too. Noting this explicitly so a future reader does not mistake it for a regression.
+9. **Identity tags** — delivery-trace roots carry `messaging.message.id` and
+   `vnext.causation.id` (both the CloudEvent envelope id), `vnext.delivery.role=backup`, domain,
+   flow, instance id, and parent/subflow instance ids; `vnext.delivery.attempt` is correctly
+   absent when the event's `RearmAttempt` is null.
+
+**Methodology note for future measurers**: in OpenObserve's trace stream, `start_time`/`end_time`
+are **nanoseconds** while `duration` is **microseconds** — mixing the two units silently produces
+nonsense containment results. This run hit that trap mid-measurement and corrected it; the
+corrected containment math (check 8 above) was validated against `end_time`, not the `duration`
+field.
+
 ## Related pages
 
 - [Event Trace Chain](event-trace-chain.md) — how `EventHook.{name}` (this page) connects to the
