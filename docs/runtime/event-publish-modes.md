@@ -147,6 +147,34 @@ Publishing an outbox row and waiting for the next poll tick used to be the only 
   this change is promoted past local. This doc does not edit that repo — flag it to whoever owns
   the Helm charts before rollout.
 
+### Trace noise: the wakeup round-trip stays out of business traces
+
+The wakeup nudge is infrastructure signaling, not business flow, and three independent mechanisms
+keep it from polluting a transition's trace:
+
+- **Publish side severed** — `OutboxWakeupCoordinator.NotifyFireAndForget` clears
+  `Activity.Current` to `null` before publishing `OutboxWakeupEvent` inside its detached,
+  fire-and-forget `Task.Run`. The committing transition's `ExecutionContext` would otherwise flow
+  into that task and hand its ambient trace context to the publish call; severing it means the
+  nudge's client span (and anything the sidecar does downstream) can never attach to — or carry
+  the traceparent of — the business trace whose commit triggered it.
+- **Worker server span excluded** — the Outbox worker's own `POST /internal/outbox-wakeup`
+  endpoint (where `IPollingWakeSignal<IOutboxProcessor>` is signaled) is now listed in
+  `Telemetry:Tracing:ExcludedPaths` (`^/internal/outbox-wakeup$`), alongside the existing
+  `^/health$`-style entries. Without it, every nudge delivery would mint its own ASP.NET Core
+  server span in the Outbox worker — a one-span trace fired on a timer, structurally identical to
+  the idle-poll `Db.*` noise this same worker already suppresses (see
+  [Trace/Span Tree § EF Core instrumentation](trace-span-tree.md#ef-core-instrumentation-the-worker-poll-cost-measured)).
+- **Dapr sidecar spans are a separate, unaddressed layer** — the two mechanisms above only cover
+  spans vnext's own code emits. The Dapr sidecar still instruments its own hop for the wakeup
+  topic (`pubsub/{env}.aether.outbox.wakeup.v1`) independently of the app-level server span, so a
+  tiny standalone trace per nudge (sidecar publish → sidecar deliver) remains visible in the
+  backend even after the app-side exclusion above. If that volume bothers a dashboard, the knob is
+  an OTel-collector filter dropping that span name before export — the same pattern already used
+  for other Dapr-internal noise (see [Trace Lanes](trace-lanes.md)). This plan does **not** touch
+  the collector config or `vnext-helm-charts`; it is flagged here for whoever owns that
+  configuration to pick up if the sidecar noise becomes a real problem.
+
 ## Observability contract
 
 - **Relay span**: `Subflow.TerminalRelay`, opened via `PipelineStepActivityHelper.StartOperationActivity`
