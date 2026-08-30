@@ -1542,6 +1542,48 @@ public static partial class WorkflowLogs
         Guid instanceId,
         Guid parentInstanceId);
 
+    /// <summary>
+    /// Logs when a subflow terminal event (completed/faulted/canceled) is relayed to the parent
+    /// instance as an immediate post-commit command (Outbox + TerminalRelay mode).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40124,
+        Level = LogLevel.Information,
+        Message = "Subflow terminal {EventName} relayed to parent (sub {SubInstanceId} -> parent {ParentInstanceId})")]
+    public static partial void SubflowTerminalRelayed(
+        this ILogger logger,
+        string eventName,
+        Guid subInstanceId,
+        Guid parentInstanceId);
+
+    /// <summary>
+    /// Logs when a subflow terminal relay attempt throws. The child's commit already stands, so the
+    /// durable Inbox backup will settle the parent shortly after.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40125,
+        Level = LogLevel.Warning,
+        Message = "Subflow terminal relay failed for {EventName} (sub {SubInstanceId} -> parent {ParentInstanceId}); Inbox backup will settle")]
+    public static partial void SubflowTerminalRelayFailed(
+        this ILogger logger,
+        Exception exception,
+        string eventName,
+        Guid subInstanceId,
+        Guid parentInstanceId);
+
+    /// <summary>
+    /// Logs when a subflow terminal relay's gateway call returns a failed <c>Result</c> (not an
+    /// exception). The durable Inbox backup will settle the parent shortly after.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40126,
+        Level = LogLevel.Warning,
+        Message = "Subflow terminal relay rejected for {EventName}: {Error}; Inbox backup will settle")]
+    public static partial void SubflowTerminalRelayRejected(
+        this ILogger logger,
+        string eventName,
+        string error);
+
     #endregion
 
     #region Instance Management

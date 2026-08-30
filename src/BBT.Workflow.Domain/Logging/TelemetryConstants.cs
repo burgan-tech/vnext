@@ -258,6 +258,23 @@ public static class TelemetryConstants
         /// </summary>
         public const string HookMode = "vnext.hook.mode";
 
+        /// <summary>Outcome of a subflow-terminal relay attempt: <c>relayed</c> | <c>failed</c> | <c>skipped</c>.</summary>
+        public const string RelayOutcome = "vnext.relay.outcome";
+
+        /// <summary>
+        /// Routing lane a subflow-terminal relay took: <c>local</c> (same-domain, in-process) or
+        /// <c>remote</c> (cross-domain, one Dapr service invocation). Sourced from the same
+        /// <c>IRuntimeInfoProvider.IsDomainMatch</c> check the gateway routes by, so the tag can
+        /// never disagree with the actual route.
+        /// </summary>
+        public const string RelayRoute = "vnext.relay.route";
+
+        /// <summary>True when the relayed terminal event's originating chain executed synchronously end-to-end.</summary>
+        public const string RelaySync = "vnext.relay.sync";
+
+        /// <summary>Which delivery path produced a subflow settlement: relay (immediate) or inbox (durable backup).</summary>
+        public const string DeliveryRole = "vnext.delivery.role";
+
         /// <summary>Domain whose endpoint is being resolved from service discovery. Set on every Discovery.Resolve span.</summary>
         public const string DiscoveryDomain = "vnext.discovery.domain";
 
