@@ -14,6 +14,7 @@ public sealed class OutboxWakeupController(
     IPollingWakeSignal<IOutboxProcessor> wakeSignal) : ControllerBase
 {
     [HttpPost("internal/outbox-wakeup")]
+    [ApiExplorerSettings(IgnoreApi = true)]
     public IActionResult Wake()
     {
         wakeSignal.Signal();
