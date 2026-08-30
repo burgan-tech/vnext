@@ -293,9 +293,7 @@ the span, but it stays valid in-process, so nothing downstream misbehaves. It is
 a blunt, host-scoped filter by design: it drops every rootless `Db.*` span in a gated host, not just
 poll-loop ones, on the reasoning that a rootless DB command in these two hosts is idle noise by
 construction once real work roots its own episode (`Outbox.Process`, see
-[Related pages](#related-pages) below) rather than running ambient. No new measurement has been
-taken against this fix; the table above remains the pre-fix baseline for reference, not a
-before/after comparison.
+[Related pages](#related-pages) below) rather than running ambient. This fix has since been measured; see [Verification](#verification-2026-08-30-local-stack) for post-cutover results.
 
 The two options this section previously weighed — an `EntityFrameworkInstrumentationOptions.Filter`
 skipping commands with no ambient `Activity`, or a collector-side filter by `service.name` + span
