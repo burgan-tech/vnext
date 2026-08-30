@@ -183,7 +183,11 @@ public sealed class InstanceCancellationServiceTests
 
         var result = await CreateService().ProcessCancellationAsync(_instance.Id);
 
-        result.IsSuccess.ShouldBeTrue();
+        // A per-job scheduler failure is now retryable (Result.Fail), not silently ACKed: the
+        // Inbox is the sole processor for cleanup events, so an IsSuccess=true here would ACK the
+        // message and strand the still-active "failed" job's scheduler entry forever. The winner
+        // ("waiting") is still persisted below before the failure is reported.
+        result.IsSuccess.ShouldBeFalse();
         failed.IsActive.ShouldBeTrue();
         running.IsActive.ShouldBeTrue();
         _instanceJobRepository.Verify(r => r.MarkManyAsProcessedAsync(
