@@ -35,6 +35,11 @@ internal sealed class InstanceSubCanceledEventHandler(
 
         using var traceScope = EventTraceScope.Start("InstanceSubCanceled.Handle", eventData, correlationIdProvider);
 
+        // This delivery is the durable BACKUP of the post-commit terminal relay: in the normal case the
+        // relay already settled the parent and the settlement path answers AlreadySettled via the
+        // pre-lock probe. Dashboards separate primary vs backup deliveries on this tag.
+        Activity.Current?.SetTag(TelemetryConstants.TagNames.DeliveryRole, "backup");
+
         var scopeProps = new Dictionary<string, object>
         {
             [TelemetryConstants.TagNames.Domain] = eventData.Domain,
