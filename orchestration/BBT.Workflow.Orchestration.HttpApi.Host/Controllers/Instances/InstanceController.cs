@@ -217,6 +217,12 @@ public sealed class InstanceController(
         [FromBody] SubItemCanceledInput request,
         CancellationToken cancellationToken = default)
     {
+        // Adopt the canceling subflow's lane, overriding the anchor the request middleware set to
+        // this relay endpoint's server span — same as CompleteSubAsync/FaultSubAsync above, and for
+        // the same reason: without it, a genuine backup-settled cancel resume detaches from the
+        // parent instance's level in the originating request's trace.
+        using var lane = WorkflowTraceLane.Reset(request.TraceRoot, request.ParentTraceRoot);
+
         await subflowCancellationService.CancellationAsync(request, cancellationToken);
         return Ok();
     }

@@ -7,7 +7,7 @@ namespace BBT.Workflow.Instances.Events;
 /// Event published when a SubFlow or SubProcess instance is canceled, notifying the parent instance.
 /// </summary>
 [EventName("instance.sub.canceled")]
-public class InstanceSubCanceledEvent : IDistributedEvent, ITraceableDistributedEvent, ISubflowTerminalEvent
+public class InstanceSubCanceledEvent : IDistributedEvent, ILaneAwareDistributedEvent, ISubflowTerminalEvent
 {
     /// <summary>The ID of the parent instance.</summary>
     [EventSubject]
@@ -57,6 +57,15 @@ public class InstanceSubCanceledEvent : IDistributedEvent, ITraceableDistributed
 
     /// <summary>Originating request id (X-Request-Id value) for log correlation.</summary>
     public string? RequestId { get; set; }
+
+    /// <summary>
+    /// Trace lane anchor of the publishing instance — the PARENT for the parent resume this cancellation will trigger, so it sits at the
+    /// right depth instead of nesting under its predecessor. See <c>WorkflowTraceLane</c>.
+    /// </summary>
+    public string? TraceRoot { get; set; }
+
+    /// <summary>W3C traceparent of the enclosing lane, so a subflow resume returns to the parent instance's lane.</summary>
+    public string? ParentTraceRoot { get; set; }
 
     /// <summary>
     /// How many times a terminal-revert has re-published this event as a durable-delivery rearm.

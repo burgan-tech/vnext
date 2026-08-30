@@ -180,6 +180,11 @@ public sealed class SubflowTerminalRelay(
             eventData.TerminationOrigin,
             eventData.InitiatorInstanceId,
             eventData.CascadeId),
+        // Carry the subflow's lane so the parent resume on the other side lands in the parent's
+        // lane (ParentTraceRoot) instead of nesting under the cancellation relay endpoint — same
+        // as MapToFlowCompletedInput/MapToSubFlowFaultedInput above.
+        TraceRoot = eventData.TraceRoot,
+        ParentTraceRoot = eventData.ParentTraceRoot,
         RearmAttempt = eventData.RearmAttempt
     };
 }
