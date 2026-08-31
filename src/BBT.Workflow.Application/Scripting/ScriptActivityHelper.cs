@@ -36,8 +36,7 @@ public static class ScriptActivityHelper
     {
         var activity = ActivitySource.StartActivity(
             string.IsNullOrEmpty(identity) ? "Script.Compile" : $"Script.Compile/{identity}",
-            ActivityKind.Internal,
-            Activity.Current?.Context ?? default);
+            ActivityKind.Internal);
 
         activity?.SetTag(TelemetryConstants.TagNames.SpanCategory, TelemetryConstants.SpanCategories.Business);
         return activity;
@@ -60,7 +59,7 @@ public static class ScriptActivityHelper
     public static Activity? StartExecuteActivity(string scriptKind)
     {
         var activity = ActivitySource.StartActivity(
-            "Script.Execute", ActivityKind.Internal, Activity.Current?.Context ?? default);
+            "Script.Execute", ActivityKind.Internal);
         if (activity != null)
         {
             activity.SetTag(TelemetryConstants.TagNames.ScriptKind, scriptKind);
@@ -74,7 +73,7 @@ public static class ScriptActivityHelper
     public static Activity? StartResolveHelpersActivity(int helperCount)
     {
         var activity = ActivitySource.StartActivity(
-            "Script.ResolveHelpers", ActivityKind.Internal, Activity.Current?.Context ?? default);
+            "Script.ResolveHelpers", ActivityKind.Internal);
         if (activity != null)
         {
             activity.SetTag(TelemetryConstants.TagNames.ScriptHelperCount, helperCount);

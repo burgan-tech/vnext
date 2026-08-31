@@ -67,8 +67,7 @@ public static class TaskExecutionActivityHelper
     {
         var activity = ActivitySource.StartActivity(
             $"{OperationTriggerLocal}.{taskKey}",
-            ActivityKind.Internal,
-            Activity.Current?.Context ?? default);
+            ActivityKind.Internal);
 
         if (activity != null)
         {
@@ -104,12 +103,9 @@ public static class TaskExecutionActivityHelper
         string? taskKey = null,
         string? taskType = null)
     {
-        var parentContext = Activity.Current?.Context ?? default;
-
         var activity = ActivitySource.StartActivity(
             operationName,
-            ActivityKind.Internal,
-            parentContext);
+            ActivityKind.Internal);
 
         if (activity != null)
         {
