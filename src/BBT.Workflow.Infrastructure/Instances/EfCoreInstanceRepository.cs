@@ -354,19 +354,14 @@ public sealed class EfCoreInstanceRepository(
     /// be told apart from query compilation or execution; see
     /// <c>docs/runtime/trace-span-tree.md</c> for how to read it.
     /// <para>
-    /// Uses <see cref="PipelineStepActivityHelper.ActivitySource"/> directly with the implicit-parent
-    /// <see cref="ActivitySource.StartActivity(string, ActivityKind)"/> overload rather than
-    /// <see cref="PipelineStepActivityHelper.StartOperationActivity"/>: that helper passes an
-    /// explicit parent context, which nulls <see cref="Activity.Parent"/> and severs the baggage
-    /// chain (same defect worked around in <c>DomainDiscoveryResolver</c>; fixing the helper itself
-    /// is out of scope here).
+    /// Creates the span via <see cref="PipelineStepActivityHelper.StartOperationActivity"/>, which
+    /// uses the implicit-parent <see cref="ActivitySource.StartActivity(string, ActivityKind)"/>
+    /// overload so baggage is inherited by child spans.
     /// </para>
     /// </remarks>
     private async Task<IQueryable<Instance>> PrepareDetailedQueryAsync()
     {
-        using var activity = PipelineStepActivityHelper.ActivitySource.StartActivity(
-            "Instance.Query.Prepare", ActivityKind.Internal);
-        activity?.SetTag(TelemetryConstants.TagNames.SpanCategory, TelemetryConstants.SpanCategories.Business);
+        using var activity = PipelineStepActivityHelper.StartOperationActivity("Instance.Query.Prepare");
 
         return await WithDetailsAsync();
     }
