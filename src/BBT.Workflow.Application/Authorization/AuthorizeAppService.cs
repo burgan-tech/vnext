@@ -116,6 +116,19 @@ public sealed class AuthorizeAppService(
             var roleForForward = resolvedForForward.Value is { Count: > 0 } forwardRoles
                 ? string.Join(",", forwardRoles)
                 : role;
+
+            // Only the forward is spanned, not the whole method. Everything above answered locally —
+            // parent-owned transitions, transition and queryRole overrides — and never touched the
+            // subflow. Spanning the method would report a descent that did not happen, and
+            // "this trace has no Subflow.Descend" would stop meaning "nothing descended".
+            using var descent = InstanceReadActivityHelper.StartDescendScope(
+                runtimeInfoProvider,
+                subflow.SubFlowDomain,
+                subflow.SubFlowName,
+                subflow.SubFlowInstanceId.ToString(),
+                instance!.Id.ToString(),
+                TelemetryConstants.DescentFunctions.Authorize);
+
             return await authorizeGateway.GetAuthorizeResultForInstanceAsync(
                 subflow.SubFlowDomain,
                 subflow.SubFlowName,

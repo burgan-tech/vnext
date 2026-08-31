@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
@@ -131,8 +132,8 @@ public sealed class MorphIdmCallerRoleResolverTests
     }
 
     /// <summary>
-    /// In a background transition scope there is no ambient HTTP request, so the position accessor is
-    /// empty and the forwarded headers are the only source.
+    /// In a background transition scope there is no ambient HTTP request, so nothing has populated
+    /// <c>ICurrentUser.Position</c> and the forwarded headers are the only source left.
     /// </summary>
     [Fact]
     public async Task FallsBackToTheHeaderDictionary_ForPosition_WhenNoAmbientRequest()
@@ -191,6 +192,143 @@ public sealed class MorphIdmCallerRoleResolverTests
         counter.Count.ShouldBe(1);
     }
 
+    // ── Tracing ─────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// A span on the miss path, carrying the caller identity the provider was keyed on and the size
+    /// of the answer. The outbound GET already produces an HTTP client span; this one is what says
+    /// WHO it was for and WHAT came back.
+    /// </summary>
+    [Fact]
+    public async Task AProviderCall_EmitsASpanTaggedWithTheCallerAndTheRoleCount()
+    {
+        using var spans = new SpanCollector();
+        var (resolver, _) = Build(Respond(HttpStatusCode.OK, """{"roles":["a","b"]}"""));
+
+        await resolver.ResolveRolesAsync(null);
+
+        var span = Assert.Single(spans.Captured);
+        Assert.Equal(AuthorizationActivityHelper.OperationResolveRoles, span.OperationName);
+        Assert.Equal(false, Tag(span, TelemetryConstants.TagNames.AuthMemoHit));
+        Assert.Equal(2, Tag(span, TelemetryConstants.TagNames.AuthRoleCount));
+        Assert.Equal("resolved", Tag(span, TelemetryConstants.TagNames.AuthOutcome));
+        Assert.Equal(Subject, Tag(span, TelemetryConstants.TagNames.Sub));
+        Assert.Equal(Actor, Tag(span, TelemetryConstants.TagNames.ActSub));
+        Assert.Equal(Position, Tag(span, TelemetryConstants.TagNames.AuthPosition));
+    }
+
+    /// <summary>
+    /// The reason this instrumentation exists. Six surfaces ask, one call happens — and all six get
+    /// a span, five of them tagged as memo hits. Without the hit spans a heavily-memoized request is
+    /// indistinguishable in the tree from one that only ever asked once, and the guarantee the memo
+    /// exists to provide becomes unverifiable outside the unit test.
+    /// </summary>
+    [Fact]
+    public async Task EverySurface_GetsASpan_ButOnlyOneIsAProviderCall()
+    {
+        using var spans = new SpanCollector();
+        var (resolver, counter) = Build(Respond(HttpStatusCode.OK, """{"roles":["a"]}"""));
+
+        for (var i = 0; i < 6; i++)
+            await resolver.ResolveRolesAsync(null);
+
+        counter.Count.ShouldBe(1);
+        spans.Captured.Count.ShouldBe(6);
+        spans.Captured.Count(s => Equals(Tag(s, TelemetryConstants.TagNames.AuthMemoHit), false)).ShouldBe(1);
+        spans.Captured.Count(s => Equals(Tag(s, TelemetryConstants.TagNames.AuthMemoHit), true)).ShouldBe(5);
+    }
+
+    /// <summary>
+    /// "No operation set" is a resolution, not a failure — the span must not carry Error status, or
+    /// a caller who legitimately holds nothing shows up in APM as a provider outage.
+    /// </summary>
+    [Fact]
+    public async Task NoContent_IsTaggedEmpty_AndIsNotAnError()
+    {
+        using var spans = new SpanCollector();
+        var (resolver, _) = Build(Respond(HttpStatusCode.NoContent, string.Empty));
+
+        await resolver.ResolveRolesAsync(null);
+
+        var span = Assert.Single(spans.Captured);
+        Assert.Equal("empty", Tag(span, TelemetryConstants.TagNames.AuthOutcome));
+        Assert.Equal(0, Tag(span, TelemetryConstants.TagNames.AuthRoleCount));
+        span.Status.ShouldBe(ActivityStatusCode.Unset);
+    }
+
+    /// <summary>
+    /// Fail-closed is invisible in logs alone once a request fans out. The span carries Error status
+    /// and the provider's status code, so the 403s downstream have a traceable cause.
+    /// </summary>
+    [Fact]
+    public async Task AFailedCall_MarksTheSpanErrorWithTheProviderStatus()
+    {
+        using var spans = new SpanCollector();
+        var (resolver, _) = Build(Respond(HttpStatusCode.InternalServerError, "{}"));
+
+        await resolver.ResolveRolesAsync(null);
+
+        var span = Assert.Single(spans.Captured);
+        Assert.Equal("failed", Tag(span, TelemetryConstants.TagNames.AuthOutcome));
+        Assert.Equal(500, Tag(span, TelemetryConstants.TagNames.AuthProviderStatusCode));
+        span.Status.ShouldBe(ActivityStatusCode.Error);
+    }
+
+    /// <summary>
+    /// A memoized FAILURE still denies, so its spans stay Error — otherwise only the first surface's
+    /// span shows the cause and the rest look like clean resolutions that happened to return nothing.
+    /// </summary>
+    [Fact]
+    public async Task AMemoizedFailure_KeepsErrorStatusOnEverySurface()
+    {
+        using var spans = new SpanCollector();
+        var (resolver, _) = Build(Respond(HttpStatusCode.BadGateway, "{}"));
+
+        await resolver.ResolveRolesAsync(null);
+        await resolver.ResolveRolesAsync(null);
+
+        spans.Captured.Count.ShouldBe(2);
+        spans.Captured.ShouldAllBe(s => s.Status == ActivityStatusCode.Error);
+        spans.Captured.Count(s => Equals(Tag(s, TelemetryConstants.TagNames.AuthMemoHit), true)).ShouldBe(1);
+    }
+
+    private static object? Tag(Activity activity, string name) =>
+        activity.GetTagItem(name);
+
+    /// <summary>
+    /// Captures the helper's spans. An ActivitySource with no listener returns null from
+    /// StartActivity, so without this every tracing assertion would pass vacuously.
+    /// </summary>
+    private sealed class SpanCollector : IDisposable
+    {
+        private readonly ActivityListener _listener;
+
+        public List<Activity> Captured { get; } = [];
+
+        public SpanCollector()
+        {
+            _listener = new ActivityListener
+            {
+                // Matched against the const, never against AuthorizationActivityHelper.ActivitySource:
+                // AddActivityListener runs this predicate while constructing sources, so touching the
+                // helper's static field here re-enters its still-running initializer and poisons the
+                // type for every later test in the process.
+                ShouldListenTo = source => source.Name == AuthorizationActivityHelper.SourceName,
+                Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllData,
+                ActivityStopped = activity => Captured.Add(activity)
+            };
+            ActivitySource.AddActivityListener(_listener);
+
+            // A collector that is not actually listening turns every tracing assertion into a
+            // vacuous pass, so prove the wiring here rather than discovering it as a mystery
+            // "collection was empty" in one test and a silent green in the next.
+            if (!AuthorizationActivityHelper.ActivitySource.HasListeners())
+                throw new InvalidOperationException("SpanCollector registered but the source has no listeners");
+        }
+
+        public void Dispose() => _listener.Dispose();
+    }
+
     // ── Helpers ─────────────────────────────────────────────────────────────────
 
     private static string? Header(HttpRequestMessage request, string name) =>
@@ -218,9 +356,7 @@ public sealed class MorphIdmCallerRoleResolverTests
         var currentUser = Substitute.For<ICurrentUser>();
         currentUser.UserName.Returns(Subject);
         currentUser.ActorUserName.Returns(Actor);
-
-        var positionAccessor = Substitute.For<ICallerPositionAccessor>();
-        positionAccessor.GetPosition().Returns(position);
+        currentUser.Position.Returns(position);
 
         var options = Options.Create(new CallerRoleProviderOptions
         {
@@ -230,7 +366,6 @@ public sealed class MorphIdmCallerRoleResolverTests
         return (new MorphIdmCallerRoleResolver(
             httpClient,
             currentUser,
-            positionAccessor,
             options,
             NullLogger<MorphIdmCallerRoleResolver>.Instance), counter);
     }

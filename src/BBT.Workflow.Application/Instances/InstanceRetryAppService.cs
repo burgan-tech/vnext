@@ -100,6 +100,17 @@ public sealed class InstanceRetryAppService(
             Roles = callerRoles.Value
         };
 
+        // Retry descends rarely, but leaving one descent unspanned would cost more than it saves:
+        // "this trace contains no Subflow.Descend" has to mean "nothing descended", or it means
+        // nothing at all.
+        using var descent = InstanceReadActivityHelper.StartDescendScope(
+            runtimeInfoProvider,
+            subflowCorrelation.SubFlowDomain,
+            subflowCorrelation.SubFlowName,
+            subflowCorrelation.SubFlowInstanceId.ToString(),
+            subflowCorrelation.ParentInstanceId.ToString(),
+            TelemetryConstants.DescentFunctions.State);
+
         var subflowStateResult = await instanceQueryGateway.GetFunctionWithStateAsync(
             subflowStateInput,
             cancellationToken);

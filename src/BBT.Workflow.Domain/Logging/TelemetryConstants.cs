@@ -62,6 +62,45 @@ public static class TelemetryConstants
         public const string FanOutItemQueueWaitMs = "vnext.fanout.item.queue_wait_ms";
         public const string Layer = "vnext.layer";
         public const string SpanCategory = "vnext.span.category";
+
+        /// <summary>Caller-role provider that answered: <c>default</c> or <c>morph-idm</c>.</summary>
+        public const string AuthProvider = "vnext.auth.provider";
+        /// <summary>
+        /// True when the request-scope memo answered and no provider call was made. Counting spans
+        /// with this false against the provider's HTTP client spans is how the one-call-per-request
+        /// guarantee is verified in production.
+        /// </summary>
+        public const string AuthMemoHit = "vnext.auth.memo.hit";
+        /// <summary>How many roles the caller holds. Zero denies every allowlist grant downstream.</summary>
+        public const string AuthRoleCount = "vnext.auth.roles.count";
+        /// <summary><c>resolved</c> | <c>empty</c> | <c>failed</c>.</summary>
+        public const string AuthOutcome = "vnext.auth.outcome";
+        /// <summary>
+        /// The caller's organizational posting. Part of the identity the provider keys its answer on
+        /// (with sub and act_sub), so a wrong or missing role set is unexplainable without it.
+        /// </summary>
+        public const string AuthPosition = "vnext.auth.position";
+        /// <summary>Provider HTTP status when the call failed with a response rather than an exception.</summary>
+        public const string AuthProviderStatusCode = "vnext.auth.provider.status_code";
+
+        /// <summary>
+        /// 1-based level of a built-in function's descent into an active subflow. Depth 1 is the
+        /// first child; the caller's own level has no descent span and is therefore not numbered.
+        /// </summary>
+        public const string SubflowDepth = "vnext.subflow.depth";
+        /// <summary>
+        /// <c>local</c> (in-process re-entry) or <c>remote</c> (HTTP to another domain). The two
+        /// transports have very different costs and, before this span existed, only the remote one
+        /// was visible at all.
+        /// </summary>
+        public const string DescentTransport = "vnext.descent.transport";
+        /// <summary>Which built-in function descended: <c>state</c>, <c>data</c>, <c>schema</c>, <c>master</c>, <c>view</c>, <c>extensions</c>, <c>authorize</c>.</summary>
+        public const string DescentFunction = "vnext.descent.function";
+        /// <summary>
+        /// Set only when a descent did NOT yield a usable answer, naming why. Absent on the normal
+        /// path — a fallback that leaves no mark is indistinguishable from a successful descent.
+        /// </summary>
+        public const string DescentOutcome = "vnext.descent.outcome";
         public const string StateFrom = "vnext.state.from";
         public const string StateTo = "vnext.state.to";
         public const string JobName = "vnext.job.name";
@@ -305,6 +344,47 @@ public static class TelemetryConstants
     }
 
     /// <summary>
+    /// Values for <see cref="TelemetryConstants.TagNames.AuthOutcome"/>.
+    /// </summary>
+    /// <summary>
+    /// Values for <see cref="TelemetryConstants.TagNames.DescentTransport"/>.
+    /// </summary>
+    public static class DescentTransports
+    {
+        /// <summary>Same domain: the gateway re-enters the query service in-process.</summary>
+        public const string Local = "local";
+        /// <summary>Another domain: the gateway calls over HTTP.</summary>
+        public const string Remote = "remote";
+    }
+
+    /// <summary>
+    /// Values for <see cref="TelemetryConstants.TagNames.DescentFunction"/>.
+    /// </summary>
+    public static class DescentFunctions
+    {
+        public const string State = "state";
+        public const string Master = "master";
+        public const string Schema = "schema";
+        public const string View = "view";
+        public const string Extensions = "extensions";
+        public const string Authorize = "authorize";
+    }
+
+    public static class AuthOutcomes
+    {
+        /// <summary>The provider returned a non-empty role set.</summary>
+        public const string Resolved = "resolved";
+        /// <summary>
+        /// The provider answered that this caller holds no roles. A valid answer, not a failure —
+        /// but a distinct one: it denies every allowlist grant, and a 403 caused by it looks nothing
+        /// like a 403 caused by a caller whose roles simply did not match.
+        /// </summary>
+        public const string Empty = "empty";
+        /// <summary>The provider could not be reached or did not answer usably; the request fails closed.</summary>
+        public const string Failed = "failed";
+    }
+
+    /// <summary>
     /// HTTP header names used for cross-domain correlation.
     /// </summary>
     public static class HeaderNames
@@ -329,6 +409,13 @@ public static class TelemetryConstants
         /// Request header carrying the parent instance ID when invoking subflow/subprocess remotely.
         /// </summary>
         public const string ParentInstanceId = "X-Parent-Instance-Id";
+        /// <summary>
+        /// Descent depth of a built-in function's walk into a subflow, carried across a domain
+        /// boundary so a mixed local/remote chain numbers its levels 1,2,3 rather than restarting at
+        /// each hop. Absent or unparseable ⇒ 0, so an older peer degrades to the previous behaviour
+        /// instead of failing.
+        /// </summary>
+        public const string SubflowDepth = "X-Subflow-Depth";
         /// <summary>
         /// Request header carrying the root (ancestor) instance ID across the full subflow chain.
         /// Remains constant at A's ID regardless of nesting depth.

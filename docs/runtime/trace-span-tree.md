@@ -88,6 +88,47 @@ Four things worth calling out that the diagram doesn't show directly:
   here. `Cache.*` spans appear anywhere a `CacheSet<T>` read/write runs, not only under
   `Transition.LoadContext`.
 
+## Reading the descent ladder
+
+A built-in function that lands on an instance with an open subflow correlation forwards the whole
+request to the child, and repeats that at every level. Each level gets one `Subflow.Descend` span, so
+the chain reads as a ladder and each level's `Cache.*` and `Db.*` spans nest under the level that
+paid for them:
+
+```
+GET .../instances/{id}/functions/state    server span (level 0)
+├─ Auth.ResolveRoles
+├─ Cache.Get/state-fn:v7:…                level 0's own cache read
+└─ Subflow.Descend/chain-busy-middle      depth=1  transport=local
+   ├─ Cache.Get/state-fn:v7:…
+   └─ Subflow.Descend/chain-busy-leaf     depth=2  transport=local
+      └─ Cache.Get/state-fn:v7:…
+```
+
+Three things this is built to answer, none of which were answerable before:
+
+- **Which level paid for a cache miss or a `Db.SELECT`.** Before these spans a three-level read was
+  one flat region under the server span, and the only way to attribute a cache read was to decode its
+  key by hand.
+- **Whether the hop was in-process or over the network** (`vnext.descent.transport`). A same-domain
+  descent produced no spans at all, while a cross-domain one was visible through HttpClient
+  instrumentation — so the cheap hop was the invisible one and the expensive hop was the traced one.
+- **How deep the chain went** (`vnext.subflow.depth`). Nothing bounds the descent, so an unexpected
+  depth is itself the finding.
+
+`vnext.subflow.depth` is carried in-process by an `AsyncLocal` (`SubflowDescentContext`) and across a
+domain boundary by the `X-Subflow-Depth` header — stamped on the way out by
+`CurrentUserForwardHeadersHelper` and read on the way in by `ParentInstanceIdEnrichmentMiddleware`.
+An absent or malformed header degrades to 0, so an older peer keeps working and only the numbering
+restarts.
+
+**Implicit parenting is load-bearing here.** These spans use the `StartActivity(name, kind)` overload,
+not the one taking an explicit `ActivityContext`. The explicit overload sets `ParentSpanId` but leaves
+`Activity.Parent` null, and baggage is inherited through the Activity *chain* — so an explicitly
+parented descent span severs baggage for everything under it, including the cross-domain read one
+level down that forwards `X-Root-Instance-Id` by reading that baggage back out. A test pins it
+(`ADescent_InheritsTheCallersBaggage`).
+
 ## Span reference
 
 All tag names live in `TelemetryConstants.TagNames` (`BBT.Workflow.Domain/Logging/TelemetryConstants.cs`)
@@ -111,6 +152,8 @@ level; nothing in this table is gated behind `AetherTracingRuntime.IsVerbose`.
 | `Uow.Commit` | `BBT.Workflow.Pipeline` | — | The transaction commit in `TransitionRunner`; sat outside every span, so a slow commit read as time spent nowhere. |
 | `Events.PublishDeferred` | `BBT.Workflow.Pipeline` | — | Staging deferred domain events onto the bus before the commit. |
 | `EventHook.{name}` | `BBT.Workflow.Instances.Events` | `vnext.event.name`, `vnext.hook.name`, `vnext.hook.mode` | **Stale — `HookedDistributedEventBus`/`EventHook` no longer exist; see the note under [Target span tree](#target-span-tree) and [Event Publish Modes § Purpose](event-publish-modes.md#purpose).** One span per hook invocation (`HookedDistributedEventBus.ExecuteHooksAsync`), named after the hook with the conventional `EventHook`/`Hook` suffix trimmed (`vnext.hook.name` keeps the untrimmed name). Its parent tells you the mode: under `Uow.Commit` means `DurablePostCommit` (hook ran after the ambient UoW committed); under `Events.PublishDeferred` means `HandledOrFallback` (hook ran at publish time). No re-parenting — the span simply opens under whatever is ambient. Error status + message on a failed or throwing hook; the failure still stays swallowed (hooks never fail the publish). |
+| `Subflow.Descend/{targetFlow}` | `BBT.Workflow.Instances.Read` | `vnext.subflow.depth`, `vnext.descent.transport` (`local` \| `remote`), `vnext.descent.function` (`state` \| `master` \| `schema` \| `view` \| `extensions` \| `authorize`), target `vnext.domain`/`vnext.flow.key`/`vnext.instance.id`, `vnext.parent.instance.id`, `vnext.descent.outcome` (only when the descent produced no usable answer) | One level of a built-in function's walk into an active subflow. Emitted by the five `InstanceQueryAppService` descent helpers, `AuthorizeAppService`'s subflow forward and `InstanceRetryAppService`. See "Reading the descent ladder" below. |
+| `Auth.ResolveRoles` | `BBT.Workflow.Authorization` | `vnext.auth.provider`, `vnext.auth.memo.hit`, `vnext.auth.roles.count`, `vnext.auth.outcome` (`resolved` \| `empty` \| `failed`), `vnext.auth.position`, `sub`, `act.sub` | Caller-role resolution through an external provider. Emitted on BOTH the provider call and the request-scope memo hit, with the difference in `memo.hit` — the compile cache's rule. Only providers that do I/O are instrumented; the default provider reads `ICurrentUser` in-process. |
 | `Cache.GenerationGet/{redisKey}` | `BBT.Workflow.Cache` | `cache.component_type`, `cache.store` | The generation-token read that precedes EVERY component resolution. The caller's `Cache.Get` sits after it, not around it, so this round trip was previously attributed to nothing. |
 | `Db.{VERB}` | `OpenTelemetry.Instrumentation.EntityFrameworkCore` | `db.statement` (text, `@p0` placeholders — parameter VALUES stay behind `OTEL_DOTNET_EXPERIMENTAL_EFCORE_ENABLE_TRACE_DB_QUERY_PARAMETERS`, false unless set) | One span per EF Core command, so a DB region resolves into the commands it actually ran. `VERB` is `SELECT`/`INSERT`/`UPDATE`/`DELETE`/`MERGE`, or `Query` when the first token is none of those. Renamed from the default DisplayName, which is the **database name** — a single transition showed fifteen siblings all called `Aether_WorkflowDb`. Reads as a check on the documented include strategy: `Instance.Load` should contain exactly three `Db.SELECT` children (instance + `DataList` + `ChildCorrelations`, split queries). |
 | `Transition.ValidatePolicy` | `BBT.Workflow.Pipeline` | `span.category=business`, error status + message on failure | Wraps `ValidatePolicyAsync`. No I/O, but it runs on every auto-chain hop — without it a trace shows the schema-bearing validation and nothing for the later hops. |

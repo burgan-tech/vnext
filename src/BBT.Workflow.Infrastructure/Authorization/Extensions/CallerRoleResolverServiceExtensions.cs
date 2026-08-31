@@ -79,7 +79,6 @@ public static class CallerRoleResolverServiceExtensions
         services.AddScoped<ICallerRoleResolver>(sp => new MorphIdmCallerRoleResolver(
             sp.GetRequiredService<IHttpClientFactory>().CreateClient(MorphIdmClientName),
             sp.GetRequiredService<ICurrentUser>(),
-            sp.GetRequiredService<ICallerPositionAccessor>(),
             sp.GetRequiredService<IOptions<CallerRoleProviderOptions>>(),
             sp.GetRequiredService<ILogger<MorphIdmCallerRoleResolver>>()));
 

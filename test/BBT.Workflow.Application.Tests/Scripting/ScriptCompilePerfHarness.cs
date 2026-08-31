@@ -85,10 +85,9 @@ public class ScriptCompilePerfHarness(ITestOutputHelper output)
 
     private static async Task<double> TimeAsync(Func<Task> action)
     {
-        var sw = Stopwatch.StartNew();
+        var sw = Stopwatch.GetTimestamp();
         await action();
-        sw.Stop();
-        return sw.Elapsed.TotalMilliseconds;
+        return Stopwatch.GetElapsedTime(sw).TotalMilliseconds;
     }
 
     private void Report(string label, List<double> samples)

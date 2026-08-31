@@ -3265,7 +3265,7 @@ public static partial class WorkflowLogs
         this ILogger logger,
         string provider,
         int roleCount,
-        long elapsedMs);
+        double elapsedMs);
 
     /// <summary>
     /// Logs when the provider answered that the caller has no operation set at all. This is a valid

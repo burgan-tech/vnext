@@ -8,8 +8,6 @@ using BBT.Aether.Uow.EntityFrameworkCore;
 using BBT.Workflow;
 using BBT.Workflow.BackgroundJobs.Handlers;
 using BBT.Workflow.Data;
-using BBT.Workflow.DefinitionContext;
-using BBT.Workflow.Authorization;
 using BBT.Workflow.Headers;
 using BBT.Workflow.HttpApi.Shared.Telemetry;
 using BBT.Workflow.Runtime;
@@ -426,7 +424,6 @@ public static class WorkflowApiBaseServiceCollectionExtensions
     {
         services.AddScoped<ResponseHeaderFilter>();
         services.AddScoped<IHeaderService, HttpContextHeaderService>();
-        services.AddScoped<ICallerPositionAccessor, HttpContextCallerPositionAccessor>();
         services
             .AddScoped<BBT.Workflow.Languages.ICurrentLanguage, BBT.Workflow.Languages.HttpContextCurrentLanguage>();
         services

@@ -88,7 +88,7 @@ public class InstanceCommandAppServiceStartProbeTests : IDisposable
             longPollAckResumeService: Substitute.For<ILongPollAckResumeService>(),
             instanceCommandGateway: Substitute.For<IInstanceCommandGateway>(),
             workflowOutputMappingService: Substitute.For<IWorkflowOutputMappingService>(),
-            currentUser: Substitute.For<ICurrentUser>(),
+            callerRoleResolver: Substitute.For<ICallerRoleResolver>(),
             logger: Substitute.For<ILogger<InstanceCommandAppService>>());
     }
 

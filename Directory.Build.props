@@ -2,7 +2,12 @@
     <PropertyGroup>
 
         <!-- All Prism packages -->
-        <AetherPackageVersion>1.0.38</AetherPackageVersion>
+        <!--
+          `-local` resolves from aether's .local-feed (see nuget.config), not nuget.org.
+          It carries the unreleased ICurrentUser.Position / Role work this branch consumes.
+          Set this back to a published version (e.g. 1.0.38) before merging.
+        -->
+        <AetherPackageVersion>1.0.40-local</AetherPackageVersion>
         <!-- Overrides transitive PostSharp 2026.0.7 from BBT.Aether.Aspects; >=2026.0.10 required to read project.assets.json v4 written by .NET SDK 10.0.300+ -->
         <PostSharpPackageVersion>2026.0.12</PostSharpPackageVersion>
         <!-- Elastic Apm packages -->

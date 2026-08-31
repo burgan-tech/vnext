@@ -503,6 +503,22 @@ public sealed class InstanceQueryAppService(
         };
 
     /// <summary>
+    /// Opens the descent span for one level. Thin forwarder over
+    /// <see cref="InstanceReadActivityHelper.StartDescendScope"/> that captures this service's
+    /// <c>IRuntimeInfoProvider</c>, so the five call sites below stay readable.
+    /// </summary>
+    private SubflowDescentScope StartDescend(
+        string targetDomain,
+        string targetFlow,
+        string targetInstanceId,
+        string parentInstanceId,
+        string function)
+    {
+        return InstanceReadActivityHelper.StartDescendScope(
+            runtimeInfoProvider, targetDomain, targetFlow, targetInstanceId, parentInstanceId, function);
+    }
+
+    /// <summary>
     /// Gets available transitions and state information from a remote SubFlow instance.
     /// Includes view extensions and active correlations from the SubFlow.
     /// </summary>
@@ -542,6 +558,13 @@ public sealed class InstanceQueryAppService(
                 Role = ICallerRoleResolver.SingleRoleOf(callerRoles.Value),
                 Roles = callerRoles.Value
             };
+
+            using var descent = StartDescend(
+                activeSubFlowCorrelation.SubFlowDomain,
+                activeSubFlowCorrelation.SubFlowName,
+                activeSubFlowCorrelation.SubFlowInstanceId.ToString(),
+                mainInstance.Id.ToString(),
+                TelemetryConstants.DescentFunctions.State);
 
             var subFlowResult = await instanceQueryGateway.GetFunctionWithStateAsync(
                 subFlowInput,
@@ -2033,6 +2056,13 @@ public sealed class InstanceQueryAppService(
             Roles = callerRoles.Value
         };
 
+        using var descent = StartDescend(
+            subflow.SubFlowDomain,
+            subflow.SubFlowName,
+            subflow.SubFlowInstanceId.ToString(),
+            subflow.ParentInstanceId.ToString(),
+            TelemetryConstants.DescentFunctions.Master);
+
         return await instanceQueryGateway.GetFunctionWithMasterAsync(subFlowInput, cancellationToken);
     }
 
@@ -2110,6 +2140,13 @@ public sealed class InstanceQueryAppService(
             Role = ICallerRoleResolver.SingleRoleOf(callerRoles.Value),
             Roles = callerRoles.Value
         };
+
+        using var descent = StartDescend(
+            subflow.SubFlowDomain,
+            subflow.SubFlowName,
+            subflow.SubFlowInstanceId.ToString(),
+            subflow.ParentInstanceId.ToString(),
+            TelemetryConstants.DescentFunctions.Extensions);
 
         return await instanceQueryGateway.GetFunctionWithExtensionsAsync(
             subFlowInput,
@@ -2199,6 +2236,13 @@ public sealed class InstanceQueryAppService(
             Role = ICallerRoleResolver.SingleRoleOf(callerRoles.Value),
             Roles = callerRoles.Value
         };
+
+        using var descent = StartDescend(
+            subflow.SubFlowDomain,
+            subflow.SubFlowName,
+            subflow.SubFlowInstanceId.ToString(),
+            subflow.ParentInstanceId.ToString(),
+            TelemetryConstants.DescentFunctions.Schema);
 
         return await instanceQueryGateway.GetFunctionWithSchemaAsync(
             subFlowInput,
@@ -2356,6 +2400,13 @@ public sealed class InstanceQueryAppService(
         if (!callerRoles.IsSuccess)
             return null;
 
+        using var descent = StartDescend(
+            instance.Subflow!.SubFlowDomain,
+            instance.Subflow!.SubFlowName,
+            instance.Subflow!.SubFlowInstanceId.ToString(),
+            instance.Id.ToString(),
+            TelemetryConstants.DescentFunctions.View);
+
         var subFlowViewResult = await instanceQueryGateway.GetFunctionWithViewAsync(
             new GetFunctionWithInstanceInput
             {
@@ -2373,6 +2424,10 @@ public sealed class InstanceQueryAppService(
 
         if (!subFlowViewResult.IsSuccess)
         {
+            // Falling back to the main-flow view is a normal outcome here, not an error — but an
+            // unmarked fallback is indistinguishable from a descent that succeeded and returned
+            // nothing, which is the exact confusion this span exists to remove.
+            InstanceReadActivityHelper.SetUnresolved(descent.Activity, "subflow-view-unavailable");
             return null;
         }
 

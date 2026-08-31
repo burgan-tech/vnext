@@ -10,7 +10,7 @@ namespace BBT.Workflow.CurrentUser;
 /// Tests for the caller role/roles resolution helpers used when locally routing function services:
 /// prefer the current user's roles, fall back to the request <c>role</c> header, else null.
 /// </summary>
-public class CurrentUserHeaderExtensionsTests
+public class CallerRoleHeaderExtensionsTests
 {
     private static ICurrentUser UserWithRoles(params string[]? roles)
     {

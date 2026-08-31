@@ -1,8 +1,10 @@
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.Linq;
 using System.Threading.Tasks;
 using BBT.Aether.Tracing;
+using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
@@ -36,6 +38,13 @@ public sealed class ParentInstanceIdEnrichmentMiddleware(
     {
         var parentInstanceId = context.Request.Headers[TelemetryConstants.HeaderNames.ParentInstanceId].FirstOrDefault();
         var rootInstanceId   = context.Request.Headers[TelemetryConstants.HeaderNames.RootInstanceId].FirstOrDefault();
+
+        // Continue the read ladder this request is a level of. Seeded before anything downstream can
+        // descend further, so the next Subflow.Descend numbers itself relative to the caller's depth
+        // rather than restarting at 1. Unparseable or absent ⇒ left at 0 (Seed ignores non-positive).
+        var subflowDepth = context.Request.Headers[TelemetryConstants.HeaderNames.SubflowDepth].FirstOrDefault();
+        if (int.TryParse(subflowDepth, NumberStyles.Integer, CultureInfo.InvariantCulture, out var depth))
+            SubflowDescentContext.Seed(depth);
 
         var activity = Activity.Current;
         var scopeProperties = new Dictionary<string, object>();

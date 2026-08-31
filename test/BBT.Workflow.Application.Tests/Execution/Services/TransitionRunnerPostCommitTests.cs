@@ -283,12 +283,25 @@ public sealed class TransitionRunnerPostCommitTests
             {
                 var probe = new CurrentUserScopeProbe();
                 var currentUser = Substitute.For<ICurrentUser>();
+
+                // Both overloads are stubbed. The SDK's ChangeFromHeaders goes through
+                // Change(BasicUserInfo) — the positional overload delegates to it — so a probe that
+                // only intercepted the positional one would record nothing and report a null user
+                // for every scope, which reads as "the user was not propagated" rather than "the
+                // test double missed the call".
+                currentUser.Change(Arg.Any<BasicUserInfo>())
+                    .Returns(call =>
+                    {
+                        probe.UserId = call.ArgAt<BasicUserInfo>(0).Id;
+                        return Substitute.For<IDisposable>();
+                    });
                 currentUser.Change(
                         Arg.Any<string?>(),
                         Arg.Any<string?>(),
                         Arg.Any<string?>(),
                         Arg.Any<string?>(),
                         Arg.Any<string[]?>(),
+                        Arg.Any<string?>(),
                         Arg.Any<string?>(),
                         Arg.Any<string?>(),
                         Arg.Any<string?>())

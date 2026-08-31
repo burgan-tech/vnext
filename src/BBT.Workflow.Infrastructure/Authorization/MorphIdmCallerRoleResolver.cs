@@ -4,7 +4,6 @@ using System.Text.Json;
 using BBT.Aether.Results;
 using BBT.Aether.Users;
 using BBT.Workflow.Authorization.Configuration;
-using BBT.Workflow.CurrentUser;
 using BBT.Workflow.Logging;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -30,7 +29,6 @@ public sealed class MorphIdmCallerRoleResolver : ICallerRoleResolver
 {
     private readonly HttpClient _httpClient;
     private readonly ICurrentUser _currentUser;
-    private readonly ICallerPositionAccessor _positionAccessor;
     private readonly MorphIdmOptions _options;
     private readonly ILogger<MorphIdmCallerRoleResolver> _logger;
 
@@ -44,21 +42,20 @@ public sealed class MorphIdmCallerRoleResolver : ICallerRoleResolver
 
     /// <summary>
     /// Headers captured from the first caller, used only as a fallback source of <c>position</c> in
-    /// scopes with no ambient HTTP request (background transition execution). Identity itself comes
-    /// from <c>ICurrentUser</c>, which is scope-wide and identical at every call site.
+    /// scopes with no ambient HTTP request (background transition execution), where nothing has
+    /// populated <c>ICurrentUser.Position</c>. The rest of the identity comes from
+    /// <c>ICurrentUser</c>, which is scope-wide and identical at every call site.
     /// </summary>
     private IReadOnlyDictionary<string, string?>? _fallbackHeaders;
 
     public MorphIdmCallerRoleResolver(
         HttpClient httpClient,
         ICurrentUser currentUser,
-        ICallerPositionAccessor positionAccessor,
         IOptions<CallerRoleProviderOptions> options,
         ILogger<MorphIdmCallerRoleResolver> logger)
     {
         _httpClient = httpClient;
         _currentUser = currentUser;
-        _positionAccessor = positionAccessor;
         _options = options.Value.MorphIdm;
         _logger = logger;
 
@@ -83,11 +80,33 @@ public sealed class MorphIdmCallerRoleResolver : ICallerRoleResolver
                 _logger.CallerRolesServedFromRequestScopeMemo(
                     CallerRoleProviderOptions.MorphIdmProvider, memoized.Result.Value?.Length ?? 0);
             }
-            return memoized;
+
+            return RecordMemoHitAsync(memoized);
         }
 
         _fallbackHeaders = headers;
         return _resolution.Value;
+    }
+
+    /// <summary>
+    /// Emits the span for a surface that was served the memo. The span is short by construction —
+    /// it measures nothing but the memo read — and that is the point: its presence, and its
+    /// <c>memo.hit=true</c> tag, are what make the shared call visible. Without it a request where
+    /// six surfaces asked once looks exactly like one where a single surface asked.
+    /// </summary>
+    private static async Task<Result<string[]?>> RecordMemoHitAsync(Task<Result<string[]?>> memoized)
+    {
+        using var activity = AuthorizationActivityHelper.StartResolveRoles(
+            CallerRoleProviderOptions.MorphIdmProvider);
+
+        var result = await memoized;
+
+        if (result.IsSuccess)
+            AuthorizationActivityHelper.SetResolved(activity, result.Value?.Length ?? 0, memoHit: true);
+        else
+            AuthorizationActivityHelper.SetFailedFromMemo(activity);
+
+        return result;
     }
 
     private async Task<Result<string[]?>> FetchAsync(
@@ -96,15 +115,23 @@ public sealed class MorphIdmCallerRoleResolver : ICallerRoleResolver
     {
         var subject = _currentUser.UserName;
         var actor = _currentUser.ActorUserName;
-        var position = _positionAccessor.GetPosition() ?? HeaderValue(headers, CurrentUserHeaderKeys.Position);
+        // Position now rides on ICurrentUser, populated by the framework's HeaderCurrentUserResolver
+        // from the `position` claim header. The forwarded-header fallback stays for scopes with no
+        // ambient HTTP request — a background transition job resolving roles carries the caller's
+        // headers as a dictionary, and nothing has populated ICurrentUser there.
+        var position = _currentUser.Position ?? HeaderValue(headers, AetherClaimTypes.Position);
 
-        var stopwatch = Stopwatch.StartNew();
+        using var activity = AuthorizationActivityHelper.StartResolveRoles(
+            CallerRoleProviderOptions.MorphIdmProvider);
+        AuthorizationActivityHelper.SetCaller(activity, subject, actor, position);
+
+        var stopwatch = Stopwatch.GetTimestamp();
         try
         {
             using var request = new HttpRequestMessage(HttpMethod.Get, _options.GetRolesPath);
-            AddHeader(request, CurrentUserHeaderKeys.ActorSub, actor);
-            AddHeader(request, CurrentUserHeaderKeys.UserName, subject);
-            AddHeader(request, CurrentUserHeaderKeys.Position, position);
+            AddHeader(request, AetherClaimTypes.ActorSub, actor);
+            AddHeader(request, AetherClaimTypes.UserName, subject);
+            AddHeader(request, AetherClaimTypes.Position, position);
 
             using var response = await _httpClient.SendAsync(request, cancellationToken);
 
@@ -114,6 +141,7 @@ public sealed class MorphIdmCallerRoleResolver : ICallerRoleResolver
             {
                 _logger.CallerRoleProviderReturnedNoContent(
                     CallerRoleProviderOptions.MorphIdmProvider, subject, actor, position);
+                AuthorizationActivityHelper.SetResolved(activity, 0, memoHit: false);
                 return Result<string[]?>.Ok([]);
             }
 
@@ -124,6 +152,8 @@ public sealed class MorphIdmCallerRoleResolver : ICallerRoleResolver
                     CallerRoleProviderOptions.MorphIdmProvider,
                     (int)response.StatusCode,
                     response.ReasonPhrase ?? "non-success status");
+                AuthorizationActivityHelper.SetFailed(
+                    activity, response.ReasonPhrase ?? "non-success status", (int)response.StatusCode);
                 return Fail($"HTTP {(int)response.StatusCode}");
             }
 
@@ -132,6 +162,7 @@ public sealed class MorphIdmCallerRoleResolver : ICallerRoleResolver
             {
                 _logger.CallerRoleProviderReturnedNoContent(
                     CallerRoleProviderOptions.MorphIdmProvider, subject, actor, position);
+                AuthorizationActivityHelper.SetResolved(activity, 0, memoHit: false);
                 return Result<string[]?>.Ok([]);
             }
 
@@ -141,17 +172,21 @@ public sealed class MorphIdmCallerRoleResolver : ICallerRoleResolver
                 _logger.CallerRoleProviderCallFailed(
                     null, CallerRoleProviderOptions.MorphIdmProvider, (int)response.StatusCode,
                     "response carried no recognizable roles array");
+                AuthorizationActivityHelper.SetFailed(
+                    activity, "unrecognized response shape", (int)response.StatusCode);
                 return Fail("unrecognized response shape");
             }
 
             _logger.CallerRolesResolvedFromProvider(
-                CallerRoleProviderOptions.MorphIdmProvider, roles.Length, stopwatch.ElapsedMilliseconds);
+                CallerRoleProviderOptions.MorphIdmProvider, roles.Length, Stopwatch.GetElapsedTime(stopwatch).TotalMilliseconds);
+            AuthorizationActivityHelper.SetResolved(activity, roles.Length, memoHit: false);
             return Result<string[]?>.Ok(roles);
         }
         catch (Exception ex)
         {
             _logger.CallerRoleProviderCallFailed(
                 ex, CallerRoleProviderOptions.MorphIdmProvider, null, ex.Message);
+            AuthorizationActivityHelper.SetFailed(activity, ex.Message);
             return Fail(ex.Message);
         }
     }
