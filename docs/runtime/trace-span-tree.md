@@ -142,7 +142,7 @@ level; nothing in this table is gated behind `AetherTracingRuntime.IsVerbose`.
 | `Function.Authorize` | `BBT.Workflow.Functions` | `vnext.layer=orchestration`, `span.category=business` | Wraps `functionAccessPolicy.AuthorizeAsync` — the function's access-policy check, before contract (verb/schema) enforcement. |
 | `Function.ValidateRequest` | `BBT.Workflow.Functions` | `vnext.layer=orchestration`, `span.category=business` | Wraps `functionRequestValidationService.ValidateRequestAsync` — verb + input-schema validation; may run schema rule scripts against the lazily-built `ScriptContext`. |
 | `Function.BuildResponse` | `BBT.Workflow.Functions` | `vnext.layer=orchestration`, `span.category=business` | Wraps response building — representation building or the function's `IOutputHandler` script. Contains the `Script.Execute` (`vnext.script.kind=functionOutput`) child above when the function declares an output handler. |
-| `Extension.Process/{scope}` | `BBT.Workflow.Extensions` | `vnext.flow` (workflow key), `vnext.layer=orchestration`, `span.category=business` | Envelope span for one instance-data extension enrichment pass (`InstanceExtensionService.ProcessExtensionsAsync`), named after the `ExtensionScope` being processed. Previously the extension path produced no spans at all — cache reads like `sys-extensions` were orphaned on the root transaction. |
+| `Extension.Process/{scope}` | `BBT.Workflow.Extensions` | `vnext.flow.key` (workflow key), `vnext.layer=orchestration`, `span.category=business` | Envelope span for one instance-data extension enrichment pass (`InstanceExtensionService.ProcessExtensionsAsync`), named after the `ExtensionScope` being processed. Previously the extension path produced no spans at all — cache reads like `sys-extensions` were orphaned on the root transaction. |
 | `Extension.Resolve` | `BBT.Workflow.Extensions` | `vnext.extension.ref.count`, `span.category=business` | Wraps extension component-ref resolution (the parallel cache fetches for the resolved extension references). `vnext.extension.ref.count` records how many references the resolve covered. |
 
 ### Reading the `Instance.Query.Prepare` span
@@ -196,11 +196,7 @@ spans with the plain `ActivitySource.StartActivity(name, kind)` overload — no 
 baggage set on an ambient activity is inherited by every helper-created child underneath it. This
 covers every span in this document that goes through one of those helpers, including
 `Instance.Query.Prepare` and `Discovery.Resolve` (both via `PipelineStepActivityHelper`). A
-concrete case this matters for: `TaskInvokeHandler` sets baggage (`vnext.instance.id`,
-`correlation.id`, `sub`, `act_sub`) on the Execution-side transaction before opening
-`Execution.HandleInvoke`; because the helper chain stays intact, that baggage is visible on
-`Invoke.{taskType}/{taskKey}` and `Invoke.Prepare` underneath it without those spans needing to
-re-read or re-set it. `SpanHelperBaggageTests`
+concrete case this matters for: `TaskInvokeHandler` captures the Execution-side transaction reference, opens `Execution.HandleInvoke`, then applies baggage (`vnext.instance.id`, `correlation.id`, `sub`, `act_sub`) to the captured transaction; because the helper chain stays intact, that baggage is visible on `Invoke.{taskType}/{taskKey}` and `Invoke.Prepare` underneath it without those spans needing to re-read or re-set it. `SpanHelperBaggageTests`
 (`test/BBT.Workflow.Application.Tests/Telemetry/SpanHelperBaggageTests.cs`) pins the contract
 directly: it starts an ambient activity carrying a baggage item, then asserts each helper's span
 has `Parent != null` and inherits the item.

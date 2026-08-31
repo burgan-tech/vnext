@@ -11,7 +11,6 @@ using BBT.Workflow.Definitions.GraphQL;
 using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Filtering;
 using BBT.Workflow.Infrastructure.Instances;
-using BBT.Workflow.Logging;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Security;
 using BBT.Workflow.BackgroundJobs.Options;
