@@ -49,7 +49,10 @@ public sealed class InvokePrepareSpanTests : IDisposable
         // IHttpClientFactory substitute + a minimal HttpTaskBinding descriptor for a simple GET.
         var handler = new CapturingHttpMessageHandler();
         var invoker = new HttpTaskInvoker(new FakeHttpClientFactory(handler), NullLogger<HttpTaskInvoker>.Instance);
-        var taskKey = "http-task";
+        // Unique per run: the listener is process-global and this source is shared with every other
+        // invoker test that may run concurrently in a different (non-serialized) test collection, so
+        // a fixed literal key risks colliding with, or being shadowed by, another test's activity.
+        var taskKey = $"http-task-{Guid.NewGuid():N}";
         var descriptor = new TaskDescriptor<HttpTaskBinding>
         {
             TaskType = TaskTypes.Http,
@@ -66,8 +69,13 @@ public sealed class InvokePrepareSpanTests : IDisposable
         result.IsSuccess.ShouldBeTrue();
         lock (_started)
         {
-            _started.ShouldContain(a => a.OperationName == "Invoke.Prepare");
-            var prep = _started.First(a => a.OperationName == "Invoke.Prepare");
+            // Match on this invocation's unique taskKey, not just the span name: the listener is
+            // process-global, so an unrelated invoker test running concurrently in another test
+            // collection can legitimately emit its own "Invoke.Prepare" into the same list.
+            _started.ShouldContain(a =>
+                a.OperationName == "Invoke.Prepare" && Equals(a.GetTagItem("vnext.task.key"), taskKey));
+            var prep = _started.First(a =>
+                a.OperationName == "Invoke.Prepare" && Equals(a.GetTagItem("vnext.task.key"), taskKey));
             prep.GetTagItem("vnext.task.key").ShouldBe(taskKey);
         }
     }
