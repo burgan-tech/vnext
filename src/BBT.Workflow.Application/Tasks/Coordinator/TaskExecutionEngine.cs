@@ -105,6 +105,7 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
             activity.SetTag(TelemetryConstants.TagNames.Flow, context.Workflow?.Key);
             activity.SetTag(TelemetryConstants.TagNames.Layer, TelemetryConstants.Layers.Orchestration);
             activity.SetTag(TelemetryConstants.TagNames.SpanCategory, TelemetryConstants.SpanCategories.Business);
+            activity.SetTag(TelemetryConstants.TagNames.TaskTrigger, taskTrigger.ToString());
         }
 
         _logger.LogInformation(
@@ -595,8 +596,12 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
             task.Key, taskType, context.Instance?.Id);
 
         // 5. Persist creation
-        instanceTask = await PersistCreationAsync(
-            persistenceStrategy, instanceTask, taskTrigger, onExecuteTask.Order, options.SkipJournalProbe, cancellationToken);
+        using (TaskExecutionActivityHelper.StartActivity(
+                   TaskExecutionActivityHelper.OperationJournalCreate, task.Key, taskTypeStr))
+        {
+            instanceTask = await PersistCreationAsync(
+                persistenceStrategy, instanceTask, taskTrigger, onExecuteTask.Order, options.SkipJournalProbe, cancellationToken);
+        }
 
         // 6. Get executor
         var executorResult = _executorRegistry.GetExecutor(taskType);
@@ -677,7 +682,11 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
         instanceTask.Completed(responseJson, isBusinessSuccess: response.IsSuccess);
 
         // Persist completion
-        await PersistCompletionAsync(persistenceStrategy, instanceTask, cancellationToken);
+        using (TaskExecutionActivityHelper.StartActivity(
+                   TaskExecutionActivityHelper.OperationJournalComplete, task.Key, taskTypeStr))
+        {
+            await PersistCompletionAsync(persistenceStrategy, instanceTask, cancellationToken);
+        }
 
         // Record metrics
         if (response.IsSuccess)

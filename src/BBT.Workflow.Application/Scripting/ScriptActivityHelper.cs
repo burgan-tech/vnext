@@ -36,8 +36,7 @@ public static class ScriptActivityHelper
     {
         var activity = ActivitySource.StartActivity(
             string.IsNullOrEmpty(identity) ? "Script.Compile" : $"Script.Compile/{identity}",
-            ActivityKind.Internal,
-            Activity.Current?.Context ?? default);
+            ActivityKind.Internal);
 
         activity?.SetTag(TelemetryConstants.TagNames.SpanCategory, TelemetryConstants.SpanCategories.Business);
         return activity;
@@ -54,13 +53,14 @@ public static class ScriptActivityHelper
 
     /// <summary>
     /// Starts the span covering one script invocation at a call site that no existing parent span
-    /// delimits (lock-key scripts, subflow mappings). Task input/output mappings are deliberately
-    /// NOT wrapped — Task.PrepareInput / Task.ProcessOutput already delimit them.
+    /// delimits (lock-key scripts, subflow input/output mappings, function output handlers). Task
+    /// input/output mappings are deliberately NOT wrapped — Task.PrepareInput / Task.ProcessOutput
+    /// already delimit them.
     /// </summary>
     public static Activity? StartExecuteActivity(string scriptKind)
     {
         var activity = ActivitySource.StartActivity(
-            "Script.Execute", ActivityKind.Internal, Activity.Current?.Context ?? default);
+            "Script.Execute", ActivityKind.Internal);
         if (activity != null)
         {
             activity.SetTag(TelemetryConstants.TagNames.ScriptKind, scriptKind);
@@ -74,7 +74,7 @@ public static class ScriptActivityHelper
     public static Activity? StartResolveHelpersActivity(int helperCount)
     {
         var activity = ActivitySource.StartActivity(
-            "Script.ResolveHelpers", ActivityKind.Internal, Activity.Current?.Context ?? default);
+            "Script.ResolveHelpers", ActivityKind.Internal);
         if (activity != null)
         {
             activity.SetTag(TelemetryConstants.TagNames.ScriptHelperCount, helperCount);

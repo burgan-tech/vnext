@@ -41,6 +41,9 @@ public static class TelemetryConstants
         public const string TaskKey = "vnext.task.key";
         public const string TaskType = "vnext.task.type";
 
+        /// <summary>Task trigger origin (OnExecute/OnEntry/OnExit/Extension/…): <c>vnext.task.trigger</c>.</summary>
+        public const string TaskTrigger = "vnext.task.trigger";
+
         /// <summary>Stable identity of one fan-out item within its batch.</summary>
         public const string FanOutItemKey = "vnext.fanout.item.key";
 
