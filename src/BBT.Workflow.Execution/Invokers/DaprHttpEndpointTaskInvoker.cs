@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using BBT.Workflow.Execution.Bindings;
 using BBT.Workflow.Execution.Metrics;
+using BBT.Workflow.Execution.Services;
 using Dapr.Client;
 using Microsoft.Extensions.Logging;
 
@@ -52,6 +53,7 @@ public sealed class DaprHttpEndpointTaskInvoker(
         CancellationToken cancellationToken)
     {
         var startTimestamp = Stopwatch.GetTimestamp();
+        var prepareActivity = InvokerActivityHelper.StartPrepareActivity(TaskType, taskKey ?? string.Empty);
 
         try
         {
@@ -69,6 +71,7 @@ public sealed class DaprHttpEndpointTaskInvoker(
             InvokerHelpers.ApplyTrustedCorrelationHeaders(request);
 
             // Use InvokeMethodWithResponseAsync to get full HTTP response including status codes
+            prepareActivity?.Dispose();
             using var response = await daprClient.InvokeMethodWithResponseAsync(request, cancellationToken);
 
             var responseHeaders = InvokerHelpers.MergeHeaders(response.Headers, response.Content.Headers);
@@ -113,6 +116,7 @@ public sealed class DaprHttpEndpointTaskInvoker(
         }
         catch (TaskCanceledException ex) when (cancellationToken.IsCancellationRequested)
         {
+            prepareActivity?.Dispose();
             _metrics.RecordDaprServiceInvocation(binding.EndpointName, binding.Path, "cancelled");
             logger.LogWarning("Dapr HTTP endpoint invocation was cancelled: {EndpointName}/{Path}",
                 binding.EndpointName, binding.Path);
@@ -131,6 +135,7 @@ public sealed class DaprHttpEndpointTaskInvoker(
         }
         catch (Exception ex)
         {
+            prepareActivity?.Dispose();
             _metrics.RecordDaprServiceInvocation(binding.EndpointName, binding.Path, "failure");
             logger.LogError(ex, "Dapr HTTP endpoint invocation failed: {EndpointName}/{Path}",
                 binding.EndpointName, binding.Path);

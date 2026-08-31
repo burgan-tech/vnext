@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using BBT.Workflow.Execution.Bindings;
 using BBT.Workflow.Execution.Metrics;
+using BBT.Workflow.Execution.Services;
 using BBT.Workflow.Execution.StateStores;
 using Microsoft.Extensions.Logging;
 
@@ -66,11 +67,13 @@ public sealed class StateStoreTaskInvoker : ITaskInvoker<StateStoreBinding>
     {
         var startTimestamp = Stopwatch.GetTimestamp();
         var command = binding.Command ?? string.Empty;
+        var prepareActivity = InvokerActivityHelper.StartPrepareActivity(TaskType, taskKey ?? string.Empty);
 
         var storeName = _stateStore.ResolveStoreName(binding.StoreName);
 
         if (string.IsNullOrWhiteSpace(storeName))
         {
+            prepareActivity?.Dispose();
             return TaskInvocationResult.Failure(
                 error: "State store name is not configured: set 'storeName' in the task config " +
                        "or the DAPR_STATE_STORE_NAME configuration value",
@@ -81,6 +84,9 @@ public sealed class StateStoreTaskInvoker : ITaskInvoker<StateStoreBinding>
 
         try
         {
+            // Dispose immediately before dispatch: whichever command branch runs next performs
+            // the actual Dapr state-store operation (the first outbound call for this invocation).
+            prepareActivity?.Dispose();
             TaskInvocationResult result = command.ToLowerInvariant() switch
             {
                 GetCommand => await GetAsync(binding, storeName, startTimestamp, cancellationToken),

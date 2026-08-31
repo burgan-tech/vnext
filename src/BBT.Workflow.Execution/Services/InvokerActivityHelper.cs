@@ -54,6 +54,23 @@ public static class InvokerActivityHelper
     }
 
     /// <summary>
+    /// Starts the span covering everything an invoker does BEFORE its outbound call — binding
+    /// deserialization, client construction, header/URL/body preparation. Dispose it immediately
+    /// before the I/O call so the trace separates "our prep" from "their latency". Always-on:
+    /// this gap measured 27 ms in the trace that motivated it, with nothing to attribute it to.
+    /// </summary>
+    public static Activity? StartPrepareActivity(string taskType, string taskKey)
+    {
+        var activity = ActivitySource.StartActivity("Invoke.Prepare", ActivityKind.Internal);
+        if (activity is not null)
+        {
+            activity.SetTag(TagTaskKey, taskKey);
+            activity.SetTag(TagTaskType, taskType);
+        }
+        return activity;
+    }
+
+    /// <summary>
     /// Starts a span for one step of the cache-aside protocol (<c>CacheAside.Read</c> /
     /// <c>CacheAside.Write</c>), so a hit and a miss are told apart in the tree rather than inferred
     /// from whether a source-task span happens to follow.

@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using BBT.Workflow.Execution.Bindings;
 using BBT.Workflow.Execution.Metrics;
+using BBT.Workflow.Execution.Services;
 using Dapr.Client;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
@@ -81,18 +82,21 @@ public sealed class GetInstanceDataRemoteInvoker : ITaskInvoker<GetInstanceDataB
         CancellationToken cancellationToken)
     {
         var startTimestamp = Stopwatch.GetTimestamp();
+        var prepareActivity = InvokerActivityHelper.StartPrepareActivity(TaskType, taskKey ?? string.Empty);
 
         try
         {
             var appId = binding.DaprAppId ?? _orchestrationAppId;
             var request = CreateDaprRequest(binding, appId);
 
+            prepareActivity?.Dispose();
             using var response = await _daprClient.InvokeMethodWithResponseAsync(request, cancellationToken);
 
             return await ProcessResponseAsync(binding, response, (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds, cancellationToken);
         }
         catch (TaskCanceledException) when (cancellationToken.IsCancellationRequested)
         {
+            prepareActivity?.Dispose();
             _metrics.RecordTaskExecution(TaskType, "cancelled");
             _logger.LogWarning("GetInstanceData Dapr invocation was cancelled for task {TaskKey}: {Domain}/{Workflow}/{Instance}",
                 taskKey, binding.Domain, binding.Workflow, binding.Instance);
@@ -105,6 +109,7 @@ public sealed class GetInstanceDataRemoteInvoker : ITaskInvoker<GetInstanceDataB
         }
         catch (Exception ex)
         {
+            prepareActivity?.Dispose();
             _metrics.RecordTaskExecution(TaskType, "failure");
             _logger.LogError(ex, "GetInstanceData Dapr invocation failed for task {TaskKey}: {Domain}/{Workflow}/{Instance}",
                 taskKey, binding.Domain, binding.Workflow, binding.Instance);
@@ -123,18 +128,21 @@ public sealed class GetInstanceDataRemoteInvoker : ITaskInvoker<GetInstanceDataB
         CancellationToken cancellationToken)
     {
         var startTimestamp = Stopwatch.GetTimestamp();
+        var prepareActivity = InvokerActivityHelper.StartPrepareActivity(TaskType, taskKey ?? string.Empty);
 
         try
         {
             var httpClient = CreateHttpClient(binding, taskKey);
             var request = CreateHttpRequest(binding);
 
+            prepareActivity?.Dispose();
             using var response = await httpClient.SendAsync(request, cancellationToken);
 
             return await ProcessResponseAsync(binding, response, (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds, cancellationToken);
         }
         catch (TaskCanceledException) when (cancellationToken.IsCancellationRequested)
         {
+            prepareActivity?.Dispose();
             _metrics.RecordTaskExecution(TaskType, "cancelled");
             _logger.LogWarning("GetInstanceData HTTP invocation was cancelled for task {TaskKey}: {Domain}/{Workflow}/{Instance}",
                 taskKey, binding.Domain, binding.Workflow, binding.Instance);
@@ -147,6 +155,7 @@ public sealed class GetInstanceDataRemoteInvoker : ITaskInvoker<GetInstanceDataB
         }
         catch (HttpRequestException ex)
         {
+            prepareActivity?.Dispose();
             _metrics.RecordTaskExecution(TaskType, "failure");
             _logger.LogError(ex, "GetInstanceData HTTP invocation failed for task {TaskKey}: {Domain}/{Workflow}/{Instance}",
                 taskKey, binding.Domain, binding.Workflow, binding.Instance);
@@ -159,6 +168,7 @@ public sealed class GetInstanceDataRemoteInvoker : ITaskInvoker<GetInstanceDataB
         }
         catch (Exception ex)
         {
+            prepareActivity?.Dispose();
             _metrics.RecordTaskExecution(TaskType, "failure");
             _logger.LogError(ex, "GetInstanceData HTTP invocation failed for task {TaskKey}: {Domain}/{Workflow}/{Instance}",
                 taskKey, binding.Domain, binding.Workflow, binding.Instance);
