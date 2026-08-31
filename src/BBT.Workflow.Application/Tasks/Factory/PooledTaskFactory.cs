@@ -1,11 +1,13 @@
+using System.Collections.Concurrent;
+using System.Diagnostics;
 using BBT.Aether.Results;
 using BBT.Workflow.Caching;
 using BBT.Workflow.Definitions;
+using BBT.Workflow.Definitions.Tasks;
+using BBT.Workflow.Tasks.Coordinator;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.ObjectPool;
 using Microsoft.Extensions.Options;
-using System.Collections.Concurrent;
-using BBT.Workflow.Definitions.Tasks;
 
 namespace BBT.Workflow.Tasks.Factory;
 
@@ -30,11 +32,21 @@ public sealed class PooledTaskFactory(
         IReference taskReference,
         CancellationToken cancellationToken = default)
     {
+        // Task.Resolve lives INSIDE the factory (not at the engine call site) so FanOut and
+        // CacheAside resolutions are covered too. Always-on Business span — this was the
+        // unattributed head of Task.Execute.
+        using var resolveActivity = TaskExecutionActivityHelper.StartActivity(
+            TaskExecutionActivityHelper.OperationResolve, taskReference.Key);
+
         return await componentCacheStore.GetTaskAsync(taskReference, cancellationToken)
             .Then(CreateFromCached)
-            .OnFailure(error => logger.LogError(
-                "Failed to create execution task for reference {TaskReference}: {ErrorCode}", 
-                taskReference.ToString(), error.Code));
+            .OnFailure(error =>
+            {
+                TaskExecutionActivityHelper.SetError(Activity.Current, error.Message, "TaskFactoryError");
+                logger.LogError(
+                    "Failed to create execution task for reference {TaskReference}: {ErrorCode}",
+                    taskReference.ToString(), error.Code);
+            });
     }
 
     /// <summary>

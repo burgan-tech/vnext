@@ -43,6 +43,12 @@ public static class TaskExecutionActivityHelper
     public const string OperationTriggerLocal = "Trigger.Local";
 
     /// <summary>
+    /// Operation name for component-ref resolution + clone inside the task factory — the
+    /// previously unspanned head of <c>Task.Execute.{key}</c>.
+    /// </summary>
+    public const string OperationResolve = "Task.Resolve";
+
+    /// <summary>
     /// Starts the span for a trigger-family task's LOCAL (same-domain, in-process) invocation.
     /// <para>
     /// NOT gated on verbose tracing: the remote branch of these tasks produces a Dapr/HTTP client
