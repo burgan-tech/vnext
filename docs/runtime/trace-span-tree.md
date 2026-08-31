@@ -331,7 +331,17 @@ All nine acceptance checks passed:
    settlement work stayed inside the flow trace while the duplicate backup delivery moved out.
 6. **Idle noise** — 2-minute buckets: pre-cutover every bucket had exactly 12 root `Db.*` spans
    per worker (and those were the only worker spans present); post-cutover every bucket has
-   **zero** root `Db.*` spans, including during heavy traffic, and zero worker spans while idle.
+   **zero** root `Db.*` spans, including during heavy traffic.
+
+   A first idle measurement (11.1 minutes) recorded zero spans from every service, but the worker
+   processes' liveness across that specific window was not independently established, so "no spans"
+   and "no process" were not distinguishable from that run alone. It was superseded on 2026-08-31
+   by a **controlled** measurement: a 5.7-minute window (05:27:22Z–05:33:07Z) with both workers
+   returning `health=200` at **both** ends and demonstrably exporting telemetry throughout (28
+   outbox-worker and 54 inbox-worker spans in the window, none of them root `Db.*`), compared
+   against an equal-length idle window on the previous build (2026-08-30 15:17:00Z–15:22:45Z),
+   which produced **69** root `Db.*` spans (36 outbox + 33 inbox). Same duration, workers alive in
+   both cases: **69 → 0**.
 7. **Wakeup isolation** — 0 `POST internal/outbox-wakeup` spans post-cutover. The Dapr
    **sidecar**'s `pubsub/…aether.outbox.wakeup…` spans still exist (241 of them), but 10/10
    sampled are standalone traces with zero occurrences inside business traces — the documented
