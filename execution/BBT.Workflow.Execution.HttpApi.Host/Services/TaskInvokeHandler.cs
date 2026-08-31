@@ -42,7 +42,24 @@ public sealed class TaskInvokeHandler(
             : null;
 
         using var restoredActivity = RestoreActivityFromBodyIfDetached(traceContext);
+
+        // The ASP.NET/gRPC transaction — captured BEFORE the child span below so every
+        // SetTag/SetBaggage keeps landing on the TRANSACTION document. Elastic prod queries
+        // filter execution transactions by labels.vnext_task_key; letting the child span become
+        // Activity.Current first would silently move those labels off the transaction.
         var activity = Activity.Current;
+
+        // Everything from here (tagging, registry resolution, invocation, response mapping) is
+        // inside one always-on span; the remaining head of the transaction is then pure
+        // transport work (model binding / protobuf parse / middleware), measurable by
+        // subtraction. Closes the 57.8 ms unattributed head found in trace 036088b9….
+        using var handleActivity = ActivitySource.StartActivity(
+            "Execution.HandleInvoke", ActivityKind.Internal);
+        handleActivity?.SetTag(TelemetryConstants.TagNames.TaskKey, envelope.TaskKey);
+        handleActivity?.SetTag(TelemetryConstants.TagNames.TaskType, envelope.TaskType);
+        handleActivity?.SetTag(TelemetryConstants.TagNames.Layer, TelemetryConstants.Layers.Execution);
+        handleActivity?.SetTag(TelemetryConstants.TagNames.SpanCategory, TelemetryConstants.SpanCategories.Business);
+
         activity?.SetTag(TelemetryConstants.TagNames.Domain, traceContext?.Domain ?? "unknown");
         activity?.SetTag(TelemetryConstants.TagNames.Flow, traceContext?.WorkflowKey ?? "unknown");
         activity?.SetTag(TelemetryConstants.TagNames.FlowVersion, traceContext?.WorkflowVersion ?? "unknown");
