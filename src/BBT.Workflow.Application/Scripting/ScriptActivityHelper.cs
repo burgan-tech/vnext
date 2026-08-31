@@ -53,8 +53,9 @@ public static class ScriptActivityHelper
 
     /// <summary>
     /// Starts the span covering one script invocation at a call site that no existing parent span
-    /// delimits (lock-key scripts, subflow mappings). Task input/output mappings are deliberately
-    /// NOT wrapped — Task.PrepareInput / Task.ProcessOutput already delimit them.
+    /// delimits (lock-key scripts, subflow input/output mappings, function output handlers). Task
+    /// input/output mappings are deliberately NOT wrapped — Task.PrepareInput / Task.ProcessOutput
+    /// already delimit them.
     /// </summary>
     public static Activity? StartExecuteActivity(string scriptKind)
     {

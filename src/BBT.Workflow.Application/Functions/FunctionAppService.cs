@@ -142,8 +142,15 @@ public sealed class FunctionAppService(
         string? httpMethod,
         CancellationToken cancellationToken)
     {
-        var access = await functionAccessPolicy.AuthorizeAsync(
-            function, instance, workflow, headers, queryParameters, cancellationToken);
+        using var functionActivity = FunctionActivityHelper.StartExecute(function.Key);
+        Activity.Current?.SetTag(TelemetryConstants.TagNames.Domain, function.Domain);
+
+        Result access;
+        using (FunctionActivityHelper.StartPhase(FunctionActivityHelper.OperationAuthorize))
+        {
+            access = await functionAccessPolicy.AuthorizeAsync(
+                function, instance, workflow, headers, queryParameters, cancellationToken);
+        }
         if (!access.IsSuccess)
             return Result<FunctionResponseOutput>.Fail(access.Error);
 
@@ -184,8 +191,12 @@ public sealed class FunctionAppService(
             .WithMetadata(metadata)
             .BuildAsync(ct));
 
-        var inputValidation = await functionRequestValidationService.ValidateRequestAsync(
-            function, body, lazyScriptContext, headers, cancellationToken);
+        Result inputValidation;
+        using (FunctionActivityHelper.StartPhase(FunctionActivityHelper.OperationValidateRequest))
+        {
+            inputValidation = await functionRequestValidationService.ValidateRequestAsync(
+                function, body, lazyScriptContext, headers, cancellationToken);
+        }
         if (!inputValidation.IsSuccess)
             return Result<FunctionResponseOutput>.Fail(inputValidation.Error);
 
@@ -414,13 +425,20 @@ public sealed class FunctionAppService(
         ScriptContext scriptContext,
         CancellationToken cancellationToken)
     {
+        using var buildResponseActivity = FunctionActivityHelper.StartPhase(FunctionActivityHelper.OperationBuildResponse);
+
         if (function.Output != null)
         {
             try
             {
                 var handler = await scriptEngine.CompileToInstanceAsync<IOutputHandler>(
                     function.Output, flowScripts: scriptContext.Workflow?.Scripts, cancellationToken: cancellationToken);
-                var scriptResponse = await handler.OutputHandler(scriptContext);
+
+                ScriptResponse scriptResponse;
+                using (ScriptActivityHelper.StartExecuteActivity("functionOutput"))
+                {
+                    scriptResponse = await handler.OutputHandler(scriptContext);
+                }
 
                 if (function.RawResponse)
                     return Result<FunctionResponseOutput>.Ok(CreateRawResponse(
