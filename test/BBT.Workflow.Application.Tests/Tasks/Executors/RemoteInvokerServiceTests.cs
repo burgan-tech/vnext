@@ -48,7 +48,12 @@ public class RemoteInvokerServiceTests
             })
             .Build();
 
-        return new RemoteInvokerService(_daprClient.Object, config, _logger.Object, _correlationIdProvider.Object);
+        // Real (not mocked) provider: it's cheap and lazy — building it does not open a
+        // gRPC channel, and these tests never exercise the "grpc" transport branch.
+        var grpcClientProvider = new GrpcTaskInvokerClientProvider(config);
+
+        return new RemoteInvokerService(
+            _daprClient.Object, config, _logger.Object, _correlationIdProvider.Object, grpcClientProvider);
     }
 
     private static TaskEnvelope CreateEnvelope() => new()
@@ -62,9 +67,7 @@ public class RemoteInvokerServiceTests
         instanceId: Guid.NewGuid(),
         domain: "test",
         workflowKey: "test-flow",
-        workflowVersion: "1.0.0",
-        headers: null,
-        instanceDataJson: null);
+        workflowVersion: "1.0.0");
 
     private void SetupDaprCreateRequest()
     {

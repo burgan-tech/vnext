@@ -22,7 +22,7 @@ public class EfCoreInstanceTransitionRepository(
     {
         var result = await base.InsertAsync(entity, autoSave, cancellationToken);
         
-        // Transfer to data sinks (e.g., ClickHouse) if enabled
+        // Transfer to registered data sinks if any
         try
         {
             await dataSinkManager.HandleInsertAsync(result, cancellationToken);
@@ -43,7 +43,7 @@ public class EfCoreInstanceTransitionRepository(
     {
         var result = await base.UpdateAsync(entity, autoSave, cancellationToken);
         
-        // Transfer to data sinks (e.g., ClickHouse) if enabled
+        // Transfer to registered data sinks if any
         try
         {
             await dataSinkManager.HandleUpdateAsync(result, cancellationToken);
@@ -59,15 +59,42 @@ public class EfCoreInstanceTransitionRepository(
 
     public async Task UpdateCompletedAsync(InstanceTransition transition, CancellationToken cancellationToken)
     {
+        // Writes EVERY column InstanceTransition.Completed() mutates, so the statement is
+        // self-sufficient regardless of whether the entity is tracked. It used to write only
+        // ToState/FinishedAt/Duration — the effective-state trio and Stage survived solely because
+        // FinalizeTransitionStep loaded the entity tracked and a later flush wrote them, which
+        // both hid the gap and produced a second UPDATE on the same row every transition.
         var context = await GetDbContextAsync();
         await context.InstanceTransitions
             .Where(p => p.Id == transition.Id)
             .ExecuteUpdateAsync(sp => sp
                     .SetProperty(p => p.ToState, transition.ToState)
+                    .SetProperty(p => p.EffectiveState, transition.EffectiveState)
+                    .SetProperty(p => p.EffectiveStateType, transition.EffectiveStateType)
+                    .SetProperty(p => p.EffectiveStateSubType, transition.EffectiveStateSubType)
+                    .SetProperty(p => p.Stage, transition.Stage)
                     .SetProperty(p => p.FinishedAt, transition.FinishedAt)
                     .SetProperty(p => p.Duration, transition.Duration),
                 cancellationToken
             );
+
+        // The normal pipeline now finalizes the already-carried transition instance. Because
+        // ExecuteUpdate bypasses change tracking, mark that tracked instance synchronized so a
+        // later ambient SaveChanges does not issue a duplicate UPDATE for the same completion.
+        var entry = context.Entry(transition);
+        if (entry.State != EntityState.Detached)
+        {
+            entry.State = EntityState.Unchanged;
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task<InstanceTransition?> FindAsReadOnlyAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        var context = await GetDbContextAsync();
+        return await context.InstanceTransitions
+            .AsNoTracking()
+            .FirstOrDefaultAsync(p => p.Id == id, cancellationToken);
     }
 
     /// <inheritdoc />

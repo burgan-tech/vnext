@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -406,19 +407,21 @@ public class TransitionPipelineTests
         enqueueGateway.EnqueueAsync(
                 Arg.Any<BBT.Workflow.BackgroundJobs.Payloads.TransitionJobPayload>(),
                 Arg.Any<BBT.Workflow.Execution.Events.TransitionContinuationRequested>(),
+                Arg.Any<bool>(),
                 Arg.Any<CancellationToken>())
-            .Returns(Task.CompletedTask);
+            .Returns(Task.FromResult(new TransitionEnqueueOutcome(TransitionEnqueuePath.Direct)));
         var enqueueStrategy = new EnqueueContinuationStrategy(jobRepository, enqueueGateway);
 
         var jobsVisibleDuringEnqueue = false;
         enqueueGateway.EnqueueAsync(
                 Arg.Any<BBT.Workflow.BackgroundJobs.Payloads.TransitionJobPayload>(),
                 Arg.Any<BBT.Workflow.Execution.Events.TransitionContinuationRequested>(),
+                Arg.Any<bool>(),
                 Arg.Any<CancellationToken>())
             .Returns(_ =>
             {
                 jobsVisibleDuringEnqueue = context.Directives.PostCommitJobs.Single() == postCommitJob;
-                return Task.CompletedTask;
+                return Task.FromResult(new TransitionEnqueueOutcome(TransitionEnqueuePath.Direct));
             });
 
         SetupContextFactory(context);
@@ -439,6 +442,7 @@ public class TransitionPipelineTests
         await enqueueGateway.Received(1).EnqueueAsync(
             Arg.Any<BBT.Workflow.BackgroundJobs.Payloads.TransitionJobPayload>(),
             Arg.Any<BBT.Workflow.Execution.Events.TransitionContinuationRequested>(),
+            Arg.Any<bool>(),
             Arg.Any<CancellationToken>());
         result.Value!.Directives.PostCommitJobs.Single().ShouldBeSameAs(postCommitJob);
         result.Value.Directives.NextTransition.ShouldBeNull();
@@ -525,6 +529,79 @@ public class TransitionPipelineTests
         // Admission runs only ONCE for the entire chain — hops carry no lock and no re-check
         await _mockAdmissionService.Received(1)
             .ReserveAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// The transaction span (job or HTTP request) names the FIRST transition, so that hop needs no
+    /// span of its own — that is the whole point of dropping the old <c>transition/{key}</c> child.
+    /// A chained hop is a different transition under the same transaction, so it gets a
+    /// <c>Transition.{key}</c> group span; without one, two transitions' step spans would sit
+    /// side by side under one parent with nothing to tell them apart.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_WithAutoChain_ShouldGroupOnlyTheChainedHopUnderATransitionSpan()
+    {
+        // Arrange — same 2-hop inline chain as the admission test above.
+        var context1 = CreateTransitionExecutionContext();
+        var context2 = CreateTransitionExecutionContext("auto-transition");
+        var workflowContext = CreateWorkflowExecutionContext(context1);
+        var contextCallCount = 0;
+
+        _mockContextFactory.CreateAsync(Arg.Any<WorkflowExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(callInfo =>
+            {
+                contextCallCount++;
+                return Task.FromResult(
+                    contextCallCount == 1
+                        ? Result<TransitionExecutionContext>.Ok(context1)
+                        : Result<TransitionExecutionContext>.Ok(context2));
+            });
+
+        foreach (var step in _mockSteps)
+        {
+            if (step.Order == LifecycleOrder.Auto)
+            {
+                var callCount = 0;
+                step.ExecuteAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+                    .Returns(callInfo =>
+                    {
+                        callCount++;
+                        if (callCount == 1)
+                        {
+                            var ctx = callInfo.ArgAt<TransitionExecutionContext>(0);
+                            ctx.Directives.RequestNextTransition(
+                                new NextTransitionRequest("auto-transition", "auto"));
+                            return Task.FromResult(
+                                Result<StepOutcome>.Ok(StepOutcome.SkipTo(LifecycleOrder.Finalize)));
+                        }
+                        return Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.Continue()));
+                    });
+            }
+            else
+            {
+                step.ExecuteAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+                    .Returns(Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.Continue())));
+            }
+        }
+
+        var collected = new List<Activity>();
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == "BBT.Workflow.Pipeline",
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStopped = collected.Add
+        };
+        ActivitySource.AddActivityListener(listener);
+
+        // Act
+        var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
+
+        // Assert
+        result.IsSuccess.ShouldBeTrue();
+        contextCallCount.ShouldBe(2);
+
+        collected.Count(a => a.DisplayName == "Transition.auto-transition").ShouldBe(1);
+        collected.Any(a => a.DisplayName == "Transition.test-transition").ShouldBeFalse();
     }
 
     [Fact]

@@ -37,8 +37,10 @@ public sealed record PostCommitParentSnapshot
         string traceId,
         IReadOnlyDictionary<string, string?> headers,
         IReadOnlyDictionary<string, string?> routeValues,
-        JsonElement? data)
+        JsonElement? data,
+        Definitions.Workflow workflow)
     {
+        Workflow = workflow;
         Domain = domain;
         WorkflowKey = workflowKey;
         WorkflowVersion = workflowVersion;
@@ -50,6 +52,13 @@ public sealed record PostCommitParentSnapshot
         RouteValues = routeValues.ToImmutableDictionary(StringComparer.OrdinalIgnoreCase);
         Data = data?.Clone();
     }
+
+    /// <summary>
+    /// The resolved workflow definition this settlement belongs to. Carried on the snapshot — unlike
+    /// the parent aggregate — because a definition is immutable and cache-backed, so it crosses the
+    /// post-commit lock handoff safely and saves the settlement a re-resolution.
+    /// </summary>
+    public Definitions.Workflow Workflow { get; }
 
     public string Domain { get; }
     public string WorkflowKey { get; }
@@ -78,6 +87,7 @@ public sealed record PostCommitParentSnapshot
             context.TraceId,
             context.Headers,
             context.RouteValues,
-            context.DataElement);
+            context.DataElement,
+            context.Workflow);
     }
 }

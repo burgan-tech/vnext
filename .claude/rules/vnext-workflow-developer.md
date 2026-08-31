@@ -108,7 +108,7 @@ A sixth profile is **composed on top of** the base, never selected instead of it
 - **Role filtering**: `ITransitionAuthorizationManager` filters available transitions per role. Supports `$InstanceStarter`, `$PreviousUser` pseudo-roles.
 - No server-side hold — 304 drives client-side polling.
 - **Response-shape version**: `StateFunctionCache.ResponseShapeVersion` is folded into both the ETag material and the cache key. Bump it in the same commit as any change to what the state body carries — otherwise a client polling a parked instance keeps getting 304 and never sees the new shape.
-- **Scheduled entries in `transitions`**: the state body lists the runtime's armed scheduled transitions inside the existing `transitions` array as `{ name, kind: "scheduled", executeAtUtc }` entries (no href — not caller-triggerable), appended after the available transitions and built from active `InstanceJob` rows (`JobType.ScheduledTransition`) whose `ExecuteAt` is stamped at scheduling time from the same instant the Dapr job is armed with. Not role-filtered; not merged from subflows. Job-set changes deliberately do NOT participate in the fingerprint ETag (team decision, issue #864) — same-state re-arms can leave the scheduled entries stale behind a 304; documented as a known gap in `docs/runtime/state-function-cache-and-etag.md`.
+- **Scheduled entries in `transitions`**: the state body lists the runtime's armed scheduled transitions inside the existing `transitions` array as `{ name, kind: "scheduled", executeAtUtc, href, view, schema }` entries, appended after the available transitions and built from active `InstanceJob` rows (`JobType.ScheduledTransition`) whose `ExecuteAt` is stamped at scheduling time from the same instant the Dapr job is armed with. The href/view/schema links use the same url shapes as triggerable entries but with `hasView`/`loadData`/`hasSchema` hardcoded false — a TEMPORARY uniformity concession for domain clients (they will adapt); scheduled transitions remain System-actor-gated at execution, so the href is not callable. Not role-filtered; not merged from subflows. Job-set changes deliberately do NOT participate in the fingerprint ETag (team decision, issue #864) — same-state re-arms can leave the scheduled entries stale behind a 304; documented as a known gap in `docs/runtime/state-function-cache-and-etag.md`.
 
 ## Well-Known Transitions (`cancel` / `updateData` / `exit`)
 
@@ -234,6 +234,14 @@ A sixth profile is **composed on top of** the base, never selected instead of it
 - **cancel/exit/timeout flip Busy at the accept**, not in the pipeline. They stay exempt from the
   Busy 409, but they do change the status, so they take the same lock as everything else. The job
   re-enters `IsPreReserved` and `TransitionPipeline` skips the second `TakeOverAsync`.
+- **updateData (`Unconditional`) takes NO lock and NO duplicate-job guard — on either path.** It is
+  status-neutral (flip = None, nothing to serialize) and must accept parallel requests: N
+  simultaneous updateData accepts share the same logical job identity yet are all legitimate, each
+  carrying its own payload, so the guard's dedupe would *lose data* for this kind. Job id/name are
+  unique per enqueue, so lock-free insert cannot collide; instance-data writes are serialized
+  downstream by the per-instance write funnel. Before this exemption, N parallel notifiers
+  (subprocess → parent `document-ready-update`) fought over the parent's status lock and every
+  loser burned an error-boundary retry backoff for a lock that protected nothing.
 - There is **no duplicate transition-record guard** downstream. Duplicate *requests* are stopped
   only by the accept-time active-job guard; duplicate *hops* by the per-hop policy checks.
 

@@ -102,6 +102,33 @@ public sealed class TransitionJobPayload : ITraceableJobPayload
     public string? TraceState { get; set; }
 
     /// <summary>
+    /// Trace lane anchor this hop's span parents to (see <c>WorkflowTraceLane</c>). Distinct from
+    /// <see cref="TraceParent"/>: the anchor is the PARENT, the traceparent is the PREDECESSOR that
+    /// gets linked. That distinction is what turns a nested chain into a flat lane.
+    /// </summary>
+    public string? TraceRoot { get; set; }
+
+    /// <summary>
+    /// The enclosing lane's anchor, propagated so a subflow's eventual resume returns to the parent
+    /// instance's lane. Null outside a subflow.
+    /// </summary>
+    public string? ParentTraceRoot { get; set; }
+
+    /// <summary>
+    /// Chain depth of this hop, carried so the lane span can be tagged with it without re-reading
+    /// the instance. Resets to 0 at resume/timeout/retry boundaries — use <see cref="LaneSeq"/> to
+    /// order a lane.
+    /// </summary>
+    public int ChainDepth { get; set; }
+
+    /// <summary>
+    /// Monotonic ordinal of this hop within its lane. Computed ONCE at the enqueue site and copied
+    /// into both the direct payload and the outbox event, because the enqueue gateway may fall back
+    /// from one to the other and incrementing in two places would produce duplicate ordinals.
+    /// </summary>
+    public int LaneSeq { get; set; }
+
+    /// <summary>
     /// Business correlation id of the originating execution chain. Restored into the rebuilt
     /// <c>TransitionInput</c> by the job handler so the async hop keeps the SAME correlation.id
     /// instead of minting a new one per job.

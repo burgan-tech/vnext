@@ -7,7 +7,6 @@ using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Execution.Pipeline.Steps;
 using BBT.Workflow.Instances;
-using BBT.Workflow.Monitoring;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Shared;
 using Microsoft.Extensions.Logging;
@@ -30,16 +29,13 @@ public class ChangeStateStepTests
     private const string WorkflowKey = "test-workflow";
 
     private readonly IInstanceRepository _mockInstanceRepository;
-    private readonly IWorkflowMetrics _mockMetrics;
     private readonly ChangeStateStep _step;
 
     public ChangeStateStepTests()
     {
         _mockInstanceRepository = Substitute.For<IInstanceRepository>();
-        _mockMetrics = Substitute.For<IWorkflowMetrics>();
         _step = new ChangeStateStep(
             _mockInstanceRepository,
-            _mockMetrics,
             Substitute.For<ILogger<ChangeStateStep>>());
     }
 

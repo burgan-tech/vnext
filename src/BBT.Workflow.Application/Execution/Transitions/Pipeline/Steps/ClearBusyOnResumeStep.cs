@@ -24,7 +24,7 @@ public sealed class ClearBusyOnResumeStep() : ITransitionStep
         // Only process this step on an internal resume (SubFlow completion or long-poll acknowledge)
         if (!context.Directives.IsInternalResume)
         {
-            return Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.Continue()));
+            return Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.ContinueNoWork()));
         }
 
         // Long-poll acknowledge resume: compare-and-clear the durable ack marker. Acknowledge and

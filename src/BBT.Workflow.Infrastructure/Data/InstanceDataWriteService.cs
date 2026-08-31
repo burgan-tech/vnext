@@ -1,12 +1,15 @@
+using System.Diagnostics;
+using System.Text;
 using BBT.Aether.Domain.EntityFrameworkCore;
 using BBT.Workflow.Aspects;
 using BBT.Workflow.BackgroundJobs.Options;
 using BBT.Workflow.Caching;
-using BBT.Workflow.DefinitionContext;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.ExceptionHandling;
+using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
+using BBT.Workflow.Shared.Merging;
 using BBT.Workflow.Validation;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -34,7 +37,6 @@ namespace BBT.Workflow.Data;
 /// </summary>
 public sealed class InstanceDataWriteService(
     IAetherDbContextProvider<WorkflowDbContext> dbContextProvider,
-    IWorkflowContext workflowContext,
     IServiceProvider serviceProvider,
     IJsonSchemaValidator jsonSchemaValidator,
     IOptions<WorkflowExecutionOptions> executionOptions,
@@ -51,43 +53,34 @@ public sealed class InstanceDataWriteService(
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<WorkflowDbContext, SemaphoreSlim>
         ContextGates = new();
 
-    /// <summary>
-    /// Striped per-instance gates taken BEFORE the context is even resolved:
-    /// <c>GetDbContextAsync</c> itself can touch the shared connection (context/schema
-    /// materialization in the ambient UnitOfWork), so two branches of the same instance must
-    /// not enter it concurrently either ("A second operation was started on this context").
-    /// Striping bounds memory; a hash collision merely serializes two unrelated instances
-    /// in-process, which the row lock would have done across processes anyway.
-    /// </summary>
-    private static readonly SemaphoreSlim[] InstanceGates =
-        Enumerable.Range(0, 64).Select(_ => new SemaphoreSlim(1, 1)).ToArray();
-
-    private static SemaphoreSlim InstanceGate(Guid instanceId) =>
-        InstanceGates[(instanceId.GetHashCode() & int.MaxValue) % InstanceGates.Length];
-
+    // The striped per-instance gate (InstanceWriteGate) is taken BEFORE the context is even
+    // resolved: GetDbContextAsync itself can touch the shared connection (context/schema
+    // materialization in the ambient UnitOfWork), so two branches of the same instance must not
+    // enter it concurrently either ("A second operation was started on this context instance").
+    //
+    // It lives in InstanceWriteGate rather than here because this service is NOT the only writer
+    // of an instance's state: SubProcessTaskExecutor.CreateCorrelationAsync read-modify-writes the
+    // same parent aggregate from a parallel fan-out branch, and a per-item correlation write and
+    // this data append genuinely overlap. Both MUST take the same semaphore — a private gate array
+    // here would serialize this service against itself and against nothing else, and the collision
+    // would come straight back. Splitting it back into two arrays reintroduces the bug.
     /// <inheritdoc />
     public async Task<InstanceData?> AppendAsync(
         Instance instance,
         JsonData delta,
         VersionStrategy? versionStrategy,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Definitions.Workflow? workflow = null)
     {
-        var instanceGate = InstanceGate(instance.Id);
-        await instanceGate.WaitAsync(cancellationToken);
-        try
-        {
-            return await AppendCoreAsync(instance, delta, versionStrategy, cancellationToken);
-        }
-        finally
-        {
-            instanceGate.Release();
-        }
+        using var gate = await InstanceWriteGate.AcquireAsync(instance.Id, cancellationToken);
+        return await AppendCoreAsync(instance, delta, versionStrategy, workflow, cancellationToken);
     }
 
     private async Task<InstanceData?> AppendCoreAsync(
         Instance instance,
         JsonData delta,
         VersionStrategy? versionStrategy,
+        Definitions.Workflow? workflow,
         CancellationToken cancellationToken)
     {
         var context = await dbContextProvider.GetDbContextAsync();
@@ -95,20 +88,31 @@ public sealed class InstanceDataWriteService(
         return await RunLockedAsync(context, instance.Id, cancellationToken, async () =>
         {
             var head = await ReadHeadAsync(context, instance.Id, cancellationToken);
-            var plan = PlanAppend(head, delta, versionStrategy);
+            var writeOptions = executionOptions.Value.InstanceDataWrite;
+            var plan = PlanAppend(
+                head, delta, versionStrategy, writeOptions.LegacyAppendPipeline, writeOptions.PreserveNumericPrecision);
+
+            // Version and size are only known now (PlanAppend needs the head read under the row
+            // lock) — the span starts here rather than at method entry, per Task 9.
+            using var activity = StartAppendActivity(
+                plan.Version, Encoding.UTF8.GetByteCount(plan.Content.NormalizedJson));
 
             if (plan.IsDuplicate)
             {
                 return null;
             }
 
-            await ValidateAgainstSchemaAsync(plan.Content, cancellationToken);
+            await ValidateAgainstSchemaAsync(workflow, plan.Content, cancellationToken);
 
             // A strategy append always sits at or above the head → it takes the latest flag.
             // VersionNo is line-scoped: the next ordinal WITHIN the target Version string.
             var row = new InstanceData(Guid.NewGuid(), instance.Id, plan.Version, plan.Content, isLatest: true)
             {
-                VersionNo = await ReadLineMaxAsync(context, instance.Id, plan.Version, cancellationToken) + 1
+                // A new semantic-version line always starts at one. Only same-version appends
+                // need MAX(VersionNo), which removes one query from every version increment.
+                VersionNo = head is null || !string.Equals(plan.Version, head.Version, StringComparison.Ordinal)
+                    ? 1
+                    : await ReadLineMaxAsync(context, instance.Id, plan.Version, cancellationToken) + 1
             };
 
             await PersistAsync(context, instance, row, demoteStaleLatest: head is not null, cancellationToken);
@@ -122,18 +126,11 @@ public sealed class InstanceDataWriteService(
         Guid id,
         string version,
         JsonData data,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Definitions.Workflow? workflow = null)
     {
-        var instanceGate = InstanceGate(instance.Id);
-        await instanceGate.WaitAsync(cancellationToken);
-        try
-        {
-            return await AppendExplicitCoreAsync(instance, id, version, data, cancellationToken);
-        }
-        finally
-        {
-            instanceGate.Release();
-        }
+        using var gate = await InstanceWriteGate.AcquireAsync(instance.Id, cancellationToken);
+        return await AppendExplicitCoreAsync(instance, id, version, data, workflow, cancellationToken);
     }
 
     private async Task<InstanceData> AppendExplicitCoreAsync(
@@ -141,8 +138,13 @@ public sealed class InstanceDataWriteService(
         Guid id,
         string version,
         JsonData data,
+        Definitions.Workflow? workflow,
         CancellationToken cancellationToken)
     {
+        // Version and data are already known at entry — unlike AppendCoreAsync, no head read is
+        // needed to know what is being written.
+        using var activity = StartAppendActivity(version, Encoding.UTF8.GetByteCount(data.NormalizedJson));
+
         var context = await dbContextProvider.GetDbContextAsync();
 
         var result = await RunLockedAsync<InstanceData>(context, instance.Id, cancellationToken, async () =>
@@ -165,7 +167,7 @@ public sealed class InstanceDataWriteService(
             var takesLatest = head is null
                 || InstanceDataVersionComparer.CompareVersionStrings(version, head.Version) >= 0;
 
-            await ValidateAgainstSchemaAsync(data, cancellationToken);
+            await ValidateAgainstSchemaAsync(workflow, data, cancellationToken);
 
             var row = new InstanceData(id, instance.Id, version, data, takesLatest)
             {
@@ -185,8 +187,66 @@ public sealed class InstanceDataWriteService(
     /// a delta-only duplicate never matches raw), and the semantic version. Pure so the contract
     /// is unit-testable; <see cref="AppendAsync"/> calls it under the row lock and then assigns
     /// the line-scoped VersionNo from the target version line's current maximum.
+    /// <para>
+    /// <paramref name="legacyPipeline"/> is the <c>InstanceDataWrite:LegacyAppendPipeline</c>
+    /// kill-switch (B9): true routes to the original multi-pass <see cref="PlanAppendLegacy"/>;
+    /// false (default) takes the single-pass <see cref="JsonCanonicalizer.MergeAndCanonicalize"/>
+    /// path, which is byte-parity proven against it (see
+    /// <c>JsonCanonicalizerParityTests</c> and <c>InstanceDataWriteServicePipelineTests</c>).
+    /// </para>
+    /// <para>
+    /// <paramref name="preserveNumericPrecision"/> is the <c>InstanceDataWrite:PreserveNumericPrecision</c>
+    /// opt-in (see <see cref="BBT.Workflow.BackgroundJobs.Options.InstanceDataWriteOptions"/>):
+    /// it only selects the <see cref="JsonNumberPolicy"/> passed into the canonicalizer on this
+    /// (non-legacy) path, and is ignored whenever <paramref name="legacyPipeline"/> is true.
+    /// </para>
     /// </summary>
     internal static AppendPlan PlanAppend(
+        InstanceDataHeadRow? head,
+        JsonData delta,
+        VersionStrategy? versionStrategy,
+        bool legacyPipeline,
+        bool preserveNumericPrecision = false)
+    {
+        if (legacyPipeline)
+        {
+            return PlanAppendLegacy(head, delta, versionStrategy);
+        }
+
+        if (head is null)
+        {
+            // Nothing to merge yet — this IS the legacy head-null result already (delta passed
+            // through untouched). Deliberately NOT routed through JsonCanonicalizer: that path
+            // replicates JsonData.Merge's Expando round-trip (camelCase + number reformat), which
+            // the legacy head-null branch never invokes (it skips Merge entirely). Canonicalizing
+            // against an empty base would therefore silently reformat the very first row of every
+            // instance — a real byte-parity break, not a hypothetical one; pinned by
+            // InstanceDataWriteServicePipelineTests.Append_NewPipeline_ProducesSameRow_AsLegacy_WhenHeadIsNull.
+            return new AppendPlan(delta, WorkflowConstants.DefaultVersion, IsDuplicate: false);
+        }
+
+        var numberPolicy = preserveNumericPrecision
+            ? JsonNumberPolicy.PreservePrecision
+            : JsonNumberPolicy.Legacy;
+        var baseElement = new JsonData(head.Data).JsonElement;
+        var result = JsonCanonicalizer.MergeAndCanonicalize(baseElement, delta.JsonElement, numberPolicy);
+
+        // No-change dedup on the MERGED result, same rule as legacy — the canonicalizer's hash
+        // is byte-parity proven equal to ComputeDataHash(legacy merged content), so this compares
+        // correctly even across a duplicate written by the OTHER pipeline.
+        var isDuplicate = string.Equals(result.DataHash, head.DataHash, StringComparison.OrdinalIgnoreCase);
+
+        var content = JsonData.FromNormalized(result.NormalizedJson);
+        var version = InstanceData.IncrementVersion(head.Version, versionStrategy ?? VersionStrategy.None);
+        return new AppendPlan(content, version, isDuplicate);
+    }
+
+    /// <summary>
+    /// Original multi-pass append plan (<c>JsonData.Merge</c> → <c>NormalizedJson</c> →
+    /// <c>ComputeDataHash</c>), preserved verbatim as the kill-switch fallback and as the
+    /// byte-parity oracle's production twin.
+    /// </summary>
+    internal static AppendPlan PlanAppendLegacy(
         InstanceDataHeadRow? head,
         JsonData delta,
         VersionStrategy? versionStrategy)
@@ -303,8 +363,8 @@ public sealed class InstanceDataWriteService(
     /// <summary>
     /// Reads the target version line's current maximum VersionNo under the lock. VersionNo is
     /// line-scoped: an ordinal WITHIN one semantic Version string (1-based), not an
-    /// instance-global sequence — each new Version line restarts at 1 and same-version appends
-    /// (<c>VersionStrategy.None</c>) continue their own line.
+    /// instance-global sequence. Strategy appends whose planned version differs from the head
+    /// start directly at 1; only same-version appends reach this query.
     /// </summary>
     private async Task<long> ReadLineMaxAsync(
         WorkflowDbContext context,
@@ -354,19 +414,26 @@ public sealed class InstanceDataWriteService(
     }
 
     /// <summary>
-    /// Validates the content against the current workflow's master schema when one is
-    /// configured — the same contract the old aggregate mutation methods enforced. No workflow
-    /// in context (publish, system paths) → skip.
+    /// Validates the content against the workflow's master schema when one is configured — the
+    /// same contract the old aggregate mutation methods enforced.
     /// </summary>
-    private async Task ValidateAgainstSchemaAsync(JsonData content, CancellationToken cancellationToken)
+    /// <remarks>
+    /// The definition arrives as an argument from the caller, which already holds it (the pipeline
+    /// context, the script context, the start path's own load). It used to be read from an ambient
+    /// scope, and a caller running outside such a scope silently skipped validation; passing it
+    /// explicitly keeps that outcome visible at each call site instead of hiding it here.
+    /// </remarks>
+    private async Task ValidateAgainstSchemaAsync(
+        Definitions.Workflow? workflow,
+        JsonData content,
+        CancellationToken cancellationToken)
     {
-        var workflow = workflowContext.Workflow;
         if (workflow?.Schema is null)
             return;
 
         // Resolved lazily: IComponentCacheStore lives in the Application module, which non-HTTP
-        // hosts (workers, DbMigrator) do not load — and in those hosts the workflow context is
-        // always empty, so this line is never reached. The null-check is a belt-and-braces skip.
+        // hosts (workers, DbMigrator) do not load. Those hosts never pass a workflow, so this line
+        // is not reached there; the null-check is a belt-and-braces skip.
         var componentCacheStore = serviceProvider.GetService<IComponentCacheStore>();
         if (componentCacheStore is null)
         {
@@ -392,6 +459,21 @@ public sealed class InstanceDataWriteService(
 
     private static string SanitizeIdentifier(string identifier)
         => identifier.Replace("\"", "", StringComparison.Ordinal);
+
+    /// <summary>
+    /// Starts the <c>Instance.AppendData</c> span around an instance-data append, tagged with
+    /// the semantic version and the serialized (UTF-8) byte size of the row being written —
+    /// never the payload content itself. Extracted from <see cref="AppendCoreAsync"/> /
+    /// <see cref="AppendExplicitCoreAsync"/> so the wiring is unit-testable without constructing
+    /// this Npgsql-backed service (DbContext, transactions, row locks).
+    /// </summary>
+    internal static Activity? StartAppendActivity(string version, long sizeBytes)
+    {
+        var activity = PipelineStepActivityHelper.StartOperationActivity("Instance.AppendData");
+        activity?.SetTag(TelemetryConstants.TagNames.DataVersion, version);
+        activity?.SetTag(TelemetryConstants.TagNames.DataSizeBytes, sizeBytes);
+        return activity;
+    }
 }
 
 /// <summary>

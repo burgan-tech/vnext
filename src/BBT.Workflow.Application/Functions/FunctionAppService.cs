@@ -437,6 +437,9 @@ public sealed class FunctionAppService(
             }
             catch (Exception ex)
             {
+                if (ex is not OperationCanceledException)
+                {
+                }
                 Logger.LogError(
                     ex,
                     "Custom function {FunctionKey} output ScriptMapping failed. Domain={Domain}, InstanceId={InstanceId}",

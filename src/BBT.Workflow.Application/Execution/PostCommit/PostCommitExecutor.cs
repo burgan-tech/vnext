@@ -1,8 +1,9 @@
 using System.Diagnostics;
 using BBT.Aether.DependencyInjection;
 using BBT.Aether.Results;
-using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Logging;
+using BBT.Workflow.BackgroundJobs.Handlers;
+using BBT.Workflow.Telemetry;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -108,13 +109,28 @@ public sealed class PostCommitExecutor(
                         }
                     }
 
-                    // 2) Execute handler — under its own business span so everything the job
-                    // spawns (subflow start, forwarded transition, HTTP calls) has a visible,
-                    // always-exported parent in the trace.
-                    using var jobActivity = PipelineStepActivityHelper.ActivitySource.StartActivity(
+                    // 2) Execute handler — its own business span, and a FLAT-LANE one: parented to
+                    // the request's lane anchor rather than to whatever pipeline span happens to be
+                    // current, so post-commit work sits beside the transition hops instead of buried
+                    // inside one of them. Everything the job spawns (subflow start, forwarded
+                    // transition, HTTP calls) then hangs off a visible, always-exported parent.
+                    //
+                    // Source moved off PipelineStepActivityHelper deliberately: that helper gates
+                    // creation on Verbose, so this span was bypassing its own helper's contract and
+                    // surviving only because SpanCategory=Business dodges Aether's Business filter.
+                    // "BBT.Workflow.BackgroundJobs" is already registered in every host that runs
+                    // post-commit work, so no configuration change is needed.
+                    //
+                    // Known cosmetic effect on the SYNC path: this span is now a sibling of the
+                    // still-open transition/{key} span and will render as overlapping it. Valid
+                    // OpenTelemetry, and the price of having post-commit work at lane level.
+                    using var jobActivity = FlatLaneActivity.Start(
+                        BackgroundJobActivityHelper.ActivitySource,
                         $"PostCommit.{job.GetType().Name}",
                         ActivityKind.Internal,
-                        Activity.Current?.Context ?? default);
+                        anchorTraceParent: null,
+                        predecessorTraceParent: Activity.Current?.Id,
+                        traceState: Activity.Current?.TraceStateString);
                     jobActivity?.SetTag(TelemetryConstants.TagNames.SpanCategory, TelemetryConstants.SpanCategories.Business);
                     jobActivity?.SetTag(TelemetryConstants.TagNames.InstanceId, context.InstanceId.ToString());
 

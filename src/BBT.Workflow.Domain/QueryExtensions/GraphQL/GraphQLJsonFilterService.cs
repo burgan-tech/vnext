@@ -85,7 +85,19 @@ public static class GraphQLJsonFilterService
             filterNode, jsonColumnName, parameters, ref parameterIndex, logger, schemaContext);
 
         if (string.IsNullOrEmpty(jsonWhereClause) && string.IsNullOrEmpty(instanceWhereClause))
+        {
+            // An Empty node carries no conditions, so returning the unfiltered set is correct.
+            // Any other node type compiling to nothing means the caller's conditions were dropped
+            // somewhere below — returning dbSet there would answer every row to a narrowing query.
+            if (filterNode.NodeType != FilterNodeType.Empty)
+            {
+                throw new FilterCompilationException(
+                    "Filter could not be translated into any condition. No results can be returned safely; " +
+                    "check the filter's operators and field names.");
+            }
+
             return dbSet;
+        }
 
         if (string.IsNullOrEmpty(tableName))
         {
@@ -150,6 +162,9 @@ public static class GraphQLJsonFilterService
         if (entries.Count == 0)
             return null;
 
+        // Every entry must produce a clause. Skipping unusable entries used to leave parts empty,
+        // which fell back to s."CreatedAt" DESC — the caller got HTTP 200 with results in an order
+        // they never asked for.
         var parts = new List<string>();
         foreach (var (field, direction) in entries)
         {
@@ -159,23 +174,34 @@ public static class GraphQLJsonFilterService
             {
                 var jsonPath = trimmed.Substring("attributes.".Length).Trim();
                 if (string.IsNullOrEmpty(jsonPath) || !IsSafeJsonPath(jsonPath))
-                    continue;
+                {
+                    // Boundary validation owns this rule (sort.unsafePath); reaching it here means
+                    // the two have drifted, not that the caller broke a schema policy.
+                    throw new FilterCompilationException(
+                        $"Sort field '{field}' is not a valid attributes path.");
+                }
 
-                // When schema context is available, skip non-sortable fields
+                // Schema policy, not drift: sortability lives in the master schema and is
+                // deliberately not duplicated in the boundary validator.
                 if (schemaContext != null && !schemaContext.IsFieldSortable(jsonPath))
-                    continue;
+                {
+                    throw new SchemaFilterValidationException(
+                        $"Field '{jsonPath}' is not sortable.");
+                }
 
                 var accessor = BuildJsonTextAccessorForOrderBy(jsonPath);
                 parts.Add($"(SELECT {accessor} FROM \"{schema}\".\"{dataTableName}\" _d WHERE _d.\"InstanceId\" = {instanceAlias}.\"Id\" AND _d.\"IsLatest\" = true LIMIT 1) {dir}");
             }
             else if (InstanceFieldDiscriminator.IsInstanceColumn(trimmed))
             {
-                try
-                {
-                    var columnName = InstanceFieldDiscriminator.GetInstanceColumnName(trimmed);
-                    parts.Add($"{instanceAlias}.\"{columnName}\" {dir}");
-                }
-                catch (ArgumentException) { }
+                var columnName = InstanceFieldDiscriminator.GetInstanceColumnName(trimmed);
+                parts.Add($"{instanceAlias}.\"{columnName}\" {dir}");
+            }
+            else
+            {
+                // Boundary validation owns this rule too (sort.unknownField).
+                throw new FilterCompilationException(
+                    $"Sort field '{field}' is neither an instance column nor an 'attributes.' path.");
             }
         }
         if (parts.Count == 0)
@@ -442,32 +468,25 @@ public static class GraphQLJsonFilterService
         var conditions = new List<string>();
         var columnName = InstanceFieldDiscriminator.GetInstanceColumnName(fieldName);
 
-        // Process each operator in the condition
+        // Process each operator in the condition.
+        //
+        // Failures deliberately propagate. These used to be caught and logged at Warning, but the
+        // hot path passes a null logger, so an unusable condition (e.g. createdAt eq "notadate")
+        // was dropped in total silence and the query ran without it — returning every row.
         foreach (var (op, value) in condition.GetOperators())
         {
-            try
+            // Array-valued operators (in, nin, between) arrive as object[] from the JSON
+            // filter syntax. InstanceColumnConditionBuilder expects a comma-separated
+            // string, so flatten the array element-by-element instead of calling
+            // ConvertToString on the array itself (which would yield "System.Object[]").
+            var stringValue = ConvertOperatorValueToString(value);
+            var (conditionSql, conditionParams) = InstanceColumnConditionBuilder.BuildCondition(
+                columnName, op, stringValue, ref parameterIndex);
+
+            if (!string.IsNullOrEmpty(conditionSql))
             {
-                // Array-valued operators (in, nin, between) arrive as object[] from the JSON
-                // filter syntax. InstanceColumnConditionBuilder expects a comma-separated
-                // string, so flatten the array element-by-element instead of calling
-                // ConvertToString on the array itself (which would yield "System.Object[]").
-                var stringValue = ConvertOperatorValueToString(value);
-                var (conditionSql, conditionParams) = InstanceColumnConditionBuilder.BuildCondition(
-                    columnName, op, stringValue, ref parameterIndex);
-                
-                if (!string.IsNullOrEmpty(conditionSql))
-                {
-                    conditions.Add(conditionSql);
-                    parameters.AddRange(conditionParams);
-                }
-            }
-            catch (ArgumentException ex)
-            {
-                logger?.LogWarning(ex, "Error building Instance condition for field: {FieldName}", fieldName);
-            }
-            catch (FormatException ex)
-            {
-                logger?.LogWarning(ex, "Error building Instance condition for field: {FieldName}", fieldName);
+                conditions.Add(conditionSql);
+                parameters.AddRange(conditionParams);
             }
         }
 

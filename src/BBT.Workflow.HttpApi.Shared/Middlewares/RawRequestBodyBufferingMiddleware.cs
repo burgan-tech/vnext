@@ -49,7 +49,11 @@ public sealed class RawRequestBodyBufferingMiddleware(
                 var rawBuffer = ms.GetBuffer();
                 var rawLength = (int)ms.Length; // safe: ms.Length <= _maxBufferedBytes (default 10 MB)
 
-                context.Items[RawBodyItemsKey] = Encoding.UTF8.GetString(rawBuffer, 0, rawLength);
+                // Store the capture lazily: decoding UTF-8 into a UTF-16 string roughly doubles the
+                // payload's memory (LOH for large bodies), and most requests never read the raw body
+                // (only script contexts that access RawBody do). The string is materialized on first
+                // read and cached inside the capture, so consumers pay the conversion at most once.
+                context.Items[RawBodyItemsKey] = new RawRequestBodyCapture(rawBuffer, rawLength);
 
                 // Replace body with a read-only view over the same buffer — no extra allocation.
                 var replacementBody = new MemoryStream(rawBuffer, 0, rawLength, writable: false);

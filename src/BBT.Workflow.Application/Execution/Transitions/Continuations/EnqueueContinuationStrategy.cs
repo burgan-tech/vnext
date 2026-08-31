@@ -3,6 +3,7 @@ using BBT.Aether.Results;
 using BBT.Workflow.BackgroundJobs.Payloads;
 using BBT.Workflow.Execution.Events;
 using BBT.Workflow.Instances;
+using BBT.Workflow.Logging;
 using BBT.Workflow.Shared;
 
 namespace BBT.Workflow.Execution.Continuations;
@@ -71,6 +72,14 @@ public sealed class EnqueueContinuationStrategy(
 
         var activity = Activity.Current;
 
+        // The lane anchor is the PARENT of the next hop's span; activity.Id is only its PREDECESSOR
+        // and is linked. That split is what makes hop N+1 a sibling of hop N instead of its child.
+        var laneAnchor = WorkflowTraceLane.Current;
+        var laneParent = WorkflowTraceLane.ParentLane;
+        // Computed once: the gateway may fall back from the direct payload to the outbox event, and
+        // incrementing at both sites would hand out the same ordinal twice.
+        var laneSeq = WorkflowTraceLane.NextSeq();
+
         var directPayload = new TransitionJobPayload
         {
             JobName = jobNameValue,
@@ -86,6 +95,10 @@ public sealed class EnqueueContinuationStrategy(
             CallerSync = false,
             TraceParent = activity?.Id,
             TraceState = activity?.TraceStateString,
+            TraceRoot = laneAnchor,
+            ParentTraceRoot = laneParent,
+            ChainDepth = current.ChainDepth + 1,
+            LaneSeq = laneSeq,
             CorrelationId = current.CorrelationId
         };
 
@@ -105,10 +118,15 @@ public sealed class EnqueueContinuationStrategy(
             ChainDepth = current.ChainDepth + 1,
             TraceParent = activity?.Id,
             TraceState = activity?.TraceStateString,
+            TraceRoot = laneAnchor,
+            ParentTraceRoot = laneParent,
+            LaneSeq = laneSeq,
             CorrelationId = current.CorrelationId
         };
 
-        await enqueueGateway.EnqueueAsync(directPayload, outboxEvent, cancellationToken);
+        // Auto-chain runs in the pipeline's ambient UoW and holds no status lock, so Aether already
+        // defers arming to that UoW's post-commit hook. Nothing to move out here.
+        await enqueueGateway.EnqueueAsync(directPayload, outboxEvent, cancellationToken: cancellationToken);
 
         // No in-process next context — a separate job resumes the chain.
         return Result<WorkflowExecutionContext?>.Ok(null);

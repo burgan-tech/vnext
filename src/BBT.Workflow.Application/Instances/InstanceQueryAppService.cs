@@ -17,12 +17,14 @@ using BBT.Workflow.Shared;
 using System.Text.Json;
 using BBT.Aether.Application.Pagination;
 using BBT.Workflow.Definitions.GraphQL;
+using BBT.Workflow.Definitions.GraphQL.Validation;
 using BBT.Workflow.RepresentationEtag;
 using BBT.Workflow.Tasks.Coordinator;
 using BBT.Aether.MultiSchema;
 using BBT.Aether.Users;
 using BBT.Workflow.CurrentUser;
 using BBT.Workflow.Definitions.Schemas;
+using BBT.Workflow.ExceptionHandling;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 
@@ -61,6 +63,25 @@ public sealed class InstanceQueryAppService(
         InstanceStatus.Faulted,
         InstanceStatus.Passive
     ];
+
+    /// <summary>
+    /// Converts a failed query validation into a 400-mapping <see cref="Error"/>, carrying every
+    /// rejection reason so the caller can fix them all in one round trip.
+    /// </summary>
+    private static Error ToValidationError(FilterValidationResult validation)
+    {
+        var validationErrors = validation.Errors
+            .Select(error => new System.ComponentModel.DataAnnotations.ValidationResult(
+                error.Message,
+                [error.Target ?? "filter"]))
+            .ToList();
+
+        return Error.Validation(
+            validation.PrimaryErrorCode,
+            validation.ToMessage(),
+            validationErrors,
+            validation.Errors[0].Target ?? "filter");
+    }
 
     private IDisposable? BeginRootIdScopeIfSubflow(Instance instance)
     {
@@ -165,10 +186,32 @@ public sealed class InstanceQueryAppService(
     {
         runtimeInfoProvider.Check(input.Domain);
 
+        // Validate before any query is built. A filter the runtime cannot honor must be rejected,
+        // never silently ignored — ignoring it widens the result set instead of narrowing it.
+        var validation = InstanceQueryValidator.Validate(new InstanceQueryValidationRequest
+        {
+            Filter = input.Filter,
+            Sort = input.Sort,
+            GroupBy = input.GroupBy,
+            Aggregations = input.Aggregations
+        });
+
+        if (!validation.IsValid)
+        {
+            foreach (var error in validation.Errors)
+            {
+                logger.InstanceQueryParameterRejected(
+                    input.Domain, input.Workflow, error.Target ?? "filter", error.Code, error.Message);
+            }
+
+            return Result<InstanceListWithGroupsResponse<GetInstanceOutput>>.Fail(
+                ToValidationError(validation));
+        }
+
         return await ResultExtensions.TryAsync(
             async ct =>
             {
- 
+
                 // Resolve schema-driven filter/sort metadata from workflow's master schema
                 SchemaFilterContext? schemaContext = null;
                 var flowResult = await componentCacheStore.GetFlowAsync(input.Domain, input.Workflow, null, ct);
@@ -224,30 +267,58 @@ public sealed class InstanceQueryAppService(
                 // Use optimized path if we have a parsed request (avoids parse-serialize-parse cycle)
                 HateoasPagedList<Instance> pagedList;
                 List<GroupSummary>? groups;
-                if (parsedRequest != null)
+                try
                 {
-                   parsedRequest.SchemaContext = schemaContext;
-                    var result = await instanceRepository.GetPagedResultsWithGroupsAsync(
-                        input.Page,
-                        input.PageSize,
-                        parsedRequest,
-                        ct);
-                    pagedList = result.PagedList;
-                    groups = result.Groups;
+                    if (parsedRequest != null)
+                    {
+                        parsedRequest.SchemaContext = schemaContext;
+                        var result = await instanceRepository.GetPagedResultsWithGroupsAsync(
+                            input.Page,
+                            input.PageSize,
+                            parsedRequest,
+                            ct);
+                        pagedList = result.PagedList;
+                        groups = result.Groups;
+                    }
+                    else
+                    {
+                        var result = await instanceRepository.GetPagedResultsWithGroupsAsync(
+                            input.Page,
+                            input.PageSize,
+                            input.Filter,
+                            groupBy,
+                            aggregations,
+                            input.Sort,
+                            schemaContext,
+                            ct);
+                        pagedList = result.PagedList;
+                        groups = result.Groups;
+                    }
                 }
-                else
+                catch (Exception ex) when (ex is ArgumentException or FormatException or FilterCompilationException)
                 {
-                   var result = await instanceRepository.GetPagedResultsWithGroupsAsync(
-                        input.Page,
-                        input.PageSize,
-                        input.Filter,
-                        groupBy,
-                        aggregations,
-                        input.Sort,
-                        schemaContext,
-                        ct);
-                    pagedList = result.PagedList;
-                    groups = result.Groups;
+                    // The filter passed boundary validation but still could not be compiled into
+                    // SQL — either a value the operator cannot accept for that column (such as
+                    // `createdAt eq "notadate"`, surfacing as ArgumentException/FormatException) or
+                    // a fail-closed guard in the builders (FilterCompilationException). Both mean
+                    // the validator's rules and the SQL builder's rules have drifted, which is why
+                    // this logs at Error; the caller still gets a 400, not a 500, because the
+                    // request is unservable either way.
+                    //
+                    // SchemaFilterValidationException is deliberately NOT caught here: it is a
+                    // master-schema policy decision (field not filterable, operator not in
+                    // x-filterOperators) that the boundary validator intentionally does not
+                    // duplicate. Treating it as drift would fire this alarm on every routine
+                    // policy rejection. It already carries its own 400-mapping code and passes
+                    // through untouched.
+                    logger.InstanceFilterCompilationFailed(ex, input.Domain, input.Workflow);
+
+                    if (ex is FilterCompilationException)
+                        throw; // Already a UserFriendlyException with InstanceFilterInvalid.
+
+                    throw new UserFriendlyException(
+                        WorkflowErrorCodes.InstanceFilterInvalid,
+                        $"Filter could not be applied: {ex.Message}");
                 }
 
                 var route = urlTemplateBuilder.BuildInstanceListUrl(input.Domain, input.Workflow);
@@ -1424,8 +1495,9 @@ public sealed class InstanceQueryAppService(
         };
 
         // Scheduled entries ride in the same transitions list, appended after the caller-triggerable
-        // ones; clients discriminate on kind ("scheduled" ⇒ executeAtUtc present, no href).
-        transitionItems.AddRange(BuildScheduledTransitionEntries(activeScheduledTransitionJobs));
+        // ones; clients discriminate on kind ("scheduled" ⇒ executeAtUtc present).
+        transitionItems.AddRange(BuildScheduledTransitionEntries(
+            activeScheduledTransitionJobs, input.Domain, input.Workflow, instance.Id.ToString()));
 
         return Result<GetInstanceStateOutput>.Ok(new GetInstanceStateOutput
         {
@@ -1447,15 +1519,26 @@ public sealed class InstanceQueryAppService(
 
     /// <summary>
     /// Maps the instance's active scheduled-transition jobs to <c>kind: "scheduled"</c> entries of the
-    /// response's <c>transitions</c> list, ordered by execution time ascending. No href/view/schema —
-    /// callers cannot trigger a scheduled transition. Rows without an
+    /// response's <c>transitions</c> list, ordered by execution time ascending. Rows without an
     /// <see cref="InstanceJob.ExecuteAt"/> (persisted before the column existed) are omitted rather
     /// than emitted without a time — every scheduled entry carries an execution instant, and such rows
     /// age out as their jobs fire or are cancelled. Not role-filtered: a scheduled transition fires
     /// regardless of the caller, so the entries are facts about the instance, not caller capabilities.
+    /// <para>
+    /// href/view/schema are emitted with the SAME url shapes as the caller-triggerable entries but
+    /// with <c>hasView</c>/<c>loadData</c>/<c>hasSchema</c> hardcoded false — a TEMPORARY uniformity
+    /// concession so existing domain clients that assume every transitions[] item carries the three
+    /// link objects do not break on scheduled entries; domains will adapt and the links may then be
+    /// dropped again. The href is not an invitation to call: scheduled transitions stay
+    /// System-actor-gated at execution (<c>ActorAuthorizationSpecification</c>), so a client PATCHing
+    /// it is rejected exactly as before.
+    /// </para>
     /// </summary>
-    private static IEnumerable<TransitionItem> BuildScheduledTransitionEntries(
-        IReadOnlyCollection<InstanceJob> activeScheduledTransitionJobs) =>
+    private IEnumerable<TransitionItem> BuildScheduledTransitionEntries(
+        IReadOnlyCollection<InstanceJob> activeScheduledTransitionJobs,
+        string domain,
+        string workflow,
+        string instanceId) =>
         activeScheduledTransitionJobs
             .Where(j => j.ExecuteAt.HasValue && !string.IsNullOrEmpty(j.TransitionKey))
             .OrderBy(j => j.ExecuteAt!.Value)
@@ -1463,7 +1546,19 @@ public sealed class InstanceQueryAppService(
             {
                 Name = j.TransitionKey!,
                 Kind = ScheduledTransitionKind,
-                ExecuteAtUtc = j.ExecuteAt!.Value
+                ExecuteAtUtc = j.ExecuteAt!.Value,
+                Href = urlTemplateBuilder.BuildTransitionUrl(domain, workflow, instanceId, j.TransitionKey!),
+                View = new ViewHref
+                {
+                    Href = urlTemplateBuilder.BuildViewUrl(domain, workflow, instanceId, j.TransitionKey!),
+                    HasView = false,
+                    LoadData = false
+                },
+                Schema = new SchemaHref
+                {
+                    Href = urlTemplateBuilder.BuildSchemaUrl(domain, workflow, instanceId, j.TransitionKey!),
+                    HasSchema = false
+                }
             });
 
     /// <summary>

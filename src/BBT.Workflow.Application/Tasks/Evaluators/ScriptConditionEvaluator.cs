@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Scripting;
@@ -42,9 +43,16 @@ public sealed class ScriptConditionEvaluator : IConditionEvaluator
                     script,
                     flowScripts: context.Workflow?.Scripts,
                     cancellationToken: ct);
-            
-                var result = await scriptRunner.Handler(context);
-                return result;
+                
+                try
+                {
+                    var result = await scriptRunner.Handler(context);
+                    return result;
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    throw;
+                }
             }, cancellationToken)
             .OnFailure(error => _logger.LogError(
                 "Condition script evaluation failed: {Error}",

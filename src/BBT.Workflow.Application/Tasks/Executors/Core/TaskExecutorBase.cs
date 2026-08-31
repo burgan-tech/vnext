@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
+using BBT.Workflow.Logging;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks.Coordinator;
 using Microsoft.Extensions.Logging;
@@ -34,7 +35,7 @@ public abstract class TaskExecutorBase<TTask>(ILogger logger) : ITaskExecutor
         TaskExecutorContext context,
         CancellationToken cancellationToken = default)
     {
-        var stopwatch = Stopwatch.StartNew();
+        var startTimestamp = Stopwatch.GetTimestamp();
         var taskKey = context.Task.Key;
 
         Logger.LogDebug("Executing task {TaskKey} with executor {Executor}",
@@ -58,11 +59,10 @@ public abstract class TaskExecutorBase<TTask>(ILogger logger) : ITaskExecutor
         }
         if (!inputResult.IsSuccess)
         {
-            stopwatch.Stop();
             Logger.LogError("Task {TaskKey} input preparation failed: {Error}",
                 taskKey, inputResult.Error.Message);
             return Result<StandardTaskResponse>.Fail(inputResult.Error);
-            // return CreateErrorResponse(inputResult.Error, stopwatch.ElapsedMilliseconds);
+            // return CreateErrorResponse(inputResult.Error, (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds);
         }
         
         context.InputResponse = inputResult.Value;
@@ -71,11 +71,10 @@ public abstract class TaskExecutorBase<TTask>(ILogger logger) : ITaskExecutor
         var preProcessResult = await PreProcessAsync(task, context, cancellationToken);
         if (!preProcessResult.IsSuccess)
         {
-            stopwatch.Stop();
             Logger.LogError("Task {TaskKey} pre-processing failed: {Error}",
                 taskKey, preProcessResult.Error.Message);
             return Result<StandardTaskResponse>.Fail(preProcessResult.Error);
-            // return CreateErrorResponse(preProcessResult.Error, stopwatch.ElapsedMilliseconds);
+            // return CreateErrorResponse(preProcessResult.Error, (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds);
         }
 
         // 4. Invoke (abstract or virtual)
@@ -86,13 +85,18 @@ public abstract class TaskExecutorBase<TTask>(ILogger logger) : ITaskExecutor
         }
         if (!invokeResult.IsSuccess)
         {
-            stopwatch.Stop();
             Logger.LogError("Task {TaskKey} invocation failed: {Error}",
                 taskKey, invokeResult.Error.Message);
-            return CreateErrorResponse(invokeResult.Error, stopwatch.ElapsedMilliseconds);
+            return CreateErrorResponse(invokeResult.Error, (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds);
         }
 
-        context.RawInvocationResultJson = JsonSerializer.Serialize(invokeResult.Value!, JsonSerializerConstants.JsonOptions);
+        // Materialize the audit payload once while the invocation result is already hot. Carrying
+        // the full object graph until the journal write extends its lifetime without reducing the
+        // number of serializations; JsonData keeps only the persisted text and parses lazily if a
+        // later consumer actually requests JsonElement.
+        context.RawInvocationResult = invokeResult.Value is null
+            ? new JsonData("null")
+            : new JsonData(invokeResult.Value);
 
         // Note: Business errors (HTTP 4xx/5xx) are NOT intercepted here.
         // The invocation result (including IsSuccess=false, StatusCode, Metadata/ExceptionType)
@@ -103,11 +107,10 @@ public abstract class TaskExecutorBase<TTask>(ILogger logger) : ITaskExecutor
         var postProcessResult = await PostProcessAsync(task, invokeResult.Value!, context, cancellationToken);
         if (!postProcessResult.IsSuccess)
         {
-            stopwatch.Stop();
             Logger.LogError("Task {TaskKey} post-processing failed: {Error}",
                 taskKey, postProcessResult.Error.Message);
             return Result<StandardTaskResponse>.Fail(postProcessResult.Error);
-            // return CreateErrorResponse(postProcessResult.Error, stopwatch.ElapsedMilliseconds);
+            // return CreateErrorResponse(postProcessResult.Error, (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds);
         }
 
         // 6. ProcessOutput (virtual - custom per executor)
@@ -118,22 +121,24 @@ public abstract class TaskExecutorBase<TTask>(ILogger logger) : ITaskExecutor
         }
         if (!outputResult.IsSuccess)
         {
-            stopwatch.Stop();
             Logger.LogError("Task {TaskKey} output processing failed: {Error}",
                 taskKey, outputResult.Error.Message);
             return Result<StandardTaskResponse>.Fail(outputResult.Error);
-            // return CreateErrorResponse(outputResult.Error, stopwatch.ElapsedMilliseconds);
+            // return CreateErrorResponse(outputResult.Error, (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds);
         }
         
         if (context.TaskTrigger == TaskTrigger.Extension)
         {
-            context.ScriptContext.SetOutputResponse(outputResult.Value, taskKey.ToVariableName());
+            // The Extension-trigger gate is unchanged (pre-existing); only the KEY inside it can
+            // move, and only when the caller opted in via ResponseVariableKey — never inferred from
+            // the trigger itself, since custom Functions also run with TaskTrigger.Extension and
+            // must keep reading their output by task key (see TaskEngineExecutionOptions).
+            context.ScriptContext.SetOutputResponse(outputResult.Value, context.ResponseVariableKey ?? taskKey.ToVariableName());
         }
 
-        stopwatch.Stop();
 
         // 7. CreateResponse
-        return CreateSuccessResponse(task, invokeResult.Value!, outputResult.Value, stopwatch.ElapsedMilliseconds);
+        return CreateSuccessResponse(task, invokeResult.Value!, outputResult.Value, (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds);
     }
 
     /// <summary>
@@ -280,18 +285,70 @@ public abstract class TaskExecutorBase<TTask>(ILogger logger) : ITaskExecutor
     }
 
     /// <summary>
+    /// Compiles the task's mapping once per task execution and hands out a FRESH instance per call.
+    /// The compiled factory is memoized on the <see cref="TaskExecutorContext"/> (keyed by mapping +
+    /// target type), so PrepareInput and ProcessOutput/Invoke asking for the same mapping share a
+    /// single engine call instead of each paying their own compile-cache lookup; instance-per-phase
+    /// semantics are unchanged — a user script holding instance fields observes exactly today's
+    /// behaviour, one fresh instance per phase.
+    /// </summary>
+    /// <remarks>
+    /// No lock guards the memo dictionary: a single task execution runs its phases sequentially on
+    /// one <see cref="TaskExecutorContext"/> within one thread (the pipeline does not fan phases of
+    /// the SAME task out concurrently), so there is no concurrent writer to race against.
+    /// CONSTRAINT: this helper compiles <c>context.OnExecuteTask.Mapping</c> and NOTHING else. A
+    /// call site holding a different <see cref="ScriptCode"/> (e.g. CacheAside's SourceMapping, the
+    /// notification state-channel mapping) must NOT route through here — it would silently compile
+    /// the wrong script; keep such sites on the engine's <c>CompileToInstanceAsync</c> overloads.
+    /// </remarks>
+    protected static async Task<T> GetOrCompileMappingAsync<T>(
+        IScriptEngine scriptEngine,
+        TaskExecutorContext context,
+        CancellationToken cancellationToken)
+        where T : class
+    {
+        var mapping = context.OnExecuteTask.Mapping;
+        var key = (mapping, typeof(T));
+        context.CompiledMappingFactories ??= new Dictionary<(ScriptCode, Type), object>();
+        if (!context.CompiledMappingFactories.TryGetValue(key, out var boxed))
+        {
+            boxed = await scriptEngine.CompileToFactoryAsync<T>(
+                mapping, context.ScriptContext.Workflow?.Scripts, cancellationToken);
+            context.CompiledMappingFactories[key] = boxed;
+        }
+        else
+        {
+            // A memo hit means the engine is never called, so no Script.Compile span is produced at all.
+            // Without this counter the trace shows no compile and no reuse — indistinguishable from a task
+            // that has no mapping.
+            Activity.Current.IncrementCounterTag(TelemetryConstants.TagNames.MappingFactoryMemoHits);
+        }
+
+        return ((Func<T>)boxed)();
+    }
+
+    /// <summary>
     /// Updates script context with response data for output handler processing.
     /// Sets the standard response on the context and optionally sets output response for extension triggers.
     /// </summary>
     /// <param name="taskKey">The task key used to generate the variable name.</param>
     /// <param name="result">The task invocation result (can be null).</param>
     /// <param name="context">The script context to update.</param>
+    /// <param name="responseVariableKey">
+    /// Caller-supplied override for the variable name (from
+    /// <c>TaskExecutorContext.ResponseVariableKey</c>). Null means "derive from
+    /// <paramref name="taskKey"/>" — today's behavior. This is the site the Preprod crash traced
+    /// back to (the <c>TaskResponse</c> merge): two extensions sharing a task key overwrote each
+    /// other's entry here, so this parameter must be honored on every call site, not just the
+    /// Extension-only <c>OutputResponse</c> write in <see cref="ExecuteAsync"/>.
+    /// </param>
     protected static void UpdateScriptContextWithResponse(
         string taskKey,
         TaskInvocationResult? result,
-        ScriptContext context)
+        ScriptContext context,
+        string? responseVariableKey = null)
     {
-        var variableKey = taskKey.ToVariableName();
+        var variableKey = responseVariableKey ?? taskKey.ToVariableName();
         var response = new StandardTaskResponse
         {
             IsSuccess = result?.IsSuccess == true,
@@ -308,4 +365,3 @@ public abstract class TaskExecutorBase<TTask>(ILogger logger) : ITaskExecutor
         context.SetStandardResponse(response, variableKey);
     }
 }
-

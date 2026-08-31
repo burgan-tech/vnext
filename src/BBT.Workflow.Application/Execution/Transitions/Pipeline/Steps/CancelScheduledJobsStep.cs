@@ -26,7 +26,7 @@ public sealed class CancelScheduledJobsStep(
         // Only cancel if current state has scheduled transitions
         if (context.Current == null || !HasScheduledTransitions(context.Current))
         {
-            return Result<StepOutcome>.Ok(StepOutcome.Continue());
+            return Result<StepOutcome>.Ok(StepOutcome.ContinueNoWork());
         }
 
         // Get transition keys for the current state's scheduled transitions

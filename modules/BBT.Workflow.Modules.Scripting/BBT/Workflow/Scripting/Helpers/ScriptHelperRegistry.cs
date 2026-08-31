@@ -7,6 +7,7 @@ using System.Runtime.Loader;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
+using System.Threading.Tasks;
 using BBT.Workflow.Scripting.Evaluators;
 using BBT.Workflow.Scripting.Sandbox;
 using Microsoft.CodeAnalysis;
@@ -28,10 +29,10 @@ public sealed class ScriptHelperRegistry(IEvaluator evaluator, ScriptSandboxOpti
     : IScriptHelperRegistry, IDisposable
 {
     private readonly ScriptSandboxOptions _sandbox = sandboxOptions ?? new ScriptSandboxOptions { Enabled = false };
-    private readonly ConcurrentDictionary<string, Lazy<HelperSet>> _cache = new();
+    private readonly ConcurrentDictionary<string, Lazy<Task<HelperSet>>> _cache = new();
 
     /// <inheritdoc />
-    public HelperSet GetOrBuildHelpers(
+    public Task<HelperSet> GetOrBuildHelpersAsync(
         IReadOnlyList<HelperSource> helpers,
         IReadOnlyList<string>? allowedAssemblies,
         IEnumerable<MetadataReference> contractReferences,
@@ -49,31 +50,56 @@ public sealed class ScriptHelperRegistry(IEvaluator evaluator, ScriptSandboxOpti
         var key = HashOf(helpers, allowedAssemblies);
 
         // Fast path: an already-materialised set is a cache hit no matter which caller produced it.
-        if (_cache.TryGetValue(key, out var existing) && existing.IsValueCreated)
-            return existing.Value with { FromCache = true };
+        // IsCompletedSuccessfully is REQUIRED: a still-running build must be awaited on the slow path
+        // (never blocked on), and a faulted build served from here would bypass the eviction below.
+        if (_cache.TryGetValue(key, out var existing)
+            && existing.IsValueCreated
+            && existing.Value.IsCompletedSuccessfully)
+        {
+            return Task.FromResult(existing.Value.Result with { FromCache = true });
+        }
 
-        // Set from inside the factory so a call that triggered a real compile reports FromCache: false,
-        // while calls served by an already-published set report a hit.
+        return GetOrBuildHelpersSlowAsync(key, helpers, allowedAssemblies, contractReferences, baseUsings);
+    }
+
+    /// <summary>
+    /// Slow path: async single-flight per set key. Concurrent callers of the same set await ONE
+    /// shared build task instead of blocking thread-pool threads in <c>Lazy.Value</c> — a helper-set
+    /// compile takes seconds, and the blocked waiters were a measured thread-pool-starvation source
+    /// during cold bursts. Split out so the argument guards above stay synchronous.
+    /// </summary>
+    private async Task<HelperSet> GetOrBuildHelpersSlowAsync(
+        string key,
+        IReadOnlyList<HelperSource> helpers,
+        IReadOnlyList<string>? allowedAssemblies,
+        IEnumerable<MetadataReference> contractReferences,
+        IEnumerable<string> baseUsings)
+    {
+        // Set from the synchronous part of the factory (under the Lazy's publication lock) so the
+        // call that triggered a real compile reports FromCache: false, while calls served by an
+        // already-published set report a hit. Task.Run keeps the CPU-bound Roslyn build off the
+        // thread that happened to materialise the Lazy.
         var built = false;
 
-        var lazy = _cache.GetOrAdd(key, _ => new Lazy<HelperSet>(
+        var lazy = _cache.GetOrAdd(key, _ => new Lazy<Task<HelperSet>>(
             () =>
             {
                 built = true;
-                return BuildHelperSet(key, helpers, allowedAssemblies, contractReferences, baseUsings);
+                return Task.Run(() => BuildHelperSet(key, helpers, allowedAssemblies, contractReferences, baseUsings));
             },
             LazyThreadSafetyMode.ExecutionAndPublication));
 
         try
         {
-            var set = lazy.Value;
+            var set = await lazy.Value.ConfigureAwait(false);
             return built ? set : set with { FromCache = true };
         }
         catch
         {
-            // Lazy<T> caches the *exception* as well as the value, so without eviction a single
-            // transient failure would be replayed from cache for the rest of the process lifetime
-            // (this registry is a singleton). Drop the poisoned entry so the next caller recompiles.
+            // The Lazy caches its (now faulted) task, so without eviction a single transient failure
+            // would be replayed from cache for the rest of the process lifetime (this registry is a
+            // singleton). Every awaiter that observes the fault may evict — the KVP-form TryRemove is
+            // idempotent and never clobbers a healthy entry another caller re-published.
             Evict(key, lazy);
             throw;
         }
@@ -121,9 +147,9 @@ public sealed class ScriptHelperRegistry(IEvaluator evaluator, ScriptSandboxOpti
     /// Removes a faulted cache entry, but only when it is still the entry we observed — never clobbers a
     /// healthy set that another caller has already published under the same key.
     /// </summary>
-    private void Evict(string key, Lazy<HelperSet> lazy)
+    private void Evict(string key, Lazy<Task<HelperSet>> lazy)
     {
-        _cache.TryRemove(new KeyValuePair<string, Lazy<HelperSet>>(key, lazy));
+        _cache.TryRemove(new KeyValuePair<string, Lazy<Task<HelperSet>>>(key, lazy));
     }
 
     /// <summary>
@@ -184,11 +210,29 @@ public sealed class ScriptHelperRegistry(IEvaluator evaluator, ScriptSandboxOpti
     {
         foreach (var entry in _cache.Values.ToList())
         {
-            // A faulted Lazy still reports IsValueCreated == false; reading .Value would rethrow.
             if (!entry.IsValueCreated)
                 continue;
 
-            TryUnload(entry.Value.LoadContext);
+            var task = entry.Value;
+            if (task.IsCompletedSuccessfully)
+            {
+                TryUnload(task.Result.LoadContext);
+            }
+            else if (!task.IsCompleted)
+            {
+                // A build still in flight at dispose time (tests dispose actively): unload its
+                // context once it lands so it does not leak. A faulted build already unloaded its
+                // own context in BuildHelperSet's catch — nothing to do for it here.
+                _ = task.ContinueWith(
+                    t =>
+                    {
+                        if (t.IsCompletedSuccessfully)
+                            TryUnload(t.Result.LoadContext);
+                    },
+                    CancellationToken.None,
+                    TaskContinuationOptions.ExecuteSynchronously,
+                    TaskScheduler.Default);
+            }
         }
 
         _cache.Clear();

@@ -42,5 +42,25 @@ public interface ITraceableJobPayload
     /// Gets the W3C Trace Context tracestate header for vendor-specific trace data.
     /// </summary>
     string? TraceState { get; }
+
+    /// <summary>
+    /// The trace lane anchor (W3C traceparent) this job's span must be parented to, so that every
+    /// hop of the same instance appears as a SIBLING rather than nested inside its predecessor.
+    /// See <c>WorkflowTraceLane</c>.
+    /// <para>
+    /// A default interface member, deliberately: only jobs that fire immediately after enqueue take
+    /// part in a lane. Deferred payloads (timer, timeout, long-poll ack) inherit the null and keep
+    /// the ambient-parent policy — resurrecting an hours-old anchor would produce an hours-long trace.
+    /// Returning null here is also what makes a payload serialized by an older build degrade to the
+    /// pre-lane behaviour instead of failing.
+    /// </para>
+    /// </summary>
+    string? TraceRoot => null;
+
+    /// <summary>
+    /// The enclosing lane's anchor — set only while executing a subflow, so the eventual resume can
+    /// return to the parent instance's lane instead of nesting under the subflow's.
+    /// </summary>
+    string? ParentTraceRoot => null;
 }
 

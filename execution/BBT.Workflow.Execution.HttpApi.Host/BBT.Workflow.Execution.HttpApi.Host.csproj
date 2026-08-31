@@ -17,4 +17,8 @@
         <ProjectReference Include="..\..\src\BBT.Workflow.HttpApi.Shared\BBT.Workflow.HttpApi.Shared.csproj"/>
         <ProjectReference Include="..\..\src\BBT.Workflow.Execution\BBT.Workflow.Execution.csproj"/>
     </ItemGroup>
+    <ItemGroup>
+        <!-- Server-side gRPC hosting: serves TaskInvoker alongside the existing HTTP controller. -->
+        <PackageReference Include="Grpc.AspNetCore" Version="$(GrpcAspNetCorePackageVersion)"/>
+    </ItemGroup>
 </Project>

@@ -28,7 +28,7 @@ public sealed class SetBusyStep(
         // is acquired at the continuation boundary instead.
         if (context.IsUpdateDataTransition())
         {
-            return Result<StepOutcome>.Ok(StepOutcome.Continue());
+            return Result<StepOutcome>.Ok(StepOutcome.ContinueNoWork());
         }
 
         // Skip if instance is already Busy (admission reserve or chained auto transitions).
@@ -37,7 +37,7 @@ public sealed class SetBusyStep(
             logger.LogDebug(
                 "Instance {InstanceId} is already Busy, skipping SetBusyStep",
                 context.InstanceId);
-            return Result<StepOutcome>.Ok(StepOutcome.Continue());
+            return Result<StepOutcome>.Ok(StepOutcome.ContinueNoWork());
         }
 
         // Skip if instance is completed (should not happen, but defensive)
@@ -46,24 +46,51 @@ public sealed class SetBusyStep(
             logger.LogDebug(
                 "Instance {InstanceId} is already completed, skipping SetBusyStep",
                 context.InstanceId);
-            return Result<StepOutcome>.Ok(StepOutcome.Continue());
+            return Result<StepOutcome>.Ok(StepOutcome.ContinueNoWork());
         }
 
         // Skip for SubFlow resume - status is managed by ClearBusyOnResumeStep
         if (context.Directives.IsSubFlowResume)
         {
+            return Result<StepOutcome>.Ok(StepOutcome.ContinueNoWork());
+        }
+
+        // Admission (Reserve/TakeOver) flipped the ROW under its status lock, in its own
+        // RequiresNew DbContext — so this pipeline's aggregate can still read Active. Settlement's
+        // owner guard reads context.Instance.IsBusy, so the in-memory aggregate MUST be aligned
+        // here or the chain never settles back to Active (stranded Busy). No DB call: the row is
+        // already Busy, and the status value simply rides along the next tracked flush.
+        if (context.OwnsStatus)
+        {
+            context.Instance.Busy();
+            logger.LogDebug(
+                "Instance {InstanceId} aggregate aligned to admission's Busy for transition {TransitionKey}",
+                context.InstanceId,
+                context.TransitionKey);
             return Result<StepOutcome>.Ok(StepOutcome.Continue());
         }
 
-        // Mark Busy and persist (admission normally does this up front; this is the in-pipeline
-        // safety net for profiles that reach here with an Active aggregate).
-        return await Result.Ok(context)
-            .Tap(ctx => ctx.Instance.Busy())
-            .TapAsync(ctx => instanceRepository.UpdateAsync(ctx.Instance, true, cancellationToken))
-            .Tap(ctx => logger.LogDebug(
+        // Safety net for paths that genuinely reach here with an Active row: one set-based CAS —
+        // the tracked save used to rewrite the full row and flush every pending change
+        // mid-pipeline; anything pending still commits with the enclosing unit of work.
+        // A lost CAS means a concurrent writer changed the row after our guards — the old blind
+        // write would have overwritten it; proceeding without the flip is strictly safer.
+        var flipped = await instanceRepository.TryMarkBusyAsync(context.Instance, cancellationToken);
+        if (flipped)
+        {
+            logger.LogDebug(
                 "Instance {InstanceId} set to Busy for transition {TransitionKey}",
-                ctx.InstanceId,
-                ctx.TransitionKey))
-            .Map(_ => StepOutcome.Continue());
+                context.InstanceId,
+                context.TransitionKey);
+        }
+        else
+        {
+            logger.LogDebug(
+                "Instance {InstanceId} was no longer Active at SetBusy for transition {TransitionKey}; continuing without the flip",
+                context.InstanceId,
+                context.TransitionKey);
+        }
+
+        return Result<StepOutcome>.Ok(StepOutcome.Continue());
     }
 }

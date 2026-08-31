@@ -13,18 +13,23 @@ namespace BBT.Workflow.Scripting.Functions;
 /// <param name="daprClient">The Dapr client for distributed application runtime operations</param>
 /// <param name="logger">The logger for script execution logging</param>
 /// <param name="configuration">The configuration for accessing application settings</param>
+/// <param name="secretCache">The singleton secret bundle cache shared across request scopes</param>
 public sealed class ScriptServices(
     DaprClient daprClient,
     ILogger<ScriptServices> logger,
-    IConfiguration configuration) : IScriptServices
+    IConfiguration configuration,
+    IScriptSecretCache secretCache) : IScriptServices
 {
     /// <inheritdoc />
     public DaprClient DaprClient { get; } = daprClient ?? throw new ArgumentNullException(nameof(daprClient));
-    
+
     /// <inheritdoc />
     public ILogger Logger { get; } = logger ?? throw new ArgumentNullException(nameof(logger));
-    
+
     /// <inheritdoc />
     public IConfiguration Configuration { get; } = configuration ?? throw new ArgumentNullException(nameof(configuration));
+
+    /// <inheritdoc />
+    public IScriptSecretCache? SecretCache { get; } = secretCache ?? throw new ArgumentNullException(nameof(secretCache));
 }
 

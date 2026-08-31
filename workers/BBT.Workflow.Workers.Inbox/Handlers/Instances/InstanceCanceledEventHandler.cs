@@ -35,7 +35,9 @@ internal sealed class InstanceCanceledEventHandler(
             return;
         }
 
-        using var traceScope = EventTraceScope.Start("InstanceCanceled.Handle", eventData, correlationIdProvider);
+        using var traceScope = EventTraceScope.Start(
+            "InstanceCanceled.Handle", eventData, correlationIdProvider,
+            EventTraceMode.LinkedDelivery, envelope.Id);
 
         var scopeProps = new Dictionary<string, object>
         {

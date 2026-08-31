@@ -1,6 +1,5 @@
 using BBT.Workflow.Execution.Strategies;
 using BBT.Workflow.Instances;
-using BBT.Aether.Aspects;
 using BBT.Aether.Results;
 
 namespace BBT.Workflow.Execution.Services;
@@ -21,10 +20,8 @@ public sealed class WorkflowExecutionService(
     /// Executes a workflow transition by delegating to TransitionRunner.
     /// The runner manages UoW lifecycle and inline auto chain processing.
     /// </summary>
-    // [Log]
-    [Trace]
     public Task<Result<TransitionOutput>> ExecuteTransitionAsync(
-        [Enrich] WorkflowExecutionContext context,
+        WorkflowExecutionContext context,
         CancellationToken cancellationToken = default)
         => transitionRunner.RunAsync(context, cancellationToken);
 

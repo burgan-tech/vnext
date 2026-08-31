@@ -34,7 +34,7 @@ public sealed class RunAutomaticTransitionsStep(
                         reason: "NoAutoTransitions"));
             }
 
-            return Result<StepOutcome>.Ok(StepOutcome.Continue());
+            return Result<StepOutcome>.Ok(StepOutcome.ContinueNoWork());
         }
 
         // Railway chain: Evaluate all transitions -> Process winner (if exists)

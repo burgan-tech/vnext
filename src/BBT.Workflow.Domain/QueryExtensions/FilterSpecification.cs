@@ -24,8 +24,17 @@ public class FilterSpecification<T> : IFilterSpecification<T>
         _filterMappings = filterMappings;
     }
 
+    /// <summary>
+    /// Builds the predicate for the configured filter.
+    /// </summary>
+    /// <exception cref="ArgumentException">
+    /// A non-empty filter matched none of the configured mappings. Returning <c>x =&gt; true</c> in
+    /// that case would turn a filtered query into an unfiltered one — the caller would receive every
+    /// row and no indication that their filter was discarded.
+    /// </exception>
     public Expression<Func<T, bool>> ToExpression()
     {
+        // No filter legitimately means no restriction.
         if (_filters == null || !_filters.Any())
             return x => true;
 
@@ -65,9 +74,9 @@ public class FilterSpecification<T> : IFilterSpecification<T>
                     }
                 }
             }
-            catch
+            catch (JsonException)
             {
-                // If not JSON, try to parse as key=value using regex
+                // Not JSON, so try to parse as key=value using regex
                 var match = KeyValueRegex.Match(filter);
                 if (!match.Success)
                     continue;
@@ -98,9 +107,14 @@ public class FilterSpecification<T> : IFilterSpecification<T>
             }
         }
 
-        return Expression.Lambda<Func<T, bool>>(
-            combinedExpression ?? Expression.Constant(true),
-            parameter);
+        if (combinedExpression == null)
+        {
+            throw new ArgumentException(
+                "Filter matched none of the supported properties and would apply no restriction. " +
+                $"Supported properties: {string.Join(", ", _filterMappings.Keys)}.");
+        }
+
+        return Expression.Lambda<Func<T, bool>>(combinedExpression, parameter);
     }
 
     public IQueryable<T> Apply(IQueryable<T> query)

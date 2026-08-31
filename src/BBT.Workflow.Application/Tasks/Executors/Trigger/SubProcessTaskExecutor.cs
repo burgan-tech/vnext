@@ -77,7 +77,14 @@ public sealed class SubProcessTaskExecutor : TriggerTaskExecutorBase<SubProcessT
 
         if (isSameDomain)
         {
-            result = await ExecuteLocalAsync(task, context, subFlowInstanceId, correlationId, cancellationToken);
+            var scoped = await RunLocalScopedAsync(
+                task,
+                targetFlow: task.TriggerFlow,
+                targetInstance: subFlowInstanceId.ToString(),
+                async ct => Result<TaskInvocationResult>.Ok(
+                    await ExecuteLocalAsync(task, context, subFlowInstanceId, correlationId, ct)),
+                cancellationToken);
+            result = scoped.Value!;
         }
         else
         {
@@ -392,7 +399,27 @@ public sealed class SubProcessTaskExecutor : TriggerTaskExecutorBase<SubProcessT
                     task.TriggerFlow,
                     task.TriggerVersion);
 
-                var trackedInstance = await _instanceRepository.GetAsync(context.ScriptContext.Instance.Id, true, ct);
+                // The whole read-modify-write of the PARENT aggregate goes under the shared
+                // per-instance gate. N fan-out items can be launching subprocesses off the same
+                // parent concurrently; each has its own DI scope but the ambient (AsyncLocal)
+                // UnitOfWork hands them all the same schema-bound DbContext, and a Npgsql
+                // connection cannot run two commands at once — unguarded, one item loses its
+                // correlation to "A second operation was started on this context instance", and
+                // that subprocess is then untracked and never finalized.
+                //
+                // It is the SAME gate InstanceDataWriteService takes, deliberately: a per-item
+                // correlation write and the parent's data append really do overlap, and two
+                // separate striped arrays would not serialize against each other at all.
+                // Splitting the gate back in two reintroduces the bug.
+                var instanceId = context.ScriptContext.Instance.Id;
+                using var gate = await InstanceWriteGate.AcquireAsync(instanceId, ct);
+
+                // Correlation-only shape: AddCorrelation needs the correlation navigation and
+                // nothing else — GetAsync(id, includeDetails: true) also dragged the full
+                // DataList in through a single cartesian JOIN.
+                var trackedInstance = await _instanceRepository.FindWithAllCorrelationsAsync(instanceId, ct)
+                    ?? throw new InvalidOperationException(
+                        $"Instance {instanceId} not found while creating the SubProcess correlation");
                 trackedInstance.AddCorrelation(correlation);
                 await _instanceRepository.UpdateAsync(trackedInstance, true, ct);
             },

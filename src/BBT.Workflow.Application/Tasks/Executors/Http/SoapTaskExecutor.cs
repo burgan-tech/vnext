@@ -43,10 +43,7 @@ public sealed class SoapTaskExecutor : TaskExecutorBase<SoapTask>
 
         var result = await ResultExtensions.TryAsync<ScriptResponse?>(async ct =>
         {
-            var scriptRunner = await _scriptEngine.CompileToInstanceAsync<IMapping>(
-                mapping,
-                flowScripts: context.ScriptContext.Workflow?.Scripts,
-                cancellationToken: ct);
+            var scriptRunner = await GetOrCompileMappingAsync<IMapping>(_scriptEngine, context, ct);
 
             return await scriptRunner.InputHandler(task, context.ScriptContext);
         }, cancellationToken, ex => Error.Failure(
@@ -116,14 +113,11 @@ public sealed class SoapTaskExecutor : TaskExecutorBase<SoapTask>
             return Result<object?>.Ok(invocationResult.Data);
         }
 
-        UpdateScriptContextWithResponse(task.Key, invocationResult, context.ScriptContext);
+        UpdateScriptContextWithResponse(task.Key, invocationResult, context.ScriptContext, context.ResponseVariableKey);
 
         var result = await ResultExtensions.TryAsync<object?>(async ct =>
         {
-            var scriptRunner = await _scriptEngine.CompileToInstanceAsync<IMapping>(
-                mapping,
-                flowScripts: context.ScriptContext.Workflow?.Scripts,
-                cancellationToken: ct);
+            var scriptRunner = await GetOrCompileMappingAsync<IMapping>(_scriptEngine, context, ct);
 
             var outputResponse = await scriptRunner.OutputHandler(context.ScriptContext);
             return outputResponse.Data;

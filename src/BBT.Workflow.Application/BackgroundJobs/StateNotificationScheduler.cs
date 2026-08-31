@@ -57,7 +57,10 @@ public sealed class StateNotificationScheduler(
             TimeSpan.FromSeconds(fp.IntervalSeconds),
             (uint)fp.MaxRetries);
 
-        var schedule = DaprJobSchedule.FromDateTime(DateTime.UtcNow.AddMilliseconds(5)).ExpressionValue;
+        // Immediate, same as the transition enqueuer: no artificial lead. See TransitionJobEnqueuer
+        // for why the former 5 ms was not protecting anything, and why this must stay an ISO-8601
+        // instant rather than a zero duration.
+        var schedule = DaprJobSchedule.FromDateTime(DateTime.UtcNow).ExpressionValue;
 
         var metadata = new Dictionary<string, object>
         {

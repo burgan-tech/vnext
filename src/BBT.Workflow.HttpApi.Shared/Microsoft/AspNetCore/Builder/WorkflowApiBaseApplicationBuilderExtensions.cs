@@ -46,14 +46,6 @@ public static class WorkflowApiBaseApplicationBuilderExtensions
     }
 
     /// <summary>
-    /// Adds HTTP metrics middleware to the pipeline
-    /// </summary>
-    public static IApplicationBuilder UseWorkflowHttpMetrics(this IApplicationBuilder app)
-    {
-        return app.UseMiddleware<HttpMetricsMiddleware>();
-    }
-
-    /// <summary>
     /// Buffers the raw request body so the original payload can be exposed to mappings for signature
     /// verification (JWS/mTLS) via <c>ScriptContext.RawBody</c>. Register before controllers/model binding.
     /// </summary>

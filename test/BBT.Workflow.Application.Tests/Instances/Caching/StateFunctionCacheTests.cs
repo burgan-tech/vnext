@@ -73,6 +73,8 @@ public class StateFunctionCacheTests
         // earlier build. v7 retires entries written before caller roles became provider-resolved:
         // the hash covers role strings, so an identically named set from a different provider would
         // otherwise collide with one produced under different authorization inputs.
+        // entries with executeAtUtc; v7 gave scheduled entries the uniform href/view/schema links
+        // with hardcoded-false flags) cannot be served from entries written by an earlier build.
         // Bump this literal in the same commit as ResponseShapeVersion — the assertion exists to make
         // a silent shape change impossible.
         key.ShouldStartWith($"state-fn:v7:{TestDomain}:{TestWorkflow}:{TestInstance}:");

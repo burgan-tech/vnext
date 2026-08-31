@@ -1,3 +1,4 @@
+using BBT.Aether.BackgroundJob;
 using BBT.Aether.Events;
 using BBT.Aether.Results;
 using BBT.Workflow.BackgroundJobs;
@@ -29,19 +30,21 @@ public sealed class TransitionEnqueueGateway(
     ILogger<TransitionEnqueueGateway> logger) : ITransitionEnqueueGateway
 {
     /// <inheritdoc />
-    public async Task EnqueueAsync(
+    public async Task<TransitionEnqueueOutcome> EnqueueAsync(
         TransitionJobPayload directPayload,
         TransitionContinuationRequested outboxEvent,
-        CancellationToken cancellationToken)
+        bool deferArming = false,
+        CancellationToken cancellationToken = default)
     {
         if (options.Value.DirectEnqueueContinuations)
         {
-            var result = await TryEnqueueDirectlyAsync(directPayload, outboxEvent.JobId, cancellationToken);
+            var result = await TryEnqueueDirectlyAsync(
+                directPayload, outboxEvent.JobId, deferArming, cancellationToken);
             if (result.IsSuccess)
             {
                 logger.TransitionContinuationEnqueued(
                     outboxEvent.InstanceId, outboxEvent.TransitionKey, outboxEvent.JobName);
-                return;
+                return new TransitionEnqueueOutcome(TransitionEnqueuePath.Direct, result.Value);
             }
 
             logger.TransitionContinuationFellBackToOutbox(
@@ -50,6 +53,7 @@ public sealed class TransitionEnqueueGateway(
         }
 
         await eventBus.PublishAsync(outboxEvent, subject: null, useOutbox: true, cancellationToken);
+        return new TransitionEnqueueOutcome(TransitionEnqueuePath.Outbox);
     }
 
     /// <summary>
@@ -57,16 +61,20 @@ public sealed class TransitionEnqueueGateway(
     /// Uses TryAsync because Dapr is an external dependency; failures are safe to catch here
     /// as the intent has already been persisted by the caller.
     /// </summary>
-    private Task<Result<bool>> TryEnqueueDirectlyAsync(
+    private Task<Result<IBackgroundJobArmHandle?>> TryEnqueueDirectlyAsync(
         TransitionJobPayload payload,
         Guid jobId,
+        bool deferArming,
         CancellationToken cancellationToken)
     {
-        return ResultExtensions.TryAsync(
+        return ResultExtensions.TryAsync<IBackgroundJobArmHandle?>(
             async ct =>
             {
+                if (deferArming)
+                    return await jobEnqueuer.EnqueueWithDeferredArmAsync(payload, jobId, ct);
+
                 await jobEnqueuer.EnqueueAsync(payload, jobId, ct);
-                return true;
+                return null;
             },
             cancellationToken,
             ex => Error.Dependency(

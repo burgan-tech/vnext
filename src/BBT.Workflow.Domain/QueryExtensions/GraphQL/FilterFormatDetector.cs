@@ -92,6 +92,12 @@ public static class FilterFormatDetector
     /// <summary>
     /// Converts a legacy filter string to GraphQL filter format
     /// </summary>
+    /// <returns>The converted node, or null when the input is blank or names no field/operator.</returns>
+    /// <exception cref="ArgumentException">The filter names an unsupported operator.</exception>
+    /// <remarks>
+    /// An unsupported operator propagates rather than collapsing to null. A null return is
+    /// interpreted upstream as "no filter", which would run the query unfiltered.
+    /// </remarks>
     public static GraphQLFilterNode? ConvertLegacyToGraphQL(string? legacyFilter)
     {
         if (string.IsNullOrWhiteSpace(legacyFilter))
@@ -99,25 +105,14 @@ public static class FilterFormatDetector
 
         var attributes = new Dictionary<string, FieldCondition>();
 
-        try
-        {
-            var (field, op, value) = FilterOperatorParser.ParseOperator(legacyFilter);
+        var (field, op, value) = FilterOperatorParser.ParseOperator(legacyFilter);
 
-            if (string.IsNullOrWhiteSpace(field) || string.IsNullOrWhiteSpace(op))
-                return null;
+        if (string.IsNullOrWhiteSpace(field) || string.IsNullOrWhiteSpace(op))
+            return null;
 
-            var condition = new FieldCondition();
-            attributes[field] = condition;
-            SetOperatorValue(condition, op, value);
-        }
-        catch (ArgumentException)
-        {
-            return null;
-        }
-        catch (FormatException)
-        {
-            return null;
-        }
+        var condition = new FieldCondition();
+        attributes[field] = condition;
+        SetOperatorValue(condition, op, value);
 
         if (attributes.Count == 0)
             return null;
@@ -173,8 +168,9 @@ public static class FilterFormatDetector
                 condition.NotIn = value.Split(',').Select(v => ParseValue(v.Trim())).ToArray();
                 break;
             default:
-                // Unknown operator, ignore
-                break;
+                // Ignoring an unknown operator here left the condition empty, which compiled to no
+                // WHERE clause and returned every row.
+                throw new ArgumentException($"Unsupported legacy filter operator: {op}", nameof(op));
         }
     }
 

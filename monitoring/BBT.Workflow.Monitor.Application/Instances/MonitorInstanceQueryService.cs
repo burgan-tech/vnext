@@ -7,6 +7,7 @@ using BBT.Workflow;
 using BBT.Workflow.Caching;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Definitions.GraphQL;
+using BBT.Workflow.Definitions.GraphQL.Validation;
 using BBT.Workflow.Definitions.Schemas;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Monitor.Common.DTOs;
@@ -90,32 +91,32 @@ public sealed class MonitorInstanceQueryService(
     }
 
     /// <summary>
-    /// Validates the GraphQL-style query parameters up front so that a malformed JSON filter
-    /// returns HTTP 400 instead of being silently swallowed (which would return every instance).
+    /// Validates the query parameters up front so that anything the runtime cannot execute returns
+    /// HTTP 400 instead of being silently swallowed (which would return every instance).
     /// </summary>
+    /// <remarks>
+    /// Delegates to the shared <see cref="InstanceQueryValidator"/> so this surface cannot drift
+    /// from the orchestration one. The previous local implementation missed two cases it now
+    /// covers: an unsupported operator (which never threw at all), and a filter truncated so it no
+    /// longer ends in <c>}</c> (which failed the <c>DetectFormat</c> pre-check and was skipped).
+    /// </remarks>
     private static Error? ValidateQueryParameters(MonitorGetInstancesInput input)
     {
-        return TryValidateJson(input.Filter, "filter", static f => GraphQLFilterParser.ParseFilter(f))
-            ?? TryValidateJson(input.GroupBy, "groupBy", static g => GraphQLFilterParser.ParseGroupBy(g))
-            ?? TryValidateJson(input.Aggregations, "aggregations", static a => GraphQLFilterParser.ParseAggregations(a));
-    }
+        var validation = InstanceQueryValidator.Validate(new InstanceQueryValidationRequest
+        {
+            Filter = input.Filter,
+            Sort = input.Sort,
+            GroupBy = input.GroupBy,
+            Aggregations = input.Aggregations
+        });
 
-    private static Error? TryValidateJson(string? value, string parameterName, Action<string> parse)
-    {
-        if (string.IsNullOrWhiteSpace(value) || FilterFormatDetector.DetectFormat(value) != FilterFormat.GraphQL)
+        if (validation.IsValid)
             return null;
 
-        try
-        {
-            parse(value);
-            return null;
-        }
-        catch (ArgumentException ex)
-        {
-            return Error.Validation(
-                "instance.invalidFilter",
-                $"The '{parameterName}' query parameter is not valid GraphQL JSON: {ex.Message}");
-        }
+        return Error.Validation(
+            validation.PrimaryErrorCode,
+            validation.ToMessage(),
+            validation.Errors[0].Target ?? "filter");
     }
 
     /// <inheritdoc />
@@ -123,7 +124,11 @@ public sealed class MonitorInstanceQueryService(
         MonitorGetInstanceDataInput input,
         CancellationToken cancellationToken = default)
     {
-        var instance = await instanceRepository.FindByIdentifierAsReadOnlyAsync(
+        // Full-history load on purpose: this endpoint reads DataList directly for explicit
+        // versions and the version-history listing. The default detail load can be trimmed to
+        // the IsLatest row (LatestOnlyInstanceLoading), which would silently hand this method a
+        // one-entry history — the dedicated full-history path is immune to that flag.
+        var instance = await instanceRepository.FindByIdentifierWithFullHistoryAsync(
             input.Instance, cancellationToken);
 
         if (instance is null)
@@ -225,11 +230,12 @@ public sealed class MonitorInstanceQueryService(
         Dictionary<Guid, List<MonitorInstanceTaskResponse>> tasksByTransition = new();
         if (input.IncludeTasks)
         {
-            foreach (var t in transitions)
-            {
-                var tasks = await instanceTaskRepository.GetByTransitionIdAsync(t.Id, cancellationToken);
-                tasksByTransition[t.Id] = tasks.Select(MapTask).ToList();
-            }
+            // One batched query for the whole timeline instead of one per transition (N+1).
+            var allTasks = await instanceTaskRepository.GetByTransitionIdsAsync(
+                transitions.Select(t => t.Id).ToList(), cancellationToken);
+            tasksByTransition = allTasks
+                .GroupBy(t => t.TransitionId)
+                .ToDictionary(g => g.Key, g => g.Select(MapTask).ToList());
         }
 
         var items = transitions.Select(t =>
@@ -388,7 +394,9 @@ public sealed class MonitorInstanceQueryService(
         MonitorGetInstanceDataDiffInput input,
         CancellationToken cancellationToken = default)
     {
-        var instance = await instanceRepository.FindByIdentifierAsReadOnlyAsync(
+        // Full-history load: the diff addresses two arbitrary versions from DataList, so it must
+        // never run on a LatestOnly-trimmed aggregate (see GetInstanceDataAsync).
+        var instance = await instanceRepository.FindByIdentifierWithFullHistoryAsync(
             input.Instance, cancellationToken);
         if (instance is null)
             return Result<MonitorInstanceDataDiffResponse>.Fail(

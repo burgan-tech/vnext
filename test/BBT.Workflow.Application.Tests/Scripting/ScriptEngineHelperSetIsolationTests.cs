@@ -5,7 +5,6 @@ using BBT.Aether.MultiSchema;
 using BBT.Aether.Results;
 using BBT.Workflow.Caching;
 using BBT.Workflow.Definitions;
-using BBT.Workflow.Monitoring;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting.Evaluators;
 using BBT.Workflow.Scripting.Functions;
@@ -84,15 +83,23 @@ public class ScriptEngineHelperSetIsolationTests
         var currentSchema = new Mock<ICurrentSchema>();
         currentSchema.Setup(x => x.Change(It.IsAny<string>())).Returns(Mock.Of<IDisposable>());
 
+        // Task 4 (A7): the helper-resolution branch now reads generation tokens to guard its memo. A
+        // fixed, never-changing token per (domain, key) is sufficient here — this test is about
+        // load-context isolation between two distinct domains, not about the memo/invalidation itself.
+        var generationProvider = new Mock<IComponentGenerationProvider>();
+        generationProvider
+            .Setup(p => p.GetAsync(RuntimeSysSchemaInfo.Mappings, It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync("gen-fixed");
+
         var services = new ServiceCollection();
         services.AddSingleton(componentStore.Object);
         services.AddSingleton(currentSchema.Object);
+        services.AddSingleton(generationProvider.Object);
         using var serviceProvider = services.BuildServiceProvider();
 
         var engine = new ScriptEngine(
             evaluator,
             Mock.Of<IScriptServices>(),
-            Mock.Of<IWorkflowMetrics>(),
             helperRegistry,
             new ScriptHelpersOptions { Enabled = true },
             serviceProvider,

@@ -11,7 +11,6 @@ using BBT.Workflow.Data;
 using BBT.Workflow.DefinitionContext;
 using BBT.Workflow.Authorization;
 using BBT.Workflow.Headers;
-using BBT.Workflow.Monitoring;
 using BBT.Workflow.HttpApi.Shared.Telemetry;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Schemas;
@@ -77,7 +76,6 @@ public static class WorkflowApiBaseServiceCollectionExtensions
 
         services.AddEndpointsApiExplorer();
         services.AddAetherApiVersioning(apiTitle: "vNext API");
-        services.AddScoped<IWorkflowContext, WorkflowContext>();
 
         // Raw request body capture for signature verification (JWS/mTLS): expose the original payload to
         // mappings via ScriptContext.RawBody. Replaces the ambient-only default registered in the Application layer.
@@ -136,11 +134,6 @@ public static class WorkflowApiBaseServiceCollectionExtensions
                 // a separate compiled model is cached per schema, table names are fully qualified,
                 // no session-level directive is ever sent — PgBouncer transaction-mode safe.
                 options.ReplaceService<IModelCacheKeyFactory, SchemaAwareModelCacheKeyFactory>();
-
-                options.AddInterceptors(
-                    sp.GetRequiredService<WorkflowDatabaseInterceptor>(),
-                    sp.GetRequiredService<WorkflowTransactionInterceptor>()
-                );
             });
 
         services.AddAetherUnitOfWorkMiddleware();
@@ -242,6 +235,7 @@ public static class WorkflowApiBaseServiceCollectionExtensions
                         new RequestIdLogProcessor(serviceProvider.GetRequiredService<ICorrelationIdProvider>())))
                 // Span counterpart, so a trace filters on the same x_request_id value as the logs.
                 .ConfigureTracing((_, tracing) =>
+                {
                     tracing
                         // Aether registers AspNetCore + HttpClient instrumentation, but nothing for
                         // gRPC. Grpc.Net.Client — which every Dapr.Client call goes through — creates
@@ -253,9 +247,72 @@ public static class WorkflowApiBaseServiceCollectionExtensions
                         // and closes the hole; this is the same failure mode Business-mode span
                         // filtering causes, documented on PipelineStepActivityHelper.
                         .AddGrpcClientInstrumentation()
+                        // The pipeline's own spans say how long a DB region took (Instance.Load,
+                        // Instance.AppendData, Uow.Commit) but not which command spent it. One span
+                        // per EF Core command closes that: a slow load is then readable as the query
+                        // it actually ran, and an N+1 shows up as N sibling spans rather than as one
+                        // wide parent.
+                        //
+                        // The query TEXT is emitted unconditionally in this version (the old
+                        // SetDbStatementForText toggle is gone), and the part that would actually
+                        // carry business data — parameter VALUES — stays behind
+                        // OTEL_DOTNET_EXPERIMENTAL_EFCORE_ENABLE_TRACE_DB_QUERY_PARAMETERS, false
+                        // unless set. Text with `@p0` placeholders is what makes the span readable,
+                        // so there is nothing to gate here.
+                        //
+                        // The DisplayName is renamed because the default is the database name: a
+                        // transition showed fifteen sibling spans all called `Aether_WorkflowDb`,
+                        // which says how many commands ran and nothing about what they were. Naming
+                        // the verb makes a write stand out among reads at a glance, and follows the
+                        // same rule as the rest of this branch's spans — subject in the name, detail
+                        // in the tags, where the full statement already sits.
+                        .AddEntityFrameworkCoreInstrumentation(options =>
+                            options.EnrichWithIDbCommand = static (activity, command) =>
+                                activity.DisplayName = $"Db.{DescribeSqlVerb(command.CommandText)}")
                         .AddProcessor(serviceProvider =>
-                            new RequestIdSpanProcessor(serviceProvider.GetRequiredService<ICorrelationIdProvider>()))));
+                            new RequestIdSpanProcessor(serviceProvider.GetRequiredService<ICorrelationIdProvider>()));
+
+                    // Worker hosts only: see IdlePollSpanProcessor. Other hosts have no idle poll
+                    // loop, so the processor would only add a per-span branch for nothing.
+                    if (configuration.GetValue("Telemetry:Tracing:DropRootDbSpans", false))
+                    {
+                        tracing.AddProcessor(new IdlePollSpanProcessor());
+                    }
+                }));
         return services;
+    }
+
+    /// <summary>
+    /// Reduces a SQL command to the verb that names it, for use as an EF Core span's DisplayName.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately the first token and nothing more: anything that tried to name the table would
+    /// have to parse SQL, and a span name is not worth a parser. Only the verbs EF Core actually
+    /// issues are recognized; anything else — a transaction statement, a provider probe, a leading
+    /// comment or hint — reports <c>Query</c> rather than being guessed at, because the full
+    /// statement is already on the span as a tag for the cases where the verb is not enough.
+    /// </remarks>
+    /// <param name="commandText">The command text EF Core is about to execute; may be null or empty.</param>
+    /// <returns>An uppercase SQL verb, or <c>Query</c> when it cannot be determined.</returns>
+    private static string DescribeSqlVerb(string? commandText)
+    {
+        if (string.IsNullOrWhiteSpace(commandText))
+            return "Query";
+
+        var text = commandText.AsSpan().TrimStart();
+
+        var end = text.IndexOfAny(' ', '\r', '\n');
+        var verb = end < 0 ? text : text[..end];
+
+        return verb switch
+        {
+            _ when verb.Equals("SELECT", StringComparison.OrdinalIgnoreCase) => "SELECT",
+            _ when verb.Equals("INSERT", StringComparison.OrdinalIgnoreCase) => "INSERT",
+            _ when verb.Equals("UPDATE", StringComparison.OrdinalIgnoreCase) => "UPDATE",
+            _ when verb.Equals("DELETE", StringComparison.OrdinalIgnoreCase) => "DELETE",
+            _ when verb.Equals("MERGE", StringComparison.OrdinalIgnoreCase) => "MERGE",
+            _ => "Query"
+        };
     }
 
     public static IServiceCollection AddDistributedCache(this IServiceCollection services, IConfiguration configuration)

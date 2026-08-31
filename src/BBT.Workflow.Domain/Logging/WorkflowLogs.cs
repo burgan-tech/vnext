@@ -119,6 +119,19 @@ public static partial class WorkflowLogs
     /// Logs when the direct Dapr enqueue of a chained continuation fails and the strategy
     /// falls back to publishing the continuation through the transactional outbox.
     /// </summary>
+    /// <summary>
+    /// Logs that a persisted transition job was armed in the scheduler after the instance status lock
+    /// was released. Debug: one line per accepted async transition, useful when verifying that the
+    /// scheduler call really left the critical section.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10098,
+        Level = LogLevel.Debug,
+        Message = "Transition job {JobId} armed after lock release")]
+    public static partial void TransitionJobArmedAfterLock(
+        this ILogger logger,
+        Guid jobId);
+
     [LoggerMessage(
         EventId = 10127,
         Level = LogLevel.Warning,
@@ -856,6 +869,145 @@ public static partial class WorkflowLogs
 
     #endregion
 
+    #region Fan-Out Execution
+
+    /// <summary>
+    /// Logs when a fan-out batch begins dispatching its items. Paired with
+    /// <see cref="FanOutBatchCompleted"/>: the two together bracket the batch and give the
+    /// operator its size and bounds before anything runs.
+    /// </summary>
+    /// <remarks>
+    /// <paramref name="itemAlias"/> is the task's readability label for one item, or a neutral
+    /// substitute when it declares none — it is a separate structured field rather than being
+    /// folded into the count so a log backend can still facet on it.
+    /// </remarks>
+    [LoggerMessage(
+        EventId = 10150,
+        Level = LogLevel.Information,
+        Message = "FanOut batch started. TaskKey={TaskKey}, Items={ItemCount} '{ItemAlias}', MaxDop={MaxDegreeOfParallelism}, JoinPolicy={JoinPolicy}, InstanceId={InstanceId}")]
+    public static partial void FanOutBatchStarted(
+        this ILogger logger,
+        string taskKey,
+        int itemCount,
+        string itemAlias,
+        int maxDegreeOfParallelism,
+        string joinPolicy,
+        Guid instanceId);
+
+    /// <summary>
+    /// Logs a single failed fan-out item. Warning, not Error: one failed item is a recoverable
+    /// outcome the join policy decides on — only the batch's verdict can fault the transition.
+    /// This is the log line that names WHICH item among N went wrong.
+    /// It carries the error MESSAGE as well as the code: the message is otherwise only attached to
+    /// the item span, and item spans are emitted at Verbose tracing detail only — so at the default
+    /// level the reason a fan-out item failed would be unrecoverable from logs.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10151,
+        Level = LogLevel.Warning,
+        Message = "FanOut item failed. TaskKey={TaskKey}, ItemKey={ItemKey}, Index={ItemIndex}, ErrorCode={ErrorCode}, ErrorMessage={ErrorMessage}, InstanceId={InstanceId}")]
+    public static partial void FanOutItemFailed(
+        this ILogger logger,
+        string taskKey,
+        string itemKey,
+        int itemIndex,
+        string errorCode,
+        string? errorMessage,
+        Guid instanceId);
+
+    /// <summary>
+    /// Logs the settled counters of a fan-out batch, including the wall-clock duration of the
+    /// whole batch (queueing included).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10152,
+        Level = LogLevel.Information,
+        Message = "FanOut batch completed. TaskKey={TaskKey}, Total={Total}, Succeeded={Succeeded}, Failed={Failed}, DurationMs={DurationMs}, InstanceId={InstanceId}")]
+    public static partial void FanOutBatchCompleted(
+        this ILogger logger,
+        string taskKey,
+        int total,
+        int succeeded,
+        int failed,
+        long durationMs,
+        Guid instanceId);
+
+    /// <summary>
+    /// Logs when a fan-out batch hit its <c>batchTimeoutSeconds</c> deadline, reporting how many
+    /// items had settled on their own before the deadline cut the rest short.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10153,
+        Level = LogLevel.Warning,
+        Message = "FanOut batch timed out. TaskKey={TaskKey}, Settled={SettledCount}/{Total}, BatchTimeout={BatchTimeoutSeconds}s, InstanceId={InstanceId}")]
+    public static partial void FanOutBatchTimedOut(
+        this ILogger logger,
+        string taskKey,
+        int settledCount,
+        int total,
+        int batchTimeoutSeconds,
+        Guid instanceId);
+
+    /// <summary>
+    /// Logs when a fan-out batch had to queue behind the process-wide item bulkhead — i.e. the
+    /// configured ceiling, not the batch's own <c>maxDegreeOfParallelism</c>, is what is now
+    /// limiting throughput. Emitted at most ONCE per batch: every queued item observing the same
+    /// saturation would be noise, not signal.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10154,
+        Level = LogLevel.Warning,
+        Message = "FanOut global item bulkhead saturated. TaskKey={TaskKey}, Active={ActiveItems}/{MaxConcurrentItems}")]
+    public static partial void FanOutBulkheadSaturated(
+        this ILogger logger,
+        string taskKey,
+        int activeItems,
+        int maxConcurrentItems);
+
+    #endregion
+
+    #region Task Coordinator
+
+    /// <summary>
+    /// Logs when a hook's onExecute/onEntry/onExit task list carries the same task key more than
+    /// once at the SAME order. <see cref="TaskCoordinator"/> now gives each occurrence a distinct
+    /// journal identity (a positional <c>#index</c> suffix), so this no longer faults the instance —
+    /// but two entries sharing both key and order is still almost certainly an authoring mistake
+    /// (duplicated line, copy-paste) rather than an intentional design, so it is surfaced as a
+    /// Warning for the author to fix, not rejected. <see cref="WorkflowValidationResult"/> only
+    /// carries hard errors (see <c>ValidationErrors</c>/<c>AddError</c>) with no warning severity,
+    /// so this is logged here at execution time instead of being folded into
+    /// <c>WorkflowValidator</c> — do not downgrade this to a validation error.
+    /// <c>TaskCoordinator.LogDuplicateTaskKeysIfAny</c> gates this off of
+    /// <see cref="TaskExecutionOrigin"/>, NOT <see cref="TaskTrigger"/>: it never calls this for
+    /// <see cref="TaskExecutionOrigin.Extension"/> (two extensions sharing one task Reference is a
+    /// supported pattern — each carries its own <c>Mapping</c> and files its output under its own
+    /// key, not the task's; this warning's remedy of "give the entries distinct orders" targets a
+    /// journal-key collision that cannot happen there, since
+    /// <c>ExtensionTaskPersistenceStrategy</c> never persists an <c>InstanceTask</c> row for
+    /// Extension-origin executions at all). Custom functions execute through
+    /// <c>TaskTrigger.Extension</c> too (<c>FunctionAppService.cs</c>) but with
+    /// <see cref="TaskExecutionOrigin.Function"/> — a multi-task function
+    /// (<c>FunctionAppService.GetSingleTaskVariableKey</c>) listing the same task twice at the same
+    /// order is still an authoring mistake with no per-entry response-key override to save it, so
+    /// this warning MUST still fire for that shape. Gating on the trigger instead of the origin
+    /// would silently swallow it.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10155,
+        Level = LogLevel.Warning,
+        Message = "Duplicate task key at the same order in transition {TransitionKey}, hook {Hook}: task '{TaskKey}' appears {OccurrenceCount} times at order {Order}. This is usually an authoring mistake — give the entries distinct orders if they are meant to run as separate steps. InstanceId={InstanceId}")]
+    public static partial void DuplicateTaskKeyAtSameOrder(
+        this ILogger logger,
+        string transitionKey,
+        string hook,
+        string taskKey,
+        int occurrenceCount,
+        int order,
+        Guid? instanceId);
+
+    #endregion
+
     #region SubFlow
 
     /// <summary>
@@ -1389,6 +1541,78 @@ public static partial class WorkflowLogs
         this ILogger logger,
         Guid instanceId,
         Guid parentInstanceId);
+
+    /// <summary>
+    /// Logs when a subflow terminal event (completed/faulted/canceled) is relayed to the parent
+    /// instance as an immediate post-commit command (Outbox + TerminalRelay mode).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40124,
+        Level = LogLevel.Information,
+        Message = "Subflow terminal {EventName} relayed to parent (sub {SubInstanceId} -> parent {ParentInstanceId})")]
+    public static partial void SubflowTerminalRelayed(
+        this ILogger logger,
+        string eventName,
+        Guid subInstanceId,
+        Guid parentInstanceId);
+
+    /// <summary>
+    /// Logs when a subflow terminal relay attempt throws. The child's commit already stands, so the
+    /// durable Inbox backup will settle the parent shortly after.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40125,
+        Level = LogLevel.Warning,
+        Message = "Subflow terminal relay failed for {EventName} (sub {SubInstanceId} -> parent {ParentInstanceId}); Inbox backup will settle")]
+    public static partial void SubflowTerminalRelayFailed(
+        this ILogger logger,
+        Exception exception,
+        string eventName,
+        Guid subInstanceId,
+        Guid parentInstanceId);
+
+    /// <summary>
+    /// Logs when a subflow terminal relay's gateway call returns a failed <c>Result</c> (not an
+    /// exception). The durable Inbox backup will settle the parent shortly after.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40126,
+        Level = LogLevel.Warning,
+        Message = "Subflow terminal relay rejected for {EventName}: {Error}; Inbox backup will settle")]
+    public static partial void SubflowTerminalRelayRejected(
+        this ILogger logger,
+        string eventName,
+        string error);
+
+    /// <summary>
+    /// Logs when a terminal-revert re-publishes the subflow terminal event as a durable-delivery
+    /// rearm, inside the same UoW as the revert. Closes the window where the lock-free duplicate
+    /// ACK consumed the original durable delivery before a phase-2 resume failure reopened the
+    /// correlation.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40127,
+        Level = LogLevel.Warning,
+        Message = "Subflow terminal settlement reverted; durable delivery re-armed (attempt {Attempt}) for sub {SubInstanceId} -> parent {ParentInstanceId}")]
+    public static partial void SubflowTerminalRearmed(
+        this ILogger logger,
+        Guid parentInstanceId,
+        Guid subInstanceId,
+        int attempt);
+
+    /// <summary>
+    /// Logs when a terminal-revert's rearm budget is exhausted — the correlation was reverted but
+    /// no fresh durable delivery was published, so manual intervention may be required.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40128,
+        Level = LogLevel.Error,
+        Message = "Subflow terminal re-arm budget exhausted ({Attempt}) for sub {SubInstanceId} -> parent {ParentInstanceId}; manual intervention required")]
+    public static partial void SubflowTerminalRearmExhausted(
+        this ILogger logger,
+        Guid parentInstanceId,
+        Guid subInstanceId,
+        int attempt);
 
     #endregion
 
@@ -2234,60 +2458,6 @@ public static partial class WorkflowLogs
     #region Service Discovery
 
     /// <summary>
-    /// Logs when bulk domain cache refresh starts.
-    /// </summary>
-    [LoggerMessage(
-        EventId = 50001,
-        Level = LogLevel.Information,
-        Message = "Bulk domain cache refresh started")]
-    public static partial void BulkCacheRefreshStarted(
-        this ILogger logger);
-
-    /// <summary>
-    /// Logs when bulk domain cache refresh completes successfully.
-    /// </summary>
-    [LoggerMessage(
-        EventId = 50002,
-        Level = LogLevel.Information,
-        Message = "Bulk domain cache refreshed: {DomainCount} domains cached")]
-    public static partial void BulkCacheRefreshed(
-        this ILogger logger,
-        int domainCount);
-
-    /// <summary>
-    /// Logs when bulk domain cache refresh fails.
-    /// </summary>
-    [LoggerMessage(
-        EventId = 50003,
-        Level = LogLevel.Warning,
-        Message = "Bulk domain cache refresh failed: {Error}")]
-    public static partial void BulkCacheRefreshFailed(
-        this ILogger logger,
-        string error);
-
-    /// <summary>
-    /// Logs when fetching a page of domain registrations.
-    /// </summary>
-    [LoggerMessage(
-        EventId = 50004,
-        Level = LogLevel.Debug,
-        Message = "Fetching page {Page} of domain registrations")]
-    public static partial void FetchingDomainPage(
-        this ILogger logger,
-        int page);
-
-    /// <summary>
-    /// Logs when a domain is not found in the bulk cache.
-    /// </summary>
-    [LoggerMessage(
-        EventId = 50005,
-        Level = LogLevel.Warning,
-        Message = "Domain {Domain} not found in bulk cache")]
-    public static partial void DomainNotFoundInCache(
-        this ILogger logger,
-        string domain);
-
-    /// <summary>
     /// Logs when querying a single domain from the discovery registry.
     /// </summary>
     [LoggerMessage(
@@ -2309,6 +2479,74 @@ public static partial class WorkflowLogs
         this ILogger logger,
         string domain,
         string baseUrl);
+
+    /// <summary>
+    /// Logs when this pod skipped domain registration because it did not acquire the
+    /// once-per-rollout registration lock. Another replica already owns (or will own) it; this
+    /// pod starts normally without registering.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 50008,
+        Level = LogLevel.Information,
+        Message = "Domain registration skipped for '{Domain}' - lock not acquired, another replica owns this rollout's registration")]
+    public static partial void DomainRegistrationSkippedNotLockOwner(
+        this ILogger logger,
+        string domain);
+
+    /// <summary>
+    /// Logs when this pod acquired the registration lock and will perform the registration.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 50009,
+        Level = LogLevel.Information,
+        Message = "Domain registration lock acquired for '{Domain}' - this pod will register")]
+    public static partial void DomainRegistrationClaimed(
+        this ILogger logger,
+        string domain);
+
+    /// <summary>
+    /// Logs when domain registration is skipped entirely (no lock attempt, no registration call)
+    /// because service discovery is disabled for this pod.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 50012,
+        Level = LogLevel.Debug,
+        Message = "Domain registration skipped for '{Domain}' - service discovery is disabled")]
+    public static partial void DomainRegistrationSkippedDisabled(
+        this ILogger logger,
+        string domain);
+
+    /// <summary>
+    /// Logs when the domain discovery initialization hosted service starts running.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 50013,
+        Level = LogLevel.Information,
+        Message = "Starting domain discovery initialization...")]
+    public static partial void DomainDiscoveryInitializationStarted(
+        this ILogger logger);
+
+    /// <summary>
+    /// Logs when the domain discovery initialization hosted service completes successfully.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 50014,
+        Level = LogLevel.Information,
+        Message = "Domain discovery initialization completed successfully")]
+    public static partial void DomainDiscoveryInitializationSucceeded(
+        this ILogger logger);
+
+    /// <summary>
+    /// Logs when domain discovery initialization fails. This is always fatal to startup: the
+    /// caller rethrows so the host aborts and the pod is restarted.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 50015,
+        Level = LogLevel.Critical,
+        Message = "Domain discovery initialization failed. Application startup will be aborted.")]
+    public static partial void DomainDiscoveryInitializationFailed(
+        this ILogger logger,
+        Exception exception);
 
     #endregion
 
@@ -2529,6 +2767,49 @@ public static partial class WorkflowLogs
     public static partial void ExtensionProcessingFailedNonBlocking(
         this ILogger logger,
         string errorCode);
+
+    /// <summary>
+    /// Logs when the SAME extension reference is listed more than once in a workflow's
+    /// <c>Extensions</c> (or in the runtime's core-extension set). Unlike two DIFFERENT extensions
+    /// sharing one task Reference (a supported pattern, see <see cref="DuplicateTaskKeyAtSameOrder"/>
+    /// remarks), this is the SAME <c>Extension</c> — and therefore the SAME <c>OnExecuteTask</c>
+    /// instance — appearing twice. <c>InstanceExtensionService.ExecuteExtensionsInternalAsync</c>'s
+    /// last-wins <c>responseKeyByTask</c> build detects this for free: the key it is about to write
+    /// is already present. The task still executes once per occurrence for the one output slot and
+    /// can still throw the parallel-merge conflict this whole fix exists to prevent, so unlike the
+    /// task-coordinator warning above, the remedy here is NOT "give them distinct orders" — the
+    /// sequential path silently overwrites at <c>ScriptContext.SetOutputResponse</c> regardless of
+    /// order, so distinct orders would not fix this shape. The only correct remedy is removing the
+    /// duplicate reference.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20102,
+        Level = LogLevel.Warning,
+        Message = "Duplicate extension reference '{ExtensionKey}' in workflow '{WorkflowKey}': the same Extension is listed more than once, so its task executes once per occurrence for one output slot and the merge can still throw a parallel-output conflict. Remove the duplicate reference — giving the entries distinct orders does not fix this, the sequential path overwrites silently regardless of order.")]
+    public static partial void DuplicateExtensionReference(
+        this ILogger logger,
+        string extensionKey,
+        string workflowKey);
+
+    /// <summary>
+    /// Logs when <c>InstanceExtensionService</c>'s per-task <c>optionsRefiner</c> cannot find the
+    /// executing task in its <c>responseKeyByTask</c> map, so <c>ResponseVariableKey</c> falls back
+    /// to <c>null</c>. <c>TaskCoordinator</c> only ever hands back the SAME <c>OnExecuteTask</c>
+    /// instances it was given (ToList/Where/GroupBy, never cloned), so this branch is unreachable
+    /// today — but a null <c>ResponseVariableKey</c> makes the task's output file under the
+    /// task-derived key instead of the extension's, and <c>ExtractExtensionResponse</c> only ever
+    /// reads by the EXTENSION's key — so the extension's result is silently dropped, exactly the
+    /// silent-data-loss class the extension-response-key fix exists to eliminate. Logged so this
+    /// cannot pass unnoticed if the assumption it depends on is ever broken.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20103,
+        Level = LogLevel.Warning,
+        Message = "Extension task '{TaskKey}' had no entry in the per-extension response-key map; falling back to the task-derived key. This extension's own read will not find it there, so its output is silently dropped. InstanceId={InstanceId}")]
+    public static partial void ExtensionResponseKeyMappingMissing(
+        this ILogger logger,
+        string taskKey,
+        Guid? instanceId);
 
     #endregion
 
@@ -3044,6 +3325,58 @@ public static partial class WorkflowLogs
 
     #endregion
 
+    #region Instance Query Filtering
+
+    /// <summary>
+    /// Logs when an instance-query parameter was rejected by the boundary validator and the query
+    /// was never executed. One entry per validation error.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20440,
+        Level = LogLevel.Warning,
+        Message = "Instance query rejected. Domain: {Domain}, Workflow: {Workflow}, Parameter: {Parameter}, Code: {ErrorCode}, Reason: {Reason}")]
+    public static partial void InstanceQueryParameterRejected(
+        this ILogger logger,
+        string domain,
+        string workflow,
+        string parameter,
+        string errorCode,
+        string reason);
+
+    /// <summary>
+    /// Logs when a filter that passed boundary validation still failed while being compiled into
+    /// SQL. This means the validator's whitelist and the SQL builder's whitelist have drifted —
+    /// the caller sees an error either way, but the drift is a defect worth investigating.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20441,
+        Level = LogLevel.Error,
+        Message = "Instance filter compilation failed after passing validation. Domain: {Domain}, Workflow: {Workflow}")]
+    public static partial void InstanceFilterCompilationFailed(
+        this ILogger logger,
+        Exception exception,
+        string domain,
+        string workflow);
+
+    /// <summary>
+    /// Logs when a workflow task's authored filter was rejected. Unlike a client-supplied filter,
+    /// this is a definition defect: the task fails so the error boundary can act on it, rather than
+    /// loading every instance of the target workflow into instance data.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20442,
+        Level = LogLevel.Warning,
+        Message = "Task filter rejected. TaskKey: {TaskKey}, TargetDomain: {TargetDomain}, TargetFlow: {TargetFlow}, Code: {ErrorCode}, Reason: {Reason}")]
+    public static partial void InstanceTaskFilterRejected(
+        this ILogger logger,
+        string taskKey,
+        string targetDomain,
+        string targetFlow,
+        string errorCode,
+        string reason);
+
+    #endregion
+
     #region Multi-Channel Notification
 
     /// <summary>
@@ -3231,6 +3564,31 @@ public static partial class WorkflowLogs
     public static partial void ScriptSandboxViolation(
         this ILogger logger,
         string reason);
+
+    /// <summary>
+    /// Logs that the startup script-engine warmup finished: Roslyn assemblies are loaded, the
+    /// compiler pipeline is JIT'd and the default reference set is materialized, so the first real
+    /// mapping compile no longer pays that one-time cost.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 60015,
+        Level = LogLevel.Information,
+        Message = "Script engine warmup compiled the probe script in {DurationMs} ms")]
+    public static partial void ScriptEngineWarmupCompleted(
+        this ILogger logger,
+        long durationMs);
+
+    /// <summary>
+    /// Logs that the startup script-engine warmup failed. Non-fatal by design: the first real
+    /// compile simply pays the cold cost the warmup would have absorbed.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 60016,
+        Level = LogLevel.Warning,
+        Message = "Script engine warmup failed; the first real compile pays the cold cost")]
+    public static partial void ScriptEngineWarmupFailed(
+        this ILogger logger,
+        Exception exception);
 
     #endregion
 

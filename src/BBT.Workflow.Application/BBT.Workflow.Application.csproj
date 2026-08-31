@@ -14,6 +14,7 @@
     <PackageReference Include="Dapr.Client" Version="$(DaprPackageVersion)" />
     <PackageReference Include="Dapr.Jobs" Version="$(DaprPackageVersion)" />
     <PackageReference Include="DynamicExpresso.Core" Version="2.19.3" />
+    <PackageReference Include="Microsoft.Extensions.Caching.Memory" Version="$(MicrosoftPackageVersion)" />
     <PackageReference Include="Polly" Version="$(PollyPackageVersion)" />
     <ProjectReference Include="..\BBT.Workflow.Domain\BBT.Workflow.Domain.csproj" />
     <ProjectReference Include="..\BBT.Workflow.Tasks.Abstractions\BBT.Workflow.Tasks.Abstractions.csproj" />

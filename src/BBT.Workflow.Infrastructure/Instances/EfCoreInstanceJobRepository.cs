@@ -21,14 +21,34 @@ public sealed class EfCoreInstanceJobRepository(
     public async Task MarkAsProcessedAsync(Guid instanceId, string jobName,
         CancellationToken cancellationToken = default)
     {
-        var job = await (await GetDbSetAsync()).FirstOrDefaultAsync(p =>
-            p.InstanceId == instanceId &&
-            p.JobName == jobName && p.IsActive == true, cancellationToken);
-        if (job != null)
+        // Single set-based statement instead of SELECT + tracked mutate + SaveChanges: this runs
+        // in every job handler's finally, so it used to cost two round-trips per fired job. The
+        // SetProperty pair mirrors InstanceJob.MarkAsProcessed() exactly (IsActive=false,
+        // ModifiedAt=UtcNow — the entity mutates nothing else); ExecuteUpdate bypassing the change
+        // tracker is therefore behavior-identical. The WHERE matches the partial index
+        // IX_InstanceJobs_Active_Instance_JobName (filtered on IsActive = true).
+        await (await GetDbSetAsync())
+            .Where(p => p.InstanceId == instanceId && p.JobName == jobName && p.IsActive == true)
+            .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(j => j.IsActive, false)
+                    .SetProperty(j => j.ModifiedAt, DateTime.UtcNow),
+                cancellationToken);
+    }
+
+    public async Task MarkManyAsProcessedAsync(IReadOnlyCollection<Guid> jobIds,
+        CancellationToken cancellationToken = default)
+    {
+        if (jobIds.Count == 0)
         {
-            job.MarkAsProcessed();
-            await SaveChangesAsync(cancellationToken);
+            return;
         }
+
+        await (await GetDbSetAsync())
+            .Where(p => jobIds.Contains(p.Id) && p.IsActive == true)
+            .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(j => j.IsActive, false)
+                    .SetProperty(j => j.ModifiedAt, DateTime.UtcNow),
+                cancellationToken);
     }
 
     public async Task<InstanceJob?> FindByJobIdAsReadOnlyAsync(Guid jobId,

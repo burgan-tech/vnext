@@ -1,3 +1,4 @@
+using BBT.Aether.Events;
 using BBT.Aether.Uow;
 using BBT.Workflow.BackgroundJobs.Options;
 using BBT.Workflow.Caching;
@@ -7,6 +8,7 @@ using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Execution.Services;
 using BBT.Workflow.Instances;
+using BBT.Workflow.Instances.Events;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Shared;
 using Microsoft.Extensions.Logging;
@@ -22,10 +24,17 @@ public sealed class SubflowCancellationService(
     IWorkflowExecutionService workflowExecutionService,
     ITransitionLockScopeFactory transitionLockScopeFactory,
     ISubItemTerminalGuard terminalGuard,
+    IDistributedEventBus eventBus,
     IOptions<WorkflowExecutionOptions> executionOptions,
     ILogger<SubflowCancellationService> logger)
     : ISubflowCancellationService
 {
+    /// <summary>
+    /// Attempt budget for re-publishing the terminal event from inside a correlation revert. See
+    /// <c>SubflowCompletionService.MaxRearmAttempts</c> for the rationale.
+    /// </summary>
+    private const int MaxRearmAttempts = 5;
+
     private LockAcquireWait TerminalLockWait => executionOptions.Value.SubItemTerminalLockRetry.ToLockAcquireWait();
 
     /// <inheritdoc />
@@ -255,7 +264,7 @@ public sealed class SubflowCancellationService(
                 await RevertCorrelationAsync(
                     parentLockKey,
                     parentInstance.Id,
-                    input.SubInstanceId);
+                    input);
             }
             catch (Exception revertException)
             {
@@ -272,8 +281,9 @@ public sealed class SubflowCancellationService(
     private async Task RevertCorrelationAsync(
         string parentLockKey,
         Guid parentInstanceId,
-        Guid subInstanceId)
+        SubItemCanceledInput originalInput)
     {
+        var subInstanceId = originalInput.SubInstanceId;
         var cancellationToken = CancellationToken.None;
         await using var lockScope = await transitionLockScopeFactory.AcquireAsync(parentLockKey, cancellationToken);
         if (!lockScope.IsAcquired)
@@ -302,6 +312,58 @@ public sealed class SubflowCancellationService(
             await instanceRepository.UpdateAsync(parentInstance, true, cancellationToken);
         }
 
+        // See SubflowCompletionService.RevertCorrelationInNewUowAsync for the rationale: the
+        // durable backup may already be consumed by the lock-free duplicate ACK, so re-publish
+        // the terminal event in THIS UoW — the outbox row commits atomically with the revert.
+        var rearmAttempt = originalInput.RearmAttempt ?? 0;
+        if (rearmAttempt >= MaxRearmAttempts)
+        {
+            logger.SubflowTerminalRearmExhausted(parentInstanceId, subInstanceId, rearmAttempt);
+        }
+        else
+        {
+            var rearmEvent = BuildTerminalEventFromInput(originalInput, rearmAttempt + 1);
+            await eventBus.PublishAsync(rearmEvent, cancellationToken: cancellationToken);
+            logger.SubflowTerminalRearmed(parentInstanceId, subInstanceId, rearmAttempt + 1);
+        }
+
         await uow.CommitAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Reconstructs the terminal event from the service's own input DTO — the exact inverse of
+    /// <c>SubflowTerminalRelay.MapToSubItemCanceledInput</c> (verbatim field copy) — so a re-arm
+    /// publishes the same fact the original delivery carried.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="SubItemType.SubFlow"/> is hardcoded: only a blocking SubFlow reaches
+    /// <see cref="ResumeParentAsync"/> (a SubProcess correlation returns before this point in
+    /// <see cref="CancellationAsync"/>), so this is the only kind the revert path ever sees. The
+    /// input carries no <c>SubItemType</c> field to round-trip because of that invariant.
+    /// </remarks>
+    private static InstanceSubCanceledEvent BuildTerminalEventFromInput(
+        SubItemCanceledInput input,
+        int rearmAttempt)
+    {
+        var termination = input.Termination ?? TerminationContext.Direct(input.InstanceId);
+        return new InstanceSubCanceledEvent
+        {
+            InstanceId = input.InstanceId,
+            SubInstanceId = input.SubInstanceId,
+            Domain = input.Domain,
+            Flow = input.Flow,
+            Version = input.Version,
+            CanceledState = input.CanceledState,
+            CanceledAt = input.CanceledAt,
+            RootInstanceId = input.RootInstanceId,
+            SubItemType = SubItemType.SubFlow,
+            Sync = input.Sync,
+            TerminationOrigin = termination.Origin,
+            InitiatorInstanceId = termination.InitiatorInstanceId,
+            CascadeId = termination.CascadeId,
+            TraceRoot = input.TraceRoot,
+            ParentTraceRoot = input.ParentTraceRoot,
+            RearmAttempt = rearmAttempt
+        };
     }
 }

@@ -60,10 +60,7 @@ public sealed class CacheAsideTaskExecutor : TaskExecutorBase<CacheAsideTask>
         {
             var result = await ResultExtensions.TryAsync<ScriptResponse?>(async ct =>
             {
-                var scriptRunner = await _scriptEngine.CompileToInstanceAsync<IMapping>(
-                    mapping,
-                    flowScripts: context.ScriptContext.Workflow?.Scripts,
-                    cancellationToken: ct);
+                var scriptRunner = await GetOrCompileMappingAsync<IMapping>(_scriptEngine, context, ct);
 
                 return await scriptRunner.InputHandler(task, context.ScriptContext);
             }, cancellationToken, ex => Error.Failure(
@@ -166,7 +163,7 @@ public sealed class CacheAsideTaskExecutor : TaskExecutorBase<CacheAsideTask>
         }
 
         // Expose the cached/raw result on the script context so the mapping's OutputHandler can read it.
-        UpdateScriptContextWithResponse(task.Key, invocationResult, context.ScriptContext);
+        UpdateScriptContextWithResponse(task.Key, invocationResult, context.ScriptContext, context.ResponseVariableKey);
 
         return await ResultExtensions.TryAsync<object?>(async ct =>
         {

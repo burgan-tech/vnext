@@ -40,37 +40,52 @@ Use SDK components for:
 - OpenTelemetry
 
 ## Domain Events (Dual Processing)
-Each domain event MUST have two components:
 
-1. **Event Hook** (`IEventPublishHook<TEvent>`) in `*.Infrastructure/*/Events/`
-   - Synchronous, before publish to the event bus
-   - Use `currentSchema.Use(...)` for multi-schema
-   - Use `UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew }`
-   - Return `EventHookResult.Ok()` / `EventHookResult.Fail()`
+**The EventHook infrastructure no longer exists** (`IEventPublishHook<TEvent>`, `IEventHookInvoker`,
+`EventHookAttribute`, `EventHookMode` are deleted). Every distributed event publishes plainly
+through the transactional outbox — there is no synchronous, pre-commit hook path anymore. Each
+event MUST have:
 
+1. **Contract** in `*.Events.Contracts/*/Events/` with `[EventName]` — no `[EventHook]` attribute,
+   there is nothing left for it to configure.
 2. **Event Handler** (`IEventHandler<TEvent>`) in `workers/BBT.Workflow.Workers.Inbox/Handlers/`
    - Asynchronous, distributed message consumption
    - Domain match guard: `if (!runtimeInfoProvider.IsDomainMatch(eventData.Domain)) return;`
-   - Same multi-schema and UoW patterns
+   - Standard multi-schema and UoW patterns
+3. **Logging extensions** in `BBT.Workflow.Domain/Logging/WorkflowLogs.cs` — never raw `logger.Log*`
+
+**Subflow terminal events are the one exception carrying extra behavior.** `InstanceSubCompletedEvent`,
+`InstanceSubFaultedEvent`, and `InstanceSubCanceledEvent` additionally implement
+`ISubflowTerminalEvent`, which opts them into the **Outbox + TerminalRelay** mode: after commit,
+`SubflowTerminalRelay` relays the event as an immediate command via `IInstanceCommandGateway`
+(local in-process, or Dapr service invocation cross-domain), and their Inbox handler is a durable
+**backup**, deduplicated via `ISubItemTerminalGuard`. This is the only event category where a
+second delivery path exists by design — every other event has exactly one handler. Full contract,
+relay semantics, and the wakeup signal that makes the outbox path near-instant:
+`docs/runtime/event-publish-modes.md`.
 
 ### Event development checklist
-- [ ] Event contract in `*.Events.Contracts/*/Events/` with `[EventHook]` and `[EventName]`
-- [ ] Event hook implementing `IEventPublishHook<TEvent>`
+- [ ] Event contract in `*.Events.Contracts/*/Events/` with `[EventName]` (add `ISubflowTerminalEvent`
+      only for a new subflow-terminal-class event)
 - [ ] Event handler implementing `IEventHandler<TEvent>`
 - [ ] Logging extensions in `BBT.Workflow.Domain/Logging/WorkflowLogs.cs`:
   - `{EventName}Received` (Information)
   - `{EventName}IgnoredDomainMismatch` (Debug)
   - `{EventName}Succeeded` (Information)
   - `{EventName}ProcessingFailed` (Error)
-- [ ] Hook registered: `services.AddEventHook<TEvent, TEventHook>()`
-- [ ] Handler auto-registered by `AddAetherEventBus` (assembly scanning)
+- [ ] Handler auto-registered by `AddAetherEventBus` (assembly scanning) — no manual hook registration
 - [ ] Use `WorkflowLogs.cs` extension methods — never raw `logger.Log*`
+- [ ] If the event implements `ISubflowTerminalEvent`: wire it into `SubflowTerminalRelay`'s
+      dispatch switch and tag its Inbox handler's activity `vnext.delivery.role = backup`
 
-### Why dual processing?
-- **Hook (local)**: Fast, synchronous within same transaction
-- **Handler (Inbox)**: Distributed, fault-tolerant, retryable
-- **Idempotency**: Both may execute — operations must be idempotent
-- **Reliability**: Distributed handler provides retry if local fails
+### Why the Inbox handler alone is enough
+- **Outbox-first**: the outbox row is written before commit succeeds, so a handler always has
+  durable work to consume — no in-process shortcut is needed for correctness.
+- **Wakeup-assisted**: a loss-tolerant Dapr nudge wakes the Outbox/Inbox poll loops immediately
+  after a commit stores a row, so the common case does not wait out the idle poll interval.
+- **Idempotency still required**: for the three subflow-terminal events, the relay and the Inbox
+  backup may both settle the same terminal outcome — handlers must stay idempotent regardless of
+  event category.
 
 ## C# / .NET Usage
 - Use C# 10+ features when appropriate (records, pattern matching, null-coalescing assignment).

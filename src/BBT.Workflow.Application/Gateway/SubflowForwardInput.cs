@@ -41,4 +41,19 @@ public record SubflowForwardInput
 
     /// <summary>Route values forwarded from the parent request.</summary>
     public Dictionary<string, string?> RouteValues { get; init; } = new();
+
+    /// <summary>
+    /// Trace lane anchor (W3C traceparent) of the forwarding parent. The relayed transition's span
+    /// parents to it, so every hop of the subflow appears flat underneath the forwarding span rather
+    /// than nested inside its predecessor. See <c>WorkflowTraceLane</c>.
+    /// <para>
+    /// Carried in this internal-only body rather than a header, exactly like <c>CorrelationId</c>:
+    /// public endpoints must not be able to inject a lane, or a caller could graft its spans onto
+    /// an unrelated trace. <c>FlatLaneActivity</c>'s trace-id check is the backstop.
+    /// </para>
+    /// </summary>
+    public string? TraceRoot { get; init; }
+
+    /// <summary>The enclosing lane's anchor, so the subflow's resume returns to the parent's lane.</summary>
+    public string? ParentTraceRoot { get; init; }
 }

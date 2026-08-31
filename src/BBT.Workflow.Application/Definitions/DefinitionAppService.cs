@@ -7,7 +7,6 @@ using BBT.Workflow.Definitions.CastHandlers;
 using BBT.Workflow.Definitions.Validators;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
-using BBT.Workflow.Monitoring;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Schemas;
 using Microsoft.Extensions.DependencyInjection;
@@ -27,7 +26,6 @@ public sealed class DefinitionAppService(
     ComponentValidatorProcessor componentValidatorProcessor,
     WorkflowCastProcessor castProcessor,
     IDomainCacheContext cacheContext,
-    IWorkflowMetrics workflowMetrics,
     IServiceScopeFactory scopeFactory,
     IServiceProvider serviceProvider)
     : ApplicationService(serviceProvider), IDefinitionAppService
@@ -88,7 +86,6 @@ public sealed class DefinitionAppService(
             foreach (var error in validationResult.ValidationErrors)
             {
                 var memberName = error.MemberNames.FirstOrDefault() ?? "unknown";
-                workflowMetrics.RecordValidationFailure(input.Flow, "AdminAppService", memberName);
             }
 
             return Result.Fail(
@@ -265,7 +262,6 @@ public sealed class DefinitionAppService(
             foreach (var error in validationResult.ValidationErrors)
             {
                 var memberName = error.MemberNames.FirstOrDefault() ?? "unknown";
-                workflowMetrics.RecordValidationFailure(componentType, "AdminAppService.SeedData", memberName);
             }
 
             return Result.Fail(

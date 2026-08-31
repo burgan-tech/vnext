@@ -92,8 +92,9 @@ public static class JsonSchemaValidationMapper
 
         foreach (var detail in failedDetails)
         {
-            var memberName = detail.InstanceLocation.ToString().TrimStart('/');
-            if (string.IsNullOrWhiteSpace(memberName)) memberName = "root";
+            // Same member path as the vocabulary-detail path, so the two response shapes address
+            // a field identically ("customer.ownerUserId", not "/customer/ownerUserId").
+            var memberName = ToMemberPath(detail.InstanceLocation.ToString());
 
             var message = "Validation failed";
 
@@ -105,43 +106,64 @@ public static class JsonSchemaValidationMapper
             validationResults.Add(new ValidationResult(message, [memberName]));
         }
 
-        if (!evaluation.IsValid && evaluation.Errors is not null)
-        {
-            foreach (var error in evaluation.Errors)
-            {
-                validationResults.Add(new ValidationResult(Regex.Unescape(error.Value), [error.Key]));
-            }
-        }
+        // NOTE: the root's own errors are NOT re-appended here. They arrive through FlattenErrors
+        // like any other node's. This used to carry a compensation loop for the flattening bug
+        // that dropped them — it reported the same error twice and, worse, used the KEYWORD
+        // ("required") as the member name, which is not a path a client can bind a message to.
 
         return validationResults;
     }
 
     /// <summary>
-    /// Recursively flattens hierarchical validation errors from JSON schema evaluation results.
-    /// This private method traverses the nested structure of evaluation details and collects 
-    /// all failed validation nodes into a flat list for easier processing.
+    /// Recursively flattens hierarchical validation errors from JSON schema evaluation results
+    /// into the flat list of failing nodes the callers report to the client.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A node's errors and its children are <b>independent</b>: in the hierarchical output a
+    /// keyword's error sits on the node that owns the keyword, and that same node gains child
+    /// <c>Details</c> the moment the schema evaluates any subschema (<c>properties</c>,
+    /// <c>additionalProperties</c>, a nested object). So a root-level <c>required</c> failure is
+    /// an error ON THE ROOT that sits beside a full set of (possibly valid) child details.
+    /// </para>
+    /// <para>
+    /// Treating the two as alternatives — recurse when there are details, otherwise take the node
+    /// — silently discarded the node's own errors. For a schema with <c>additionalProperties:
+    /// false</c> and a nested object, the root's <c>required</c> error was the ONLY error there
+    /// was, every child was valid, and the caller received a 400 naming nothing at all.
+    /// </para>
+    /// </remarks>
     /// <param name="result">The evaluation result to flatten</param>
-    /// <returns>
-    /// A flat list of EvaluationResults containing only the failed validation nodes
-    /// </returns>
+    /// <returns>A flat list of the failing nodes that carry reportable errors.</returns>
     private static List<EvaluationResults> FlattenErrors(EvaluationResults result)
     {
         var list = new List<EvaluationResults>();
+        CollectErrors(result, list);
+        return list;
+    }
 
-        if (result is { IsValid: false, Details: not null })
+    private static void CollectErrors(EvaluationResults result, List<EvaluationResults> collected)
+    {
+        if (result.IsValid)
+            return;
+
+        var startCount = collected.Count;
+
+        // The node's own errors, if it has any — additive, never instead of the children.
+        if (result.Errors is { Count: > 0 })
+            collected.Add(result);
+
+        if (result.Details is not null)
         {
             foreach (var child in result.Details)
-            {
-                list.AddRange(FlattenErrors(child));
-            }
-        }
-        else if (!result.IsValid)
-        {
-            list.Add(result);
+                CollectErrors(child, collected);
         }
 
-        return list;
+        // An invalid subtree that produced nothing reportable (a failing combinator whose errors
+        // live neither here nor on any child) still has to surface, or the payload is rejected
+        // with an empty error list. The callers render this as a "Validation failed" placeholder.
+        if (collected.Count == startCount)
+            collected.Add(result);
     }
 
     private static string ToMemberPath(string instanceLocation)

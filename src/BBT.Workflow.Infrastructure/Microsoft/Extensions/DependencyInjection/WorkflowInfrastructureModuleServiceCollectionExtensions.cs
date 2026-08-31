@@ -1,16 +1,12 @@
 using BBT.Aether.MultiSchema;
 using BBT.Workflow.Caching;
 using BBT.Workflow.Data;
-using BBT.Workflow.DefinitionContext;
 using BBT.Workflow.Execution.PostCommit;
 using BBT.Workflow.Infrastructure.DataSink;
 using BBT.Workflow.Infrastructure.Execution.PostCommit;
-using BBT.Workflow.Infrastructure.HostedServices;
 using BBT.Workflow.Infrastructure.Security;
 using BBT.Workflow.Infrastructure.Scripting;
 using BBT.Workflow.Instances;
-using BBT.Workflow.Instances.Events;
-using BBT.Workflow.Monitoring;
 using BBT.Workflow.Remote.Extensions;
 using BBT.Workflow.Schemas;
 using BBT.Workflow.Security;
@@ -88,11 +84,6 @@ public static class WorkflowInfrastructureModuleServiceCollectionExtensions
         services.AddScoped<ISchemaValidator, SchemaValidator>();
         
         // Explicit InstanceData persist path (per-instance FOR UPDATE lock + versioning).
-        // The service reads IWorkflowContext for master-schema validation; register the default
-        // scoped holder here so non-HTTP hosts (workers, DbMigrator) that only call this module
-        // can construct the service — in those hosts the context simply stays empty and
-        // validation is skipped. TryAdd keeps the API hosts' own registration authoritative.
-        services.TryAddScoped<IWorkflowContext, WorkflowContext>();
         services.AddScoped<IInstanceDataWriteService, InstanceDataWriteService>();
 
         // You can register your repositories here.
@@ -110,17 +101,8 @@ public static class WorkflowInfrastructureModuleServiceCollectionExtensions
         // Instance Gateways - route between local and remote execution
         services.AddInstanceGatewayServices();
         
-        // Monitoring
-        services.AddSingleton<IWorkflowMetrics, PrometheusWorkflowMetrics>();
-        services.AddSingleton<WorkflowDatabaseInterceptor>();
-        services.AddSingleton<WorkflowTransactionInterceptor>();
-        
-        // Hosted Services
-        services.AddHostedService<SystemHealthMonitoringHostedService>();
-        
-        // DataSink Integration (replaces ClickHouse integration)
+        // DataSink Integration (no sinks are registered by default; concrete sinks plug in here)
         services.AddDataSinkServices();
-        services.AddClickHouseDataSinks();
         services.RegisterDataSinks();
         
         // Schema Migration Orchestration
@@ -154,22 +136,4 @@ public static class WorkflowInfrastructureModuleServiceCollectionExtensions
         return services;
     }
 
-    /// <summary>
-    /// Registers workflow event hooks that execute before domain events are published.
-    /// These hooks depend on application-layer services (<see cref="BBT.Workflow.Instances.IInstanceCancellationService"/>)
-    /// and a configured event bus (<see cref="BBT.Aether.Events.IDistributedEventBus"/>).
-    /// Call this only from hosts that register both <c>AddApplicationModule()</c> and an event bus.
-    /// Do NOT call from DbMigrator or other minimal hosts.
-    /// </summary>
-    public static IServiceCollection AddWorkflowEventHooks(this IServiceCollection services)
-    {
-        services.AddEventHook<InstanceSubCompletedEvent, InstanceSubCompletedEventHook>();
-        services.AddEventHook<InstanceSubFaultedEvent, InstanceSubFaultedEventHook>();
-        services.AddEventHook<InstanceSubCanceledEvent, InstanceSubCanceledEventHook>();
-        services.AddEventHook<InstanceSubStateChangedEvent, InstanceSubStateChangedEventHook>();
-        services.AddEventHook<InstanceCanceledEvent, InstanceCanceledEventHook>();
-        services.AddEventHook<InstanceCompletedCleanupEvent, InstanceCompletedCleanupEventHook>();
-        services.AddEventHook<InstanceFaultedCleanupEvent, InstanceFaultedCleanupEventHook>();
-        return services;
-    }
 }

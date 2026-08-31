@@ -1,0 +1,352 @@
+# Publishes prerelease Docker images for pull requests that carry a publish-* label.
+#
+# Opt-in per PR: add `publish-alpha`, `publish-beta` or `publish-rc` to the PR and every
+# subsequent push rebuilds and republishes the images for that channel. When several
+# publish-* labels are present the highest channel wins: rc > beta > alpha.
+#
+# Version scheme: {next stable version}-{channel}.pr{PR number}.{run number}
+# (e.g. 0.0.86-alpha.pr123.7 while v0.0.85 is the latest stable tag), plus a moving
+# `pr-{N}` convenience tag per service. The base is one patch above the highest
+# stable v-tag so the prerelease previews — and semver-sorts below — the upcoming
+# release; common.props is only the fallback when no stable tag exists.
+# The versioned tag is the canonical reference — a cancelled run can leave `pr-{N}`
+# pointing at different builds across services.
+#
+# Each PR gets ONE GitHub prerelease (tag `pr-{N}`), updated in place on every push
+# and deleted by pr-prerelease-cleanup.yml when the PR closes — so the Releases page
+# shows at most one entry per open PR and stable releases stay "Latest".
+#
+# Images get the same supply-chain treatment as release images: cosign keyless
+# signature by digest, SBOM artifact and Anchore vulnerability scan with SARIF
+# upload. Scope is deliberately narrow otherwise: no NuGet/npm publish and no
+# GitHub build-provenance attestation — those belong to the release pipeline
+# (build-and-publish-images.yml).
+#
+# Security note: adding a label requires only triage permission, and the images are
+# built from the UNREVIEWED PR head. The prerelease tag namespace (`-{channel}.prN.`)
+# is the mitigation — nothing here can touch `latest` or a stable version tag.
+# Fork PRs are excluded (their GITHUB_TOKEN is read-only anyway).
+name: PR Prerelease Images
+
+on:
+  pull_request:
+    types: [labeled, synchronize, reopened]
+    branches:
+      - master
+      - 'release-v*'
+
+permissions: {}
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_BASE: ghcr.io/${{ github.repository }}
+  # PR builds are single-arch: the arm64 leg would run the whole .NET build under QEMU
+  # emulation (3-10x slower). Flip to `linux/amd64,linux/arm64` if arm64 test images
+  # are ever needed — but see the cleanup note below before doing so.
+  PLATFORMS: linux/amd64
+
+concurrency:
+  group: pr-prerelease-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  prepare:
+    # Gate lives only here — the `needs` chain skips everything downstream.
+    # `labeled` fires for EVERY label, so unrelated labels must not trigger a rebuild;
+    # it also fires on closed PRs, hence the state check.
+    if: >-
+      github.event.pull_request.state == 'open' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      (contains(github.event.pull_request.labels.*.name, 'publish-alpha') ||
+       contains(github.event.pull_request.labels.*.name, 'publish-beta') ||
+       contains(github.event.pull_request.labels.*.name, 'publish-rc')) &&
+      (github.event.action != 'labeled' || startsWith(github.event.label.name, 'publish-'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      channel: ${{ steps.channel.outputs.channel }}
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          # The PR head, not the transient refs/pull/N/merge commit: the image must
+          # correspond to a commit the developer can point at, and the merge ref does
+          # not exist while the PR has conflicts.
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Resolve prerelease channel
+        id: channel
+        env:
+          HAS_ALPHA: ${{ contains(github.event.pull_request.labels.*.name, 'publish-alpha') }}
+          HAS_BETA: ${{ contains(github.event.pull_request.labels.*.name, 'publish-beta') }}
+          HAS_RC: ${{ contains(github.event.pull_request.labels.*.name, 'publish-rc') }}
+        run: |
+          if [ "$HAS_RC" = "true" ]; then
+            CHANNEL=rc
+          elif [ "$HAS_BETA" = "true" ]; then
+            CHANNEL=beta
+          else
+            CHANNEL=alpha
+          fi
+          echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
+          echo "Resolved channel: $CHANNEL"
+
+      - name: Compute prerelease version
+        id: version
+        env:
+          CHANNEL: ${{ steps.channel.outputs.channel }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          # Preview the NEXT release: one patch above the highest stable v-tag, so the
+          # prerelease semver-sorts below the version it previews (0.0.86-alpha... <
+          # 0.0.86). common.props cannot be the primary source — on master it lags the
+          # release branch, which would base the alpha on an already-shipped version.
+          git fetch --quiet origin '+refs/tags/v*:refs/tags/v*'
+          LATEST=$(git tag -l 'v*' | sed 's/^v//' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1)
+          if [ -n "$LATEST" ]; then
+            BASE="${LATEST%.*}.$(( ${LATEST##*.} + 1 ))"
+            echo "Latest stable tag: v$LATEST -> next version base: $BASE"
+          else
+            BASE=$(grep '<Version>' ./common.props | sed 's/.*<Version>\(.*\)<\/Version>.*/\1/' | head -n 1)
+            # Tolerate a prerelease suffix someone may have committed into common.props.
+            BASE="${BASE%%-*}"
+            echo "No stable v-tag found; falling back to common.props base: $BASE"
+          fi
+          if [ -z "$BASE" ]; then
+            echo "::error::Could not determine version base"
+            exit 1
+          fi
+          VERSION="${BASE}-${CHANNEL}.pr${PR_NUMBER}.${{ github.run_number }}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Publishing version: $VERSION"
+
+  build:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: execution
+            dockerfile: ./execution/BBT.Workflow.Execution.HttpApi.Host/Dockerfile
+          - image: orchestrator
+            dockerfile: ./orchestration/BBT.Workflow.Orchestration.HttpApi.Host/Dockerfile
+          - image: init
+            dockerfile: ./init/VNext.Init.Host/Dockerfile
+          - image: inbox
+            dockerfile: ./workers/BBT.Workflow.Workers.Inbox/Dockerfile
+          - image: outbox
+            dockerfile: ./workers/BBT.Workflow.Workers.Outbox/Dockerfile
+          - image: db-migrator
+            dockerfile: ./workers/BBT.Workflow.DbMigrator/Dockerfile
+          - image: mcp-server
+            dockerfile: ./tools/BBT.Workflow.Mcp.Server/Dockerfile
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      # The Dockerfiles COPY common.props; this stamp is how the version reaches the
+      # compiled assemblies (same mechanism as the release pipeline).
+      - name: Stamp version into common.props
+        run: |
+          VERSION="${{ needs.prepare.outputs.version }}"
+          sed -i "s|<Version>.*</Version>|<Version>$VERSION</Version>|g" ./common.props
+          echo "Stamped common.props with version $VERSION"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_BASE }}/${{ matrix.image }}
+          # Only PR-scoped tags — never `latest`, branch or sha tags from PR code.
+          tags: |
+            type=raw,value=${{ needs.prepare.outputs.version }}
+            type=ref,event=pr
+
+      # provenance/sbom off keeps each push a single plain manifest (no attestation
+      # index), so every GHCR version stays tagged and cleanup by tag is safe.
+      - name: Build and push Docker image
+        id: push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: ${{ env.PLATFORMS }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: false
+          sbom: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            VERSION=${{ needs.prepare.outputs.version }}
+
+      - name: Resolve image digest
+        id: digest
+        run: |
+          DIGEST="${{ steps.push.outputs.digest }}"
+          if [ -z "$DIGEST" ]; then
+            echo "::error::Could not resolve image digest"
+            exit 1
+          fi
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+          echo "Resolved digest: $DIGEST"
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign image by digest (immutable reference)
+        env:
+          IMAGE_REF: ${{ env.IMAGE_BASE }}/${{ matrix.image }}
+          DIGEST: ${{ steps.digest.outputs.digest }}
+        run: |
+          cosign sign --yes "${IMAGE_REF}@${DIGEST}"
+
+      - name: Generate SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ env.IMAGE_BASE }}/${{ matrix.image }}:${{ needs.prepare.outputs.version }}
+          format: spdx-json
+          output-file: ${{ matrix.image }}-sbom.spdx.json
+
+      # Shorter retention than release SBOMs (90d) — PR builds are frequent and
+      # short-lived.
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-${{ matrix.image }}-${{ needs.prepare.outputs.version }}
+          path: ${{ matrix.image }}-sbom.spdx.json
+          retention-days: 14
+
+      # v3's bundled grype can no longer load its vulnerability DB (discontinued feed);
+      # v7 is input-compatible (image / fail-build / output-format, sarif output).
+      - name: Security scan
+        uses: anchore/scan-action@v7
+        id: scan
+        with:
+          image: ${{ env.IMAGE_BASE }}/${{ matrix.image }}:${{ needs.prepare.outputs.version }}
+          fail-build: false
+          output-format: sarif
+
+      - name: Validate SARIF output
+        id: validate_sarif
+        if: always() && steps.scan.outputs.sarif != ''
+        run: |
+          SARIF_FILE="${{ steps.scan.outputs.sarif }}"
+          if [ -f "$SARIF_FILE" ] && [ -s "$SARIF_FILE" ] && jq empty "$SARIF_FILE" 2>/dev/null; then
+            echo "valid=true" >> $GITHUB_OUTPUT
+          else
+            echo "::warning::SARIF file is missing, empty, or contains invalid JSON – skipping upload"
+            echo "valid=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Upload SARIF results
+        if: always() && steps.validate_sarif.outputs.valid == 'true'
+        uses: github/codeql-action/upload-sarif@v3
+        continue-on-error: true
+        with:
+          sarif_file: ${{ steps.scan.outputs.sarif }}
+          category: ${{ matrix.image }}
+
+  announce:
+    needs: [prepare, build]
+    # Announce build failure too, so the sticky comment reflects broken state instead
+    # of going silently stale; skip only cancelled runs (a newer push will re-announce).
+    if: ${{ !cancelled() && needs.prepare.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      # One per-PR prerelease on the Releases page (tag pr-{N}), updated in place on
+      # every push, plus a sticky PR comment — both from the same body so they never
+      # drift. The release/tag is deleted by pr-prerelease-cleanup.yml when the PR
+      # closes. The pr-{N} git tag can never collide with real releases: the release
+      # pipeline only creates and walks v-prefixed tags.
+      - name: Upsert per-PR prerelease and sticky comment
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CHANNEL: ${{ needs.prepare.outputs.channel }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          BUILD_RESULT: ${{ needs.build.result }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          MARKER='<!-- pr-prerelease-images -->'
+          TAG="pr-$PR"
+          RELEASE_URL="https://github.com/$REPO/releases/tag/$TAG"
+
+          if [ "$BUILD_RESULT" = "success" ]; then
+            STATUS="✅ **Build succeeded**"
+          else
+            STATUS="❌ **Build failed** (result: \`$BUILD_RESULT\`) — tags below may be missing or stale"
+          fi
+
+          BODY="$MARKER
+          ## 🐳 PR Prerelease Images
+
+          $STATUS
+
+          - **Channel**: \`$CHANNEL\`
+          - **Version**: \`$VERSION\`
+          - **Commit**: $HEAD_SHA
+          - **Release**: $RELEASE_URL
+
+          \`\`\`bash
+          docker pull ghcr.io/$REPO/execution:$VERSION
+          docker pull ghcr.io/$REPO/orchestrator:$VERSION
+          docker pull ghcr.io/$REPO/init:$VERSION
+          docker pull ghcr.io/$REPO/inbox:$VERSION
+          docker pull ghcr.io/$REPO/outbox:$VERSION
+          docker pull ghcr.io/$REPO/db-migrator:$VERSION
+          docker pull ghcr.io/$REPO/mcp-server:$VERSION
+          \`\`\`
+
+          The moving tag \`pr-$PR\` also points at the newest build of this PR. A cancelled run can leave it inconsistent across services — the versioned tag above is the canonical reference."
+
+          # Only move the release when images actually pushed; a failed build keeps the
+          # previous (still pullable) release and the comment carries the failure.
+          if [ "$BUILD_RESULT" = "success" ]; then
+            TITLE="PR #$PR prerelease — $VERSION"
+            if gh release view "$TAG" -R "$REPO" >/dev/null 2>&1; then
+              gh api -X PATCH "repos/$REPO/git/refs/tags/$TAG" -f sha="$HEAD_SHA" -F force=true
+              gh release edit "$TAG" -R "$REPO" --title "$TITLE" --notes "$BODY" --prerelease
+              echo "Updated release $TAG"
+            else
+              gh release create "$TAG" -R "$REPO" --target "$HEAD_SHA" --title "$TITLE" --notes "$BODY" --prerelease
+              echo "Created release $TAG"
+            fi
+          fi
+
+          CID=$(gh api "repos/$REPO/issues/$PR/comments" --paginate \
+                --jq ".[] | select(.body | startswith(\"$MARKER\")) | .id" | head -n 1)
+
+          if [ -n "$CID" ]; then
+            gh api -X PATCH "repos/$REPO/issues/comments/$CID" -f body="$BODY"
+            echo "Updated existing comment $CID"
+          else
+            gh api -X POST "repos/$REPO/issues/$PR/comments" -f body="$BODY"
+            echo "Created new comment"
+          fi

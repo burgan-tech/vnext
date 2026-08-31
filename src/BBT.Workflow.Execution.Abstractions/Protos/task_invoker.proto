@@ -1,0 +1,23 @@
+syntax = "proto3";
+
+package bbt.workflow.execution.v1;
+
+option csharp_namespace = "BBT.Workflow.Execution.Grpc";
+
+// Task invocation surface of the Execution service, served over Dapr gRPC proxy mode.
+// The payload is the SAME JSON the HTTP endpoint exchanges, carried as bytes — the
+// contract is JSON-shaped (JsonElement bindings, object result data) and this migration
+// deliberately changes the transport, not the serialization semantics.
+service TaskInvoker {
+  rpc Invoke (InvokeRequest) returns (InvokeReply);
+}
+
+message InvokeRequest {
+  string task_type = 1;
+  string task_key = 2;
+  bytes payload_json = 3; // TaskInvokeRequest as UTF-8 JSON (web defaults / camelCase)
+}
+
+message InvokeReply {
+  bytes payload_json = 1; // TaskInvokeResponse as UTF-8 JSON (web defaults / camelCase)
+}

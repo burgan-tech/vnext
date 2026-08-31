@@ -37,7 +37,7 @@ public sealed class StartTask : WorkflowTask
     /// <summary>
     /// Sync of the instance to start
     /// </summary>
-    public bool TriggerSync { get; private set; } = true;
+    public bool TriggerSync { get; private set; } = false;
     
     /// <summary>
     /// Version of the target workflow

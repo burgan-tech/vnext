@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Runtime;
@@ -58,8 +59,16 @@ public sealed class TransitionDataMapper(
                 var mappingInstance = await CompileMappingScriptAsync(transition, workflow.Scripts, ct);
                 var scriptContext = await BuildScriptContextAsync(
                     payload, transition, workflow, instance, runtimeInfoProvider, headers, ct);
-
-                return await mappingInstance.Handler(scriptContext);
+                
+                try
+                {
+                    var mapped = await mappingInstance.Handler(scriptContext);
+                    return mapped;
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    throw; // TryAsync continues to apply the existing error mapping (CreateMappingError)
+                }
             },
             cancellationToken,
             CreateMappingError);

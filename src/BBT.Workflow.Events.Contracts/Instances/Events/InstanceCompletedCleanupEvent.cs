@@ -1,5 +1,4 @@
 using BBT.Aether.Events;
-using BBT.Workflow.Events.Hooks;
 using BBT.Workflow.Events;
 
 namespace BBT.Workflow.Instances.Events;
@@ -8,13 +7,6 @@ namespace BBT.Workflow.Instances.Events;
 /// Event published when a workflow instance completes to trigger job cleanup.
 /// This event triggers cancellation of all scheduled jobs for the completed instance.
 /// </summary>
-/// <remarks>
-/// This event supports hooks. Register hooks via DI:
-/// <code>
-/// services.AddEventHook&lt;InstanceCompletedCleanupEvent, InstanceCompletedCleanupEventHook&gt;();
-/// </code>
-/// </remarks>
-[EventHook]
 [EventName("instance.completed.cleanup")]
 public class InstanceCompletedCleanupEvent : IDistributedEvent, ITraceableDistributedEvent
 {

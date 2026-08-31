@@ -71,7 +71,9 @@ public sealed class GraphQLFilterNodeConverter : JsonConverter<GraphQLFilterNode
                     }
                     else
                     {
-                        // Skip unknown/unsupported properties
+                        // Record before skipping so the validator can reject the request instead of
+                        // executing a query that silently ignores part of the caller's intent.
+                        (node.UnrecognizedProperties ??= []).Add(originalPropertyName ?? string.Empty);
                         reader.Skip();
                     }
                     break;
@@ -151,6 +153,7 @@ public sealed class GraphQLFilterNodeConverter : JsonConverter<GraphQLFilterNode
             var operatorName = reader.GetString()?.ToLowerInvariant();
             if (string.IsNullOrEmpty(operatorName))
             {
+                (condition.UnrecognizedOperators ??= []).Add(new UnrecognizedOperator(string.Empty, JsonValueKind.Undefined));
                 reader.Skip();
                 continue;
             }
@@ -217,9 +220,24 @@ public sealed class GraphQLFilterNodeConverter : JsonConverter<GraphQLFilterNode
                         condition.NestedConditions ??= new Dictionary<string, object>();
                         var nestedJson = JsonDocument.ParseValue(ref reader);
                         condition.NestedConditions[operatorName] = nestedJson.RootElement.Clone();
+
+                        // A nested field is never legitimately named after a known operator
+                        // misspelling, so record those for the validator. Genuine nested paths
+                        // (e.g. {"parent":{"child":{"eq":1}}}) are left alone.
+                        if (FilterOperators.Suggest(operatorName) != null)
+                        {
+                            (condition.UnrecognizedOperators ??= []).Add(
+                                new UnrecognizedOperator(operatorName, JsonValueKind.Object));
+                        }
                     }
                     else
                     {
+                        // An unsupported operator with a scalar value (e.g. {"gte":100}) would
+                        // otherwise vanish here, leaving a condition with zero operators that
+                        // compiles to an empty WHERE clause and returns every row. Record it so
+                        // the validator can reject the request.
+                        (condition.UnrecognizedOperators ??= []).Add(
+                            new UnrecognizedOperator(operatorName, ToValueKind(reader.TokenType)));
                         reader.Skip();
                     }
                     break;
@@ -228,6 +246,21 @@ public sealed class GraphQLFilterNodeConverter : JsonConverter<GraphQLFilterNode
 
         return condition;
     }
+
+    /// <summary>
+    /// Maps a reader token to the equivalent <see cref="JsonValueKind"/> for diagnostics.
+    /// </summary>
+    private static JsonValueKind ToValueKind(JsonTokenType tokenType) => tokenType switch
+    {
+        JsonTokenType.String => JsonValueKind.String,
+        JsonTokenType.Number => JsonValueKind.Number,
+        JsonTokenType.True => JsonValueKind.True,
+        JsonTokenType.False => JsonValueKind.False,
+        JsonTokenType.Null => JsonValueKind.Null,
+        JsonTokenType.StartArray => JsonValueKind.Array,
+        JsonTokenType.StartObject => JsonValueKind.Object,
+        _ => JsonValueKind.Undefined
+    };
 
     private static object? ReadValue(ref Utf8JsonReader reader)
     {

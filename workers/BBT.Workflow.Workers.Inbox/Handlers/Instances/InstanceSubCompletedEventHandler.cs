@@ -37,7 +37,14 @@ internal sealed class InstanceSubCompletedEventHandler(
             return;
         }
 
-        using var traceScope = EventTraceScope.Start("InstanceSubCompleted.Handle", eventData, correlationIdProvider);
+        using var traceScope = EventTraceScope.Start(
+            "InstanceSubCompleted.Handle", eventData, correlationIdProvider,
+            EventTraceMode.LinkedDelivery, envelope.Id, eventData.RearmAttempt);
+
+        // This delivery is the durable BACKUP of the post-commit terminal relay: in the normal case the
+        // relay already settled the parent and the settlement path answers AlreadySettled via the
+        // pre-lock probe. Dashboards separate primary vs backup deliveries on this tag.
+        Activity.Current?.SetTag(TelemetryConstants.TagNames.DeliveryRole, "backup");
 
         var scopeProps = new Dictionary<string, object>
         {
@@ -82,7 +89,12 @@ internal sealed class InstanceSubCompletedEventHandler(
                 // At-least-once async retry path: the sync caller (if any) was already answered
                 // by the synchronous hook. Force async here so a retried resume never blocks the
                 // worker with an inline sync chain; idempotent guards make duplicates no-ops.
-                Sync = false
+                Sync = false,
+                // Relay the lane so the parent resume on the receiving side lands at the parent
+                // instance's level rather than nesting under the relay endpoint.
+                TraceRoot = eventData.TraceRoot,
+                ParentTraceRoot = eventData.ParentTraceRoot,
+                RearmAttempt = eventData.RearmAttempt
             };
 
             var route = $"api/v1/{eventData.Domain}/workflows/{eventData.Flow}/instances/{eventData.InstanceId}/complete";

@@ -1,6 +1,7 @@
 using BBT.Workflow.BackgroundJobs;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Instances;
+using BBT.Workflow.Logging;
 using Microsoft.Extensions.Logging;
 
 namespace BBT.Workflow.Execution.Pipeline;
@@ -27,6 +28,12 @@ internal static class TransitionSettlement
         CancellationToken cancellationToken,
         IInstanceStatusLock? statusLock = null)
     {
+        // The resting-status flip closes a transition: a status write, its lock, and the state
+        // notification. It ran unnamed at the very end of the pipeline, so a trace showed the last
+        // step finishing and then a stretch of nothing before the hop ended.
+        using var activity = PipelineStepActivityHelper.StartOperationActivity("Transition.Settle");
+        activity?.SetTag(TelemetryConstants.TagNames.SettledStatus, resolvedStatus?.Code ?? "none");
+
         if (context.OwnsStatus &&
             context.Instance.IsBusy &&
             resolvedStatus is not null &&
@@ -44,12 +51,17 @@ internal static class TransitionSettlement
 
             await using var _ = scope;
 
-            context.Instance.Active();
-            logger.LogDebug(
-                "Instance {InstanceId} resolved to Active after chain settlement",
-                context.InstanceId);
-
-            await instanceRepository.UpdateAsync(context.Instance, true, cancellationToken);
+            // One set-based CAS instead of the tracked full-row save. resolvedStatus only ever
+            // carries Active (ResolveAvailableStep / ClearBusyOnResumeStep) and the old write was
+            // Active() unconditionally, so Busy → Active CAS is behavior-identical; a lost CAS
+            // means the row is no longer Busy and the flip is moot. Pending tracked changes still
+            // commit with the enclosing unit of work.
+            if (await instanceRepository.TryReleaseBusyAsync(context.Instance, cancellationToken))
+            {
+                logger.LogDebug(
+                    "Instance {InstanceId} resolved to Active after chain settlement",
+                    context.InstanceId);
+            }
         }
 
         if (scheduleNotification && context.Target?.HasStateNotifications == true)

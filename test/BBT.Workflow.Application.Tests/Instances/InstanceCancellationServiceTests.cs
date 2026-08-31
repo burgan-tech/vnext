@@ -90,7 +90,10 @@ public sealed class InstanceCancellationServiceTests
         _backgroundJobService.Verify(
             b => b.CancelWaitingAsync(job.JobId, It.IsAny<CancellationToken>()),
             Times.Once);
-        job.IsActive.ShouldBeFalse();
+        // The row closes via the batched set-based settle, not an in-memory entity mutation.
+        _instanceJobRepository.Verify(r => r.MarkManyAsProcessedAsync(
+            It.Is<IReadOnlyCollection<Guid>>(ids => ids.Count == 1 && ids.Contains(job.Id)),
+            It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
@@ -109,8 +112,10 @@ public sealed class InstanceCancellationServiceTests
 
         result.IsSuccess.ShouldBeTrue();
         job.IsActive.ShouldBeTrue();
-        _instanceJobRepository.Verify(r => r.UpdateAsync(
-            It.IsAny<InstanceJob>(), false, It.IsAny<CancellationToken>()), Times.Never);
+        // A running job is never in the batched settle.
+        _instanceJobRepository.Verify(r => r.MarkManyAsProcessedAsync(
+            It.Is<IReadOnlyCollection<Guid>>(ids => ids.Count == 0),
+            It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
@@ -128,8 +133,10 @@ public sealed class InstanceCancellationServiceTests
 
         result.IsSuccess.ShouldBeTrue();
         job.IsActive.ShouldBeTrue();
-        _instanceJobRepository.Verify(r => r.UpdateAsync(
-            It.IsAny<InstanceJob>(), false, It.IsAny<CancellationToken>()), Times.Never);
+        // A running job is never in the batched settle.
+        _instanceJobRepository.Verify(r => r.MarkManyAsProcessedAsync(
+            It.Is<IReadOnlyCollection<Guid>>(ids => ids.Count == 0),
+            It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Theory]
@@ -150,9 +157,9 @@ public sealed class InstanceCancellationServiceTests
         var result = await CreateService().ProcessCancellationAsync(_instance.Id);
 
         result.IsSuccess.ShouldBeTrue();
-        job.IsActive.ShouldBeFalse();
-        _instanceJobRepository.Verify(r => r.UpdateAsync(
-            job, false, It.IsAny<CancellationToken>()), Times.Once);
+        _instanceJobRepository.Verify(r => r.MarkManyAsProcessedAsync(
+            It.Is<IReadOnlyCollection<Guid>>(ids => ids.Count == 1 && ids.Contains(job.Id)),
+            It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
@@ -176,10 +183,16 @@ public sealed class InstanceCancellationServiceTests
 
         var result = await CreateService().ProcessCancellationAsync(_instance.Id);
 
-        result.IsSuccess.ShouldBeTrue();
+        // A per-job scheduler failure is now retryable (Result.Fail), not silently ACKed: the
+        // Inbox is the sole processor for cleanup events, so an IsSuccess=true here would ACK the
+        // message and strand the still-active "failed" job's scheduler entry forever. The winner
+        // ("waiting") is still persisted below before the failure is reported.
+        result.IsSuccess.ShouldBeFalse();
         failed.IsActive.ShouldBeTrue();
-        waiting.IsActive.ShouldBeFalse();
         running.IsActive.ShouldBeTrue();
+        _instanceJobRepository.Verify(r => r.MarkManyAsProcessedAsync(
+            It.Is<IReadOnlyCollection<Guid>>(ids => ids.Count == 1 && ids.Contains(waiting.Id)),
+            It.IsAny<CancellationToken>()), Times.Once);
         _logger.SingleMessage(40019)
             .ShouldBe($"Processed 1 instance cancellation jobs for instance {_instance.Id}");
     }
@@ -211,8 +224,10 @@ public sealed class InstanceCancellationServiceTests
 
         result.IsSuccess.ShouldBeTrue();
         failed.IsActive.ShouldBeTrue();
-        waiting.IsActive.ShouldBeFalse();
         running.IsActive.ShouldBeTrue();
+        _instanceJobRepository.Verify(r => r.MarkManyAsProcessedAsync(
+            It.Is<IReadOnlyCollection<Guid>>(ids => ids.Count == 1 && ids.Contains(waiting.Id)),
+            It.IsAny<CancellationToken>()), Times.Once);
         _logger.SingleMessage(10058).ShouldBe(
             $"Processed 1 scheduled jobs for instance {_instance.Id}, transitions: failed, waiting, running");
     }

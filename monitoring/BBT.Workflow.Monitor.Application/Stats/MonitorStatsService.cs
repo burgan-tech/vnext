@@ -4,6 +4,7 @@ using BBT.Aether.MultiSchema;
 using BBT.Aether.Results;
 using BBT.Workflow.Caching;
 using BBT.Workflow.Definitions;
+using BBT.Workflow.Definitions.GraphQL.Validation;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Monitor.Stats.DTOs;
 using BBT.Workflow.Runtime;
@@ -27,6 +28,19 @@ public sealed class MonitorStatsService(
         MonitorGetInstanceCountersInput input,
         CancellationToken cancellationToken = default)
     {
+        // Counters are as sensitive to a dropped filter as a list is: an ignored filter turns
+        // "how many match X" into "how many exist", answered with HTTP 200.
+        var validation = InstanceQueryValidator.Validate(new InstanceQueryValidationRequest
+        {
+            Filter = input.Filter
+        });
+
+        if (!validation.IsValid)
+        {
+            return Result<MonitorInstanceCountersResponse>.Fail(Error.Validation(
+                validation.PrimaryErrorCode, validation.ToMessage(), validation.Errors[0].Target ?? "filter"));
+        }
+
         return await ResultExtensions.TryAsync(async ct =>
         {
             if (string.IsNullOrWhiteSpace(input.Workflow))
@@ -79,7 +93,9 @@ public sealed class MonitorStatsService(
             var totalFaulted = await instanceRepository.CountAsync("{\"status\":{\"eq\":\"Faulted\"}}", ct);
             var byState = (await instanceRepository.GetFaultStateCountsAsync(ct))
                 .Select(s => new MonitorKeyCount { Key = s.StateKey, Count = s.Count }).ToList();
-            var byTask = (await taskRepository.GetTaskStatsAsync(ct))
+            // Last 24h, matching the response's own trend granularity: the unbounded variant was a
+            // full-table GROUP BY over an append-only table and only got slower with age.
+            var byTask = (await taskRepository.GetTaskStatsAsync(DateTime.UtcNow.AddHours(-24), ct))
                 .Where(t => t.FailureCount > 0)
                 .Select(t => new MonitorKeyCount { Key = t.TaskKey, Count = t.FailureCount }).ToList();
 
@@ -110,7 +126,8 @@ public sealed class MonitorStatsService(
     {
         return await ResultExtensions.TryAsync(async ct =>
         {
-            var stats = await taskRepository.GetTaskStatsAsync(ct);
+            // Last 24h — see GetFaultStatsAsync's byTask note; documented on the stats endpoint.
+            var stats = await taskRepository.GetTaskStatsAsync(DateTime.UtcNow.AddHours(-24), ct);
             var items = stats.Select(s => new MonitorTaskStatItem
             {
                 TaskKey = s.TaskKey,

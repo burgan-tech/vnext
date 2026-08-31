@@ -7,7 +7,6 @@ using BBT.Workflow.Definitions.Validators;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Instances.Caching;
 using BBT.Workflow.Instances.Related;
-using BBT.Workflow.Monitoring;
 using BBT.Workflow.RepresentationEtag;
 using BBT.Workflow.Resilience;
 using BBT.Workflow.Runtime;
@@ -126,19 +125,13 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
     }
 
     /// <summary>
-    /// Configures component cache store with metrics.
+    /// Configures the component cache store.
     /// </summary>
     private static void AddCacheServices(this IServiceCollection services)
     {
         services.AddSingleton<ComponentCacheStore>();
         services.AddSingleton<IComponentCacheStore>(serviceProvider =>
-        {
-            var originalStore = serviceProvider.GetRequiredService<ComponentCacheStore>();
-            var workflowMetrics = serviceProvider.GetRequiredService<IWorkflowMetrics>();
-            var logger = serviceProvider.GetRequiredService<ILogger<MetricsAwareComponentCacheStore>>();
-            
-            return originalStore.WithMetrics(workflowMetrics, logger);
-        });
+            serviceProvider.GetRequiredService<ComponentCacheStore>());
         
         // Cache Backend Services
         services.AddSingleton<ICacheBackend<Workflow>, RuntimeCacheBackend<Workflow>>();
@@ -159,6 +152,10 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
         // Scopes cached version resolutions so a publish invalidates them all at once.
         services.TryAddSingleton(TimeProvider.System);
         services.AddSingleton<IComponentGenerationProvider, ComponentGenerationProvider>();
+
+        // In-process envelope cache in front of the distributed store. Resolution entries are keyed
+        // by generation, so publish invalidation applies to L1 exactly as it does to L2.
+        services.AddSingleton<IComponentL1Cache, ComponentL1Cache>();
 
         // Domain Cache Context
         services.AddSingleton<DomainCacheContext>();

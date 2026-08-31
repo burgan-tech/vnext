@@ -12,12 +12,14 @@ namespace BBT.Workflow.Tasks.Executors;
 /// <param name="ScriptContext">The script context for variable resolution and script execution.</param>
 /// <param name="InstanceTransitionId">The instance transition ID for tracking (optional).</param>
 /// <param name="TaskTrigger">The trigger that initiated this task execution.</param>
+/// <param name="Origin">The component that initiated this execution (Flow, Extension, Function, ...).</param>
 public sealed record TaskExecutorContext(
     WorkflowTask Task,
     OnExecuteTask OnExecuteTask,
     ScriptContext ScriptContext,
     Guid? InstanceTransitionId,
-    TaskTrigger TaskTrigger)
+    TaskTrigger TaskTrigger,
+    TaskExecutionOrigin Origin)
 {
     /// <summary>
     /// Gets the task type from the workflow task.
@@ -30,9 +32,27 @@ public sealed record TaskExecutorContext(
     public ScriptResponse? InputResponse { get; set; }
 
     /// <summary>
-    /// Holds the raw invocation result as serialized JSON, captured after InvokeAsync
-    /// and before output mapping (ProcessOutputAsync). Null if invocation never ran.
+    /// Holds the raw invocation result captured after InvokeAsync and before output mapping
+    /// (ProcessOutputAsync), already materialized in its journal representation. Null if invocation
+    /// never ran. Keeping JsonData instead of the original object graph avoids extending the graph's
+    /// lifetime through output processing while preserving exactly one serialization.
     /// </summary>
-    public string? RawInvocationResultJson { get; set; }
-}
+    public JsonData? RawInvocationResult { get; set; }
 
+    /// <summary>
+    /// Per-execution compiled-mapping factory memo, keyed by (mapping, target type) — see
+    /// <c>TaskExecutorBase.GetOrCompileMappingAsync</c>. Boxed as <see cref="object"/> because a
+    /// record cannot declare a dictionary whose value type varies by the generic <c>T</c> callers
+    /// ask for; each entry is actually a <c>Func&lt;T&gt;</c> for that entry's target type.
+    /// </summary>
+    public Dictionary<(ScriptCode Mapping, Type Target), object>? CompiledMappingFactories { get; set; }
+
+    /// <summary>
+    /// Overrides the script-context variable name this task's response/output is filed under. Null
+    /// means "derive from the task key" (today's behavior). Populated from the Application-layer
+    /// <c>TaskEngineExecutionOptions.ResponseVariableKey</c> by the execution engine when it builds
+    /// this context; kept as a plain string here rather than referencing that type, since Domain
+    /// must not depend on Application.
+    /// </summary>
+    public string? ResponseVariableKey { get; init; }
+}

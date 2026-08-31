@@ -116,7 +116,7 @@ public class SandboxedScriptingTests
         var instance = await evaluator.CompileToInstanceAsync<ISandboxTestCalc>(
             code, extraReferences: [ContractRef], usingDirectives: ["BBT.Workflow.Scripting"]);
 
-        instance.Calc().ShouldBe(7);
+        instance.Instance.Calc().ShouldBe(7);
     }
 
     [Fact]
@@ -144,7 +144,7 @@ public class SandboxedScriptingTests
         var instance = await evaluator.CompileToInstanceAsync<ISandboxTestCalc>(
             code, extraReferences: [ContractRef], usingDirectives: ["BBT.Workflow.Scripting"]);
 
-        instance.Calc().ShouldBe(42);
+        instance.Instance.Calc().ShouldBe(42);
     }
 
     [Fact]
@@ -167,7 +167,7 @@ public class SandboxedScriptingTests
         var instance = await evaluator.CompileToInstanceAsync<ISandboxTestCalc>(
             code, extraReferences: refs, usingDirectives: ["BBT.Workflow.Scripting"]);
 
-        instance.Calc().ShouldBe(5);
+        instance.Instance.Calc().ShouldBe(5);
     }
 
     [Fact]
@@ -186,7 +186,7 @@ public class SandboxedScriptingTests
             extraReferences: [ContractRef, MetadataReference.CreateFromFile(typeof(System.Uri).Assembly.Location)],
             usingDirectives: ["BBT.Workflow.Scripting"]);
 
-        instance.Calc().ShouldBe(5); // "a%20b"
+        instance.Instance.Calc().ShouldBe(5); // "a%20b"
     }
 
     [Fact]
@@ -198,7 +198,7 @@ public class SandboxedScriptingTests
         const string code =
             "public class C : ISandboxTestCalc { public int Calc() => System.Uri.EscapeDataString(\"a b\").Length; }";
 
-        var ex = await Should.ThrowAsync<System.InvalidOperationException>(async () =>
+        var ex = await Should.ThrowAsync<ScriptCompilationException>(async () =>
             await evaluator.CompileToInstanceAsync<ISandboxTestCalc>(
                 code, extraReferences: [ContractRef], usingDirectives: ["BBT.Workflow.Scripting"]));
 
@@ -239,7 +239,7 @@ public class SandboxedScriptingTests
             extraReferences: [ContractRef, SoapTaskRef, XmlImplRef, ResolveFacade("System.Xml.ReaderWriter")],
             usingDirectives: ["BBT.Workflow.Scripting"]);
 
-        instance.Calc().ShouldBe(4);
+        instance.Instance.Calc().ShouldBe(4);
     }
 
     [Fact]
@@ -255,11 +255,11 @@ public class SandboxedScriptingTests
             extraReferences: [ContractRef, SoapTaskRef, XmlImplRef, ResolveFacade("System.Xml.ReaderWriter")],
             usingDirectives: ["BBT.Workflow.Scripting"]);
 
-        instance.Calc().ShouldBe(4);
+        instance.Instance.Calc().ShouldBe(4);
     }
 
     [Fact]
-    public void HelperRegistry_Compiles_Set_And_Exposes_Namespaces()
+    public async Task HelperRegistry_Compiles_Set_And_Exposes_Namespaces()
     {
         var sandbox = EnabledSandbox();
         var registry = new ScriptHelperRegistry(new CSharpEvaluator(sandbox), sandbox);
@@ -269,14 +269,14 @@ public class SandboxedScriptingTests
             "namespace MyHelpers { public static class TaxCalc { public static int Tax(int x) => x / 10; } }",
             "tax-calculator.csx");
 
-        var set = registry.GetOrBuildHelpers([helper], null, [], ["System"]);
+        var set = await registry.GetOrBuildHelpersAsync([helper], null, [], ["System"]);
 
         set.Namespaces.ShouldContain("MyHelpers");
         set.FromCache.ShouldBeFalse();
     }
 
     [Fact]
-    public void HelperRegistry_Caches_By_Content_Hash()
+    public async Task HelperRegistry_Caches_By_Content_Hash()
     {
         var sandbox = EnabledSandbox();
         var registry = new ScriptHelperRegistry(new CSharpEvaluator(sandbox), sandbox);
@@ -286,8 +286,8 @@ public class SandboxedScriptingTests
             "namespace MyHelpers { public static class TaxCalc { public static int Tax(int x) => x / 10; } }",
             "tax-calculator.csx");
 
-        var first = registry.GetOrBuildHelpers([helper], null, [], ["System"]);
-        var second = registry.GetOrBuildHelpers([helper], null, [], ["System"]);
+        var first = await registry.GetOrBuildHelpersAsync([helper], null, [], ["System"]);
+        var second = await registry.GetOrBuildHelpersAsync([helper], null, [], ["System"]);
 
         first.FromCache.ShouldBeFalse();
         second.FromCache.ShouldBeTrue();
@@ -306,7 +306,7 @@ public class SandboxedScriptingTests
             "namespace MyHelpers { public static class TaxCalc { public static int Tax(int x) => x / 10; } }",
             "tax-calculator.csx");
 
-        var set = registry.GetOrBuildHelpers([helper], null, [], ["System"]);
+        var set = await registry.GetOrBuildHelpersAsync([helper], null, [], ["System"]);
 
         // Mapping references the helper assembly + auto-imports its namespace, compiled into the
         // helper set's load context so the call resolves at runtime.
@@ -318,11 +318,11 @@ public class SandboxedScriptingTests
             usingDirectives: set.Namespaces.Append("BBT.Workflow.Scripting"),
             loadContext: set.LoadContext);
 
-        instance.Calc().ShouldBe(10);
+        instance.Instance.Calc().ShouldBe(10);
     }
 
     [Fact]
-    public void HelperRegistry_Does_Not_Cache_A_Failed_Build()
+    public async Task HelperRegistry_Does_Not_Cache_A_Failed_Build()
     {
         // Regression: the registry stored the build in a Lazy<T>, which caches the factory's exception.
         // Because the registry is a singleton, one transient failure (e.g. an OperationCanceledException
@@ -332,13 +332,11 @@ public class SandboxedScriptingTests
         var evaluator = new FailOnceEvaluator(new CSharpEvaluator(sandbox));
         var registry = new ScriptHelperRegistry(evaluator, sandbox);
 
-        Should.Throw<OperationCanceledException>(() =>
-        {
-            registry.GetOrBuildHelpers([TaxHelper], null, [], ["System"]);
-        });
+        await Should.ThrowAsync<OperationCanceledException>(
+            () => registry.GetOrBuildHelpersAsync([TaxHelper], null, [], ["System"]));
 
         // Second attempt must reach the evaluator again rather than replaying the cached exception.
-        var set = registry.GetOrBuildHelpers([TaxHelper], null, [], ["System"]);
+        var set = await registry.GetOrBuildHelpersAsync([TaxHelper], null, [], ["System"]);
 
         set.Namespaces.ShouldContain("MyHelpers");
         set.FromCache.ShouldBeFalse();
@@ -346,7 +344,7 @@ public class SandboxedScriptingTests
     }
 
     [Fact]
-    public void HelperRegistry_Does_Not_Pass_Caller_Token_To_The_Compiler()
+    public async Task HelperRegistry_Does_Not_Pass_Caller_Token_To_The_Compiler()
     {
         // The helper set is a process-wide artifact, so a build in progress must not be cancellable by
         // the request that happened to trigger it: the compile runs with CancellationToken.None.
@@ -356,7 +354,7 @@ public class SandboxedScriptingTests
 
         using var cts = new CancellationTokenSource();
 
-        var set = registry.GetOrBuildHelpers([TaxHelper], null, [], ["System"], cts.Token);
+        var set = await registry.GetOrBuildHelpersAsync([TaxHelper], null, [], ["System"], cts.Token);
 
         set.Namespaces.ShouldContain("MyHelpers");
         evaluator.ObservedToken.CanBeCanceled.ShouldBeFalse();
@@ -373,18 +371,63 @@ public class SandboxedScriptingTests
         using var cts = new CancellationTokenSource();
         cts.Cancel();
 
+        // The entry gate throws synchronously (before any task is created) — pinned deliberately.
         Should.Throw<OperationCanceledException>(() =>
         {
-            registry.GetOrBuildHelpers([TaxHelper], null, [], ["System"], cts.Token);
+            _ = registry.GetOrBuildHelpersAsync([TaxHelper], null, [], ["System"], cts.Token);
         });
 
         evaluator.Attempts.ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task HelperRegistry_DisposedWhileABuildIsInFlight_CompletesTheBuildWithoutThrowing()
+    {
+        // With the Task-based cache a build can still be running when Dispose enumerates the
+        // entries (tests dispose actively). Dispose must neither throw nor block on it; the
+        // in-flight build completes normally and its context is unloaded by the continuation.
+        var sandbox = EnabledSandbox();
+        var evaluator = new GatedEvaluator(new CSharpEvaluator(sandbox));
+        var registry = new ScriptHelperRegistry(evaluator, sandbox);
+
+        var pending = registry.GetOrBuildHelpersAsync([TaxHelper], null, [], ["System"]);
+        evaluator.Entered.Wait(TimeSpan.FromSeconds(10)).ShouldBeTrue("build never started");
+
+        Should.NotThrow(() => registry.Dispose());
+
+        evaluator.Release.Set();
+        var set = await pending;
+        set.Namespaces.ShouldContain("MyHelpers");
     }
 
     private static HelperSource TaxHelper => new(
         "tax-calculator", "1.0.0",
         "namespace MyHelpers { public static class TaxCalc { public static int Tax(int x) => x / 10; } }",
         "tax-calculator.csx");
+
+    /// <summary>
+    /// Delegating evaluator that signals when a helper compile has started and holds it until the
+    /// test releases it — used to pin Dispose-during-in-flight-build behaviour.
+    /// </summary>
+    private sealed class GatedEvaluator(IEvaluator inner) : DelegatingEvaluator(inner)
+    {
+        public ManualResetEventSlim Entered { get; } = new(false);
+        public ManualResetEventSlim Release { get; } = new(false);
+
+        public override CompiledHelpers CompileHelpers(
+            IReadOnlyList<(string Path, string Code)> sources,
+            AssemblyLoadContext loadContext,
+            IEnumerable<MetadataReference>? extraReferences,
+            IEnumerable<string>? usingDirectives,
+            IReadOnlyList<string>? sandboxGrant,
+            CancellationToken cancellationToken)
+        {
+            Entered.Set();
+            Release.Wait(TimeSpan.FromSeconds(10));
+            return Inner.CompileHelpers(
+                sources, loadContext, extraReferences, usingDirectives, sandboxGrant, cancellationToken);
+        }
+    }
 
     /// <summary>
     /// Delegating evaluator that simulates a cancelled first helper compilation and then succeeds,
@@ -443,16 +486,30 @@ public class SandboxedScriptingTests
 
         public int Attempts { get; protected set; }
 
-        public Task<T> CompileToInstanceAsync<T>(
+        public int CachedTypeCount => Inner.CachedTypeCount;
+
+        public Task<EvaluatorCompilation<T>> CompileToInstanceAsync<T>(
             string code,
             IScriptServices? services = null,
             IEnumerable<MetadataReference>? extraReferences = null,
             IEnumerable<string>? usingDirectives = null,
             CancellationToken cancellationToken = default,
             AssemblyLoadContext? loadContext = null,
-            IReadOnlyList<string>? sandboxGrant = null)
+            IReadOnlyList<string>? sandboxGrant = null,
+            string? precomputedCacheKey = null)
             => Inner.CompileToInstanceAsync<T>(
-                code, services, extraReferences, usingDirectives, cancellationToken, loadContext, sandboxGrant);
+                code, services, extraReferences, usingDirectives, cancellationToken, loadContext, sandboxGrant,
+                precomputedCacheKey);
+
+        public string BuildProfile(
+            IEnumerable<MetadataReference>? extraReferences,
+            IEnumerable<string>? usingDirectives,
+            IReadOnlyList<string>? sandboxGrant,
+            AssemblyLoadContext? loadContext)
+            => Inner.BuildProfile(extraReferences, usingDirectives, sandboxGrant, loadContext);
+
+        public string ComputeCacheKey(string sourceHashHex, Type targetType, string profile)
+            => Inner.ComputeCacheKey(sourceHashHex, targetType, profile);
 
         // Declared without default values: defaults are not part of the signature, so this still
         // implements IEvaluator.CompileHelpers, and every call site here passes all arguments.

@@ -52,8 +52,68 @@ public class JsonData : ValueObject
         }
     }
     
+    // Boxed deliberately: JsonElement is a multi-word struct, so a Nullable<JsonElement> field
+    // write is NOT atomic — a torn read would be possible when parallel COW branches race the
+    // first access on a SHARED JsonData (snapshots share rows since Katman 2). An object-reference
+    // publish is atomic; the unbox on read is negligible next to the parse it replaces.
+    private object? _jsonElementBoxed;
+
+    /// <summary>
+    /// Parsed once per instance (Json is assigned only in constructors). Benign race: concurrent
+    /// first accesses may parse twice; both results are equivalent standalone elements and the
+    /// last (reference-atomic) publish wins — no torn value is ever observable.
+    /// </summary>
     public JsonElement JsonElement =>
-        JsonSerializer.Deserialize<JsonElement>(Json, JsonSerializerConstants.JsonOptions)!;
+        (JsonElement)(_jsonElementBoxed ??=
+            JsonSerializer.Deserialize<JsonElement>(Json, JsonSerializerConstants.JsonOptions)!);
+
+    /// <summary>
+    /// Creates a JsonData from an already-materialized element: the raw JSON text is captured for
+    /// storage, and the element (cloned, so it is detached from any caller-owned document) is seeded
+    /// into the lazy cache — the first <see cref="JsonElement"/> read does not re-parse the payload.
+    /// Use on hot paths that hold an element and whose consumers read it back
+    /// (e.g. the task-output delta feeding the instance-data append).
+    /// </summary>
+    public static JsonData FromElement(JsonElement element)
+    {
+        // The public element factory must detach from a caller-owned JsonDocument, but it does not
+        // need to run the JsonElement through JsonSerializer again. Clone once for lifetime safety
+        // and take the already-serialized text directly from that clone.
+        var owned = element.Clone();
+        var data = new JsonData(owned.GetRawText());
+        data._jsonElementBoxed = owned;
+        return data;
+    }
+
+    /// <summary>
+    /// Serializes an object into the two representations required by JsonData in one materialization
+    /// operation: an owned JsonElement for downstream merge/validation and its raw JSON text for
+    /// persistence. Unlike <see cref="FromElement"/>, ownership is established inside this method,
+    /// so no defensive JsonElement clone is required.
+    /// </summary>
+    public static JsonData FromMaterializedObject(
+        object value,
+        JsonSerializerOptions? options = null)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+
+        var element = JsonSerializer.SerializeToElement(
+            value,
+            options ?? JsonSerializerConstants.JsonOptions);
+        var data = new JsonData(element.GetRawText());
+        data._jsonElementBoxed = element;
+        return data;
+    }
+
+    /// <summary>
+    /// Canonicalizer çıktısı için: json ZATEN kanonik/normalize — NormalizedJson yeniden hesaplanmaz.
+    /// </summary>
+    internal static JsonData FromNormalized(string normalizedJson)
+    {
+        var data = new JsonData(normalizedJson);
+        data._normalizedJson = normalizedJson;
+        return data;
+    }
 
     public JsonData Merge(JsonData newData)
     {

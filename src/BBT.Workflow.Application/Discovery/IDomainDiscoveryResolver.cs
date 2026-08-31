@@ -4,14 +4,13 @@ namespace BBT.Workflow.Discovery;
 
 /// <summary>
 /// Service responsible for resolving domain endpoints from service discovery.
-/// Provides caching mechanisms for endpoint resolution with ETag validation.
+/// Every resolution queries the registry directly - there is no cache, so discovery is
+/// authoritative and a moved or de-registered endpoint is never masked behind a stale entry.
 /// </summary>
 public interface IDomainDiscoveryResolver
 {
     /// <summary>
-    /// Resolves the endpoint for a domain from service discovery cache.
-    /// Performs ETag validation on cached entries.
-    /// If domain not found in cache, queries registry directly.
+    /// Resolves the endpoint for a domain by querying the service discovery registry directly.
     /// </summary>
     /// <param name="domain">The domain name to resolve.</param>
     /// <param name="preferredKind">The preferred endpoint kind (URL or Dapr). Default is URL.</param>
@@ -21,14 +20,5 @@ public interface IDomainDiscoveryResolver
         string domain,
         EndpointKind preferredKind = EndpointKind.Url,
         CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Refreshes the bulk domain cache from service discovery.
-    /// Fetches all active domains with pagination support.
-    /// Uses distributed lock to prevent concurrent updates from multiple pods.
-    /// </summary>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>A task representing the asynchronous operation.</returns>
-    Task RefreshBulkCacheAsync(CancellationToken cancellationToken = default);
 }
 

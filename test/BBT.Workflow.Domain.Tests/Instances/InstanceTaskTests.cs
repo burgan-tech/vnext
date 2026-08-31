@@ -18,7 +18,7 @@ public class InstanceTaskTests : DomainTestBase<DomainEntryPoint>
         var taskId = "test-task";
 
         // Act
-        var instanceTask = new InstanceTask(id, transitionId, taskId);
+        var instanceTask = new InstanceTask(id, transitionId, taskId, TaskTrigger.OnExecute, 1);
 
         // Assert
         Assert.Equal(id, instanceTask.Id);
@@ -39,7 +39,7 @@ public class InstanceTaskTests : DomainTestBase<DomainEntryPoint>
         var before = DateTime.UtcNow.AddSeconds(-1);
 
         // Act
-        var instanceTask = new InstanceTask(Guid.NewGuid(), Guid.NewGuid(), "task-id");
+        var instanceTask = new InstanceTask(Guid.NewGuid(), Guid.NewGuid(), "task-id", TaskTrigger.OnExecute, 1);
         var after = DateTime.UtcNow.AddSeconds(1);
 
         // Assert
@@ -50,7 +50,7 @@ public class InstanceTaskTests : DomainTestBase<DomainEntryPoint>
     public void Constructor_ShouldInitializeRequestAndResponseAsEmpty()
     {
         // Arrange & Act
-        var instanceTask = new InstanceTask(Guid.NewGuid(), Guid.NewGuid(), "task-id");
+        var instanceTask = new InstanceTask(Guid.NewGuid(), Guid.NewGuid(), "task-id", TaskTrigger.OnExecute, 1);
 
         // Assert
         Assert.NotNull(instanceTask.Request);
@@ -64,7 +64,7 @@ public class InstanceTaskTests : DomainTestBase<DomainEntryPoint>
     public void Completed_ShouldSetStatusToCompleted()
     {
         // Arrange
-        var instanceTask = new InstanceTask(Guid.NewGuid(), Guid.NewGuid(), "task-id");
+        var instanceTask = new InstanceTask(Guid.NewGuid(), Guid.NewGuid(), "task-id", TaskTrigger.OnExecute, 1);
         var response = JsonData.CreateFrom("{\"result\":\"success\"}");
 
         // Act
@@ -78,7 +78,7 @@ public class InstanceTaskTests : DomainTestBase<DomainEntryPoint>
     public void Completed_ShouldSetResponseData()
     {
         // Arrange
-        var instanceTask = new InstanceTask(Guid.NewGuid(), Guid.NewGuid(), "task-id");
+        var instanceTask = new InstanceTask(Guid.NewGuid(), Guid.NewGuid(), "task-id", TaskTrigger.OnExecute, 1);
         var response = JsonData.CreateFrom("{\"result\":\"success\"}");
 
         // Act
@@ -93,7 +93,7 @@ public class InstanceTaskTests : DomainTestBase<DomainEntryPoint>
     public void Completed_ShouldSetFinishedAtToCurrentTime()
     {
         // Arrange
-        var instanceTask = new InstanceTask(Guid.NewGuid(), Guid.NewGuid(), "task-id");
+        var instanceTask = new InstanceTask(Guid.NewGuid(), Guid.NewGuid(), "task-id", TaskTrigger.OnExecute, 1);
         var response = JsonData.CreateFrom("{}");
         var before = DateTime.UtcNow.AddSeconds(-1);
 
@@ -110,7 +110,7 @@ public class InstanceTaskTests : DomainTestBase<DomainEntryPoint>
     public void Faulted_ShouldSetStatusToFaulted()
     {
         // Arrange
-        var instanceTask = new InstanceTask(Guid.NewGuid(), Guid.NewGuid(), "task-id");
+        var instanceTask = new InstanceTask(Guid.NewGuid(), Guid.NewGuid(), "task-id", TaskTrigger.OnExecute, 1);
         var reason = "Task execution failed";
 
         // Act
@@ -124,7 +124,7 @@ public class InstanceTaskTests : DomainTestBase<DomainEntryPoint>
     public void Faulted_ShouldSetResponseWithErrorMessage()
     {
         // Arrange
-        var instanceTask = new InstanceTask(Guid.NewGuid(), Guid.NewGuid(), "task-id");
+        var instanceTask = new InstanceTask(Guid.NewGuid(), Guid.NewGuid(), "task-id", TaskTrigger.OnExecute, 1);
         var reason = "Task execution failed";
 
         // Act
@@ -140,7 +140,7 @@ public class InstanceTaskTests : DomainTestBase<DomainEntryPoint>
     public void Faulted_ShouldSetFinishedAtToCurrentTime()
     {
         // Arrange
-        var instanceTask = new InstanceTask(Guid.NewGuid(), Guid.NewGuid(), "task-id");
+        var instanceTask = new InstanceTask(Guid.NewGuid(), Guid.NewGuid(), "task-id", TaskTrigger.OnExecute, 1);
         var before = DateTime.UtcNow.AddSeconds(-1);
 
         // Act
@@ -156,7 +156,7 @@ public class InstanceTaskTests : DomainTestBase<DomainEntryPoint>
     public void Status_ShouldBeWaiting_Initially()
     {
         // Arrange & Act
-        var instanceTask = new InstanceTask(Guid.NewGuid(), Guid.NewGuid(), "task-id");
+        var instanceTask = new InstanceTask(Guid.NewGuid(), Guid.NewGuid(), "task-id", TaskTrigger.OnExecute, 1);
 
         // Assert
         Assert.Equal(TaskStatus.Waiting, instanceTask.Status);
@@ -166,7 +166,7 @@ public class InstanceTaskTests : DomainTestBase<DomainEntryPoint>
     public void Duration_ShouldBeNull_BeforeCompletion()
     {
         // Arrange & Act
-        var instanceTask = new InstanceTask(Guid.NewGuid(), Guid.NewGuid(), "task-id");
+        var instanceTask = new InstanceTask(Guid.NewGuid(), Guid.NewGuid(), "task-id", TaskTrigger.OnExecute, 1);
 
         // Assert
         Assert.Null(instanceTask.Duration);
@@ -176,7 +176,7 @@ public class InstanceTaskTests : DomainTestBase<DomainEntryPoint>
     public void FinishedAt_ShouldBeNull_BeforeCompletion()
     {
         // Arrange & Act
-        var instanceTask = new InstanceTask(Guid.NewGuid(), Guid.NewGuid(), "task-id");
+        var instanceTask = new InstanceTask(Guid.NewGuid(), Guid.NewGuid(), "task-id", TaskTrigger.OnExecute, 1);
 
         // Assert
         Assert.Null(instanceTask.FinishedAt);
@@ -186,7 +186,7 @@ public class InstanceTaskTests : DomainTestBase<DomainEntryPoint>
     public void FaultedTaskId_ShouldBeNull_Initially()
     {
         // Arrange & Act
-        var instanceTask = new InstanceTask(Guid.NewGuid(), Guid.NewGuid(), "task-id");
+        var instanceTask = new InstanceTask(Guid.NewGuid(), Guid.NewGuid(), "task-id", TaskTrigger.OnExecute, 1);
 
         // Assert
         Assert.Null(instanceTask.FaultedTaskId);
@@ -196,7 +196,7 @@ public class InstanceTaskTests : DomainTestBase<DomainEntryPoint>
     public void Completed_WithComplexResponse_ShouldStoreCorrectly()
     {
         // Arrange
-        var instanceTask = new InstanceTask(Guid.NewGuid(), Guid.NewGuid(), "task-id");
+        var instanceTask = new InstanceTask(Guid.NewGuid(), Guid.NewGuid(), "task-id", TaskTrigger.OnExecute, 1);
         var response = JsonData.CreateFrom(@"
         {
             ""status"": ""success"",
@@ -219,7 +219,7 @@ public class InstanceTaskTests : DomainTestBase<DomainEntryPoint>
     public void Faulted_WithSpecialCharacters_ShouldEscapeCorrectly()
     {
         // Arrange
-        var instanceTask = new InstanceTask(Guid.NewGuid(), Guid.NewGuid(), "task-id");
+        var instanceTask = new InstanceTask(Guid.NewGuid(), Guid.NewGuid(), "task-id", TaskTrigger.OnExecute, 1);
         var reason = "Task failed: \"Unexpected error\" with 'quotes'";
 
         // Act
@@ -235,7 +235,7 @@ public class InstanceTaskTests : DomainTestBase<DomainEntryPoint>
     public void Completed_ShouldBeIdempotent()
     {
         // Arrange
-        var instanceTask = new InstanceTask(Guid.NewGuid(), Guid.NewGuid(), "task-id");
+        var instanceTask = new InstanceTask(Guid.NewGuid(), Guid.NewGuid(), "task-id", TaskTrigger.OnExecute, 1);
         var response1 = JsonData.CreateFrom("{\"result\":\"first\"}");
         var response2 = JsonData.CreateFrom("{\"result\":\"second\"}");
 
@@ -260,7 +260,7 @@ public class InstanceTaskTests : DomainTestBase<DomainEntryPoint>
     public void Faulted_ShouldBeIdempotent()
     {
         // Arrange
-        var instanceTask = new InstanceTask(Guid.NewGuid(), Guid.NewGuid(), "task-id");
+        var instanceTask = new InstanceTask(Guid.NewGuid(), Guid.NewGuid(), "task-id", TaskTrigger.OnExecute, 1);
 
         // Act
         instanceTask.Faulted("error 1");
@@ -283,7 +283,7 @@ public class InstanceTaskTests : DomainTestBase<DomainEntryPoint>
     public void Completed_AfterFaulted_ShouldChangeStatus()
     {
         // Arrange
-        var instanceTask = new InstanceTask(Guid.NewGuid(), Guid.NewGuid(), "task-id");
+        var instanceTask = new InstanceTask(Guid.NewGuid(), Guid.NewGuid(), "task-id", TaskTrigger.OnExecute, 1);
 
         // Act
         instanceTask.Faulted("error");
@@ -300,7 +300,7 @@ public class InstanceTaskTests : DomainTestBase<DomainEntryPoint>
     public void Faulted_AfterCompleted_ShouldChangeStatus()
     {
         // Arrange
-        var instanceTask = new InstanceTask(Guid.NewGuid(), Guid.NewGuid(), "task-id");
+        var instanceTask = new InstanceTask(Guid.NewGuid(), Guid.NewGuid(), "task-id", TaskTrigger.OnExecute, 1);
 
         // Act
         instanceTask.Completed(JsonData.CreateFrom("{\"result\":\"success\"}"));
@@ -317,7 +317,7 @@ public class InstanceTaskTests : DomainTestBase<DomainEntryPoint>
     public void Completed_WithEmptyResponse_ShouldWork()
     {
         // Arrange
-        var instanceTask = new InstanceTask(Guid.NewGuid(), Guid.NewGuid(), "task-id");
+        var instanceTask = new InstanceTask(Guid.NewGuid(), Guid.NewGuid(), "task-id", TaskTrigger.OnExecute, 1);
         var response = JsonData.CreateFrom("{}");
 
         // Act
@@ -332,7 +332,7 @@ public class InstanceTaskTests : DomainTestBase<DomainEntryPoint>
     public void Faulted_WithEmptyReason_ShouldWork()
     {
         // Arrange
-        var instanceTask = new InstanceTask(Guid.NewGuid(), Guid.NewGuid(), "task-id");
+        var instanceTask = new InstanceTask(Guid.NewGuid(), Guid.NewGuid(), "task-id", TaskTrigger.OnExecute, 1);
 
         // Act
         instanceTask.Faulted(string.Empty);

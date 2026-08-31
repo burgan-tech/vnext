@@ -55,7 +55,7 @@ public sealed class SoapTaskInvoker(
         SoapTaskBinding binding,
         CancellationToken cancellationToken)
     {
-        var stopwatch = Stopwatch.StartNew();
+        var startTimestamp = Stopwatch.GetTimestamp();
 
         try
         {
@@ -99,7 +99,6 @@ public sealed class SoapTaskInvoker(
 
             var responseHeaders = InvokerHelpers.MergeHeaders(response.Headers, response.Content.Headers);
             var content = await response.Content.ReadAsStringAsync(cancellationToken);
-            stopwatch.Stop();
 
             var (parsedData, isSoapFault, faultCode, faultString) = TryParseSoapResponse(content, isSoap12);
 
@@ -126,7 +125,7 @@ public sealed class SoapTaskInvoker(
                     data: parsedData,
                     body: content,
                     statusCode: (int)response.StatusCode,
-                    executionDurationMs: stopwatch.ElapsedMilliseconds,
+                    executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
                     taskType: TaskType,
                     headers: responseHeaders,
                     metadata: metadata)
@@ -136,7 +135,7 @@ public sealed class SoapTaskInvoker(
                         : $"HTTP {response.StatusCode}: {response.ReasonPhrase}",
                     statusCode: (int)response.StatusCode,
                     body: content,
-                    executionDurationMs: stopwatch.ElapsedMilliseconds,
+                    executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
                     taskType: TaskType,
                     headers: responseHeaders,
                     data: parsedData,
@@ -144,13 +143,12 @@ public sealed class SoapTaskInvoker(
         }
         catch (TaskCanceledException ex) when (cancellationToken.IsCancellationRequested)
         {
-            stopwatch.Stop();
             _metrics.RecordTaskExecution(TaskType, "cancelled");
             logger.LogWarning("SOAP request was cancelled for task {TaskKey} - URL: {Url}", taskKey, binding.Url);
 
             return TaskInvocationResult.Failure(
                 error: "SOAP request was cancelled",
-                executionDurationMs: stopwatch.ElapsedMilliseconds,
+                executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
                 taskType: TaskType,
                 metadata: new Dictionary<string, object>
                 {
@@ -162,13 +160,12 @@ public sealed class SoapTaskInvoker(
         }
         catch (HttpRequestException ex)
         {
-            stopwatch.Stop();
             _metrics.RecordTaskExecution(TaskType, "failure");
             logger.LogError(ex, "SOAP task invocation failed for {TaskKey} - URL: {Url}", taskKey, binding.Url);
 
             return TaskInvocationResult.Failure(
                 error: ex.Message,
-                executionDurationMs: stopwatch.ElapsedMilliseconds,
+                executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
                 taskType: TaskType,
                 metadata: new Dictionary<string, object>
                 {
@@ -180,13 +177,12 @@ public sealed class SoapTaskInvoker(
         }
         catch (Exception ex)
         {
-            stopwatch.Stop();
             _metrics.RecordTaskExecution(TaskType, "failure");
             logger.LogError(ex, "Unexpected error during SOAP task invocation for {TaskKey}", taskKey);
 
             return TaskInvocationResult.Failure(
                 error: ex.Message,
-                executionDurationMs: stopwatch.ElapsedMilliseconds,
+                executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
                 taskType: TaskType,
                 metadata: new Dictionary<string, object>
                 {

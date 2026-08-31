@@ -41,8 +41,15 @@ public sealed class GetInstancesTask : WorkflowTask
     public int PageSize { get; private set; } = 10;
 
     /// <summary>
-    /// Sort field and direction (e.g., "-CreatedAt" for descending)
+    /// OrderBy JSON: <c>{"field":"createdAt","direction":"desc"}</c>, or
+    /// <c>{"fields":[{"field":"status","direction":"asc"},…]}</c> for multiple keys.
     /// </summary>
+    /// <remarks>
+    /// This previously documented a <c>"-CreatedAt"</c> shorthand. The runtime has never parsed it:
+    /// <c>GraphQLFilterParser.ParseOrderBy</c> returned null and the query silently fell back to
+    /// <c>CreatedAt DESC</c>. It is now rejected instead of silently ignored, so any definition
+    /// carrying the shorthand must be migrated to the JSON form above.
+    /// </remarks>
     public string? Sort { get; private set; }
 
     /// <summary>
