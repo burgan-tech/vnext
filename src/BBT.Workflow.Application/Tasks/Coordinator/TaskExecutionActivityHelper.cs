@@ -49,6 +49,16 @@ public static class TaskExecutionActivityHelper
     public const string OperationResolve = "Task.Resolve";
 
     /// <summary>
+    /// Operation name for the journal-row creation/probe persist.
+    /// </summary>
+    public const string OperationJournalCreate = "Task.Journal.Create";
+
+    /// <summary>
+    /// Operation name for the journal-row completion persist.
+    /// </summary>
+    public const string OperationJournalComplete = "Task.Journal.Complete";
+
+    /// <summary>
     /// Starts the span for a trigger-family task's LOCAL (same-domain, in-process) invocation.
     /// <para>
     /// NOT gated on verbose tracing: the remote branch of these tasks produces a Dapr/HTTP client
