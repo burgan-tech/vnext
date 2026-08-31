@@ -1,7 +1,7 @@
 <Project>
   <PropertyGroup>
     <LangVersion>latest</LangVersion>
-    <Version>0.0.85</Version>
+    <Version>0.0.86</Version>
     <!-- Worker-SDK hosts (inbox/outbox/db-migrator) default to Workstation GC, unlike the Web-SDK
          hosts; force Server GC everywhere so throughput-oriented GC applies to all services and
          benchmarks (which already set it) measure the GC production actually runs. -->
