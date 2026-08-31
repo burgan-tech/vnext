@@ -7,7 +7,6 @@ using BBT.Aether.MultiSchema;
 using BBT.Aether.Results;
 using BBT.Workflow.Caching;
 using BBT.Workflow.Definitions;
-using BBT.Workflow.Monitoring;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting.Evaluators;
 using BBT.Workflow.Scripting.Functions;
@@ -42,7 +41,6 @@ public class ScriptEngineKeyMemoTests
         return new ScriptEngine(
             evaluator,
             Mock.Of<IScriptServices>(),
-            Mock.Of<IWorkflowMetrics>(),
             helperRegistry,
             new ScriptHelpersOptions { Enabled = helpersEnabled },
             serviceProvider,
@@ -187,7 +185,6 @@ public class ScriptEngineKeyMemoTests
         var engine = new ScriptEngine(
             evaluatorMock.Object,
             Mock.Of<IScriptServices>(),
-            Mock.Of<IWorkflowMetrics>(),
             Mock.Of<IScriptHelperRegistry>(),
             new ScriptHelpersOptions { Enabled = false },
             new ServiceCollection().BuildServiceProvider(),

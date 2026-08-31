@@ -30,7 +30,7 @@ public sealed class ResourceLockStep(
     {
         var lockDef = context.Transition?.ResourceLock;
         if (lockDef is null)
-            return Result<StepOutcome>.Ok(StepOutcome.Continue());
+            return Result<StepOutcome>.Ok(StepOutcome.ContinueNoWork());
 
         var keyResult = await ResolveKeyAsync(context, lockDef, cancellationToken);
         if (!keyResult.IsSuccess)
@@ -56,6 +56,8 @@ public sealed class ResourceLockStep(
     {
         try
         {
+            using var scriptActivity = ScriptActivityHelper.StartExecuteActivity("lockKey");
+
             var mapping = await scriptEngine.CompileToInstanceAsync<ITransitionMapping>(
                 lockDef.KeyExpression,
                 flowScripts: context.Workflow.Scripts,

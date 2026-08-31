@@ -2,13 +2,12 @@ using BBT.Aether.MultiSchema;
 using BBT.Workflow.Caching;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Logging;
-using BBT.Workflow.Monitoring;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting.Evaluators;
 using BBT.Workflow.Scripting.Functions;
 using BBT.Workflow.Scripting.Helpers;
+using BBT.Workflow.Scripting.Sandbox;
 using Microsoft.CodeAnalysis;
-using Microsoft.CodeAnalysis.Scripting;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using System.Collections.Concurrent;
@@ -39,7 +38,6 @@ namespace BBT.Workflow.Scripting;
 public sealed class ScriptEngine(
     IEvaluator evaluator,
     IScriptServices scriptServices,
-    IWorkflowMetrics workflowMetrics,
     IScriptHelperRegistry helperRegistry,
     ScriptHelpersOptions helpersOptions,
     IServiceProvider serviceProvider,
@@ -313,7 +311,7 @@ public sealed class ScriptEngine(
     /// mid-flight by any single caller's token.
     /// </param>
     /// <returns>A task containing the compiled instance of type T</returns>
-    /// <exception cref="CompilationErrorException">Thrown when the code contains compilation errors</exception>
+    /// <exception cref="Sandbox.ScriptCompilationException">Thrown when the code contains compilation errors</exception>
     /// <exception cref="InvalidOperationException">Thrown when the code cannot be compiled to the target type</exception>
     /// <exception cref="OperationCanceledException">Thrown when <paramref name="cancellationToken"/> is already cancelled at entry</exception>
     public Task<T> CompileToInstanceAsync<T>(
@@ -373,11 +371,13 @@ public sealed class ScriptEngine(
                 var key = _evaluator.ComputeCacheKey(sourceHash, typeof(T), profile);
 
                 return await CompileCoreAsync<T>(
-                    body, null, null, null, grant, cancellationToken, precomputedCacheKey: key);
+                    body, null, null, null, grant, cancellationToken, precomputedCacheKey: key,
+                    scriptIdentity: scriptCode.TraceIdentity);
             }
 
             return await CompileCoreAsync<T>(
-                body, extraReferences, usingDirectives, null, grant, cancellationToken);
+                body, extraReferences, usingDirectives, null, grant, cancellationToken,
+                scriptIdentity: scriptCode.TraceIdentity);
         }
 
         if (!_helpersOptions.Enabled)
@@ -418,6 +418,8 @@ public sealed class ScriptEngine(
         }
         else
         {
+            using var resolveActivity = ScriptActivityHelper.StartResolveHelpersActivity(effective.Helpers!.Count);
+
             helperSources = await ResolveHelperSourcesAsync(effective.Helpers!, cancellationToken);
 
             // Build the referenced helper set first (sandboxed, cached by content hash), referencing the
@@ -462,11 +464,13 @@ public sealed class ScriptEngine(
             var key = _evaluator.ComputeCacheKey(sourceHash, typeof(T), helperProfile);
 
             return await CompileCoreAsync<T>(
-                body, refs, usings, helperSet.LoadContext, grant, cancellationToken, precomputedCacheKey: key);
+                body, refs, usings, helperSet.LoadContext, grant, cancellationToken, precomputedCacheKey: key,
+                scriptIdentity: scriptCode.TraceIdentity);
         }
 
         return await CompileCoreAsync<T>(
-            body, refs, usings, helperSet.LoadContext, grant, cancellationToken);
+            body, refs, usings, helperSet.LoadContext, grant, cancellationToken,
+            scriptIdentity: scriptCode.TraceIdentity);
     }
 
     /// <inheritdoc />
@@ -574,9 +578,19 @@ public sealed class ScriptEngine(
         AssemblyLoadContext? loadContext,
         IReadOnlyList<string>? sandboxGrant,
         CancellationToken cancellationToken,
-        string? precomputedCacheKey = null)
+        string? precomputedCacheKey = null,
+        string? scriptIdentity = null)
     {
-        var stopwatch = Stopwatch.StartNew();
+        // MUST be captured before starting the Script.Compile span below: that span is started
+        // with an EXPLICIT parent context (Activity.Current?.Context), so its own Activity.Parent
+        // is null and a lazy re-resolve of the target from Activity.Current afterward would never
+        // walk past it to the task-key-carrying ancestor — see ScriptCompileTelemetry's class
+        // remarks on capture-before-span ordering. Every Record call below threads this same
+        // captured value through explicitly so the accumulator keeps landing on the task span
+        // regardless of what becomes Activity.Current while this method runs.
+        var telemetryTarget = ScriptCompileTelemetry.FindTargetActivity();
+        using var compileActivity = ScriptActivityHelper.StartCompileActivity(scriptIdentity);
+        var startTimestamp = Stopwatch.GetTimestamp();
         const string scriptType = "compilation";
         const string language = "csharp";
 
@@ -598,79 +612,86 @@ public sealed class ScriptEngine(
                 MergeDefaultGrant(sandboxGrant),
                 precomputedCacheKey);
 
-            stopwatch.Stop();
-            var durationSeconds = stopwatch.Elapsed.TotalSeconds;
-            var cache = compilation.Compiled ? "miss" : "hit";
+            // Three outcomes, not two: a single-flight WAITER's wall time is someone else's compile,
+            // so labelling it "hit" made hit latency look like multi-second compile time during cold
+            // bursts. Misses report the evaluator's own emit duration (clean compile time, free of
+            // Task.Run queueing and await overhead); waits and hits report their observed wall time.
+            var cache = compilation.Compiled ? "miss" : compilation.Waited ? "wait" : "hit";
+            var reportedDuration = compilation.Compiled ? compilation.CompileDuration : Stopwatch.GetElapsedTime(startTimestamp);
+            var durationSeconds = reportedDuration.TotalSeconds;
+            ScriptActivityHelper.SetCompileResult(compileActivity, compilation.Compiled, "success");
 
             // DEPRECATED (vnext-meta/deprecations.json): script_executions_total keeps its historical
             // compile-path semantics until consumers migrate — do not remove or repurpose here.
-            workflowMetrics.RecordScriptExecution(scriptType, language, "success");
-            workflowMetrics.RecordScriptCompilation(cache, "success");
-            workflowMetrics.RecordScriptCompilationDuration(scriptType, language, "success", durationSeconds, cache);
-            ScriptCompileTelemetry.Record(compilation.Compiled, stopwatch.Elapsed.TotalMilliseconds, "success");
+            ScriptCompileTelemetry.Record(compilation.Compiled, reportedDuration.TotalMilliseconds, "success", telemetryTarget);
             // The type cache never evicts, so its size only changes on a miss; skipping the gauge on
             // hits avoids ConcurrentDictionary.Count's all-stripe lock on the hot path.
             if (compilation.Compiled)
             {
-                workflowMetrics.SetCacheEntries("script-types", _evaluator.CachedTypeCount);
+
+                // Script identity, tagged only on the cold path (cache miss) so the hit hot path
+                // stays allocation-free: the evaluator cache key when the caller precomputed one,
+                // else a SHA-256 prefix of the source good enough to correlate spans without
+                // hashing the full source into the tag value.
+                var scriptKey = precomputedCacheKey ?? Convert.ToHexString(
+                    SHA256.HashData(Encoding.UTF8.GetBytes(code)))[..16];
+                compileActivity?.SetTag(TelemetryConstants.TagNames.ScriptKey, scriptKey);
             }
 
             return compilation.Instance;
         }
-        catch (CompilationErrorException ex)
+        catch (ScriptSandboxViolationException ex)
         {
-            stopwatch.Stop();
-            var durationSeconds = stopwatch.Elapsed.TotalSeconds;
+            var durationSeconds = Stopwatch.GetElapsedTime(startTimestamp).TotalSeconds;
 
-            // Record compilation error
-            workflowMetrics.RecordScriptExecution(scriptType, language, "compilation_error");
-            workflowMetrics.RecordScriptCompilation("miss", "compilation_error");
-            workflowMetrics.RecordScriptCompilationError(scriptType, language, ex.GetType().Name);
-            workflowMetrics.RecordScriptCompilationDuration(scriptType, language, "compilation_error", durationSeconds, "miss");
-            ScriptCompileTelemetry.Record(cacheMiss: true, stopwatch.Elapsed.TotalMilliseconds, "compilation_error");
+            // The code is FORBIDDEN, not broken — a distinct label so a sandbox-policy problem is
+            // never diagnosed as an authoring error (or vice versa).
+            ScriptCompileTelemetry.Record(cacheMiss: true, Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds, "sandbox_violation");
+            _logger.ScriptSandboxViolation(ex.Message);
+
+            throw;
+        }
+        catch (ScriptCompilationException ex)
+        {
+            var durationSeconds = Stopwatch.GetElapsedTime(startTimestamp).TotalSeconds;
+
+            // Record compilation error. (The former catch here was CompilationErrorException from
+            // the Roslyn scripting API — dead code, since the evaluator drives CSharpCompilation
+            // directly and throws its own typed exception.)
+            ScriptCompileTelemetry.Record(cacheMiss: true, Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds, "compilation_error", telemetryTarget);
+            ScriptActivityHelper.SetCompileResult(compileActivity, cacheMiss: true, "compilation_error");
 
             throw;
         }
         catch (InvalidOperationException ex)
         {
-            stopwatch.Stop();
-            var durationSeconds = stopwatch.Elapsed.TotalSeconds;
+            var durationSeconds = Stopwatch.GetElapsedTime(startTimestamp).TotalSeconds;
 
             // Record invalid operation as compilation error
-            workflowMetrics.RecordScriptExecution(scriptType, language, "invalid_operation");
-            workflowMetrics.RecordScriptCompilation("miss", "invalid_operation");
-            workflowMetrics.RecordScriptCompilationError(scriptType, language, ex.GetType().Name);
-            workflowMetrics.RecordScriptCompilationDuration(scriptType, language, "invalid_operation", durationSeconds, "miss");
-            ScriptCompileTelemetry.Record(cacheMiss: true, stopwatch.Elapsed.TotalMilliseconds, "invalid_operation");
+            ScriptCompileTelemetry.Record(cacheMiss: true, Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds, "invalid_operation", telemetryTarget);
+            ScriptActivityHelper.SetCompileResult(compileActivity, cacheMiss: true, "invalid_operation");
 
             throw;
         }
         catch (OperationCanceledException)
         {
-            stopwatch.Stop();
-            var durationSeconds = stopwatch.Elapsed.TotalSeconds;
+            var durationSeconds = Stopwatch.GetElapsedTime(startTimestamp).TotalSeconds;
 
             // Record cancelled compilation
-            workflowMetrics.RecordScriptExecution(scriptType, language, "cancelled");
             // A failing call by definition did not come from the cache; OperationCanceledException can
             // fire before lookup, but counting it as a miss is an accepted simplification.
-            workflowMetrics.RecordScriptCompilation("miss", "cancelled");
-            workflowMetrics.RecordScriptCompilationDuration(scriptType, language, "cancelled", durationSeconds, "miss");
-            ScriptCompileTelemetry.Record(cacheMiss: true, stopwatch.Elapsed.TotalMilliseconds, "cancelled");
+            ScriptCompileTelemetry.Record(cacheMiss: true, Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds, "cancelled", telemetryTarget);
+            ScriptActivityHelper.SetCompileResult(compileActivity, cacheMiss: true, "cancelled");
 
             throw;
         }
         catch (Exception ex)
         {
-            stopwatch.Stop();
-            var durationSeconds = stopwatch.Elapsed.TotalSeconds;
+            var durationSeconds = Stopwatch.GetElapsedTime(startTimestamp).TotalSeconds;
 
             // Record unexpected compilation error
-            workflowMetrics.RecordScriptExecution(scriptType, language, "unexpected_error");
-            workflowMetrics.RecordScriptCompilation("miss", "unexpected_error");
-            workflowMetrics.RecordScriptCompilationError(scriptType, language, ex.GetType().Name);
-            workflowMetrics.RecordScriptCompilationDuration(scriptType, language, "unexpected_error", durationSeconds, "miss");
-            ScriptCompileTelemetry.Record(cacheMiss: true, stopwatch.Elapsed.TotalMilliseconds, "unexpected_error");
+            ScriptCompileTelemetry.Record(cacheMiss: true, Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds, "unexpected_error", telemetryTarget);
+            ScriptActivityHelper.SetCompileResult(compileActivity, cacheMiss: true, "unexpected_error");
 
             throw;
         }

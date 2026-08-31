@@ -966,6 +966,48 @@ public static partial class WorkflowLogs
 
     #endregion
 
+    #region Task Coordinator
+
+    /// <summary>
+    /// Logs when a hook's onExecute/onEntry/onExit task list carries the same task key more than
+    /// once at the SAME order. <see cref="TaskCoordinator"/> now gives each occurrence a distinct
+    /// journal identity (a positional <c>#index</c> suffix), so this no longer faults the instance —
+    /// but two entries sharing both key and order is still almost certainly an authoring mistake
+    /// (duplicated line, copy-paste) rather than an intentional design, so it is surfaced as a
+    /// Warning for the author to fix, not rejected. <see cref="WorkflowValidationResult"/> only
+    /// carries hard errors (see <c>ValidationErrors</c>/<c>AddError</c>) with no warning severity,
+    /// so this is logged here at execution time instead of being folded into
+    /// <c>WorkflowValidator</c> — do not downgrade this to a validation error.
+    /// <c>TaskCoordinator.LogDuplicateTaskKeysIfAny</c> gates this off of
+    /// <see cref="TaskExecutionOrigin"/>, NOT <see cref="TaskTrigger"/>: it never calls this for
+    /// <see cref="TaskExecutionOrigin.Extension"/> (two extensions sharing one task Reference is a
+    /// supported pattern — each carries its own <c>Mapping</c> and files its output under its own
+    /// key, not the task's; this warning's remedy of "give the entries distinct orders" targets a
+    /// journal-key collision that cannot happen there, since
+    /// <c>ExtensionTaskPersistenceStrategy</c> never persists an <c>InstanceTask</c> row for
+    /// Extension-origin executions at all). Custom functions execute through
+    /// <c>TaskTrigger.Extension</c> too (<c>FunctionAppService.cs</c>) but with
+    /// <see cref="TaskExecutionOrigin.Function"/> — a multi-task function
+    /// (<c>FunctionAppService.GetSingleTaskVariableKey</c>) listing the same task twice at the same
+    /// order is still an authoring mistake with no per-entry response-key override to save it, so
+    /// this warning MUST still fire for that shape. Gating on the trigger instead of the origin
+    /// would silently swallow it.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10155,
+        Level = LogLevel.Warning,
+        Message = "Duplicate task key at the same order in transition {TransitionKey}, hook {Hook}: task '{TaskKey}' appears {OccurrenceCount} times at order {Order}. This is usually an authoring mistake — give the entries distinct orders if they are meant to run as separate steps. InstanceId={InstanceId}")]
+    public static partial void DuplicateTaskKeyAtSameOrder(
+        this ILogger logger,
+        string transitionKey,
+        string hook,
+        string taskKey,
+        int occurrenceCount,
+        int order,
+        Guid? instanceId);
+
+    #endregion
+
     #region SubFlow
 
     /// <summary>
@@ -2344,60 +2386,6 @@ public static partial class WorkflowLogs
     #region Service Discovery
 
     /// <summary>
-    /// Logs when bulk domain cache refresh starts.
-    /// </summary>
-    [LoggerMessage(
-        EventId = 50001,
-        Level = LogLevel.Information,
-        Message = "Bulk domain cache refresh started")]
-    public static partial void BulkCacheRefreshStarted(
-        this ILogger logger);
-
-    /// <summary>
-    /// Logs when bulk domain cache refresh completes successfully.
-    /// </summary>
-    [LoggerMessage(
-        EventId = 50002,
-        Level = LogLevel.Information,
-        Message = "Bulk domain cache refreshed: {DomainCount} domains cached")]
-    public static partial void BulkCacheRefreshed(
-        this ILogger logger,
-        int domainCount);
-
-    /// <summary>
-    /// Logs when bulk domain cache refresh fails.
-    /// </summary>
-    [LoggerMessage(
-        EventId = 50003,
-        Level = LogLevel.Warning,
-        Message = "Bulk domain cache refresh failed: {Error}")]
-    public static partial void BulkCacheRefreshFailed(
-        this ILogger logger,
-        string error);
-
-    /// <summary>
-    /// Logs when fetching a page of domain registrations.
-    /// </summary>
-    [LoggerMessage(
-        EventId = 50004,
-        Level = LogLevel.Debug,
-        Message = "Fetching page {Page} of domain registrations")]
-    public static partial void FetchingDomainPage(
-        this ILogger logger,
-        int page);
-
-    /// <summary>
-    /// Logs when a domain is not found in the bulk cache.
-    /// </summary>
-    [LoggerMessage(
-        EventId = 50005,
-        Level = LogLevel.Warning,
-        Message = "Domain {Domain} not found in bulk cache")]
-    public static partial void DomainNotFoundInCache(
-        this ILogger logger,
-        string domain);
-
-    /// <summary>
     /// Logs when querying a single domain from the discovery registry.
     /// </summary>
     [LoggerMessage(
@@ -2419,6 +2407,74 @@ public static partial class WorkflowLogs
         this ILogger logger,
         string domain,
         string baseUrl);
+
+    /// <summary>
+    /// Logs when this pod skipped domain registration because it did not acquire the
+    /// once-per-rollout registration lock. Another replica already owns (or will own) it; this
+    /// pod starts normally without registering.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 50008,
+        Level = LogLevel.Information,
+        Message = "Domain registration skipped for '{Domain}' - lock not acquired, another replica owns this rollout's registration")]
+    public static partial void DomainRegistrationSkippedNotLockOwner(
+        this ILogger logger,
+        string domain);
+
+    /// <summary>
+    /// Logs when this pod acquired the registration lock and will perform the registration.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 50009,
+        Level = LogLevel.Information,
+        Message = "Domain registration lock acquired for '{Domain}' - this pod will register")]
+    public static partial void DomainRegistrationClaimed(
+        this ILogger logger,
+        string domain);
+
+    /// <summary>
+    /// Logs when domain registration is skipped entirely (no lock attempt, no registration call)
+    /// because service discovery is disabled for this pod.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 50012,
+        Level = LogLevel.Debug,
+        Message = "Domain registration skipped for '{Domain}' - service discovery is disabled")]
+    public static partial void DomainRegistrationSkippedDisabled(
+        this ILogger logger,
+        string domain);
+
+    /// <summary>
+    /// Logs when the domain discovery initialization hosted service starts running.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 50013,
+        Level = LogLevel.Information,
+        Message = "Starting domain discovery initialization...")]
+    public static partial void DomainDiscoveryInitializationStarted(
+        this ILogger logger);
+
+    /// <summary>
+    /// Logs when the domain discovery initialization hosted service completes successfully.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 50014,
+        Level = LogLevel.Information,
+        Message = "Domain discovery initialization completed successfully")]
+    public static partial void DomainDiscoveryInitializationSucceeded(
+        this ILogger logger);
+
+    /// <summary>
+    /// Logs when domain discovery initialization fails. This is always fatal to startup: the
+    /// caller rethrows so the host aborts and the pod is restarted.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 50015,
+        Level = LogLevel.Critical,
+        Message = "Domain discovery initialization failed. Application startup will be aborted.")]
+    public static partial void DomainDiscoveryInitializationFailed(
+        this ILogger logger,
+        Exception exception);
 
     #endregion
 
@@ -2639,6 +2695,49 @@ public static partial class WorkflowLogs
     public static partial void ExtensionProcessingFailedNonBlocking(
         this ILogger logger,
         string errorCode);
+
+    /// <summary>
+    /// Logs when the SAME extension reference is listed more than once in a workflow's
+    /// <c>Extensions</c> (or in the runtime's core-extension set). Unlike two DIFFERENT extensions
+    /// sharing one task Reference (a supported pattern, see <see cref="DuplicateTaskKeyAtSameOrder"/>
+    /// remarks), this is the SAME <c>Extension</c> — and therefore the SAME <c>OnExecuteTask</c>
+    /// instance — appearing twice. <c>InstanceExtensionService.ExecuteExtensionsInternalAsync</c>'s
+    /// last-wins <c>responseKeyByTask</c> build detects this for free: the key it is about to write
+    /// is already present. The task still executes once per occurrence for the one output slot and
+    /// can still throw the parallel-merge conflict this whole fix exists to prevent, so unlike the
+    /// task-coordinator warning above, the remedy here is NOT "give them distinct orders" — the
+    /// sequential path silently overwrites at <c>ScriptContext.SetOutputResponse</c> regardless of
+    /// order, so distinct orders would not fix this shape. The only correct remedy is removing the
+    /// duplicate reference.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20102,
+        Level = LogLevel.Warning,
+        Message = "Duplicate extension reference '{ExtensionKey}' in workflow '{WorkflowKey}': the same Extension is listed more than once, so its task executes once per occurrence for one output slot and the merge can still throw a parallel-output conflict. Remove the duplicate reference — giving the entries distinct orders does not fix this, the sequential path overwrites silently regardless of order.")]
+    public static partial void DuplicateExtensionReference(
+        this ILogger logger,
+        string extensionKey,
+        string workflowKey);
+
+    /// <summary>
+    /// Logs when <c>InstanceExtensionService</c>'s per-task <c>optionsRefiner</c> cannot find the
+    /// executing task in its <c>responseKeyByTask</c> map, so <c>ResponseVariableKey</c> falls back
+    /// to <c>null</c>. <c>TaskCoordinator</c> only ever hands back the SAME <c>OnExecuteTask</c>
+    /// instances it was given (ToList/Where/GroupBy, never cloned), so this branch is unreachable
+    /// today — but a null <c>ResponseVariableKey</c> makes the task's output file under the
+    /// task-derived key instead of the extension's, and <c>ExtractExtensionResponse</c> only ever
+    /// reads by the EXTENSION's key — so the extension's result is silently dropped, exactly the
+    /// silent-data-loss class the extension-response-key fix exists to eliminate. Logged so this
+    /// cannot pass unnoticed if the assumption it depends on is ever broken.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20103,
+        Level = LogLevel.Warning,
+        Message = "Extension task '{TaskKey}' had no entry in the per-extension response-key map; falling back to the task-derived key. This extension's own read will not find it there, so its output is silently dropped. InstanceId={InstanceId}")]
+    public static partial void ExtensionResponseKeyMappingMissing(
+        this ILogger logger,
+        string taskKey,
+        Guid? instanceId);
 
     #endregion
 
@@ -3319,6 +3418,31 @@ public static partial class WorkflowLogs
     public static partial void ScriptSandboxViolation(
         this ILogger logger,
         string reason);
+
+    /// <summary>
+    /// Logs that the startup script-engine warmup finished: Roslyn assemblies are loaded, the
+    /// compiler pipeline is JIT'd and the default reference set is materialized, so the first real
+    /// mapping compile no longer pays that one-time cost.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 60015,
+        Level = LogLevel.Information,
+        Message = "Script engine warmup compiled the probe script in {DurationMs} ms")]
+    public static partial void ScriptEngineWarmupCompleted(
+        this ILogger logger,
+        long durationMs);
+
+    /// <summary>
+    /// Logs that the startup script-engine warmup failed. Non-fatal by design: the first real
+    /// compile simply pays the cold cost the warmup would have absorbed.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 60016,
+        Level = LogLevel.Warning,
+        Message = "Script engine warmup failed; the first real compile pays the cold cost")]
+    public static partial void ScriptEngineWarmupFailed(
+        this ILogger logger,
+        Exception exception);
 
     #endregion
 

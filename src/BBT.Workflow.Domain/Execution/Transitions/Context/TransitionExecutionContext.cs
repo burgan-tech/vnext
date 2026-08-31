@@ -1,9 +1,11 @@
+using System.Diagnostics;
 using System.Text.Json;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution.Pipeline;
 using BBT.Aether.Aspects;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Instances.Events;
+using BBT.Workflow.Logging;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Shared;
 
@@ -204,7 +206,12 @@ public sealed class TransitionExecutionContext
         CancellationToken cancellationToken = default)
     {
         if (Cache.TryGetValue("ScriptContext", out var cached) && cached is ScriptContext scriptContext)
+        {
+            // The build path is spanned (ScriptContext.Build and its children); the reuse path was silent,
+            // so a trace could not tell a reused context from one that was never needed.
+            Activity.Current.IncrementCounterTag(TelemetryConstants.TagNames.ScriptContextMemoHits);
             return scriptContext;
+        }
 
         var created = await factory(cancellationToken);
         Cache["ScriptContext"] = created;

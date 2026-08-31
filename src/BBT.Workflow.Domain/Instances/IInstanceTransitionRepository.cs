@@ -22,6 +22,13 @@ public interface IInstanceTransitionRepository : IRepository<InstanceTransition,
     Task<InstanceTransition?> GetLatestIncompleteAsync(Guid instanceId, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Read-only (AsNoTracking) lookup by id. For callers that only compute values to feed a
+    /// set-based write (<see cref="UpdateCompletedAsync"/>) — a tracked load would make the later
+    /// ambient flush rewrite the same row a second time.
+    /// </summary>
+    Task<InstanceTransition?> FindAsReadOnlyAsync(Guid id, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Gets the most recent completed manual transition for an instance.
     /// Used to resolve $PreviousUser for instance authorization (CreatedBy of that transition).
     /// </summary>

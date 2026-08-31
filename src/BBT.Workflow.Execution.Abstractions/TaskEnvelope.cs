@@ -31,8 +31,10 @@ public sealed class TaskEnvelope
 }
 
 /// <summary>
-/// Trace context for distributed tracing and placeholder resolution.
-/// Carried from Orchestration to Execution via Dapr service invocation.
+/// Trace context for distributed tracing.
+/// Carried from Orchestration to Execution via Dapr service invocation. Deliberately carries
+/// NO payload (headers / instance data): bindings arrive fully materialized, so nothing on the
+/// execution side reads them — they were dead weight on every invocation.
 /// </summary>
 public sealed class TaskTraceContext
 {
@@ -72,18 +74,6 @@ public sealed class TaskTraceContext
     /// Gateway-authenticated actor subject propagated for dependency log correlation.
     /// </summary>
     public string? ActSub { get; init; }
-
-    /// <summary>
-    /// Original HTTP request headers forwarded from orchestration.
-    /// Used for <c>{HEADER.*}</c> placeholder resolution.
-    /// </summary>
-    public IReadOnlyDictionary<string, string>? RequestHeaders { get; init; }
-
-    /// <summary>
-    /// Serialized instance latest data JSON for placeholder resolution.
-    /// Used for <c>{INSTANCE.*}</c> placeholder resolution.
-    /// </summary>
-    public string? InstanceDataJson { get; init; }
 
     /// <summary>
     /// Originating request id (X-Request-Id value) for cross-service log correlation.

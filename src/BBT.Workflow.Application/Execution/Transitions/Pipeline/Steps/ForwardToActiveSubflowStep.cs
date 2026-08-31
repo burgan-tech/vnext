@@ -23,13 +23,13 @@ public class ForwardToActiveSubflowStep : ITransitionStep
         // Skip if no active subflow - early return for non-applicable case
         if (!HasActiveSubflow(context))
         {
-            return Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.Continue()));
+            return Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.ContinueNoWork()));
         }
 
         // Parent shared transition available in current state: execute on parent, do not forward
         if (IsParentSharedTransition(context))
         {
-            return Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.Continue()));
+            return Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.ContinueNoWork()));
         }
 
         // updateData always executes on the instance it targets — the parent's data is updated
@@ -38,7 +38,7 @@ public class ForwardToActiveSubflowStep : ITransitionStep
         // subflow instance directly.
         if (context.IsUpdateDataTransition())
         {
-            return Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.Continue()));
+            return Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.ContinueNoWork()));
         }
 
         // Enqueue post-commit job - actual forward happens after lock release.

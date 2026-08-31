@@ -39,9 +39,11 @@ public sealed class ServiceDiscoveryOptions
     public string RegistryFlow { get; set; } = string.Empty;
 
     /// <summary>
-    /// Timeout in seconds for HTTP requests (default: 30 seconds).
+    /// Timeout in seconds for HTTP requests (default: 5 seconds).
+    /// With the endpoint cache removed, this timeout now sits in front of every cross-domain
+    /// resolution instead of a rare cache miss, so it is kept short deliberately.
     /// </summary>
-    public int TimeoutSeconds { get; set; } = 30;
+    public int TimeoutSeconds { get; set; } = 5;
 
     /// <summary>
     /// Maximum retry attempts for failed requests (default: 3).
@@ -74,16 +76,36 @@ public sealed class ServiceDiscoveryOptions
     public string InternalOperationHeader { get; set; } = "X-Internal-Operation";
 
     /// <summary>
-    /// Cache duration in seconds for discovered endpoints (default: 300 = 5 minutes).
+    /// Discovery API endpoint template for resolving a single domain endpoint.
+    /// <c>{0}</c> = domain name, URL-encoded by the resolver before formatting.
+    /// <para>
+    /// Default: <c>"/discovery/functions/domain-lookup?key={0}"</c> - the discovery domain's
+    /// <c>domain-lookup</c> function, which serves the registration through its own read-through
+    /// cache (so a hit never touches the instance store) and answers 404 for an unregistered
+    /// domain. It returns the same <c>{ "data": { ... }, "eTag": "..." }</c> envelope as the
+    /// built-in instance <c>data</c> function.
+    /// </para>
+    /// <para>
+    /// The previous value, <c>"/discovery/workflows/domain/instances/{0}/functions/data"</c>,
+    /// still works: it reads the instance directly (no cache) and supports <c>304 Not Modified</c>
+    /// on a conditional request. The resolver handles both - it falls back to comparing the
+    /// response body's eTag when the endpoint does not answer 304.
+    /// </para>
     /// </summary>
-    public int DiscoveryCacheSeconds { get; set; } = 300;
+    public string DiscoveryEndpointTemplate { get; set; } = "/discovery/functions/domain-lookup?key={0}";
 
     /// <summary>
-    /// Discovery API endpoint template for resolving domain endpoints.
-    /// {0} = domain name.
-    /// Default: "/discovery/workflows/domain/instances/{0}/functions/data"
+    /// Request header used to carry the caller's W3C trace id (32-hex <c>trace.id</c>) to the
+    /// discovery service on every registry call. Defaults to
+    /// <see cref="BBT.Workflow.Logging.TelemetryConstants.HeaderNames.TraceId"/> (<c>X-Trace-Id</c>).
+    /// Set to an empty string to stop sending it.
+    /// <para>
+    /// The full W3C trace context (<c>traceparent</c>/<c>tracestate</c>) is already propagated by
+    /// the HTTP stack; this flat header only makes the trace id directly loggable on the discovery
+    /// side through a header enricher.
+    /// </para>
     /// </summary>
-    public string DiscoveryEndpointTemplate { get; set; } = "/discovery/workflows/domain/instances/{0}/functions/data";
+    public string TraceIdHeader { get; set; } = BBT.Workflow.Logging.TelemetryConstants.HeaderNames.TraceId;
 
     /// <summary>
     /// Gets or sets whether SSL certificate validation is enabled.

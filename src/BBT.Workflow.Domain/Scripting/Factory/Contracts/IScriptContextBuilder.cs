@@ -33,7 +33,7 @@ public interface IScriptContextBuilder
     /// <summary>
     /// Sets the instance by retrieving it from repository using instance ID.
     /// </summary>
-    IScriptContextBuilder WithInstance(Guid instanceId, bool noTracking = false);
+    IScriptContextBuilder WithInstance(Guid instanceId);
     
     /// <summary>
     /// Sets the instance directly from an existing Instance object.

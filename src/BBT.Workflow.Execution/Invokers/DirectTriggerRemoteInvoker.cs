@@ -132,7 +132,7 @@ public sealed class DirectTriggerRemoteInvoker : ITaskInvoker<DirectTriggerBindi
         DirectTriggerBinding binding,
         CancellationToken cancellationToken)
     {
-        var stopwatch = Stopwatch.StartNew();
+        var startTimestamp = Stopwatch.GetTimestamp();
 
         try
         {
@@ -146,12 +146,10 @@ public sealed class DirectTriggerRemoteInvoker : ITaskInvoker<DirectTriggerBindi
                 },
                 cancellationToken);
 
-            stopwatch.Stop();
-            return await ProcessResponseAsync(taskKey, binding, response, stopwatch.ElapsedMilliseconds, cancellationToken);
+            return await ProcessResponseAsync(taskKey, binding, response, (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds, cancellationToken);
         }
         catch (TaskCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            stopwatch.Stop();
             _metrics.RecordTaskExecution(TaskType, "cancelled");
             _logger.LogWarning(
                 "DirectTrigger Dapr invocation was cancelled for task {TaskKey}: {Domain}/{Workflow}/{InstanceId}/{TransitionKey}",
@@ -159,13 +157,12 @@ public sealed class DirectTriggerRemoteInvoker : ITaskInvoker<DirectTriggerBindi
 
             return TaskInvocationResult.Failure(
                 error: "DirectTrigger remote invocation was cancelled",
-                executionDurationMs: stopwatch.ElapsedMilliseconds,
+                executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
                 taskType: TaskType,
                 metadata: CreateMetadata(binding, cancelled: true));
         }
         catch (Exception ex)
         {
-            stopwatch.Stop();
             _metrics.RecordTaskExecution(TaskType, "failure");
             _logger.LogError(ex,
                 "DirectTrigger Dapr invocation failed for task {TaskKey}: {Domain}/{Workflow}/{InstanceId}/{TransitionKey}",
@@ -173,7 +170,7 @@ public sealed class DirectTriggerRemoteInvoker : ITaskInvoker<DirectTriggerBindi
 
             return TaskInvocationResult.Failure(
                 error: ex.Message,
-                executionDurationMs: stopwatch.ElapsedMilliseconds,
+                executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
                 taskType: TaskType,
                 metadata: CreateMetadata(binding, exceptionType: ex.GetType().Name));
         }
@@ -184,7 +181,7 @@ public sealed class DirectTriggerRemoteInvoker : ITaskInvoker<DirectTriggerBindi
         DirectTriggerBinding binding,
         CancellationToken cancellationToken)
     {
-        var stopwatch = Stopwatch.StartNew();
+        var startTimestamp = Stopwatch.GetTimestamp();
 
         try
         {
@@ -198,12 +195,10 @@ public sealed class DirectTriggerRemoteInvoker : ITaskInvoker<DirectTriggerBindi
                 },
                 cancellationToken);
 
-            stopwatch.Stop();
-            return await ProcessResponseAsync(taskKey, binding, response, stopwatch.ElapsedMilliseconds, cancellationToken);
+            return await ProcessResponseAsync(taskKey, binding, response, (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds, cancellationToken);
         }
         catch (TaskCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            stopwatch.Stop();
             _metrics.RecordTaskExecution(TaskType, "cancelled");
             _logger.LogWarning(
                 "DirectTrigger HTTP invocation was cancelled for task {TaskKey}: {Domain}/{Workflow}/{InstanceId}/{TransitionKey}",
@@ -211,13 +206,12 @@ public sealed class DirectTriggerRemoteInvoker : ITaskInvoker<DirectTriggerBindi
 
             return TaskInvocationResult.Failure(
                 error: "DirectTrigger remote invocation was cancelled",
-                executionDurationMs: stopwatch.ElapsedMilliseconds,
+                executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
                 taskType: TaskType,
                 metadata: CreateMetadata(binding, cancelled: true));
         }
         catch (HttpRequestException ex)
         {
-            stopwatch.Stop();
             _metrics.RecordTaskExecution(TaskType, "failure");
             _logger.LogError(ex,
                 "DirectTrigger HTTP invocation failed for task {TaskKey}: {Domain}/{Workflow}/{InstanceId}/{TransitionKey}",
@@ -225,13 +219,12 @@ public sealed class DirectTriggerRemoteInvoker : ITaskInvoker<DirectTriggerBindi
 
             return TaskInvocationResult.Failure(
                 error: ex.Message,
-                executionDurationMs: stopwatch.ElapsedMilliseconds,
+                executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
                 taskType: TaskType,
                 metadata: CreateMetadata(binding, exceptionType: ex.GetType().Name));
         }
         catch (Exception ex)
         {
-            stopwatch.Stop();
             _metrics.RecordTaskExecution(TaskType, "failure");
             _logger.LogError(ex,
                 "DirectTrigger HTTP invocation failed for task {TaskKey}: {Domain}/{Workflow}/{InstanceId}/{TransitionKey}",
@@ -239,7 +232,7 @@ public sealed class DirectTriggerRemoteInvoker : ITaskInvoker<DirectTriggerBindi
 
             return TaskInvocationResult.Failure(
                 error: ex.Message,
-                executionDurationMs: stopwatch.ElapsedMilliseconds,
+                executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
                 taskType: TaskType,
                 metadata: CreateMetadata(binding, exceptionType: ex.GetType().Name));
         }

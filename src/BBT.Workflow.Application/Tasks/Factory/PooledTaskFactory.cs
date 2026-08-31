@@ -1,7 +1,6 @@
 using BBT.Aether.Results;
 using BBT.Workflow.Caching;
 using BBT.Workflow.Definitions;
-using BBT.Workflow.Monitoring;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.ObjectPool;
 using Microsoft.Extensions.Options;
@@ -17,8 +16,7 @@ namespace BBT.Workflow.Tasks.Factory;
 public sealed class PooledTaskFactory(
     IComponentCacheStore componentCacheStore,
     ILogger<PooledTaskFactory> logger,
-    IOptions<TaskFactoryOptions> options,
-    IWorkflowMetrics workflowMetrics)
+    IOptions<TaskFactoryOptions> options)
     : ITaskFactory
 {
     private readonly ConcurrentDictionary<Type, ObjectPool<WorkflowTask>> _pools = new();
@@ -71,7 +69,6 @@ public sealed class PooledTaskFactory(
         var pool = _pools.GetOrAdd(taskType, _ => CreatePoolForType(taskType));
 
         // Record pool rental metric
-        workflowMetrics.RecordTaskFactoryPoolRental(taskTypeName);
 
         var pooledTask = pool.Get();
         // Copy properties from template to pooled instance using efficient internal methods
@@ -97,13 +94,10 @@ public sealed class PooledTaskFactory(
     private ObjectPool<WorkflowTask> CreatePoolForType(Type taskType)
     {
         // Pool creation logic kept for future use
-        var policy = new TaskPooledObjectPolicy(taskType, workflowMetrics);
+        var policy = new TaskPooledObjectPolicy(taskType);
         var pool = new DefaultObjectPool<WorkflowTask>(policy, _options.MaxPoolSize);
 
         // Initialize pool size metric
-        workflowMetrics.SetTaskFactoryPoolSize(taskType.Name, _options.MaxPoolSize);
-        workflowMetrics.SetTaskFactoryPoolAvailable(taskType.Name, _options.MaxPoolSize);
-        workflowMetrics.SetTaskFactoryPoolInUse(taskType.Name, 0);
 
         return pool;
     }
@@ -117,7 +111,7 @@ public sealed class PooledTaskFactory(
 /// <summary>
 /// Object pool policy for creating workflow task instances.
 /// </summary>
-internal sealed class TaskPooledObjectPolicy(Type taskType, IWorkflowMetrics workflowMetrics)
+internal sealed class TaskPooledObjectPolicy(Type taskType)
     : IPooledObjectPolicy<WorkflowTask>
 {
     private readonly string _taskTypeName = taskType.Name;
@@ -125,7 +119,6 @@ internal sealed class TaskPooledObjectPolicy(Type taskType, IWorkflowMetrics wor
     public WorkflowTask Create()
     {
         // Record object creation metric
-        workflowMetrics.RecordTaskFactoryPoolCreate(_taskTypeName);
 
         // Try registry-based creation first
         var task = PoolableTaskRegistry.TryCreateEmpty(taskType);
@@ -141,7 +134,6 @@ internal sealed class TaskPooledObjectPolicy(Type taskType, IWorkflowMetrics wor
     public bool Return(WorkflowTask obj)
     {
         // Record object return metric
-        workflowMetrics.RecordTaskFactoryPoolReturn(_taskTypeName);
 
         // Reset the object state before returning to pool
         obj.Reset();

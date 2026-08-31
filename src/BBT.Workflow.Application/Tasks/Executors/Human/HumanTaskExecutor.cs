@@ -1,6 +1,5 @@
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
-using BBT.Workflow.Monitoring;
 using BBT.Workflow.Tasks;
 using Microsoft.Extensions.Logging;
 
@@ -16,8 +15,8 @@ public sealed class HumanTaskExecutor : TaskExecutorBase<HumanTask>
     /// <summary>
     /// Initializes a new instance of HumanTaskExecutor.
     /// </summary>
-    public HumanTaskExecutor(ILogger<HumanTaskExecutor> logger, IWorkflowMetrics metrics)
-        : base(logger, metrics)
+    public HumanTaskExecutor(ILogger<HumanTaskExecutor> logger)
+        : base(logger)
     {
     }
 

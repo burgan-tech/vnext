@@ -124,7 +124,7 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
             origin,
             context,
             completedTaskIds: [],
-            cancellationToken);
+            cancellationToken: cancellationToken);
     }
 
     /// <inheritdoc />
@@ -135,8 +135,16 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
         TaskExecutionOrigin origin,
         ScriptContext context,
         IEnumerable<string> completedTaskIds,
+        bool skipJournalProbe = false,
+        Func<OnExecuteTask, TaskEngineExecutionOptions, TaskEngineExecutionOptions>? optionsRefiner = null,
         CancellationToken cancellationToken = default)
     {
+        // One shared options instance per call: fresh-record executions skip the guaranteed-empty
+        // journal probe, everything else keeps the engine's default (probing) behavior.
+        var engineOptions = skipJournalProbe
+            ? TaskEngineExecutionOptions.FreshTransitionRecord
+            : TaskEngineExecutionOptions.Default;
+
         // No span of its own: the coordinator is a pure fan-out wrapper. Its former
         // "TaskCoordinator.Execute" span added a level between transition/{key} and
         // Task.Execute.{key} without carrying information neither of those already has.
@@ -146,7 +154,7 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
         var tasks = onExecuteTasks.ToList();
         var completedSet = completedTaskIds.ToHashSet(StringComparer.OrdinalIgnoreCase);
         var executedTasks = new List<TaskExecutionSummary>();
-        var totalStopwatch = Stopwatch.StartNew();
+        var totalStartTimestamp = Stopwatch.GetTimestamp();
 
         if (!tasks.Any())
         {
@@ -175,13 +183,35 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
         {
             var groupTasks = group.ToList();
 
+            // A hook (onExecute/onEntry/onExit) may legitimately list the same task key twice at
+            // the same order. Resolved once per group, from the definition's own shape, so the
+            // single-task and parallel paths below apply the identical decision — the suffix must
+            // not depend on which path happens to run the group.
+            LogDuplicateTaskKeysIfAny(group.Key, groupTasks, taskTrigger, origin, context.Instance?.Id, context.Transition?.Key);
+            var groupOptions = ResolveGroupEngineOptions(groupTasks, engineOptions);
+
+            // Caller-supplied per-task override (e.g. the extension path setting a distinct
+            // ResponseVariableKey per extension). Applied AFTER the duplicate-key JournalTaskKey
+            // disambiguation above so the two disambiguators compose instead of competing — the
+            // refiner only ever adds to what ResolveGroupEngineOptions already resolved, never
+            // races it.
+            if (optionsRefiner is not null)
+            {
+                var refined = new TaskEngineExecutionOptions[groupTasks.Count];
+                for (var i = 0; i < groupTasks.Count; i++)
+                {
+                    refined[i] = optionsRefiner(groupTasks[i], groupOptions[i]);
+                }
+                groupOptions = refined;
+            }
+
             if (groupTasks.Count == 1)
             {
                 // Single task - execute directly
                 var result = await _executionEngine.ExecuteAsync(
-                    groupTasks[0], instanceTransitionId, taskTrigger, origin, context, cancellationToken);
+                    groupTasks[0], instanceTransitionId, taskTrigger, origin, context, groupOptions[0], cancellationToken);
 
-                var processResult = ProcessTaskResult(result, groupTasks[0], executedTasks, totalStopwatch);
+                var processResult = ProcessTaskResult(result, groupTasks[0], executedTasks, totalStartTimestamp);
                 if (processResult.HasValue)
                     return processResult.Value;
             }
@@ -189,11 +219,10 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
             {
                 // Multiple tasks with same Order - execute in parallel with cancellation
                 var parallelResult = await ExecuteTaskGroupInParallelAsync(
-                    groupTasks, instanceTransitionId, taskTrigger, origin, context, cancellationToken);
+                    groupTasks, instanceTransitionId, taskTrigger, origin, context, groupOptions, cancellationToken);
 
                 if (!parallelResult.IsSuccess)
                 {
-                    totalStopwatch.Stop();
                     return parallelResult;
                 }
 
@@ -203,14 +232,12 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
                 // If any task in parallel group failed with blocking action, stop
                 if (!groupResult.IsSuccess)
                 {
-                    totalStopwatch.Stop();
                     return parallelResult;
                 }
             }
 
         }
 
-        totalStopwatch.Stop();
 
         if (skippedCount > 0)
         {
@@ -222,8 +249,8 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
         var hasBusinessFailures = executedTasks.Any(t => !t.IsSuccess);
         return Result<TasksExecutionResult>.Ok(
             hasBusinessFailures
-                ? TasksExecutionResult.SuccessWithFailedTasks(executedTasks, totalStopwatch.ElapsedMilliseconds)
-                : TasksExecutionResult.Success(executedTasks, totalStopwatch.ElapsedMilliseconds));
+                ? TasksExecutionResult.SuccessWithFailedTasks(executedTasks, (long)Stopwatch.GetElapsedTime(totalStartTimestamp).TotalMilliseconds)
+                : TasksExecutionResult.Success(executedTasks, (long)Stopwatch.GetElapsedTime(totalStartTimestamp).TotalMilliseconds));
     }
 
     /// <summary>
@@ -233,23 +260,22 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
         Result<TasksExecutionResult> taskResult,
         OnExecuteTask onExecuteTask,
         List<TaskExecutionSummary> executedTasks,
-        Stopwatch totalStopwatch)
+        long totalStartTimestamp)
     {
         // Infrastructure error
         if (!taskResult.IsSuccess)
         {
-            totalStopwatch.Stop();
             var infraError = _errorFactory.CreateFromError(
                 taskResult.Error,
                 onExecuteTask.Task.Key,
                 "Unknown",
-                totalStopwatch.ElapsedMilliseconds);
+                (long)Stopwatch.GetElapsedTime(totalStartTimestamp).TotalMilliseconds);
 
             return Result<TasksExecutionResult>.Ok(TasksExecutionResult.Failure(
                 onExecuteTask,
                 infraError,
                 executedTasks,
-                totalStopwatch.ElapsedMilliseconds));
+                (long)Stopwatch.GetElapsedTime(totalStartTimestamp).TotalMilliseconds));
         }
 
         var result = taskResult.Value!;
@@ -257,7 +283,6 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
         // Business error with blocking action
         if (!result.IsSuccess)
         {
-            totalStopwatch.Stop();
             return Result<TasksExecutionResult>.Ok(new TasksExecutionResult
             {
                 IsSuccess = false,
@@ -267,7 +292,7 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
                 TaskError = result.TaskError,
                 BoundaryAction = result.BoundaryAction,
                 ExecutedTasks = executedTasks,
-                TotalExecutionDurationMs = totalStopwatch.ElapsedMilliseconds
+                TotalExecutionDurationMs = (long)Stopwatch.GetElapsedTime(totalStartTimestamp).TotalMilliseconds
             });
         }
 
@@ -288,12 +313,13 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
         TaskTrigger taskTrigger,
         TaskExecutionOrigin origin,
         ScriptContext context,
+        IReadOnlyList<TaskEngineExecutionOptions> engineOptionsPerTask,
         CancellationToken cancellationToken)
     {
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         var linkedToken = linkedCts.Token;
         var executedTasks = new List<TaskExecutionSummary>();
-        var stopwatch = Stopwatch.StartNew();
+        var startTimestamp = Stopwatch.GetTimestamp();
 
         _logger.LogDebug(
             "Executing {TaskCount} tasks in parallel for instance {InstanceId}",
@@ -303,7 +329,7 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
         TasksExecutionResult? firstFailure = null;
         OnExecuteTask? firstFailedTask = null;
 
-        var executionTasks = tasks.Select(async task =>
+        var executionTasks = tasks.Select(async (task, index) =>
         {
             var branchContext = context.CreateParallelBranch();
             try
@@ -315,7 +341,7 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
                 var scopedEngine = scope.ServiceProvider.GetRequiredService<ITaskExecutionEngine>();
 
                 var result = await scopedEngine.ExecuteAsync(
-                    task, instanceTransitionId, taskTrigger, origin, branchContext, linkedToken);
+                    task, instanceTransitionId, taskTrigger, origin, branchContext, engineOptionsPerTask[index], linkedToken);
 
                 if (!result.IsSuccess)
                 {
@@ -323,12 +349,12 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
                         result.Error,
                         task.Task.Key,
                         "Unknown",
-                        stopwatch.ElapsedMilliseconds);
+                        (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds);
                     result = Result<TasksExecutionResult>.Ok(
                         TasksExecutionResult.Failure(
                             task,
                             infrastructureError,
-                            totalDurationMs: stopwatch.ElapsedMilliseconds));
+                            totalDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds));
                 }
 
                 if (!result.Value!.IsSuccess)
@@ -360,7 +386,6 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
             foreach (var outcome in results)
                 context.MergeParallelBranch(outcome.Context);
 
-            stopwatch.Stop();
 
             // If there was a failure, return it with error boundary info
             if (firstFailure != null && firstFailedTask != null)
@@ -383,7 +408,7 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
                     TaskError = firstFailure.TaskError,
                     BoundaryAction = firstFailure.BoundaryAction,
                     ExecutedTasks = executedTasks,
-                    TotalExecutionDurationMs = stopwatch.ElapsedMilliseconds
+                    TotalExecutionDurationMs = (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds
                 });
             }
 
@@ -399,12 +424,11 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
             var hasBusinessFailures = executedTasks.Any(t => !t.IsSuccess);
             return Result<TasksExecutionResult>.Ok(
                 hasBusinessFailures
-                    ? TasksExecutionResult.SuccessWithFailedTasks(executedTasks, stopwatch.ElapsedMilliseconds)
-                    : TasksExecutionResult.Success(executedTasks, stopwatch.ElapsedMilliseconds));
+                    ? TasksExecutionResult.SuccessWithFailedTasks(executedTasks, (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds)
+                    : TasksExecutionResult.Success(executedTasks, (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds));
         }
         catch (Exception ex)
         {
-            stopwatch.Stop();
             _logger.LogError(ex, "Parallel task execution failed unexpectedly");
 
             if (firstFailure != null && firstFailedTask != null)
@@ -418,11 +442,127 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
                     TaskError = firstFailure.TaskError,
                     BoundaryAction = firstFailure.BoundaryAction,
                     ExecutedTasks = executedTasks,
-                    TotalExecutionDurationMs = stopwatch.ElapsedMilliseconds
+                    TotalExecutionDurationMs = (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds
                 });
             }
 
             return Result<TasksExecutionResult>.Fail(Error.Failure("ParallelExecutionFailed", ex.Message));
+        }
+    }
+
+    /// <summary>
+    /// Resolves the per-task <see cref="TaskEngineExecutionOptions"/> for one Order group. A task
+    /// key that appears only once in the group keeps <paramref name="baseOptions"/> unchanged — no
+    /// journal-key churn for the overwhelmingly common case. A task key that REPEATS within the
+    /// group gets a positional suffix on EVERY occurrence ("key#0", "key#1", … by position among
+    /// that key's occurrences) so <c>InstanceTask.ExecutionKey</c> (which folds in
+    /// <c>options.JournalTaskKey ?? task.Key</c>, see <c>TaskExecutionEngine</c>) is distinct per
+    /// occurrence instead of colliding on <c>UX_InstanceTasks_ExecutionKey</c> when two entries
+    /// share both key and order (a legitimate hook shape — see
+    /// <see cref="WorkflowLogs.DuplicateTaskKeyAtSameOrder"/> for the accompanying warning).
+    /// Suffixing only the second-onward occurrence would leave a confusing asymmetric pair in the
+    /// journal ("script-task" next to "script-task#1"); suffixing all of them reads correctly.
+    /// A <see cref="TaskEngineExecutionOptions.JournalTaskKey"/> the caller already set (FanOut sets
+    /// its own, e.g. "fan-out-docs#3") is never overwritten.
+    /// </summary>
+    /// <remarks>
+    /// Called for every group regardless of size (including groups of one) so the decision comes
+    /// from the definition's own shape rather than from which execution path — single-task or
+    /// parallel — happens to run the group.
+    /// </remarks>
+    internal static IReadOnlyList<TaskEngineExecutionOptions> ResolveGroupEngineOptions(
+        IReadOnlyList<OnExecuteTask> groupTasks,
+        TaskEngineExecutionOptions baseOptions)
+    {
+        var result = new TaskEngineExecutionOptions[groupTasks.Count];
+
+        if (groupTasks.Count == 1)
+        {
+            result[0] = baseOptions;
+            return result;
+        }
+
+        var keyCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var task in groupTasks)
+        {
+            keyCounts[task.Task.Key] = keyCounts.GetValueOrDefault(task.Task.Key) + 1;
+        }
+
+        var seenPerKey = new Dictionary<string, int>(StringComparer.Ordinal);
+        for (var i = 0; i < groupTasks.Count; i++)
+        {
+            var task = groupTasks[i];
+            var options = baseOptions;
+
+            if (keyCounts[task.Task.Key] > 1 && string.IsNullOrEmpty(options.JournalTaskKey))
+            {
+                var position = seenPerKey.GetValueOrDefault(task.Task.Key);
+                seenPerKey[task.Task.Key] = position + 1;
+                options = options with { JournalTaskKey = $"{task.Task.Key}#{position}" };
+            }
+
+            result[i] = options;
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Emits <see cref="WorkflowLogs.DuplicateTaskKeyAtSameOrder"/> once per task key that repeats
+    /// within this Order group. A hook listing the same task key twice at the same order now
+    /// executes correctly (see <see cref="ResolveGroupEngineOptions"/>) but is still almost
+    /// certainly an authoring mistake, so it is surfaced as a warning rather than silently accepted
+    /// or rejected outright — <c>WorkflowValidationResult</c> has no warning severity to carry this
+    /// at definition-validation time (only hard errors), so it is logged here at execution time.
+    /// </summary>
+    /// <remarks>
+    /// Gated on <see cref="TaskExecutionOrigin.Extension"/> — NOT <see cref="TaskTrigger.Extension"/>.
+    /// Two extensions sharing one task Reference at the same order is a documented, intentional
+    /// pattern (see <c>InstanceExtensionService.ExecuteExtensionsInternalAsync</c>): each extension
+    /// owns its own <c>OnExecuteTask</c> — with its own <c>Mapping</c>/<c>ErrorBoundary</c> — and
+    /// files its output under its own <c>ResponseVariableKey</c>, so the two writes never collide.
+    /// The remedy this warning carries ("give the entries distinct orders") would also be actively
+    /// wrong advice for this hook: it targets the journal-key collision that
+    /// <see cref="ResolveGroupEngineOptions"/>'s "#0"/"#1" suffixing exists to prevent, but
+    /// <c>ExtensionTaskPersistenceStrategy</c> never persists an <c>InstanceTask</c> row for
+    /// Extension-origin executions in the first place — there is no journal entry to collide, so
+    /// there is nothing for that suffixing to disambiguate here.
+    ///
+    /// Custom functions (<c>FunctionAppService.cs</c>) execute through the SAME
+    /// <see cref="TaskTrigger.Extension"/> trigger but with <see cref="TaskExecutionOrigin.Function"/>
+    /// — a multi-task function (<c>FunctionAppService.GetSingleTaskVariableKey</c> exists precisely
+    /// to distinguish single-task from multi-task functions) has no per-entry response-key override,
+    /// so a duplicated task key at the same order there is still a plain authoring mistake. Gating
+    /// on <c>taskTrigger</c> instead of <c>origin</c> would silently swallow that case too — do not
+    /// revert to the trigger check.
+    ///
+    /// For every OTHER hook (transition OnEntry/OnExit/OnExecute/Manual) the duplicate is still
+    /// almost certainly a copy-paste mistake and must keep warning with the current remedy.
+    /// </remarks>
+    private void LogDuplicateTaskKeysIfAny(
+        int order,
+        IReadOnlyList<OnExecuteTask> groupTasks,
+        TaskTrigger taskTrigger,
+        TaskExecutionOrigin origin,
+        Guid? instanceId,
+        string? transitionKey)
+    {
+        if (groupTasks.Count < 2 || origin == TaskExecutionOrigin.Extension)
+            return;
+
+        var duplicates = groupTasks
+            .GroupBy(t => t.Task.Key, StringComparer.Ordinal)
+            .Where(g => g.Count() > 1);
+
+        foreach (var duplicate in duplicates)
+        {
+            _logger.DuplicateTaskKeyAtSameOrder(
+                transitionKey ?? "N/A",
+                taskTrigger.ToString(),
+                duplicate.Key,
+                duplicate.Count(),
+                order,
+                instanceId);
         }
     }
 }

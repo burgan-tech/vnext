@@ -15,7 +15,6 @@ using BBT.Workflow.BackgroundJobs.Handlers;
 using BBT.Workflow.BackgroundJobs.Payloads;
 using BBT.Workflow.Caching;
 using BBT.Workflow.CurrentUser;
-using BBT.Workflow.DefinitionContext;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.Pipeline;
@@ -53,8 +52,6 @@ public sealed class InstanceCommandAppService(
     ITransitionDataMapper transitionDataMapper,
     ITransitionValidationService transitionValidationService,
     ITransitionAdmissionService transitionAdmissionService,
-    ITransitionContextFactory transitionContextFactory,
-    IWorkflowContext workflowContext,
     IRepresentationEtagService representationEtagService,
     ISchemaFieldFilterService schemaFieldFilterService,
     IInstanceExtensionService instanceExtensionService,
@@ -133,12 +130,15 @@ public sealed class InstanceCommandAppService(
         // Key path: only a non-terminal (Active/Busy) row occupies the key. A plain
         // FindByIdentifierAsync(key) uses FirstOrDefault with no status filter, so when terminal
         // history rows share the key it can return an arbitrary (possibly completed) row and let a
-        // second active instance be created. FindActiveByKeyAsync is the deterministic check.
-        // Id path: the PK is unique, so FindByIdentifierAsync is already deterministic.
+        // second active instance be created. FindActiveByKeyLeanAsync is the deterministic check.
+        // Id path: a typed Guid — FindLeanByIdAsync probes the PK only. The generic identifier
+        // resolver would, on a miss (every fresh subprocess start), fall back to comparing Key
+        // against the id string: a second guaranteed-miss full-row query per start.
+        // Both probes are include-free: only Id/Key/Status are read below.
         var existingInstance = !instanceKey.IsNullOrWhiteSpace()
-            ? await instanceRepository.FindActiveByKeyAsync(instanceKey, cancellationToken)
+            ? await instanceRepository.FindActiveByKeyLeanAsync(instanceKey, cancellationToken)
             : instanceId.HasValue
-                ? await instanceRepository.FindByIdentifierAsync(instanceId.Value.ToString(), cancellationToken)
+                ? await instanceRepository.FindLeanByIdAsync(instanceId.Value, cancellationToken)
                 : null;
 
         if (existingInstance is null)
@@ -252,33 +252,26 @@ public sealed class InstanceCommandAppService(
     }
 
     /// <summary>
-    /// Step 2: Loads the workflow definition from cache and sets it in WorkflowContext.
-    /// Note: TransitionRunner will also set it in its isolated scope.
+    /// Step 2: Loads the workflow definition from the component cache.
     /// </summary>
+    /// <remarks>
+    /// This used to short-circuit on a scope-held definition (the retired <c>IWorkflowContext</c>),
+    /// but that memo compared the KEY only — a request pinning a version silently got whatever
+    /// version the scope happened to hold. The component cache already answers a repeat read from
+    /// its in-process layer, so the memo bought little and risked the wrong definition.
+    /// </remarks>
     private async Task<Result<Definitions.Workflow>> LoadWorkflowAsync(
         string domain,
         string workflow,
         string? version,
         CancellationToken cancellationToken)
     {
-        var workflowInScope = workflowContext.Workflow;
-        if (workflowInScope != null && workflowInScope.Key == workflow)
-        {
-            return Result<Definitions.Workflow>.Ok(workflowInScope);
-        }
-
         var workflowResult = await componentCacheStore.GetFlowAsync(
             domain, workflow, version, cancellationToken);
 
-        if (!workflowResult.IsSuccess)
-            return Result<Definitions.Workflow>.Fail(workflowResult.Error);
-
-        var workflowDefinition = workflowResult.Value!;
-
-        // Set workflow in current scope's context
-        workflowContext.SetWorkflow(workflowDefinition);
-
-        return Result<Definitions.Workflow>.Ok(workflowDefinition);
+        return workflowResult.IsSuccess
+            ? Result<Definitions.Workflow>.Ok(workflowResult.Value!)
+            : Result<Definitions.Workflow>.Fail(workflowResult.Error);
     }
 
     /// <summary>
@@ -379,7 +372,8 @@ public sealed class InstanceCommandAppService(
                         data.Instance,
                         new JsonData(mappedData),
                         data.Workflow.StartTransition.VersionStrategy,
-                        cancellationToken);
+                        cancellationToken,
+                        data.Workflow);
                 }
             })
             .MapAsync(_ => data);
@@ -396,6 +390,13 @@ public sealed class InstanceCommandAppService(
         CancellationToken cancellationToken)
     {
         var context = input.ToExecutionContext(data.Instance.Id, data.Workflow.StartTransition.Key);
+
+        // The definition and the payload verdict both travel with the request: the start already
+        // resolved this flow, and it already validated the payload against the start transition's
+        // schema — necessarily so, because that check has to happen before the instance row is
+        // persisted, which is earlier than any execution entry runs.
+        context.ResolvedWorkflow = data.Workflow;
+        context.PayloadSchemaValidated = true;
 
         // Creation is the reservation: a sub-item is persisted Busy at creation (IsSubItem seed
         // in CreateAndPrepareInstanceAsync), and this request — the one that just created the
@@ -609,99 +610,75 @@ public sealed class InstanceCommandAppService(
             }
         }
 
-        // 2) Admitted (or no snapshot row) — resolve the full instance.
-        var instanceResult = await instanceRepository.GetActiveAsync(instance, cancellationToken);
-        if (!instanceResult.IsSuccess)
-            return Result<TransitionOutput>.Fail(instanceResult.Error);
-
-        var resolvedInstance = instanceResult.Value!;
-
-        // The definition loaded above already belongs to this instance in the normal case; load
-        // only when there was no snapshot, or when the two identifier resolutions disagreed —
-        // the workflow must always match the instance's own Flow, never the request's.
-        if (workflowDefinition is null || workflowDefinition.Key != resolvedInstance.Flow)
+        // 2) Admitted. The intake does NOT materialize the aggregate: everything left to do here —
+        //    build the dispatch context, stamp the response headers — reads Id/Flow/FlowVersion/Key,
+        //    all of which the projection above already carries. The execution entry loads the
+        //    aggregate for real, in its own scope and DbContext; loading it here as well was a
+        //    second ~20 ms round trip for a copy that could not be handed across that boundary.
+        // Reproduced verbatim from the aggregate load this replaces (EfCoreInstanceRepository's
+        // GetResultAsync): same code, same message. WorkflowErrors.InstanceNotFound is a DIFFERENT
+        // code (NotFoundInstanceData) despite the name, and using it here would silently change the
+        // error a client sees for an unknown instance.
+        if (snapshot is null)
         {
-            var workflowResult = await LoadWorkflowAsync(
-                input.Domain,
-                resolvedInstance.Flow,
-                resolvedInstance.FlowVersion,
-                cancellationToken);
-            if (!workflowResult.IsSuccess)
-                return Result<TransitionOutput>.Fail(workflowResult.Error);
-
-            workflowDefinition = workflowResult.Value;
+            return Result<TransitionOutput>.Fail(Error.NotFound(
+                WorkflowErrorCodes.InstanceNotFound,
+                $"Instance with ID {instance} not found",
+                instance));
         }
 
-        var context = BuildTransitionContext(resolvedInstance, transitionKey, input);
-
-        // Pre-dispatch validation guard: validate schema + state-machine policy BEFORE
-        // dispatching to the execution service. This guarantees consistent 400 Bad Request
-        // behaviour for both sync=true and sync=false callers — the async path would otherwise
-        // accept the request, flip the instance to Busy and discover the schema violation
-        // later in the background job (leaving the instance Faulted). The same check is also
-        // performed inside AsyncTransitionStrategy as defense in depth for callers that
-        // bypass the AppService and invoke WorkflowExecutionService directly.
-        var preValidation = await ValidateTransitionRequestAsync(
-            context, resolvedInstance, workflowDefinition!, cancellationToken);
-        if (!preValidation.IsSuccess)
+        // Terminal check the aggregate load used to perform (GetActiveAsync). IsTerminal, not
+        // IsCompleted: Faulted and Passive are terminal for admission too.
+        if (snapshot.IsTerminal)
         {
-            logger.TransitionValidationFailed(resolvedInstance.Id, transitionKey, preValidation.Error.Code);
-            return Result<TransitionOutput>.Fail(preValidation.Error);
+            return Result<TransitionOutput>.Fail(Error.Validation(
+                WorkflowErrorCodes.InstanceCompleted,
+                $"Instance {instance} is already completed with status: {snapshot.Status.Code}",
+                instance));
         }
+
+        var context = BuildTransitionContext(snapshot, transitionKey, input, workflowDefinition!);
+
+        // No validation here. Validation belongs to the execution entry, and both entries run it
+        // before any side effect: the async strategy validates before it flips Busy and enqueues,
+        // the sync pipeline before it admits. Validating here as well meant every request resolved
+        // its schema twice and built a whole execution context that was then thrown away — and it
+        // bought nothing, because the 400-before-side-effect guarantee it was written for is the
+        // execution entry's guarantee too. The Busy fast-fail above is a different check and stays.
 
         return await workflowExecutionService
             .ExecuteTransitionAsync(context, cancellationToken)
-            .OnSuccess(output => AddTransitionHeader(output, resolvedInstance.Flow, resolvedInstance.FlowVersion))
+            .OnSuccess(output => AddTransitionHeader(output, snapshot.Flow!, snapshot.FlowVersion))
             .ThenAsync(output =>
             {
                 if (input.Sync)
                     return EnrichSyncOutputAsync(output, output.Id, workflowDefinition, input.Extensions, new AuthorizationRequestContext(input.Headers), cancellationToken);
-                output.Key = resolvedInstance.Key;
+                output.Key = snapshot.Key;
                 return Task.FromResult(Result<TransitionOutput>.Ok(output));
             });
     }
 
-    /// <summary>
-    /// Pre-dispatch schema + state-machine validation for a transition request.
-    /// Builds the execution context from pre-loaded instance and workflow (zero DB calls)
-    /// and runs the same <see cref="ITransitionValidationService.ValidateAsync"/>
-    /// that the sync pipeline uses, so both sync=true and sync=false callers get the same
-    /// validation error contract before any state mutation or background-job enqueue.
-    /// </summary>
-    private async Task<Result> ValidateTransitionRequestAsync(
-        WorkflowExecutionContext context,
-        Instance instance,
-        Definitions.Workflow workflow,
-        CancellationToken cancellationToken)
-    {
-        var contextResult = transitionContextFactory.CreateFromPreloaded(context, workflow, instance);
-        if (!contextResult.IsSuccess)
-            return Result.Fail(contextResult.Error);
-
-        // Busy-as-mutex: reject a Busy instance BEFORE spending validation work — a request
-        // that cannot be admitted should not fetch schemas or evaluate specifications.
-        // No-op for exempt kinds (cancel/exit/updateData/owner re-entry).
-        var admission = transitionAdmissionService.CheckAdmission(contextResult.Value!);
-        if (!admission.IsSuccess)
-            return Result.Fail(admission.Error);
-
-        return await transitionValidationService.ValidateAsync(contextResult.Value!, cancellationToken);
-    }
 
     /// <summary>
     /// Builds execution context for transition using instance's Flow and FlowVersion (not from request).
     /// </summary>
     private static WorkflowExecutionContext BuildTransitionContext(
-        Instance resolvedInstance,
+        InstanceExecutionSnapshot snapshot,
         string transitionKey,
-        TransitionInput input)
+        TransitionInput input,
+        Definitions.Workflow workflow)
     {
         return new WorkflowExecutionContext
         {
             Domain = input.Domain,
-            InstanceId = resolvedInstance.Id.ToString(),
-            WorkflowKey = resolvedInstance.Flow,
-            WorkflowVersion = resolvedInstance.FlowVersion,
+            InstanceId = snapshot.Id.ToString(),
+            // The instance's OWN bound flow, never the request's — same rule as before, now read
+            // from the projection that resolved the identifier.
+            WorkflowKey = snapshot.Flow!,
+            WorkflowVersion = snapshot.FlowVersion,
+            // Carried, not re-resolved downstream: this is the very definition the layers below
+            // would look up with the three coordinates above.
+            ResolvedWorkflow = workflow,
             TransitionKey = transitionKey,
             TriggerType = TriggerType.Manual,
             Actor = input.Actor,

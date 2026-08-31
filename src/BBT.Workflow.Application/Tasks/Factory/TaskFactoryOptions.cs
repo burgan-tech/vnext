@@ -33,11 +33,6 @@ public sealed class TaskFactoryOptions
     public int InitialPoolSize { get; set; } = 10;
 
     /// <summary>
-    /// Gets or sets whether to enable detailed performance metrics.
-    /// </summary>
-    public bool EnableMetrics { get; set; } = false;
-
-    /// <summary>
     /// Gets or sets the task types that should use object pooling.
     /// Only applies when UseObjectPooling is true.
     /// </summary>

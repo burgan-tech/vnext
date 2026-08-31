@@ -2,7 +2,6 @@ using System.Text.Json;
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Logging;
-using BBT.Workflow.Monitoring;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks.Notification;
 using Dapr.Client;
@@ -24,9 +23,8 @@ public sealed class NotificationTaskExecutor(
     INotificationChannelResolver channelResolver,
     IStateChannelMessageBuilder stateChannelBuilder,
     IScriptEngine scriptEngine,
-    ILogger<NotificationTaskExecutor> logger,
-    IWorkflowMetrics metrics)
-    : TaskExecutorBase<NotificationTask>(logger, metrics)
+    ILogger<NotificationTaskExecutor> logger)
+    : TaskExecutorBase<NotificationTask>(logger)
 {
     private const string StateChannel = "state";
 

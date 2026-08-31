@@ -51,7 +51,7 @@ public sealed class HttpTaskInvoker(
         HttpTaskBinding binding,
         CancellationToken cancellationToken)
     {
-        var stopwatch = Stopwatch.StartNew();
+        var startTimestamp = Stopwatch.GetTimestamp();
 
         try
         {
@@ -99,7 +99,6 @@ public sealed class HttpTaskInvoker(
             var responseHeaders = InvokerHelpers.MergeHeaders(response.Headers, response.Content.Headers);
 
             var content = await response.Content.ReadAsStringAsync(cancellationToken);
-            stopwatch.Stop();
             var responseData = InvokerHelpers.TryParseJson(content);
 
             var metadata = new Dictionary<string, object>
@@ -119,7 +118,7 @@ public sealed class HttpTaskInvoker(
                     data: responseData,
                     body: content,
                     statusCode: (int)response.StatusCode,
-                    executionDurationMs: stopwatch.ElapsedMilliseconds,
+                    executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
                     taskType: TaskType,
                     headers: responseHeaders,
                     metadata: metadata)
@@ -127,7 +126,7 @@ public sealed class HttpTaskInvoker(
                     error: $"HTTP {response.StatusCode}: {response.ReasonPhrase}",
                     statusCode: (int)response.StatusCode,
                     body: content,
-                    executionDurationMs: stopwatch.ElapsedMilliseconds,
+                    executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
                     taskType: TaskType,
                     headers: responseHeaders,
                     data: responseData,
@@ -135,14 +134,13 @@ public sealed class HttpTaskInvoker(
         }
         catch (TaskCanceledException ex) when (cancellationToken.IsCancellationRequested)
         {
-            stopwatch.Stop();
             _metrics.RecordTaskExecution(TaskType, "cancelled");
             
             logger.LogWarning("HTTP request was cancelled for task {TaskKey} - URL: {Url}", taskKey, binding.Url);
             
             return TaskInvocationResult.Failure(
                 error: "HTTP request was cancelled",
-                executionDurationMs: stopwatch.ElapsedMilliseconds,
+                executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
                 taskType: TaskType,
                 metadata: new Dictionary<string, object>
                 {
@@ -154,13 +152,12 @@ public sealed class HttpTaskInvoker(
         }
         catch (HttpRequestException ex)
         {
-            stopwatch.Stop();
             _metrics.RecordTaskExecution(TaskType, "failure");
             logger.LogError(ex, "HTTP task invocation failed for {TaskKey} - URL: {Url}", taskKey, binding.Url);
             
             return TaskInvocationResult.Failure(
                 error: ex.Message,
-                executionDurationMs: stopwatch.ElapsedMilliseconds,
+                executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
                 taskType: TaskType,
                 metadata: new Dictionary<string, object>
                 {
@@ -172,13 +169,12 @@ public sealed class HttpTaskInvoker(
         }
         catch (Exception ex)
         {
-            stopwatch.Stop();
             _metrics.RecordTaskExecution(TaskType, "failure");
             logger.LogError(ex, "Unexpected error during HTTP task invocation for {TaskKey}", taskKey);
             
             return TaskInvocationResult.Failure(
                 error: ex.Message,
-                executionDurationMs: stopwatch.ElapsedMilliseconds,
+                executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
                 taskType: TaskType,
                 metadata: new Dictionary<string, object>
                 {

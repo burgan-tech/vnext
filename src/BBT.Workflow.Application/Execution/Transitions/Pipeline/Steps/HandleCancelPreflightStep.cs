@@ -24,7 +24,7 @@ public sealed class HandleCancelPreflightStep(
         // Skip if not a cancel or exit transition
         if (!isCancelTransition && !isExitTransition)
         {
-            return Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.Continue()));
+            return Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.ContinueNoWork()));
         }
 
         // Railway chain: Log detection -> Validate -> Create skip outcome

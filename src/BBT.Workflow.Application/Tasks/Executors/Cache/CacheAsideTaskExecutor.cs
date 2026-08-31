@@ -4,7 +4,6 @@ using BBT.Workflow;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.Bindings;
-using BBT.Workflow.Monitoring;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks.Evaluators;
 using BBT.Workflow.Tasks.Factory;
@@ -36,9 +35,8 @@ public sealed class CacheAsideTaskExecutor : TaskExecutorBase<CacheAsideTask>
         IScriptEngine scriptEngine,
         ITaskFactory taskFactory,
         IDynamicExpressoValueEvaluator expressoEvaluator,
-        ILogger<CacheAsideTaskExecutor> logger,
-        IWorkflowMetrics metrics)
-        : base(logger, metrics)
+        ILogger<CacheAsideTaskExecutor> logger)
+        : base(logger)
     {
         _remoteInvoker = remoteInvoker;
         _scriptEngine = scriptEngine;
@@ -165,7 +163,7 @@ public sealed class CacheAsideTaskExecutor : TaskExecutorBase<CacheAsideTask>
         }
 
         // Expose the cached/raw result on the script context so the mapping's OutputHandler can read it.
-        UpdateScriptContextWithResponse(task.Key, invocationResult, context.ScriptContext);
+        UpdateScriptContextWithResponse(task.Key, invocationResult, context.ScriptContext, context.ResponseVariableKey);
 
         return await ResultExtensions.TryAsync<object?>(async ct =>
         {

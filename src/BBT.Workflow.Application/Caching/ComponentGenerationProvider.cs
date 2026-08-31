@@ -37,6 +37,13 @@ public sealed class ComponentGenerationProvider(
         if (TryReadMemo(redisKey, out var memoized))
             return memoized;
 
+        // Every component resolution reads this token before it may use a cached body, and the read
+        // is a real round trip to the distributed cache. It produced no span of its own, so the cost
+        // showed up as time in whatever happened to be running — the caller's Cache.Get sits AFTER
+        // this, not around it, so the token read was attributed to nothing at all.
+        using var activity = CacheActivityHelper.StartActivity(
+            CacheActivityHelper.OperationGenerationGet, redisKey, componentTypeKey);
+
         try
         {
             var entry = await distributedCache.GetAsync<ComponentGenerationEntry>(redisKey, cancellationToken);

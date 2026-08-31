@@ -1,5 +1,4 @@
 using BBT.Workflow.Instances;
-using BBT.Workflow.Monitoring;
 using BBT.Workflow.Logging;
 using Microsoft.Extensions.Logging;
 using System.Diagnostics;
@@ -13,7 +12,6 @@ namespace BBT.Workflow.Execution.Pipeline.Steps;
 /// </summary>
 public sealed class ChangeStateStep(
     IInstanceRepository instanceRepository,
-    IWorkflowMetrics workflowMetrics,
     ILogger<ChangeStateStep> logger) : ITransitionStep
 {
     /// <inheritdoc />
@@ -26,7 +24,7 @@ public sealed class ChangeStateStep(
         // Skip for SubFlow resume - state cleared/managed by ClearBusyOnResumeStep
         if (context.Directives.IsSubFlowResume)
         {
-            return Result<StepOutcome>.Ok(StepOutcome.Continue());
+            return Result<StepOutcome>.Ok(StepOutcome.ContinueNoWork());
         }
 
         // Timeout: target state was pre-resolved in ApplyTimeoutStateStep; apply it here
@@ -39,7 +37,7 @@ public sealed class ChangeStateStep(
         // Skip if no transition (other non-timeout resume scenarios)
         if (context.Transition == null)
         {
-            return Result<StepOutcome>.Ok(StepOutcome.Continue());
+            return Result<StepOutcome>.Ok(StepOutcome.ContinueNoWork());
         }
 
         // updateData writes data without moving the instance: the step still runs — it is the only
@@ -115,10 +113,6 @@ public sealed class ChangeStateStep(
     /// </summary>
     private void RecordTransitionMetric(TransitionExecutionContext context, StateTransitionInfo info)
     {
-        workflowMetrics.RecordStateTransition(
-            context.Workflow.Key,
-            info.FromState,
-            info.ToState);
     }
 
     /// <summary>
@@ -172,9 +166,6 @@ public sealed class ChangeStateStep(
     /// </summary>
     private void RecordStateEntryMetric(TransitionExecutionContext context)
     {
-        workflowMetrics.RecordStateEntry(
-            context.Workflow.Key,
-            context.Instance.GetCurrentState);
     }
 
     /// <summary>

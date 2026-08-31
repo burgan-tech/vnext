@@ -351,6 +351,14 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
             snapshot._dataList.Add(data.CreateSnapshot());
         }
 
+        // Carry the partial-load marker: a latest-only-loaded aggregate copies a one-entry
+        // history into the snapshot, and without the marker FindData/GetVersionHistory on the
+        // snapshot would return silently-wrong answers instead of failing fast.
+        if (IsDataPartiallyLoaded)
+        {
+            snapshot.MarkDataPartiallyLoaded();
+        }
+
         foreach (var correlation in _childCorrelations)
         {
             snapshot._childCorrelations.Add(correlation.CreateSnapshot());
