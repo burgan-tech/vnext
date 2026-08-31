@@ -49,6 +49,8 @@ public sealed class SubflowOutputMappingService(
                 .WithBody(childInstanceData?.Deserialize<Dictionary<string, object>>() ?? new Dictionary<string, object>())
                 .BuildAsync(cancellationToken);
 
+            using var scriptActivity = ScriptActivityHelper.StartExecuteActivity("subflowOutputMapping");
+
             var mappingInstance = await scriptEngine.CompileToInstanceAsync<object>(
                 subFlowConfig.Mapping,
                 flowScripts: parentWorkflow.Scripts,
@@ -68,7 +70,8 @@ public sealed class SubflowOutputMappingService(
                     parentInstance,
                     new JsonData(JsonSerializer.Serialize(outputMappingResult!.Data)),
                     parentState.VersionStrategy,
-                    cancellationToken);
+                    cancellationToken,
+                    parentWorkflow);
             }
 
             if (scriptContext.Mutations.HasChanges)

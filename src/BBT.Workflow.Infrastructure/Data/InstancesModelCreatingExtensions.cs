@@ -54,6 +54,12 @@ public static class InstancesModelCreatingExtensions
             b.HasIndex(p => p.EffectiveState)
                 .HasDatabaseName("IX_Instances_EffectiveState");
 
+            // Serves the monitor's state-distribution counts (WHERE CurrentState = x AND
+            // Status = y) and any state+status filtered listing — without it every such
+            // count is a sequential scan.
+            b.HasIndex(p => new { p.CurrentState, p.Status })
+                .HasDatabaseName("IX_Instances_CurrentState_Status");
+
             b.Property(p => p.Stage)
                 .HasMaxLength(InstanceConstants.MaxStageLength);
 
@@ -362,6 +368,22 @@ public static class InstancesModelCreatingExtensions
             b.HasIndex(p => new { p.InstanceId, p.FinishedAt })
                 .HasFilter("\"FinishedAt\" IS NOT NULL AND \"TriggerType\" = 0")
                 .HasDatabaseName("IX_InstanceTransitions_CompletedManual");
+
+            // Unfiltered journal index: WHERE InstanceId = x ORDER BY StartedAt (timeline,
+            // history, retry-bypass reads) and the cascade-delete FK check. The two indexes
+            // above are both partial, so without this every such read walks the whole
+            // append-only table. Named HasIndex overload on purpose: the lambda overload would
+            // re-configure IX_InstanceTransitions_Incomplete (same property set) instead of
+            // declaring a second index.
+            b.HasIndex(new[] { nameof(InstanceTransition.InstanceId), nameof(InstanceTransition.StartedAt) },
+                    "IX_InstanceTransitions_Instance_StartedAt");
+
+            // BRIN for the transition-stats aggregation (time-windowed GROUP BY) — same
+            // rationale as IX_InstanceTasks_StartedAt_Brin: rows arrive in StartedAt order,
+            // so the range map stays a few pages regardless of table size.
+            b.HasIndex(p => p.StartedAt)
+                .HasDatabaseName("IX_InstanceTransitions_StartedAt_Brin")
+                .HasMethod("brin");
         });
 
         builder.Entity<InstanceTask>(b =>
@@ -422,6 +444,13 @@ public static class InstancesModelCreatingExtensions
                 .IsUnique()
                 .HasFilter("\"ExecutionKey\" IS NOT NULL")
                 .HasDatabaseName("UX_InstanceTasks_ExecutionKey");
+
+            // BRIN on StartedAt: bounds the Monitor task-stats aggregation (time-windowed
+            // GROUP BY over this table) without a fat btree. Rows are inserted in StartedAt
+            // order, which is exactly the physical correlation BRIN needs to stay tiny.
+            b.HasIndex(p => p.StartedAt)
+                .HasDatabaseName("IX_InstanceTasks_StartedAt_Brin")
+                .HasMethod("brin");
         });
 
         builder.Entity<InstanceAction>(b =>
@@ -488,6 +517,18 @@ public static class InstancesModelCreatingExtensions
             b.HasIndex(i => new { i.InstanceId, i.JobName })
                 .HasFilter("\"IsActive\" = true")
                 .HasDatabaseName("IX_InstanceJobs_Active_Instance_JobName");
+
+            // Partial indexes for the monitor jobs listings: WHERE IsActive AND FlowName/Domain
+            // ORDER BY CreatedAt DESC. The instance-keyed index above cannot serve these shapes,
+            // so without them the listings scan the table. CreatedAt in the key makes the
+            // DESC ordering an index walk instead of a sort.
+            b.HasIndex(i => new { i.FlowName, i.CreatedAt })
+                .HasFilter("\"IsActive\" = true")
+                .HasDatabaseName("IX_InstanceJobs_Active_Flow_CreatedAt");
+
+            b.HasIndex(i => new { i.Domain, i.CreatedAt })
+                .HasFilter("\"IsActive\" = true")
+                .HasDatabaseName("IX_InstanceJobs_Active_Domain_CreatedAt");
         });
     }
 }

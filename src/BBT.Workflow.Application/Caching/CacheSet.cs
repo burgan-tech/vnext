@@ -168,6 +168,7 @@ public class CacheSet<T>(
         {
             CacheActivityHelper.SetCacheHit(activity, true);
             CacheActivityHelper.SetL1Hit(activity, true);
+            CacheActivityHelper.SetSource(activity, CacheActivityHelper.SourceL1);
             HydrateReference(l1Envelope);
             return Result<T>.Ok(l1Envelope.Entity);
         }
@@ -176,6 +177,9 @@ public class CacheSet<T>(
         if (envelope is not null)
         {
             CacheActivityHelper.SetCacheHit(activity, true);
+            // A negative is an L2 answer too: the distributed store is what told us the version
+            // does not exist, so the source is the store, not the backend we never reached.
+            CacheActivityHelper.SetSource(activity, CacheActivityHelper.SourceL2);
 
             if (envelope.IsNegative)
             {
@@ -195,6 +199,7 @@ public class CacheSet<T>(
         }
 
         CacheActivityHelper.SetCacheHit(activity, false);
+        CacheActivityHelper.SetSource(activity, CacheActivityHelper.SourceBackend);
 
         return await ResolveCoalescedAsync(domain, key, requested, spelling, redisKey, activity, cancellationToken);
     }
@@ -322,6 +327,7 @@ public class CacheSet<T>(
         {
             CacheActivityHelper.SetCacheHit(activity, true);
             CacheActivityHelper.SetL1Hit(activity, true);
+            CacheActivityHelper.SetSource(activity, CacheActivityHelper.SourceL1);
             HydrateReference(l1Envelope);
             return Result<T>.Ok(l1Envelope.Entity);
         }
@@ -331,6 +337,7 @@ public class CacheSet<T>(
         {
             CacheActivityHelper.SetCacheHit(activity, true);
             CacheActivityHelper.SetL1Hit(activity, false);
+            CacheActivityHelper.SetSource(activity, CacheActivityHelper.SourceL2);
             // Hydrate before storing — see GetResolvedAsync.
             HydrateReference(envelope);
             PopulateL1(redisKey, envelope, FullEntryOptions());
@@ -338,6 +345,7 @@ public class CacheSet<T>(
         }
 
         CacheActivityHelper.SetCacheHit(activity, false);
+        CacheActivityHelper.SetSource(activity, CacheActivityHelper.SourceBackend);
 
         var dbResult = await backend.LoadAsync(domain, key, fullVersion, cancellationToken);
         if (!dbResult.IsSuccess)
@@ -475,6 +483,14 @@ public class CacheSet<T>(
         DistributedCacheEntryOptions entryOptions,
         CancellationToken cancellationToken)
     {
+        // Spanned because this is the write half of a cache-aside miss: it runs inside the
+        // Cache.Get that missed, so without a span of its own the distributed write is folded
+        // anonymously into that parent's duration. The failure below is swallowed on purpose —
+        // a cache that cannot be written is still a correct read — and an error span is the only
+        // thing that makes a persistently unwritable cache visible outside the log.
+        using var activity = CacheActivityHelper.StartActivity(
+            CacheActivityHelper.OperationWrite, redisKey, ComponentKeyName);
+
         // Write-through: negatives are rejected by the L1 itself, and an entity left in L1 after a
         // failed L2 write is still correct — it came from the backend.
         PopulateL1(redisKey, envelope, entryOptions);
@@ -485,6 +501,7 @@ public class CacheSet<T>(
         }
         catch (Exception ex)
         {
+            CacheActivityHelper.SetError(activity, ex);
             logger.ComponentCacheOperationFailed(ex, CacheActivityHelper.OperationSet, redisKey);
         }
     }

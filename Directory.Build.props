@@ -2,7 +2,7 @@
     <PropertyGroup>
 
         <!-- All Prism packages -->
-        <AetherPackageVersion>1.0.36</AetherPackageVersion>
+        <AetherPackageVersion>1.0.37</AetherPackageVersion>
         <!-- Overrides transitive PostSharp 2026.0.7 from BBT.Aether.Aspects; >=2026.0.10 required to read project.assets.json v4 written by .NET SDK 10.0.300+ -->
         <PostSharpPackageVersion>2026.0.12</PostSharpPackageVersion>
         <!-- Elastic Apm packages -->
@@ -28,7 +28,17 @@
         <!-- Instrumentation packages that only ship as prerelease. Kept on the same 1.15.x line
              Aether already pulls for OpenTelemetry.Instrumentation.Process. -->
         <OpenTelemetryInstrumentationPrereleasePackageVersion>1.15.1-beta.1</OpenTelemetryInstrumentationPrereleasePackageVersion>
-      
+
+        <!-- gRPC packages for the orchestration->execution proxy-mode transport (Dapr gRPC proxy) -->
+        <!-- Grpc.Net.Client: gRPC client channel used by orchestration to call Execution -->
+        <GrpcPackageVersion>2.83.0</GrpcPackageVersion>
+        <!-- Grpc.Tools: MSBuild proto codegen (protoc + grpc plugin) -->
+        <GrpcToolsPackageVersion>2.83.0</GrpcToolsPackageVersion>
+        <!-- Google.Protobuf: generated message runtime (ByteString, message base classes) -->
+        <GoogleProtobufPackageVersion>3.36.0</GoogleProtobufPackageVersion>
+        <!-- Grpc.AspNetCore: server-side gRPC hosting for the Execution host's TaskInvoker service -->
+        <GrpcAspNetCorePackageVersion>2.83.0</GrpcAspNetCorePackageVersion>
+
         <!-- Microsot Test SDK packages -->
         <TestSdkPackageVersion>18.0.1</TestSdkPackageVersion>
         <NSubstitutePackageVersion>5.3.0</NSubstitutePackageVersion>
@@ -37,7 +47,6 @@
         <xunitPackageVersion>2.9.3</xunitPackageVersion>
         <xunitRunnerPackageVersion>3.0.1</xunitRunnerPackageVersion>
         <MoqPackageVersion>4.20.72</MoqPackageVersion>
-        <PrometheusVersion>8.2.1</PrometheusVersion>
         <TestcontainersPackageVersion>4.10.0</TestcontainersPackageVersion>
 
     </PropertyGroup>

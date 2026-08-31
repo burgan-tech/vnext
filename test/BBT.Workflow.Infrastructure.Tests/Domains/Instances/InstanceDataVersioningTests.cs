@@ -6,7 +6,6 @@ using BBT.Aether.Domain.EntityFrameworkCore;
 using BBT.Aether.MultiSchema;
 using BBT.Workflow.BackgroundJobs.Options;
 using BBT.Workflow.Data;
-using BBT.Workflow.DefinitionContext;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Validation;
 using Microsoft.EntityFrameworkCore;
@@ -65,7 +64,6 @@ public sealed class InstanceDataVersioningTests : IAsyncLifetime
 
     private static InstanceDataWriteService CreateService(WorkflowDbContext context) => new(
         new FixedDbContextProvider(context),
-        new NullWorkflowContext(),
         new ServiceCollection().BuildServiceProvider(),
         Substitute.For<IJsonSchemaValidator>(),
         Options.Create(new WorkflowExecutionOptions()),
@@ -366,12 +364,5 @@ public sealed class InstanceDataVersioningTests : IAsyncLifetime
     {
         public Task<WorkflowDbContext> GetDbContextAsync(CancellationToken cancellationToken = default)
             => Task.FromResult(context);
-    }
-
-    private sealed class NullWorkflowContext : IWorkflowContext
-    {
-        public Definitions.Workflow? Workflow => null;
-        public bool HasWorkflow => false;
-        public void SetWorkflow(Definitions.Workflow workflow) { }
     }
 }

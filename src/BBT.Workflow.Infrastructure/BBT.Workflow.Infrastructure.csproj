@@ -19,7 +19,6 @@
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
     <PackageReference Include="Polly.Extensions.Http" Version="3.0.0" />
-    <PackageReference Include="prometheus-net" Version="$(PrometheusVersion)" />
     <ProjectReference Include="..\BBT.Workflow.Application\BBT.Workflow.Application.csproj" />
     <ProjectReference Include="..\BBT.Workflow.Domain\BBT.Workflow.Domain.csproj" />
   </ItemGroup>

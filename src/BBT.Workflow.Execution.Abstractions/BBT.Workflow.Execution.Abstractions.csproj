@@ -9,6 +9,16 @@
   <ItemGroup>
     <!-- Minimal dependencies - just what's needed for contracts -->
     <PackageReference Include="System.Text.Json" Version="$(MicrosoftPackageVersion)" />
+    <PackageReference Include="Google.Protobuf" Version="$(GoogleProtobufPackageVersion)" />
+    <PackageReference Include="Grpc.Net.Client" Version="$(GrpcPackageVersion)" />
+    <PackageReference Include="Grpc.Tools" Version="$(GrpcToolsPackageVersion)">
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Both stubs from one project: orchestration consumes the Client, the Execution
+         host derives the service from the Base. -->
+    <Protobuf Include="Protos\task_invoker.proto" GrpcServices="Both" />
   </ItemGroup>
 </Project>
 

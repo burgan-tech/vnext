@@ -31,12 +31,19 @@ public interface IInstanceDataWriteService
     /// <param name="delta">The data delta produced by the caller (payload mapping, task output…).</param>
     /// <param name="versionStrategy">Semantic version strategy; null behaves as None.</param>
     /// <param name="cancellationToken">Token to monitor for cancellation requests.</param>
+    /// <param name="workflow">
+    /// The instance's workflow definition, supplied by the caller so the merged content can be
+    /// validated against the flow's master schema. Callers that have no definition in hand (the
+    /// publish path, system writes) pass <c>null</c> and the validation is skipped — the same
+    /// outcome those paths already had when the definition was read from an ambient scope.
+    /// </param>
     /// <returns>The persisted row, or <c>null</c> when the merge produced no content change.</returns>
     Task<InstanceData?> AppendAsync(
         Instance instance,
         JsonData delta,
         VersionStrategy? versionStrategy,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default,
+        Definitions.Workflow? workflow = null);
 
     /// <summary>
     /// Appends a row with an EXPLICIT, caller-authored version (the definition publish path):
@@ -50,11 +57,16 @@ public interface IInstanceDataWriteService
     /// <param name="version">The explicit semantic version to store.</param>
     /// <param name="data">The payload, stored as authored (no merge).</param>
     /// <param name="cancellationToken">Token to monitor for cancellation requests.</param>
+    /// <param name="workflow">
+    /// The instance's workflow definition for master-schema validation; <c>null</c> skips it.
+    /// See <see cref="AppendAsync"/>.
+    /// </param>
     /// <returns>The persisted row, or the pre-existing row when the version already exists.</returns>
     Task<InstanceData> AppendExplicitAsync(
         Instance instance,
         Guid id,
         string version,
         JsonData data,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default,
+        Definitions.Workflow? workflow = null);
 }

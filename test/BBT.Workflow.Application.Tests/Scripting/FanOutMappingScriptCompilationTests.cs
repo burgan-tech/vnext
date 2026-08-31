@@ -1,7 +1,6 @@
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using BBT.Workflow.Definitions;
-using BBT.Workflow.Monitoring;
 using BBT.Workflow.Scripting.Evaluators;
 using BBT.Workflow.Scripting.Functions;
 using BBT.Workflow.Scripting.Helpers;
@@ -49,7 +48,6 @@ public class FanOutMappingScriptCompilationTests
         return new ScriptEngine(
             evaluator,
             Mock.Of<IScriptServices>(),
-            Mock.Of<IWorkflowMetrics>(),
             new ScriptHelperRegistry(evaluator),
             new ScriptHelpersOptions { Enabled = false },
             serviceProvider,

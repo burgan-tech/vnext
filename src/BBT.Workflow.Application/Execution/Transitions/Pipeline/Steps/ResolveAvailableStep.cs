@@ -30,7 +30,7 @@ public sealed class ResolveAvailableStep(
         // Check if instance should become Available
         if (!ShouldSetAvailable(context))
         {
-            return Result<StepOutcome>.Ok(StepOutcome.Continue());
+            return Result<StepOutcome>.Ok(StepOutcome.ContinueNoWork());
         }
 
         // Defer status update to after post-commit jobs complete

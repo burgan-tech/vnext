@@ -9,7 +9,6 @@ using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Execution.Services;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
-using BBT.Workflow.Monitoring;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Shared;
 using Microsoft.Extensions.Logging;
@@ -26,7 +25,6 @@ public sealed class FlowTimeoutJobHandler(
     IInstanceRepository instanceRepository,
     IInstanceJobRepository jobRepository,
     IComponentCacheStore componentCacheStore,
-    IWorkflowMetrics workflowMetrics,
     IWorkflowExecutionService workflowExecutionService,
     IRuntimeInfoProvider runtimeInfoProvider,
     ILogger<FlowTimeoutJobHandler> logger,
@@ -148,14 +146,9 @@ public sealed class FlowTimeoutJobHandler(
                         return;
                     }
 
-                    // Re-read instance to get updated Duration for metrics (set by HandleFinishStep if Finish state)
-                    var updatedInstance =
-                        await instanceRepository.FindAsync(p => p.Id == args.InstanceId, true, cancellationToken);
-                    var durationSeconds = updatedInstance?.Duration?.TotalSeconds;
-
-                    workflowMetrics.RecordInstanceTimedOut(instance.Flow, runtimeInfoProvider.Domain, currentStatus,
-                        durationSeconds);
-
+                    // NOTE: the post-pipeline instance re-read that used to live here fed the
+                    // removed prometheus timeout metric and nothing else — a full-detail
+                    // cartesian load per timeout with no remaining consumer.
                     activity?.SetStatus(ActivityStatusCode.Ok);
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)

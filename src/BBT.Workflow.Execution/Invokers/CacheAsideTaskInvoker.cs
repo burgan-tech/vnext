@@ -63,14 +63,13 @@ public sealed class CacheAsideTaskInvoker : ITaskInvoker<CacheAsideBinding>
         CacheAsideBinding binding,
         CancellationToken cancellationToken)
     {
-        var stopwatch = Stopwatch.StartNew();
+        var startTimestamp = Stopwatch.GetTimestamp();
 
         if (string.IsNullOrWhiteSpace(binding.Key))
         {
-            stopwatch.Stop();
             return TaskInvocationResult.Failure(
                 error: "CacheAside requires a non-empty 'key'.",
-                executionDurationMs: stopwatch.ElapsedMilliseconds,
+                executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
                 taskType: TaskType);
         }
 
@@ -79,11 +78,10 @@ public sealed class CacheAsideTaskInvoker : ITaskInvoker<CacheAsideBinding>
 
         if (!canCache && !binding.BypassOnCacheError)
         {
-            stopwatch.Stop();
             return TaskInvocationResult.Failure(
                 error: "State store name is not configured: set 'storeName' in the task config " +
                        "or the DAPR_STATE_STORE_NAME configuration value.",
-                executionDurationMs: stopwatch.ElapsedMilliseconds,
+                executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
                 taskType: TaskType);
         }
 
@@ -92,16 +90,19 @@ public sealed class CacheAsideTaskInvoker : ITaskInvoker<CacheAsideBinding>
         {
             try
             {
+                // The hit/miss decision is the whole point of this task type; without a span for it
+                // a reader can only infer the outcome from whether a source-task span follows.
+                using var readActivity = InvokerActivityHelper.StartCacheAsideActivity("Read", binding.Key);
                 var entry = await _stateStore.GetAsync(
                     storeName!, binding.Key, binding.Consistency, metadata: null, cancellationToken);
+                InvokerActivityHelper.SetCacheHit(readActivity, entry.Found);
 
                 if (entry.Found)
                 {
-                    stopwatch.Stop();
                     return TaskInvocationResult.Success(
                         data: entry.Value,
                         body: entry.Value.GetRawText(),
-                        executionDurationMs: stopwatch.ElapsedMilliseconds,
+                        executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
                         taskType: TaskType,
                         metadata: Metadata(binding, storeName!, cacheHit: true, refreshed: false, entry.ETag));
                 }
@@ -114,10 +115,9 @@ public sealed class CacheAsideTaskInvoker : ITaskInvoker<CacheAsideBinding>
             {
                 if (!binding.BypassOnCacheError)
                 {
-                    stopwatch.Stop();
                     return TaskInvocationResult.Failure(
                         error: $"CacheAside read failed: {ex.Message}",
-                        executionDurationMs: stopwatch.ElapsedMilliseconds,
+                        executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
                         taskType: TaskType,
                         metadata: new Dictionary<string, object> { ["ExceptionType"] = ex.GetType().Name });
                 }
@@ -133,7 +133,6 @@ public sealed class CacheAsideTaskInvoker : ITaskInvoker<CacheAsideBinding>
         var sourceResult = await registry.InvokeAsync(binding.SourceTask, cancellationToken);
         if (!sourceResult.IsSuccess || sourceResult.Data is null)
         {
-            stopwatch.Stop();
             // Propagate the source outcome unchanged (a business failure flows to the error boundary chain;
             // a null result is simply not cached).
             return sourceResult;
@@ -144,6 +143,7 @@ public sealed class CacheAsideTaskInvoker : ITaskInvoker<CacheAsideBinding>
         {
             try
             {
+                using var writeActivity = InvokerActivityHelper.StartCacheAsideActivity("Write", binding.Key);
                 await _stateStore.SetAsync(
                     storeName!, binding.Key, sourceResult.Data, binding.TtlInSeconds, binding.Consistency,
                     concurrency: null, etag: null, metadata: null, cancellationToken);
@@ -156,10 +156,9 @@ public sealed class CacheAsideTaskInvoker : ITaskInvoker<CacheAsideBinding>
             {
                 if (!binding.BypassOnCacheError)
                 {
-                    stopwatch.Stop();
                     return TaskInvocationResult.Failure(
                         error: $"CacheAside write failed: {ex.Message}",
-                        executionDurationMs: stopwatch.ElapsedMilliseconds,
+                        executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
                         taskType: TaskType,
                         metadata: new Dictionary<string, object> { ["ExceptionType"] = ex.GetType().Name });
                 }
@@ -170,11 +169,10 @@ public sealed class CacheAsideTaskInvoker : ITaskInvoker<CacheAsideBinding>
             }
         }
 
-        stopwatch.Stop();
         return TaskInvocationResult.Success(
             data: sourceResult.Data,
             body: sourceResult.Body,
-            executionDurationMs: stopwatch.ElapsedMilliseconds,
+            executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
             taskType: TaskType,
             metadata: Metadata(binding, storeName ?? string.Empty, cacheHit: false, refreshed: true, etag: null));
     }

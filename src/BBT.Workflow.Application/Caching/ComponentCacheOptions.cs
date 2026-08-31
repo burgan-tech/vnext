@@ -90,17 +90,26 @@ public sealed class ComponentCacheOptions
 
     /// <summary>
     /// Gets or sets how long, in seconds, a generation token may be memoized in process.
-    /// Default is 0 (disabled).
+    /// Default is 5; zero disables the memo.
     /// </summary>
     /// <remarks>
-    /// Resolving a range version costs one extra distributed-cache read to fetch the generation token.
-    /// Setting this above zero removes that read for the configured interval, at the cost of serving a
-    /// stale resolution for up to that long after a publish. It is off by default because correctness
-    /// comes first and because in-process state is otherwise avoided in this codebase for cache data —
-    /// enable it deliberately, and only if the extra read is shown to matter.
+    /// Resolving a range version costs one extra distributed-cache read to fetch the generation token,
+    /// and that read is unavoidable for a <c>res:</c> lookup because the token is part of the key.
+    /// Setting this above zero removes the read for the configured interval, at the cost of serving a
+    /// stale resolution for up to that long after a publish — the memo caches the token itself, so a
+    /// bump written by another pod is invisible here until it expires. That is the whole trade, and it
+    /// is the one thing L1 does not share: an L1 key embeds the token, so L1 cannot go stale at all.
+    /// <para>
+    /// It was off by default until the cost was measured rather than assumed. A single business request
+    /// traced end to end issued 74 token reads for 12 distinct components — every component resolution
+    /// asking again, ~1.1 ms each. Five seconds collapses that to roughly one read per component per
+    /// interval while bounding staleness to a window well under the time a publish takes to roll out.
+    /// Raise it only against the same measurement; lower it to zero where a publish must be visible
+    /// cluster-wide immediately.
+    /// </para>
     /// </remarks>
     [Range(0, 60)]
-    public int GenerationMemoSeconds { get; set; } = 0;
+    public int GenerationMemoSeconds { get; set; } = 5;
 
     /// <summary>
     /// Gets or sets whether publishing also deletes cache keys written by the pre-generation key

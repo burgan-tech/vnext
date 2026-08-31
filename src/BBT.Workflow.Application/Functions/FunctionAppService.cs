@@ -11,7 +11,6 @@ using BBT.Workflow.Functions.Contracts;
 using BBT.Workflow.Functions.Validation;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
-using BBT.Workflow.Monitoring;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks;
@@ -38,8 +37,7 @@ public sealed class FunctionAppService(
     IStateStoreCacheGateway cacheGateway,
     IRemoteInvokerService remoteInvoker,
     IFunctionAccessPolicy functionAccessPolicy,
-    IFunctionRequestValidationService functionRequestValidationService,
-    IWorkflowMetrics workflowMetrics)
+    IFunctionRequestValidationService functionRequestValidationService)
     : ApplicationService(serviceProvider), IFunctionAppService
 {
     /// <inheritdoc />
@@ -422,11 +420,7 @@ public sealed class FunctionAppService(
             {
                 var handler = await scriptEngine.CompileToInstanceAsync<IOutputHandler>(
                     function.Output, flowScripts: scriptContext.Workflow?.Scripts, cancellationToken: cancellationToken);
-                var executeStart = Stopwatch.GetTimestamp();
                 var scriptResponse = await handler.OutputHandler(scriptContext);
-                workflowMetrics.RecordScriptExecutionDuration(
-                    "function", "csharp", "success",
-                    Stopwatch.GetElapsedTime(executeStart).TotalSeconds);
 
                 if (function.RawResponse)
                     return Result<FunctionResponseOutput>.Ok(CreateRawResponse(
@@ -445,7 +439,6 @@ public sealed class FunctionAppService(
             {
                 if (ex is not OperationCanceledException)
                 {
-                    workflowMetrics.RecordScriptRuntimeError("function", "csharp", ex.GetType().Name);
                 }
                 Logger.LogError(
                     ex,

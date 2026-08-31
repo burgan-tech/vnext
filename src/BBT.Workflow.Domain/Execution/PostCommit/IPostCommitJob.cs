@@ -47,7 +47,7 @@ public interface IIdempotentPostCommitJob : IPostCommitJob
 public sealed record StartSubflowJob(
     Guid CorrelationId,
     string TargetStateKey,
-    PostCommitContinuationBehavior ContinuationBehavior) : IIdempotentPostCommitJob, IPostCommitContinuationJob
+    PostCommitContinuationBehavior ContinuationBehavior) : IPostCommitContinuationJob
 {
     /// <inheritdoc />
     public string IdempotencyKey => $"subflow:{CorrelationId}";

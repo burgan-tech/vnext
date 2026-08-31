@@ -32,6 +32,17 @@
       "replacement": null,
       "severity": "warning",
       "message": "The ExtensionScope member GetHistoryTransition was removed. It shared its numeric value (2) with GetAllInstances, was never accepted by the extension component schema (scope allows 1, 2, 3), was never handled by the scope switch and was never referenced by any code path, so no authored extension could request it and no stored value ever meant it. Extensions on the transitions-history endpoint are not supported; reinstating that capability requires a new scope value plus runtime wiring."
+    },
+    {
+      "id": "discovery-refresh-endpoint",
+      "type": "behavior",
+      "component": "api",
+      "path": "POST utilities/discovery/refresh",
+      "deprecatedSince": "0.0.85",
+      "removedAt": null,
+      "replacement": null,
+      "severity": "warning",
+      "message": "Discovery is no longer cached; every resolution queries the registry directly. The endpoint is a no-op kept for compatibility."
     }
   ]
 }

@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using BBT.Aether.Telemetry;
 using BBT.Workflow.Logging;
 
 namespace BBT.Workflow.Tasks.Coordinator;
@@ -89,7 +88,11 @@ public static class TaskExecutionActivityHelper
     }
 
     /// <summary>
-    /// Starts a new activity as a child of the current activity for an executor phase.
+    /// Starts a new activity as a child of the current activity for an executor phase
+    /// (PrepareInput, Invoke, ProcessOutput). These phases are business-level and always on —
+    /// not gated behind verbose tracing — so they are visible under the existing
+    /// <c>Task.Execute.{key}</c> span (created by Aether's <c>[Trace]</c> aspect on
+    /// <c>TaskExecutionEngine.ExecuteAsync</c>) in every trace, not just verbose ones.
     /// When taskKey/taskType are provided, enriches the span with standard tags for filtering.
     /// </summary>
     /// <param name="operationName">The name of the operation (e.g. Task.PrepareInput, Task.Invoke, Task.ProcessOutput).</param>
@@ -101,9 +104,6 @@ public static class TaskExecutionActivityHelper
         string? taskKey = null,
         string? taskType = null)
     {
-        if (!AetherTracingRuntime.IsVerbose)
-            return null;
-
         var parentContext = Activity.Current?.Context ?? default;
 
         var activity = ActivitySource.StartActivity(
@@ -118,7 +118,7 @@ public static class TaskExecutionActivityHelper
             if (!string.IsNullOrEmpty(taskType))
                 activity.SetTag(TelemetryConstants.TagNames.TaskType, taskType);
             activity.SetTag(TelemetryConstants.TagNames.Layer, TelemetryConstants.Layers.Orchestration);
-            activity.SetTag(TelemetryConstants.TagNames.SpanCategory, TelemetryConstants.SpanCategories.Diagnostic);
+            activity.SetTag(TelemetryConstants.TagNames.SpanCategory, TelemetryConstants.SpanCategories.Business);
         }
 
         return activity;

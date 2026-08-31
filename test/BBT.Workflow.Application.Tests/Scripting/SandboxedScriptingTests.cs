@@ -198,7 +198,7 @@ public class SandboxedScriptingTests
         const string code =
             "public class C : ISandboxTestCalc { public int Calc() => System.Uri.EscapeDataString(\"a b\").Length; }";
 
-        var ex = await Should.ThrowAsync<System.InvalidOperationException>(async () =>
+        var ex = await Should.ThrowAsync<ScriptCompilationException>(async () =>
             await evaluator.CompileToInstanceAsync<ISandboxTestCalc>(
                 code, extraReferences: [ContractRef], usingDirectives: ["BBT.Workflow.Scripting"]));
 

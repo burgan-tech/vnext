@@ -2,7 +2,7 @@ using BBT.Aether.DependencyInjection;
 using BBT.Aether.MultiSchema;
 using BBT.Aether.Results;
 using BBT.Workflow.Caching;
-using BBT.Workflow.DefinitionContext;
+using BBT.Workflow.Execution;
 using BBT.Workflow.Instances;
 
 namespace Microsoft.Extensions.DependencyInjection;
@@ -129,6 +129,11 @@ public static class ServiceScopeFactoryExtensions
     /// <param name="workflowVersion">Optional workflow version; null resolves to the latest version.</param>
     /// <param name="action">The async operation to execute once the workflow is loaded.</param>
     /// <param name="cancellationToken">Cancellation token for the operation.</param>
+    /// <param name="carrier">
+    /// Optional context carrying a workflow already resolved for these coordinates; supplying it skips
+    /// the cache lookup, and leaving it null lets the loaded workflow be published back onto the
+    /// context for the layers downstream. See the private helper for the full contract.
+    /// </param>
     /// <returns>A <see cref="Result{T}"/> containing the operation outcome or a workflow loading error.</returns>
     public static Task<Result<T>> ExecuteWithWorkflowAsync<T>(
         this IServiceScopeFactory scopeFactory,
@@ -136,13 +141,15 @@ public static class ServiceScopeFactoryExtensions
         string workflowKey,
         string? workflowVersion,
         Func<IServiceProvider, CancellationToken, Task<Result<T>>> action,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        WorkflowExecutionContext? carrier = null)
     {
         return scopeFactory.ExecuteInScopeAsync(
             (sp, ct) => WithWorkflowScopeAsync(
                 sp, domain, workflowKey, workflowVersion, ct,
                 () => action(sp, ct),
-                Result<T>.Fail),
+                Result<T>.Fail,
+                carrier),
             cancellationToken);
     }
 
@@ -234,8 +241,8 @@ public static class ServiceScopeFactoryExtensions
     #region Private Helpers
 
     /// <summary>
-    /// Core workflow setup: activates the schema, loads the workflow from cache, sets it in
-    /// <see cref="IWorkflowContext"/>, then delegates to <paramref name="action"/>.
+    /// Core workflow setup: activates the schema scope, loads the workflow from cache, then
+    /// delegates to <paramref name="action"/>.
     /// </summary>
     /// <typeparam name="TResult">The return type of the action.</typeparam>
     /// <param name="sp">The scoped service provider.</param>
@@ -245,6 +252,12 @@ public static class ServiceScopeFactoryExtensions
     /// <param name="ct">Cancellation token.</param>
     /// <param name="action">The operation to execute after the workflow is loaded.</param>
     /// <param name="onWorkflowLoadFailed">Called when the workflow cannot be loaded; maps the error to TResult.</param>
+    /// <param name="carrier">
+    /// Optional context carrying a workflow the caller has already resolved for these exact
+    /// coordinates. When supplied, the cache lookup is skipped and the definition is reused; when the
+    /// caller has none, the workflow loaded here is published back onto it so the layers downstream
+    /// resolve it once instead of once each.
+    /// </param>
     private static async Task<TResult> WithWorkflowScopeAsync<TResult>(
         IServiceProvider sp,
         string domain,
@@ -252,20 +265,30 @@ public static class ServiceScopeFactoryExtensions
         string? workflowVersion,
         CancellationToken ct,
         Func<Task<TResult>> action,
-        Func<Error, TResult> onWorkflowLoadFailed)
+        Func<Error, TResult> onWorkflowLoadFailed,
+        WorkflowExecutionContext? carrier = null)
     {
         var currentSchema = sp.GetRequiredService<ICurrentSchema>();
         var componentCacheStore = sp.GetRequiredService<IComponentCacheStore>();
-        var workflowContext = sp.GetRequiredService<IWorkflowContext>();
 
         using (currentSchema.Change(workflowKey))
         {
-            var workflowResult = await componentCacheStore.GetFlowAsync(domain, workflowKey, workflowVersion, ct);
+            // The caller may already have resolved this exact definition (the intake did, before
+            // dispatching). Reuse it, and otherwise publish what we load back onto the carrier so
+            // the layers inside the scope — the context factory above all — do not resolve it a
+            // third time. The load stays INSIDE the schema scope: on a cache miss it reaches the
+            // database, which is schema-bound.
+            var carried = carrier?.ResolvedWorkflow;
+            if (carried is null)
+            {
+                var workflowResult = await componentCacheStore.GetFlowAsync(domain, workflowKey, workflowVersion, ct);
 
-            if (!workflowResult.IsSuccess)
-                return onWorkflowLoadFailed(workflowResult.Error);
+                if (!workflowResult.IsSuccess)
+                    return onWorkflowLoadFailed(workflowResult.Error);
 
-            workflowContext.SetWorkflow(workflowResult.Value!);
+                if (carrier is not null)
+                    carrier.ResolvedWorkflow = workflowResult.Value!;
+            }
 
             return await action();
         }

@@ -1,7 +1,6 @@
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Scripting.Functions;
 using Microsoft.CodeAnalysis;
-using Microsoft.CodeAnalysis.Scripting;
 
 namespace BBT.Workflow.Scripting;
 
@@ -47,7 +46,7 @@ public interface IScriptCompiler
     /// <param name="usingDirectives">Optional additional using directives to include</param>
     /// <param name="cancellationToken">Token to cancel the operation</param>
     /// <returns>A task containing the compiled instance of type T</returns>
-    /// <exception cref="CompilationErrorException">Thrown when the code contains compilation errors</exception>
+    /// <exception cref="Sandbox.ScriptCompilationException">Thrown when the code contains compilation errors</exception>
     /// <exception cref="InvalidOperationException">Thrown when the code cannot be compiled to the target type</exception>
     /// <exception cref="OperationCanceledException">Thrown when the operation is cancelled</exception>
     Task<T> CompileToInstanceAsync<T>(

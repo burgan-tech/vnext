@@ -53,6 +53,14 @@ public sealed class HookedDistributedEventBus : IDistributedEventBus
     private static readonly ConcurrentDictionary<Type, EventHookMode?> EventHookModeCache = new();
 
     /// <summary>
+    /// Source for per-hook execution spans. The name is deliberately the one three hosts already
+    /// list in Telemetry:Tracing:AdditionalSources ("BBT.Workflow.Instances.Events"), so creating
+    /// the source lights those hosts up without config changes; the Execution host's entry is
+    /// added alongside this change.
+    /// </summary>
+    private static readonly ActivitySource HookActivitySource = new("BBT.Workflow.Instances.Events");
+
+    /// <summary>
     /// Initializes a new instance of the <see cref="HookedDistributedEventBus"/> class.
     /// </summary>
     public HookedDistributedEventBus(
@@ -327,6 +335,23 @@ public sealed class HookedDistributedEventBus : IDistributedEventBus
         {
             var hookName = invoker.HookName;
 
+            // One span per hook, named after the hook and parented to whatever is ambient — Uow.Commit
+            // for DurablePostCommit (OnCompleted runs inside CommitAsync), Events.PublishDeferred for
+            // HandledOrFallback. This is what attributes a hook's remote calls to the hook: those
+            // client spans become THIS span's children instead of hanging directly under the commit.
+            //
+            // Deliberately the implicit-parent overload (name + kind only): passing an explicit parent
+            // context (even Activity.Current?.Context) sets Activity.Parent to null, and GetBaggageItem
+            // walks the Parent chain — so an explicit parent silently severs baggage (e.g. RootInstanceId)
+            // from everything inside the hook, even though the span's displayed parent id is identical.
+            using var hookActivity = HookActivitySource.StartActivity(
+                $"EventHook.{TrimHookSuffix(hookName)}",
+                ActivityKind.Internal);
+            hookActivity?.SetTag(TelemetryConstants.TagNames.EventName, eventType.Name);
+            hookActivity?.SetTag(TelemetryConstants.TagNames.HookName, hookName);
+            hookActivity?.SetTag(TelemetryConstants.TagNames.HookMode, GetEventHookMode(eventType)?.ToString());
+            hookActivity?.SetTag(TelemetryConstants.TagNames.SpanCategory, TelemetryConstants.SpanCategories.Business);
+
             try
             {
                 // Direct invocation via invoker - no reflection!
@@ -353,6 +378,7 @@ public sealed class HookedDistributedEventBus : IDistributedEventBus
 
                     metadata[$"hook_error_{hookName}"] = result.Exception?.GetType().Name ?? "Unknown";
                     metadata[$"hook_error_{hookName}_message"] = result.Exception?.Message ?? "No message";
+                    hookActivity?.SetStatus(ActivityStatusCode.Error, result.Exception?.Message ?? "No message");
                 }
                 else
                 {
@@ -370,6 +396,7 @@ public sealed class HookedDistributedEventBus : IDistributedEventBus
 
                 metadata[$"hook_error_{hookName}"] = ex.GetType().Name;
                 metadata[$"hook_error_{hookName}_message"] = ex.Message;
+                hookActivity?.SetStatus(ActivityStatusCode.Error, ex.Message);
             }
         }
 
@@ -445,6 +472,16 @@ public sealed class HookedDistributedEventBus : IDistributedEventBus
             .Where(invoker => invoker.EventType == eventType)
             .ToList();
     }
+
+    /// <summary>
+    /// Trims the conventional "EventHook"/"Hook" suffix for the span NAME only — the display name
+    /// reads as the subject ("EventHook.InstanceSubFaulted"), while vnext.hook.name keeps the full
+    /// class name for querying. Mirrors the Step-span convention of trimming the "Step" suffix.
+    /// </summary>
+    private static string TrimHookSuffix(string hookName) =>
+        hookName.EndsWith("EventHook", StringComparison.Ordinal) ? hookName[..^"EventHook".Length]
+        : hookName.EndsWith("Hook", StringComparison.Ordinal) ? hookName[..^"Hook".Length]
+        : hookName;
 
     /// <summary>
     /// Attempts to add hook metadata to the event if the event type supports it.

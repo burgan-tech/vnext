@@ -10,7 +10,6 @@ using BBT.Aether.Uow;
 using BBT.Aether.Users;
 using BBT.Workflow.Authorization;
 using BBT.Workflow.Caching;
-using BBT.Workflow.DefinitionContext;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.LongPoll;
@@ -82,8 +81,6 @@ public class InstanceCommandAppServiceBusyFastFailTests : IDisposable
             transitionDataMapper: Substitute.For<ITransitionDataMapper>(),
             transitionValidationService: Substitute.For<ITransitionValidationService>(),
             transitionAdmissionService: _admissionService,
-            transitionContextFactory: Substitute.For<ITransitionContextFactory>(),
-            workflowContext: Substitute.For<IWorkflowContext>(),
             representationEtagService: Substitute.For<IRepresentationEtagService>(),
             schemaFieldFilterService: Substitute.For<ISchemaFieldFilterService>(),
             instanceExtensionService: Substitute.For<IInstanceExtensionService>(),
@@ -130,14 +127,15 @@ public class InstanceCommandAppServiceBusyFastFailTests : IDisposable
         // Forward adayı — fast-fail devreye girmez; tam yükleme yapılır (pipeline forward eder).
         var instanceId = Guid.NewGuid();
         SetupSnapshot(instanceId, InstanceStatus.Busy, hasActiveSubFlow: true);
-        _instanceRepository.GetActiveAsync(instanceId.ToString(), Arg.Any<CancellationToken>())
-            .Returns(Result<Instance>.Fail(WorkflowErrors.InstanceNotFound(instanceId.ToString())));
-
         await _service.TransitionAsync(
             instanceId.ToString(), "regular-transition", CreateInput(), CancellationToken.None);
 
-        await _instanceRepository.Received(1)
-            .GetActiveAsync(instanceId.ToString(), Arg.Any<CancellationToken>());
+        // "Falls through" now means the request reaches the execution service. The intake no
+        // longer materializes the aggregate — the execution entry does, in its own scope.
+        await _executionService.Received(1)
+            .ExecuteTransitionAsync(Arg.Any<WorkflowExecutionContext>(), Arg.Any<CancellationToken>());
+        await _instanceRepository.DidNotReceive()
+            .GetActiveAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -149,14 +147,13 @@ public class InstanceCommandAppServiceBusyFastFailTests : IDisposable
         _admissionService
             .ClassifyKey(Arg.Any<Definitions.Workflow>(), "cancel")
             .Returns(AdmissionKind.BypassBusyCheck);
-        _instanceRepository.GetActiveAsync(instanceId.ToString(), Arg.Any<CancellationToken>())
-            .Returns(Result<Instance>.Fail(WorkflowErrors.InstanceNotFound(instanceId.ToString())));
-
         await _service.TransitionAsync(
             instanceId.ToString(), "cancel", CreateInput(), CancellationToken.None);
 
-        await _instanceRepository.Received(1)
-            .GetActiveAsync(instanceId.ToString(), Arg.Any<CancellationToken>());
+        // "Falls through" now means the request reaches the execution service; the intake no
+        // longer materializes the aggregate.
+        await _executionService.Received(1)
+            .ExecuteTransitionAsync(Arg.Any<WorkflowExecutionContext>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -164,14 +161,15 @@ public class InstanceCommandAppServiceBusyFastFailTests : IDisposable
     {
         var instanceId = Guid.NewGuid();
         SetupSnapshot(instanceId, InstanceStatus.Active, hasActiveSubFlow: false);
-        _instanceRepository.GetActiveAsync(instanceId.ToString(), Arg.Any<CancellationToken>())
-            .Returns(Result<Instance>.Fail(WorkflowErrors.InstanceNotFound(instanceId.ToString())));
-
         await _service.TransitionAsync(
             instanceId.ToString(), "regular-transition", CreateInput(), CancellationToken.None);
 
-        await _instanceRepository.Received(1)
-            .GetActiveAsync(instanceId.ToString(), Arg.Any<CancellationToken>());
+        // "Falls through" now means the request reaches the execution service. The intake no
+        // longer materializes the aggregate — the execution entry does, in its own scope.
+        await _executionService.Received(1)
+            .ExecuteTransitionAsync(Arg.Any<WorkflowExecutionContext>(), Arg.Any<CancellationToken>());
+        await _instanceRepository.DidNotReceive()
+            .GetActiveAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
         _admissionService.DidNotReceive()
             .ClassifyKey(Arg.Any<Definitions.Workflow>(), Arg.Any<string>());
     }
@@ -187,18 +185,16 @@ public class InstanceCommandAppServiceBusyFastFailTests : IDisposable
         _admissionService
             .ClassifyKey(Arg.Any<Definitions.Workflow>(), "regular-transition")
             .Returns(AdmissionKind.Normal);
-        _instanceRepository.GetActiveAsync(instanceId.ToString(), Arg.Any<CancellationToken>())
-            .Returns(Result<Instance>.Fail(WorkflowErrors.InstanceNotFound(instanceId.ToString())));
 
         var input = CreateInput();
         input.ChainReserved = true;
 
-        var result = await _service.TransitionAsync(
+        await _service.TransitionAsync(
             instanceId.ToString(), "regular-transition", input, CancellationToken.None);
 
-        result.Error.Code.ShouldNotBe(WorkflowErrorCodes.InstanceBusy);
-        await _instanceRepository.Received(1)
-            .GetActiveAsync(instanceId.ToString(), Arg.Any<CancellationToken>());
+        // The claim exempts the relay from the Busy fast-fail, so the request reaches execution.
+        await _executionService.Received(1)
+            .ExecuteTransitionAsync(Arg.Any<WorkflowExecutionContext>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -220,6 +216,45 @@ public class InstanceCommandAppServiceBusyFastFailTests : IDisposable
 
         result.IsSuccess.ShouldBeFalse();
         result.Error.Code.ShouldBe(WorkflowErrorCodes.InstanceBusy);
+    }
+
+    [Fact]
+    public async Task TransitionAsync_NoSnapshotRow_ReturnsInstanceNotFound()
+    {
+        // The intake resolves the identifier through the projection now, so the not-found answer
+        // has to come from here — it used to fall out of the aggregate load.
+        var instanceId = Guid.NewGuid();
+        _instanceRepository
+            .GetExecutionSnapshotAsync(instanceId.ToString(), Arg.Any<CancellationToken>())
+            .Returns((InstanceExecutionSnapshot?)null);
+
+        var result = await _service.TransitionAsync(
+            instanceId.ToString(), "regular-transition", CreateInput(), CancellationToken.None);
+
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.InstanceNotFound);
+        await _executionService.DidNotReceiveWithAnyArgs()
+            .ExecuteTransitionAsync(default!, default);
+    }
+
+    [Theory]
+    [InlineData("C")]
+    [InlineData("F")]
+    [InlineData("P")]
+    public async Task TransitionAsync_TerminalInstance_IsRejectedBeforeDispatch(string statusCode)
+    {
+        // Completed, Faulted and Passive are all terminal for admission — the aggregate load used
+        // to enforce that, so the projection path must enforce exactly the same set.
+        var instanceId = Guid.NewGuid();
+        SetupSnapshot(instanceId, InstanceStatus.FromCode(statusCode), hasActiveSubFlow: false);
+
+        var result = await _service.TransitionAsync(
+            instanceId.ToString(), "regular-transition", CreateInput(), CancellationToken.None);
+
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.InstanceCompleted);
+        await _executionService.DidNotReceiveWithAnyArgs()
+            .ExecuteTransitionAsync(default!, default);
     }
 
     private void SetupSnapshot(Guid instanceId, InstanceStatus status, bool hasActiveSubFlow)
