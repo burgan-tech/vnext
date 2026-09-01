@@ -308,6 +308,16 @@ public static class TelemetryConstants
         /// <summary>Which delivery path produced a subflow settlement: relay (immediate) or inbox (durable backup).</summary>
         public const string DeliveryRole = "vnext.delivery.role";
 
+
+        /// <summary>Full name of the executing hook (untrimmed, e.g. <c>InstanceSubFaultedEventHook</c>).</summary>
+        public const string HookName = "vnext.hook.name";
+
+        /// <summary>
+        /// Hook execution mode: <c>HandledOrFallback</c> (at publish, under Events.PublishDeferred) or
+        /// <c>DurablePostCommit</c> (inside the UoW commit, under Uow.Commit).
+        /// </summary>
+        public const string HookMode = "vnext.hook.mode";
+
         /// <summary>Domain whose endpoint is being resolved from service discovery. Set on every Discovery.Resolve span.</summary>
         public const string DiscoveryDomain = "vnext.discovery.domain";
 

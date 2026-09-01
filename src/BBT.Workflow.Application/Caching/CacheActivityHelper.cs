@@ -81,7 +81,8 @@ public static class CacheActivityHelper
 
         var activity = ActivitySource.StartActivity(
             spanName,
-            ActivityKind.Client);
+            ActivityKind.Client,
+            Activity.Current?.Context ?? default);
 
         if (activity is not null)
         {
