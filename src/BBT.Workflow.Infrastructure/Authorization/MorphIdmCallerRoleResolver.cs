@@ -115,11 +115,13 @@ public sealed class MorphIdmCallerRoleResolver : ICallerRoleResolver
     {
         var subject = _currentUser.UserName;
         var actor = _currentUser.ActorUserName;
+        var clientId = HeaderValue(headers, AetherClaimTypes.ClientId);
         // Position now rides on ICurrentUser, populated by the framework's HeaderCurrentUserResolver
         // from the `position` claim header. The forwarded-header fallback stays for scopes with no
         // ambient HTTP request — a background transition job resolving roles carries the caller's
         // headers as a dictionary, and nothing has populated ICurrentUser there.
         var position = _currentUser.Position ?? HeaderValue(headers, AetherClaimTypes.Position);
+       
 
         using var activity = AuthorizationActivityHelper.StartResolveRoles(
             CallerRoleProviderOptions.MorphIdmProvider);
@@ -132,6 +134,7 @@ public sealed class MorphIdmCallerRoleResolver : ICallerRoleResolver
             AddHeader(request, AetherClaimTypes.ActorSub, actor);
             AddHeader(request, AetherClaimTypes.UserName, subject);
             AddHeader(request, AetherClaimTypes.Position, position);
+            AddHeader(request, AetherClaimTypes.ClientId, clientId);
 
             using var response = await _httpClient.SendAsync(request, cancellationToken);
 
