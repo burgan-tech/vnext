@@ -1,7 +1,6 @@
 using System.Text.Json;
 using BBT.Workflow.Caching;
 using BBT.Workflow.Definitions;
-using BBT.Workflow.Monitoring;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using NSubstitute;
@@ -28,8 +27,7 @@ public sealed class PooledTaskFactoryTests
             {
                 UseObjectPooling = true,
                 PooledTaskTypes = ["ExternalHttpTask"]
-            }),
-            Substitute.For<IWorkflowMetrics>());
+            }));
 
         var cached = ExternalHttpTask.Create(JsonDocument.Parse("""
         {

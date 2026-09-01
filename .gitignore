@@ -309,3 +309,4 @@ BBT.Workflow.*.csproj.cache
 
 # BenchmarkDotNet run output
 BenchmarkDotNet.Artifacts/
+docs/superpowers/specs/2026-08-27-performans-firsatlari.md

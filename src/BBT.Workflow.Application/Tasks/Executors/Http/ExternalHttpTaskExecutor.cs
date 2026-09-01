@@ -3,7 +3,6 @@ using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution.Bindings;
 using BBT.Workflow.Logging;
-using BBT.Workflow.Monitoring;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks.Mapping;
 using Microsoft.Extensions.Logging;
@@ -40,9 +39,8 @@ public sealed class ExternalHttpTaskExecutor : TaskExecutorBase<HttpTask>
         IExternalHttpTaskInvoker localInvoker,
         IScriptEngine scriptEngine,
         IRemoteInvokerService remoteInvoker,
-        ILogger<ExternalHttpTaskExecutor> logger,
-        IWorkflowMetrics metrics)
-        : base(logger, metrics)
+        ILogger<ExternalHttpTaskExecutor> logger)
+        : base(logger)
     {
         _localInvoker = localInvoker;
         _scriptEngine = scriptEngine;

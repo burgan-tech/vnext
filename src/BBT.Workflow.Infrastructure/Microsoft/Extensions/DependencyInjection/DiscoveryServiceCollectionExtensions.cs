@@ -38,6 +38,9 @@ public static class DiscoveryServiceCollectionExtensions
 
         var options = optionsSection.Get<ServiceDiscoveryOptions>() ?? new ServiceDiscoveryOptions();
 
+        // Outbound trace-id stamping for every discovery call (registration + resolution).
+        services.AddTransient<DiscoveryTraceHeaderHandler>();
+
         // Register HttpClient with Polly policies
         services.AddHttpClient(DomainRegistrationService.HttpClientName, (sp, client) =>
             {
@@ -75,6 +78,13 @@ public static class DiscoveryServiceCollectionExtensions
 
                 return handler;
             })
+            .AddHttpMessageHandler<DiscoveryTraceHeaderHandler>()
+            // Registered outermost-first: timeout wraps retry wraps circuit breaker. client.Timeout
+            // (set above from clientOptions.TimeoutSeconds) additionally bounds the whole SendAsync,
+            // so it caps the ENTIRE retry sequence, not one attempt. Raising MaxRetryAttempts without
+            // also raising TimeoutSeconds buys nothing — the extra attempts simply can't fit inside
+            // the outer timeout. See docs/superpowers/specs/2026-08-28-discovery-direct-and-load-gap-spec.md
+            // ("Decisions taken" / TimeoutSeconds) for the arithmetic.
             .AddPolicyHandler(GetTimeoutPolicy(options))
             .AddPolicyHandler(GetRetryPolicy(options))
             .AddPolicyHandler(GetCircuitBreakerPolicy(options));

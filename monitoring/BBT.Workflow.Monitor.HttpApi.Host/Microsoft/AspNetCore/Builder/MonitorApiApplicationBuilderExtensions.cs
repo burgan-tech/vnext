@@ -1,4 +1,3 @@
-using Prometheus;
 
 namespace Microsoft.AspNetCore.Builder;
 
@@ -38,9 +37,6 @@ public static class MonitorApiApplicationBuilderExtensions
         app.UseRouting();
         app.UseSchemaResolution();
         app.UseAetherUnitOfWork();
-        app.UseWorkflowHttpMetrics();
-        app.UseHttpMetrics();
-        app.MapMetrics();
         app.UseHttpBodyLogging();
         app.MapControllers();
         app.MapAppHealthChecks();

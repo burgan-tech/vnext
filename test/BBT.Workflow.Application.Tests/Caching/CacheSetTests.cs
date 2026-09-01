@@ -728,7 +728,10 @@ public class CacheSetTests
         options.GenerationTtlSeconds.ShouldBe(3600);
         options.ResolutionTtlSeconds.ShouldBe(3600);
         options.NegativeTtlSeconds.ShouldBe(30);
-        options.GenerationMemoSeconds.ShouldBe(0, "memoization trades correctness for latency");
+        options.GenerationMemoSeconds.ShouldBe(
+            5,
+            "the token read is unavoidable per resolution, so it is memoized briefly; the number is "
+            + "the bounded staleness window a publish is allowed, and changing it is a policy decision");
         options.PurgeLegacyKeysOnPublish.ShouldBeTrue();
     }
 }

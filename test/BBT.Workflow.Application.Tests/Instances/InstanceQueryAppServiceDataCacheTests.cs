@@ -71,7 +71,6 @@ public class InstanceQueryAppServiceDataCacheTests : IDisposable
         services.AddLogging();
         services.AddSingleton(mockUoWManager);
         services.AddSingleton(Substitute.For<IComponentCacheStore>());
-        services.AddSingleton(Substitute.For<BBT.Workflow.DefinitionContext.IWorkflowContext>());
         _ambientServiceProvider = services.BuildServiceProvider();
 
         _previousAmbientServiceProvider = AmbientServiceProvider.Current;

@@ -41,8 +41,13 @@ public sealed class TransitionJobHandler(
         // Dapr scheduler callback, which is transport, not the originating business request.
         using var lane = WorkflowTraceLane.Reset(args.TraceRoot, args.ParentTraceRoot, args.LaneSeq);
 
-        // Restore trace context from the original request for distributed tracing correlation
-        using var activity = BackgroundJobActivityHelper.StartFlatLaneActivity("TransitionJob.Execute", args);
+        // Restore trace context from the original request for distributed tracing correlation.
+        // The name carries the transition key because THIS span is the transaction in APM: without
+        // it every transition job aggregates under one "TransitionJob.Execute" name and the key is
+        // only reachable as a tag. It also makes the old `transition/{key}` child redundant — see
+        // TransitionExecutor.EnrichTelemetry.
+        using var activity = BackgroundJobActivityHelper.StartFlatLaneActivity(
+            $"TransitionJob.Execute/{args.TransitionKey}", args);
 
         // Payload from a build that predates the lane: make THIS hop the anchor for its own
         // descendants, which reproduces the pre-lane nesting exactly instead of half-flattening.

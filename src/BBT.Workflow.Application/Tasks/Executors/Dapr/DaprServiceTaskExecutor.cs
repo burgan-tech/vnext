@@ -3,7 +3,6 @@ using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution;
 using BBT.Workflow.Logging;
-using BBT.Workflow.Monitoring;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks.Mapping;
 using Microsoft.Extensions.Logging;
@@ -25,9 +24,8 @@ public sealed class DaprServiceTaskExecutor : TaskExecutorBase<DaprServiceTask>
     public DaprServiceTaskExecutor(
         IRemoteInvokerService remoteInvoker,
         IScriptEngine scriptEngine,
-        ILogger<DaprServiceTaskExecutor> logger,
-        IWorkflowMetrics metrics)
-        : base(logger, metrics)
+        ILogger<DaprServiceTaskExecutor> logger)
+        : base(logger)
     {
         _remoteInvoker = remoteInvoker;
         _scriptEngine = scriptEngine;
@@ -120,7 +118,7 @@ public sealed class DaprServiceTaskExecutor : TaskExecutorBase<DaprServiceTask>
             return Result<object?>.Ok(invocationResult.Data);
         }
 
-        UpdateScriptContextWithResponse(task.Key, invocationResult, context.ScriptContext);
+        UpdateScriptContextWithResponse(task.Key, invocationResult, context.ScriptContext, context.ResponseVariableKey);
 
         var result = await ResultExtensions.TryAsync<object?>(async ct =>
         {

@@ -20,6 +20,26 @@ public sealed record TaskEngineExecutionOptions
     public static readonly TaskEngineExecutionOptions Default = new();
 
     /// <summary>
+    /// Preset for tasks running under a FRESHLY INSERTED transition record: identical to
+    /// <see cref="Default"/> except the per-task journal idempotency probe is skipped — a new
+    /// record id cannot have <c>InstanceTask</c> rows, so the lookup can never find one.
+    /// </summary>
+    public static readonly TaskEngineExecutionOptions FreshTransitionRecord = new() { SkipJournalProbe = true };
+
+    /// <summary>
+    /// When true, task-journal creation skips the <c>FindByTransitionAndTaskAsync</c> idempotency
+    /// probe and inserts directly. Only safe when the caller KNOWS no journal row can exist for
+    /// this transition record — i.e. the record was inserted by this very pipeline run
+    /// (<c>CreateTransitionRecordStep</c> sets the signal). On the retry path the probe must stay:
+    /// it is what finds and reuses the previous attempt's rows, including legacy rows without an
+    /// <c>ExecutionKey</c>. The guarantee only covers the FIRST attempt: the engine's error-aware
+    /// retry loop re-executes the same (TransitionId, TaskId) identity, so it downgrades this flag
+    /// after attempt #1 — a retry that kept skipping the probe would insert a second row with the
+    /// same ExecutionKey and trip <c>UX_InstanceTasks_ExecutionKey</c>.
+    /// </summary>
+    public bool SkipJournalProbe { get; init; }
+
+    /// <summary>
     /// When true, the task output is NOT appended to instance data (collect-only execution).
     /// FanOut items use this so the batch has a single write point at the end instead of N racing writes.
     /// </summary>
@@ -52,4 +72,25 @@ public sealed record TaskEngineExecutionOptions
     /// actually exists; infrastructure failures leave it null.
     /// </summary>
     public bool CaptureResponse { get; init; }
+
+    /// <summary>
+    /// Overrides the script-context variable name this task's response is filed under — both the
+    /// <c>TaskResponse</c> merge (<c>TaskExecutorBase.UpdateScriptContextWithResponse</c>) and, for
+    /// Extension-triggered tasks, the raw <c>OutputResponse</c> entry (<c>SetOutputResponse</c>).
+    /// Null means "derive from the task key" via <c>taskKey.ToVariableName()</c> — today's
+    /// behavior, unchanged for every caller that does not set this.
+    /// </summary>
+    /// <remarks>
+    /// WHY: an extension's output belongs to the EXTENSION, not to the task it happens to
+    /// reference. Two extensions can point at the same task key while applying different
+    /// <c>Mapping</c>s to interpret the response differently — keying purely off <c>taskKey</c>
+    /// makes the second extension's write silently clobber the first's entry, in both
+    /// <c>TaskResponse</c> and <c>OutputResponse</c>. The Preprod crash traced back to the
+    /// <c>TaskResponse</c> merge specifically, so both sites must honor this, not just one. Never
+    /// gate the new key on the trigger type (<c>TaskTrigger.Extension</c>) alone — custom Functions
+    /// share that trigger value and read their output by task key (see
+    /// <c>FunctionAppService.cs</c>); this option, left null by every caller except the extension
+    /// path, is the only thing that may change the key.
+    /// </remarks>
+    public string? ResponseVariableKey { get; init; }
 }

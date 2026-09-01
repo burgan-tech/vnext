@@ -9,7 +9,6 @@ using BBT.Aether.Results;
 using BBT.Aether.Uow;
 using BBT.Aether.Users;
 using BBT.Workflow.Caching;
-using BBT.Workflow.DefinitionContext;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.Continuations;
@@ -278,7 +277,6 @@ public sealed class TransitionRunnerPostCommitTests
 
             services.AddSingleton(currentSchema);
             services.AddSingleton(cacheStore);
-            services.AddScoped(_ => Substitute.For<IWorkflowContext>());
             services.AddScoped(_ =>
             {
                 var probe = new CurrentUserScopeProbe();

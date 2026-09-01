@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
-using BBT.Workflow.Monitoring;
 using BBT.Workflow.Scripting.Functions;
 using Microsoft.CodeAnalysis;
 using Moq;
@@ -24,7 +23,6 @@ public class ScriptEngineTests : ApplicationTestBase<ApplicationEntryPoint>
     private readonly Mock<DaprClient> _mockDaprClient = new();
 
     // Field (not a local in AddApplication) so tests can verify metrics recording calls.
-    private readonly Mock<IWorkflowMetrics> _mockWorkflowMetrics = new();
 
     public ScriptEngineTests()
     {
@@ -51,9 +49,6 @@ public class ScriptEngineTests : ApplicationTestBase<ApplicationEntryPoint>
         // Mock Configuration for IScriptServices
         var mockConfiguration = new Mock<IConfiguration>();
         services.AddSingleton(mockConfiguration.Object);
-        
-        // Mock IWorkflowMetrics
-        services.AddSingleton(_mockWorkflowMetrics.Object);
         
         base.AddApplication(services);
     }
@@ -445,22 +440,8 @@ public class ScriptEngineTests : ApplicationTestBase<ApplicationEntryPoint>
         await _scriptEngine.CompileToInstanceAsync<ITransitionMapping>(code, references);
         await _scriptEngine.CompileToInstanceAsync<ITransitionMapping>(code, references);
 
-        // Assert - new counter: 1 miss + 1 hit
-        _mockWorkflowMetrics.Verify(m => m.RecordScriptCompilation("miss", "success"), Times.Once);
-        _mockWorkflowMetrics.Verify(m => m.RecordScriptCompilation("hit", "success"), Times.Once);
-
-        // Histogram: cache-labelled, one record each (5-arg Verify - CS0854: optional args are not
-        // allowed in expression trees, so ALL five args must be explicit)
-        _mockWorkflowMetrics.Verify(m => m.RecordScriptCompilationDuration(
-            "compilation", "csharp", "success", It.IsAny<double>(), "miss"), Times.Once);
-        _mockWorkflowMetrics.Verify(m => m.RecordScriptCompilationDuration(
-            "compilation", "csharp", "success", It.IsAny<double>(), "hit"), Times.Once);
-
-        // DEPRECATED metric keeps flowing exactly as before (dashboard regression guarantee)
-        _mockWorkflowMetrics.Verify(m => m.RecordScriptExecution("compilation", "csharp", "success"), Times.Exactly(2));
-
-        // Gauge fed
-        _mockWorkflowMetrics.Verify(m => m.SetCacheEntries("script-types", It.Is<int>(n => n >= 1)), Times.AtLeastOnce);
+        // Assert — both invocations complete; cache behavior itself is pinned by the key-memo and
+        // hit-path identity tests (the prometheus metric assertions were removed with the metrics).
     }
 }
 

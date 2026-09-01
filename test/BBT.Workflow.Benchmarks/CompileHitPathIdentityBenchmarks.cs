@@ -45,7 +45,6 @@ public class CompileHitPathIdentityBenchmarks
         _engine = new ScriptEngine(
             evaluator,
             new NoopScriptServices(),
-            new NoopWorkflowMetrics(),
             new ScriptHelperRegistry(evaluator),
             new ScriptHelpersOptions { Enabled = false },
             services,

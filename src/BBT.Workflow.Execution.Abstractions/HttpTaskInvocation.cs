@@ -96,7 +96,7 @@ public static class HttpTaskInvocation
         CancellationToken cancellationToken = default,
         TaskTraceContext? traceContext = null)
     {
-        var stopwatch = Stopwatch.StartNew();
+        var startTimestamp = Stopwatch.GetTimestamp();
 
         try
         {
@@ -149,7 +149,6 @@ public static class HttpTaskInvocation
             var responseHeaders = MergeHeaders(response.Headers, response.Content.Headers);
 
             var content = await response.Content.ReadAsStringAsync(cancellationToken);
-            stopwatch.Stop();
             var responseData = TryParseJson(content);
 
             var metadata = new Dictionary<string, object>
@@ -169,7 +168,7 @@ public static class HttpTaskInvocation
                     data: responseData,
                     body: content,
                     statusCode: (int)response.StatusCode,
-                    executionDurationMs: stopwatch.ElapsedMilliseconds,
+                    executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
                     taskType: taskType,
                     headers: responseHeaders,
                     metadata: metadata)
@@ -177,7 +176,7 @@ public static class HttpTaskInvocation
                     error: $"HTTP {response.StatusCode}: {response.ReasonPhrase}",
                     statusCode: (int)response.StatusCode,
                     body: content,
-                    executionDurationMs: stopwatch.ElapsedMilliseconds,
+                    executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
                     taskType: taskType,
                     headers: responseHeaders,
                     data: responseData,
@@ -185,11 +184,10 @@ public static class HttpTaskInvocation
         }
         catch (TaskCanceledException ex) when (cancellationToken.IsCancellationRequested)
         {
-            stopwatch.Stop();
 
             return TaskInvocationResult.Failure(
                 error: "HTTP request was cancelled",
-                executionDurationMs: stopwatch.ElapsedMilliseconds,
+                executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
                 taskType: taskType,
                 metadata: new Dictionary<string, object>
                 {
@@ -201,11 +199,10 @@ public static class HttpTaskInvocation
         }
         catch (Exception ex)
         {
-            stopwatch.Stop();
 
             return TaskInvocationResult.Failure(
                 error: ex.Message,
-                executionDurationMs: stopwatch.ElapsedMilliseconds,
+                executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
                 taskType: taskType,
                 metadata: new Dictionary<string, object>
                 {

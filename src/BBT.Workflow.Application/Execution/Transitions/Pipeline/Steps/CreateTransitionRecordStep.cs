@@ -32,7 +32,7 @@ public sealed class CreateTransitionRecordStep(
         // Skip for SubFlow resume - transition record already exists
         if (context.Directives.IsSubFlowResume)
         {
-            return Result<StepOutcome>.Ok(StepOutcome.Continue());
+            return Result<StepOutcome>.Ok(StepOutcome.ContinueNoWork());
         }
 
         // Build transition info
@@ -70,7 +70,7 @@ public sealed class CreateTransitionRecordStep(
             .TapAsync(_ => isReusedRecord
                 ? instanceTransitionRepository.UpdateAsync(instanceTransition, true, cancellationToken)
                 : instanceTransitionRepository.InsertAsync(instanceTransition, saveChanges: true, cancellationToken))
-            .Tap(_ => UpdateContextItems(context, instanceTransition))
+            .Tap(_ => UpdateContextItems(context, instanceTransition, isReusedRecord))
             .Map(_ => StepOutcome.Continue());
     }
 
@@ -159,7 +159,8 @@ public sealed class CreateTransitionRecordStep(
                 context.Instance,
                 new JsonData(mappedData),
                 transition?.VersionStrategy,
-                cancellationToken);
+                cancellationToken,
+                context.Workflow);
 
             if (transition?.Mapping is not null)
             {
@@ -204,10 +205,23 @@ public sealed class CreateTransitionRecordStep(
     /// <summary>
     /// Updates context items with transition record ID and the InstanceTransition for ScriptContext.CurrentTransition.
     /// </summary>
-    private static void UpdateContextItems(TransitionExecutionContext context, InstanceTransition instanceTransition)
+    private static void UpdateContextItems(
+        TransitionExecutionContext context,
+        InstanceTransition instanceTransition,
+        bool isReusedRecord)
     {
-        context.Items["TransitionRecordId"] = instanceTransition.Id;
-        context.Items["InstanceTransition"] = instanceTransition;
+        context.Items[WellKnownItems.TransitionRecordId] = instanceTransition.Id;
+        context.Items[WellKnownItems.InstanceTransition] = instanceTransition;
+        // A FRESH record id cannot have InstanceTask journal rows yet, so the task engine may skip
+        // its per-task idempotency probe; a reused (retry) record keeps the probe, which is what
+        // lets already-persisted task rows be found and reused instead of duplicated.
+        context.Items[TransitionRecordFreshKey] = !isReusedRecord;
         context.Items.Remove("NextTransitionKey");
     }
+
+    /// <summary>
+    /// Context item: true when this pipeline run INSERTED the transition record (no task journal
+    /// rows can exist for its id), false when a retry reused the original record.
+    /// </summary>
+    public const string TransitionRecordFreshKey = "TransitionRecordCreatedFresh";
 }

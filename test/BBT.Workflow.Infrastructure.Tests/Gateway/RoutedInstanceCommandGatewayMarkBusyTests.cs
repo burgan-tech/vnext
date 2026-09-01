@@ -6,7 +6,6 @@ using System.Threading.Tasks;
 using BBT.Aether.MultiSchema;
 using BBT.Aether.Results;
 using BBT.Workflow.Caching;
-using BBT.Workflow.DefinitionContext;
 using BBT.Workflow.Gateway;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Instances.Remote;
@@ -77,7 +76,6 @@ public sealed class RoutedInstanceCommandGatewayMarkBusyTests
         cacheStore.GetFlowAsync(domain, workflowKey, Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(Result.Ok(workflow));
 
-        var workflowContext = Substitute.For<IWorkflowContext>();
 
         var busyService = Substitute.For<IInstanceBusyManager>();
         busyService.MarkBusyWithPropagationAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>())
@@ -86,7 +84,6 @@ public sealed class RoutedInstanceCommandGatewayMarkBusyTests
         var services = new ServiceCollection();
         services.AddSingleton(_ => schema);
         services.AddSingleton(_ => cacheStore);
-        services.AddSingleton(_ => workflowContext);
         services.AddSingleton(_ => busyService);
 
         services.AddSingleton<LocalInstanceCommandGateway>();

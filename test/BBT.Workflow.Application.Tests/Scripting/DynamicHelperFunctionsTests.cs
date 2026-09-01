@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
-using BBT.Workflow.Monitoring;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting.Functions;
 using Dapr.Client;
@@ -50,8 +49,6 @@ public class DynamicHelperFunctionsTests : ApplicationTestBase<ApplicationEntryP
         var mockConfiguration = new Mock<Microsoft.Extensions.Configuration.IConfiguration>();
         services.AddSingleton(mockConfiguration.Object);
 
-        var mockMetrics = new Mock<IWorkflowMetrics>();
-        services.AddSingleton(mockMetrics.Object);
 
         base.AddApplication(services);
     }

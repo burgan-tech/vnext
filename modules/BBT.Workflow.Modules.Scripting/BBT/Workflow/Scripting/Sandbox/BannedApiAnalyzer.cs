@@ -9,7 +9,7 @@ namespace BBT.Workflow.Scripting.Sandbox;
 
 /// <summary>
 /// Semantic guard that runs after a <see cref="Compilation"/> is built but before IL is emitted.
-/// It resolves every referenced symbol and rejects any whose containing namespace falls under a
+/// It resolves referenced symbols and rejects any whose containing namespace falls under a
 /// banned prefix, plus <c>DllImport</c> and <c>unsafe</c>. This catches dangerous types that live
 /// in mandatory assemblies (e.g. <c>System.IO.File</c>) which reference omission alone cannot block.
 ///
@@ -17,6 +17,16 @@ namespace BBT.Workflow.Scripting.Sandbox;
 /// non-overridable) unioned with any operator additions; <see cref="MandatoryAllowedNamespaces"/>
 /// carves out sub-namespaces that must remain usable (notably <c>System.Threading.Tasks</c>, so
 /// banning thread/synchronization primitives does not break <c>Task</c>-based async).
+///
+/// <para>
+/// Cost discipline: the analyzer runs on EVERY compile, and <c>GetSymbolInfo</c> is a semantic
+/// bind — the same work <c>Emit</c> does again later — so the walk is restricted to the node kinds
+/// through which a symbol can actually be NAMED (simple names, member accesses, object creations,
+/// attributes) instead of every expression, and both the per-namespace verdict and the namespace
+/// display string are memoized per distinct symbol rather than recomputed per node. The verdicts
+/// are unchanged — the same symbols resolve to the same namespaces — only the redundant binds and
+/// string formatting are gone.
+/// </para>
 /// </summary>
 public static class BannedApiAnalyzer
 {
@@ -88,49 +98,55 @@ public static class BannedApiAnalyzer
 
         var violations = new List<string>();
 
+        // Per-namespace verdict memo: the banned-prefix hit (or null) for a namespace symbol never
+        // changes within one compilation, and scripts reference the same few namespaces repeatedly.
+        var namespaceVerdicts = new Dictionary<INamespaceSymbol, string?>(SymbolEqualityComparer.Default);
+
         foreach (var tree in compilation.SyntaxTrees)
         {
             var model = compilation.GetSemanticModel(tree);
             var root = tree.GetRoot();
 
-            // 1. Banned namespace usage — resolve symbols on every name/expression/attribute node.
+            // One walk over the tree covers all three checks.
             foreach (var node in root.DescendantNodes())
             {
-                if (node is not (ExpressionSyntax or AttributeSyntax))
-                    continue;
-
-                var symbol = model.GetSymbolInfo(node).Symbol;
-                var ns = NamespaceOf(symbol);
-                if (ns is null)
-                    continue;
-
-                // Member-level carve-outs (benign metadata reads) win over the banned prefixes.
-                if (symbol is not null && MandatoryAllowedMembers.Contains(symbol.ToString()))
-                    continue;
-
-                // Carve-outs win over the banned prefixes.
-                if (allowedCarveOuts.Any(a => ns == a || ns.StartsWith(a + ".", System.StringComparison.Ordinal)))
-                    continue;
-
-                var hit = banned.FirstOrDefault(b =>
-                    ns == b || ns.StartsWith(b + ".", System.StringComparison.Ordinal));
-
-                if (hit is not null)
+                switch (node)
                 {
-                    var line = node.GetLocation().GetLineSpan().StartLinePosition.Line + 1;
-                    violations.Add(
-                        $"{Path.GetFileName(tree.FilePath)}({line}): banned namespace '{hit}' via '{symbol}'");
-                }
-            }
+                    // 1. Banned namespace usage — a banned symbol is always reached through a name
+                    // (simple or generic), a member access, an object creation, or an attribute;
+                    // every other expression kind only combines values those nodes already produced.
+                    case SimpleNameSyntax or MemberAccessExpressionSyntax or BaseObjectCreationExpressionSyntax
+                        or AttributeSyntax:
+                    {
+                        var symbol = model.GetSymbolInfo(node).Symbol;
+                        var hit = BannedHitOf(symbol, banned, allowedCarveOuts, namespaceVerdicts);
+                        if (hit is null)
+                            break;
 
-            // 2. P/Invoke.
-            foreach (var method in root.DescendantNodes().OfType<MethodDeclarationSyntax>())
-            {
-                if (method.AttributeLists.SelectMany(a => a.Attributes)
-                    .Any(a => a.Name.ToString().Contains("DllImport")))
-                {
-                    var line = method.GetLocation().GetLineSpan().StartLinePosition.Line + 1;
-                    violations.Add($"{Path.GetFileName(tree.FilePath)}({line}): P/Invoke (DllImport) is not allowed");
+                        // Member-level carve-outs (benign metadata reads) win over the banned
+                        // prefixes. Only evaluated after a banned hit — the ToString is not free.
+                        if (symbol is not null && MandatoryAllowedMembers.Contains(symbol.ToString()))
+                            break;
+
+                        var line = node.GetLocation().GetLineSpan().StartLinePosition.Line + 1;
+                        violations.Add(
+                            $"{Path.GetFileName(tree.FilePath)}({line}): banned namespace '{hit}' via '{symbol}'");
+                        break;
+                    }
+
+                    // 2. P/Invoke.
+                    case MethodDeclarationSyntax method:
+                    {
+                        if (method.AttributeLists.SelectMany(a => a.Attributes)
+                            .Any(a => a.Name.ToString().Contains("DllImport")))
+                        {
+                            var line = method.GetLocation().GetLineSpan().StartLinePosition.Line + 1;
+                            violations.Add(
+                                $"{Path.GetFileName(tree.FilePath)}({line}): P/Invoke (DllImport) is not allowed");
+                        }
+
+                        break;
+                    }
                 }
             }
 
@@ -145,7 +161,16 @@ public static class BannedApiAnalyzer
         return violations.Distinct().ToList();
     }
 
-    private static string? NamespaceOf(ISymbol? symbol)
+    /// <summary>
+    /// The banned prefix the symbol's containing namespace falls under, or null. Verdicts are
+    /// memoized per namespace symbol; the display string is only built on the memo's first sight
+    /// of that namespace.
+    /// </summary>
+    private static string? BannedHitOf(
+        ISymbol? symbol,
+        List<string> banned,
+        IReadOnlyList<string> allowedCarveOuts,
+        Dictionary<INamespaceSymbol, string?> namespaceVerdicts)
     {
         var type = symbol switch
         {
@@ -154,8 +179,19 @@ public static class BannedApiAnalyzer
             _ => symbol.ContainingType,
         };
 
-        return type?.ContainingNamespace is { IsGlobalNamespace: false } ns
-            ? ns.ToDisplayString()
-            : null;
+        if (type?.ContainingNamespace is not { IsGlobalNamespace: false } ns)
+            return null;
+
+        if (namespaceVerdicts.TryGetValue(ns, out var verdict))
+            return verdict;
+
+        var name = ns.ToDisplayString();
+
+        verdict = allowedCarveOuts.Any(a => name == a || name.StartsWith(a + ".", System.StringComparison.Ordinal))
+            ? null
+            : banned.FirstOrDefault(b => name == b || name.StartsWith(b + ".", System.StringComparison.Ordinal));
+
+        namespaceVerdicts[ns] = verdict;
+        return verdict;
     }
 }

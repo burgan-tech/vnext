@@ -2,7 +2,6 @@ using System.Text;
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Logging;
-using BBT.Workflow.Monitoring;
 using BBT.Workflow.Scripting;
 using Microsoft.Extensions.Logging;
 
@@ -22,9 +21,8 @@ public sealed class ScriptTaskExecutor : TaskExecutorBase<ScriptTask>
     /// </summary>
     public ScriptTaskExecutor(
         IScriptEngine scriptEngine,
-        ILogger<ScriptTaskExecutor> logger,
-        IWorkflowMetrics metrics)
-        : base(logger, metrics)
+        ILogger<ScriptTaskExecutor> logger)
+        : base(logger)
     {
         _scriptEngine = scriptEngine;
     }
@@ -104,7 +102,7 @@ public sealed class ScriptTaskExecutor : TaskExecutorBase<ScriptTask>
         }
         
         // Update script context with response for output handler
-        UpdateScriptContextWithResponse(task.Key, result.Value, context.ScriptContext);
+        UpdateScriptContextWithResponse(task.Key, result.Value, context.ScriptContext, context.ResponseVariableKey);
 
         return result;
     }

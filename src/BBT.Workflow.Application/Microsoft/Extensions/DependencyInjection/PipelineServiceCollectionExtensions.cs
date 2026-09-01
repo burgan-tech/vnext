@@ -41,7 +41,6 @@ public static class PipelineServiceCollectionExtensions
         
         // Context Factory
         services.AddScoped<ITransitionContextFactory, TransitionContextFactory>();
-        services.AddScoped<IContextRefresher, ContextRefresher>();
 
         // Transition Data Mapping Service
         services.AddScoped<ITransitionDataMapper, TransitionDataMapper>();

@@ -8,4 +8,7 @@ public static class WellKnownItems
 {
     /// <summary>The ID of the transition record created by CreateTransitionRecordStep.</summary>
     public const string TransitionRecordId = "TransitionRecordId";
+
+    /// <summary>The transition record created or reused by CreateTransitionRecordStep.</summary>
+    public const string InstanceTransition = "InstanceTransition";
 }

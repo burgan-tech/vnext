@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
 using BBT.Aether.MultiSchema;
@@ -81,6 +83,36 @@ public class TransitionJobHandlerTests
         Workflow = "test-flow",
         Version = "1.0.0"
     };
+
+    /// <summary>
+    /// The job span IS the transaction in APM, so it must name the transition it runs. Before this,
+    /// every transition job showed up as the same "TransitionJob.Execute" transaction and the key
+    /// was only reachable as a tag — which is also why a redundant <c>transition/{key}</c> child
+    /// span existed underneath. Naming the lane span removes the need for that child.
+    /// </summary>
+    [Fact]
+    public async Task HandleAsync_NamesTheJobSpanAfterTheTransition()
+    {
+        var payload = CreatePayload();
+        var handler = CreateHandler();
+        var collected = new List<Activity>();
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == "BBT.Workflow.BackgroundJobs",
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStopped = collected.Add
+        };
+        ActivitySource.AddActivityListener(listener);
+
+        _executionService
+            .Setup(s => s.ExecuteTransitionAsync(
+                It.IsAny<WorkflowExecutionContext>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result<TransitionOutput>.Ok(new TransitionOutput()));
+
+        await handler.HandleAsync(payload, CancellationToken.None);
+
+        Assert.Single(collected, a => a.DisplayName == "TransitionJob.Execute/go");
+    }
 
     /// <summary>
     /// The captured x-request-id must be restored into the correlation provider for the duration

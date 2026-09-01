@@ -4,7 +4,6 @@ using System.Threading.Tasks;
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution;
-using BBT.Workflow.Monitoring;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks.Executors;
@@ -101,9 +100,8 @@ public class TriggerTaskStatusCodeMappingTests
         IScriptEngine scriptEngine,
         IRuntimeInfoProvider runtimeInfoProvider,
         IRemoteInvokerService remoteInvoker,
-        ILogger logger,
-        IWorkflowMetrics metrics)
-        : TriggerTaskExecutorBase<StartTask>(scriptEngine, runtimeInfoProvider, remoteInvoker, logger, metrics)
+        ILogger logger)
+        : TriggerTaskExecutorBase<StartTask>(scriptEngine, runtimeInfoProvider, remoteInvoker, logger)
     {
         public override TaskType TaskType => TaskType.StartTrigger;
 

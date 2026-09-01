@@ -41,7 +41,7 @@ public sealed class HandleLongPollTerminationStep(
     {
         if (!IsApplicable(context))
         {
-            return Result<StepOutcome>.Ok(StepOutcome.Continue());
+            return Result<StepOutcome>.Ok(StepOutcome.ContinueNoWork());
         }
 
         // Role gate: the long-poll stop belongs to the role that drove the transition into this state.
@@ -51,12 +51,16 @@ public sealed class HandleLongPollTerminationStep(
         // signal and the acknowledge check, so arm → signal → ack all agree on the owning role.
         if (!await OwnsLongPollAsync(context, cancellationToken))
         {
-            return Result<StepOutcome>.Ok(StepOutcome.Continue());
+            return Result<StepOutcome>.Ok(StepOutcome.ContinueNoWork());
         }
 
         var token = guidGenerator.Create();
+        // In-memory arm keeps the pipeline's aggregate consistent; the persistence is ONE
+        // set-based UPDATE of the token column instead of saving the whole aggregate. The full
+        // save's incidental flush of other pending changes is covered by the job insert below
+        // (autoSave: true).
         context.Instance.ArmLongPollAck(token);
-        await instanceRepository.UpdateAsync(context.Instance, true, cancellationToken);
+        await instanceRepository.ArmLongPollAckAsync(context.InstanceId, token, cancellationToken);
 
         await ScheduleFallbackAsync(context, token, cancellationToken);
 

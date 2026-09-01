@@ -40,7 +40,7 @@ public sealed class RunOnEntryTasksStep(
         // Skip if no OnEntry tasks
         if (!HasOnEntryTasks(context))
         {
-            return Result<StepOutcome>.Ok(StepOutcome.Continue());
+            return Result<StepOutcome>.Ok(StepOutcome.ContinueNoWork());
         }
 
         // Railway chain: Build context -> Get successful tasks -> Execute remaining -> Apply changes -> Persist
@@ -146,6 +146,13 @@ public sealed class RunOnEntryTasksStep(
         TransitionExecutionContext context,
         CancellationToken cancellationToken)
     {
+        // A transition record inserted by this pipeline run cannot have task journal rows yet.
+        // Keep the lookup only for retries, where the original transition record is reused.
+        if (IsFreshTransitionRecord(context))
+        {
+            return [];
+        }
+
         var transitionId = GetTransitionRecordId(context);
         if (!transitionId.HasValue)
         {
@@ -174,7 +181,10 @@ public sealed class RunOnEntryTasksStep(
             TaskExecutionOrigin.Flow,
             scriptContext,
             successfulTaskIds,
-            cancellationToken);
+            // A freshly inserted transition record cannot have journal rows, so the engine skips
+            // its per-task idempotency probe; a retry (reused record) keeps it.
+            skipJournalProbe: IsFreshTransitionRecord(context),
+            cancellationToken: cancellationToken);
     }
 
     /// <summary>
@@ -207,4 +217,12 @@ public sealed class RunOnEntryTasksStep(
 
         return await builder.BuildAsync(cancellationToken);
     }
+
+    /// <summary>
+    /// True when CreateTransitionRecordStep INSERTED the record in this run (see
+    /// <see cref="CreateTransitionRecordStep.TransitionRecordFreshKey"/>); false on retries.
+    /// </summary>
+    private static bool IsFreshTransitionRecord(TransitionExecutionContext context)
+        => context.Items.TryGetValue(CreateTransitionRecordStep.TransitionRecordFreshKey, out var fresh)
+           && fresh is true;
 }

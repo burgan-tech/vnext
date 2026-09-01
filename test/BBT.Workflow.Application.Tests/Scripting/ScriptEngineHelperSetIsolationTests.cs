@@ -5,7 +5,6 @@ using BBT.Aether.MultiSchema;
 using BBT.Aether.Results;
 using BBT.Workflow.Caching;
 using BBT.Workflow.Definitions;
-using BBT.Workflow.Monitoring;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting.Evaluators;
 using BBT.Workflow.Scripting.Functions;
@@ -101,7 +100,6 @@ public class ScriptEngineHelperSetIsolationTests
         var engine = new ScriptEngine(
             evaluator,
             Mock.Of<IScriptServices>(),
-            Mock.Of<IWorkflowMetrics>(),
             helperRegistry,
             new ScriptHelpersOptions { Enabled = true },
             serviceProvider,

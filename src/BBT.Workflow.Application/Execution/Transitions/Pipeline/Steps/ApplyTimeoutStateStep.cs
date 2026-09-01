@@ -22,7 +22,7 @@ public sealed class ApplyTimeoutStateStep(
         // Only process this step for timeout transitions
         if (!context.Directives.IsTimeoutTransition)
         {
-            return Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.Continue()));
+            return Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.ContinueNoWork()));
         }
 
         if (context.Workflow.Timeout is null)

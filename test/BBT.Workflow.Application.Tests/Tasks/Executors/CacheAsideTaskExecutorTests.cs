@@ -7,7 +7,6 @@ using BBT.Aether.Results;
 using BBT.Workflow;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Instances;
-using BBT.Workflow.Monitoring;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks;
@@ -149,8 +148,7 @@ public sealed class CacheAsideTaskExecutorTests
                 Substitute.For<IScriptEngine>(),
                 TaskFactory,
                 ExpressoEvaluator,
-                NullLogger<CacheAsideTaskExecutor>.Instance,
-                Substitute.For<IWorkflowMetrics>());
+                NullLogger<CacheAsideTaskExecutor>.Instance);
         }
 
         public CacheAsideTaskExecutor Executor { get; }

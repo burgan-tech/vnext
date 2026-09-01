@@ -27,6 +27,9 @@ public sealed class TransitionLockScopeFactory(
 {
     private readonly int _leaseSeconds = executionOptions.Value.GetEffectiveLockLeaseSeconds();
 
+    /// <summary>This funnel's value for <see cref="TelemetryConstants.TagNames.LockKind"/>.</summary>
+    private const string LockKind = "chain";
+
     /// <inheritdoc />
     public Task<ITransitionLockScope> AcquireAsync(
         string lockKey,
@@ -39,6 +42,12 @@ public sealed class TransitionLockScopeFactory(
         LockAcquireWait wait,
         CancellationToken cancellationToken = default)
     {
+        // Key in the span name — see InstanceStatusLock.AcquireAsync for the rationale.
+        using var activity = PipelineStepActivityHelper.StartOperationActivity($"Lock.Acquire/{lockKey}");
+        activity?.SetTag(TelemetryConstants.TagNames.LockKey, lockKey);
+        activity?.SetTag(TelemetryConstants.TagNames.LockLeaseSeconds, _leaseSeconds);
+        activity?.SetTag(TelemetryConstants.TagNames.LockKind, LockKind);
+
         var attempts = Math.Max(1, wait.MaxAttempts);
 
         for (var attempt = 1; attempt <= attempts; attempt++)
@@ -53,7 +62,8 @@ public sealed class TransitionLockScopeFactory(
                 logger.LogDebug("Transition lock acquired for {LockKey} (lease={LeaseSeconds}s, attempt={Attempt})",
                     lockKey, _leaseSeconds, attempt);
 
-                return new TransitionLockScope(lockKey, handle, _leaseSeconds, logger);
+                activity?.SetTag(TelemetryConstants.TagNames.LockAcquired, true);
+                return new TransitionLockScope(lockKey, handle, _leaseSeconds, logger, LockKind);
             }
 
             if (attempt == attempts)
@@ -73,6 +83,7 @@ public sealed class TransitionLockScopeFactory(
         }
 
         logger.InstanceLockFailed(lockKey);
+        activity?.SetTag(TelemetryConstants.TagNames.LockAcquired, false);
         return TransitionLockScope.NotAcquired(lockKey);
     }
 }
@@ -87,17 +98,26 @@ internal sealed class TransitionLockScope : ITransitionLockScope
     private readonly int _leaseSeconds;
     private readonly ILogger _logger;
 
+    /// <summary>
+    /// This scope's <see cref="TelemetryConstants.TagNames.LockKind"/> value ("status" | "chain"),
+    /// stamped by whichever funnel constructed it. Null for the non-acquiring construction paths
+    /// (<see cref="NotAcquired"/>/<see cref="Reentrant"/>), which never emit a Release span.
+    /// </summary>
+    private readonly string? _kind;
+
     internal TransitionLockScope(
         string lockKey,
         IDistributedLockHandle handle,
         int leaseSeconds,
-        ILogger logger)
+        ILogger logger,
+        string kind)
     {
         LockKey = lockKey;
         IsAcquired = true;
         _handle = handle;
         _leaseSeconds = leaseSeconds;
         _logger = logger;
+        _kind = kind;
     }
 
     private TransitionLockScope(string lockKey, bool isAcquired)
@@ -107,6 +127,7 @@ internal sealed class TransitionLockScope : ITransitionLockScope
         _handle = null;
         _leaseSeconds = 0;
         _logger = null!;
+        _kind = null;
     }
 
     /// <inheritdoc />
@@ -137,6 +158,9 @@ internal sealed class TransitionLockScope : ITransitionLockScope
     {
         if (_handle is not null)
         {
+            using var activity = PipelineStepActivityHelper.StartOperationActivity($"Lock.Release/{LockKey}");
+            activity?.SetTag(TelemetryConstants.TagNames.LockKey, LockKey);
+            activity?.SetTag(TelemetryConstants.TagNames.LockKind, _kind);
             await _handle.DisposeAsync();
             _logger.LogDebug("Transition lock released for {LockKey}", LockKey);
         }

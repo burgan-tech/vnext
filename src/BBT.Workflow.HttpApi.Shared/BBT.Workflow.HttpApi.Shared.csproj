@@ -12,12 +12,13 @@
     <PackageReference Include="Dapr.Extensions.Configuration" Version="$(DaprPackageVersion)" />
     <PackageReference Include="AspNetCore.HealthChecks.NpgSql" Version="$(HealthChecksPackageVersion)" />
     <PackageReference Include="Dapr.AspNetCore" Version="$(DaprPackageVersion)" />
-    <PackageReference Include="prometheus-net.AspNetCore" Version="$(PrometheusVersion)" />
-    <PackageReference Include="prometheus-net.AspNetCore.HealthChecks" Version="$(PrometheusVersion)" />
     <!-- Exports the Grpc.Net.Client span that Dapr.Client's gRPC calls create. Without it that
          activity is still created and still becomes the parent of the System.Net.Http span, but is
          never exported — see AddTelemetry for why that breaks the trace tree. -->
     <PackageReference Include="OpenTelemetry.Instrumentation.GrpcNetClient" Version="$(OpenTelemetryInstrumentationPrereleasePackageVersion)" />
+    <!-- Spans the DB commands EF Core issues. Without it the trace ends at Instance.Load and
+         Uow.Commit: the time is attributed, but which query spent it is not. -->
+    <PackageReference Include="OpenTelemetry.Instrumentation.EntityFrameworkCore" Version="$(OpenTelemetryInstrumentationPrereleasePackageVersion)" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\BBT.Workflow.Domain\BBT.Workflow.Domain.csproj" />

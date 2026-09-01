@@ -5,7 +5,6 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using BBT.Workflow.Definitions;
-using BBT.Workflow.Monitoring;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks.Executors;
@@ -125,16 +124,13 @@ public sealed class ExternalHttpTaskExecutorTests
         var remoteInvoker = Substitute.For<IRemoteInvokerService>();
         remoteInvoker.CreateTraceContext(Arg.Any<ScriptContext>())
             .Returns(TaskTraceContext.Create(
-                instanceId: Guid.Empty, domain: "test", workflowKey: "test", workflowVersion: "1.0.0",
-                correlationId: null, headers: null, instanceDataJson: null,
-                traceParent: null, traceState: null, sub: null, actSub: null, requestId: null));
+                instanceId: Guid.Empty, domain: "test", workflowKey: "test", workflowVersion: "1.0.0"));
 
         return new ExternalHttpTaskExecutor(
             invoker,
             Substitute.For<IScriptEngine>(),
             remoteInvoker,
-            NullLogger<ExternalHttpTaskExecutor>.Instance,
-            Substitute.For<IWorkflowMetrics>());
+            NullLogger<ExternalHttpTaskExecutor>.Instance);
     }
 
     private static TaskExecutorContext CreateContext(ExternalHttpTask task)

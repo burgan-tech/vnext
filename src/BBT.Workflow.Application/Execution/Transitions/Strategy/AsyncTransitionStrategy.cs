@@ -75,20 +75,29 @@ public sealed class AsyncTransitionStrategy(
     {
         var activity = Activity.Current;
         return ctxFactory.CreateAsync(context, cancellationToken)
-            .BindAsync(ctx => ValidateAsync(ctx, cancellationToken))
+            .BindAsync(ctx => ValidateAsync(ctx, context.PayloadSchemaValidated, cancellationToken))
             .BindAsync(ctx => EnqueueJobAndReturnContextAsync(ctx, context, activity, cancellationToken));
     }
 
     /// <summary>
-    /// Validates the transition context (schema + state-machine policy) before
-    /// any side effects (Busy flip, lock acquisition, job enqueue).
-    /// Mirrors the guard in <c>TransitionPipeline.RunAsync</c> for the sync path.
+    /// Validates the transition context before any side effects (Busy flip, lock acquisition, job
+    /// enqueue). Mirrors the guard in <c>TransitionPipeline.RunAsync</c> for the sync path.
     /// </summary>
+    /// <remarks>
+    /// Policy is re-validated always — it reads the instance's current state, which the caller may
+    /// not have seen. The SCHEMA is skipped when the caller already validated the same payload
+    /// against the same transition (the start path, which must validate before persisting the
+    /// instance row); re-reading the schema component and re-running the validator over identical
+    /// bytes cannot reach a different verdict.
+    /// </remarks>
     private async Task<Result<TransitionExecutionContext>> ValidateAsync(
         TransitionExecutionContext ctx,
+        bool payloadSchemaValidated,
         CancellationToken cancellationToken)
     {
-        var validationResult = await validationService.ValidateAsync(ctx, cancellationToken);
+        var validationResult = payloadSchemaValidated
+            ? await validationService.ValidatePolicyAsync(ctx, cancellationToken)
+            : await validationService.ValidateAsync(ctx, cancellationToken);
         return validationResult.IsSuccess
             ? Result<TransitionExecutionContext>.Ok(ctx)
             : Result<TransitionExecutionContext>.Fail(validationResult.Error);
