@@ -42,8 +42,7 @@ public static class InvokerActivityHelper
     {
         var activity = ActivitySource.StartActivity(
             $"Invoke.{taskType}/{taskKey}",
-            ActivityKind.Internal,
-            Activity.Current?.Context ?? default);
+            ActivityKind.Internal);
 
         if (activity is not null)
         {
@@ -79,8 +78,7 @@ public static class InvokerActivityHelper
     public static Activity? StartCacheAsideActivity(string operation, string cacheKey)
         => ActivitySource.StartActivity(
             $"CacheAside.{operation}/{cacheKey}",
-            ActivityKind.Client,
-            Activity.Current?.Context ?? default);
+            ActivityKind.Client);
 
     /// <summary>Records whether the cache-aside read was a hit.</summary>
     public static void SetCacheHit(Activity? activity, bool hit) => activity?.SetTag(TagCacheHit, hit);

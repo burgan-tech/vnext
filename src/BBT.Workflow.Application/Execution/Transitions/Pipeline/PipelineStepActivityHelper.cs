@@ -24,8 +24,7 @@ public static class PipelineStepActivityHelper
     {
         var activity = ActivitySource.StartActivity(
             $"Step.{TrimStepSuffix(step.Name)}",
-            ActivityKind.Internal,
-            Activity.Current?.Context ?? default);
+            ActivityKind.Internal);
 
         if (activity != null)
         {
@@ -77,8 +76,7 @@ public static class PipelineStepActivityHelper
     {
         var activity = ActivitySource.StartActivity(
             operationName,
-            ActivityKind.Internal,
-            Activity.Current?.Context ?? default);
+            ActivityKind.Internal);
 
         activity?.SetTag(TelemetryConstants.TagNames.SpanCategory, TelemetryConstants.SpanCategories.Business);
         return activity;

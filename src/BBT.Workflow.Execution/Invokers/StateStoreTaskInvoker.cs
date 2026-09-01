@@ -69,17 +69,7 @@ public sealed class StateStoreTaskInvoker : ITaskInvoker<StateStoreBinding>
         var command = binding.Command ?? string.Empty;
         var prepareActivity = InvokerActivityHelper.StartPrepareActivity(TaskType, taskKey ?? string.Empty);
 
-        var storeName = _stateStore.ResolveStoreName(binding.StoreName);
-
-        if (string.IsNullOrWhiteSpace(storeName))
-        {
-            return TaskInvocationResult.Failure(
-                error: "State store name is not configured: set 'storeName' in the task config " +
-                       "or the DAPR_STATE_STORE_NAME configuration value",
-                executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
-                taskType: TaskType,
-                metadata: BaseMetadata(binding, storeName: string.Empty));
-        }
+        var storeName = string.Empty;
 
         try
         {

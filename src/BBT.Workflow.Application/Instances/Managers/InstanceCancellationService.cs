@@ -58,7 +58,6 @@ public sealed class InstanceCancellationService(
 
             var cancelledJobIds = new List<Guid>(jobs.Count);
             var failedCount = 0;
-
             foreach (var job in jobs)
             {
                 try

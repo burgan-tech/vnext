@@ -145,7 +145,6 @@ public sealed class SubProcessRemoteInvoker : ITaskInvoker<SubProcessBinding>
         }
         catch (TaskCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-
             prepareActivity?.Dispose();
             _metrics.RecordTaskExecution(TaskType, "cancelled");
             _logger.LogWarning("SubProcess HTTP invocation was cancelled for task {TaskKey}: {Domain}/{Workflow}",

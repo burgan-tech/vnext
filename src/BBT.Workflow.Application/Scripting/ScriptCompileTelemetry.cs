@@ -21,16 +21,17 @@ namespace BBT.Workflow.Scripting;
 /// <b>Capture-before-span ordering.</b> <c>CompileCoreAsync</c> MUST call
 /// <see cref="FindTargetActivity"/> and capture the result BEFORE starting the
 /// <c>Script.Compile</c> span (<see cref="ScriptActivityHelper.StartCompileActivity"/>), then pass
-/// that captured activity to <see cref="Record"/> via the <c>target</c> parameter. A
-/// <c>Script.Compile</c> span is started with an EXPLICIT parent context
-/// (<c>Activity.Current?.Context</c>), which means the new span's own <see cref="Activity.Parent"/>
-/// is <c>null</c> — it is not linked in-process to whatever was current before it started. If the
-/// target were instead re-resolved lazily (i.e. from <see cref="Activity.Current"/> AFTER
-/// <c>Script.Compile</c> became current), the parent-chain walk would terminate at the compile span
-/// itself on its very first step and never reach the task-key-carrying ancestor — silently
-/// relocating every accumulator tag and <c>script.compile</c> event onto the compile span instead
-/// of the task span. Capturing first and threading the result through as an explicit argument keeps
-/// this class's resolution logic decoupled from what happens to <c>Activity.Current</c> afterward.
+/// that captured activity to <see cref="Record"/> via the <c>target</c> parameter. The reason is
+/// the walk in <see cref="FindTargetActivity"/>: it climbs <see cref="Activity.Parent"/>, and any
+/// span started with an EXPLICIT parent context (<c>Activity.Current?.Context</c>) has a
+/// <see cref="Activity.Parent"/> of <c>null</c> even though its ParentSpanId is set. Let such a
+/// span become current before the target is resolved and the walk terminates on its very first
+/// step, silently relocating every accumulator tag and <c>script.compile</c> event onto it instead
+/// of the task span. <c>Script.Compile</c> itself is no longer one of those spans —
+/// <see cref="ScriptActivityHelper.StartCompileActivity"/> uses the implicit-parent overload so
+/// baggage survives — but the capture-first contract is kept deliberately: it makes this class's
+/// resolution independent of whatever becomes <see cref="Activity.Current"/> afterward, so a future
+/// span inserted on this path cannot reintroduce the bug silently.
 /// </para>
 /// <para>
 /// Tags written (cumulative per span): <c>vnext.script.compile.count</c>,
@@ -111,15 +112,15 @@ public static class ScriptCompileTelemetry
 
     /// <summary>
     /// Resolves the span the compile cost belongs to: self-or-ancestor carrying the task key tag,
-    /// else <see cref="Activity.Current"/>. Spans started with an explicit parent context (e.g.
-    /// <c>Script.Compile</c> itself) have <see cref="Activity.Parent"/> == null, which ends the
-    /// walk on the very first step — landing on that span's own tag check (miss, for
-    /// <c>Script.Compile</c>) and then the <c>current</c> fallback, i.e. the span itself. That is
-    /// exactly why callers that are about to start such a span must call this method and capture
-    /// the result BEFORE doing so (see the class remarks) rather than relying on this method to
-    /// walk past it afterward — it cannot. Internal (not private) so <c>ScriptEngine</c> can
-    /// capture the target ahead of <c>ScriptActivityHelper.StartCompileActivity</c>, and so tests
-    /// can pin the capture-before-span contract directly.
+    /// else <see cref="Activity.Current"/>. The walk climbs <see cref="Activity.Parent"/>, so a span
+    /// started with an explicit parent context — <see cref="Activity.Parent"/> == null despite a set
+    /// ParentSpanId — ends it on the very first step, landing on that span's own tag check (a miss)
+    /// and then the <c>current</c> fallback, i.e. the span itself. That is why callers about to
+    /// start a child span call this method and capture the result BEFORE doing so (see the class
+    /// remarks) rather than relying on it to walk past afterward. Internal (not private) so
+    /// <c>ScriptEngine</c> can capture the target ahead of
+    /// <c>ScriptActivityHelper.StartCompileActivity</c>, and so tests can pin the
+    /// capture-before-span contract directly.
     /// </summary>
     internal static Activity? FindTargetActivity()
     {

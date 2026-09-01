@@ -60,7 +60,6 @@ public sealed class TaskInvokeHandler(
         handleActivity?.SetTag(TelemetryConstants.TagNames.Layer, TelemetryConstants.Layers.Execution);
         handleActivity?.SetTag(TelemetryConstants.TagNames.SpanCategory, TelemetryConstants.SpanCategories.Business);
 
-
         activity?.SetTag(TelemetryConstants.TagNames.Domain, traceContext?.Domain ?? "unknown");
         activity?.SetTag(TelemetryConstants.TagNames.Flow, traceContext?.WorkflowKey ?? "unknown");
         activity?.SetTag(TelemetryConstants.TagNames.FlowVersion, traceContext?.WorkflowVersion ?? "unknown");

@@ -117,7 +117,6 @@ public sealed class DaprHttpEndpointTaskInvoker(
         catch (TaskCanceledException ex) when (cancellationToken.IsCancellationRequested)
         {
             prepareActivity?.Dispose();
-
             _metrics.RecordDaprServiceInvocation(binding.EndpointName, binding.Path, "cancelled");
             logger.LogWarning("Dapr HTTP endpoint invocation was cancelled: {EndpointName}/{Path}",
                 binding.EndpointName, binding.Path);
