@@ -1,4 +1,5 @@
 using BBT.Aether.Uow;
+using BBT.Aether.Results;
 using BBT.Workflow.BackgroundJobs.Options;
 using BBT.Workflow.Caching;
 using BBT.Workflow.Definitions;
@@ -20,6 +21,7 @@ public sealed class SubflowCompletionService(
     IUnitOfWorkManager uowManager,
     IComponentCacheStore componentCacheStore,
     IInstanceRepository instanceRepository,
+    IInstanceCorrelationRepository correlationRepository,
     IRuntimeInfoProvider runtimeInfoProvider,
     IWorkflowExecutionService workflowExecutionService,
     ISubflowOutputMappingService outputMappingService,
@@ -84,7 +86,8 @@ public sealed class SubflowCompletionService(
             try
             {
                 Instance? parentInstance;
-                Definitions.Workflow? parentWorkflow;
+                Definitions.Workflow? parentWorkflow = null;
+                Result<SubflowOutputMappingPlan>? preparedMapping = null;
 
                 // Per-subInstance terminal lock, independent of the main-flow lock and reserved keys:
                 // a long-held chain lease never blocks the signal, parallel SubProcess terminal-closes
@@ -96,11 +99,12 @@ public sealed class SubflowCompletionService(
                 // design (DurablePostCommit hook + Inbox worker), so the common case is a duplicate
                 // whose work is already persisted. Answering it from a read-only snapshot keeps it
                 // off the distributed lock entirely; only genuinely-open deliveries contend.
-                var probe = await terminalGuard.ProbeAsync(
+                var probeResult = await terminalGuard.ProbeWithSnapshotAsync(
                     completedInput.InstanceId,
                     completedInput.SubInstanceId,
                     SubItemTerminalOutcome.Completed,
                     cancellationToken);
+                var probe = probeResult.Decision;
 
                 if (probe != SubItemTerminalProbe.Proceed)
                 {
@@ -110,6 +114,29 @@ public sealed class SubflowCompletionService(
                             : "terminal_outcome_conflict_prelock");
                     SubFlowActivityHelper.SetSuccess(activity);
                     return;
+                }
+
+                // Workflow resolution and script compilation are immutable preparation work. Keep
+                // them outside the terminal lock; only the authoritative read, execution and
+                // persistence remain in the critical section. The null-snapshot fallback below is
+                // retained for the narrow race where the correlation was not visible to the probe.
+                if (probeResult.SubFlowType?.Equals(SubFlowType.SubFlow) == true
+                    && probeResult.ParentState is not null)
+                {
+                    var workflowResult = await componentCacheStore.GetFlowAsync(
+                        completedInput.Domain,
+                        completedInput.Flow,
+                        completedInput.Version,
+                        cancellationToken);
+                    if (workflowResult.IsSuccess)
+                    {
+                        parentWorkflow = workflowResult.Value!;
+                        preparedMapping = await outputMappingService.PrepareAsync(
+                            completedInput.InstanceId,
+                            parentWorkflow,
+                            probeResult.ParentState,
+                            cancellationToken);
+                    }
                 }
 
                 // Bounded wait rather than fail-fast: a duplicate that arrives while the original is
@@ -134,7 +161,10 @@ public sealed class SubflowCompletionService(
                         new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew });
                     // Data must be loaded here: output mapping appends a new data version via
                     // Instance.AddData, whose version/IsLatest math reads the in-memory data list.
-                    parentInstance = await instanceRepository.FindWithAllCorrelationsAndDataAsync(completedInput.InstanceId, cancellationToken);
+                    parentInstance = await instanceRepository.FindForSubflowCompletionAsync(
+                        completedInput.InstanceId,
+                        completedInput.SubInstanceId,
+                        cancellationToken);
 
                     if (parentInstance == null)
                     {
@@ -210,11 +240,13 @@ public sealed class SubflowCompletionService(
                     activity?.SetTag("vnext.subflow.type", "subflow");
 
                     // Load parent workflow definition for output mapping
-                    var parentWorkflowResult = await componentCacheStore.GetFlowAsync(
-                        completedInput.Domain,
-                        completedInput.Flow,
-                        completedInput.Version,
-                        cancellationToken);
+                    var parentWorkflowResult = parentWorkflow is not null
+                        ? Result<Definitions.Workflow>.Ok(parentWorkflow)
+                        : await componentCacheStore.GetFlowAsync(
+                            completedInput.Domain,
+                            completedInput.Flow,
+                            completedInput.Version,
+                            cancellationToken);
 
                     if (!parentWorkflowResult.IsSuccess)
                     {
@@ -241,12 +273,22 @@ public sealed class SubflowCompletionService(
 
                     parentWorkflow = parentWorkflowResult.Value!;
 
-                    var mappingResult = await outputMappingService.ApplyAsync(
+                    var mappingPreparation = preparedMapping.HasValue
+                        ? preparedMapping.Value
+                        : await outputMappingService.PrepareAsync(
+                            parentInstance.Id,
+                            parentWorkflow,
+                            correlation.ParentState,
+                            cancellationToken);
+
+                    var mappingResult = mappingPreparation.IsSuccess
+                        ? await outputMappingService.ApplyPreparedAsync(
                         parentInstance,
                         parentWorkflow,
-                        correlation.ParentState,
+                        mappingPreparation.Value!,
                         completedInput.InstanceData,
-                        cancellationToken);
+                        cancellationToken)
+                        : Result.Fail(mappingPreparation.Error);
 
                     if (!mappingResult.IsSuccess)
                     {
@@ -282,6 +324,14 @@ public sealed class SubflowCompletionService(
                     completedInput.Sync,
                     cancellationToken);
 
+                // Resume has committed in its own UoW. Marking settlement is deliberately a tiny
+                // set-based write in a new UoW; a marker-write failure must not compensate an
+                // already successful resume, it only forfeits the duplicate fast path.
+                await MarkSettlementBestEffortAsync(
+                    completedInput.SubInstanceId,
+                    completedInput.CompletedAt,
+                    cancellationToken);
+
                 SubFlowActivityHelper.SetSuccess(activity);
             }
             catch (Exception ex)
@@ -294,6 +344,28 @@ public sealed class SubflowCompletionService(
 
                 throw;
             }
+        }
+    }
+
+    private async Task MarkSettlementBestEffortAsync(
+        Guid subInstanceId,
+        DateTime settledAt,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await using var markerUow = uowManager.Begin(
+                new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew });
+            await correlationRepository.TryMarkSettledAsync(
+                subInstanceId,
+                SubItemTerminalOutcome.Completed,
+                settledAt,
+                cancellationToken);
+            await markerUow.CommitAsync(cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            logger.SubItemSettlementMarkerWriteFailed(ex, nameof(SubItemTerminalOutcome.Completed), subInstanceId);
         }
     }
 
@@ -421,6 +493,11 @@ public sealed class SubflowCompletionService(
             // Reset parent's EffectiveState back to its own CurrentState for blocking SubFlows.
             // A SubProcess completion only closes its persisted correlation.
             parentInstance.SetEffectiveState(parentInstance.GetCurrentState);
+        }
+        else
+        {
+            // SubProcess has no resume phase; its terminal write is already fully settled.
+            correlation.MarkSettled(completedAt);
         }
 
         logger.SubFlowCorrelationCompleted(subInstanceId, parentInstanceId);

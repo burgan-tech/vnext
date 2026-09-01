@@ -179,6 +179,53 @@ public sealed class EfCoreInstanceRepository(
         return MarkIfPartiallyLoaded(instance);
     }
 
+    /// <inheritdoc />
+    public async Task<Instance?> FindForSubflowStartAsync(
+        Guid instanceId,
+        Guid correlationId,
+        CancellationToken cancellationToken = default)
+    {
+        var dbSet = await GetDbSetAsync();
+        var instance = await dbSet
+            .Include(i => i.DataList.Where(d => d.IsLatest))
+            .Include(i => i.ChildCorrelations.Where(c => c.Id == correlationId))
+            .AsSplitQuery()
+            .FirstOrDefaultAsync(i => i.Id == instanceId, cancellationToken);
+        instance?.MarkDataPartiallyLoaded();
+        return instance;
+    }
+
+    /// <inheritdoc />
+    public async Task<Instance?> FindForSubflowCompletionAsync(
+        Guid instanceId,
+        Guid subInstanceId,
+        CancellationToken cancellationToken = default)
+    {
+        var dbSet = await GetDbSetAsync();
+        var instance = await dbSet
+            .Include(i => i.DataList.Where(d => d.IsLatest))
+            .Include(i => i.ChildCorrelations.Where(c => c.SubFlowInstanceId == subInstanceId))
+            .AsSplitQuery()
+            .FirstOrDefaultAsync(i => i.Id == instanceId, cancellationToken);
+        instance?.MarkDataPartiallyLoaded();
+        return instance;
+    }
+
+    /// <inheritdoc />
+    public async Task<Instance?> FindForPostCommitSettlementAsync(
+        Guid instanceId,
+        CancellationToken cancellationToken = default)
+    {
+        var dbSet = await GetDbSetAsync();
+        var instance = await dbSet
+            .Include(i => i.DataList.Where(d => d.IsLatest))
+            .Include(i => i.ChildCorrelations.Where(c => !c.IsCompleted))
+            .AsSplitQuery()
+            .FirstOrDefaultAsync(i => i.Id == instanceId, cancellationToken);
+        instance?.MarkDataPartiallyLoaded();
+        return instance;
+    }
+
     /// <summary>
     /// Inserts a new instance and automatically records metrics
     /// </summary>

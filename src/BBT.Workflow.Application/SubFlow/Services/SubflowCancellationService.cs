@@ -186,6 +186,11 @@ public sealed class SubflowCancellationService(
                 SubItemTerminalOutcome.Canceled,
                 input.CanceledAt);
 
+            if (correlation.SubFlowType.Equals(SubFlowType.SubProcess))
+            {
+                correlation.MarkSettled(input.CanceledAt);
+            }
+
             await instanceRepository.UpdateAsync(parentInstance, true, cancellationToken);
             await uow.CommitAsync(cancellationToken);
 
@@ -201,6 +206,33 @@ public sealed class SubflowCancellationService(
             input,
             lockKey,
             cancellationToken);
+
+        await MarkSettlementBestEffortAsync(
+            input.SubInstanceId,
+            input.CanceledAt,
+            cancellationToken);
+    }
+
+    private async Task MarkSettlementBestEffortAsync(
+        Guid subInstanceId,
+        DateTime settledAt,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await using var markerUow = uowManager.Begin(
+                new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew });
+            await terminalGuard.TryMarkSettledAsync(
+                subInstanceId,
+                SubItemTerminalOutcome.Canceled,
+                settledAt,
+                cancellationToken);
+            await markerUow.CommitAsync(cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            logger.SubItemSettlementMarkerWriteFailed(ex, nameof(SubItemTerminalOutcome.Canceled), subInstanceId);
+        }
     }
 
     private async Task ResumeParentAsync(

@@ -27,6 +27,7 @@ using BBT.Workflow.Definitions.Schemas;
 using BBT.Workflow.ExceptionHandling;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
+using System.Collections.Concurrent;
 
 namespace BBT.Workflow.Instances;
 
@@ -57,6 +58,8 @@ public sealed class InstanceQueryAppService(
     ILogger<InstanceQueryAppService> logger)
     : ApplicationService(serviceProvider), IInstanceQueryAppService
 {
+    private static readonly ConcurrentDictionary<string, BuildGate> ActiveSubflowBuildGates = new();
+
     private static readonly HashSet<InstanceStatus> TerminalStatuses =
     [
         InstanceStatus.Completed,
@@ -1047,15 +1050,22 @@ public sealed class InstanceQueryAppService(
         // entry, aggregate load or response build needed. The body cache only serves callers
         // without a current ETag.
         string? stateCacheKey = null;
+        IDisposable? activeSubflowBuildLease = null;
         if (stateFunctionCache.Enabled)
         {
-            var fastResult = await TryServeStateFromFingerprintAsync(input, cancellationToken);
-            if (fastResult.HasValue)
-                return fastResult.Value;
             stateCacheKey = stateFunctionCache.BuildKey(input);
+            var fastResult = await TryServeStateFromFingerprintAsync(
+                input,
+                stateCacheKey,
+                cancellationToken);
+            if (fastResult.Result.HasValue)
+                return fastResult.Result.Value;
+            activeSubflowBuildLease = fastResult.BuildLease;
         }
 
-        return await GetInstanceByIdOrKeyAsync(input.Instance, cancellationToken)
+        try
+        {
+            return await GetInstanceByIdOrKeyAsync(input.Instance, cancellationToken)
             .BindAsync(instance =>
                 componentCacheStore.GetFlowAsync(input.Domain, input.Workflow, instance.FlowVersion ?? input.Version, cancellationToken)
                     .MapAsync(workflow => (instance, workflow)))
@@ -1095,17 +1105,24 @@ public sealed class InstanceQueryAppService(
                         ? stateFunctionCache.ComputeEtag(input, fingerprint, output)
                         : stateFunctionCache.ComputeEtag(input, fingerprint);
 
-                    // Warm the cache before the 304 decision so a Not-Modified outcome still
-                    // stores the entry. Active-subflow responses are built from a live subflow
-                    // call and cannot be validated by the local fingerprint — never cache them.
-                    if (stateCacheKey is not null && !data.instance.HasActiveSubFlow)
+                    // Active-child state cannot be validated from the parent row, so keep it only
+                    // for a short freshness window. Parent changes still invalidate immediately;
+                    // concurrent misses are coalesced by the per-key build lease.
+                    if (stateCacheKey is not null)
                     {
-                        await stateFunctionCache.SetAsync(stateCacheKey, new Caching.StateFunctionCacheEntry
+                        var cacheEntry = new Caching.StateFunctionCacheEntry
                         {
                             Etag = etag,
+                            ParentEtag = stateFunctionCache.ComputeEtag(input, fingerprint),
+                            IsActiveSubflowSnapshot = data.instance.HasActiveSubFlow,
                             EntityEtag = entityEtag,
                             Output = output
-                        }, cancellationToken);
+                        };
+                        if (data.instance.HasActiveSubFlow)
+                            await stateFunctionCache.SetAsync(
+                                stateCacheKey, cacheEntry, stateFunctionCache.ActiveSubflowTtl, cancellationToken);
+                        else
+                            await stateFunctionCache.SetAsync(stateCacheKey, cacheEntry, cancellationToken);
                     }
 
                     if (!string.IsNullOrEmpty(input.IfNoneMatch) && etag.MatchesIfNoneMatch(input.IfNoneMatch))
@@ -1115,6 +1132,11 @@ public sealed class InstanceQueryAppService(
                     return ConditionalResult<GetInstanceStateOutput>.Success(output);
                 },
                 onFailure: error => ConditionalResult<GetInstanceStateOutput>.Fail(error));
+        }
+        finally
+        {
+            activeSubflowBuildLease?.Dispose();
+        }
     }
 
     /// <summary>
@@ -1125,18 +1147,37 @@ public sealed class InstanceQueryAppService(
     /// comes from the full path), active subflow (live evaluation required), cache miss, or a
     /// stale cache entry.
     /// </summary>
-    private async Task<ConditionalResult<GetInstanceStateOutput>?> TryServeStateFromFingerprintAsync(
+    private async Task<StateFingerprintFastPath> TryServeStateFromFingerprintAsync(
         GetInstanceStateInput input,
+        string cacheKey,
         CancellationToken cancellationToken)
     {
         var fingerprint = await instanceRepository.GetStateFingerprintAsync(input.Instance, cancellationToken);
         if (fingerprint is null)
-            return null;
+            return default;
 
         if (fingerprint.HasActiveSubFlow)
         {
+            var parentEtag = stateFunctionCache.ComputeEtag(input, fingerprint);
+            var cached = await TryServeActiveSubflowSnapshotAsync(
+                input, cacheKey, parentEtag, fingerprint, cancellationToken);
+            if (cached.HasValue)
+                return new(cached, null);
+
+            var lease = await AcquireBuildGateAsync(cacheKey, cancellationToken);
+
+            // Double-check after entering the gate: another request may have populated the short
+            // cache while this one was waiting.
+            cached = await TryServeActiveSubflowSnapshotAsync(
+                input, cacheKey, parentEtag, fingerprint, cancellationToken);
+            if (cached.HasValue)
+            {
+                lease.Dispose();
+                return new(cached, null);
+            }
+
             logger.StateFunctionCacheBypassedForSubFlow(input.Instance);
-            return null;
+            return new(null, lease);
         }
 
         var etag = stateFunctionCache.ComputeEtag(input, fingerprint);
@@ -1144,20 +1185,20 @@ public sealed class InstanceQueryAppService(
         if (!string.IsNullOrEmpty(input.IfNoneMatch) && etag.MatchesIfNoneMatch(input.IfNoneMatch))
         {
             logger.StateFunctionEtagNotModified(input.Instance, fingerprint.EffectiveState, fingerprint.Status.Code);
-            return ConditionalResult<GetInstanceStateOutput>.NotModified();
+            return new(ConditionalResult<GetInstanceStateOutput>.NotModified(), null);
         }
 
-        var entry = await stateFunctionCache.GetAsync(stateFunctionCache.BuildKey(input), cancellationToken);
+        var entry = await stateFunctionCache.GetAsync(cacheKey, cancellationToken);
         if (entry is null)
         {
             logger.StateFunctionCacheMiss(input.Instance);
-            return null;
+            return default;
         }
 
         if (!string.Equals(entry.Etag, etag, StringComparison.Ordinal))
         {
             logger.StateFunctionCacheInvalidated(input.Instance, entry.Etag, etag);
-            return null;
+            return default;
         }
 
         logger.StateFunctionCacheHit(input.Instance, fingerprint.EffectiveState, fingerprint.Status.Code);
@@ -1165,7 +1206,89 @@ public sealed class InstanceQueryAppService(
         var output = entry.Output;
         output.EntityEtag = entry.EntityEtag;
         output.ETag = entry.Etag;
-        return ConditionalResult<GetInstanceStateOutput>.Success(output);
+        return new(ConditionalResult<GetInstanceStateOutput>.Success(output), null);
+    }
+
+    private async Task<ConditionalResult<GetInstanceStateOutput>?> TryServeActiveSubflowSnapshotAsync(
+        GetInstanceStateInput input,
+        string cacheKey,
+        string parentEtag,
+        InstanceStateFingerprint fingerprint,
+        CancellationToken cancellationToken)
+    {
+        var entry = await stateFunctionCache.GetAsync(cacheKey, cancellationToken);
+        if (entry is null
+            || !entry.IsActiveSubflowSnapshot
+            || !string.Equals(entry.ParentEtag, parentEtag, StringComparison.Ordinal))
+            return null;
+
+        logger.StateFunctionCacheHit(input.Instance, fingerprint.EffectiveState, fingerprint.Status.Code);
+        if (!string.IsNullOrEmpty(input.IfNoneMatch) && entry.Etag.MatchesIfNoneMatch(input.IfNoneMatch))
+            return ConditionalResult<GetInstanceStateOutput>.NotModified();
+
+        entry.Output.EntityEtag = entry.EntityEtag;
+        entry.Output.ETag = entry.Etag;
+        return ConditionalResult<GetInstanceStateOutput>.Success(entry.Output);
+    }
+
+    private readonly record struct StateFingerprintFastPath(
+        ConditionalResult<GetInstanceStateOutput>? Result,
+        IDisposable? BuildLease);
+
+    private static async Task<BuildGateLease> AcquireBuildGateAsync(
+        string key,
+        CancellationToken cancellationToken)
+    {
+        while (true)
+        {
+            var gate = ActiveSubflowBuildGates.GetOrAdd(key, _ => new BuildGate());
+            Interlocked.Increment(ref gate.Users);
+
+            if (ActiveSubflowBuildGates.TryGetValue(key, out var current)
+                && ReferenceEquals(current, gate))
+            {
+                try
+                {
+                    await gate.Semaphore.WaitAsync(cancellationToken);
+                    return new BuildGateLease(key, gate);
+                }
+                catch
+                {
+                    ReleaseBuildGateReference(key, gate, releaseSemaphore: false);
+                    throw;
+                }
+            }
+
+            ReleaseBuildGateReference(key, gate, releaseSemaphore: false);
+        }
+    }
+
+    private static void ReleaseBuildGateReference(string key, BuildGate gate, bool releaseSemaphore)
+    {
+        if (releaseSemaphore)
+            gate.Semaphore.Release();
+
+        if (Interlocked.Decrement(ref gate.Users) == 0)
+            ActiveSubflowBuildGates.TryRemove(new KeyValuePair<string, BuildGate>(key, gate));
+    }
+
+    private sealed class BuildGate
+    {
+        internal readonly SemaphoreSlim Semaphore = new(1, 1);
+        internal int Users;
+    }
+
+    private sealed class BuildGateLease(string key, BuildGate gate) : IDisposable
+    {
+        private int _disposed;
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+                return;
+
+            ReleaseBuildGateReference(key, gate, releaseSemaphore: true);
+        }
     }
 
     /// <summary>

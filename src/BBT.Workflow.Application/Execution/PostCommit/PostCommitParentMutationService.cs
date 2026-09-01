@@ -95,7 +95,7 @@ public sealed class PostCommitParentMutationService(
 
         // The authoritative output carries PipelineInstance into sync response enrichment, so
         // reload correlations for settlement decisions and data for the final response projection.
-        var instance = await instanceRepository.FindWithAllCorrelationsAndDataAsync(
+        var instance = await instanceRepository.FindForPostCommitSettlementAsync(
             source.InstanceId,
             cancellationToken);
         if (instance is null)

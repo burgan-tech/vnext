@@ -1144,6 +1144,21 @@ public static partial class WorkflowLogs
         Guid subInstanceId);
 
     /// <summary>
+    /// Logs when the best-effort durable settlement marker write failed after a terminal outcome
+    /// ({Outcome}) was fully handled. The terminal work itself is committed — losing the marker
+    /// only forfeits the lock-free duplicate fast path for this correlation.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40060,
+        Level = LogLevel.Warning,
+        Message = "Could not persist {Outcome} settlement marker for sub-instance {SubInstanceId}; duplicates will take the locked path")]
+    public static partial void SubItemSettlementMarkerWriteFailed(
+        this ILogger logger,
+        Exception exception,
+        string outcome,
+        Guid subInstanceId);
+
+    /// <summary>
     /// Logs when a contended transition lock acquisition is retried after a jittered backoff.
     /// </summary>
     [LoggerMessage(
