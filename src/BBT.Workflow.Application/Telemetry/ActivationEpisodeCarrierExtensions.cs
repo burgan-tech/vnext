@@ -14,9 +14,17 @@ public static class ActivationEpisodeCarrierExtensions
 {
     /// <summary>The episode a job payload carries, or null.</summary>
     public static ActivationEpisode? ToActivationEpisode(this ITraceableJobPayload payload)
-        => ActivationEpisode.FromCarrier(payload.EpisodeStartedAt, payload.EpisodeTrigger, payload.EpisodeTransitionKey);
+        => ActivationEpisode.FromCarrier(
+            payload.EpisodeStartedAt,
+            payload.EpisodeTrigger,
+            payload.EpisodeTransitionKey,
+            payload.EpisodeTraceRoot);
 
     /// <summary>The episode a lane-aware distributed event carries, or null.</summary>
     public static ActivationEpisode? ToActivationEpisode(this ILaneAwareDistributedEvent evt)
-        => ActivationEpisode.FromCarrier(evt.EpisodeStartedAt, evt.EpisodeTrigger, evt.EpisodeTransitionKey);
+        => ActivationEpisode.FromCarrier(
+            evt.EpisodeStartedAt,
+            evt.EpisodeTrigger,
+            evt.EpisodeTransitionKey,
+            evt.EpisodeTraceRoot);
 }

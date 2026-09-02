@@ -105,7 +105,8 @@ public class AsyncTransitionStrategyTests
             new DateTimeOffset(2026, 9, 2, 10, 0, 0, TimeSpan.Zero),
             TelemetryConstants.ActivationTriggers.Manual,
             "test-transition",
-            Partial: false);
+            Partial: false,
+            TraceRoot: "00-11111111111111111111111111111111-2222222222222222-01");
 
         using (WorkflowTraceLane.Use("00-11111111111111111111111111111111-1111111111111111-01", episode: episode))
         {
@@ -116,9 +117,11 @@ public class AsyncTransitionStrategyTests
         payload().ShouldNotBeNull().EpisodeStartedAt.ShouldBe(episode.StartedAt);
         payload()!.EpisodeTrigger.ShouldBe(TelemetryConstants.ActivationTriggers.Manual);
         payload()!.EpisodeTransitionKey.ShouldBe("test-transition");
+        payload()!.EpisodeTraceRoot.ShouldBe(episode.TraceRoot);
         outboxEvent().ShouldNotBeNull().EpisodeStartedAt.ShouldBe(episode.StartedAt);
         outboxEvent()!.EpisodeTrigger.ShouldBe(TelemetryConstants.ActivationTriggers.Manual);
         outboxEvent()!.EpisodeTransitionKey.ShouldBe("test-transition");
+        outboxEvent()!.EpisodeTraceRoot.ShouldBe(episode.TraceRoot);
     }
 
     /// <summary>

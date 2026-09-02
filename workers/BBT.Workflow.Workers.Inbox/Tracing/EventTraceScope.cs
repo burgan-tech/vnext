@@ -147,7 +147,8 @@ internal sealed class EventTraceScope : IDisposable
                 laneAware.TraceRoot,
                 laneAware.ParentTraceRoot,
                 episode: ActivationEpisode.FromCarrier(
-                    laneAware.EpisodeStartedAt, laneAware.EpisodeTrigger, laneAware.EpisodeTransitionKey))
+                    laneAware.EpisodeStartedAt, laneAware.EpisodeTrigger, laneAware.EpisodeTransitionKey,
+                    laneAware.EpisodeTraceRoot))
             : WorkflowTraceLane.Reset(activity?.Id);
 
         return new EventTraceScope(

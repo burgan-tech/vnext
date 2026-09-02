@@ -118,4 +118,7 @@ public sealed class TransitionContinuationRequested : IDistributedEvent, ILaneAw
 
     /// <inheritdoc />
     public string? EpisodeTransitionKey { get; set; }
+
+    /// <inheritdoc />
+    public string? EpisodeTraceRoot { get; set; }
 }

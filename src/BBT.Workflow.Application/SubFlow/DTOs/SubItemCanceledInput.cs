@@ -40,6 +40,9 @@ public record SubItemCanceledInput
     /// <summary>The transition the episode was triggered with (the first hop's key).</summary>
     public string? EpisodeTransitionKey { get; init; }
 
+    /// <summary>The trace root under which the activation episode began.</summary>
+    public string? EpisodeTraceRoot { get; init; }
+
     /// <summary>
     /// How many times a terminal-revert has re-published this event as a durable-delivery rearm.
     /// <c>null</c>/<c>0</c> for an original delivery. See <c>FlowCompletedInput.RearmAttempt</c>.

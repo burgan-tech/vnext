@@ -45,7 +45,7 @@ node any more — see [Trace Span Tree](trace-span-tree.md).
 | Lane-carrying events | `BBT.Workflow.Events.Contracts/Events/ILaneAwareDistributedEvent.cs` |
 | Activation episode record (`StartedAt`, `Trigger`, `TransitionKey`, `Partial`) | `BBT.Workflow.Domain/Logging/ActivationEpisode.cs` |
 | The synthetic `Instance.Activation/{key}` span | `BBT.Workflow.Application/Telemetry/ActivationActivity.cs` |
-| Rebuilding the episode from a carrier's three fields | `BBT.Workflow.Application/Telemetry/ActivationEpisodeCarrierExtensions.cs` |
+| Rebuilding the episode from a carrier's four fields | `BBT.Workflow.Application/Telemetry/ActivationEpisodeCarrierExtensions.cs` |
 | The settlement verdict that closes an episode | `Execution/Transitions/Pipeline/TransitionSettlement.cs` → `ActivationVerdict` on `PipelineDirectives.Activation` |
 
 ### Scope helpers — which one to call
@@ -79,7 +79,7 @@ node any more — see [Trace Span Tree](trace-span-tree.md).
 | `ParentInstanceIdEnrichmentMiddleware` | anchors on the ASP.NET server span (runs while it is `Activity.Current`) | `UseCurrentActivity()` — seeds `http`, start = the server span's start |
 | `InstanceCommandAppService.StartAsync` / `.TransitionAsync`, `EventAppService`, `InstanceRetryAppService`, `LongPollAckResumeService` | — (already anchored by the middleware) | `UseEpisode(start \| manual \| event \| retry \| ack, key)` — classifies the `http` episode without moving its start; `TransitionAsync`'s `manual` loses to an earlier `event` |
 | `TransitionTimerJobHandler`, `FlowTimeoutJobHandler`, `LongPollAckTimeoutJobHandler` | none — deferred payloads carry no anchor (see Safety rules) | `UseEpisode(scheduled \| timeout \| ack-timeout, key)` — opens its **own** episode at the Dapr callback span; the client's question here is "fire → Active" |
-| `TransitionJobHandler` | `Reset` from `payload.TraceRoot` / `ParentTraceRoot` / `LaneSeq` | `Reset` from `payload.EpisodeStartedAt` / `EpisodeTrigger` / `EpisodeTransitionKey` (`ToActivationEpisode()`); a payload with a null start seeds a `Partial` `job` episode at the job span |
+| `TransitionJobHandler` | `Reset` from `payload.TraceRoot` / `ParentTraceRoot` / `LaneSeq` | `Reset` from `payload.EpisodeStartedAt` / `EpisodeTrigger` / `EpisodeTransitionKey` / `EpisodeTraceRoot` (`ToActivationEpisode()`); a payload with a null start seeds a `Partial` `job` episode at the job span |
 | `ForwardToSubflowJobHandler`, `StartSubflowJobHandler` | `EnterChildLane()` | **inherited** from the parent lane |
 | `TriggerTaskExecutorBase` (trigger-family tasks) | `EnterChildLane(trigger)` | **restarted** at the invocation span |
 | `EventTraceScope` (Inbox) | `Reset` from a lane-aware event, else the handler span | `Reset` from the event's three episode fields (null clears) |
@@ -101,7 +101,7 @@ node any more — see [Trace Span Tree](trace-span-tree.md).
 - **Deferred jobs never carry an anchor** (timer, timeout, long-poll ack). `ITraceableJobPayload`
   exposes `TraceRoot` as a default interface member returning null for exactly this reason —
   resurrecting an hours-old anchor would produce an hours-long trace. The same holds for the
-  episode fields (`EpisodeStartedAt` / `EpisodeTrigger` / `EpisodeTransitionKey`, also default
+  episode fields (`EpisodeStartedAt` / `EpisodeTrigger` / `EpisodeTransitionKey` / `EpisodeTraceRoot`, also default
   null): a deferred job opens its own episode when it fires.
 - **A timestamp is not an anchor.** The carried episode start cannot graft spans onto another
   trace, so it needs none of the header protection the anchor has — it still rides only the
@@ -159,7 +159,7 @@ synthetic and backdated; why it has to be, and why its kind is `Internal`, is in
 **Where the start lives.** On the lane: `WorkflowTraceLane.Episode` is an
 `ActivationEpisode(StartedAt, Trigger, TransitionKey, Partial)` held in the same `AsyncLocal` as the
 anchor, so it flows through inline auto-chain hops, the post-commit barrier and the terminal relay
-on its own. Only the async boundaries that already carry the anchor need fields — **three nullable
+on its own. Only the async boundaries that already carry the anchor need fields — **four nullable
 ones, always copied together**, beside `TraceRoot` / `ParentTraceRoot`:
 
 | Carrier | Filled from the lane by | Restored by |
@@ -171,7 +171,7 @@ ones, always copied together**, beside `TraceRoot` / `ParentTraceRoot`:
 | `SubflowForwardInput` | `RemoteInstanceCommandAppService` | `internal/subflow-forward` → `Reset` |
 | Cross-domain child start body (`CreateSubInstanceDto`) | `RemoteInstanceCommandAppService.StartSubAsync` | `sub/instances/start` → `Use` the carried episode while preserving the child server-span anchor |
 
-Cross-domain child starts carry only the three episode fields, never the lane anchor. The child
+Cross-domain child starts carry only the four episode fields, never the lane anchor. The child
 therefore remains rooted under its own `sub/instances/start` server span, while its synthetic
 activation duration starts with the parent episode. A same-domain child inherits both through
 `EnterChildLane()`.

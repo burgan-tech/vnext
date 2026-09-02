@@ -125,6 +125,7 @@ public class TransitionJobHandlerTests
         payload.EpisodeStartedAt = new DateTimeOffset(2026, 9, 2, 10, 0, 0, TimeSpan.Zero);
         payload.EpisodeTrigger = TelemetryConstants.ActivationTriggers.Manual;
         payload.EpisodeTransitionKey = "go";
+        payload.EpisodeTraceRoot = "00-11111111111111111111111111111111-2222222222222222-01";
         var handler = CreateHandler();
 
         ActivationEpisode? observed = null;
@@ -140,6 +141,7 @@ public class TransitionJobHandlerTests
         Assert.Equal(payload.EpisodeStartedAt, observed!.StartedAt);
         Assert.Equal(TelemetryConstants.ActivationTriggers.Manual, observed.Trigger);
         Assert.Equal("go", observed.TransitionKey);
+        Assert.Equal(payload.EpisodeTraceRoot, observed.TraceRoot);
         Assert.False(observed.Partial);
         Assert.Null(WorkflowTraceLane.Episode);
     }

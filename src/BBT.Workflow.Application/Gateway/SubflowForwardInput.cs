@@ -70,4 +70,7 @@ public record SubflowForwardInput
 
     /// <summary>The transition the episode was triggered with (the first hop's key).</summary>
     public string? EpisodeTransitionKey { get; init; }
+
+    /// <summary>The trace root under which the activation episode began.</summary>
+    public string? EpisodeTraceRoot { get; init; }
 }

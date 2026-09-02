@@ -128,7 +128,8 @@ public sealed class InstanceController(
             episode: ActivationEpisode.FromCarrier(
                 request.EpisodeStartedAt,
                 request.EpisodeTrigger,
-                request.EpisodeTransitionKey));
+                request.EpisodeTransitionKey,
+                request.EpisodeTraceRoot));
 
         var input = new StartInstanceInput(domain, workflow, version, sync)
         {
@@ -172,7 +173,11 @@ public sealed class InstanceController(
         using var lane = WorkflowTraceLane.Reset(
             request.TraceRoot,
             request.ParentTraceRoot,
-            episode: ActivationEpisode.FromCarrier(request.EpisodeStartedAt, request.EpisodeTrigger, request.EpisodeTransitionKey));
+            episode: ActivationEpisode.FromCarrier(
+                request.EpisodeStartedAt,
+                request.EpisodeTrigger,
+                request.EpisodeTransitionKey,
+                request.EpisodeTraceRoot));
 
         await subflowCompletionService.CompletionAsync(request, cancellationToken);
         return Ok();
@@ -215,7 +220,9 @@ public sealed class InstanceController(
         using var lane = WorkflowTraceLane.Reset(
             request.TraceRoot,
             request.ParentTraceRoot,
-            episode: ActivationEpisode.FromCarrier(request.EpisodeStartedAt, request.EpisodeTrigger, request.EpisodeTransitionKey));
+            episode: ActivationEpisode.FromCarrier(
+                request.EpisodeStartedAt, request.EpisodeTrigger, request.EpisodeTransitionKey,
+                request.EpisodeTraceRoot));
 
         await subflowFaultService.FaultAsync(request, cancellationToken);
         return Ok();
@@ -241,7 +248,9 @@ public sealed class InstanceController(
         using var lane = WorkflowTraceLane.Reset(
             request.TraceRoot,
             request.ParentTraceRoot,
-            episode: ActivationEpisode.FromCarrier(request.EpisodeStartedAt, request.EpisodeTrigger, request.EpisodeTransitionKey));
+            episode: ActivationEpisode.FromCarrier(
+                request.EpisodeStartedAt, request.EpisodeTrigger, request.EpisodeTransitionKey,
+                request.EpisodeTraceRoot));
 
         await subflowCancellationService.CancellationAsync(request, cancellationToken);
         return Ok();
@@ -332,7 +341,9 @@ public sealed class InstanceController(
         using var lane = WorkflowTraceLane.Reset(
             input.TraceRoot,
             input.ParentTraceRoot,
-            episode: ActivationEpisode.FromCarrier(input.EpisodeStartedAt, input.EpisodeTrigger, input.EpisodeTransitionKey));
+            episode: ActivationEpisode.FromCarrier(
+                input.EpisodeStartedAt, input.EpisodeTrigger, input.EpisodeTransitionKey,
+                input.EpisodeTraceRoot));
 
         var result = await commandAppService.TransitionAsync(
             instance.ToString(),
@@ -532,6 +543,7 @@ public sealed class InstanceController(
             EpisodeStartedAt = continuation.EpisodeStartedAt,
             EpisodeTrigger = continuation.EpisodeTrigger,
             EpisodeTransitionKey = continuation.EpisodeTransitionKey,
+            EpisodeTraceRoot = continuation.EpisodeTraceRoot,
             CorrelationId = continuation.CorrelationId
         };
 

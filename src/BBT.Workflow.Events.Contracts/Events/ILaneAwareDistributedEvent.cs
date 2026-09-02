@@ -44,4 +44,7 @@ public interface ILaneAwareDistributedEvent : ITraceableDistributedEvent
 
     /// <summary>The transition the episode was triggered with (the first hop's key).</summary>
     string? EpisodeTransitionKey { get; set; }
+
+    /// <summary>The trace root under which the activation episode began.</summary>
+    string? EpisodeTraceRoot { get; set; }
 }

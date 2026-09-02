@@ -97,6 +97,7 @@ internal sealed class InstanceSubCompletedEventHandler(
                 EpisodeStartedAt = eventData.EpisodeStartedAt,
                 EpisodeTrigger = eventData.EpisodeTrigger,
                 EpisodeTransitionKey = eventData.EpisodeTransitionKey,
+                EpisodeTraceRoot = eventData.EpisodeTraceRoot,
                 RearmAttempt = eventData.RearmAttempt
             };
 

@@ -33,4 +33,5 @@ public class CreateSubInstanceDto : CreateInstanceDto
     public DateTimeOffset? EpisodeStartedAt { get; set; }
     public string? EpisodeTrigger { get; set; }
     public string? EpisodeTransitionKey { get; set; }
+    public string? EpisodeTraceRoot { get; set; }
 }

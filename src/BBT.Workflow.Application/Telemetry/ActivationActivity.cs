@@ -156,15 +156,16 @@ public static class ActivationActivity
     }
 
     /// <summary>
-    /// The lane anchor when it belongs to the ambient trace (the normal case: the APM transaction
-    /// the hops are flat under), else the ambient span itself. An anchor from another trace is never
-    /// trusted as a parent — the same posture as <see cref="FlatLaneActivity"/>.
+    /// The episode's originating trace root when it belongs to the ambient trace, falling back to
+    /// the lane anchor for legacy carriers and then to the ambient span. Keeping this root separate
+    /// prevents a backdated child activation from starting before a later handoff parent.
     /// </summary>
     private static ActivityContext ResolveParent(Activity? ambient)
     {
         var fallback = ambient?.Context ?? default;
 
-        if (!ActivityContext.TryParse(WorkflowTraceLane.Current, ambient?.TraceStateString, isRemote: true, out var anchor))
+        var traceRoot = WorkflowTraceLane.Episode?.TraceRoot ?? WorkflowTraceLane.Current;
+        if (!ActivityContext.TryParse(traceRoot, ambient?.TraceStateString, isRemote: true, out var anchor))
             return fallback;
 
         return ambient is null || anchor.TraceId == ambient.TraceId ? anchor : fallback;

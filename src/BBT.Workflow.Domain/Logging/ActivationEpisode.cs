@@ -9,8 +9,8 @@ namespace BBT.Workflow.Logging;
 /// Busy). It is the unit a client actually waits for, and the unit the
 /// <c>Instance.Activation/{key}</c> span measures.
 /// <para>
-/// Carried on <see cref="WorkflowTraceLane"/> and, across async boundaries, as three nullable
-/// fields (<c>EpisodeStartedAt</c>, <c>EpisodeTrigger</c>, <c>EpisodeTransitionKey</c>) beside the
+/// Carried on <see cref="WorkflowTraceLane"/> and, across async boundaries, with its start,
+/// trigger, transition key and trace root beside the
 /// lane anchor in job payloads, outbox events and internal relay bodies. A payload from a build that
 /// predates the episode simply yields null on the consuming side; the settling hop then reports a
 /// <see cref="Partial"/> episode covering itself alone rather than inventing a start.
@@ -22,11 +22,15 @@ namespace BBT.Workflow.Logging;
 /// <param name="TransitionKey">The transition the trigger ran (the first hop's key), when known.</param>
 /// <param name="Partial">True when the start was not carried to this hop and covers only the
 /// settling hop; excluded from latency aggregates.</param>
+/// <param name="TraceRoot">The span under which the episode began. Kept separate from the lane
+/// anchor because an inherited child lane is anchored on its handoff span while its backdated
+/// activation still belongs under the originating request.</param>
 public sealed record ActivationEpisode(
     DateTimeOffset StartedAt,
     string Trigger,
     string? TransitionKey,
-    bool Partial)
+    bool Partial,
+    string? TraceRoot = null)
 {
     /// <summary>
     /// Opens an episode that starts when <paramref name="activity"/> started (the ambient server or
@@ -37,18 +41,24 @@ public sealed record ActivationEpisode(
             activity is null ? DateTimeOffset.UtcNow : new DateTimeOffset(activity.StartTimeUtc, TimeSpan.Zero),
             trigger,
             transitionKey,
-            Partial: false);
+            Partial: false,
+            TraceRoot: activity?.Id);
 
     /// <summary>
-    /// Rebuilds an episode from the three carried fields, or null when the carrier holds no start —
+    /// Rebuilds an episode from the four carried fields, or null when the carrier holds no start —
     /// the shape every payload, event and relay body shares.
     /// </summary>
-    public static ActivationEpisode? FromCarrier(DateTimeOffset? startedAt, string? trigger, string? transitionKey)
+    public static ActivationEpisode? FromCarrier(
+        DateTimeOffset? startedAt,
+        string? trigger,
+        string? transitionKey,
+        string? traceRoot = null)
         => startedAt is null
             ? null
             : new ActivationEpisode(
                 startedAt.Value,
                 string.IsNullOrEmpty(trigger) ? TelemetryConstants.ActivationTriggers.Http : trigger,
                 transitionKey,
-                Partial: false);
+                Partial: false,
+                TraceRoot: traceRoot);
 }

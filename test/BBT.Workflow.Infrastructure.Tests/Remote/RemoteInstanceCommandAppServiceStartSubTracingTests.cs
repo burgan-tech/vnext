@@ -28,11 +28,13 @@ public sealed class RemoteInstanceCommandAppServiceStartSubTracingTests
         var handler = new RecordingHandler();
         var sut = CreateSut(handler);
         var startedAt = new DateTimeOffset(2026, 9, 2, 12, 34, 56, TimeSpan.Zero);
+        const string episodeTraceRoot = "00-11111111111111111111111111111111-3333333333333333-01";
         var episode = new ActivationEpisode(
             startedAt,
             TelemetryConstants.ActivationTriggers.Start,
             "create",
-            Partial: false);
+            Partial: false,
+            TraceRoot: episodeTraceRoot);
         using var lane = WorkflowTraceLane.Use(
             "00-11111111111111111111111111111111-2222222222222222-01",
             episode: episode);
@@ -48,6 +50,7 @@ public sealed class RemoteInstanceCommandAppServiceStartSubTracingTests
         body.RootElement.GetProperty("episodeStartedAt").GetDateTimeOffset().ShouldBe(startedAt);
         body.RootElement.GetProperty("episodeTrigger").GetString().ShouldBe("start");
         body.RootElement.GetProperty("episodeTransitionKey").GetString().ShouldBe("create");
+        body.RootElement.GetProperty("episodeTraceRoot").GetString().ShouldBe(episodeTraceRoot);
     }
 
     private static RemoteInstanceCommandAppService CreateSut(RecordingHandler handler)

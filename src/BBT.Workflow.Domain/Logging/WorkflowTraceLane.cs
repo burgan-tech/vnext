@@ -154,7 +154,12 @@ public static class WorkflowTraceLane
         var previous = State.Value;
         var current = previous?.Episode;
         var episode = current is null
-            ? new ActivationEpisode(DateTimeOffset.UtcNow, trigger, transitionKey, Partial: false)
+            ? new ActivationEpisode(
+                DateTimeOffset.UtcNow,
+                trigger,
+                transitionKey,
+                Partial: false,
+                TraceRoot: Activity.Current?.Id ?? previous?.Anchor)
             : current with
             {
                 Trigger = current.Trigger == TelemetryConstants.ActivationTriggers.Http ? trigger : current.Trigger,

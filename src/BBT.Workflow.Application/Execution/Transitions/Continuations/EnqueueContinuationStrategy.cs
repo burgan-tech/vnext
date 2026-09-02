@@ -106,6 +106,7 @@ public sealed class EnqueueContinuationStrategy(
             EpisodeStartedAt = episode?.StartedAt,
             EpisodeTrigger = episode?.Trigger,
             EpisodeTransitionKey = episode?.TransitionKey,
+            EpisodeTraceRoot = episode?.TraceRoot,
             CorrelationId = current.CorrelationId
         };
 
@@ -131,6 +132,7 @@ public sealed class EnqueueContinuationStrategy(
             EpisodeStartedAt = episode?.StartedAt,
             EpisodeTrigger = episode?.Trigger,
             EpisodeTransitionKey = episode?.TransitionKey,
+            EpisodeTraceRoot = episode?.TraceRoot,
             CorrelationId = current.CorrelationId
         };
 

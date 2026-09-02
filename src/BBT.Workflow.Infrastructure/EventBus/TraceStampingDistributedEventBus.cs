@@ -61,12 +61,19 @@ public sealed class TraceStampingDistributedEventBus : IDistributedEventBus
 
             // The activation episode rides with the lane: the consumer's rest point (a parent
             // resume settling Active) measures from the publisher's original trigger, not from the
-            // delivery. Same never-overwrite policy; the three fields travel together.
-            if (laneAware.EpisodeStartedAt is null && WorkflowTraceLane.Episode is { } episode)
+            // delivery. Same never-overwrite policy; the fields travel together. TraceRoot is
+            // filled independently so carriers produced by an older initializer still preserve
+            // the episode's original trace parent.
+            if (WorkflowTraceLane.Episode is { } episode)
             {
-                laneAware.EpisodeStartedAt = episode.StartedAt;
-                laneAware.EpisodeTrigger = episode.Trigger;
-                laneAware.EpisodeTransitionKey = episode.TransitionKey;
+                if (laneAware.EpisodeStartedAt is null)
+                {
+                    laneAware.EpisodeStartedAt = episode.StartedAt;
+                    laneAware.EpisodeTrigger = episode.Trigger;
+                    laneAware.EpisodeTransitionKey = episode.TransitionKey;
+                }
+
+                laneAware.EpisodeTraceRoot ??= episode.TraceRoot;
             }
         }
     }

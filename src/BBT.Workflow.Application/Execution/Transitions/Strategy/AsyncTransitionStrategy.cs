@@ -291,6 +291,7 @@ public sealed class AsyncTransitionStrategy(
             EpisodeStartedAt = WorkflowTraceLane.Episode?.StartedAt,
             EpisodeTrigger = WorkflowTraceLane.Episode?.Trigger,
             EpisodeTransitionKey = WorkflowTraceLane.Episode?.TransitionKey,
+            EpisodeTraceRoot = WorkflowTraceLane.Episode?.TraceRoot,
             CorrelationId = transContext.CorrelationId,
             Stage = context.Data?.Stage,
             SubflowChainReserved = subflowChainReserved
@@ -332,6 +333,7 @@ public sealed class AsyncTransitionStrategy(
             EpisodeStartedAt = WorkflowTraceLane.Episode?.StartedAt,
             EpisodeTrigger = WorkflowTraceLane.Episode?.Trigger,
             EpisodeTransitionKey = WorkflowTraceLane.Episode?.TransitionKey,
+            EpisodeTraceRoot = WorkflowTraceLane.Episode?.TraceRoot,
             CorrelationId = transContext.CorrelationId,
             ChainDepth = transContext.ChainDepth,
             SubflowChainReserved = subflowChainReserved

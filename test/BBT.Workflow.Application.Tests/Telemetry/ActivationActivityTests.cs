@@ -101,6 +101,26 @@ public sealed class ActivationActivityTests : IDisposable
     }
 
     [Fact]
+    public void Emit_for_an_inherited_child_episode_parents_to_the_episode_root_not_the_later_handoff()
+    {
+        Listen(TestSource);
+
+        using var request = Source.StartActivity("PATCH /transitions/to-review")!;
+        using var lane = WorkflowTraceLane.UseCurrentActivity();
+        using var classify = WorkflowTraceLane.UseEpisode(TelemetryConstants.ActivationTriggers.Manual, "to-review");
+        using var handoff = Source.StartActivity("PostCommit.StartSubflowJob")!;
+        using var childLane = WorkflowTraceLane.EnterChildLane();
+        using var settlingHop = Source.StartActivity("child/create")!;
+
+        var emitted = Emit().ShouldNotBeNull();
+
+        emitted.StartTimeUtc.ShouldBe(request.StartTimeUtc);
+        emitted.ParentSpanId.ShouldBe(request.SpanId);
+        emitted.ParentSpanId.ShouldNotBe(handoff.SpanId);
+        emitted.Links.Select(l => l.Context.SpanId).ShouldContain(settlingHop.SpanId);
+    }
+
+    [Fact]
     public void Emit_without_an_episode_covers_only_the_hop_and_is_tagged_partial()
     {
         Listen(TestSource);

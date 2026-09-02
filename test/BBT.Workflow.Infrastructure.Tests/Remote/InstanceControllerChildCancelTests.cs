@@ -33,6 +33,7 @@ public sealed class InstanceControllerChildCancelTests
     {
         var startedAt = new DateTimeOffset(2026, 9, 2, 12, 34, 56, TimeSpan.Zero);
         const string requestAnchor = "00-11111111111111111111111111111111-2222222222222222-01";
+        const string episodeTraceRoot = "00-11111111111111111111111111111111-3333333333333333-01";
         var requestEpisode = new ActivationEpisode(
             startedAt.AddSeconds(1),
             TelemetryConstants.ActivationTriggers.Http,
@@ -59,7 +60,8 @@ public sealed class InstanceControllerChildCancelTests
             ExtraProperties = new Dictionary<string, object?>(),
             EpisodeStartedAt = startedAt,
             EpisodeTrigger = TelemetryConstants.ActivationTriggers.Manual,
-            EpisodeTransitionKey = "approve"
+            EpisodeTransitionKey = "approve",
+            EpisodeTraceRoot = episodeTraceRoot
         };
 
         using (WorkflowTraceLane.Use(requestAnchor, episode: requestEpisode))
@@ -79,7 +81,8 @@ public sealed class InstanceControllerChildCancelTests
             startedAt,
             TelemetryConstants.ActivationTriggers.Manual,
             "approve",
-            Partial: false));
+            Partial: false,
+            TraceRoot: episodeTraceRoot));
         WorkflowTraceLane.Episode.ShouldBeNull();
     }
 

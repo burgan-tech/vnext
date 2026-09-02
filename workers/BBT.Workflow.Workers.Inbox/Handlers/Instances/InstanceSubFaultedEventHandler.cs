@@ -114,6 +114,7 @@ internal sealed class InstanceSubFaultedEventHandler(
                 EpisodeStartedAt = eventData.EpisodeStartedAt,
                 EpisodeTrigger = eventData.EpisodeTrigger,
                 EpisodeTransitionKey = eventData.EpisodeTransitionKey,
+                EpisodeTraceRoot = eventData.EpisodeTraceRoot,
                 RearmAttempt = eventData.RearmAttempt
             };
 

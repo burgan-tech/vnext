@@ -159,7 +159,8 @@ public sealed class RemoteInstanceCommandAppService(
                 ExtraProperties = input.Instance.ExtraProperties,
                 EpisodeStartedAt = episode?.StartedAt,
                 EpisodeTrigger = episode?.Trigger,
-                EpisodeTransitionKey = episode?.TransitionKey
+                EpisodeTransitionKey = episode?.TransitionKey,
+                EpisodeTraceRoot = episode?.TraceRoot
             };
 
             var jsonContent = JsonSerializer.Serialize(requestBody, JsonSerializerConstants.JsonOptions);
@@ -241,7 +242,8 @@ public sealed class RemoteInstanceCommandAppService(
                 // measured from the client's request to the parent, not from this relay hop.
                 EpisodeStartedAt = WorkflowTraceLane.Episode?.StartedAt,
                 EpisodeTrigger = WorkflowTraceLane.Episode?.Trigger,
-                EpisodeTransitionKey = WorkflowTraceLane.Episode?.TransitionKey
+                EpisodeTransitionKey = WorkflowTraceLane.Episode?.TransitionKey,
+                EpisodeTraceRoot = WorkflowTraceLane.Episode?.TraceRoot
             };
 
             var jsonContent = JsonSerializer.Serialize(forwardInput, JsonSerializerConstants.JsonOptions);

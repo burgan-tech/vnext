@@ -94,6 +94,7 @@ internal sealed class InstanceSubCanceledEventHandler(
                 EpisodeStartedAt = eventData.EpisodeStartedAt,
                 EpisodeTrigger = eventData.EpisodeTrigger,
                 EpisodeTransitionKey = eventData.EpisodeTransitionKey,
+                EpisodeTraceRoot = eventData.EpisodeTraceRoot,
                 RearmAttempt = eventData.RearmAttempt
             };
             var route = $"api/v1/{eventData.Domain}/workflows/{eventData.Flow}/instances/{eventData.InstanceId}/sub/cancel";

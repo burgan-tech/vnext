@@ -398,6 +398,7 @@ public sealed class SubflowCancellationService(
             EpisodeStartedAt = input.EpisodeStartedAt,
             EpisodeTrigger = input.EpisodeTrigger,
             EpisodeTransitionKey = input.EpisodeTransitionKey,
+            EpisodeTraceRoot = input.EpisodeTraceRoot,
             RearmAttempt = rearmAttempt
         };
     }

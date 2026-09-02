@@ -102,6 +102,9 @@ public class InstanceSubCompletedEvent : IDistributedEvent, ILaneAwareDistribute
     /// <inheritdoc />
     public string? EpisodeTransitionKey { get; set; }
 
+    /// <inheritdoc />
+    public string? EpisodeTraceRoot { get; set; }
+
     /// <summary>
     /// How many times a terminal-revert has re-published this event as a durable-delivery rearm,
     /// after the original delivery was consumed by the lock-free duplicate ACK and a later

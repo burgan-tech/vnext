@@ -117,6 +117,7 @@ public sealed class SubflowTerminalRelay(
             EpisodeStartedAt = eventData.EpisodeStartedAt,
             EpisodeTrigger = eventData.EpisodeTrigger,
             EpisodeTransitionKey = eventData.EpisodeTransitionKey,
+            EpisodeTraceRoot = eventData.EpisodeTraceRoot,
             RearmAttempt = eventData.RearmAttempt
         };
     }
@@ -164,6 +165,7 @@ public sealed class SubflowTerminalRelay(
             EpisodeStartedAt = eventData.EpisodeStartedAt,
             EpisodeTrigger = eventData.EpisodeTrigger,
             EpisodeTransitionKey = eventData.EpisodeTransitionKey,
+            EpisodeTraceRoot = eventData.EpisodeTraceRoot,
             RearmAttempt = eventData.RearmAttempt
         };
     }
@@ -194,6 +196,7 @@ public sealed class SubflowTerminalRelay(
         EpisodeStartedAt = eventData.EpisodeStartedAt,
         EpisodeTrigger = eventData.EpisodeTrigger,
         EpisodeTransitionKey = eventData.EpisodeTransitionKey,
+        EpisodeTraceRoot = eventData.EpisodeTraceRoot,
         RearmAttempt = eventData.RearmAttempt
     };
 }

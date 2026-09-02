@@ -118,6 +118,7 @@ public sealed class TraceStampingDistributedEventBusTests
         evt.EpisodeStartedAt.ShouldBe(episode.StartedAt);
         evt.EpisodeTrigger.ShouldBe(TelemetryConstants.ActivationTriggers.Manual);
         evt.EpisodeTransitionKey.ShouldBe("go");
+        evt.EpisodeTraceRoot.ShouldBe(episode.TraceRoot);
     }
 
     [Fact]
@@ -136,6 +137,7 @@ public sealed class TraceStampingDistributedEventBusTests
         evt.EpisodeStartedAt.ShouldBe(preset);
         evt.EpisodeTrigger.ShouldBe("event");
         evt.EpisodeTransitionKey.ShouldBe("preset");
+        evt.EpisodeTraceRoot.ShouldBe(ambient.TraceRoot);
     }
 
     [Fact]
@@ -249,6 +251,7 @@ public sealed class TraceStampingDistributedEventBusTests
         public DateTimeOffset? EpisodeStartedAt { get; set; }
         public string? EpisodeTrigger { get; set; }
         public string? EpisodeTransitionKey { get; set; }
+        public string? EpisodeTraceRoot { get; set; }
     }
 
     private sealed class PlainEvent;
