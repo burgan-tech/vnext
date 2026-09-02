@@ -86,25 +86,28 @@ public static class LifecycleOrder
 
     /// <summary>
     /// Order for handling declarative long-poll termination on state entry.
-    /// Runs after OnEntry/SubFlow and before the epilogue (Schedule/Auto): when the entered
+    /// Runs after OnEntry/SubFlow and before the epilogue (Auto/Schedule): when the entered
     /// state's <c>interaction.longPoll.terminate</c> is true, the pipeline pauses here (skips the
     /// epilogue to Finalize, instance stays Busy) and resumes on acknowledge or fallback timeout.
     /// </summary>
     public const int LongPollTermination = 75;
 
-    public const int ClearBusyOnResumeStep = Schedule - 1;
-    
-    /// <summary>
-    /// Order for scheduling future transitions.
-    /// Enqueues scheduled transitions based on timers.
-    /// </summary>
-    public const int Schedule = 80;
-    
+    public const int ClearBusyOnResumeStep = Auto - 1;
+
     /// <summary>
     /// Order for executing automatic transitions.
-    /// Evaluates and triggers automatic transitions based on conditions.
+    /// Evaluates auto-transition conditions and, on a winner, requests the next transition.
+    /// Runs BEFORE Schedule so a satisfied winner suppresses pointless timer arming
+    /// (the chained hop's CancelScheduledJobs would immediately tear those jobs down).
     /// </summary>
-    public const int Auto = 90;
+    public const int Auto = 80;
+
+    /// <summary>
+    /// Order for scheduling future transitions.
+    /// Enqueues scheduled transitions based on timers — only when the Auto step did not
+    /// select a winner (see ScheduleTransitionsStep's NextTransition guard).
+    /// </summary>
+    public const int Schedule = 90;
     
     /// <summary>
     /// Order for handling workflow finishing.
