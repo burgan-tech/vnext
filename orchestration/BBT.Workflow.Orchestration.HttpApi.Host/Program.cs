@@ -1,10 +1,20 @@
+using System.Diagnostics;
 using BBT.Aether.AspNetCore.Dapr;
 using BBT.Aether.AspNetCore.Threads;
+using BBT.Workflow.HttpApi.Shared.Telemetry;
 using BBT.Workflow.Logging;
 using Dapr.Client;
 using Dapr.Extensions.Configuration;
 
 ThreadPoolHelper.ConfigureThreadPool();
+
+// PROCESS-GLOBAL MUTATION: repairs Dapr's duplicated (comma-joined) traceparent on sidecar hops so the
+// inbound request is parented to the caller's trace instead of being rooted as a new one. No-op for
+// well-formed input. MUST stay above WebApplication.CreateBuilder — hosting captures the propagator
+// instance into DI during builder construction. Full rationale and live trace evidence: the Execution
+// host's Program.cs and docs/runtime/dapr-invocation-transport.md.
+DistributedContextPropagator.Current =
+    new DuplicateTolerantTraceContextPropagator(DistributedContextPropagator.Current);
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Configuration.SetBasePath(Directory.GetCurrentDirectory());
