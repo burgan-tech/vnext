@@ -7,7 +7,6 @@ using BBT.Workflow.Execution.Bindings;
 using BBT.Workflow.Gateway;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
-using BBT.Workflow.Monitoring;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks.Mapping;
@@ -34,9 +33,8 @@ public sealed class StartTriggerTaskExecutor : TriggerTaskExecutorBase<StartTask
         IRemoteInvokerService remoteInvoker,
         IInstanceCommandGateway instanceCommandGateway,
         IDomainDiscoveryResolver endpointResolver,
-        ILogger<StartTriggerTaskExecutor> logger,
-        IWorkflowMetrics metrics)
-        : base(scriptEngine, runtimeInfoProvider, remoteInvoker, logger, metrics)
+        ILogger<StartTriggerTaskExecutor> logger)
+        : base(scriptEngine, runtimeInfoProvider, remoteInvoker, logger)
     {
         _instanceCommandGateway = instanceCommandGateway;
         _endpointResolver = endpointResolver;

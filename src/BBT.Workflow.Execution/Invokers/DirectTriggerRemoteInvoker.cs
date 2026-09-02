@@ -5,6 +5,7 @@ using System.Text.Json;
 using BBT.Workflow.Execution.Bindings;
 using BBT.Workflow.Execution.Configuration;
 using BBT.Workflow.Execution.Metrics;
+using BBT.Workflow.Execution.Services;
 using Dapr.Client;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
@@ -132,12 +133,18 @@ public sealed class DirectTriggerRemoteInvoker : ITaskInvoker<DirectTriggerBindi
         DirectTriggerBinding binding,
         CancellationToken cancellationToken)
     {
-        var stopwatch = Stopwatch.StartNew();
+        var startTimestamp = Stopwatch.GetTimestamp();
+        var prepareActivity = InvokerActivityHelper.StartPrepareActivity(TaskType, taskKey ?? string.Empty);
 
         try
         {
             var appId = binding.DaprAppId ?? _orchestrationAppId;
 
+            // Request build happens per retry attempt inside the pipeline below (a fresh
+            // HttpRequestMessage per attempt), so "prep" here covers only what precedes the
+            // first attempt; dispose before entering the pipeline for uniformity with the other
+            // invokers rather than trying to instrument each retry individually.
+            prepareActivity?.Dispose();
             var response = await _retryPipeline.ExecuteAsync(
                 async token =>
                 {
@@ -146,12 +153,11 @@ public sealed class DirectTriggerRemoteInvoker : ITaskInvoker<DirectTriggerBindi
                 },
                 cancellationToken);
 
-            stopwatch.Stop();
-            return await ProcessResponseAsync(taskKey, binding, response, stopwatch.ElapsedMilliseconds, cancellationToken);
+            return await ProcessResponseAsync(taskKey, binding, response, (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds, cancellationToken);
         }
         catch (TaskCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            stopwatch.Stop();
+            prepareActivity?.Dispose();
             _metrics.RecordTaskExecution(TaskType, "cancelled");
             _logger.LogWarning(
                 "DirectTrigger Dapr invocation was cancelled for task {TaskKey}: {Domain}/{Workflow}/{InstanceId}/{TransitionKey}",
@@ -159,13 +165,13 @@ public sealed class DirectTriggerRemoteInvoker : ITaskInvoker<DirectTriggerBindi
 
             return TaskInvocationResult.Failure(
                 error: "DirectTrigger remote invocation was cancelled",
-                executionDurationMs: stopwatch.ElapsedMilliseconds,
+                executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
                 taskType: TaskType,
                 metadata: CreateMetadata(binding, cancelled: true));
         }
         catch (Exception ex)
         {
-            stopwatch.Stop();
+            prepareActivity?.Dispose();
             _metrics.RecordTaskExecution(TaskType, "failure");
             _logger.LogError(ex,
                 "DirectTrigger Dapr invocation failed for task {TaskKey}: {Domain}/{Workflow}/{InstanceId}/{TransitionKey}",
@@ -173,7 +179,7 @@ public sealed class DirectTriggerRemoteInvoker : ITaskInvoker<DirectTriggerBindi
 
             return TaskInvocationResult.Failure(
                 error: ex.Message,
-                executionDurationMs: stopwatch.ElapsedMilliseconds,
+                executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
                 taskType: TaskType,
                 metadata: CreateMetadata(binding, exceptionType: ex.GetType().Name));
         }
@@ -184,12 +190,18 @@ public sealed class DirectTriggerRemoteInvoker : ITaskInvoker<DirectTriggerBindi
         DirectTriggerBinding binding,
         CancellationToken cancellationToken)
     {
-        var stopwatch = Stopwatch.StartNew();
+        var startTimestamp = Stopwatch.GetTimestamp();
+        var prepareActivity = InvokerActivityHelper.StartPrepareActivity(TaskType, taskKey ?? string.Empty);
 
         try
         {
             var httpClient = CreateHttpClient(binding, taskKey);
 
+            // Request build happens per retry attempt inside the pipeline below (a fresh
+            // HttpRequestMessage per attempt), so "prep" here covers only what precedes the
+            // first attempt; dispose before entering the pipeline for uniformity with the other
+            // invokers rather than trying to instrument each retry individually.
+            prepareActivity?.Dispose();
             var response = await _retryPipeline.ExecuteAsync(
                 async token =>
                 {
@@ -198,12 +210,11 @@ public sealed class DirectTriggerRemoteInvoker : ITaskInvoker<DirectTriggerBindi
                 },
                 cancellationToken);
 
-            stopwatch.Stop();
-            return await ProcessResponseAsync(taskKey, binding, response, stopwatch.ElapsedMilliseconds, cancellationToken);
+            return await ProcessResponseAsync(taskKey, binding, response, (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds, cancellationToken);
         }
         catch (TaskCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            stopwatch.Stop();
+            prepareActivity?.Dispose();
             _metrics.RecordTaskExecution(TaskType, "cancelled");
             _logger.LogWarning(
                 "DirectTrigger HTTP invocation was cancelled for task {TaskKey}: {Domain}/{Workflow}/{InstanceId}/{TransitionKey}",
@@ -211,13 +222,13 @@ public sealed class DirectTriggerRemoteInvoker : ITaskInvoker<DirectTriggerBindi
 
             return TaskInvocationResult.Failure(
                 error: "DirectTrigger remote invocation was cancelled",
-                executionDurationMs: stopwatch.ElapsedMilliseconds,
+                executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
                 taskType: TaskType,
                 metadata: CreateMetadata(binding, cancelled: true));
         }
         catch (HttpRequestException ex)
         {
-            stopwatch.Stop();
+            prepareActivity?.Dispose();
             _metrics.RecordTaskExecution(TaskType, "failure");
             _logger.LogError(ex,
                 "DirectTrigger HTTP invocation failed for task {TaskKey}: {Domain}/{Workflow}/{InstanceId}/{TransitionKey}",
@@ -225,13 +236,13 @@ public sealed class DirectTriggerRemoteInvoker : ITaskInvoker<DirectTriggerBindi
 
             return TaskInvocationResult.Failure(
                 error: ex.Message,
-                executionDurationMs: stopwatch.ElapsedMilliseconds,
+                executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
                 taskType: TaskType,
                 metadata: CreateMetadata(binding, exceptionType: ex.GetType().Name));
         }
         catch (Exception ex)
         {
-            stopwatch.Stop();
+            prepareActivity?.Dispose();
             _metrics.RecordTaskExecution(TaskType, "failure");
             _logger.LogError(ex,
                 "DirectTrigger HTTP invocation failed for task {TaskKey}: {Domain}/{Workflow}/{InstanceId}/{TransitionKey}",
@@ -239,7 +250,7 @@ public sealed class DirectTriggerRemoteInvoker : ITaskInvoker<DirectTriggerBindi
 
             return TaskInvocationResult.Failure(
                 error: ex.Message,
-                executionDurationMs: stopwatch.ElapsedMilliseconds,
+                executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
                 taskType: TaskType,
                 metadata: CreateMetadata(binding, exceptionType: ex.GetType().Name));
         }

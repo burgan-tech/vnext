@@ -29,13 +29,70 @@ public sealed class SubflowOutputMappingService(
         JsonElement? childInstanceData,
         CancellationToken cancellationToken = default)
     {
+        var preparation = await PrepareAsync(
+            parentInstance.Id,
+            parentWorkflow,
+            parentStateKey,
+            cancellationToken);
+        if (!preparation.IsSuccess)
+            return Result.Fail(preparation.Error);
+
+        return await ApplyPreparedAsync(
+            parentInstance,
+            parentWorkflow,
+            preparation.Value!,
+            childInstanceData,
+            cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async Task<Result<SubflowOutputMappingPlan>> PrepareAsync(
+        Guid parentInstanceId,
+        Definitions.Workflow parentWorkflow,
+        string parentStateKey,
+        CancellationToken cancellationToken = default)
+    {
         var parentStateResult = parentWorkflow.GetState(parentStateKey);
         if (!parentStateResult.IsSuccess)
-            return Result.Ok();
+            return Result<SubflowOutputMappingPlan>.Ok(new(null, null));
 
         var parentState = parentStateResult.Value!;
         var subFlowConfig = parentState.SubFlow;
         if (subFlowConfig?.Mapping is null || !subFlowConfig.Mapping.HasMappingCode)
+            return Result<SubflowOutputMappingPlan>.Ok(new(parentState, null));
+
+        try
+        {
+            var mappingInstance = await scriptEngine.CompileToInstanceAsync<object>(
+                subFlowConfig.Mapping,
+                flowScripts: parentWorkflow.Scripts,
+                cancellationToken: cancellationToken);
+
+            return Result<SubflowOutputMappingPlan>.Ok(new(parentState, mappingInstance));
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.SubFlowOutputMappingFailed(ex, parentInstanceId);
+            return Result<SubflowOutputMappingPlan>.Fail(WorkflowErrors.SubFlowOutputMappingFailed(
+                parentInstanceId,
+                ScriptDiagnostics.Explain(ex),
+                stackTrace: ex.ToString()));
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task<Result> ApplyPreparedAsync(
+        Instance parentInstance,
+        Definitions.Workflow parentWorkflow,
+        SubflowOutputMappingPlan plan,
+        JsonElement? childInstanceData,
+        CancellationToken cancellationToken = default)
+    {
+        if (plan.ParentState is null || plan.MappingInstance is null)
             return Result.Ok();
 
         try
@@ -49,13 +106,11 @@ public sealed class SubflowOutputMappingService(
                 .WithBody(childInstanceData?.Deserialize<Dictionary<string, object>>() ?? new Dictionary<string, object>())
                 .BuildAsync(cancellationToken);
 
-            var mappingInstance = await scriptEngine.CompileToInstanceAsync<object>(
-                subFlowConfig.Mapping,
-                flowScripts: parentWorkflow.Scripts,
-                cancellationToken: cancellationToken);
+            using var scriptActivity = ScriptActivityHelper.StartExecuteActivity("subflowOutputMapping");
 
             ScriptResponse? outputMappingResult = null;
-            if (subFlowConfig.Type.Equals(SubFlowType.SubFlow) && mappingInstance is ISubFlowMapping subFlowMapping)
+            if (plan.ParentState.SubFlow!.Type.Equals(SubFlowType.SubFlow)
+                && plan.MappingInstance is ISubFlowMapping subFlowMapping)
             {
                 outputMappingResult = await subFlowMapping.OutputHandler(scriptContext);
             }
@@ -67,8 +122,9 @@ public sealed class SubflowOutputMappingService(
                 await instanceDataWriteService.AppendAsync(
                     parentInstance,
                     new JsonData(JsonSerializer.Serialize(outputMappingResult!.Data)),
-                    parentState.VersionStrategy,
-                    cancellationToken);
+                    plan.ParentState.VersionStrategy,
+                    cancellationToken,
+                    parentWorkflow);
             }
 
             if (scriptContext.Mutations.HasChanges)

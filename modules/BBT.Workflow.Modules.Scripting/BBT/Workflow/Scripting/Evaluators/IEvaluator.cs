@@ -19,14 +19,19 @@ public sealed record CompiledHelpers(MetadataReference Reference, string[] Names
 /// <summary>
 /// The result of a compile-or-fetch call: the instantiated script plus whether THIS call performed
 /// the actual Roslyn compile (<see cref="Compiled"/> = cache miss) and how long that compile took.
-/// Exactly one caller per cache key observes <c>Compiled == true</c>; every other caller —
-/// including waiters that blocked on the same in-flight compile — observes a hit.
+/// Exactly one caller per cache key observes <c>Compiled == true</c>.
 /// </summary>
 /// <typeparam name="T">The compiled instance type.</typeparam>
 /// <param name="Instance">The compiled and service-injected instance.</param>
 /// <param name="Compiled">True only for the single call whose factory ran the Roslyn emit.</param>
 /// <param name="CompileDuration">Wall time of the Roslyn emit; <see cref="TimeSpan.Zero"/> on hits.</param>
-public sealed record EvaluatorCompilation<T>(T Instance, bool Compiled, TimeSpan CompileDuration);
+/// <param name="Waited">
+/// True when this call neither hit a completed cache entry nor compiled itself — it awaited (or
+/// raced) another caller's in-flight compile. Telemetry needs the distinction: a waiter's wall time
+/// is someone else's compile, and labelling it a plain hit made "hit" latency look like multi-second
+/// compile time whenever a cold burst was in progress.
+/// </param>
+public sealed record EvaluatorCompilation<T>(T Instance, bool Compiled, TimeSpan CompileDuration, bool Waited = false);
 
 /// <summary>
 /// Provides script compilation and instantiation capabilities.

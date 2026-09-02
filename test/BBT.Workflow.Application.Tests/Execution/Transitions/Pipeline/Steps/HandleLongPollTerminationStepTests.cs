@@ -50,7 +50,7 @@ public class HandleLongPollTerminationStepTests
         _guidGenerator.Create().Returns(Guid.NewGuid());
         _step = new HandleLongPollTerminationStep(
             _instanceRepository, _jobRepository, _jobService, _guidGenerator,
-            _authManager, _currentUser,
+            _authManager, new DefaultCallerRoleResolver(_currentUser),
             Substitute.For<ILogger<HandleLongPollTerminationStep>>());
     }
 
@@ -87,9 +87,11 @@ public class HandleLongPollTerminationStepTests
         result.IsSuccess.ShouldBeTrue();
         result.Value!.SkipToOrder.ShouldBe(LifecycleOrder.Finalize);
 
-        // Token armed and persisted; fallback job scheduled and tracked.
+        // Token armed in memory and persisted set-based (single-column write, not a full
+        // aggregate save); fallback job scheduled and tracked.
         context.Instance.IsAwaitingLongPollAck.ShouldBeTrue();
-        await _instanceRepository.Received(1).UpdateAsync(context.Instance, true, Arg.Any<CancellationToken>());
+        await _instanceRepository.Received(1).ArmLongPollAckAsync(
+            context.InstanceId, Arg.Any<Guid>(), Arg.Any<CancellationToken>());
         await _jobService.Received(1).EnqueueAsync(
             Arg.Any<string>(), Arg.Any<string>(), Arg.Any<LongPollAckTimeoutPayload>(),
             Arg.Any<string>(), Arg.Any<Dictionary<string, object>>(),

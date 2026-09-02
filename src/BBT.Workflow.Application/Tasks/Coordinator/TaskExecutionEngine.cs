@@ -7,7 +7,6 @@ using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution.ErrorHandling;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
-using BBT.Workflow.Monitoring;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks.Executors;
 using BBT.Workflow.Tasks.Factory;
@@ -30,7 +29,6 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
     private readonly ITaskFactory _taskFactory;
     private readonly ITaskPersistenceStrategyFactory _persistenceStrategyFactory;
     private readonly IGuidGenerator _guidGenerator;
-    private readonly IWorkflowMetrics _workflowMetrics;
     private readonly IErrorBoundaryResolver _boundaryResolver;
     private readonly IErrorActionExecutor _actionExecutor;
     private readonly IExecutionErrorFactory _errorFactory;
@@ -45,7 +43,6 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
         ITaskFactory taskFactory,
         ITaskPersistenceStrategyFactory persistenceStrategyFactory,
         IGuidGenerator guidGenerator,
-        IWorkflowMetrics workflowMetrics,
         IErrorBoundaryResolver boundaryResolver,
         IErrorActionExecutor actionExecutor,
         IExecutionErrorFactory errorFactory,
@@ -56,7 +53,6 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
         _taskFactory = taskFactory;
         _persistenceStrategyFactory = persistenceStrategyFactory;
         _guidGenerator = guidGenerator;
-        _workflowMetrics = workflowMetrics;
         _boundaryResolver = boundaryResolver;
         _actionExecutor = actionExecutor;
         _errorFactory = errorFactory;
@@ -109,6 +105,7 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
             activity.SetTag(TelemetryConstants.TagNames.Flow, context.Workflow?.Key);
             activity.SetTag(TelemetryConstants.TagNames.Layer, TelemetryConstants.Layers.Orchestration);
             activity.SetTag(TelemetryConstants.TagNames.SpanCategory, TelemetryConstants.SpanCategories.Business);
+            activity.SetTag(TelemetryConstants.TagNames.TaskTrigger, taskTrigger.ToString());
         }
 
         _logger.LogInformation(
@@ -145,7 +142,7 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
         CancellationToken cancellationToken)
     {
         var taskKey = onExecuteTask.Task.Key;
-        var totalStopwatch = Stopwatch.StartNew();
+        var totalStartTimestamp = Stopwatch.GetTimestamp();
         Result<TasksExecutionResult> result;
 
         try
@@ -159,18 +156,16 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
                 // Success - return directly
                 if (result is { IsSuccess: true, Value.IsSuccess: true })
                 {
-                    totalStopwatch.Stop();
                     Activity.Current?.SetStatus(ActivityStatusCode.Ok);
                     _logger.LogInformation(
                         "Task {TaskKey} completed successfully. Total duration: {Duration}ms",
-                        taskKey, totalStopwatch.ElapsedMilliseconds);
+                        taskKey, (long)Stopwatch.GetElapsedTime(totalStartTimestamp).TotalMilliseconds);
                     return result;
                 }
 
                 // No boundary + business failure (e.g. 404) - flow continues; do not resolve fallback
                 if (result is { IsSuccess: true, Value: var value } && value is { TaskError: null, HasFailedTasks: true })
                 {
-                    totalStopwatch.Stop();
                     _logger.LogDebug(
                         "Task {TaskKey} failed with business error but no ErrorBoundary defined. Flow will continue with auto-transitions.",
                         taskKey);
@@ -182,7 +177,7 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
                 if (executionError == null)
                 {
                     executionError = _errorFactory.CreateFromError(
-                        result.Error, taskKey, "Unknown", totalStopwatch.ElapsedMilliseconds);
+                        result.Error, taskKey, "Unknown", (long)Stopwatch.GetElapsedTime(totalStartTimestamp).TotalMilliseconds);
                 }
 
                 var retryPolicy = GetRetryPolicyForError(boundaryChain, executionError.NormalizedError);
@@ -199,27 +194,30 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
 
                 await Task.Delay(delay, cancellationToken);
                 attempt++;
+
+                // Only attempt 1 can know no journal row exists yet. From here on the probe must
+                // run: it is what finds and reuses the previous attempt's row instead of inserting
+                // a second one under the same ExecutionKey (UX_InstanceTasks_ExecutionKey).
+                options = options with { SkipJournalProbe = false };
             }
 
-            totalStopwatch.Stop();
 
             // Retry exhausted or matching rule is not Retry - resolve boundary for fallback actions
             return await HandlePostRetryFailureAsync(
                 result,
                 onExecuteTask,
                 boundaryChain,
-                totalStopwatch.ElapsedMilliseconds,
+                (long)Stopwatch.GetElapsedTime(totalStartTimestamp).TotalMilliseconds,
                 attempt,
                 cancellationToken);
         }
         catch (Exception ex)
         {
-            totalStopwatch.Stop();
             _logger.LogError(ex, "Task execution failed with exception for {TaskKey}", taskKey);
 
             Activity.Current?.RecordExceptionWithStatus(ex, $"Task {taskKey} threw unhandled exception");
 
-            var taskError = _errorFactory.CreateFromException(ex, taskKey, "Unknown", totalStopwatch.ElapsedMilliseconds);
+            var taskError = _errorFactory.CreateFromException(ex, taskKey, "Unknown", (long)Stopwatch.GetElapsedTime(totalStartTimestamp).TotalMilliseconds);
             return Result<TasksExecutionResult>.Fail(taskError.ToError());
         }
     }
@@ -435,11 +433,14 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
     private static async Task<InstanceTask> PersistCreationAsync(
         ITaskPersistenceStrategy? strategy,
         InstanceTask instanceTask,
+        TaskTrigger taskTrigger,
+        int order,
+        bool skipJournalProbe,
         CancellationToken cancellationToken)
     {
         if (strategy == null)
             return instanceTask;
-        return await strategy.HandleCreationAsync(instanceTask, cancellationToken);
+        return await strategy.HandleCreationAsync(instanceTask, taskTrigger, order, skipJournalProbe, cancellationToken);
     }
 
     /// <summary>
@@ -470,7 +471,7 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
         ITaskPersistenceStrategy? strategy,
         string taskType,
         string workflowKey,
-        Stopwatch stopwatch,
+        long startTimestamp,
         string? errorMessage,
         CancellationToken cancellationToken)
     {
@@ -479,8 +480,6 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
         if (strategy != null)
             await strategy.HandleCompletionAsync(instanceTask, cancellationToken);
 
-        _workflowMetrics.RecordTaskFailed(taskType, workflowKey, stopwatch.Elapsed.TotalSeconds);
-        _workflowMetrics.FinishTaskExecution(taskType, workflowKey);
 
         _logger.LogError("Task {TaskKey} failed: {Error}", instanceTask.TaskId, errorMessage);
     }
@@ -510,9 +509,12 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
             return;
         }
 
-        var delta = new JsonData(JsonSerializer.Serialize(response.Data, JsonSerializerConstants.JsonOptions));
+        // Materialize the persisted text and the parsed element together. The append pipeline reads
+        // delta.JsonElement immediately, so constructing JsonData from a string would force a parse
+        // of the payload we just serialized.
+        var delta = JsonData.FromMaterializedObject(response.Data, JsonSerializerConstants.JsonOptions);
         var persisted = await _instanceDataWriteService.AppendAsync(
-            context.Instance, delta, VersionStrategy.IncreasePatch, cancellationToken);
+            context.Instance, delta, VersionStrategy.IncreasePatch, cancellationToken, context.Workflow);
 
         // The service refreshed the aggregate it was given (the snapshot). Nothing else to do:
         // the live aggregate in the pipeline scope is fixed up by EF when it shares the
@@ -535,7 +537,7 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
         TaskEngineExecutionOptions options,
         CancellationToken cancellationToken)
     {
-        var stopwatch = Stopwatch.StartNew();
+        var startTimestamp = Stopwatch.GetTimestamp();
 
         // 1. Load task from factory — skipped when the caller supplied an already prepared
         //    (cloned + bound) task instance, e.g. a FanOut item.
@@ -549,12 +551,11 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
             var taskResult = await _taskFactory.CreateExecutionTaskAsync(onExecuteTask.Task, cancellationToken);
             if (!taskResult.IsSuccess)
             {
-                stopwatch.Stop();
                 var error = _errorFactory.CreateFromException(
                     new InvalidOperationException(taskResult.Error.Message ?? "Failed to create task"),
                     onExecuteTask.Task.Key,
                     "Unknown",
-                    stopwatch.ElapsedMilliseconds);
+                    (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds);
 
                 TaskExecutionActivityHelper.AddFailedEvent(Activity.Current, error.ErrorMessage, "TaskFactoryError");
 
@@ -571,47 +572,63 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
         Activity.Current?.SetTag(TelemetryConstants.TagNames.TaskType, taskTypeStr);
 
         // 2. Create instance task for tracking. The journal key may be overridden so sibling
-        //    executions of the same inner task (FanOut items) get distinct journal identities.
+        //    executions of the same inner task (FanOut items) get distinct journal identities
+        //    (e.g. "fan-out-docs#3"). ExecutionKey additionally folds in taskTrigger + Order so a
+        //    non-FanOut task key that legitimately repeats within the same hook (or across hooks
+        //    of the same transition) still gets a distinct key per occurrence — the two
+        //    disambiguators compose rather than compete: JournalTaskKey already makes the FanOut
+        //    case unique by itself, trigger+order is what fixes the plain-duplicate-entry case
+        //    (the production bug — same task key twice in one transition's onExecute list).
         var instanceTask = new InstanceTask(
             _guidGenerator.Create(),
             instanceTransitionId ?? Guid.Empty,
-            options.JournalTaskKey ?? task.Key);
+            options.JournalTaskKey ?? task.Key,
+            taskTrigger,
+            onExecuteTask.Order);
 
         // 3. Get persistence strategy
         var persistenceStrategy = GetPersistenceStrategy(origin);
 
         // 4. Record metrics start
-        _workflowMetrics.RecordTaskExecuted(taskTypeStr, workflowKey);
-        _workflowMetrics.StartTaskExecution(taskTypeStr, workflowKey);
 
         _logger.LogDebug(
             "Executing task {TaskKey} of type {TaskType} for instance {InstanceId} (retry attempt)",
             task.Key, taskType, context.Instance?.Id);
 
         // 5. Persist creation
-        instanceTask = await PersistCreationAsync(persistenceStrategy, instanceTask, cancellationToken);
+        using (TaskExecutionActivityHelper.StartActivity(
+                   TaskExecutionActivityHelper.OperationJournalCreate, task.Key, taskTypeStr))
+        {
+            instanceTask = await PersistCreationAsync(
+                persistenceStrategy, instanceTask, taskTrigger, onExecuteTask.Order, options.SkipJournalProbe, cancellationToken);
+        }
 
         // 6. Get executor
         var executorResult = _executorRegistry.GetExecutor(taskType);
         if (!executorResult.IsSuccess)
         {
-            stopwatch.Stop();
-            await RecordFailureAsync(instanceTask, persistenceStrategy, taskTypeStr, workflowKey, stopwatch,
+            await RecordFailureAsync(instanceTask, persistenceStrategy, taskTypeStr, workflowKey, startTimestamp,
                 executorResult.Error.Message, cancellationToken);
 
             var infraError = _errorFactory.CreateFromError(
-                executorResult.Error, task.Key, taskTypeStr, stopwatch.ElapsedMilliseconds);
+                executorResult.Error, task.Key, taskTypeStr, (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds);
 
             TaskExecutionActivityHelper.AddFailedEvent(Activity.Current, infraError.ErrorMessage, "ExecutorNotFound");
 
             // Return failure without boundary resolution - not retriable
             return Result<TasksExecutionResult>.Ok(TasksExecutionResult.Failure(
-                onExecuteTask, infraError, [], stopwatch.ElapsedMilliseconds));
+                onExecuteTask, infraError, [], (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds));
         }
 
-        // 7. Create executor context
+        // 7. Create executor context. ResponseVariableKey threads options.ResponseVariableKey down
+        // to TaskExecutorBase's two response-key derivation points (see TaskEngineExecutionOptions
+        // for why); Domain's TaskExecutorContext carries it as a plain string since it cannot
+        // reference this Application-layer options type.
         var executorContext = new TaskExecutorContext(
-            task, onExecuteTask, context, instanceTransitionId, taskTrigger, origin);
+            task, onExecuteTask, context, instanceTransitionId, taskTrigger, origin)
+        {
+            ResponseVariableKey = options.ResponseVariableKey
+        };
 
         // 8. Execute task
         var executeResult = await executorResult.Value!.ExecuteAsync(executorContext, cancellationToken);
@@ -629,26 +646,25 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
             JsonSerializerConstants.JsonOptions));
         instanceTask.SetRequest(requestJson);
 
-        if (executorContext.RawInvocationResultJson != null)
+        if (executorContext.RawInvocationResult is { } rawInvocationResult)
         {
-            instanceTask.SetInvocationResult(new JsonData(executorContext.RawInvocationResultJson));
+            instanceTask.SetInvocationResult(rawInvocationResult);
         }
 
-        stopwatch.Stop();
 
         // 9. Handle infrastructure error - return without boundary resolution (not retriable)
         if (!executeResult.IsSuccess)
         {
-            await RecordFailureAsync(instanceTask, persistenceStrategy, taskTypeStr, workflowKey, stopwatch,
+            await RecordFailureAsync(instanceTask, persistenceStrategy, taskTypeStr, workflowKey, startTimestamp,
                 executeResult.Error.Message ?? "Unknown infrastructure error", cancellationToken);
 
             var infraError = _errorFactory.CreateFromError(
-                executeResult.Error, task.Key, taskTypeStr, stopwatch.ElapsedMilliseconds);
+                executeResult.Error, task.Key, taskTypeStr, (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds);
 
             TaskExecutionActivityHelper.AddFailedEvent(Activity.Current, infraError.ErrorMessage, taskTypeStr);
 
             return Result<TasksExecutionResult>.Ok(TasksExecutionResult.Failure(
-                onExecuteTask, infraError, [], stopwatch.ElapsedMilliseconds));
+                onExecuteTask, infraError, [], (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds));
         }
 
         // 10. Process response
@@ -666,18 +682,19 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
         instanceTask.Completed(responseJson, isBusinessSuccess: response.IsSuccess);
 
         // Persist completion
-        await PersistCompletionAsync(persistenceStrategy, instanceTask, cancellationToken);
+        using (TaskExecutionActivityHelper.StartActivity(
+                   TaskExecutionActivityHelper.OperationJournalComplete, task.Key, taskTypeStr))
+        {
+            await PersistCompletionAsync(persistenceStrategy, instanceTask, cancellationToken);
+        }
 
         // Record metrics
         if (response.IsSuccess)
         {
-            _workflowMetrics.RecordTaskCompleted(taskTypeStr, workflowKey, stopwatch.Elapsed.TotalSeconds);
         }
         else
         {
-            _workflowMetrics.RecordTaskFailed(taskTypeStr, workflowKey, stopwatch.Elapsed.TotalSeconds);
         }
-        _workflowMetrics.FinishTaskExecution(taskTypeStr, workflowKey);
 
         // 11. Handle business failure
         // response.IsSuccess is already overridden by AcceptedStatusCodes in TaskExecutorBase,
@@ -685,7 +702,7 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
         if (!response.IsSuccess)
         {
             var executionError = _errorFactory.CreateFromResponse(
-                response, task.Key, taskTypeStr, stopwatch.ElapsedMilliseconds);
+                response, task.Key, taskTypeStr, (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds);
 
             // Critical Decision: Check if ErrorBoundary is configured
             // - No boundary: Developer manages via auto-transitions (e.g., 404 → NotFound state)
@@ -702,11 +719,11 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
 
                 var failureSummary = TaskExecutionSummary.Failure(
                     task.Key, taskTypeStr, executionError.ErrorMessage,
-                    response.StatusCode, stopwatch.ElapsedMilliseconds);
+                    response.StatusCode, (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds);
 
                 // Return success to let pipeline continue (auto-transitions will handle routing)
                 var noBoundaryResult = TasksExecutionResult.SuccessWithFailedTasks(
-                    [failureSummary], stopwatch.ElapsedMilliseconds);
+                    [failureSummary], (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds);
                 if (options.CaptureResponse)
                 {
                     noBoundaryResult = noBoundaryResult with { Response = response };
@@ -732,16 +749,16 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
                 TaskError = executionError,
                 BoundaryAction = null, // No boundary action yet - raw result for retry
                 ExecutedTasks = [],
-                TotalExecutionDurationMs = stopwatch.ElapsedMilliseconds,
+                TotalExecutionDurationMs = (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
                 Response = options.CaptureResponse ? response : null
             });
         }
 
         // 12. Business success
         var summary = TaskExecutionSummary.Success(
-            task.Key, taskTypeStr, response.StatusCode, stopwatch.ElapsedMilliseconds);
+            task.Key, taskTypeStr, response.StatusCode, (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds);
 
-        var executionResult = TasksExecutionResult.Success([summary], stopwatch.ElapsedMilliseconds);
+        var executionResult = TasksExecutionResult.Success([summary], (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds);
         if (options.CaptureResponse)
         {
             executionResult = executionResult with { Response = response };

@@ -1,6 +1,5 @@
 using BBT.Aether.AspNetCore.Controllers;
 using BBT.Workflow.Definitions;
-using BBT.Workflow.Discovery;
 using BBT.Workflow.Runtime;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Filters;
@@ -19,7 +18,6 @@ public sealed class UtilityController(
     IDefinitionAppService definitionAppService,
     IRuntimeInfoProvider runtimeInfoProvider,
     IOptions<RuntimeOptions> runtimeOptions,
-    IDomainDiscoveryResolver domainDiscoveryResolver,
     ILogger<UtilityController> logger) : AetherControllerBase
 {
     /// <summary>
@@ -59,18 +57,13 @@ public sealed class UtilityController(
     }
 
     /// <summary>
-    /// Clears and refreshes the bulk domain cache from service discovery.
-    /// Fetches all active domain registrations and updates the cache.
+    /// Deprecated no-op. Discovery is no longer cached - every resolution queries the registry
+    /// directly - so there is nothing to refresh. The route is kept so existing runbooks and
+    /// automation do not break; it will be removed a few versions after 0.0.85.
     /// </summary>
-    /// <param name="cancellationToken">Cancellation token for the operation.</param>
-    /// <returns>Success message indicating cache refresh completed.</returns>
-    /// <response code="200">Returns success message when cache refresh completes.</response>
     [ApiExplorerSettings(IgnoreApi = true)]
     [HttpPost("utilities/discovery/refresh")]
     [ProducesResponseType(StatusCodes.Status200OK)]
-    public async Task<IActionResult> RefreshDiscoveryCacheAsync(CancellationToken cancellationToken = default)
-    {
-        await domainDiscoveryResolver.RefreshBulkCacheAsync(cancellationToken);
-        return Ok(new { message = "Discovery cache refreshed successfully" });
-    }
+    public IActionResult RefreshDiscoveryCacheAsync()
+        => Ok(new { message = "Discovery is no longer cached; this endpoint is a deprecated no-op." });
 }

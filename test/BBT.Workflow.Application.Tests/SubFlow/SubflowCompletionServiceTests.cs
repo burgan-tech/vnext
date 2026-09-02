@@ -5,6 +5,7 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using BBT.Aether.Events;
 using BBT.Aether.Results;
 using BBT.Aether.Uow;
 using BBT.Workflow.BackgroundJobs.Options;
@@ -15,6 +16,7 @@ using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Execution.Services;
 using BBT.Workflow.Instances;
+using BBT.Workflow.Instances.Events;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.SubFlow;
@@ -32,12 +34,14 @@ public sealed class SubflowCompletionServiceTests
     private readonly Mock<IUnitOfWork> _uow = new();
     private readonly Mock<IComponentCacheStore> _componentCacheStore = new();
     private readonly Mock<IInstanceRepository> _instanceRepository = new();
+    private readonly Mock<IInstanceCorrelationRepository> _correlationRepository = new();
     private readonly Mock<IRuntimeInfoProvider> _runtimeInfoProvider = new();
     private readonly Mock<IWorkflowExecutionService> _workflowExecutionService = new();
     private readonly Mock<ISubflowOutputMappingService> _outputMappingService = new();
     private readonly Mock<ITransitionLockScopeFactory> _lockScopeFactory = new();
     private readonly Mock<ISubItemTerminalGuard> _terminalGuard = new();
     private readonly Mock<ITransitionLockScope> _lockScope = new();
+    private readonly Mock<IDistributedEventBus> _eventBus = new();
     private readonly Mock<ILogger<SubflowCompletionService>> _logger = new();
 
     public SubflowCompletionServiceTests()
@@ -62,10 +66,39 @@ public sealed class SubflowCompletionServiceTests
         // Default: the pre-lock probe finds nothing terminal, so every test exercises the
         // authoritative locked path unless it explicitly overrides this.
         _terminalGuard
-            .Setup(x => x.ProbeAsync(
+            .Setup(x => x.ProbeWithSnapshotAsync(
                 It.IsAny<Guid>(), It.IsAny<Guid>(),
                 It.IsAny<SubItemTerminalOutcome>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(SubItemTerminalProbe.Proceed);
+            .ReturnsAsync(new SubItemTerminalProbeResult(
+                SubItemTerminalProbe.Proceed,
+                "waiting-child",
+                SubFlowType.SubFlow));
+        _terminalGuard
+            .Setup(x => x.ProbeWithSnapshotAsync(
+                It.IsAny<Guid>(), It.IsAny<Guid>(),
+                It.IsAny<SubItemTerminalOutcome>(), It.IsAny<CancellationToken>()))
+            .Returns(async (Guid parentId, Guid subId, SubItemTerminalOutcome outcome, CancellationToken ct) =>
+            {
+                var decision = await _terminalGuard.Object.ProbeAsync(parentId, subId, outcome, ct);
+                return new SubItemTerminalProbeResult(decision, null, null);
+            });
+        _instanceRepository
+            .Setup(x => x.FindForSubflowCompletionAsync(
+                It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .Returns((Guid parentId, Guid _, CancellationToken ct) =>
+                _instanceRepository.Object.FindWithAllCorrelationsAndDataAsync(parentId, ct));
+        _outputMappingService
+            .Setup(x => x.PrepareAsync(
+                It.IsAny<Guid>(), It.IsAny<Definitions.Workflow>(), It.IsAny<string>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result<SubflowOutputMappingPlan>.Ok(new(null, null)));
+        _outputMappingService
+            .Setup(x => x.ApplyPreparedAsync(
+                It.IsAny<Instance>(), It.IsAny<Definitions.Workflow>(),
+                It.IsAny<SubflowOutputMappingPlan>(), It.IsAny<JsonElement?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result.Ok());
+
         _logger.Setup(x => x.IsEnabled(It.IsAny<LogLevel>())).Returns(true);
     }
 
@@ -165,6 +198,24 @@ public sealed class SubflowCompletionServiceTests
         _instanceRepository.VerifyNoOtherCalls();
     }
 
+    [Fact]
+    public async Task CompletionAsync_BlockingSubFlowWithSettlementMarker_ShouldSkipLock()
+    {
+        var parent = CreateParentInstance(out var subInstanceId);
+        var snapshot = SnapshotOf(
+            parent,
+            subInstanceId,
+            SubFlowType.SubFlow,
+            SubItemTerminalOutcome.Completed);
+        snapshot.MarkSettled(DateTime.UtcNow);
+
+        await CreateServiceWithRealGuard(snapshot)
+            .CompletionAsync(CreateInput(parent.Id, subInstanceId));
+
+        _lockScopeFactory.VerifyNoOtherCalls();
+        _instanceRepository.VerifyNoOtherCalls();
+    }
+
     private SubflowCompletionService CreateServiceWithRealGuard(InstanceCorrelation? snapshot)
     {
         var correlationRepository = new Mock<IInstanceCorrelationRepository>();
@@ -180,11 +231,13 @@ public sealed class SubflowCompletionServiceTests
             _uowManager.Object,
             _componentCacheStore.Object,
             _instanceRepository.Object,
+            correlationRepository.Object,
             _runtimeInfoProvider.Object,
             _workflowExecutionService.Object,
             _outputMappingService.Object,
             _lockScopeFactory.Object,
             new SubItemTerminalGuard(correlationRepository.Object, guardLogger.Object),
+            _eventBus.Object,
             Options.Create(new WorkflowExecutionOptions()),
             _logger.Object);
     }
@@ -707,8 +760,8 @@ public sealed class SubflowCompletionServiceTests
         var parent = CreateParentInstance(out var subInstanceId, SubFlowType.SubFlow);
         SetupCompletedCorrelationPath(parent);
         _outputMappingService
-            .Setup(x => x.ApplyAsync(
-                It.IsAny<Instance>(), It.IsAny<Definitions.Workflow>(), It.IsAny<string>(),
+            .Setup(x => x.ApplyPreparedAsync(
+                It.IsAny<Instance>(), It.IsAny<Definitions.Workflow>(), It.IsAny<SubflowOutputMappingPlan>(),
                 It.IsAny<JsonElement?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(Result.Fail(WorkflowErrors.SubFlowOutputMappingFailed(
                 parent.Id, "mapping script is invalid", "at Mapping.OutputHandler()")));
@@ -735,11 +788,13 @@ public sealed class SubflowCompletionServiceTests
             _uowManager.Object,
             _componentCacheStore.Object,
             _instanceRepository.Object,
+            _correlationRepository.Object,
             _runtimeInfoProvider.Object,
             _workflowExecutionService.Object,
             _outputMappingService.Object,
             _lockScopeFactory.Object,
             _terminalGuard.Object,
+            _eventBus.Object,
             Options.Create(new WorkflowExecutionOptions()),
             _logger.Object);
 

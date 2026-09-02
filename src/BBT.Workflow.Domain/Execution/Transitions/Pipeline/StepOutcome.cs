@@ -26,10 +26,27 @@ public sealed class StepOutcome
     public Action<PipelineDirectives>? MutateDirectives { get; init; }
 
     /// <summary>
+    /// Gets a value indicating whether the step did nothing at all — its applicability guard did
+    /// not match, so no lock was taken, no task ran, no data was written. Purely an observability
+    /// signal: the pipeline treats it exactly like <see cref="Continue"/>, but the step's span is
+    /// dropped from the trace (see <c>PipelineStepActivityHelper.SetStepOutcome</c>), because a
+    /// transition would otherwise carry a dozen zero-duration spans for steps that never applied.
+    /// </summary>
+    public bool NoWork { get; init; }
+
+    /// <summary>
     /// Creates an outcome that continues to the next pipeline step.
     /// </summary>
     /// <returns>A StepOutcome that allows pipeline continuation.</returns>
     public static StepOutcome Continue() => new();
+
+    /// <summary>
+    /// Creates an outcome that continues to the next pipeline step, recording that this step was
+    /// not applicable and performed no work. Return this from an applicability guard — never after
+    /// doing something observable, even if the something produced no state change.
+    /// </summary>
+    /// <returns>A StepOutcome that continues the pipeline and suppresses the step's span.</returns>
+    public static StepOutcome ContinueNoWork() => new() { NoWork = true };
     
     /// <summary>
     /// Creates an outcome that stops the pipeline execution completely.

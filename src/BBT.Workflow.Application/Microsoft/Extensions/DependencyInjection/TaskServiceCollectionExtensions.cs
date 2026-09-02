@@ -89,6 +89,13 @@ public static class TaskServiceCollectionExtensions
             .ValidateOnStart();
         services.TryAddSingleton<FanOutConcurrencyLimiter>();
 
+        // Process-lifetime gRPC channel/client holder for RemoteInvokerService's "grpc"
+        // transport (ExecutionApi:Transport). Singleton so every request-scoped invoker shares
+        // ONE HTTP/2 connection to the Dapr sidecar instead of opening a new channel per scope;
+        // internally lazy (see GrpcTaskInvokerClientProvider) so the default "http" transport
+        // never constructs one.
+        services.TryAddSingleton<GrpcTaskInvokerClientProvider>();
+
         // Remote invoker service for Dapr invocation
         services.TryAddScoped<IRemoteInvokerService, RemoteInvokerService>();
 
@@ -104,6 +111,13 @@ public static class TaskServiceCollectionExtensions
         // HTTP, SOAP and Dapr remote executors
         services.AddTaskExecutor<HttpTaskExecutor>();
         services.AddTaskExecutor<SoapTaskExecutor>();
+
+        // External HTTP executor (issue #399): the orchestrator performs the user-defined URL call
+        // in-process — no /execution/invoke hop. The named HTTP clients it sends through are
+        // concrete transport and are registered by the Infrastructure module
+        // (AddExternalHttpTaskClients), which every composition root pairs with this one.
+        services.TryAddScoped<IExternalHttpTaskInvoker, ExternalHttpTaskInvoker>();
+        services.AddTaskExecutor<ExternalHttpTaskExecutor>();
         services.AddTaskExecutor<DaprServiceTaskExecutor>();
         services.AddTaskExecutor<DaprBindingTaskExecutor>();
         services.AddTaskExecutor<DaprHttpEndpointTaskExecutor>();

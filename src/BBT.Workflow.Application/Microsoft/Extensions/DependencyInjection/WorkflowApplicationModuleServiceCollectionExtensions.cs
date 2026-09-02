@@ -7,7 +7,6 @@ using BBT.Workflow.Definitions.Validators;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Instances.Caching;
 using BBT.Workflow.Instances.Related;
-using BBT.Workflow.Monitoring;
 using BBT.Workflow.RepresentationEtag;
 using BBT.Workflow.Resilience;
 using BBT.Workflow.Runtime;
@@ -95,6 +94,9 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
         services.AddScoped<IInstanceSelectorResolver, InstanceSelectorResolver>();
         services.AddScoped<IComponentDiscoveryAppService, ComponentDiscoveryAppService>();
         services.AddScoped<ITransitionAuthorizationManager, TransitionAuthorizationManager>();
+        // Fallback, so a host wiring only this module still resolves it. Infrastructure registers the
+        // configured provider afterwards and, being an explicit Add, wins over this.
+        services.TryAddScoped<ICallerRoleResolver, DefaultCallerRoleResolver>();
         services.AddScoped<IAuthorizeAppService, AuthorizeAppService>();
         services.AddScoped<IRepresentationEtagService, RepresentationEtagService>();
         services.AddScoped<ISchemaFieldFilterService, SchemaFieldFilterService>();
@@ -122,19 +124,13 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
     }
 
     /// <summary>
-    /// Configures component cache store with metrics.
+    /// Configures the component cache store.
     /// </summary>
     private static void AddCacheServices(this IServiceCollection services)
     {
         services.AddSingleton<ComponentCacheStore>();
         services.AddSingleton<IComponentCacheStore>(serviceProvider =>
-        {
-            var originalStore = serviceProvider.GetRequiredService<ComponentCacheStore>();
-            var workflowMetrics = serviceProvider.GetRequiredService<IWorkflowMetrics>();
-            var logger = serviceProvider.GetRequiredService<ILogger<MetricsAwareComponentCacheStore>>();
-            
-            return originalStore.WithMetrics(workflowMetrics, logger);
-        });
+            serviceProvider.GetRequiredService<ComponentCacheStore>());
         
         // Cache Backend Services
         services.AddSingleton<ICacheBackend<Workflow>, RuntimeCacheBackend<Workflow>>();

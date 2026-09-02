@@ -42,17 +42,63 @@ public class SetBusyStepTests
     [Fact]
     public async Task ExecuteAsync_WhenInstanceIsActive_ShouldSetToBusy()
     {
-        // Arrange
+        // Arrange — the aggregate-aware CAS mutates the instance in memory on success; the mock
+        // mimics that contract.
         var context = CreateTransitionExecutionContext();
         context.Instance.IsActive.ShouldBeTrue();
+        _mockInstanceRepository.TryMarkBusyAsync(context.Instance, Arg.Any<CancellationToken>())
+            .Returns(callInfo =>
+            {
+                callInfo.Arg<Instance>().Busy();
+                return true;
+            });
 
         // Act
         var result = await _step.ExecuteAsync(context, CancellationToken.None);
 
-        // Assert
+        // Assert — one set-based CAS, no tracked full-row save.
         result.IsSuccess.ShouldBeTrue();
         context.Instance.IsBusy.ShouldBeTrue();
-        await _mockInstanceRepository.Received(1).UpdateAsync(context.Instance, true, CancellationToken.None);
+        await _mockInstanceRepository.Received(1).TryMarkBusyAsync(context.Instance, Arg.Any<CancellationToken>());
+        await _mockInstanceRepository.DidNotReceive()
+            .UpdateAsync(Arg.Any<Instance>(), Arg.Any<bool>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenAdmissionOwnsStatus_ShouldAlignInMemoryWithoutAnyDbCall()
+    {
+        // Admission (Reserve/TakeOver) flipped the ROW in its own RequiresNew DbContext, so this
+        // pipeline's aggregate still reads Active. The step must align the in-memory aggregate —
+        // settlement's owner guard reads context.Instance.IsBusy and would otherwise strand the
+        // instance Busy — and must NOT touch the database (the row is already Busy).
+        var context = CreateTransitionExecutionContext();
+        context.OwnsStatus = true;
+        context.Instance.IsActive.ShouldBeTrue();
+
+        var result = await _step.ExecuteAsync(context, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        context.Instance.IsBusy.ShouldBeTrue();
+        await _mockInstanceRepository.DidNotReceive()
+            .TryMarkBusyAsync(Arg.Any<Instance>(), Arg.Any<CancellationToken>());
+        await _mockInstanceRepository.DidNotReceive()
+            .UpdateAsync(Arg.Any<Instance>(), Arg.Any<bool>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenCasLosesRace_ShouldContinueWithoutFlip()
+    {
+        // A lost CAS means the row is no longer Active (concurrent writer); the pipeline proceeds
+        // without the flip instead of blindly overwriting the status like the old tracked save.
+        var context = CreateTransitionExecutionContext();
+        _mockInstanceRepository.TryMarkBusyAsync(context.Instance, Arg.Any<CancellationToken>())
+            .Returns(false);
+
+        var result = await _step.ExecuteAsync(context, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        result.Value!.StopPipeline.ShouldBeFalse();
+        context.Instance.IsActive.ShouldBeTrue();
     }
 
     [Fact]
@@ -69,7 +115,7 @@ public class SetBusyStepTests
         result.IsSuccess.ShouldBeTrue();
         context.Instance.IsBusy.ShouldBeTrue();
         await _mockInstanceRepository.DidNotReceive()
-            .UpdateAsync(Arg.Any<Instance>(), Arg.Any<bool>(), Arg.Any<CancellationToken>());
+            .TryMarkBusyAsync(Arg.Any<Instance>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -86,7 +132,7 @@ public class SetBusyStepTests
         result.IsSuccess.ShouldBeTrue();
         context.Instance.IsCompleted.ShouldBeTrue();
         await _mockInstanceRepository.DidNotReceive()
-            .UpdateAsync(Arg.Any<Instance>(), Arg.Any<bool>(), Arg.Any<CancellationToken>());
+            .TryMarkBusyAsync(Arg.Any<Instance>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -103,7 +149,7 @@ public class SetBusyStepTests
         result.IsSuccess.ShouldBeTrue();
         context.Instance.IsActive.ShouldBeTrue();
         await _mockInstanceRepository.DidNotReceive()
-            .UpdateAsync(Arg.Any<Instance>(), Arg.Any<bool>(), Arg.Any<CancellationToken>());
+            .TryMarkBusyAsync(Arg.Any<Instance>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -120,7 +166,7 @@ public class SetBusyStepTests
         result.IsSuccess.ShouldBeTrue();
         context.Instance.IsActive.ShouldBeTrue(); // Should remain Active
         await _mockInstanceRepository.DidNotReceive()
-            .UpdateAsync(Arg.Any<Instance>(), Arg.Any<bool>(), Arg.Any<CancellationToken>());
+            .TryMarkBusyAsync(Arg.Any<Instance>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]

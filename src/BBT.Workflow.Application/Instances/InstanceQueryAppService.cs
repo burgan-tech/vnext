@@ -27,6 +27,7 @@ using BBT.Workflow.Definitions.Schemas;
 using BBT.Workflow.ExceptionHandling;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
+using System.Collections.Concurrent;
 
 namespace BBT.Workflow.Instances;
 
@@ -48,7 +49,7 @@ public sealed class InstanceQueryAppService(
     ITransitionAuthorizationManager transitionAuthorizationManager,
     IRepresentationEtagService representationEtagService,
     ISchemaFieldFilterService schemaFieldFilterService,
-    ICurrentUser currentUser,
+    ICallerRoleResolver callerRoleResolver,
     IPaginationLinkGenerator paginationLinkGenerator,
     IOptions<InstanceFilteringOptions> instanceFilteringOptions,
     Caching.IStateFunctionCache stateFunctionCache,
@@ -57,6 +58,8 @@ public sealed class InstanceQueryAppService(
     ILogger<InstanceQueryAppService> logger)
     : ApplicationService(serviceProvider), IInstanceQueryAppService
 {
+    private static readonly ConcurrentDictionary<string, BuildGate> ActiveSubflowBuildGates = new();
+
     private static readonly HashSet<InstanceStatus> TerminalStatuses =
     [
         InstanceStatus.Completed,
@@ -503,6 +506,22 @@ public sealed class InstanceQueryAppService(
         };
 
     /// <summary>
+    /// Opens the descent span for one level. Thin forwarder over
+    /// <see cref="InstanceReadActivityHelper.StartDescendScope"/> that captures this service's
+    /// <c>IRuntimeInfoProvider</c>, so the five call sites below stay readable.
+    /// </summary>
+    private SubflowDescentScope StartDescend(
+        string targetDomain,
+        string targetFlow,
+        string targetInstanceId,
+        string parentInstanceId,
+        string function)
+    {
+        return InstanceReadActivityHelper.StartDescendScope(
+            runtimeInfoProvider, targetDomain, targetFlow, targetInstanceId, parentInstanceId, function);
+    }
+
+    /// <summary>
     /// Gets available transitions and state information from a remote SubFlow instance.
     /// Includes view extensions and active correlations from the SubFlow.
     /// </summary>
@@ -524,6 +543,12 @@ public sealed class InstanceQueryAppService(
     {
         try
         {
+            // Unresolvable roles fall through to the main-flow transitions below rather than forwarding
+            // with an unknown role set — the subflow would then filter its transitions against nothing.
+            var callerRoles = await callerRoleResolver.ResolveRolesAsync(headers, cancellationToken);
+            if (!callerRoles.IsSuccess)
+                return GetMainFlowTransitions(mainInstance, currentWorkflow);
+
             var subFlowInput = new GetFunctionWithInstanceInput
             {
                 Domain = activeSubFlowCorrelation.SubFlowDomain,
@@ -533,9 +558,16 @@ public sealed class InstanceQueryAppService(
                 Extensions = extensions,
                 Headers = headers,
                 QueryParams = queryParams,
-                Role = currentUser.ResolveCallerRole(headers),
-                Roles = currentUser.ResolveCallerRoles(headers)
+                Role = ICallerRoleResolver.SingleRoleOf(callerRoles.Value),
+                Roles = callerRoles.Value
             };
+
+            using var descent = StartDescend(
+                activeSubFlowCorrelation.SubFlowDomain,
+                activeSubFlowCorrelation.SubFlowName,
+                activeSubFlowCorrelation.SubFlowInstanceId.ToString(),
+                mainInstance.Id.ToString(),
+                TelemetryConstants.DescentFunctions.State);
 
             var subFlowResult = await instanceQueryGateway.GetFunctionWithStateAsync(
                 subFlowInput,
@@ -1047,15 +1079,22 @@ public sealed class InstanceQueryAppService(
         // entry, aggregate load or response build needed. The body cache only serves callers
         // without a current ETag.
         string? stateCacheKey = null;
+        IDisposable? activeSubflowBuildLease = null;
         if (stateFunctionCache.Enabled)
         {
-            var fastResult = await TryServeStateFromFingerprintAsync(input, cancellationToken);
-            if (fastResult.HasValue)
-                return fastResult.Value;
             stateCacheKey = stateFunctionCache.BuildKey(input);
+            var fastResult = await TryServeStateFromFingerprintAsync(
+                input,
+                stateCacheKey,
+                cancellationToken);
+            if (fastResult.Result.HasValue)
+                return fastResult.Result.Value;
+            activeSubflowBuildLease = fastResult.BuildLease;
         }
 
-        return await GetInstanceByIdOrKeyAsync(input.Instance, cancellationToken)
+        try
+        {
+            return await GetInstanceByIdOrKeyAsync(input.Instance, cancellationToken)
             .BindAsync(instance =>
                 componentCacheStore.GetFlowAsync(input.Domain, input.Workflow, instance.FlowVersion ?? input.Version, cancellationToken)
                     .MapAsync(workflow => (instance, workflow)))
@@ -1095,17 +1134,24 @@ public sealed class InstanceQueryAppService(
                         ? stateFunctionCache.ComputeEtag(input, fingerprint, output)
                         : stateFunctionCache.ComputeEtag(input, fingerprint);
 
-                    // Warm the cache before the 304 decision so a Not-Modified outcome still
-                    // stores the entry. Active-subflow responses are built from a live subflow
-                    // call and cannot be validated by the local fingerprint — never cache them.
-                    if (stateCacheKey is not null && !data.instance.HasActiveSubFlow)
+                    // Active-child state cannot be validated from the parent row, so keep it only
+                    // for a short freshness window. Parent changes still invalidate immediately;
+                    // concurrent misses are coalesced by the per-key build lease.
+                    if (stateCacheKey is not null)
                     {
-                        await stateFunctionCache.SetAsync(stateCacheKey, new Caching.StateFunctionCacheEntry
+                        var cacheEntry = new Caching.StateFunctionCacheEntry
                         {
                             Etag = etag,
+                            ParentEtag = stateFunctionCache.ComputeEtag(input, fingerprint),
+                            IsActiveSubflowSnapshot = data.instance.HasActiveSubFlow,
                             EntityEtag = entityEtag,
                             Output = output
-                        }, cancellationToken);
+                        };
+                        if (data.instance.HasActiveSubFlow)
+                            await stateFunctionCache.SetAsync(
+                                stateCacheKey, cacheEntry, stateFunctionCache.ActiveSubflowTtl, cancellationToken);
+                        else
+                            await stateFunctionCache.SetAsync(stateCacheKey, cacheEntry, cancellationToken);
                     }
 
                     if (!string.IsNullOrEmpty(input.IfNoneMatch) && etag.MatchesIfNoneMatch(input.IfNoneMatch))
@@ -1115,6 +1161,11 @@ public sealed class InstanceQueryAppService(
                     return ConditionalResult<GetInstanceStateOutput>.Success(output);
                 },
                 onFailure: error => ConditionalResult<GetInstanceStateOutput>.Fail(error));
+        }
+        finally
+        {
+            activeSubflowBuildLease?.Dispose();
+        }
     }
 
     /// <summary>
@@ -1125,18 +1176,37 @@ public sealed class InstanceQueryAppService(
     /// comes from the full path), active subflow (live evaluation required), cache miss, or a
     /// stale cache entry.
     /// </summary>
-    private async Task<ConditionalResult<GetInstanceStateOutput>?> TryServeStateFromFingerprintAsync(
+    private async Task<StateFingerprintFastPath> TryServeStateFromFingerprintAsync(
         GetInstanceStateInput input,
+        string cacheKey,
         CancellationToken cancellationToken)
     {
         var fingerprint = await instanceRepository.GetStateFingerprintAsync(input.Instance, cancellationToken);
         if (fingerprint is null)
-            return null;
+            return default;
 
         if (fingerprint.HasActiveSubFlow)
         {
+            var parentEtag = stateFunctionCache.ComputeEtag(input, fingerprint);
+            var cached = await TryServeActiveSubflowSnapshotAsync(
+                input, cacheKey, parentEtag, fingerprint, cancellationToken);
+            if (cached.HasValue)
+                return new(cached, null);
+
+            var lease = await AcquireBuildGateAsync(cacheKey, cancellationToken);
+
+            // Double-check after entering the gate: another request may have populated the short
+            // cache while this one was waiting.
+            cached = await TryServeActiveSubflowSnapshotAsync(
+                input, cacheKey, parentEtag, fingerprint, cancellationToken);
+            if (cached.HasValue)
+            {
+                lease.Dispose();
+                return new(cached, null);
+            }
+
             logger.StateFunctionCacheBypassedForSubFlow(input.Instance);
-            return null;
+            return new(null, lease);
         }
 
         var etag = stateFunctionCache.ComputeEtag(input, fingerprint);
@@ -1144,20 +1214,20 @@ public sealed class InstanceQueryAppService(
         if (!string.IsNullOrEmpty(input.IfNoneMatch) && etag.MatchesIfNoneMatch(input.IfNoneMatch))
         {
             logger.StateFunctionEtagNotModified(input.Instance, fingerprint.EffectiveState, fingerprint.Status.Code);
-            return ConditionalResult<GetInstanceStateOutput>.NotModified();
+            return new(ConditionalResult<GetInstanceStateOutput>.NotModified(), null);
         }
 
-        var entry = await stateFunctionCache.GetAsync(stateFunctionCache.BuildKey(input), cancellationToken);
+        var entry = await stateFunctionCache.GetAsync(cacheKey, cancellationToken);
         if (entry is null)
         {
             logger.StateFunctionCacheMiss(input.Instance);
-            return null;
+            return default;
         }
 
         if (!string.Equals(entry.Etag, etag, StringComparison.Ordinal))
         {
             logger.StateFunctionCacheInvalidated(input.Instance, entry.Etag, etag);
-            return null;
+            return default;
         }
 
         logger.StateFunctionCacheHit(input.Instance, fingerprint.EffectiveState, fingerprint.Status.Code);
@@ -1165,7 +1235,89 @@ public sealed class InstanceQueryAppService(
         var output = entry.Output;
         output.EntityEtag = entry.EntityEtag;
         output.ETag = entry.Etag;
-        return ConditionalResult<GetInstanceStateOutput>.Success(output);
+        return new(ConditionalResult<GetInstanceStateOutput>.Success(output), null);
+    }
+
+    private async Task<ConditionalResult<GetInstanceStateOutput>?> TryServeActiveSubflowSnapshotAsync(
+        GetInstanceStateInput input,
+        string cacheKey,
+        string parentEtag,
+        InstanceStateFingerprint fingerprint,
+        CancellationToken cancellationToken)
+    {
+        var entry = await stateFunctionCache.GetAsync(cacheKey, cancellationToken);
+        if (entry is null
+            || !entry.IsActiveSubflowSnapshot
+            || !string.Equals(entry.ParentEtag, parentEtag, StringComparison.Ordinal))
+            return null;
+
+        logger.StateFunctionCacheHit(input.Instance, fingerprint.EffectiveState, fingerprint.Status.Code);
+        if (!string.IsNullOrEmpty(input.IfNoneMatch) && entry.Etag.MatchesIfNoneMatch(input.IfNoneMatch))
+            return ConditionalResult<GetInstanceStateOutput>.NotModified();
+
+        entry.Output.EntityEtag = entry.EntityEtag;
+        entry.Output.ETag = entry.Etag;
+        return ConditionalResult<GetInstanceStateOutput>.Success(entry.Output);
+    }
+
+    private readonly record struct StateFingerprintFastPath(
+        ConditionalResult<GetInstanceStateOutput>? Result,
+        IDisposable? BuildLease);
+
+    private static async Task<BuildGateLease> AcquireBuildGateAsync(
+        string key,
+        CancellationToken cancellationToken)
+    {
+        while (true)
+        {
+            var gate = ActiveSubflowBuildGates.GetOrAdd(key, _ => new BuildGate());
+            Interlocked.Increment(ref gate.Users);
+
+            if (ActiveSubflowBuildGates.TryGetValue(key, out var current)
+                && ReferenceEquals(current, gate))
+            {
+                try
+                {
+                    await gate.Semaphore.WaitAsync(cancellationToken);
+                    return new BuildGateLease(key, gate);
+                }
+                catch
+                {
+                    ReleaseBuildGateReference(key, gate, releaseSemaphore: false);
+                    throw;
+                }
+            }
+
+            ReleaseBuildGateReference(key, gate, releaseSemaphore: false);
+        }
+    }
+
+    private static void ReleaseBuildGateReference(string key, BuildGate gate, bool releaseSemaphore)
+    {
+        if (releaseSemaphore)
+            gate.Semaphore.Release();
+
+        if (Interlocked.Decrement(ref gate.Users) == 0)
+            ActiveSubflowBuildGates.TryRemove(new KeyValuePair<string, BuildGate>(key, gate));
+    }
+
+    private sealed class BuildGate
+    {
+        internal readonly SemaphoreSlim Semaphore = new(1, 1);
+        internal int Users;
+    }
+
+    private sealed class BuildGateLease(string key, BuildGate gate) : IDisposable
+    {
+        private int _disposed;
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+                return;
+
+            ReleaseBuildGateReference(key, gate, releaseSemaphore: true);
+        }
     }
 
     /// <summary>
@@ -2011,6 +2163,10 @@ public sealed class InstanceQueryAppService(
         GetMasterInput input,
         CancellationToken cancellationToken)
     {
+        var callerRoles = await callerRoleResolver.ResolveRolesAsync(input.Headers, cancellationToken);
+        if (!callerRoles.IsSuccess)
+            return Result<GetSchemaOutput>.Fail(callerRoles.Error);
+
         var subFlowInput = new GetFunctionWithInstanceInput
         {
             Domain = subflow.SubFlowDomain,
@@ -2019,9 +2175,16 @@ public sealed class InstanceQueryAppService(
             Instance = subflow.SubFlowInstanceId.ToString(),
             Headers = input.Headers ?? new Dictionary<string, string?>(),
             QueryParams = input.QueryParameters ?? new Dictionary<string, string?>(),
-            Role = currentUser.ResolveCallerRole(input.Headers),
-            Roles = currentUser.ResolveCallerRoles(input.Headers)
+            Role = ICallerRoleResolver.SingleRoleOf(callerRoles.Value),
+            Roles = callerRoles.Value
         };
+
+        using var descent = StartDescend(
+            subflow.SubFlowDomain,
+            subflow.SubFlowName,
+            subflow.SubFlowInstanceId.ToString(),
+            subflow.ParentInstanceId.ToString(),
+            TelemetryConstants.DescentFunctions.Master);
 
         return await instanceQueryGateway.GetFunctionWithMasterAsync(subFlowInput, cancellationToken);
     }
@@ -2086,6 +2249,10 @@ public sealed class InstanceQueryAppService(
         string[]? extensions,
         CancellationToken cancellationToken)
     {
+        var callerRoles = await callerRoleResolver.ResolveRolesAsync(null, cancellationToken);
+        if (!callerRoles.IsSuccess)
+            return Result<GetExtensionsOutput>.Fail(callerRoles.Error);
+
         var subFlowInput = new GetFunctionWithInstanceInput
         {
             Domain = subflow.SubFlowDomain,
@@ -2093,9 +2260,16 @@ public sealed class InstanceQueryAppService(
             Version = subflow.SubFlowVersion,
             Instance = subflow.SubFlowInstanceId.ToString(),
             Extensions = extensions,
-            Role = currentUser.ResolveCallerRole(null),
-            Roles = currentUser.ResolveCallerRoles(null)
+            Role = ICallerRoleResolver.SingleRoleOf(callerRoles.Value),
+            Roles = callerRoles.Value
         };
+
+        using var descent = StartDescend(
+            subflow.SubFlowDomain,
+            subflow.SubFlowName,
+            subflow.SubFlowInstanceId.ToString(),
+            subflow.ParentInstanceId.ToString(),
+            TelemetryConstants.DescentFunctions.Extensions);
 
         return await instanceQueryGateway.GetFunctionWithExtensionsAsync(
             subFlowInput,
@@ -2172,15 +2346,26 @@ public sealed class InstanceQueryAppService(
         string transitionKey,
         CancellationToken cancellationToken)
     {
+        var callerRoles = await callerRoleResolver.ResolveRolesAsync(null, cancellationToken);
+        if (!callerRoles.IsSuccess)
+            return Result<GetSchemaOutput>.Fail(callerRoles.Error);
+
         var subFlowInput = new GetFunctionWithInstanceInput
         {
             Domain = subflow.SubFlowDomain,
             Workflow = subflow.SubFlowName,
             Version = subflow.SubFlowVersion,
             Instance = subflow.SubFlowInstanceId.ToString(),
-            Role = currentUser.ResolveCallerRole(null),
-            Roles = currentUser.ResolveCallerRoles(null)
+            Role = ICallerRoleResolver.SingleRoleOf(callerRoles.Value),
+            Roles = callerRoles.Value
         };
+
+        using var descent = StartDescend(
+            subflow.SubFlowDomain,
+            subflow.SubFlowName,
+            subflow.SubFlowInstanceId.ToString(),
+            subflow.ParentInstanceId.ToString(),
+            TelemetryConstants.DescentFunctions.Schema);
 
         return await instanceQueryGateway.GetFunctionWithSchemaAsync(
             subFlowInput,
@@ -2332,6 +2517,19 @@ public sealed class InstanceQueryAppService(
         Dictionary<string, string?>? queryParams = null,
         CancellationToken cancellationToken = default)
     {
+        // No failure channel here — the method already signals "no subflow view" with null, which is
+        // also the closed answer when the caller's roles cannot be established.
+        var callerRoles = await callerRoleResolver.ResolveRolesAsync(headers, cancellationToken);
+        if (!callerRoles.IsSuccess)
+            return null;
+
+        using var descent = StartDescend(
+            instance.Subflow!.SubFlowDomain,
+            instance.Subflow!.SubFlowName,
+            instance.Subflow!.SubFlowInstanceId.ToString(),
+            instance.Id.ToString(),
+            TelemetryConstants.DescentFunctions.View);
+
         var subFlowViewResult = await instanceQueryGateway.GetFunctionWithViewAsync(
             new GetFunctionWithInstanceInput
             {
@@ -2341,14 +2539,18 @@ public sealed class InstanceQueryAppService(
                 Version = instance.Subflow!.SubFlowVersion,
                 Headers = headers ?? new Dictionary<string, string?>(),
                 QueryParams = queryParams ?? new Dictionary<string, string?>(),
-                Role = currentUser.ResolveCallerRole(headers),
-                Roles = currentUser.ResolveCallerRoles(headers)
+                Role = ICallerRoleResolver.SingleRoleOf(callerRoles.Value),
+                Roles = callerRoles.Value
             },
             transitionKey,
             cancellationToken);
 
         if (!subFlowViewResult.IsSuccess)
         {
+            // Falling back to the main-flow view is a normal outcome here, not an error — but an
+            // unmarked fallback is indistinguishable from a descent that succeeded and returned
+            // nothing, which is the exact confusion this span exists to remove.
+            InstanceReadActivityHelper.SetUnresolved(descent.Activity, "subflow-view-unavailable");
             return null;
         }
 
@@ -2439,9 +2641,12 @@ public sealed class InstanceQueryAppService(
         const int humanTaskFanoutParallelism = 10;
 
         var scopeFactory = serviceProvider.GetRequiredService<IServiceScopeFactory>();
-        // Honor the legacy `role` header: a caller whose roles arrive only as a header must not be
-        // treated as role-less, which would silently drop every task guarded by a role grant.
-        var userRoles = currentUser.ResolveCallerRoles(headers) ?? [];
+        // Resolved once, before the fan-out: the parallel bodies open their own DI scopes, so a resolver
+        // read inside them would be a fresh memo — and, under a remote provider, one call per workflow.
+        var callerRolesResult = await callerRoleResolver.ResolveRolesAsync(headers, cancellationToken);
+        if (!callerRolesResult.IsSuccess)
+            return Result<List<HumanTaskItemOutput>>.Fail(callerRolesResult.Error);
+        var userRoles = callerRolesResult.Value ?? [];
         var requestContext = new AuthorizationRequestContext(headers);
         var allItems = new System.Collections.Concurrent.ConcurrentBag<HumanTaskItemOutput>();
 

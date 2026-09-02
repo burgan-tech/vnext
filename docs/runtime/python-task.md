@@ -27,7 +27,7 @@ NumPy and pandas objects in the workflow script with `.tolist()`, `.item()`, or 
 
 ```json
 {
-  "type": "22",
+  "type": "23",
   "config": {
     "script": {
       "location": "inline.py",

@@ -24,13 +24,9 @@ public static class SubFlowActivityHelper
     /// <returns>A new Activity linked to the current trace context, or null if no listener.</returns>
     public static Activity? StartActivity(string operationName, ActivityKind kind = ActivityKind.Internal)
     {
-        // Get the current activity's context to establish parent-child relationship
-        var parentContext = Activity.Current?.Context ?? default;
-        
         return ActivitySource.StartActivity(
             operationName,
-            kind,
-            parentContext);
+            kind);
     }
 
     /// <summary>

@@ -34,6 +34,18 @@ public sealed class SubflowOutputMappingServiceTests
     private readonly Mock<IGuidGenerator> _guidGenerator = new();
     private readonly Mock<ILogger<SubflowOutputMappingService>> _logger = new();
 
+    public SubflowOutputMappingServiceTests()
+    {
+        _scriptEngine
+            .Setup(x => x.CompileToInstanceAsync<object>(
+                It.IsAny<ScriptCode>(),
+                It.IsAny<ScriptSettings>(),
+                It.IsAny<IEnumerable<MetadataReference>>(),
+                It.IsAny<IEnumerable<string>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Mock.Of<ISubFlowMapping>());
+    }
+
     [Fact]
     public async Task ApplyAsync_WhenScriptContextBuildThrowsUnclassifiedAssemblyLoadFailure_ShouldReturnFailedResult()
     {

@@ -86,4 +86,33 @@ public class InstanceDataLatestInvariantTests : DomainTestBase<DomainEntryPoint>
         // Act & Assert
         Assert.Throws<InvalidOperationException>(() => instance.FindData("0.9.0"));
     }
+
+    [Fact]
+    public void CreateSnapshot_ShouldCarryPartialLoadMarker()
+    {
+        // A latest-only-loaded aggregate copies a one-entry history into its snapshot; without
+        // the marker the snapshot (used by script contexts and parallel branches) would answer
+        // history-dependent reads silently wrong instead of failing fast.
+        var instance = InstanceFactory.CreateDefault();
+        instance.SeedData(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":\"one\"}")); // 1.0.0
+        instance.MarkDataPartiallyLoaded();
+
+        var snapshot = instance.CreateSnapshot();
+
+        Assert.True(snapshot.IsDataPartiallyLoaded);
+        Assert.Throws<InvalidOperationException>(() => snapshot.GetVersionHistory("1.0.0"));
+        Assert.Throws<InvalidOperationException>(() => snapshot.FindData("0.9.0"));
+    }
+
+    [Fact]
+    public void CreateSnapshot_FullyLoadedAggregate_ShouldNotCarryMarker()
+    {
+        var instance = InstanceFactory.CreateDefault();
+        instance.SeedData(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":\"one\"}"));
+
+        var snapshot = instance.CreateSnapshot();
+
+        Assert.False(snapshot.IsDataPartiallyLoaded);
+        Assert.NotNull(snapshot.FindData("1.0.0"));
+    }
 }

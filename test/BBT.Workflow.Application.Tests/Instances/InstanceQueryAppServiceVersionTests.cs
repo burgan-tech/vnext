@@ -69,7 +69,6 @@ public class InstanceQueryAppServiceVersionTests : IDisposable
         services.AddLogging();
         services.AddSingleton(mockUoWManager);
         services.AddSingleton(Substitute.For<IComponentCacheStore>());
-        services.AddSingleton(Substitute.For<BBT.Workflow.DefinitionContext.IWorkflowContext>());
         _ambientServiceProvider = services.BuildServiceProvider();
 
         _previousAmbientServiceProvider = AmbientServiceProvider.Current;
@@ -115,7 +114,7 @@ public class InstanceQueryAppServiceVersionTests : IDisposable
             transitionAuthorizationManager: Substitute.For<ITransitionAuthorizationManager>(),
             representationEtagService: _representationEtagService,
             schemaFieldFilterService: _schemaFieldFilterService,
-            currentUser: Substitute.For<ICurrentUser>(),
+            callerRoleResolver: new DefaultCallerRoleResolver(Substitute.For<ICurrentUser>()),
             paginationLinkGenerator: Substitute.For<BBT.Aether.Application.Pagination.IPaginationLinkGenerator>(),
             instanceFilteringOptions: Options.Create(new InstanceFilteringOptions()),
             stateFunctionCache: Substitute.For<Caching.IStateFunctionCache>(),

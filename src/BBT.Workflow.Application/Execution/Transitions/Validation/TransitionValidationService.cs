@@ -1,6 +1,7 @@
 using BBT.Workflow.Caching;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Definitions.Policies;
+using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Runtime;
@@ -26,21 +27,42 @@ public class TransitionValidationService(
         TransitionExecutionContext context,
         CancellationToken cancellationToken = default)
     {
+        using var activity = PipelineStepActivityHelper.StartOperationActivity("Transition.Validate");
+
         // 1. Schema Validation
         var schemaResult = await ValidateSchemaAsync(context, cancellationToken);
         if (!schemaResult.IsSuccess)
+        {
+            activity?.SetStatus(ActivityStatusCode.Error, schemaResult.Error.Message);
             return schemaResult;
+        }
 
         // 2. State Machine Validation using Specification Pattern
         // Includes: Actor authorization, state transition rules, SubFlow bypass, etc.
-        return await ValidatePolicyAsync(context, cancellationToken);
+        var policyResult = await ValidatePolicyAsync(context, cancellationToken);
+        if (!policyResult.IsSuccess)
+            activity?.SetStatus(ActivityStatusCode.Error, policyResult.Error.Message);
+
+        return policyResult;
     }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// Spanned like <see cref="ValidateAsync"/> even though it does no I/O: it runs on every hop of
+    /// an auto-chain, and a trace that shows the schema-bearing validation but not this one reads
+    /// as if the later hops validated nothing.
+    /// </remarks>
     public Task<Result> ValidatePolicyAsync(
         TransitionExecutionContext context,
         CancellationToken cancellationToken = default)
-        => Task.FromResult(transitionExecutionPolicy.Validate(context));
+    {
+        using var activity = PipelineStepActivityHelper.StartOperationActivity("Transition.ValidatePolicy");
+        var result = transitionExecutionPolicy.Validate(context);
+        if (!result.IsSuccess)
+            activity?.SetStatus(ActivityStatusCode.Error, result.Error.Message);
+
+        return Task.FromResult(result);
+    }
 
     /// <inheritdoc />
     /// <summary>

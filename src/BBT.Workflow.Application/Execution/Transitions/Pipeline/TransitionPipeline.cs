@@ -114,8 +114,17 @@ public class TransitionPipeline
         if (!admission.IsSuccess)
             return Result<TransitionExecutionContext>.Fail(admission.Error);
 
-        // 3) Policy validation (schema is intake-only; see CreateAndValidateContextAsync).
-        var validationResult = await _validationService.ValidatePolicyAsync(context, cancellationToken);
+        // 3) Validation. Policy always: state-machine specifications read the CURRENT state, which
+        //    changes between hops. Schema only for a request whose payload nobody has validated yet
+        //    — this is the sync path's single validation point, the async path having validated at
+        //    its accept. A job re-entry (IsPreReserved) carries a payload the accept already
+        //    validated, and the start path validates before it persists the instance row and says
+        //    so with PayloadSchemaValidated; both skip it rather than re-read the schema component
+        //    and re-run the validator over identical bytes.
+        var payloadAlreadyValidated = workflowContext.PayloadSchemaValidated || context.IsPreReserved;
+        var validationResult = payloadAlreadyValidated
+            ? await _validationService.ValidatePolicyAsync(context, cancellationToken)
+            : await _validationService.ValidateAsync(context, cancellationToken);
         if (!validationResult.IsSuccess)
             return Result<TransitionExecutionContext>.Fail(validationResult.Error);
 
@@ -205,9 +214,24 @@ public class TransitionPipeline
         CancellationToken cancellationToken)
     {
         var context = initialContext;
+        var hop = 0;
 
         while (true)
         {
+            hop++;
+
+            // The transaction span already names the FIRST transition (the job span is
+            // "TransitionJob.Execute/{key}"; on the sync path the route carries the key), so hop 1
+            // needs no span of its own — that redundancy is exactly what the old `transition/{key}`
+            // node was. A chained hop is a DIFFERENT transition running under the same transaction,
+            // so it gets a group span; without one, two transitions' step spans would sit side by
+            // side under one parent with nothing to tell them apart. It also gives
+            // TransitionExecutor.EnrichTelemetry a per-hop span to tag, instead of every hop
+            // overwriting the transaction's tags.
+            using var hopActivity = hop == 1
+                ? null
+                : PipelineStepActivityHelper.StartOperationActivity($"Transition.{context.TransitionKey}");
+
             // Guard: Prevent infinite chain loops
             if (context.ChainDepth > MaxChainDepth)
             {
@@ -426,8 +450,12 @@ public class TransitionPipeline
         await using var faultUow = _uowManager.Begin(
             new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew });
 
-        // Reload in the new scope so we operate on a clean, tracked entity.
-        var instance = await _instanceRepository.FindAsync(context.InstanceId, true, cancellationToken)
+        // Reload in the new scope so we operate on a clean, tracked entity. Narrow shape on
+        // purpose: Fault() walks the correlations for the child-fault cascade and puts LatestData
+        // in the event payload — FindWithAllCorrelationsAndDataAsync covers both as split queries,
+        // where FindAsync(id, includeDetails: true) produced one cartesian JOIN over
+        // DataList × Correlations.
+        var instance = await _instanceRepository.FindWithAllCorrelationsAndDataAsync(context.InstanceId, cancellationToken)
                        ?? context.Instance;
 
         if (!instance.HasActiveIncident)

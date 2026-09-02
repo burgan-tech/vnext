@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using BBT.Workflow.Execution.Bindings;
 using BBT.Workflow.Execution.Metrics;
+using BBT.Workflow.Execution.Services;
 using Dapr.Client;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
@@ -83,41 +84,42 @@ public sealed class SubProcessRemoteInvoker : ITaskInvoker<SubProcessBinding>
         SubProcessBinding binding,
         CancellationToken cancellationToken)
     {
-        var stopwatch = Stopwatch.StartNew();
+        var startTimestamp = Stopwatch.GetTimestamp();
+        var prepareActivity = InvokerActivityHelper.StartPrepareActivity(TaskType, taskKey ?? string.Empty);
 
         try
         {
             var appId = binding.DaprAppId ?? _orchestrationAppId;
             var request = CreateDaprRequest(binding, appId);
 
+            prepareActivity?.Dispose();
             using var response = await _daprClient.InvokeMethodWithResponseAsync(request, cancellationToken);
-            stopwatch.Stop();
 
-            return await ProcessResponseAsync(binding, response, stopwatch.ElapsedMilliseconds, cancellationToken);
+            return await ProcessResponseAsync(binding, response, (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds, cancellationToken);
         }
         catch (TaskCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            stopwatch.Stop();
+            prepareActivity?.Dispose();
             _metrics.RecordTaskExecution(TaskType, "cancelled");
             _logger.LogWarning("SubProcess Dapr invocation was cancelled for task {TaskKey}: {Domain}/{Workflow}",
                 taskKey, binding.Domain, binding.Workflow);
 
             return TaskInvocationResult.Failure(
                 error: "SubProcess remote invocation was cancelled",
-                executionDurationMs: stopwatch.ElapsedMilliseconds,
+                executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
                 taskType: TaskType,
                 metadata: CreateMetadata(binding, cancelled: true));
         }
         catch (Exception ex)
         {
-            stopwatch.Stop();
+            prepareActivity?.Dispose();
             _metrics.RecordTaskExecution(TaskType, "failure");
             _logger.LogError(ex, "SubProcess Dapr invocation failed for task {TaskKey}: {Domain}/{Workflow}",
                 taskKey, binding.Domain, binding.Workflow);
 
             return TaskInvocationResult.Failure(
                 error: ex.Message,
-                executionDurationMs: stopwatch.ElapsedMilliseconds,
+                executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
                 taskType: TaskType,
                 metadata: CreateMetadata(binding, exceptionType: ex.GetType().Name));
         }
@@ -128,54 +130,55 @@ public sealed class SubProcessRemoteInvoker : ITaskInvoker<SubProcessBinding>
         SubProcessBinding binding,
         CancellationToken cancellationToken)
     {
-        var stopwatch = Stopwatch.StartNew();
+        var startTimestamp = Stopwatch.GetTimestamp();
+        var prepareActivity = InvokerActivityHelper.StartPrepareActivity(TaskType, taskKey ?? string.Empty);
 
         try
         {
             var httpClient = CreateHttpClient(binding, taskKey);
             var request = CreateHttpRequest(binding);
 
+            prepareActivity?.Dispose();
             using var response = await httpClient.SendAsync(request, cancellationToken);
-            stopwatch.Stop();
 
-            return await ProcessResponseAsync(binding, response, stopwatch.ElapsedMilliseconds, cancellationToken);
+            return await ProcessResponseAsync(binding, response, (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds, cancellationToken);
         }
         catch (TaskCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            stopwatch.Stop();
+            prepareActivity?.Dispose();
             _metrics.RecordTaskExecution(TaskType, "cancelled");
             _logger.LogWarning("SubProcess HTTP invocation was cancelled for task {TaskKey}: {Domain}/{Workflow}",
                 taskKey, binding.Domain, binding.Workflow);
 
             return TaskInvocationResult.Failure(
                 error: "SubProcess remote invocation was cancelled",
-                executionDurationMs: stopwatch.ElapsedMilliseconds,
+                executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
                 taskType: TaskType,
                 metadata: CreateMetadata(binding, cancelled: true));
         }
         catch (HttpRequestException ex)
         {
-            stopwatch.Stop();
+            prepareActivity?.Dispose();
             _metrics.RecordTaskExecution(TaskType, "failure");
             _logger.LogError(ex, "SubProcess HTTP invocation failed for task {TaskKey}: {Domain}/{Workflow}",
                 taskKey, binding.Domain, binding.Workflow);
 
             return TaskInvocationResult.Failure(
                 error: ex.Message,
-                executionDurationMs: stopwatch.ElapsedMilliseconds,
+                executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
                 taskType: TaskType,
                 metadata: CreateMetadata(binding, exceptionType: ex.GetType().Name));
         }
         catch (Exception ex)
         {
-            stopwatch.Stop();
+            prepareActivity?.Dispose();
             _metrics.RecordTaskExecution(TaskType, "failure");
             _logger.LogError(ex, "SubProcess HTTP invocation failed for task {TaskKey}: {Domain}/{Workflow}",
                 taskKey, binding.Domain, binding.Workflow);
 
             return TaskInvocationResult.Failure(
                 error: ex.Message,
-                executionDurationMs: stopwatch.ElapsedMilliseconds,
+                executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
                 taskType: TaskType,
                 metadata: CreateMetadata(binding, exceptionType: ex.GetType().Name));
         }

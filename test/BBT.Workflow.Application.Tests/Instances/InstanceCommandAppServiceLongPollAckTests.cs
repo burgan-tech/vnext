@@ -11,7 +11,6 @@ using BBT.Aether.Uow;
 using BBT.Aether.Users;
 using BBT.Workflow.Authorization;
 using BBT.Workflow.Caching;
-using BBT.Workflow.DefinitionContext;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.LongPoll;
@@ -51,7 +50,6 @@ public class InstanceCommandAppServiceLongPollAckTests : IDisposable
     private readonly IInstanceCancellationService _cancellationService = Substitute.For<IInstanceCancellationService>();
     private readonly ILongPollAckResumeService _resumeService = Substitute.For<ILongPollAckResumeService>();
     private readonly IInstanceCommandGateway _gateway = Substitute.For<IInstanceCommandGateway>();
-    private readonly IWorkflowContext _workflowContext = Substitute.For<IWorkflowContext>();
     private readonly InstanceCommandAppService _service;
     private readonly IServiceProvider _ambient;
     private readonly IServiceProvider? _previousAmbient;
@@ -87,8 +85,6 @@ public class InstanceCommandAppServiceLongPollAckTests : IDisposable
             transitionDataMapper: Substitute.For<ITransitionDataMapper>(),
             transitionValidationService: Substitute.For<ITransitionValidationService>(),
             transitionAdmissionService: Substitute.For<ITransitionAdmissionService>(),
-            transitionContextFactory: Substitute.For<ITransitionContextFactory>(),
-            workflowContext: _workflowContext,
             representationEtagService: Substitute.For<IRepresentationEtagService>(),
             schemaFieldFilterService: Substitute.For<ISchemaFieldFilterService>(),
             instanceExtensionService: Substitute.For<IInstanceExtensionService>(),
@@ -99,7 +95,7 @@ public class InstanceCommandAppServiceLongPollAckTests : IDisposable
             longPollAckResumeService: _resumeService,
             instanceCommandGateway: _gateway,
             workflowOutputMappingService: Substitute.For<IWorkflowOutputMappingService>(),
-            currentUser: Substitute.For<ICurrentUser>(),
+            callerRoleResolver: new DefaultCallerRoleResolver(Substitute.For<ICurrentUser>()),
             logger: Substitute.For<ILogger<InstanceCommandAppService>>());
     }
 

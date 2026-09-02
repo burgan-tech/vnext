@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using BBT.Workflow.Execution.Bindings;
 using BBT.Workflow.Execution.Metrics;
+using BBT.Workflow.Execution.Services;
 using Dapr.Client;
 using Microsoft.Extensions.Logging;
 
@@ -50,7 +51,8 @@ public sealed class DaprBindingTaskInvoker(
         DaprBindingTaskBinding binding,
         CancellationToken cancellationToken)
     {
-        var stopwatch = Stopwatch.StartNew();
+        var startTimestamp = Stopwatch.GetTimestamp();
+        var prepareActivity = InvokerActivityHelper.StartPrepareActivity(TaskType, taskKey ?? string.Empty);
 
         try
         {
@@ -85,6 +87,7 @@ public sealed class DaprBindingTaskInvoker(
                 ? null
                 : JsonSerializer.Deserialize<object>(binding.Body);
 
+            prepareActivity?.Dispose();
             await daprClient.InvokeBindingAsync(
                 binding.BindingName,
                 operation,
@@ -92,11 +95,10 @@ public sealed class DaprBindingTaskInvoker(
                 cleanMetadata,
                 cancellationToken);
 
-            stopwatch.Stop();
             _metrics.RecordDaprBindingInvocation(binding.BindingName, operation, "success");
 
             return TaskInvocationResult.Success(
-                executionDurationMs: stopwatch.ElapsedMilliseconds,
+                executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
                 taskType: TaskType,
                 metadata: new Dictionary<string, object>
                 {
@@ -106,14 +108,14 @@ public sealed class DaprBindingTaskInvoker(
         }
         catch (TaskCanceledException ex) when (cancellationToken.IsCancellationRequested)
         {
-            stopwatch.Stop();
+            prepareActivity?.Dispose();
             _metrics.RecordDaprBindingInvocation(binding.BindingName, binding.Operation, "cancelled");
             logger.LogWarning("Dapr binding invocation was cancelled: {BindingName}, Operation: {Operation}",
                 binding.BindingName, binding.Operation);
 
             return TaskInvocationResult.Failure(
                 error: "Dapr binding invocation was cancelled",
-                executionDurationMs: stopwatch.ElapsedMilliseconds,
+                executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
                 taskType: TaskType,
                 metadata: new Dictionary<string, object>
                 {
@@ -125,14 +127,14 @@ public sealed class DaprBindingTaskInvoker(
         }
         catch (Exception ex)
         {
-            stopwatch.Stop();
+            prepareActivity?.Dispose();
             _metrics.RecordDaprBindingInvocation(binding.BindingName, binding.Operation, "failure");
             logger.LogError(ex, "Dapr binding invocation failed: {BindingName}, Operation: {Operation}",
                 binding.BindingName, binding.Operation);
 
             return TaskInvocationResult.Failure(
                 error: ex.Message,
-                executionDurationMs: stopwatch.ElapsedMilliseconds,
+                executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
                 taskType: TaskType,
                 metadata: new Dictionary<string, object>
                 {

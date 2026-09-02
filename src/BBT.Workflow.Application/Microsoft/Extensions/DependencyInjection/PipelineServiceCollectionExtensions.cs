@@ -14,6 +14,7 @@ using BBT.Workflow.Execution.Strategies;
 using BBT.Workflow.Execution.Transitions.Factory;
 using BBT.Workflow.Execution.Transitions.Services;
 using BBT.Workflow.Execution.Validation;
+using BBT.Workflow.SubFlow;
 
 namespace Microsoft.Extensions.DependencyInjection;
 
@@ -33,7 +34,10 @@ public static class PipelineServiceCollectionExtensions
         
         // Transition Runner (owns chaining with isolated scope + UoW per hop)
         services.AddScoped<ITransitionRunner, TransitionRunner>();
-        
+
+        // Post-commit COMMAND relay for subflow terminal events (Outbox + TerminalRelay mode)
+        services.AddScoped<ISubflowTerminalRelay, SubflowTerminalRelay>();
+
         // Execution Strategies
         services.AddScoped<IExecutionStrategyFactory, ExecutionStrategyFactory>();
         services.AddScoped<ITransitionStrategy, SyncTransitionStrategy>();
@@ -41,7 +45,6 @@ public static class PipelineServiceCollectionExtensions
         
         // Context Factory
         services.AddScoped<ITransitionContextFactory, TransitionContextFactory>();
-        services.AddScoped<IContextRefresher, ContextRefresher>();
 
         // Transition Data Mapping Service
         services.AddScoped<ITransitionDataMapper, TransitionDataMapper>();

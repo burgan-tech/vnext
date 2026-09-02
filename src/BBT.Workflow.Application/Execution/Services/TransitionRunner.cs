@@ -5,7 +5,9 @@ using BBT.Aether.Users;
 using BBT.Workflow.CurrentUser;
 using BBT.Workflow.Execution.PostCommit;
 using BBT.Workflow.Instances;
+using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Logging;
+using BBT.Workflow.SubFlow;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -140,18 +142,22 @@ public sealed class TransitionRunner(
     /// This ensures complete isolation from any ambient UoW.
     /// Before commit, stages deferred domain events collected during pipeline execution.
     /// Durable hooks run after commit from the UoW completion callback.
-    /// Uses ExecuteWithWorkflowAsync extension for automatic workflow loading and IWorkflowContext setup.
+    /// Uses the ExecuteWithWorkflowAsync extension for scope + workflow loading.
     /// </summary>
     private Task<Result<TransitionCoreOutput>> ExecuteWithScopeAsync(
         WorkflowExecutionContext context,
         CancellationToken cancellationToken)
     {
+        // The context is handed in as the carrier: it may already hold the definition the intake
+        // resolved, and when it does not, the scope's own load lands on it so the pipeline's
+        // context factory reuses it instead of resolving the same flow a third time.
         return scopeFactory.ExecuteWithWorkflowAsync(context.Domain, context.WorkflowKey, context.WorkflowVersion,
             async (sp, ct) =>
             {
                 var uowManager = sp.GetRequiredService<IUnitOfWorkManager>();
                 var core = sp.GetRequiredService<IWorkflowExecutionCore>();
                 var currentUser = sp.GetRequiredService<ICurrentUser>();
+                var terminalRelay = sp.GetRequiredService<ISubflowTerminalRelay>();
 
                 using (currentUser.ChangeFromHeaders(context.Headers))
                 {
@@ -162,18 +168,34 @@ public sealed class TransitionRunner(
                     if (!coreResult.IsSuccess)
                         return Result<TransitionCoreOutput>.Fail(coreResult.Error);
 
-                    await PublishDeferredEventsAsync(sp, uowManager, coreResult.Value!, ct);
-                    
-                    await uow.CommitAsync(ct);
-                    
+                    using (PipelineStepActivityHelper.StartOperationActivity("Events.PublishDeferred"))
+                    {
+                        await PublishDeferredEventsAsync(sp, uowManager, coreResult.Value!, ct);
+                    }
+
+                    // The transaction commit — everything the hop wrote reaching the database at
+                    // once. It sat outside every span, so a slow commit read as time the hop spent
+                    // nowhere.
+                    using (PipelineStepActivityHelper.StartOperationActivity("Uow.Commit"))
+                    {
+                        await uow.CommitAsync(ct);
+                    }
+
+                    // Terminal relay: subflow terminal events settle the parent IMMEDIATELY as a command —
+                    // awaited here so a sync chain's response follows the settled chain, and an async job
+                    // relays with gap ≈ 0. The outbox rows written pre-commit stay the durable record; the
+                    // Inbox handlers are the backup and ISubItemTerminalGuard absorbs the duplicate.
+                    await terminalRelay.RelayAsync(coreResult.Value!.DeferredEvents, ct);
+
                     return coreResult;
                 }
-            }, cancellationToken);
+            }, cancellationToken, carrier: context);
     }
 
     /// <summary>
     /// Stages deferred domain events via IDistributedEventBus before UoW commit.
-    /// Each event passes through HookedDistributedEventBus; durable hooks are registered for post-commit execution.
+    /// Each event passes through TraceStampingDistributedEventBus, which stamps trace context and
+    /// delegates — every event rides the outbox.
     /// Events include pre-extracted metadata from AddDistributedEvent time.
     /// </summary>
     private async Task PublishDeferredEventsAsync(

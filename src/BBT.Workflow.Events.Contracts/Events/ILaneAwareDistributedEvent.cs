@@ -12,7 +12,7 @@ namespace BBT.Workflow.Events;
 /// </para>
 /// <para>
 /// Settable for the same reason as <see cref="ITraceableDistributedEvent"/>: stamped centrally by
-/// <c>HookedDistributedEventBus</c> at publish time, while the publisher's lane is still ambient.
+/// <c>TraceStampingDistributedEventBus</c> at publish time, while the publisher's lane is still ambient.
 /// </para>
 /// </summary>
 public interface ILaneAwareDistributedEvent : ITraceableDistributedEvent

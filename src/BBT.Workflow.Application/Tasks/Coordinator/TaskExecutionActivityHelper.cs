@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using BBT.Aether.Telemetry;
 using BBT.Workflow.Logging;
 
 namespace BBT.Workflow.Tasks.Coordinator;
@@ -44,6 +43,22 @@ public static class TaskExecutionActivityHelper
     public const string OperationTriggerLocal = "Trigger.Local";
 
     /// <summary>
+    /// Operation name for component-ref resolution + clone inside the task factory — the
+    /// previously unspanned head of <c>Task.Execute.{key}</c>.
+    /// </summary>
+    public const string OperationResolve = "Task.Resolve";
+
+    /// <summary>
+    /// Operation name for the journal-row creation/probe persist.
+    /// </summary>
+    public const string OperationJournalCreate = "Task.Journal.Create";
+
+    /// <summary>
+    /// Operation name for the journal-row completion persist.
+    /// </summary>
+    public const string OperationJournalComplete = "Task.Journal.Complete";
+
+    /// <summary>
     /// Starts the span for a trigger-family task's LOCAL (same-domain, in-process) invocation.
     /// <para>
     /// NOT gated on verbose tracing: the remote branch of these tasks produces a Dapr/HTTP client
@@ -68,8 +83,7 @@ public static class TaskExecutionActivityHelper
     {
         var activity = ActivitySource.StartActivity(
             $"{OperationTriggerLocal}.{taskKey}",
-            ActivityKind.Internal,
-            Activity.Current?.Context ?? default);
+            ActivityKind.Internal);
 
         if (activity != null)
         {
@@ -89,7 +103,11 @@ public static class TaskExecutionActivityHelper
     }
 
     /// <summary>
-    /// Starts a new activity as a child of the current activity for an executor phase.
+    /// Starts a new activity as a child of the current activity for an executor phase
+    /// (PrepareInput, Invoke, ProcessOutput). These phases are business-level and always on —
+    /// not gated behind verbose tracing — so they are visible under the existing
+    /// <c>Task.Execute.{key}</c> span (created by Aether's <c>[Trace]</c> aspect on
+    /// <c>TaskExecutionEngine.ExecuteAsync</c>) in every trace, not just verbose ones.
     /// When taskKey/taskType are provided, enriches the span with standard tags for filtering.
     /// </summary>
     /// <param name="operationName">The name of the operation (e.g. Task.PrepareInput, Task.Invoke, Task.ProcessOutput).</param>
@@ -101,15 +119,9 @@ public static class TaskExecutionActivityHelper
         string? taskKey = null,
         string? taskType = null)
     {
-        if (!AetherTracingRuntime.IsVerbose)
-            return null;
-
-        var parentContext = Activity.Current?.Context ?? default;
-
         var activity = ActivitySource.StartActivity(
             operationName,
-            ActivityKind.Internal,
-            parentContext);
+            ActivityKind.Internal);
 
         if (activity != null)
         {
@@ -118,7 +130,7 @@ public static class TaskExecutionActivityHelper
             if (!string.IsNullOrEmpty(taskType))
                 activity.SetTag(TelemetryConstants.TagNames.TaskType, taskType);
             activity.SetTag(TelemetryConstants.TagNames.Layer, TelemetryConstants.Layers.Orchestration);
-            activity.SetTag(TelemetryConstants.TagNames.SpanCategory, TelemetryConstants.SpanCategories.Diagnostic);
+            activity.SetTag(TelemetryConstants.TagNames.SpanCategory, TelemetryConstants.SpanCategories.Business);
         }
 
         return activity;

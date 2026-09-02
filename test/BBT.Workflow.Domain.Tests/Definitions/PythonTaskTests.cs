@@ -13,7 +13,7 @@ public sealed class PythonTaskTests
     {
         var json = """
             {
-              "type": "22",
+              "type": "23",
               "config": {
                 "script": {
                   "location": "risk.py",

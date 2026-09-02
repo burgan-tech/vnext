@@ -80,6 +80,24 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Include-free variant of <see cref="FindActiveByKeyAsync"/> for existence/status probes
+    /// (e.g. the start idempotency check): same non-terminal filter and ordering, but no
+    /// DataList or correlation loads.
+    /// </summary>
+    Task<Instance?> FindActiveByKeyLeanAsync(string key,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Include-free lookup by primary key with NO key-string fallback — the id counterpart of
+    /// <see cref="FindActiveByKeyLeanAsync"/>. Use when the caller holds a typed <see cref="Guid"/>
+    /// id (e.g. the start idempotency probe): the generic identifier resolvers would compare
+    /// <see cref="Instance.Key"/> against the id string after a miss, which is both meaningless
+    /// for a typed id and an extra full-row query.
+    /// </summary>
+    Task<Instance?> FindLeanByIdAsync(Guid id,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Loads a read-only (no-tracking) instance with the full <see cref="Instance.DataList"/>
     /// history. Dedicated to <c>GetInstanceHistoryAsync</c> where detached entities are sufficient.
     /// </summary>
@@ -152,6 +170,45 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Compare-and-set Active → Busy as ONE set-based UPDATE (no aggregate load): the guard is the
+    /// WHERE clause, so the returned flag is the authoritative outcome under the caller's status
+    /// lock. Busy() raises no domain events, which is what makes the set-based write legal here —
+    /// do NOT copy this pattern for event-raising status changes (Complete/Fault/Cancel).
+    /// </summary>
+    /// <returns>True when exactly this call flipped Active → Busy; false when the instance was
+    /// missing, already Busy, or terminal (Completed/Faulted/Passive).</returns>
+    Task<bool> TryMarkBusyAsync(Guid instanceId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Compare-and-set Busy → Active; the set-based counterpart of <see cref="TryMarkBusyAsync(Guid,CancellationToken)"/>
+    /// with the same event rules.
+    /// </summary>
+    /// <returns>True when exactly this call flipped Busy → Active.</returns>
+    Task<bool> TryReleaseBusyAsync(Guid instanceId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Aggregate-aware variant of <see cref="TryMarkBusyAsync(Guid,CancellationToken)"/> for
+    /// callers holding the change-tracked instance (pipeline steps, settlement): on a successful CAS
+    /// it applies <c>Busy()</c> in memory AND aligns the change tracker's baseline for the status
+    /// column, so a later SaveChanges in the same unit of work does not write the status a second
+    /// time. On a lost race the aggregate is left untouched.
+    /// </summary>
+    Task<bool> TryMarkBusyAsync(Instance instance, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Aggregate-aware counterpart of <see cref="TryReleaseBusyAsync(Guid,CancellationToken)"/>:
+    /// CAS Busy → Active, then <c>Active()</c> in memory with the same change-tracker baseline
+    /// alignment as <see cref="TryMarkBusyAsync(Instance,CancellationToken)"/>.
+    /// </summary>
+    Task<bool> TryReleaseBusyAsync(Instance instance, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Writes the long-poll acknowledge token as one set-based UPDATE — the arm is a single
+    /// column, so saving the whole aggregate for it was pure overhead. Raises no events.
+    /// </summary>
+    Task ArmLongPollAckAsync(Guid instanceId, Guid token, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Checks if an active instance exists with the specified key, excluding the given instance ID.
     /// </summary>
     /// <param name="key">The key to check for duplicates.</param>
@@ -193,6 +250,23 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The instance with all correlations and data, or null when not found.</returns>
     Task<Instance?> FindWithAllCorrelationsAndDataAsync(
+        Guid instanceId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Loads latest parent data and only the correlation being started.</summary>
+    Task<Instance?> FindForSubflowStartAsync(
+        Guid instanceId,
+        Guid correlationId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Loads latest parent data and only the correlation for the terminal child.</summary>
+    Task<Instance?> FindForSubflowCompletionAsync(
+        Guid instanceId,
+        Guid subInstanceId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Loads latest parent data and only active correlations for post-commit settlement.</summary>
+    Task<Instance?> FindForPostCommitSettlementAsync(
         Guid instanceId,
         CancellationToken cancellationToken = default);
 

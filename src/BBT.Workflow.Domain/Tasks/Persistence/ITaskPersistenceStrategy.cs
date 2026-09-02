@@ -26,8 +26,25 @@ public interface ITaskPersistenceStrategy
     /// Handles the creation and initial persistence of an InstanceTask if required.
     /// </summary>
     /// <param name="instanceTask">The InstanceTask to be persisted.</param>
+    /// <param name="taskTrigger">
+    /// The hook this occurrence runs under (OnExecute/OnEntry/OnExit/...). Together with
+    /// <paramref name="order"/> it identifies which occurrence of <c>instanceTask.TaskId</c> this
+    /// is within the transition, for the idempotency probe — see
+    /// <see cref="InstanceTask.ExecutionKey"/>.
+    /// </param>
+    /// <param name="order">The occurrence's execution order within its hook.</param>
+    /// <param name="skipLookup">
+    /// When true, the strategy may insert without probing for an existing row — the caller
+    /// guarantees none can exist (the transition record was inserted by this very pipeline run).
+    /// On retries this MUST be false so the previous attempt's row is found and reused.
+    /// </param>
     /// <param name="cancellationToken">Cancellation token for async operation control.</param>
-    Task<InstanceTask> HandleCreationAsync(InstanceTask instanceTask, CancellationToken cancellationToken = default);
+    Task<InstanceTask> HandleCreationAsync(
+        InstanceTask instanceTask,
+        TaskTrigger taskTrigger,
+        int order,
+        bool skipLookup = false,
+        CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Handles the completion and final persistence of an InstanceTask if required.

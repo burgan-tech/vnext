@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Text.Json;
 using BBT.Workflow.Execution.Bindings;
 using BBT.Workflow.Execution.Metrics;
+using BBT.Workflow.Execution.Services;
 using Dapr.AI.Conversation;
 using Dapr.AI.Conversation.ConversationRoles;
 using Google.Protobuf.WellKnownTypes;
@@ -54,13 +55,13 @@ public sealed class DaprConversationTaskInvoker(
         DaprConversationBinding binding,
         CancellationToken cancellationToken)
     {
-        var stopwatch = Stopwatch.StartNew();
+        var startTimestamp = Stopwatch.GetTimestamp();
 
         if (string.IsNullOrWhiteSpace(binding.ComponentName))
         {
             return TaskInvocationResult.Failure(
                 error: "Dapr conversation task requires a 'componentName'",
-                executionDurationMs: stopwatch.ElapsedMilliseconds,
+                executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
                 taskType: TaskType);
         }
 
@@ -68,9 +69,11 @@ public sealed class DaprConversationTaskInvoker(
         {
             return TaskInvocationResult.Failure(
                 error: "Dapr conversation task requires at least one input message",
-                executionDurationMs: stopwatch.ElapsedMilliseconds,
+                executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
                 taskType: TaskType);
         }
+
+        var prepareActivity = InvokerActivityHelper.StartPrepareActivity(TaskType, taskKey ?? string.Empty);
 
         try
         {
@@ -89,9 +92,9 @@ public sealed class DaprConversationTaskInvoker(
                 Parameters = ToAnyParameters(binding.Parameters)
             };
 
+            prepareActivity?.Dispose();
             var response = await conversationClient.ConverseAsync(inputs, options, cancellationToken);
 
-            stopwatch.Stop();
 
             var payload = new
             {
@@ -127,7 +130,7 @@ public sealed class DaprConversationTaskInvoker(
             return TaskInvocationResult.Success(
                 data: responseData,
                 body: body,
-                executionDurationMs: stopwatch.ElapsedMilliseconds,
+                executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
                 taskType: TaskType,
                 metadata: new Dictionary<string, object>
                 {
@@ -138,14 +141,14 @@ public sealed class DaprConversationTaskInvoker(
         }
         catch (OperationCanceledException ex) when (cancellationToken.IsCancellationRequested)
         {
-            stopwatch.Stop();
+            prepareActivity?.Dispose();
             _metrics.RecordDaprConversationInvocation(binding.ComponentName, "cancelled");
             logger.LogWarning("Dapr conversation invocation was cancelled: {ComponentName}",
                 binding.ComponentName);
 
             return TaskInvocationResult.Failure(
                 error: "Dapr conversation invocation was cancelled",
-                executionDurationMs: stopwatch.ElapsedMilliseconds,
+                executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
                 taskType: TaskType,
                 metadata: new Dictionary<string, object>
                 {
@@ -156,14 +159,14 @@ public sealed class DaprConversationTaskInvoker(
         }
         catch (Exception ex)
         {
-            stopwatch.Stop();
+            prepareActivity?.Dispose();
             _metrics.RecordDaprConversationInvocation(binding.ComponentName, "failure");
             logger.LogError(ex, "Unexpected error during Dapr conversation invocation: {ComponentName}",
                 binding.ComponentName);
 
             return TaskInvocationResult.Failure(
                 error: ex.Message,
-                executionDurationMs: stopwatch.ElapsedMilliseconds,
+                executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
                 taskType: TaskType,
                 metadata: new Dictionary<string, object>
                 {

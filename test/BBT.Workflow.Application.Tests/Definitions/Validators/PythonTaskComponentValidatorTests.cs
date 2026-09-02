@@ -15,7 +15,7 @@ public sealed class PythonTaskComponentValidatorTests
     {
         var result = Validate("""
             {
-              "type":"22",
+              "type":"23",
               "config":{
                 "script":{"location":"model.py","code":"def main(input): return input","encoding":"NAT"},
                 "executionMode":"pythonNet",
@@ -36,7 +36,7 @@ public sealed class PythonTaskComponentValidatorTests
     {
         var result = Validate($$"""
             {
-              "type":"22",
+              "type":"23",
               "config":{
                 "script":{"code":"def main(input): return input","encoding":"NAT"},
                 "executionMode":"{{mode}}",
@@ -54,7 +54,7 @@ public sealed class PythonTaskComponentValidatorTests
     {
         var result = Validate("""
             {
-              "type":"22",
+              "type":"23",
               "config":{
                 "script":{
                   "encoding":"REF",
@@ -72,7 +72,7 @@ public sealed class PythonTaskComponentValidatorTests
     public void Validate_ReportsInvalidBase64WithoutThrowing()
     {
         var result = Validate("""
-            {"type":"22","config":{"script":{"code":"not-base64","encoding":"B64"}}}
+            {"type":"23","config":{"script":{"code":"not-base64","encoding":"B64"}}}
             """);
 
         result.IsValid.ShouldBeFalse();
@@ -84,7 +84,7 @@ public sealed class PythonTaskComponentValidatorTests
     {
         var result = Validate("""
             {
-              "type":"22",
+              "type":"23",
               "config":{
                 "script":{
                   "location":"/opt/workflow/task.py",

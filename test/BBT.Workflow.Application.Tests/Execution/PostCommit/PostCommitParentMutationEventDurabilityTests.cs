@@ -14,7 +14,6 @@ using BBT.Aether.MultiSchema;
 using BBT.Aether.Uow;
 using BBT.Aether.Uow.EntityFrameworkCore;
 using BBT.Workflow.BackgroundJobs;
-using BBT.Workflow.DefinitionContext;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.Pipeline;
@@ -164,7 +163,7 @@ public sealed class PostCommitParentMutationEventDurabilityTests
             });
 
             var repository = Substitute.For<IInstanceRepository>();
-            repository.FindWithAllCorrelationsAndDataAsync(authoritative.Id, Arg.Any<CancellationToken>())
+            repository.FindForPostCommitSettlementAsync(authoritative.Id, Arg.Any<CancellationToken>())
                 .Returns(authoritative);
             repository.UpdateAsync(authoritative, true, Arg.Any<CancellationToken>())
                 .Returns(async _ =>
@@ -182,13 +181,10 @@ public sealed class PostCommitParentMutationEventDurabilityTests
 
             var uowManager = Substitute.For<IUnitOfWorkManager>();
             uowManager.Begin(Arg.Any<UnitOfWorkOptions>()).Returns(uow);
-            var workflowContext = Substitute.For<IWorkflowContext>();
-            workflowContext.Workflow.Returns(CreateWorkflow());
             var service = new PostCommitParentMutationService(
                 uowManager,
                 repository,
                 statusLock,
-                workflowContext,
                 Substitute.For<IStateNotificationScheduler>(),
                 NullLogger<PostCommitParentMutationService>.Instance);
             var snapshot = new PostCommitParentSnapshot(
@@ -201,7 +197,8 @@ public sealed class PostCommitParentMutationEventDurabilityTests
                 "trace-id",
                 new Dictionary<string, string?>(),
                 new Dictionary<string, string?>(),
-                null);
+                null,
+                CreateWorkflow());
 
             return new FaultEventHarness(
                 provider,

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using BBT.Aether;
 using BBT.Aether.Domain.EntityFrameworkCore;
@@ -7,9 +8,9 @@ using BBT.Workflow.Data;
 using BBT.Workflow.DataSink;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Definitions.GraphQL;
+using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Filtering;
 using BBT.Workflow.Infrastructure.Instances;
-using BBT.Workflow.Monitoring;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Security;
 using BBT.Workflow.BackgroundJobs.Options;
@@ -23,7 +24,6 @@ namespace BBT.Workflow.Instances;
 public sealed class EfCoreInstanceRepository(
     IAetherDbContextProvider<WorkflowDbContext> dbContext,
     IServiceProvider serviceProvider,
-    IWorkflowMetrics workflowMetrics,
     IRuntimeInfoProvider runtimeInfoProvider,
     IDataSinkManager dataSinkManager,
      ICurrentSchema currentSchema,
@@ -178,6 +178,53 @@ public sealed class EfCoreInstanceRepository(
         return MarkIfPartiallyLoaded(instance);
     }
 
+    /// <inheritdoc />
+    public async Task<Instance?> FindForSubflowStartAsync(
+        Guid instanceId,
+        Guid correlationId,
+        CancellationToken cancellationToken = default)
+    {
+        var dbSet = await GetDbSetAsync();
+        var instance = await dbSet
+            .Include(i => i.DataList.Where(d => d.IsLatest))
+            .Include(i => i.ChildCorrelations.Where(c => c.Id == correlationId))
+            .AsSplitQuery()
+            .FirstOrDefaultAsync(i => i.Id == instanceId, cancellationToken);
+        instance?.MarkDataPartiallyLoaded();
+        return instance;
+    }
+
+    /// <inheritdoc />
+    public async Task<Instance?> FindForSubflowCompletionAsync(
+        Guid instanceId,
+        Guid subInstanceId,
+        CancellationToken cancellationToken = default)
+    {
+        var dbSet = await GetDbSetAsync();
+        var instance = await dbSet
+            .Include(i => i.DataList.Where(d => d.IsLatest))
+            .Include(i => i.ChildCorrelations.Where(c => c.SubFlowInstanceId == subInstanceId))
+            .AsSplitQuery()
+            .FirstOrDefaultAsync(i => i.Id == instanceId, cancellationToken);
+        instance?.MarkDataPartiallyLoaded();
+        return instance;
+    }
+
+    /// <inheritdoc />
+    public async Task<Instance?> FindForPostCommitSettlementAsync(
+        Guid instanceId,
+        CancellationToken cancellationToken = default)
+    {
+        var dbSet = await GetDbSetAsync();
+        var instance = await dbSet
+            .Include(i => i.DataList.Where(d => d.IsLatest))
+            .Include(i => i.ChildCorrelations.Where(c => !c.IsCompleted))
+            .AsSplitQuery()
+            .FirstOrDefaultAsync(i => i.Id == instanceId, cancellationToken);
+        instance?.MarkDataPartiallyLoaded();
+        return instance;
+    }
+
     /// <summary>
     /// Inserts a new instance and automatically records metrics
     /// </summary>
@@ -188,7 +235,6 @@ public sealed class EfCoreInstanceRepository(
 
         // Database metrics are automatically recorded by WorkflowDatabaseInterceptor
         // Only record business-specific instance metrics here
-        workflowMetrics.RecordInstanceCreated(entity.Flow, runtimeInfoProvider.Domain);
 
         // Transfer to registered data sinks if any
         try
@@ -246,11 +292,156 @@ public sealed class EfCoreInstanceRepository(
     // Transaction metrics are now automatically handled by WorkflowDatabaseInterceptor
     // No need for manual transaction tracking helpers
 
+    /// <inheritdoc />
+    public async Task<bool> TryMarkBusyAsync(Guid instanceId, CancellationToken cancellationToken = default)
+        => await TryTransitionStatusAsync(instanceId, InstanceStatus.Active, InstanceStatus.Busy, cancellationToken);
+
+    /// <inheritdoc />
+    public async Task<bool> TryReleaseBusyAsync(Guid instanceId, CancellationToken cancellationToken = default)
+        => await TryTransitionStatusAsync(instanceId, InstanceStatus.Busy, InstanceStatus.Active, cancellationToken);
+
+    /// <inheritdoc />
+    public async Task<bool> TryMarkBusyAsync(Instance instance, CancellationToken cancellationToken = default)
+    {
+        if (!await TryTransitionStatusAsync(
+                instance.Id, InstanceStatus.Active, InstanceStatus.Busy, cancellationToken))
+        {
+            return false;
+        }
+
+        instance.Busy();
+        await AlignStatusBaselineAsync(instance);
+        return true;
+    }
+
+    /// <inheritdoc />
+    public async Task<bool> TryReleaseBusyAsync(Instance instance, CancellationToken cancellationToken = default)
+    {
+        if (!await TryTransitionStatusAsync(
+                instance.Id, InstanceStatus.Busy, InstanceStatus.Active, cancellationToken))
+        {
+            return false;
+        }
+
+        instance.Active();
+        await AlignStatusBaselineAsync(instance);
+        return true;
+    }
+
+    /// <summary>
+    /// The shared CAS: guard in the WHERE, single UPDATE, no aggregate load. ModifiedAt is set
+    /// explicitly because ExecuteUpdate bypasses the audit interceptor — without it the computed
+    /// LastTouchedAt column would stop advancing. ModifiedBy is deliberately NOT re-stamped: a
+    /// Busy flip is a system operation (same rule as InstanceJobs.MarkAsProcessedAsync).
+    /// </summary>
+    private async Task<bool> TryTransitionStatusAsync(
+        Guid instanceId,
+        InstanceStatus expected,
+        InstanceStatus next,
+        CancellationToken cancellationToken)
+    {
+        var affected = await (await GetDbSetAsync())
+            .Where(i => i.Id == instanceId && i.Status == expected)
+            .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(i => i.Status, next)
+                    .SetProperty(i => i.ModifiedAt, DateTime.UtcNow),
+                cancellationToken);
+
+        if (affected != 1)
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// After a set-based status flip on a change-tracked aggregate, the tracker's snapshot still
+    /// carries the OLD status while the in-memory mutation above set the NEW one — a later
+    /// SaveChanges in the same unit of work would then write the status a second time. Aligning
+    /// the baseline to the current value marks the column clean; every other pending change is
+    /// left exactly as tracked. No-op for detached aggregates.
+    /// </summary>
+    private async Task AlignStatusBaselineAsync(Instance instance)
+    {
+        var dbContext = await GetDbContextAsync();
+        var entry = dbContext.Entry(instance);
+        if (entry.State == EntityState.Detached)
+        {
+            return;
+        }
+
+        var status = entry.Property(nameof(Instance.Status));
+        status.OriginalValue = instance.Status;
+        status.IsModified = false;
+    }
+
+    /// <inheritdoc />
+    public async Task ArmLongPollAckAsync(Guid instanceId, Guid token, CancellationToken cancellationToken = default)
+    {
+        await (await GetDbSetAsync())
+            .Where(i => i.Id == instanceId)
+            .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(i => i.LongPollAckToken, token)
+                    .SetProperty(i => i.ModifiedAt, DateTime.UtcNow),
+                cancellationToken);
+    }
+
+    /// <summary>
+    /// Awaits the detailed (DataList + open-correlation) query inside an
+    /// <c>Instance.Query.Prepare</c> span.
+    /// </summary>
+    /// <remarks>
+    /// Live measurement across 300 <c>Instance.Load</c> spans found the gap to their
+    /// <c>Db.SELECT</c> children almost entirely leading (mean lead 0.60ms vs. trail 0.03ms):
+    /// <c>Db.SELECT</c> is EF's command-level instrumentation (CommandExecuting→CommandExecuted)
+    /// and simply does not start until the command is issued, so everything before that —
+    /// DbContext/connection acquisition — was invisible. This span names that window so it can
+    /// be told apart from query compilation or execution; see
+    /// <c>docs/runtime/trace-span-tree.md</c> for how to read it.
+    /// <para>
+    /// Creates the span via <see cref="PipelineStepActivityHelper.StartOperationActivity"/>, which
+    /// uses the implicit-parent <see cref="ActivitySource.StartActivity(string, ActivityKind)"/>
+    /// overload so baggage is inherited by child spans.
+    /// </para>
+    /// </remarks>
+    private async Task<IQueryable<Instance>> PrepareDetailedQueryAsync()
+    {
+        using var activity = PipelineStepActivityHelper.StartOperationActivity("Instance.Query.Prepare");
+
+        return await WithDetailsAsync();
+    }
+
+    /// <summary>
+    /// The include-free variant of <see cref="FindByIdentifierAsync"/>: same id-then-key
+    /// resolution, no DataList/correlation loads. Serves GetResultAsync(includeDetails: false).
+    /// </summary>
+    private async Task<Instance?> FindLeanByIdentifierAsync(
+        string? identifier,
+        CancellationToken cancellationToken)
+    {
+        var query = await GetQueryableAsync();
+
+        if (Guid.TryParse(identifier, out var instanceId))
+        {
+            var response = await query.FirstOrDefaultAsync(p => p.Id == instanceId, cancellationToken);
+            if (response != null)
+            {
+                return MarkIfPartiallyLoaded(response);
+            }
+        }
+
+        return MarkIfPartiallyLoaded(await query
+            .Where(p => p.Key == identifier)
+            .OrderByDescending(p => p.CreatedAt)
+            .FirstOrDefaultAsync(cancellationToken));
+    }
+
     public async Task<Instance?> FindByIdentifierAsync(
         string? identifier,
         CancellationToken cancellationToken = default)
     {
-        var query = (await WithDetailsAsync())
+        var query = (await PrepareDetailedQueryAsync())
             .AsSplitQuery();
 
         if (Guid.TryParse(identifier, out var instanceId))
@@ -277,7 +468,7 @@ public sealed class EfCoreInstanceRepository(
     public async Task<Instance?> FindActiveByKeyAsync(string key,
         CancellationToken cancellationToken = default)
     {
-        var query = (await WithDetailsAsync())
+        var query = (await PrepareDetailedQueryAsync())
             .AsSplitQuery();
 
         // Only non-terminal instances occupy a key (Active or Busy). Terminal rows
@@ -290,10 +481,37 @@ public sealed class EfCoreInstanceRepository(
             .FirstOrDefaultAsync(cancellationToken));
     }
 
+    /// <inheritdoc />
+    public async Task<Instance?> FindActiveByKeyLeanAsync(string key,
+        CancellationToken cancellationToken = default)
+    {
+        // Include-free twin of FindActiveByKeyAsync for existence/status probes: same WHERE and
+        // ordering, no DataList/correlation loads.
+        var query = await GetQueryableAsync();
+
+        return MarkIfPartiallyLoaded(await query
+            .Where(i => i.Key == key
+                        && (i.Status == InstanceStatus.Active || i.Status == InstanceStatus.Busy))
+            .OrderByDescending(i => i.CreatedAt)
+            .FirstOrDefaultAsync(cancellationToken));
+    }
+
+    /// <inheritdoc />
+    public async Task<Instance?> FindLeanByIdAsync(Guid id,
+        CancellationToken cancellationToken = default)
+    {
+        // Pure PK probe: no includes, no key-string fallback. See the interface doc — the
+        // identifier resolvers' key fallback is wasted work when the caller holds a typed Guid.
+        var query = await GetQueryableAsync();
+
+        return MarkIfPartiallyLoaded(await query
+            .FirstOrDefaultAsync(i => i.Id == id, cancellationToken));
+    }
+
     public async Task<Instance?> FindByIdentifierAsReadOnlyAsync(string identifier,
         CancellationToken cancellationToken = default)
     {
-        var query = (await WithDetailsAsync())
+        var query = (await PrepareDetailedQueryAsync())
             .AsNoTracking()
             .AsSplitQuery();
 
@@ -1354,7 +1572,11 @@ public sealed class EfCoreInstanceRepository(
     public async Task<Result<Instance>> GetResultAsync(string identifier, bool includeDetails = true,
         CancellationToken cancellationToken = default)
     {
-        var instance = await FindByIdentifierAsync(identifier, cancellationToken);
+        // includeDetails used to be accepted and ignored — every caller paid the full
+        // DataList + ChildCorrelations split-query load. False now really means lean.
+        var instance = includeDetails
+            ? await FindByIdentifierAsync(identifier, cancellationToken)
+            : await FindLeanByIdentifierAsync(identifier, cancellationToken);
 
         if (instance is null)
         {
@@ -1579,25 +1801,21 @@ public sealed class EfCoreInstanceRepository(
     private async Task HandleStatusChangeMetrics(Instance entity, InstanceStatus oldStatus, InstanceStatus newStatus)
     {
         // Update status transition metrics (handles all status gauge changes)
-        workflowMetrics.UpdateInstanceStatusMetrics(entity.Flow, oldStatus.Code, newStatus.Code);
 
         // Record specific completion events with duration
         if (newStatus.Equals(InstanceStatus.Completed))
         {
             var durationSeconds = entity.Duration?.TotalSeconds;
-            workflowMetrics.RecordInstanceCompleted(entity.Flow, runtimeInfoProvider.Domain, durationSeconds);
         }
 
         // Record specific error events with duration
         if (newStatus.Equals(InstanceStatus.Faulted))
         {
             var durationSeconds = entity.Duration?.TotalSeconds;
-            workflowMetrics.RecordError("instance_faulted", "High", "Instance");
 
             // Record duration for faulted instances
             if (durationSeconds.HasValue)
             {
-                workflowMetrics.RecordInstanceDuration(entity.Flow, "Faulted", durationSeconds.Value);
             }
         }
 

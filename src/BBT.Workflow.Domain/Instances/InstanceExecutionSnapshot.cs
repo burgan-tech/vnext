@@ -30,4 +30,15 @@ public sealed record InstanceExecutionSnapshot(
 
     /// <summary>True when the instance reached a terminal Completed status.</summary>
     public bool IsCompleted => Status.Equals(InstanceStatus.Completed);
+
+    /// <summary>
+    /// True when the instance can no longer accept a transition. Mirrors
+    /// <c>Instance.IsCompleted</c>, which counts Faulted and Passive as terminal too — a caller
+    /// deciding admission from this projection instead of the aggregate must use this, not
+    /// <see cref="IsCompleted"/>, or it would admit a faulted instance.
+    /// </summary>
+    public bool IsTerminal =>
+        Status.Equals(InstanceStatus.Completed)
+        || Status.Equals(InstanceStatus.Faulted)
+        || Status.Equals(InstanceStatus.Passive);
 }

@@ -3,7 +3,6 @@ using System.Threading;
 using System.Threading.Tasks;
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
-using BBT.Workflow.Monitoring;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks.Executors;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -24,17 +23,19 @@ namespace BBT.Workflow.Tasks;
 /// </summary>
 public class TaskExecutorMappingMemoTests
 {
-    private sealed class MemoProbeExecutor(Microsoft.Extensions.Logging.ILogger logger, IWorkflowMetrics metrics, IScriptEngine scriptEngine)
-        : TaskExecutorBase<ScriptTask>(logger, metrics)
+    private sealed class MemoProbeExecutor(Microsoft.Extensions.Logging.ILogger logger, IScriptEngine scriptEngine)
+        : TaskExecutorBase<ScriptTask>(logger)
     {
         public override TaskType TaskType => TaskType.Script;
+
+        public TaskInvocationResult InvocationResult { get; init; } = new() { IsSuccess = true };
 
         public Task<IMapping> CallGetOrCompile(TaskExecutorContext context)
             => GetOrCompileMappingAsync<IMapping>(scriptEngine, context, CancellationToken.None);
 
         protected override Task<Result<TaskInvocationResult>> InvokeAsync(
             ScriptTask task, TaskExecutorContext context, CancellationToken ct)
-            => Task.FromResult(Result<TaskInvocationResult>.Ok(new TaskInvocationResult { IsSuccess = true }));
+            => Task.FromResult(Result<TaskInvocationResult>.Ok(InvocationResult));
     }
 
     [Fact]
@@ -52,7 +53,7 @@ public class TaskExecutorMappingMemoTests
 
         var context = TestTaskContexts.ScriptTaskWithMapping();
 
-        var probe = new MemoProbeExecutor(NullLogger.Instance, Mock.Of<IWorkflowMetrics>(), engine.Object);
+        var probe = new MemoProbeExecutor(NullLogger.Instance, engine.Object);
         var a = await probe.CallGetOrCompile(context);
         var b = await probe.CallGetOrCompile(context);
 
@@ -65,5 +66,26 @@ public class TaskExecutorMappingMemoTests
         await probe.CallGetOrCompile(context2);
         engine.Verify(e => e.CompileToFactoryAsync<IMapping>(
             It.IsAny<ScriptCode>(), It.IsAny<ScriptSettings?>(), It.IsAny<CancellationToken>()), Times.Exactly(2)); // memo is context-scoped
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_MaterializesRawInvocationResultOnce_ForJournalWrite()
+    {
+        var invocationResult = TaskInvocationResult.Success(
+            data: new { CustomerId = 42 },
+            statusCode: 202,
+            taskType: "Script");
+        var context = TestTaskContexts.ScriptTaskWithoutMapping();
+        var probe = new MemoProbeExecutor(NullLogger.Instance, Mock.Of<IScriptEngine>())
+        {
+            InvocationResult = invocationResult
+        };
+
+        var result = await probe.ExecuteAsync(context);
+
+        result.IsSuccess.ShouldBeTrue();
+        context.RawInvocationResult.ShouldNotBeNull();
+        context.RawInvocationResult.Json.ShouldBe(
+            System.Text.Json.JsonSerializer.Serialize(invocationResult, JsonSerializerConstants.JsonOptions));
     }
 }

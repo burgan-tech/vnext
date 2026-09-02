@@ -23,16 +23,22 @@ public class EfCoreInstanceTaskRepository(
     public async Task<InstanceTask?> FindByTransitionAndTaskAsync(
         Guid transitionId,
         string taskId,
+        TaskTrigger taskTrigger,
+        int order,
         CancellationToken cancellationToken = default)
     {
         var dbSet = await GetDbSetAsync();
-        var executionKey = InstanceTask.CreateExecutionKey(transitionId, taskId);
+        var executionKey = InstanceTask.CreateExecutionKey(transitionId, taskId, taskTrigger, order);
 
-        // ExecutionKey is the deterministic hash of (TransitionId, TaskId), so any row matching
-        // the pair either carries exactly this key or a NULL key (row created before the
-        // ExecutionKey migration). Filtering on the key lets the planner resolve the common case
-        // through UX_InstanceTasks_ExecutionKey as a point lookup; the OR arm keeps legacy rows
-        // reachable via the (TransitionId, ...) prefix of the covering index.
+        // ExecutionKey is the deterministic hash of (TransitionId, TaskId, TaskTrigger, Order) —
+        // i.e. one OCCURRENCE, since the same task key can legitimately appear more than once in a
+        // transition (same or different hook, same or different order). Any row matching the
+        // occurrence either carries exactly this key or a NULL key (legacy row created before the
+        // ExecutionKey migration — those rows predate the trigger/order fold too, so they can only
+        // be matched by the pre-existing (TransitionId, TaskId) shape below). Filtering on the key
+        // lets the planner resolve the common case through UX_InstanceTasks_ExecutionKey as a
+        // point lookup; the OR arm keeps legacy rows reachable via the (TransitionId, ...) prefix
+        // of the covering index. Keep this legacy NULL fallback as-is.
         return await dbSet
             .Where(task => task.ExecutionKey == executionKey ||
                            (task.TransitionId == transitionId &&
@@ -99,6 +105,43 @@ public class EfCoreInstanceTaskRepository(
     }
 
     /// <inheritdoc />
+    public async Task MarkCompletedAsync(InstanceTask instanceTask, CancellationToken cancellationToken = default)
+    {
+        // The JsonData members are OwnsOne-mapped, and SetProperty cannot target an owned
+        // navigation — it must target the owned type's scalar (t.X.Json), which maps to the
+        // single jsonb column each owned instance occupies.
+        await (await GetDbSetAsync())
+            .Where(t => t.Id == instanceTask.Id)
+            .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(t => t.Status, instanceTask.Status)
+                    .SetProperty(t => t.BusinessStatus, instanceTask.BusinessStatus)
+                    .SetProperty(t => t.Response.Json, instanceTask.Response.Json)
+                    .SetProperty(t => t.Request.Json, instanceTask.Request.Json)
+                    .SetProperty(t => t.InvocationResult.Json, instanceTask.InvocationResult.Json)
+                    .SetProperty(t => t.FinishedAt, instanceTask.FinishedAt)
+                    .SetProperty(t => t.Duration, instanceTask.Duration),
+                cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async Task<List<InstanceTask>> GetByTransitionIdsAsync(
+        IReadOnlyCollection<Guid> transitionIds,
+        CancellationToken cancellationToken = default)
+    {
+        if (transitionIds.Count == 0)
+        {
+            return [];
+        }
+
+        var dbSet = await GetDbSetAsync();
+        return await dbSet
+            .AsNoTracking()
+            .Where(t => transitionIds.Contains(t.TransitionId))
+            .OrderBy(t => t.StartedAt)
+            .ToListAsync(cancellationToken);
+    }
+
+    /// <inheritdoc />
     public async Task<InstanceTask?> GetByIdAsReadOnlyAsync(
         Guid id,
         CancellationToken cancellationToken = default)
@@ -149,10 +192,21 @@ public class EfCoreInstanceTaskRepository(
     }
 
     /// <inheritdoc />
-    public async Task<List<TaskExecutionStat>> GetTaskStatsAsync(CancellationToken cancellationToken = default)
+    public async Task<List<TaskExecutionStat>> GetTaskStatsAsync(
+        DateTime? since = null,
+        CancellationToken cancellationToken = default)
     {
         var dbSet = await GetDbSetAsync();
-        var counts = await dbSet.AsNoTracking()
+        var query = dbSet.AsNoTracking();
+
+        // Bounds the aggregation's scan; served by IX_InstanceTasks_StartedAt_Brin (rows are
+        // inserted in StartedAt order, so the BRIN range map stays tiny).
+        if (since is { } lowerBound)
+        {
+            query = query.Where(t => t.StartedAt >= lowerBound);
+        }
+
+        var counts = await query
             .GroupBy(t => t.TaskId)
             .Select(g => new
             {

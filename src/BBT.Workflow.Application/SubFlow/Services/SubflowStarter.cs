@@ -250,6 +250,8 @@ public sealed class SubflowStarter(
 
         return await ResultExtensions.TryAsync<ScriptResponse?>(async ct =>
         {
+            using var scriptActivity = ScriptActivityHelper.StartExecuteActivity("subflowInputMapping");
+
             // Cast to the appropriate mapping interface and execute InputHandler
             if (subFlowConfig.Type.Code == "S")
             {

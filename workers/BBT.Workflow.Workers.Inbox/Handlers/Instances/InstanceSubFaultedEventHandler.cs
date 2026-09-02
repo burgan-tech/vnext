@@ -36,7 +36,14 @@ internal sealed class InstanceSubFaultedEventHandler(
             return;
         }
 
-        using var traceScope = EventTraceScope.Start("InstanceSubFaulted.Handle", eventData, correlationIdProvider);
+        using var traceScope = EventTraceScope.Start(
+            "InstanceSubFaulted.Handle", eventData, correlationIdProvider,
+            EventTraceMode.LinkedDelivery, envelope.Id, eventData.RearmAttempt);
+
+        // This delivery is the durable BACKUP of the post-commit terminal relay: in the normal case the
+        // relay already settled the parent and the settlement path answers AlreadySettled via the
+        // pre-lock probe. Dashboards separate primary vs backup deliveries on this tag.
+        Activity.Current?.SetTag(TelemetryConstants.TagNames.DeliveryRole, "backup");
 
         var scopeProps = new Dictionary<string, object>
         {
@@ -103,7 +110,8 @@ internal sealed class InstanceSubFaultedEventHandler(
                 // worker with an inline sync chain; idempotent guards make duplicates no-ops.
                 Sync = false,
                 TraceRoot = eventData.TraceRoot,
-                ParentTraceRoot = eventData.ParentTraceRoot
+                ParentTraceRoot = eventData.ParentTraceRoot,
+                RearmAttempt = eventData.RearmAttempt
             };
 
             var route = $"api/v1/{eventData.Domain}/workflows/{eventData.Flow}/instances/{eventData.InstanceId}/sub/fault";

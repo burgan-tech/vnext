@@ -270,6 +270,9 @@ namespace BBT.Workflow.Migrations
                         .HasDatabaseName("IX_Instances_LongPollAckToken")
                         .HasFilter("\"LongPollAckToken\" IS NOT NULL");
 
+                    b.HasIndex("CurrentState", "Status")
+                        .HasDatabaseName("IX_Instances_CurrentState_Status");
+
                     b.HasIndex("LastTouchedAt", "Id")
                         .HasDatabaseName("IX_Instances_Active_LastTouched_Id")
                         .HasFilter("\"Status\" = 'A'");
@@ -370,6 +373,10 @@ namespace BBT.Workflow.Migrations
                         .IsRequired()
                         .HasMaxLength(100)
                         .HasColumnType("character varying(100)");
+
+                    b.Property<DateTime?>("SettledAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasComment("Durable terminal settlement marker; set after blocking parent resume completes");
 
                     b.Property<string>("SubFlowCurrentState")
                         .HasMaxLength(100)
@@ -536,6 +543,14 @@ namespace BBT.Workflow.Migrations
                     b.HasIndex("JobId")
                         .IsUnique();
 
+                    b.HasIndex("Domain", "CreatedAt")
+                        .HasDatabaseName("IX_InstanceJobs_Active_Domain_CreatedAt")
+                        .HasFilter("\"IsActive\" = true");
+
+                    b.HasIndex("FlowName", "CreatedAt")
+                        .HasDatabaseName("IX_InstanceJobs_Active_Flow_CreatedAt")
+                        .HasFilter("\"IsActive\" = true");
+
                     b.HasIndex("InstanceId", "JobName")
                         .HasDatabaseName("IX_InstanceJobs_Active_Instance_JobName")
                         .HasFilter("\"IsActive\" = true");
@@ -590,6 +605,11 @@ namespace BBT.Workflow.Migrations
                         .HasFilter("\"ExecutionKey\" IS NOT NULL");
 
                     b.HasIndex("FaultedTaskId");
+
+                    b.HasIndex("StartedAt")
+                        .HasDatabaseName("IX_InstanceTasks_StartedAt_Brin");
+
+                    NpgsqlIndexBuilderExtensions.HasMethod(b.HasIndex("StartedAt"), "brin");
 
                     b.HasIndex("TransitionId", "Status")
                         .HasDatabaseName("IX_InstanceTasks_Transition_Status_Covering");
@@ -665,6 +685,11 @@ namespace BBT.Workflow.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("StartedAt")
+                        .HasDatabaseName("IX_InstanceTransitions_StartedAt_Brin");
+
+                    NpgsqlIndexBuilderExtensions.HasMethod(b.HasIndex("StartedAt"), "brin");
+
                     b.HasIndex("InstanceId", "FinishedAt")
                         .HasDatabaseName("IX_InstanceTransitions_CompletedManual")
                         .HasFilter("\"FinishedAt\" IS NOT NULL AND \"TriggerType\" = 0");
@@ -672,6 +697,8 @@ namespace BBT.Workflow.Migrations
                     b.HasIndex("InstanceId", "StartedAt")
                         .HasDatabaseName("IX_InstanceTransitions_Incomplete")
                         .HasFilter("\"FinishedAt\" IS NULL");
+
+                    b.HasIndex(new[] { "InstanceId", "StartedAt" }, "IX_InstanceTransitions_Instance_StartedAt");
 
                     b.ToTable("InstanceTransitions", "public");
                 });

@@ -1,7 +1,5 @@
 using System.Text.Json;
-using BBT.Aether.Users;
 using BBT.Workflow.Caching;
-using BBT.Workflow.CurrentUser;
 using BBT.Workflow.Definitions.Schemas;
 using BBT.Workflow.Instances;
 
@@ -14,7 +12,7 @@ namespace BBT.Workflow.Authorization;
 public sealed class SchemaFieldFilterService(
     IComponentCacheStore componentCacheStore,
     ITransitionAuthorizationManager transitionAuthorizationManager,
-    ICurrentUser currentUser) : ISchemaFieldFilterService
+    ICallerRoleResolver callerRoleResolver) : ISchemaFieldFilterService
 {
     /// <inheritdoc />
     public async Task<JsonElement?> ApplyAsync(
@@ -38,10 +36,18 @@ public sealed class SchemaFieldFilterService(
         if (pathRoleGrants.Count == 0)
             return data;
 
-        // Honor the legacy `role` header: a caller whose roles arrive only as a header must not be filtered
-        // as if role-less. This has to match how the surrounding read was authorized and cache-keyed,
-        // otherwise the same cache entry can be filled with differently-filtered bodies.
-        var callerRoles = currentUser.ResolveCallerRoles(requestContext?.Headers);
+        // The role set must match how the surrounding read was authorized and cache-keyed, otherwise
+        // the same cache entry can be filled with differently-filtered bodies — hence the shared resolver
+        // rather than a local read of the current user.
+        var callerRolesResult = await callerRoleResolver.ResolveRolesAsync(
+            requestContext?.Headers, cancellationToken);
+
+        var pathsWithRoles = new HashSet<string>(pathRoleGrants.Keys, StringComparer.Ordinal);
+
+        // Unresolvable roles prune every guarded field. This method has no failure channel, and the
+        // alternative — returning the data unfiltered — would leak exactly the fields the schema guards.
+        if (!callerRolesResult.IsSuccess)
+            return InstanceDataRoleFilter.FilterByVisiblePaths(element, pathsWithRoles, new HashSet<string>(0));
 
         // One evaluator for the whole schema: the union of every guarded path's grants decides the single
         // prefetch, and predefined/dynamic grants are then matched on the grant side per path.
@@ -52,8 +58,8 @@ public sealed class SchemaFieldFilterService(
             pathRoleGrants.SelectMany(kv => kv.Value),
             cancellationToken);
 
-        var visiblePaths = SchemaFieldVisibilityService.GetVisiblePaths(pathRoleGrants, callerRoles, evaluator);
-        var pathsWithRoles = new HashSet<string>(pathRoleGrants.Keys, StringComparer.Ordinal);
+        var visiblePaths = SchemaFieldVisibilityService.GetVisiblePaths(
+            pathRoleGrants, callerRolesResult.Value, evaluator);
         return InstanceDataRoleFilter.FilterByVisiblePaths(element, pathsWithRoles, visiblePaths);
     }
 }

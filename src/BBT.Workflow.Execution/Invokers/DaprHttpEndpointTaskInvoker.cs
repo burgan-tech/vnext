@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using BBT.Workflow.Execution.Bindings;
 using BBT.Workflow.Execution.Metrics;
+using BBT.Workflow.Execution.Services;
 using Dapr.Client;
 using Microsoft.Extensions.Logging;
 
@@ -51,7 +52,8 @@ public sealed class DaprHttpEndpointTaskInvoker(
         DaprHttpEndpointBinding binding,
         CancellationToken cancellationToken)
     {
-        var stopwatch = Stopwatch.StartNew();
+        var startTimestamp = Stopwatch.GetTimestamp();
+        var prepareActivity = InvokerActivityHelper.StartPrepareActivity(TaskType, taskKey ?? string.Empty);
 
         try
         {
@@ -69,12 +71,12 @@ public sealed class DaprHttpEndpointTaskInvoker(
             InvokerHelpers.ApplyTrustedCorrelationHeaders(request);
 
             // Use InvokeMethodWithResponseAsync to get full HTTP response including status codes
+            prepareActivity?.Dispose();
             using var response = await daprClient.InvokeMethodWithResponseAsync(request, cancellationToken);
 
             var responseHeaders = InvokerHelpers.MergeHeaders(response.Headers, response.Content.Headers);
 
             var content = await response.Content.ReadAsStringAsync(cancellationToken);
-            stopwatch.Stop();
             var responseData = InvokerHelpers.TryParseJson(content);
             
             var metadata = new Dictionary<string, object>
@@ -98,7 +100,7 @@ public sealed class DaprHttpEndpointTaskInvoker(
                     data: responseData,
                     body: content,
                     statusCode: (int)response.StatusCode,
-                    executionDurationMs: stopwatch.ElapsedMilliseconds,
+                    executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
                     taskType: TaskType,
                     headers: responseHeaders,
                     metadata: metadata)
@@ -106,7 +108,7 @@ public sealed class DaprHttpEndpointTaskInvoker(
                     error: $"HTTP {(int)response.StatusCode}: {response.ReasonPhrase}",
                     statusCode: (int)response.StatusCode,
                     body: content,
-                    executionDurationMs: stopwatch.ElapsedMilliseconds,
+                    executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
                     taskType: TaskType,
                     headers: responseHeaders,
                     data: responseData,
@@ -114,14 +116,14 @@ public sealed class DaprHttpEndpointTaskInvoker(
         }
         catch (TaskCanceledException ex) when (cancellationToken.IsCancellationRequested)
         {
-            stopwatch.Stop();
+            prepareActivity?.Dispose();
             _metrics.RecordDaprServiceInvocation(binding.EndpointName, binding.Path, "cancelled");
             logger.LogWarning("Dapr HTTP endpoint invocation was cancelled: {EndpointName}/{Path}",
                 binding.EndpointName, binding.Path);
 
             return TaskInvocationResult.Failure(
                 error: "Dapr HTTP endpoint invocation was cancelled",
-                executionDurationMs: stopwatch.ElapsedMilliseconds,
+                executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
                 taskType: TaskType,
                 metadata: new Dictionary<string, object>
                 {
@@ -133,14 +135,14 @@ public sealed class DaprHttpEndpointTaskInvoker(
         }
         catch (Exception ex)
         {
-            stopwatch.Stop();
+            prepareActivity?.Dispose();
             _metrics.RecordDaprServiceInvocation(binding.EndpointName, binding.Path, "failure");
             logger.LogError(ex, "Dapr HTTP endpoint invocation failed: {EndpointName}/{Path}",
                 binding.EndpointName, binding.Path);
 
             return TaskInvocationResult.Failure(
                 error: ex.Message,
-                executionDurationMs: stopwatch.ElapsedMilliseconds,
+                executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
                 taskType: TaskType,
                 metadata: new Dictionary<string, object>
                 {

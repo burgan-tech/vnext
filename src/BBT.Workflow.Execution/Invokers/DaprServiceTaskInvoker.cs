@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using BBT.Workflow.Execution.Bindings;
 using BBT.Workflow.Execution.Metrics;
+using BBT.Workflow.Execution.Services;
 using Dapr.Client;
 using Microsoft.Extensions.Logging;
 
@@ -51,7 +52,8 @@ public sealed class DaprServiceTaskInvoker(
         DaprServiceBinding binding,
         CancellationToken cancellationToken)
     {
-        var stopwatch = Stopwatch.StartNew();
+        var startTimestamp = Stopwatch.GetTimestamp();
+        var prepareActivity = InvokerActivityHelper.StartPrepareActivity(TaskType, taskKey ?? string.Empty);
 
         try
         {
@@ -94,12 +96,12 @@ public sealed class DaprServiceTaskInvoker(
             InvokerHelpers.ApplyTrustedCorrelationHeaders(request);
 
             // Use InvokeMethodWithResponseAsync to get full HTTP response including status codes
+            prepareActivity?.Dispose();
             using var response = await daprClient.InvokeMethodWithResponseAsync(request, cancellationToken);
 
             var responseHeaders = InvokerHelpers.MergeHeaders(response.Headers, response.Content.Headers);
 
             var content = await response.Content.ReadAsStringAsync(cancellationToken);
-            stopwatch.Stop();
             var responseData = InvokerHelpers.TryParseJson(content);
             
             var metadata = new Dictionary<string, object>
@@ -126,7 +128,7 @@ public sealed class DaprServiceTaskInvoker(
                     data: responseData,
                     body: content,
                     statusCode: (int)response.StatusCode,
-                    executionDurationMs: stopwatch.ElapsedMilliseconds,
+                    executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
                     taskType: TaskType,
                     headers: responseHeaders,
                     metadata: metadata)
@@ -134,7 +136,7 @@ public sealed class DaprServiceTaskInvoker(
                     error: $"HTTP {(int)response.StatusCode}: {response.ReasonPhrase}",
                     statusCode: (int)response.StatusCode,
                     body: content,
-                    executionDurationMs: stopwatch.ElapsedMilliseconds,
+                    executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
                     taskType: TaskType,
                     headers: responseHeaders,
                     data: responseData,
@@ -142,14 +144,14 @@ public sealed class DaprServiceTaskInvoker(
         }
         catch (TaskCanceledException ex) when (cancellationToken.IsCancellationRequested)
         {
-            stopwatch.Stop();
+            prepareActivity?.Dispose();
             _metrics.RecordDaprServiceInvocation(binding.AppId, binding.MethodName, "cancelled");
             logger.LogWarning("Dapr service invocation was cancelled: {AppId}/{MethodName}",
                 binding.AppId, binding.MethodName);
 
             return TaskInvocationResult.Failure(
                 error: "Dapr service invocation was cancelled",
-                executionDurationMs: stopwatch.ElapsedMilliseconds,
+                executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
                 taskType: TaskType,
                 metadata: new Dictionary<string, object>
                 {
@@ -162,14 +164,14 @@ public sealed class DaprServiceTaskInvoker(
         }
         catch (Exception ex)
         {
-            stopwatch.Stop();
+            prepareActivity?.Dispose();
             _metrics.RecordDaprServiceInvocation(binding.AppId, binding.MethodName, "failure");
             logger.LogError(ex, "Unexpected error during Dapr service invocation: {AppId}/{MethodName}",
                 binding.AppId, binding.MethodName);
 
             return TaskInvocationResult.Failure(
                 error: ex.Message,
-                executionDurationMs: stopwatch.ElapsedMilliseconds,
+                executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
                 taskType: TaskType,
                 metadata: new Dictionary<string, object>
                 {

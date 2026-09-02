@@ -27,6 +27,6 @@ public sealed class HandleUpdateDataDataOnlyStep : ITransitionStep
             return Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.SkipToFinalize()));
         }
 
-        return Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.Continue()));
+        return Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.ContinueNoWork()));
     }
 }

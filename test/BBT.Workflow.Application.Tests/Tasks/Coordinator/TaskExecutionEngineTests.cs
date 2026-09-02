@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -8,7 +10,6 @@ using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution.ErrorHandling;
 using BBT.Workflow.Instances;
-using BBT.Workflow.Monitoring;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks.Executors;
@@ -29,13 +30,17 @@ using BBT.Workflow.Tasks.Coordinator;
 /// and the failure-path completion persist must be fully awaited (no fire-and-forget) so it cannot
 /// race the pipeline's next DbContext write.
 /// </summary>
-public sealed class TaskExecutionEngineTests
+[Collection("TracingDetailLevel")]
+public sealed class TaskExecutionEngineTests : IDisposable
 {
+    // Literal (not TaskExecutionActivityHelper.ActivitySource.Name): reading the helper's static
+    // field inside a listener callback re-enters its type initializer mid-construction.
+    private const string TaskSourceName = "BBT.Workflow.Tasks";
+
     private readonly ITaskExecutorRegistry _executorRegistry = Substitute.For<ITaskExecutorRegistry>();
     private readonly ITaskFactory _taskFactory = Substitute.For<ITaskFactory>();
     private readonly ITaskPersistenceStrategyFactory _persistenceStrategyFactory = Substitute.For<ITaskPersistenceStrategyFactory>();
     private readonly IGuidGenerator _guidGenerator = Substitute.For<IGuidGenerator>();
-    private readonly IWorkflowMetrics _workflowMetrics = Substitute.For<IWorkflowMetrics>();
     private readonly IInstanceDataWriteService _instanceDataWriteService = Substitute.For<IInstanceDataWriteService>();
 
     // Real error-handling collaborators so boundary resolution is authentic.
@@ -43,9 +48,32 @@ public sealed class TaskExecutionEngineTests
     private readonly IErrorActionExecutor _actionExecutor = new ErrorActionExecutor(NullLogger<ErrorActionExecutor>.Instance);
     private readonly IExecutionErrorFactory _errorFactory = new ExecutionErrorFactory(new ErrorNormalizer());
 
+    private readonly ActivityListener _listener;
+    private readonly List<Activity> _startedActivities = [];
+
+    private List<Activity> StartedActivities
+    {
+        get { lock (_startedActivities) return [.. _startedActivities]; }
+    }
+
     public TaskExecutionEngineTests()
     {
         _guidGenerator.Create().Returns(_ => Guid.NewGuid());
+
+        _listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == TaskSourceName,
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) =>
+                ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStarted = a => { lock (_startedActivities) _startedActivities.Add(a); }
+        };
+        ActivitySource.AddActivityListener(_listener);
+    }
+
+    public void Dispose()
+    {
+        _listener.Dispose();
+        Activity.Current = null;
     }
 
     private TaskExecutionEngine CreateEngine() => new(
@@ -53,7 +81,6 @@ public sealed class TaskExecutionEngineTests
         _taskFactory,
         _persistenceStrategyFactory,
         _guidGenerator,
-        _workflowMetrics,
         _boundaryResolver,
         _actionExecutor,
         _errorFactory,
@@ -137,7 +164,7 @@ public sealed class TaskExecutionEngineTests
             .Returns(Result<ITaskExecutor>.Fail(new Error("500", "no executor registered")));
 
         var strategy = Substitute.For<ITaskPersistenceStrategy>();
-        strategy.HandleCreationAsync(Arg.Any<InstanceTask>(), Arg.Any<CancellationToken>())
+        strategy.HandleCreationAsync(Arg.Any<InstanceTask>(), Arg.Any<TaskTrigger>(), Arg.Any<int>(), Arg.Any<bool>(), Arg.Any<CancellationToken>())
             .Returns(callInfo => callInfo.Arg<InstanceTask>());
         strategy.HandleCompletionAsync(Arg.Any<InstanceTask>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromException(new InvalidOperationException("journal write failed")));
@@ -240,6 +267,36 @@ public sealed class TaskExecutionEngineTests
     }
 
     /// <summary>
+    /// Pins the journal persist spans (<c>Task.Journal.Create</c> / <c>Task.Journal.Complete</c>)
+    /// added for trace readability around the two persistence calls in
+    /// <c>TaskExecutionEngine.ExecuteCoreAsync</c>, plus the <c>vnext.task.trigger</c> tag stamped
+    /// on the ambient <c>Task.Execute.{key}</c> span in <c>ExecuteAsync</c>. <c>Task.Execute.{key}</c>
+    /// itself comes from Aether's <c>[Trace]</c> aspect, which is outside this listener's source, so
+    /// the trigger tag is asserted on a manually-started ambient activity standing in for it.
+    /// </summary>
+    [Fact]
+    public async Task Successful_execution_emits_journal_spans_and_trigger_tag()
+    {
+        var task = WorkflowTaskFactory.CreateHttpTask("mock-api");
+        ArrangeSuccessfulExecution(task);
+        var onExecute = OnExecuteTask.Create(1, task, ScriptCode.FromNative(string.Empty));
+
+        using var ambient = new Activity("test-root").Start();
+
+        var result = await CreateEngine().ExecuteAsync(
+            onExecute, Guid.NewGuid(), TaskTrigger.OnExecute, TaskExecutionOrigin.Flow,
+            CreateScriptContext(), CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+
+        var names = StartedActivities.Select(a => a.OperationName).ToList();
+        names.ShouldContain("Task.Journal.Create");
+        names.ShouldContain("Task.Journal.Complete");
+
+        ambient.GetTagItem("vnext.task.trigger").ShouldBe("OnExecute");
+    }
+
+    /// <summary>
     /// Additive guarantee: the options-less overload keeps writing instance data exactly as before.
     /// This is the control for <see cref="ExecuteAsync_WithSuppressDataApply_Should_Not_Write_Instance_Data"/> —
     /// without it, that test would also pass if the data-apply path were simply unreachable.
@@ -296,7 +353,7 @@ public sealed class TaskExecutionEngineTests
             .Returns(Result<ITaskExecutor>.Ok(executor));
 
         var strategy = Substitute.For<ITaskPersistenceStrategy>();
-        strategy.HandleCreationAsync(Arg.Any<InstanceTask>(), Arg.Any<CancellationToken>())
+        strategy.HandleCreationAsync(Arg.Any<InstanceTask>(), Arg.Any<TaskTrigger>(), Arg.Any<int>(), Arg.Any<bool>(), Arg.Any<CancellationToken>())
             .Returns(callInfo => callInfo.Arg<InstanceTask>());
         UsePersistenceStrategy(strategy);
 
@@ -315,7 +372,8 @@ public sealed class TaskExecutionEngineTests
         result.IsSuccess.ShouldBeTrue();
         await _taskFactory.DidNotReceiveWithAnyArgs().CreateExecutionTaskAsync(default!, default);
         await strategy.Received().HandleCreationAsync(
-            Arg.Is<InstanceTask>(t => t.TaskId == "fan-out-docs#3"), Arg.Any<CancellationToken>());
+            Arg.Is<InstanceTask>(t => t.TaskId == "fan-out-docs#3"),
+            TaskTrigger.OnEntry, 1, Arg.Any<bool>(), Arg.Any<CancellationToken>());
 
         // The prepared instance — not a factory-loaded one — is what actually reached the executor.
         await executor.Received(1).ExecuteAsync(
@@ -437,6 +495,84 @@ public sealed class TaskExecutionEngineTests
     }
 
     /// <summary>
+    /// Production regression: <c>Npgsql.PostgresException 23505</c> on
+    /// <c>UX_InstanceTasks_ExecutionKey</c> ("online_document_subprocess", FanOut-driven same-domain
+    /// subprocesses with a per-item Retry boundary on a fresh transition record). Attempt 1 legitimately
+    /// skips the journal idempotency probe (<see cref="TaskEngineExecutionOptions.SkipJournalProbe"/> is
+    /// true for a transition record this pipeline run just inserted, so no prior row can exist). But the
+    /// engine forwarded that SAME <see cref="TaskEngineExecutionOptions"/> instance, unchanged, into every
+    /// retry attempt — so the retry also skipped the probe and re-inserted a journal row keyed on the same
+    /// <c>ExecutionKey</c> (SHA256 of transitionId+taskId+trigger+order), colliding with attempt 1's
+    /// row under the filtered unique index. Both <see cref="TaskEngineExecutionOptions.SkipJournalProbe"/> and
+    /// <see cref="ITaskPersistenceStrategy.HandleCreationAsync"/>'s <c>skipLookup</c> parameter document
+    /// that only the FIRST attempt may skip the probe — from the retry onward the probe must run, since
+    /// it is what finds and reuses the previous attempt's row instead of inserting a duplicate.
+    /// </summary>
+    [Fact]
+    public async Task ExecuteAsync_WhenRetrying_Should_Restore_TheJournalProbe()
+    {
+        var task = WorkflowTaskFactory.CreateHttpTask("mock-api");
+        _taskFactory.CreateExecutionTaskAsync(Arg.Any<IReference>(), Arg.Any<CancellationToken>())
+            .Returns(Result<WorkflowTask>.Ok(task));
+
+        var executor = Substitute.For<ITaskExecutor>();
+        var callCount = 0;
+        executor.ExecuteAsync(Arg.Any<TaskExecutorContext>(), Arg.Any<CancellationToken>())
+            .Returns(_ =>
+            {
+                callCount++;
+                return callCount == 1
+                    ? Result<StandardTaskResponse>.Fail(new Error("500", "transient boom"))
+                    : Result<StandardTaskResponse>.Ok(new StandardTaskResponse
+                    {
+                        IsSuccess = true,
+                        StatusCode = 200,
+                        Data = new Dictionary<string, object> { ["result"] = "ok" }
+                    });
+            });
+        _executorRegistry.GetExecutor(Arg.Any<TaskType>())
+            .Returns(Result<ITaskExecutor>.Ok(executor));
+
+        var skipLookupCalls = new List<bool>();
+        var strategy = Substitute.For<ITaskPersistenceStrategy>();
+        strategy.HandleCreationAsync(Arg.Any<InstanceTask>(), Arg.Any<TaskTrigger>(), Arg.Any<int>(), Arg.Any<bool>(), Arg.Any<CancellationToken>())
+            .Returns(callInfo =>
+            {
+                skipLookupCalls.Add(callInfo.ArgAt<bool>(3));
+                return Task.FromResult(callInfo.Arg<InstanceTask>());
+            });
+        UsePersistenceStrategy(strategy);
+
+        // Wildcard Retry rule with no delay/jitter: exactly one retry (two attempts total),
+        // without the test actually sleeping.
+        var errorBoundary = ErrorBoundary.Builder()
+            .OnErrorRetry(new RetryPolicy
+            {
+                MaxRetries = 1,
+                InitialDelay = TimeSpan.FromMilliseconds(1),
+                UseJitter = false
+            })
+            .Build();
+
+        var onExecute = OnExecuteTask.Create(1, task, ScriptCode.FromNative(string.Empty), errorBoundary);
+
+        // The fresh-transition-record option: attempt 1 is allowed to skip the probe.
+        var options = new TaskEngineExecutionOptions { SkipJournalProbe = true };
+
+        var result = await CreateEngine().ExecuteAsync(
+            onExecute, Guid.NewGuid(), TaskTrigger.OnExecute, TaskExecutionOrigin.Flow,
+            CreateScriptContext(), options, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue("the retry should succeed on the second attempt");
+        skipLookupCalls.Count.ShouldBe(2, "one journal-creation call per attempt");
+        skipLookupCalls[0].ShouldBeTrue(
+            "attempt 1 is the only one that can know no journal row exists yet - the perf win must survive");
+        skipLookupCalls[1].ShouldBeFalse(
+            "from the retry onward the probe must return - it is what finds and reuses attempt 1's row " +
+            "instead of inserting a second one under the same ExecutionKey (UX_InstanceTasks_ExecutionKey)");
+    }
+
+    /// <summary>
     /// B8 regression: the audit request stored on <see cref="InstanceTask.Request"/> carries a task
     /// REFERENCE (key/version/domain/flow/type), not the full task definition. Guards against a
     /// regression back to embedding the whole <see cref="WorkflowTask"/> (including mapping/config)
@@ -499,6 +635,68 @@ public sealed class TaskExecutionEngineTests
     }
 
     /// <summary>
+    /// Production regression (UX_InstanceTasks_ExecutionKey 23505): the fresh-transition-record
+    /// guarantee only covers the FIRST attempt. The error-aware retry loop re-executes the same
+    /// (TransitionId, TaskId) identity, so every retry attempt must run the journal idempotency
+    /// probe again (skipLookup=false) and reuse attempt #1's row — keeping the skip would insert
+    /// a second row with the same ExecutionKey.
+    /// </summary>
+    [Fact]
+    public async Task ExecuteAsync_WithFreshTransitionRecordAndRetry_ShouldProbeJournalOnRetryAttempts()
+    {
+        var task = WorkflowTaskFactory.CreateHttpTask("mock-api");
+        _taskFactory.CreateExecutionTaskAsync(Arg.Any<IReference>(), Arg.Any<CancellationToken>())
+            .Returns(Result<WorkflowTask>.Ok(task));
+
+        var executor = Substitute.For<ITaskExecutor>();
+        executor.ExecuteAsync(Arg.Any<TaskExecutorContext>(), Arg.Any<CancellationToken>())
+            .Returns(Result<StandardTaskResponse>.Fail(new Error("500", "transient boom")));
+        _executorRegistry.GetExecutor(Arg.Any<TaskType>())
+            .Returns(Result<ITaskExecutor>.Ok(executor));
+
+        var strategy = new SkipLookupRecordingPersistenceStrategy();
+        UsePersistenceStrategy(strategy);
+
+        var errorBoundary = ErrorBoundary.WithRules(new ErrorHandlerRule
+        {
+            Action = ErrorAction.Retry,
+            ErrorCodes = ["*"],
+            Priority = 1,
+            RetryPolicy = new RetryPolicy { MaxRetries = 1, UseJitter = false, InitialDelay = TimeSpan.Zero }
+        });
+        var onExecute = OnExecuteTask.Create(1, task, ScriptCode.FromNative(string.Empty), errorBoundary);
+
+        await CreateEngine().ExecuteAsync(
+            onExecute, Guid.NewGuid(), TaskTrigger.OnEntry, TaskExecutionOrigin.Flow,
+            CreateScriptContext(), TaskEngineExecutionOptions.FreshTransitionRecord, CancellationToken.None);
+
+        // Attempt #1 may skip the probe (fresh record); every retry attempt must probe and reuse.
+        strategy.SkipLookupCalls.Count.ShouldBe(2);
+        strategy.SkipLookupCalls[0].ShouldBeTrue();
+        strategy.SkipLookupCalls[1].ShouldBeFalse();
+    }
+
+    /// <summary>
+    /// Test double recording the <c>skipLookup</c> argument of every creation persist, so the
+    /// fresh-record retry regression test can pin the per-attempt probe decision.
+    /// </summary>
+    private sealed class SkipLookupRecordingPersistenceStrategy : ITaskPersistenceStrategy
+    {
+        public List<bool> SkipLookupCalls { get; } = [];
+
+        public bool CanHandle(TaskExecutionOrigin origin) => true;
+
+        public Task<InstanceTask> HandleCreationAsync(InstanceTask instanceTask, TaskTrigger taskTrigger, int order, bool skipLookup = false, CancellationToken cancellationToken = default)
+        {
+            SkipLookupCalls.Add(skipLookup);
+            return Task.FromResult(instanceTask);
+        }
+
+        public Task HandleCompletionAsync(InstanceTask instanceTask, CancellationToken cancellationToken = default)
+            => Task.CompletedTask;
+    }
+
+    /// <summary>
     /// Test double that records whether the completion persist ran to completion, with an
     /// optional delay so an un-awaited (fire-and-forget) call is observably incomplete when
     /// ExecuteAsync returns.
@@ -510,7 +708,7 @@ public sealed class TaskExecutionEngineTests
 
         public bool CanHandle(TaskExecutionOrigin origin) => true;
 
-        public Task<InstanceTask> HandleCreationAsync(InstanceTask instanceTask, CancellationToken cancellationToken = default)
+        public Task<InstanceTask> HandleCreationAsync(InstanceTask instanceTask, TaskTrigger taskTrigger, int order, bool skipLookup = false, CancellationToken cancellationToken = default)
             => Task.FromResult(instanceTask);
 
         public async Task HandleCompletionAsync(InstanceTask instanceTask, CancellationToken cancellationToken = default)
@@ -533,7 +731,7 @@ public sealed class TaskExecutionEngineTests
 
         public bool CanHandle(TaskExecutionOrigin origin) => true;
 
-        public Task<InstanceTask> HandleCreationAsync(InstanceTask instanceTask, CancellationToken cancellationToken = default)
+        public Task<InstanceTask> HandleCreationAsync(InstanceTask instanceTask, TaskTrigger taskTrigger, int order, bool skipLookup = false, CancellationToken cancellationToken = default)
             => Task.FromResult(instanceTask);
 
         public Task HandleCompletionAsync(InstanceTask instanceTask, CancellationToken cancellationToken = default)

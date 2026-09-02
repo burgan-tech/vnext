@@ -9,7 +9,6 @@ using BBT.Workflow.Execution.Bindings;
 using BBT.Workflow.Gateway;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
-using BBT.Workflow.Monitoring;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks.Mapping;
@@ -44,9 +43,8 @@ public sealed class SubProcessTaskExecutor : TriggerTaskExecutorBase<SubProcessT
         IGuidGenerator guidGenerator,
         IConfiguration configuration,
         IDomainDiscoveryResolver endpointResolver,
-        ILogger<SubProcessTaskExecutor> logger,
-        IWorkflowMetrics metrics)
-        : base(scriptEngine, runtimeInfoProvider, remoteInvoker, logger, metrics)
+        ILogger<SubProcessTaskExecutor> logger)
+        : base(scriptEngine, runtimeInfoProvider, remoteInvoker, logger)
     {
         _instanceCommandGateway = instanceCommandGateway;
         _instanceRepository = instanceRepository;
@@ -416,7 +414,12 @@ public sealed class SubProcessTaskExecutor : TriggerTaskExecutorBase<SubProcessT
                 var instanceId = context.ScriptContext.Instance.Id;
                 using var gate = await InstanceWriteGate.AcquireAsync(instanceId, ct);
 
-                var trackedInstance = await _instanceRepository.GetAsync(instanceId, true, ct);
+                // Correlation-only shape: AddCorrelation needs the correlation navigation and
+                // nothing else — GetAsync(id, includeDetails: true) also dragged the full
+                // DataList in through a single cartesian JOIN.
+                var trackedInstance = await _instanceRepository.FindWithAllCorrelationsAsync(instanceId, ct)
+                    ?? throw new InvalidOperationException(
+                        $"Instance {instanceId} not found while creating the SubProcess correlation");
                 trackedInstance.AddCorrelation(correlation);
                 await _instanceRepository.UpdateAsync(trackedInstance, true, ct);
             },

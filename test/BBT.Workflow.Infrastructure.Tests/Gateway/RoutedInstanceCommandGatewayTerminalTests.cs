@@ -7,7 +7,6 @@ using BBT.Aether.MultiSchema;
 using BBT.Aether.Results;
 using BBT.Aether.Uow;
 using BBT.Workflow.Caching;
-using BBT.Workflow.DefinitionContext;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Gateway;
 using BBT.Workflow.Instances;
@@ -160,7 +159,6 @@ public sealed class RoutedInstanceCommandGatewayTerminalTests
         var services = new ServiceCollection();
         services.AddSingleton(schema);
         services.AddSingleton(cacheStore);
-        services.AddSingleton(Substitute.For<IWorkflowContext>());
         services.AddSingleton(cancellationService);
         return services;
     }
@@ -175,7 +173,6 @@ public sealed class RoutedInstanceCommandGatewayTerminalTests
         var services = new ServiceCollection();
         services.AddSingleton(schema);
         services.AddSingleton(cacheStore);
-        services.AddSingleton(Substitute.For<IWorkflowContext>());
         return services;
     }
 

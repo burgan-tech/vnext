@@ -2,7 +2,6 @@ using System.Diagnostics;
 using BBT.Aether.BackgroundJob;
 using BBT.Aether.Guids;
 using BBT.Aether.Results;
-using BBT.Aether.Users;
 using BBT.Workflow.Authorization;
 using BBT.Workflow.CurrentUser;
 using BBT.Workflow.BackgroundJobs.Handlers;
@@ -29,7 +28,7 @@ public sealed class HandleLongPollTerminationStep(
     IBackgroundJobService backgroundJobService,
     IGuidGenerator guidGenerator,
     ITransitionAuthorizationManager transitionAuthorizationManager,
-    ICurrentUser currentUser,
+    ICallerRoleResolver callerRoleResolver,
     ILogger<HandleLongPollTerminationStep> logger) : ITransitionStep
 {
     /// <inheritdoc />
@@ -41,7 +40,7 @@ public sealed class HandleLongPollTerminationStep(
     {
         if (!IsApplicable(context))
         {
-            return Result<StepOutcome>.Ok(StepOutcome.Continue());
+            return Result<StepOutcome>.Ok(StepOutcome.ContinueNoWork());
         }
 
         // Role gate: the long-poll stop belongs to the role that drove the transition into this state.
@@ -51,12 +50,16 @@ public sealed class HandleLongPollTerminationStep(
         // signal and the acknowledge check, so arm → signal → ack all agree on the owning role.
         if (!await OwnsLongPollAsync(context, cancellationToken))
         {
-            return Result<StepOutcome>.Ok(StepOutcome.Continue());
+            return Result<StepOutcome>.Ok(StepOutcome.ContinueNoWork());
         }
 
         var token = guidGenerator.Create();
+        // In-memory arm keeps the pipeline's aggregate consistent; the persistence is ONE
+        // set-based UPDATE of the token column instead of saving the whole aggregate. The full
+        // save's incidental flush of other pending changes is covered by the job insert below
+        // (autoSave: true).
         context.Instance.ArmLongPollAck(token);
-        await instanceRepository.UpdateAsync(context.Instance, true, cancellationToken);
+        await instanceRepository.ArmLongPollAckAsync(context.InstanceId, token, cancellationToken);
 
         await ScheduleFallbackAsync(context, token, cancellationToken);
 
@@ -92,6 +95,11 @@ public sealed class HandleLongPollTerminationStep(
     /// No roles configured → applies to all (every caller owns it). Otherwise the caller's role(s)
     /// must satisfy <c>interaction.longPoll.roles</c> (same grant used by the State function signal
     /// and the acknowledge check; DENY-wins / allowlist semantics, predefined + dynamic roles honored).
+    /// <para>
+    /// When the role provider cannot answer, this returns false rather than failing the step. Arming
+    /// the pause is the privileged outcome here — not arming it is the closed direction, and it keeps
+    /// a provider outage from faulting in-flight instances, which propagating the failure would do.
+    /// </para>
     /// </summary>
     private async Task<bool> OwnsLongPollAsync(
         TransitionExecutionContext context,
@@ -101,10 +109,16 @@ public sealed class HandleLongPollTerminationStep(
         if (roles is not { Count: > 0 })
             return true;
 
-        var callerRoles = currentUser.ResolveCallerRoles(context.Headers);
+        var callerRoles = await callerRoleResolver.ResolveRolesAsync(context.Headers, cancellationToken);
+        if (!callerRoles.IsSuccess)
+        {
+            logger.LongPollOwnershipUndeterminedRoles(context.InstanceId, context.Target!.Key);
+            return false;
+        }
+
         var requestContext = new AuthorizationRequestContext(context.Headers, null, context.RouteValues);
         return await transitionAuthorizationManager.IsAnyRoleAllowedForGrantsAsync(
-            callerRoles, roles, context.Instance, requestContext, cancellationToken);
+            callerRoles.Value, roles, context.Instance, requestContext, cancellationToken);
     }
 
     /// <summary>

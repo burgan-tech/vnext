@@ -1,16 +1,12 @@
 using BBT.Aether.MultiSchema;
 using BBT.Workflow.Caching;
 using BBT.Workflow.Data;
-using BBT.Workflow.DefinitionContext;
 using BBT.Workflow.Execution.PostCommit;
 using BBT.Workflow.Infrastructure.DataSink;
 using BBT.Workflow.Infrastructure.Execution.PostCommit;
-using BBT.Workflow.Infrastructure.HostedServices;
 using BBT.Workflow.Infrastructure.Security;
 using BBT.Workflow.Infrastructure.Scripting;
 using BBT.Workflow.Instances;
-using BBT.Workflow.Instances.Events;
-using BBT.Workflow.Monitoring;
 using BBT.Workflow.Remote.Extensions;
 using BBT.Workflow.Schemas;
 using BBT.Workflow.Security;
@@ -18,6 +14,7 @@ using BBT.Workflow.Scripting;
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using BBT.Workflow.Authorization.Extensions;
 
 namespace Microsoft.Extensions.DependencyInjection;
 
@@ -87,11 +84,6 @@ public static class WorkflowInfrastructureModuleServiceCollectionExtensions
         services.AddScoped<ISchemaValidator, SchemaValidator>();
         
         // Explicit InstanceData persist path (per-instance FOR UPDATE lock + versioning).
-        // The service reads IWorkflowContext for master-schema validation; register the default
-        // scoped holder here so non-HTTP hosts (workers, DbMigrator) that only call this module
-        // can construct the service — in those hosts the context simply stays empty and
-        // validation is skipped. TryAdd keeps the API hosts' own registration authoritative.
-        services.TryAddScoped<IWorkflowContext, WorkflowContext>();
         services.AddScoped<IInstanceDataWriteService, InstanceDataWriteService>();
 
         // You can register your repositories here.
@@ -102,19 +94,16 @@ public static class WorkflowInfrastructureModuleServiceCollectionExtensions
         services.AddScoped<IInstanceJobRepository, EfCoreInstanceJobRepository>();
         services.AddScoped<IInstanceActionRepository, EfCoreInstanceActionRepository>();
 
+        // Named HTTP clients for the external HTTP task executor (issue #399) — concrete
+        // transport, so it lives here rather than in the Application layer that consumes it.
+        services.AddExternalHttpTaskClients();
+
         // Remote vnext api
         services.AddVNextApiServices();
+        services.AddCallerRoleResolver(services.GetConfiguration());
         
         // Instance Gateways - route between local and remote execution
         services.AddInstanceGatewayServices();
-        
-        // Monitoring
-        services.AddSingleton<IWorkflowMetrics, PrometheusWorkflowMetrics>();
-        services.AddSingleton<WorkflowDatabaseInterceptor>();
-        services.AddSingleton<WorkflowTransactionInterceptor>();
-        
-        // Hosted Services
-        services.AddHostedService<SystemHealthMonitoringHostedService>();
         
         // DataSink Integration (no sinks are registered by default; concrete sinks plug in here)
         services.AddDataSinkServices();
@@ -152,21 +141,44 @@ public static class WorkflowInfrastructureModuleServiceCollectionExtensions
     }
 
     /// <summary>
-    /// Registers workflow event hooks that execute before domain events are published.
-    /// These hooks depend on application-layer services (<see cref="BBT.Workflow.Instances.IInstanceCancellationService"/>)
-    /// and a configured event bus (<see cref="BBT.Aether.Events.IDistributedEventBus"/>).
-    /// Call this only from hosts that register both <c>AddApplicationModule()</c> and an event bus.
-    /// Do NOT call from DbMigrator or other minimal hosts.
+    /// Registers the named HTTP clients the external HTTP task executor
+    /// (<c>BBT.Workflow.Tasks.Executors.ExternalHttpTaskInvoker</c>) sends through. Mirrors the
+    /// Execution host's <c>AddWorkflowHttpClient</c> (same client names, decompression, connection
+    /// cap, cookie policy and SSL-bypass variant) so a task behaves identically whichever host
+    /// performs the call. The 30s base timeout is overridden per request from the task's
+    /// <c>timeoutSeconds</c> by the shared <c>HttpTaskInvocation</c> core.
     /// </summary>
-    public static IServiceCollection AddWorkflowEventHooks(this IServiceCollection services)
+    private static IServiceCollection AddExternalHttpTaskClients(this IServiceCollection services)
     {
-        services.AddEventHook<InstanceSubCompletedEvent, InstanceSubCompletedEventHook>();
-        services.AddEventHook<InstanceSubFaultedEvent, InstanceSubFaultedEventHook>();
-        services.AddEventHook<InstanceSubCanceledEvent, InstanceSubCanceledEventHook>();
-        services.AddEventHook<InstanceSubStateChangedEvent, InstanceSubStateChangedEventHook>();
-        services.AddEventHook<InstanceCanceledEvent, InstanceCanceledEventHook>();
-        services.AddEventHook<InstanceCompletedCleanupEvent, InstanceCompletedCleanupEventHook>();
-        services.AddEventHook<InstanceFaultedCleanupEvent, InstanceFaultedCleanupEventHook>();
+        // Default HTTP client with SSL validation enabled
+        services.AddHttpClient(BBT.Workflow.Execution.WorkflowHttpClientNames.Default, client =>
+            {
+                client.Timeout = TimeSpan.FromSeconds(30);
+                client.MaxResponseContentBufferSize = int.MaxValue;
+                client.DefaultRequestHeaders.Add("Accept", "application/json");
+            })
+            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+            {
+                AutomaticDecompression = System.Net.DecompressionMethods.GZip | System.Net.DecompressionMethods.Deflate,
+                MaxConnectionsPerServer = 10,
+                UseCookies = false
+            });
+
+        // HTTP client with SSL validation disabled (validateSsl: false tasks)
+        services.AddHttpClient(BBT.Workflow.Execution.WorkflowHttpClientNames.NoSslValidation, client =>
+            {
+                client.Timeout = TimeSpan.FromSeconds(30);
+                client.MaxResponseContentBufferSize = int.MaxValue;
+                client.DefaultRequestHeaders.Add("Accept", "application/json");
+            })
+            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+            {
+                AutomaticDecompression = System.Net.DecompressionMethods.GZip | System.Net.DecompressionMethods.Deflate,
+                MaxConnectionsPerServer = 10,
+                UseCookies = false,
+                ServerCertificateCustomValidationCallback = (_, _, _, _) => true
+            });
+
         return services;
     }
 }

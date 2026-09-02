@@ -124,7 +124,11 @@ public sealed class MonitorInstanceQueryService(
         MonitorGetInstanceDataInput input,
         CancellationToken cancellationToken = default)
     {
-        var instance = await instanceRepository.FindByIdentifierAsReadOnlyAsync(
+        // Full-history load on purpose: this endpoint reads DataList directly for explicit
+        // versions and the version-history listing. The default detail load can be trimmed to
+        // the IsLatest row (LatestOnlyInstanceLoading), which would silently hand this method a
+        // one-entry history — the dedicated full-history path is immune to that flag.
+        var instance = await instanceRepository.FindByIdentifierWithFullHistoryAsync(
             input.Instance, cancellationToken);
 
         if (instance is null)
@@ -226,11 +230,12 @@ public sealed class MonitorInstanceQueryService(
         Dictionary<Guid, List<MonitorInstanceTaskResponse>> tasksByTransition = new();
         if (input.IncludeTasks)
         {
-            foreach (var t in transitions)
-            {
-                var tasks = await instanceTaskRepository.GetByTransitionIdAsync(t.Id, cancellationToken);
-                tasksByTransition[t.Id] = tasks.Select(MapTask).ToList();
-            }
+            // One batched query for the whole timeline instead of one per transition (N+1).
+            var allTasks = await instanceTaskRepository.GetByTransitionIdsAsync(
+                transitions.Select(t => t.Id).ToList(), cancellationToken);
+            tasksByTransition = allTasks
+                .GroupBy(t => t.TransitionId)
+                .ToDictionary(g => g.Key, g => g.Select(MapTask).ToList());
         }
 
         var items = transitions.Select(t =>
@@ -389,7 +394,9 @@ public sealed class MonitorInstanceQueryService(
         MonitorGetInstanceDataDiffInput input,
         CancellationToken cancellationToken = default)
     {
-        var instance = await instanceRepository.FindByIdentifierAsReadOnlyAsync(
+        // Full-history load: the diff addresses two arbitrary versions from DataList, so it must
+        // never run on a LatestOnly-trimmed aggregate (see GetInstanceDataAsync).
+        var instance = await instanceRepository.FindByIdentifierWithFullHistoryAsync(
             input.Instance, cancellationToken);
         if (instance is null)
             return Result<MonitorInstanceDataDiffResponse>.Fail(

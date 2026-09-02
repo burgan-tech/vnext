@@ -9,7 +9,6 @@ using BBT.Aether.Results;
 using BBT.Aether.Uow;
 using BBT.Aether.Users;
 using BBT.Workflow.Caching;
-using BBT.Workflow.DefinitionContext;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.Continuations;
@@ -17,6 +16,7 @@ using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Execution.PostCommit;
 using BBT.Workflow.Execution.Services;
 using BBT.Workflow.Instances;
+using BBT.Workflow.SubFlow;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using NSubstitute;
@@ -278,17 +278,30 @@ public sealed class TransitionRunnerPostCommitTests
 
             services.AddSingleton(currentSchema);
             services.AddSingleton(cacheStore);
-            services.AddScoped(_ => Substitute.For<IWorkflowContext>());
+            services.AddSingleton(Substitute.For<ISubflowTerminalRelay>());
             services.AddScoped(_ =>
             {
                 var probe = new CurrentUserScopeProbe();
                 var currentUser = Substitute.For<ICurrentUser>();
+
+                // Both overloads are stubbed. The SDK's ChangeFromHeaders goes through
+                // Change(BasicUserInfo) — the positional overload delegates to it — so a probe that
+                // only intercepted the positional one would record nothing and report a null user
+                // for every scope, which reads as "the user was not propagated" rather than "the
+                // test double missed the call".
+                currentUser.Change(Arg.Any<BasicUserInfo>())
+                    .Returns(call =>
+                    {
+                        probe.UserId = call.ArgAt<BasicUserInfo>(0).Id;
+                        return Substitute.For<IDisposable>();
+                    });
                 currentUser.Change(
                         Arg.Any<string?>(),
                         Arg.Any<string?>(),
                         Arg.Any<string?>(),
                         Arg.Any<string?>(),
                         Arg.Any<string[]?>(),
+                        Arg.Any<string?>(),
                         Arg.Any<string?>(),
                         Arg.Any<string?>(),
                         Arg.Any<string?>())

@@ -37,14 +37,15 @@ public sealed class StartSubflowJobHandler(
         using (logger.BeginScope(scopeProps))
         {
             // Refresh instance to get the correlation that was added during the step
-            var instanceResult = await instanceRepository.GetResultAsync(context.InstanceId.ToString(), true, cancellationToken);
-            if (!instanceResult.IsSuccess)
+            var instance = await instanceRepository.FindForSubflowStartAsync(
+                context.InstanceId,
+                job.CorrelationId,
+                cancellationToken);
+            if (instance is null)
             {
                 logger.SubFlowInstanceNotFound(context.InstanceId, job.CorrelationId);
-                return Result.Fail(instanceResult.Error);
+                return Result.Fail(WorkflowErrors.InstanceNotFound(context.InstanceId.ToString()));
             }
-
-            var instance = instanceResult.Value!;
 
             // Find the correlation that was created during the step
             var correlation = instance.ChildCorrelations.SingleOrDefault(x => x.Id == job.CorrelationId);
@@ -133,4 +134,3 @@ public sealed class StartSubflowJobHandler(
             .BuildAsync(cancellationToken);
     }
 }
-

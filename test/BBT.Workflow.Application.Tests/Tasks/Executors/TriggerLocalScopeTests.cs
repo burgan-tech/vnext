@@ -8,7 +8,6 @@ using BBT.Workflow.Discovery;
 using BBT.Workflow.Gateway;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
-using BBT.Workflow.Monitoring;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks;
@@ -78,8 +77,7 @@ public sealed class TriggerLocalScopeTests : IDisposable
             Substitute.For<IRemoteInvokerService>(),
             gateway,
             Substitute.For<IDomainDiscoveryResolver>(),
-            NullLogger<GetInstanceTaskExecutor>.Instance,
-            Substitute.For<IWorkflowMetrics>());
+            NullLogger<GetInstanceTaskExecutor>.Instance);
 
     [Fact]
     public async Task LocalInvocation_RunsInsideTriggerLocalSpan_WithTargetTags()

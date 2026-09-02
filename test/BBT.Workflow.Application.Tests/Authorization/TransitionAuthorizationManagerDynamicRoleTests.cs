@@ -49,7 +49,6 @@ public sealed class TransitionAuthorizationManagerDynamicRoleTests : IDisposable
         services.AddLogging();
         services.AddSingleton(mockUoWManager);
         services.AddSingleton(Substitute.For<BBT.Workflow.Caching.IComponentCacheStore>());
-        services.AddSingleton(Substitute.For<BBT.Workflow.DefinitionContext.IWorkflowContext>());
         _previousAmbientServiceProvider = AmbientServiceProvider.Current;
         AmbientServiceProvider.Current = services.BuildServiceProvider();
     }
