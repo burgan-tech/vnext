@@ -58,6 +58,12 @@ RUN apk add --no-cache protobuf grpc-plugins
 ENV PROTOBUF_PROTOC=/usr/bin/protoc \
     GRPC_PROTOC_PLUGIN=/usr/bin/grpc_csharp_plugin
 
+# Grpc.Tools ships glibc-linked protoc/grpc plugin binaries that cannot exec on musl —
+# point its documented env overrides at Alpine's native protobuf toolchain instead.
+RUN apk add --no-cache protobuf grpc-plugins
+ENV PROTOBUF_PROTOC=/usr/bin/protoc \
+    GRPC_PROTOC_PLUGIN=/usr/bin/grpc_csharp_plugin
+
 COPY ["common.props", "/common.props"]
 COPY ["Directory.Build.props", "/Directory.Build.props"]
 COPY ["global.json", "/global.json"]
