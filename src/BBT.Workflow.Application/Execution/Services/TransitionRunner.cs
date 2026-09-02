@@ -7,6 +7,7 @@ using BBT.Workflow.Execution.PostCommit;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Logging;
+using BBT.Workflow.SubFlow;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -156,6 +157,7 @@ public sealed class TransitionRunner(
                 var uowManager = sp.GetRequiredService<IUnitOfWorkManager>();
                 var core = sp.GetRequiredService<IWorkflowExecutionCore>();
                 var currentUser = sp.GetRequiredService<ICurrentUser>();
+                var terminalRelay = sp.GetRequiredService<ISubflowTerminalRelay>();
 
                 using (currentUser.ChangeFromHeaders(context.Headers))
                 {
@@ -178,7 +180,13 @@ public sealed class TransitionRunner(
                     {
                         await uow.CommitAsync(ct);
                     }
-                    
+
+                    // Terminal relay: subflow terminal events settle the parent IMMEDIATELY as a command —
+                    // awaited here so a sync chain's response follows the settled chain, and an async job
+                    // relays with gap ≈ 0. The outbox rows written pre-commit stay the durable record; the
+                    // Inbox handlers are the backup and ISubItemTerminalGuard absorbs the duplicate.
+                    await terminalRelay.RelayAsync(coreResult.Value!.DeferredEvents, ct);
+
                     return coreResult;
                 }
             }, cancellationToken, carrier: context);
@@ -186,7 +194,8 @@ public sealed class TransitionRunner(
 
     /// <summary>
     /// Stages deferred domain events via IDistributedEventBus before UoW commit.
-    /// Each event passes through HookedDistributedEventBus; durable hooks are registered for post-commit execution.
+    /// Each event passes through TraceStampingDistributedEventBus, which stamps trace context and
+    /// delegates — every event rides the outbox.
     /// Events include pre-extracted metadata from AddDistributedEvent time.
     /// </summary>
     private async Task PublishDeferredEventsAsync(

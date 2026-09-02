@@ -150,4 +150,10 @@ public record SubFlowFaultedInput
 
     /// <summary>The enclosing lane's anchor — where the parent resume belongs.</summary>
     public string? ParentTraceRoot { get; init; }
+
+    /// <summary>
+    /// How many times a terminal-revert has re-published this event as a durable-delivery rearm.
+    /// <c>null</c>/<c>0</c> for an original delivery. See <c>FlowCompletedInput.RearmAttempt</c>.
+    /// </summary>
+    public int? RearmAttempt { get; init; }
 }

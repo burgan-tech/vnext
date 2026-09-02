@@ -7,7 +7,6 @@ using BBT.Workflow.Infrastructure.Execution.PostCommit;
 using BBT.Workflow.Infrastructure.Security;
 using BBT.Workflow.Infrastructure.Scripting;
 using BBT.Workflow.Instances;
-using BBT.Workflow.Instances.Events;
 using BBT.Workflow.Remote.Extensions;
 using BBT.Workflow.Schemas;
 using BBT.Workflow.Security;
@@ -15,6 +14,7 @@ using BBT.Workflow.Scripting;
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using BBT.Workflow.Authorization.Extensions;
 
 namespace Microsoft.Extensions.DependencyInjection;
 
@@ -96,6 +96,7 @@ public static class WorkflowInfrastructureModuleServiceCollectionExtensions
 
         // Remote vnext api
         services.AddVNextApiServices();
+        services.AddCallerRoleResolver(services.GetConfiguration());
         
         // Instance Gateways - route between local and remote execution
         services.AddInstanceGatewayServices();
@@ -135,22 +136,4 @@ public static class WorkflowInfrastructureModuleServiceCollectionExtensions
         return services;
     }
 
-    /// <summary>
-    /// Registers workflow event hooks that execute before domain events are published.
-    /// These hooks depend on application-layer services (<see cref="BBT.Workflow.Instances.IInstanceCancellationService"/>)
-    /// and a configured event bus (<see cref="BBT.Aether.Events.IDistributedEventBus"/>).
-    /// Call this only from hosts that register both <c>AddApplicationModule()</c> and an event bus.
-    /// Do NOT call from DbMigrator or other minimal hosts.
-    /// </summary>
-    public static IServiceCollection AddWorkflowEventHooks(this IServiceCollection services)
-    {
-        services.AddEventHook<InstanceSubCompletedEvent, InstanceSubCompletedEventHook>();
-        services.AddEventHook<InstanceSubFaultedEvent, InstanceSubFaultedEventHook>();
-        services.AddEventHook<InstanceSubCanceledEvent, InstanceSubCanceledEventHook>();
-        services.AddEventHook<InstanceSubStateChangedEvent, InstanceSubStateChangedEventHook>();
-        services.AddEventHook<InstanceCanceledEvent, InstanceCanceledEventHook>();
-        services.AddEventHook<InstanceCompletedCleanupEvent, InstanceCompletedCleanupEventHook>();
-        services.AddEventHook<InstanceFaultedCleanupEvent, InstanceFaultedCleanupEventHook>();
-        return services;
-    }
 }

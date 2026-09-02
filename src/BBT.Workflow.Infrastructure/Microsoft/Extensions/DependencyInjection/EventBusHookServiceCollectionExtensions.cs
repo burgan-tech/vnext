@@ -1,48 +1,23 @@
 using BBT.Aether.Events;
-using BBT.Aether.Uow;
+using BBT.Aether.Tracing;
 using BBT.Workflow.Infrastructure.EventBus;
 using Microsoft.Extensions.Logging;
 
 namespace Microsoft.Extensions.DependencyInjection;
 
 /// <summary>
-/// Extension methods for configuring event bus with hook support.
+/// Extension methods for configuring the event bus with trace-stamping support.
 /// </summary>
 public static class EventBusHookServiceCollectionExtensions
 {
     /// <summary>
-    /// Adds the Aether event bus with hook execution support to the service collection.
-    /// This method wraps the standard Aether event bus with a decorator that executes
-    /// hooks before publishing events.
+    /// Adds the Aether event bus to the service collection, decorated with
+    /// <see cref="TraceStampingDistributedEventBus"/> so every published event carries W3C trace
+    /// context, the originating request id, and trace-lane anchors.
     /// </summary>
     /// <param name="services">The <see cref="IServiceCollection"/> to add services to.</param>
     /// <param name="configure">An action to configure event bus options.</param>
     /// <returns>The <see cref="IServiceCollection"/> so that additional calls can be chained.</returns>
-    /// <remarks>
-    /// <para>
-    /// This method internally calls <c>AddAetherEventBus</c> with the provided options,
-    /// then decorates the registered <see cref="IDistributedEventBus"/> with
-    /// <see cref="HookedDistributedEventBus"/> to enable hook execution.
-    /// </para>
-    /// <para>
-    /// Hooks are discovered via <see cref="BBT.Workflow.Events.Hooks.EventHookAttribute"/>
-    /// on event types and must be registered in the DI container to be executed.
-    /// </para>
-    /// <para>
-    /// Example usage:
-    /// <code>
-    /// services.AddEventBusWithHooks(options =>
-    /// {
-    ///     options.DefaultSource = "urn:myapp";
-    ///     options.PrefixEnvironmentToTopic = true;
-    ///     options.PubSubName = "pubsub";
-    /// });
-    /// 
-    /// // Register your hooks
-    /// services.AddScoped&lt;IEventPublishHook, MyCustomHook&gt;();
-    /// </code>
-    /// </para>
-    /// </remarks>
     /// <exception cref="ArgumentNullException">
     /// Thrown when <paramref name="services"/> is null.
     /// </exception>
@@ -63,13 +38,17 @@ public static class EventBusHookServiceCollectionExtensions
         // First, add the standard Aether event bus
         services.AddAetherEventBus(configure);
 
-        // Now decorate it with the hooked implementation
+        // Now decorate it with the trace-stamping implementation
         // We need to replace the IDistributedEventBus registration with our decorator
         services.Decorate<IDistributedEventBus>((inner, serviceProvider) =>
         {
-            var uowManager = serviceProvider.GetRequiredService<IUnitOfWorkManager>();
-            var logger = serviceProvider.GetRequiredService<ILogger<HookedDistributedEventBus>>();
-            return new HookedDistributedEventBus(inner, serviceProvider, uowManager, logger);
+            var logger = serviceProvider.GetRequiredService<ILogger<TraceStampingDistributedEventBus>>();
+            // The old HookedDistributedEventBus construction never passed this optional provider, so
+            // RequestId stamping was a permanent no-op in production. Resolving it here deliberately
+            // activates it — an additive CloudEvent extension field; consumers that don't read
+            // requestId are unaffected, and the Inbox side (EventTraceScope) already expects it.
+            var correlationIdProvider = serviceProvider.GetService<ICorrelationIdProvider>();
+            return new TraceStampingDistributedEventBus(inner, logger, correlationIdProvider);
         });
 
         return services;

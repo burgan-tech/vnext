@@ -35,7 +35,9 @@ internal sealed class ChildSubflowCancelRequestedEventHandler(
             return;
         }
 
-        using var traceScope = EventTraceScope.Start("ChildSubflowCancelRequested.Handle", eventData, correlationIdProvider);
+        using var traceScope = EventTraceScope.Start(
+            "ChildSubflowCancelRequested.Handle", eventData, correlationIdProvider,
+            EventTraceMode.ContinueTrace, envelope.Id);
 
         var scopeProps = new Dictionary<string, object>
         {

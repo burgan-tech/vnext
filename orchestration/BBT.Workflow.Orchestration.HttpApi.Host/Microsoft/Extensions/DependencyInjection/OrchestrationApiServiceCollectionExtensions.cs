@@ -37,7 +37,6 @@ public static class OrchestrationApiServiceCollectionExtensions
             .AddResultResilience(configuration)
             .AddDaprClients()
             .AddEventBus(configuration)
-            .AddWorkflowEventHooks()
             .AddDomainEventsInfrastructure()
             .AddInfrastructureRuntimeServices()
             .AddDbContext(configuration)

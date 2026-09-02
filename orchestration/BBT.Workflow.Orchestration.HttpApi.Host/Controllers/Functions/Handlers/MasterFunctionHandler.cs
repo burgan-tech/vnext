@@ -1,5 +1,6 @@
 using BBT.Aether.AspNetCore.Results;
-using BBT.Workflow.CurrentUser;
+using BBT.Aether.Results;
+using BBT.Workflow.Authorization;
 using BBT.Workflow.Definitions.Functions;
 using BBT.Workflow.Domain.Shared;
 using BBT.Workflow.Instances;
@@ -14,13 +15,20 @@ namespace BBT.Workflow.Controllers.Instances;
 /// Supports conditional GET (304 Not Modified) and sets the ETag response header.
 /// </summary>
 public sealed class MasterFunctionHandler(
-    IInstanceQueryAppService queryAppService) : IInstanceFunctionHandler
+    IInstanceQueryAppService queryAppService,
+    ICallerRoleResolver callerRoleResolver) : IInstanceFunctionHandler
 {
     public string FunctionType => FunctionTypeConst.Master;
 
     public async Task<IActionResult> HandleAsync(
         InstanceFunctionRequest request, CancellationToken cancellationToken)
     {
+        // The caller's role set comes from the configured provider, not from ICurrentUser directly:
+        // a provider failure denies the read rather than serving it as if the caller had no roles.
+        var callerRoles = await callerRoleResolver.ResolveRolesAsync(request.Headers, cancellationToken);
+        if (!callerRoles.IsSuccess)
+            return Result.Fail(callerRoles.Error).ToActionResult(request.HttpContext);
+
         var input = new GetMasterInput
         {
             Domain = request.Domain,
@@ -30,7 +38,7 @@ public sealed class MasterFunctionHandler(
             IfNoneMatch = request.IfNoneMatch,
             Headers = request.Headers,
             QueryParameters = request.QueryParameters,
-            Roles = request.CurrentUser.ResolveCallerRoles(request.Headers),
+            Roles = callerRoles.Value,
         };
 
         var result = await queryAppService.GetMasterAsync(input, cancellationToken);

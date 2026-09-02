@@ -560,6 +560,17 @@ public static class WorkflowErrors
             WorkflowErrorCodes.AuthorizationRoleDenied,
             $"Access to function '{functionKey}' is not permitted for the current roles.");
 
+    /// <summary>
+    /// The configured caller-role provider could not answer, so the caller's role set is unknown.
+    /// Maps to HTTP 403 rather than a gateway error on purpose: the outcome is that we cannot establish
+    /// what the caller may do, and the only safe reading of that is denial. Returning success with an
+    /// empty role set would silently widen access wherever a grant set is deny-only.
+    /// </summary>
+    public static Error CallerRoleResolutionFailed(string provider, string reason)
+        => Error.Forbidden(
+            WorkflowErrorCodes.CallerRoleResolutionFailed,
+            $"Caller roles could not be resolved from provider '{provider}': {reason}");
+
     #endregion
 
     #region Discovery Errors

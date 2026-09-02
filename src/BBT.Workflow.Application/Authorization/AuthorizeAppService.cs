@@ -1,8 +1,6 @@
 using BBT.Aether.Application.Services;
 using BBT.Aether.Results;
-using BBT.Aether.Users;
 using BBT.Workflow.Caching;
-using BBT.Workflow.CurrentUser;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Gateway;
 using BBT.Workflow.Instances;
@@ -15,7 +13,8 @@ namespace BBT.Workflow.Authorization;
 /// <summary>
 /// Application service for authorize and authorization matrix system functions.
 /// Evaluates role grants: DENY always wins; if no DENY match, any ALLOW match yields allowed.
-/// Uses ICurrentUser.Roles (multiple roles); if any caller role is allowed, result is allowed.
+/// The caller's role set comes from the configured provider via <see cref="ICallerRoleResolver"/>
+/// (multiple roles); if any caller role is allowed, result is allowed.
 /// When instance has active subflow, forwards authorize request to subflow via IAuthorizeGateway.
 /// For predefined roles ($InstanceStarter, $PreviousUser), matching is done against ICurrentUser.ActorUserName.
 /// </summary>
@@ -26,7 +25,7 @@ public sealed class AuthorizeAppService(
     IInstanceRepository instanceRepository,
     ITransitionAuthorizationManager transitionAuthorizationManager,
     IAuthorizeGateway authorizeGateway,
-    ICurrentUser currentUser,
+    ICallerRoleResolver callerRoleResolver,
     ILogger<AuthorizeAppService> logger) : ApplicationService(serviceProvider), IAuthorizeAppService
 {
     /// <inheritdoc />
@@ -71,9 +70,11 @@ public sealed class AuthorizeAppService(
             {
                 if (IsParentOwnedTransition(wf, transitionKey))
                 {
-                    var parentCallerRoles = GetCallerRoles(role, requestContext);
-                    var parentAllowed = await EvaluateAuthorizeAsync(wf, parentCallerRoles, transitionKey, null, instance, false, domain, workflowVersion, requestContext, cancellationToken);
-                    logger.AuthorizeRequest(domain, workflow, role, parentAllowed);
+                    var parentCallerRoles = await GetCallerRolesAsync(role, requestContext, cancellationToken);
+                    if (!parentCallerRoles.IsSuccess)
+                        return Result<AuthorizeOutput>.Fail(parentCallerRoles.Error);
+                    var parentAllowed = await EvaluateAuthorizeAsync(wf, parentCallerRoles.Value, transitionKey, null, instance, false, domain, workflowVersion, requestContext, cancellationToken);
+                    logger.AuthorizeRequest(domain, workflow, Describe(parentCallerRoles.Value), parentAllowed);
                     return Result<AuthorizeOutput>.Ok(new AuthorizeOutput { Allowed = parentAllowed });
                 }
 
@@ -82,9 +83,11 @@ public sealed class AuthorizeAppService(
                     subFlowConfig.Overrides!.Transitions!.TryGetValue(transitionKey, out var transitionOverride) &&
                     transitionOverride.Roles is { Count: > 0 })
                 {
-                    var overrideCallerRoles = GetCallerRoles(role, requestContext);
-                    var overrideAllowed = await EvaluateWithGrantsAsync(overrideCallerRoles, transitionOverride.Roles!, instance, requestContext, cancellationToken);
-                    logger.AuthorizeRequest(domain, workflow, role, overrideAllowed);
+                    var overrideCallerRoles = await GetCallerRolesAsync(role, requestContext, cancellationToken);
+                    if (!overrideCallerRoles.IsSuccess)
+                        return Result<AuthorizeOutput>.Fail(overrideCallerRoles.Error);
+                    var overrideAllowed = await EvaluateWithGrantsAsync(overrideCallerRoles.Value, transitionOverride.Roles!, instance, requestContext, cancellationToken);
+                    logger.AuthorizeRequest(domain, workflow, Describe(overrideCallerRoles.Value), overrideAllowed);
                     return Result<AuthorizeOutput>.Ok(new AuthorizeOutput { Allowed = overrideAllowed });
                 }
             }
@@ -97,18 +100,35 @@ public sealed class AuthorizeAppService(
                     subFlowConfig.Overrides!.States!.TryGetValue(subFlowCurrentState, out var stateOverride) &&
                     stateOverride.QueryRoles is { Count: > 0 })
                 {
-                    var overrideCallerRoles = GetCallerRoles(role, requestContext);
-                    var overrideAllowed = await EvaluateWithGrantsAsync(overrideCallerRoles, stateOverride.QueryRoles!, instance, requestContext, cancellationToken);
-                    logger.AuthorizeRequest(domain, workflow, role, overrideAllowed);
+                    var overrideCallerRoles = await GetCallerRolesAsync(role, requestContext, cancellationToken);
+                    if (!overrideCallerRoles.IsSuccess)
+                        return Result<AuthorizeOutput>.Fail(overrideCallerRoles.Error);
+                    var overrideAllowed = await EvaluateWithGrantsAsync(overrideCallerRoles.Value, stateOverride.QueryRoles!, instance, requestContext, cancellationToken);
+                    logger.AuthorizeRequest(domain, workflow, Describe(overrideCallerRoles.Value), overrideAllowed);
                     return Result<AuthorizeOutput>.Ok(new AuthorizeOutput { Allowed = overrideAllowed });
                 }
             }
 
             // Forward to SubFlow (functionKey, no-override transition, no-override queryRoles)
-            var resolvedForForward = GetCallerRoles(role, requestContext);
-            var roleForForward = resolvedForForward is { Count: > 0 }
-                ? string.Join(",", resolvedForForward)
+            var resolvedForForward = await GetCallerRolesAsync(role, requestContext, cancellationToken);
+            if (!resolvedForForward.IsSuccess)
+                return Result<AuthorizeOutput>.Fail(resolvedForForward.Error);
+            var roleForForward = resolvedForForward.Value is { Count: > 0 } forwardRoles
+                ? string.Join(",", forwardRoles)
                 : role;
+
+            // Only the forward is spanned, not the whole method. Everything above answered locally —
+            // parent-owned transitions, transition and queryRole overrides — and never touched the
+            // subflow. Spanning the method would report a descent that did not happen, and
+            // "this trace has no Subflow.Descend" would stop meaning "nothing descended".
+            using var descent = InstanceReadActivityHelper.StartDescendScope(
+                runtimeInfoProvider,
+                subflow.SubFlowDomain,
+                subflow.SubFlowName,
+                subflow.SubFlowInstanceId.ToString(),
+                instance!.Id.ToString(),
+                TelemetryConstants.DescentFunctions.Authorize);
+
             return await authorizeGateway.GetAuthorizeResultForInstanceAsync(
                 subflow.SubFlowDomain,
                 subflow.SubFlowName,
@@ -122,25 +142,47 @@ public sealed class AuthorizeAppService(
                 cancellationToken);
         }
 
-        var callerRoles = GetCallerRoles(role, requestContext);
-        var allowed = await EvaluateAuthorizeAsync(wf, callerRoles, transitionKey, functionKey, instance, checkQueryRoles, domain, workflowVersion, requestContext, cancellationToken);
-        logger.AuthorizeRequest(domain, workflow, role, allowed);
+        var callerRolesResult = await GetCallerRolesAsync(role, requestContext, cancellationToken);
+        if (!callerRolesResult.IsSuccess)
+            return Result<AuthorizeOutput>.Fail(callerRolesResult.Error);
+        var allowed = await EvaluateAuthorizeAsync(wf, callerRolesResult.Value, transitionKey, functionKey, instance, checkQueryRoles, domain, workflowVersion, requestContext, cancellationToken);
+        logger.AuthorizeRequest(domain, workflow, Describe(callerRolesResult.Value), allowed);
         return Result<AuthorizeOutput>.Ok(new AuthorizeOutput { Allowed = allowed });
     }
 
     /// <summary>
-    /// Resolves caller roles in precedence order: <c>ICurrentUser.Roles</c>, then the explicit <c>role</c>
-    /// request parameter, then the legacy <c>role</c> header. The header leg matters because
-    /// <c>ChangeFromHeaders</c> is not applied on the HTTP path, so a header-only caller would otherwise
-    /// be evaluated as role-less here while other surfaces resolve their roles.
+    /// Resolves the caller's role set through the configured provider, falling back to the explicit
+    /// <c>role</c> request parameter only when the provider reports no roles at all.
+    /// <para>
+    /// The provider is asked first so that this surface and the discovery surfaces agree: an
+    /// <c>authorize</c> answer that contradicts <c>availableTransitions</c> is worse than no answer.
+    /// The <c>role</c> parameter remains a convenience for callers probing a specific role, and under
+    /// the default provider it behaves exactly as before — that provider returns the current user's
+    /// roles, then the <c>role</c> header, and only an empty result lets the parameter through.
+    /// </para>
     /// </summary>
-    private IReadOnlyList<string>? GetCallerRoles(string? roleParameter, AuthorizationRequestContext? requestContext)
+    /// <summary>
+    /// Renders the role set for the audit log. The resolved set is logged rather than the <c>role</c>
+    /// request parameter — under an external provider that parameter is usually absent, and logging it
+    /// would record an empty role for every decision.
+    /// </summary>
+    private static string Describe(IReadOnlyList<string>? roles) =>
+        roles is { Count: > 0 } ? string.Join(",", roles) : string.Empty;
+
+    private async Task<Result<IReadOnlyList<string>?>> GetCallerRolesAsync(
+        string? roleParameter,
+        AuthorizationRequestContext? requestContext,
+        CancellationToken cancellationToken)
     {
-        if (currentUser.Roles is { Length: > 0 } roles)
-            return roles;
-        if (!string.IsNullOrWhiteSpace(roleParameter))
-            return [roleParameter.Trim()];
-        return currentUser.ResolveCallerRoles(requestContext?.Headers);
+        var resolved = await callerRoleResolver.ResolveRolesAsync(requestContext?.Headers, cancellationToken);
+        if (!resolved.IsSuccess)
+            return Result<IReadOnlyList<string>?>.Fail(resolved.Error);
+
+        if (resolved.Value is { Length: > 0 } roles)
+            return Result<IReadOnlyList<string>?>.Ok(roles);
+
+        return Result<IReadOnlyList<string>?>.Ok(
+            string.IsNullOrWhiteSpace(roleParameter) ? null : [roleParameter.Trim()]);
     }
     
     private async Task<Result<AuthorizationMatrixOutput>> GetAuthorizationMatrixAsync(

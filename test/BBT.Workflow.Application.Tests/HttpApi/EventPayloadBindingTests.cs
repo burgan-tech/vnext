@@ -116,7 +116,8 @@ public sealed class EventPayloadBindingTests
             instanceCommandGateway: Substitute.For<IInstanceCommandGateway>(),
             eventAppService: Substitute.For<IEventAppService>(),
             relatedInstanceQueryAppService: Substitute.For<IRelatedInstanceQueryAppService>(),
-            currentUser: Substitute.For<BBT.Aether.Users.ICurrentUser>());
+            callerRoleResolver: new BBT.Workflow.Authorization.DefaultCallerRoleResolver(
+                Substitute.For<BBT.Aether.Users.ICurrentUser>()));
 
         // AetherControllerBase resolves its Logger through the request services.
         var services = new ServiceCollection();

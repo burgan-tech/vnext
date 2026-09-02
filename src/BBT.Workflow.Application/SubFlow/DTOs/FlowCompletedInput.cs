@@ -77,4 +77,12 @@ public record FlowCompletedInput
 
     /// <summary>The enclosing lane's anchor, so the subflow's resume returns to the parent's lane.</summary>
     public string? ParentTraceRoot { get; init; }
+
+    /// <summary>
+    /// How many times a terminal-revert has re-published this event as a durable-delivery rearm.
+    /// <c>null</c>/<c>0</c> for an original delivery. Carried so a rearm that itself needs to be
+    /// reverted again can see its own attempt count and eventually stop (see
+    /// <c>SubflowCompletionService.RevertCorrelationInNewUowAsync</c>).
+    /// </summary>
+    public int? RearmAttempt { get; init; }
 }

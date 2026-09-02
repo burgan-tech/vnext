@@ -44,6 +44,12 @@ public sealed class StateFunctionCache(
     /// <see cref="InstanceStateFingerprint.FlowVersion"/> already covers — and so cannot change while an
     /// instance is parked. What needed invalidating was the shape change, once, not the value.
     /// </remarks>
+    /// <remarks>
+    /// v7 does not change the response shape. It retires entries written before caller roles became
+    /// provider-resolved: the hash covers the role <i>strings</i>, so an entry keyed under the default
+    /// provider's roles collides with an identically named set from an external provider, even though
+    /// the two were produced under different authorization inputs.
+    /// </remarks>
     private const string ResponseShapeVersion = "v7";
 
     private const string KeyPrefix = $"state-fn:{ResponseShapeVersion}:";

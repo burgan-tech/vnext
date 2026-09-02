@@ -57,6 +57,7 @@ public sealed class InstanceCancellationService(
             }
 
             var cancelledJobIds = new List<Guid>(jobs.Count);
+            var failedCount = 0;
             foreach (var job in jobs)
             {
                 try
@@ -68,6 +69,7 @@ public sealed class InstanceCancellationService(
                 }
                 catch (Exception ex)
                 {
+                    failedCount++;
                     logger.InstanceJobDeletionFailed(ex, job.JobId, instanceId);
                 }
             }
@@ -78,6 +80,15 @@ public sealed class InstanceCancellationService(
 
             logger.InstanceCanceledJobsProcessed(instanceId, cancelledJobIds.Count);
 
+            if (failedCount > 0)
+            {
+                // Retryable: winners are already persisted above, so the Inbox redelivery this
+                // failure triggers only retries the jobs that are still active. Returning Ok here
+                // would ACK the message and strand the uncancelled scheduler entries forever.
+                return Result.Fail(WorkflowErrors.InstanceCancellationFailed(
+                    instanceId, $"{failedCount} scheduler job cancellation(s) failed; delivery will be retried"));
+            }
+
             return Result.Ok();
         }
         catch (Exception ex)
@@ -86,7 +97,7 @@ public sealed class InstanceCancellationService(
             return Result.Fail(WorkflowErrors.InstanceCancellationFailed(instanceId, ex.Message));
         }
     }
-    
+
     /// <inheritdoc />
     public async Task<Result> ProcessStateTransitionsCancellationAsync(
         Guid instanceId,

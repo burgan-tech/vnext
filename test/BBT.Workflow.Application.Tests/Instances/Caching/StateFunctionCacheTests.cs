@@ -69,6 +69,10 @@ public class StateFunctionCacheTests
         // state body (v2 added the workflow-level updateData/exit transitions; v3 the workflow's
         // `functions` discovery links; v4 replaced that list with a hasFunctions flag plus a catalog
         // link; v6 started listing scheduled transitions inside transitions as kind:"scheduled"
+        // entries with executeAtUtc) cannot be served from entries written by an
+        // earlier build. v7 retires entries written before caller roles became provider-resolved:
+        // the hash covers role strings, so an identically named set from a different provider would
+        // otherwise collide with one produced under different authorization inputs.
         // entries with executeAtUtc; v7 gave scheduled entries the uniform href/view/schema links
         // with hardcoded-false flags) cannot be served from entries written by an earlier build.
         // Bump this literal in the same commit as ResponseShapeVersion — the assertion exists to make
