@@ -93,4 +93,14 @@ public interface IInstanceCorrelationRepository : IRepository<InstanceCorrelatio
     Task<InstanceCorrelation?> FindBySubInstanceIdAsReadOnlyAsync(
         Guid subInstanceId,
         CancellationToken cancellationToken = default);
-} 
+
+    /// <summary>
+    /// Durably marks a completed correlation as fully settled. The terminal outcome predicate
+    /// prevents a stale delivery from settling a correlation won by a different outcome.
+    /// </summary>
+    Task<bool> TryMarkSettledAsync(
+        Guid subInstanceId,
+        SubItemTerminalOutcome outcome,
+        DateTime settledAt,
+        CancellationToken cancellationToken = default);
+}

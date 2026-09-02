@@ -62,6 +62,9 @@ public sealed class StateFunctionCache(
     /// <inheritdoc />
     public bool Enabled => options.Value.Enabled;
 
+    public TimeSpan ActiveSubflowTtl =>
+        TimeSpan.FromMilliseconds(Math.Max(1, options.Value.ActiveSubflowTtlMilliseconds));
+
     /// <inheritdoc />
     public string BuildKey(GetInstanceStateInput input) =>
         $"{KeyPrefix}{input.Domain}:{input.Workflow}:{input.Instance}:{BuildCallerHash(input)}";
@@ -137,7 +140,18 @@ public sealed class StateFunctionCache(
     }
 
     /// <inheritdoc />
-    public async Task SetAsync(string key, StateFunctionCacheEntry entry, CancellationToken cancellationToken = default)
+    public Task SetAsync(
+        string key,
+        StateFunctionCacheEntry entry,
+        CancellationToken cancellationToken = default) =>
+        SetAsync(key, entry, TimeSpan.FromSeconds(options.Value.TtlSeconds), cancellationToken);
+
+    /// <inheritdoc />
+    public async Task SetAsync(
+        string key,
+        StateFunctionCacheEntry entry,
+        TimeSpan ttl,
+        CancellationToken cancellationToken = default)
     {
         using var activity = CacheActivityHelper.StartActivity(
             CacheActivityHelper.OperationSet, key, ComponentType);
@@ -149,7 +163,7 @@ public sealed class StateFunctionCache(
                 entry,
                 new DistributedCacheEntryOptions
                 {
-                    AbsoluteExpiration = DateTimeOffset.UtcNow.AddSeconds(options.Value.TtlSeconds)
+                    AbsoluteExpiration = DateTimeOffset.UtcNow.Add(ttl)
                 },
                 cancellationToken);
         }

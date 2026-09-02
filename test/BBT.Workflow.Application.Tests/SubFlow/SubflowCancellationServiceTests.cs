@@ -293,7 +293,8 @@ public sealed class SubflowCancellationServiceTests
         _instanceRepository.Verify(
             x => x.FindWithAllCorrelationsAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()),
             Times.Once);
-        _uowManager.Verify(x => x.Begin(It.IsAny<UnitOfWorkOptions>()), Times.Once);
+        // Phase-1 correlation commit plus the tiny durable-settlement marker UoW.
+        _uowManager.Verify(x => x.Begin(It.IsAny<UnitOfWorkOptions>()), Times.Exactly(2));
     }
 
     [Fact]

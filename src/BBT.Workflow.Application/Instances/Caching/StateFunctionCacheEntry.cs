@@ -15,6 +15,11 @@ public sealed class StateFunctionCacheEntry
     /// </summary>
     public string Etag { get; set; } = string.Empty;
 
+    /// <summary>ETag derived only from the local parent fingerprint.</summary>
+    public string ParentEtag { get; set; } = string.Empty;
+
+    public bool IsActiveSubflowSnapshot { get; set; }
+
     /// <summary>
     /// Entity (instance data) ETag at build time. May lag behind data-only updates until the
     /// next state/status change — accepted: the state function tracks state/status, not data.

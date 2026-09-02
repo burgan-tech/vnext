@@ -192,6 +192,7 @@ public sealed class SubflowFaultService(
 
                     if (correlation.SubFlowType.Equals(SubFlowType.SubProcess))
                     {
+                        correlation.MarkSettled(input.FaultedAt);
                         await instanceRepository.UpdateAsync(parentInstance, true, cancellationToken);
                         await uow.CommitAsync(cancellationToken);
                         return;
@@ -209,6 +210,7 @@ public sealed class SubflowFaultService(
                     {
                         RecordIncident(parentInstance, input, ErrorAction.Abort, null);
                         parentInstance.Fault(input.Domain, input.Sync);
+                        correlation.MarkSettled(input.FaultedAt);
                         await instanceRepository.UpdateAsync(parentInstance, true, cancellationToken);
                         await uow.CommitAsync(cancellationToken);
                         return;
@@ -291,6 +293,11 @@ public sealed class SubflowFaultService(
                         cancellationToken);
                 }
 
+                await MarkSettlementBestEffortAsync(
+                    input.SubInstanceId,
+                    input.FaultedAt,
+                    cancellationToken);
+
                 logger.SubFlowFaultPropagatedToParent(input.SubInstanceId, input.InstanceId);
                 SubFlowActivityHelper.SetSuccess(activity);
             }
@@ -300,6 +307,28 @@ public sealed class SubflowFaultService(
                 logger.SubFlowFaultProcessingFailed(ex, input.SubInstanceId, input.InstanceId);
                 throw;
             }
+        }
+    }
+
+    private async Task MarkSettlementBestEffortAsync(
+        Guid subInstanceId,
+        DateTime settledAt,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await using var markerUow = uowManager.Begin(
+                new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew });
+            await terminalGuard.TryMarkSettledAsync(
+                subInstanceId,
+                SubItemTerminalOutcome.Faulted,
+                settledAt,
+                cancellationToken);
+            await markerUow.CommitAsync(cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            logger.SubItemSettlementMarkerWriteFailed(ex, nameof(SubItemTerminalOutcome.Faulted), subInstanceId);
         }
     }
 

@@ -50,4 +50,12 @@ public interface IStateFunctionCache
     /// Stores the entry under the key with the configured TTL. Failures are swallowed.
     /// </summary>
     Task SetAsync(string key, StateFunctionCacheEntry entry, CancellationToken cancellationToken = default);
+
+    Task SetAsync(
+        string key,
+        StateFunctionCacheEntry entry,
+        TimeSpan ttl,
+        CancellationToken cancellationToken = default);
+
+    TimeSpan ActiveSubflowTtl { get; }
 }

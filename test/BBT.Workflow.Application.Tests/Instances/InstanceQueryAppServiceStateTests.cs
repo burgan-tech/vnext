@@ -1290,11 +1290,11 @@ public class InstanceQueryAppServiceStateTests : IDisposable
     }
 
     /// <summary>
-    /// When the fingerprint reports an active SubFlow, both the 304 fast path and the cache are
-    /// bypassed (live evaluation required) and nothing is written back.
+    /// An active SubFlow uses a short-lived snapshot cache. A miss is double-checked after the
+    /// single-flight gate, then the live child response is stored with the active-child TTL.
     /// </summary>
     [Fact]
-    public async Task GetInstanceStateAsync_WhenFingerprintHasActiveSubFlow_BypassesCache()
+    public async Task GetInstanceStateAsync_WhenFingerprintHasActiveSubFlow_UsesShortTtlCache()
     {
         // Arrange
         var (instance, workflow) = CreateParentWithActiveSubFlow();
@@ -1311,13 +1311,18 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         // Act
         var result = await _service.GetInstanceStateAsync(CreateInput(instance.Id.ToString()), CancellationToken.None);
 
-        // Assert — served live from the subflow gateway with the subflow ETag variant, never cached
+        // Assert — served live from the child and warmed for concurrent/nearby polls.
         result.Result.IsSuccess.ShouldBeTrue();
         result.Result.Value!.State.ShouldBe("sub-review");
         result.Result.Value!.ETag.ShouldBe("\"etag-subflow\"");
-        await _stateFunctionCache.DidNotReceive().GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
-        await _stateFunctionCache.DidNotReceive()
-            .SetAsync(Arg.Any<string>(), Arg.Any<Caching.StateFunctionCacheEntry>(), Arg.Any<CancellationToken>());
+        await _stateFunctionCache.Received(2)
+            .GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+        await _stateFunctionCache.Received(1)
+            .SetAsync(
+                Arg.Any<string>(),
+                Arg.Is<Caching.StateFunctionCacheEntry>(entry => entry.IsActiveSubflowSnapshot),
+                Arg.Any<TimeSpan>(),
+                Arg.Any<CancellationToken>());
     }
 
     /// <summary>
