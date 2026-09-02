@@ -155,7 +155,7 @@ public sealed class TransitionSettlementVerdictTests : IDisposable
     }
 
     [Fact]
-    public async Task OpenSubFlowCorrelation_RestsAsBusySubflow()
+    public async Task OpenSubFlowCorrelation_KeepsTheEpisodeOpen()
     {
         Listen();
         var instance = CreateBusyInstance();
@@ -165,7 +165,7 @@ public sealed class TransitionSettlementVerdictTests : IDisposable
 
         await Apply(context, resolvedStatus: null, Substitute.For<IInstanceRepository>(), chainSettled: true);
 
-        context.Directives.Activation.ShouldNotBeNull().Outcome.ShouldBe(TelemetryConstants.ActivationOutcomes.BusySubflow);
+        context.Directives.Activation.ShouldBeNull();
     }
 
     [Fact]

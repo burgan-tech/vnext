@@ -180,11 +180,27 @@ public class TransitionJobHandlerTests
     /// of the job so downstream calls (Execution invoke, cross-domain) keep the client's request id.
     /// </summary>
     [Fact]
-    public async Task HandleAsync_WithRequestIdHeader_RestoresCorrelationId()
+    public async Task HandleAsync_WithRequestIdHeader_RestoresCorrelationIdBeforeStartingTheJobSpan()
     {
         var payload = CreatePayload();
         payload.Headers["x-request-id"] = "req-abc-123";
         var handler = CreateHandler();
+        var correlationChanged = false;
+        var correlationWasChangedWhenActivityStarted = false;
+        _correlationIdProvider
+            .Setup(p => p.Change("req-abc-123"))
+            .Callback(() => correlationChanged = true);
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == "BBT.Workflow.BackgroundJobs",
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStarted = activity =>
+            {
+                if (activity.DisplayName == "TransitionJob.Execute/go")
+                    correlationWasChangedWhenActivityStarted = correlationChanged;
+            }
+        };
+        ActivitySource.AddActivityListener(listener);
 
         _executionService
             .Setup(s => s.ExecuteTransitionAsync(
@@ -194,6 +210,7 @@ public class TransitionJobHandlerTests
         await handler.HandleAsync(payload, CancellationToken.None);
 
         _correlationIdProvider.Verify(p => p.Change("req-abc-123"), Times.Once);
+        Assert.True(correlationWasChangedWhenActivityStarted);
     }
 
     /// <summary>

@@ -146,13 +146,13 @@ observe through the state function:
 | `active` | the Busy→Active compare-and-set at `Transition.Settle` flipped **and committed** |
 | `completed` / `canceled` | `HandleFinishStep` completed or cancelled the instance (a cancel/exit transition or a `Cancelled`-subtype target ⇒ `canceled`) |
 | `faulted` | `Instance.Fault` (pipeline failure), a post-commit parent fault, or job-timeout recovery |
-| `busy.subflow` | the instance handed off to a SubFlow and rests Busy while the child runs |
 | `busy.parked` | the instance rests Busy at a state whose automatic transitions did not fire |
 | `busy.subtype` | the instance rests in a `Busy`-subtype state, awaiting an external signal |
 
 Every episode is one trace (the lane model already guaranteed that) **and** one
-`Instance.Activation/{key}` span whose duration is trigger → rest point — `{key}` is the episode's
-first-hop transition key, falling back to the settling hop's key, then `resume`. The span is
+`Instance.Activation/{key}` span whose duration is trigger → rest point — `{key}` is the settling
+hop's transition key, falling back to the episode's first-hop key, then `resume`. The original
+first-hop key remains available as `vnext.activation.transition.key`. The span is
 synthetic and backdated; why it has to be, and why its kind is `Internal`, is in
 [Trace Span Tree § Activation episode](trace-span-tree.md#activation-episode-why-the-span-is-synthetic).
 
@@ -199,6 +199,9 @@ them, and the client's question there is "fire → Active".
   `Directives.ContinuationEnqueued`; `TransitionPipeline` passes `chainSettled: !hadNextTransition`
   and the post-commit settlement `chainSettled: !continuations.ContinuationEnqueued &&
   instance.IsBusy`. The job it becomes carries the episode and settles it.
+- **A parent handing off to a live SubFlow never emits.** It is still Busy, so `busy.subflow`
+  would falsely mark the activation complete. The child inherits the episode and its activation
+  span records the surface that actually becomes available.
 - **CAS lost ⇒ no verdict** (`vnext.settle.cas=lost`): the row was no longer Busy; whoever flipped
   it emits.
 - **Fresh post-commit parent not Busy ⇒ no verdict**: a synchronous child callback already settled

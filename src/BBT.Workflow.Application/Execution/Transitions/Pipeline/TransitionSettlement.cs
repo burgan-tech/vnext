@@ -159,12 +159,15 @@ internal static class TransitionSettlement
             return null;
         }
 
+        // A live SubFlow is not a settlement for the parent: it is still Busy and must not emit a
+        // misleading completed activation. The handoff carries the episode to the child, whose
+        // activation span represents the next surface that actually becomes available.
+        if (hasOpenSubFlow)
+            return null;
+
         // Rests Busy, deliberately. Each of these is a state the client observes as "not yet".
         if (context.Target?.SubType == StateSubType.Busy)
             return new ActivationVerdict(TelemetryConstants.ActivationOutcomes.BusySubtype, CasFlipped: false, stateTo);
-
-        if (hasOpenSubFlow)
-            return new ActivationVerdict(TelemetryConstants.ActivationOutcomes.BusySubflow, CasFlipped: false, stateTo);
 
         return new ActivationVerdict(TelemetryConstants.ActivationOutcomes.BusyParked, CasFlipped: false, stateTo);
     }

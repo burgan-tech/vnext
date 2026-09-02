@@ -45,6 +45,13 @@ public sealed class TransitionJobHandler(
         using var lane = WorkflowTraceLane.Reset(
             args.TraceRoot, args.ParentTraceRoot, args.LaneSeq, args.ToActivationEpisode());
 
+        // The Dapr scheduler callback is a fresh HTTP request. Restore the originating request id
+        // before starting the job activity; activity enrichment snapshots the current correlation
+        // id at StartActivity time, so doing this afterwards permanently stamps the callback's id
+        // on the span even though downstream logs use the correct one.
+        var requestId = args.Headers.GetValueOrDefault(TelemetryConstants.HeaderNames.RequestId.ToLowerInvariant());
+        using var correlationScope = string.IsNullOrEmpty(requestId) ? null : correlationIdProvider.Change(requestId);
+
         // Restore trace context from the original request for distributed tracing correlation.
         // The name carries the transition key because THIS span is the transaction in APM: without
         // it every transition job aggregates under one "TransitionJob.Execute" name and the key is
@@ -65,11 +72,6 @@ public sealed class TransitionJobHandler(
                 episode: ActivationEpisode.StartingAt(activity, TelemetryConstants.ActivationTriggers.Job, args.TransitionKey)
                     with { Partial = true })
             : null;
-        // The Dapr scheduler callback is a fresh HTTP request, so the client's X-Request-Id is not
-        // ambient here — restore it from the captured request headers so log scopes and downstream
-        // calls (Execution invoke, cross-domain) keep correlating to the originating request.
-        var requestId = args.Headers.GetValueOrDefault(TelemetryConstants.HeaderNames.RequestId.ToLowerInvariant());
-        using var correlationScope = string.IsNullOrEmpty(requestId) ? null : correlationIdProvider.Change(requestId);
         using (currentSchema.Change(args.Workflow))
         {
             using (logger.BeginScope(new Dictionary<string, object>

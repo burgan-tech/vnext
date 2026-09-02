@@ -154,9 +154,9 @@ public sealed class PostCommitParentMutationServiceActivationTests : IDisposable
     }
 
     [Fact]
-    public async Task SettleAsync_HandoffToSubflow_ClosesTheEpisodeAsBusySubflow()
+    public async Task SettleAsync_HandoffToSubflow_KeepsTheEpisodeOpen()
     {
-        // The parent rests Busy while the child runs; the client observes the child from here on.
+        // The parent remains Busy while the child runs; this is not the requested Available point.
         using var root = StartRoot();
         var collected = Listen(root);
         var authoritative = CreateBusyInstance();
@@ -170,9 +170,9 @@ public sealed class PostCommitParentMutationServiceActivationTests : IDisposable
             CancellationToken.None);
 
         result.IsSuccess.ShouldBeTrue();
-        var activation = collected.Single(IsActivation);
-        activation.GetTagItem(TelemetryConstants.TagNames.ActivationOutcome).ShouldBe(TelemetryConstants.ActivationOutcomes.BusySubflow);
-        activation.GetTagItem(TelemetryConstants.TagNames.SettleCas).ShouldBe("n/a");
+        collected.ShouldNotContain(a => IsActivation(a));
+        collected.Single(a => a.DisplayName == "Transition.Settle")
+            .GetTagItem(TelemetryConstants.TagNames.ActivationEmitted).ShouldBe(false);
     }
 
     [Fact]

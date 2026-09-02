@@ -36,7 +36,7 @@ namespace BBT.Workflow.Telemetry;
 /// </summary>
 public static class ActivationActivity
 {
-    /// <summary>Span name prefix; the suffix is the episode's transition key.</summary>
+    /// <summary>Span name prefix; the suffix is the transition that settled the episode.</summary>
     public const string SpanNamePrefix = "Instance.Activation";
 
     /// <summary>
@@ -94,9 +94,10 @@ public static class ActivationActivity
         var parent = ResolveParent(ambient);
         var links = ambient is null ? null : new[] { new ActivityLink(ambient.Context) };
         var episodeKey = episode?.TransitionKey ?? lastTransitionKey ?? "resume";
+        var settlingKey = lastTransitionKey ?? episodeKey;
 
         var activity = source.StartActivity(
-            $"{SpanNamePrefix}/{episodeKey}",
+            $"{SpanNamePrefix}/{settlingKey}",
             ActivityKind.Internal,
             parent,
             tags: null,

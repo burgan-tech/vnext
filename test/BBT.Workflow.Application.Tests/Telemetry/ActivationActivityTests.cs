@@ -150,14 +150,16 @@ public sealed class ActivationActivityTests : IDisposable
     }
 
     [Fact]
-    public void Emit_names_the_span_after_the_episode_key_and_falls_back_to_the_settling_key()
+    public void Emit_names_the_span_after_the_settling_key_but_keeps_the_episode_key_as_a_tag()
     {
         Listen(TestSource);
 
         using var root = Source.StartActivity("root")!;
         using (WorkflowTraceLane.Use(root.Id, episode: new ActivationEpisode(DateTimeOffset.UtcNow, "manual", "start-it", false)))
         {
-            Emit().ShouldNotBeNull().DisplayName.ShouldBe("Instance.Activation/start-it");
+            var emitted = Emit().ShouldNotBeNull();
+            emitted.DisplayName.ShouldBe("Instance.Activation/go");
+            emitted.GetTagItem(TelemetryConstants.TagNames.ActivationTransitionKey).ShouldBe("start-it");
         }
 
         using (WorkflowTraceLane.Use(root.Id, episode: new ActivationEpisode(DateTimeOffset.UtcNow, "resume", null, false)))
