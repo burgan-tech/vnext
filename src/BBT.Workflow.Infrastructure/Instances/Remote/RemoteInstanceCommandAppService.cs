@@ -147,7 +147,8 @@ public sealed class RemoteInstanceCommandAppService(
 
             var requestUri = new Uri(endpoint.BaseUrl, relativePath.TrimStart('/'));
 
-            var requestBody = new CreateInstanceInput
+            var episode = WorkflowTraceLane.Episode;
+            var requestBody = new
             {
                 Id = input.Instance.Id,
                 Key = input.Instance.Key,
@@ -155,7 +156,10 @@ public sealed class RemoteInstanceCommandAppService(
                 Stage = input.Instance.Stage,
                 Attributes = input.Instance.Attributes,
                 Callback = input.Instance.Callback,
-                ExtraProperties = input.Instance.ExtraProperties
+                ExtraProperties = input.Instance.ExtraProperties,
+                EpisodeStartedAt = episode?.StartedAt,
+                EpisodeTrigger = episode?.Trigger,
+                EpisodeTransitionKey = episode?.TransitionKey
             };
 
             var jsonContent = JsonSerializer.Serialize(requestBody, JsonSerializerConstants.JsonOptions);

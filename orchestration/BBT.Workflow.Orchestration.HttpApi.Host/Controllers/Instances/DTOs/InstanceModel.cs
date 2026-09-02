@@ -24,4 +24,13 @@ public class CreateSubInstanceDto : CreateInstanceDto
     public Guid? Id  { get; set; }
     public string? Callback { get; set; }
     public Dictionary<string, object?> ExtraProperties { get; set; }
+
+    /// <summary>
+    /// Activation-episode context carried in the internal request body. These values deliberately
+    /// do not travel as trace headers: the child request keeps its own server-span anchor while its
+    /// time-to-available measurement starts with the parent episode.
+    /// </summary>
+    public DateTimeOffset? EpisodeStartedAt { get; set; }
+    public string? EpisodeTrigger { get; set; }
+    public string? EpisodeTransitionKey { get; set; }
 }

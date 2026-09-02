@@ -120,6 +120,16 @@ public sealed class InstanceController(
         CancellationToken cancellationToken = default
     )
     {
+        // Preserve the child request's own server-span anchor, but inherit the activation episode
+        // that began in the parent domain. Older callers carry no episode and retain the episode
+        // seeded by request middleware, which keeps this change backward compatible.
+        using var episode = WorkflowTraceLane.Use(
+            anchor: null,
+            episode: ActivationEpisode.FromCarrier(
+                request.EpisodeStartedAt,
+                request.EpisodeTrigger,
+                request.EpisodeTransitionKey));
+
         var input = new StartInstanceInput(domain, workflow, version, sync)
         {
             Instance = new CreateInstanceInput

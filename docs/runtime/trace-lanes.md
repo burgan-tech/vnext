@@ -169,11 +169,12 @@ ones, always copied together**, beside `TraceRoot` / `ParentTraceRoot`:
 | `InstanceSubCompletedEvent` / `InstanceSubFaultedEvent` / `InstanceSubCanceledEvent` | `TraceStampingDistributedEventBus` | `SubflowTerminalRelay` and the Inbox `InstanceSub*EventHandler`s map them onto the inputs below |
 | `FlowCompletedInput` / `SubFlowFaultedInput` / `SubItemCanceledInput` | the relay / inbox mappings above | `internal/…/complete`, `/sub/fault`, `/sub/cancel` → `Reset`; the `Subflow*Service`s copy them back onto the event republished by a terminal revert |
 | `SubflowForwardInput` | `RemoteInstanceCommandAppService` | `internal/subflow-forward` → `Reset` |
+| Cross-domain child start body (`CreateSubInstanceDto`) | `RemoteInstanceCommandAppService.StartSubAsync` | `sub/instances/start` → `Use` the carried episode while preserving the child server-span anchor |
 
-**Not carried (known boundary):** the cross-domain **child start** body (`CreateSubInstanceDto`,
-`StartSubAsync`). A cross-domain child's episode starts at its own `sub/instances/start` server
-span; a same-domain child inherits through `EnterChildLane()`. Optional follow-up: add the three
-fields there too (a timestamp is not an anchor, so the header-injection concern does not apply).
+Cross-domain child starts carry only the three episode fields, never the lane anchor. The child
+therefore remains rooted under its own `sub/instances/start` server span, while its synthetic
+activation duration starts with the parent episode. A same-domain child inherits both through
+`EnterChildLane()`.
 
 **Inherit vs restart.** A subflow handoff (`StartSubflowJobHandler`, `ForwardToSubflowJobHandler`
 → `EnterChildLane()`) **inherits** the parent's episode: the client polls the parent, which reports

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -10,6 +11,7 @@ using BBT.Workflow.Gateway;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Instances.Events;
 using BBT.Workflow.Instances.Related;
+using BBT.Workflow.Logging;
 using BBT.Workflow.Orchestration.Controllers.Instances;
 using BBT.Workflow.Scripting.Related;
 using BBT.Workflow.SubFlow;
@@ -25,6 +27,61 @@ namespace BBT.Workflow.Infrastructure.Tests.Remote;
 public sealed class InstanceControllerChildCancelTests
 {
     private const string RemovedEnvelopeHeader = "X-Vnext-Internal-Transition-Envelope";
+
+    [Fact]
+    public async Task StartSubAsync_AdoptsCarriedEpisodeWithoutLeakingScope()
+    {
+        var startedAt = new DateTimeOffset(2026, 9, 2, 12, 34, 56, TimeSpan.Zero);
+        const string requestAnchor = "00-11111111111111111111111111111111-2222222222222222-01";
+        var requestEpisode = new ActivationEpisode(
+            startedAt.AddSeconds(1),
+            TelemetryConstants.ActivationTriggers.Http,
+            null,
+            Partial: false);
+        ActivationEpisode? observedEpisode = null;
+        string? observedAnchor = null;
+        var commandService = Substitute.For<IInstanceCommandAppService>();
+        commandService.StartAsync(
+                Arg.Do<StartInstanceInput>(_ =>
+                {
+                    observedEpisode = WorkflowTraceLane.Episode;
+                    observedAnchor = WorkflowTraceLane.Current;
+                }),
+                Arg.Any<CancellationToken>())
+            .Returns(Result<StartInstanceOutput>.Ok(new StartInstanceOutput()));
+        var httpContext = new DefaultHttpContext();
+        var accessor = Substitute.For<IHttpContextAccessor>();
+        accessor.HttpContext.Returns(httpContext);
+        var sut = CreateController(commandService, accessor, Substitute.For<IChildSubflowCancellationService>());
+        sut.ControllerContext = new ControllerContext { HttpContext = httpContext };
+        var request = new CreateSubInstanceDto
+        {
+            ExtraProperties = new Dictionary<string, object?>(),
+            EpisodeStartedAt = startedAt,
+            EpisodeTrigger = TelemetryConstants.ActivationTriggers.Manual,
+            EpisodeTransitionKey = "approve"
+        };
+
+        using (WorkflowTraceLane.Use(requestAnchor, episode: requestEpisode))
+        {
+            await sut.StartSubAsync(
+                "child-domain",
+                "child-flow",
+                request,
+                cancellationToken: CancellationToken.None);
+
+            WorkflowTraceLane.Current.ShouldBe(requestAnchor);
+            WorkflowTraceLane.Episode.ShouldBe(requestEpisode);
+        }
+
+        observedAnchor.ShouldBe(requestAnchor);
+        observedEpisode.ShouldBe(new ActivationEpisode(
+            startedAt,
+            TelemetryConstants.ActivationTriggers.Manual,
+            "approve",
+            Partial: false));
+        WorkflowTraceLane.Episode.ShouldBeNull();
+    }
 
     [Fact]
     public async Task TransitionAsync_WithRemovedInternalMarker_TreatsBodyAsNormalRawPayload()

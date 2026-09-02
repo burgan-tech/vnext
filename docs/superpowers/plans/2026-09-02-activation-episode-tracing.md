@@ -192,10 +192,12 @@ Three nullable fields — `DateTimeOffset? EpisodeStartedAt`, `string? EpisodeTr
 | `ILaneAwareDistributedEvent` | three settable members; implemented by `InstanceSubCompletedEvent`, `InstanceSubFaultedEvent`, `InstanceSubCanceledEvent`, `TransitionContinuationRequested` | `TraceStampingDistributedEventBus` — fills when `EpisodeStartedAt is null` (never overwrites) | `SubflowTerminalRelay` mappings; Inbox `InstanceSub*EventHandler` mappings |
 | `FlowCompletedInput` / `SubFlowFaultedInput` / `SubItemCanceledInput` | after `ParentTraceRoot` | relay / inbox mappings | copied back onto the republished event in `SubflowCompletionService`, `SubflowFaultService`, `SubflowCancellationService` (terminal revert) |
 | `SubflowForwardInput` | after `ParentTraceRoot` | `RemoteInstanceCommandAppService` | `InstanceController.SubflowForwardAsync` → `Reset` |
+| Cross-domain child start body (`CreateSubInstanceDto`) | internal body fields only; no lane anchor | `RemoteInstanceCommandAppService.StartSubAsync` | `InstanceController.StartSubAsync` → `Use` the carried episode while preserving the child server-span anchor |
 
 `ActivationEpisodeCarrierExtensions.ToActivationEpisode(this ITraceableJobPayload | ILaneAwareDistributedEvent)` (`Application/Telemetry/`) keeps the consuming sites one-liners.
 
-**Not carried (known boundary, documented):** the cross-domain **child start** body (`CreateSubInstanceDto`, `InstanceController.StartSubAsync`) — a cross-domain child's episode starts at its own `sub/instances/start` server span. Optional follow-up: add the three fields there too (a timestamp is not an anchor; the `trace-lanes.md` header-injection concern does not apply).
+The cross-domain child-start follow-up is now implemented. It carries only episode metadata in the
+internal body; W3C trace headers and lane anchors are still not copied manually.
 
 - [x] **Step 1: Failing tests** — implemented in `TraceStampingDistributedEventBusTests`: `Publish_LaneAwareEventWithoutEpisode_StampsTheAmbientActivationEpisode`, `Publish_LaneAwareEventWithPresetEpisode_DoesNotOverwriteIt`.
 - [ ] **Planned, not yet written:** `AsyncTransitionStrategyTests.EnqueueAsync_PayloadAndOutboxEvent_CarryEpisode`; the `EnqueueContinuationStrategy` counterpart.
@@ -306,7 +308,6 @@ dotnet test test/BBT.Workflow.Application.Tests --filter "FullyQualifiedName~Tel
 - Joining timer/timeout/ack jobs to the origin trace (D1).
 - Changes to Aether (suggestion only).
 - Attaching the client's state-function poll to the business trace (a separate HTTP request; the `X-Trace-Id` response header already exists).
-- Carrying the episode in the cross-domain child-start body (Task 7 note; optional follow-up).
 - A new vnext-example integration scenario (telemetry, not behavior, changes; with user approval if needed).
 
 ## Self-review notes
