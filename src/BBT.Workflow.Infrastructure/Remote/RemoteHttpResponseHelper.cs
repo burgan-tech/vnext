@@ -2,6 +2,7 @@ using System.Net;
 using System.Text.Json;
 using BBT.Aether.Results;
 using BBT.Workflow.Domain;
+using BBT.Workflow.Logging;
 
 namespace BBT.Workflow.Remote;
 
@@ -47,15 +48,18 @@ public static class RemoteHttpResponseHelper
     }
 
     /// <summary>
-    /// Returns true if the header name is restricted and must not be set manually on outbound requests
-    /// (e.g. Content-Type, Content-Length, Host, Connection). Use with CurrentUserForwardHeadersHelper.
+    /// Returns true if the header name is restricted and must not be set manually on outbound requests:
+    /// transport/content headers (Content-Type, Content-Length, Host, Connection) and the W3C trace-context
+    /// headers (traceparent, tracestate, baggage). The latter are owned by the live Activity — copying a
+    /// captured value would parent the callee to a stale span. Use with CurrentUserForwardHeadersHelper.
     /// </summary>
     public static bool IsRestrictedHeader(string headerName)
     {
         return headerName.Equals("Content-Type", StringComparison.OrdinalIgnoreCase) ||
                headerName.Equals("Content-Length", StringComparison.OrdinalIgnoreCase) ||
                headerName.Equals("Host", StringComparison.OrdinalIgnoreCase) ||
-               headerName.Equals("Connection", StringComparison.OrdinalIgnoreCase);
+               headerName.Equals("Connection", StringComparison.OrdinalIgnoreCase) ||
+               TelemetryConstants.HeaderNames.IsW3CTraceContextHeader(headerName);
     }
 
     private static Error? TryParseAetherError(

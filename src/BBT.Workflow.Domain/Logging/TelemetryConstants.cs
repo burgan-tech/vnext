@@ -440,6 +440,23 @@ public static class TelemetryConstants
         /// </para>
         /// </summary>
         public const string TraceId = "X-Trace-Id";
+
+        /// <summary>
+        /// The W3C Trace Context headers. Never copied from a captured request onto an outbound one:
+        /// <c>HttpClient</c>'s <c>DiagnosticsHandler</c> injects <c>traceparent</c> fill-if-absent,
+        /// so a stale copy taken from the inbound request (or from a persisted job payload) would win
+        /// over the live <see cref="System.Diagnostics.Activity"/> and parent the callee to a span that
+        /// is not the caller's. The task-invoker path keeps its own, wider list in
+        /// <c>HttpTaskInvocation.ReservedTraceHeaders</c> (it also drops correlation headers the
+        /// binding must not override); this one is deliberately only the W3C trio, because the
+        /// remote app-service path legitimately forwards <c>X-Request-Id</c> and friends.
+        /// </summary>
+        public static readonly string[] W3CTraceContext = ["traceparent", "tracestate", "baggage"];
+
+        /// <summary>True for <c>traceparent</c>, <c>tracestate</c> and <c>baggage</c> (case-insensitive).</summary>
+        public static bool IsW3CTraceContextHeader(string? headerName) =>
+            headerName is not null &&
+            Array.Exists(W3CTraceContext, h => h.Equals(headerName, StringComparison.OrdinalIgnoreCase));
     }
 
     /// <summary>
