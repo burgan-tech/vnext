@@ -786,6 +786,45 @@ public static partial class WorkflowLogs
         string errorMessage);
 
     /// <summary>
+    /// Logs when an external (orchestrator-executed) HTTP task request fails at the transport level.
+    /// The exception details travel inside the invocation result's metadata (ExceptionType,
+    /// StackTrace) — the shared send core never throws.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10098,
+        Level = LogLevel.Error,
+        Message = "External HTTP task request failed. TaskKey={TaskKey}, Url={Url}, Error={ErrorMessage}")]
+    public static partial void ExternalHttpTaskRequestFailed(
+        this ILogger logger,
+        string? taskKey,
+        string url,
+        string errorMessage);
+
+    /// <summary>
+    /// Logs when an external (orchestrator-executed) HTTP task request is cancelled.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10099,
+        Level = LogLevel.Warning,
+        Message = "External HTTP task request was cancelled. TaskKey={TaskKey}, Url={Url}")]
+    public static partial void ExternalHttpTaskRequestCancelled(
+        this ILogger logger,
+        string? taskKey,
+        string url);
+
+    /// <summary>
+    /// Logs when an external (orchestrator-executed) HTTP task disables SSL certificate validation.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10108,
+        Level = LogLevel.Debug,
+        Message = "SSL certificate validation is disabled for external HTTP task {TaskKey} - URL: {Url}")]
+    public static partial void ExternalHttpTaskSslValidationDisabled(
+        this ILogger logger,
+        string? taskKey,
+        string url);
+
+    /// <summary>
     /// Logs when task instance resolution fails (for DirectTrigger, GetInstanceData).
     /// </summary>
     [LoggerMessage(

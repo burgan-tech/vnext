@@ -48,6 +48,7 @@ public sealed class TaskFactoryOptions
         "DaprHttpEndpointTask",
         "DaprPubSubTask",
         "DaprServiceTask",
-        "HumanTask"
+        "HumanTask",
+        "ExternalHttpTask"
     };
 } 

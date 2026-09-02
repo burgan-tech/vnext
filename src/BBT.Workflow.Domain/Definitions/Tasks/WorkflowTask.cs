@@ -28,6 +28,7 @@ namespace BBT.Workflow.Definitions;
 [JsonDerivedType(typeof(GetInstanceTask), typeDiscriminator: "19")]
 [JsonDerivedType(typeof(DaprConversationTask), typeDiscriminator: "20")]
 [JsonDerivedType(typeof(FanOutTask), typeDiscriminator: "21")]
+[JsonDerivedType(typeof(ExternalHttpTask), typeDiscriminator: "22")]
 public abstract class WorkflowTask : IDomainEntity, ITaskReference, IReferenceSetter, ITaskClonable
 {
     protected WorkflowTask()

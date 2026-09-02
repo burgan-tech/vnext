@@ -39,6 +39,7 @@ public sealed class SubflowTerminalRevertRearmTests
     private readonly Mock<IUnitOfWork> _uow = new();
     private readonly Mock<IComponentCacheStore> _componentCacheStore = new();
     private readonly Mock<IInstanceRepository> _instanceRepository = new();
+    private readonly Mock<IInstanceCorrelationRepository> _correlationRepository = new();
     private readonly Mock<IRuntimeInfoProvider> _runtimeInfoProvider = new();
     private readonly Mock<IWorkflowExecutionService> _workflowExecutionService = new();
     private readonly Mock<ISubflowOutputMappingService> _outputMappingService = new();
@@ -70,6 +71,11 @@ public sealed class SubflowTerminalRevertRearmTests
             .Setup(x => x.ProbeAsync(
                 It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<SubItemTerminalOutcome>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SubItemTerminalProbe.Proceed);
+
+        _terminalGuard
+            .Setup(x => x.ProbeWithSnapshotAsync(
+                It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<SubItemTerminalOutcome>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new SubItemTerminalProbeResult(SubItemTerminalProbe.Proceed, null, null));
 
         _eventBus
             .Setup(x => x.PublishAsync(
@@ -233,6 +239,7 @@ public sealed class SubflowTerminalRevertRearmTests
             _uowManager.Object,
             _componentCacheStore.Object,
             _instanceRepository.Object,
+            _correlationRepository.Object,
             _runtimeInfoProvider.Object,
             _workflowExecutionService.Object,
             _outputMappingService.Object,

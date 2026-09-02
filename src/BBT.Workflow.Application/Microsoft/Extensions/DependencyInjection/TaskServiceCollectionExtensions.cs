@@ -111,6 +111,13 @@ public static class TaskServiceCollectionExtensions
         // HTTP, SOAP and Dapr remote executors
         services.AddTaskExecutor<HttpTaskExecutor>();
         services.AddTaskExecutor<SoapTaskExecutor>();
+
+        // External HTTP executor (issue #399): the orchestrator performs the user-defined URL call
+        // in-process — no /execution/invoke hop. The named HTTP clients it sends through are
+        // concrete transport and are registered by the Infrastructure module
+        // (AddExternalHttpTaskClients), which every composition root pairs with this one.
+        services.TryAddScoped<IExternalHttpTaskInvoker, ExternalHttpTaskInvoker>();
+        services.AddTaskExecutor<ExternalHttpTaskExecutor>();
         services.AddTaskExecutor<DaprServiceTaskExecutor>();
         services.AddTaskExecutor<DaprBindingTaskExecutor>();
         services.AddTaskExecutor<DaprHttpEndpointTaskExecutor>();

@@ -94,6 +94,10 @@ public static class WorkflowInfrastructureModuleServiceCollectionExtensions
         services.AddScoped<IInstanceJobRepository, EfCoreInstanceJobRepository>();
         services.AddScoped<IInstanceActionRepository, EfCoreInstanceActionRepository>();
 
+        // Named HTTP clients for the external HTTP task executor (issue #399) — concrete
+        // transport, so it lives here rather than in the Application layer that consumes it.
+        services.AddExternalHttpTaskClients();
+
         // Remote vnext api
         services.AddVNextApiServices();
         services.AddCallerRoleResolver(services.GetConfiguration());
@@ -136,4 +140,45 @@ public static class WorkflowInfrastructureModuleServiceCollectionExtensions
         return services;
     }
 
+    /// <summary>
+    /// Registers the named HTTP clients the external HTTP task executor
+    /// (<c>BBT.Workflow.Tasks.Executors.ExternalHttpTaskInvoker</c>) sends through. Mirrors the
+    /// Execution host's <c>AddWorkflowHttpClient</c> (same client names, decompression, connection
+    /// cap, cookie policy and SSL-bypass variant) so a task behaves identically whichever host
+    /// performs the call. The 30s base timeout is overridden per request from the task's
+    /// <c>timeoutSeconds</c> by the shared <c>HttpTaskInvocation</c> core.
+    /// </summary>
+    private static IServiceCollection AddExternalHttpTaskClients(this IServiceCollection services)
+    {
+        // Default HTTP client with SSL validation enabled
+        services.AddHttpClient(BBT.Workflow.Execution.WorkflowHttpClientNames.Default, client =>
+            {
+                client.Timeout = TimeSpan.FromSeconds(30);
+                client.MaxResponseContentBufferSize = int.MaxValue;
+                client.DefaultRequestHeaders.Add("Accept", "application/json");
+            })
+            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+            {
+                AutomaticDecompression = System.Net.DecompressionMethods.GZip | System.Net.DecompressionMethods.Deflate,
+                MaxConnectionsPerServer = 10,
+                UseCookies = false
+            });
+
+        // HTTP client with SSL validation disabled (validateSsl: false tasks)
+        services.AddHttpClient(BBT.Workflow.Execution.WorkflowHttpClientNames.NoSslValidation, client =>
+            {
+                client.Timeout = TimeSpan.FromSeconds(30);
+                client.MaxResponseContentBufferSize = int.MaxValue;
+                client.DefaultRequestHeaders.Add("Accept", "application/json");
+            })
+            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+            {
+                AutomaticDecompression = System.Net.DecompressionMethods.GZip | System.Net.DecompressionMethods.Deflate,
+                MaxConnectionsPerServer = 10,
+                UseCookies = false,
+                ServerCertificateCustomValidationCallback = (_, _, _, _) => true
+            });
+
+        return services;
+    }
 }

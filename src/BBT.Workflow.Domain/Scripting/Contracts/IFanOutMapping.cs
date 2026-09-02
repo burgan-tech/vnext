@@ -8,7 +8,7 @@ namespace BBT.Workflow.Scripting;
 /// collection, in parallel, then a single output handler for the whole batch.
 /// </summary>
 /// <remarks>
-/// WHERE THE SCRIPT IS ATTACHED — not on the task component. A type-21 task component carries only
+/// WHERE THE SCRIPT IS ATTACHED — not on the task component. A type-22 task component carries only
 /// <c>type</c> and <c>config</c>; the mapping rides the WORKFLOW's task binding, the same
 /// <c>{ order, task, mapping: { location, code } }</c> slot every other task type uses
 /// (<c>OnExecuteTask.Mapping</c>, which the executor reads as

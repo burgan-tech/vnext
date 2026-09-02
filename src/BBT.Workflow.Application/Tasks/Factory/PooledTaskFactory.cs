@@ -172,6 +172,12 @@ public static class PoolableTaskRegistry
             HttpTask.CreateEmpty,
             (source, target) => ((HttpTask)target).CopyFromInternal((HttpTask)source));
 
+        // Exact-type lookup: the HttpTask entry does not match the derived external task, and an
+        // unregistered pooled type falls back to CopyBaseToInternal, losing every HTTP property.
+        RegisterPoolableTask<ExternalHttpTask>(
+            ExternalHttpTask.CreateEmpty,
+            (source, target) => ((ExternalHttpTask)target).CopyFromInternal((HttpTask)source));
+
         RegisterPoolableTask<ScriptTask>(
             ScriptTask.CreateEmpty,
             (source, target) => ((ScriptTask)target).CopyFromInternal((ScriptTask)source));
