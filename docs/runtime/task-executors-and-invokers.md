@@ -32,12 +32,13 @@ external calls from strongly typed bindings.
 | Task family | Executor examples | Invoker examples |
 | --- | --- | --- |
 | HTTP/SOAP | `HttpTaskExecutor`, `SoapTaskExecutor` | `HttpTaskInvoker`, `SoapTaskInvoker` |
-| External HTTP (type `21`) | `ExternalHttpTaskExecutor` | None — `ExternalHttpTaskInvoker` runs the shared `HttpTaskInvocation` core in-process inside Orchestration (issue #399) |
+| External HTTP (type `22`) | `ExternalHttpTaskExecutor` | None — `ExternalHttpTaskInvoker` runs the shared `HttpTaskInvocation` core in-process inside Orchestration (issue #399) |
 | Dapr | `DaprServiceTaskExecutor`, `DaprPubSubTaskExecutor`, `DaprBindingTaskExecutor` | Matching Dapr invokers |
 | State store | `StateStoreTaskExecutor` | `StateStoreTaskInvoker` — Dapr state store cache access ([details](state-store-task.md)) |
 | Trigger | `StartTriggerTaskExecutor`, `DirectTriggerTaskExecutor`, `SubProcessTaskExecutor` | Remote trigger invokers |
 | Data query | `GetInstancesTaskExecutor`, `GetInstanceDataTaskExecutor` | Remote data invokers |
 | Script | `ScriptTaskExecutor` | Executes in Orchestration through scripting module |
+| Python | `PythonTaskExecutor` | `PythonTaskInvoker` selects an explicit Python.NET, process, or container runtime ([details](python-task.md)) |
 | Human/notification | Human and notification executors | May remain application-owned depending on side effect type |
 
 ## Failure Modes
@@ -55,9 +56,13 @@ Execution controller begins a log scope with domain, workflow key, instance id, 
 and task type from the trace context and envelope. Executors should preserve correlation
 and task metadata when sending remote envelopes.
 
-## External HTTP tasks (type `21`)
+Python is the first task family with a second runtime registry behind its invoker. The
+`PythonTaskInvoker` resolves exactly one configured `IPythonExecutionRuntime`; a disabled or
+unavailable requested mode is a task failure and never causes a silent mode fallback.
 
-`ExternalHttpTask` (`type: "21"`, config identical to the type-6 HTTP task) is executed **directly by
+## External HTTP tasks (type `22`)
+
+`ExternalHttpTask` (`type: "22"`, config identical to the type-6 HTTP task) is executed **directly by
 the Orchestrator**: the executor flattens the task through the same `TaskBindingMapper` as the
 remote path and hands the `HttpTaskBinding` to `ExternalHttpTaskInvoker`.
 `/execution/invoke/{type}/{key}` is never called.
@@ -65,7 +70,7 @@ remote path and hands the `HttpTaskBinding` to `ExternalHttpTaskInvoker`.
 Both HTTP task types run **one shared send implementation** — `HttpTaskInvocation` in
 `BBT.Workflow.Execution.Abstractions` (the only assembly both hosts reference; it stays
 package-free by taking the named-client resolver as a `Func<string, HttpClient>`). The Execution
-service's `HttpTaskInvoker` (type 6) and the Orchestrator's `ExternalHttpTaskInvoker` (type 21)
+service's `HttpTaskInvoker` (type 6) and the Orchestrator's `ExternalHttpTaskInvoker` (type 22)
 are thin wrappers adding host-specific logging/metrics and, on the orchestrator side, the mapping
 to the orchestrator-side `TaskInvocationResult` twin. Named clients (`validateSsl: false` selects
 the SSL-bypass client), header/Content-Type semantics, response parsing and accepted-status-code
@@ -104,4 +109,4 @@ Trade-offs to be aware of when choosing type 21 over type 6:
 - `execution/BBT.Workflow.Execution.HttpApi.Host/Controllers/Executions/ExecutionController.cs`
 - `src/BBT.Workflow.Execution/Invokers/`
 - `src/BBT.Workflow.Execution/Services/TaskInvokerRegistry.cs`
-
+- `src/BBT.Workflow.Execution/Python/PythonRuntimeRegistry.cs`

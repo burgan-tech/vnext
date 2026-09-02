@@ -13,6 +13,7 @@ public static class TaskTypes
     public const string DaprHttpEndpoint = "daprhttpendpoint";
     public const string DaprPubSub = "daprpubsub";
     public const string DaprConversation = "daprconversation";
+    public const string Python = "python";
 
     public const string StateStore = "statestore";
 
@@ -28,4 +29,3 @@ public static class TaskTypes
     public const string GetInstances = "getinstances";
     public const string GetInstance = "getinstance";
 }
-

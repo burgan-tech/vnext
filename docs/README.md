@@ -48,6 +48,7 @@ describe the stable mental model, boundaries, failure modes, and change-safety r
 25. Read [Dapr Invocation Transport](runtime/dapr-invocation-transport.md) before assuming a Dapr-facing task or client should move to gRPC. Covers the three hops of a Dapr service invocation call and why `dapr.io/app-protocol` never controlled `DaprServiceTask`'s transport, the `InvokeService` deprecation evidence behind the decision to keep `DaprServiceTask` on HTTP, and the Orchestration → Execution gRPC proxy-mode design.
 26. Read [Extensions](domain/extensions.md) before assuming two Extensions cannot reference the same task — they can and are expected to when their `Mapping`/`ErrorBoundary` differ. Covers the per-extension `ResponseVariableKey` output key, why the duplicate-task-key warning does not fire for the Extension hook, and the Preprod fault (parallel-merge crash) this shape once caused.
 27. Read [Event Publish Modes](runtime/event-publish-modes.md) before adding or changing a distributed event, or before touching subflow terminal delivery. Covers the two-mode publish taxonomy (Outbox vs Outbox + TerminalRelay), why the EventHook infrastructure no longer exists, the `SubflowTerminalRelay` / Inbox-backup split for the three subflow terminal events, the re-arm-on-revert mechanism, and the Aether wakeup signal (`Aether:Outbox:WakeupSignalEnabled`).
+28. Read [Python Task](runtime/python-task.md) before authoring Python tasks or changing the Python.NET, process, container, package-lock, or container-driver contracts.
 
 ## Documentation Rules
 
