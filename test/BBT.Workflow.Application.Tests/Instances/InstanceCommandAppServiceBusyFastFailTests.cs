@@ -91,7 +91,7 @@ public class InstanceCommandAppServiceBusyFastFailTests : IDisposable
             longPollAckResumeService: Substitute.For<ILongPollAckResumeService>(),
             instanceCommandGateway: Substitute.For<IInstanceCommandGateway>(),
             workflowOutputMappingService: Substitute.For<IWorkflowOutputMappingService>(),
-            currentUser: Substitute.For<ICurrentUser>(),
+            callerRoleResolver: new DefaultCallerRoleResolver(Substitute.For<ICurrentUser>()),
             logger: Substitute.For<ILogger<InstanceCommandAppService>>());
     }
 

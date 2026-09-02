@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using BBT.Workflow.Execution.Bindings;
 using BBT.Workflow.Execution.Metrics;
+using BBT.Workflow.Execution.Services;
 using Microsoft.Extensions.Logging;
 
 namespace BBT.Workflow.Execution.Invokers;
@@ -52,6 +53,7 @@ public sealed class HttpTaskInvoker(
         CancellationToken cancellationToken)
     {
         var startTimestamp = Stopwatch.GetTimestamp();
+        var prepareActivity = InvokerActivityHelper.StartPrepareActivity(TaskType, taskKey ?? string.Empty);
 
         try
         {
@@ -94,6 +96,7 @@ public sealed class HttpTaskInvoker(
                 request.Content.Headers.ContentType = MediaTypeHeaderValue.Parse(contentType);
             }
 
+            prepareActivity?.Dispose();
             var response = await httpClient.SendAsync(request, cancellationToken);
 
             var responseHeaders = InvokerHelpers.MergeHeaders(response.Headers, response.Content.Headers);
@@ -134,10 +137,11 @@ public sealed class HttpTaskInvoker(
         }
         catch (TaskCanceledException ex) when (cancellationToken.IsCancellationRequested)
         {
+            prepareActivity?.Dispose();
             _metrics.RecordTaskExecution(TaskType, "cancelled");
-            
+
             logger.LogWarning("HTTP request was cancelled for task {TaskKey} - URL: {Url}", taskKey, binding.Url);
-            
+
             return TaskInvocationResult.Failure(
                 error: "HTTP request was cancelled",
                 executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
@@ -152,6 +156,7 @@ public sealed class HttpTaskInvoker(
         }
         catch (HttpRequestException ex)
         {
+            prepareActivity?.Dispose();
             _metrics.RecordTaskExecution(TaskType, "failure");
             logger.LogError(ex, "HTTP task invocation failed for {TaskKey} - URL: {Url}", taskKey, binding.Url);
             
@@ -169,6 +174,7 @@ public sealed class HttpTaskInvoker(
         }
         catch (Exception ex)
         {
+            prepareActivity?.Dispose();
             _metrics.RecordTaskExecution(TaskType, "failure");
             logger.LogError(ex, "Unexpected error during HTTP task invocation for {TaskKey}", taskKey);
             

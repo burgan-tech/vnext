@@ -17,4 +17,20 @@ public record SubItemCanceledInput
     public Guid? RootInstanceId { get; init; }
     public bool Sync { get; init; }
     public TerminationContext? Termination { get; init; }
+
+    /// <summary>
+    /// Trace lane anchor (W3C traceparent) of the canceling subflow. See <c>WorkflowTraceLane</c>
+    /// and <c>FlowCompletedInput.TraceRoot</c> for why this is carried in the internal-only body
+    /// rather than a header.
+    /// </summary>
+    public string? TraceRoot { get; init; }
+
+    /// <summary>The enclosing lane's anchor, so the subflow's resume returns to the parent's lane.</summary>
+    public string? ParentTraceRoot { get; init; }
+
+    /// <summary>
+    /// How many times a terminal-revert has re-published this event as a durable-delivery rearm.
+    /// <c>null</c>/<c>0</c> for an original delivery. See <c>FlowCompletedInput.RearmAttempt</c>.
+    /// </summary>
+    public int? RearmAttempt { get; init; }
 }

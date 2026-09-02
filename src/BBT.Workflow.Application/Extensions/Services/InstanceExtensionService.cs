@@ -32,6 +32,8 @@ public sealed class InstanceExtensionService(
         ExtensionScope currentScope,
         CancellationToken cancellationToken = default)
     {
+        using var processActivity = ExtensionActivityHelper.StartProcess(workflow.Key, currentScope);
+
         var context = new ExtensionProcessingContext(
             new Dictionary<string, object>(),
             new HashSet<string>());
@@ -180,6 +182,8 @@ public sealed class InstanceExtensionService(
     {
         if (extensionReferences.Count == 0)
             return [];
+
+        using var resolveActivity = ExtensionActivityHelper.StartResolve(extensionReferences.Count);
 
         var extensionTasks = extensionReferences.Select(async reference =>
         {

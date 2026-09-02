@@ -31,9 +31,9 @@ public enum SubItemTerminalProbe
 /// <summary>
 /// Lock-free pre-check for sub-item terminal deliveries (Completed / Faulted / Canceled).
 /// <para>
-/// Terminal sub-item events are published with <c>EventHookMode.DurablePostCommit</c>, so every
-/// signal is delivered twice by design: once inline by the local publish hook and once through the
-/// Inbox worker. On top of that the broker guarantees only at-least-once delivery. Without this
+/// Terminal sub-item events are delivered twice by design: once by the post-commit terminal relay
+/// and once through the Inbox backup. On top of that the broker guarantees only at-least-once
+/// delivery. Without this
 /// probe, each duplicate has to win the per-subInstance distributed lock purely to discover that
 /// the work is already done — and a duplicate that loses the race is reported as a transient
 /// failure, forcing a full broker re-delivery cycle.

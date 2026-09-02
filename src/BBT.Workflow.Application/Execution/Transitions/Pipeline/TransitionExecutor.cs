@@ -178,8 +178,8 @@ public sealed class TransitionExecutor
         }
 
         activity.SetTag(TelemetryConstants.TagNames.ChainDepth, context.ChainDepth);
-        activity.SetTag("vnext.pipeline.profile", context.Profile?.Name ?? "unknown");
-        activity.SetTag("vnext.chain.id", context.ExecutionChainId);
+        activity.SetTag(TelemetryConstants.TagNames.PipelineProfile, context.Profile?.Name ?? "unknown");
+        activity.SetTag(TelemetryConstants.TagNames.ChainId, context.ExecutionChainId);
 
         // Business correlation + vendor-neutral instance id: published for EVERY pipeline run
         // (sync and async alike) so downstream stampers (RemoteInvokerService.CreateTraceContext,

@@ -62,7 +62,7 @@ public sealed class InstanceCommandAppService(
     ILongPollAckResumeService longPollAckResumeService,
     IInstanceCommandGateway instanceCommandGateway,
     IWorkflowOutputMappingService workflowOutputMappingService,
-    ICurrentUser currentUser,
+    ICallerRoleResolver callerRoleResolver,
     ILogger<InstanceCommandAppService> logger)
     : ApplicationService(serviceProvider), IInstanceCommandAppService
 {
@@ -215,9 +215,12 @@ public sealed class InstanceCommandAppService(
         var ackRoles = state?.LongPollAckRoles;
         if (ackRoles is { Count: > 0 })
         {
-            var callerRoles = BuildCallerRoles(input.Role, input.Headers);
+            var callerRolesResult = await BuildCallerRolesAsync(input.Role, input.Headers, cancellationToken);
+            if (!callerRolesResult.IsSuccess)
+                return Result.Fail(callerRolesResult.Error);
+
             var allowed = await transitionAuthorizationManager.IsAnyRoleAllowedForGrantsAsync(
-                callerRoles, ackRoles, instance,
+                callerRolesResult.Value, ackRoles, instance,
                 new AuthorizationRequestContext(input.Headers), cancellationToken);
             if (!allowed)
                 return Result.Fail(WorkflowErrors.LongPollAckAccessDenied(instance.Id));
@@ -234,21 +237,25 @@ public sealed class InstanceCommandAppService(
 
     /// <summary>
     /// Builds the caller role set for the long-poll acknowledge check: the explicit <c>role</c> parameter
-    /// plus the caller's resolved roles. Resolution honors the legacy <c>role</c> header, because
-    /// <c>ChangeFromHeaders</c> does not run on the HTTP path and a header-only caller would otherwise be
-    /// rejected with 403 by an allowlist grant set.
+    /// plus the roles reported by the configured caller-role provider. The explicit parameter is additive
+    /// here (unlike <c>authorize</c>, where it is a fallback) because acknowledge is a narrow, single-grant
+    /// check and the parameter is how a client names which of its roles is acknowledging.
     /// </summary>
-    private IReadOnlyCollection<string> BuildCallerRoles(
+    private async Task<Result<IReadOnlyCollection<string>>> BuildCallerRolesAsync(
         string? explicitRole,
-        IReadOnlyDictionary<string, string?>? headers)
+        IReadOnlyDictionary<string, string?>? headers,
+        CancellationToken cancellationToken)
     {
+        var resolved = await callerRoleResolver.ResolveRolesAsync(headers, cancellationToken);
+        if (!resolved.IsSuccess)
+            return Result<IReadOnlyCollection<string>>.Fail(resolved.Error);
+
         var roles = new List<string>();
         if (!string.IsNullOrWhiteSpace(explicitRole))
             roles.Add(explicitRole.Trim());
-        var resolved = currentUser.ResolveCallerRoles(headers);
-        if (resolved is { Length: > 0 })
-            roles.AddRange(resolved);
-        return roles;
+        if (resolved.Value is { Length: > 0 } callerRoles)
+            roles.AddRange(callerRoles);
+        return Result<IReadOnlyCollection<string>>.Ok(roles);
     }
 
     /// <summary>

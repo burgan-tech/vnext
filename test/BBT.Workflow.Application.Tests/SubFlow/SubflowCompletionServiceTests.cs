@@ -5,6 +5,7 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using BBT.Aether.Events;
 using BBT.Aether.Results;
 using BBT.Aether.Uow;
 using BBT.Workflow.BackgroundJobs.Options;
@@ -15,6 +16,7 @@ using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Execution.Services;
 using BBT.Workflow.Instances;
+using BBT.Workflow.Instances.Events;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.SubFlow;
@@ -38,6 +40,7 @@ public sealed class SubflowCompletionServiceTests
     private readonly Mock<ITransitionLockScopeFactory> _lockScopeFactory = new();
     private readonly Mock<ISubItemTerminalGuard> _terminalGuard = new();
     private readonly Mock<ITransitionLockScope> _lockScope = new();
+    private readonly Mock<IDistributedEventBus> _eventBus = new();
     private readonly Mock<ILogger<SubflowCompletionService>> _logger = new();
 
     public SubflowCompletionServiceTests()
@@ -66,6 +69,13 @@ public sealed class SubflowCompletionServiceTests
                 It.IsAny<Guid>(), It.IsAny<Guid>(),
                 It.IsAny<SubItemTerminalOutcome>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SubItemTerminalProbe.Proceed);
+        _eventBus
+            .Setup(x => x.PublishAsync(
+                It.IsAny<InstanceSubCompletedEvent>(),
+                It.IsAny<string>(),
+                It.IsAny<bool>(),
+                It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
         _logger.Setup(x => x.IsEnabled(It.IsAny<LogLevel>())).Returns(true);
     }
 
@@ -185,6 +195,7 @@ public sealed class SubflowCompletionServiceTests
             _outputMappingService.Object,
             _lockScopeFactory.Object,
             new SubItemTerminalGuard(correlationRepository.Object, guardLogger.Object),
+            _eventBus.Object,
             Options.Create(new WorkflowExecutionOptions()),
             _logger.Object);
     }
@@ -740,6 +751,7 @@ public sealed class SubflowCompletionServiceTests
             _outputMappingService.Object,
             _lockScopeFactory.Object,
             _terminalGuard.Object,
+            _eventBus.Object,
             Options.Create(new WorkflowExecutionOptions()),
             _logger.Object);
 

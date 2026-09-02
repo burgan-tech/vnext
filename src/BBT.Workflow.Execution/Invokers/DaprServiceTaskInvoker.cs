@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using BBT.Workflow.Execution.Bindings;
 using BBT.Workflow.Execution.Metrics;
+using BBT.Workflow.Execution.Services;
 using Dapr.Client;
 using Microsoft.Extensions.Logging;
 
@@ -52,6 +53,7 @@ public sealed class DaprServiceTaskInvoker(
         CancellationToken cancellationToken)
     {
         var startTimestamp = Stopwatch.GetTimestamp();
+        var prepareActivity = InvokerActivityHelper.StartPrepareActivity(TaskType, taskKey ?? string.Empty);
 
         try
         {
@@ -94,6 +96,7 @@ public sealed class DaprServiceTaskInvoker(
             InvokerHelpers.ApplyTrustedCorrelationHeaders(request);
 
             // Use InvokeMethodWithResponseAsync to get full HTTP response including status codes
+            prepareActivity?.Dispose();
             using var response = await daprClient.InvokeMethodWithResponseAsync(request, cancellationToken);
 
             var responseHeaders = InvokerHelpers.MergeHeaders(response.Headers, response.Content.Headers);
@@ -141,6 +144,7 @@ public sealed class DaprServiceTaskInvoker(
         }
         catch (TaskCanceledException ex) when (cancellationToken.IsCancellationRequested)
         {
+            prepareActivity?.Dispose();
             _metrics.RecordDaprServiceInvocation(binding.AppId, binding.MethodName, "cancelled");
             logger.LogWarning("Dapr service invocation was cancelled: {AppId}/{MethodName}",
                 binding.AppId, binding.MethodName);
@@ -160,6 +164,7 @@ public sealed class DaprServiceTaskInvoker(
         }
         catch (Exception ex)
         {
+            prepareActivity?.Dispose();
             _metrics.RecordDaprServiceInvocation(binding.AppId, binding.MethodName, "failure");
             logger.LogError(ex, "Unexpected error during Dapr service invocation: {AppId}/{MethodName}",
                 binding.AppId, binding.MethodName);

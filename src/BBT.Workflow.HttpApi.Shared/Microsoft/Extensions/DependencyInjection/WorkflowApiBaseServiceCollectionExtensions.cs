@@ -233,6 +233,7 @@ public static class WorkflowApiBaseServiceCollectionExtensions
                         new RequestIdLogProcessor(serviceProvider.GetRequiredService<ICorrelationIdProvider>())))
                 // Span counterpart, so a trace filters on the same x_request_id value as the logs.
                 .ConfigureTracing((_, tracing) =>
+                {
                     tracing
                         // Aether registers AspNetCore + HttpClient instrumentation, but nothing for
                         // gRPC. Grpc.Net.Client — which every Dapr.Client call goes through — creates
@@ -267,7 +268,15 @@ public static class WorkflowApiBaseServiceCollectionExtensions
                             options.EnrichWithIDbCommand = static (activity, command) =>
                                 activity.DisplayName = $"Db.{DescribeSqlVerb(command.CommandText)}")
                         .AddProcessor(serviceProvider =>
-                            new RequestIdSpanProcessor(serviceProvider.GetRequiredService<ICorrelationIdProvider>()))));
+                            new RequestIdSpanProcessor(serviceProvider.GetRequiredService<ICorrelationIdProvider>()));
+
+                    // Worker hosts only: see IdlePollSpanProcessor. Other hosts have no idle poll
+                    // loop, so the processor would only add a per-span branch for nothing.
+                    if (configuration.GetValue("Telemetry:Tracing:DropRootDbSpans", false))
+                    {
+                        tracing.AddProcessor(new IdlePollSpanProcessor());
+                    }
+                }));
         return services;
     }
 

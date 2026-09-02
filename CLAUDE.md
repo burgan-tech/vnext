@@ -112,9 +112,17 @@ Each workflow "flow" has its own PostgreSQL schema. Schema resolution uses `ICur
 
 ### Domain Events (dual-processing pattern)
 
-Every domain event requires **two** handlers:
-- **Event Hook** (`IEventPublishHook<T>` in `*.Infrastructure/*/Events/`) — synchronous, local, within the same UoW
+The EventHook infrastructure has been deleted. Every distributed event publishes plainly through
+the transactional outbox and requires:
+- **Contract** in `*.Events.Contracts/*/Events/` with `[EventName]`
 - **Event Handler** (`IEventHandler<T>` in `workers/BBT.Workflow.Workers.Inbox/Handlers/`) — asynchronous, distributed, fault-tolerant
+- **WorkflowLogs** entries (`BBT.Workflow.Domain/Logging/WorkflowLogs.cs`)
+
+The three subflow terminal events (`InstanceSubCompletedEvent`, `InstanceSubFaultedEvent`,
+`InstanceSubCanceledEvent`) additionally implement `ISubflowTerminalEvent`: post-commit, `SubflowTerminalRelay`
+relays them as an immediate command via `IInstanceCommandGateway`, and their Inbox handler is a
+durable backup deduplicated by `ISubItemTerminalGuard` — the only event category with a second
+delivery path by design. See `docs/runtime/event-publish-modes.md`.
 
 ---
 

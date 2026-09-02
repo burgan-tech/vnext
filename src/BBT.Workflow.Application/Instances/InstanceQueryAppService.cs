@@ -48,7 +48,7 @@ public sealed class InstanceQueryAppService(
     ITransitionAuthorizationManager transitionAuthorizationManager,
     IRepresentationEtagService representationEtagService,
     ISchemaFieldFilterService schemaFieldFilterService,
-    ICurrentUser currentUser,
+    ICallerRoleResolver callerRoleResolver,
     IPaginationLinkGenerator paginationLinkGenerator,
     IOptions<InstanceFilteringOptions> instanceFilteringOptions,
     Caching.IStateFunctionCache stateFunctionCache,
@@ -503,6 +503,22 @@ public sealed class InstanceQueryAppService(
         };
 
     /// <summary>
+    /// Opens the descent span for one level. Thin forwarder over
+    /// <see cref="InstanceReadActivityHelper.StartDescendScope"/> that captures this service's
+    /// <c>IRuntimeInfoProvider</c>, so the five call sites below stay readable.
+    /// </summary>
+    private SubflowDescentScope StartDescend(
+        string targetDomain,
+        string targetFlow,
+        string targetInstanceId,
+        string parentInstanceId,
+        string function)
+    {
+        return InstanceReadActivityHelper.StartDescendScope(
+            runtimeInfoProvider, targetDomain, targetFlow, targetInstanceId, parentInstanceId, function);
+    }
+
+    /// <summary>
     /// Gets available transitions and state information from a remote SubFlow instance.
     /// Includes view extensions and active correlations from the SubFlow.
     /// </summary>
@@ -524,6 +540,12 @@ public sealed class InstanceQueryAppService(
     {
         try
         {
+            // Unresolvable roles fall through to the main-flow transitions below rather than forwarding
+            // with an unknown role set — the subflow would then filter its transitions against nothing.
+            var callerRoles = await callerRoleResolver.ResolveRolesAsync(headers, cancellationToken);
+            if (!callerRoles.IsSuccess)
+                return GetMainFlowTransitions(mainInstance, currentWorkflow);
+
             var subFlowInput = new GetFunctionWithInstanceInput
             {
                 Domain = activeSubFlowCorrelation.SubFlowDomain,
@@ -533,9 +555,16 @@ public sealed class InstanceQueryAppService(
                 Extensions = extensions,
                 Headers = headers,
                 QueryParams = queryParams,
-                Role = currentUser.ResolveCallerRole(headers),
-                Roles = currentUser.ResolveCallerRoles(headers)
+                Role = ICallerRoleResolver.SingleRoleOf(callerRoles.Value),
+                Roles = callerRoles.Value
             };
+
+            using var descent = StartDescend(
+                activeSubFlowCorrelation.SubFlowDomain,
+                activeSubFlowCorrelation.SubFlowName,
+                activeSubFlowCorrelation.SubFlowInstanceId.ToString(),
+                mainInstance.Id.ToString(),
+                TelemetryConstants.DescentFunctions.State);
 
             var subFlowResult = await instanceQueryGateway.GetFunctionWithStateAsync(
                 subFlowInput,
@@ -2011,6 +2040,10 @@ public sealed class InstanceQueryAppService(
         GetMasterInput input,
         CancellationToken cancellationToken)
     {
+        var callerRoles = await callerRoleResolver.ResolveRolesAsync(input.Headers, cancellationToken);
+        if (!callerRoles.IsSuccess)
+            return Result<GetSchemaOutput>.Fail(callerRoles.Error);
+
         var subFlowInput = new GetFunctionWithInstanceInput
         {
             Domain = subflow.SubFlowDomain,
@@ -2019,9 +2052,16 @@ public sealed class InstanceQueryAppService(
             Instance = subflow.SubFlowInstanceId.ToString(),
             Headers = input.Headers ?? new Dictionary<string, string?>(),
             QueryParams = input.QueryParameters ?? new Dictionary<string, string?>(),
-            Role = currentUser.ResolveCallerRole(input.Headers),
-            Roles = currentUser.ResolveCallerRoles(input.Headers)
+            Role = ICallerRoleResolver.SingleRoleOf(callerRoles.Value),
+            Roles = callerRoles.Value
         };
+
+        using var descent = StartDescend(
+            subflow.SubFlowDomain,
+            subflow.SubFlowName,
+            subflow.SubFlowInstanceId.ToString(),
+            subflow.ParentInstanceId.ToString(),
+            TelemetryConstants.DescentFunctions.Master);
 
         return await instanceQueryGateway.GetFunctionWithMasterAsync(subFlowInput, cancellationToken);
     }
@@ -2086,6 +2126,10 @@ public sealed class InstanceQueryAppService(
         string[]? extensions,
         CancellationToken cancellationToken)
     {
+        var callerRoles = await callerRoleResolver.ResolveRolesAsync(null, cancellationToken);
+        if (!callerRoles.IsSuccess)
+            return Result<GetExtensionsOutput>.Fail(callerRoles.Error);
+
         var subFlowInput = new GetFunctionWithInstanceInput
         {
             Domain = subflow.SubFlowDomain,
@@ -2093,9 +2137,16 @@ public sealed class InstanceQueryAppService(
             Version = subflow.SubFlowVersion,
             Instance = subflow.SubFlowInstanceId.ToString(),
             Extensions = extensions,
-            Role = currentUser.ResolveCallerRole(null),
-            Roles = currentUser.ResolveCallerRoles(null)
+            Role = ICallerRoleResolver.SingleRoleOf(callerRoles.Value),
+            Roles = callerRoles.Value
         };
+
+        using var descent = StartDescend(
+            subflow.SubFlowDomain,
+            subflow.SubFlowName,
+            subflow.SubFlowInstanceId.ToString(),
+            subflow.ParentInstanceId.ToString(),
+            TelemetryConstants.DescentFunctions.Extensions);
 
         return await instanceQueryGateway.GetFunctionWithExtensionsAsync(
             subFlowInput,
@@ -2172,15 +2223,26 @@ public sealed class InstanceQueryAppService(
         string transitionKey,
         CancellationToken cancellationToken)
     {
+        var callerRoles = await callerRoleResolver.ResolveRolesAsync(null, cancellationToken);
+        if (!callerRoles.IsSuccess)
+            return Result<GetSchemaOutput>.Fail(callerRoles.Error);
+
         var subFlowInput = new GetFunctionWithInstanceInput
         {
             Domain = subflow.SubFlowDomain,
             Workflow = subflow.SubFlowName,
             Version = subflow.SubFlowVersion,
             Instance = subflow.SubFlowInstanceId.ToString(),
-            Role = currentUser.ResolveCallerRole(null),
-            Roles = currentUser.ResolveCallerRoles(null)
+            Role = ICallerRoleResolver.SingleRoleOf(callerRoles.Value),
+            Roles = callerRoles.Value
         };
+
+        using var descent = StartDescend(
+            subflow.SubFlowDomain,
+            subflow.SubFlowName,
+            subflow.SubFlowInstanceId.ToString(),
+            subflow.ParentInstanceId.ToString(),
+            TelemetryConstants.DescentFunctions.Schema);
 
         return await instanceQueryGateway.GetFunctionWithSchemaAsync(
             subFlowInput,
@@ -2332,6 +2394,19 @@ public sealed class InstanceQueryAppService(
         Dictionary<string, string?>? queryParams = null,
         CancellationToken cancellationToken = default)
     {
+        // No failure channel here — the method already signals "no subflow view" with null, which is
+        // also the closed answer when the caller's roles cannot be established.
+        var callerRoles = await callerRoleResolver.ResolveRolesAsync(headers, cancellationToken);
+        if (!callerRoles.IsSuccess)
+            return null;
+
+        using var descent = StartDescend(
+            instance.Subflow!.SubFlowDomain,
+            instance.Subflow!.SubFlowName,
+            instance.Subflow!.SubFlowInstanceId.ToString(),
+            instance.Id.ToString(),
+            TelemetryConstants.DescentFunctions.View);
+
         var subFlowViewResult = await instanceQueryGateway.GetFunctionWithViewAsync(
             new GetFunctionWithInstanceInput
             {
@@ -2341,14 +2416,18 @@ public sealed class InstanceQueryAppService(
                 Version = instance.Subflow!.SubFlowVersion,
                 Headers = headers ?? new Dictionary<string, string?>(),
                 QueryParams = queryParams ?? new Dictionary<string, string?>(),
-                Role = currentUser.ResolveCallerRole(headers),
-                Roles = currentUser.ResolveCallerRoles(headers)
+                Role = ICallerRoleResolver.SingleRoleOf(callerRoles.Value),
+                Roles = callerRoles.Value
             },
             transitionKey,
             cancellationToken);
 
         if (!subFlowViewResult.IsSuccess)
         {
+            // Falling back to the main-flow view is a normal outcome here, not an error — but an
+            // unmarked fallback is indistinguishable from a descent that succeeded and returned
+            // nothing, which is the exact confusion this span exists to remove.
+            InstanceReadActivityHelper.SetUnresolved(descent.Activity, "subflow-view-unavailable");
             return null;
         }
 
@@ -2439,9 +2518,12 @@ public sealed class InstanceQueryAppService(
         const int humanTaskFanoutParallelism = 10;
 
         var scopeFactory = serviceProvider.GetRequiredService<IServiceScopeFactory>();
-        // Honor the legacy `role` header: a caller whose roles arrive only as a header must not be
-        // treated as role-less, which would silently drop every task guarded by a role grant.
-        var userRoles = currentUser.ResolveCallerRoles(headers) ?? [];
+        // Resolved once, before the fan-out: the parallel bodies open their own DI scopes, so a resolver
+        // read inside them would be a fresh memo — and, under a remote provider, one call per workflow.
+        var callerRolesResult = await callerRoleResolver.ResolveRolesAsync(headers, cancellationToken);
+        if (!callerRolesResult.IsSuccess)
+            return Result<List<HumanTaskItemOutput>>.Fail(callerRolesResult.Error);
+        var userRoles = callerRolesResult.Value ?? [];
         var requestContext = new AuthorizationRequestContext(headers);
         var allItems = new System.Collections.Concurrent.ConcurrentBag<HumanTaskItemOutput>();
 

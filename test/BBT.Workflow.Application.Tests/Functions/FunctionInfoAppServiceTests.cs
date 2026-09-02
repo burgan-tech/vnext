@@ -88,8 +88,7 @@ public sealed class FunctionInfoAppServiceTests : IDisposable
             componentCacheStore: _componentCacheStore,
             currentSchema: Substitute.For<ICurrentSchema>(),
             urlTemplateBuilder: new UrlTemplateBuilder(Options.Create(new UrlTemplateOptions())),
-            functionAccessPolicy: new FunctionAccessPolicy(
-                Substitute.For<ICurrentUser>(), _authorizationManager),
+            functionAccessPolicy: new FunctionAccessPolicy(),
             contractResolver: new FunctionContractResolver(
                 _conditionService, NullLogger<FunctionContractResolver>.Instance),
             viewContentResolutionService: _viewContentResolution);
@@ -103,23 +102,22 @@ public sealed class FunctionInfoAppServiceTests : IDisposable
 
     // ─── Access gates ───────────────────────────────────────────────────────────
 
+    /// <summary>
+    /// <c>function.roles</c> no longer gates the runtime's own surfaces — the middle tier owns that
+    /// decision and consults the <c>authorize</c> function for it. Info therefore reports the contract
+    /// of a roles-bearing function to a caller who holds none of them.
+    /// </summary>
     [Fact]
-    public async Task Info_WhenRolesDeny_ReturnsForbidden_WithoutRevealingContracts()
+    public async Task Info_IsNotRoleGated()
     {
         SetupFunction(FunctionTestFactory.Attributes($$"""
             "roles": [ { "role": "ops", "grant": "allow" } ],
             "inputView": {{FunctionTestFactory.Ref("v1", "sys-views")}}
             """));
-        _authorizationManager
-            .IsAnyRoleAllowedForGrantsAsync(
-                Arg.Any<IReadOnlyList<string>>(), Arg.Any<IReadOnlyCollection<RoleGrant>>(),
-                Arg.Any<Instance?>(), Arg.Any<AuthorizationRequestContext?>(), Arg.Any<CancellationToken>())
-            .Returns(false);
 
         var result = await _service.GetInfoByKeyAsync(TestDomain, FunctionKey);
 
-        result.IsSuccess.ShouldBeFalse();
-        result.Error.Code.ShouldBe(WorkflowErrorCodes.AuthorizationRoleDenied);
+        result.IsSuccess.ShouldBeTrue();
     }
 
     [Fact]
@@ -133,23 +131,22 @@ public sealed class FunctionInfoAppServiceTests : IDisposable
         result.Error.Code.ShouldBe(WorkflowErrorCodes.FunctionScopeNotSatisfied);
     }
 
+    /// <summary>
+    /// Same as <see cref="Info_IsNotRoleGated"/> for the view slot. The call now reaches view-content
+    /// resolution instead of being short-circuited by the role gate — that reach is the assertion,
+    /// since resolution itself is stubbed out here.
+    /// </summary>
     [Fact]
-    public async Task View_WhenRolesDeny_ReturnsForbidden()
+    public async Task View_IsNotRoleGated()
     {
         SetupFunction(FunctionTestFactory.Attributes($$"""
             "roles": [ { "role": "ops", "grant": "allow" } ],
             "inputView": {{FunctionTestFactory.Ref("v1", "sys-views")}}
             """));
-        _authorizationManager
-            .IsAnyRoleAllowedForGrantsAsync(
-                Arg.Any<IReadOnlyList<string>>(), Arg.Any<IReadOnlyCollection<RoleGrant>>(),
-                Arg.Any<Instance?>(), Arg.Any<AuthorizationRequestContext?>(), Arg.Any<CancellationToken>())
-            .Returns(false);
 
-        var result = await _service.GetViewByKeyAsync(TestDomain, FunctionKey, "input");
+        await _service.GetViewByKeyAsync(TestDomain, FunctionKey, "input");
 
-        result.IsSuccess.ShouldBeFalse();
-        await _viewContentResolution.DidNotReceiveWithAnyArgs()
+        await _viewContentResolution.ReceivedWithAnyArgs(1)
             .ResolveViewContentAsync(default!, default!, default, default, default);
     }
 
@@ -360,44 +357,22 @@ public sealed class FunctionInfoAppServiceTests : IDisposable
     }
 
     /// <summary>
-    /// Role-filtered, so every link handed out is actionable: a function the caller could not invoke is
-    /// not advertised at all.
+    /// The catalog is scope-filtered, not role-filtered. A roles-bearing function is advertised to a
+    /// caller holding none of its roles — deciding whether to surface the link is the middle tier's
+    /// call, made against the <c>authorize</c> function.
     /// </summary>
     [Fact]
-    public async Task Catalog_OmitsFunctionsTheCallerCannotInvoke()
+    public async Task Catalog_IsNotRoleFiltered()
     {
         var instance = SetupInstance();
         SetupFlowWithFunctions("open-fn", "guarded-fn");
         SetupCatalogFunction("open-fn", "I");
         SetupCatalogFunction("guarded-fn", "I",
             roles: """, "roles": [ { "role": "ops", "grant": "allow" } ]""");
-        _authorizationManager
-            .IsAnyRoleAllowedForGrantsAsync(
-                Arg.Any<IReadOnlyList<string>>(), Arg.Any<IReadOnlyCollection<RoleGrant>>(),
-                Arg.Any<Instance?>(), Arg.Any<AuthorizationRequestContext?>(), Arg.Any<CancellationToken>())
-            .Returns(false);
 
         var result = await _service.GetCatalogByInstanceAsync(TestDomain, TestFlow, instance.Id.ToString());
 
-        result.Value!.Functions.Select(f => f.Name).ShouldBe(["open-fn"]);
-    }
-
-    [Fact]
-    public async Task Catalog_IncludesGuardedFunctionsWhenTheCallerIsAllowed()
-    {
-        var instance = SetupInstance();
-        SetupFlowWithFunctions("guarded-fn");
-        SetupCatalogFunction("guarded-fn", "I",
-            roles: """, "roles": [ { "role": "ops", "grant": "allow" } ]""");
-        _authorizationManager
-            .IsAnyRoleAllowedForGrantsAsync(
-                Arg.Any<IReadOnlyList<string>>(), Arg.Any<IReadOnlyCollection<RoleGrant>>(),
-                Arg.Any<Instance?>(), Arg.Any<AuthorizationRequestContext?>(), Arg.Any<CancellationToken>())
-            .Returns(true);
-
-        var result = await _service.GetCatalogByInstanceAsync(TestDomain, TestFlow, instance.Id.ToString());
-
-        result.Value!.Functions.Select(f => f.Name).ShouldBe(["guarded-fn"]);
+        result.Value!.Functions.Select(f => f.Name).ShouldBe(["open-fn", "guarded-fn"], ignoreOrder: true);
     }
 
     /// <summary>

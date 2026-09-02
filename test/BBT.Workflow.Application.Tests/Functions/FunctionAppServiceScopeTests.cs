@@ -124,11 +124,9 @@ public sealed class FunctionAppServiceScopeTests : IDisposable
             keyEvaluator: _keyEvaluator,
             cacheGateway: _cacheGateway,
             remoteInvoker: Substitute.For<IRemoteInvokerService>(),
-            // The real policy, so these tests keep covering the scope and role gates end to end
-            // after they moved out of FunctionAppService.
-            functionAccessPolicy: new FunctionAccessPolicy(
-                Substitute.For<ICurrentUser>(),
-                Substitute.For<ITransitionAuthorizationManager>()),
+            // The real policy, so these tests keep covering the scope gate end to end
+            // after it moved out of FunctionAppService.
+            functionAccessPolicy: new FunctionAccessPolicy(),
             functionRequestValidationService: _functionRequestValidationService);
     }
 
