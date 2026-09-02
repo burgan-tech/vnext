@@ -204,6 +204,27 @@ public sealed class PipelineDirectives
     }
 
     /// <summary>
+    /// The settlement's verdict that this hop closed the activation episode (see
+    /// <see cref="ActivationVerdict"/>), or null when the episode continues (a continuation was
+    /// enqueued, or this execution does not own the instance's status). Recorded by
+    /// <c>TransitionSettlement</c>; read by the runner after commit, which emits the span.
+    /// </summary>
+    public ActivationVerdict? Activation { get; private set; }
+
+    /// <summary>Records the settlement's activation verdict.</summary>
+    public void RecordActivation(ActivationVerdict verdict) => Activation = verdict;
+
+    /// <summary>
+    /// True once the Enqueue continuation strategy has durably handed the chain to a follow-up job.
+    /// The settlement reads it to know the episode has NOT reached its rest point even though this
+    /// hop has nothing left to run in-process.
+    /// </summary>
+    public bool ContinuationEnqueued { get; private set; }
+
+    /// <summary>Marks that the next hop was enqueued as a separate job.</summary>
+    public void MarkContinuationEnqueued() => ContinuationEnqueued = true;
+
+    /// <summary>
     /// Enqueues a post-commit job to be executed after the distributed lock is released.
     /// Post-commit jobs are returned intact across the pipeline barrier for runner-owned execution
     /// after the distributed lock is released. They are used for side effects like remote calls
@@ -260,7 +281,8 @@ public sealed class PipelineDirectives
             ResolvedStatus,
             ResumeFromOrder,
             TerminalReached,
-            Epilogue);
+            Epilogue,
+            ContinuationEnqueued);
 
     /// <summary>
     /// Gets a value indicating whether there are deferred events waiting to be published.

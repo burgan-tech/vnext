@@ -66,6 +66,10 @@ public sealed class LongPollAckResumeService(
             }
         };
 
+        // An ack over HTTP opens an `ack` episode; when the ack-timeout job drives this resume it
+        // has already classified the episode as `ack-timeout`, which UseEpisode leaves alone.
+        using var episode = WorkflowTraceLane.UseEpisode(TelemetryConstants.ActivationTriggers.Ack, transitionKey: null);
+
         var result = await workflowExecutionService.ExecuteTransitionAsync(input, cancellationToken);
         if (!result.IsSuccess)
         {

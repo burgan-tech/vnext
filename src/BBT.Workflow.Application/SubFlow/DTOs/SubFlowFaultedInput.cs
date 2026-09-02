@@ -152,6 +152,18 @@ public record SubFlowFaultedInput
     public string? ParentTraceRoot { get; init; }
 
     /// <summary>
+    /// Start of the activation episode the faulting subflow was executing, inherited by the parent
+    /// resume so its rest point is measured from the client's request. See <c>WorkflowTraceLane.Episode</c>.
+    /// </summary>
+    public DateTimeOffset? EpisodeStartedAt { get; init; }
+
+    /// <summary>What opened the episode; one of <c>TelemetryConstants.ActivationTriggers</c>.</summary>
+    public string? EpisodeTrigger { get; init; }
+
+    /// <summary>The transition the episode was triggered with (the first hop's key).</summary>
+    public string? EpisodeTransitionKey { get; init; }
+
+    /// <summary>
     /// How many times a terminal-revert has re-published this event as a durable-delivery rearm.
     /// <c>null</c>/<c>0</c> for an original delivery. See <c>FlowCompletedInput.RearmAttempt</c>.
     /// </summary>

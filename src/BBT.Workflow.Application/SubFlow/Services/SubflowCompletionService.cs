@@ -586,6 +586,9 @@ public sealed class SubflowCompletionService(
         Sync = input.Sync,
         TraceRoot = input.TraceRoot,
         ParentTraceRoot = input.ParentTraceRoot,
+        EpisodeStartedAt = input.EpisodeStartedAt,
+        EpisodeTrigger = input.EpisodeTrigger,
+        EpisodeTransitionKey = input.EpisodeTransitionKey,
         RearmAttempt = rearmAttempt
     };
 

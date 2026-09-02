@@ -1,3 +1,4 @@
+using System;
 using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
@@ -94,6 +95,47 @@ public sealed class TraceStampingDistributedEventBusTests
 
         evt.TraceRoot.ShouldBe("00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-1111111111111111-01");
         evt.ParentTraceRoot.ShouldBe("00-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-2222222222222222-01");
+    }
+
+    [Fact]
+    public async Task Publish_LaneAwareEventWithoutEpisode_StampsTheAmbientActivationEpisode()
+    {
+        var (sut, _) = CreateSut();
+        var evt = new LaneAwareEvent();
+        var episode = new ActivationEpisode(
+            new DateTimeOffset(2026, 9, 2, 10, 0, 0, TimeSpan.Zero),
+            TelemetryConstants.ActivationTriggers.Manual,
+            "go",
+            Partial: false);
+
+        using (WorkflowTraceLane.Use("00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-1111111111111111-01", episode: episode))
+        {
+            await sut.PublishAsync(evt, useOutbox: true);
+        }
+
+        // The consumer's rest point measures from the publisher's original trigger, so a parent
+        // resumed by this event reports what the client actually waited for.
+        evt.EpisodeStartedAt.ShouldBe(episode.StartedAt);
+        evt.EpisodeTrigger.ShouldBe(TelemetryConstants.ActivationTriggers.Manual);
+        evt.EpisodeTransitionKey.ShouldBe("go");
+    }
+
+    [Fact]
+    public async Task Publish_LaneAwareEventWithPresetEpisode_DoesNotOverwriteIt()
+    {
+        var (sut, _) = CreateSut();
+        var preset = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var evt = new LaneAwareEvent { EpisodeStartedAt = preset, EpisodeTrigger = "event", EpisodeTransitionKey = "preset" };
+        var ambient = new ActivationEpisode(DateTimeOffset.UtcNow, TelemetryConstants.ActivationTriggers.Manual, "go", false);
+
+        using (WorkflowTraceLane.Use("00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-1111111111111111-01", episode: ambient))
+        {
+            await sut.PublishAsync(evt, useOutbox: true);
+        }
+
+        evt.EpisodeStartedAt.ShouldBe(preset);
+        evt.EpisodeTrigger.ShouldBe("event");
+        evt.EpisodeTransitionKey.ShouldBe("preset");
     }
 
     [Fact]
@@ -204,6 +246,9 @@ public sealed class TraceStampingDistributedEventBusTests
         public string? RequestId { get; set; }
         public string? TraceRoot { get; set; }
         public string? ParentTraceRoot { get; set; }
+        public DateTimeOffset? EpisodeStartedAt { get; set; }
+        public string? EpisodeTrigger { get; set; }
+        public string? EpisodeTransitionKey { get; set; }
     }
 
     private sealed class PlainEvent;

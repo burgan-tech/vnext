@@ -3,6 +3,7 @@ using BBT.Aether.BackgroundJob;
 using BBT.Aether.Results;
 using BBT.Aether.Uow;
 using BBT.Workflow.BackgroundJobs;
+using BBT.Workflow.BackgroundJobs.Handlers;
 using BBT.Workflow.BackgroundJobs.Payloads;
 using BBT.Workflow.Execution.Continuations;
 using BBT.Workflow.Execution.Events;
@@ -187,7 +188,17 @@ public sealed class AsyncTransitionStrategy(
         // leaves an armed job behind. A null handle means the outbox relay owns delivery instead.
         if (acceptResult.IsSuccess && armHandle is not null)
         {
-            await armHandle.ArmAsync(cancellationToken);
+            using var armActivity = BackgroundJobActivityHelper.StartArmActivity(jobName.Value);
+            try
+            {
+                await armHandle.ArmAsync(cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                armActivity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+                throw;
+            }
+
             logger.TransitionJobArmedAfterLock(armHandle.JobId);
         }
 
@@ -213,6 +224,11 @@ public sealed class AsyncTransitionStrategy(
         bool subflowChainReserved,
         CancellationToken cancellationToken)
     {
+        // The durable half of the accept — job row, delivery decision, commit — runs under the
+        // status lock and used to be the unnamed remainder of the server span.
+        using var enqueueActivity = PipelineStepActivityHelper.StartOperationActivity("Transition.Enqueue");
+        enqueueActivity?.SetTag(TelemetryConstants.TagNames.JobName, jobName.Value);
+
         var directPayload = BuildDirectPayload(context, transContext, jobName.Value, activity, subflowChainReserved);
         var outboxEvent = BuildOutboxEvent(context, transContext, jobName, jobId, activity, subflowChainReserved);
 
@@ -232,6 +248,7 @@ public sealed class AsyncTransitionStrategy(
 
         await uow.CommitAsync(cancellationToken);
 
+        enqueueActivity?.SetTag(TelemetryConstants.TagNames.EnqueuePath, outcome.Path.ToString());
         return Result<TransitionEnqueueOutcome>.Ok(outcome);
     }
 
@@ -269,6 +286,11 @@ public sealed class AsyncTransitionStrategy(
             ParentTraceRoot = WorkflowTraceLane.ParentLane,
             ChainDepth = transContext.ChainDepth,
             LaneSeq = WorkflowTraceLane.NextSeq(),
+            // The activation episode opened by this request: the job that brings the instance to
+            // rest measures from the request's arrival, not from its own start.
+            EpisodeStartedAt = WorkflowTraceLane.Episode?.StartedAt,
+            EpisodeTrigger = WorkflowTraceLane.Episode?.Trigger,
+            EpisodeTransitionKey = WorkflowTraceLane.Episode?.TransitionKey,
             CorrelationId = transContext.CorrelationId,
             Stage = context.Data?.Stage,
             SubflowChainReserved = subflowChainReserved
@@ -307,6 +329,9 @@ public sealed class AsyncTransitionStrategy(
             TraceRoot = WorkflowTraceLane.Current,
             ParentTraceRoot = WorkflowTraceLane.ParentLane,
             LaneSeq = WorkflowTraceLane.NextSeq(),
+            EpisodeStartedAt = WorkflowTraceLane.Episode?.StartedAt,
+            EpisodeTrigger = WorkflowTraceLane.Episode?.Trigger,
+            EpisodeTransitionKey = WorkflowTraceLane.Episode?.TransitionKey,
             CorrelationId = transContext.CorrelationId,
             ChainDepth = transContext.ChainDepth,
             SubflowChainReserved = subflowChainReserved

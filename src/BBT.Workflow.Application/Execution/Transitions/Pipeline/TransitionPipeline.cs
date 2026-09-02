@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using BBT.Aether.Results;
 using BBT.Aether.Uow;
 using BBT.Workflow.BackgroundJobs;
@@ -5,6 +6,7 @@ using BBT.Workflow.Execution.Continuations;
 using BBT.Workflow.Execution.Validation;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
+using BBT.Workflow.Telemetry;
 using Microsoft.Extensions.Logging;
 
 namespace BBT.Workflow.Execution.Pipeline;
@@ -366,6 +368,9 @@ public class TransitionPipeline
                     _stateNotificationScheduler,
                     _logger,
                     cancellationToken,
+                    // A next transition that was enqueued rather than run here keeps the activation
+                    // episode open; the job it becomes settles it.
+                    chainSettled: !hadNextTransition,
                     statusLock: _statusLock);
 
                 return Result<TransitionExecutionContext>.Ok(context);
@@ -445,6 +450,12 @@ public class TransitionPipeline
     {
         _logger.InstanceFaultedDueToPipelineError(context.InstanceId, error.Code, error.Message);
 
+        // The failure path's own rest point: a status lock, a fresh unit of work, a reload and a
+        // commit that used to run unnamed after the failing step's span had already closed.
+        using var activity = PipelineStepActivityHelper.StartOperationActivity("Instance.Fault");
+        activity?.SetTag("error.code", error.Code);
+        activity?.SetStatus(ActivityStatusCode.Error, error.Message);
+
         await using var statusScope = await _statusLock.AcquireAsync(context.LockKey, cancellationToken);
 
         await using var faultUow = _uowManager.Begin(
@@ -475,6 +486,18 @@ public class TransitionPipeline
         instance.Fault(context.Domain, context.CallerMode == ExecMode.Sync);
         await _instanceRepository.UpdateAsync(instance, true, cancellationToken);
         await faultUow.CommitAsync(cancellationToken);
+
+        // Faulted is a rest point the client observes, so the activation episode closes here —
+        // after the commit, like every other rest point. Regardless of OwnsStatus: whatever this
+        // execution owned, the instance now rests Faulted because of it.
+        ActivationActivity.Emit(
+            PipelineStepActivityHelper.ActivitySource,
+            TelemetryConstants.ActivationOutcomes.Faulted,
+            context.InstanceId,
+            context.Domain,
+            context.WorkflowKey,
+            context.TransitionKey,
+            instance.GetCurrentState);
 
         _logger.InstanceFaultedSuccessfully(context.InstanceId);
     }

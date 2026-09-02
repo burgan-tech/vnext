@@ -94,6 +94,9 @@ internal sealed class InstanceSubCompletedEventHandler(
                 // instance's level rather than nesting under the relay endpoint.
                 TraceRoot = eventData.TraceRoot,
                 ParentTraceRoot = eventData.ParentTraceRoot,
+                EpisodeStartedAt = eventData.EpisodeStartedAt,
+                EpisodeTrigger = eventData.EpisodeTrigger,
+                EpisodeTransitionKey = eventData.EpisodeTransitionKey,
                 RearmAttempt = eventData.RearmAttempt
             };
 

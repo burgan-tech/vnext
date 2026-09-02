@@ -211,6 +211,33 @@ A sixth profile is **composed on top of** the base, never selected instead of it
 - `sync=true`: blocks until pipeline completes; full instance returned.
 - `sync=false` (default): immediate `{ id, status }`; client polls via State function.
 
+### Activation episode (trace)
+
+- **Definition**: trigger → rest point. A trigger is the HTTP start/transition request, a timer or
+  timeout fire, an event delivery, a retry, a long-poll ack, a subflow resume or a child start; the
+  rest point is the Busy→Active CAS flip, Completed/Canceled, Faulted, or a deliberate rest in Busy
+  (`busy.subflow` open SubFlow correlation, `busy.parked` auto-gate not met, `busy.subtype`).
+- **One trace + one backdated `Instance.Activation/{key}` span per episode**, emitted **after** the
+  UoW commit (`TransitionRunner`, `PostCommitParentMutationService.MutateFreshAsync`,
+  `TransitionPipeline.MarkInstanceFaultedAsync`, `JobTimeoutRecoveryService`) — never at
+  `Transition.Settle`, whose flip is not durable yet. Parent = lane anchor, start = episode start,
+  settling span attached as an `ActivityLink`. Kind `Internal` (a `Consumer` would be counted as an
+  APM transaction).
+- **The episode start travels in `WorkflowTraceLane.Episode`** and, across every async boundary, as
+  `EpisodeStartedAt` / `EpisodeTrigger` / `EpisodeTransitionKey` beside `TraceRoot` in every lane
+  carrier (`TransitionJobPayload`, `TransitionContinuationRequested`, the three `InstanceSub*`
+  events, `SubflowForwardInput`, `FlowCompletedInput`, `SubFlowFaultedInput`, `SubItemCanceledInput`).
+  **A new carrier must copy all three** — a missing start degrades the consumer to a
+  `vnext.activation.partial=true` span covering only its own hop.
+- **Only status owners emit** (`OwnsStatus`), and **a hop that enqueued a continuation never emits**
+  (`PipelineDirectives.ContinuationEnqueued` → `chainSettled:false`); a lost CAS yields no verdict
+  (whoever flipped emits), and a fresh post-commit parent that is no longer Busy yields none (a sync
+  child callback already closed it). `Instance.Fault` emits `faulted` regardless of ownership.
+- **`ActivationActivity` is the one explicit-parent span outside the lane helpers** and must keep its
+  `Activity.Current` save/restore: an explicit parent leaves `Activity.Parent` null, so `Stop()`
+  would null `Activity.Current` for the caller's remaining frame (`Emit_restores_Activity_Current`).
+  Full guide: `docs/runtime/trace-lanes.md` § Activation episode, `docs/runtime/trace-span-tree.md`.
+
 ## Locking — one lock, at the status change
 
 - **The Busy flag is the mutex.** A distributed lock is taken *only* for the status check-and-set,

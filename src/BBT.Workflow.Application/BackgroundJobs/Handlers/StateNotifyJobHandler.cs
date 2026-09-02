@@ -38,7 +38,12 @@ public sealed class StateNotifyJobHandler(
 
     public async Task HandleAsync(StateNotifyPayload args, CancellationToken cancellationToken)
     {
-        using var activity = BackgroundJobActivityHelper.StartActivityContinuingTrace("StateNotify.Execute", args);
+        // Flat lane, like the transition hops: anchored on the settling request's lane (payload
+        // TraceRoot) with the scheduling hop linked as predecessor. Reset, not Use — the ambient lane
+        // here belongs to the Dapr scheduler callback. A payload without an anchor (older build)
+        // degrades to exactly the previous continue-the-predecessor parenting.
+        using var lane = WorkflowTraceLane.Reset(args.TraceRoot, args.ParentTraceRoot);
+        using var activity = BackgroundJobActivityHelper.StartFlatLaneActivity("StateNotify.Execute", args);
         // The Dapr scheduler callback is a fresh HTTP request, so restore the originating request id
         // from the captured headers — RequestIdLogProcessor stamps it onto every log record from here.
         var requestId = args.Headers?.GetValueOrDefault(TelemetryConstants.HeaderNames.RequestId.ToLowerInvariant());

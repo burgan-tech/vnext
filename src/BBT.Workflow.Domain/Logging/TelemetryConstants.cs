@@ -206,6 +206,61 @@ public static class TelemetryConstants
         /// <summary>Resting status a transition settled the instance into.</summary>
         public const string SettledStatus = "vnext.settle.status";
 
+        /// <summary>
+        /// What the Busy→Active compare-and-set at settlement actually did: <c>flipped</c> (this
+        /// hop made the instance Active), <c>lost</c> (the row was no longer Busy — somebody else
+        /// settled it), or <c>skipped</c> (the settlement guard did not apply: non-owner, terminal,
+        /// Busy-subtype target, open SubFlow correlation). <c>vnext.settle.status</c> alone cannot
+        /// tell these apart.
+        /// </summary>
+        public const string SettleCas = "vnext.settle.cas";
+
+        /// <summary>
+        /// How the activation episode ended — see <see cref="ActivationOutcomes"/>. Stamped on
+        /// <c>Instance.Activation/{key}</c>.
+        /// </summary>
+        public const string ActivationOutcome = "vnext.activation.outcome";
+
+        /// <summary>What started the activation episode — see <see cref="ActivationTriggers"/>.</summary>
+        public const string ActivationTrigger = "vnext.activation.trigger";
+
+        /// <summary>Number of lane hops the episode spanned (the settling hop's <c>vnext.lane.seq</c>).</summary>
+        public const string ActivationHops = "vnext.activation.hops";
+
+        /// <summary>Trigger → rest-point duration in milliseconds, as the client experienced it.</summary>
+        public const string ActivationDurationMs = "vnext.activation.duration_ms";
+
+        /// <summary>
+        /// True when the episode start was not carried to the settling hop (payload from an older
+        /// build, or an entry point that seeded no episode) and the span therefore covers only the
+        /// settling hop. Exclude from latency aggregates.
+        /// </summary>
+        public const string ActivationPartial = "vnext.activation.partial";
+
+        /// <summary>
+        /// True when the carried episode start lay in the future of the settling replica's clock;
+        /// the span was clamped to zero length rather than reported negative.
+        /// </summary>
+        public const string ActivationClockSkew = "vnext.activation.clock_skew";
+
+        /// <summary>The transition the episode was triggered with (the first hop's key).</summary>
+        public const string ActivationTransitionKey = "vnext.activation.transition.key";
+
+        /// <summary>
+        /// On <c>Transition.Settle</c>: true when this settlement closed the activation episode and
+        /// an <c>Instance.Activation</c> span will be emitted after commit.
+        /// </summary>
+        public const string ActivationEmitted = "vnext.activation.emitted";
+
+        /// <summary>On <c>Instance.Create</c>: whether the start request carried attributes, i.e. an initial data version was appended.</summary>
+        public const string InstanceDataAppended = "vnext.instance.data.appended";
+
+        /// <summary>On <c>Transition.Intake</c>: the Busy flag the fast-fail projection read.</summary>
+        public const string InstanceBusy = "vnext.instance.busy";
+
+        /// <summary>On <c>Transition.Enqueue</c>: which delivery path the enqueue gateway took (<c>Direct</c> or <c>Outbox</c>).</summary>
+        public const string EnqueuePath = "vnext.enqueue.path";
+
         /// <summary>Number of items in a fan-out batch.</summary>
         public const string FanOutItemCount = "vnext.fanout.item.count";
 
@@ -344,6 +399,47 @@ public static class TelemetryConstants
     {
         public const string Business = "business";
         public const string Diagnostic = "diagnostic";
+    }
+
+    /// <summary>
+    /// Values for <see cref="TagNames.ActivationTrigger"/>: what opened an activation episode.
+    /// </summary>
+    public static class ActivationTriggers
+    {
+        /// <summary>Seeded at request entry before the endpoint has classified itself.</summary>
+        public const string Http = "http";
+        public const string Start = "start";
+        public const string Manual = "manual";
+        public const string Event = "event";
+        public const string Retry = "retry";
+        /// <summary>A long-poll acknowledgement resumed the instance.</summary>
+        public const string Ack = "ack";
+        public const string Scheduled = "scheduled";
+        public const string Timeout = "timeout";
+        public const string AckTimeout = "ack-timeout";
+        /// <summary>A trigger-family task started or advanced another instance.</summary>
+        public const string Trigger = "trigger";
+        /// <summary>A job hop whose payload carried no episode (older build) — the span is partial.</summary>
+        public const string Job = "job";
+    }
+
+    /// <summary>
+    /// Values for <see cref="TagNames.ActivationOutcome"/>: the rest point an activation episode
+    /// reached. Every value is a state a client can observe through the state function.
+    /// </summary>
+    public static class ActivationOutcomes
+    {
+        /// <summary>The Busy→Active flip committed — the instance is available.</summary>
+        public const string Active = "active";
+        public const string Completed = "completed";
+        public const string Canceled = "canceled";
+        public const string Faulted = "faulted";
+        /// <summary>The instance handed off to a SubFlow and rests Busy while the child runs.</summary>
+        public const string BusySubflow = "busy.subflow";
+        /// <summary>The instance parked Busy at a state whose automatic transitions did not fire.</summary>
+        public const string BusyParked = "busy.parked";
+        /// <summary>The instance came to rest in a Busy-subtype state, awaiting an external signal.</summary>
+        public const string BusySubtype = "busy.subtype";
     }
 
     /// <summary>

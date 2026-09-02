@@ -232,7 +232,12 @@ public sealed class RemoteInstanceCommandAppService(
                 // forward span the subflow's hops must anchor on. Body, not header: a public
                 // endpoint must never let a caller inject a lane.
                 TraceRoot = WorkflowTraceLane.Current,
-                ParentTraceRoot = WorkflowTraceLane.ParentLane
+                ParentTraceRoot = WorkflowTraceLane.ParentLane,
+                // The activation episode crosses with the lane: the subflow's time-to-Active is
+                // measured from the client's request to the parent, not from this relay hop.
+                EpisodeStartedAt = WorkflowTraceLane.Episode?.StartedAt,
+                EpisodeTrigger = WorkflowTraceLane.Episode?.Trigger,
+                EpisodeTransitionKey = WorkflowTraceLane.Episode?.TransitionKey
             };
 
             var jsonContent = JsonSerializer.Serialize(forwardInput, JsonSerializerConstants.JsonOptions);

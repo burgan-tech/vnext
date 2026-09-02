@@ -1,8 +1,10 @@
 using BBT.Aether.Uow;
 using BBT.Workflow.BackgroundJobs.Options;
 using BBT.Workflow.BackgroundJobs.Payloads;
+using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
+using BBT.Workflow.Telemetry;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -73,6 +75,18 @@ public sealed class JobTimeoutRecoveryService(
 
             await instanceRepository.UpdateAsync(instance, true, cancellationToken);
             await uow.CommitAsync(cancellationToken);
+
+            // The job's episode is still ambient here (TransitionJobHandler runs recovery inside its
+            // lane scope): a job that timed out rests the instance Faulted, and that is the client's
+            // rest point.
+            ActivationActivity.Emit(
+                PipelineStepActivityHelper.ActivitySource,
+                TelemetryConstants.ActivationOutcomes.Faulted,
+                args.InstanceId,
+                args.Domain,
+                args.Workflow,
+                args.TransitionKey,
+                instance.GetCurrentState);
 
             logger.LogError(
                 "Instance {InstanceId} faulted after job execution timeout. " +

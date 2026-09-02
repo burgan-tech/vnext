@@ -29,4 +29,19 @@ public interface ILaneAwareDistributedEvent : ITraceableDistributedEvent
     /// which is where the resume belongs — a resume is a parent-instance operation, not a subflow one.
     /// </summary>
     string? ParentTraceRoot { get; set; }
+
+    /// <summary>
+    /// Start of the activation episode the publisher was executing — the instant the request (or
+    /// timer, event, resume) that set the instance in motion was accepted. The consumer's rest
+    /// point emits an <c>Instance.Activation</c> span starting here, so a parent resumed by a
+    /// subflow's terminal event measures from the child's final request, which is what the client
+    /// polling the parent actually waited for. Null from an older publisher ⇒ partial span.
+    /// </summary>
+    DateTimeOffset? EpisodeStartedAt { get; set; }
+
+    /// <summary>What opened the episode; one of <c>TelemetryConstants.ActivationTriggers</c>.</summary>
+    string? EpisodeTrigger { get; set; }
+
+    /// <summary>The transition the episode was triggered with (the first hop's key).</summary>
+    string? EpisodeTransitionKey { get; set; }
 }
