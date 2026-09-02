@@ -1,6 +1,8 @@
+using System.Diagnostics;
 using BBT.Aether.Results;
 using BBT.Workflow.Caching;
 using BBT.Workflow.Definitions;
+using BBT.Workflow.Tasks.Coordinator;
 using Microsoft.Extensions.Logging;
 
 namespace BBT.Workflow.Tasks.Factory;
@@ -21,14 +23,24 @@ public sealed class TaskFactory(
     /// <param name="cancellationToken">Cancellation token for async operations.</param>
     /// <returns>A Result containing the task instance ready for execution, or an error if creation failed.</returns>
     public async Task<Result<WorkflowTask>> CreateExecutionTaskAsync(
-        IReference taskReference, 
+        IReference taskReference,
         CancellationToken cancellationToken = default)
     {
+        // Task.Resolve lives INSIDE the factory (not at the engine call site) so FanOut and
+        // CacheAside resolutions are covered too. Always-on Business span — this was the
+        // unattributed head of Task.Execute.
+        using var resolveActivity = TaskExecutionActivityHelper.StartActivity(
+            TaskExecutionActivityHelper.OperationResolve, taskReference.Key);
+
         return await componentCacheStore.GetTaskAsync(taskReference, cancellationToken)
             .Then(CreateFromCached)
-            .OnFailure(error => logger.LogError(
-                "Failed to create execution task for reference {TaskReference}: {ErrorCode}", 
-                taskReference.ToString(), error.Code));
+            .OnFailure(error =>
+            {
+                TaskExecutionActivityHelper.SetError(Activity.Current, error.Message, "TaskFactoryError");
+                logger.LogError(
+                    "Failed to create execution task for reference {TaskReference}: {ErrorCode}",
+                    taskReference.ToString(), error.Code);
+            });
     }
 
     /// <summary>

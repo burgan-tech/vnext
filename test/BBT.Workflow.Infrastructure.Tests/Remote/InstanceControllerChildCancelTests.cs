@@ -18,6 +18,7 @@ using Microsoft.AspNetCore.Mvc;
 using NSubstitute;
 using Shouldly;
 using Xunit;
+using BBT.Workflow.Authorization;
 
 namespace BBT.Workflow.Infrastructure.Tests.Remote;
 
@@ -129,5 +130,5 @@ public sealed class InstanceControllerChildCancelTests
         Substitute.For<IInstanceCommandGateway>(),
         Substitute.For<IEventAppService>(),
         relatedInstanceQueryAppService ?? Substitute.For<IRelatedInstanceQueryAppService>(),
-        Substitute.For<ICurrentUser>());
+        new DefaultCallerRoleResolver(Substitute.For<ICurrentUser>()));
 }

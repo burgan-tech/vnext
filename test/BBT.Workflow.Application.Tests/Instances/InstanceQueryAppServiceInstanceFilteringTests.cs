@@ -273,7 +273,7 @@ public sealed class InstanceQueryAppServiceInstanceFilteringTests : IDisposable
             transitionAuthorizationManager: Substitute.For<ITransitionAuthorizationManager>(),
             representationEtagService: Substitute.For<IRepresentationEtagService>(),
             schemaFieldFilterService: Substitute.For<ISchemaFieldFilterService>(),
-            currentUser: Substitute.For<ICurrentUser>(),
+            callerRoleResolver: new DefaultCallerRoleResolver(Substitute.For<ICurrentUser>()),
             paginationLinkGenerator: _paginationLinkGenerator,
             instanceFilteringOptions: instanceFilteringOptions,
             stateFunctionCache: Substitute.For<Caching.IStateFunctionCache>(),

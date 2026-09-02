@@ -11,7 +11,30 @@ public sealed class SubItemTerminalGuard(
     ILogger<SubItemTerminalGuard> logger) : ISubItemTerminalGuard
 {
     /// <inheritdoc />
+    public Task<bool> TryMarkSettledAsync(
+        Guid subInstanceId,
+        SubItemTerminalOutcome outcome,
+        DateTime settledAt,
+        CancellationToken cancellationToken = default) =>
+        correlationRepository.TryMarkSettledAsync(subInstanceId, outcome, settledAt, cancellationToken);
+
+    /// <inheritdoc />
     public async Task<SubItemTerminalProbe> ProbeAsync(
+        Guid parentInstanceId,
+        Guid subInstanceId,
+        SubItemTerminalOutcome incomingOutcome,
+        CancellationToken cancellationToken = default)
+    {
+        var result = await ProbeWithSnapshotAsync(
+            parentInstanceId,
+            subInstanceId,
+            incomingOutcome,
+            cancellationToken);
+        return result.Decision;
+    }
+
+    /// <inheritdoc />
+    public async Task<SubItemTerminalProbeResult> ProbeWithSnapshotAsync(
         Guid parentInstanceId,
         Guid subInstanceId,
         SubItemTerminalOutcome incomingOutcome,
@@ -31,7 +54,7 @@ public sealed class SubItemTerminalGuard(
             // reason, fall through to the authoritative locked path rather than failing the
             // delivery — correctness never depends on this read succeeding.
             logger.SubItemTerminalProbeFailed(ex, parentInstanceId, subInstanceId);
-            return SubItemTerminalProbe.Proceed;
+            return new(SubItemTerminalProbe.Proceed, null, null);
         }
 
         // Unknown or still-open correlation: the locked path owns the decision. A correlation that
@@ -39,21 +62,22 @@ public sealed class SubItemTerminalGuard(
         // a delivery that genuinely still has work to do would be dropped.
         if (correlation is null || !correlation.IsCompleted)
         {
-            return SubItemTerminalProbe.Proceed;
+            return new(
+                SubItemTerminalProbe.Proceed,
+                correlation?.ParentState,
+                correlation?.SubFlowType);
         }
 
-        // A persisted terminal outcome only proves settlement for a non-blocking SubProcess, which
-        // commits its correlation and returns. A blocking SubFlow releases the lock and resumes the
-        // parent in a second phase, reverting the correlation if that resume fails — acknowledging
-        // from the flag alone would consume a durable delivery whose work is about to roll back.
-        if (!correlation.SubFlowType.Equals(SubFlowType.SubProcess))
+        // Legacy SubProcess rows are settled by definition because they have no resume phase.
+        // Blocking SubFlows are provably settled only after their durable marker is present.
+        if (!correlation.SubFlowType.Equals(SubFlowType.SubProcess) && correlation.SettledAt is null)
         {
             logger.SubItemTerminalSettlementNotProvable(
                 correlation.SubFlowType.Code,
                 parentInstanceId,
                 subInstanceId);
 
-            return SubItemTerminalProbe.Proceed;
+            return new(SubItemTerminalProbe.Proceed, correlation.ParentState, correlation.SubFlowType);
         }
 
         if (correlation.TerminalOutcome == incomingOutcome)
@@ -63,7 +87,7 @@ public sealed class SubItemTerminalGuard(
                 parentInstanceId,
                 subInstanceId);
 
-            return SubItemTerminalProbe.AlreadySettled;
+            return new(SubItemTerminalProbe.AlreadySettled, correlation.ParentState, correlation.SubFlowType);
         }
 
         logger.SubItemTerminalConflict(
@@ -72,6 +96,6 @@ public sealed class SubItemTerminalGuard(
             correlation.TerminalOutcome?.ToString() ?? "legacy",
             incomingOutcome.ToString());
 
-        return SubItemTerminalProbe.Conflict;
+        return new(SubItemTerminalProbe.Conflict, correlation.ParentState, correlation.SubFlowType);
     }
 }

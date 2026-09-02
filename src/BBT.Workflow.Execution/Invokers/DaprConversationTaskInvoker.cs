@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Text.Json;
 using BBT.Workflow.Execution.Bindings;
 using BBT.Workflow.Execution.Metrics;
+using BBT.Workflow.Execution.Services;
 using Dapr.AI.Conversation;
 using Dapr.AI.Conversation.ConversationRoles;
 using Google.Protobuf.WellKnownTypes;
@@ -72,6 +73,8 @@ public sealed class DaprConversationTaskInvoker(
                 taskType: TaskType);
         }
 
+        var prepareActivity = InvokerActivityHelper.StartPrepareActivity(TaskType, taskKey ?? string.Empty);
+
         try
         {
             var inputs = binding.Inputs
@@ -89,6 +92,7 @@ public sealed class DaprConversationTaskInvoker(
                 Parameters = ToAnyParameters(binding.Parameters)
             };
 
+            prepareActivity?.Dispose();
             var response = await conversationClient.ConverseAsync(inputs, options, cancellationToken);
 
 
@@ -137,6 +141,7 @@ public sealed class DaprConversationTaskInvoker(
         }
         catch (OperationCanceledException ex) when (cancellationToken.IsCancellationRequested)
         {
+            prepareActivity?.Dispose();
             _metrics.RecordDaprConversationInvocation(binding.ComponentName, "cancelled");
             logger.LogWarning("Dapr conversation invocation was cancelled: {ComponentName}",
                 binding.ComponentName);
@@ -154,6 +159,7 @@ public sealed class DaprConversationTaskInvoker(
         }
         catch (Exception ex)
         {
+            prepareActivity?.Dispose();
             _metrics.RecordDaprConversationInvocation(binding.ComponentName, "failure");
             logger.LogError(ex, "Unexpected error during Dapr conversation invocation: {ComponentName}",
                 binding.ComponentName);

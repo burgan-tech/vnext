@@ -1,6 +1,7 @@
 using System.Text.Json;
 using BBT.Workflow.Execution.Bindings;
 using BBT.Workflow.Execution.Metrics;
+using BBT.Workflow.Execution.Services;
 using Microsoft.Extensions.Logging;
 
 namespace BBT.Workflow.Execution.Invokers;
@@ -59,7 +60,7 @@ public sealed class HttpTaskInvoker(
         }
 
         var result = await HttpTaskInvocation.SendAsync(
-            httpClientFactory.CreateClient, binding, TaskType, cancellationToken);
+            httpClientFactory.CreateClient, binding, TaskType, cancellationToken, taskKey: taskKey);
 
         // The shared core never throws or logs; classify the failed results here so this host's
         // metrics and log lines stay exactly as they were before the core was extracted.

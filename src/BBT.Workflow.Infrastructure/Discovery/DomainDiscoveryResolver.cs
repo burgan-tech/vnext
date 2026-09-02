@@ -27,9 +27,9 @@ public sealed class DomainDiscoveryResolver(
     /// <c>Telemetry:Tracing:AdditionalSources</c>). This resolver is called from 32 sites across both
     /// hosts; a span here parents to whatever is ambient at each call site with no per-call-site
     /// changes, and the discovery HTTP call becomes its child instead of an unattributed HttpClient
-    /// span. Started with the implicit-parent overload deliberately: an explicit
-    /// <c>Activity.Current?.Context</c> leaves <c>Activity.Parent</c> null and severs the baggage
-    /// chain (fixed for the event-hook span on this branch; not reintroduced here).
+    /// span. Started with the implicit-parent overload: an explicit
+    /// <c>Activity.Current?.Context</c> would leave <c>Activity.Parent</c> null and sever the baggage
+    /// chain (fixed in <c>PipelineStepActivityHelper</c> and related helpers).
     /// </remarks>
     public async Task<Result<DiscoveryEndpoint>> GetEndpointAsync(
         string domain,

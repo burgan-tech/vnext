@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using BBT.Aether.Events;
 using BBT.Aether.Results;
 using BBT.Aether.Uow;
 using BBT.Workflow.BackgroundJobs.Options;
@@ -35,11 +36,19 @@ public sealed class SubflowCancellationServiceTests
     private readonly Mock<ITransitionLockScopeFactory> _lockScopeFactory = new();
     private readonly Mock<ISubItemTerminalGuard> _terminalGuard = new();
     private readonly Mock<ITransitionLockScope> _lockScope = new();
+    private readonly Mock<IDistributedEventBus> _eventBus = new();
     private readonly Mock<ILogger<SubflowCancellationService>> _logger = new();
 
     public SubflowCancellationServiceTests()
     {
         _uow.Setup(x => x.CommitAsync(It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        _eventBus
+            .Setup(x => x.PublishAsync(
+                It.IsAny<InstanceSubCanceledEvent>(),
+                It.IsAny<string>(),
+                It.IsAny<bool>(),
+                It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
         _uow.Setup(x => x.DisposeAsync())
             .Returns(ValueTask.CompletedTask);
@@ -284,7 +293,8 @@ public sealed class SubflowCancellationServiceTests
         _instanceRepository.Verify(
             x => x.FindWithAllCorrelationsAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()),
             Times.Once);
-        _uowManager.Verify(x => x.Begin(It.IsAny<UnitOfWorkOptions>()), Times.Once);
+        // Phase-1 correlation commit plus the tiny durable-settlement marker UoW.
+        _uowManager.Verify(x => x.Begin(It.IsAny<UnitOfWorkOptions>()), Times.Exactly(2));
     }
 
     [Fact]
@@ -498,6 +508,7 @@ public sealed class SubflowCancellationServiceTests
         _workflowExecution.Object,
         _lockScopeFactory.Object,
         _terminalGuard.Object,
+        _eventBus.Object,
         Options.Create(new WorkflowExecutionOptions()),
         _logger.Object);
 

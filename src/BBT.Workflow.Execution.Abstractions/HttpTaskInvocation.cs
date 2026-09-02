@@ -74,6 +74,32 @@ public static class HttpTaskInvocation
     };
 
     /// <summary>
+    /// Deliberately the SAME source name as the Execution host's <c>InvokerActivityHelper</c>
+    /// (ActivitySource listeners match by name): the <c>Invoke.Prepare</c> span this core starts is
+    /// the same span that helper starts for the non-HTTP invokers, and the Execution host's
+    /// <c>BBT.Workflow.Execution*</c> AdditionalSources wildcard exports both without new config.
+    /// The helper itself lives in the host assembly, which this contracts package cannot reference.
+    /// </summary>
+    private static readonly ActivitySource InvokerActivitySource = new("BBT.Workflow.Execution.Invokers");
+
+    /// <summary>
+    /// Starts the span covering everything this core does BEFORE the outbound call — client
+    /// construction, header/URL/body preparation. Disposed immediately before the I/O call so the
+    /// trace separates "our prep" from "their latency" (mirrors the Execution host's
+    /// <c>InvokerActivityHelper.StartPrepareActivity</c>).
+    /// </summary>
+    private static Activity? StartPrepareActivity(string taskType, string? taskKey)
+    {
+        var activity = InvokerActivitySource.StartActivity("Invoke.Prepare", ActivityKind.Internal);
+        if (activity is not null)
+        {
+            activity.SetTag("vnext.task.key", taskKey ?? string.Empty);
+            activity.SetTag("vnext.task.type", taskType);
+        }
+        return activity;
+    }
+
+    /// <summary>
     /// Executes the HTTP request described by the binding. Never throws: transport failures and
     /// cancellation become failed results so the caller's error boundary decides.
     /// </summary>
@@ -94,9 +120,11 @@ public static class HttpTaskInvocation
         HttpTaskBinding binding,
         string taskType,
         CancellationToken cancellationToken = default,
-        TaskTraceContext? traceContext = null)
+        TaskTraceContext? traceContext = null,
+        string? taskKey = null)
     {
         var startTimestamp = Stopwatch.GetTimestamp();
+        var prepareActivity = StartPrepareActivity(taskType, taskKey);
 
         try
         {
@@ -144,6 +172,7 @@ public static class HttpTaskInvocation
                 request.Content.Headers.ContentType = MediaTypeHeaderValue.Parse(contentType);
             }
 
+            prepareActivity?.Dispose();
             var response = await httpClient.SendAsync(request, cancellationToken);
 
             var responseHeaders = MergeHeaders(response.Headers, response.Content.Headers);
@@ -184,7 +213,7 @@ public static class HttpTaskInvocation
         }
         catch (TaskCanceledException ex) when (cancellationToken.IsCancellationRequested)
         {
-
+            prepareActivity?.Dispose();
             return TaskInvocationResult.Failure(
                 error: "HTTP request was cancelled",
                 executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
@@ -199,7 +228,7 @@ public static class HttpTaskInvocation
         }
         catch (Exception ex)
         {
-
+            prepareActivity?.Dispose();
             return TaskInvocationResult.Failure(
                 error: ex.Message,
                 executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,

@@ -189,6 +189,9 @@ public static class InstancesModelCreatingExtensions
                 .HasConversion<int?>()
                 .HasComment("Completed=1, Faulted=2, Canceled=3; null for legacy rows");
 
+            b.Property(p => p.SettledAt)
+                .HasComment("Durable terminal settlement marker; set after blocking parent resume completes");
+
             // Partial covering index for the runtime hot-path. The WithDetailsAsync
             // include now filters c => !c.IsCompleted, so this partial set matches the
             // include precisely and serves it as an index-only scan.

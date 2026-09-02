@@ -1183,6 +1183,21 @@ public static partial class WorkflowLogs
         Guid subInstanceId);
 
     /// <summary>
+    /// Logs when the best-effort durable settlement marker write failed after a terminal outcome
+    /// ({Outcome}) was fully handled. The terminal work itself is committed — losing the marker
+    /// only forfeits the lock-free duplicate fast path for this correlation.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40060,
+        Level = LogLevel.Warning,
+        Message = "Could not persist {Outcome} settlement marker for sub-instance {SubInstanceId}; duplicates will take the locked path")]
+    public static partial void SubItemSettlementMarkerWriteFailed(
+        this ILogger logger,
+        Exception exception,
+        string outcome,
+        Guid subInstanceId);
+
+    /// <summary>
     /// Logs when a contended transition lock acquisition is retried after a jittered backoff.
     /// </summary>
     [LoggerMessage(
@@ -1580,6 +1595,78 @@ public static partial class WorkflowLogs
         this ILogger logger,
         Guid instanceId,
         Guid parentInstanceId);
+
+    /// <summary>
+    /// Logs when a subflow terminal event (completed/faulted/canceled) is relayed to the parent
+    /// instance as an immediate post-commit command (Outbox + TerminalRelay mode).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40124,
+        Level = LogLevel.Information,
+        Message = "Subflow terminal {EventName} relayed to parent (sub {SubInstanceId} -> parent {ParentInstanceId})")]
+    public static partial void SubflowTerminalRelayed(
+        this ILogger logger,
+        string eventName,
+        Guid subInstanceId,
+        Guid parentInstanceId);
+
+    /// <summary>
+    /// Logs when a subflow terminal relay attempt throws. The child's commit already stands, so the
+    /// durable Inbox backup will settle the parent shortly after.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40125,
+        Level = LogLevel.Warning,
+        Message = "Subflow terminal relay failed for {EventName} (sub {SubInstanceId} -> parent {ParentInstanceId}); Inbox backup will settle")]
+    public static partial void SubflowTerminalRelayFailed(
+        this ILogger logger,
+        Exception exception,
+        string eventName,
+        Guid subInstanceId,
+        Guid parentInstanceId);
+
+    /// <summary>
+    /// Logs when a subflow terminal relay's gateway call returns a failed <c>Result</c> (not an
+    /// exception). The durable Inbox backup will settle the parent shortly after.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40126,
+        Level = LogLevel.Warning,
+        Message = "Subflow terminal relay rejected for {EventName}: {Error}; Inbox backup will settle")]
+    public static partial void SubflowTerminalRelayRejected(
+        this ILogger logger,
+        string eventName,
+        string error);
+
+    /// <summary>
+    /// Logs when a terminal-revert re-publishes the subflow terminal event as a durable-delivery
+    /// rearm, inside the same UoW as the revert. Closes the window where the lock-free duplicate
+    /// ACK consumed the original durable delivery before a phase-2 resume failure reopened the
+    /// correlation.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40127,
+        Level = LogLevel.Warning,
+        Message = "Subflow terminal settlement reverted; durable delivery re-armed (attempt {Attempt}) for sub {SubInstanceId} -> parent {ParentInstanceId}")]
+    public static partial void SubflowTerminalRearmed(
+        this ILogger logger,
+        Guid parentInstanceId,
+        Guid subInstanceId,
+        int attempt);
+
+    /// <summary>
+    /// Logs when a terminal-revert's rearm budget is exhausted — the correlation was reverted but
+    /// no fresh durable delivery was published, so manual intervention may be required.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40128,
+        Level = LogLevel.Error,
+        Message = "Subflow terminal re-arm budget exhausted ({Attempt}) for sub {SubInstanceId} -> parent {ParentInstanceId}; manual intervention required")]
+    public static partial void SubflowTerminalRearmExhausted(
+        this ILogger logger,
+        Guid parentInstanceId,
+        Guid subInstanceId,
+        int attempt);
 
     #endregion
 
@@ -3215,6 +3302,80 @@ public static partial class WorkflowLogs
         int count,
         string targetDomains,
         string reason);
+
+    #endregion
+
+    #region Caller Role Provider (2044x)
+
+    /// <summary>
+    /// Logs a successful role-set fetch from an external caller-role provider. Debug: this happens at
+    /// most once per request scope, but on every authorized request.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20440,
+        Level = LogLevel.Debug,
+        Message = "Caller roles resolved from provider. Provider={Provider}, RoleCount={RoleCount}, ElapsedMs={ElapsedMs}")]
+    public static partial void CallerRolesResolvedFromProvider(
+        this ILogger logger,
+        string provider,
+        int roleCount,
+        double elapsedMs);
+
+    /// <summary>
+    /// Logs when the provider answered that the caller has no operation set at all. This is a valid
+    /// answer, not a failure — but it denies every allowlist grant, so it is worth seeing.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20441,
+        Level = LogLevel.Warning,
+        Message = "Caller role provider returned no operation set. Provider={Provider}, Subject={Subject}, Actor={Actor}, Position={Position}")]
+    public static partial void CallerRoleProviderReturnedNoContent(
+        this ILogger logger,
+        string provider,
+        string? subject,
+        string? actor,
+        string? position);
+
+    /// <summary>
+    /// Logs a failed provider call. The request is denied (fail-closed) after this is written, so this
+    /// is the only record of why a caller lost access.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20442,
+        Level = LogLevel.Error,
+        Message = "Caller role provider call failed. Provider={Provider}, StatusCode={StatusCode}, Reason={Reason}")]
+    public static partial void CallerRoleProviderCallFailed(
+        this ILogger logger,
+        Exception? exception,
+        string provider,
+        int? statusCode,
+        string reason);
+
+    /// <summary>
+    /// Logs when a surface was served the memoized role set instead of triggering a second provider
+    /// call. Useful to confirm the one-call-per-request guarantee holds under concurrent fan-out.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20443,
+        Level = LogLevel.Debug,
+        Message = "Caller roles served from request-scope memo. Provider={Provider}, RoleCount={RoleCount}")]
+    public static partial void CallerRolesServedFromRequestScopeMemo(
+        this ILogger logger,
+        string provider,
+        int roleCount);
+
+    /// <summary>
+    /// Logs when the long-poll ownership gate could not establish the caller's roles and therefore
+    /// declined to arm the pause. The transition continues normally; nothing faults.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20444,
+        Level = LogLevel.Warning,
+        Message = "Long-poll ownership undetermined: caller roles unresolved. InstanceId={InstanceId}, State={StateKey}")]
+    public static partial void LongPollOwnershipUndeterminedRoles(
+        this ILogger logger,
+        Guid instanceId,
+        string stateKey);
 
     #endregion
 

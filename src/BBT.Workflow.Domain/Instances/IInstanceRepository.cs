@@ -253,6 +253,23 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
         Guid instanceId,
         CancellationToken cancellationToken = default);
 
+    /// <summary>Loads latest parent data and only the correlation being started.</summary>
+    Task<Instance?> FindForSubflowStartAsync(
+        Guid instanceId,
+        Guid correlationId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Loads latest parent data and only the correlation for the terminal child.</summary>
+    Task<Instance?> FindForSubflowCompletionAsync(
+        Guid instanceId,
+        Guid subInstanceId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Loads latest parent data and only active correlations for post-commit settlement.</summary>
+    Task<Instance?> FindForPostCommitSettlementAsync(
+        Guid instanceId,
+        CancellationToken cancellationToken = default);
+
     /// <summary>
     /// Returns active instances with Human state subtype.
     /// Includes DataList for JSON data extraction.

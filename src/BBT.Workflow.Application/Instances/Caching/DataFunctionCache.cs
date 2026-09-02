@@ -24,7 +24,12 @@ public sealed class DataFunctionCache(
     ILogger<DataFunctionCache> logger) : IDataFunctionCache
 {
     private const string ComponentType = "data-fn";
-    private const string KeyPrefix = "data-fn:";
+    /// <summary>
+    /// The <c>v1</c> segment is a cache generation, not a response-shape version: bump it whenever a
+    /// change alters what a cached body means for a given caller hash. It was introduced to retire
+    /// entries written before caller roles became provider-resolved.
+    /// </summary>
+    private const string KeyPrefix = "data-fn:v1:";
 
     /// <summary>
     /// Length of the fingerprint ETag (hex chars of the SHA-256 digest — 128 bits).

@@ -28,25 +28,31 @@ public enum SubItemTerminalProbe
     Conflict = 2
 }
 
+public sealed record SubItemTerminalProbeResult(
+    SubItemTerminalProbe Decision,
+    string? ParentState,
+    SubFlowType? SubFlowType);
+
 /// <summary>
 /// Lock-free pre-check for sub-item terminal deliveries (Completed / Faulted / Canceled).
 /// <para>
-/// Terminal sub-item events are published with <c>EventHookMode.DurablePostCommit</c>, so every
-/// signal is delivered twice by design: once inline by the local publish hook and once through the
-/// Inbox worker. On top of that the broker guarantees only at-least-once delivery. Without this
+/// Terminal sub-item events are delivered twice by design: once by the post-commit terminal relay
+/// and once through the Inbox backup. On top of that the broker guarantees only at-least-once
+/// delivery. Without this
 /// probe, each duplicate has to win the per-subInstance distributed lock purely to discover that
 /// the work is already done — and a duplicate that loses the race is reported as a transient
 /// failure, forcing a full broker re-delivery cycle.
 /// </para>
 /// <para>
-/// <b>Why this only answers for <see cref="SubFlowType.SubProcess"/>:</b> a persisted terminal
-/// outcome is not by itself proof that the delivery has been fully discharged. A blocking
+/// A persisted terminal outcome is not by itself proof that the delivery has been fully discharged.
+/// A blocking
 /// <see cref="SubFlowType.SubFlow"/> completes its correlation, <em>releases the lock</em>, and
 /// only then resumes the parent in a second phase; if that resume fails the correlation is
 /// reverted so the delivery can be retried. Acknowledging such a delivery from the persisted flag
-/// alone would consume a durable message whose work is about to be rolled back. A SubProcess has
-/// no second phase — it commits the correlation and returns — so there the flag really is final.
-/// Widening this fast path to SubFlow requires a durable settlement marker first.
+/// alone would consume a durable message whose work is about to be rolled back. The durable
+/// <c>SettledAt</c> marker is written only after that second phase succeeds, allowing the guard to
+/// answer conclusively for blocking SubFlows too. A SubProcess has no second phase and remains
+/// final as soon as its terminal correlation commits, including legacy rows without the marker.
 /// </para>
 /// <para>
 /// This guard is an optimisation only: whenever the answer is not conclusive it returns
@@ -55,6 +61,18 @@ public enum SubItemTerminalProbe
 /// </summary>
 public interface ISubItemTerminalGuard
 {
+    Task<SubItemTerminalProbeResult> ProbeWithSnapshotAsync(
+        Guid parentInstanceId,
+        Guid subInstanceId,
+        SubItemTerminalOutcome incomingOutcome,
+        CancellationToken cancellationToken = default);
+
+    Task<bool> TryMarkSettledAsync(
+        Guid subInstanceId,
+        SubItemTerminalOutcome outcome,
+        DateTime settledAt,
+        CancellationToken cancellationToken = default);
+
     /// <summary>
     /// Probes whether the given terminal outcome has already been applied <em>and settled</em>.
     /// </summary>

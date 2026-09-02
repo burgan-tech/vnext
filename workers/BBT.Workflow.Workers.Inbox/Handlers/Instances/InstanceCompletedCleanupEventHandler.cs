@@ -34,7 +34,9 @@ internal sealed class InstanceCompletedCleanupEventHandler(
             return;
         }
 
-        using var traceScope = EventTraceScope.Start("InstanceCompletedCleanup.Handle", eventData, correlationIdProvider);
+        using var traceScope = EventTraceScope.Start(
+            "InstanceCompletedCleanup.Handle", eventData, correlationIdProvider,
+            EventTraceMode.LinkedDelivery, envelope.Id);
 
         var scopeProps = new Dictionary<string, object>
         {

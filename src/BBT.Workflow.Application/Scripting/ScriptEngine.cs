@@ -581,13 +581,13 @@ public sealed class ScriptEngine(
         string? precomputedCacheKey = null,
         string? scriptIdentity = null)
     {
-        // MUST be captured before starting the Script.Compile span below: that span is started
-        // with an EXPLICIT parent context (Activity.Current?.Context), so its own Activity.Parent
-        // is null and a lazy re-resolve of the target from Activity.Current afterward would never
-        // walk past it to the task-key-carrying ancestor — see ScriptCompileTelemetry's class
-        // remarks on capture-before-span ordering. Every Record call below threads this same
-        // captured value through explicitly so the accumulator keeps landing on the task span
-        // regardless of what becomes Activity.Current while this method runs.
+        // Captured before the Script.Compile span below starts, per ScriptCompileTelemetry's
+        // capture-before-span contract: FindTargetActivity climbs Activity.Parent, so any span that
+        // becomes current with an explicit parent context (Parent == null) would end the walk on its
+        // first step and strand the accumulator there instead of on the task span. Script.Compile is
+        // implicit-parent today, so it would be walked past; capturing first keeps that a property of
+        // this call site rather than of the helper's chosen overload. Every Record call below threads
+        // this same captured value through explicitly.
         var telemetryTarget = ScriptCompileTelemetry.FindTargetActivity();
         using var compileActivity = ScriptActivityHelper.StartCompileActivity(scriptIdentity);
         var startTimestamp = Stopwatch.GetTimestamp();

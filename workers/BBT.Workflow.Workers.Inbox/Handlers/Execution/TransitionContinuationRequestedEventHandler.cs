@@ -35,7 +35,9 @@ internal sealed class TransitionContinuationRequestedEventHandler(
             return;
         }
 
-        using var traceScope = EventTraceScope.Start("TransitionContinuationRequested.Handle", eventData, correlationIdProvider);
+        using var traceScope = EventTraceScope.Start(
+            "TransitionContinuationRequested.Handle", eventData, correlationIdProvider,
+            EventTraceMode.ContinueTrace, envelope.Id);
 
         logger.TransitionContinuationReceived(
             eventData.InstanceId, eventData.TransitionKey, eventData.JobName);

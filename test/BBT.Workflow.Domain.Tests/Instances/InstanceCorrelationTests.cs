@@ -207,6 +207,23 @@ public class InstanceCorrelationTests : DomainTestBase<DomainEntryPoint>
     }
 
     [Fact]
+    public void MarkSettled_ShouldRequireTerminalCorrelation_AndRevertShouldClearMarker()
+    {
+        var correlation = InstanceCorrelation.Create(
+            Guid.NewGuid(), Guid.NewGuid(), "state", Guid.NewGuid(), "S", "domain", "flow", null);
+
+        Assert.Throws<InvalidOperationException>(() => correlation.MarkSettled(DateTime.UtcNow));
+
+        var settledAt = DateTime.UtcNow;
+        correlation.ApplyTerminalOutcome(SubItemTerminalOutcome.Completed, settledAt);
+        correlation.MarkSettled(settledAt);
+        correlation.SettledAt.ShouldBe(settledAt);
+
+        correlation.Revert();
+        correlation.SettledAt.ShouldBeNull();
+    }
+
+    [Fact]
     public void Correlation_PropertiesShouldBeAccessible()
     {
         // Arrange

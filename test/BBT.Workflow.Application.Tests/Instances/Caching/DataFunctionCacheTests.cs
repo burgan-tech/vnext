@@ -68,7 +68,9 @@ public class DataFunctionCacheTests
     {
         var key = CreateSut().BuildKey(CreateInput());
 
-        key.ShouldStartWith($"data-fn:{TestDomain}:{TestWorkflow}:{TestInstance}:");
+        // The v1 segment is a cache generation: bump it whenever a change alters what a cached body
+        // means for a given caller hash, as the move to provider-resolved caller roles did.
+        key.ShouldStartWith($"data-fn:v1:{TestDomain}:{TestWorkflow}:{TestInstance}:");
     }
 
     [Fact]

@@ -34,7 +34,8 @@ public sealed class ExternalHttpTaskInvoker(
             binding,
             TaskType.ExternalHttp.ToString(),
             cancellationToken,
-            ToWireTraceContext(traceContext));
+            ToWireTraceContext(traceContext),
+            taskKey);
 
         // The shared core never throws or logs; classify the failed results here so this host's
         // log lines carry the workflow-structured events.
