@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Globalization;
+using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
 
 namespace BBT.Workflow.Remote;
@@ -44,6 +46,15 @@ public static class CurrentUserForwardHeadersHelper
                     request.Headers.TryAddWithoutValidation(kv.Key, kv.Value);
             }
         }
+
+        // Descent depth rides a header, not baggage: it is a property of THIS call's position in the
+        // read ladder, not of the whole trace. Baggage would leak the caller's depth into every
+        // unrelated downstream call made from the same context.
+        var descentDepth = SubflowDescentContext.Current;
+        if (descentDepth > 0 && !request.Headers.Contains(TelemetryConstants.HeaderNames.SubflowDepth))
+            request.Headers.TryAddWithoutValidation(
+                TelemetryConstants.HeaderNames.SubflowDepth,
+                descentDepth.ToString(CultureInfo.InvariantCulture));
 
         var rootIdBaggage = Activity.Current?.GetBaggageItem(TelemetryConstants.TagNames.RootInstanceId);
         if (!string.IsNullOrEmpty(rootIdBaggage) && !request.Headers.Contains(TelemetryConstants.HeaderNames.RootInstanceId))

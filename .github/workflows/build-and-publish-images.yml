@@ -25,6 +25,7 @@ env:
   REGISTRY: ghcr.io
   IMAGE_BASE: ghcr.io/${{ github.repository }}
   EXECUTION_IMAGE_NAME: ${{ github.repository }}/execution
+  PYTHON_RUNNER_IMAGE_NAME: ${{ github.repository }}/python-runner
   ORCHESTRATOR_IMAGE_NAME: ${{ github.repository }}/orchestrator
   INIT_IMAGE_NAME: ${{ github.repository }}/init
   INBOX_IMAGE_NAME: ${{ github.repository }}/inbox
@@ -167,6 +168,11 @@ jobs:
             image_name_env: EXECUTION_IMAGE_NAME
             dockerfile: ./execution/BBT.Workflow.Execution.HttpApi.Host/Dockerfile
             with_version_arg: true
+          - key: python-runner
+            image: python-runner
+            image_name_env: PYTHON_RUNNER_IMAGE_NAME
+            dockerfile: ./execution/python/Dockerfile
+            with_version_arg: false
           - key: orchestrator
             image: orchestrator
             image_name_env: ORCHESTRATOR_IMAGE_NAME
@@ -388,6 +394,7 @@ jobs:
         id: digests
         run: |
           EXEC_DIGEST=$(cat digests/execution.digest)
+          PYTHON_RUNNER_DIGEST=$(cat digests/python-runner.digest)
           ORCH_DIGEST=$(cat digests/orchestrator.digest)
           INIT_DIGEST=$(cat digests/init.digest)
           INBOX_DIGEST=$(cat digests/inbox.digest)
@@ -395,6 +402,7 @@ jobs:
           DBMIG_DIGEST=$(cat digests/db-migrator.digest)
 
           echo "exec_digest=$EXEC_DIGEST" >> $GITHUB_OUTPUT
+          echo "python_runner_digest=$PYTHON_RUNNER_DIGEST" >> $GITHUB_OUTPUT
           echo "orch_digest=$ORCH_DIGEST" >> $GITHUB_OUTPUT
           echo "init_digest=$INIT_DIGEST" >> $GITHUB_OUTPUT
           echo "inbox_digest=$INBOX_DIGEST" >> $GITHUB_OUTPUT
@@ -424,6 +432,7 @@ jobs:
           WORKFLOW_REF="https://github.com/${REPO}/.github/workflows/build-and-publish-images.yml@.*"
 
           EXEC_DIGEST="${{ steps.digests.outputs.exec_digest }}"
+          PYTHON_RUNNER_DIGEST="${{ steps.digests.outputs.python_runner_digest }}"
           ORCH_DIGEST="${{ steps.digests.outputs.orch_digest }}"
           INIT_DIGEST="${{ steps.digests.outputs.init_digest }}"
           INBOX_DIGEST="${{ steps.digests.outputs.inbox_digest }}"
@@ -440,6 +449,7 @@ jobs:
           Tags can move; these digests cannot. Signatures and provenance refer to these references.
 
           - \`${REGISTRY}/${REPO}/execution@${EXEC_DIGEST}\`
+          - \`${REGISTRY}/${REPO}/python-runner@${PYTHON_RUNNER_DIGEST}\`
           - \`${REGISTRY}/${REPO}/orchestrator@${ORCH_DIGEST}\`
           - \`${REGISTRY}/${REPO}/init@${INIT_DIGEST}\`
           - \`${REGISTRY}/${REPO}/inbox@${INBOX_DIGEST}\`
@@ -450,6 +460,7 @@ jobs:
 
           \`\`\`bash
           docker pull ${REGISTRY}/${REPO}/execution:${VERSION}
+          docker pull ${REGISTRY}/${REPO}/python-runner:${VERSION}
           docker pull ${REGISTRY}/${REPO}/orchestrator:${VERSION}
           docker pull ${REGISTRY}/${REPO}/init:${VERSION}
           docker pull ${REGISTRY}/${REPO}/inbox:${VERSION}
@@ -477,6 +488,12 @@ jobs:
             --certificate-oidc-issuer https://token.actions.githubusercontent.com \\
             --certificate-identity-regexp "${WORKFLOW_REF}" \\
             ${REGISTRY}/${REPO}/orchestrator@${ORCH_DIGEST}
+
+          # Python runner
+          cosign verify \\
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \\
+            --certificate-identity-regexp "${WORKFLOW_REF}" \\
+            ${REGISTRY}/${REPO}/python-runner@${PYTHON_RUNNER_DIGEST}
 
           # Init
           cosign verify \\
@@ -507,6 +524,7 @@ jobs:
 
           \`\`\`bash
           gh attestation verify oci://${REGISTRY}/${REPO}/execution@${EXEC_DIGEST}    --repo ${REPO}
+          gh attestation verify oci://${REGISTRY}/${REPO}/python-runner@${PYTHON_RUNNER_DIGEST} --repo ${REPO}
           gh attestation verify oci://${REGISTRY}/${REPO}/orchestrator@${ORCH_DIGEST}  --repo ${REPO}
           gh attestation verify oci://${REGISTRY}/${REPO}/init@${INIT_DIGEST}          --repo ${REPO}
           gh attestation verify oci://${REGISTRY}/${REPO}/inbox@${INBOX_DIGEST}        --repo ${REPO}
@@ -584,9 +602,19 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   trigger-helm:
-    needs: [prepare, release]
+    needs: [prepare, build-sign-scan, release]
     runs-on: ubuntu-latest
     steps:
+      - name: Download Python runner digest
+        uses: actions/download-artifact@v4
+        with:
+          name: digest-python-runner
+          path: digests
+
+      - name: Read Python runner digest
+        id: python_runner
+        run: echo "digest=$(cat digests/python-runner.digest)" >> $GITHUB_OUTPUT
+
       - name: Generate GitHub App Token
         id: generate_token
         uses: actions/create-github-app-token@v1
@@ -603,7 +631,7 @@ jobs:
           token: ${{ steps.generate_token.outputs.token }}
           repository: burgan-tech/vnext-helm-charts
           event-type: app-release
-          client-payload: '{"app_version": "${{ needs.prepare.outputs.version }}"}'
+          client-payload: '{"app_version": "${{ needs.prepare.outputs.version }}", "python_runner_image": "ghcr.io/${{ github.repository }}/python-runner", "python_runner_digest": "${{ steps.python_runner.outputs.digest }}"}'
 
   notify:
     needs: [prepare, build-sign-scan, release]
@@ -625,6 +653,7 @@ jobs:
           REPO="${{ github.repository }}"
 
           EXEC_DIGEST=$(cat digests/execution.digest 2>/dev/null || echo "n/a")
+          PYTHON_RUNNER_DIGEST=$(cat digests/python-runner.digest 2>/dev/null || echo "n/a")
           ORCH_DIGEST=$(cat digests/orchestrator.digest 2>/dev/null || echo "n/a")
           INIT_DIGEST=$(cat digests/init.digest 2>/dev/null || echo "n/a")
           INBOX_DIGEST=$(cat digests/inbox.digest 2>/dev/null || echo "n/a")
@@ -645,6 +674,7 @@ jobs:
             echo "| Image | Digest |"
             echo "|-------|--------|"
             echo "| execution    | \`${EXEC_DIGEST}\`  |"
+            echo "| python-runner| \`${PYTHON_RUNNER_DIGEST}\` |"
             echo "| orchestrator | \`${ORCH_DIGEST}\`  |"
             echo "| init         | \`${INIT_DIGEST}\`  |"
             echo "| inbox        | \`${INBOX_DIGEST}\` |"
@@ -655,6 +685,7 @@ jobs:
             echo ""
             echo '```bash'
             echo "docker pull ${REGISTRY}/${REPO}/execution:${VERSION}"
+            echo "docker pull ${REGISTRY}/${REPO}/python-runner:${VERSION}"
             echo "docker pull ${REGISTRY}/${REPO}/orchestrator:${VERSION}"
             echo "docker pull ${REGISTRY}/${REPO}/init:${VERSION}"
             echo "docker pull ${REGISTRY}/${REPO}/inbox:${VERSION}"

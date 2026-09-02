@@ -1,5 +1,4 @@
 using BBT.Aether.Events;
-using BBT.Workflow.Events.Hooks;
 using BBT.Workflow.Events;
 
 namespace BBT.Workflow.Instances.Events;
@@ -8,13 +7,6 @@ namespace BBT.Workflow.Instances.Events;
 /// Event published when a workflow instance is canceled.
 /// Contains all necessary information about the canceled instance.
 /// </summary>
-/// <remarks>
-/// This event supports hooks. Register hooks via DI:
-/// <code>
-/// services.AddEventHook&lt;InstanceCanceledEvent, InstanceCanceledEventHook&gt;();
-/// </code>
-/// </remarks>
-[EventHook]
 [EventName("instance.canceled")]
 public class InstanceCanceledEvent : IDistributedEvent, ITraceableDistributedEvent
 {

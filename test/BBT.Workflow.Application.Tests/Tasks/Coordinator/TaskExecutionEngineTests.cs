@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -28,8 +30,13 @@ using BBT.Workflow.Tasks.Coordinator;
 /// and the failure-path completion persist must be fully awaited (no fire-and-forget) so it cannot
 /// race the pipeline's next DbContext write.
 /// </summary>
-public sealed class TaskExecutionEngineTests
+[Collection("TracingDetailLevel")]
+public sealed class TaskExecutionEngineTests : IDisposable
 {
+    // Literal (not TaskExecutionActivityHelper.ActivitySource.Name): reading the helper's static
+    // field inside a listener callback re-enters its type initializer mid-construction.
+    private const string TaskSourceName = "BBT.Workflow.Tasks";
+
     private readonly ITaskExecutorRegistry _executorRegistry = Substitute.For<ITaskExecutorRegistry>();
     private readonly ITaskFactory _taskFactory = Substitute.For<ITaskFactory>();
     private readonly ITaskPersistenceStrategyFactory _persistenceStrategyFactory = Substitute.For<ITaskPersistenceStrategyFactory>();
@@ -41,9 +48,32 @@ public sealed class TaskExecutionEngineTests
     private readonly IErrorActionExecutor _actionExecutor = new ErrorActionExecutor(NullLogger<ErrorActionExecutor>.Instance);
     private readonly IExecutionErrorFactory _errorFactory = new ExecutionErrorFactory(new ErrorNormalizer());
 
+    private readonly ActivityListener _listener;
+    private readonly List<Activity> _startedActivities = [];
+
+    private List<Activity> StartedActivities
+    {
+        get { lock (_startedActivities) return [.. _startedActivities]; }
+    }
+
     public TaskExecutionEngineTests()
     {
         _guidGenerator.Create().Returns(_ => Guid.NewGuid());
+
+        _listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == TaskSourceName,
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) =>
+                ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStarted = a => { lock (_startedActivities) _startedActivities.Add(a); }
+        };
+        ActivitySource.AddActivityListener(_listener);
+    }
+
+    public void Dispose()
+    {
+        _listener.Dispose();
+        Activity.Current = null;
     }
 
     private TaskExecutionEngine CreateEngine() => new(
@@ -234,6 +264,36 @@ public sealed class TaskExecutionEngineTests
 
         UsePersistenceStrategy(new TrackingPersistenceStrategy(completionDelay: TimeSpan.Zero));
         return executor;
+    }
+
+    /// <summary>
+    /// Pins the journal persist spans (<c>Task.Journal.Create</c> / <c>Task.Journal.Complete</c>)
+    /// added for trace readability around the two persistence calls in
+    /// <c>TaskExecutionEngine.ExecuteCoreAsync</c>, plus the <c>vnext.task.trigger</c> tag stamped
+    /// on the ambient <c>Task.Execute.{key}</c> span in <c>ExecuteAsync</c>. <c>Task.Execute.{key}</c>
+    /// itself comes from Aether's <c>[Trace]</c> aspect, which is outside this listener's source, so
+    /// the trigger tag is asserted on a manually-started ambient activity standing in for it.
+    /// </summary>
+    [Fact]
+    public async Task Successful_execution_emits_journal_spans_and_trigger_tag()
+    {
+        var task = WorkflowTaskFactory.CreateHttpTask("mock-api");
+        ArrangeSuccessfulExecution(task);
+        var onExecute = OnExecuteTask.Create(1, task, ScriptCode.FromNative(string.Empty));
+
+        using var ambient = new Activity("test-root").Start();
+
+        var result = await CreateEngine().ExecuteAsync(
+            onExecute, Guid.NewGuid(), TaskTrigger.OnExecute, TaskExecutionOrigin.Flow,
+            CreateScriptContext(), CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+
+        var names = StartedActivities.Select(a => a.OperationName).ToList();
+        names.ShouldContain("Task.Journal.Create");
+        names.ShouldContain("Task.Journal.Complete");
+
+        ambient.GetTagItem("vnext.task.trigger").ShouldBe("OnExecute");
     }
 
     /// <summary>

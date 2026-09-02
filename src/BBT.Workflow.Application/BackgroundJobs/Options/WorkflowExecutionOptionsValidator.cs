@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Options;
+using BBT.Workflow.Definitions;
 
 namespace BBT.Workflow.BackgroundJobs.Options;
 
@@ -21,6 +22,25 @@ public sealed class WorkflowExecutionOptionsValidator(IConfiguration configurati
 
         var invocationTimeoutSeconds = int.TryParse(
             configuration["ExecutionApi:InvocationTimeoutSeconds"], out var parsed) ? parsed : 60;
+        var pythonMaxTimeoutSeconds = int.TryParse(
+            configuration["Python:MaxTimeoutSeconds"], out var parsedPythonTimeout)
+                ? parsedPythonTimeout
+                : PythonTask.MaxTimeoutSeconds;
+
+        if (pythonMaxTimeoutSeconds < 1 || pythonMaxTimeoutSeconds > PythonTask.MaxTimeoutSeconds)
+        {
+            failures.Add(
+                $"Python:MaxTimeoutSeconds ({pythonMaxTimeoutSeconds}s) must be between 1 and " +
+                $"the task contract limit ({PythonTask.MaxTimeoutSeconds}s).");
+        }
+
+        if (pythonMaxTimeoutSeconds >= invocationTimeoutSeconds)
+        {
+            failures.Add(
+                $"Python:MaxTimeoutSeconds ({pythonMaxTimeoutSeconds}s) must be smaller than " +
+                $"ExecutionApi:InvocationTimeoutSeconds ({invocationTimeoutSeconds}s): the Dapr call " +
+                "must outlive Python cleanup and response propagation.");
+        }
 
         if (invocationTimeoutSeconds >= options.TransitionJobTimeoutSeconds)
         {

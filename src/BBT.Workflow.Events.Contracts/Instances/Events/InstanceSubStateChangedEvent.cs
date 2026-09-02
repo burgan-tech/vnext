@@ -1,5 +1,4 @@
 using BBT.Aether.Events;
-using BBT.Workflow.Events.Hooks;
 using BBT.Workflow.Events;
 
 namespace BBT.Workflow.Instances.Events;
@@ -8,13 +7,6 @@ namespace BBT.Workflow.Instances.Events;
 /// Event published when a SubFlow instance changes state.
 /// Contains all necessary information about the state change for parent instance synchronization.
 /// </summary>
-/// <remarks>
-/// This event supports hooks. Register hooks via DI:
-/// <code>
-/// services.AddEventHook&lt;InstanceSubStateChangedEvent, InstanceSubStateChangedEventHook&gt;();
-/// </code>
-/// </remarks>
-[EventHook]
 [EventName("instance.sub.state.changed")]
 public class InstanceSubStateChangedEvent : IDistributedEvent, ITraceableDistributedEvent
 {

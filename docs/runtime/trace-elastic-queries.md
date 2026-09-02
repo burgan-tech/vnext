@@ -15,7 +15,7 @@ So `labels.vnext_script_context_memo_hits` matches nothing — the memo counters
 |---|---|
 | `cache.hit`, `cache.l1.hit`, `cache.source`, `cache.key`, `cache.store` | `labels.cache_hit`, `labels.cache_l1_hit`, `labels.cache_source`, … |
 | `vnext.script.cache_hit`, `vnext.script.key` | `labels.vnext_script_cache_hit`, … |
-| `vnext.hook.name`, `vnext.hook.mode`, `vnext.event.name` | `labels.vnext_hook_name`, … |
+| `vnext.event.name`, `vnext.delivery.role` | `labels.vnext_event_name`, `labels.vnext_delivery_role` |
 | `vnext.discovery.domain`, `vnext.discovery.endpoint_kind` | `labels.vnext_discovery_domain`, … |
 | `vnext.step.outcome`, `vnext.lock.acquired`, `vnext.lock.kind` | `labels.vnext_step_outcome`, … |
 | **`vnext.script.context.memo.hits`** | **`numeric_labels.vnext_script_context_memo_hits`** |

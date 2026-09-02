@@ -110,6 +110,13 @@ public sealed class InstanceCorrelation : AuditedEntity<Guid>
 
     public SubItemTerminalOutcome? TerminalOutcome { get; private set; }
 
+    /// <summary>
+    /// Indicates that every durable phase of terminal handling has completed. For a blocking
+    /// SubFlow this is written only after the parent resume succeeds; duplicate Inbox deliveries
+    /// may therefore be acknowledged from a single correlation probe without taking the lock.
+    /// </summary>
+    public DateTime? SettledAt { get; private set; }
+
     public TerminalOutcomeApplyResult ApplyTerminalOutcome(
         SubItemTerminalOutcome outcome,
         DateTime completedAt)
@@ -130,6 +137,16 @@ public sealed class InstanceCorrelation : AuditedEntity<Guid>
     public void Completed() =>
         ApplyTerminalOutcome(SubItemTerminalOutcome.Completed, DateTime.UtcNow);
 
+    public void MarkSettled(DateTime settledAt)
+    {
+        if (!IsCompleted)
+        {
+            throw new InvalidOperationException("An open correlation cannot be marked as settled.");
+        }
+
+        SettledAt ??= settledAt;
+    }
+
     /// <summary>
     /// Reverts the correlation to its incomplete state.
     /// Used for rollback scenarios when subflow completion needs to be undone.
@@ -139,6 +156,7 @@ public sealed class InstanceCorrelation : AuditedEntity<Guid>
         IsCompleted = false;
         CompletedAt = null;
         TerminalOutcome = null;
+        SettledAt = null;
     }
 
     /// <summary>
@@ -169,7 +187,8 @@ public sealed class InstanceCorrelation : AuditedEntity<Guid>
             SubFlowStateChangedAt = SubFlowStateChangedAt,
             IsCompleted = IsCompleted,
             CompletedAt = CompletedAt,
-            TerminalOutcome = TerminalOutcome
+            TerminalOutcome = TerminalOutcome,
+            SettledAt = SettledAt
         };
 
         return snapshot;

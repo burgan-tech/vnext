@@ -1,3 +1,4 @@
+using BBT.Aether.Events;
 using BBT.Aether.Uow;
 using BBT.Workflow.BackgroundJobs.Options;
 using BBT.Workflow.Caching;
@@ -8,6 +9,7 @@ using BBT.Workflow.Execution.ErrorHandling;
 using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Execution.Services;
 using BBT.Workflow.Instances;
+using BBT.Workflow.Instances.Events;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Shared;
 using Microsoft.Extensions.Logging;
@@ -26,10 +28,17 @@ public sealed class SubflowFaultService(
     IErrorActionExecutor errorActionExecutor,
     ITransitionLockScopeFactory transitionLockScopeFactory,
     ISubItemTerminalGuard terminalGuard,
+    IDistributedEventBus eventBus,
     IOptions<WorkflowExecutionOptions> executionOptions,
     ILogger<SubflowFaultService> logger)
     : ISubflowFaultService
 {
+    /// <summary>
+    /// Attempt budget for re-publishing the terminal event from inside a correlation revert. See
+    /// <c>SubflowCompletionService.MaxRearmAttempts</c> for the rationale.
+    /// </summary>
+    private const int MaxRearmAttempts = 5;
+
     private LockAcquireWait TerminalLockWait => executionOptions.Value.SubItemTerminalLockRetry.ToLockAcquireWait();
 
     /// <inheritdoc />
@@ -183,6 +192,7 @@ public sealed class SubflowFaultService(
 
                     if (correlation.SubFlowType.Equals(SubFlowType.SubProcess))
                     {
+                        correlation.MarkSettled(input.FaultedAt);
                         await instanceRepository.UpdateAsync(parentInstance, true, cancellationToken);
                         await uow.CommitAsync(cancellationToken);
                         return;
@@ -200,6 +210,7 @@ public sealed class SubflowFaultService(
                     {
                         RecordIncident(parentInstance, input, ErrorAction.Abort, null);
                         parentInstance.Fault(input.Domain, input.Sync);
+                        correlation.MarkSettled(input.FaultedAt);
                         await instanceRepository.UpdateAsync(parentInstance, true, cancellationToken);
                         await uow.CommitAsync(cancellationToken);
                         return;
@@ -268,9 +279,8 @@ public sealed class SubflowFaultService(
                         parentInstance,
                         parentWorkflow!,
                         actionResult.TransitionKey,
-                        input.SubInstanceId,
+                        input,
                         lockKey,
-                        input.Sync,
                         cancellationToken);
                 }
                 else if (actionResult?.ShouldContinue == true)
@@ -278,11 +288,15 @@ public sealed class SubflowFaultService(
                     await ResumePipelineAsync(
                         parentInstance,
                         parentWorkflow!,
-                        input.SubInstanceId,
+                        input,
                         lockKey,
-                        input.Sync,
                         cancellationToken);
                 }
+
+                await MarkSettlementBestEffortAsync(
+                    input.SubInstanceId,
+                    input.FaultedAt,
+                    cancellationToken);
 
                 logger.SubFlowFaultPropagatedToParent(input.SubInstanceId, input.InstanceId);
                 SubFlowActivityHelper.SetSuccess(activity);
@@ -293,6 +307,28 @@ public sealed class SubflowFaultService(
                 logger.SubFlowFaultProcessingFailed(ex, input.SubInstanceId, input.InstanceId);
                 throw;
             }
+        }
+    }
+
+    private async Task MarkSettlementBestEffortAsync(
+        Guid subInstanceId,
+        DateTime settledAt,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await using var markerUow = uowManager.Begin(
+                new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew });
+            await terminalGuard.TryMarkSettledAsync(
+                subInstanceId,
+                SubItemTerminalOutcome.Faulted,
+                settledAt,
+                cancellationToken);
+            await markerUow.CommitAsync(cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            logger.SubItemSettlementMarkerWriteFailed(ex, nameof(SubItemTerminalOutcome.Faulted), subInstanceId);
         }
     }
 
@@ -358,9 +394,8 @@ public sealed class SubflowFaultService(
         Instance parentInstance,
         Definitions.Workflow parentWorkflow,
         string transitionKey,
-        Guid subInstanceId,
+        SubFlowFaultedInput originalInput,
         string parentLockKey,
-        bool sync,
         CancellationToken cancellationToken)
     {
         try
@@ -370,7 +405,7 @@ public sealed class SubflowFaultService(
                 parentWorkflow,
                 transitionKey,
                 isErrorBoundaryTransition: true,
-                sync);
+                originalInput.Sync);
 
             var result = await workflowExecutionService.ExecuteTransitionAsync(input, cancellationToken);
             if (!result.IsSuccess)
@@ -387,7 +422,7 @@ public sealed class SubflowFaultService(
         {
             await RevertCorrelationInNewUowAsync(
                 parentLockKey,
-                subInstanceId,
+                originalInput,
                 parentInstance.Id);
             throw;
         }
@@ -396,11 +431,11 @@ public sealed class SubflowFaultService(
     private async Task ResumePipelineAsync(
         Instance parentInstance,
         Definitions.Workflow parentWorkflow,
-        Guid subInstanceId,
+        SubFlowFaultedInput originalInput,
         string parentLockKey,
-        bool sync,
         CancellationToken cancellationToken)
     {
+        var subInstanceId = originalInput.SubInstanceId;
         try
         {
             // The resume is a PARENT-instance operation: it runs after the fault commits, in its own
@@ -419,7 +454,7 @@ public sealed class SubflowFaultService(
                 parentWorkflow,
                 transitionKey: string.Empty,
                 isErrorBoundaryTransition: false,
-                sync);
+                originalInput.Sync);
             input.Mode = ExecMode.Resume;
             input.Execution!.ResumeFrom = LifecycleOrder.ClearBusyOnResumeStep;
             input.Execution.IsSubFlowResume = true;
@@ -440,7 +475,7 @@ public sealed class SubflowFaultService(
         {
             await RevertCorrelationInNewUowAsync(
                 parentLockKey,
-                subInstanceId,
+                originalInput,
                 parentInstance.Id);
             throw;
         }
@@ -480,9 +515,10 @@ public sealed class SubflowFaultService(
 
     private async Task RevertCorrelationInNewUowAsync(
         string parentLockKey,
-        Guid subInstanceId,
+        SubFlowFaultedInput originalInput,
         Guid parentInstanceId)
     {
+        var subInstanceId = originalInput.SubInstanceId;
         try
         {
             var cancellationToken = CancellationToken.None;
@@ -519,6 +555,21 @@ public sealed class SubflowFaultService(
                 await instanceRepository.UpdateAsync(tracked, true, cancellationToken);
             }
 
+            // See SubflowCompletionService.RevertCorrelationInNewUowAsync for the rationale: the
+            // durable backup may already be consumed by the lock-free duplicate ACK, so re-publish
+            // the terminal event in THIS UoW — the outbox row commits atomically with the revert.
+            var rearmAttempt = originalInput.RearmAttempt ?? 0;
+            if (rearmAttempt >= MaxRearmAttempts)
+            {
+                logger.SubflowTerminalRearmExhausted(parentInstanceId, subInstanceId, rearmAttempt);
+            }
+            else
+            {
+                var rearmEvent = BuildTerminalEventFromInput(originalInput, rearmAttempt + 1);
+                await eventBus.PublishAsync(rearmEvent, cancellationToken: cancellationToken);
+                logger.SubflowTerminalRearmed(parentInstanceId, subInstanceId, rearmAttempt + 1);
+            }
+
             await revertUow.CommitAsync(cancellationToken);
         }
         catch (Exception revertEx)
@@ -526,4 +577,46 @@ public sealed class SubflowFaultService(
             logger.SubItemCorrelationRevertFailed(revertEx, parentInstanceId, subInstanceId);
         }
     }
+
+    /// <summary>
+    /// Reconstructs the terminal event from the service's own input DTO — the exact inverse of
+    /// <c>SubflowTerminalRelay.MapToSubFlowFaultedInput</c> (verbatim field copy) — so a re-arm
+    /// publishes the same fact the original delivery carried.
+    /// </summary>
+    private static InstanceSubFaultedEvent BuildTerminalEventFromInput(
+        SubFlowFaultedInput input,
+        int rearmAttempt) => new()
+    {
+        InstanceId = input.InstanceId,
+        Domain = input.Domain,
+        Flow = input.Flow,
+        Version = input.Version,
+        SubInstanceId = input.SubInstanceId,
+        FaultedState = input.FaultedState,
+        FaultedStateType = input.FaultedStateType,
+        FaultedStateSubType = input.FaultedStateSubType,
+        InstanceData = input.InstanceData,
+        FaultedAt = input.FaultedAt,
+        SubFlowName = input.SubFlowName,
+        IncidentMessage = input.IncidentMessage,
+        IncidentErrorCode = input.IncidentErrorCode,
+        IncidentErrorLayer = input.IncidentErrorLayer,
+        IncidentStackTrace = input.IncidentStackTrace,
+        IncidentStatusCode = input.IncidentStatusCode,
+        IncidentTraceId = input.IncidentTraceId,
+        IncidentTaskKey = input.IncidentTaskKey,
+        IncidentTransition = input.IncidentTransition,
+        IncidentState = input.IncidentState,
+        IncidentBoundaryAction = input.IncidentBoundaryAction,
+        IncidentBoundaryLevel = input.IncidentBoundaryLevel,
+        RootInstanceId = input.RootInstanceId,
+        SubItemType = input.SubItemType,
+        TerminationOrigin = input.Termination?.Origin,
+        InitiatorInstanceId = input.Termination?.InitiatorInstanceId,
+        CascadeId = input.Termination?.CascadeId,
+        Sync = input.Sync,
+        TraceRoot = input.TraceRoot,
+        ParentTraceRoot = input.ParentTraceRoot,
+        RearmAttempt = rearmAttempt
+    };
 }

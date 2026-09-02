@@ -83,4 +83,24 @@ public sealed class EfCoreInstanceCorrelationRepository(
             .AsNoTracking()
             .FirstOrDefaultAsync(c => c.SubFlowInstanceId == subInstanceId, cancellationToken);
     }
+
+    /// <inheritdoc />
+    public async Task<bool> TryMarkSettledAsync(
+        Guid subInstanceId,
+        SubItemTerminalOutcome outcome,
+        DateTime settledAt,
+        CancellationToken cancellationToken = default)
+    {
+        var affected = await (await GetDbSetAsync())
+            .Where(c => c.SubFlowInstanceId == subInstanceId
+                        && c.IsCompleted
+                        && c.TerminalOutcome == outcome
+                        && c.SettledAt == null)
+            .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(c => c.SettledAt, settledAt)
+                    .SetProperty(c => c.ModifiedAt, DateTime.UtcNow),
+                cancellationToken);
+
+        return affected == 1;
+    }
 }

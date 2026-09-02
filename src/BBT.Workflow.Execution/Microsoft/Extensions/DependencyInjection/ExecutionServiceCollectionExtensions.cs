@@ -4,9 +4,12 @@ using Dapr.AI.Conversation.Extensions;
 using BBT.Workflow.Execution.Configuration;
 using BBT.Workflow.Execution.Invokers;
 using BBT.Workflow.Execution.Metrics;
+using BBT.Workflow.Execution.Python;
+using BBT.Workflow.Execution.Python.Containers;
 using BBT.Workflow.Execution.Services;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Options;
 
 namespace Microsoft.Extensions.DependencyInjection;
 
@@ -37,6 +40,23 @@ public static class ExecutionServiceCollectionExtensions
             services.Configure<TriggerRetryOptions>(_ => { });
         }
 
+        var pythonOptions = services.AddOptions<PythonOptions>();
+        if (configuration is not null)
+        {
+            pythonOptions.Bind(configuration.GetSection(PythonOptions.SectionName));
+        }
+        pythonOptions.ValidateOnStart();
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IValidateOptions<PythonOptions>, PythonOptionsValidator>());
+        services.AddSingleton<PythonRunnerProtocol>();
+        services.AddSingleton<IContainerExecutionDriver, DockerContainerExecutionDriver>();
+        services.AddSingleton<IContainerExecutionDriver, KubernetesContainerExecutionDriver>();
+        services.AddSingleton<IPythonExecutionRuntime, PythonNetExecutionRuntime>();
+        services.AddSingleton<IPythonExecutionRuntime, ProcessPythonExecutionRuntime>();
+        services.AddSingleton<IPythonExecutionRuntime, ContainerPythonExecutionRuntime>();
+        services.AddSingleton<IPythonRuntimeRegistry, PythonRuntimeRegistry>();
+        services.AddHostedService<PythonRuntimeHostedService>();
+
         // Register WorkflowHttpClient instances
         services.AddWorkflowHttpClient();
 
@@ -61,6 +81,7 @@ public static class ExecutionServiceCollectionExtensions
         services.AddSingleton<ITaskInvoker, DaprHttpEndpointTaskInvoker>();
         services.AddSingleton<ITaskInvoker, DaprPubSubTaskInvoker>();
         services.AddSingleton<ITaskInvoker, DaprConversationTaskInvoker>();
+        services.AddSingleton<ITaskInvoker, PythonTaskInvoker>();
         services.AddSingleton<ITaskInvoker, StateStoreTaskInvoker>();
         services.AddSingleton<ITaskInvoker, CacheAsideTaskInvoker>();
         

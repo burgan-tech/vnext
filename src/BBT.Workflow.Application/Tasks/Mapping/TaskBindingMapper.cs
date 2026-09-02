@@ -46,6 +46,7 @@ public static class TaskBindingMapper
                 DaprHttpEndpointTask daprHttpEndpoint => (TaskTypes.DaprHttpEndpoint, MapDaprHttpEndpointTask(daprHttpEndpoint)),
                 DaprPubSubTask daprPubSub => (TaskTypes.DaprPubSub, MapDaprPubSubTask(daprPubSub)),
                 DaprConversationTask daprConversation => (TaskTypes.DaprConversation, (object)MapDaprConversationTask(daprConversation)),
+                PythonTask python => (TaskTypes.Python, (object)MapPythonTask(python)),
                 StateStoreTask stateStore => (TaskTypes.StateStore, (object)MapStateStoreTask(stateStore)),
 
                 // Trigger tasks (basic mapping - runtime context handled by invokers)
@@ -381,6 +382,15 @@ public static class TaskBindingMapper
             Parameters = ToStringDictionary(task.Parameters)
         };
     }
+
+    private static PythonTaskBinding MapPythonTask(PythonTask task) => new()
+    {
+        Script = task.Script?.DecodedCode ?? string.Empty,
+        Location = task.Script?.Location ?? ScriptCode.DefaultLocation,
+        ExecutionMode = task.ExecutionMode,
+        Input = task.Input,
+        TimeoutSeconds = task.TimeoutSeconds
+    };
 
     /// <summary>
     /// Converts an optional JSON object into a string dictionary, coercing non-string values to their raw JSON text.

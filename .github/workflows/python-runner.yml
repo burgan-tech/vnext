@@ -1,0 +1,48 @@
+name: Python Runner
+
+on:
+  pull_request:
+    paths:
+      - "execution/python/**"
+      - "src/BBT.Workflow.Execution/Python/**"
+      - "src/BBT.Workflow.Execution/Invokers/PythonTaskInvoker.cs"
+      - ".github/workflows/python-runner.yml"
+  push:
+    branches: [master]
+    paths:
+      - "execution/python/**"
+      - "src/BBT.Workflow.Execution/Python/**"
+      - "src/BBT.Workflow.Execution/Invokers/PythonTaskInvoker.cs"
+
+permissions:
+  contents: read
+
+jobs:
+  contract-and-image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: execution/python/requirements.lock
+
+      - name: Install locked Python dependencies
+        run: "python -m pip install --only-binary=:all: --require-hashes -r execution/python/requirements.lock"
+
+      - name: Run runner contract tests
+        run: python -m unittest discover -s execution/python/tests -v
+
+      - name: Build Python runner image
+        run: docker build -f execution/python/Dockerfile -t vnext-python-runner:test .
+
+      - name: Smoke test isolated runner image
+        run: |
+          printf '%s' '{"script":"def main(input): return {\"value\": input[\"value\"] * 2}","location":"ci.py","input":{"value":21},"allowedModules":["*"],"maxOutputBytes":2097152,"maxStdoutBytes":32768,"maxStderrBytes":32768}' \
+            | docker run --rm -i --network none --read-only --memory 2g --cpus 1 --pids-limit 128 \
+                --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m \
+                --cap-drop ALL --security-opt no-new-privileges:true vnext-python-runner:test \
+            | tee /tmp/python-runner-response.json
+          jq -e '.success == true and (.outputJson | fromjson | .value) == 42' /tmp/python-runner-response.json

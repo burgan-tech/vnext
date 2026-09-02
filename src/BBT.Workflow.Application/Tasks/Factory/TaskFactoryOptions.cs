@@ -38,16 +38,18 @@ public sealed class TaskFactoryOptions
     /// </summary>
     [Required]
     [MinLength(1, ErrorMessage = "At least one task type must be specified for pooling")]
-    public string[] PooledTaskTypes { get; set; } = 
+    public string[] PooledTaskTypes { get; set; } =
     {
         "DaprServiceTask",
         "HttpTask",
         "ScriptTask",
+        "PythonTask",
         "ConditionTask",
         "DaprBindingTask",
         "DaprHttpEndpointTask",
         "DaprPubSubTask",
         "DaprServiceTask",
-        "HumanTask"
+        "HumanTask",
+        "ExternalHttpTask"
     };
-} 
+}

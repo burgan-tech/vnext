@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Xml.Linq;
 using BBT.Workflow.Execution.Bindings;
 using BBT.Workflow.Execution.Metrics;
+using BBT.Workflow.Execution.Services;
 using Microsoft.Extensions.Logging;
 
 namespace BBT.Workflow.Execution.Invokers;
@@ -56,6 +57,7 @@ public sealed class SoapTaskInvoker(
         CancellationToken cancellationToken)
     {
         var startTimestamp = Stopwatch.GetTimestamp();
+        var prepareActivity = InvokerActivityHelper.StartPrepareActivity(TaskType, taskKey ?? string.Empty);
 
         try
         {
@@ -95,6 +97,7 @@ public sealed class SoapTaskInvoker(
 
             InvokerHelpers.ApplyTrustedCorrelationHeaders(request);
 
+            prepareActivity?.Dispose();
             var response = await httpClient.SendAsync(request, cancellationToken);
 
             var responseHeaders = InvokerHelpers.MergeHeaders(response.Headers, response.Content.Headers);
@@ -143,6 +146,7 @@ public sealed class SoapTaskInvoker(
         }
         catch (TaskCanceledException ex) when (cancellationToken.IsCancellationRequested)
         {
+            prepareActivity?.Dispose();
             _metrics.RecordTaskExecution(TaskType, "cancelled");
             logger.LogWarning("SOAP request was cancelled for task {TaskKey} - URL: {Url}", taskKey, binding.Url);
 
@@ -160,6 +164,7 @@ public sealed class SoapTaskInvoker(
         }
         catch (HttpRequestException ex)
         {
+            prepareActivity?.Dispose();
             _metrics.RecordTaskExecution(TaskType, "failure");
             logger.LogError(ex, "SOAP task invocation failed for {TaskKey} - URL: {Url}", taskKey, binding.Url);
 
@@ -177,6 +182,7 @@ public sealed class SoapTaskInvoker(
         }
         catch (Exception ex)
         {
+            prepareActivity?.Dispose();
             _metrics.RecordTaskExecution(TaskType, "failure");
             logger.LogError(ex, "Unexpected error during SOAP task invocation for {TaskKey}", taskKey);
 

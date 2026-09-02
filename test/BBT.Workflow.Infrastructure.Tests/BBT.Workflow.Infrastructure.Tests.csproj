@@ -24,4 +24,20 @@
         <PackageReference Include="Dapr.AspNetCore" Version="$(DaprPackageVersion)" />
     </ItemGroup>
 
+    <!--
+      Compile-included (not project-referenced): the Inbox worker has no test project of its own, and
+      this task must not create one. EventTraceMode/EventTraceParenting hold EventTraceScope's pure
+      parenting decision (EventTraceMode.ContinueTrace vs LinkedDelivery) with zero
+      Activity.Current/ActivitySource access. EventTraceScope.cs itself is ALSO compile-included
+      (round 1 review finding): it depends only on Domain/Events.Contracts/Aether types already
+      referenced here, so its highest-risk behavior — forcing/restoring a root Activity — can be
+      pinned with a real ActivityListener instead of relying solely on Faz C's OpenObserve
+      acceptance checks.
+    -->
+    <ItemGroup>
+        <Compile Include="..\..\workers\BBT.Workflow.Workers.Inbox\Tracing\EventTraceMode.cs" Link="Tracing\EventTraceMode.cs"/>
+        <Compile Include="..\..\workers\BBT.Workflow.Workers.Inbox\Tracing\EventTraceParenting.cs" Link="Tracing\EventTraceParenting.cs"/>
+        <Compile Include="..\..\workers\BBT.Workflow.Workers.Inbox\Tracing\EventTraceScope.cs" Link="Tracing\EventTraceScope.cs"/>
+    </ItemGroup>
+
 </Project>

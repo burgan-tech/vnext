@@ -27,4 +27,10 @@ public sealed class StateFunctionCacheOptions
     /// are detected on every hit via the fingerprint validation query.
     /// </summary>
     public int TtlSeconds { get; set; } = 60;
+
+    /// <summary>
+    /// Short freshness bound for active-SubFlow responses whose displayed state is owned by a
+    /// child runtime and cannot be validated from the parent's local fingerprint.
+    /// </summary>
+    public int ActiveSubflowTtlMilliseconds { get; set; } = 500;
 }

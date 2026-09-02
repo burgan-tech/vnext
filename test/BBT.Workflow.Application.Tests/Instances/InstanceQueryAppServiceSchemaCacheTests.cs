@@ -100,7 +100,7 @@ public class InstanceQueryAppServiceSchemaCacheTests : IDisposable
             transitionAuthorizationManager: _transitionAuthorizationManager,
             representationEtagService: Substitute.For<IRepresentationEtagService>(),
             schemaFieldFilterService: Substitute.For<ISchemaFieldFilterService>(),
-            currentUser: Substitute.For<ICurrentUser>(),
+            callerRoleResolver: new DefaultCallerRoleResolver(Substitute.For<ICurrentUser>()),
             paginationLinkGenerator: Substitute.For<BBT.Aether.Application.Pagination.IPaginationLinkGenerator>(),
             instanceFilteringOptions: Options.Create(new InstanceFilteringOptions()),
             stateFunctionCache: Substitute.For<Caching.IStateFunctionCache>(),

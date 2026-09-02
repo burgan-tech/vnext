@@ -1,6 +1,5 @@
 using System.Text.Json;
 using BBT.Aether.Events;
-using BBT.Workflow.Events.Hooks;
 using BBT.Workflow.Events;
 
 namespace BBT.Workflow.Instances.Events;
@@ -9,15 +8,8 @@ namespace BBT.Workflow.Instances.Events;
 /// Event published when a SubFlow instance faults, notifying the parent instance.
 /// Contains incident information from the faulted SubFlow for parent-level recording.
 /// </summary>
-/// <remarks>
-/// This event supports hooks. Register hooks via DI:
-/// <code>
-/// services.AddEventHook&lt;InstanceSubFaultedEvent, InstanceSubFaultedEventHook&gt;();
-/// </code>
-/// </remarks>
-[EventHook(EventHookMode.DurablePostCommit)]
 [EventName("instance.sub.faulted")]
-public class InstanceSubFaultedEvent : IDistributedEvent, ILaneAwareDistributedEvent
+public class InstanceSubFaultedEvent : IDistributedEvent, ILaneAwareDistributedEvent, ISubflowTerminalEvent
 {
     /// <summary>
     /// The ID of the Parent instance
@@ -179,4 +171,10 @@ public class InstanceSubFaultedEvent : IDistributedEvent, ILaneAwareDistributedE
 
     /// <summary>W3C traceparent of the enclosing lane, so a subflow resume returns to the parent instance's lane.</summary>
     public string? ParentTraceRoot { get; set; }
+
+    /// <summary>
+    /// How many times a terminal-revert has re-published this event as a durable-delivery rearm.
+    /// <c>null</c>/<c>0</c> for an original delivery. See <c>InstanceSubCompletedEvent.RearmAttempt</c>.
+    /// </summary>
+    public int? RearmAttempt { get; init; }
 }

@@ -13,7 +13,7 @@ internal static class ScriptContextActivity
     private static readonly ActivitySource Source = new("BBT.Workflow.Scripting");
 
     public static Activity? Start(string operation) =>
-        Source.StartActivity(operation, ActivityKind.Internal, Activity.Current?.Context ?? default);
+        Source.StartActivity(operation, ActivityKind.Internal);
 
     public static void TagInstanceShape(Activity? activity, Instance? instance)
     {

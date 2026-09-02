@@ -2,7 +2,7 @@
     <PropertyGroup>
 
         <!-- All Prism packages -->
-        <AetherPackageVersion>1.0.37</AetherPackageVersion>
+        <AetherPackageVersion>1.0.39</AetherPackageVersion>
         <!-- Overrides transitive PostSharp 2026.0.7 from BBT.Aether.Aspects; >=2026.0.10 required to read project.assets.json v4 written by .NET SDK 10.0.300+ -->
         <PostSharpPackageVersion>2026.0.12</PostSharpPackageVersion>
         <!-- Elastic Apm packages -->
@@ -48,6 +48,10 @@
         <xunitRunnerPackageVersion>3.0.1</xunitRunnerPackageVersion>
         <MoqPackageVersion>4.20.72</MoqPackageVersion>
         <TestcontainersPackageVersion>4.10.0</TestcontainersPackageVersion>
+        <!-- Embedded CPython interop for trusted Python workflow tasks -->
+        <PythonNetPackageVersion>3.1.0</PythonNetPackageVersion>
+        <!-- Official Kubernetes client used by the Python container execution driver -->
+    <KubernetesClientPackageVersion>19.0.2</KubernetesClientPackageVersion>
 
     </PropertyGroup>
 </Project>

@@ -374,6 +374,10 @@ namespace BBT.Workflow.Migrations
                         .HasMaxLength(100)
                         .HasColumnType("character varying(100)");
 
+                    b.Property<DateTime?>("SettledAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasComment("Durable terminal settlement marker; set after blocking parent resume completes");
+
                     b.Property<string>("SubFlowCurrentState")
                         .HasMaxLength(100)
                         .HasColumnType("character varying(100)");

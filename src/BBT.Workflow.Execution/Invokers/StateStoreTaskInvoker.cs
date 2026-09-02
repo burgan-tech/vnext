@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using BBT.Workflow.Execution.Bindings;
 using BBT.Workflow.Execution.Metrics;
+using BBT.Workflow.Execution.Services;
 using BBT.Workflow.Execution.StateStores;
 using Microsoft.Extensions.Logging;
 
@@ -66,21 +67,30 @@ public sealed class StateStoreTaskInvoker : ITaskInvoker<StateStoreBinding>
     {
         var startTimestamp = Stopwatch.GetTimestamp();
         var command = binding.Command ?? string.Empty;
+        var prepareActivity = InvokerActivityHelper.StartPrepareActivity(TaskType, taskKey ?? string.Empty);
 
-        var storeName = _stateStore.ResolveStoreName(binding.StoreName);
-
-        if (string.IsNullOrWhiteSpace(storeName))
-        {
-            return TaskInvocationResult.Failure(
-                error: "State store name is not configured: set 'storeName' in the task config " +
-                       "or the DAPR_STATE_STORE_NAME configuration value",
-                executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
-                taskType: TaskType,
-                metadata: BaseMetadata(binding, storeName: string.Empty));
-        }
+        var storeName = string.Empty;
 
         try
         {
+            // Store-name resolution is prep too — it runs inside the try so a throw here still
+            // reaches the catches below and disposes prepareActivity (no un-stopped ambient span).
+            storeName = _stateStore.ResolveStoreName(binding.StoreName) ?? string.Empty;
+
+            if (string.IsNullOrWhiteSpace(storeName))
+            {
+                prepareActivity?.Dispose();
+                return TaskInvocationResult.Failure(
+                    error: "State store name is not configured: set 'storeName' in the task config " +
+                           "or the DAPR_STATE_STORE_NAME configuration value",
+                    executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
+                    taskType: TaskType,
+                    metadata: BaseMetadata(binding, storeName: string.Empty));
+            }
+
+            // Dispose immediately before dispatch: whichever command branch runs next performs
+            // the actual Dapr state-store operation (the first outbound call for this invocation).
+            prepareActivity?.Dispose();
             TaskInvocationResult result = command.ToLowerInvariant() switch
             {
                 GetCommand => await GetAsync(binding, storeName, startTimestamp, cancellationToken),
@@ -98,6 +108,7 @@ public sealed class StateStoreTaskInvoker : ITaskInvoker<StateStoreBinding>
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
+            prepareActivity?.Dispose();
             _metrics.RecordStateStoreOperation(storeName, command, "cancelled");
             _logger.LogWarning("State store operation was cancelled: {StoreName}/{Command}",
                 storeName, command);
@@ -110,6 +121,7 @@ public sealed class StateStoreTaskInvoker : ITaskInvoker<StateStoreBinding>
         }
         catch (Exception ex)
         {
+            prepareActivity?.Dispose();
             _metrics.RecordStateStoreOperation(storeName, command, "failure");
             _logger.LogError(ex, "State store operation failed: {StoreName}/{Command}",
                 storeName, command);

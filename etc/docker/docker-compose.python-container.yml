@@ -1,0 +1,11 @@
+services:
+  vnext-execution-app:
+    environment:
+      Python__Enabled: "true"
+      Python__EnabledModes__0: "pythonNet"
+      Python__EnabledModes__1: "process"
+      Python__EnabledModes__2: "container"
+      Python__Container__Endpoint: "unix:///var/run/docker.sock"
+      Python__Container__Image: "ghcr.io/burgan-tech/vnext/python-runner:latest"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
