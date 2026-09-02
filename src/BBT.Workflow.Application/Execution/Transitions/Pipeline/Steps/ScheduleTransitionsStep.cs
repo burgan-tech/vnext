@@ -38,6 +38,15 @@ public sealed class ScheduleTransitionsStep(
     public async Task<Result<StepOutcome>> ExecuteAsync(TransitionExecutionContext context,
         CancellationToken cancellationToken)
     {
+        // Skip if no scheduled transitions. Runs before the NextTransition guard below so a
+        // state with nothing to arm never logs the chained-next skip — there would be nothing
+        // scheduled either way, and the log would be misleading noise on every auto-win hop
+        // into a state with zero scheduled transitions.
+        if (!HasScheduledTransitions(context))
+        {
+            return Result<StepOutcome>.Ok(StepOutcome.ContinueNoWork());
+        }
+
         // The Auto step (LifecycleOrder.Auto, runs just before this step) may have selected
         // a winner: the instance is leaving this state immediately, so arming its timers
         // would be pure churn — the chained hop's CancelScheduledJobsStep would tear them
@@ -47,12 +56,6 @@ public sealed class ScheduleTransitionsStep(
         {
             logger.ScheduledTransitionsSkippedForChainedNext(
                 context.Target?.Key ?? context.Current.Key, context.InstanceId, chainedNext.TransitionKey);
-            return Result<StepOutcome>.Ok(StepOutcome.ContinueNoWork());
-        }
-
-        // Skip if no scheduled transitions
-        if (!HasScheduledTransitions(context))
-        {
             return Result<StepOutcome>.Ok(StepOutcome.ContinueNoWork());
         }
 
