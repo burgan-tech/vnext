@@ -711,6 +711,18 @@ public static partial class WorkflowLogs
         string workflowKey,
         Exception exception);
 
+    /// <summary>
+    /// Logs when ScheduleTransitionsStep skips arming a state's scheduled transitions because the
+    /// Auto step (which runs just before it) already selected a winning next transition — the
+    /// instance is leaving the state immediately, so arming would be pure churn.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10156,
+        Level = LogLevel.Debug,
+        Message = "Scheduled transitions for state {StateKey} not armed on instance {InstanceId}: auto step already selected next transition {NextTransitionKey}")]
+    public static partial void ScheduledTransitionsSkippedForChainedNext(
+        this ILogger logger, string stateKey, Guid instanceId, string nextTransitionKey);
+
     #endregion
 
     #region Task Execution

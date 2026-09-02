@@ -19,6 +19,8 @@ namespace BBT.Workflow.Execution.Pipeline.Steps;
 /// Pipeline step that schedules future transitions based on timers.
 /// Enqueues scheduled transitions for later execution.
 /// Uses Result pattern for exception-free error handling.
+/// Runs after RunAutomaticTransitionsStep; when an auto winner was selected
+/// (Directives.NextTransition set) it arms nothing.
 /// </summary>
 public sealed class ScheduleTransitionsStep(
     IBackgroundJobService backgroundJobService,
@@ -36,6 +38,18 @@ public sealed class ScheduleTransitionsStep(
     public async Task<Result<StepOutcome>> ExecuteAsync(TransitionExecutionContext context,
         CancellationToken cancellationToken)
     {
+        // The Auto step (LifecycleOrder.Auto, runs just before this step) may have selected
+        // a winner: the instance is leaving this state immediately, so arming its timers
+        // would be pure churn — the chained hop's CancelScheduledJobsStep would tear them
+        // down right away. Skip arming entirely. (updateData never reaches here: its +Self
+        // profile excludes Schedule by name.)
+        if (context.Directives.NextTransition is { } chainedNext)
+        {
+            logger.ScheduledTransitionsSkippedForChainedNext(
+                context.Target?.Key ?? context.Current.Key, context.InstanceId, chainedNext.TransitionKey);
+            return Result<StepOutcome>.Ok(StepOutcome.ContinueNoWork());
+        }
+
         // Skip if no scheduled transitions
         if (!HasScheduledTransitions(context))
         {
