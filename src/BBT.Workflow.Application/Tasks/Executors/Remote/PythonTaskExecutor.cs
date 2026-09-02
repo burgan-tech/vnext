@@ -2,7 +2,6 @@ using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution;
 using BBT.Workflow.Logging;
-using BBT.Workflow.Monitoring;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks.Mapping;
 using Microsoft.Extensions.Logging;
@@ -15,9 +14,8 @@ namespace BBT.Workflow.Tasks.Executors;
 /// </summary>
 public sealed class PythonTaskExecutor(
     IRemoteInvokerService remoteInvoker,
-    ILogger<PythonTaskExecutor> logger,
-    IWorkflowMetrics metrics)
-    : TaskExecutorBase<PythonTask>(logger, metrics)
+    ILogger<PythonTaskExecutor> logger)
+    : TaskExecutorBase<PythonTask>(logger)
 {
     public override TaskType TaskType => TaskType.Python;
 
