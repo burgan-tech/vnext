@@ -99,7 +99,7 @@ public static class TransitionExecutionContextExtensions
     /// <summary>
     /// Determines whether this execution skips the state's lifecycle — the steps that only make
     /// sense when a state is actually left and another entered: <c>CancelScheduledJobs (39)</c>,
-    /// <c>OnExit (40)</c>, <c>OnEntry (60)</c> and <c>Schedule (80)</c>.
+    /// <c>OnExit (40)</c>, <c>OnEntry (60)</c> and <c>Schedule (90)</c>.
     /// </summary>
     /// <remarks>
     /// <para>
