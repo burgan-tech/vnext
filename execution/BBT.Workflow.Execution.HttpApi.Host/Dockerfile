@@ -11,8 +11,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
     OMP_NUM_THREADS=1 \
     OPENBLAS_NUM_THREADS=1 \
-    MKL_NUM_THREADS=1 \
-    Python__Enabled=true
+    MKL_NUM_THREADS=1
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -52,12 +51,14 @@ RUN apt-get update \
     && unzip -q /tmp/netstandard.nupkg -d /var/tmp/postsharp/NuGetFallback/NETStandard.Library.Ref/2.1.0 \
     && rm -rf /tmp/netstandard.nupkg /var/lib/apt/lists/*
 
+
 # No protoc override here, unlike the Alpine-based host Dockerfiles: this build stage is
 # Ubuntu (glibc), so the protoc / grpc_csharp_plugin binaries that Grpc.Tools ships for
 # linux_x64 and linux_arm64 exec natively. The `apk add protobuf grpc-plugins` +
 # PROTOBUF_PROTOC/GRPC_PROTOC_PLUGIN lines were an Alpine-only workaround left behind when
 # the stage moved to noble (#921) — there is no apk on noble, and the ENV would point at
 # binaries that do not exist.
+
 
 COPY ["common.props", "/common.props"]
 COPY ["Directory.Build.props", "/Directory.Build.props"]
