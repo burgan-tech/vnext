@@ -138,6 +138,12 @@ Episode tags, on `Instance.Activation/{key}`: `vnext.activation.outcome` · `vne
 `vnext.activation.duration_ms` · `vnext.activation.partial` · `vnext.activation.clock_skew`. On
 `Transition.Settle`: `vnext.settle.cas` (`flipped` | `lost` | `skipped`) · `vnext.activation.emitted`.
 
+Within a lane, `vnext.transition.key` is the hop-level discriminator on pipeline steps,
+validation/persistence/commit spans and post-commit work. Background-job arms refine it with
+`vnext.job.type`, `vnext.state.from`, then the unique `vnext.job.name`. See
+[Trace Span Tree § Identity tag hierarchy](trace-span-tree.md#identity-tag-hierarchy) for the full
+logical drill-down diagram; the attributes themselves remain flat OpenTelemetry key/value pairs.
+
 ## Activation episode
 
 **Definition.** An *activation episode* runs from a **trigger** to the instance's next **rest

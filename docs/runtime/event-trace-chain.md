@@ -1,5 +1,10 @@
 # The Event Chain: Publish → Hook → Outbox → Handle, as One Trace
 
+> **Historical document.** The `EventHook.*` model described and measured here has been removed.
+> [Event Publish Modes](event-publish-modes.md) is the canonical current behavior; the current
+> span inventory is [Trace Span Tree](trace-span-tree.md). The evidence below is retained for
+> archaeology and must not be used as an operational trace contract.
+
 ## Why this exists
 
 A domain event's life crosses three processes and (usually) a message broker: it is published
@@ -50,9 +55,9 @@ for — `TransitionContinuationRequested`, `ChildSubflowCancelRequested`, `Child
 demonstrated below: the handler span still parents onto the event's own `TraceParent` and joins the
 producing transition's trace, byte-for-byte the same result this page's live evidence shows.
 
-The evidence below therefore keeps its full evidentiary value for what it proves about the
-publish-side `EventHook.{name}` spans (Task 1, still real and load-bearing where hooks still run)
-and for the `ContinueTrace` shape it happens to also demonstrate on the Inbox side — it simply no
+The evidence below therefore keeps historical value for the removed publish-side
+`EventHook.{name}` spans and for the `ContinueTrace` shape it happens to also demonstrate on the
+Inbox side — it simply no
 longer describes the **current** trace shape for `InstanceSubCompletedEvent` or any other fact
 event. See [Event Publish Modes § Observability contract](event-publish-modes.md#observability-contract)
 for the current tag/shape reference (`messaging.message.id`, `vnext.causation.id`,

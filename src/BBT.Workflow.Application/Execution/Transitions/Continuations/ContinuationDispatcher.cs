@@ -45,7 +45,8 @@ public sealed class ContinuationDispatcher
         // job row and arms the scheduler, an Inline hands the next context back to the loop. It was
         // the largest unattributed stretch inside the pipeline — a trace showed the steps finishing
         // and then time passing with nothing to name it.
-        using var activity = PipelineStepActivityHelper.StartOperationActivity($"Transition.Continuation/{mode}");
+        using var activity = PipelineStepActivityHelper.StartTransitionActivity(
+            $"Transition.Continuation/{mode}", current?.TransitionKey);
         activity?.SetTag(TelemetryConstants.TagNames.ContinuationMode, mode.ToString());
 
         var result = await strategy.DispatchAsync(current, cancellationToken);

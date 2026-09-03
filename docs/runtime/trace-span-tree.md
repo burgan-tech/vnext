@@ -19,15 +19,6 @@ Full design rationale, decisions, and work breakdown: see
 
 ## Target span tree
 
-> **Stale note:** the `EventHook.{name}` nodes below (and the `EventHook.{name}` row in
-> [Span reference](#span-reference)) describe the per-event `EventHook`/`HookedDistributedEventBus`
-> model, which has since been removed outright — every distributed event now rides the
-> transactional outbox instead. See
-> [Event Publish Modes § Purpose](event-publish-modes.md#purpose) for the current model. Kept here
-> as historical record of the tree at the time this page was written, not as current behavior.
-> The source those spans used, `BBT.Workflow.Instances.Events`, was removed from all four hosts'
-> `Telemetry:Tracing:AdditionalSources` on 2026-09-02 — nothing emits on it any more.
-
 ```
 POST .../instances/start  |  PATCH .../transitions/{key}     the HTTP server span: APM transaction of the
                                                               accept AND the lane anchor of everything below
@@ -78,10 +69,8 @@ TransitionJob.Execute/start-login          the transaction (async path)
 │                                          the `faulted` Instance.Activation is emitted inside it, after the commit
 ├─ Lock.Release/{lockKey}
 ├─ Events.PublishDeferred                staging deferred events onto the bus before the commit
-│  └─ EventHook.{name}                   HandledOrFallback hooks — run at publish time
 ├─ Uow.Commit                            transaction commit — then `instance.available.committed`
-│  └─ EventHook.{name}                     lands on the TRANSACTION (this span is closed by then)
-└─ PostCommit.Execute                    → job enqueue children
+└─ PostCommit.{jobType}                  → post-commit job children
 ```
 
 Five things worth calling out that the diagram doesn't show directly:
@@ -163,6 +152,44 @@ All tag names live in `TelemetryConstants.TagNames` (`BBT.Workflow.Domain/Loggin
 unless noted otherwise. Every span with `span.category=business` renders in the default detail
 level; nothing in this table is gated behind `AetherTracingRuntime.IsVerbose`.
 
+### Identity tag hierarchy
+
+OpenTelemetry attributes are physically flat key/value pairs; the diagram below is the logical
+drill-down order to use when filtering a trace. A child node does not imply that every span repeats
+all ancestor tags. The lane/transaction span owns the broad execution identity, while narrower
+business spans add their own transition, step, task, job, or activation discriminator.
+
+```mermaid
+flowchart TD
+    traceId["Trace: trace.id and x_request_id"]
+    lane["Lane: vnext.trace.lane.anchor and vnext.lane.seq"]
+    workflow["Workflow: vnext.domain, vnext.flow.key, vnext.flow.version"]
+    rootInstance["Business root: vnext.root.instance.id"]
+    instance["Instance: vnext.instance.id and workflow.instance.id"]
+    transition["Transition: vnext.transition.key"]
+    pipeline["Pipeline operation: Transition.*, Uow.Commit, PostCommit.*"]
+    step["Step: vnext.step.order and vnext.step.outcome"]
+    task["Task: vnext.task.key, vnext.task.type, vnext.task.trigger"]
+    jobType["Job class: vnext.job.type"]
+    jobState["Job source: vnext.state.from"]
+    jobName["Scheduler identity: vnext.job.name"]
+    activation["Episode: vnext.activation.transition.key, trigger, outcome"]
+
+    traceId --> lane --> rootInstance --> workflow --> instance --> transition
+    transition --> pipeline
+    transition --> step
+    transition --> task
+    transition --> jobType --> jobState --> jobName
+    instance --> activation
+```
+
+The practical query path is therefore `trace.id` → `vnext.root.instance.id` →
+`vnext.instance.id` → `vnext.transition.key`. From there, choose the leaf discriminator relevant
+to the operation. `vnext.job.name` is intentionally the final, high-cardinality scheduler identity;
+group jobs by `vnext.job.type` or `vnext.transition.key` first. For an arm operation the waterfall
+name is also readable as `BackgroundJob.Arm/{type}/{key}`, but the full unique name remains only in
+`vnext.job.name`.
+
 | Span name | ActivitySource | Key tags | Notes |
 |---|---|---|---|
 | `TransitionJob.Execute/{transitionKey}` | `BBT.Workflow.BackgroundJobs` | lane tags (`vnext.trace.lane`, `.anchor`, `vnext.hop.predecessor`, `vnext.lane.seq`) + the payload's job tags | The transaction on the async path (`TransitionJobHandler`). Naming it after the transition is what made the old `transition/{key}` child redundant. |
@@ -179,7 +206,7 @@ level; nothing in this table is gated behind `AetherTracingRuntime.IsVerbose`.
 | `TransitionRecord.Persist` | `BBT.Workflow.Pipeline` | `span.category=business`, `vnext.transition.key` | Wraps the instance update plus transition-record insert/update in `CreateTransitionRecordStep`, including EF preparation before the provider command spans. |
 | `Lock.Acquire/{lockKey}` | `BBT.Workflow.Pipeline` | `vnext.lock.key`, `vnext.lock.acquired` (false on Busy/409), `vnext.lock.lease_seconds`, `vnext.lock.kind` (`status` \| `chain`) | Emitted by both `InstanceStatusLock` (`kind=status`) and `TransitionLockScopeFactory` (`kind=chain`). A failed acquire is a span with `acquired=false`, not an exception span. |
 | `Lock.Release/{lockKey}` | `BBT.Workflow.Pipeline` | `vnext.lock.key`, `vnext.lock.kind` (`status` \| `chain`) | Fires from the shared `TransitionLockScope.DisposeAsync`. `kind` is carried on the scope from whichever funnel constructed it. |
-| `Transition.Continuation/{mode}` | `BBT.Workflow.Pipeline` | `vnext.continuation.mode` (Inline \| Enqueue), `vnext.continuation.has_next`, error status on failure | What happens between one hop finishing and the next starting: an Enqueue writes the job row and arms the scheduler, an Inline hands the next context to the loop. Was the largest unattributed stretch inside the pipeline. |
+| `Transition.Continuation/{mode}` | `BBT.Workflow.Pipeline` | `vnext.transition.key`, `vnext.continuation.mode` (Inline \| Enqueue), `vnext.continuation.has_next`, error status on failure | What happens between one hop finishing and the next starting: an Enqueue writes the job row and arms the scheduler, an Inline hands the next context to the loop. Was the largest unattributed stretch inside the pipeline. |
 | `Transition.Settle` | `BBT.Workflow.Pipeline` | `vnext.transition.key`, `vnext.settle.status`, `vnext.settle.cas` (`flipped` \| `lost` \| `skipped`), `vnext.activation.emitted`; ActivityEvent `instance.available` (tags `vnext.instance.id`, `vnext.state.to`) **only** when the CAS flipped | The resting-status flip that closes a transition — status write, its lock, the state notification. `vnext.settle.status` is stamped whether the hop flipped, lost the race or never tried; `vnext.settle.cas` is what tells them apart: `flipped` — this hop made the instance Active; `lost` — the row was no longer Busy, a concurrent settler did; `skipped` — the guard did not apply (non-owner, no resolved status, Busy-subtype target, open SubFlow correlation). The `instance.available` event marks the flip **pre-commit**; the durable counterpart is `instance.available.committed` (below). `vnext.activation.emitted=true` means this settlement recorded an `ActivationVerdict` and an `Instance.Activation` span follows the commit. |
 | `Uow.Commit` | `BBT.Workflow.Pipeline` | `vnext.transition.key` when transition-owned | The transaction commit in `TransitionRunner` and its transition-owned recovery/mutation paths. After it returns, on a flipped CAS, `TransitionRunner` adds the ActivityEvent `instance.available.committed` to `Activity.Current` — the **transaction** (job span or server span), since this span is already closed. |
 | `Instance.Activation/{key}` | `BBT.Workflow.Pipeline` | `vnext.activation.outcome` (`active` \| `completed` \| `canceled` \| `faulted` \| `busy.parked` \| `busy.subtype`), `vnext.activation.trigger` (`http` \| `start` \| `manual` \| `event` \| `retry` \| `ack` \| `scheduled` \| `timeout` \| `ack-timeout` \| `trigger` \| `job`), `vnext.activation.transition.key`, `vnext.activation.hops` (the settling hop's `vnext.lane.seq`), `vnext.activation.duration_ms`, `vnext.activation.partial` (only when true), `vnext.activation.clock_skew` (only when true), `vnext.settle.cas` (`flipped` \| `n/a`), `vnext.instance.id`, `workflow.instance.id`, `vnext.domain`, `vnext.flow.key`, `vnext.transition.key` (the settling hop's), `vnext.state.to`, `vnext.layer=orchestration`, `span.category=business` | **Kind `Internal`, one per activation episode, and SYNTHETIC**: its start is **backdated** to the episode start carried on the lane (`WorkflowTraceLane.Episode.StartedAt` — the server span's start for an HTTP entry point, the callback span's for a timer/timeout/ack-timeout fire), its parent is the **episode trace root** (`EpisodeTraceRoot`; the lane anchor is a legacy fallback), and the final `Uow.Commit` that made the rest point durable is attached as an **`ActivityLink`**. Emitted **after that UoW commit** (`ActivationActivity.Emit`, from `TransitionRunner`, `PostCommitParentMutationService.MutateFreshAsync`, `TransitionPipeline.MarkInstanceFaultedAsync`, `JobTimeoutRecoveryService`) — never at Settle, whose flip is not yet durable. `{key}` = the settling hop's transition key, else the episode's first-hop key, else `resume`; `vnext.activation.transition.key` retains that first-hop key. A parent with a live SubFlow does not emit a false `busy.subflow` completion; the child inherits the episode and emits for the surface that becomes available. `vnext.activation.partial=true` when the start was not carried (older producer, or an entry point that seeded none) — the span then covers only the settling hop. An anchor from another trace is never trusted as parent (falls back to the ambient span). See [Activation episode](#activation-episode-why-the-span-is-synthetic) below and [Trace Lanes § Activation episode](trace-lanes.md#activation-episode) for who emits and who never does. |
@@ -189,8 +216,7 @@ level; nothing in this table is gated behind `AetherTracingRuntime.IsVerbose`.
 | `Transition.Intake` | `BBT.Workflow.Pipeline` | `vnext.transition.key`, `vnext.instance.busy` (the Busy flag the fast-fail projection read) | Head of `InstanceCommandAppService.TransitionAsync`: `GetExecutionSnapshotAsync` + the definition resolve + the Busy fast-fail verdict. Runs for **every** transition request (sync and async); a Busy rejection still produces the span. |
 | `Transition.Enqueue` | `BBT.Workflow.Pipeline` | `vnext.transition.key`, `vnext.job.name`, `vnext.enqueue.path` (`Direct` \| `Outbox` — which delivery path the enqueue gateway took) | `AsyncTransitionStrategy.EnqueueAndSaveJobAsync`: the durable half of the async accept — job row, gateway decision, `RequiresNew` commit — run under the status lock. Was the unnamed remainder of the 202 server span. |
 | `BackgroundJob.Arm/{type}/{key}` | `BBT.Workflow.BackgroundJobs` | `vnext.job.name`, `vnext.job.type`, `vnext.transition.key`, `vnext.state.from`, `span.category=business`; `ActivityStatusCode.Error` + message when `ArmAsync` throws (rethrown) | `BackgroundJobActivityHelper.StartArmActivity` around `IBackgroundJobArmHandle.ArmAsync` in `AsyncTransitionStrategy`: the controlled-cardinality type and transition key are visible in the waterfall, while the unique scheduler job name remains a tag. Aether's own `BackgroundJob.Schedule*` spans are Verbose-gated. Not applied to the auto-chain continuation arm, which Aether defers to the UoW post-commit hook. |
-| `Events.PublishDeferred` | `BBT.Workflow.Pipeline` | — | Staging deferred domain events onto the bus before the commit. |
-| `EventHook.{name}` | `BBT.Workflow.Instances.Events` | `vnext.event.name`, `vnext.hook.name`, `vnext.hook.mode` | **Stale — `HookedDistributedEventBus`/`EventHook` no longer exist; see the note under [Target span tree](#target-span-tree) and [Event Publish Modes § Purpose](event-publish-modes.md#purpose). The `BBT.Workflow.Instances.Events` source has been removed from every host's `AdditionalSources` (2026-09-02).** One span per hook invocation (`HookedDistributedEventBus.ExecuteHooksAsync`), named after the hook with the conventional `EventHook`/`Hook` suffix trimmed (`vnext.hook.name` keeps the untrimmed name). Its parent tells you the mode: under `Uow.Commit` means `DurablePostCommit` (hook ran after the ambient UoW committed); under `Events.PublishDeferred` means `HandledOrFallback` (hook ran at publish time). No re-parenting — the span simply opens under whatever is ambient. Error status + message on a failed or throwing hook; the failure still stays swallowed (hooks never fail the publish). |
+| `Events.PublishDeferred` | `BBT.Workflow.Pipeline` | `vnext.transition.key` | Staging deferred domain events onto the transactional outbox before the commit. The removed `EventHook.*` model is documented only as historical evidence in [Event Trace Chain](event-trace-chain.md). |
 | `Subflow.Descend/{targetFlow}` | `BBT.Workflow.Instances.Read` | `vnext.subflow.depth`, `vnext.descent.transport` (`local` \| `remote`), `vnext.descent.function` (`state` \| `master` \| `schema` \| `view` \| `extensions` \| `authorize`), target `vnext.domain`/`vnext.flow.key`/`vnext.instance.id`, `vnext.parent.instance.id`, `vnext.descent.outcome` (only when the descent produced no usable answer) | One level of a built-in function's walk into an active subflow. Emitted by the five `InstanceQueryAppService` descent helpers, `AuthorizeAppService`'s subflow forward and `InstanceRetryAppService`. See "Reading the descent ladder" below. |
 | `Auth.ResolveRoles` | `BBT.Workflow.Authorization` | `vnext.auth.provider`, `vnext.auth.memo.hit`, `vnext.auth.roles.count`, `vnext.auth.outcome` (`resolved` \| `empty` \| `failed`), `vnext.auth.position`, `sub`, `act.sub` | Caller-role resolution through an external provider. Emitted on BOTH the provider call and the request-scope memo hit, with the difference in `memo.hit` — the compile cache's rule. Only providers that do I/O are instrumented; the default provider reads `ICurrentUser` in-process. |
 | `Cache.GenerationGet/{redisKey}` | `BBT.Workflow.Cache` | `cache.component_type`, `cache.store` | The generation-token read that precedes EVERY component resolution. The caller's `Cache.Get` sits after it, not around it, so this round trip was previously attributed to nothing. |
@@ -221,7 +247,7 @@ level; nothing in this table is gated behind `AetherTracingRuntime.IsVerbose`.
 | `Cache.Set/{cacheKey}` | `BBT.Workflow.Cache` | same shape as `Cache.Get` plus `cache.generation` from the bump | `CacheSet<T>.SetAsync`. Also covers the warm-resolutions pass (no separate `Cache.Warmup` span — see note below). |
 | `Cache.Remove/{cacheKey}` | `BBT.Workflow.Cache` | `cache.generation` | `CacheSet<T>.InvalidateAsync`. |
 | `Subflow.*` | `BBT.Workflow.SubFlow` | subflow-specific | Pre-existed (`SubFlowActivityHelper`: start/forward/complete/fault/cancel). Own `Script.*` children for input/output mapping. |
-| `PostCommit.*` | `BBT.Workflow.BackgroundJobs` | `span.category=business`, `vnext.instance.id`, `vnext.transition.key` | A real child of the transition that just committed (`PostCommitExecutor`). This keeps the work filling the interval after `Uow.Commit` adjacent to that commit in Elastic's tree. Owns its subflow/forward children. |
+| `PostCommit.*` | `BBT.Workflow.Pipeline` | `span.category=business`, `vnext.instance.id`, `vnext.transition.key` | A real child of the transition that just committed (`PostCommitExecutor`). This keeps the work filling the interval after `Uow.Commit` adjacent to that commit in Elastic's tree. Owns its subflow/forward children. |
 | `PostCommit.Coordinate` | `BBT.Workflow.Pipeline` | `span.category=business`, `vnext.transition.key`, error status on failure | Wraps creation of the fresh post-commit scope, workflow resolution and `PostCommitTransitionCoordinator`. Its `Cache.Get` and `PostCommit.*` spans are children, so the interval immediately after `Uow.Commit` is fully owned. |
 | `StateNotify.Execute` | `BBT.Workflow.BackgroundJobs` | lane tags (`vnext.trace.lane`, `.anchor`, `vnext.hop.predecessor`) + the payload's job tags | The `state.notify` job. Now a **flat-lane item** (`StateNotifyJobHandler` → `WorkflowTraceLane.Reset(payload.TraceRoot, payload.ParentTraceRoot)` + `StartFlatLaneActivity`): parented to the lane anchor beside the transition hops, with the scheduling hop tagged as predecessor. A payload without `TraceRoot` (older build) degrades to the previous continue-the-predecessor parenting. |
 | `Function.Execute/{key}` | `BBT.Workflow.Functions` | `vnext.layer=orchestration`, `vnext.domain`, `span.category=business` | Envelope span for one function execution (`FunctionAppService.ExecuteFunctionAsync`), parent to the three phase spans below. Previously the function path produced no phase spans of its own — authorization, request validation, and response building were all unattributable inside the endpoint transaction. |
@@ -570,8 +596,9 @@ field.
 
 ## Related pages
 
-- [Event Trace Chain](event-trace-chain.md) — how `EventHook.{name}` (this page) connects to the
-  outbox → pub/sub → inbox handoff, verified live evidence, and the current state of outbox-side
+- [Event Trace Chain](event-trace-chain.md) — historical evidence for the removed
+  `EventHook.{name}` model and how it connected to the outbox → pub/sub → inbox handoff. For the
+  current model use [Event Publish Modes](event-publish-modes.md). It also records the outbox-side
   trace continuity: `Outbox.Process` now **roots its own trace** and attaches the originating
   transition's context as an `ActivityLink` rather than re-parenting onto it — a deliberate
   linked-root model, not the rejoin this page's evidence was gated on. The Inbox side mirrors this
