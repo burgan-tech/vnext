@@ -23,6 +23,11 @@ public static class CurrentUserForwardHeadersHelper
     /// <summary>
     /// Merges forward headers with input headers. Input headers take precedence (override) for the same key.
     /// Content headers (e.g. Content-Type) are silently skipped as they cannot be set on HttpRequestMessage.Headers.
+    /// W3C trace-context headers (traceparent, tracestate, baggage) are never forwarded from either source,
+    /// regardless of <paramref name="isRestrictedHeader"/>: both dictionaries hold captured inbound request
+    /// headers (possibly restored from a persisted job payload long after the fact), and because .NET's
+    /// DiagnosticsHandler injects traceparent fill-if-absent, a stale copy would win over the live one and
+    /// parent the callee to the wrong span. The live Activity must own the trace context on outbound calls.
     /// Also stamps cross-domain correlation headers when absent: X-Root-Instance-Id from the ambient
     /// Activity baggage, and X-Request-Id from <paramref name="correlationId"/> when provided.
     /// </summary>
@@ -31,7 +36,8 @@ public static class CurrentUserForwardHeadersHelper
         isRestrictedHeader ??= _ => false;
         foreach (var kv in forwardHeaders)
         {
-            if (string.IsNullOrEmpty(kv.Value) || !IsAsciiSafe(kv.Value) || isRestrictedHeader(kv.Key) || ContentHeaders.Contains(kv.Key))
+            if (string.IsNullOrEmpty(kv.Value) || !IsAsciiSafe(kv.Value) || isRestrictedHeader(kv.Key) || ContentHeaders.Contains(kv.Key)
+                || TelemetryConstants.HeaderNames.IsW3CTraceContextHeader(kv.Key))
                 continue;
             request.Headers.TryAddWithoutValidation(kv.Key, kv.Value);
         }
@@ -39,7 +45,8 @@ public static class CurrentUserForwardHeadersHelper
         {
             foreach (var kv in inputHeaders)
             {
-                if (isRestrictedHeader(kv.Key) || ContentHeaders.Contains(kv.Key))
+                if (isRestrictedHeader(kv.Key) || ContentHeaders.Contains(kv.Key)
+                    || TelemetryConstants.HeaderNames.IsW3CTraceContextHeader(kv.Key))
                     continue;
                 request.Headers.Remove(kv.Key);
                 if (!string.IsNullOrEmpty(kv.Value) && IsAsciiSafe(kv.Value))

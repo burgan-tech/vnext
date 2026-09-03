@@ -143,7 +143,12 @@ internal sealed class EventTraceScope : IDisposable
         // handler (a relayed transition, a republished event) would anchor on the pub/sub delivery
         // span and detach from the originating request's trace tree. IDENTICAL in both modes.
         var laneScope = evt is ILaneAwareDistributedEvent laneAware
-            ? WorkflowTraceLane.Reset(laneAware.TraceRoot, laneAware.ParentTraceRoot)
+            ? WorkflowTraceLane.Reset(
+                laneAware.TraceRoot,
+                laneAware.ParentTraceRoot,
+                episode: ActivationEpisode.FromCarrier(
+                    laneAware.EpisodeStartedAt, laneAware.EpisodeTrigger, laneAware.EpisodeTransitionKey,
+                    laneAware.EpisodeTraceRoot))
             : WorkflowTraceLane.Reset(activity?.Id);
 
         return new EventTraceScope(

@@ -29,6 +29,9 @@ public sealed class TransitionTimerJobHandler(
         // Restore trace context from the original request for distributed tracing correlation
         using var activity =
             BackgroundJobActivityHelper.StartActivityAsChildWithLink("TransitionTimerJob.Execute", args);
+        // A timer firing opens its OWN activation episode (this trace is deliberately separate from
+        // the request that armed it): the client's question here is "fire → Active".
+        using var episode = WorkflowTraceLane.UseEpisode(TelemetryConstants.ActivationTriggers.Scheduled, args.TransitionKey);
         using (currentSchema.Change(args.FlowName))
         {
             using (logger.BeginScope(new Dictionary<string, object>

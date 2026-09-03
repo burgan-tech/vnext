@@ -30,8 +30,8 @@ load unrelated state or make policy decisions that belong to profile resolution.
 | 60 | OnEntry | Run target-state tasks. |
 | 70 | SubFlow | Create correlation and enqueue subflow start work. |
 | 79 | Clear busy on resume | Clear parent Busy state on subflow resume path. |
-| 80 | Schedule | Enqueue scheduled transitions. |
-| 90 | Auto | Evaluate automatic transitions and request the next transition. |
+| 80 | Auto | Evaluate automatic transitions and request the next transition. |
+| 90 | Schedule | Enqueue scheduled transitions. Skipped when Auto already selected a next transition. |
 | 100 | Finish | Complete or cancel terminal instances. |
 | 110 | Finalize | Complete transition record and clear script cache. |
 | 112 | Resolve available | Resolve deferred Active status. |
@@ -63,10 +63,10 @@ exclusions onto the base profile (`Manual+Self`, `AutoChain+Self`, …):
 | CancelScheduledJobs (39) | The state is not left; tearing its timers down would lose them. |
 | OnExit (40) | No state is left. |
 | OnEntry (60) | No state is entered; the hooks already ran when the instance first arrived. |
-| Schedule (80) | Re-arming the state's timers would silently restart every timeout. |
+| Schedule (90) | Re-arming the state's timers would silently restart every timeout. |
 
 `ChangeState (50)` deliberately still runs — it is the only step that sets `context.Target`, which
-`RunAutomaticTransitionsStep (90)` needs in order to evaluate the state's auto transitions against
+`RunAutomaticTransitionsStep (80)` needs in order to evaluate the state's auto transitions against
 the freshly written data. `OnExecute (30)` also still runs: that is the transition's own work, not
 the state's lifecycle. `ChangeStateStep` suppresses its state-change metric, log and span event on
 this path, since reporting a change from a state to itself is a false signal there.

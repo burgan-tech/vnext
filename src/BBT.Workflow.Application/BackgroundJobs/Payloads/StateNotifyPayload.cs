@@ -50,4 +50,14 @@ public sealed class StateNotifyPayload : ITraceableJobPayload
 
     /// <summary>W3C tracestate for vendor-specific trace data.</summary>
     public string? TraceState { get; set; }
+
+    /// <summary>
+    /// Trace lane anchor of the settling request, so the notify job renders as a flat lane item
+    /// beside the transition hops instead of nesting under the hop that scheduled it. Null from an
+    /// older build ⇒ the handler falls back to continuing the predecessor's trace.
+    /// </summary>
+    public string? TraceRoot { get; set; }
+
+    /// <summary>The enclosing lane's anchor, carried for symmetry with the transition payload.</summary>
+    public string? ParentTraceRoot { get; set; }
 }

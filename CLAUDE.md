@@ -104,7 +104,7 @@ The two services communicate via **Dapr service invocation**. Orchestration call
 - **Cache**: Redis via `IDistributedCache`
 - **Messaging**: Dapr pub/sub + transactional Inbox/Outbox workers
 - **Scripting**: `modules/BBT.Workflow.Modules.Scripting` — Roslyn-based C# script engine
-- **Observability**: OpenTelemetry (Jaeger in Docker), structured logging via `WorkflowLogs.cs`
+- **Observability**: OpenTelemetry via Aether → otel-collector → Elastic APM (Kibana) + OpenObserve, structured logging via `WorkflowLogs.cs`
 
 ### Multi-Schema Tenancy
 
@@ -148,8 +148,8 @@ Transitions execute through a deterministic pipeline of ordered steps. Each step
 | 60 | RunOnEntryTasksStep | Run target-state OnEntry tasks |
 | 70 | HandleSubFlowStep | Start subflow correlation; enqueue StartSubflowJob |
 | 79 | ClearBusyOnResumeStep | Clear busy on subflow resume path |
-| 80 | ScheduleTransitionsStep | Schedule future transitions |
-| 90 | RunAutomaticTransitionsStep | Evaluate auto-transition conditions; set NextTransition |
+| 80 | RunAutomaticTransitionsStep | Evaluate auto-transition conditions; set NextTransition |
+| 90 | ScheduleTransitionsStep | Schedule future transitions — skipped when auto selected a winner |
 | 100 | HandleFinishStep | Complete/cancel instance on finish states |
 | 110 | FinalizeTransitionStep | Complete transition record; dispose script cache |
 | 112 | ResolveAvailableStep | Resolve deferred Active status |

@@ -120,6 +120,17 @@ public sealed class InstanceController(
         CancellationToken cancellationToken = default
     )
     {
+        // Preserve the child request's own server-span anchor, but inherit the activation episode
+        // that began in the parent domain. Older callers carry no episode and retain the episode
+        // seeded by request middleware, which keeps this change backward compatible.
+        using var episode = WorkflowTraceLane.Use(
+            anchor: null,
+            episode: ActivationEpisode.FromCarrier(
+                request.EpisodeStartedAt,
+                request.EpisodeTrigger,
+                request.EpisodeTransitionKey,
+                request.EpisodeTraceRoot));
+
         var input = new StartInstanceInput(domain, workflow, version, sync)
         {
             Instance = new CreateInstanceInput
@@ -159,7 +170,14 @@ public sealed class InstanceController(
         // Adopt the completing subflow's lane, overriding the anchor the request middleware set to
         // this relay endpoint's server span. ParentTraceRoot is what puts the resume back at the
         // parent instance's level in the originating request's trace.
-        using var lane = WorkflowTraceLane.Reset(request.TraceRoot, request.ParentTraceRoot);
+        using var lane = WorkflowTraceLane.Reset(
+            request.TraceRoot,
+            request.ParentTraceRoot,
+            episode: ActivationEpisode.FromCarrier(
+                request.EpisodeStartedAt,
+                request.EpisodeTrigger,
+                request.EpisodeTransitionKey,
+                request.EpisodeTraceRoot));
 
         await subflowCompletionService.CompletionAsync(request, cancellationToken);
         return Ok();
@@ -199,7 +217,12 @@ public sealed class InstanceController(
     {
         // Adopt the faulting subflow's lane so the parent resume lands at the parent instance's
         // level, not nested under this relay endpoint's server span.
-        using var lane = WorkflowTraceLane.Reset(request.TraceRoot, request.ParentTraceRoot);
+        using var lane = WorkflowTraceLane.Reset(
+            request.TraceRoot,
+            request.ParentTraceRoot,
+            episode: ActivationEpisode.FromCarrier(
+                request.EpisodeStartedAt, request.EpisodeTrigger, request.EpisodeTransitionKey,
+                request.EpisodeTraceRoot));
 
         await subflowFaultService.FaultAsync(request, cancellationToken);
         return Ok();
@@ -222,7 +245,12 @@ public sealed class InstanceController(
         // this relay endpoint's server span — same as CompleteSubAsync/FaultSubAsync above, and for
         // the same reason: without it, a genuine backup-settled cancel resume detaches from the
         // parent instance's level in the originating request's trace.
-        using var lane = WorkflowTraceLane.Reset(request.TraceRoot, request.ParentTraceRoot);
+        using var lane = WorkflowTraceLane.Reset(
+            request.TraceRoot,
+            request.ParentTraceRoot,
+            episode: ActivationEpisode.FromCarrier(
+                request.EpisodeStartedAt, request.EpisodeTrigger, request.EpisodeTransitionKey,
+                request.EpisodeTraceRoot));
 
         await subflowCancellationService.CancellationAsync(request, cancellationToken);
         return Ok();
@@ -310,7 +338,12 @@ public sealed class InstanceController(
         // Adopt the forwarding parent's lane for this relay, overriding the anchor the request
         // middleware set to THIS endpoint's server span. Without it the subflow's hops would anchor
         // on the relay endpoint and detach from the originating request's trace tree.
-        using var lane = WorkflowTraceLane.Reset(input.TraceRoot, input.ParentTraceRoot);
+        using var lane = WorkflowTraceLane.Reset(
+            input.TraceRoot,
+            input.ParentTraceRoot,
+            episode: ActivationEpisode.FromCarrier(
+                input.EpisodeStartedAt, input.EpisodeTrigger, input.EpisodeTransitionKey,
+                input.EpisodeTraceRoot));
 
         var result = await commandAppService.TransitionAsync(
             instance.ToString(),
@@ -507,6 +540,10 @@ public sealed class InstanceController(
             ParentTraceRoot = continuation.ParentTraceRoot,
             ChainDepth = continuation.ChainDepth,
             LaneSeq = continuation.LaneSeq,
+            EpisodeStartedAt = continuation.EpisodeStartedAt,
+            EpisodeTrigger = continuation.EpisodeTrigger,
+            EpisodeTransitionKey = continuation.EpisodeTransitionKey,
+            EpisodeTraceRoot = continuation.EpisodeTraceRoot,
             CorrelationId = continuation.CorrelationId
         };
 

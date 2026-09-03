@@ -5,6 +5,7 @@ using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
+using BBT.Workflow.Telemetry;
 using Microsoft.Extensions.Logging;
 
 namespace BBT.Workflow.Execution.PostCommit;
@@ -42,7 +43,12 @@ public sealed class PostCommitParentMutationService(
                 instanceRepository,
                 stateNotificationScheduler,
                 logger,
-                ct);
+                ct,
+                // The episode rests here only when nothing continues it: an enqueued continuation
+                // carries it to the next job, and a fresh parent that is no longer Busy was already
+                // settled — and its episode already closed — by a synchronous child callback.
+                chainSettled: !continuations.ContinuationEnqueued && instance.IsBusy);
+            return context.Directives.Activation;
         }, cancellationToken);
     }
 
@@ -59,7 +65,7 @@ public sealed class PostCommitParentMutationService(
             // A synchronous callback may already have completed or faulted the parent. Its
             // authoritative terminal result wins over a later outer post-commit failure.
             if (instance.IsCompleted)
-                return;
+                return null;
 
             if (!instance.HasActiveIncident)
             {
@@ -76,12 +82,14 @@ public sealed class PostCommitParentMutationService(
 
             instance.Fault(source.Domain, source.CallerMode == ExecMode.Sync);
             await instanceRepository.UpdateAsync(instance, true, ct);
+            return new ActivationVerdict(
+                TelemetryConstants.ActivationOutcomes.Faulted, CasFlipped: false, instance.GetCurrentState);
         }, cancellationToken);
     }
 
     private async Task<Result<TransitionOutput>> MutateFreshAsync(
         PostCommitParentSnapshot source,
-        Func<Instance, CancellationToken, Task> mutation,
+        Func<Instance, CancellationToken, Task<ActivationVerdict?>> mutation,
         CancellationToken cancellationToken)
     {
         // Post-commit mutations are status flips — the short status lock serializes them,
@@ -101,8 +109,22 @@ public sealed class PostCommitParentMutationService(
         if (instance is null)
             return Result<TransitionOutput>.Fail(WorkflowErrors.InstanceNotFound(source.InstanceId.ToString()));
 
-        await mutation(instance, cancellationToken);
+        var verdict = await mutation(instance, cancellationToken);
         await uow.CommitAsync(cancellationToken);
+
+        // Same rule as TransitionRunner: the episode closes once the status write is durable.
+        if (verdict is not null)
+        {
+            ActivationActivity.Emit(
+                PipelineStepActivityHelper.ActivitySource,
+                verdict.Outcome,
+                source.InstanceId,
+                source.Domain,
+                source.WorkflowKey,
+                source.TransitionKey,
+                verdict.StateTo ?? instance.GetCurrentState,
+                verdict.CasFlipped);
+        }
 
         return Result<TransitionOutput>.Ok(new TransitionOutput
         {

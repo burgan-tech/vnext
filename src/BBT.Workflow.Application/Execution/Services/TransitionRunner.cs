@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using BBT.Aether.Events;
 using BBT.Aether.Results;
 using BBT.Aether.Uow;
@@ -8,6 +9,7 @@ using BBT.Workflow.Instances;
 using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Logging;
 using BBT.Workflow.SubFlow;
+using BBT.Workflow.Telemetry;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -179,6 +181,19 @@ public sealed class TransitionRunner(
                     using (PipelineStepActivityHelper.StartOperationActivity("Uow.Commit"))
                     {
                         await uow.CommitAsync(ct);
+                    }
+
+                    // The activation episode closes HERE, not at Transition.Settle: the settlement's
+                    // Busy→Active write only becomes visible to a client polling the state function
+                    // once this commit lands. Emitted while the transaction (job span or server
+                    // span) is still Activity.Current, parented to the lane anchor with its start
+                    // backdated to the originating request — see ActivationActivity.
+                    var executionContext = coreResult.Value!.ExecutionContext;
+                    if (executionContext.Directives.Activation is { } verdict)
+                    {
+                        ActivationActivity.Emit(executionContext, verdict);
+                        if (verdict.CasFlipped)
+                            Activity.Current?.AddEvent(new ActivityEvent("instance.available.committed"));
                     }
 
                     // Terminal relay: subflow terminal events settle the parent IMMEDIATELY as a command —

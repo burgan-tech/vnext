@@ -101,6 +101,47 @@ public class InstanceCommandAppServiceBusyFastFailTests : IDisposable
         (_ambient as IDisposable)?.Dispose();
     }
 
+    /// <summary>
+    /// The intake (projection + definition resolve + Busy verdict) is the head of every transition
+    /// request and used to sit unattributed under the server span. It is a span now — even when the
+    /// request is rejected right there, which is when the verdict is most worth reading.
+    /// </summary>
+    [Fact]
+    public async Task TransitionAsync_BusySnapshot_EmitsTransitionIntakeSpan()
+    {
+        // A root span scopes the process-wide listener to THIS test's trace.
+        using var root = new System.Diagnostics.Activity("test-root");
+        root.SetIdFormat(System.Diagnostics.ActivityIdFormat.W3C);
+        root.Start();
+        var collected = new List<System.Diagnostics.Activity>();
+        using var listener = new System.Diagnostics.ActivityListener
+        {
+            ShouldListenTo = source => source.Name == "BBT.Workflow.Pipeline",
+            Sample = (ref System.Diagnostics.ActivityCreationOptions<System.Diagnostics.ActivityContext> _) =>
+                System.Diagnostics.ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStopped = a =>
+            {
+                if (a.TraceId != root.TraceId) return;
+                lock (collected) collected.Add(a);
+            }
+        };
+        System.Diagnostics.ActivitySource.AddActivityListener(listener);
+
+        var instanceId = Guid.NewGuid();
+        SetupSnapshot(instanceId, InstanceStatus.Busy, hasActiveSubFlow: false);
+        _admissionService
+            .ClassifyKey(Arg.Any<Definitions.Workflow>(), "regular-transition")
+            .Returns(AdmissionKind.Normal);
+
+        var result = await _service.TransitionAsync(
+            instanceId.ToString(), "regular-transition", CreateInput(), CancellationToken.None);
+
+        result.IsSuccess.ShouldBeFalse();
+        var intake = System.Linq.Enumerable.Single(collected, a => a.DisplayName == "Transition.Intake");
+        intake.GetTagItem(TelemetryConstants.TagNames.TransitionKey).ShouldBe("regular-transition");
+        intake.GetTagItem(TelemetryConstants.TagNames.InstanceBusy).ShouldBe(true);
+    }
+
     [Fact]
     public async Task TransitionAsync_BusySnapshot_Returns409WithoutLoadingAggregate()
     {

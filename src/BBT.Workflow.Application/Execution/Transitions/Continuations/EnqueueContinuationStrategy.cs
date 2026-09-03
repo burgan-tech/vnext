@@ -80,6 +80,10 @@ public sealed class EnqueueContinuationStrategy(
         // incrementing at both sites would hand out the same ordinal twice.
         var laneSeq = WorkflowTraceLane.NextSeq();
 
+        // The activation episode travels with the chain: the hop that finally brings the instance
+        // to rest measures from the ORIGINAL trigger, not from itself.
+        var episode = WorkflowTraceLane.Episode;
+
         var directPayload = new TransitionJobPayload
         {
             JobName = jobNameValue,
@@ -99,6 +103,10 @@ public sealed class EnqueueContinuationStrategy(
             ParentTraceRoot = laneParent,
             ChainDepth = current.ChainDepth + 1,
             LaneSeq = laneSeq,
+            EpisodeStartedAt = episode?.StartedAt,
+            EpisodeTrigger = episode?.Trigger,
+            EpisodeTransitionKey = episode?.TransitionKey,
+            EpisodeTraceRoot = episode?.TraceRoot,
             CorrelationId = current.CorrelationId
         };
 
@@ -121,12 +129,20 @@ public sealed class EnqueueContinuationStrategy(
             TraceRoot = laneAnchor,
             ParentTraceRoot = laneParent,
             LaneSeq = laneSeq,
+            EpisodeStartedAt = episode?.StartedAt,
+            EpisodeTrigger = episode?.Trigger,
+            EpisodeTransitionKey = episode?.TransitionKey,
+            EpisodeTraceRoot = episode?.TraceRoot,
             CorrelationId = current.CorrelationId
         };
 
         // Auto-chain runs in the pipeline's ambient UoW and holds no status lock, so Aether already
         // defers arming to that UoW's post-commit hook. Nothing to move out here.
         await enqueueGateway.EnqueueAsync(directPayload, outboxEvent, cancellationToken: cancellationToken);
+
+        // The chain goes on in another job: the settlement must not treat this hop's "nothing left
+        // to run in-process" as the activation episode's rest point.
+        current.Directives.MarkContinuationEnqueued();
 
         // No in-process next context — a separate job resumes the chain.
         return Result<WorkflowExecutionContext?>.Ok(null);

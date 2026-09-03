@@ -161,7 +161,9 @@ public abstract class TriggerTaskExecutorBase<TTask>(
         // Anchor AFTER starting the span: EnterChildLane reads Activity.Current, and the anchor
         // must be this invocation's span — not the surrounding Task.Execute — so multiple local
         // invocations inside one task each own their triggered work.
-        using var lane = WorkflowTraceLane.EnterChildLane();
+        // Restart the activation episode too: the client waiting on THIS instance does not observe
+        // the triggered one, so the target's time-to-Active is measured from this invocation.
+        using var lane = WorkflowTraceLane.EnterChildLane(TelemetryConstants.ActivationTriggers.Trigger);
 
         var result = await action(cancellationToken);
 
