@@ -62,5 +62,22 @@ public interface ITraceableJobPayload
     /// return to the parent instance's lane instead of nesting under the subflow's.
     /// </summary>
     string? ParentTraceRoot => null;
-}
 
+    /// <summary>
+    /// When the activation episode this job continues was triggered (see
+    /// <c>WorkflowTraceLane.Episode</c>). Carried so the hop that finally brings the instance to
+    /// rest can emit an <c>Instance.Activation</c> span starting at the original request, not at
+    /// itself. Default null for the same reason as <see cref="TraceRoot"/>: deferred jobs open
+    /// their own episode when they fire, and an older build's payload degrades to a partial span.
+    /// </summary>
+    DateTimeOffset? EpisodeStartedAt => null;
+
+    /// <summary>What opened the episode; one of <c>TelemetryConstants.ActivationTriggers</c>.</summary>
+    string? EpisodeTrigger => null;
+
+    /// <summary>The transition the episode was triggered with (the first hop's key).</summary>
+    string? EpisodeTransitionKey => null;
+
+    /// <summary>The trace root under which the activation episode began.</summary>
+    string? EpisodeTraceRoot => null;
+}

@@ -11,6 +11,7 @@ using BBT.Workflow.Execution.Services;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Scripting;
+using BBT.Workflow.Telemetry;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -39,7 +40,17 @@ public sealed class TransitionJobHandler(
         // enqueue, post-commit jobs, subflow handoffs — reads the same anchor and lands as a sibling
         // rather than nesting inside this hop. Reset (not Use): the ambient lane here belongs to the
         // Dapr scheduler callback, which is transport, not the originating business request.
-        using var lane = WorkflowTraceLane.Reset(args.TraceRoot, args.ParentTraceRoot, args.LaneSeq);
+        // The activation episode rides along: the hop that finally brings the instance to rest
+        // measures from the originating request's arrival, which the payload carried here.
+        using var lane = WorkflowTraceLane.Reset(
+            args.TraceRoot, args.ParentTraceRoot, args.LaneSeq, args.ToActivationEpisode());
+
+        // The Dapr scheduler callback is a fresh HTTP request. Restore the originating request id
+        // before starting the job activity; activity enrichment snapshots the current correlation
+        // id at StartActivity time, so doing this afterwards permanently stamps the callback's id
+        // on the span even though downstream logs use the correct one.
+        var requestId = args.Headers.GetValueOrDefault(TelemetryConstants.HeaderNames.RequestId.ToLowerInvariant());
+        using var correlationScope = string.IsNullOrEmpty(requestId) ? null : correlationIdProvider.Change(requestId);
 
         // Restore trace context from the original request for distributed tracing correlation.
         // The name carries the transition key because THIS span is the transaction in APM: without
@@ -52,11 +63,15 @@ public sealed class TransitionJobHandler(
         // Payload from a build that predates the lane: make THIS hop the anchor for its own
         // descendants, which reproduces the pre-lane nesting exactly instead of half-flattening.
         using var legacyLane = args.TraceRoot is null ? WorkflowTraceLane.Use(activity?.Id) : null;
-        // The Dapr scheduler callback is a fresh HTTP request, so the client's X-Request-Id is not
-        // ambient here — restore it from the captured request headers so log scopes and downstream
-        // calls (Execution invoke, cross-domain) keep correlating to the originating request.
-        var requestId = args.Headers.GetValueOrDefault(TelemetryConstants.HeaderNames.RequestId.ToLowerInvariant());
-        using var correlationScope = string.IsNullOrEmpty(requestId) ? null : correlationIdProvider.Change(requestId);
+
+        // Payload from a build that predates the activation episode: the rest point can only
+        // measure this hop, and says so (vnext.activation.partial) instead of inventing a start.
+        using var legacyEpisode = args.EpisodeStartedAt is null
+            ? WorkflowTraceLane.Use(
+                null,
+                episode: ActivationEpisode.StartingAt(activity, TelemetryConstants.ActivationTriggers.Job, args.TransitionKey)
+                    with { Partial = true })
+            : null;
         using (currentSchema.Change(args.Workflow))
         {
             using (logger.BeginScope(new Dictionary<string, object>

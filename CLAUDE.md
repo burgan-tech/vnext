@@ -104,7 +104,7 @@ The two services communicate via **Dapr service invocation**. Orchestration call
 - **Cache**: Redis via `IDistributedCache`
 - **Messaging**: Dapr pub/sub + transactional Inbox/Outbox workers
 - **Scripting**: `modules/BBT.Workflow.Modules.Scripting` — Roslyn-based C# script engine
-- **Observability**: OpenTelemetry (Jaeger in Docker), structured logging via `WorkflowLogs.cs`
+- **Observability**: OpenTelemetry via Aether → otel-collector → Elastic APM (Kibana) + OpenObserve, structured logging via `WorkflowLogs.cs`
 
 ### Multi-Schema Tenancy
 

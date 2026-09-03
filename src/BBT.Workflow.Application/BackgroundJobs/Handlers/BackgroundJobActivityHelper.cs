@@ -108,6 +108,23 @@ public static class BackgroundJobActivityHelper
             traceState: payload.TraceState);
 
     /// <summary>
+    /// Names the Dapr scheduler round-trip that arms an already-persisted job
+    /// (<c>IBackgroundJobArmHandle.ArmAsync</c>). Aether's own <c>BackgroundJob.Schedule*</c> spans
+    /// are Verbose-gated, so in Business mode the arm — the dominant term of the async accept's
+    /// tail, and the start of the dead time before the job span begins — was invisible. Implicit
+    /// parent, Business category, like every other in-process span.
+    /// </summary>
+    public static Activity? StartArmActivity(string jobName)
+    {
+        var activity = ActivitySource.StartActivity("BackgroundJob.Arm", ActivityKind.Internal);
+        if (activity is null) return null;
+
+        activity.SetTag(TelemetryConstants.TagNames.SpanCategory, TelemetryConstants.SpanCategories.Business);
+        activity.SetTag(TelemetryConstants.TagNames.JobName, jobName);
+        return activity;
+    }
+
+    /// <summary>
     /// Enriches the activity with common job-specific tags for observability.
     /// </summary>
     /// <param name="activity">The activity to enrich.</param>

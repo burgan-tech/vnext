@@ -57,6 +57,20 @@ public static class WorkflowTraceLane
     public static int Seq => State.Value?.Seq ?? 0;
 
     /// <summary>
+    /// The <em>activation episode</em> the current work belongs to: when the trigger that set this
+    /// instance in motion was accepted, and what that trigger was. Read at the rest point (the
+    /// Busy→Active flip, a terminal status, a rest-in-Busy) to emit the <c>Instance.Activation</c>
+    /// span whose duration is exactly what a client waited. Null when no entry point seeded one.
+    /// <para>
+    /// Rides the lane, not the execution context, for the same reason the anchor does: an
+    /// <see cref="System.Threading.AsyncLocal{T}"/> flows through inline auto-chain hops, the
+    /// post-commit barrier and the terminal relay on its own, and only the async boundaries that
+    /// already carry the anchor (job payloads, outbox events, internal relay bodies) need a field.
+    /// </para>
+    /// </summary>
+    public static ActivationEpisode? Episode => State.Value?.Episode;
+
+    /// <summary>
     /// The ordinal to stamp on the next hop. Compute it ONCE per enqueue and copy the same value
     /// into both the direct payload and the outbox event — the enqueue gateway may fall back from
     /// one to the other, and incrementing in two places would produce duplicate ordinals.
@@ -70,13 +84,20 @@ public static class WorkflowTraceLane
     /// </summary>
     /// <param name="anchor">The lane anchor (W3C traceparent), or null to keep the current one.</param>
     /// <param name="parentAnchor">The enclosing lane's anchor, or null to keep the current one.</param>
-    public static IDisposable Use(string? anchor, string? parentAnchor = null, int? seq = null)
+    /// <param name="seq">The hop ordinal, or null to keep the current one.</param>
+    /// <param name="episode">The activation episode, or null to keep the current one.</param>
+    public static IDisposable Use(
+        string? anchor,
+        string? parentAnchor = null,
+        int? seq = null,
+        ActivationEpisode? episode = null)
     {
         var previous = State.Value;
         State.Value = new LaneScopeState(
             anchor ?? previous?.Anchor,
             parentAnchor ?? previous?.ParentAnchor,
-            seq ?? previous?.Seq ?? 0);
+            seq ?? previous?.Seq ?? 0,
+            episode ?? previous?.Episode);
         return new LaneScope(previous);
     }
 
@@ -91,34 +112,87 @@ public static class WorkflowTraceLane
     /// payload without an anchor degrades cleanly to the pre-lane shape instead.
     /// </para>
     /// </summary>
-    public static IDisposable Reset(string? anchor, string? parentAnchor = null, int seq = 0)
+    /// <param name="anchor">The lane anchor (W3C traceparent); null clears the lane.</param>
+    /// <param name="parentAnchor">The enclosing lane's anchor; null clears it.</param>
+    /// <param name="seq">The hop ordinal.</param>
+    /// <param name="episode">The activation episode carried by the payload; null clears it, so a
+    /// payload from a build that predates episodes does not inherit the callback request's.</param>
+    public static IDisposable Reset(
+        string? anchor,
+        string? parentAnchor = null,
+        int seq = 0,
+        ActivationEpisode? episode = null)
     {
         var previous = State.Value;
-        State.Value = new LaneScopeState(anchor, parentAnchor, seq);
+        State.Value = new LaneScopeState(anchor, parentAnchor, seq, episode);
         return new LaneScope(previous);
     }
 
     /// <summary>
-    /// Anchors the lane on <see cref="Activity.Current"/>, keeping the enclosing lane unchanged.
-    /// Used at request entry (the ASP.NET server span) and as the legacy fallback inside a job
-    /// handler whose payload carries no anchor.
+    /// Anchors the lane on <see cref="Activity.Current"/>, keeping the enclosing lane unchanged, and
+    /// opens an activation episode that starts when that span started. Used at request entry (the
+    /// ASP.NET server span — so the episode begins the instant the request arrived, before any
+    /// endpoint code ran) and as the legacy fallback inside a job handler whose payload carries no
+    /// anchor.
     /// </summary>
-    public static IDisposable UseCurrentActivity() => Use(Activity.Current?.Id);
+    /// <param name="episodeTrigger">What opened the episode; the entry point refines it later via
+    /// <see cref="UseEpisode"/> once it knows which transition it is running.</param>
+    public static IDisposable UseCurrentActivity(string episodeTrigger = TelemetryConstants.ActivationTriggers.Http)
+        => Use(Activity.Current?.Id, episode: ActivationEpisode.StartingAt(Activity.Current, episodeTrigger));
+
+    /// <summary>
+    /// Classifies the current episode without moving its start. The request middleware seeds every
+    /// episode as <see cref="TelemetryConstants.ActivationTriggers.Http"/> before the endpoint knows
+    /// what it is; the first entry point to call this names the trigger, and later ones keep it —
+    /// an event delivery classifies itself as <c>event</c> before it re-enters the generic
+    /// transition entry point, which must not overwrite that with <c>manual</c>. The transition key
+    /// is replaced whenever one is supplied (a subflow's own start names the child's span after the
+    /// child's start transition). Seeds a fresh episode starting now when none is ambient.
+    /// </summary>
+    public static IDisposable UseEpisode(string trigger, string? transitionKey)
+    {
+        var previous = State.Value;
+        var current = previous?.Episode;
+        var episode = current is null
+            ? new ActivationEpisode(
+                DateTimeOffset.UtcNow,
+                trigger,
+                transitionKey,
+                Partial: false,
+                TraceRoot: Activity.Current?.Id ?? previous?.Anchor)
+            : current with
+            {
+                Trigger = current.Trigger == TelemetryConstants.ActivationTriggers.Http ? trigger : current.Trigger,
+                TransitionKey = transitionKey ?? current.TransitionKey
+            };
+        State.Value = new LaneScopeState(previous?.Anchor, previous?.ParentAnchor, previous?.Seq ?? 0, episode);
+        return new LaneScope(previous);
+    }
 
     /// <summary>
     /// Opens a <b>child</b> lane for a subflow handoff: <see cref="Activity.Current"/> (the handing-off
     /// span) becomes the child instance's anchor, and the lane being left becomes
     /// <see cref="ParentLane"/> so the eventual resume can return to it.
+    /// <para>
+    /// The activation episode is <b>inherited</b> by default: the client that started the parent is
+    /// polling the parent, which reports the leaf subflow's status, so the child's time-to-Active is
+    /// measured from the parent's request. Pass <paramref name="restartTrigger"/> when the handoff
+    /// is NOT something the originating client waits on — a trigger-family task starting an
+    /// unrelated instance — and the child's episode starts at the handing-off span instead.
+    /// </para>
     /// </summary>
-    public static IDisposable EnterChildLane()
+    public static IDisposable EnterChildLane(string? restartTrigger = null)
     {
         var previous = State.Value;
+        var episode = restartTrigger is null
+            ? previous?.Episode
+            : ActivationEpisode.StartingAt(Activity.Current, restartTrigger);
         // The child lane starts its own numbering: its hops belong to a different instance.
-        State.Value = new LaneScopeState(Activity.Current?.Id, previous?.Anchor, Seq: 0);
+        State.Value = new LaneScopeState(Activity.Current?.Id, previous?.Anchor, Seq: 0, episode);
         return new LaneScope(previous);
     }
 
-    private sealed record LaneScopeState(string? Anchor, string? ParentAnchor, int Seq);
+    private sealed record LaneScopeState(string? Anchor, string? ParentAnchor, int Seq, ActivationEpisode? Episode);
 
     private sealed class LaneScope(LaneScopeState? previous) : IDisposable
     {

@@ -115,15 +115,94 @@ public class TransitionJobHandlerTests
     }
 
     /// <summary>
+    /// The activation episode carried by the payload must be the ambient episode while the pipeline
+    /// runs, so the hop that brings the instance to rest measures from the originating request.
+    /// </summary>
+    [Fact]
+    public async Task HandleAsync_WithPayloadEpisode_RestoresItForTheDurationOfTheJob()
+    {
+        var payload = CreatePayload();
+        payload.EpisodeStartedAt = new DateTimeOffset(2026, 9, 2, 10, 0, 0, TimeSpan.Zero);
+        payload.EpisodeTrigger = TelemetryConstants.ActivationTriggers.Manual;
+        payload.EpisodeTransitionKey = "go";
+        payload.EpisodeTraceRoot = "00-11111111111111111111111111111111-2222222222222222-01";
+        var handler = CreateHandler();
+
+        ActivationEpisode? observed = null;
+        _executionService
+            .Setup(s => s.ExecuteTransitionAsync(
+                It.IsAny<WorkflowExecutionContext>(), It.IsAny<CancellationToken>()))
+            .Callback<WorkflowExecutionContext, CancellationToken>((_, _) => observed = WorkflowTraceLane.Episode)
+            .ReturnsAsync(Result<TransitionOutput>.Ok(new TransitionOutput()));
+
+        await handler.HandleAsync(payload, CancellationToken.None);
+
+        Assert.NotNull(observed);
+        Assert.Equal(payload.EpisodeStartedAt, observed!.StartedAt);
+        Assert.Equal(TelemetryConstants.ActivationTriggers.Manual, observed.Trigger);
+        Assert.Equal("go", observed.TransitionKey);
+        Assert.Equal(payload.EpisodeTraceRoot, observed.TraceRoot);
+        Assert.False(observed.Partial);
+        Assert.Null(WorkflowTraceLane.Episode);
+    }
+
+    /// <summary>
+    /// A payload from a build that predates the episode must not inherit the Dapr callback
+    /// request's episode, nor invent a start: the hop reports a partial episode covering itself.
+    /// </summary>
+    [Fact]
+    public async Task HandleAsync_LegacyPayloadWithoutEpisode_SeedsAPartialEpisode()
+    {
+        var payload = CreatePayload();
+        var handler = CreateHandler();
+
+        ActivationEpisode? observed = null;
+        _executionService
+            .Setup(s => s.ExecuteTransitionAsync(
+                It.IsAny<WorkflowExecutionContext>(), It.IsAny<CancellationToken>()))
+            .Callback<WorkflowExecutionContext, CancellationToken>((_, _) => observed = WorkflowTraceLane.Episode)
+            .ReturnsAsync(Result<TransitionOutput>.Ok(new TransitionOutput()));
+
+        // The callback request's own episode, which the job must NOT inherit.
+        var callback = new ActivationEpisode(DateTimeOffset.UtcNow.AddHours(-1), "http", null, false);
+        using (WorkflowTraceLane.Use("00-11111111111111111111111111111111-1111111111111111-01", episode: callback))
+        {
+            await handler.HandleAsync(payload, CancellationToken.None);
+        }
+
+        Assert.NotNull(observed);
+        Assert.True(observed!.Partial);
+        Assert.Equal(TelemetryConstants.ActivationTriggers.Job, observed.Trigger);
+        Assert.Equal("go", observed.TransitionKey);
+        Assert.NotEqual(callback.StartedAt, observed.StartedAt);
+    }
+
+    /// <summary>
     /// The captured x-request-id must be restored into the correlation provider for the duration
     /// of the job so downstream calls (Execution invoke, cross-domain) keep the client's request id.
     /// </summary>
     [Fact]
-    public async Task HandleAsync_WithRequestIdHeader_RestoresCorrelationId()
+    public async Task HandleAsync_WithRequestIdHeader_RestoresCorrelationIdBeforeStartingTheJobSpan()
     {
         var payload = CreatePayload();
         payload.Headers["x-request-id"] = "req-abc-123";
         var handler = CreateHandler();
+        var correlationChanged = false;
+        var correlationWasChangedWhenActivityStarted = false;
+        _correlationIdProvider
+            .Setup(p => p.Change("req-abc-123"))
+            .Callback(() => correlationChanged = true);
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == "BBT.Workflow.BackgroundJobs",
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStarted = activity =>
+            {
+                if (activity.DisplayName == "TransitionJob.Execute/go")
+                    correlationWasChangedWhenActivityStarted = correlationChanged;
+            }
+        };
+        ActivitySource.AddActivityListener(listener);
 
         _executionService
             .Setup(s => s.ExecuteTransitionAsync(
@@ -133,6 +212,7 @@ public class TransitionJobHandlerTests
         await handler.HandleAsync(payload, CancellationToken.None);
 
         _correlationIdProvider.Verify(p => p.Change("req-abc-123"), Times.Once);
+        Assert.True(correlationWasChangedWhenActivityStarted);
     }
 
     /// <summary>

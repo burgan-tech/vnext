@@ -209,6 +209,10 @@ public sealed class EventAppService(
             Headers = input.Headers
         };
 
+        // Classify the activation episode before the generic transition entry point does: an event
+        // delivery is what set the instance in motion, and the span should say so.
+        using var episode = WorkflowTraceLane.UseEpisode(TelemetryConstants.ActivationTriggers.Event, input.TransitionKey);
+
         var result = await instanceCommandAppService.TransitionAsync(
             activeInstance.Id.ToString(),
             input.TransitionKey!,

@@ -147,7 +147,8 @@ public sealed class RemoteInstanceCommandAppService(
 
             var requestUri = new Uri(endpoint.BaseUrl, relativePath.TrimStart('/'));
 
-            var requestBody = new CreateInstanceInput
+            var episode = WorkflowTraceLane.Episode;
+            var requestBody = new
             {
                 Id = input.Instance.Id,
                 Key = input.Instance.Key,
@@ -155,7 +156,11 @@ public sealed class RemoteInstanceCommandAppService(
                 Stage = input.Instance.Stage,
                 Attributes = input.Instance.Attributes,
                 Callback = input.Instance.Callback,
-                ExtraProperties = input.Instance.ExtraProperties
+                ExtraProperties = input.Instance.ExtraProperties,
+                EpisodeStartedAt = episode?.StartedAt,
+                EpisodeTrigger = episode?.Trigger,
+                EpisodeTransitionKey = episode?.TransitionKey,
+                EpisodeTraceRoot = episode?.TraceRoot
             };
 
             var jsonContent = JsonSerializer.Serialize(requestBody, JsonSerializerConstants.JsonOptions);
@@ -232,7 +237,13 @@ public sealed class RemoteInstanceCommandAppService(
                 // forward span the subflow's hops must anchor on. Body, not header: a public
                 // endpoint must never let a caller inject a lane.
                 TraceRoot = WorkflowTraceLane.Current,
-                ParentTraceRoot = WorkflowTraceLane.ParentLane
+                ParentTraceRoot = WorkflowTraceLane.ParentLane,
+                // The activation episode crosses with the lane: the subflow's time-to-Active is
+                // measured from the client's request to the parent, not from this relay hop.
+                EpisodeStartedAt = WorkflowTraceLane.Episode?.StartedAt,
+                EpisodeTrigger = WorkflowTraceLane.Episode?.Trigger,
+                EpisodeTransitionKey = WorkflowTraceLane.Episode?.TransitionKey,
+                EpisodeTraceRoot = WorkflowTraceLane.Episode?.TraceRoot
             };
 
             var jsonContent = JsonSerializer.Serialize(forwardInput, JsonSerializerConstants.JsonOptions);

@@ -79,6 +79,11 @@ public sealed class InstanceCommandAppService(
 
         var workflow = workflowResult.Value!;
 
+        // The start request opened the activation episode (the request middleware seeded its start
+        // from the server span); name the trigger and the transition now that both are known.
+        using var episode = WorkflowTraceLane.UseEpisode(
+            TelemetryConstants.ActivationTriggers.Start, workflow.StartTransition?.Key);
+
         // Step 2: Check existing instance
         var existingInstanceResult = await CheckExistingInstanceAsync(input, cancellationToken);
         if (existingInstanceResult.HasValue)
@@ -290,6 +295,14 @@ public sealed class InstanceCommandAppService(
         StartInstanceInput input,
         CancellationToken cancellationToken)
     {
+        // Everything that makes the instance exist — aggregate construction, start-transition
+        // validation, the INSERT, the initial data version and the commit that makes them durable —
+        // ran unnamed inside the start transaction; only the inner Instance.AppendData was visible.
+        using var activity = PipelineStepActivityHelper.StartOperationActivity("Instance.Create");
+        activity?.SetTag(TelemetryConstants.TagNames.Flow, workflow.Key);
+        activity?.SetTag(TelemetryConstants.TagNames.FlowVersion, workflow.Version);
+        activity?.SetTag(TelemetryConstants.TagNames.InstanceDataAppended, input.Instance.Attributes != null);
+
         await using var uow = UnitOfWorkManager.Begin(
             new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew, IsTransactional = true });
         var result = await CreateAndPrepareInstanceAsync(
@@ -307,6 +320,12 @@ public sealed class InstanceCommandAppService(
             .ThenAsync(data => MapAndAppendInstanceDataAsync(data, input, cancellationToken));
 
         await uow.CommitAsync(cancellationToken);
+
+        if (result.IsSuccess)
+            activity?.SetTag(TelemetryConstants.TagNames.InstanceId, result.Value.Instance.Id.ToString());
+        else
+            activity?.SetStatus(ActivityStatusCode.Error, result.Error.Message);
+
         return result;
     }
 
@@ -455,9 +474,15 @@ public sealed class InstanceCommandAppService(
             return;
         }
 
+        // The timeout arm is the start request's tail: a schedule resolve (possibly a script), a
+        // Dapr scheduler round-trip and a job row, none of which had a name in the trace.
+        using var scheduleActivity = PipelineStepActivityHelper.StartOperationActivity("Instance.Timeout.Schedule");
+        scheduleActivity?.SetTag(TelemetryConstants.TagNames.InstanceId, instance.Id.ToString());
+
         try
         {
             var jobName = JobName.ForTimeout(instance.Id);
+            scheduleActivity?.SetTag(TelemetryConstants.TagNames.JobName, jobName.Value);
             var activity = Activity.Current;
             var payload = new WorkflowTimeoutPayload
             {
@@ -520,6 +545,7 @@ public sealed class InstanceCommandAppService(
         catch (Exception ex)
         {
             logger.WorkflowTimeoutSchedulingFailed(ex, instance.Id);
+            scheduleActivity?.SetStatus(ActivityStatusCode.Error, ex.Message);
             // Don't throw - timeout scheduling failure should not prevent workflow start
         }
     }
@@ -584,6 +610,11 @@ public sealed class InstanceCommandAppService(
     {
         runtimeInfoProvider.Check(input.Domain);
 
+        // The request opened the activation episode (seeded by the request middleware from the
+        // server span); name it. An entry point that already classified itself — an event
+        // delivery, a relayed subflow forward — keeps its trigger, only the key is refreshed.
+        using var episode = WorkflowTraceLane.UseEpisode(TelemetryConstants.ActivationTriggers.Manual, transitionKey);
+
         // 1) Light Busy check FIRST — a single-row projection (no DataList, no includes) so a
         //    Busy rejection never pays the full aggregate load. The snapshot also carries the
         //    bound Flow/FlowVersion, so the workflow definition is resolved ONCE here (from the
@@ -591,29 +622,37 @@ public sealed class InstanceCommandAppService(
         //    fast-fail: cancel/exit/updateData are exempt, and a Busy parent with an active
         //    SubFlow is admitted so the pipeline can forward the request to the subflow. This is
         //    a fast-fail only — the authoritative decision is the reserve under the status lock.
-        var snapshot = await instanceRepository.GetExecutionSnapshotAsync(instance, cancellationToken);
-
+        InstanceExecutionSnapshot? snapshot;
         Definitions.Workflow? workflowDefinition = null;
-        if (snapshot is not null)
+        // Named because it is the head of every transition request and used to sit unattributed
+        // under the server span: the projection and the definition resolve, with the Busy verdict.
+        using (var intake = PipelineStepActivityHelper.StartOperationActivity("Transition.Intake"))
         {
-            var snapshotWorkflow = await LoadWorkflowAsync(
-                input.Domain, snapshot.Flow!, snapshot.FlowVersion, cancellationToken);
-            if (!snapshotWorkflow.IsSuccess)
-                return Result<TransitionOutput>.Fail(snapshotWorkflow.Error);
+            intake?.SetTag(TelemetryConstants.TagNames.TransitionKey, transitionKey);
+            snapshot = await instanceRepository.GetExecutionSnapshotAsync(instance, cancellationToken);
 
-            workflowDefinition = snapshotWorkflow.Value!;
-
-            // input.ChainReserved exempts the relay: the accept that admitted the request already
-            // reserved this instance's Busy flag as part of its SubFlow chain reserve, so the Busy
-            // it finds here is its own. Server-internal — see TransitionInput.ChainReserved.
-            if (snapshot is { IsBusy: true, HasActiveSubFlow: false }
-                && !input.ChainReserved
-                && transitionAdmissionService.ClassifyKey(workflowDefinition, transitionKey)
-                    == AdmissionKind.Normal)
+            if (snapshot is not null)
             {
-                logger.TransitionRejectedInstanceBusy(snapshot.Id, transitionKey);
-                return Result<TransitionOutput>.Fail(
-                    WorkflowErrors.InstanceBusy(snapshot.Id, transitionKey));
+                intake?.SetTag(TelemetryConstants.TagNames.InstanceBusy, snapshot.IsBusy);
+                var snapshotWorkflow = await LoadWorkflowAsync(
+                    input.Domain, snapshot.Flow!, snapshot.FlowVersion, cancellationToken);
+                if (!snapshotWorkflow.IsSuccess)
+                    return Result<TransitionOutput>.Fail(snapshotWorkflow.Error);
+
+                workflowDefinition = snapshotWorkflow.Value!;
+
+                // input.ChainReserved exempts the relay: the accept that admitted the request already
+                // reserved this instance's Busy flag as part of its SubFlow chain reserve, so the Busy
+                // it finds here is its own. Server-internal — see TransitionInput.ChainReserved.
+                if (snapshot is { IsBusy: true, HasActiveSubFlow: false }
+                    && !input.ChainReserved
+                    && transitionAdmissionService.ClassifyKey(workflowDefinition, transitionKey)
+                        == AdmissionKind.Normal)
+                {
+                    logger.TransitionRejectedInstanceBusy(snapshot.Id, transitionKey);
+                    return Result<TransitionOutput>.Fail(
+                        WorkflowErrors.InstanceBusy(snapshot.Id, transitionKey));
+                }
             }
         }
 

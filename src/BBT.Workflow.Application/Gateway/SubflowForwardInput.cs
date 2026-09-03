@@ -56,4 +56,21 @@ public record SubflowForwardInput
 
     /// <summary>The enclosing lane's anchor, so the subflow's resume returns to the parent's lane.</summary>
     public string? ParentTraceRoot { get; init; }
+
+    /// <summary>
+    /// Start of the activation episode the forwarding parent is executing, so the subflow's
+    /// time-to-Active is measured from the client's request rather than from this relay hop. A
+    /// timestamp, not an anchor: it cannot graft spans onto another trace, so it needs no more
+    /// protection than the lane fields already have. See <c>WorkflowTraceLane.Episode</c>.
+    /// </summary>
+    public DateTimeOffset? EpisodeStartedAt { get; init; }
+
+    /// <summary>What opened the episode; one of <c>TelemetryConstants.ActivationTriggers</c>.</summary>
+    public string? EpisodeTrigger { get; init; }
+
+    /// <summary>The transition the episode was triggered with (the first hop's key).</summary>
+    public string? EpisodeTransitionKey { get; init; }
+
+    /// <summary>The trace root under which the activation episode began.</summary>
+    public string? EpisodeTraceRoot { get; init; }
 }

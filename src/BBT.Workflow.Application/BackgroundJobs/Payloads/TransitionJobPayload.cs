@@ -129,6 +129,22 @@ public sealed class TransitionJobPayload : ITraceableJobPayload
     public int LaneSeq { get; set; }
 
     /// <summary>
+    /// Start of the activation episode this hop continues — the instant the originating request
+    /// (or timer, event, resume) was accepted. Null from a build that predates episodes; the
+    /// consuming hop then reports a partial span. See <c>WorkflowTraceLane.Episode</c>.
+    /// </summary>
+    public DateTimeOffset? EpisodeStartedAt { get; set; }
+
+    /// <summary>What opened the episode; one of <c>TelemetryConstants.ActivationTriggers</c>.</summary>
+    public string? EpisodeTrigger { get; set; }
+
+    /// <summary>The transition the episode was triggered with (the first hop's key).</summary>
+    public string? EpisodeTransitionKey { get; set; }
+
+    /// <summary>The trace root under which the activation episode began.</summary>
+    public string? EpisodeTraceRoot { get; set; }
+
+    /// <summary>
     /// Business correlation id of the originating execution chain. Restored into the rebuilt
     /// <c>TransitionInput</c> by the job handler so the async hop keeps the SAME correlation.id
     /// instead of minting a new one per job.

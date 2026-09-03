@@ -109,4 +109,16 @@ public sealed class TransitionContinuationRequested : IDistributedEvent, ILaneAw
     /// both enqueue paths agree; see <c>WorkflowTraceLane.NextSeq</c>.
     /// </summary>
     public int LaneSeq { get; set; }
+
+    /// <inheritdoc />
+    public DateTimeOffset? EpisodeStartedAt { get; set; }
+
+    /// <inheritdoc />
+    public string? EpisodeTrigger { get; set; }
+
+    /// <inheritdoc />
+    public string? EpisodeTransitionKey { get; set; }
+
+    /// <inheritdoc />
+    public string? EpisodeTraceRoot { get; set; }
 }

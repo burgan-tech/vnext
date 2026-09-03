@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using BBT.Workflow.Logging;
 using System.Text.Json;
 using BBT.Aether.BackgroundJob;
 using BBT.Aether.Domain.Entities;
@@ -49,7 +50,11 @@ public sealed class StateNotificationScheduler(
                 ? null
                 : JsonSerializer.SerializeToElement(context.Data, JsonSerializerConstants.JsonOptions),
             TraceParent = activity?.Id,
-            TraceState = activity?.TraceStateString
+            TraceState = activity?.TraceStateString,
+            // Same lane as the transition hops: the notify job is a sibling of the hop that
+            // settled the state, not a child nested under it.
+            TraceRoot = WorkflowTraceLane.Current,
+            ParentTraceRoot = WorkflowTraceLane.ParentLane
         };
 
         var fp = executionOptions.Value.FailurePolicy;

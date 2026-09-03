@@ -293,6 +293,9 @@ public sealed class InstanceRetryAppService(
             }
         };
 
+        // The retry request opened the activation episode; name it so the span reads `retry`.
+        using var episode = WorkflowTraceLane.UseEpisode(TelemetryConstants.ActivationTriggers.Retry, data.Transition.TransitionId);
+
         var result = await workflowExecutionService.ExecuteTransitionAsync(context, cancellationToken);
 
         if (!result.IsSuccess)

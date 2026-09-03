@@ -617,6 +617,10 @@ public sealed class SubflowFaultService(
         Sync = input.Sync,
         TraceRoot = input.TraceRoot,
         ParentTraceRoot = input.ParentTraceRoot,
+        EpisodeStartedAt = input.EpisodeStartedAt,
+        EpisodeTrigger = input.EpisodeTrigger,
+        EpisodeTransitionKey = input.EpisodeTransitionKey,
+        EpisodeTraceRoot = input.EpisodeTraceRoot,
         RearmAttempt = rearmAttempt
     };
 }

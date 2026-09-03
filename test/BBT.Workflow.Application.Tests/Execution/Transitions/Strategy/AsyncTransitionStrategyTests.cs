@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using BBT.Aether.DistributedLock;
@@ -89,6 +90,77 @@ public class AsyncTransitionStrategyTests
     }
 
     #region ExecuteAsync — happy path
+
+    /// <summary>
+    /// The accept carries the activation episode onto BOTH delivery shapes (the gateway may fall
+    /// back from the direct payload to the outbox event), so the job that finally brings the instance
+    /// to rest measures from this request's arrival rather than from its own start.
+    /// </summary>
+    [Fact]
+    public async Task ExecuteAsync_ShouldCarryTheActivationEpisodeOntoPayloadAndOutboxEvent()
+    {
+        var (wfCtx, _) = SetupSuccessfulContext();
+        var (payload, outboxEvent) = CaptureEnqueue();
+        var episode = new ActivationEpisode(
+            new DateTimeOffset(2026, 9, 2, 10, 0, 0, TimeSpan.Zero),
+            TelemetryConstants.ActivationTriggers.Manual,
+            "test-transition",
+            Partial: false,
+            TraceRoot: "00-11111111111111111111111111111111-2222222222222222-01");
+
+        using (WorkflowTraceLane.Use("00-11111111111111111111111111111111-1111111111111111-01", episode: episode))
+        {
+            var result = await _strategy.ExecuteAsync(wfCtx, CancellationToken.None);
+            result.IsSuccess.ShouldBeTrue();
+        }
+
+        payload().ShouldNotBeNull().EpisodeStartedAt.ShouldBe(episode.StartedAt);
+        payload()!.EpisodeTrigger.ShouldBe(TelemetryConstants.ActivationTriggers.Manual);
+        payload()!.EpisodeTransitionKey.ShouldBe("test-transition");
+        payload()!.EpisodeTraceRoot.ShouldBe(episode.TraceRoot);
+        outboxEvent().ShouldNotBeNull().EpisodeStartedAt.ShouldBe(episode.StartedAt);
+        outboxEvent()!.EpisodeTrigger.ShouldBe(TelemetryConstants.ActivationTriggers.Manual);
+        outboxEvent()!.EpisodeTransitionKey.ShouldBe("test-transition");
+        outboxEvent()!.EpisodeTraceRoot.ShouldBe(episode.TraceRoot);
+    }
+
+    /// <summary>
+    /// The accept's durable half (job row + delivery decision + commit) and the Dapr scheduler arm
+    /// used to be the unnamed tail of the server span; both are spans now.
+    /// </summary>
+    [Fact]
+    public async Task ExecuteAsync_ShouldSpanTheEnqueueAndTheArm()
+    {
+        // A root span scopes the process-wide listener to THIS test's trace.
+        using var root = new System.Diagnostics.Activity("test-root");
+        root.SetIdFormat(System.Diagnostics.ActivityIdFormat.W3C);
+        root.Start();
+        var collected = new List<System.Diagnostics.Activity>();
+        using var listener = new System.Diagnostics.ActivityListener
+        {
+            ShouldListenTo = source => source.Name is "BBT.Workflow.Pipeline" or "BBT.Workflow.BackgroundJobs",
+            Sample = (ref System.Diagnostics.ActivityCreationOptions<System.Diagnostics.ActivityContext> _) =>
+                System.Diagnostics.ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStopped = a =>
+            {
+                if (a.TraceId != root.TraceId) return;
+                lock (collected) collected.Add(a);
+            }
+        };
+        System.Diagnostics.ActivitySource.AddActivityListener(listener);
+        var (wfCtx, _) = SetupSuccessfulContext();
+
+        var result = await _strategy.ExecuteAsync(wfCtx, CancellationToken.None);
+        System.Diagnostics.Activity.Current = null;
+
+        result.IsSuccess.ShouldBeTrue();
+        var enqueue = collected.Single(a => a.DisplayName == "Transition.Enqueue");
+        enqueue.GetTagItem(TelemetryConstants.TagNames.EnqueuePath).ShouldBe("Direct");
+        enqueue.GetTagItem(TelemetryConstants.TagNames.JobName).ShouldNotBeNull();
+        var arm = collected.Single(a => a.DisplayName == "BackgroundJob.Arm");
+        arm.GetTagItem(TelemetryConstants.TagNames.SpanCategory).ShouldBe(TelemetryConstants.SpanCategories.Business);
+        _mockArmHandle.Verify(h => h.ArmAsync(It.IsAny<CancellationToken>()), Times.Once);
+    }
 
     [Fact]
     public async Task ExecuteAsync_WithValidContext_ShouldEnqueueJobSuccessfully()

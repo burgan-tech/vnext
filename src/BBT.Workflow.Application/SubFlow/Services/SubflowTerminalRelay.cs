@@ -114,6 +114,10 @@ public sealed class SubflowTerminalRelay(
             // lane (ParentTraceRoot) instead of nesting under the completion relay endpoint.
             TraceRoot = eventData.TraceRoot,
             ParentTraceRoot = eventData.ParentTraceRoot,
+            EpisodeStartedAt = eventData.EpisodeStartedAt,
+            EpisodeTrigger = eventData.EpisodeTrigger,
+            EpisodeTransitionKey = eventData.EpisodeTransitionKey,
+            EpisodeTraceRoot = eventData.EpisodeTraceRoot,
             RearmAttempt = eventData.RearmAttempt
         };
     }
@@ -158,6 +162,10 @@ public sealed class SubflowTerminalRelay(
             Sync = eventData.Sync,
             TraceRoot = eventData.TraceRoot,
             ParentTraceRoot = eventData.ParentTraceRoot,
+            EpisodeStartedAt = eventData.EpisodeStartedAt,
+            EpisodeTrigger = eventData.EpisodeTrigger,
+            EpisodeTransitionKey = eventData.EpisodeTransitionKey,
+            EpisodeTraceRoot = eventData.EpisodeTraceRoot,
             RearmAttempt = eventData.RearmAttempt
         };
     }
@@ -185,6 +193,10 @@ public sealed class SubflowTerminalRelay(
         // as MapToFlowCompletedInput/MapToSubFlowFaultedInput above.
         TraceRoot = eventData.TraceRoot,
         ParentTraceRoot = eventData.ParentTraceRoot,
+        EpisodeStartedAt = eventData.EpisodeStartedAt,
+        EpisodeTrigger = eventData.EpisodeTrigger,
+        EpisodeTransitionKey = eventData.EpisodeTransitionKey,
+        EpisodeTraceRoot = eventData.EpisodeTraceRoot,
         RearmAttempt = eventData.RearmAttempt
     };
 }

@@ -23,13 +23,16 @@ namespace BBT.Workflow.Execution;
 /// <param name="ResumeFromOrder">Lifecycle order to resume execution from (subflow resume / replan), or null.</param>
 /// <param name="TerminalReached">Whether the pipeline reached a terminal state.</param>
 /// <param name="Epilogue">The epilogue execution mode (Run/DispatchOnly/Skip).</param>
+/// <param name="ContinuationEnqueued">Whether the next hop was already handed to a separate job before the
+/// post-commit barrier — the post-commit settlement must then treat the activation episode as still open.</param>
 public sealed record ContinuationSet(
     NextTransitionRequest? Next,
     IReadOnlyList<IPostCommitJob> PostCommitJobs,
     InstanceStatus? ResolvedStatus,
     int? ResumeFromOrder,
     bool TerminalReached,
-    EpilogueMode Epilogue)
+    EpilogueMode Epilogue,
+    bool ContinuationEnqueued = false)
 {
     /// <summary>
     /// An empty continuation set representing "nothing left to do".
