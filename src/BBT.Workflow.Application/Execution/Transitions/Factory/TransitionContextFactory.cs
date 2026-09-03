@@ -24,7 +24,8 @@ public sealed class TransitionContextFactory(
         WorkflowExecutionContext input,
         CancellationToken cancellationToken)
     {
-        using var activity = PipelineStepActivityHelper.StartOperationActivity("Transition.LoadContext");
+        using var activity = PipelineStepActivityHelper.StartTransitionActivity(
+            "Transition.LoadContext", input.TransitionKey);
         var result = await ValidateDomain(input.Domain)
             .BindAsync(_ => RehydrateInstanceAsync(input, cancellationToken))
             .ThenAsync(data => Task.FromResult(ResolveStateAndTransition(data, input)))

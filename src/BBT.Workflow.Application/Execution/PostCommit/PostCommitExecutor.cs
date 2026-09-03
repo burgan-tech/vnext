@@ -124,6 +124,7 @@ public sealed class PostCommitExecutor(
                         $"PostCommit.{job.GetType().Name}", ActivityKind.Internal);
                     jobActivity?.SetTag(TelemetryConstants.TagNames.SpanCategory, TelemetryConstants.SpanCategories.Business);
                     jobActivity?.SetTag(TelemetryConstants.TagNames.InstanceId, context.InstanceId.ToString());
+                    jobActivity?.SetTag(TelemetryConstants.TagNames.TransitionKey, context.TransitionKey);
 
                     var execResult = await DispatchAsync(job, serviceProvider, context, cancellationToken);
 

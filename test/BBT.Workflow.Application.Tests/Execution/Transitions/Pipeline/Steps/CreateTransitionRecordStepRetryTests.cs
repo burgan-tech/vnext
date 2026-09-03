@@ -27,6 +27,7 @@ namespace BBT.Workflow.Application.Tests.Execution.Transitions.Pipeline.Steps;
 /// lets <c>GetSuccessfulTaskIdsAsync</c> bypass already-completed tasks instead of re-running
 /// their side effects.
 /// </summary>
+[Collection(BBT.Workflow.Application.Tests.TracingDetailLevelCollection.Name)]
 public class CreateTransitionRecordStepRetryTests
 {
     private readonly IInstanceTransitionRepository _transitionRepository =
@@ -127,6 +128,7 @@ public class CreateTransitionRecordStepRetryTests
         span.ParentId.ShouldBe(root.Id);
         span.GetTagItem(TelemetryConstants.TagNames.SpanCategory)
             .ShouldBe(TelemetryConstants.SpanCategories.Business);
+        span.GetTagItem(TelemetryConstants.TagNames.TransitionKey).ShouldBe("test-transition");
     }
 
     private static TransitionExecutionContext CreateContext()

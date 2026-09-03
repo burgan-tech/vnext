@@ -112,7 +112,8 @@ public sealed class PostCommitParentMutationService(
 
         var verdict = await mutation(instance, cancellationToken);
         ActivityContext commitContext;
-        using (var commitActivity = PipelineStepActivityHelper.StartOperationActivity("Uow.Commit"))
+        using (var commitActivity = PipelineStepActivityHelper.StartTransitionActivity(
+                   "Uow.Commit", source.TransitionKey))
         {
             await uow.CommitAsync(cancellationToken);
             commitContext = commitActivity?.Context ?? default;

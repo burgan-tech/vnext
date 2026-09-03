@@ -28,6 +28,7 @@ using WorkflowDefinition = BBT.Workflow.Definitions.Workflow;
 
 namespace BBT.Workflow.Application.Tests.Execution.Services;
 
+[Collection(TracingDetailLevelCollection.Name)]
 public sealed class TransitionRunnerPostCommitTests
 {
     [Fact]
@@ -58,6 +59,7 @@ public sealed class TransitionRunnerPostCommitTests
         span.ParentId.ShouldBe(root.Id);
         span.GetTagItem(TelemetryConstants.TagNames.SpanCategory)
             .ShouldBe(TelemetryConstants.SpanCategories.Business);
+        span.GetTagItem(TelemetryConstants.TagNames.TransitionKey).ShouldBe("first");
     }
 
     [Fact]

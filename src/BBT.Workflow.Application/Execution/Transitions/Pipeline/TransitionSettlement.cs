@@ -38,7 +38,8 @@ internal static class TransitionSettlement
         // The resting-status flip closes a transition: a status write, its lock, and the state
         // notification. It ran unnamed at the very end of the pipeline, so a trace showed the last
         // step finishing and then a stretch of nothing before the hop ended.
-        using var activity = PipelineStepActivityHelper.StartOperationActivity("Transition.Settle");
+        using var activity = PipelineStepActivityHelper.StartTransitionActivity(
+            "Transition.Settle", context.TransitionKey);
         activity?.SetTag(TelemetryConstants.TagNames.SettledStatus, resolvedStatus?.Code ?? "none");
 
         var hasOpenSubFlow = HasOpenSubFlow(context);

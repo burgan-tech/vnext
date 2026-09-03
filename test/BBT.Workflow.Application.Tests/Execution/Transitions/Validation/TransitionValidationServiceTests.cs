@@ -28,6 +28,7 @@ namespace BBT.Workflow.Execution.Validation;
 /// Unit tests for TransitionValidationService
 /// Tests transition validation operations including policy and schema validation
 /// </summary>
+[Collection(BBT.Workflow.Application.Tests.TracingDetailLevelCollection.Name)]
 public class TransitionValidationServiceTests
 {
     private readonly Mock<IJsonSchemaValidator> _mockSchemaValidator;
@@ -210,6 +211,8 @@ public class TransitionValidationServiceTests
         schemaSpan.ParentId.ShouldNotBeNull();
         schemaSpan.GetTagItem(TelemetryConstants.TagNames.SpanCategory)
             .ShouldBe(TelemetryConstants.SpanCategories.Business);
+        schemaSpan.GetTagItem(TelemetryConstants.TagNames.TransitionKey)
+            .ShouldBe(context.TransitionKey);
     }
 
     [Fact(Skip = "Extension methods cannot be mocked")]

@@ -76,7 +76,8 @@ public sealed class JobTimeoutRecoveryService(
 
             await instanceRepository.UpdateAsync(instance, true, cancellationToken);
             ActivityContext commitContext;
-            using (var commitActivity = PipelineStepActivityHelper.StartOperationActivity("Uow.Commit"))
+            using (var commitActivity = PipelineStepActivityHelper.StartTransitionActivity(
+                       "Uow.Commit", args.TransitionKey))
             {
                 await uow.CommitAsync(cancellationToken);
                 commitContext = commitActivity?.Context ?? default;

@@ -7,6 +7,7 @@ using BBT.Aether.Results;
 using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.PostCommit;
 using BBT.Workflow.Instances;
+using BBT.Workflow.Logging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using NSubstitute;
@@ -20,6 +21,7 @@ namespace BBT.Workflow.Application.Tests.Execution.PostCommit;
 /// Focuses on how handler failures are surfaced as fault requests, including the
 /// propagation of the originating error's detail (stack trace) into the fault request.
 /// </summary>
+[Collection(BBT.Workflow.Application.Tests.TracingDetailLevelCollection.Name)]
 public class PostCommitExecutorTests
 {
     private readonly IServiceScopeFactory _scopeFactory;
@@ -88,6 +90,7 @@ public class PostCommitExecutorTests
         ActivityContext observed = default;
         ActivitySpanId observedParent = default;
         ActivityLink[] observedLinks = [];
+        object? observedTransitionKey = null;
         var handler = Substitute.For<IPostCommitHandler<TestJob>>();
         handler.HandleAsync(
                 Arg.Any<TestJob>(), Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
@@ -96,6 +99,7 @@ public class PostCommitExecutorTests
                 observed = Activity.Current?.Context ?? default;
                 observedParent = Activity.Current?.ParentSpanId ?? default;
                 observedLinks = Activity.Current?.Links.ToArray() ?? [];
+                observedTransitionKey = Activity.Current?.GetTagItem(TelemetryConstants.TagNames.TransitionKey);
                 return Result.Ok();
             });
         _serviceProvider.GetService(typeof(IPostCommitHandler<TestJob>)).Returns(handler);
@@ -107,6 +111,7 @@ public class PostCommitExecutorTests
         observed.TraceId.ShouldBe(parent.TraceId);
         observedParent.ShouldBe(parent.SpanId);
         observedLinks.ShouldBeEmpty();
+        observedTransitionKey.ShouldBe("test-transition");
     }
 
     private static TransitionExecutionContext CreateContext()

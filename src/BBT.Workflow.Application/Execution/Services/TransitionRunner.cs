@@ -102,7 +102,8 @@ public sealed class TransitionRunner(
         TransitionExecutionContext sourceContext,
         CancellationToken cancellationToken)
     {
-        using var activity = PipelineStepActivityHelper.StartOperationActivity("PostCommit.Coordinate");
+        using var activity = PipelineStepActivityHelper.StartTransitionActivity(
+            "PostCommit.Coordinate", sourceContext.TransitionKey);
         var result = await scopeFactory.ExecuteWithWorkflowAsync(
             snapshot.Domain,
             snapshot.WorkflowKey,
@@ -175,7 +176,8 @@ public sealed class TransitionRunner(
                     if (!coreResult.IsSuccess)
                         return Result<TransitionCoreOutput>.Fail(coreResult.Error);
 
-                    using (PipelineStepActivityHelper.StartOperationActivity("Events.PublishDeferred"))
+                    using (PipelineStepActivityHelper.StartTransitionActivity(
+                               "Events.PublishDeferred", context.TransitionKey))
                     {
                         await PublishDeferredEventsAsync(sp, uowManager, coreResult.Value!, ct);
                     }
@@ -184,7 +186,8 @@ public sealed class TransitionRunner(
                     // once. It sat outside every span, so a slow commit read as time the hop spent
                     // nowhere.
                     ActivityContext commitContext;
-                    using (var commitActivity = PipelineStepActivityHelper.StartOperationActivity("Uow.Commit"))
+                    using (var commitActivity = PipelineStepActivityHelper.StartTransitionActivity(
+                               "Uow.Commit", context.TransitionKey))
                     {
                         await uow.CommitAsync(ct);
                         commitContext = commitActivity?.Context ?? default;

@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using BBT.Workflow.BackgroundJobs.Payloads;
+using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Telemetry;
 
@@ -114,13 +115,22 @@ public static class BackgroundJobActivityHelper
     /// tail, and the start of the dead time before the job span begins — was invisible. Implicit
     /// parent, Business category, like every other in-process span.
     /// </summary>
-    public static Activity? StartArmActivity(string jobName)
+    public static Activity? StartArmActivity(JobName jobName)
     {
-        var activity = ActivitySource.StartActivity("BackgroundJob.Arm", ActivityKind.Internal);
+        ArgumentNullException.ThrowIfNull(jobName);
+
+        var discriminator = jobName.TransitionKey is { Length: > 0 } transitionKey
+            ? $"{jobName.Type}/{transitionKey}"
+            : jobName.Type.ToString();
+        var activity = ActivitySource.StartActivity(
+            $"BackgroundJob.Arm/{discriminator}", ActivityKind.Internal);
         if (activity is null) return null;
 
         activity.SetTag(TelemetryConstants.TagNames.SpanCategory, TelemetryConstants.SpanCategories.Business);
-        activity.SetTag(TelemetryConstants.TagNames.JobName, jobName);
+        activity.SetTag(TelemetryConstants.TagNames.JobName, jobName.Value);
+        activity.SetTag(TelemetryConstants.TagNames.JobType, jobName.Type.ToString());
+        activity.SetTag(TelemetryConstants.TagNames.TransitionKey, jobName.TransitionKey);
+        activity.SetTag(TelemetryConstants.TagNames.StateFrom, jobName.SourceState);
         return activity;
     }
 

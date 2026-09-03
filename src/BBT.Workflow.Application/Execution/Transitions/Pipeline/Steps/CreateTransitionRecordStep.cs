@@ -82,7 +82,8 @@ public sealed class CreateTransitionRecordStep(
         bool isReusedRecord,
         CancellationToken cancellationToken)
     {
-        using var activity = PipelineStepActivityHelper.StartOperationActivity("TransitionRecord.Persist");
+        using var activity = PipelineStepActivityHelper.StartTransitionActivity(
+            "TransitionRecord.Persist", instanceTransition.TransitionId);
         await instanceRepository.UpdateAsync(instance, false, cancellationToken);
         if (isReusedRecord)
             await instanceTransitionRepository.UpdateAsync(instanceTransition, true, cancellationToken);

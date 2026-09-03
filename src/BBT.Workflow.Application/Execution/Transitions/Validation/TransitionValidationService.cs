@@ -27,7 +27,8 @@ public class TransitionValidationService(
         TransitionExecutionContext context,
         CancellationToken cancellationToken = default)
     {
-        using var activity = PipelineStepActivityHelper.StartOperationActivity("Transition.Validate");
+        using var activity = PipelineStepActivityHelper.StartTransitionActivity(
+            "Transition.Validate", context.TransitionKey);
 
         // 1. Schema Validation
         var schemaResult = await ValidateSchemaAsync(context, cancellationToken);
@@ -56,7 +57,8 @@ public class TransitionValidationService(
         TransitionExecutionContext context,
         CancellationToken cancellationToken = default)
     {
-        using var activity = PipelineStepActivityHelper.StartOperationActivity("Transition.ValidatePolicy");
+        using var activity = PipelineStepActivityHelper.StartTransitionActivity(
+            "Transition.ValidatePolicy", context.TransitionKey);
         var result = transitionExecutionPolicy.Validate(context);
         if (!result.IsSuccess)
             activity?.SetStatus(ActivityStatusCode.Error, result.Error.Message);
@@ -83,7 +85,8 @@ public class TransitionValidationService(
         if (!schemaResult.IsSuccess)
             return Result.Fail(schemaResult.Error);
 
-        using var schemaActivity = PipelineStepActivityHelper.StartOperationActivity("Schema.Validate");
+        using var schemaActivity = PipelineStepActivityHelper.StartTransitionActivity(
+            "Schema.Validate", context.TransitionKey);
         var validationResult = schemaValidator.Validate(
             schemaResult.Value!.Schema,
             context.DataElement,

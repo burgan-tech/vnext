@@ -107,6 +107,7 @@ public static class TelemetryConstants
         public const string StateFrom = "vnext.state.from";
         public const string StateTo = "vnext.state.to";
         public const string JobName = "vnext.job.name";
+        public const string JobType = "vnext.job.type";
         /// <summary>
         /// Parent instance ID for subflow/subprocess correlation in traces and logs.
         /// </summary>
