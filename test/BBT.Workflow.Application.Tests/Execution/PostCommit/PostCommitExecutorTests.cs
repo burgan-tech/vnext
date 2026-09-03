@@ -1,7 +1,9 @@
 using System;
+using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
 using BBT.Aether.Results;
+using BBT.Workflow.BackgroundJobs.Handlers;
 using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.PostCommit;
 using BBT.Workflow.Instances;
@@ -69,6 +71,42 @@ public class PostCommitExecutorTests
         result.FaultRequest.ShouldNotBeNull();
         result.FaultRequest!.ErrorCode.ShouldBe("Instance:100023");
         result.FaultRequest.StackTrace.ShouldBe(stackTrace);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_PostCommitSpan_IsARealChildOfTheCurrentTransition()
+    {
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == BackgroundJobActivityHelper.ActivitySource.Name,
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) =>
+                ActivitySamplingResult.AllDataAndRecorded
+        };
+        ActivitySource.AddActivityListener(listener);
+
+        using var parent = new Activity("TransitionJob.Execute/test").Start();
+        ActivityContext observed = default;
+        ActivitySpanId observedParent = default;
+        ActivityLink[] observedLinks = [];
+        var handler = Substitute.For<IPostCommitHandler<TestJob>>();
+        handler.HandleAsync(
+                Arg.Any<TestJob>(), Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(_ =>
+            {
+                observed = Activity.Current?.Context ?? default;
+                observedParent = Activity.Current?.ParentSpanId ?? default;
+                observedLinks = Activity.Current?.Links.ToArray() ?? [];
+                return Result.Ok();
+            });
+        _serviceProvider.GetService(typeof(IPostCommitHandler<TestJob>)).Returns(handler);
+
+        var result = await _executor.ExecuteAsync(
+            [new TestJob()], CreateContext(), CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        observed.TraceId.ShouldBe(parent.TraceId);
+        observedParent.ShouldBe(parent.SpanId);
+        observedLinks.ShouldBeEmpty();
     }
 
     private static TransitionExecutionContext CreateContext()

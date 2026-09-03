@@ -89,8 +89,8 @@ public static class BackgroundJobActivityHelper
 
     /// <summary>
     /// Starts the job's span as a <em>flat-lane</em> item: parented to the payload's trace lane
-    /// anchor so that every hop of the same instance is a SIBLING, with the enqueue-time
-    /// <c>TraceParent</c> attached as an <see cref="ActivityLink"/> instead of as the parent.
+    /// anchor so that every hop of the same instance is a SIBLING. The enqueue-time
+    /// <c>TraceParent</c> is retained as the searchable <c>vnext.hop.predecessor</c> tag.
     /// <para>
     /// This is what removes the old "nesting depth == chain depth" behaviour. Kind stays
     /// <see cref="ActivityKind.Consumer"/> so Elastic APM keeps treating the job as a transaction.

@@ -46,7 +46,7 @@ public sealed class FlatLaneActivityTests : IDisposable
     private static readonly string Predecessor = TraceParent(TraceId, "2222222222222222");
 
     [Fact]
-    public void Anchor_becomes_the_parent_and_the_predecessor_is_linked()
+    public void Anchor_becomes_the_parent_and_the_predecessor_is_tagged_without_a_link()
     {
         using var activity = FlatLaneActivity.Start(
             _source, "TransitionJob.Execute", ActivityKind.Consumer, Anchor, Predecessor, traceState: null);
@@ -55,7 +55,7 @@ public sealed class FlatLaneActivityTests : IDisposable
         activity!.TraceId.ToString().ShouldBe(TraceId);
         activity.ParentSpanId.ToString().ShouldBe("1111111111111111");
 
-        activity.Links.Select(l => l.Context.SpanId.ToString()).ShouldContain("2222222222222222");
+        activity.Links.ShouldBeEmpty();
         activity.GetTagItem(TelemetryConstants.TagNames.TraceLane).ShouldBe(true);
         activity.GetTagItem(TelemetryConstants.TagNames.TraceLaneAnchor).ShouldBe("1111111111111111");
         activity.GetTagItem(TelemetryConstants.TagNames.HopPredecessor).ShouldBe("2222222222222222");
@@ -77,8 +77,8 @@ public sealed class FlatLaneActivityTests : IDisposable
         hop2.ParentSpanId.ToString().ShouldBe("1111111111111111");
         hop2.ParentSpanId.ShouldNotBe(hop1.SpanId);
 
-        // Causality survives as a link + tag rather than as a parent edge.
-        hop2.Links.Select(l => l.Context.SpanId).ShouldContain(hop1.SpanId);
+        // Causality survives as a tag rather than a parent or link edge.
+        hop2.Links.ShouldBeEmpty();
         hop2.GetTagItem(TelemetryConstants.TagNames.HopPredecessor).ShouldBe(hop1.SpanId.ToString());
     }
 

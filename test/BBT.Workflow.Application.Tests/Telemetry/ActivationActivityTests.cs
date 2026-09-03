@@ -11,9 +11,9 @@ namespace BBT.Workflow.Application.Tests.Telemetry;
 
 /// <summary>
 /// Pins the synthetic, backdated <c>Instance.Activation/{key}</c> span: its start is the carried
-/// episode start (not "now"), its parent is the lane anchor, the settling span is linked, and —
-/// the trap every explicit-parent span in this codebase must avoid — emitting it leaves the
-/// caller's <see cref="Activity.Current"/> exactly as it was.
+/// episode start (not "now"), its parent is the lane anchor, the commit that made the rest point
+/// durable is linked, and — the trap every explicit-parent span in this codebase must avoid —
+/// emitting it leaves the caller's <see cref="Activity.Current"/> exactly as it was.
 /// </summary>
 [Collection(TracingDetailLevelCollection.Name)]
 public sealed class ActivationActivityTests : IDisposable
@@ -48,8 +48,13 @@ public sealed class ActivationActivityTests : IDisposable
         return collected;
     }
 
-    private Activity? Emit(string outcome = TelemetryConstants.ActivationOutcomes.Active, bool casFlipped = true)
-        => ActivationActivity.Emit(Source, outcome, _instanceId, "dom", "flow", "go", "waiting", casFlipped);
+    private Activity? Emit(
+        string outcome = TelemetryConstants.ActivationOutcomes.Active,
+        bool casFlipped = true,
+        ActivityContext settlingCommit = default)
+        => ActivationActivity.Emit(
+            Source, outcome, _instanceId, "dom", "flow", "go", "waiting", casFlipped,
+            settlingCommit);
 
     [Fact]
     public void Emit_backdates_the_start_to_the_episode_and_parents_to_the_lane_anchor()
@@ -60,10 +65,15 @@ public sealed class ActivationActivityTests : IDisposable
         using var root = Source.StartActivity("PATCH /transitions/go")!;
         using var lane = WorkflowTraceLane.UseCurrentActivity();
         using var classify = WorkflowTraceLane.UseEpisode(TelemetryConstants.ActivationTriggers.Manual, "go");
-        // The settling hop's span, current at emit time.
+        // The settling hop remains current, but only the completed commit is linked.
         using var hop = Source.StartActivity("TransitionJob.Execute/go")!;
+        ActivityContext commitContext;
+        using (var commit = Source.StartActivity("Uow.Commit")!)
+        {
+            commitContext = commit.Context;
+        }
 
-        var emitted = Emit().ShouldNotBeNull();
+        var emitted = Emit(settlingCommit: commitContext).ShouldNotBeNull();
 
         emitted.DisplayName.ShouldBe("Instance.Activation/go");
         emitted.Kind.ShouldBe(ActivityKind.Internal);
@@ -71,7 +81,8 @@ public sealed class ActivationActivityTests : IDisposable
         emitted.Duration.ShouldBeGreaterThanOrEqualTo(TimeSpan.Zero);
         emitted.ParentSpanId.ShouldBe(root.Context.SpanId);
         emitted.TraceId.ShouldBe(root.TraceId);
-        emitted.Links.Select(l => l.Context.SpanId).ShouldContain(hop.Context.SpanId);
+        emitted.Links.Select(l => l.Context.SpanId).ShouldContain(commitContext.SpanId);
+        emitted.Links.Select(l => l.Context.SpanId).ShouldNotContain(hop.Context.SpanId);
 
         emitted.GetTagItem(TelemetryConstants.TagNames.ActivationOutcome).ShouldBe(TelemetryConstants.ActivationOutcomes.Active);
         emitted.GetTagItem(TelemetryConstants.TagNames.ActivationTrigger).ShouldBe(TelemetryConstants.ActivationTriggers.Manual);
@@ -111,13 +122,19 @@ public sealed class ActivationActivityTests : IDisposable
         using var handoff = Source.StartActivity("PostCommit.StartSubflowJob")!;
         using var childLane = WorkflowTraceLane.EnterChildLane();
         using var settlingHop = Source.StartActivity("child/create")!;
+        ActivityContext commitContext;
+        using (var commit = Source.StartActivity("Uow.Commit")!)
+        {
+            commitContext = commit.Context;
+        }
 
-        var emitted = Emit().ShouldNotBeNull();
+        var emitted = Emit(settlingCommit: commitContext).ShouldNotBeNull();
 
         emitted.StartTimeUtc.ShouldBe(request.StartTimeUtc);
         emitted.ParentSpanId.ShouldBe(request.SpanId);
         emitted.ParentSpanId.ShouldNotBe(handoff.SpanId);
-        emitted.Links.Select(l => l.Context.SpanId).ShouldContain(settlingHop.SpanId);
+        emitted.Links.Select(l => l.Context.SpanId).ShouldContain(commitContext.SpanId);
+        emitted.Links.Select(l => l.Context.SpanId).ShouldNotContain(settlingHop.SpanId);
     }
 
     [Fact]

@@ -485,7 +485,12 @@ public class TransitionPipeline
 
         instance.Fault(context.Domain, context.CallerMode == ExecMode.Sync);
         await _instanceRepository.UpdateAsync(instance, true, cancellationToken);
-        await faultUow.CommitAsync(cancellationToken);
+        ActivityContext commitContext;
+        using (var commitActivity = PipelineStepActivityHelper.StartOperationActivity("Uow.Commit"))
+        {
+            await faultUow.CommitAsync(cancellationToken);
+            commitContext = commitActivity?.Context ?? default;
+        }
 
         // Faulted is a rest point the client observes, so the activation episode closes here —
         // after the commit, like every other rest point. Regardless of OwnsStatus: whatever this
@@ -497,7 +502,8 @@ public class TransitionPipeline
             context.Domain,
             context.WorkflowKey,
             context.TransitionKey,
-            instance.GetCurrentState);
+            instance.GetCurrentState,
+            settlingCommit: commitContext);
 
         _logger.InstanceFaultedSuccessfully(context.InstanceId);
     }

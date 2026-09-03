@@ -111,9 +111,9 @@ Five things worth calling out that the diagram doesn't show directly:
   `Transition.LoadContext`.
 - **The episode span is a sibling, not a parent.** `Instance.Activation/{key}` is parented to the
   lane anchor exactly like the hops it covers, with its start backdated to the episode's trigger
-  (the anchor's own start for an HTTP entry point); the hop that settled the episode is attached as
-  an `ActivityLink`, not nested. It is the one span here whose lifetime deliberately exceeds every
-  sibling's — see [Activation episode](#activation-episode-why-the-span-is-synthetic).
+  (the anchor's own start for an HTTP entry point); the final `Uow.Commit` that made the rest point
+  durable is attached as an `ActivityLink`, not the longer-lived settling job. See
+  [Activation episode](#activation-episode-why-the-span-is-synthetic).
 
 ## Reading the descent ladder
 
@@ -214,8 +214,8 @@ level; nothing in this table is gated behind `AetherTracingRuntime.IsVerbose`.
 | `Cache.Set/{cacheKey}` | `BBT.Workflow.Cache` | same shape as `Cache.Get` plus `cache.generation` from the bump | `CacheSet<T>.SetAsync`. Also covers the warm-resolutions pass (no separate `Cache.Warmup` span — see note below). |
 | `Cache.Remove/{cacheKey}` | `BBT.Workflow.Cache` | `cache.generation` | `CacheSet<T>.InvalidateAsync`. |
 | `Subflow.*` | `BBT.Workflow.SubFlow` | subflow-specific | Pre-existed (`SubFlowActivityHelper`: start/forward/complete/fault/cancel). Own `Script.*` children for input/output mapping. |
-| `PostCommit.*` | `BBT.Workflow.BackgroundJobs` | job-specific | Pre-existed (`PostCommitExecutor` reuses `BackgroundJobActivityHelper.ActivitySource`). Own job-enqueue children. |
-| `StateNotify.Execute` | `BBT.Workflow.BackgroundJobs` | lane tags (`vnext.trace.lane`, `.anchor`, `vnext.hop.predecessor`) + the payload's job tags | The `state.notify` job. Now a **flat-lane item** (`StateNotifyJobHandler` → `WorkflowTraceLane.Reset(payload.TraceRoot, payload.ParentTraceRoot)` + `StartFlatLaneActivity`): parented to the lane anchor beside the transition hops, with the hop that scheduled it linked as predecessor. A payload without `TraceRoot` (older build) degrades to the previous continue-the-predecessor parenting. |
+| `PostCommit.*` | `BBT.Workflow.BackgroundJobs` | `span.category=business`, `vnext.instance.id` | A real child of the transition that just committed (`PostCommitExecutor`). This keeps the work filling the interval after `Uow.Commit` adjacent to that commit in Elastic's tree. Owns its subflow/forward children. |
+| `StateNotify.Execute` | `BBT.Workflow.BackgroundJobs` | lane tags (`vnext.trace.lane`, `.anchor`, `vnext.hop.predecessor`) + the payload's job tags | The `state.notify` job. Now a **flat-lane item** (`StateNotifyJobHandler` → `WorkflowTraceLane.Reset(payload.TraceRoot, payload.ParentTraceRoot)` + `StartFlatLaneActivity`): parented to the lane anchor beside the transition hops, with the scheduling hop tagged as predecessor. A payload without `TraceRoot` (older build) degrades to the previous continue-the-predecessor parenting. |
 | `Function.Execute/{key}` | `BBT.Workflow.Functions` | `vnext.layer=orchestration`, `vnext.domain`, `span.category=business` | Envelope span for one function execution (`FunctionAppService.ExecuteFunctionAsync`), parent to the three phase spans below. Previously the function path produced no phase spans of its own — authorization, request validation, and response building were all unattributable inside the endpoint transaction. |
 | `Function.Authorize` | `BBT.Workflow.Functions` | `vnext.layer=orchestration`, `span.category=business` | Wraps `functionAccessPolicy.AuthorizeAsync` — the function's access-policy check, before contract (verb/schema) enforcement. |
 | `Function.ValidateRequest` | `BBT.Workflow.Functions` | `vnext.layer=orchestration`, `span.category=business` | Wraps `functionRequestValidationService.ValidateRequestAsync` — verb + input-schema validation; may run schema rule scripts against the lazily-built `ScriptContext`. |
@@ -237,8 +237,9 @@ process** after a Dapr scheduler round-trip, and sometimes on another replica. N
 can be both. So the hops stay parented to the lane anchor exactly as before, and the episode span is
 **created at the rest point** with `startTime` = the carried episode start
 (`ActivitySource.StartActivity(name, kind, parentContext, tags, links, startTime)`), parented to the
-same anchor, so it lands beside the hops and covers all of them. The settling hop's span is attached
-as an `ActivityLink`, so "which hop closed the episode" stays discoverable. The start is a
+same anchor, so it lands beside the hops and covers all of them. The final `Uow.Commit` span is
+attached as an `ActivityLink`, so the durable rest point stays discoverable without linking a job
+whose cleanup can outlive availability. The start is a
 `DateTimeOffset` carried on `WorkflowTraceLane.Episode` and, across async boundaries, as
 `EpisodeStartedAt` / `EpisodeTrigger` / `EpisodeTransitionKey` / `EpisodeTraceRoot` beside `TraceRoot` in every lane
 carrier — the full carrier list and the emission rules are in

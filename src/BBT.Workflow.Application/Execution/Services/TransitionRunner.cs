@@ -178,9 +178,11 @@ public sealed class TransitionRunner(
                     // The transaction commit — everything the hop wrote reaching the database at
                     // once. It sat outside every span, so a slow commit read as time the hop spent
                     // nowhere.
-                    using (PipelineStepActivityHelper.StartOperationActivity("Uow.Commit"))
+                    ActivityContext commitContext;
+                    using (var commitActivity = PipelineStepActivityHelper.StartOperationActivity("Uow.Commit"))
                     {
                         await uow.CommitAsync(ct);
+                        commitContext = commitActivity?.Context ?? default;
                     }
 
                     // The activation episode closes HERE, not at Transition.Settle: the settlement's
@@ -191,7 +193,7 @@ public sealed class TransitionRunner(
                     var executionContext = coreResult.Value!.ExecutionContext;
                     if (executionContext.Directives.Activation is { } verdict)
                     {
-                        ActivationActivity.Emit(executionContext, verdict);
+                        ActivationActivity.Emit(executionContext, verdict, commitContext);
                         if (verdict.CasFlipped)
                             Activity.Current?.AddEvent(new ActivityEvent("instance.available.committed"));
                     }

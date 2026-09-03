@@ -12,9 +12,11 @@ The fix separates two things that were conflated in one field:
 | | Field | Role |
 |---|---|---|
 | **Anchor** | `TraceRoot` | the span the hop's own span is **parented** to |
-| **Predecessor** | `TraceParent` | the previous hop, attached as an `ActivityLink` |
+| **Predecessor** | `TraceParent` | the previous hop, retained as `vnext.hop.predecessor` |
 
-Causality is preserved (link + `vnext.hop.predecessor` tag) while the spans render as siblings.
+Causality is preserved as a searchable tag while the spans render as siblings. Avoiding
+`ActivityLink` here is intentional: Elastic reorders linked siblings in ways that create apparent
+gaps around post-commit work.
 
 ## The model: one lane per instance
 
@@ -22,9 +24,9 @@ Causality is preserved (link + `vnext.hop.predecessor` tag) while the spans rend
 PATCH .../instances/{id}/transitions/{key}      ← APM transaction, anchors the root lane
 ├── TransitionJob.Execute        (hop 1)
 ├── TransitionJob.Execute        (hop 2)        ← sibling of hop 1, not its child
-├── PostCommit.ForwardToSubflowJob              ← anchors the SUBFLOW's lane
-│   ├── TransitionJob.Execute    (subflow hop 1)
-│   └── TransitionJob.Execute    (subflow hop 2)
+│   └── PostCommit.ForwardToSubflowJob          ← real continuation; anchors SUBFLOW lane
+│       ├── TransitionJob.Execute (subflow hop 1)
+│       └── TransitionJob.Execute (subflow hop 2)
 ├── SubFlow.Resume/{domain}/{flow}              ← back in the parent's lane
 └── TransitionJob.Execute        (parent resume)
 ```
@@ -110,7 +112,7 @@ node any more — see [Trace Span Tree](trace-span-tree.md).
 - **`state.notify` is a lane item too.** `StateNotifyPayload` carries `TraceRoot` /
   `ParentTraceRoot`, filled by `StateNotificationScheduler`; `StateNotifyJobHandler` `Reset`s the
   lane and opens `StateNotify.Execute` via `StartFlatLaneActivity`, so the notify job is a sibling
-  of the hop that scheduled it (that hop linked as predecessor) rather than nested under it. A
+  of the hop that scheduled it (that hop tagged as predecessor) rather than nested under it. A
   payload without an anchor (older build) degrades to exactly the previous
   continue-the-predecessor parenting.
 
@@ -119,13 +121,14 @@ node any more — see [Trace Span Tree](trace-span-tree.md).
 `kind` is always the caller's choice, never forced. Job spans stay `Consumer` so Elastic APM keeps
 classifying them as transactions (apm-server keys off `SpanKind`, and OTLP carries no
 parent-is-remote flag — re-parenting onto a local anchor does not change the classification).
-In-process lane items (`PostCommit.*`, `SubFlow.Resume`) are `Internal`, so transaction counts and
-service-map edges do not move.
+In-process `PostCommit.*` spans and lane-level `SubFlow.Resume` spans are `Internal`, so transaction
+counts and service-map edges do not move. `PostCommit.*` remains a real child of the transition that
+committed; only cross-hop operations opt into lane parenting.
 
 ## Tags
 
 `vnext.trace.lane` · `vnext.trace.lane.anchor` · `vnext.trace.lane.mismatch` ·
-`vnext.hop.predecessor` (primary causality; self-joins into a chain even where a UI hides links) ·
+`vnext.hop.predecessor` (primary causality; self-joins into a chain without UI-level links) ·
 `vnext.lane.seq` (reliable ordinal — `vnext.chain.depth` resets to 0 at every resume/timeout/retry
 boundary) · `vnext.chain.depth` · `vnext.root.instance.id` (stamped unconditionally on lane spans: the
 single filter that selects a whole business request).
@@ -219,16 +222,14 @@ covers only that hop, and is excluded from the `workflow_activation_duration_ms`
 clock; the span is clamped to zero length rather than reported negative, and likewise excluded.
 Alert on the flags, not on the numbers.
 
-## Known cosmetic effect
+## Async timing shape
 
-On the **sync** path `PostCommit.*` is a sibling of the still-open transaction span (the HTTP server
-span, or the job span on the async path), so it renders as overlapping it. Valid OpenTelemetry, and
-the price of having post-commit work at lane level. On the **async** path the hops likewise start
-after the 202 transaction has ended. The backdated `Instance.Activation/{key}` span now gives such a
-trace a readable total: it starts with the transaction and ends after the last hop, so the waterfall
-shows one bar that is the client's wait, instead of a short transaction followed by unrelated-looking
-siblings. In Elastic the axis extends to the latest-ending span (`getWaterfallDuration` =
-max(offset + duration)), so the whole episode is visible.
+`PostCommit.*` is a real child of the transition that committed, so work after `Uow.Commit` remains
+adjacent to that commit in Elastic's tree. Async transition hops can still begin after the original
+202 response has ended; that is the real scheduler boundary. The backdated
+`Instance.Activation/{key}` span covers trigger → durable rest point and links the final
+`Uow.Commit`, not the whole job. Any job bookkeeping after that commit is intentionally outside the
+activation duration because the instance is already observable as Available.
 
 ## Related
 

@@ -13,11 +13,10 @@ namespace BBT.Workflow.Telemetry;
 /// exactly one place to review. See <see cref="WorkflowTraceLane"/> for the lane model.
 /// </para>
 /// <para>
-/// The same-trace predecessor (hop N when starting hop N+1) is <b>not</b> discarded: it is attached
-/// as an <see cref="ActivityLink"/> and stamped as
-/// <see cref="TelemetryConstants.TagNames.HopPredecessor"/>, so ordering and causality stay
-/// reconstructable even though the spans are siblings. Cross-trace transport contexts are tags,
-/// never links, because Elastic expands linked traces into the same waterfall.
+/// The predecessor (hop N when starting hop N+1) is <b>not</b> discarded: its span id is stamped as
+/// <see cref="TelemetryConstants.TagNames.HopPredecessor"/>. This keeps causality queryable without
+/// ActivityLinks, which make Elastic reorder otherwise-correct sibling spans and create apparent
+/// gaps in the waterfall. Cross-trace transport contexts follow the same tag-only rule.
 /// </para>
 /// </summary>
 public static class FlatLaneActivity
@@ -34,7 +33,7 @@ public static class FlatLaneActivity
     /// (apm-server keys that off SpanKind), while in-process lane items use
     /// <see cref="ActivityKind.Internal"/> so transaction counts and service-map edges do not move.</param>
     /// <param name="anchorTraceParent">The lane anchor; when null, <see cref="WorkflowTraceLane.Current"/> is used.</param>
-    /// <param name="predecessorTraceParent">The immediate logical predecessor, linked rather than parented.</param>
+    /// <param name="predecessorTraceParent">The immediate logical predecessor, retained as a tag.</param>
     /// <param name="traceState">W3C tracestate accompanying both contexts — anchor and predecessor are
     /// in the same trace by construction, so one tracestate covers both.</param>
     public static Activity? Start(
@@ -79,14 +78,12 @@ public static class FlatLaneActivity
                                     ambientBeforeStart.Context.TraceId != anchorContext.TraceId
             ? ambientBeforeStart.Context
             : default;
-        var links = BuildPredecessorLink(anchorContext, predecessorContext, hasPredecessor);
-
         var activity = source.StartActivity(
             name,
             kind,
             parentContext: anchorContext,
             tags: null,
-            links: links);
+            links: null);
 
         if (activity is null) return null;
 
@@ -126,21 +123,6 @@ public static class FlatLaneActivity
         StampDaprCallback(activity, demotedAmbientContext);
 
         return activity;
-    }
-
-    private static IEnumerable<ActivityLink>? BuildPredecessorLink(
-        ActivityContext anchorContext,
-        ActivityContext predecessorContext,
-        bool hasPredecessor)
-    {
-        // hop N -> hop N+1: linked, not parented. Skipped when the predecessor IS the anchor,
-        // which is the first hop of a lane (nothing to add beyond the parent edge).
-        if (hasPredecessor && predecessorContext.SpanId != anchorContext.SpanId)
-        {
-            return [new ActivityLink(predecessorContext)];
-        }
-
-        return null;
     }
 
     private static void StampDaprCallback(Activity activity, ActivityContext callbackContext)
