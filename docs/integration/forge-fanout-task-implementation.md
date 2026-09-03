@@ -316,7 +316,7 @@ Two more facts for the policy picker's help text:
 **The recommended partial-failure pattern**, and the one Forge should offer as a one-click
 affordance: `policy: "allSettled"` + an auto-transition condition on
 `{resultKey}Summary.failed > 0` routing to a `partial-failure` state, `failed == 0` continuing the
-happy path (evaluated by `RunAutomaticTransitionsStep`, order 90). The platform does not decide
+happy path (evaluated by `RunAutomaticTransitionsStep`, order 80). The platform does not decide
 this; it is a workflow-design choice every time.
 
 ### 6.2 Two-level concurrency ceiling
