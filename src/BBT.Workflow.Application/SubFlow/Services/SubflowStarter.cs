@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using BBT.Aether;
 using BBT.Aether.Results;
@@ -40,6 +41,31 @@ public sealed class SubflowStarter(
         CancellationToken cancellationToken = default)
     {
         var subFlowConfig = targetState.SubFlow!;
+        var subFlowReference = subFlowConfig.Process;
+        using var activity =
+            SubFlowActivityHelper.StartActivity($"SubFlow.Start/{subFlowReference.Domain}/{subFlowReference.Key}");
+        var rootInstanceId = parentInstance.GetRootInstanceId();
+        SubFlowActivityHelper.EnrichWithStart(
+            activity,
+            parentInstance.Id,
+            subFlowReference.Domain,
+            subFlowReference.Key,
+            correlation.SubFlowInstanceId,
+            rootInstanceId);
+        activity?.SetTag("vnext.subflow.type", subFlowConfig.Type.Code == "S" ? "subflow" : "subprocess");
+        activity?.SetTag("vnext.subflow.parent.state", targetState.Key);
+        activity?.SetTag("vnext.subflow.parent.transition", transition.Key);
+
+        using var logScope = logger.BeginScope(new Dictionary<string, object>
+        {
+            [TelemetryConstants.TagNames.Domain] = workflow.Domain,
+            [TelemetryConstants.TagNames.Flow] = workflow.Key,
+            [TelemetryConstants.TagNames.FlowVersion] = workflow.Version,
+            [TelemetryConstants.TagNames.InstanceId] = parentInstance.Id,
+            [TelemetryConstants.TagNames.InstanceKey] = parentInstance.Key ?? "N/A",
+            [TelemetryConstants.TagNames.SubflowInstanceId] = correlation.SubFlowInstanceId,
+            [TelemetryConstants.TagNames.RootInstanceId] = rootInstanceId,
+        });
 
         // Handle input mapping if mapping is configured
         ScriptResponse? inputMappingResult = null;
@@ -48,6 +74,7 @@ public sealed class SubflowStarter(
             var mappingResult = await HandleInputMappingAsync(subFlowConfig, workflow, context, cancellationToken);
             if (!mappingResult.IsSuccess)
             {
+                SubFlowActivityHelper.SetError(activity, mappingResult.Error.Message ?? mappingResult.Error.Code);
                 return Result.Fail(mappingResult.Error);
             }
 
@@ -66,6 +93,7 @@ public sealed class SubflowStarter(
             subFlowConfig.HasTimeoutOverride ? subFlowConfig.Overrides!.Timeout : null,
             subFlowConfig.Overrides,
             mode,
+            activity,
             cancellationToken);
     }
 
@@ -85,148 +113,124 @@ public sealed class SubflowStarter(
         WorkflowTimeout? timeoutOverride,
         SubFlowOverrides? overrides,
         ExecMode mode,
+        Activity? activity,
         CancellationToken cancellationToken)
     {
-        using var activity =
-            SubFlowActivityHelper.StartActivity($"SubFlow.Start/{subFlowReference.Domain}/{subFlowReference.Key}");
-        // Propagate root instance ID: use parent's stored root, or parent itself if parent is the root
         var rootInstanceId = parentInstance.GetRootInstanceId();
-        SubFlowActivityHelper.EnrichWithStart(
-            activity,
-            parentInstance.Id,
-            subFlowReference.Domain,
-            subFlowReference.Key,
-            correlation.SubFlowInstanceId,
-            rootInstanceId);
-        activity?.SetTag("vnext.subflow.type", subFlowTypeCode == "S" ? "subflow" : "subprocess");
-        activity?.SetTag("vnext.subflow.parent.state", stateKey);
-        activity?.SetTag("vnext.subflow.parent.transition", transitionKey);
 
-        using (logger.BeginScope(new Dictionary<string, object>
-               {
-                   [TelemetryConstants.TagNames.Domain] = workflow.Domain,
-                   [TelemetryConstants.TagNames.Flow] = workflow.Key,
-                   [TelemetryConstants.TagNames.FlowVersion] = workflow.Version,
-                   [TelemetryConstants.TagNames.InstanceId] = parentInstance.Id,
-                   [TelemetryConstants.TagNames.InstanceKey] = parentInstance.Key ?? "N/A",
-                   [TelemetryConstants.TagNames.SubflowInstanceId] = correlation.SubFlowInstanceId,
-                   [TelemetryConstants.TagNames.RootInstanceId] = rootInstanceId,
-               }))
+        // Prepare instance creation input
+        var createInstanceInput = new CreateInstanceInput
         {
-            // Prepare instance creation input
-            var createInstanceInput = new CreateInstanceInput
-            {
-                Id = correlation.SubFlowInstanceId,
-                Callback = configuration["DAPR_APP_ID"],
-                Key = parentInstance.Key ?? string.Empty,
-                Attributes = inputMappingResult?.Data != null
+            Id = correlation.SubFlowInstanceId,
+            Callback = configuration["DAPR_APP_ID"],
+            Key = parentInstance.Key ?? string.Empty,
+            Attributes = inputMappingResult?.Data != null
                     ? JsonSerializer.SerializeToElement(inputMappingResult.Data)
                     : null,
-                Tags =
+            Tags =
                 [
                     $"parent.key:{parentInstance.Key}",
                     $"parent.domain:{workflow.Domain}",
                     $"parent.flow:{workflow.Key}",
                     $"root.instance:{rootInstanceId}"
                 ],
-                ExtraProperties = new ExtraPropertyDictionary
-                {
-                    [DomainConsts.MetaDataKeys.Id] = parentInstance.Id,
-                    [DomainConsts.MetaDataKeys.Key] = parentInstance.Key ?? string.Empty,
-                    [DomainConsts.MetaDataKeys.Domain] = workflow.Domain,
-                    [DomainConsts.MetaDataKeys.Flow] = workflow.Key,
-                    [DomainConsts.MetaDataKeys.Version] = workflow.Version,
-                    [DomainConsts.MetaDataKeys.State] = stateKey,
-                    [DomainConsts.MetaDataKeys.Transition] = transitionKey,
-                    [DomainConsts.MetaDataKeys.FlowType] = subFlowTypeCode,
-                    [DomainConsts.MetaDataKeys.RootInstanceId] = rootInstanceId
-                }
-            };
-
-            // Apply timeout override from SubFlow config if present
-            if (timeoutOverride != null)
+            ExtraProperties = new ExtraPropertyDictionary
             {
-                createInstanceInput.ExtraProperties[DomainConsts.MetaDataKeys.TimeoutOverride] =
-                    JsonSerializer.Serialize(timeoutOverride);
+                [DomainConsts.MetaDataKeys.Id] = parentInstance.Id,
+                [DomainConsts.MetaDataKeys.Key] = parentInstance.Key ?? string.Empty,
+                [DomainConsts.MetaDataKeys.Domain] = workflow.Domain,
+                [DomainConsts.MetaDataKeys.Flow] = workflow.Key,
+                [DomainConsts.MetaDataKeys.Version] = workflow.Version,
+                [DomainConsts.MetaDataKeys.State] = stateKey,
+                [DomainConsts.MetaDataKeys.Transition] = transitionKey,
+                [DomainConsts.MetaDataKeys.FlowType] = subFlowTypeCode,
+                [DomainConsts.MetaDataKeys.RootInstanceId] = rootInstanceId
+            }
+        };
+
+        // Apply timeout override from SubFlow config if present
+        if (timeoutOverride != null)
+        {
+            createInstanceInput.ExtraProperties[DomainConsts.MetaDataKeys.TimeoutOverride] =
+                JsonSerializer.Serialize(timeoutOverride);
+        }
+
+        // Serialize parent-defined role overrides (transitions + states) for SubFlow to use during state queries.
+        // views are excluded as they are hosted/resolved on the parent side.
+        if (overrides?.Transitions is { Count: > 0 })
+        {
+            createInstanceInput.ExtraProperties[DomainConsts.MetaDataKeys.TransitionRoleOverrides] =
+                JsonSerializer.Serialize(overrides.Transitions);
+        }
+
+        if (overrides?.States is { Count: > 0 })
+        {
+            createInstanceInput.ExtraProperties[DomainConsts.MetaDataKeys.StateRoleOverrides] =
+                JsonSerializer.Serialize(overrides.States);
+        }
+
+        // Apply additional properties from input mapping if available
+        if (inputMappingResult != null)
+        {
+            if (!inputMappingResult.Key.IsNullOrEmpty())
+            {
+                createInstanceInput.Key = inputMappingResult.Key;
             }
 
-            // Serialize parent-defined role overrides (transitions + states) for SubFlow to use during state queries.
-            // views are excluded as they are hosted/resolved on the parent side.
-            if (overrides?.Transitions is { Count: > 0 })
+            if (!inputMappingResult.Tags.IsNullOrEmpty())
             {
-                createInstanceInput.ExtraProperties[DomainConsts.MetaDataKeys.TransitionRoleOverrides] =
-                    JsonSerializer.Serialize(overrides.Transitions);
+                var existingTags = createInstanceInput.Tags?.ToList() ?? new List<string>();
+                existingTags.AddRange(inputMappingResult.Tags);
+                createInstanceInput.Tags = existingTags.ToArray();
             }
+        }
 
-            if (overrides?.States is { Count: > 0 })
-            {
-                createInstanceInput.ExtraProperties[DomainConsts.MetaDataKeys.StateRoleOverrides] =
-                    JsonSerializer.Serialize(overrides.States);
-            }
+        // HTTP headers are case-insensitive. Use OrdinalIgnoreCase so a parent/root instance-id
+        // supplied by the input mapping (any casing) is REPLACED by the framework-stamped value
+        // below instead of producing a duplicate header entry.
+        var headers = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+        if (inputMappingResult?.Headers is IDictionary<string, string?> fromMapping)
+        {
+            foreach (var kv in fromMapping)
+                headers[kv.Key] = kv.Value;
+        }
 
-            // Apply additional properties from input mapping if available
-            if (inputMappingResult != null)
-            {
-                if (!inputMappingResult.Key.IsNullOrEmpty())
-                {
-                    createInstanceInput.Key = inputMappingResult.Key;
-                }
+        headers[TelemetryConstants.HeaderNames.ParentInstanceId] = parentInstance.Id.ToString();
+        headers[TelemetryConstants.HeaderNames.RootInstanceId] = rootInstanceId.ToString();
 
-                if (!inputMappingResult.Tags.IsNullOrEmpty())
-                {
-                    var existingTags = createInstanceInput.Tags?.ToList() ?? new List<string>();
-                    existingTags.AddRange(inputMappingResult.Tags);
-                    createInstanceInput.Tags = existingTags.ToArray();
-                }
-            }
-
-            // HTTP headers are case-insensitive. Use OrdinalIgnoreCase so a parent/root instance-id
-            // supplied by the input mapping (any casing) is REPLACED by the framework-stamped value
-            // below instead of producing a duplicate header entry.
-            var headers = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
-            if (inputMappingResult?.Headers is IDictionary<string, string?> fromMapping)
-            {
-                foreach (var kv in fromMapping)
-                    headers[kv.Key] = kv.Value;
-            }
-
-            headers[TelemetryConstants.HeaderNames.ParentInstanceId] = parentInstance.Id.ToString();
-            headers[TelemetryConstants.HeaderNames.RootInstanceId] = rootInstanceId.ToString();
-
-            var subFlowStartInput = new StartInstanceInput(
+        var subFlowStartInput = new StartInstanceInput(
                 subFlowReference.Domain,
                 subFlowReference.Key,
                 subFlowReference.Version,
                 sync: mode == ExecMode.Sync
             )
-            {
-                Instance = createInstanceInput,
-                Headers = headers,
-                RouteValues = inputMappingResult?.RouteValues ?? new Dictionary<string, string?>(),
-                StrictIdempotency = true // Service-to-service call: return 409 if active instance exists
-            };
+        {
+            Instance = createInstanceInput,
+            Headers = headers,
+            RouteValues = inputMappingResult?.RouteValues ?? new Dictionary<string, string?>(),
+            StrictIdempotency = true // Service-to-service call: return 409 if active instance exists
+        };
 
-            var startResult = await instanceCommandGateway.StartSubAsync(subFlowStartInput, cancellationToken);
+        var startResult = await instanceCommandGateway.StartSubAsync(subFlowStartInput, cancellationToken);
 
-            if (!startResult.IsSuccess)
-            {
-                var error = startResult.Error;
+        if (!startResult.IsSuccess)
+        {
+            var error = startResult.Error;
 
-                SubFlowActivityHelper.SetError(activity, $"{error.Code}: {error.Message}");
-                logger.SubFlowStartFailed(
-                    subFlowReference.Key,
-                    parentInstance.Id,
-                    error.Code,
-                    error.Message ?? string.Empty);
+            SubFlowActivityHelper.SetError(activity, $"{error.Code}: {error.Message}");
+            logger.SubFlowStartFailed(
+                subFlowReference.Key,
+                parentInstance.Id,
+                error.Code,
+                error.Message ?? string.Empty);
 
-                return Result.Fail(error);
-            }
-
-            SubFlowActivityHelper.SetSuccess(activity);
-            logger.SubFlowStarted(subFlowReference.Key, parentInstance.Id);
-
-            return Result.Ok();
+            return Result.Fail(error);
         }
+
+        SubFlowActivityHelper.SetSuccess(activity);
+        logger.SubFlowStarted(subFlowReference.Key, parentInstance.Id);
+
+        return Result.Ok();
     }
 
     /// <summary>
@@ -259,6 +263,7 @@ public sealed class SubflowStarter(
                     subFlowConfig.Mapping,
                     flowScripts: workflow.Scripts,
                     cancellationToken: ct);
+                using var invokeActivity = ScriptActivityHelper.StartInvokeActivity();
                 return await subFlowMapping.InputHandler(context);
             }
 
@@ -268,6 +273,7 @@ public sealed class SubflowStarter(
                     subFlowConfig.Mapping,
                     flowScripts: workflow.Scripts,
                     cancellationToken: ct);
+                using var invokeActivity = ScriptActivityHelper.StartInvokeActivity();
                 return await subProcessMapping.InputHandler(context);
             }
 

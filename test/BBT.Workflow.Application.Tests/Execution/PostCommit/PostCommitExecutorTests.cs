@@ -1,9 +1,9 @@
 using System;
 using System.Diagnostics;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using BBT.Aether.Results;
-using BBT.Workflow.BackgroundJobs.Handlers;
 using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.PostCommit;
 using BBT.Workflow.Instances;
@@ -78,7 +78,7 @@ public class PostCommitExecutorTests
     {
         using var listener = new ActivityListener
         {
-            ShouldListenTo = source => source.Name == BackgroundJobActivityHelper.ActivitySource.Name,
+            ShouldListenTo = source => source.Name == "BBT.Workflow.BackgroundJobs",
             Sample = (ref ActivityCreationOptions<ActivityContext> _) =>
                 ActivitySamplingResult.AllDataAndRecorded
         };

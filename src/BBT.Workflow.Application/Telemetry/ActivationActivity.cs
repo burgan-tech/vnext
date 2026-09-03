@@ -31,7 +31,7 @@ namespace BBT.Workflow.Telemetry;
 /// <b>This is the one explicit-parent span outside the lane helpers</b>, and it needs the same care:
 /// an explicit parent leaves <see cref="Activity.Parent"/> null, so <c>Stop()</c> would set
 /// <see cref="Activity.Current"/> to null and strip the caller's ambient span for the rest of its
-/// frame. <see cref="Emit(ActivitySource, string, Guid, string, string, string?, string?, bool)"/>
+/// frame. The explicit <see cref="Emit(ActivitySource, string, Guid, string, string, string?, string?, bool, ActivityContext)"/>
 /// saves and restores it.
 /// </para>
 /// </summary>

@@ -70,6 +70,20 @@ public static class ScriptActivityHelper
         return activity;
     }
 
+    /// <summary>
+    /// Starts the child span covering invocation of an already compiled script instance. Keeping
+    /// this separate from <c>Script.Compile</c> makes the remainder of <c>Script.Execute</c>
+    /// attributable instead of looking like an unexplained waterfall gap on cold executions.
+    /// </summary>
+    public static Activity? StartInvokeActivity()
+    {
+        var activity = ActivitySource.StartActivity("Script.Invoke", ActivityKind.Internal);
+        activity?.SetTag(
+            TelemetryConstants.TagNames.SpanCategory,
+            TelemetryConstants.SpanCategories.Business);
+        return activity;
+    }
+
     /// <summary>Starts the span covering a helper-set resolve + compile (the invisible ~2s cold cost).</summary>
     public static Activity? StartResolveHelpersActivity(int helperCount)
     {
