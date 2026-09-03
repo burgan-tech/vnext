@@ -39,7 +39,7 @@ internal sealed class EventTraceScope : IDisposable
     /// ActivitySource for inbox event-consumption spans. Matched by the
     /// "BBT.Workflow.Workers.*" entry in the worker's Telemetry:Tracing:AdditionalSources.
     /// </summary>
-    public static readonly ActivitySource ActivitySource = new("BBT.Workflow.Workers.Inbox");
+    public static readonly ActivitySource ActivitySource = new(TelemetryConstants.ActivitySources.WorkersInbox);
 
     private readonly Activity? _activity;
     private readonly IDisposable? _correlationChange;

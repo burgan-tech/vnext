@@ -397,6 +397,68 @@ public static class TelemetryConstants
 
         /// <summary>Delivery attempt count for a redelivered message or job.</summary>
         public const string DeliveryAttempt = "vnext.delivery.attempt";
+
+        /// <summary>Standard OpenTelemetry error.type attribute.</summary>
+        public const string ErrorType = "error.type";
+
+        /// <summary>Standard OpenTelemetry error.code attribute.</summary>
+        public const string ErrorCode = "error.code";
+
+        /// <summary>Standard OpenTelemetry db.system.name attribute (SemConv v1.25+).</summary>
+        public const string DbSystemName = "db.system.name";
+
+        /// <summary>Standard OpenTelemetry db.operation.name attribute (SemConv v1.25+).</summary>
+        public const string DbOperationName = "db.operation.name";
+
+        /// <summary>Standard OpenTelemetry rpc.system attribute.</summary>
+        public const string RpcSystem = "rpc.system";
+
+        /// <summary>Standard OpenTelemetry messaging.system attribute.</summary>
+        public const string MessagingSystem = "messaging.system";
+    }
+
+    /// <summary>
+    /// Well-known OpenTelemetry ActivitySource names used across vNext services and libraries.
+    /// Centralized to keep instrumentation, tests, and configuration (Telemetry:Tracing:AdditionalSources)
+    /// in sync without magic strings.
+    /// </summary>
+    public static class ActivitySources
+    {
+        public const string Pipeline = "BBT.Workflow.Pipeline";
+        public const string BackgroundJobs = "BBT.Workflow.BackgroundJobs";
+        public const string SubFlow = "BBT.Workflow.SubFlow";
+        public const string Tasks = "BBT.Workflow.Tasks";
+        public const string Cache = "BBT.Workflow.Cache";
+        public const string Scripting = "BBT.Workflow.Scripting";
+        public const string Authorization = "BBT.Workflow.Authorization";
+        public const string InstancesRead = "BBT.Workflow.Instances.Read";
+        public const string Functions = "BBT.Workflow.Functions";
+        public const string Extensions = "BBT.Workflow.Extensions";
+        public const string ExecutionInvokers = "BBT.Workflow.Execution.Invokers";
+        public const string Execution = "BBT.Workflow.Execution";
+        public const string ExecutionPython = "BBT.Workflow.Execution.Python";
+        public const string WorkersInbox = "BBT.Workflow.Workers.Inbox";
+
+        /// <summary>
+        /// All ActivitySource names registered by the vNext engine.
+        /// </summary>
+        public static readonly string[] All =
+        [
+            Pipeline,
+            BackgroundJobs,
+            SubFlow,
+            Tasks,
+            Cache,
+            Scripting,
+            Authorization,
+            InstancesRead,
+            Functions,
+            Extensions,
+            ExecutionInvokers,
+            Execution,
+            ExecutionPython,
+            WorkersInbox
+        ];
     }
 
     /// <summary>

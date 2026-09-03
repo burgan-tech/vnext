@@ -15,7 +15,7 @@ namespace BBT.Workflow.Scripting;
 public static class ScriptActivityHelper
 {
     /// <summary>ActivitySource for script spans. Registered in Telemetry:Tracing:AdditionalSources.</summary>
-    public static readonly ActivitySource ActivitySource = new("BBT.Workflow.Scripting");
+    public static readonly ActivitySource ActivitySource = new(TelemetryConstants.ActivitySources.Scripting);
 
     /// <summary>
     /// Starts the span covering one compile call, named <c>Script.Compile/{identity}</c> so the tree

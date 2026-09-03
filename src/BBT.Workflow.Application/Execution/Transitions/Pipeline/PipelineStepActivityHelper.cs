@@ -17,7 +17,7 @@ namespace BBT.Workflow.Execution.Pipeline;
 public static class PipelineStepActivityHelper
 {
     /// <summary>ActivitySource for pipeline spans. Registered in Telemetry:Tracing:AdditionalSources.</summary>
-    public static readonly ActivitySource ActivitySource = new("BBT.Workflow.Pipeline");
+    public static readonly ActivitySource ActivitySource = new(TelemetryConstants.ActivitySources.Pipeline);
 
     /// <summary>Starts the span for a pipeline step, named <c>Step.{Name}</c> (trailing "Step" trimmed).</summary>
     public static Activity? StartStepActivity(ITransitionStep step, string? transitionKey = null)

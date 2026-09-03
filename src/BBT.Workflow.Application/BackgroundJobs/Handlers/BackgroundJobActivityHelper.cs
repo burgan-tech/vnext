@@ -17,7 +17,7 @@ public static class BackgroundJobActivityHelper
     /// ActivitySource for creating activities correlated with the original trace context.
     /// Used by all background job handlers for distributed tracing correlation.
     /// </summary>
-    public static readonly ActivitySource ActivitySource = new("BBT.Workflow.BackgroundJobs");
+    public static readonly ActivitySource ActivitySource = new(TelemetryConstants.ActivitySources.BackgroundJobs);
 
     /// <summary>
     /// Continues the ORIGINAL trace captured at enqueue time: the payload's TraceParent becomes
