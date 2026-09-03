@@ -25,16 +25,12 @@ using Xunit;
 namespace BBT.Workflow.Domains.Instances;
 
 /// <summary>
-/// Pins the <c>Instance.Query.Prepare</c> span added around <see cref="EfCoreInstanceRepository"/>'s
-/// detailed-query preparation (the <c>WithDetailsAsync</c> awaited by <c>FindByIdentifierAsync</c>,
-/// <c>FindActiveByKeyAsync</c> and <c>FindByIdentifierAsReadOnlyAsync</c> via the shared private
-/// <c>PrepareDetailedQueryAsync</c> helper).
+/// Pins the <c>Instance.Query.Prepare</c> and <c>Instance.Query.Execute</c> spans around
+/// <see cref="EfCoreInstanceRepository"/>'s detailed-query preparation and materialization.
 /// <para>
-/// Before this span, the leading gap between <c>Instance.Load</c> and its first <c>Db.SELECT</c>
-/// child was anonymous: 300 live spans measured mean lead 0.60ms vs. trail 0.03ms (p50 0.63ms,
-/// p90 2.40ms, max 88ms) — nearly all the cost sits before the first EF command is even issued, a
-/// window EF's own CommandExecuting/CommandExecuted instrumentation cannot see. See
-/// <c>docs/runtime/trace-span-tree.md</c> for how to read the new span.
+/// <c>Prepare</c> isolates query construction; <c>Execute</c> owns EF query compilation, connection
+/// acquisition, command spans and materialization. EF's own command instrumentation cannot see the
+/// work before the first command is issued. See <c>docs/runtime/trace-span-tree.md</c>.
 /// </para>
 /// <para>
 /// Uses a real (Testcontainers) PostgreSQL rather than the suite's usual in-memory Sqlite fixture:
@@ -93,7 +89,7 @@ public sealed class EfCoreInstanceRepositoryPrepareSpanTests : IAsyncLifetime
         NullLogger<EfCoreInstanceRepository>.Instance);
 
     [Fact]
-    public async Task FindByIdentifierAsync_emits_prepare_span_nested_inside_the_caller_span()
+    public async Task FindByIdentifierAsync_emits_adjacent_prepare_and_execute_spans_inside_the_caller()
     {
         await using var seedCtx = CreateContext();
         var seeded = Instance.Create(Guid.NewGuid(), "prepare-span-flow", "1.0.0", "prepare-span-key");
@@ -136,20 +132,19 @@ public sealed class EfCoreInstanceRepositoryPrepareSpanTests : IAsyncLifetime
         found.ShouldNotBeNull();
         found!.Id.ShouldBe(seeded.Id);
 
-        var span = collected.Single(a => a.DisplayName == "Instance.Query.Prepare");
-        span.ParentId.ShouldBe(ambient.Id);
-        span.GetTagItem(TelemetryConstants.TagNames.SpanCategory).ShouldBe(TelemetryConstants.SpanCategories.Business);
-
-        // The span wraps only WithDetailsAsync() — it is disposed (Stop()) before
-        // FindByIdentifierAsync's subsequent FirstOrDefaultAsync call, which is what actually issues
-        // the SELECT and produces the Db.SELECT command span. That ordering is structural (the
-        // `using` scope inside PrepareDetailedQueryAsync ends before the method returns to its
-        // caller), not something this test needs a real Db.SELECT span to confirm.
-        span.Duration.ShouldBeGreaterThanOrEqualTo(TimeSpan.Zero);
+        var prepare = collected.Single(a => a.DisplayName == "Instance.Query.Prepare");
+        var execute = collected.Single(a => a.DisplayName == "Instance.Query.Execute");
+        prepare.ParentId.ShouldBe(ambient.Id);
+        execute.ParentId.ShouldBe(ambient.Id);
+        prepare.GetTagItem(TelemetryConstants.TagNames.SpanCategory)
+            .ShouldBe(TelemetryConstants.SpanCategories.Business);
+        execute.GetTagItem(TelemetryConstants.TagNames.SpanCategory)
+            .ShouldBe(TelemetryConstants.SpanCategories.Business);
+        execute.StartTimeUtc.ShouldBeGreaterThanOrEqualTo(prepare.StartTimeUtc + prepare.Duration);
     }
 
     [Fact]
-    public async Task FindByIdentifierAsReadOnlyAsync_also_emits_exactly_one_prepare_span()
+    public async Task FindByIdentifierAsReadOnlyAsync_also_emits_exactly_one_span_for_each_phase()
     {
         await using var ctx = CreateContext();
         var repository = CreateRepository(ctx);
@@ -166,6 +161,7 @@ public sealed class EfCoreInstanceRepositoryPrepareSpanTests : IAsyncLifetime
         await repository.FindByIdentifierAsReadOnlyAsync(Guid.NewGuid().ToString(), CancellationToken.None);
 
         collected.Count(a => a.DisplayName == "Instance.Query.Prepare").ShouldBe(1);
+        collected.Count(a => a.DisplayName == "Instance.Query.Execute").ShouldBe(1);
     }
 
     private sealed class FixedDbContextProvider(WorkflowDbContext context)

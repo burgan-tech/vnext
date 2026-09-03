@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
+using System.Diagnostics;
 using System.Linq;
 using System.Text.Json;
 using System.Threading;
@@ -12,6 +13,7 @@ using BBT.Workflow.Definitions.Policies;
 using BBT.Workflow.Definitions.Specifications;
 using BBT.Workflow.Domain;
 using BBT.Workflow.Instances;
+using BBT.Workflow.Logging;
 using BBT.Workflow.Shared;
 using BBT.Workflow.Validation;
 using Microsoft.Extensions.Logging;
@@ -42,7 +44,7 @@ public class TransitionValidationServiceTests
         var emptySpecs = Enumerable.Empty<ITransitionSpecification>();
         var logger = Substitute.For<ILogger<CompositeTransitionSpecification>>();
         var composite = new CompositeTransitionSpecification(emptySpecs, logger);
-        
+
         _transitionExecutionPolicy = new TransitionExecutionPolicy(composite);
 
         _service = new TransitionValidationService(
@@ -58,7 +60,7 @@ public class TransitionValidationServiceTests
     {
         // Arrange
         var context = CreateValidTransitionContext();
-        
+
         SetupSuccessfulPolicyValidation(context);
 
         // Act
@@ -97,7 +99,7 @@ public class TransitionValidationServiceTests
         var schemaDefinition = CreateMockSchemaDefinition("test-schema");
 
         SetupSuccessfulPolicyValidation(context);
-        
+
         _mockComponentCacheStore
             .Setup(x => x.GetSchemaAsync(schemaRef.Domain, schemaRef.Key, schemaRef.Version, It.IsAny<CancellationToken>()))
             .ReturnsAsync(Result<SchemaDefinition>.Ok(schemaDefinition));
@@ -131,7 +133,7 @@ public class TransitionValidationServiceTests
             .ReturnsAsync(Result<SchemaDefinition>.Ok(schemaDefinition));
 
         var validationError = Error.Validation(
-            code: "SCHEMA_ERROR", 
+            code: "SCHEMA_ERROR",
             message: "Schema validation failed",
             validationErrors: new List<ValidationResult>() { new("Invalid schema definition",
                 ["field1"]) });
@@ -171,6 +173,16 @@ public class TransitionValidationServiceTests
         });
         var schemaDefinition = CreateMockSchemaDefinition("test-schema");
         SchemaValidationOptions? capturedOptions = null;
+        var collected = new List<Activity>();
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == "BBT.Workflow.Pipeline",
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) =>
+                ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStopped = collected.Add
+        };
+        ActivitySource.AddActivityListener(listener);
+        using var root = new Activity("schema-validation-test").Start();
 
         _mockComponentCacheStore
             .Setup(x => x.GetSchemaAsync(schemaRef.Domain, schemaRef.Key, schemaRef.Version, It.IsAny<CancellationToken>()))
@@ -193,6 +205,11 @@ public class TransitionValidationServiceTests
         capturedOptions!.Culture.ShouldBe("tr-TR");
         capturedOptions.IncludeVocabularyDetails.ShouldBeTrue();
         capturedOptions.CustomValidationEnabled.ShouldBeTrue();
+        var schemaSpan = collected.Single(a =>
+            a.TraceId == root.TraceId && a.DisplayName == "Schema.Validate");
+        schemaSpan.ParentId.ShouldNotBeNull();
+        schemaSpan.GetTagItem(TelemetryConstants.TagNames.SpanCategory)
+            .ShouldBe(TelemetryConstants.SpanCategories.Business);
     }
 
     [Fact(Skip = "Extension methods cannot be mocked")]
@@ -209,8 +226,8 @@ public class TransitionValidationServiceTests
             .Setup(x => x.GetSchemaAsync(schemaRef.Domain, schemaRef.Key, schemaRef.Version, It.IsAny<CancellationToken>()))
             .ReturnsAsync(Result<SchemaDefinition>.Ok(schemaDefinition));
 
-        var validationErrors = new List<ValidationResult> 
-        { 
+        var validationErrors = new List<ValidationResult>
+        {
             new("invalid", ["field1"])
         };
 
@@ -543,7 +560,7 @@ public class TransitionValidationServiceTests
         var workflow = CreateMockWorkflow(workflowKey, domain);
         var instance = CreateMockInstance(instanceId, workflowKey, domain);
         var state = workflow.GetState("state1").Value!;
-        var transition = Transition.Create(transitionKey, null, "state1", TriggerType.Manual, VersionStrategy.IncreasePatch.Code); 
+        var transition = Transition.Create(transitionKey, null, "state1", TriggerType.Manual, VersionStrategy.IncreasePatch.Code);
 
         return new TransitionExecutionContext
         {
@@ -580,7 +597,7 @@ public class TransitionValidationServiceTests
 
     private Instance CreateMockInstance(Guid instanceId, string workflowKey, string domain)
     {
-        var instance = Instance.Create(instanceId, workflowKey,"1.0.0", workflowKey);
+        var instance = Instance.Create(instanceId, workflowKey, "1.0.0", workflowKey);
         return instance;
     }
 
@@ -606,8 +623,8 @@ public class TransitionValidationServiceTests
         }
         """;
 
-        var options = new System.Text.Json.JsonSerializerOptions 
-        { 
+        var options = new System.Text.Json.JsonSerializerOptions
+        {
             PropertyNameCaseInsensitive = true,
             Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() }
         };

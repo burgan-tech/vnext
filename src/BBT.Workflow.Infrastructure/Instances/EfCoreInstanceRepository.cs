@@ -184,6 +184,7 @@ public sealed class EfCoreInstanceRepository(
         Guid correlationId,
         CancellationToken cancellationToken = default)
     {
+        using var activity = PipelineStepActivityHelper.StartOperationActivity("Instance.Query.Execute");
         var dbSet = await GetDbSetAsync();
         var instance = await dbSet
             .Include(i => i.DataList.Where(d => d.IsLatest))
@@ -443,6 +444,7 @@ public sealed class EfCoreInstanceRepository(
     {
         var query = (await PrepareDetailedQueryAsync())
             .AsSplitQuery();
+        using var activity = PipelineStepActivityHelper.StartOperationActivity("Instance.Query.Execute");
 
         if (Guid.TryParse(identifier, out var instanceId))
         {
@@ -470,6 +472,7 @@ public sealed class EfCoreInstanceRepository(
     {
         var query = (await PrepareDetailedQueryAsync())
             .AsSplitQuery();
+        using var activity = PipelineStepActivityHelper.StartOperationActivity("Instance.Query.Execute");
 
         // Only non-terminal instances occupy a key (Active or Busy). Terminal rows
         // (Completed/Faulted/Passive) are ignored. OrderByDescending(CreatedAt) keeps the
@@ -514,6 +517,7 @@ public sealed class EfCoreInstanceRepository(
         var query = (await PrepareDetailedQueryAsync())
             .AsNoTracking()
             .AsSplitQuery();
+        using var activity = PipelineStepActivityHelper.StartOperationActivity("Instance.Query.Execute");
 
         if (Guid.TryParse(identifier, out var instanceId))
         {
@@ -1327,11 +1331,11 @@ public sealed class EfCoreInstanceRepository(
                     .FromSqlRaw(rawSql)
                     .AsNoTracking()
                     .ToListAsync(cancellationToken);
- 
+
                 hasNextPage = orderedInstances.Count > pageSize;
                 if (hasNextPage)
                     orderedInstances = orderedInstances.Take(pageSize).ToList();
- 
+
                 items = await LoadDataListAndPreserveOrderAsync(orderedInstances, cancellationToken);
             }
             else
@@ -1363,11 +1367,11 @@ public sealed class EfCoreInstanceRepository(
                         .Skip(skipCount)
                         .Take(pageSize + 1)
                         .ToListAsync(cancellationToken);
- 
+
                     hasNextPage = orderedInstances.Count > pageSize;
                     if (hasNextPage)
                         orderedInstances = orderedInstances.Take(pageSize).ToList();
- 
+
                     items = await LoadDataListAndPreserveOrderAsync(orderedInstances, cancellationToken);
                 }
                 else
@@ -1411,7 +1415,7 @@ public sealed class EfCoreInstanceRepository(
             if (hasNextPage)
                 items = items.Take(pageSize).ToList();
         }
- 
+
         var normalPagedList = new HateoasPagedList<Instance>(MarkListIfPartiallyLoaded(items), page, pageSize, hasNextPage);
         return (normalPagedList, null);
     }

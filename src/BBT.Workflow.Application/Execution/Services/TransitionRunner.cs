@@ -97,12 +97,13 @@ public sealed class TransitionRunner(
                 stageContext.TransitionKey));
     }
 
-    private Task<Result<PostCommitCoordinationResult>> CoordinatePostCommitAsync(
+    private async Task<Result<PostCommitCoordinationResult>> CoordinatePostCommitAsync(
         PostCommitParentSnapshot snapshot,
         TransitionExecutionContext sourceContext,
         CancellationToken cancellationToken)
     {
-        return scopeFactory.ExecuteWithWorkflowAsync(
+        using var activity = PipelineStepActivityHelper.StartOperationActivity("PostCommit.Coordinate");
+        var result = await scopeFactory.ExecuteWithWorkflowAsync(
             snapshot.Domain,
             snapshot.WorkflowKey,
             snapshot.WorkflowVersion,
@@ -116,6 +117,10 @@ public sealed class TransitionRunner(
                 }
             },
             cancellationToken);
+        if (!result.IsSuccess)
+            activity?.SetStatus(ActivityStatusCode.Error, result.Error.Message);
+
+        return result;
     }
 
     private Task<Result<TransitionOutput>> MutateParentAsync(

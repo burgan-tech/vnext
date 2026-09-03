@@ -366,6 +366,7 @@ public sealed class InstanceCommandAppService(
         Instance instance,
         CancellationToken cancellationToken)
     {
+        using var activity = PipelineStepActivityHelper.StartOperationActivity("Instance.Persist");
         await instanceRepository.InsertAsync(instance, true, cancellationToken);
         return Result<(Definitions.Workflow, Instance)>.Ok((workflow, instance));
     }

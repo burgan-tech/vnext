@@ -1,4 +1,7 @@
 using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using BBT.Aether.Guids;
@@ -8,6 +11,7 @@ using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.Pipeline.Steps;
 using BBT.Workflow.Execution.Transitions.Services;
 using BBT.Workflow.Instances;
+using BBT.Workflow.Logging;
 using BBT.Workflow.Runtime;
 using Microsoft.Extensions.Logging;
 using NSubstitute;
@@ -99,6 +103,30 @@ public class CreateTransitionRecordStepRetryTests
             .InsertAsync(Arg.Any<InstanceTransition>(), Arg.Any<bool>(), Arg.Any<CancellationToken>());
         await _transitionRepository.DidNotReceive()
             .FindAsync(Arg.Any<Guid>(), Arg.Any<bool>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_PersistWork_IsOwnedByTransitionRecordPersistSpan()
+    {
+        var collected = new List<Activity>();
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == "BBT.Workflow.Pipeline",
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) =>
+                ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStopped = collected.Add
+        };
+        ActivitySource.AddActivityListener(listener);
+        using var root = new Activity("transition-record-persist-test").Start();
+
+        var result = await _step.ExecuteAsync(CreateContext(), CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        var span = collected.Single(a =>
+            a.TraceId == root.TraceId && a.DisplayName == "TransitionRecord.Persist");
+        span.ParentId.ShouldBe(root.Id);
+        span.GetTagItem(TelemetryConstants.TagNames.SpanCategory)
+            .ShouldBe(TelemetryConstants.SpanCategories.Business);
     }
 
     private static TransitionExecutionContext CreateContext()

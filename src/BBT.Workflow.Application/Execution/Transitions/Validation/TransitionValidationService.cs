@@ -83,10 +83,15 @@ public class TransitionValidationService(
         if (!schemaResult.IsSuccess)
             return Result.Fail(schemaResult.Error);
 
-        return schemaValidator.Validate(
+        using var schemaActivity = PipelineStepActivityHelper.StartOperationActivity("Schema.Validate");
+        var validationResult = schemaValidator.Validate(
             schemaResult.Value!.Schema,
             context.DataElement,
             CreateSchemaValidationOptions(context.Headers));
+        if (!validationResult.IsSuccess)
+            schemaActivity?.SetStatus(ActivityStatusCode.Error, validationResult.Error.Message);
+
+        return validationResult;
     }
 
     private static SchemaValidationOptions CreateSchemaValidationOptions(IReadOnlyDictionary<string, string?>? headers)
