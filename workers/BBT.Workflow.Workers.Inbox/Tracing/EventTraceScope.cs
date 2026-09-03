@@ -14,21 +14,21 @@ namespace BBT.Workflow.Workers.Inbox.Tracing;
 /// <para>
 /// <see cref="EventTraceMode.ContinueTrace"/> (immediate async COMMANDS) restores the publisher's
 /// trace context exactly as before this split: the event's TraceParent becomes the real parent of
-/// the handler span, the ambient pub/sub delivery span is attached as an ActivityLink on trace-id
-/// mismatch, and everything else is unchanged.
+/// the handler span. A foreign ambient pub/sub delivery trace is not linked into the business
+/// waterfall.
 /// </para>
 /// <para>
-/// <see cref="EventTraceMode.LinkedDelivery"/> (FACT deliveries) roots a brand-new trace for the
-/// handler span instead: the producer's TraceParent/TraceState and the ambient pub/sub delivery span
-/// become ActivityLinks rather than the parent, so a fact's delivery machinery (pubsub → inbox →
-/// Dapr invoke → settlement) no longer drags the whole business trace it is reporting on into one
-/// 300+ span tree. Forcing a genuine root requires clearing <see cref="Activity.Current"/> around
+/// <see cref="EventTraceMode.IsolatedDelivery"/> (FACT deliveries) roots a brand-new trace for the
+/// handler span without cross-trace ActivityLinks. Producer and ambient pub/sub ids are retained as
+/// indexed tags, so Elastic cannot splice delayed backup delivery into the business waterfall.
+/// Forcing a genuine root requires clearing <see cref="Activity.Current"/> around
 /// the <c>StartActivity</c> call — a default <see cref="ActivityContext"/> parent alone does not do
 /// it, .NET falls back to the ambient activity — so this scope restores the ambient in
 /// <see cref="Dispose"/> once the handler body (which must see the new root as
 /// <see cref="Activity.Current"/>) has run.
 /// </para>
-/// Lane <see cref="WorkflowTraceLane.Reset(string?, string?, int)"/> and the RequestId restore are
+/// Lane <see cref="WorkflowTraceLane.Reset(string, string, int, ActivationEpisode)"/> and the
+/// RequestId restore are
 /// IDENTICAL in both modes — this is what keeps a genuine backup-settled subflow resume anchored
 /// into the PARENT's trace regardless of which mode delivered it.
 /// Dispose in reverse order of acquisition (activity first, correlation restore last).
@@ -72,14 +72,14 @@ internal sealed class EventTraceScope : IDisposable
     /// <param name="mode">Whether the handler continues the producer's trace or roots its own.</param>
     /// <param name="messageId">
     /// The CloudEvent envelope id (<c>envelope.Id</c>). Stamped as both <c>messaging.message.id</c>
-    /// and <c>vnext.causation.id</c> on a <see cref="EventTraceMode.LinkedDelivery"/> root, which is
+    /// and <c>vnext.causation.id</c> on a <see cref="EventTraceMode.IsolatedDelivery"/> root, which is
     /// now a trace entry point and needs to be findable by the message that produced it. Ignored for
-    /// <see cref="EventTraceMode.ContinueTrace"/>, which stamps no extra tags (byte-for-byte parity
-    /// with the pre-split behavior).
+    /// <see cref="EventTraceMode.ContinueTrace"/>. ContinueTrace only adds callback identity tags
+    /// when the ambient delivery belongs to another trace.
     /// </param>
     /// <param name="deliveryAttempt">
     /// The event's rearm/redelivery attempt count, when it carries one (e.g. <c>RearmAttempt</c> on
-    /// the subflow-terminal events). Stamped as <c>vnext.delivery.attempt</c> on a LinkedDelivery
+    /// the subflow-terminal events). Stamped as <c>vnext.delivery.attempt</c> on an IsolatedDelivery
     /// root when provided; omitted entirely when null. Ignored for ContinueTrace.
     /// </param>
     public static EventTraceScope Start(
@@ -93,10 +93,10 @@ internal sealed class EventTraceScope : IDisposable
         var previousAmbient = Activity.Current;
         var ambientContext = previousAmbient?.Context ?? default;
 
-        var (parentContext, links) = EventTraceParenting.ResolveParenting(
+        var parentContext = EventTraceParenting.ResolveParent(
             mode, evt.TraceParent, evt.TraceState, ambientContext);
 
-        var forcedRoot = mode == EventTraceMode.LinkedDelivery;
+        var forcedRoot = mode == EventTraceMode.IsolatedDelivery;
         Activity? activity;
 
         if (forcedRoot)
@@ -113,8 +113,8 @@ internal sealed class EventTraceScope : IDisposable
                     activityName,
                     ActivityKind.Consumer,
                     parentContext: parentContext,
-                    tags: BuildDeliveryTags(evt, messageId, deliveryAttempt),
-                    links: links);
+                    tags: BuildDeliveryTags(evt, messageId, deliveryAttempt, ambientContext),
+                    links: null);
             }
             catch
             {
@@ -129,7 +129,8 @@ internal sealed class EventTraceScope : IDisposable
                 ActivityKind.Consumer,
                 parentContext: parentContext,
                 tags: null,
-                links: links);
+                links: null);
+            StampDaprCallback(activity, ambientContext);
         }
 
         IDisposable? correlationChange = null;
@@ -160,27 +161,51 @@ internal sealed class EventTraceScope : IDisposable
     }
 
     /// <summary>
-    /// Identity tags for a LinkedDelivery root: it is now a trace entry point, so it must be
-    /// findable by the message that produced it and by the instance(s) it concerns. Property access
-    /// is adapted per concrete event type since the shared <see cref="ITraceableDistributedEvent"/>
-    /// contract does not expose Domain/Flow/instance ids (they differ in shape — e.g.
+    /// Identity and correlation tags for an IsolatedDelivery root: it is now a trace entry point,
+    /// so it must be findable by the message that produced it and by the instance(s) it concerns.
+    /// Property access is adapted per concrete event type since the shared
+    /// <see cref="ITraceableDistributedEvent"/> contract does not expose Domain/Flow/instance ids
+    /// (they differ in shape — e.g.
     /// <see cref="InstanceSubStateChangedEvent"/> has no bare "InstanceId", only
     /// Parent/SubInstanceId).
     /// </summary>
     private static IEnumerable<KeyValuePair<string, object?>> BuildDeliveryTags(
-        ITraceableDistributedEvent evt, string? messageId, int? deliveryAttempt)
+        ITraceableDistributedEvent evt,
+        string? messageId,
+        int? deliveryAttempt,
+        ActivityContext ambientContext)
     {
         var tags = new List<KeyValuePair<string, object?>>();
 
         if (!string.IsNullOrEmpty(messageId))
         {
-            tags.Add(new KeyValuePair<string, object?>(TelemetryConstants.TagNames.MessagingMessageId, messageId));
+            tags.Add(new KeyValuePair<string, object?>(
+                TelemetryConstants.TagNames.MessagingMessageId, messageId));
             tags.Add(new KeyValuePair<string, object?>(TelemetryConstants.TagNames.CausationId, messageId));
         }
 
         if (deliveryAttempt.HasValue)
         {
-            tags.Add(new KeyValuePair<string, object?>(TelemetryConstants.TagNames.DeliveryAttempt, deliveryAttempt.Value));
+            tags.Add(new KeyValuePair<string, object?>(
+                TelemetryConstants.TagNames.DeliveryAttempt, deliveryAttempt.Value));
+        }
+
+        if (!string.IsNullOrEmpty(evt.TraceParent) &&
+            ActivityContext.TryParse(evt.TraceParent, evt.TraceState, isRemote: true, out var originContext))
+        {
+            tags.Add(new KeyValuePair<string, object?>(
+                TelemetryConstants.TagNames.OriginTraceId, originContext.TraceId.ToString()));
+            tags.Add(new KeyValuePair<string, object?>(
+                TelemetryConstants.TagNames.OriginSpanId, originContext.SpanId.ToString()));
+        }
+
+        if (ambientContext != default)
+        {
+            tags.Add(new KeyValuePair<string, object?>(TelemetryConstants.TagNames.DaprCallback, true));
+            tags.Add(new KeyValuePair<string, object?>(
+                TelemetryConstants.TagNames.DaprCallbackTraceId, ambientContext.TraceId.ToString()));
+            tags.Add(new KeyValuePair<string, object?>(
+                TelemetryConstants.TagNames.DaprCallbackSpanId, ambientContext.SpanId.ToString()));
         }
 
         switch (evt)
@@ -210,6 +235,21 @@ internal sealed class EventTraceScope : IDisposable
         }
 
         return tags;
+    }
+
+    private static void StampDaprCallback(Activity? activity, ActivityContext ambientContext)
+    {
+        if (activity is null || ambientContext == default ||
+            ambientContext.TraceId == activity.TraceId)
+        {
+            return;
+        }
+
+        activity.SetTag(TelemetryConstants.TagNames.DaprCallback, true);
+        activity.SetTag(
+            TelemetryConstants.TagNames.DaprCallbackTraceId, ambientContext.TraceId.ToString());
+        activity.SetTag(
+            TelemetryConstants.TagNames.DaprCallbackSpanId, ambientContext.SpanId.ToString());
     }
 
     private static void AddInstanceIdentity(

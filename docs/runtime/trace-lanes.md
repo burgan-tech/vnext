@@ -94,7 +94,8 @@ node any more — see [Trace Span Tree](trace-span-tree.md).
 - **An anchor from another trace is linked, never parented** (`vnext.trace.lane.mismatch`), so a stale
   `AsyncLocal` or a relayed payload from an unrelated request cannot teleport a span. The comparison
   is against the *predecessor* only — a foreign **ambient** span is normal on the job path (the Dapr
-  callback is its own trace) and is demoted to a link with `vnext.dapr.callback`.
+  callback is its own trace) and is retained as searchable
+  `vnext.dapr.callback.trace_id` / `.span_id` tags with `vnext.dapr.callback=true`.
 - **No anchor ⇒ exactly the pre-lane behaviour**, plus `vnext.trace.lane=false`. Both payloads and
   events degrade in either direction, so deploy order is unconstrained. No DB migration: job payloads
   live in the Dapr scheduler store and outbox events in a serialized blob.

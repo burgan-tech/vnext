@@ -13,9 +13,11 @@ namespace BBT.Workflow.Telemetry;
 /// exactly one place to review. See <see cref="WorkflowTraceLane"/> for the lane model.
 /// </para>
 /// <para>
-/// The predecessor (hop N when starting hop N+1) is <b>not</b> discarded: it is attached as an
-/// <see cref="ActivityLink"/> and stamped as <see cref="TelemetryConstants.TagNames.HopPredecessor"/>,
-/// so ordering and causality stay reconstructable even though the spans are siblings.
+/// The same-trace predecessor (hop N when starting hop N+1) is <b>not</b> discarded: it is attached
+/// as an <see cref="ActivityLink"/> and stamped as
+/// <see cref="TelemetryConstants.TagNames.HopPredecessor"/>, so ordering and causality stay
+/// reconstructable even though the spans are siblings. Cross-trace transport contexts are tags,
+/// never links, because Elastic expands linked traces into the same waterfall.
 /// </para>
 /// </summary>
 public static class FlatLaneActivity
@@ -64,7 +66,7 @@ public static class FlatLaneActivity
         // Compared against the PREDECESSOR only, never against a bare ambient span. The ambient span
         // is routinely from another trace — a Dapr scheduler callback is its own trace by
         // construction — and treating that as a mismatch would reject every legitimate anchor on the
-        // job path. A foreign ambient span is handled by demoting it to a link (see BuildLinks).
+        // job path. A foreign ambient span is retained as searchable callback id tags.
         if (hasPredecessor && predecessorContext.TraceId != anchorContext.TraceId)
         {
             var mismatched = StartFallback(
@@ -72,7 +74,12 @@ public static class FlatLaneActivity
             return mismatched;
         }
 
-        var links = BuildLinks(anchorContext, predecessorContext, hasPredecessor, out var demotedAmbient);
+        var ambientBeforeStart = Activity.Current;
+        var demotedAmbientContext = ambientBeforeStart is not null &&
+                                    ambientBeforeStart.Context.TraceId != anchorContext.TraceId
+            ? ambientBeforeStart.Context
+            : default;
+        var links = BuildPredecessorLink(anchorContext, predecessorContext, hasPredecessor);
 
         var activity = source.StartActivity(
             name,
@@ -87,8 +94,7 @@ public static class FlatLaneActivity
         activity.SetTag(TelemetryConstants.TagNames.TraceLaneAnchor, anchorContext.SpanId.ToString());
         if (hasPredecessor)
             activity.SetTag(TelemetryConstants.TagNames.HopPredecessor, predecessorContext.SpanId.ToString());
-        if (demotedAmbient)
-            activity.SetTag(TelemetryConstants.TagNames.DaprCallback, true);
+        StampDaprCallback(activity, demotedAmbientContext);
 
         return activity;
     }
@@ -103,15 +109,13 @@ public static class FlatLaneActivity
         bool laned,
         bool mismatch)
     {
-        IEnumerable<ActivityLink>? links = null;
         var ambient = Activity.Current;
-        if (ambient is not null && hasPredecessor && ambient.Context.TraceId != predecessorContext.TraceId)
-        {
-            // Preserves the pre-existing "link the Dapr callback we did not parent to" behaviour.
-            links = [new ActivityLink(ambient.Context)];
-        }
+        var demotedAmbientContext = ambient is not null && hasPredecessor &&
+                                    ambient.Context.TraceId != predecessorContext.TraceId
+            ? ambient.Context
+            : default;
 
-        var activity = source.StartActivity(name, kind, fallbackParent, tags: null, links: links);
+        var activity = source.StartActivity(name, kind, fallbackParent, tags: null, links: null);
         if (activity is null) return null;
 
         activity.SetTag(TelemetryConstants.TagNames.TraceLane, laned);
@@ -119,37 +123,33 @@ public static class FlatLaneActivity
             activity.SetTag(TelemetryConstants.TagNames.TraceLaneMismatch, true);
         if (hasPredecessor)
             activity.SetTag(TelemetryConstants.TagNames.HopPredecessor, predecessorContext.SpanId.ToString());
-        if (links is not null)
-            activity.SetTag(TelemetryConstants.TagNames.DaprCallback, true);
+        StampDaprCallback(activity, demotedAmbientContext);
 
         return activity;
     }
 
-    private static IEnumerable<ActivityLink>? BuildLinks(
+    private static IEnumerable<ActivityLink>? BuildPredecessorLink(
         ActivityContext anchorContext,
         ActivityContext predecessorContext,
-        bool hasPredecessor,
-        out bool demotedAmbient)
+        bool hasPredecessor)
     {
-        List<ActivityLink>? links = null;
-        demotedAmbient = false;
-
         // hop N -> hop N+1: linked, not parented. Skipped when the predecessor IS the anchor,
         // which is the first hop of a lane (nothing to add beyond the parent edge).
         if (hasPredecessor && predecessorContext.SpanId != anchorContext.SpanId)
         {
-            links = [new ActivityLink(predecessorContext)];
+            return [new ActivityLink(predecessorContext)];
         }
 
-        var ambient = Activity.Current;
-        if (ambient is not null && ambient.Context.TraceId != anchorContext.TraceId)
-        {
-            links ??= [];
-            links.Add(new ActivityLink(ambient.Context));
-            demotedAmbient = true;
-        }
+        return null;
+    }
 
-        return links;
+    private static void StampDaprCallback(Activity activity, ActivityContext callbackContext)
+    {
+        if (callbackContext == default) return;
+
+        activity.SetTag(TelemetryConstants.TagNames.DaprCallback, true);
+        activity.SetTag(TelemetryConstants.TagNames.DaprCallbackTraceId, callbackContext.TraceId.ToString());
+        activity.SetTag(TelemetryConstants.TagNames.DaprCallbackSpanId, callbackContext.SpanId.ToString());
     }
 
     private static bool TryParse(string? traceParent, string? traceState, out ActivityContext context)

@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using BBT.Workflow.Instances.Events;
+using BBT.Workflow.Logging;
 using BBT.Workflow.Workers.Inbox.Tracing;
 using Shouldly;
 using Xunit;
@@ -10,7 +11,7 @@ namespace BBT.Workflow.Infrastructure.Tests.Tracing;
 /// <summary>
 /// Pins <see cref="EventTraceScope"/>'s highest-risk behavior — the ambient
 /// <see cref="Activity.Current"/> clear/restore choreography that forces a genuine root span for
-/// <see cref="EventTraceMode.LinkedDelivery"/> — which sits outside <c>EventTraceParenting</c>'s
+/// <see cref="EventTraceMode.IsolatedDelivery"/> — which sits outside <c>EventTraceParenting</c>'s
 /// pure decision table and so was otherwise pinned only by Faz C's OpenObserve acceptance checks.
 /// Compile-included into this test project the same way as <c>EventTraceParenting.cs</c>: the Inbox
 /// worker has no test project of its own, and <c>EventTraceScope.cs</c> depends only on
@@ -45,7 +46,7 @@ public sealed class EventTraceScopeTests
     }
 
     [Fact]
-    public void LinkedDelivery_WithAmbientActivity_StartsGenuineRootSpan_NotChildOfAmbient()
+    public void IsolatedDelivery_WithAmbientActivity_StartsGenuineRootSpan_WithoutLinks()
     {
         using var listener = ListenTo(EventTraceScope.ActivitySource.Name);
         ActivitySource.AddActivityListener(listener);
@@ -53,10 +54,12 @@ public sealed class EventTraceScopeTests
         var ambient = StartAmbient("ambient-pubsub-delivery");
         try
         {
-            var evt = MakeEvent();
+            const string originTraceId = "0af7651916cd43dd8448eb211c80319c";
+            const string originSpanId = "b7ad6b7169203331";
+            var evt = MakeEvent(traceParent: $"00-{originTraceId}-{originSpanId}-01");
             using var scope = EventTraceScope.Start(
-                "Test.LinkedDelivery.Handle", evt, correlationIdProvider: null,
-                EventTraceMode.LinkedDelivery, messageId: "msg-1");
+                "Test.IsolatedDelivery.Handle", evt, correlationIdProvider: null,
+                EventTraceMode.IsolatedDelivery, messageId: "msg-1");
 
             // (a) A default parentContext alone would fall back to the ambient activity (the Task A1
             // gotcha, pinned separately by ActivityParentContextSemanticsTests). If EventTraceScope
@@ -66,6 +69,13 @@ public sealed class EventTraceScopeTests
             started.ShouldNotBeNull();
             started!.ParentSpanId.ShouldBe(default(ActivitySpanId));
             started.TraceId.ShouldNotBe(ambient.TraceId);
+            started.Links.ShouldBeEmpty();
+            started.GetTagItem(TelemetryConstants.TagNames.OriginTraceId).ShouldBe(originTraceId);
+            started.GetTagItem(TelemetryConstants.TagNames.OriginSpanId).ShouldBe(originSpanId);
+            started.GetTagItem(TelemetryConstants.TagNames.DaprCallbackTraceId)
+                .ShouldBe(ambient.TraceId.ToString());
+            started.GetTagItem(TelemetryConstants.TagNames.DaprCallbackSpanId)
+                .ShouldBe(ambient.SpanId.ToString());
         }
         finally
         {
@@ -75,7 +85,7 @@ public sealed class EventTraceScopeTests
     }
 
     [Fact]
-    public void LinkedDelivery_AfterDispose_RestoresThePriorAmbientActivity()
+    public void IsolatedDelivery_AfterDispose_RestoresThePriorAmbientActivity()
     {
         using var listener = ListenTo(EventTraceScope.ActivitySource.Name);
         ActivitySource.AddActivityListener(listener);
@@ -85,8 +95,8 @@ public sealed class EventTraceScopeTests
         {
             var evt = MakeEvent();
             var scope = EventTraceScope.Start(
-                "Test.LinkedDelivery.Handle", evt, correlationIdProvider: null,
-                EventTraceMode.LinkedDelivery, messageId: "msg-1");
+                "Test.IsolatedDelivery.Handle", evt, correlationIdProvider: null,
+                EventTraceMode.IsolatedDelivery, messageId: "msg-1");
 
             // Sanity: while the scope is live, the handler body sees the new root, not `ambient`.
             Activity.Current.ShouldNotBeSameAs(ambient);
@@ -105,7 +115,7 @@ public sealed class EventTraceScopeTests
     }
 
     [Fact]
-    public void LinkedDelivery_WhenSpanIsSampledOut_StillRestoresAmbientActivityOnDispose()
+    public void IsolatedDelivery_WhenSpanIsSampledOut_StillRestoresAmbientActivityOnDispose()
     {
         // Deliberately NO ActivityListener registered for EventTraceScope.ActivitySource: with no
         // listener, ActivitySource.StartActivity returns null — the "sampled out" case. The restore
@@ -115,8 +125,8 @@ public sealed class EventTraceScopeTests
         {
             var evt = MakeEvent();
             var scope = EventTraceScope.Start(
-                "Test.LinkedDelivery.Handle", evt, correlationIdProvider: null,
-                EventTraceMode.LinkedDelivery, messageId: "msg-1");
+                "Test.IsolatedDelivery.Handle", evt, correlationIdProvider: null,
+                EventTraceMode.IsolatedDelivery, messageId: "msg-1");
 
             // (c) Nothing was created to replace it, and Start() explicitly cleared Activity.Current
             // to force a root — so between Start() and Dispose(), Current is genuinely null.
@@ -157,6 +167,12 @@ public sealed class EventTraceScopeTests
             started!.TraceId.ToString().ShouldBe(originTraceId);
             started.ParentSpanId.ToString().ShouldBe(originSpanId);
             started.TraceId.ShouldNotBe(ambient.TraceId);
+            started.Links.ShouldBeEmpty();
+            started.GetTagItem(TelemetryConstants.TagNames.DaprCallback).ShouldBe(true);
+            started.GetTagItem(TelemetryConstants.TagNames.DaprCallbackTraceId)
+                .ShouldBe(ambient.TraceId.ToString());
+            started.GetTagItem(TelemetryConstants.TagNames.DaprCallbackSpanId)
+                .ShouldBe(ambient.SpanId.ToString());
         }
         finally
         {

@@ -1,8 +1,8 @@
 using System;
 using System.Diagnostics;
-using System.Linq;
 using BBT.Workflow.BackgroundJobs.Handlers;
 using BBT.Workflow.BackgroundJobs.Payloads;
+using BBT.Workflow.Logging;
 using Shouldly;
 using Xunit;
 
@@ -12,8 +12,8 @@ namespace BBT.Workflow.Application.Tests.BackgroundJobs.Handlers;
 /// Pins the two trace-restoration policies for background jobs:
 /// <see cref="BackgroundJobActivityHelper.StartActivityContinuingTrace"/> (immediate jobs — the
 /// payload's TraceParent becomes the REAL parent so the job stays inside the originating trace)
-/// and <see cref="BackgroundJobActivityHelper.StartActivityAsChildWithLink"/> (deferred jobs —
-/// ambient parent, original context only linked).
+/// and <see cref="BackgroundJobActivityHelper.StartDeferredActivity"/> (deferred jobs —
+/// ambient parent, original context retained as searchable tags).
 /// </summary>
 public sealed class BackgroundJobActivityHelperTests : IDisposable
 {
@@ -59,7 +59,7 @@ public sealed class BackgroundJobActivityHelperTests : IDisposable
     }
 
     [Fact]
-    public void ContinuingTrace_WithTraceParentAndAmbient_ParentsOnPayloadAndLinksAmbient()
+    public void ContinuingTrace_WithTraceParentAndAmbient_ParentsOnPayloadAndTagsAmbient()
     {
         using var original = StartAmbientActivity();
         var payload = CreatePayload(original.Id, "vendor=state");
@@ -72,9 +72,12 @@ public sealed class BackgroundJobActivityHelperTests : IDisposable
 
         activity.ShouldNotBeNull();
         activity.TraceId.ShouldBe(originalTraceId);
-        activity.Links.Count().ShouldBe(1);
-        activity.Links.Single().Context.TraceId.ShouldBe(ambient.Context.TraceId);
-        activity.GetTagItem("vnext.dapr.callback").ShouldBe(true);
+        activity.Links.ShouldBeEmpty();
+        activity.GetTagItem(TelemetryConstants.TagNames.DaprCallback).ShouldBe(true);
+        activity.GetTagItem(TelemetryConstants.TagNames.DaprCallbackTraceId)
+            .ShouldBe(ambient.TraceId.ToString());
+        activity.GetTagItem(TelemetryConstants.TagNames.DaprCallbackSpanId)
+            .ShouldBe(ambient.SpanId.ToString());
     }
 
     [Fact]
@@ -110,7 +113,7 @@ public sealed class BackgroundJobActivityHelperTests : IDisposable
     }
 
     [Fact]
-    public void ChildWithLink_KeepsDeferredPolicy_AmbientParentPayloadLinked()
+    public void DeferredActivity_UsesAmbientParentAndTagsPayloadWithoutLink()
     {
         using var original = StartAmbientActivity();
         var payload = CreatePayload(original.Id);
@@ -119,11 +122,14 @@ public sealed class BackgroundJobActivityHelperTests : IDisposable
 
         using var ambient = StartAmbientActivity();
 
-        using var activity = BackgroundJobActivityHelper.StartActivityAsChildWithLink("TransitionTimerJob.Execute", payload);
+        using var activity = BackgroundJobActivityHelper.StartDeferredActivity("TransitionTimerJob.Execute", payload);
 
         activity.ShouldNotBeNull();
         activity.TraceId.ShouldBe(ambient.Context.TraceId);
-        activity.Links.Count().ShouldBe(1);
-        activity.Links.Single().Context.TraceId.ShouldBe(originalTraceId);
+        activity.Links.ShouldBeEmpty();
+        activity.GetTagItem(TelemetryConstants.TagNames.OriginTraceId)
+            .ShouldBe(originalTraceId.ToString());
+        activity.GetTagItem(TelemetryConstants.TagNames.OriginSpanId)
+            .ShouldBe(original.SpanId.ToString());
     }
 }

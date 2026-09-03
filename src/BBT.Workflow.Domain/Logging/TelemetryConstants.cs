@@ -157,8 +157,8 @@ public static class TelemetryConstants
 
         /// <summary>
         /// Set when an anchor was rejected for belonging to a different trace. The span keeps its
-        /// ambient parent and links the anchor instead, so a stale or forged anchor cannot
-        /// teleport it into a foreign trace.
+        /// predecessor/ambient parent, so a stale or forged anchor cannot teleport it into a
+        /// foreign trace.
         /// </summary>
         public const string TraceLaneMismatch = "vnext.trace.lane.mismatch";
 
@@ -179,10 +179,23 @@ public static class TelemetryConstants
         public const string ChainDepth = "vnext.chain.depth";
 
         /// <summary>
-        /// Set when the ambient Dapr scheduler-callback span was demoted to an ActivityLink because
-        /// the span continues a different (originating) trace.
+        /// Set when the ambient Dapr scheduler-callback span belongs to a different trace from the
+        /// business span. The callback is correlated by id tags rather than an ActivityLink so
+        /// Elastic does not splice its transport trace into the business waterfall.
         /// </summary>
         public const string DaprCallback = "vnext.dapr.callback";
+
+        /// <summary>Trace id of an originating context retained for searchable correlation.</summary>
+        public const string OriginTraceId = "vnext.origin.trace_id";
+
+        /// <summary>Span id of an originating context retained for searchable correlation.</summary>
+        public const string OriginSpanId = "vnext.origin.span_id";
+
+        /// <summary>Trace id of the ambient Dapr callback/delivery transport context.</summary>
+        public const string DaprCallbackTraceId = "vnext.dapr.callback.trace_id";
+
+        /// <summary>Span id of the ambient Dapr callback/delivery transport context.</summary>
+        public const string DaprCallbackSpanId = "vnext.dapr.callback.span_id";
 
         /// <summary>
         /// Number of script compilations (hits + misses) that ran while this span was current.

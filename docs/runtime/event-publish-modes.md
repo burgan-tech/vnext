@@ -196,18 +196,17 @@ keep it from polluting a transition's trace:
     `ChildSubflowCancelRequested`, `ChildSubflowFaultRequested`) and is unchanged from before this
     work: the handler span parents onto the event's own `TraceParent`, joining the producing
     transition's trace exactly as it always has.
-  - `LinkedDelivery` covers the seven **fact** events (`InstanceCanceledEvent`,
+  - `IsolatedDelivery` covers the seven **fact** events (`InstanceCanceledEvent`,
     `InstanceCompletedCleanupEvent`, `InstanceFaultedCleanupEvent`, `InstanceSubStateChangedEvent`,
     and the three sub-terminal events `InstanceSubCompletedEvent`/`InstanceSubFaultedEvent`/
     `InstanceSubCanceledEvent`). Instead of joining the producer's trace, the handler **roots a
-    brand-new trace** for its span and attaches the producer's `TraceParent` — plus the ambient
-    pub/sub delivery span, when its trace id differs — as `ActivityLink`s rather than as the
-    parent. This is a deliberate episode separation: a fact's delivery machinery (pubsub → inbox →
+    brand-new trace** for its span without cross-trace `ActivityLink`s. The producer and ambient
+    pub/sub delivery trace/span ids are retained as indexed tags. This is a deliberate episode separation: a fact's delivery machinery (pubsub → inbox →
     Dapr invoke → settlement) no longer drags the entire business trace it is reporting on into one
     tree. Forcing the genuine root requires clearing `Activity.Current` around the `StartActivity`
     call — a default `ActivityContext` parent alone does not do it, .NET falls back to the ambient
     activity — and `EventTraceScope.Dispose` restores the ambient afterward.
-  - A `LinkedDelivery` root is stamped `messaging.message.id` and `vnext.causation.id` (both from
+  - An `IsolatedDelivery` root is stamped `messaging.message.id` and `vnext.causation.id` (both from
     the CloudEvent envelope id, since the root is now a trace entry point and must be findable by
     the message that produced it), plus `vnext.delivery.attempt` when the event carries a
     rearm/redelivery count (the three sub-terminal events' `RearmAttempt`) — omitted entirely when

@@ -570,7 +570,7 @@ field.
   linked-root model, not the rejoin this page's evidence was gated on. The Inbox side mirrors this
   split: command events keep re-parenting onto the producer's trace (`EventTraceMode.ContinueTrace`),
   while the seven `Instance*` fact events now root their own delivery trace and link the producer
-  instead (`EventTraceMode.LinkedDelivery`). See
+  instead (`EventTraceMode.IsolatedDelivery`, no cross-trace ActivityLinks). See
   [Event Publish Modes § Observability contract](event-publish-modes.md#observability-contract) for
   the full tag reference.
 - [Trace Lanes](trace-lanes.md) — the anchor/predecessor split that keeps chained hops and
