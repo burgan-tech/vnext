@@ -20,8 +20,8 @@ This rule complements the workflow concepts already captured in the root `CLAUDE
 | 60 | RunOnEntryTasksStep | Run target-state OnEntry tasks |
 | 70 | HandleSubFlowStep | Start subflow correlation; enqueue StartSubflowJob |
 | 79 | ClearBusyOnResumeStep | Clear busy on subflow resume path |
-| 80 | ScheduleTransitionsStep | Schedule future transitions |
-| 90 | RunAutomaticTransitionsStep | Evaluate auto-transition conditions; set NextTransition |
+| 80 | RunAutomaticTransitionsStep | Evaluate auto-transition conditions; set NextTransition |
+| 90 | ScheduleTransitionsStep | Schedule future transitions — skipped when auto selected a winner |
 | 100 | HandleFinishStep | Complete/cancel instance on finish states |
 | 110 | FinalizeTransitionStep | Complete transition record; dispose script cache |
 | 112 | ResolveAvailableStep | Resolve deferred Active status |
@@ -55,7 +55,7 @@ the transition definition's — the two can disagree and the inbound trigger is 
 A sixth profile is **composed on top of** the base, never selected instead of it. When
 `TransitionExecutionContext.SkipsStateLifecycle()` is true,
 `PipelineExecutionProfile.ForSelfTarget(base)` adds `CancelScheduledJobs (39)`, `OnExit (40)`,
-`OnEntry (60)`, `Schedule (80)` to the base's exclusions (`Manual+Self`, …).
+`OnEntry (60)`, `Schedule (90)` to the base's exclusions (`Manual+Self`, …).
 
 - **`SkipsStateLifecycle() = IsSelfTargetTransition() && IsUpdateDataTransition()`.** Two separate
   claims, deliberately: the first is a fact about the target, the second is the policy. Only
@@ -81,7 +81,7 @@ A sixth profile is **composed on top of** the base, never selected instead of it
 - **`updateData` leaves and enters no state, so the state's lifecycle must not fire.** OnEntry would
   re-run hooks for a state the instance never re-entered; Schedule would re-arm its timers from zero.
 - **`ChangeState (50)` still runs and must keep running** — it is the only step that sets
-  `context.Target`, which `RunAutomaticTransitionsStep (90)` reads. Excluding it makes the auto step
+  `context.Target`, which `RunAutomaticTransitionsStep (80)` reads. Excluding it makes the auto step
   return at its first guard and the transition advances nothing.
 - **`OnExecute (30)` still runs** — the transition's own work, not the state's lifecycle.
 - `ChangeStateStep` suppresses its state-change metric/log/span event on this path **only** (it is
@@ -271,6 +271,10 @@ A sixth profile is **composed on top of** the base, never selected instead of it
   loser burned an error-boundary retry backoff for a lock that protected nothing.
 - There is **no duplicate transition-record guard** downstream. Duplicate *requests* are stopped
   only by the accept-time active-job guard; duplicate *hops* by the per-hop policy checks.
+- **Epilogue sırası Auto → Schedule'dır.** Auto kazanan seçtiyse (`Directives.NextTransition` dolu)
+  `ScheduleTransitionsStep` hiçbir timer arm etmez — eski "arm et, zincirin bir sonraki hop'unda
+  CancelScheduledJobs ile sil" churn'ü bilinçli olarak kaldırıldı. Kazananla zincirlenen hop fault
+  ederse timer'lar da arm edilmemiştir (faulted instance'ta zaten işe yaramazlardı).
 
 ## Status / State / Type Semantics
 

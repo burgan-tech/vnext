@@ -344,7 +344,7 @@ auto-transition conditions and error-boundary rules:
 **The recommended partial-failure pattern**: use `join.policy: "allSettled"` so the FanOut task
 itself always succeeds, write (or let the default output write)
 `{resultKey}Summary.{total,succeeded,failed,timedOut}` into instance data, then let the
-transition's `RunAutomaticTransitionsStep` (order 90) evaluate an auto-transition condition
+transition's `RunAutomaticTransitionsStep` (order 80) evaluate an auto-transition condition
 against that summary — e.g. `failed > 0` routes to a `partial-failure` state, `failed == 0`
 continues the happy path. The platform does not decide this for you; it is a workflow-design
 choice every time.

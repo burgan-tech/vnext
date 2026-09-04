@@ -64,7 +64,7 @@ public sealed class PipelineExecutionProfile
     // runs the FULL lifecycle. Reading "+Self" as "every $self transition" is the wrong conclusion
     // and has cost real work twice — check the resolver before assuming.
     // ChangeState (50) deliberately stays IN: it is the only step that sets context.Target, which
-    // RunAutomaticTransitionsStep (90) needs to evaluate the state's auto transitions against the
+    // RunAutomaticTransitionsStep (80) needs to evaluate the state's auto transitions against the
     // freshly written data. OnExecute (30) also stays — that is the transition's own work, not the
     // state's lifecycle.
     private static readonly ImmutableHashSet<int> SelfTargetExcluded = ImmutableHashSet.Create(

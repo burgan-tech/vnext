@@ -96,6 +96,18 @@ public sealed class JobTimeoutRecoveryService(
                 instance.GetCurrentState,
                 settlingCommit: commitContext);
 
+            // The job's episode is still ambient here (TransitionJobHandler runs recovery inside its
+            // lane scope): a job that timed out rests the instance Faulted, and that is the client's
+            // rest point.
+            ActivationActivity.Emit(
+                PipelineStepActivityHelper.ActivitySource,
+                TelemetryConstants.ActivationOutcomes.Faulted,
+                args.InstanceId,
+                args.Domain,
+                args.Workflow,
+                args.TransitionKey,
+                instance.GetCurrentState);
+
             logger.LogError(
                 "Instance {InstanceId} faulted after job execution timeout. " +
                 "Transition: {TransitionKey}, State: {State}",
