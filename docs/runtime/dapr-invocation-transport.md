@@ -7,6 +7,7 @@
 | Orchestration → Execution task invoke | gRPC proxy mode (opt-in per env) | Typed internal contract, single inbound surface, supported path |
 | DaprServiceTask → external domain apps | HTTP API (unchanged) | gRPC→HTTP invocation is deprecated for removal; targets are HTTP apps |
 | App → sidecar state/lock/pubsub calls | SDK-chosen (unchanged) | Deferred — evaluate after the above lands |
+| Cross-domain `Remote*` services (orchestrator → other domain's orchestrator) | `DaprClient.CreateInvokeHttpClient()` (SDK `InvocationHandler`, HTTP to the sidecar), opt-in via `ServiceDiscovery:Provider=dapr` | The whole `DaprClient.InvokeMethod*` family is `[Obsolete]` in 1.17; `CreateInvokeHttpClient` is the surface its message points at. Targets are HTTP/JSON controllers, so gRPC on the first hop is not available. See "Cross-domain Remote* services" below. |
 
 > **Formerly a known limitation, now fixed (2026-08-26):** gRPC proxy mode used to produce **two
 > disconnected traces per task invocation** — root-caused to Dapr's AppCallback hop delivering a
@@ -23,10 +24,12 @@ There isn't — a Dapr service invocation call crosses three separate hops, and 
 is configured by `dapr.io/app-protocol`:
 
 1. **App → its own sidecar.** This is chosen by which SDK method the calling app invokes, not by
-   any annotation. `DaprClient.InvokeMethodAsync`/`InvokeMethodWithResponseAsync` go over the
-   SDK's plain HTTP client; `InvokeMethodGrpcAsync` and `CreateInvocationInvoker` (proxy mode) go
-   over the SDK's gRPC channel. `DaprServiceTask` today calls the HTTP-shaped methods, which is
-   the actual reason it runs over HTTP — not the Helm `protocol` value.
+   any annotation. `DaprClient.CreateInvokeHttpClient()` (and the now-`[Obsolete]`
+   `InvokeMethodAsync`/`InvokeMethodWithResponseAsync`) go over the SDK's plain HTTP client;
+   `InvokeMethodGrpcAsync` (also obsolete) and `CreateInvocationInvoker` (proxy mode) go over the
+   SDK's gRPC channel. `DaprServiceTask` sends through `DaprServiceInvocationClient`, i.e. the
+   HTTP invocation client, which is the actual reason it runs over HTTP — not the Helm `protocol`
+   value.
 2. **Sidecar → sidecar.** Always gRPC. This hop is not configurable and does not read
    `app-protocol` at all — it is how the Dapr runtime talks to itself, unconditionally, on every
    service invocation regardless of what either app does.
@@ -162,6 +165,59 @@ the same 60-second budget, and the same no-retry policy carry over to the gRPC p
 Full design (proto contract, `RemoteInvokerService`'s transport switch, error mapping, context
 propagation, and success criteria): see
 [`docs/superpowers/specs/2026-08-26-execution-grpc-transport-spec.md`](../superpowers/specs/2026-08-26-execution-grpc-transport-spec.md).
+
+## Cross-domain Remote* services: DaprClient, HTTP to the sidecar, and why not gRPC (2026-09)
+
+The `Remote*` app services (`RemoteInstance{Command,Query,Retry}AppService`,
+`RemoteAuthorizeAppService`, `RemoteRelatedInstanceReader`) call another domain's **orchestrator**
+— HTTP/JSON MVC controllers behind `dapr.io/app-protocol: http`. They can now travel over Dapr
+service invocation when `ServiceDiscovery:Provider=dapr`; the wire is chosen per call from the
+resolved `EndpointKind` by `RemoteTransportRouter`, and the Dapr shell (`DaprRemoteTransport`) sends
+through the `HttpClient` returned by `DaprClient.CreateInvokeHttpClient()`. Architecture and
+contracts: [Remote App Service Architecture](remote-app-service-architecture.md).
+
+**Why `CreateInvokeHttpClient` and not `DaprClient.InvokeMethod*`.** In SDK 1.17.9 the entire
+`InvokeMethod*` family — `InvokeMethodAsync`, `InvokeMethodWithResponseAsync`,
+`InvokeMethodGrpcAsync`, every overload — carries
+`[Obsolete("Recommended guidance is to use a native HTTP or gRPC client for service invocation")]`
+(`DaprClient.cs` lines 448–753). `CreateInvokeHttpClient()` is not obsolete and is that "native HTTP
+client": an `HttpClient` whose `InvocationHandler` rewrites an absolute `http://{appId}/{path}` to
+`{endpoint}/v1.0/invoke/{appId}/method/{path}` via `UriBuilder(uri)`, resolves
+`DAPR_HTTP_ENDPOINT`/`DAPR_HTTP_PORT`/`DAPR_API_TOKEN` through `DaprDefaults`, adds the token per
+request and removes it in `finally`. The same move was made everywhere the obsolete family was
+used — `RemoteInvokerService`'s HTTP branch and all eight Execution invokers — through one shared
+type, `DaprServiceInvocationClient` (`BBT.Workflow.Execution.Abstractions`); a
+`dotnet build --no-incremental` now reports zero CS0618 for `InvokeMethod*`.
+
+**The app → sidecar hop is HTTP, deliberately.** `InvokeMethodGrpcAsync<TRequest,TResponse>`
+requires `TRequest : IMessage` (Protobuf) and a callee implementing Dapr's AppCallback gRPC
+service; the orchestrator is an HTTP/JSON app and implements neither — and the method is obsolete
+anyway. So the SDK contributes the sidecar contract (endpoint, token, invoke URI) while the sidecar
+contributes Name Resolution, sidecar-to-sidecar gRPC + mTLS, and the `resiliency-cross-domain.yaml`
+circuit breaker. Moving these endpoints to gRPC is the same shape as Orchestration → Execution above
+(a gRPC surface on the callee + Dapr gRPC proxying) and is a separate piece of work.
+
+**Two details pinned by `DaprRemoteTransportTests`** — which run the SDK's real
+`InvocationHandler` over a recording stub, so they observe exactly what the sidecar would receive:
+
+- **Query strings survive verbatim.** `InvocationHandler` rewrites scheme/host/port/path and
+  leaves the query alone, so `filter=a%20b` reaches the sidecar as `filter=a%20b`. The
+  `CreateInvokeMethodRequest(…, queryStringParameters)` overload would have re-escaped each pair
+  with `Uri.EscapeDataString` (`filter=a%2520b`), which is one more reason it is not used.
+- **An unreachable callee does not fail the socket.** The sidecar answers `HTTP 500` with
+  `{"errorCode":"ERR_DIRECT_INVOKE",…}`, which `MapToErrorAsync` would classify as a permanent
+  remote 5xx. The shell converts it to `HttpRequestException` so the ~28
+  `catch (HttpRequestException)` sites keep producing `Error.Transient("remote_network_error", …)`;
+  a genuine callee 5xx (identified by the `_aether_error_format` header only a vNext app emits) still
+  maps as a remote error. A socket failure to the sidecar is already a native `HttpRequestException`
+  on this path.
+
+**Trace shape.** The callee here is the other domain's orchestrator, which — like the Execution
+host — receives Dapr's duplicated `traceparent` and tolerates it through
+`DuplicateTolerantTraceContextPropagator` (installed in all four hosts' `Program.cs`). Each
+cross-domain call therefore gains a caller-sidecar and a callee-sidecar span under one trace; the
+callee sidecar's own span remains unreachable from the AppCallback header, exactly as documented
+for Orchestration → Execution above.
 
 ## Verification
 

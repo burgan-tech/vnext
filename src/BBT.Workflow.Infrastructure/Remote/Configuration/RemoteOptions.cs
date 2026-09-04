@@ -61,4 +61,26 @@ public sealed class RemoteOptions
     /// Default is true for security reasons.
     /// </summary>
     public bool ValidateSsl { get; set; } = true;
+
+    /// <summary>
+    /// Re-enables transport-level retry on the MUTATING remote clients
+    /// (<c>IRemoteInstanceCommandAppService</c>, <c>IRemoteInstanceRetryAppService</c>).
+    /// Default false, and it should stay false.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Emergency reversal only. Those clients carry side-effecting endpoints
+    /// (<c>instances/start</c>, <c>internal/subflow-forward</c>, <c>transitions/{key}</c>,
+    /// <c>sub/*</c>, <c>busy</c>, <c>child-cancel</c>, <c>complete</c>, <c>longpoll/ack</c>) where
+    /// a retried request can duplicate the effect: a second start, or a second subflow forward.
+    /// Retry for them belongs to the user-defined error boundary, which is the only layer that
+    /// knows whether repeating a given transition is safe.
+    /// </para>
+    /// <para>
+    /// It exists because the retry split is a CODE change and therefore outside the scope of the
+    /// <c>ServiceDiscovery:Provider</c> switch — flipping the provider back to <c>http</c> does
+    /// not restore the old retry behaviour. This flag is the only way back without a redeploy.
+    /// </para>
+    /// </remarks>
+    public bool EnableRetryOnMutating { get; set; } = false;
 } 

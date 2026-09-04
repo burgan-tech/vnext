@@ -6,7 +6,6 @@ using BBT.Workflow.Execution.Bindings;
 using BBT.Workflow.Execution.Configuration;
 using BBT.Workflow.Execution.Metrics;
 using BBT.Workflow.Execution.Services;
-using Dapr.Client;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -23,7 +22,7 @@ namespace BBT.Workflow.Execution.Invokers;
 /// </summary>
 public sealed class DirectTriggerRemoteInvoker : ITaskInvoker<DirectTriggerBinding>
 {
-    private readonly DaprClient _daprClient;
+    private readonly DaprServiceInvocationClient _daprInvocation;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILogger<DirectTriggerRemoteInvoker> _logger;
     private readonly ITaskMetrics _metrics;
@@ -32,18 +31,20 @@ public sealed class DirectTriggerRemoteInvoker : ITaskInvoker<DirectTriggerBindi
     private readonly ResiliencePipeline<HttpResponseMessage> _retryPipeline;
 
     public DirectTriggerRemoteInvoker(
-        DaprClient daprClient,
+        DaprServiceInvocationClient daprInvocation,
         IHttpClientFactory httpClientFactory,
         IConfiguration configuration,
         ILogger<DirectTriggerRemoteInvoker> logger,
         IOptions<TriggerRetryOptions>? retryOptions = null,
         ITaskMetrics? metrics = null)
     {
-        _daprClient = daprClient;
+        _daprInvocation = daprInvocation;
         _httpClientFactory = httpClientFactory;
         _logger = logger;
         _metrics = metrics ?? NullTaskMetrics.Instance;
-        _orchestrationAppId = configuration["OrchestrationApi:AppId"] ?? "vnext-app";
+        _orchestrationAppId = VNextAppIds.OrchestratorOrDefault(
+            configuration[VNextAppIds.ConfigKeys.Orchestrator],
+            configuration[VNextAppIds.ConfigKeys.AppDomain]);
         _retryOptions = retryOptions?.Value ?? new TriggerRetryOptions();
         _retryPipeline = CreateRetryPipeline();
     }
@@ -149,7 +150,7 @@ public sealed class DirectTriggerRemoteInvoker : ITaskInvoker<DirectTriggerBindi
                 async token =>
                 {
                     var httpRequest = CreateDaprRequest(binding, appId);
-                    return await _daprClient.InvokeMethodWithResponseAsync(httpRequest, token);
+                    return await _daprInvocation.SendAsync(httpRequest, token);
                 },
                 cancellationToken);
 
@@ -319,7 +320,7 @@ public sealed class DirectTriggerRemoteInvoker : ITaskInvoker<DirectTriggerBindi
             attributes = binding.Body
         };
 
-        var request = _daprClient.CreateInvokeMethodRequest(
+        var request = DaprServiceInvocationClient.CreateRequest(
             HttpMethod.Patch,
             appId,
             path);

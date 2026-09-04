@@ -20,6 +20,8 @@ using Microsoft.Extensions.Options;
 using IConditionEvaluator = BBT.Workflow.Tasks.Evaluation.IConditionEvaluator;
 using ITimerEvaluator = BBT.Workflow.Tasks.Evaluation.ITimerEvaluator;
 using TaskFactory = BBT.Workflow.Tasks.Factory.TaskFactory;
+using Dapr.Client;
+using BBT.Workflow.Execution;
 
 namespace Microsoft.Extensions.DependencyInjection;
 
@@ -95,6 +97,11 @@ public static class TaskServiceCollectionExtensions
         // internally lazy (see GrpcTaskInvokerClientProvider) so the default "http" transport
         // never constructs one.
         services.TryAddSingleton<GrpcTaskInvokerClientProvider>();
+
+        // Service-invocation client for RemoteInvokerService's HTTP transport: the SDK's non-obsolete
+        // DaprClient.CreateInvokeHttpClient() (the InvokeMethod* family is [Obsolete] in 1.17). Singleton,
+        // shared with the Execution invokers when both layers live in one host (TryAdd).
+        services.TryAddSingleton(new DaprServiceInvocationClient(DaprClient.CreateInvokeHttpClient()));
 
         // Remote invoker service for Dapr invocation
         services.TryAddScoped<IRemoteInvokerService, RemoteInvokerService>();

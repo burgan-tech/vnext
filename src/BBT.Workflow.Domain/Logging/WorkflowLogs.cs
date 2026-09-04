@@ -2535,6 +2535,60 @@ public static partial class WorkflowLogs
         string domain);
 
     /// <summary>
+    /// Logs when the Dapr discovery provider derived a target app-id from the naming convention
+    /// without touching the registry. The common path: no network call is involved.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 50032,
+        Level = LogLevel.Debug,
+        Message = "Domain '{Domain}' resolved by convention to Dapr app-id '{AppId}'")]
+    public static partial void DomainResolvedByConvention(
+        this ILogger logger,
+        string domain,
+        string appId);
+
+    /// <summary>
+    /// Logs when the registry supplied an explicit <c>appId</c> that overrode the convention.
+    /// Worth Information level: it means this domain deviates from <c>vnext-{domain}-app</c>.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 50033,
+        Level = LogLevel.Information,
+        Message = "Domain '{Domain}' uses registry-supplied Dapr app-id '{AppId}' instead of the convention '{ConventionAppId}'")]
+    public static partial void DomainAppIdOverriddenByRegistry(
+        this ILogger logger,
+        string domain,
+        string appId,
+        string conventionAppId);
+
+    /// <summary>
+    /// Logs when the registry lookup was skipped entirely because
+    /// <c>ServiceDiscovery:Dapr:RequireRegistryEntry</c> is false — the fastest path, and the
+    /// escape hatch when the registry itself is unavailable.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 50034,
+        Level = LogLevel.Debug,
+        Message = "Skipped registry lookup for domain '{Domain}': RequireRegistryEntry is disabled")]
+    public static partial void DomainRegistryLookupSkipped(
+        this ILogger logger,
+        string domain);
+
+    /// <summary>
+    /// Logs the discovery provider a domain resolved through. Emitted once per resolution at
+    /// Debug so a per-domain rollout can be traced in logs as well as on the span.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 50035,
+        Level = LogLevel.Debug,
+        Message = "Domain '{Domain}' resolved via '{Provider}' provider as '{Endpoint}'")]
+    public static partial void DomainResolvedViaProvider(
+        this ILogger logger,
+        string domain,
+        string provider,
+        string endpoint);
+
+    /// <summary>
     /// Logs when a domain is successfully resolved from the registry.
     /// </summary>
     [LoggerMessage(

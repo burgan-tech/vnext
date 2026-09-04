@@ -369,6 +369,30 @@ public static class TelemetryConstants
         /// <summary>Endpoint kind requested from service discovery (Url or AppId). Set on every Discovery.Resolve span.</summary>
         public const string DiscoveryEndpointKind = "vnext.discovery.endpoint_kind";
 
+        /// <summary>
+        /// Which discovery provider answered: <c>http</c> (registry base URL) or <c>dapr</c>
+        /// (convention app-id + Name Resolution). Set on every Discovery.Resolve span — the
+        /// primary signal for watching a per-domain rollout, since both providers can be live
+        /// at once via <c>ServiceDiscovery:Dapr:DomainOverrides</c>.
+        /// </summary>
+        public const string DiscoveryProvider = "vnext.discovery.provider";
+
+        /// <summary>
+        /// How the endpoint was obtained: <c>convention</c>, <c>registry</c> or <c>cache</c>.
+        /// Distinguishes "resolved without touching the network" from a registry round trip.
+        /// See <see cref="DiscoveryResolutions"/>.
+        /// </summary>
+        public const string DiscoveryResolution = "vnext.discovery.resolution";
+
+        /// <summary>Resolved target Dapr app-id. Set only on the dapr provider's spans.</summary>
+        public const string DaprAppId = "vnext.dapr.app_id";
+
+        /// <summary>
+        /// Target Kubernetes namespace appended to the app-id for cross-namespace invocation.
+        /// Absent when resolution stays in the caller's own namespace.
+        /// </summary>
+        public const string DaprNamespace = "vnext.dapr.namespace";
+
         /// <summary>Execution chain id correlating hops within one auto-chain/subflow run.</summary>
         public const string ChainId = "vnext.chain.id";
 
@@ -452,8 +476,34 @@ public static class TelemetryConstants
     {
         /// <summary>Same domain: the gateway re-enters the query service in-process.</summary>
         public const string Local = "local";
-        /// <summary>Another domain: the gateway calls over HTTP.</summary>
+
+        /// <summary>
+        /// Another domain: the gateway calls out over the network.
+        /// <para>
+        /// Deliberately stays <c>remote</c> now that the wire may be either plain HTTP or Dapr
+        /// service invocation. The attribute describes LOCALITY (in-process vs. not), not the
+        /// transport — adding a third <c>dapr</c> value would silently break every dashboard and
+        /// query that partitions on <c>local</c> / <c>remote</c>. Which transport carried the
+        /// call is available separately as
+        /// <see cref="TelemetryConstants.TagNames.DiscoveryProvider"/>.
+        /// </para>
+        /// </summary>
         public const string Remote = "remote";
+    }
+
+    /// <summary>
+    /// Values for <see cref="TelemetryConstants.TagNames.DiscoveryResolution"/>.
+    /// </summary>
+    public static class DiscoveryResolutions
+    {
+        /// <summary>Derived from the app-id convention — no registry call was made.</summary>
+        public const string Convention = "convention";
+
+        /// <summary>Read from the discovery registry over HTTP.</summary>
+        public const string Registry = "registry";
+
+        /// <summary>Served from the provider's positive-result cache.</summary>
+        public const string Cache = "cache";
     }
 
     /// <summary>

@@ -19,9 +19,15 @@ using Xunit;
 namespace BBT.Workflow.Infrastructure.Tests.Discovery;
 
 /// <summary>
-/// Pins the post-cache-removal contract of <see cref="DomainDiscoveryResolver"/>: every resolution
-/// queries the discovery registry directly over HTTP, with no bulk cache, no ETag revalidation, and
-/// no <c>IDistributedCacheService</c>/<c>IDistributedLockService</c> dependency in the constructor.
+/// Pins the contract of <see cref="HttpDomainDiscoveryProvider"/> — the DEFAULT provider, and the
+/// behaviour <c>ServiceDiscovery:Provider=http</c> restores: every resolution queries the discovery
+/// registry directly over HTTP, with no bulk cache, no ETag revalidation, and no
+/// <c>IDistributedCacheService</c>/<c>IDistributedLockService</c> dependency.
+/// <para>
+/// These expectations are what makes the provider switch a real rollback rather than an
+/// approximation of one, so they must keep passing unchanged as the Dapr provider evolves. The
+/// Dapr provider's own contract is pinned separately in <c>DaprDomainDiscoveryProviderTests</c>.
+/// </para>
 /// Follows the inline stub-<see cref="HttpMessageHandler"/> pattern established by
 /// <c>RemoteRelatedInstanceReaderTests.RoutingHandler</c>; there is no shared mocking library for
 /// <see cref="HttpClient"/> in this codebase.
@@ -35,7 +41,7 @@ public sealed class DomainDiscoveryResolverTests
 {
     private const string Domain = "lending";
 
-    internal static (DomainDiscoveryResolver Resolver, RoutingHandler Handler) CreateSut(
+    internal static (IDomainDiscoveryResolver Resolver, RoutingHandler Handler) CreateSut(
         Func<HttpRequestMessage, HttpResponseMessage>? respond = null,
         ServiceDiscoveryOptions? options = null)
     {
@@ -50,10 +56,13 @@ public sealed class DomainDiscoveryResolverTests
             Domain = "core"
         };
 
-        var resolver = new DomainDiscoveryResolver(
-            httpClientFactory,
+        var resolver = new HttpDomainDiscoveryProvider(
+            new DiscoveryRegistryClient(
+                httpClientFactory,
+                Options.Create(resolvedOptions),
+                NullLogger<DiscoveryRegistryClient>.Instance),
             Options.Create(resolvedOptions),
-            NullLogger<DomainDiscoveryResolver>.Instance);
+            NullLogger<HttpDomainDiscoveryProvider>.Instance);
 
         return (resolver, handler);
     }
