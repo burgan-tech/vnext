@@ -38,6 +38,9 @@ services:
       "--dapr-http-port", "42110",
       "--scheduler-host-address", "dapr-scheduler:50007",
       "--placement-host-address", "dapr-placement:50005",
+      # Explicit so the sidecar-to-sidecar port is deterministic (mDNS advertises whatever
+      # the sidecar listens on; a fixed port is easier to read in traces and tcpdump).
+      "--dapr-internal-grpc-port", "50002",
       "--app-channel-address", "host.orb.local"
     ]
     volumes:
@@ -47,7 +50,10 @@ services:
       - "42110:42110"
       - "42111:42111"
     networks:
-      - bbt-development
+      bbt-development:
+        # Convenience alias "{app-id}-dapr" (the container is named after its ROLE, not its
+        # app-id). Name resolution is mDNS and does not need it; humans curling a sidecar do.
+        aliases: ["vnext-app-dapr"]
     extra_hosts:
       - "host.orb.local:host-gateway"
     depends_on:
@@ -81,6 +87,9 @@ services:
       "--dapr-http-port", "43110",
       "--scheduler-host-address", "dapr-scheduler:50007",
       "--placement-host-address", "dapr-placement:50005",
+      # Explicit so the sidecar-to-sidecar port is deterministic (mDNS advertises whatever
+      # the sidecar listens on; a fixed port is easier to read in traces and tcpdump).
+      "--dapr-internal-grpc-port", "50002",
       "--app-channel-address", "host.orb.local"
     ]
     volumes:
@@ -90,7 +99,10 @@ services:
       - "43110:43110"
       - "43111:43111"
     networks:
-      - bbt-development
+      bbt-development:
+        # Convenience alias "{app-id}-dapr" (the container is named after its ROLE, not its
+        # app-id). Name resolution is mDNS and does not need it; humans curling a sidecar do.
+        aliases: ["vnext-execution-app-dapr"]
     extra_hosts:
       - "host.orb.local:host-gateway"
     depends_on:
@@ -112,6 +124,9 @@ services:
       "--dapr-http-port", "44110",
       "--scheduler-host-address", "dapr-scheduler:50007",
       "--placement-host-address", "dapr-placement:50005",
+      # Explicit so the sidecar-to-sidecar port is deterministic (mDNS advertises whatever
+      # the sidecar listens on; a fixed port is easier to read in traces and tcpdump).
+      "--dapr-internal-grpc-port", "50002",
       "--app-channel-address", "host.orb.local"
     ]
     volumes:
@@ -121,7 +136,10 @@ services:
       - "44110:44110"
       - "44111:44111"
     networks:
-      - bbt-development
+      bbt-development:
+        # Convenience alias "{app-id}-dapr" (the container is named after its ROLE, not its
+        # app-id). Name resolution is mDNS and does not need it; humans curling a sidecar do.
+        aliases: ["vnext-worker-outbox-dapr"]
     extra_hosts:
       - "host.orb.local:host-gateway"
     depends_on:
@@ -143,6 +161,9 @@ services:
       "--dapr-http-port", "45110",
       "--scheduler-host-address", "dapr-scheduler:50007",
       "--placement-host-address", "dapr-placement:50005",
+      # Explicit so the sidecar-to-sidecar port is deterministic (mDNS advertises whatever
+      # the sidecar listens on; a fixed port is easier to read in traces and tcpdump).
+      "--dapr-internal-grpc-port", "50002",
       "--app-channel-address", "host.orb.local"
     ]
     volumes:
@@ -152,7 +173,10 @@ services:
       - "45110:45110"
       - "45111:45111"
     networks:
-      - bbt-development
+      bbt-development:
+        # Convenience alias "{app-id}-dapr" (the container is named after its ROLE, not its
+        # app-id). Name resolution is mDNS and does not need it; humans curling a sidecar do.
+        aliases: ["vnext-worker-inbox-dapr"]
     extra_hosts:
       - "host.orb.local:host-gateway"
     depends_on:
@@ -173,6 +197,9 @@ services:
       "--dapr-http-port", "44210",
       "--scheduler-host-address", "dapr-scheduler:50007",
       "--placement-host-address", "dapr-placement:50005",
+      # Explicit so the sidecar-to-sidecar port is deterministic (mDNS advertises whatever
+      # the sidecar listens on; a fixed port is easier to read in traces and tcpdump).
+      "--dapr-internal-grpc-port", "50002",
       "--app-channel-address", "host.orb.local"
     ]
     volumes:
@@ -182,7 +209,10 @@ services:
       - "44210:44210"
       - "44211:44211"
     networks:
-      - bbt-development
+      bbt-development:
+        # Convenience alias "{app-id}-dapr" (the container is named after its ROLE, not its
+        # app-id). Name resolution is mDNS and does not need it; humans curling a sidecar do.
+        aliases: ["vnext-db-migrator-dapr"]
     extra_hosts:
       - "host.orb.local:host-gateway"
     depends_on:
@@ -204,6 +234,9 @@ services:
       "--dapr-http-port", "42130",
       "--scheduler-host-address", "dapr-scheduler:50007",
       "--placement-host-address", "dapr-placement:50005",
+      # Explicit so the sidecar-to-sidecar port is deterministic (mDNS advertises whatever
+      # the sidecar listens on; a fixed port is easier to read in traces and tcpdump).
+      "--dapr-internal-grpc-port", "50002",
       "--app-channel-address", "host.orb.local"
     ]
     volumes:
@@ -213,7 +246,10 @@ services:
       - "42130:42130"
       - "42131:42131"
     networks:
-      - bbt-development
+      bbt-development:
+        # Convenience alias "{app-id}-dapr" (the container is named after its ROLE, not its
+        # app-id). Name resolution is mDNS and does not need it; humans curling a sidecar do.
+        aliases: ["vnext-monitoring-dapr"]
     extra_hosts:
       - "host.orb.local:host-gateway"
     depends_on:

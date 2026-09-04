@@ -20,7 +20,7 @@ namespace BBT.Workflow.Infrastructure.Instances.Remote;
 /// Uses IDomainDiscoveryResolver to dynamically resolve endpoint URLs based on target domain.
 /// </summary>
 public sealed class RemoteInstanceRetryAppService(
-    HttpClient httpClient,
+    IRemoteTransport<IRemoteInstanceRetryAppService> transport,
     IOptions<RemoteOptions> options,
     IDomainDiscoveryResolver endpointResolver,
     ICurrentUser currentUser)
@@ -59,22 +59,19 @@ public sealed class RemoteInstanceRetryAppService(
             if (queryParams.Count > 0)
                 relativePath += "?" + string.Join("&", queryParams);
 
-            var requestUri = new Uri(endpoint.BaseUrl, relativePath.TrimStart('/'));
 
             // Build request body from data if provided
             var content = input.Data != null
                 ? new StringContent(JsonSerializer.Serialize(input.Data, JsonSerializerConstants.JsonOptions), Encoding.UTF8, "application/json")
                 : new StringContent("{}", Encoding.UTF8, "application/json");
 
-            var requestMessage = new HttpRequestMessage(HttpMethod.Post, requestUri)
+            var response = await transport.SendAsync(endpoint, HttpMethod.Post, relativePath, requestMessage =>
             {
-                Content = content
-            };
+                requestMessage.Content = content;
 
-            var forwardHeaders = currentUser.ToForwardHeaders();
-            CurrentUserForwardHeadersHelper.MergeIntoRequest(requestMessage, forwardHeaders, input.Headers, RemoteHttpResponseHelper.IsRestrictedHeader);
-
-            var response = await httpClient.SendAsync(requestMessage, cancellationToken);
+                var forwardHeaders = currentUser.ToForwardHeaders();
+                CurrentUserForwardHeadersHelper.MergeIntoRequest(requestMessage, forwardHeaders, input.Headers, RemoteHttpResponseHelper.IsRestrictedHeader);
+            }, cancellationToken);
 
             // Status code → Result.Fail (per Railway Pattern)
             return await HandleResponseAsync<RetryInstanceOutput>(response, cancellationToken);

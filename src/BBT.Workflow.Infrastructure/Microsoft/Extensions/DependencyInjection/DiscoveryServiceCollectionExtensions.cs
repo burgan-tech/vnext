@@ -91,8 +91,30 @@ public static class DiscoveryServiceCollectionExtensions
 
         services.AddScoped<IDomainRegistrationService, DomainRegistrationService>();
 
-        // Register domain discovery resolver for dynamic endpoint resolution
-        services.AddSingleton<IDomainDiscoveryResolver, DomainDiscoveryResolver>();
+        // Registry reads are shared by both providers: the http provider needs the baseUrl, the
+        // dapr provider only the optional appId override. Registration and health are untouched
+        // by the Dapr migration — only address resolution moved.
+        services.AddSingleton<IDiscoveryRegistryClient, DiscoveryRegistryClient>();
+
+        // The dapr provider caches positive results; harmless when it is not selected.
+        services.AddMemoryCache();
+
+        // Provider selection. Singleton, matching the previous resolver's lifetime.
+        //
+        // An unrecognized value falls back to http rather than throwing: a typo in an
+        // environment variable must not move production traffic onto a new transport, and it
+        // must not stop the host from starting either. The chosen provider is logged so the
+        // decision is visible at boot.
+        var provider = options.Provider?.Trim() ?? string.Empty;
+
+        if (provider.Equals(DiscoveryProviders.Dapr, StringComparison.OrdinalIgnoreCase))
+        {
+            services.AddSingleton<IDomainDiscoveryResolver, DaprDomainDiscoveryProvider>();
+        }
+        else
+        {
+            services.AddSingleton<IDomainDiscoveryResolver, HttpDomainDiscoveryProvider>();
+        }
 
         return services;
     }

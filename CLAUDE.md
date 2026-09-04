@@ -27,6 +27,7 @@ On-demand skills live under `.claude/skills/`. Invoke via the `Skill` tool when 
 - **create-github-issue** — "issue aç" / "open issue" / "projeyi tara"
 - **create-github-pr** — "PR oluştur" / "open PR" / "pull request"
 - **git-commit-message** — "commit mesajı" / "git commit"
+- **cross-domain-lab** — "cross-domain test" / "çapraz domain" / "partner domain" (lokal 3-domain Dapr lab'ı; lab vnext-example `labs/cross-domain/` altında)
 
 ## First-Time Setup
 

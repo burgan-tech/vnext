@@ -20,7 +20,7 @@ namespace BBT.Workflow.Authorization.Remote;
 /// Uses IDomainDiscoveryResolver to resolve endpoint by target domain.
 /// </summary>
 public sealed class RemoteAuthorizeAppService(
-    HttpClient httpClient,
+    IRemoteTransport<IRemoteAuthorizeAppService> transport,
     IOptions<RemoteOptions> options,
     IDomainDiscoveryResolver endpointResolver,
     ICurrentUser currentUser)
@@ -67,11 +67,11 @@ public sealed class RemoteAuthorizeAppService(
             if (queryParams.Count > 0)
                 relativePath += "?" + string.Join("&", queryParams);
 
-            var requestUri = new Uri(endpoint.BaseUrl, relativePath.TrimStart('/'));
-            using var requestMessage = new HttpRequestMessage(HttpMethod.Get, requestUri);
-            var forwardHeaders = currentUser.ToForwardHeaders();
-            CurrentUserForwardHeadersHelper.MergeIntoRequest(requestMessage, forwardHeaders, requestContext?.Headers);
-            var response = await httpClient.SendAsync(requestMessage, cancellationToken);
+            var response = await transport.SendAsync(endpoint, HttpMethod.Get, relativePath, requestMessage =>
+            {
+                var forwardHeaders = currentUser.ToForwardHeaders();
+                CurrentUserForwardHeadersHelper.MergeIntoRequest(requestMessage, forwardHeaders, requestContext?.Headers);
+            }, cancellationToken);
 
             // 200 and 403 both return AuthorizeOutput body (allowed true/false)
             if (response.StatusCode == HttpStatusCode.OK || response.StatusCode == HttpStatusCode.Forbidden)
@@ -110,11 +110,11 @@ public sealed class RemoteAuthorizeAppService(
             if (!string.IsNullOrEmpty(version))
                 relativePath += "?version=" + Uri.EscapeDataString(version);
 
-            var requestUri = new Uri(endpoint.BaseUrl, relativePath.TrimStart('/'));
-            using var requestMessage = new HttpRequestMessage(HttpMethod.Get, requestUri);
-            var forwardHeaders = currentUser.ToForwardHeaders();
-            CurrentUserForwardHeadersHelper.MergeIntoRequest(requestMessage, forwardHeaders, null);
-            var response = await httpClient.SendAsync(requestMessage, cancellationToken);
+            var response = await transport.SendAsync(endpoint, HttpMethod.Get, relativePath, requestMessage =>
+            {
+                var forwardHeaders = currentUser.ToForwardHeaders();
+                CurrentUserForwardHeadersHelper.MergeIntoRequest(requestMessage, forwardHeaders, null);
+            }, cancellationToken);
 
             if (response.StatusCode == HttpStatusCode.OK)
             {

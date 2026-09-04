@@ -15,11 +15,11 @@ namespace BBT.Workflow.Gateway;
 /// Reads related instances that live in another domain, over the internal related-data endpoints
 /// (<c>InstanceController.GetRelatedDataAsync</c> / <c>GetRelatedDataBatchAsync</c>). Modeled on
 /// <see cref="BBT.Workflow.Instances.Remote.RemoteInstanceQueryAppService"/> for endpoint resolution,
-/// <see cref="HttpClient"/> usage and error mapping. Unlike that service, this reader sends no caller
+/// transport usage and error mapping. Unlike that service, this reader sends no caller
 /// identity and forwards no headers — related-instance access is system-identity by design.
 /// </summary>
 public sealed class RemoteRelatedInstanceReader(
-    HttpClient httpClient,
+    IRemoteTransport<RemoteRelatedInstanceReader> transport,
     IOptions<RemoteOptions> options,
     IDomainDiscoveryResolver endpointResolver) : IRelatedInstanceReader
 {
@@ -48,11 +48,10 @@ public sealed class RemoteRelatedInstanceReader(
         if (!string.IsNullOrWhiteSpace(reference.FlowVersion))
             relativePath += $"?version={Uri.EscapeDataString(reference.FlowVersion)}";
 
-        var requestUri = new Uri(endpoint.BaseUrl, relativePath.TrimStart('/'));
-
         try
         {
-            var response = await httpClient.GetAsync(requestUri, cancellationToken);
+            var response = await transport.SendAsync(
+                endpoint, HttpMethod.Get, relativePath, configure: null, cancellationToken);
 
             // AetherControllerBase.FromResult maps a successful read of a nonexistent instance to 204
             // No Content — absence, not an error. A 404 here means the route or the target app id is
@@ -139,24 +138,19 @@ public sealed class RemoteRelatedInstanceReader(
         if (!string.IsNullOrWhiteSpace(flowVersion))
             relativePath += $"?version={Uri.EscapeDataString(flowVersion)}";
 
-        var requestUri = new Uri(endpoint.BaseUrl, relativePath.TrimStart('/'));
-
         var requestBody = new RelatedDataBatchInput
         {
             InstanceIds = group.Select(reference => reference.InstanceId).ToList()
         };
 
         var jsonContent = JsonSerializer.Serialize(requestBody, JsonSerializerConstants.JsonOptions);
-        var content = new StringContent(jsonContent, Encoding.UTF8, "application/json");
-
-        var requestMessage = new HttpRequestMessage(HttpMethod.Post, requestUri)
-        {
-            Content = content
-        };
 
         try
         {
-            var response = await httpClient.SendAsync(requestMessage, cancellationToken);
+            var response = await transport.SendAsync(endpoint, HttpMethod.Post, relativePath, requestMessage =>
+            {
+                requestMessage.Content = new StringContent(jsonContent, Encoding.UTF8, "application/json");
+            }, cancellationToken);
 
             if (!response.IsSuccessStatusCode)
             {
