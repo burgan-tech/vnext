@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -16,6 +17,7 @@ using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Execution.PostCommit;
 using BBT.Workflow.Execution.Services;
 using BBT.Workflow.Instances;
+using BBT.Workflow.Logging;
 using BBT.Workflow.SubFlow;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -26,8 +28,40 @@ using WorkflowDefinition = BBT.Workflow.Definitions.Workflow;
 
 namespace BBT.Workflow.Application.Tests.Execution.Services;
 
+[Collection(TracingDetailLevelCollection.Name)]
 public sealed class TransitionRunnerPostCommitTests
 {
+    [Fact]
+    public async Task RunAsync_PostCommitCoordination_IsSpannedAroundTheFreshScope()
+    {
+        var collected = new List<Activity>();
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == "BBT.Workflow.Pipeline",
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) =>
+                ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStopped = collected.Add
+        };
+        ActivitySource.AddActivityListener(listener);
+        using var root = new Activity("post-commit-coordinate-test").Start();
+        var harness = new RunnerHarness(
+            new StagePlan(
+                "pipeline",
+                PostCommitBehavior: PostCommitContinuationBehavior.ContinueParent,
+                NextTransition: "fresh-parent-next"),
+            new StagePlan("fresh-next-stage"));
+
+        var result = await harness.Runner.RunAsync(harness.CreateInput("first"));
+
+        result.IsSuccess.ShouldBeTrue();
+        var span = collected.Single(a =>
+            a.TraceId == root.TraceId && a.DisplayName == "PostCommit.Coordinate");
+        span.ParentId.ShouldBe(root.Id);
+        span.GetTagItem(TelemetryConstants.TagNames.SpanCategory)
+            .ShouldBe(TelemetryConstants.SpanCategories.Business);
+        span.GetTagItem(TelemetryConstants.TagNames.TransitionKey).ShouldBe("first");
+    }
+
     [Fact]
     public async Task RunAsync_ContinueParent_OrdersCommitAndPostCommitBeforeFreshStage()
     {

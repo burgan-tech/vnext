@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using BBT.Aether.Uow;
 using BBT.Workflow.BackgroundJobs.Options;
 using BBT.Workflow.BackgroundJobs.Payloads;
@@ -74,7 +75,26 @@ public sealed class JobTimeoutRecoveryService(
             }
 
             await instanceRepository.UpdateAsync(instance, true, cancellationToken);
-            await uow.CommitAsync(cancellationToken);
+            ActivityContext commitContext;
+            using (var commitActivity = PipelineStepActivityHelper.StartTransitionActivity(
+                       "Uow.Commit", args.TransitionKey))
+            {
+                await uow.CommitAsync(cancellationToken);
+                commitContext = commitActivity?.Context ?? default;
+            }
+
+            // The job's episode is still ambient here (TransitionJobHandler runs recovery inside its
+            // lane scope): a job that timed out rests the instance Faulted, and that is the client's
+            // rest point.
+            ActivationActivity.Emit(
+                PipelineStepActivityHelper.ActivitySource,
+                TelemetryConstants.ActivationOutcomes.Faulted,
+                args.InstanceId,
+                args.Domain,
+                args.Workflow,
+                args.TransitionKey,
+                instance.GetCurrentState,
+                settlingCommit: commitContext);
 
             // The job's episode is still ambient here (TransitionJobHandler runs recovery inside its
             // lane scope): a job that timed out rests the instance Faulted, and that is the client's

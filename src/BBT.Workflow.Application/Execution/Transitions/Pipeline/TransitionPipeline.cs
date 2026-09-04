@@ -452,7 +452,8 @@ public class TransitionPipeline
 
         // The failure path's own rest point: a status lock, a fresh unit of work, a reload and a
         // commit that used to run unnamed after the failing step's span had already closed.
-        using var activity = PipelineStepActivityHelper.StartOperationActivity("Instance.Fault");
+        using var activity = PipelineStepActivityHelper.StartTransitionActivity(
+            "Instance.Fault", context.TransitionKey);
         activity?.SetTag("error.code", error.Code);
         activity?.SetStatus(ActivityStatusCode.Error, error.Message);
 
@@ -485,7 +486,13 @@ public class TransitionPipeline
 
         instance.Fault(context.Domain, context.CallerMode == ExecMode.Sync);
         await _instanceRepository.UpdateAsync(instance, true, cancellationToken);
-        await faultUow.CommitAsync(cancellationToken);
+        ActivityContext commitContext;
+        using (var commitActivity = PipelineStepActivityHelper.StartTransitionActivity(
+                   "Uow.Commit", context.TransitionKey))
+        {
+            await faultUow.CommitAsync(cancellationToken);
+            commitContext = commitActivity?.Context ?? default;
+        }
 
         // Faulted is a rest point the client observes, so the activation episode closes here —
         // after the commit, like every other rest point. Regardless of OwnsStatus: whatever this
@@ -497,7 +504,8 @@ public class TransitionPipeline
             context.Domain,
             context.WorkflowKey,
             context.TransitionKey,
-            instance.GetCurrentState);
+            instance.GetCurrentState,
+            settlingCommit: commitContext);
 
         _logger.InstanceFaultedSuccessfully(context.InstanceId);
     }

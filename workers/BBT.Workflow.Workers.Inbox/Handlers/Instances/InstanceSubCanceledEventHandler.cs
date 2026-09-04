@@ -35,7 +35,7 @@ internal sealed class InstanceSubCanceledEventHandler(
 
         using var traceScope = EventTraceScope.Start(
             "InstanceSubCanceled.Handle", eventData, correlationIdProvider,
-            EventTraceMode.LinkedDelivery, envelope.Id, eventData.RearmAttempt);
+            EventTraceMode.IsolatedDelivery, envelope.Id, eventData.RearmAttempt);
 
         // This delivery is the durable BACKUP of the post-commit terminal relay: in the normal case the
         // relay already settled the parent and the settlement path answers AlreadySettled via the

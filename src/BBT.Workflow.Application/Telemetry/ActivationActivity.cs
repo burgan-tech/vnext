@@ -17,8 +17,9 @@ namespace BBT.Workflow.Telemetry;
 /// Dapr scheduler round-trip. The hops are therefore parented to the lane anchor (the APM
 /// transaction) as they always were, and this span is created at the rest point with
 /// <c>startTime</c> = the carried episode start — a sibling of the hops under the same anchor,
-/// covering all of them. The settling hop's span is attached as an <see cref="ActivityLink"/> so
-/// "which hop closed the episode" stays discoverable.
+/// covering all of them. The <c>Uow.Commit</c> span that made the rest point durable is attached as
+/// an <see cref="ActivityLink"/>. Linking the whole settling job is deliberately avoided because
+/// job bookkeeping can continue after the instance is already observable as Available.
 /// </para>
 /// <para>
 /// <b>Kind is <see cref="ActivityKind.Internal"/>, deliberately.</b> apm-server classifies
@@ -30,7 +31,7 @@ namespace BBT.Workflow.Telemetry;
 /// <b>This is the one explicit-parent span outside the lane helpers</b>, and it needs the same care:
 /// an explicit parent leaves <see cref="Activity.Parent"/> null, so <c>Stop()</c> would set
 /// <see cref="Activity.Current"/> to null and strip the caller's ambient span for the rest of its
-/// frame. <see cref="Emit(ActivitySource, string, Guid, string, string, string?, string?, bool)"/>
+/// frame. The explicit <see cref="Emit(ActivitySource, string, Guid, string, string, string?, string?, bool, ActivityContext)"/>
 /// saves and restores it.
 /// </para>
 /// </summary>
@@ -43,7 +44,10 @@ public static class ActivationActivity
     /// Emits the episode span for the instance the pipeline context describes. Call it only after the
     /// settlement's writes have committed — see <see cref="ActivationVerdict"/>.
     /// </summary>
-    public static Activity? Emit(TransitionExecutionContext context, ActivationVerdict verdict)
+    public static Activity? Emit(
+        TransitionExecutionContext context,
+        ActivationVerdict verdict,
+        ActivityContext settlingCommit = default)
         => Emit(
             PipelineStepActivityHelper.ActivitySource,
             verdict.Outcome,
@@ -52,7 +56,8 @@ public static class ActivationActivity
             context.WorkflowKey,
             context.TransitionKey,
             verdict.StateTo ?? context.Target?.Key,
-            verdict.CasFlipped);
+            verdict.CasFlipped,
+            settlingCommit);
 
     /// <summary>
     /// Emits the episode span. Returns the (already stopped) activity so callers and tests can
@@ -66,6 +71,7 @@ public static class ActivationActivity
     /// <param name="lastTransitionKey">The transition the settling hop ran.</param>
     /// <param name="stateTo">The state the instance rests in.</param>
     /// <param name="casFlipped">True when the settlement's compare-and-set made the instance Active.</param>
+    /// <param name="settlingCommit">The completed Uow.Commit span that made the rest point durable.</param>
     public static Activity? Emit(
         ActivitySource source,
         string outcome,
@@ -74,7 +80,8 @@ public static class ActivationActivity
         string flow,
         string? lastTransitionKey,
         string? stateTo,
-        bool casFlipped = false)
+        bool casFlipped = false,
+        ActivityContext settlingCommit = default)
     {
         var episode = WorkflowTraceLane.Episode;
         var ambient = Activity.Current;
@@ -92,7 +99,9 @@ public static class ActivationActivity
         if (clockSkew) startedAt = now;
 
         var parent = ResolveParent(ambient);
-        var links = ambient is null ? null : new[] { new ActivityLink(ambient.Context) };
+        var links = settlingCommit != default && settlingCommit.TraceId == parent.TraceId
+            ? new[] { new ActivityLink(settlingCommit) }
+            : null;
         var episodeKey = episode?.TransitionKey ?? lastTransitionKey ?? "resume";
         var settlingKey = lastTransitionKey ?? episodeKey;
 

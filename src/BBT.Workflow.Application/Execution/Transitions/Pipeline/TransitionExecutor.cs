@@ -142,7 +142,7 @@ public sealed class TransitionExecutor
         TransitionExecutionContext context,
         CancellationToken cancellationToken)
     {
-        using var stepActivity = PipelineStepActivityHelper.StartStepActivity(step);
+        using var stepActivity = PipelineStepActivityHelper.StartStepActivity(step, context.TransitionKey);
         try
         {
             var result = await step.ExecuteAsync(context, cancellationToken);

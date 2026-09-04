@@ -46,7 +46,7 @@ public sealed class FlatLaneActivityTests : IDisposable
     private static readonly string Predecessor = TraceParent(TraceId, "2222222222222222");
 
     [Fact]
-    public void Anchor_becomes_the_parent_and_the_predecessor_is_linked()
+    public void Anchor_becomes_the_parent_and_the_predecessor_is_tagged_without_a_link()
     {
         using var activity = FlatLaneActivity.Start(
             _source, "TransitionJob.Execute", ActivityKind.Consumer, Anchor, Predecessor, traceState: null);
@@ -55,7 +55,7 @@ public sealed class FlatLaneActivityTests : IDisposable
         activity!.TraceId.ToString().ShouldBe(TraceId);
         activity.ParentSpanId.ToString().ShouldBe("1111111111111111");
 
-        activity.Links.Select(l => l.Context.SpanId.ToString()).ShouldContain("2222222222222222");
+        activity.Links.ShouldBeEmpty();
         activity.GetTagItem(TelemetryConstants.TagNames.TraceLane).ShouldBe(true);
         activity.GetTagItem(TelemetryConstants.TagNames.TraceLaneAnchor).ShouldBe("1111111111111111");
         activity.GetTagItem(TelemetryConstants.TagNames.HopPredecessor).ShouldBe("2222222222222222");
@@ -77,8 +77,8 @@ public sealed class FlatLaneActivityTests : IDisposable
         hop2.ParentSpanId.ToString().ShouldBe("1111111111111111");
         hop2.ParentSpanId.ShouldNotBe(hop1.SpanId);
 
-        // Causality survives as a link + tag rather than as a parent edge.
-        hop2.Links.Select(l => l.Context.SpanId).ShouldContain(hop1.SpanId);
+        // Causality survives as a tag rather than a parent or link edge.
+        hop2.Links.ShouldBeEmpty();
         hop2.GetTagItem(TelemetryConstants.TagNames.HopPredecessor).ShouldBe(hop1.SpanId.ToString());
     }
 
@@ -117,7 +117,7 @@ public sealed class FlatLaneActivityTests : IDisposable
     }
 
     [Fact]
-    public void An_anchor_from_another_trace_is_linked_but_never_parented()
+    public void An_anchor_from_another_trace_is_rejected_and_never_parented()
     {
         var foreignAnchor = TraceParent(OtherTraceId, "3333333333333333");
 
@@ -153,7 +153,7 @@ public sealed class FlatLaneActivityTests : IDisposable
     }
 
     [Fact]
-    public void An_ambient_span_from_another_trace_is_demoted_to_a_link()
+    public void An_ambient_span_from_another_trace_is_retained_as_tags_without_a_link()
     {
         var ambient = new Activity("dapr-callback");
         ambient.SetIdFormat(ActivityIdFormat.W3C);
@@ -165,8 +165,12 @@ public sealed class FlatLaneActivityTests : IDisposable
 
             activity.ShouldNotBeNull();
             activity!.ParentSpanId.ToString().ShouldBe("1111111111111111");
-            activity.Links.Select(l => l.Context.SpanId).ShouldContain(ambient.SpanId);
+            activity.Links.Select(l => l.Context.SpanId).ShouldNotContain(ambient.SpanId);
             activity.GetTagItem(TelemetryConstants.TagNames.DaprCallback).ShouldBe(true);
+            activity.GetTagItem(TelemetryConstants.TagNames.DaprCallbackTraceId)
+                .ShouldBe(ambient.TraceId.ToString());
+            activity.GetTagItem(TelemetryConstants.TagNames.DaprCallbackSpanId)
+                .ShouldBe(ambient.SpanId.ToString());
         }
         finally
         {
@@ -244,9 +248,13 @@ public sealed class FlatLaneActivityTests : IDisposable
             activity!.ParentSpanId.ToString().ShouldBe("1111111111111111");
             activity.GetTagItem(TelemetryConstants.TagNames.TraceLane).ShouldBe(true);
             activity.GetTagItem(TelemetryConstants.TagNames.TraceLaneMismatch).ShouldBeNull();
-            // The callback is not lost — it is linked.
-            activity.Links.Select(l => l.Context.SpanId).ShouldContain(ambient.SpanId);
+            // The callback remains searchable without making Elastic splice its trace into this one.
+            activity.Links.Select(l => l.Context.SpanId).ShouldNotContain(ambient.SpanId);
             activity.GetTagItem(TelemetryConstants.TagNames.DaprCallback).ShouldBe(true);
+            activity.GetTagItem(TelemetryConstants.TagNames.DaprCallbackTraceId)
+                .ShouldBe(ambient.TraceId.ToString());
+            activity.GetTagItem(TelemetryConstants.TagNames.DaprCallbackSpanId)
+                .ShouldBe(ambient.SpanId.ToString());
         }
         finally
         {

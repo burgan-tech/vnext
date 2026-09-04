@@ -97,12 +97,14 @@ public sealed class TransitionRunner(
                 stageContext.TransitionKey));
     }
 
-    private Task<Result<PostCommitCoordinationResult>> CoordinatePostCommitAsync(
+    private async Task<Result<PostCommitCoordinationResult>> CoordinatePostCommitAsync(
         PostCommitParentSnapshot snapshot,
         TransitionExecutionContext sourceContext,
         CancellationToken cancellationToken)
     {
-        return scopeFactory.ExecuteWithWorkflowAsync(
+        using var activity = PipelineStepActivityHelper.StartTransitionActivity(
+            "PostCommit.Coordinate", sourceContext.TransitionKey);
+        var result = await scopeFactory.ExecuteWithWorkflowAsync(
             snapshot.Domain,
             snapshot.WorkflowKey,
             snapshot.WorkflowVersion,
@@ -116,6 +118,10 @@ public sealed class TransitionRunner(
                 }
             },
             cancellationToken);
+        if (!result.IsSuccess)
+            activity?.SetStatus(ActivityStatusCode.Error, result.Error.Message);
+
+        return result;
     }
 
     private Task<Result<TransitionOutput>> MutateParentAsync(
@@ -170,7 +176,8 @@ public sealed class TransitionRunner(
                     if (!coreResult.IsSuccess)
                         return Result<TransitionCoreOutput>.Fail(coreResult.Error);
 
-                    using (PipelineStepActivityHelper.StartOperationActivity("Events.PublishDeferred"))
+                    using (PipelineStepActivityHelper.StartTransitionActivity(
+                               "Events.PublishDeferred", context.TransitionKey))
                     {
                         await PublishDeferredEventsAsync(sp, uowManager, coreResult.Value!, ct);
                     }
@@ -178,9 +185,25 @@ public sealed class TransitionRunner(
                     // The transaction commit — everything the hop wrote reaching the database at
                     // once. It sat outside every span, so a slow commit read as time the hop spent
                     // nowhere.
-                    using (PipelineStepActivityHelper.StartOperationActivity("Uow.Commit"))
+                    ActivityContext commitContext;
+                    using (var commitActivity = PipelineStepActivityHelper.StartTransitionActivity(
+                               "Uow.Commit", context.TransitionKey))
                     {
                         await uow.CommitAsync(ct);
+                        commitContext = commitActivity?.Context ?? default;
+                    }
+
+                    // The activation episode closes HERE, not at Transition.Settle: the settlement's
+                    // Busy→Active write only becomes visible to a client polling the state function
+                    // once this commit lands. Emitted while the transaction (job span or server
+                    // span) is still Activity.Current, parented to the lane anchor with its start
+                    // backdated to the originating request — see ActivationActivity.
+                    var executionContext = coreResult.Value!.ExecutionContext;
+                    if (executionContext.Directives.Activation is { } verdict)
+                    {
+                        ActivationActivity.Emit(executionContext, verdict, commitContext);
+                        if (verdict.CasFlipped)
+                            Activity.Current?.AddEvent(new ActivityEvent("instance.available.committed"));
                     }
 
                     // The activation episode closes HERE, not at Transition.Settle: the settlement's

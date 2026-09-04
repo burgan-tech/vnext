@@ -1,5 +1,10 @@
 # The Event Chain: Publish → Hook → Outbox → Handle, as One Trace
 
+> **Historical document.** The `EventHook.*` model described and measured here has been removed.
+> [Event Publish Modes](event-publish-modes.md) is the canonical current behavior; the current
+> span inventory is [Trace Span Tree](trace-span-tree.md). The evidence below is retained for
+> archaeology and must not be used as an operational trace contract.
+
 ## Why this exists
 
 A domain event's life crosses three processes and (usually) a message broker: it is published
@@ -38,11 +43,11 @@ transition's `Events.PublishDeferred` span — was true for **every** event at t
 captured. It is **no longer true for that specific event**. `EventTraceScope.Start` now takes an
 explicit `EventTraceMode` (`workers/BBT.Workflow.Workers.Inbox/Tracing/EventTraceScope.cs`), and the
 seven `Instance*` **fact** events — including `InstanceSubCompletedEvent`, the event this page's
-worked example is built on — use `EventTraceMode.LinkedDelivery`: the handler now **roots its own
-delivery trace** and attaches the producer's `TraceParent` as an `ActivityLink` instead of parenting
-onto it. Re-running the exact query in [Regression guard](#regression-guard-eventtracescope-still-works)
-today would show `InstanceSubCompleted.Handle` as a **root transaction in its own trace**, linked to
-— not sharing `trace.id` with — the origin trace `4682ca695dac4f7021c1a1bc4419faa1`.
+worked example is built on — use `EventTraceMode.IsolatedDelivery`: the handler now **roots its own
+delivery trace** without a cross-trace `ActivityLink`; producer and transport ids remain searchable
+tags instead. Re-running the exact query in [Regression guard](#regression-guard-eventtracescope-still-works)
+today would show `InstanceSubCompleted.Handle` as a **root transaction in its own trace**, correlated
+by ids but neither linked to nor sharing `trace.id` with origin trace `4682ca695dac4f7021c1a1bc4419faa1`.
 
 The **command** events this page's diagram calls `EventHook`-adjacent but never worked an example
 for — `TransitionContinuationRequested`, `ChildSubflowCancelRequested`, `ChildSubflowFaultRequested`
@@ -50,9 +55,9 @@ for — `TransitionContinuationRequested`, `ChildSubflowCancelRequested`, `Child
 demonstrated below: the handler span still parents onto the event's own `TraceParent` and joins the
 producing transition's trace, byte-for-byte the same result this page's live evidence shows.
 
-The evidence below therefore keeps its full evidentiary value for what it proves about the
-publish-side `EventHook.{name}` spans (Task 1, still real and load-bearing where hooks still run)
-and for the `ContinueTrace` shape it happens to also demonstrate on the Inbox side — it simply no
+The evidence below therefore keeps historical value for the removed publish-side
+`EventHook.{name}` spans and for the `ContinueTrace` shape it happens to also demonstrate on the
+Inbox side — it simply no
 longer describes the **current** trace shape for `InstanceSubCompletedEvent` or any other fact
 event. See [Event Publish Modes § Observability contract](event-publish-modes.md#observability-contract)
 for the current tag/shape reference (`messaging.message.id`, `vnext.causation.id`,
@@ -234,7 +239,7 @@ when it happens; this run simply never made one.
 > **As captured, 2026-08 (see [Update](#update-2026-08-30-command-vs-fact-delivery-now-diverge)
 > above):** this section's live query and its "same trace" conclusion are exactly what ran at the
 > time — nothing here is altered. `InstanceSubCompletedEvent` has since moved to
-> `EventTraceMode.LinkedDelivery`, so re-running this today would show the `.Handle` transaction
+> `EventTraceMode.IsolatedDelivery`, so re-running this today would show the `.Handle` transaction
 > rooting its own trace instead of parenting onto `Events.PublishDeferred`. The regression guard
 > this section demonstrates — that `EventTraceScope` re-parents onto the event's own `TraceParent`
 > field at all — remains the mechanism `EventTraceMode.ContinueTrace` uses unchanged today for the

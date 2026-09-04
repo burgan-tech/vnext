@@ -23,7 +23,7 @@ public static class CacheActivityHelper
     /// (e.g. <c>AddSource("BBT.Workflow.Cache")</c>). If the host uses a wildcard such as
     /// <c>AddSource("BBT.Workflow.*")</c>, no extra registration is needed.
     /// </summary>
-    public static readonly ActivitySource ActivitySource = new("BBT.Workflow.Cache");
+    public static readonly ActivitySource ActivitySource = new(TelemetryConstants.ActivitySources.Cache);
 
     public const string OperationGet = "Cache.Get";
     public const string OperationSet = "Cache.Set";

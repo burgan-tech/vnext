@@ -13,7 +13,7 @@ public static class SubFlowActivityHelper
     /// <summary>
     /// ActivitySource for creating SubFlow-related activities.
     /// </summary>
-    public static readonly ActivitySource ActivitySource = new("BBT.Workflow.SubFlow");
+    public static readonly ActivitySource ActivitySource = new(TelemetryConstants.ActivitySources.SubFlow);
 
     /// <summary>
     /// Starts a new activity as a child of the current activity.

@@ -105,6 +105,9 @@ public sealed class PostCommitParentMutationServiceActivationTests : IDisposable
         activation.GetTagItem(TelemetryConstants.TagNames.InstanceId).ShouldBe(authoritative.Id.ToString());
 
         var settle = collected.Single(a => a.DisplayName == "Transition.Settle");
+        var commit = collected.Single(a => a.DisplayName == "Uow.Commit");
+        activation.Links.Select(link => link.Context.SpanId).ShouldContain(commit.SpanId);
+        activation.Links.Select(link => link.Context.SpanId).ShouldNotContain(root.SpanId);
         settle.GetTagItem(TelemetryConstants.TagNames.SettleCas).ShouldBe("flipped");
         settle.GetTagItem(TelemetryConstants.TagNames.ActivationEmitted).ShouldBe(true);
         settle.Events.Select(e => e.Name).ShouldContain("instance.available");
@@ -192,8 +195,11 @@ public sealed class PostCommitParentMutationServiceActivationTests : IDisposable
         result.IsSuccess.ShouldBeTrue();
         authoritative.Status.ShouldBe(InstanceStatus.Faulted);
         calls.ShouldBe(["lock", "uow", "reload", "update", "commit", "activation", "unlock"]);
-        collected.Single(IsActivation)
-            .GetTagItem(TelemetryConstants.TagNames.ActivationOutcome).ShouldBe(TelemetryConstants.ActivationOutcomes.Faulted);
+        var activation = collected.Single(IsActivation);
+        activation.GetTagItem(TelemetryConstants.TagNames.ActivationOutcome)
+            .ShouldBe(TelemetryConstants.ActivationOutcomes.Faulted);
+        var commit = collected.Single(a => a.DisplayName == "Uow.Commit");
+        activation.Links.Select(link => link.Context.SpanId).ShouldContain(commit.SpanId);
     }
 
     [Fact]

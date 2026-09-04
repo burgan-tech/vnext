@@ -35,7 +35,7 @@ public sealed class FlowTimeoutJobHandler(
 
     public async Task HandleAsync(WorkflowTimeoutPayload args, CancellationToken cancellationToken)
     {
-        using var activity = BackgroundJobActivityHelper.StartActivityAsChildWithLink("TimeoutJob.Execute", args);
+        using var activity = BackgroundJobActivityHelper.StartDeferredActivity("TimeoutJob.Execute", args);
         // A timeout firing opens its own activation episode — see TransitionTimerJobHandler.
         using var episode = WorkflowTraceLane.UseEpisode(TelemetryConstants.ActivationTriggers.Timeout, WellKnownTransitionKeys.Timeout);
         using (currentSchema.Change(args.FlowName))

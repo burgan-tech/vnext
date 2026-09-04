@@ -366,6 +366,7 @@ public sealed class InstanceCommandAppService(
         Instance instance,
         CancellationToken cancellationToken)
     {
+        using var activity = PipelineStepActivityHelper.StartOperationActivity("Instance.Persist");
         await instanceRepository.InsertAsync(instance, true, cancellationToken);
         return Result<(Definitions.Workflow, Instance)>.Ok((workflow, instance));
     }
@@ -626,9 +627,9 @@ public sealed class InstanceCommandAppService(
         Definitions.Workflow? workflowDefinition = null;
         // Named because it is the head of every transition request and used to sit unattributed
         // under the server span: the projection and the definition resolve, with the Busy verdict.
-        using (var intake = PipelineStepActivityHelper.StartOperationActivity("Transition.Intake"))
+        using (var intake = PipelineStepActivityHelper.StartTransitionActivity(
+                   "Transition.Intake", transitionKey))
         {
-            intake?.SetTag(TelemetryConstants.TagNames.TransitionKey, transitionKey);
             snapshot = await instanceRepository.GetExecutionSnapshotAsync(instance, cancellationToken);
 
             if (snapshot is not null)

@@ -18,7 +18,7 @@ public sealed class TaskInvokeHandler(
     /// ActivitySource for spans restored from the request body's trace context when
     /// transport-level (traceparent header) propagation did not produce an ambient activity.
     /// </summary>
-    private static readonly ActivitySource ActivitySource = new("BBT.Workflow.Execution");
+    private static readonly ActivitySource ActivitySource = new(TelemetryConstants.ActivitySources.Execution);
 
     /// <summary>
     /// Invokes a task using the envelope-based routing pattern.

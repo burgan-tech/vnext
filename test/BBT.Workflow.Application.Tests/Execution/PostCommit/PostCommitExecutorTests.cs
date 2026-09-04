@@ -1,10 +1,13 @@
 using System;
+using System.Diagnostics;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using BBT.Aether.Results;
 using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.PostCommit;
 using BBT.Workflow.Instances;
+using BBT.Workflow.Logging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using NSubstitute;
@@ -18,6 +21,7 @@ namespace BBT.Workflow.Application.Tests.Execution.PostCommit;
 /// Focuses on how handler failures are surfaced as fault requests, including the
 /// propagation of the originating error's detail (stack trace) into the fault request.
 /// </summary>
+[Collection(BBT.Workflow.Application.Tests.TracingDetailLevelCollection.Name)]
 public class PostCommitExecutorTests
 {
     private readonly IServiceScopeFactory _scopeFactory;
@@ -69,6 +73,45 @@ public class PostCommitExecutorTests
         result.FaultRequest.ShouldNotBeNull();
         result.FaultRequest!.ErrorCode.ShouldBe("Instance:100023");
         result.FaultRequest.StackTrace.ShouldBe(stackTrace);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_PostCommitSpan_IsARealChildOfTheCurrentTransition()
+    {
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == "BBT.Workflow.BackgroundJobs",
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) =>
+                ActivitySamplingResult.AllDataAndRecorded
+        };
+        ActivitySource.AddActivityListener(listener);
+
+        using var parent = new Activity("TransitionJob.Execute/test").Start();
+        ActivityContext observed = default;
+        ActivitySpanId observedParent = default;
+        ActivityLink[] observedLinks = [];
+        object? observedTransitionKey = null;
+        var handler = Substitute.For<IPostCommitHandler<TestJob>>();
+        handler.HandleAsync(
+                Arg.Any<TestJob>(), Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(_ =>
+            {
+                observed = Activity.Current?.Context ?? default;
+                observedParent = Activity.Current?.ParentSpanId ?? default;
+                observedLinks = Activity.Current?.Links.ToArray() ?? [];
+                observedTransitionKey = Activity.Current?.GetTagItem(TelemetryConstants.TagNames.TransitionKey);
+                return Result.Ok();
+            });
+        _serviceProvider.GetService(typeof(IPostCommitHandler<TestJob>)).Returns(handler);
+
+        var result = await _executor.ExecuteAsync(
+            [new TestJob()], CreateContext(), CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        observed.TraceId.ShouldBe(parent.TraceId);
+        observedParent.ShouldBe(parent.SpanId);
+        observedLinks.ShouldBeEmpty();
+        observedTransitionKey.ShouldBe("test-transition");
     }
 
     private static TransitionExecutionContext CreateContext()

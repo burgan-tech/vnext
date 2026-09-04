@@ -107,6 +107,7 @@ public static class TelemetryConstants
         public const string StateFrom = "vnext.state.from";
         public const string StateTo = "vnext.state.to";
         public const string JobName = "vnext.job.name";
+        public const string JobType = "vnext.job.type";
         /// <summary>
         /// Parent instance ID for subflow/subprocess correlation in traces and logs.
         /// </summary>
@@ -157,8 +158,8 @@ public static class TelemetryConstants
 
         /// <summary>
         /// Set when an anchor was rejected for belonging to a different trace. The span keeps its
-        /// ambient parent and links the anchor instead, so a stale or forged anchor cannot
-        /// teleport it into a foreign trace.
+        /// predecessor/ambient parent, so a stale or forged anchor cannot teleport it into a
+        /// foreign trace.
         /// </summary>
         public const string TraceLaneMismatch = "vnext.trace.lane.mismatch";
 
@@ -179,10 +180,23 @@ public static class TelemetryConstants
         public const string ChainDepth = "vnext.chain.depth";
 
         /// <summary>
-        /// Set when the ambient Dapr scheduler-callback span was demoted to an ActivityLink because
-        /// the span continues a different (originating) trace.
+        /// Set when the ambient Dapr scheduler-callback span belongs to a different trace from the
+        /// business span. The callback is correlated by id tags rather than an ActivityLink so
+        /// Elastic does not splice its transport trace into the business waterfall.
         /// </summary>
         public const string DaprCallback = "vnext.dapr.callback";
+
+        /// <summary>Trace id of an originating context retained for searchable correlation.</summary>
+        public const string OriginTraceId = "vnext.origin.trace_id";
+
+        /// <summary>Span id of an originating context retained for searchable correlation.</summary>
+        public const string OriginSpanId = "vnext.origin.span_id";
+
+        /// <summary>Trace id of the ambient Dapr callback/delivery transport context.</summary>
+        public const string DaprCallbackTraceId = "vnext.dapr.callback.trace_id";
+
+        /// <summary>Span id of the ambient Dapr callback/delivery transport context.</summary>
+        public const string DaprCallbackSpanId = "vnext.dapr.callback.span_id";
 
         /// <summary>
         /// Number of script compilations (hits + misses) that ran while this span was current.
@@ -383,6 +397,68 @@ public static class TelemetryConstants
 
         /// <summary>Delivery attempt count for a redelivered message or job.</summary>
         public const string DeliveryAttempt = "vnext.delivery.attempt";
+
+        /// <summary>Standard OpenTelemetry error.type attribute.</summary>
+        public const string ErrorType = "error.type";
+
+        /// <summary>Standard OpenTelemetry error.code attribute.</summary>
+        public const string ErrorCode = "error.code";
+
+        /// <summary>Standard OpenTelemetry db.system.name attribute (SemConv v1.25+).</summary>
+        public const string DbSystemName = "db.system.name";
+
+        /// <summary>Standard OpenTelemetry db.operation.name attribute (SemConv v1.25+).</summary>
+        public const string DbOperationName = "db.operation.name";
+
+        /// <summary>Standard OpenTelemetry rpc.system attribute.</summary>
+        public const string RpcSystem = "rpc.system";
+
+        /// <summary>Standard OpenTelemetry messaging.system attribute.</summary>
+        public const string MessagingSystem = "messaging.system";
+    }
+
+    /// <summary>
+    /// Well-known OpenTelemetry ActivitySource names used across vNext services and libraries.
+    /// Centralized to keep instrumentation, tests, and configuration (Telemetry:Tracing:AdditionalSources)
+    /// in sync without magic strings.
+    /// </summary>
+    public static class ActivitySources
+    {
+        public const string Pipeline = "BBT.Workflow.Pipeline";
+        public const string BackgroundJobs = "BBT.Workflow.BackgroundJobs";
+        public const string SubFlow = "BBT.Workflow.SubFlow";
+        public const string Tasks = "BBT.Workflow.Tasks";
+        public const string Cache = "BBT.Workflow.Cache";
+        public const string Scripting = "BBT.Workflow.Scripting";
+        public const string Authorization = "BBT.Workflow.Authorization";
+        public const string InstancesRead = "BBT.Workflow.Instances.Read";
+        public const string Functions = "BBT.Workflow.Functions";
+        public const string Extensions = "BBT.Workflow.Extensions";
+        public const string ExecutionInvokers = "BBT.Workflow.Execution.Invokers";
+        public const string Execution = "BBT.Workflow.Execution";
+        public const string ExecutionPython = "BBT.Workflow.Execution.Python";
+        public const string WorkersInbox = "BBT.Workflow.Workers.Inbox";
+
+        /// <summary>
+        /// All ActivitySource names registered by the vNext engine.
+        /// </summary>
+        public static readonly string[] All =
+        [
+            Pipeline,
+            BackgroundJobs,
+            SubFlow,
+            Tasks,
+            Cache,
+            Scripting,
+            Authorization,
+            InstancesRead,
+            Functions,
+            Extensions,
+            ExecutionInvokers,
+            Execution,
+            ExecutionPython,
+            WorkersInbox
+        ];
     }
 
     /// <summary>

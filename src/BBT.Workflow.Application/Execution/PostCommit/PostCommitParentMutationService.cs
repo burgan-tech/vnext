@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using BBT.Aether.Results;
 using BBT.Aether.Uow;
 using BBT.Workflow.BackgroundJobs;
@@ -110,7 +111,13 @@ public sealed class PostCommitParentMutationService(
             return Result<TransitionOutput>.Fail(WorkflowErrors.InstanceNotFound(source.InstanceId.ToString()));
 
         var verdict = await mutation(instance, cancellationToken);
-        await uow.CommitAsync(cancellationToken);
+        ActivityContext commitContext;
+        using (var commitActivity = PipelineStepActivityHelper.StartTransitionActivity(
+                   "Uow.Commit", source.TransitionKey))
+        {
+            await uow.CommitAsync(cancellationToken);
+            commitContext = commitActivity?.Context ?? default;
+        }
 
         // Same rule as TransitionRunner: the episode closes once the status write is durable.
         if (verdict is not null)
@@ -123,7 +130,8 @@ public sealed class PostCommitParentMutationService(
                 source.WorkflowKey,
                 source.TransitionKey,
                 verdict.StateTo ?? instance.GetCurrentState,
-                verdict.CasFlipped);
+                verdict.CasFlipped,
+                commitContext);
         }
 
         return Result<TransitionOutput>.Ok(new TransitionOutput

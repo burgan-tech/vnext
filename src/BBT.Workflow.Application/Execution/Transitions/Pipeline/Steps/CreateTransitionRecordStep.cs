@@ -66,12 +66,29 @@ public sealed class CreateTransitionRecordStep(
                 .MapAsync(_ => mappedData))
             .TapAsync(mappedData => AppendMappedDataAsync(
                 context, mappedData, transition, instanceTransition, cancellationToken))
-            .TapAsync(_ => instanceRepository.UpdateAsync(context.Instance, false, cancellationToken))
-            .TapAsync(_ => isReusedRecord
-                ? instanceTransitionRepository.UpdateAsync(instanceTransition, true, cancellationToken)
-                : instanceTransitionRepository.InsertAsync(instanceTransition, saveChanges: true, cancellationToken))
+            .TapAsync(_ => PersistTransitionRecordAsync(
+                context.Instance, instanceTransition, isReusedRecord, cancellationToken))
             .Tap(_ => UpdateContextItems(context, instanceTransition, isReusedRecord))
             .Map(_ => StepOutcome.Continue());
+    }
+
+    /// <summary>
+    /// Covers EF change detection and SaveChanges preparation as well as the command spans emitted
+    /// by the provider. Without this parent, the CPU before the transition INSERT appears as a gap.
+    /// </summary>
+    private async Task PersistTransitionRecordAsync(
+        Instance instance,
+        InstanceTransition instanceTransition,
+        bool isReusedRecord,
+        CancellationToken cancellationToken)
+    {
+        using var activity = PipelineStepActivityHelper.StartTransitionActivity(
+            "TransitionRecord.Persist", instanceTransition.TransitionId);
+        await instanceRepository.UpdateAsync(instance, false, cancellationToken);
+        if (isReusedRecord)
+            await instanceTransitionRepository.UpdateAsync(instanceTransition, true, cancellationToken);
+        else
+            await instanceTransitionRepository.InsertAsync(instanceTransition, saveChanges: true, cancellationToken);
     }
 
     /// <summary>

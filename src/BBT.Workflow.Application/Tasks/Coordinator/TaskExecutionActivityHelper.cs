@@ -15,7 +15,7 @@ public static class TaskExecutionActivityHelper
     /// (e.g. <c>AddSource("BBT.Workflow.Tasks")</c>). If the host uses a wildcard such as
     /// <c>AddSource("BBT.Workflow.*")</c>, no extra registration is needed.
     /// </summary>
-    public static readonly ActivitySource ActivitySource = new("BBT.Workflow.Tasks");
+    public static readonly ActivitySource ActivitySource = new(TelemetryConstants.ActivitySources.Tasks);
 
     /// <summary>
     /// Operation name for the input preparation (PrepareInput) phase.
@@ -145,9 +145,9 @@ public static class TaskExecutionActivityHelper
         if (activity is null) return;
         activity.SetStatus(ActivityStatusCode.Error, errorMessage);
         if (!string.IsNullOrEmpty(errorType))
-            activity.SetTag("error.type", errorType);
+            activity.SetTag(TelemetryConstants.TagNames.ErrorType, errorType);
         if (statusCode.HasValue)
-            activity.SetTag("error.code", statusCode.Value.ToString());
+            activity.SetTag(TelemetryConstants.TagNames.ErrorCode, statusCode.Value.ToString());
     }
 
     /// <summary>

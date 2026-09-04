@@ -61,9 +61,9 @@ fresh HTTP request, so job handlers restore the trace explicitly
 
 | Job | Policy | Result in APM |
 |---|---|---|
-| `flow.transition` (async transitions, auto-chain steps) | **Continues the original trace, parented to the trace lane anchor** — payload `TraceRoot` is the span's parent, payload `TraceParent` (the previous hop) is attached as an `ActivityLink`, and the Dapr callback span is linked too (`vnext.dapr.callback=true`). Without an anchor it falls back to `TraceParent` as the parent, i.e. the pre-lane behaviour | Client request → job → pipeline → Execution → remote task: one tree, with the chain's hops as **siblings** rather than nested. See [Trace Lanes](../runtime/trace-lanes.md) |
-| `state.notify` | **Flat lane, same policy as `flow.transition`** (fires ~5 ms after enqueue) — payload `TraceRoot` / `ParentTraceRoot` parent the notify job to the lane anchor, with the hop that scheduled it linked as predecessor (`StateNotifyJobHandler` → `WorkflowTraceLane.Reset` + `StartFlatLaneActivity`). A payload without an anchor (older build) degrades to the previous continue-the-predecessor parenting | Same tree, one level up: a sibling of the transition hops, not a child of one |
-| `flow.transition.schedule` (timers), workflow timeout, long-poll ack timeout | **New trace + `ActivityLink`** to the arming trace | Separate tree, linked — deliberate: these fire minutes-to-days later and must not resurrect (possibly expired) traces. Each fire opens its **own** activation episode (`vnext.activation.trigger` = `scheduled` / `timeout` / `ack-timeout`) starting at the callback span |
+| `flow.transition` (async transitions, auto-chain steps) | **Continues the original trace, parented to the trace lane anchor** — payload `TraceRoot` is the span's parent and payload `TraceParent` (the previous hop in the same trace) is retained as `vnext.hop.predecessor`. A foreign Dapr callback trace is retained only as `vnext.dapr.callback.trace_id` / `.span_id` tags (`vnext.dapr.callback=true`). No ActivityLinks are emitted, preventing Elastic from reordering the business waterfall. Without an anchor it falls back to `TraceParent` as the parent, i.e. the pre-lane behaviour | Client request → job → pipeline → Execution → remote task: one tree, with the chain's hops as **siblings** rather than nested. See [Trace Lanes](../runtime/trace-lanes.md) |
+| `state.notify` | **Flat lane, same policy as `flow.transition`** (fires ~5 ms after enqueue) — payload `TraceRoot` / `ParentTraceRoot` parent the notify job to the lane anchor, with the scheduling hop tagged as predecessor (`StateNotifyJobHandler` → `WorkflowTraceLane.Reset` + `StartFlatLaneActivity`). A payload without an anchor (older build) degrades to the previous continue-the-predecessor parenting | Same tree, one level up: a sibling of the transition hops, not a child of one |
+| `flow.transition.schedule` (timers), workflow timeout, long-poll ack timeout | **New trace**, with the arming trace retained as `vnext.origin.trace_id` / `.span_id` | Separate tree, tag-correlated — deliberate: these fire minutes-to-days later and must not resurrect (possibly expired) traces. Each fire opens its **own** activation episode (`vnext.activation.trigger` = `scheduled` / `timeout` / `ack-timeout`) starting at the callback span |
 
 The same continue-with-link semantics apply on the outbox → pub/sub → Inbox path: lifecycle events
 implement `ITraceableDistributedEvent`, stamped centrally by `TraceStampingDistributedEventBus` at
@@ -182,7 +182,7 @@ in `OnStartActivity`, before the middleware, so it can never observe a fabricate
 purely that a single name is worth more than a duplicate.
 
 The system-triggered jobs called out above are separate traces by design, so a request-id query
-will not return them. Follow the `ActivityLink` on the job span, or query `vnext.instance.id`.
+will not return them. Query `vnext.origin.trace_id` or `vnext.instance.id` instead.
 
 The log → trace pivot still works and is often faster when you start from an error: filter the logs
 by `x_request_id`, take `trace_id` off any record, and open that trace directly.
