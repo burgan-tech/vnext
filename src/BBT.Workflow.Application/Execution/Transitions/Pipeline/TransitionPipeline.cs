@@ -311,41 +311,16 @@ public class TransitionPipeline
             // Do not consume the jobs: it returns the intact directives to the runner.
             if (context.Directives.PostCommitJobs.Count > 0)
             {
-                // Enqueued continuations must still be persisted in the originating UoW before
-                // we return the barrier. Inline continuations remain in directives so the runner
-                // can orchestrate them after the handoff.
-                if (context.EnqueueContinuations)
-                {
-                    var enqueueResult = await _continuationDispatcher.DispatchAsync(
-                        ContinuationMode.Enqueue, context, cancellationToken);
-                    if (!enqueueResult.IsSuccess)
-                    {
-                        // A reserve taken for an updateData handoff whose continuation never
-                        // made it out must not strand the instance Busy.
-                        if (reservedForHandoff)
-                            await _admissionService.ReleaseReservationAsync(context, cancellationToken);
-
-                        return Result<TransitionExecutionContext>.Fail(enqueueResult.Error);
-                    }
-                }
-
+                // Keep the continuation intact so the runner awaits it after commit and child handoff.
                 return Result<TransitionExecutionContext>.Ok(context);
             }
 
-            // Realize the continuation. Inline = in-process auto-chain (sync); Enqueue =
-            // transition-per-job (the strategy persists the next transition to the outbox and
-            // returns null, ending the in-process loop — a separate job resumes the chain).
-            var continuationMode = context.EnqueueContinuations
-                ? ContinuationMode.Enqueue
-                : ContinuationMode.Inline;
-
-            // Capture before dispatch: the Enqueue strategy CONSUMES NextTransition, so reading it
-            // afterwards is unreliable. The chain has truly settled only when there was no next
-            // transition AND the dispatcher produced no in-process continuation.
+            // Auto-chain always runs in the awaited pipeline loop, including async entry jobs.
+            // Capture before dispatch because the strategy consumes NextTransition.
             var hadNextTransition = context.Directives.NextTransition is not null;
 
             var continuationResult = await _continuationDispatcher.DispatchAsync(
-                continuationMode, context, cancellationToken);
+                ContinuationMode.Inline, context, cancellationToken);
             if (!continuationResult.IsSuccess)
             {
                 // Same compensation as the barrier path: a handoff reserve without a live
@@ -358,8 +333,7 @@ public class TransitionPipeline
 
             if (continuationResult.Value is null)
             {
-                // No further in-process work (chain complete or continuation enqueued) —
-                // apply the deferred status.
+                // The inline chain is complete; apply the deferred status.
                 await TransitionSettlement.ApplyAsync(
                     context,
                     context.Directives.ConsumeResolvedStatus(),
@@ -368,8 +342,6 @@ public class TransitionPipeline
                     _stateNotificationScheduler,
                     _logger,
                     cancellationToken,
-                    // A next transition that was enqueued rather than run here keeps the activation
-                    // episode open; the job it becomes settles it.
                     chainSettled: !hadNextTransition,
                     statusLock: _statusLock);
 
@@ -377,7 +349,7 @@ public class TransitionPipeline
             }
 
             // Rebuild and validate the next chained transition context (single source of truth).
-            var nextContextResult = await CreateAndValidateContextAsync(continuationResult.Value, cancellationToken);
+            var nextContextResult = await CreateAndValidateContextAsync(continuationResult.Value, context, cancellationToken);
             if (!nextContextResult.IsSuccess)
                 return Result<TransitionExecutionContext>.Fail(nextContextResult.Error);
 
@@ -411,9 +383,21 @@ public class TransitionPipeline
     /// </summary>
     private async Task<Result<TransitionExecutionContext>> CreateAndValidateContextAsync(
         WorkflowExecutionContext workflowContext,
+        TransitionExecutionContext previous,
         CancellationToken cancellationToken)
     {
-        var contextResult = await _contextFactory.CreateAsync(workflowContext, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        // Only this in-loop path reuses tracked entities. Runner/post-commit/retry entries still
+        // call CreateAsync in their new scope and rehydrate authoritative state.
+        // Preserve GetActiveAsync's terminal guard without issuing another aggregate query.
+        if (previous.Instance.IsCompleted)
+            return Result<TransitionExecutionContext>.Fail(Error.Validation(
+                WorkflowErrorCodes.InstanceCompleted,
+                $"Instance {previous.InstanceId} is already completed with status: {previous.Instance.Status.Code}",
+                workflowContext.InstanceId));
+
+        var contextResult = _contextFactory.CreateFromPreloaded(
+            workflowContext, previous.Workflow, previous.Instance);
         if (!contextResult.IsSuccess)
             return Result<TransitionExecutionContext>.Fail(contextResult.Error);
 

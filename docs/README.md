@@ -11,19 +11,20 @@ describe the stable mental model, boundaries, failure modes, and change-safety r
 
 | Area | Purpose |
 | --- | --- |
+| [Agent onboarding](agent-onboarding.md) | Source-of-truth order, where-is-X, pitfalls for a new coding session. |
 | [Architecture](architecture/system-overview.md) | Runtime shape, service boundaries, dependency direction, routing. |
 | [Domain](domain/instance-data-merge-concept.md) | Instance lifecycle, data versioning, cache context, function-handler behavior. |
 | [Runtime](runtime/task-executors-and-invokers.md) | Task execution, invokers, scripting, remote runtime integration. |
 | [Contracts](contracts/api-and-service-contracts.md) | API shapes, validation, compatibility, error behavior. |
 | [Integration](integration/forge-fanout-task-implementation.md) | Implementation specs for consumer products (Forge Studio, CLI, SDKs) that build against runtime features. |
-| [Specs](specs/00-docs-rebuild-master-spec.md) | Rewrite scope, rollout specs, migration and deprecation plan. |
-| [Archive](archive/README.md) | Legacy docs moved aside during the documentation rebuild. |
+| [Monitoring](monitoring/correlation-and-tracing.md) | Tracing/correlation contract of the runtime, plus the read-only Monitor API (`monitoring/` host, port `4203`): [feature guide](monitoring/features/monitoring-features.md), [endpoint reference](monitoring/endpoints/vnext-monitor-api-reference.md), [GraphQL filter guide](monitoring/features/monitoring-filter-guide.md), [component query-param filters](monitoring/features/query-param-filter.md). |
+| [Plans & specs](superpowers/plans/) | Dated design plans (`superpowers/plans/`) and specs (`superpowers/specs/`). Point-in-time records of decisions — read for the *why*, not as the current contract; the pages above win when they disagree. |
 
 ## Reading Path
 
-1. Read [System Overview](architecture/system-overview.md) to understand the two-host runtime.
-2. Read [Workflow Execution Pipeline](architecture/workflow-execution-pipeline.md) before changing transition behavior.
-3. Read [Async Transition Execution Modes](architecture/async-transition-execution-modes.md) before changing the `WorkflowExecution` flags (outbox / transition-per-job / chain-token gate / reaper).
+1. Read [Agent Onboarding](agent-onboarding.md) if you are starting a coding session, then [System Overview](architecture/system-overview.md) to understand the three API hosts and worker boundaries.
+2. Read [Workflow Execution Pipeline](architecture/workflow-execution-pipeline.md) before changing transition behavior; pair it with [Inline Auto-Chain Context Reuse](architecture/inline-chain-context-reuse.md) before changing context creation, UoW boundaries or automatic continuation handling.
+3. Read [Async Transition Execution Modes](architecture/async-transition-execution-modes.md) before changing the `WorkflowExecution` flags (the initial-accept enqueue path, `DirectEnqueueContinuations`) or the auto-chain's always-inline continuation model. Read [Subflow Execution](architecture/subflow-execution.md) before changing child start/forward/retry call mode, parent ownership handoff or terminal resume.
 4. Read [Domain Cache Context](domain/domain-cache-context.md) before changing definition cache behavior, and [Component Cache Generation Memo](runtime/component-cache-generation-memo.md) before enabling `GenerationMemoSeconds` or editing the CD propagation window.
 5. Read [Task Executors and Invokers](runtime/task-executors-and-invokers.md) before adding a task type.
 6. Read [API and Service Contracts](contracts/api-and-service-contracts.md) before changing HTTP or Dapr-facing contracts.
@@ -32,7 +33,7 @@ describe the stable mental model, boundaries, failure modes, and change-safety r
 9. Read [Instance Function Cache and Fingerprint ETag](runtime/state-function-cache-and-etag.md) before changing the state/data/master/schema functions' ETag, caching, or 304 behavior (includes the workflow-level `functionCache.ttlSeconds` contract).
 10. Read [Event-Driven Workflows](domain/event-driven-workflows.md) before wiring external events into workflows or transitions (event mappings, Dapr subscriptions, correlation).
 11. Read [Instance Filtering and Queries](runtime/instance-filtering-and-queries.md) before writing instance queries in mapping scripts (fluent `InstanceQuery`, operator reference, `GetInstancesTask` vs `DaprServiceTask`, migration from hand-written GraphQL filters).
-12. Read [GetInstance Task](runtime/get-instance-task.md) when a mapping needs a single instance's metadata **and** data in one call (task type `18`, local/remote response parity).
+12. Read [GetInstance Task](runtime/get-instance-task.md) when a mapping needs a single instance's metadata **and** data in one call (task type `19`, local/remote response parity).
 13. Read [Script Related Instance Access](runtime/script-related-instance-access.md) before using or changing `context.Related` in mapping scripts (parent/correlation reads, unfiltered `x-roles` behavior, internal endpoint security posture).
 14. Read [View Display Modes](domain/view-display-modes.md) before changing a view's `display` declaration or how clients present views (SDI / MDI shapes, response `modes` contract).
 15. Read [Function Handler Architecture](domain/function-handler-architecture.md) § Custom Function Contract before declaring function `verbs` / input-output schemas and views, or changing verb enforcement.
@@ -49,6 +50,20 @@ describe the stable mental model, boundaries, failure modes, and change-safety r
 26. Read [Extensions](domain/extensions.md) before assuming two Extensions cannot reference the same task — they can and are expected to when their `Mapping`/`ErrorBoundary` differ. Covers the per-extension `ResponseVariableKey` output key, why the duplicate-task-key warning does not fire for the Extension hook, and the Preprod fault (parallel-merge crash) this shape once caused.
 27. Read [Event Publish Modes](runtime/event-publish-modes.md) before adding or changing a distributed event, or before touching subflow terminal delivery. Covers the two-mode publish taxonomy (Outbox vs Outbox + TerminalRelay), why the EventHook infrastructure no longer exists, the `SubflowTerminalRelay` / Inbox-backup split for the three subflow terminal events, the re-arm-on-revert mechanism, and the Aether wakeup signal (`Aether:Outbox:WakeupSignalEnabled`).
 28. Read [Python Task](runtime/python-task.md) before authoring Python tasks or changing the Python.NET, process, container, package-lock, or container-driver contracts.
+29. Read [Dependency Map](architecture/dependency-map.md) before adding a project reference or moving a type across layers, and [Gateway Routing Strategy](architecture/gateway-routing-strategy.md) before adding a use case that must run locally or remotely through the routed gateways.
+30. Read [Script Context and Engine](runtime/script-context-and-engine.md) before extending `ScriptContext` or changing script compilation/caching, and [Custom Script Helpers](custom-script-helpers.md) before enabling or changing the sandboxed, component-referenced helper set (experimental, `>= 0.0.58`).
+31. Read [State Store Task](runtime/state-store-task.md) (task type `17`) and [Cache-Aside Task](runtime/cache-aside-task.md) (task type `18`) before authoring or changing the Dapr state-store caching primitives.
+32. Read [Form URL-Encoded Payloads](contracts/form-url-encoded-payloads.md) before changing how start / transition / function endpoints accept `application/x-www-form-urlencoded` bodies.
+33. Read [Elastic Dev Tools Queries for the vNext Trace Tree](runtime/trace-elastic-queries.md) when verifying spans in Kibana — every query was executed against a real `traces-apm*` index; note the `labels.*` vs `numeric_labels.*` split.
+
+### Historical records (not current contracts)
+
+Kept for archaeology; read the canonical page linked from each before relying on anything in them.
+
+- [The Event Chain as One Trace](runtime/event-trace-chain.md) — the removed `EventHook.*` model; canonical: [Event Publish Modes](runtime/event-publish-modes.md).
+- [Script.Compile measurement (2026-08-27)](runtime/script-compile-measurement-2026-08-27.md) — a point-in-time cold-start vs per-request investigation.
+- [Extension Response Key — Consumer Inventory (2026-08-28)](runtime/extension-response-key-inventory.md) — inventory taken before the fix; canonical: [Extensions](domain/extensions.md).
+- [Async/Durability Refactor — Required EF Core Migrations](async-durability-refactor-MIGRATIONS.md) — superseded `ChainToken`/`ChainHeartbeat`/`ResumePoint` draft; canonical: [Async Transition Execution Modes](architecture/async-transition-execution-modes.md).
 
 ## Documentation Rules
 
@@ -57,6 +72,7 @@ describe the stable mental model, boundaries, failure modes, and change-safety r
 - Include boundaries, failure modes, observability, and change-safety notes.
 - Reference source files for implementation detail instead of duplicating code.
 - If code and docs conflict, fix the docs or document the divergence.
+- `/ai-docs` is gitignored local scratch. Do not treat it as committed documentation.
 
 ## Local Development
 

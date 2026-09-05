@@ -23,6 +23,7 @@ public class InlineContinuationStrategyTests
             Guid.NewGuid(),
             Guid.NewGuid());
         var context = CreateContext(termination);
+        context.EnqueueContinuations = true;
         context.Directives.RequestNextTransition(new NextTransitionRequest("approve"));
         var sut = new InlineContinuationStrategy();
 
@@ -33,6 +34,8 @@ public class InlineContinuationStrategyTests
         result.Value!.Termination.ShouldNotBeNull();
         result.Value.Termination!.CascadeId.ShouldBe(termination.CascadeId);
         result.Value.Termination.InitiatorInstanceId.ShouldBe(termination.InitiatorInstanceId);
+        result.Value.Mode.ShouldBe(ExecMode.Sync);
+        result.Value.EnqueueContinuations.ShouldBeFalse();
     }
 
     private static TransitionExecutionContext CreateContext(TerminationContext termination)

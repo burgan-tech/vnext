@@ -61,7 +61,7 @@ fresh HTTP request, so job handlers restore the trace explicitly
 
 | Job | Policy | Result in APM |
 |---|---|---|
-| `flow.transition` (async transitions, auto-chain steps) | **Continues the original trace, parented to the trace lane anchor** — payload `TraceRoot` is the span's parent and payload `TraceParent` (the previous hop in the same trace) is retained as `vnext.hop.predecessor`. A foreign Dapr callback trace is retained only as `vnext.dapr.callback.trace_id` / `.span_id` tags (`vnext.dapr.callback=true`). No ActivityLinks are emitted, preventing Elastic from reordering the business waterfall. Without an anchor it falls back to `TraceParent` as the parent, i.e. the pre-lane behaviour | Client request → job → pipeline → Execution → remote task: one tree, with the chain's hops as **siblings** rather than nested. See [Trace Lanes](../runtime/trace-lanes.md) |
+| `flow.transition` (an async accepted transition's initial job) | **Continues the original trace, parented to the trace lane anchor** — payload `TraceRoot` is the span's parent and payload `TraceParent` is retained as `vnext.hop.predecessor`. A foreign Dapr callback trace is retained only as `vnext.dapr.callback.trace_id` / `.span_id` tags (`vnext.dapr.callback=true`). Without an anchor it falls back to `TraceParent` as the parent | Client request → job → pipeline → Execution → remote task: one tree. The auto-chain runs **inline inside this one job**; normal parent resume after subflow completion is an awaited command, not another `flow.transition` Scheduler job. See [Trace Lanes](../runtime/trace-lanes.md) |
 | `state.notify` | **Flat lane, same policy as `flow.transition`** (fires ~5 ms after enqueue) — payload `TraceRoot` / `ParentTraceRoot` parent the notify job to the lane anchor, with the scheduling hop tagged as predecessor (`StateNotifyJobHandler` → `WorkflowTraceLane.Reset` + `StartFlatLaneActivity`). A payload without an anchor (older build) degrades to the previous continue-the-predecessor parenting | Same tree, one level up: a sibling of the transition hops, not a child of one |
 | `flow.transition.schedule` (timers), workflow timeout, long-poll ack timeout | **New trace**, with the arming trace retained as `vnext.origin.trace_id` / `.span_id` | Separate tree, tag-correlated — deliberate: these fire minutes-to-days later and must not resurrect (possibly expired) traces. Each fire opens its **own** activation episode (`vnext.activation.trigger` = `scheduled` / `timeout` / `ack-timeout`) starting at the callback span |
 
@@ -330,7 +330,7 @@ too (`Transition.Intake`, `Transition.Enqueue`, `BackgroundJob.Arm`, `Instance.C
 7. No `Instance.Activation/*` span for an episode, or one tagged `vnext.activation.partial=true` →
    the job payload / event / relay body arrived without `EpisodeStartedAt` (rolling deploy: an
    older producer), or the execution that settled did not own the status (`OwnsStatus=false` — the
-   owning hop emits instead; a hop that enqueued a continuation never does). Check the
+   owning hop emits instead; an automatic winner waits for the final inline hop). Check the
    `vnext.settle.cas` tag on `Transition.Settle`: `flipped` should pair with exactly one `active`
    episode, `lost` means a concurrent settler emitted it, `skipped` means the guard did not apply.
    `vnext.activation.clock_skew=true` means the start came from a replica whose clock is ahead and

@@ -20,7 +20,8 @@ Two changes address this, one per repo:
 - **vnext, Task 1** (this repo, commit `82a7439d`): a span per event hook
   (`EventHook.{name}`), parented to whatever is ambient when the hook runs — `Uow.Commit` for
   `DurablePostCommit` hooks, `Events.PublishDeferred` for `HandledOrFallback` hooks. Documented
-  already in [Trace/Span Tree](trace-span-tree.md#target-span-tree). **Live and verified below.**
+  in the trace contract of that revision. **Historical evidence is retained below; this path is no
+  longer live.**
 - **aether, Task 2** (`burgan-tech/aether`, commit `950931b` on branch
   `feature/outbox-trace-continuity`): the outbox row carries the drop's trace identity
   (`TraceParent`/`TraceState` in `ExtraProperties`, `outbox.message_id` tagged onto the ambient
@@ -265,16 +266,12 @@ trace=4682ca695dac4f7021c1a1bc4419faa1  svc=vnext-inbox-worker
      └─ span: Dapr invoke vnext-app
 ```
 
-`f52f69cda8cb22ff`'s `parent.id` is `345d3a8a0bd42a4e` — the `Events.PublishDeferred` span from the
-*same* trace as the hook subtree above, in a *different process* (`vnext-inbox-worker` vs.
-`vnext-app`). This is `EventTraceScope` doing exactly what it is documented to do: it reads the
-event payload's own `TraceParent` field (set by `HookedDistributedEventBus` at publish time,
-independent of Task 2) and re-parents the handler span onto the originating trace. The dual-processing
-pattern (Event Hook local + Event Handler distributed) is intact and both halves land in one trace
-tree today, for the payload-level trace carrier. Bonus: the `Handle` transaction's own child, `Dapr
-invoke vnext-app`, is exactly the "remote client call attributed to the right span" shape the brief
-was checking for — just one level down from where it was expected (under `.Handle`, not under the
-publish-side hook).
+In the measured revision, `f52f69cda8cb22ff`'s `parent.id` was `345d3a8a0bd42a4e` — the
+`Events.PublishDeferred` span from the *same* trace as the hook subtree above, in a *different
+process* (`vnext-inbox-worker` vs. `vnext-app`). This is retained only as evidence of the former
+`HookedDistributedEventBus`/dual-processing model. Current code uses
+`TraceStampingDistributedEventBus`, has no local EventHook half, and isolates fact-event delivery
+as described at the top of this page. Do not use this captured tree as a current runtime contract.
 
 ## Release gate
 

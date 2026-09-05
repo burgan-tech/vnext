@@ -6,8 +6,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 These rules are authoritative for all work in this repo. Read them before writing code:
 
-- [.NET / Aether / vNext coding standards](.claude/rules/dotnet-coding-standards.md) — style, naming, Aether SDK usage, domain-event dual processing, logging via `WorkflowLogs.cs`, Result pattern, multi-schema rules.
-- [vNext workflow developer reference](.claude/rules/vnext-workflow-developer.md) — pipeline step order, profiles, subflow lifecycle, error boundary, long-polling, instance data, `vnext-meta`.
+- [Agent onboarding](docs/agent-onboarding.md) — source-of-truth order, where-is-X, known pitfalls. When this file disagrees with code, trust `LifecycleOrder.cs` / `PipelineExecutionProfile.cs`.
+- [.NET / Aether / vNext coding standards](.claude/rules/dotnet-coding-standards.md) — style, naming, Aether SDK usage, outbox event delivery, logging via `WorkflowLogs.cs`, Result pattern, multi-schema rules.
+- [vNext workflow developer reference](.claude/rules/vnext-workflow-developer.md) — pipeline step order, profiles, subflow lifecycle, error boundary, long-polling, instance data, `vnext-meta`. Keep `.cursor/rules/` aligned with these files.
 
 ### Personal, machine-local overrides
 
@@ -52,9 +53,10 @@ cd etc/docker && ./run-docker.sh stage    # Staging mode
 # Run API hosts locally (requires infrastructure running)
 dotnet run --project orchestration/BBT.Workflow.Orchestration.HttpApi.Host
 dotnet run --project execution/BBT.Workflow.Execution.HttpApi.Host
+dotnet run --project monitoring/BBT.Workflow.Monitor.HttpApi.Host
 ```
 
-**Ports**: Orchestration → 4201, Execution → 4202
+**Ports**: Orchestration → 4201, Execution → 4202, Monitor → 4203
 
 ## Testing
 
@@ -70,14 +72,16 @@ Test projects: `Domain.Tests`, `Application.Tests`, `Infrastructure.Tests`, `Tes
 
 This is a **distributed workflow orchestration engine** built on .NET 10, Clean Architecture, DDD, and the Aether SDK.
 
-### Two API Hosts (microservices boundary)
+### API Hosts
 
 | Host | Project | Purpose |
 |------|---------|---------|
 | Orchestration | `orchestration/BBT.Workflow.Orchestration.HttpApi.Host` | Public-facing: manages workflow definitions, instances, transitions |
 | Execution | `execution/BBT.Workflow.Execution.HttpApi.Host` | Internal: executes task invokers for a specific transition |
+| Monitor | `monitoring/BBT.Workflow.Monitor.HttpApi.Host` | Read-only operational queries for monitoring clients |
 
-The two services communicate via **Dapr service invocation**. Orchestration calls Execution for task processing; Execution calls back to Orchestration to report outcomes.
+Orchestration and Execution communicate through **Dapr service invocation**. Monitor reads the
+runtime's operational data without owning transition execution.
 
 ### Layer Responsibilities (`src/`)
 
@@ -85,7 +89,7 @@ The two services communicate via **Dapr service invocation**. Orchestration call
 |---------|------|
 | `BBT.Workflow.Domain` | Aggregates, entities, domain events, value objects, business rules. No infrastructure dependencies. |
 | `BBT.Workflow.Application` | Application services, DTOs, pipeline logic, use cases. Depends on Domain only. |
-| `BBT.Workflow.Infrastructure` | EF Core repositories, external integrations, event hooks. Implements Domain and Application interfaces. |
+| `BBT.Workflow.Infrastructure` | EF Core repositories, external integrations and routed gateways. Implements Domain and Application interfaces. |
 | `BBT.Workflow.Events.Contracts` | Shared distributed event definitions (CloudEvents). |
 | `BBT.Workflow.Execution` / `Execution.Abstractions` | Task invoker bindings and contracts for the Execution service. |
 | `BBT.Workflow.Tasks.Abstractions` | Task interface contracts used by both Orchestration and Execution. |
@@ -111,7 +115,7 @@ The two services communicate via **Dapr service invocation**. Orchestration call
 
 Each workflow "flow" has its own PostgreSQL schema. Schema resolution uses `ICurrentSchema` populated from HTTP headers, routes, or query string. Always wrap infrastructure operations with `currentSchema.Use(flow)`.
 
-### Domain Events (dual-processing pattern)
+### Domain Events
 
 The EventHook infrastructure has been deleted. Every distributed event publishes plainly through
 the transactional outbox and requires:
@@ -136,10 +140,10 @@ Transitions execute through a deterministic pipeline of ordered steps. Each step
 | Order | Step | Responsibility |
 |-------|------|----------------|
 | 5 | HandleCancelPreflightStep | Detect cancel/exit; short-circuit if instance already completed |
-| 9 | HandleUpdateDataPreflightStep | Parent update-data / shared-transition preflight for subflows |
-| 10 | ForwardToActiveSubflowStep | Queue post-commit forward to active subflow; skip epilogue |
+| 10 | ForwardToActiveSubflowStep | Queue post-commit forward to active subflow; skip epilogue. Does not forward `updateData` or parent shared `$self` transitions. |
 | 19 | SetBusyStep | Set instance status to Busy and persist |
 | 20 | CreateTransitionRecordStep | Create transition record; duplicate key guard |
+| 21 | HandleUpdateDataDataOnlyStep | Parent with active SubFlow: persist update data, then skip lifecycle/epilogue |
 | 25 | ResourceLockStep | Acquire/release/extend resource locks via script |
 | 30 | RunOnExecuteTasksStep | Run transition OnExecute tasks |
 | 38 | ApplyTimeoutStateStep | Apply timeout target into context before exit |
@@ -148,6 +152,7 @@ Transitions execute through a deterministic pipeline of ordered steps. Each step
 | 50 | ChangeStateStep | Persist state change |
 | 60 | RunOnEntryTasksStep | Run target-state OnEntry tasks |
 | 70 | HandleSubFlowStep | Start subflow correlation; enqueue StartSubflowJob |
+| 75 | HandleLongPollTerminationStep | Pause on state entry and arm acknowledgment fallback when configured |
 | 79 | ClearBusyOnResumeStep | Clear busy on subflow resume path |
 | 80 | RunAutomaticTransitionsStep | Evaluate auto-transition conditions; set NextTransition |
 | 90 | ScheduleTransitionsStep | Schedule future transitions — skipped when auto selected a winner |
@@ -157,9 +162,9 @@ Transitions execute through a deterministic pipeline of ordered steps. Each step
 
 **StepOutcome**: `Continue()` (next step), `Stop()` (break loop), `SkipTo(order)` (jump + replan), `SkipToFinalize()` (shorthand), `With(Action<PipelineDirectives>)` (mutate directives).
 
-**PipelineExecutionProfile**: Each trigger type resolves to a profile (`IPipelineProfileResolver`) that excludes irrelevant steps. Profiles: Manual (no exclusions), AutoChain (skip Preflight/CheckParentUpdateData/ForwardSubflow/SetBusy/ApplyTimeoutState — ResourceLock runs so auto-chained transitions can lock), Scheduled, Event, ErrorBoundary (`AllowAutoChain=false`, `AllowSubFlow=false`). A **self-target** variant is composed on top of any of these for **`updateData` only** (`SkipsStateLifecycle()` = target is the authored `$self` keyword AND the transition is updateData): it additionally excludes CancelScheduledJobs/OnExit/OnEntry/Schedule, because no state is left or entered. ChangeState and OnExecute deliberately still run. Every **other** `$self` transition — a `$self` shared transition above all — keeps the base profile and runs the **full** lifecycle, including the timer re-arm; `target: $self` means "do not move the instance", not "skip the state's hooks". A literal target equal to the current state does **not** count as `$self` — start and retry-after-commit both present that shape while genuinely needing the state entered. See `.claude/rules/vnext-workflow-developer.md`.
+**PipelineExecutionProfile**: Each trigger type resolves to a profile (`IPipelineProfileResolver`) that excludes irrelevant steps. Profiles: Manual (no exclusions), AutoChain (skip Preflight/ForwardSubflow/SetBusy/ApplyTimeoutState — ResourceLock runs), Scheduled, Event, ErrorBoundary (skip Preflight/ForwardSubflow/ResourceLock; `AllowSubFlow=false`). A **self-target** variant is composed on top of any of these for **`updateData` only** (`SkipsStateLifecycle()` = target is the authored `$self` keyword AND the transition is updateData): it additionally excludes CancelScheduledJobs/OnExit/OnEntry/Schedule, because no state is left or entered. ChangeState and OnExecute deliberately still run. Every **other** `$self` transition — a `$self` shared transition above all — keeps the base profile and runs the **full** lifecycle, including the timer re-arm; `target: $self` means "do not move the instance", not "skip the state's hooks". A literal target equal to the current state does **not** count as `$self` — start and retry-after-commit both present that shape while genuinely needing the state entered. See `.claude/rules/vnext-workflow-developer.md`.
 
-**TransitionExecutionContext**: Built by `TransitionContextFactory` (workflow from `IComponentCacheStore`, instance from `instanceRepository.GetActiveAsync`). Same context reference flows through all steps. `Cache` dict cleared at Finalize. `Directives` accumulate mutations (next transition, post-commit jobs, epilogue skip).
+**TransitionExecutionContext**: Initial/fresh entries are built by `TransitionContextFactory` (workflow from `IComponentCacheStore`, instance from `instanceRepository.GetActiveAsync`). Every automatic hop gets a new context, but an uninterrupted inline chain reuses the previous hop's tracked `Instance` and resolved `Workflow` via `CreateFromPreloaded`. Reuse ends at post-commit/new-scope, subflow callback and retry boundaries. Within one hop, the same context reference flows through all steps. `Cache` is cleared at Finalize; `Directives` are per-hop consumable mutations. See `docs/architecture/inline-chain-context-reuse.md`.
 
 ### Status / State / Type Semantics
 
@@ -175,6 +180,8 @@ Transitions execute through a deterministic pipeline of ordered steps. Each step
 
 - `sync=true`: Request blocks until pipeline completes; response includes full instance data. Use for deterministic short-lived processes and backend-to-backend integration.
 - `sync=false` (default): Request accepted immediately with `{ id, status }`. Client polls via State function for completion. Use for human tasks, external API calls, and mobile/web clients.
+- Automatic continuations never create per-hop Scheduler jobs. They run inline and are awaited by the request or by the initial async transition job.
+- Runtime-generated subflow start, active-child forward and descended child retry calls always use `sync=true`, independent of the parent caller mode and `S`/`P` definition type. This awaits the child's current activation to a rest point, not its future human/event lifetime.
 
 ### Long-Polling / State Function
 
@@ -218,22 +225,25 @@ Backend-Driven View approach: UI changes deploy via backend only, minimizing mob
 - **Levels**: Task → State → Global (resolved by `CompiledBoundaryChain`). Rules sorted by `EffectivePriority` ASC → specificity DESC → definition order.
 - **Actions**: `Abort`, `Retry`, `Rollback`, `Ignore`, `Notify`, `Log`.
 - **Pipeline mapping** (`BoundaryOutcomeHandler`): `Log`/`Ignore` → `Continue()`; transition set → `RequestNextTransition` + `SkipToFinalize()`; abort without transition → Fail → instance fault.
-- Error-boundary profile disables auto-chain and subflow to prevent cascading.
+- Error-boundary profile disables subflow handling and skips ResourceLock; its current code does not exclude the Auto step.
 
 ### SubFlow Lifecycle
 
 - **SubFlow (S)**: On completion → output mapping → `ResumePipelineAsync` with `ResumeFrom = ClearBusyOnResumeStep` (order 79). Parent pipeline resumes execution.
 - **SubProcess (P)**: On completion → correlation complete + persist → no parent resume (fire-and-forget).
 - Start uses `StrictIdempotency: true` with parent metadata in `ExtraProperties`.
+- Start, active-child forward and descended retry calls use `sync=true`; `S` versus `P` controls parent continuation, not call transport mode.
 - On resume failure, correlation is reverted in a new UoW for retry.
 - **Completion window**: If subflow is in terminal status while parent correlation is still open, State function shows parent transitions instead of subflow terminal view.
 
 ### Instance Repository Include Strategy
 
 - Pipeline steps do NOT call EF `Include` directly — includes are applied at load time via `WithDetailsAsync()`.
-- Default load: `Include(DataList)` + `Include(ChildCorrelations.Where(!IsCompleted))` with split queries.
+- Default load: `DataList` (or latest-only when `WorkflowExecution:LatestOnlyInstanceLoading` is on) + `Include(ChildCorrelations.Where(!IsCompleted))` with split queries.
+- `GetResultAsync(includeDetails: false)` is lean (no DataList/correlations). `true` uses `WithDetailsAsync()`.
 - History paths use `AsNoTracking` + explicit filtered includes.
 - **Rule**: Do not add unnecessary includes. If `TransitionExecutionContext` already has the data, do not re-query.
+- Inline context reuse is valid only inside the same pipeline/UoW. Never carry a tracked instance across a post-commit, retry or subflow callback boundary.
 
 ---
 
@@ -244,4 +254,4 @@ For domain/platform knowledge beyond what's in code:
 - Aether SDK: `burgan-tech/aether` (tag `aether`)
 - Examples: tag `vnext-example`
 
-Detailed docs live in `/docs` (implementation) and `/ai-docs` (AI-generated).
+Detailed docs live in `/docs` (implementation). `/ai-docs` is gitignored local scratch, not a source of truth.

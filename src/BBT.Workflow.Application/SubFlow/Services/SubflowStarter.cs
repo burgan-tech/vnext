@@ -92,7 +92,6 @@ public sealed class SubflowStarter(
             inputMappingResult,
             subFlowConfig.HasTimeoutOverride ? subFlowConfig.Overrides!.Timeout : null,
             subFlowConfig.Overrides,
-            mode,
             activity,
             cancellationToken);
     }
@@ -112,7 +111,6 @@ public sealed class SubflowStarter(
         ScriptResponse? inputMappingResult,
         WorkflowTimeout? timeoutOverride,
         SubFlowOverrides? overrides,
-        ExecMode mode,
         Activity? activity,
         CancellationToken cancellationToken)
     {
@@ -202,7 +200,7 @@ public sealed class SubflowStarter(
                 subFlowReference.Domain,
                 subFlowReference.Key,
                 subFlowReference.Version,
-                sync: mode == ExecMode.Sync
+                sync: true
             )
         {
             Instance = createInstanceInput,

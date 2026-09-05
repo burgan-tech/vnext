@@ -7,8 +7,8 @@ namespace BBT.Workflow.Execution.Continuations;
 /// <summary>
 /// Realizes the auto-chain continuation in-process: builds the next
 /// <see cref="WorkflowExecutionContext"/> so the pipeline loop runs the chained
-/// transition under the same request and lock scope. This reproduces the original
-/// in-loop chaining behavior exactly (sync execution).
+/// transition inside the same uninterrupted pipeline and UoW. The distributed status lock has
+/// already been released after admission; it is not held across the chain.
 /// </summary>
 public sealed class InlineContinuationStrategy : IContinuationStrategy
 {
@@ -30,7 +30,8 @@ public sealed class InlineContinuationStrategy : IContinuationStrategy
 
     /// <summary>
     /// Creates a new <see cref="WorkflowExecutionContext"/> for the next transition in the chain.
-    /// Identity-only — the full context is rebuilt and validated by the pipeline's context factory.
+    /// Identity/execution carrier only — the pipeline builds and validates a new execution context,
+    /// reusing the current tracked instance/workflow only while it remains in the same UoW.
     /// </summary>
     private static WorkflowExecutionContext CreateNextWorkflowContext(
         TransitionExecutionContext currentContext,
@@ -51,6 +52,7 @@ public sealed class InlineContinuationStrategy : IContinuationStrategy
             CausationId = currentContext.ExecutionChainId,
             RequestedAt = DateTimeOffset.UtcNow,
             Headers = currentContext.Headers.ToDictionary(kvp => kvp.Key, kvp => kvp.Value),
+            RouteValues = currentContext.RouteValues.ToDictionary(kvp => kvp.Key, kvp => kvp.Value),
             Execution = new ExecutionInfo
             {
                 ExecutionChainId = currentContext.ExecutionChainId,
@@ -58,7 +60,7 @@ public sealed class InlineContinuationStrategy : IContinuationStrategy
                 ResumeFrom = null
             },
             IsReentry = true,
-            EnqueueContinuations = currentContext.EnqueueContinuations,
+            EnqueueContinuations = false,
             IsPreReserved = currentContext.IsPreReserved,
             SubflowChainReserved = currentContext.SubflowChainReserved,
             OwnsStatus = currentContext.OwnsStatus,

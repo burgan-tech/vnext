@@ -148,8 +148,8 @@ public sealed class PipelineExecutionProfile
     public static PipelineExecutionProfile ForEvent() => EventInstance;
 
     /// <summary>
-    /// Creates the minimal profile for error-boundary transitions: excludes lock, scheduling, auto, and subflow prelude steps;
-    /// auto-chain and subflow are disabled.
+    /// Creates the profile for error-boundary transitions: excludes preflight, active-subflow
+    /// forwarding and resource locking; subflow handling is disabled. The Auto step remains active.
     /// </summary>
     public static PipelineExecutionProfile ForErrorBoundary() => ErrorBoundaryInstance;
 

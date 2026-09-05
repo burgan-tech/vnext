@@ -137,7 +137,7 @@ public sealed class InstanceRetryAppService(
             Domain = subflowCorrelation.SubFlowDomain,
             Workflow = subflowCorrelation.SubFlowName,
             Instance = subflowCorrelation.SubFlowInstanceId.ToString(),
-            Sync = input.Sync,
+            Sync = true,
             Data = input.Data,
             Headers = input.Headers,
             RouteValues = input.RouteValues
