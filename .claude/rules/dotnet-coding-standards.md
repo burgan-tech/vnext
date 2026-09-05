@@ -157,8 +157,8 @@ logger.InstanceCompletedCleanupEventReceived(instanceId, flow);
 - Controllers MUST include API summaries.
 
 ## Documentation Locations
-- AI-generated technical docs → `/ai-docs`
-- Developer-focused implementation docs → `/docs`
+- Developer-focused implementation docs → `/docs` (index: `docs/README.md`; agent map: `docs/agent-onboarding.md`)
+- `/ai-docs` is gitignored local scratch for generated dumps (e.g. vnext-docs staging). It is not committed and is not a source of truth.
 - When the user says "add to document", update English docs and ensure Navigation/Overview grouping in `docs/README.md`.
 
 ## Context7 Sources
@@ -170,12 +170,12 @@ For platform/domain knowledge beyond the code:
 ## File Structure Expectation
 ```
 root/
- ├─ ai-docs/
  ├─ docs/
  ├─ src/
- ├─ tests/
+ ├─ test/
  ├─ tools/
  └─ README.md
+ (`ai-docs/` is gitignored local scratch; test projects live under `test/` not `tests/`)
 ```
 
 ## Architectural Rules

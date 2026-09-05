@@ -6,8 +6,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 These rules are authoritative for all work in this repo. Read them before writing code:
 
+- [Agent onboarding](docs/agent-onboarding.md) — source-of-truth order, where-is-X, known pitfalls. When this file disagrees with code, trust `LifecycleOrder.cs` / `PipelineExecutionProfile.cs`.
 - [.NET / Aether / vNext coding standards](.claude/rules/dotnet-coding-standards.md) — style, naming, Aether SDK usage, outbox event delivery, logging via `WorkflowLogs.cs`, Result pattern, multi-schema rules.
-- [vNext workflow developer reference](.claude/rules/vnext-workflow-developer.md) — pipeline step order, profiles, subflow lifecycle, error boundary, long-polling, instance data, `vnext-meta`.
+- [vNext workflow developer reference](.claude/rules/vnext-workflow-developer.md) — pipeline step order, profiles, subflow lifecycle, error boundary, long-polling, instance data, `vnext-meta`. Keep `.cursor/rules/` aligned with these files.
 
 ### Personal, machine-local overrides
 
@@ -139,8 +140,7 @@ Transitions execute through a deterministic pipeline of ordered steps. Each step
 | Order | Step | Responsibility |
 |-------|------|----------------|
 | 5 | HandleCancelPreflightStep | Detect cancel/exit; short-circuit if instance already completed |
-| 9 | HandleUpdateDataPreflightStep | Parent update-data / shared-transition preflight for subflows |
-| 10 | ForwardToActiveSubflowStep | Queue post-commit forward to active subflow; skip epilogue |
+| 10 | ForwardToActiveSubflowStep | Queue post-commit forward to active subflow; skip epilogue. Does not forward `updateData` or parent shared `$self` transitions. |
 | 19 | SetBusyStep | Set instance status to Busy and persist |
 | 20 | CreateTransitionRecordStep | Create transition record; duplicate key guard |
 | 21 | HandleUpdateDataDataOnlyStep | Parent with active SubFlow: persist update data, then skip lifecycle/epilogue |
@@ -239,7 +239,8 @@ Backend-Driven View approach: UI changes deploy via backend only, minimizing mob
 ### Instance Repository Include Strategy
 
 - Pipeline steps do NOT call EF `Include` directly — includes are applied at load time via `WithDetailsAsync()`.
-- Default load: `Include(DataList)` + `Include(ChildCorrelations.Where(!IsCompleted))` with split queries.
+- Default load: `DataList` (or latest-only when `WorkflowExecution:LatestOnlyInstanceLoading` is on) + `Include(ChildCorrelations.Where(!IsCompleted))` with split queries.
+- `GetResultAsync(includeDetails: false)` is lean (no DataList/correlations). `true` uses `WithDetailsAsync()`.
 - History paths use `AsNoTracking` + explicit filtered includes.
 - **Rule**: Do not add unnecessary includes. If `TransitionExecutionContext` already has the data, do not re-query.
 - Inline context reuse is valid only inside the same pipeline/UoW. Never carry a tracked instance across a post-commit, retry or subflow callback boundary.
@@ -253,4 +254,4 @@ For domain/platform knowledge beyond what's in code:
 - Aether SDK: `burgan-tech/aether` (tag `aether`)
 - Examples: tag `vnext-example`
 
-Detailed docs live in `/docs` (implementation) and `/ai-docs` (AI-generated).
+Detailed docs live in `/docs` (implementation). `/ai-docs` is gitignored local scratch, not a source of truth.

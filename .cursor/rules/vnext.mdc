@@ -49,92 +49,31 @@ Use SDK components for:
 - Unit of Work (UoW)
 - OpenTelemetry
 
-## Domain Events Architecture
-When implementing domain events in the vNext workflow system, follow this dual-processing pattern:
+## Domain Events (Outbox Delivery)
 
-### Event Processing Pattern
-Each domain event **MUST** have two components:
+**The EventHook infrastructure no longer exists** (`IEventPublishHook<TEvent>`, `IEventHookInvoker`,
+`EventHookAttribute`, `EventHookMode` are deleted). Every distributed event publishes through the
+transactional outbox. Canonical contract: `docs/runtime/event-publish-modes.md` and
+`.claude/rules/dotnet-coding-standards.md`.
 
-1. **Event Hook** (`IEventPublishHook<TEvent>`) - Located in `*.Infrastructure/*/Events/`
-   - Executes **synchronously** before event is published to event bus
-   - Handles local processing within the same process
-   - Uses `currentSchema.Use()` for multi-schema support
-   - Uses `UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew }` for isolation
-   - Returns `EventHookResult.Ok()` or `EventHookResult.Fail()`
+Each event MUST have:
 
-2. **Event Handler** (`IEventHandler<TEvent>`) - Located in `workers/BBT.Workflow.Workers.Inbox/Handlers/`
-   - Executes **asynchronously** after event is published to event bus
-   - Processes events from distributed message queue
-   - Performs domain match validation: `if (!runtimeInfoProvider.IsDomainMatch(eventData.Domain))`
-   - Uses same multi-schema and UoW patterns as hooks
-   - Provides fault tolerance and distributed processing
+1. **Contract** in `*.Events.Contracts/*/Events/` with `[EventName]` — no `[EventHook]` attribute.
+2. **Event Handler** (`IEventHandler<TEvent>`) in `workers/BBT.Workflow.Workers.Inbox/Handlers/`
+   - Domain match guard: `if (!runtimeInfoProvider.IsDomainMatch(eventData.Domain)) return;`
+   - Standard multi-schema and UoW patterns
+3. **Logging extensions** in `BBT.Workflow.Domain/Logging/WorkflowLogs.cs` — never raw `logger.Log*`
 
-### Event Development Checklist
-When creating a new domain event:
-- [ ] Create event contract in `*.Events.Contracts/*/Events/` with `[EventHook]` and `[EventName]` attributes
-- [ ] Create event hook in `*.Infrastructure/*/Events/` implementing `IEventPublishHook<TEvent>`
-- [ ] Create event handler in `workers/BBT.Workflow.Workers.Inbox/Handlers/` implementing `IEventHandler<TEvent>`
-- [ ] Add logging extension methods to `BBT.Workflow.Domain/Logging/WorkflowLogs.cs`:
-  - `{EventName}Received` (Information level)
-  - `{EventName}IgnoredDomainMismatch` (Debug level)
-  - `{EventName}Succeeded` (Information level)
-  - `{EventName}ProcessingFailed` (Error level)
-- [ ] Register event hook in Infrastructure DI: `services.AddEventHook<TEvent, TEventHook>()`
-- [ ] Event handler is auto-registered by Aether's `AddAetherEventBus` (assembly scanning)
-- [ ] Use standard logging extension methods (never raw `logger.Log*` calls)
+**Subflow terminal exception:** `InstanceSubCompletedEvent`, `InstanceSubFaultedEvent`, and
+`InstanceSubCanceledEvent` implement `ISubflowTerminalEvent` (Outbox + `SubflowTerminalRelay` via
+`IInstanceCommandGateway`). Their Inbox handler is a durable backup, deduplicated by
+`ISubItemTerminalGuard`. Do not add a second delivery path for any other event.
 
-### Event Pattern Example
-```csharp
-// 1. Event Contract
-[EventHook]
-[EventName("instance.completed.cleanup")]
-public class InstanceCompletedCleanupEvent : IDistributedEvent { }
-
-// 2. Event Hook (Infrastructure layer)
-public sealed class InstanceCompletedCleanupEventHook : IEventPublishHook<InstanceCompletedCleanupEvent>
-{
-    public async Task<EventHookResult> BeforePublishAsync(
-        InstanceCompletedCleanupEvent eventData,
-        EventHookContext context,
-        CancellationToken cancellationToken)
-    {
-        using (currentSchema.Use(eventData.Flow))
-        {
-            await using var uow = await unitOfWorkManager.BeginAsync(
-                new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew }, 
-                cancellationToken);
-            
-            await service.ProcessAsync(eventData.InstanceId, cancellationToken);
-            await uow.CommitAsync(cancellationToken);
-        }
-        return EventHookResult.Ok();
-    }
-}
-
-// 3. Event Handler (Inbox Worker)
-internal sealed class InstanceCompletedCleanupEventHandler : IEventHandler<InstanceCompletedCleanupEvent>
-{
-    public async Task HandleAsync(
-        CloudEventEnvelope<InstanceCompletedCleanupEvent> envelope,
-        CancellationToken cancellationToken)
-    {
-        if (!runtimeInfoProvider.IsDomainMatch(eventData.Domain))
-        {
-            logger.InstanceCompletedCleanupEventIgnoredDomainMismatch(...);
-            return;
-        }
-        
-        logger.InstanceCompletedCleanupEventReceived(...);
-        // Process event...
-    }
-}
-```
-
-### Why Dual Processing?
-- **Hook (Local):** Fast, synchronous processing within same transaction boundary
-- **Handler (Inbox):** Distributed, fault-tolerant processing for cross-domain/cross-service scenarios
-- **Idempotency:** Operations should be idempotent since both may execute
-- **Reliability:** If local fails, distributed handler provides retry mechanism
+### Event development checklist
+- [ ] Event contract with `[EventName]` (`ISubflowTerminalEvent` only for a new subflow-terminal event)
+- [ ] Inbox `IEventHandler<TEvent>` (auto-registered by `AddAetherEventBus`)
+- [ ] `WorkflowLogs.cs` extensions: Received / IgnoredDomainMismatch / Succeeded / ProcessingFailed
+- [ ] If `ISubflowTerminalEvent`: wire `SubflowTerminalRelay` dispatch and tag the Inbox handler `vnext.delivery.role = backup`
 
 ## Aether SDK Knowledge – Context7
 LibraryId: burgan-tech/aether
@@ -215,16 +154,13 @@ logger.InstanceCompletedCleanupEventReceived(instanceId, flow);
 - Controllers MUST include API summaries.
 
 ## Documentation
-### AI-Generated Technical Documentation (ai-docs)
-All AI-generated documents must be stored under:
-/ai-docs
-
-### Developer-Focused Implementation Docs (docs)
-All implementation details must be placed under:
-/docs
+### Implementation docs (`/docs`)
+Canonical developer docs live under `/docs`. Start at `docs/README.md` and
+`docs/agent-onboarding.md`. `/ai-docs` is gitignored local scratch (generated dumps);
+it is not committed and is not a source of truth.
 
 ### Development Guidance
-- When a task is assigned, first consult summaries on the relevant structures and then scan the detailed documents under `/docs` for deeper context.
+- When a task is assigned, first consult `docs/agent-onboarding.md`, then scan `/docs` for the area you are changing.
 - For platform feature and domain knowledge, use the `vnext-runtime` tag with the `use context7` prompt to access MCP documentation.
 - For example components, use the `vnext-example` tag with the `use context7` prompt to access MCP examples.
 
@@ -233,12 +169,12 @@ Whenever the user says "add to document", update docs in English and ensure Navi
 
 ## File Structure Expectations
 root/
- ├─ ai-docs/
  ├─ docs/
  ├─ src/
- ├─ tests/
+ ├─ test/
  ├─ tools/
  └─ README.md
+ (`ai-docs/` is gitignored local scratch; test projects live under `test/` not `tests/`)
 
 ## Architectural Rules
 - Workflows MUST be deterministic.

@@ -6,6 +6,10 @@ alwaysApply: true
 
 # vNext Workflow Developer — Domain Knowledge
 
+Canonical long form: `.claude/rules/vnext-workflow-developer.md`.
+Canonical code: `LifecycleOrder.cs`, `PipelineExecutionProfile.cs`.
+Session map: `docs/agent-onboarding.md`.
+
 ## Transition Pipeline
 
 Transitions execute through a deterministic pipeline of ordered steps. Each step has a single responsibility and returns `Result<StepOutcome>`.
@@ -15,10 +19,10 @@ Transitions execute through a deterministic pipeline of ordered steps. Each step
 | Order | Step | Responsibility |
 |-------|------|----------------|
 | 5 | HandleCancelPreflightStep | Detect cancel/exit; short-circuit if instance already completed |
-| 9 | HandleUpdateDataPreflightStep | Parent update-data / shared-transition preflight for subflows |
-| 10 | ForwardToActiveSubflowStep | Queue post-commit forward to active subflow; skip epilogue |
+| 10 | ForwardToActiveSubflowStep | Queue post-commit forward to active subflow; skip epilogue. Does not forward `updateData` or parent shared `$self` transitions. |
 | 19 | SetBusyStep | Set instance status to Busy and persist |
 | 20 | CreateTransitionRecordStep | Create transition record; duplicate key guard |
+| 21 | HandleUpdateDataDataOnlyStep | Parent with active SubFlow: persist update data, then skip lifecycle/epilogue |
 | 25 | ResourceLockStep | Acquire/release/extend resource locks via script |
 | 30 | RunOnExecuteTasksStep | Run transition OnExecute tasks |
 | 38 | ApplyTimeoutStateStep | Apply timeout target into context before exit |
@@ -27,12 +31,15 @@ Transitions execute through a deterministic pipeline of ordered steps. Each step
 | 50 | ChangeStateStep | Persist state change |
 | 60 | RunOnEntryTasksStep | Run target-state OnEntry tasks |
 | 70 | HandleSubFlowStep | Start subflow correlation; enqueue StartSubflowJob |
+| 75 | HandleLongPollTerminationStep | Pause on state entry and arm acknowledgment fallback when configured |
 | 79 | ClearBusyOnResumeStep | Clear busy on subflow resume path |
-| 80 | ScheduleTransitionsStep | Schedule future transitions |
-| 90 | RunAutomaticTransitionsStep | Evaluate auto-transition conditions; set NextTransition |
+| 80 | RunAutomaticTransitionsStep | Evaluate auto-transition conditions; set NextTransition |
+| 90 | ScheduleTransitionsStep | Schedule future transitions — skipped when auto selected a winner |
 | 100 | HandleFinishStep | Complete/cancel instance on finish states |
 | 110 | FinalizeTransitionStep | Complete transition record; dispose script cache |
 | 112 | ResolveAvailableStep | Resolve deferred Active status |
+
+There is no step 9 / `HandleUpdateDataPreflightStep`. Parent `updateData` is skipped at forward (10) and short-circuited at data-only (21) when a SubFlow correlation is open.
 
 ### StepOutcome Values
 
@@ -51,20 +58,22 @@ Each trigger type resolves to a profile that excludes irrelevant steps:
 | Profile | Trigger | Key Exclusions |
 |---------|---------|----------------|
 | Manual | Manual (0) | None |
-| AutoChain | Automatic (1) | Preflight, SetBusy, CreateTransition, ResourceLock, ResolveAvailable |
-| Scheduled | Scheduled (2) | Preflight, ForwardSubflow, SetBusy, ResourceLock |
-| Event | Event (3) | Preflight, ForwardSubflow, SetBusy, ResourceLock |
-| ErrorBoundary | Error boundary | Preflight, UpdateDataCheck, ForwardSubflow, ResourceLock, Auto, Schedule; `AllowAutoChain=false`, `AllowSubFlow=false` |
+| AutoChain | Automatic (1) | Preflight, ForwardSubflow, SetBusy, ApplyTimeoutState (ResourceLock runs); `AllowSubFlow=false` |
+| Scheduled | Scheduled (2) | Preflight, ForwardSubflow; `AllowSubFlow=false` |
+| Event | Event (3) | Preflight, ForwardSubflow; `AllowSubFlow=true` |
+| ErrorBoundary | Error boundary | Preflight, ForwardSubflow, ResourceLock; `AllowSubFlow=false`, `AllowAutoChain=true` (Auto is not excluded) |
 
-Resolution: `IPipelineProfileResolver.Resolve(context)` — if `IsErrorBoundaryTransition` → ErrorBoundary; else by `TriggerType`.
+A self-target variant is composed on top of the base for **`updateData` only** (`SkipsStateLifecycle()`): extra exclusions CancelScheduledJobs / OnExit / OnEntry / Schedule. Every other `$self` transition runs the full lifecycle. See `.claude/rules/vnext-workflow-developer.md`.
+
+Resolution: `IPipelineProfileResolver.Resolve(workflowContext, transitionContext)` — if `IsErrorBoundaryTransition` → ErrorBoundary; else by the **workflow context's** `TriggerType`.
 
 ## Instance Repository Include Strategy
 
 - Pipeline steps do NOT call EF `Include` directly. Includes are applied at load time.
-- `EfCoreInstanceRepository.WithDetailsAsync()` loads: `Include(DataList)` + `Include(ChildCorrelations.Where(!IsCompleted))` with split queries.
+- `EfCoreInstanceRepository.WithDetailsAsync()` loads: `DataList` (or latest-only when `WorkflowExecution:LatestOnlyInstanceLoading` is on) + `Include(ChildCorrelations.Where(!IsCompleted))` with split queries.
 - `GetActiveAsync` → `GetResultAsync` → `FindByIdentifierAsync` → `WithDetailsAsync()`.
+- `GetResultAsync(includeDetails: false)` is lean (no DataList/correlations).
 - History paths use `AsNoTracking` + explicit includes.
-- `includeDetails` parameter on `GetResultAsync` exists but both paths load full details today.
 - **Rule**: Do not add unnecessary includes. If `TransitionExecutionContext` already has the data, do not re-query.
 
 ## Long-Polling / State Function
@@ -115,7 +124,7 @@ Resolution: `IPipelineProfileResolver.Resolve(context)` — if `IsErrorBoundaryT
   - Transition set → `RequestNextTransition(key, ErrorBoundary)` + `SkipToFinalize()`
   - Abort without transition → Fail → instance fault
 - Error-boundary transitions set `IsErrorBoundaryTransition = true` on chained context.
-- Error-boundary profile disables auto-chain and subflow to prevent cascading.
+- Error-boundary profile disables subflow (`AllowSubFlow=false`) and skips ResourceLock. Auto is not excluded; `AllowAutoChain` remains true.
 
 ## SubFlow Lifecycle
 

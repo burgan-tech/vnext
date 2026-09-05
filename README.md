@@ -81,11 +81,12 @@ dotnet test --filter "FullyQualifiedName~MyTest"   # one test
 - `vnext-meta/`: `@burgan-tech/vnext-meta` npm package — machine-readable runtime metadata (features, deprecations, migrations, known issues, component registry)
 - `etc/`: Docker Compose files and per-host Dapr component configs
 - `scripts/`: setup helpers
-- `docs/`: developer documentation; `ai-docs/`: AI-generated technical notes
+- `docs/`: developer documentation (`docs/agent-onboarding.md` for coding agents). `ai-docs/` is gitignored local scratch, not committed.
 
 ## Docs
 
 - [docs/README.md](docs/README.md) — documentation index and reading path
+- [Agent onboarding](docs/agent-onboarding.md) — source-of-truth order for coding agents
 - [Workflow Execution Pipeline](docs/architecture/workflow-execution-pipeline.md) — ordered steps, admission, inline auto-chain and post-commit boundaries
 - [Subflow Execution](docs/architecture/subflow-execution.md) — child start/forward/retry, `S`/`P` semantics and terminal resume
 - [CLAUDE.md](CLAUDE.md) / [AGENTS.md](AGENTS.md) — architecture overview and domain concepts for coding agents (same content)

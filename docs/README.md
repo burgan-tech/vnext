@@ -11,6 +11,7 @@ describe the stable mental model, boundaries, failure modes, and change-safety r
 
 | Area | Purpose |
 | --- | --- |
+| [Agent onboarding](agent-onboarding.md) | Source-of-truth order, where-is-X, pitfalls for a new coding session. |
 | [Architecture](architecture/system-overview.md) | Runtime shape, service boundaries, dependency direction, routing. |
 | [Domain](domain/instance-data-merge-concept.md) | Instance lifecycle, data versioning, cache context, function-handler behavior. |
 | [Runtime](runtime/task-executors-and-invokers.md) | Task execution, invokers, scripting, remote runtime integration. |
@@ -21,7 +22,7 @@ describe the stable mental model, boundaries, failure modes, and change-safety r
 
 ## Reading Path
 
-1. Read [System Overview](architecture/system-overview.md) to understand the three API hosts and worker boundaries.
+1. Read [Agent Onboarding](agent-onboarding.md) if you are starting a coding session, then [System Overview](architecture/system-overview.md) to understand the three API hosts and worker boundaries.
 2. Read [Workflow Execution Pipeline](architecture/workflow-execution-pipeline.md) before changing transition behavior; pair it with [Inline Auto-Chain Context Reuse](architecture/inline-chain-context-reuse.md) before changing context creation, UoW boundaries or automatic continuation handling.
 3. Read [Async Transition Execution Modes](architecture/async-transition-execution-modes.md) before changing the `WorkflowExecution` flags (the initial-accept enqueue path, `DirectEnqueueContinuations`) or the auto-chain's always-inline continuation model. Read [Subflow Execution](architecture/subflow-execution.md) before changing child start/forward/retry call mode, parent ownership handoff or terminal resume.
 4. Read [Domain Cache Context](domain/domain-cache-context.md) before changing definition cache behavior, and [Component Cache Generation Memo](runtime/component-cache-generation-memo.md) before enabling `GenerationMemoSeconds` or editing the CD propagation window.
@@ -32,7 +33,7 @@ describe the stable mental model, boundaries, failure modes, and change-safety r
 9. Read [Instance Function Cache and Fingerprint ETag](runtime/state-function-cache-and-etag.md) before changing the state/data/master/schema functions' ETag, caching, or 304 behavior (includes the workflow-level `functionCache.ttlSeconds` contract).
 10. Read [Event-Driven Workflows](domain/event-driven-workflows.md) before wiring external events into workflows or transitions (event mappings, Dapr subscriptions, correlation).
 11. Read [Instance Filtering and Queries](runtime/instance-filtering-and-queries.md) before writing instance queries in mapping scripts (fluent `InstanceQuery`, operator reference, `GetInstancesTask` vs `DaprServiceTask`, migration from hand-written GraphQL filters).
-12. Read [GetInstance Task](runtime/get-instance-task.md) when a mapping needs a single instance's metadata **and** data in one call (task type `18`, local/remote response parity).
+12. Read [GetInstance Task](runtime/get-instance-task.md) when a mapping needs a single instance's metadata **and** data in one call (task type `19`, local/remote response parity).
 13. Read [Script Related Instance Access](runtime/script-related-instance-access.md) before using or changing `context.Related` in mapping scripts (parent/correlation reads, unfiltered `x-roles` behavior, internal endpoint security posture).
 14. Read [View Display Modes](domain/view-display-modes.md) before changing a view's `display` declaration or how clients present views (SDI / MDI shapes, response `modes` contract).
 15. Read [Function Handler Architecture](domain/function-handler-architecture.md) § Custom Function Contract before declaring function `verbs` / input-output schemas and views, or changing verb enforcement.
@@ -71,6 +72,7 @@ Kept for archaeology; read the canonical page linked from each before relying on
 - Include boundaries, failure modes, observability, and change-safety notes.
 - Reference source files for implementation detail instead of duplicating code.
 - If code and docs conflict, fix the docs or document the divergence.
+- `/ai-docs` is gitignored local scratch. Do not treat it as committed documentation.
 
 ## Local Development
 

@@ -42,7 +42,9 @@ transition — no hard-coded client knowledge of the well-known keys.
 
 When the instance sits in a `SubFlow` state, `MergeWithParentAvailableTransitions` merges the
 **parent's** `cancel`, `updateData` and `exit` into the subflow's own transition list. This is the
-primary surface for `updateData`: its preflight step only does work in exactly that situation.
+primary **discovery** surface for `updateData`. Execution on a parent with an open SubFlow
+correlation is `HandleUpdateDataDataOnlyStep` (21) (data only, skip to Finalize);
+`ForwardToActiveSubflowStep` (10) never forwards `updateData` to the child.
 
 ### The configured key is what gets listed
 
@@ -266,5 +268,5 @@ rejected.
 | Role evaluation (AND) | `src/BBT.Workflow.Application/Authorization/TransitionAuthorizationManager.cs` (`IsTransitionAllowedInStateAsync`, `FilterAuthorizedTransitionKeysAsync`) |
 | Authorize / matrix | `src/BBT.Workflow.Application/Authorization/AuthorizeAppService.cs` |
 | Validation | `src/BBT.Workflow.Domain/Definitions/Validators/WorkflowValidator.cs` |
-| Pipeline steps | `.../Pipeline/Steps/HandleCancelPreflightStep.cs`, `HandleUpdateDataPreflightStep.cs`, `HandleFinishStep.cs` |
+| Pipeline steps | `.../Pipeline/Steps/HandleCancelPreflightStep.cs`, `ForwardToActiveSubflowStep.cs`, `HandleUpdateDataDataOnlyStep.cs`, `HandleFinishStep.cs` |
 | State-machine exemption + state gate | `src/BBT.Workflow.Domain/Definitions/Specifications/WellKnownTransitionSpecification.cs`, `SharedTransitionAvailabilitySpecification.cs`, `SubFlowBypassSpecification.cs` |

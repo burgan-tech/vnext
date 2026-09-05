@@ -7,8 +7,7 @@ This rule complements the workflow concepts already captured in the root `CLAUDE
 | Order | Step | Responsibility |
 |-------|------|----------------|
 | 5 | HandleCancelPreflightStep | Detect cancel/exit; short-circuit if instance already completed |
-| 9 | HandleUpdateDataPreflightStep | Parent update-data / shared-transition preflight for subflows |
-| 10 | ForwardToActiveSubflowStep | Queue post-commit forward to active subflow; skip epilogue |
+| 10 | ForwardToActiveSubflowStep | Queue post-commit forward to active subflow; skip epilogue. Does not forward `updateData` or parent shared `$self` transitions. |
 | 19 | SetBusyStep | Set instance status to Busy and persist |
 | 20 | CreateTransitionRecordStep | Create transition record; duplicate key guard |
 | 21 | HandleUpdateDataDataOnlyStep | Parent with active SubFlow: persist update data and skip lifecycle/epilogue |
@@ -97,8 +96,11 @@ A sixth profile is **composed on top of** the base, never selected instead of it
 ## Instance Repository Include Strategy
 
 - Pipeline steps do NOT call EF `Include` directly. Includes applied at load time.
-- `EfCoreInstanceRepository.WithDetailsAsync()` loads: `Include(DataList)` + `Include(ChildCorrelations.Where(!IsCompleted))` (split queries).
+- `EfCoreInstanceRepository.WithDetailsAsync()` loads `DataList` (or latest-only when
+  `WorkflowExecution:LatestOnlyInstanceLoading` is on) + `Include(ChildCorrelations.Where(!IsCompleted))`
+  (split queries).
 - `GetActiveAsync` → `GetResultAsync` → `FindByIdentifierAsync` → `WithDetailsAsync()`.
+- `GetResultAsync(includeDetails: false)` is lean (no DataList/correlations).
 - History paths: `AsNoTracking` + explicit filtered includes.
 - **Rule**: do not add unnecessary includes; reuse data from `TransitionExecutionContext`.
 
@@ -118,7 +120,8 @@ A sixth profile is **composed on top of** the base, never selected instead of it
   including `roles`, `view`, `schema`, `annotations`.
 - **Listed in `availableTransitions`** from every state (subject to `triggerType` Manual/Event and
   `availableIn`), and merged from the **parent** into a subflow's list — that merge is `updateData`'s
-  primary surface, since `HandleUpdateDataPreflightStep` only acts while the current state is `SubFlow`.
+  primary discovery surface. On a parent with an open SubFlow correlation, `HandleUpdateDataDataOnlyStep`
+  (21) writes data and skips to Finalize; `ForwardToActiveSubflowStep` (10) never forwards `updateData`.
 - The **configured key** is listed, never the alias (`cancel` / `update-parent-data` / `exit`): role
   filtering resolves via `FindTransitionInContext`, which matches these three on the configured key.
   Aliases stay accepted on the request side (`ResolveWellKnownKey`).

@@ -17,8 +17,7 @@ load unrelated state or make policy decisions that belong to profile resolution.
 | Order | Step | Responsibility |
 | --- | --- | --- |
 | 5 | Preflight | Cancel/exit detection and already-completed guard. |
-| 9 | Parent update-data preflight | Shared transition handling for parent/subflow flows. |
-| 10 | Forward to active subflow | Forward parent transitions into an active subflow when applicable. |
+| 10 | Forward to active subflow | Forward parent transitions into an active subflow when applicable. Does not forward `updateData` or parent shared `$self` transitions. |
 | 19 | Set Busy | Mark the instance Busy during transition execution. |
 | 20 | Create transition | Persist the transition attempt and duplicate guard. |
 | 21 | Parent update-data data-only | When a parent has an open SubFlow correlation, persist update data and skip state lifecycle/epilogue. |
@@ -38,6 +37,10 @@ load unrelated state or make policy decisions that belong to profile resolution.
 | 110 | Finalize | Complete transition record and clear script cache. |
 | 112 | Resolve available | Resolve deferred Active status. |
 
+There is no step at order 9 (`HandleUpdateDataPreflightStep` was removed). Parent `updateData`
+handling is: `ForwardToActiveSubflowStep` does not forward it, and `HandleUpdateDataDataOnlyStep`
+(21) skips to Finalize when the parent has an open SubFlow correlation.
+
 `StepOutcome` controls execution:
 
 - `Continue()` moves to the next step.
@@ -51,10 +54,10 @@ Profiles remove irrelevant steps:
 | Profile | Trigger | Notes |
 | --- | --- | --- |
 | Manual | Manual | Full pipeline, auto-chain and subflow allowed. |
-| AutoChain | Automatic | Skips preflight, active-subflow forwarding, Busy marking and timeout application. ResourceLock still runs. |
-| Scheduled | Scheduled | Skips preflight and active-subflow forwarding. |
-| Event | Event | Skips preflight and active-subflow forwarding. |
-| ErrorBoundary | Error boundary | Skips preflight, active-subflow forwarding and ResourceLock; subflow handling remains disabled. |
+| AutoChain | Automatic | Skips preflight, active-subflow forwarding, Busy marking and timeout application. ResourceLock still runs. `AllowSubFlow=false`. |
+| Scheduled | Scheduled | Skips preflight and active-subflow forwarding. `AllowSubFlow=false`. |
+| Event | Event | Skips preflight and active-subflow forwarding. `AllowSubFlow=true`. |
+| ErrorBoundary | Error boundary | Skips preflight, active-subflow forwarding and ResourceLock; `AllowSubFlow=false`; `AllowAutoChain=true` (Auto is not excluded). |
 
 A sixth profile is **composed on top of** the trigger's profile rather than selected instead of it.
 For an `updateData` transition, `PipelineExecutionProfile.ForSelfTarget` layers the state-lifecycle
