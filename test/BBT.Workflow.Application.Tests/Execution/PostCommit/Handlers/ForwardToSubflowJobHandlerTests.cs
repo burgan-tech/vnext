@@ -175,9 +175,10 @@ public class ForwardToSubflowJobHandlerTests
     }
 
     [Theory]
-    [InlineData(ExecMode.Sync, true)]
-    [InlineData(ExecMode.Async, false)]
-    public async Task HandleAsync_ShouldPropagateSyncFromCallerMode(ExecMode callerMode, bool expectedSync)
+    [InlineData(ExecMode.Sync)]
+    [InlineData(ExecMode.Async)]
+    [InlineData(ExecMode.Resume)]
+    public async Task HandleAsync_ShouldAlwaysForwardSynchronously(ExecMode callerMode)
     {
         // Arrange
         var job = CreateForwardToSubflowJob();
@@ -202,11 +203,11 @@ public class ForwardToSubflowJobHandlerTests
 
         // Assert
         capturedInput.ShouldNotBeNull();
-        capturedInput!.Sync.ShouldBe(expectedSync);
+        capturedInput!.Sync.ShouldBeTrue();
     }
 
     [Fact]
-    public async Task HandleAsync_WhenModeIsSyncButCallerModeIsAsync_ShouldUseCallerModeForSubflow()
+    public async Task HandleAsync_WhenModeIsSyncButCallerModeIsAsync_ShouldForwardSynchronously()
     {
         // Arrange — simulates a background job handler scenario where Mode=Sync (loop prevention)
         // but CallerMode=Async (original caller wanted async)
@@ -230,9 +231,9 @@ public class ForwardToSubflowJobHandlerTests
         // Act
         await _handler.HandleAsync(job, context, CancellationToken.None);
 
-        // Assert — subflow should receive sync=false (from CallerMode), not sync=true (from Mode)
+        // Child execution is synchronous even when the original caller requested async.
         capturedInput.ShouldNotBeNull();
-        capturedInput!.Sync.ShouldBeFalse();
+        capturedInput!.Sync.ShouldBeTrue();
     }
 
     [Theory]

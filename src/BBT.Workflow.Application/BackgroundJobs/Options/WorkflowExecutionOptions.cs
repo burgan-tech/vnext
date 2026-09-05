@@ -11,15 +11,13 @@ public sealed class WorkflowExecutionOptions
     public TransitionJobFailurePolicyOptions FailurePolicy { get; set; } = new();
 
     /// <summary>
-    /// When enabled, async transitions execute one transition per background job
-    /// (transition-per-job) rather than running the entire auto-chain inside a single job.
-    /// Each committed transition enqueues the next via <c>ITransitionEnqueueGateway</c>.
-    /// Default: false.
+    /// Legacy configuration retained for binding compatibility; ignored by execution.
+    /// Automatic continuations always run in-process and are awaited by the caller or entry job.
     /// </summary>
     public bool TransitionPerJob { get; set; }
 
     /// <summary>
-    /// Governs how <c>EnqueueContinuationStrategy</c> realizes a chained continuation.
+    /// Governs how async entry requests enqueue their initial transition job.
     /// <para>
     /// ON (default): enqueue the Dapr job DIRECTLY (no outbox/inbox poll hop) for lower latency;
     /// if the direct Dapr enqueue fails, fall back to publishing a <c>TransitionContinuationRequested</c>

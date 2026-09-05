@@ -51,6 +51,7 @@ public sealed class InlineContinuationStrategy : IContinuationStrategy
             CausationId = currentContext.ExecutionChainId,
             RequestedAt = DateTimeOffset.UtcNow,
             Headers = currentContext.Headers.ToDictionary(kvp => kvp.Key, kvp => kvp.Value),
+            RouteValues = currentContext.RouteValues.ToDictionary(kvp => kvp.Key, kvp => kvp.Value),
             Execution = new ExecutionInfo
             {
                 ExecutionChainId = currentContext.ExecutionChainId,
@@ -58,7 +59,7 @@ public sealed class InlineContinuationStrategy : IContinuationStrategy
                 ResumeFrom = null
             },
             IsReentry = true,
-            EnqueueContinuations = currentContext.EnqueueContinuations,
+            EnqueueContinuations = false,
             IsPreReserved = currentContext.IsPreReserved,
             SubflowChainReserved = currentContext.SubflowChainReserved,
             OwnsStatus = currentContext.OwnsStatus,

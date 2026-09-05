@@ -390,7 +390,7 @@ public class TransitionPipelineTests
     }
 
     [Fact]
-    public async Task RunAsync_WhenPostCommitJobsAreQueuedForEnqueueContinuation_ShouldDispatchBeforeReturning()
+    public async Task RunAsync_WhenLegacyEnqueueFlagIsSet_ShouldPreserveContinuationUntilPostCommit()
     {
         var context = CreateTransitionExecutionContext();
         var workflowContext = CreateWorkflowExecutionContext(context);
@@ -434,18 +434,18 @@ public class TransitionPipelineTests
         var result = await pipeline.RunAsync(workflowContext, CancellationToken.None);
 
         result.IsSuccess.ShouldBeTrue();
-        jobsVisibleDuringEnqueue.ShouldBeTrue();
-        await jobRepository.Received(1).InsertAsync(
+        jobsVisibleDuringEnqueue.ShouldBeFalse();
+        await jobRepository.DidNotReceive().InsertAsync(
             Arg.Any<InstanceJob>(),
             true,
             Arg.Any<CancellationToken>());
-        await enqueueGateway.Received(1).EnqueueAsync(
+        await enqueueGateway.DidNotReceive().EnqueueAsync(
             Arg.Any<BBT.Workflow.BackgroundJobs.Payloads.TransitionJobPayload>(),
             Arg.Any<BBT.Workflow.Execution.Events.TransitionContinuationRequested>(),
             Arg.Any<bool>(),
             Arg.Any<CancellationToken>());
         result.Value!.Directives.PostCommitJobs.Single().ShouldBeSameAs(postCommitJob);
-        result.Value.Directives.NextTransition.ShouldBeNull();
+        result.Value.Directives.NextTransition.ShouldBeSameAs(next);
     }
 
     [Fact]
@@ -473,13 +473,16 @@ public class TransitionPipelineTests
 
     #region Auto-Chain Tests
 
-    [Fact]
-    public async Task RunAsync_WithAutoChain_ShouldAdmitOnlyOnceForTheWholeChain()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RunAsync_WithAutoChain_ShouldAdmitOnlyOnceForTheWholeChain(bool legacyEnqueueContinuations)
     {
         // Arrange
         var context1 = CreateTransitionExecutionContext();
         var context2 = CreateTransitionExecutionContext("auto-transition");
         var workflowContext = CreateWorkflowExecutionContext(context1);
+        workflowContext.EnqueueContinuations = legacyEnqueueContinuations;
         var contextCallCount = 0;
 
         _mockContextFactory.CreateAsync(Arg.Any<WorkflowExecutionContext>(), Arg.Any<CancellationToken>())

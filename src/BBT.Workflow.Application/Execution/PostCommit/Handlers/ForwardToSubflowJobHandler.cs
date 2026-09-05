@@ -37,7 +37,7 @@ public sealed class ForwardToSubflowJobHandler(
             logger.SubFlowForwardStarted(job.TransitionKey, job.SubflowInstanceId, job.ParentInstanceId);
 
             // Reconstruct TransitionInput from job's primitive values (includes parent instance id header for trace correlation)
-            var input = CreateTransitionInput(job, context.CallerMode);
+            var input = CreateTransitionInput(job);
 
             // Open the subflow's own trace lane. Activity.Current here is the enclosing
             // PostCommit.ForwardToSubflowJob span, so it becomes the anchor for every hop the
@@ -114,7 +114,7 @@ public sealed class ForwardToSubflowJobHandler(
     /// Creates a TransitionInput from the job's primitive values.
     /// Merges job headers with parent instance id header for trace/log correlation on the remote side.
     /// </summary>
-    private static TransitionInput CreateTransitionInput(ForwardToSubflowJob job, ExecMode mode)
+    private static TransitionInput CreateTransitionInput(ForwardToSubflowJob job)
     {
         // HTTP headers are case-insensitive. Build with OrdinalIgnoreCase and copy the forwarded
         // headers with last-wins semantics so a parent-instance-id already present (possibly
@@ -134,7 +134,7 @@ public sealed class ForwardToSubflowJobHandler(
                 Tags = job.Tags,
                 Stage = job.Stage
             },
-            sync: mode == ExecMode.Sync)
+            sync: true)
         {
             Headers = headers,
             RouteValues = job.RouteValues,
@@ -142,4 +142,3 @@ public sealed class ForwardToSubflowJobHandler(
         };
     }
 }
-
