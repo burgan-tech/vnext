@@ -31,6 +31,16 @@ PATCH .../instances/{id}/transitions/{key}      ← APM transaction, anchors the
 └── TransitionJob.Execute        (parent resume)
 ```
 
+The `hop 1` / `hop 2` job-level siblings above are illustrative of the lane mechanism, not of
+today's auto-chain: automatic continuations run **inline inside a single job** now
+(`EnqueueContinuationStrategy`/`ContinuationMode.Enqueue` is no longer registered — see
+[Async Transition Execution Modes](../architecture/async-transition-execution-modes.md)), so
+one accept's whole chain is one `TransitionJob.Execute/{key}` span with nested
+`Transition.{key}` group spans per hop, not additional job-level siblings. A genuinely
+separate sibling `TransitionJob.Execute` under the same lane today comes from a **different**
+job: a subflow forward reserved at accept time, or — as drawn above — the parent's resume
+after its child subflow completes.
+
 A new lane opens **only** at a subflow handoff, never at a service boundary. So depth is
 `O(subflow nesting)`, independent of chain length. Inside each lane item the structure is
 `TransitionJob.Execute/{key}` → `Step.*` → `Task.Execute.{key}` → HTTP/Dapr client span. The lane
