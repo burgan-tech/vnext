@@ -349,7 +349,7 @@ public class TransitionPipeline
             }
 
             // Rebuild and validate the next chained transition context (single source of truth).
-            var nextContextResult = await CreateAndValidateContextAsync(continuationResult.Value, cancellationToken);
+            var nextContextResult = await CreateAndValidateContextAsync(continuationResult.Value, context, cancellationToken);
             if (!nextContextResult.IsSuccess)
                 return Result<TransitionExecutionContext>.Fail(nextContextResult.Error);
 
@@ -383,9 +383,21 @@ public class TransitionPipeline
     /// </summary>
     private async Task<Result<TransitionExecutionContext>> CreateAndValidateContextAsync(
         WorkflowExecutionContext workflowContext,
+        TransitionExecutionContext previous,
         CancellationToken cancellationToken)
     {
-        var contextResult = await _contextFactory.CreateAsync(workflowContext, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        // Only this in-loop path reuses tracked entities. Runner/post-commit/retry entries still
+        // call CreateAsync in their new scope and rehydrate authoritative state.
+        // Preserve GetActiveAsync's terminal guard without issuing another aggregate query.
+        if (previous.Instance.IsCompleted)
+            return Result<TransitionExecutionContext>.Fail(Error.Validation(
+                WorkflowErrorCodes.InstanceCompleted,
+                $"Instance {previous.InstanceId} is already completed with status: {previous.Instance.Status.Code}",
+                workflowContext.InstanceId));
+
+        var contextResult = _contextFactory.CreateFromPreloaded(
+            workflowContext, previous.Workflow, previous.Instance);
         if (!contextResult.IsSuccess)
             return Result<TransitionExecutionContext>.Fail(contextResult.Error);
 

@@ -485,6 +485,10 @@ public class TransitionPipelineTests
         workflowContext.EnqueueContinuations = legacyEnqueueContinuations;
         var contextCallCount = 0;
 
+        _mockContextFactory.CreateFromPreloaded(Arg.Any<WorkflowExecutionContext>(),
+                Arg.Any<Definitions.Workflow>(), Arg.Any<Instance>())
+            .Returns(_ => { contextCallCount++; return Result<TransitionExecutionContext>.Ok(context2); });
+
         _mockContextFactory.CreateAsync(Arg.Any<WorkflowExecutionContext>(), Arg.Any<CancellationToken>())
             .Returns(callInfo =>
             {
@@ -528,6 +532,10 @@ public class TransitionPipelineTests
         // Assert
         result.IsSuccess.ShouldBeTrue();
         contextCallCount.ShouldBe(2);
+        await _mockContextFactory.Received(1).CreateAsync(
+            Arg.Any<WorkflowExecutionContext>(), Arg.Any<CancellationToken>());
+        _mockContextFactory.Received(1).CreateFromPreloaded(
+            Arg.Any<WorkflowExecutionContext>(), context1.Workflow, context1.Instance);
 
         // Admission runs only ONCE for the entire chain — hops carry no lock and no re-check
         await _mockAdmissionService.Received(1)
@@ -549,6 +557,10 @@ public class TransitionPipelineTests
         var context2 = CreateTransitionExecutionContext("auto-transition");
         var workflowContext = CreateWorkflowExecutionContext(context1);
         var contextCallCount = 0;
+
+        _mockContextFactory.CreateFromPreloaded(Arg.Any<WorkflowExecutionContext>(),
+                Arg.Any<Definitions.Workflow>(), Arg.Any<Instance>())
+            .Returns(_ => { contextCallCount++; return Result<TransitionExecutionContext>.Ok(context2); });
 
         _mockContextFactory.CreateAsync(Arg.Any<WorkflowExecutionContext>(), Arg.Any<CancellationToken>())
             .Returns(callInfo =>
@@ -875,6 +887,9 @@ public class TransitionPipelineTests
         TransitionExecutionContext chained)
     {
         var contextCallCount = 0;
+        _mockContextFactory.CreateFromPreloaded(Arg.Any<WorkflowExecutionContext>(),
+                Arg.Any<Definitions.Workflow>(), Arg.Any<Instance>())
+            .Returns(_ => { contextCallCount++; return Result<TransitionExecutionContext>.Ok(chained); });
         _mockContextFactory.CreateAsync(Arg.Any<WorkflowExecutionContext>(), Arg.Any<CancellationToken>())
             .Returns(_ =>
             {
@@ -1118,6 +1133,9 @@ public class TransitionPipelineTests
         context2.Target = CreateStateWithNotification("final");
         var workflowContext = CreateWorkflowExecutionContext(context1);
         var contextCallCount = 0;
+        _mockContextFactory.CreateFromPreloaded(Arg.Any<WorkflowExecutionContext>(),
+                Arg.Any<Definitions.Workflow>(), Arg.Any<Instance>())
+            .Returns(_ => { contextCallCount++; return Result<TransitionExecutionContext>.Ok(context2); });
 
         _mockContextFactory.CreateAsync(Arg.Any<WorkflowExecutionContext>(), Arg.Any<CancellationToken>())
             .Returns(callInfo =>
