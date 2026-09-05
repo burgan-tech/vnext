@@ -22,24 +22,24 @@ gaps around post-commit work.
 
 ```
 PATCH .../instances/{id}/transitions/{key}      ← APM transaction, anchors the root lane
-├── TransitionJob.Execute        (hop 1)
-├── TransitionJob.Execute        (hop 2)        ← sibling of hop 1, not its child
-│   └── PostCommit.ForwardToSubflowJob          ← real continuation; anchors SUBFLOW lane
-│       ├── TransitionJob.Execute (subflow hop 1)
-│       └── TransitionJob.Execute (subflow hop 2)
-├── SubFlow.Resume/{domain}/{flow}              ← back in the parent's lane
-└── TransitionJob.Execute        (parent resume)
+└── TransitionJob.Execute/{key}                 ← present only for an async accepted request
+    ├── Transition.{key}                        ← first hop
+    ├── Transition.{automatic-key}              ← awaited inline; no Scheduler job
+    └── PostCommit.StartSubflowJob / ForwardToSubflowJob
+        └── Transition.{child-key}               ← synchronous child call, SUBFLOW lane
+
+Inbox terminal-event delivery
+└── SubFlow.Resume/{domain}/{flow}              ← awaited parent resume
+    ├── Transition.{resume-key}
+    └── Transition.{automatic-key}              ← awaited inline; no Scheduler job
 ```
 
-The `hop 1` / `hop 2` job-level siblings above are illustrative of the lane mechanism, not of
-today's auto-chain: automatic continuations run **inline inside a single job** now
-(`EnqueueContinuationStrategy`/`ContinuationMode.Enqueue` is no longer registered — see
-[Async Transition Execution Modes](../architecture/async-transition-execution-modes.md)), so
-one accept's whole chain is one `TransitionJob.Execute/{key}` span with nested
-`Transition.{key}` group spans per hop, not additional job-level siblings. A genuinely
-separate sibling `TransitionJob.Execute` under the same lane today comes from a **different**
-job: a subflow forward reserved at accept time, or — as drawn above — the parent's resume
-after its child subflow completes.
+For a top-level `sync=true` request the first `TransitionJob.Execute/{key}` layer is absent and the
+pipeline runs in the request. `EnqueueContinuationStrategy` / `ContinuationMode.Enqueue` remains
+as legacy code but is not registered; see
+[Async Transition Execution Modes](../architecture/async-transition-execution-modes.md). A
+separate `TransitionJob.Execute` therefore represents another accepted asynchronous transition,
+not an automatic hop or the normal parent-resume path.
 
 A new lane opens **only** at a subflow handoff, never at a service boundary. So depth is
 `O(subflow nesting)`, independent of chain length. Inside each lane item the structure is
@@ -184,8 +184,8 @@ ones, always copied together**, beside `TraceRoot` / `ParentTraceRoot`:
 
 | Carrier | Filled from the lane by | Restored by |
 |---|---|---|
-| `TransitionJobPayload` (`ITraceableJobPayload` defaults null) | `AsyncTransitionStrategy.BuildDirectPayload`, `EnqueueContinuationStrategy` | `TransitionJobHandler` → `Reset(…, payload.ToActivationEpisode())` |
-| `TransitionContinuationRequested` (`ILaneAwareDistributedEvent`) | the same two enqueue sites; `TraceStampingDistributedEventBus` additionally fills any lane-aware event `??=`-style, never overwriting a preset value | Inbox `EventTraceScope`; the `/enqueue` relay copies them onto the job payload |
+| `TransitionJobPayload` (`ITraceableJobPayload` defaults null) | `AsyncTransitionStrategy.BuildDirectPayload`; the outbox relay may reconstruct it from `TransitionContinuationRequested` | `TransitionJobHandler` → `Reset(…, payload.ToActivationEpisode())` |
+| `TransitionContinuationRequested` (`ILaneAwareDistributedEvent`) | the initial async-accept outbox/fallback path; `TraceStampingDistributedEventBus` additionally fills any lane-aware event `??=`-style, never overwriting a preset value | Inbox `EventTraceScope`; the `/enqueue` relay copies it onto the job payload |
 | `InstanceSubCompletedEvent` / `InstanceSubFaultedEvent` / `InstanceSubCanceledEvent` | `TraceStampingDistributedEventBus` | `SubflowTerminalRelay` and the Inbox `InstanceSub*EventHandler`s map them onto the inputs below |
 | `FlowCompletedInput` / `SubFlowFaultedInput` / `SubItemCanceledInput` | the relay / inbox mappings above | `internal/…/complete`, `/sub/fault`, `/sub/cancel` → `Reset`; the `Subflow*Service`s copy them back onto the event republished by a terminal revert |
 | `SubflowForwardInput` | `RemoteInstanceCommandAppService` | `internal/subflow-forward` → `Reset` |
@@ -215,10 +215,10 @@ them, and the client's question there is "fire → Active".
   the flip is not durable yet; a client sees Active only after the commit.
 - **Only status owners emit** (`OwnsStatus`). A non-owning execution beside an in-flight chain — an
   `updateData` on a Busy parent, a forwarded request — leaves the verdict to the owner.
-- **A hop that enqueued a continuation never emits.** `EnqueueContinuationStrategy` marks
-  `Directives.ContinuationEnqueued`; `TransitionPipeline` passes `chainSettled: !hadNextTransition`
-  and the post-commit settlement `chainSettled: !continuations.ContinuationEnqueued &&
-  instance.IsBusy`. The job it becomes carries the episode and settles it.
+- **An automatic winner does not close the episode.** `TransitionPipeline` passes
+  `chainSettled:false` while another inline hop is pending. `ContinuationEnqueued` remains a legacy
+  field; the current DI graph has no enqueue continuation strategy, so an automatic hop never
+  becomes a Scheduler job.
 - **A parent handing off to a live SubFlow never emits.** It is still Busy, so `busy.subflow`
   would falsely mark the activation complete. The child inherits the episode and its activation
   span records the surface that actually becomes available.
@@ -241,8 +241,9 @@ Alert on the flags, not on the numbers.
 ## Async timing shape
 
 `PostCommit.*` is a real child of the transition that committed, so work after `Uow.Commit` remains
-adjacent to that commit in Elastic's tree. Async transition hops can still begin after the original
-202 response has ended; that is the real scheduler boundary. The backdated
+adjacent to that commit in Elastic's tree. An async transition's initial job can still begin after
+the original 202 response has ended; that is the Scheduler boundary. Its automatic hops then run
+inline inside that job. The backdated
 `Instance.Activation/{key}` span covers trigger → durable rest point and links the final
 `Uow.Commit`, not the whole job. Any job bookkeeping after that commit is intentionally outside the
 activation duration because the instance is already observable as Available.

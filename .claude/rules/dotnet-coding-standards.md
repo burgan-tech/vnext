@@ -39,7 +39,7 @@ Use SDK components for:
 - Unit of Work (UoW)
 - OpenTelemetry
 
-## Domain Events (Dual Processing)
+## Domain Events (Outbox Delivery)
 
 **The EventHook infrastructure no longer exists** (`IEventPublishHook<TEvent>`, `IEventHookInvoker`,
 `EventHookAttribute`, `EventHookMode` are deleted). Every distributed event publishes plainly

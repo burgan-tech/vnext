@@ -386,19 +386,9 @@ round trip's latency on every single item.
   before the deadline cut the rest short), `FanOutBulkheadSaturated` (Warning, emitted **at most
   once per batch** — the first time an item has to wait for the global bulkhead rather than the
   batch's own `maxDegreeOfParallelism`).
-- **Metrics** (Prometheus, `WorkflowMetrics.cs` / `PrometheusWorkflowMetrics.RecordFanOutBatch`),
-  batch-level only:
-  - `workflow_fanout_batch_size` (histogram, labels `task_key`, `workflow`) — items per batch.
-  - `workflow_fanout_batch_duration_seconds` (histogram, same labels) — whole-batch wall clock,
-    queueing included.
-  - `workflow_fanout_item_failures_total` (counter, same labels) — incremented once per batch by
-    the batch's failed count, not once per item.
-
-  There is **no per-item duration metric**: an item is a full task execution through the engine,
-  so its duration is already captured by the engine's own generic per-task duration metric under
-  the inner task's own key. There is also **no live concurrency/saturation gauge** — bulkhead
-  pressure is visible only through the one-time-per-batch `FanOutBulkheadSaturated` log line, not
-  through a metric you can graph continuously.
+- **Metrics**: there are currently no fan-out-specific counters, histograms or gauges. Batch size,
+  duration, failure count and bulkhead pressure are exposed through the logs and spans described
+  here. Do not look for the removed `PrometheusWorkflowMetrics` implementation or a `ContextMeter`.
 - **Spans** (`ActivitySource("BBT.Workflow.Tasks")`, only emitted when verbose tracing is on —
   `AetherTracingRuntime.IsVerbose`): each item gets its own `FanOut.Item` child span, opened
   **before** it waits for either concurrency gate, tagged `vnext.fanout.item.key`,
@@ -469,5 +459,5 @@ Split across two layers:
 | Public error codes | `src/BBT.Workflow.Application/Tasks/Executors/FanOut/FanOutErrorCodes.cs` |
 | DI registration (Orchestration-only) | `src/BBT.Workflow.Application/Microsoft/Extensions/DependencyInjection/TaskServiceCollectionExtensions.cs` (`AddTaskExecutors`) |
 | Logging | `src/BBT.Workflow.Domain/Logging/WorkflowLogs.cs` § Fan-Out Execution |
-| Metrics | `src/BBT.Workflow.Infrastructure/Monitoring/WorkflowMetrics.cs`, `PrometheusWorkflowMetrics.cs` § Fan-Out Metrics |
+| Activation metric (not fan-out-specific) | `src/BBT.Workflow.Application/Telemetry/WorkflowMetrics.cs` |
 | Design spec | `docs/superpowers/specs/2026-08-21-fanout-task-design.md` |

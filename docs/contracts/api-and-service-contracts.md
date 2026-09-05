@@ -220,6 +220,11 @@ Two more back the accept-time SubFlow chain reserve (see
 | POST | `.../instances/{instance}/internal/subflow-forward?transitionKey=` | Same contract as the public transition endpoint: `200` (sync) / `202` (async), or the mapped error. |
 | PUT | `.../instances/{instance}/internal/busy-release` | `200`, also when the instance is absent (no-op). |
 
+The endpoint contract can represent both response modes, but current runtime-generated active-child
+forward calls always set `sync=true` and therefore await the child activation. The distinction is
+important when diagnosing traces or changing ownership semantics; see
+[Subflow Execution](../architecture/subflow-execution.md).
+
 `internal/subflow-forward` exists **because** it is internal. The relay must carry a claim proving the
 originating accept already reserved this chain's Busy flag, and the public transition endpoint cannot
 carry one safely: it copies every inbound header into `TransitionInput.Headers` unfiltered and
@@ -290,4 +295,3 @@ available. Current-user and correlation headers should be forwarded across remot
 - `src/BBT.Workflow.Execution.Abstractions/TaskEnvelope.cs`
 - `src/BBT.Workflow.Events.Contracts/`
 - `src/BBT.Workflow.Domain/Validation/SchemaValidationProblemDetails.cs`
-

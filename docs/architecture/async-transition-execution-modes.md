@@ -82,8 +82,8 @@ flowchart TD
 ```
 
 Once the job starts, there is no branching left to configure: `RunChainAsync` walks the
-auto-chain hop by hop inside the same pipeline invocation and the same job, each hop
-committing its own unit of work, until it reaches a state with no automatic transition,
+auto-chain hop by hop inside the same pipeline invocation, job and UoW until it reaches a
+post-commit boundary or a state with no automatic transition,
 a finish state, or a Busy rest point (open SubFlow correlation, unmet auto-gate, Busy
 subtype). See [Trace Lanes](../runtime/trace-lanes.md) for how these hops render as
 siblings, not nested spans, in one trace, and
@@ -143,7 +143,7 @@ idempotent regardless of which enqueue path was taken.
 - `src/BBT.Workflow.Application/BackgroundJobs/Handlers/TransitionJobHandler.cs`
   — the job entry point that runs the chain.
 - [Workflow Execution Pipeline](workflow-execution-pipeline.md) — the per-transition step order.
-- [Inline chain context reuse](../inline-chain-context-reuse.md) — how successive in-process
+- [Inline Auto-Chain Context Reuse](inline-chain-context-reuse.md) — how successive in-process
   hops build their `TransitionExecutionContext` without re-loading the instance/workflow.
 - [Async/Durability Refactor — Required EF Core Migrations](../async-durability-refactor-MIGRATIONS.md)
   — historical draft for the `ChainToken`/`ChainHeartbeat`/`ResumePoint` design above; the

@@ -114,7 +114,7 @@ internal static class TransitionSettlement
 
     /// <summary>
     /// Decides whether this settlement closed the activation episode, and how. Null means the
-    /// episode goes on (or was never this execution's to close): a hop that enqueued its
+    /// episode goes on (or was never this execution's to close): a hop that requested another
     /// continuation, a non-owning execution beside an in-flight chain, a CAS lost to a concurrent
     /// settler that emits its own verdict, or an instance that was already Active.
     /// </summary>

@@ -21,6 +21,7 @@ load unrelated state or make policy decisions that belong to profile resolution.
 | 10 | Forward to active subflow | Forward parent transitions into an active subflow when applicable. |
 | 19 | Set Busy | Mark the instance Busy during transition execution. |
 | 20 | Create transition | Persist the transition attempt and duplicate guard. |
+| 21 | Parent update-data data-only | When a parent has an open SubFlow correlation, persist update data and skip state lifecycle/epilogue. |
 | 25 | Resource lock | Acquire, release, or extend business resource locks. |
 | 30 | OnExecute | Run transition tasks before leaving the state. |
 | 38 | Apply timeout state | Apply timeout target into context before exit. |
@@ -29,6 +30,7 @@ load unrelated state or make policy decisions that belong to profile resolution.
 | 50 | Change state | Persist current/effective state changes. |
 | 60 | OnEntry | Run target-state tasks. |
 | 70 | SubFlow | Create correlation and enqueue subflow start work. |
+| 75 | Long-poll termination | Pause after state entry and arm an acknowledgment fallback job when configured. |
 | 79 | Clear busy on resume | Clear parent Busy state on subflow resume path. |
 | 80 | Auto | Evaluate automatic transitions and request the next transition. |
 | 90 | Schedule | Enqueue scheduled transitions. Skipped when Auto already selected a next transition. |
@@ -49,10 +51,10 @@ Profiles remove irrelevant steps:
 | Profile | Trigger | Notes |
 | --- | --- | --- |
 | Manual | Manual | Full pipeline, auto-chain and subflow allowed. |
-| AutoChain | Automatic | Skips preflight, busy marking, resource lock, timeout application, and subflow forwarding. |
-| Scheduled | Scheduled | Skips preflight and parent/subflow forwarding. |
-| Event | Event | Skips preflight and forward-to-active-subflow. |
-| ErrorBoundary | Error boundary | Minimal recovery path; lock and subflow prelude are excluded. |
+| AutoChain | Automatic | Skips preflight, active-subflow forwarding, Busy marking and timeout application. ResourceLock still runs. |
+| Scheduled | Scheduled | Skips preflight and active-subflow forwarding. |
+| Event | Event | Skips preflight and active-subflow forwarding. |
+| ErrorBoundary | Error boundary | Skips preflight, active-subflow forwarding and ResourceLock; subflow handling remains disabled. |
 
 A sixth profile is **composed on top of** the trigger's profile rather than selected instead of it.
 For an `updateData` transition, `PipelineExecutionProfile.ForSelfTarget` layers the state-lifecycle
@@ -101,12 +103,32 @@ means "no state change" in only one of them:
 
 | Input | Output | Invariants |
 | --- | --- | --- |
-| `WorkflowExecutionContext` | `TransitionExecutionContext` | Context factory loads workflow definition and active instance. |
+| `WorkflowExecutionContext` | `TransitionExecutionContext` | Initial/fresh entry loads workflow and active instance; an uninterrupted inline hop reuses the previous workflow/instance. |
 | Ordered `ITransitionStep` list | Mutated instance and directives | Steps execute by `LifecycleOrder`. |
 | `PipelineDirectives` | Post-commit jobs, deferred events, next transition | Directives are consumed explicitly to avoid repeated work. |
 
-The main lock is acquired once and held across an automatic chain. Reserved transitions
-can use their own lock path, for example subflow resume.
+The distributed status lock is held only around admission's status check-and-set. The pipeline body
+and automatic chain run without a distributed lock lease. The Busy status is the ownership marker;
+special admission kinds define how cancel, exit, timeout, updateData and owner re-entry behave.
+
+## Automatic Continuations and Transaction Boundaries
+
+Automatic continuations always run inline and are awaited. `InlineContinuationStrategy` creates an
+identity/execution `WorkflowExecutionContext` for the next transition, and `TransitionPipeline`
+creates a fresh `TransitionExecutionContext` for that hop. No Dapr Scheduler job is created for an
+automatic continuation. For an async client request, only the initial accepted transition uses a
+`flow.transition` job; that job awaits the whole uninterrupted auto-chain.
+
+Inside one uninterrupted pipeline/UoW, later hops use the previous hop's tracked `Instance` and
+resolved `Workflow` through `TransitionContextFactory.CreateFromPreloaded`. State/transition
+resolution, policy validation, profile resolution and step execution still happen for every hop.
+Temporary context state (`Directives`, `Items`, `Cache`) is rebuilt per hop.
+
+A post-commit job is a hard reuse boundary. The runner commits and disposes the current scope,
+executes the post-commit work, and starts any parent continuation as a new stage with a fresh
+authoritative instance load. Subflow start and forward therefore never receive the old tracked
+parent aggregate. See [Inline Auto-Chain Context Reuse](inline-chain-context-reuse.md) and
+[Subflow Execution](subflow-execution.md).
 
 ## Failure Modes
 
@@ -115,6 +137,8 @@ can use their own lock path, for example subflow resume.
 - Unhandled pipeline errors mark the instance Faulted and add an incident when needed.
 - Post-commit failure can fault the instance if it returns a fault request.
 - Chain depth is capped to prevent infinite automatic transition loops.
+- A process crash during an inline auto-chain rolls back the current UoW; the initial Dapr job is
+  retried for async entry. There is no per-automatic-hop Scheduler checkpoint.
 
 ## Observability
 
@@ -128,7 +152,9 @@ The current trace is enriched with `vnext.chain.depth`, `vnext.pipeline.profile`
 - Add new steps with explicit `LifecycleOrder` gaps when possible.
 - If a step can alter control flow, use `PipelineDirectives` rather than hidden state.
 - Keep profile exclusions synchronized with tests in `PipelineExecutionProfileTests`.
-- Do not bypass `TransitionContextFactory` when the pipeline needs workflow or instance state.
+- Use `CreateFromPreloaded` only inside the uninterrupted pipeline/UoW; fresh stages use
+  `CreateAsync` and an authoritative load.
+- Do not carry an EF-tracked instance across a post-commit, retry or subflow callback boundary.
 
 ### PostgreSQL-to-Dapr Lock Cutover
 
@@ -146,4 +172,6 @@ quiesced and stopped before the new replicas can execute workflow or background 
 - `src/BBT.Workflow.Domain/Execution/Transitions/Pipeline/PipelineExecutionProfile.cs`
 - `src/BBT.Workflow.Application/Execution/Transitions/Pipeline/PipelineProfileResolver.cs`
 - `src/BBT.Workflow.Application/Execution/Transitions/Pipeline/Steps/`
-- [Async Transition Execution Modes](async-transition-execution-modes.md) — how the `WorkflowExecution` flags route async continuations.
+- [Async Transition Execution Modes](async-transition-execution-modes.md) — initial async job routing and the always-inline auto-chain.
+- [Inline Auto-Chain Context Reuse](inline-chain-context-reuse.md) — carried values, isolation and reload boundaries.
+- [Subflow Execution](subflow-execution.md) — synchronous child calls and post-commit ownership handoff.
