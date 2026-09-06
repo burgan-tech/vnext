@@ -14,6 +14,7 @@ describe the stable mental model, boundaries, failure modes, and change-safety r
 | [Architecture](architecture/system-overview.md) | Runtime shape, service boundaries, dependency direction, routing. |
 | [Domain](domain/instance-data-merge-concept.md) | Instance lifecycle, data versioning, cache context, function-handler behavior. |
 | [Runtime](runtime/task-executors-and-invokers.md) | Task execution, invokers, scripting, remote runtime integration. |
+| [Script engine tiers (proposal)](superpowers/specs/2026-09-06-script-engine-tiered-alternatives-design.md) | Why Roslyn is expensive only when cold; Expresso / JSONata / publish-time C#; expected % by denominator. |
 | [Contracts](contracts/api-and-service-contracts.md) | API shapes, validation, compatibility, error behavior. |
 | [Integration](integration/forge-fanout-task-implementation.md) | Implementation specs for consumer products (Forge Studio, CLI, SDKs) that build against runtime features. |
 | [Specs](specs/00-docs-rebuild-master-spec.md) | Rewrite scope, rollout specs, migration and deprecation plan. |
@@ -49,6 +50,7 @@ describe the stable mental model, boundaries, failure modes, and change-safety r
 26. Read [Extensions](domain/extensions.md) before assuming two Extensions cannot reference the same task — they can and are expected to when their `Mapping`/`ErrorBoundary` differ. Covers the per-extension `ResponseVariableKey` output key, why the duplicate-task-key warning does not fire for the Extension hook, and the Preprod fault (parallel-merge crash) this shape once caused.
 27. Read [Event Publish Modes](runtime/event-publish-modes.md) before adding or changing a distributed event, or before touching subflow terminal delivery. Covers the two-mode publish taxonomy (Outbox vs Outbox + TerminalRelay), why the EventHook infrastructure no longer exists, the `SubflowTerminalRelay` / Inbox-backup split for the three subflow terminal events, the re-arm-on-revert mechanism, and the Aether wakeup signal (`Aether:Outbox:WakeupSignalEnabled`).
 28. Read [Python Task](runtime/python-task.md) before authoring Python tasks or changing the Python.NET, process, container, package-lock, or container-driver contracts.
+29. Read [Script Engine Tiers (proposal)](superpowers/specs/2026-09-06-script-engine-tiered-alternatives-design.md) before replacing or extending Roslyn scripting. Covers Expresso vs JSONata vs publish-time C#, why cost is cold-start not execute, and expected percentage ranges by denominator (compile self-time vs warm E2E).
 
 ## Documentation Rules
 

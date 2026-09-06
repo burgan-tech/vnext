@@ -93,4 +93,5 @@ failures can be traced back to definition content.
 - `modules/BBT.Workflow.Modules.Scripting/BBT/Workflow/Scripting/Functions/ScriptBase.cs`
 - `src/BBT.Workflow.Domain/Execution/Transitions/Context/TransitionExecutionContext.cs`
 - `src/BBT.Workflow.Application/Tasks/Executors/Script/ScriptTaskExecutor.cs`
+- [Script engine tiers — Expresso / JSONata / publish-time C# (proposal, with expected %)](../superpowers/specs/2026-09-06-script-engine-tiered-alternatives-design.md)
 
