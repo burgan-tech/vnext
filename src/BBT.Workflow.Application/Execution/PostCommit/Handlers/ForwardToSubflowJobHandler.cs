@@ -138,7 +138,10 @@ public sealed class ForwardToSubflowJobHandler(
         {
             Headers = headers,
             RouteValues = job.RouteValues,
-            ChainReserved = job.ChainReserved
+            ChainReserved = job.ChainReserved,
+            // Only Status is read from the child's response (ClientResponse above); the client's
+            // attributes/extensions come from the parent's own enrichment.
+            SuppressResponseEnrichment = true
         };
     }
 }

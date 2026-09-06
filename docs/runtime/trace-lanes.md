@@ -25,8 +25,10 @@ PATCH .../instances/{id}/transitions/{key}      ← APM transaction, anchors the
 └── TransitionJob.Execute/{key}                 ← present only for an async accepted request
     ├── Transition.{key}                        ← first hop
     ├── Transition.{automatic-key}              ← awaited inline; no Scheduler job
-    └── PostCommit.StartSubflowJob / ForwardToSubflowJob
-        └── Transition.{child-key}               ← synchronous child call, SUBFLOW lane
+    ├── PostCommit.Coordinate
+    │   └── PostCommit.StartSubflowJob / ForwardToSubflowJob
+    │       └── Transition.{child-key}           ← synchronous child call, SUBFLOW lane
+    └── PostCommit.Settle | PostCommit.Fault     ← fresh-parent mutation after the handoff
 
 Inbox terminal-event delivery
 └── SubFlow.Resume/{domain}/{flow}              ← awaited parent resume

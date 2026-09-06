@@ -255,7 +255,7 @@ public sealed class PostCommitParentMutationServiceActivationTests : IDisposable
         });
 
         var repository = Substitute.For<IInstanceRepository>();
-        repository.FindForPostCommitSettlementAsync(authoritative.Id, Arg.Any<CancellationToken>())
+        repository.FindForPostCommitSettlementAsync(authoritative.Id, Arg.Any<bool>(), Arg.Any<CancellationToken>())
             .Returns(_ =>
             {
                 calls.Add("reload");

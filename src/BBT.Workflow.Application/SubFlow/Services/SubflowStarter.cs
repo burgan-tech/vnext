@@ -206,7 +206,10 @@ public sealed class SubflowStarter(
             Instance = createInstanceInput,
             Headers = headers,
             RouteValues = inputMappingResult?.RouteValues ?? new Dictionary<string, string?>(),
-            StrictIdempotency = true // Service-to-service call: return 409 if active instance exists
+            StrictIdempotency = true, // Service-to-service call: return 409 if active instance exists
+            // sync=true awaits the child's activation to a rest point; the response body is read
+            // for IsSuccess only (below), so the child must not project attributes/extensions.
+            SuppressResponseEnrichment = true
         };
 
         var startResult = await instanceCommandGateway.StartSubAsync(subFlowStartInput, cancellationToken);

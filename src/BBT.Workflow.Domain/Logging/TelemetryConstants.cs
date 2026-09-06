@@ -221,6 +221,17 @@ public static class TelemetryConstants
         public const string SettledStatus = "vnext.settle.status";
 
         /// <summary>
+        /// Where <c>Instance.EnrichResponse</c> took the instance it projected: <c>pipeline</c> (the
+        /// committed aggregate the execution handed back) or <c>reload</c> (a read-only re-read —
+        /// always on the start path, and on a transition whenever the pipeline instance still read
+        /// Busy or was not carried).
+        /// </summary>
+        public const string EnrichSource = "vnext.enrich.source";
+
+        /// <summary>Number of extensions the caller asked for on a sync response (0 = defaults only).</summary>
+        public const string ExtensionsRequested = "vnext.extensions.requested";
+
+        /// <summary>
         /// What the Busy→Active compare-and-set at settlement actually did: <c>flipped</c> (this
         /// hop made the instance Active), <c>lost</c> (the row was no longer Busy — somebody else
         /// settled it), or <c>skipped</c> (the settlement guard did not apply: non-owner, terminal,

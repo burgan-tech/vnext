@@ -198,6 +198,138 @@ public sealed class TransitionRunnerPostCommitTests
     }
 
     [Fact]
+    public async Task RunAsync_HandoffToChild_WrapsParentSettlementInPostCommitSettleSpan()
+    {
+        var collected = new List<Activity>();
+        using var listener = CreatePipelineListener(collected);
+        using var root = new Activity("post-commit-settle-test").Start();
+        var harness = new RunnerHarness(new StagePlan(
+            "pipeline",
+            PostCommitBehavior: PostCommitContinuationBehavior.HandoffToChild));
+        Activity? observedDuringSettle = null;
+        harness.ParentMutationService.SettleAsync(
+                Arg.Any<PostCommitParentSnapshot>(),
+                Arg.Any<ContinuationSet>(),
+                Arg.Any<CancellationToken>())
+            .Returns(_ =>
+            {
+                observedDuringSettle = Activity.Current;
+                return Result<TransitionOutput>.Ok(new TransitionOutput { Id = harness.InstanceId });
+            });
+
+        var result = await harness.Runner.RunAsync(harness.CreateInput("first"));
+
+        result.IsSuccess.ShouldBeTrue();
+        var settle = collected.Single(a =>
+            a.TraceId == root.TraceId && a.DisplayName == "PostCommit.Settle");
+        settle.ParentId.ShouldBe(root.Id);
+        settle.GetTagItem(TelemetryConstants.TagNames.SpanCategory)
+            .ShouldBe(TelemetryConstants.SpanCategories.Business);
+        settle.GetTagItem(TelemetryConstants.TagNames.TransitionKey).ShouldBe("first");
+        settle.GetTagItem(TelemetryConstants.TagNames.InstanceId).ShouldBe(harness.InstanceId.ToString());
+        settle.Status.ShouldBe(ActivityStatusCode.Unset);
+        // The mutation itself (lock, fresh reload, Transition.Settle, commit) runs INSIDE the span.
+        observedDuringSettle.ShouldNotBeNull();
+        observedDuringSettle!.Id.ShouldBe(settle.Id);
+        // Settlement follows coordination; both are siblings under the transaction.
+        var coordinate = collected.Single(a =>
+            a.TraceId == root.TraceId && a.DisplayName == "PostCommit.Coordinate");
+        settle.StartTimeUtc.ShouldBeGreaterThanOrEqualTo(coordinate.StartTimeUtc + coordinate.Duration);
+        collected.ShouldNotContain(a => a.DisplayName == "PostCommit.Fault");
+    }
+
+    [Fact]
+    public async Task RunAsync_PostCommitFaultRequest_WrapsParentFaultInPostCommitFaultSpan()
+    {
+        var collected = new List<Activity>();
+        using var listener = CreatePipelineListener(collected);
+        using var root = new Activity("post-commit-fault-test").Start();
+        var harness = new RunnerHarness(new StagePlan(
+            "pipeline",
+            PostCommitBehavior: PostCommitContinuationBehavior.HandoffToChild))
+        {
+            PostCommitResult = PostCommitResult.Fail(
+                Error.Failure("PostCommit:Failed", "remote child failed", detail: "stack"),
+                new PostCommitFaultRequest("PostCommit:Failed", "remote child failed", "stack"))
+        };
+        Activity? observedDuringFault = null;
+        harness.ParentMutationService.FaultAsync(
+                Arg.Any<PostCommitParentSnapshot>(),
+                Arg.Any<PostCommitFaultRequest>(),
+                Arg.Any<CancellationToken>())
+            .Returns(_ =>
+            {
+                observedDuringFault = Activity.Current;
+                return Result<TransitionOutput>.Ok(new TransitionOutput { Id = harness.InstanceId });
+            });
+
+        var result = await harness.Runner.RunAsync(harness.CreateInput("first"));
+
+        result.IsSuccess.ShouldBeTrue();
+        var fault = collected.Single(a =>
+            a.TraceId == root.TraceId && a.DisplayName == "PostCommit.Fault");
+        fault.ParentId.ShouldBe(root.Id);
+        fault.GetTagItem(TelemetryConstants.TagNames.SpanCategory)
+            .ShouldBe(TelemetryConstants.SpanCategories.Business);
+        fault.GetTagItem(TelemetryConstants.TagNames.TransitionKey).ShouldBe("first");
+        fault.GetTagItem(TelemetryConstants.TagNames.InstanceId).ShouldBe(harness.InstanceId.ToString());
+        // The fault mutation itself succeeded, so the span is not an error even though the
+        // post-commit job that triggered it failed.
+        fault.Status.ShouldBe(ActivityStatusCode.Unset);
+        observedDuringFault.ShouldNotBeNull();
+        observedDuringFault!.Id.ShouldBe(fault.Id);
+        collected.ShouldNotContain(a => a.DisplayName == "PostCommit.Settle");
+    }
+
+    [Fact]
+    public async Task RunAsync_ParentMutationFailure_MarksPostCommitSettleSpanAsError()
+    {
+        var collected = new List<Activity>();
+        using var listener = CreatePipelineListener(collected);
+        using var root = new Activity("post-commit-settle-error-test").Start();
+        var harness = new RunnerHarness(new StagePlan(
+            "pipeline",
+            PostCommitBehavior: PostCommitContinuationBehavior.HandoffToChild));
+        var lockConflict = WorkflowErrors.InstanceLockConflict(harness.InstanceId);
+        harness.ParentMutationService.SettleAsync(
+                Arg.Any<PostCommitParentSnapshot>(),
+                Arg.Any<ContinuationSet>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Result<TransitionOutput>.Fail(lockConflict));
+
+        var result = await harness.Runner.RunAsync(harness.CreateInput("first"));
+
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.ShouldBe(lockConflict);
+        var settle = collected.Single(a =>
+            a.TraceId == root.TraceId && a.DisplayName == "PostCommit.Settle");
+        settle.Status.ShouldBe(ActivityStatusCode.Error);
+        settle.StatusDescription.ShouldBe(lockConflict.Message);
+    }
+
+    [Fact]
+    public async Task RunAsync_PostCommitScopes_ReuseTheCommittedDefinitionInsteadOfReloadingTheFlow()
+    {
+        var harness = new RunnerHarness(new StagePlan(
+            "pipeline",
+            PostCommitBehavior: PostCommitContinuationBehavior.HandoffToChild));
+        harness.ParentMutationService.SettleAsync(
+                Arg.Any<PostCommitParentSnapshot>(),
+                Arg.Any<ContinuationSet>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Result<TransitionOutput>.Ok(new TransitionOutput { Id = harness.InstanceId }));
+
+        var result = await harness.Runner.RunAsync(harness.CreateInput("first"));
+
+        result.IsSuccess.ShouldBeTrue();
+        // Exactly one resolution: the first stage's scope (the input carries no definition). The
+        // coordination scope has the committed context's definition and the settlement scope has
+        // the snapshot's — neither may hit the component cache again.
+        await harness.CacheStore.Received(1).GetFlowAsync(
+            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public async Task RunAsync_PostCommitErrorWithoutFaultRequest_ReturnsOriginalErrorWithoutParentMutation()
     {
         var error = Error.Validation("PostCommit:Rejected", "child rejected the request");
@@ -239,6 +371,19 @@ public sealed class TransitionRunnerPostCommitTests
         harness.StageScopes.ShouldAllBe(scope => scope.IsDisposed && scope.UowDisposed);
     }
 
+    private static ActivityListener CreatePipelineListener(List<Activity> collected)
+    {
+        var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == "BBT.Workflow.Pipeline",
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) =>
+                ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStopped = collected.Add
+        };
+        ActivitySource.AddActivityListener(listener);
+        return listener;
+    }
+
     private sealed class RunnerHarness
     {
         private const string Domain = "test-domain";
@@ -269,6 +414,7 @@ public sealed class TransitionRunnerPostCommitTests
         public Guid InstanceId { get; } = Guid.NewGuid();
         public TransitionRunner Runner { get; }
         public IPostCommitParentMutationService ParentMutationService { get; }
+        public IComponentCacheStore CacheStore { get; private set; } = null!;
         public List<string> BusinessCalls { get; } = [];
         public List<StageScopeProbe> StageScopes { get; } = [];
         public List<IWorkflowExecutionCore> CoreInstances { get; } = [];
@@ -310,6 +456,7 @@ public sealed class TransitionRunnerPostCommitTests
                     Arg.Any<CancellationToken>())
                 .Returns(Result<WorkflowDefinition>.Ok(_workflow));
 
+            CacheStore = cacheStore;
             services.AddSingleton(currentSchema);
             services.AddSingleton(cacheStore);
             services.AddSingleton(Substitute.For<ISubflowTerminalRelay>());
