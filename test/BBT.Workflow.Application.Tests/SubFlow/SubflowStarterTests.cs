@@ -53,4 +53,32 @@ public class SubflowStarterTests
                 input.Instance.Id == childId && input.Domain == "remote"),
             Arg.Any<CancellationToken>());
     }
+
+    [Fact]
+    public async Task StartAsync_SuppressesChildResponseEnrichment()
+    {
+        // The child's sync start response is read for IsSuccess only — the starter never looks at
+        // attributes, ETag or extensions — so the child must not pay for projecting them.
+        var gateway = Substitute.For<IInstanceCommandGateway>();
+        var starter = new SubflowStarter(gateway, new ConfigurationBuilder().Build(),
+            Substitute.For<IScriptEngine>(), Substitute.For<ILogger<SubflowStarter>>());
+        var workflow = WorkflowFactory.CreateDefault();
+        var parent = Instance.Create(Guid.NewGuid(), workflow.Key, workflow.Version, "parent");
+        var state = StateFactory.CreateDefault("child", StateType.SubFlow);
+        state.SetSubFlow("S", new Reference("child-flow", "remote", "sys-flows", "1.0.0"), null!, null);
+        var childId = Guid.NewGuid();
+        var correlation = InstanceCorrelation.Create(Guid.NewGuid(), parent.Id, state.Key,
+            childId, "S", "remote", "child-flow", "1.0.0");
+        StartInstanceInput? captured = null;
+        gateway.StartSubAsync(Arg.Do<StartInstanceInput>(input => captured = input), Arg.Any<CancellationToken>())
+            .Returns(Result<StartInstanceOutput>.Ok(new StartInstanceOutput { Id = childId, Status = InstanceStatus.Active }));
+
+        var result = await starter.StartAsync(workflow, parent, state,
+            TransitionFactory.CreateDefault(), correlation, null!, ExecMode.Sync);
+
+        result.IsSuccess.ShouldBeTrue();
+        captured.ShouldNotBeNull();
+        captured!.Sync.ShouldBeTrue();
+        captured.SuppressResponseEnrichment.ShouldBeTrue();
+    }
 }

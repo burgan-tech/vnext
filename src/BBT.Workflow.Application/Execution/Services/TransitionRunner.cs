@@ -67,6 +67,7 @@ public sealed class TransitionRunner(
             if (decision.FaultRequest is not null)
             {
                 return await MutateParentAsync(
+                    "PostCommit.Fault",
                     parentSnapshot,
                     (service, ct) => service.FaultAsync(parentSnapshot, decision.FaultRequest, ct),
                     cancellationToken);
@@ -81,6 +82,7 @@ public sealed class TransitionRunner(
             // HandoffToChild (and a ContinueParent job with no remaining continuation) settles
             // from a fresh authoritative reload. The old outer NextTransition is never executed.
             return await MutateParentAsync(
+                "PostCommit.Settle",
                 parentSnapshot,
                 (service, ct) => service.SettleAsync(parentSnapshot, coreOutput.Continuations, ct),
                 cancellationToken);
@@ -104,6 +106,8 @@ public sealed class TransitionRunner(
     {
         using var activity = PipelineStepActivityHelper.StartTransitionActivity(
             "PostCommit.Coordinate", sourceContext.TransitionKey);
+        // The committed context already holds the definition this stage ran with; the fresh scope
+        // reuses it instead of re-resolving the same coordinates from the component cache.
         var result = await scopeFactory.ExecuteWithWorkflowAsync(
             snapshot.Domain,
             snapshot.WorkflowKey,
@@ -117,19 +121,34 @@ public sealed class TransitionRunner(
                     return await coordinator.CoordinateAsync(sourceContext, ct);
                 }
             },
-            cancellationToken);
+            cancellationToken,
+            resolvedWorkflow: sourceContext.Workflow);
         if (!result.IsSuccess)
             activity?.SetStatus(ActivityStatusCode.Error, result.Error.Message);
 
         return result;
     }
 
-    private Task<Result<TransitionOutput>> MutateParentAsync(
+    /// <summary>
+    /// Runs one fresh-parent mutation (settle or fault) in its own workflow scope, under a single
+    /// <c>PostCommit.Settle</c> / <c>PostCommit.Fault</c> span. Everything the mutation does — the
+    /// status lock, the authoritative reload, <c>Transition.Settle</c>, its commit and the release —
+    /// used to land directly on the transaction as unrelated siblings after
+    /// <c>PostCommit.Coordinate</c>; the span names the phase they belong to.
+    /// </summary>
+    private async Task<Result<TransitionOutput>> MutateParentAsync(
+        string operationName,
         PostCommitParentSnapshot snapshot,
         Func<IPostCommitParentMutationService, CancellationToken, Task<Result<TransitionOutput>>> mutation,
         CancellationToken cancellationToken)
     {
-        return scopeFactory.ExecuteWithWorkflowAsync(
+        using var activity = PipelineStepActivityHelper.StartTransitionActivity(
+            operationName, snapshot.TransitionKey);
+        activity?.SetTag(TelemetryConstants.TagNames.InstanceId, snapshot.InstanceId.ToString());
+
+        // The snapshot carries the definition across the handoff (see PostCommitParentSnapshot.Workflow),
+        // and the mutation service builds its fresh context from it — the scope has nothing to resolve.
+        var result = await scopeFactory.ExecuteWithWorkflowAsync(
             snapshot.Domain,
             snapshot.WorkflowKey,
             snapshot.WorkflowVersion,
@@ -142,7 +161,12 @@ public sealed class TransitionRunner(
                     return await mutation(mutationService, ct);
                 }
             },
-            cancellationToken);
+            cancellationToken,
+            resolvedWorkflow: snapshot.Workflow);
+        if (!result.IsSuccess)
+            activity?.SetStatus(ActivityStatusCode.Error, result.Error.Message);
+
+        return result;
     }
 
     /// <summary>

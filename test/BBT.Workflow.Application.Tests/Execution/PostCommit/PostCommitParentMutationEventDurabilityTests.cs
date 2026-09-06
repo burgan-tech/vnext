@@ -163,7 +163,7 @@ public sealed class PostCommitParentMutationEventDurabilityTests
             });
 
             var repository = Substitute.For<IInstanceRepository>();
-            repository.FindForPostCommitSettlementAsync(authoritative.Id, Arg.Any<CancellationToken>())
+            repository.FindForPostCommitSettlementAsync(authoritative.Id, Arg.Any<bool>(), Arg.Any<CancellationToken>())
                 .Returns(authoritative);
             repository.UpdateAsync(authoritative, true, Arg.Any<CancellationToken>())
                 .Returns(async _ =>

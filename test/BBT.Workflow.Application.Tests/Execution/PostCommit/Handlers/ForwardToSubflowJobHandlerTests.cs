@@ -266,6 +266,35 @@ public class ForwardToSubflowJobHandlerTests
         capturedInput!.ChainReserved.ShouldBe(chainReserved);
     }
 
+    [Fact]
+    public async Task HandleAsync_SuppressesChildResponseEnrichmentOnTheForwardedInput()
+    {
+        // The relay reads only Status from the child's response (ClientResponse carries Id/Status/
+        // Error) and the client's attributes come from the PARENT's own enrichment, so the child's
+        // reload + schema filter + extension pass would be discarded work.
+        var job = CreateForwardToSubflowJob();
+        var context = CreateContext();
+        TransitionInput? capturedInput = null;
+        _mockForwardingService
+            .ForwardTransitionAsync(
+                job.SubflowInstanceId,
+                job.TransitionKey,
+                Arg.Do<TransitionInput>(input => capturedInput = input),
+                Arg.Any<CancellationToken>(),
+                Arg.Any<Guid?>())
+            .Returns(Result<TransitionOutput>.Ok(new TransitionOutput
+            {
+                Id = job.SubflowInstanceId,
+                Status = InstanceStatus.Active
+            }));
+
+        await _handler.HandleAsync(job, context, CancellationToken.None);
+
+        capturedInput.ShouldNotBeNull();
+        capturedInput!.Sync.ShouldBeTrue();
+        capturedInput.SuppressResponseEnrichment.ShouldBeTrue();
+    }
+
     private static ForwardToSubflowJob CreateForwardToSubflowJob(bool chainReserved = false)
     {
         return new ForwardToSubflowJob(

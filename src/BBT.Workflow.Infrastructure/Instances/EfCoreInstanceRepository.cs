@@ -214,12 +214,22 @@ public sealed class EfCoreInstanceRepository(
     /// <inheritdoc />
     public async Task<Instance?> FindForPostCommitSettlementAsync(
         Guid instanceId,
+        bool includeLatestData,
         CancellationToken cancellationToken = default)
     {
         var dbSet = await GetDbSetAsync();
-        var instance = await dbSet
-            .Include(i => i.DataList.Where(d => d.IsLatest))
-            .Include(i => i.ChildCorrelations.Where(c => !c.IsCompleted))
+        // Open correlations are unconditional: TransitionSettlement.HasOpenSubFlow and the
+        // Instance.Fault child cascade both read ActiveCorrelations, and an empty collection
+        // there is indistinguishable from "no open SubFlow" — the parent would be flipped Active
+        // under a live child. The data row is the caller's call (one Db.SELECT + the jsonb
+        // payload per settlement); without it the aggregate still reports partially loaded so a
+        // history read fails fast instead of answering from an empty list.
+        IQueryable<Instance> query = dbSet
+            .Include(i => i.ChildCorrelations.Where(c => !c.IsCompleted));
+        if (includeLatestData)
+            query = query.Include(i => i.DataList.Where(d => d.IsLatest));
+
+        var instance = await query
             .AsSplitQuery()
             .FirstOrDefaultAsync(i => i.Id == instanceId, cancellationToken);
         instance?.MarkDataPartiallyLoaded();

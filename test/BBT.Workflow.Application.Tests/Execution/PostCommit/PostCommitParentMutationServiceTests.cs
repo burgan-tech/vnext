@@ -191,6 +191,65 @@ public sealed class PostCommitParentMutationServiceTests
     }
 
     [Fact]
+    public async Task SettleAsync_AsyncCaller_ReloadsWithoutLatestData()
+    {
+        // Nothing on the async path reads the parent's data: the settlement guard reads only
+        // status + open correlations, and the job handler discards the output's PipelineInstance.
+        var authoritative = CreateBusyInstance();
+        var fixture = CreateFixture(authoritative);
+
+        var result = await fixture.Service.SettleAsync(
+            CreateSnapshot(authoritative.Id, callerMode: ExecMode.Async),
+            CreateContinuations(resolvedStatus: InstanceStatus.Active),
+            CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        authoritative.Status.ShouldBe(InstanceStatus.Active);
+        await fixture.Repository.Received(1).FindForPostCommitSettlementAsync(
+            authoritative.Id, includeLatestData: false, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task SettleAsync_SyncCaller_ReloadsWithLatestData()
+    {
+        // A sync caller projects the settled PipelineInstance into the response (attributes,
+        // entity ETag), so the latest data row must ride along with the reload.
+        var authoritative = CreateBusyInstance();
+        var fixture = CreateFixture(authoritative);
+
+        var result = await fixture.Service.SettleAsync(
+            CreateSnapshot(authoritative.Id, callerMode: ExecMode.Sync),
+            CreateContinuations(resolvedStatus: InstanceStatus.Active),
+            CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        await fixture.Repository.Received(1).FindForPostCommitSettlementAsync(
+            authoritative.Id, includeLatestData: true, Arg.Any<CancellationToken>());
+    }
+
+    [Theory]
+    [InlineData(ExecMode.Sync)]
+    [InlineData(ExecMode.Async)]
+    public async Task FaultAsync_ReloadsWithLatestDataRegardlessOfCallerMode(ExecMode callerMode)
+    {
+        // Instance.Fault publishes the faulted SubFlow's latest data upward to its parent
+        // (InstanceSubFaultedEvent.InstanceData); whether the instance is a SubFlow is only known
+        // after the reload, and faults are the exceptional path — so the fault reload always
+        // carries the data rather than paying a second query to find out.
+        var authoritative = CreateBusyInstance();
+        var fixture = CreateFixture(authoritative);
+
+        var result = await fixture.Service.FaultAsync(
+            CreateSnapshot(authoritative.Id, callerMode: callerMode),
+            new PostCommitFaultRequest("PostCommit:Dependency", "child invocation failed", "stack"),
+            CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        await fixture.Repository.Received(1).FindForPostCommitSettlementAsync(
+            authoritative.Id, includeLatestData: true, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public async Task FaultAsync_FaultsOnlyFreshAuthoritativeInstanceAndPersistsGeneratedEvents()
     {
         var sourceInstance = CreateBusyInstance();
@@ -285,7 +344,7 @@ public sealed class PostCommitParentMutationServiceTests
         });
 
         var repository = Substitute.For<IInstanceRepository>();
-        repository.FindForPostCommitSettlementAsync(authoritative.Id, Arg.Any<CancellationToken>())
+        repository.FindForPostCommitSettlementAsync(authoritative.Id, Arg.Any<bool>(), Arg.Any<CancellationToken>())
             .Returns(_ =>
             {
                 calls.Add("reload");
@@ -328,13 +387,14 @@ public sealed class PostCommitParentMutationServiceTests
 
     private static PostCommitParentSnapshot CreateSnapshot(
         Guid instanceId,
-        Definitions.Workflow? workflow = null) => new(
+        Definitions.Workflow? workflow = null,
+        ExecMode callerMode = ExecMode.Sync) => new(
         Domain,
         WorkflowKey,
         WorkflowVersion,
         instanceId,
         "source-transition",
-        ExecMode.Sync,
+        callerMode,
         "trace-id",
         new Dictionary<string, string?> { ["userId"] = "42" },
         new Dictionary<string, string?> { ["route"] = "value" },

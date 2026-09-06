@@ -442,7 +442,7 @@ public sealed class InstanceCommandAppService(
                 Key = data.Instance.Key,
                 Status = transitionOutput.Status
             })
-            .ThenAsync(output => input.Sync
+            .ThenAsync(output => input.Sync && !input.SuppressResponseEnrichment
                 ? EnrichSyncOutputAsync(output, output.Id, data.Workflow, input.Extensions, new AuthorizationRequestContext(input.Headers), cancellationToken)
                 : Task.FromResult(Result<StartInstanceOutput>.Ok(output)));
     }
@@ -698,7 +698,9 @@ public sealed class InstanceCommandAppService(
             .OnSuccess(output => AddTransitionHeader(output, snapshot.Flow!, snapshot.FlowVersion))
             .ThenAsync(output =>
             {
-                if (input.Sync)
+                // A runtime-internal relay (SuppressResponseEnrichment) awaits the pipeline like any
+                // sync caller but takes the identity-only response — see TransitionInput.
+                if (input.Sync && !input.SuppressResponseEnrichment)
                     return EnrichSyncOutputAsync(output, output.Id, workflowDefinition, input.Extensions, new AuthorizationRequestContext(input.Headers), cancellationToken);
                 output.Key = snapshot.Key;
                 return Task.FromResult(Result<TransitionOutput>.Ok(output));
@@ -797,13 +799,25 @@ public sealed class InstanceCommandAppService(
         CancellationToken cancellationToken)
         where TOutput : class
     {
+        // The sync response projection is one phase: reload (or reuse), schema field filter, script
+        // context, output mapping, extensions. It ran unnamed, so its children — Instance.Query.*,
+        // the schema Cache.Get, ScriptContext.*, Extension.Process — landed on whatever span was
+        // ambient (SubFlow.Start, SubFlow.Forward, the server span) as unrelated siblings.
+        using var activity = PipelineStepActivityHelper.StartOperationActivity("Instance.EnrichResponse");
+        activity?.SetTag(TelemetryConstants.TagNames.InstanceId, instanceId.ToString());
+        activity?.SetTag(TelemetryConstants.TagNames.Flow, workflow?.Key);
+        activity?.SetTag(TelemetryConstants.TagNames.ExtensionsRequested, extensionRequested?.Length ?? 0);
+
         // Use pipeline instance if available (already committed, avoids redundant DB read).
         // A Busy snapshot may be stale — a sync subflow completion resumes and finalizes the
         // parent in its own scope — so re-read as no-tracking (this scope may already track the
         // row with pre-resume values) to reflect the settled state. Also falls back to the DB
-        // read when PipelineInstance is not set (e.g. idempotent existing-instance path).
+        // read when PipelineInstance is not set (e.g. idempotent existing-instance path, and the
+        // start path, whose output never carries one).
         var pipelineInstance = (output as InstanceOutputBase)?.PipelineInstance;
-        var instance = pipelineInstance is not null && !pipelineInstance.Status.Equals(InstanceStatus.Busy)
+        var reusePipelineInstance = pipelineInstance is not null && !pipelineInstance.Status.Equals(InstanceStatus.Busy);
+        activity?.SetTag(TelemetryConstants.TagNames.EnrichSource, reusePipelineInstance ? "pipeline" : "reload");
+        var instance = reusePipelineInstance
             ? pipelineInstance
             : await instanceRepository.FindByIdentifierAsReadOnlyAsync(instanceId.ToString(), cancellationToken)
               ?? pipelineInstance;

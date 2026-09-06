@@ -144,7 +144,10 @@ public sealed class InstanceController(
                 ExtraProperties = new ExtraPropertyDictionary(request.ExtraProperties)
             },
             StrictIdempotency = true,
-            Extensions = extensions
+            Extensions = extensions,
+            // This surface is called only by a parent runtime, which reads IsSuccess from the
+            // response and nothing else — never project attributes/extensions here.
+            SuppressResponseEnrichment = true
         };
         var httpContext = httpContextAccessor.HttpContext;
         if (httpContext is not null)
@@ -325,7 +328,9 @@ public sealed class InstanceController(
         {
             RouteValues = input.RouteValues,
             CorrelationId = input.CorrelationId,
-            ChainReserved = input.ChainReserved
+            ChainReserved = input.ChainReserved,
+            // Internal relay: the forwarding parent reads only Status — see TransitionInput.
+            SuppressResponseEnrichment = true
         };
 
         var httpContext = httpContextAccessor.HttpContext;

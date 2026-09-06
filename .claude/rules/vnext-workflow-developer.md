@@ -102,6 +102,12 @@ A sixth profile is **composed on top of** the base, never selected instead of it
 - `GetActiveAsync` → `GetResultAsync` → `FindByIdentifierAsync` → `WithDetailsAsync()`.
 - `GetResultAsync(includeDetails: false)` is lean (no DataList/correlations).
 - History paths: `AsNoTracking` + explicit filtered includes.
+- Post-commit settlement (`FindForPostCommitSettlementAsync(id, includeLatestData)`): open correlations
+  **always** (settlement guard + fault cascade read `ActiveCorrelations`); the latest data row only when
+  something downstream projects it — sync caller (`TransitionOutput.PipelineInstance` →
+  `EnrichOutputCoreAsync`) or a fault (`Instance.Fault` publishes a SubFlow's data upward). Async settle
+  skips it. The decision matrix lives on `PostCommitParentMutationService.NeedsLatestDataForSettle`;
+  add a new `LatestData` reader there, not by re-widening the include.
 - **Rule**: do not add unnecessary includes; reuse data from `TransitionExecutionContext`.
 
 ## Long-Polling / State Function
@@ -314,6 +320,13 @@ A sixth profile is **composed on top of** the base, never selected instead of it
 - Start: `CreateInstanceInput` with parent metadata in `ExtraProperties`, `StrictIdempotency: true`.
 - `SubflowStarter`, `ForwardToSubflowJobHandler` and descended subflow retry force `sync=true`.
   `S` versus `P` controls parent terminal-resume behavior, not the child-call mode.
+- Those runtime-internal child calls also set `SuppressResponseEnrichment` (SERVER-ONLY flag on
+  `StartInstanceInput` / `TransitionInput`, same posture as `ChainReserved`; set locally by the
+  starter/handler and cross-domain by the `sub/instances/start` and `internal/subflow-forward`
+  endpoints themselves — it is not carried in a body). The child still awaits its pipeline but
+  answers identity-only (`Id`, `Key`, `Status`): the starter reads `IsSuccess`, the relay reads
+  `Status`, and the client's attributes/extensions come from the **parent's** own
+  `EnrichOutputCoreAsync`. Do not read attributes off a sub-start or forward response.
 
 ### Accept-time chain reserve (async transitions on a parent with an active SubFlow)
 
