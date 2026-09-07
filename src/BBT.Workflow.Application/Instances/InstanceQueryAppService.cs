@@ -1784,7 +1784,13 @@ public sealed class InstanceQueryAppService(
     /// polling an ancestor did not ask about the leaf's history.
     /// </para>
     /// </remarks>
-    private IncidentHref BuildIncidentHref(
+    /// <remarks>
+    /// <c>internal</c> rather than private so the subflow-lifting rule — which instance each link
+    /// addresses — can be pinned directly (<c>InternalsVisibleTo</c>). Reaching it through
+    /// <c>GetInstanceStateAsync</c> would need a whole active-subflow gateway setup to assert four
+    /// lines.
+    /// </remarks>
+    internal IncidentHref BuildIncidentHref(
         Instance instance,
         IncidentHref? leafIncident,
         string domain,

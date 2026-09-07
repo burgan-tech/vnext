@@ -1900,6 +1900,52 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         result.Error!.Code.ShouldBe(WorkflowErrorCodes.ActiveIncidentNotFound);
     }
 
+    [Fact]
+    public void BuildIncidentHref_WhenLiftedFromASubflow_PointsActiveAtTheLeafAndHistoryAtThePolledInstance()
+    {
+        // The client polls an ancestor but observes the leaf, so the leaf's own block is taken as-is
+        // and its active link already addresses the instance that OWNS the incident. History is
+        // deliberately re-pointed at the polled instance: that link answers "what has gone wrong with
+        // the thing I asked about", and the caller did not ask about the leaf.
+        var parent = Instance.Create(Guid.NewGuid(), TestWorkflow, TestVersion, "parent");
+        var leafBlock = new IncidentHref
+        {
+            HasActiveIncident = true,
+            Active = new ActiveIncidentHref { Href = "/api/v1/core/workflows/leaf-flow/instances/leaf-id/incidents/active" },
+            History = new IncidentHistoryHref { Href = "/api/v1/core/workflows/leaf-flow/instances/leaf-id/incidents" }
+        };
+        _urlTemplateBuilder.BuildIncidentsUrl(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>())
+            .Returns("https://parent-incidents-url");
+
+        var block = _service.BuildIncidentHref(parent, leafBlock, TestDomain, TestWorkflow);
+
+        block.HasActiveIncident.ShouldBeTrue("the parent itself carries none, but the leaf does");
+        block.Active!.Href.ShouldBe("/api/v1/core/workflows/leaf-flow/instances/leaf-id/incidents/active");
+        block.History.Href.ShouldBe("https://parent-incidents-url");
+    }
+
+    [Fact]
+    public void BuildIncidentHref_WhenTheLeafIsHealthy_FallsBackToThePolledInstance()
+    {
+        // A leaf reporting no incident must not mask the ancestor's own: the parent can carry one it
+        // took from an earlier failure while the current child is fine.
+        var parent = Instance.Create(Guid.NewGuid(), TestWorkflow, TestVersion, "parent-faulted");
+        parent.AddIncident(InstanceIncidentFactory.Create(
+            state: TestState, transition: "submit", taskKey: null, message: "boom", errorCode: "E", errorLayer: "Task"));
+        _urlTemplateBuilder.BuildIncidentsUrl(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>())
+            .Returns("https://parent-incidents-url");
+        _urlTemplateBuilder.BuildActiveIncidentUrl(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>())
+            .Returns("https://parent-active-url");
+
+        var healthyLeaf = new IncidentHref { HasActiveIncident = false };
+
+        var block = _service.BuildIncidentHref(parent, healthyLeaf, TestDomain, TestWorkflow);
+
+        block.HasActiveIncident.ShouldBeTrue();
+        block.Active!.Href.ShouldBe("https://parent-active-url");
+        block.History.Href.ShouldBe("https://parent-incidents-url");
+    }
+
     private static GetActiveInstanceIncidentInput CreateActiveIncidentInput(string instanceId) => new()
     {
         Domain = TestDomain,
