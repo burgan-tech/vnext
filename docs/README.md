@@ -12,6 +12,7 @@ describe the stable mental model, boundaries, failure modes, and change-safety r
 | Area | Purpose |
 | --- | --- |
 | [Agent onboarding](agent-onboarding.md) | Source-of-truth order, where-is-X, pitfalls for a new coding session. |
+| [Agent Council](agent-council/README.md) | Plan-only decision workflow, roles, session artifacts, evidence gates, and Chair approval. |
 | [Architecture](architecture/system-overview.md) | Runtime shape, service boundaries, dependency direction, routing. |
 | [Domain](domain/instance-data-merge-concept.md) | Instance lifecycle, data versioning, cache context, function-handler behavior. |
 | [Runtime](runtime/task-executors-and-invokers.md) | Task execution, invokers, scripting, remote runtime integration. |

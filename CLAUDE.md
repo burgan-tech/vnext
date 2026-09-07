@@ -9,6 +9,7 @@ These rules are authoritative for all work in this repo. Read them before writin
 - [Agent onboarding](docs/agent-onboarding.md) — source-of-truth order, where-is-X, known pitfalls. When this file disagrees with code, trust `LifecycleOrder.cs` / `PipelineExecutionProfile.cs`.
 - [.NET / Aether / vNext coding standards](.claude/rules/dotnet-coding-standards.md) — style, naming, Aether SDK usage, outbox event delivery, logging via `WorkflowLogs.cs`, Result pattern, multi-schema rules.
 - [vNext workflow developer reference](.claude/rules/vnext-workflow-developer.md) — pipeline step order, profiles, subflow lifecycle, error boundary, long-polling, instance data, `vnext-meta`. Keep `.cursor/rules/` aligned with these files.
+- [Agent Council plan mode](.claude/rules/agent-council-plan-mode.md) — non-trivial decisions must produce an evidence-backed plan before implementation; keep `.cursor/rules/` aligned.
 
 ### Personal, machine-local overrides
 
@@ -21,6 +22,9 @@ environment notes and working preferences; if the file is absent this import is 
 
 On-demand skills live under `.claude/skills/`. Invoke via the `Skill` tool when the trigger phrase matches:
 
+- **agent-council** — "council" / "karar verelim" / "eklemeli miyim" / "mimari karar"; also fires
+  without a trigger phrase on any design, technology-selection or cross-service question whose
+  answer would be a recommendation (see [Agent Council plan mode](.claude/rules/agent-council-plan-mode.md))
 - **vnext-docs-generator** — "döküman oluştur" / "create docs"
 - **vnext-meta-validator** — "validate meta" / "meta kontrol" (also after any `vnext-meta/` edit)
 - **vnext-meta-matrix** — "meta matrix" / "meta rapor"
