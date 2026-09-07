@@ -315,3 +315,6 @@ __pycache__/
 *.py[cod]
 
 docs/superpowers/specs/2026-08-27-performans-firsatlari.md
+
+# etc/docker/run-docker.sh up/switch state (pids, logs, current domain)
+.vnext-local/

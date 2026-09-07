@@ -37,16 +37,43 @@ dotnet restore
 dotnet build
 ```
 
-Start the infrastructure (PostgreSQL, Redis, Dapr, observability) with Docker:
+`etc/docker/run-docker.sh` is the single entry point. Docker stacks:
 
 ```bash
 cd etc/docker
-./run-docker.sh          # infrastructure only (default)
-./run-docker.sh dev      # dev mode with debugger
-./run-docker.sh stage    # staging mode
+./run-docker.sh                   # infrastructure only (default)
+./run-docker.sh dev [domain]      # dev mode: apps built into containers, with debugger
+./run-docker.sh stage [domain]    # staging mode: release images
 ```
 
-Run the apps locally against that infrastructure (each in its own terminal; the
+`dev` and `stage` ask for the domain when none is given (default: last used, else `core`) and pass it
+to the containers as `APP_DOMAIN` / `VNEXT_DB` through compose interpolation, so the `.env.*` files stay
+untouched.
+
+Local development, one or more domains side by side (infra in docker, runtime as locally built binaries):
+
+```bash
+./run-docker.sh up                     # asks for the domain (default: last used, else core), then
+                                       # infra + sidecars → DbMigrator → 4 hosts, waits for /health
+./run-docker.sh up sales --offset 10   # second domain next to core: ports 4211/4212/4511/4411, own sidecars
+./run-docker.sh plan hr --offset 20    # print ports, app-ids, env overrides; start nothing
+./run-docker.sh status | domains | logs sales orchestration | down sales | down --all [--infra]
+```
+
+Port offsets follow [vnext-runtime](https://github.com/burgan-tech/vnext-runtime): `core` is offset 0 and
+keeps the sidecars from `docker-compose.yml`; any other domain gets `base + offset` app ports, its own
+`<service>-<domain>` sidecar containers and `vnext-<domain>-…` Dapr app-ids. Offsets that would collide
+with core or another registered domain are refused (`--help` has the table). Flags: `--monitor`,
+`--no-build`, `--skip-migrate`, `--db <name>`, `--offset N`.
+
+Each host receives its `http` launch profile's environment with `APP_DOMAIN`, the connection string, the
+Dapr ports/app-ids and the cross-host references overridden per process, so no tracked file changes.
+Every `up` writes a record of the environment (ports, app-ids, database, logs, reproduce command) to
+`ai-docs/local-environments/<domain>.md` — git-ignored, meant for the next session or the next agent.
+The script refuses to start when the docker infra belongs to another compose file (e.g. a cross-domain
+lab), because the sidecars would land on the wrong network. The manual equivalent of `up core`:
+
+Run the apps against the infrastructure by hand (each in its own terminal; the
 `Properties/launchSettings.json` profiles carry the `APP_DOMAIN` / `DAPR_*` / `OTEL_*` environment):
 
 ```bash

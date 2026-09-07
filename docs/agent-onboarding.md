@@ -59,7 +59,7 @@ disagrees with the code, the code wins.
 | Distributed events | [runtime/event-publish-modes.md](runtime/event-publish-modes.md); contracts in `src/BBT.Workflow.Events.Contracts/`; handlers in `workers/BBT.Workflow.Workers.Inbox/Handlers/` |
 | Task type numbers | `src/BBT.Workflow.Domain/Definitions/Tasks/TaskEnums.cs` (`CacheAside = 18`, `GetInstance = 19`, `FanOut = 21`, `Python = 23`) |
 | Instance load / includes | `EfCoreInstanceRepository.WithDetailsAsync()` — latest-only is gated by `WorkflowExecution:LatestOnlyInstanceLoading`; `GetResultAsync(includeDetails: false)` is lean |
-| Hosts / ports | Orchestration `4201`, Execution `4202`, Monitor `4203`; Inbox `4501`, Outbox `4401` |
+| Hosts / ports | Orchestration `4201`, Execution `4202`, Monitor `4203`; Inbox `4501`, Outbox `4401` (core). Other domains run at `base + offset`; what is running right now, with ports, app-ids and database: `ai-docs/local-environments/<domain>.md` (git-ignored, written by `etc/docker/run-docker.sh up`) |
 | Layer references | [architecture/dependency-map.md](architecture/dependency-map.md) |
 
 ## Pitfalls that have already cost work

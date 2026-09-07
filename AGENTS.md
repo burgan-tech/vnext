@@ -26,18 +26,39 @@ On macOS/Linux, run the setup script before building (required for PostSharp com
 dotnet restore
 dotnet build
 
-# Run with full infrastructure (recommended for development)
+# Single entry point: etc/docker/run-docker.sh (--help lists everything)
 cd etc/docker && ./run-docker.sh          # Infrastructure only (default)
-cd etc/docker && ./run-docker.sh dev      # Dev mode with debugger
-cd etc/docker && ./run-docker.sh stage    # Staging mode
+cd etc/docker && ./run-docker.sh dev      # Dev mode: apps in containers, with debugger (asks the domain)
+cd etc/docker && ./run-docker.sh stage    # Staging mode (asks the domain)
+cd etc/docker && ./run-docker.sh up       # Infra + sidecars + DbMigrator + all hosts as local binaries on a
+                                          # domain (asks which). `up sales --offset 10` runs a second domain
+                                          # beside core; `plan` shows ports without starting; records land in
+                                          # ai-docs/local-environments/<domain>.md
 
-# Run API hosts locally (requires infrastructure running)
+# Or run API hosts by hand (requires infrastructure running)
 dotnet run --project orchestration/BBT.Workflow.Orchestration.HttpApi.Host
 dotnet run --project execution/BBT.Workflow.Execution.HttpApi.Host
 dotnet run --project monitoring/BBT.Workflow.Monitor.HttpApi.Host
 ```
 
 **Ports**: Orchestration → 4201, Execution → 4202, Monitor → 4203
+
+### Runbook: "bring up domain X" (for agents)
+
+Commands run without a terminal, so the script never prompts — pass everything explicitly.
+
+1. `cd etc/docker && ./run-docker.sh status` and read `ai-docs/local-environments/README.md` (if present):
+   is X already registered, which offset does it have, is anything else running?
+2. Decide the offset: `core` → none (offset 0). Another domain → its recorded offset, else the next
+   free multiple of 10 (`./run-docker.sh plan X --offset N` shows ports and app-ids; it refuses collisions).
+   Tell the user the offset you picked before starting.
+3. `./run-docker.sh up X --offset N` (`--monitor` only if asked; `--no-build` only if the build is
+   known to be fresh). It brings up infra + sidecars, runs DbMigrator, starts the hosts and waits for
+   `/health`. Expect a few minutes on a cold build.
+4. If it refuses with "docker infra is running from another compose file", stop: another stack (for
+   example a cross-domain lab) owns the infra. Report it and let the user decide — do not `down` it yourself.
+5. Report the base URL and the record path `ai-docs/local-environments/X.md`; point integration tests
+   at `VNEXT_BASE_URL=http://localhost:<4201+offset>`. Stop with `./run-docker.sh down X`.
 
 ## Testing
 
