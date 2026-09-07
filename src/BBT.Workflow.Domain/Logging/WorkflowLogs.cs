@@ -2963,8 +2963,42 @@ public static partial class WorkflowLogs
         Guid incidentId);
 
     /// <summary>
+    /// Logs when every open incident of an instance is resolved (retry, or a completed
+    /// error-boundary transition).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20203,
+        Level = LogLevel.Information,
+        Message = "Resolved {Count} open incident(s) on instance {InstanceId}")]
+    public static partial void IncidentsResolved(
+        this ILogger logger,
+        Guid instanceId,
+        int count);
+
+    /// <summary>
+    /// Logs when an incident could not be persisted at the point it was recorded. The transition
+    /// still faults with its ORIGINAL error; the pipeline's fault path then records its own
+    /// fallback incident, so the failure is not lost — only its boundary attribution is.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20204,
+        Level = LogLevel.Error,
+        Message = "Failed to persist the incident recorded for instance {InstanceId} on transition {TransitionKey}")]
+    public static partial void IncidentPersistFailed(
+        this ILogger logger,
+        Exception exception,
+        Guid instanceId,
+        string transitionKey);
+
+    /// <summary>
     /// Logs when an informational incident is recorded (Log/Ignore action - already resolved).
     /// </summary>
+    /// <remarks>
+    /// Currently unreachable: the task engine reports a continue-style boundary outcome as a result
+    /// with no boundary action attached (<c>TasksExecutionResult.SuccessWithFailedTasks</c>), so the
+    /// pipeline step never enters the branch that would record an informational incident. Kept for
+    /// the day that changes.
+    /// </remarks>
     [LoggerMessage(
         EventId = 20202,
         Level = LogLevel.Debug,

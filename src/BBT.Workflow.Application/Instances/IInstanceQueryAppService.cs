@@ -29,6 +29,14 @@ public interface IInstanceQueryAppService : IApplicationService
     Task<Result<GetInstanceHistoryOutput>> GetInstanceHistoryAsync(
         GetInstanceHistoryInput input,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Pages the error-boundary incident history of an instance, newest first. Gated by the same
+    /// <c>queryRoles</c> check as the state function.
+    /// </summary>
+    Task<Result<GetInstanceIncidentsOutput>> GetInstanceIncidentsAsync(
+        GetInstanceIncidentsInput input,
+        CancellationToken cancellationToken = default);
     
     /// <summary>
     /// Retrieves only the instance data (attributes) with optional ETag support

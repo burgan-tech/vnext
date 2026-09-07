@@ -5,6 +5,7 @@ using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace BBT.Workflow.Schemas;
 
@@ -25,7 +26,8 @@ public sealed class MultiSchemaMigrator<TContext>(
     IConfiguration configuration,
     ISchemaNameFormatter schemaNameFormatter,
     ILogger<MultiSchemaMigrator<TContext>> logger,
-    ICurrentSchema currentSchema
+    ICurrentSchema currentSchema,
+    IOptions<SchemaMigrationOptions> options
 ) : IMultiSchemaMigrator<TContext>
     where TContext : DbContext
 {
@@ -48,6 +50,8 @@ public sealed class MultiSchemaMigrator<TContext>(
             {
                 // Schema-qualified history table — preserves existing migration records.
                 npgsql.MigrationsHistoryTable("__Workflow_Migrations", schemaName);
+                // Data migrations over large tables outlive Npgsql's 30 s default (SchemaMigration section).
+                npgsql.CommandTimeout(options.Value.CommandTimeoutSeconds);
             })
             // SchemaAwareModelCacheKeyFactory produces a different compiled model per schema,
             // so EF Core's snapshot-diff check always sees a "mismatch". This is by design —

@@ -45,12 +45,13 @@ public sealed class StateFunctionCache(
     /// instance is parked. What needed invalidating was the shape change, once, not the value.
     /// </remarks>
     /// <remarks>
-    /// v7 does not change the response shape. It retires entries written before caller roles became
-    /// provider-resolved: the hash covers the role <i>strings</i>, so an entry keyed under the default
-    /// provider's roles collides with an identically named set from an external provider, even though
-    /// the two were produced under different authorization inputs.
+    /// History: v7 gave the scheduled entries the uniform <c>href</c>/<c>view</c>/<c>schema</c> link
+    /// objects (capability flags hardcoded false) and, being a key segment, also retired entries
+    /// written before caller roles became provider-resolved. v8 added the always-present
+    /// <c>incident</c> block (<c>hasActiveIncident</c>, <c>active</c>, <c>historyHref</c>) together with
+    /// <see cref="InstanceStateFingerprint.HasActiveIncident"/> in the ETag material.
     /// </remarks>
-    private const string ResponseShapeVersion = "v7";
+    private const string ResponseShapeVersion = "v8";
 
     private const string KeyPrefix = $"state-fn:{ResponseShapeVersion}:";
 
@@ -102,7 +103,9 @@ public sealed class StateFunctionCache(
             fingerprint.CorrelationCount,
             fingerprint.CompletedCorrelationCount,
             FormatTimestamp(fingerprint.LastCorrelationCompletedAt),
-            FormatTimestamp(fingerprint.LastSubFlowStateChangedAt));
+            FormatTimestamp(fingerprint.LastSubFlowStateChangedAt),
+            // The body carries an incident block; the flag can flip without a state/status change.
+            fingerprint.HasActiveIncident);
 
         return Convert.ToHexStringLower(
             SHA256.HashData(Encoding.UTF8.GetBytes(material)))[..EtagLength];

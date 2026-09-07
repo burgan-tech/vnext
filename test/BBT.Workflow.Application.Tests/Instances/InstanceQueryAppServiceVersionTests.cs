@@ -104,6 +104,7 @@ public class InstanceQueryAppServiceVersionTests : IDisposable
             instanceTransitionRepository: Substitute.For<IInstanceTransitionRepository>(),
             instanceCorrelationRepository: Substitute.For<IInstanceCorrelationRepository>(),
             instanceJobRepository: Substitute.For<IInstanceJobRepository>(),
+            instanceIncidentRepository: CreateIncidentRepository(),
             instanceExtensionService: _instanceExtensionService,
             scriptContextFactory: _scriptContextFactory,
             instanceQueryGateway: Substitute.For<IInstanceQueryGateway>(),
@@ -250,6 +251,18 @@ public class InstanceQueryAppServiceVersionTests : IDisposable
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// GetInstanceAsync enriches metadata.incident from the incident table; NSubstitute returns null
+    /// for a <c>Task&lt;List&lt;T&gt;&gt;</c>, so the "no incidents" answer has to be explicit.
+    /// </summary>
+    private static IInstanceIncidentRepository CreateIncidentRepository()
+    {
+        var repository = Substitute.For<IInstanceIncidentRepository>();
+        repository.GetLatestAsync(Arg.Any<Guid>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(new List<InstanceIncident>());
+        return repository;
+    }
 
     private static Instance CreateInstanceWithMultipleVersions()
     {

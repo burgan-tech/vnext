@@ -39,6 +39,7 @@ public sealed class InstanceQueryAppService(
     IInstanceTransitionRepository instanceTransitionRepository,
     IInstanceCorrelationRepository instanceCorrelationRepository,
     IInstanceJobRepository instanceJobRepository,
+    IInstanceIncidentRepository instanceIncidentRepository,
     IInstanceExtensionService instanceExtensionService,
     IScriptContextFactory scriptContextFactory,
     IInstanceQueryGateway instanceQueryGateway,
@@ -168,6 +169,7 @@ public sealed class InstanceQueryAppService(
                     }
 
                     var response = result.Value!;
+                    await EnrichIncidentMetadataAsync(response, instance, input.Domain, input.Workflow, cancellationToken);
                     var entityEtag = instance.LatestData?.ETag ?? string.Empty;
                     response.EntityEtag = entityEtag;
                     var representationEtag = representationEtagService.Generate(response);
@@ -368,6 +370,8 @@ public sealed class InstanceQueryAppService(
                     list.Add(instanceOutputResult.Value!);
                 }
 
+                await EnrichIncidentSummariesForListAsync(list, pagedList.Items, input.Domain, input.Workflow, ct);
+
                 var resultPagedList = new HateoasPagedList<GetInstanceOutput>(list, pagedList.CurrentPage,
                     pagedList.PageSize,
                     pagedList.HasNext);
@@ -377,6 +381,108 @@ public sealed class InstanceQueryAppService(
                 return response;
             },
             cancellationToken);
+    }
+
+    /// <summary>
+    /// Fills <c>metadata.incident</c> for a single GET: the newest incidents (inline history, capped),
+    /// the unresolved one (loaded onto the aggregate), the total count and the history link. One
+    /// query when the instance has no incidents at all — the common case.
+    /// </summary>
+    private async Task EnrichIncidentMetadataAsync(
+        GetInstanceOutput response,
+        Instance instance,
+        string domain,
+        string workflow,
+        CancellationToken cancellationToken)
+    {
+        var latest = await instanceIncidentRepository.GetLatestAsync(
+            instance.Id, InstanceIncidentConstants.InlineHistoryLimit, cancellationToken);
+
+        if (latest.Count == 0 && !instance.HasActiveIncident)
+        {
+            response.Metadata.Incident = null;
+            return;
+        }
+
+        await instanceRepository.LoadActiveIncidentsAsync(instance, cancellationToken);
+        var total = await instanceIncidentRepository.CountByInstanceAsync(instance.Id, cancellationToken);
+
+        response.Metadata.Incident = IncidentInfoDto.FromInstance(
+            instance,
+            history: latest,
+            totalCount: total,
+            href: urlTemplateBuilder.BuildIncidentsUrl(domain, workflow, instance.Id.ToString()));
+    }
+
+    /// <summary>
+    /// List view: instances flagged <c>HasActiveIncident</c> get their newest unresolved incident from
+    /// ONE batch query for the whole page; nothing is queried when no item is flagged. History and
+    /// totals are not resolved per item — the block carries the flag, the active summary and the link.
+    /// </summary>
+    private async Task EnrichIncidentSummariesForListAsync(
+        List<GetInstanceOutput> outputs,
+        IList<Instance> instances,
+        string domain,
+        string workflow,
+        CancellationToken cancellationToken)
+    {
+        var flagged = instances.Where(i => i.HasActiveIncident).Select(i => i.Id).ToList();
+        if (flagged.Count == 0)
+            return;
+
+        var activeByInstance = await instanceIncidentRepository.GetLatestActiveByInstanceIdsAsync(
+            flagged, cancellationToken);
+
+        foreach (var output in outputs)
+        {
+            if (output.Id is not { } outputId || !activeByInstance.TryGetValue(outputId, out var active))
+                continue;
+
+            var href = urlTemplateBuilder.BuildIncidentsUrl(domain, workflow, outputId.ToString());
+            output.Metadata.Incident = new IncidentInfoDto
+            {
+                HasActiveIncident = true,
+                TotalCount = 1,
+                Active = IncidentDetailDto.FromIncident(active),
+                History = [IncidentDetailDto.FromIncident(active)],
+                Href = href
+            };
+        }
+    }
+
+    public async Task<Result<GetInstanceIncidentsOutput>> GetInstanceIncidentsAsync(
+        GetInstanceIncidentsInput input,
+        CancellationToken cancellationToken = default)
+    {
+        runtimeInfoProvider.Check(input.Domain);
+
+        var page = input.Page < 1 ? 1 : input.Page;
+        var pageSize = Math.Clamp(input.PageSize, 1, GetInstanceIncidentsInput.MaxPageSize);
+
+        return await GetInstanceByIdOrKeyAsync(input.Instance, cancellationToken)
+            .BindAsync(instance =>
+                componentCacheStore.GetFlowAsync(input.Domain, input.Workflow, instance.FlowVersion, cancellationToken)
+                    .MapAsync(workflow => (instance, workflow)))
+            .BindAsync(async data =>
+            {
+                using var instanceScope = BeginInstanceScope(data.instance);
+
+                // Same gate as the state function: a caller who may poll the state may read why it stalled.
+                if (!await IsInstanceQueryAllowedAsync(data.workflow, data.instance, input.Roles, input.Headers, input.QueryParameters, cancellationToken))
+                    return Result<GetInstanceIncidentsOutput>.Fail(WorkflowErrors.QueryAccessDenied(data.instance.GetEffectiveState));
+
+                var paged = await instanceIncidentRepository.GetHistoryPagedAsync(
+                    data.instance.Id, page, pageSize, cancellationToken);
+
+                return Result<GetInstanceIncidentsOutput>.Ok(new GetInstanceIncidentsOutput
+                {
+                    HasActiveIncident = data.instance.HasActiveIncident,
+                    Items = paged.Items.Select(IncidentDetailDto.FromIncident).ToList(),
+                    Page = paged.CurrentPage,
+                    PageSize = paged.PageSize,
+                    HasNext = paged.HasNext
+                });
+            });
     }
 
     public async Task<Result<GetInstanceHistoryOutput>> GetInstanceHistoryAsync(
@@ -600,7 +706,9 @@ public sealed class InstanceQueryAppService(
                     SubFlowCorrelations: subFlowValue.Correlations,
                     SubFlowTransitionItems: subFlowValue.Transitions,
                     // Bubble the (possibly deeper) subflow's long-poll termination signal up the chain.
-                    Interaction: subFlowValue.Interaction);
+                    Interaction: subFlowValue.Interaction,
+                    // The client observes the leaf: its incident is what explains a stalled chain.
+                    Incident: subFlowValue.Incident);
             }
         }
         catch (Exception ex)
@@ -1104,6 +1212,10 @@ public sealed class InstanceQueryAppService(
                     using var instanceScope = BeginInstanceScope(data.instance);
                     if (!await IsInstanceQueryAllowedAsync(data.workflow, data.instance, input.Roles, input.Headers, input.QueryParams, cancellationToken))
                         return ConditionalResult<GetInstanceStateOutput>.Fail(WorkflowErrors.QueryAccessDenied(data.instance.GetEffectiveState));
+
+                    // The incident block needs the newest unresolved incident; incidents are a separate
+                    // table and never ride along with the aggregate. No query when the flag is false.
+                    await instanceRepository.LoadActiveIncidentsAsync(data.instance, cancellationToken);
 
                     // Full correlation set (active + completed), ordered by creation time. The aggregate's
                     // own ChildCorrelations collection is loaded with an active-only filtered include, so
@@ -1631,6 +1743,12 @@ public sealed class InstanceQueryAppService(
             : await ResolveInteractionAsync(
                 input, instance, currentStateValue, displayedState, cancellationToken);
 
+        // Incident block: the leaf's when an active subflow reported one (a stalled chain is explained
+        // by the deepest incident), otherwise this instance's own. The history link always points to the
+        // polled instance — a client follows it on the instance it is polling. Never a stack trace.
+        var incidentHref = BuildIncidentHref(
+            instance, subFlowStateInfo.Incident, input.Domain, input.Workflow);
+
         // Only the flag and the link — never the list. Enumerating the functions means one component
         // read per declared function plus a role evaluation each, which this response cannot afford.
         var functionsHref = new FunctionsHref
@@ -1659,9 +1777,59 @@ public sealed class InstanceQueryAppService(
             Correlations = allCorrelationHrefs,
             Transitions = transitionItems,
             Functions = functionsHref,
-            Interaction = interaction
+            Interaction = interaction,
+            Incident = incidentHref
         });
     }
+
+    /// <summary>
+    /// Builds the state body's <c>incident</c> block. A leaf-reported block wins when it carries an
+    /// active incident; otherwise the polled instance's own loaded incidents are projected.
+    /// </summary>
+    private IncidentHref BuildIncidentHref(
+        Instance instance,
+        IncidentHref? leafIncident,
+        string domain,
+        string workflow)
+    {
+        var historyHref = urlTemplateBuilder.BuildIncidentsUrl(domain, workflow, instance.Id.ToString());
+
+        if (leafIncident is { HasActiveIncident: true })
+        {
+            return new IncidentHref
+            {
+                HasActiveIncident = true,
+                Active = leafIncident.Active,
+                HistoryHref = historyHref
+            };
+        }
+
+        var active = instance.HasActiveIncident
+            ? instance.GetLoadedIncidents().LastOrDefault(i => !i.IsResolved)
+            : null;
+
+        return new IncidentHref
+        {
+            HasActiveIncident = instance.HasActiveIncident,
+            Active = active is null ? null : ToIncidentSummary(active),
+            HistoryHref = historyHref
+        };
+    }
+
+    private static IncidentSummary ToIncidentSummary(InstanceIncident incident) => new()
+    {
+        Id = incident.Id,
+        ErrorCode = incident.ErrorCode,
+        Message = incident.Message,
+        State = incident.State,
+        Transition = incident.Transition,
+        Task = incident.Task,
+        ErrorLayer = incident.ErrorLayer,
+        StatusCode = incident.StatusCode,
+        BoundaryAction = incident.BoundaryAction,
+        TraceId = incident.TraceId,
+        CreatedAtUtc = incident.CreatedAt
+    };
 
     /// <summary>
     /// Maps the instance's active scheduled-transition jobs to <c>kind: "scheduled"</c> entries of the
@@ -2928,7 +3096,8 @@ public sealed class InstanceQueryAppService(
         List<ActiveCorrelationHref>? SubFlowActiveCorrelations = null,
         List<ActiveCorrelationHref>? SubFlowCorrelations = null,
         List<TransitionItem>? SubFlowTransitionItems = null,
-        InstanceInteractionOutput? Interaction = null);
+        InstanceInteractionOutput? Interaction = null,
+        IncidentHref? Incident = null);
 
     private static Dictionary<string, SubFlowTransitionOverride>? TryGetParentTransitionRoleOverrides(Instance instance)
     {

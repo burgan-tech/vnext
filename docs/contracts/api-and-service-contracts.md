@@ -27,7 +27,8 @@ contracts. Remote services call public runtime APIs rather than internal reposit
 
 | Endpoint family | Behavior |
 | --- | --- |
-| `GET /{domain}/workflows/{workflow}/instances/{instance}/functions/state` | Conditional state response, available transitions, role filtering, ETag, child correlations, workflow function discovery links. |
+| `GET /{domain}/workflows/{workflow}/instances/{instance}/functions/state` | Conditional state response, available transitions, role filtering, ETag, child correlations, workflow function discovery links, incident summary. |
+| `GET /{domain}/workflows/{workflow}/instances/{instance}/incidents` | Paged error-boundary incident history (newest first), same `queryRoles` gate as the state function; never carries stack traces. |
 | `GET /{domain}/workflows/{workflow}/instances/{instance}/functions/data` | Latest data, optional extensions, ETag. |
 | `GET /{domain}/workflows/{workflow}/instances/{instance}/functions/view` | Backend-driven view selection. |
 | `GET /{domain}/workflows/{workflow}/instances/{instance}/functions/schema` | Transition-aware schema. |
@@ -169,6 +170,60 @@ render countdowns and upcoming-action information without polling anything else:
   a stale `executeAtUtc` until the next fingerprint-visible change. Clients that need the fresh
   time after triggering such an update should re-fetch without the ETag. See
   [state-function cache and fingerprint ETag](../runtime/state-function-cache-and-etag.md).
+
+### State response: incident block
+
+The state body always carries an `incident` block so a client can explain a Faulted or waiting
+instance deterministically:
+
+```jsonc
+"incident": {
+  "hasActiveIncident": true,
+  "active": {
+    "id": "…", "errorCode": "TaskExecutionFailed", "message": "Payment service did not respond",
+    "state": "payment", "transition": "calculate-payment", "task": "payment-call",
+    "errorLayer": "Task", "statusCode": 503, "boundaryAction": "Abort",
+    "traceId": "…", "createdAtUtc": "2026-08-03T14:30:00.000Z"
+  },
+  "historyHref": "/api/v1/core/workflows/onboarding/instances/{id}/incidents"
+}
+```
+
+- `hasActiveIncident` is the instance's denormalized flag; `active` is the newest unresolved incident
+  or `null`. When the instance delegates to an active subflow the block describes the **leaf** (same
+  lifting as `interaction`); `historyHref` always points at the polled instance.
+- Visible to every caller who passes the state function's `queryRoles` gate. **Never** a stack trace —
+  operators read those from the Monitor API.
+- `hasActiveIncident` **is** in the ETag material (`InstanceStateFingerprint.HasActiveIncident`), so
+  raising or resolving an incident without a state change still moves the ETag. Shape introduced by
+  `ResponseShapeVersion` `v8`.
+- `GET …/instances/{instance}/incidents?page=&pageSize=` pages the full history (`items`, `page`,
+  `pageSize`, `hasNext`, `hasActiveIncident`), newest first; `pageSize` is clamped to 100. Incidents
+  are unbounded (own table, cascade-deleted with the instance) — the former "last 5" cap is gone; the
+  inline `metadata.incident.history` on `GET …/instances/{instance}` keeps showing the newest 5 and
+  now carries `href` to this endpoint.
+- **One failure produces one incident.** An abort — or an unhandled task failure with no matching
+  rule — leaves a single row, and `active` is that row: the boundary's own verdict, carrying
+  `boundaryAction` when a rule resolved one and omitting it when none did. Earlier builds emitted a
+  second, pipeline-layer row (`errorCode: "ErrorBoundaryAbort"`, `errorLayer: "Pipeline"`, no task
+  attribution) that became `active` and hid the verdict. A client keying off `ErrorBoundaryAbort`,
+  or counting on two rows per failure, has to adapt.
+- **`retryCount` is always `0` today.** The field is filled from the resolved boundary's retry
+  policy, which the execution engine does not attach to the action result. Read the attempt count
+  from instance data written by the task's own mapping instead.
+
+### Retry: `POST …/instances/{instance}/retry`
+
+- Accepts only a **Faulted** instance; anything else is `400` with `Instance:100027`.
+- The optional body's `attributes` are merged into instance data *before* the re-executed
+  transition's OnExecute runs, so the same task can take a different path on the retry.
+- Unfaulting closes **every** open incident on the instance, not just the newest, and clears
+  `hasActiveIncident`. The history rows stay, marked resolved.
+- A retry whose work faults again answers `200` with `"status": "F"` in the body, and that status is
+  durable: the instance stays Faulted and **can be retried again**. Earlier builds answered `F` and
+  then settled the instance back to `Active`, which left it unfinished and permanently unretryable —
+  a client that worked around this by treating `F`-with-`Active` as terminal should drop that
+  workaround.
 
 ### Client-facing hrefs and the `UrlTemplates` section
 

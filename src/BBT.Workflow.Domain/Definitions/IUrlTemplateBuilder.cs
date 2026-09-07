@@ -223,4 +223,16 @@ public interface IUrlTemplateBuilder
     /// <returns>Generated client-facing acknowledge URL</returns>
     string BuildLongPollAckUrl(string domain, string workflow, string instance, string? apiVersionPrefix = null)
         => $"{BuildInstanceUrl(domain, workflow, instance, apiVersionPrefix)}/longpoll/ack";
+
+    /// <summary>
+    /// Builds URL for the paged incident history endpoint of an instance. Default interface member so
+    /// external implementations keep compiling.
+    /// </summary>
+    /// <param name="domain">The domain name</param>
+    /// <param name="workflow">The workflow name</param>
+    /// <param name="instance">The instance key or ID</param>
+    /// <param name="apiVersionPrefix">Optional API version prefix (e.g., "api/v1")</param>
+    /// <returns>Generated client-facing incident history URL</returns>
+    string BuildIncidentsUrl(string domain, string workflow, string instance, string? apiVersionPrefix = null)
+        => $"{BuildInstanceUrl(domain, workflow, instance, apiVersionPrefix)}/incidents";
 }

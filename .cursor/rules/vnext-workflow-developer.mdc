@@ -75,6 +75,10 @@ Resolution: `IPipelineProfileResolver.Resolve(workflowContext, transitionContext
 - `GetResultAsync(includeDetails: false)` is lean (no DataList/correlations).
 - History paths use `AsNoTracking` + explicit includes.
 - **Rule**: Do not add unnecessary includes. If `TransitionExecutionContext` already has the data, do not re-query.
+- **Incidents are never included.** `InstanceIncident` rows live in `InstanceIncidents`; `Instance.HasActiveIncident` is a denormalized column. Load unresolved incidents only via `IInstanceRepository.LoadActiveIncidentsAsync` (no query when the flag is false) before resolving/faulting/building scripts or the state body; history via `IInstanceIncidentRepository`. Rows read back stay OFF the EF navigation (detached list) or another context tracking the same aggregate re-inserts them (`23505`); resolving a detached incident needs `IInstanceIncidentRepository.ResolveAllAsync`.
+- **A task step records the incident BEFORE its own save; nothing records one after a save.** The three task steps call `BoundaryOutcomeHandler` and *then* `UpdateAsync(instance, autoSave: true)`, so the row and the `HasActiveIncident` flag commit together — `TransitionPipeline.MarkInstanceFaultedAsync` reloads in its own UoW and skips its fallback incident only when the **committed** flag says one exists. Recording after the save produced two rows per abort, with the bare `ErrorBoundaryAbort` pipeline row the newer of the two. The unhandled path skips `ApplyScriptContextChanges` and wraps the save in try/catch so the original task error survives. `Handle`'s `ShouldContinue` branch is unreachable from the steps (`ignore`/`log` come back as `SuccessWithFailedTasks`, which carries no boundary action).
+- **Resolve is set-based.** `Instance.ResolveOpenIncidents()` closes every unresolved row on the materialized aggregate and recomputes the flag; no single-row API exists. `FinalizeTransitionStep` relies on the pipeline aggregate being tracked; the detached retry path always calls `ResolveAllAsync`.
+- **Retry loads no-tracking and unfaults with a CAS** (`GetResultAsReadOnlyAsync` + `TryUnfaultAsync`), and commits the unfault before `ExecuteRetryAsync`. Never mutate an ambient-tracked aggregate and leave the write to an inner `RequiresNew` scope — the ambient commit overwrote the inner scope's `Faulted` with a stale `Active`.
 
 ## Long-Polling / State Function
 
@@ -82,6 +86,7 @@ Resolution: `IPipelineProfileResolver.Resolve(workflowContext, transitionContext
 - Client cycle: `GET /functions/state` → `200` (changed) | `304` (not modified → wait → retry).
 - ETag source: `LatestData?.ETag` for entity, `IRepresentationEtagService.Generate(output)` for representation.
 - **Role filtering**: `ITransitionAuthorizationManager` filters available transitions per role. Supports `$InstanceStarter`, `$PreviousUser` pseudo-roles.
+- **`incident` block** (ResponseShapeVersion `v8`): always present — `{ hasActiveIncident, active | null, historyHref }`, lifted from the leaf subflow, no stack trace; `HasActiveIncident` is in the fingerprint ETag. History: `GET …/instances/{instance}/incidents` (paged, `queryRoles` gate).
 - No server-side hold — 304 response drives client polling.
 
 ## Sync vs Async Execution

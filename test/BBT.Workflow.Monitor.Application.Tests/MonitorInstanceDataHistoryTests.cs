@@ -65,5 +65,6 @@ public sealed class MonitorInstanceDataHistoryTests
         Substitute.For<IInstanceActionRepository>(),
         Substitute.For<IComponentCacheStore>(),
         Substitute.For<IInstanceCorrelationRepository>(),
+        Substitute.For<IInstanceIncidentRepository>(),
         Substitute.For<ICurrentSchema>());
 }

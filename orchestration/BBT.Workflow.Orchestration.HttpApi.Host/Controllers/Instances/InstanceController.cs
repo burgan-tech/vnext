@@ -919,6 +919,50 @@ public sealed class InstanceController(
         var response = await queryAppService.GetInstanceHistoryAsync(input, cancellationToken);
         return response.ToActionResult(HttpContext);
     }
+
+    /// <summary>
+    /// Pages the error-boundary incident history of an instance, newest first. This is the target of
+    /// the state function's <c>incident.historyHref</c>. Gated by the same <c>queryRoles</c> check as
+    /// the state function; stack traces are never returned here (operators use the Monitor API).
+    /// </summary>
+    /// <param name="domain">Domain key</param>
+    /// <param name="workflow">Workflow key</param>
+    /// <param name="instance">Instance id or business key</param>
+    /// <param name="page">1-based page number (default 1)</param>
+    /// <param name="pageSize">Page size (default 20, max 100)</param>
+    /// <param name="cancellationToken">Cancellation token</param>
+    [HttpGet("{domain}/workflows/{workflow}/instances/{instance}/incidents")]
+    public async Task<IActionResult> GetInstanceIncidentsAsync(
+        [FromRoute] string domain,
+        [FromRoute] string workflow,
+        [FromRoute] string instance,
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 20,
+        CancellationToken cancellationToken = default)
+    {
+        var requestContext = HttpContext.GetRequestBindingContext();
+
+        // Same provider-resolved roles as the state/data functions so the queryRoles gate evaluates
+        // the caller consistently across the surfaces that describe one instance.
+        var callerRoles = await callerRoleResolver.ResolveRolesAsync(requestContext.Headers, cancellationToken);
+        if (!callerRoles.IsSuccess)
+            return FromResult(BBT.Aether.Results.Result.Fail(callerRoles.Error));
+
+        var input = new GetInstanceIncidentsInput
+        {
+            Domain = domain,
+            Workflow = workflow,
+            Instance = instance,
+            Page = page,
+            PageSize = pageSize,
+            Headers = requestContext.Headers,
+            QueryParameters = requestContext.QueryParameters,
+            Roles = callerRoles.Value
+        };
+
+        var response = await queryAppService.GetInstanceIncidentsAsync(input, cancellationToken);
+        return response.ToActionResult(HttpContext);
+    }
     
     [ApiExplorerSettings(IgnoreApi = true)]
     [HttpGet("{domain}/workflows/{workflow}/instances/{instance}/data")]

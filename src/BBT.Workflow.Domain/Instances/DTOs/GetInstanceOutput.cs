@@ -90,6 +90,9 @@ public sealed class InstanceMetadataDto
         ModifiedBy = instance.ModifiedBy;
         ModifiedByBehalfOf = instance.ModifiedByBehalfOf;
 
+        // Incidents are a separate table and are never included by default: only the unresolved
+        // rows (loaded when the flag is set) and rows added in this unit of work are on the aggregate.
+        // The query service enriches TotalCount/History/Href from IInstanceIncidentRepository.
         if (instance.HasActiveIncident || instance.Incidents.Count > 0)
         {
             Incident = IncidentInfoDto.FromInstance(instance);
@@ -144,7 +147,10 @@ public sealed class InstanceMetadataDto
     /// <summary>Modifier behalf-of user identifier.</summary>
     public string? ModifiedByBehalfOf { get; set; }
 
-    /// <summary>Error boundary incident information. Null when no incidents have occurred.</summary>
+    /// <summary>
+    /// Error boundary incident information. Null when the instance has no active incident and no
+    /// incident history was loaded for this response.
+    /// </summary>
     public IncidentInfoDto? Incident { get; set; }
 }
 
@@ -156,32 +162,51 @@ public sealed class IncidentInfoDto
     /// <summary>Whether the instance currently has an unresolved incident.</summary>
     public bool HasActiveIncident { get; set; }
 
-    /// <summary>Total number of incidents (resolved + unresolved) retained for this instance.</summary>
+    /// <summary>Total number of incidents (resolved + unresolved) recorded for this instance.</summary>
     public int TotalCount { get; set; }
 
     /// <summary>The most recent unresolved incident, or null if all are resolved.</summary>
     public IncidentDetailDto? Active { get; set; }
 
-    /// <summary>All retained incidents ordered by creation time descending.</summary>
+    /// <summary>
+    /// The newest incidents ordered by creation time descending, capped at
+    /// <see cref="InstanceIncidentConstants.InlineHistoryLimit"/>. The full history is paged by
+    /// <see cref="Href"/>.
+    /// </summary>
     public List<IncidentDetailDto> History { get; set; } = [];
 
-    internal static IncidentInfoDto FromInstance(Instance instance)
-    {
-        var incidents = instance.Incidents;
-        var active = incidents.LastOrDefault(i => !i.IsResolved);
+    /// <summary>Link to the paged incident history endpoint of this instance.</summary>
+    public string? Href { get; set; }
 
-        var dto = new IncidentInfoDto
+    /// <summary>
+    /// Builds the block from what is materialized on the aggregate (unresolved incidents plus any
+    /// recorded in the current unit of work). <paramref name="history"/> and
+    /// <paramref name="totalCount"/> come from <c>IInstanceIncidentRepository</c> when the caller has
+    /// them; otherwise the loaded incidents stand in for both.
+    /// </summary>
+    public static IncidentInfoDto FromInstance(
+        Instance instance,
+        IReadOnlyList<InstanceIncident>? history = null,
+        int? totalCount = null,
+        string? href = null)
+    {
+        var loaded = instance.GetLoadedIncidents();
+        var active = loaded.LastOrDefault(i => !i.IsResolved);
+        var historySource = history ?? loaded;
+
+        return new IncidentInfoDto
         {
             HasActiveIncident = instance.HasActiveIncident,
-            TotalCount = incidents.Count,
+            TotalCount = totalCount ?? loaded.Count,
             Active = active != null ? IncidentDetailDto.FromIncident(active) : null,
-            History = incidents
+            History = historySource
                 .OrderByDescending(i => i.CreatedAt)
+                .ThenByDescending(i => i.Id)
+                .Take(InstanceIncidentConstants.InlineHistoryLimit)
                 .Select(IncidentDetailDto.FromIncident)
-                .ToList()
+                .ToList(),
+            Href = href
         };
-
-        return dto;
     }
 }
 
@@ -235,7 +260,7 @@ public sealed class IncidentDetailDto
     /// <summary>Number of retry attempts before resolution or exhaustion.</summary>
     public int RetryCount { get; set; }
 
-    internal static IncidentDetailDto FromIncident(InstanceIncident incident) => new()
+    public static IncidentDetailDto FromIncident(InstanceIncident incident) => new()
     {
         Id = incident.Id,
         CreatedAt = incident.CreatedAt,
@@ -253,6 +278,27 @@ public sealed class IncidentDetailDto
         ResolvedAt = incident.ResolvedAt,
         RetryCount = incident.RetryCount
     };
+}
+
+/// <summary>
+/// One page of an instance's incident history, newest first.
+/// </summary>
+public sealed class GetInstanceIncidentsOutput
+{
+    /// <summary>Whether the instance currently has an unresolved incident.</summary>
+    public bool HasActiveIncident { get; set; }
+
+    /// <summary>Incidents on this page, newest first. Stack traces are never included.</summary>
+    public List<IncidentDetailDto> Items { get; set; } = [];
+
+    /// <summary>1-based page number.</summary>
+    public int Page { get; set; }
+
+    /// <summary>Page size.</summary>
+    public int PageSize { get; set; }
+
+    /// <summary>Whether a next page exists.</summary>
+    public bool HasNext { get; set; }
 }
 
 /// <summary>

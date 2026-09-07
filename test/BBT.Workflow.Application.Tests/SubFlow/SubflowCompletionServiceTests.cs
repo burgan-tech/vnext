@@ -375,7 +375,7 @@ public sealed class SubflowCompletionServiceTests
         correlation.SubFlowStateChangedAt.ShouldBe(completedAt);
         parent.Status.ShouldBe(InstanceStatus.Active);
         parent.GetEffectiveState.ShouldBe("child-active");
-        parent.GetIncidentsForMonitor().ShouldBeEmpty();
+        parent.GetLoadedIncidents().ShouldBeEmpty();
         _componentCacheStore.VerifyNoOtherCalls();
         _outputMappingService.VerifyNoOtherCalls();
         _workflowExecutionService.VerifyNoOtherCalls();
@@ -407,7 +407,7 @@ public sealed class SubflowCompletionServiceTests
         correlation.CompletedAt.ShouldBe(completedAt);
         parent.Status.ShouldBe(InstanceStatus.Completed);
         parent.GetEffectiveState.ShouldBe("terminal-parent");
-        parent.GetIncidentsForMonitor().ShouldBeEmpty();
+        parent.GetLoadedIncidents().ShouldBeEmpty();
         _componentCacheStore.VerifyNoOtherCalls();
         _outputMappingService.VerifyNoOtherCalls();
         _workflowExecutionService.VerifyNoOtherCalls();
@@ -482,7 +482,7 @@ public sealed class SubflowCompletionServiceTests
         correlation.SubFlowStateChangedAt.ShouldBe(completedAt);
         parent.Status.ShouldBe(InstanceStatus.Passive);
         parent.GetEffectiveState.ShouldBe("terminal-parent");
-        parent.GetIncidentsForMonitor().ShouldBeEmpty();
+        parent.GetLoadedIncidents().ShouldBeEmpty();
         _componentCacheStore.VerifyNoOtherCalls();
         _outputMappingService.VerifyNoOtherCalls();
         _workflowExecutionService.VerifyNoOtherCalls();

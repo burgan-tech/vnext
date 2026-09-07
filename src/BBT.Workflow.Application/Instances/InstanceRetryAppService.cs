@@ -26,6 +26,7 @@ public sealed class InstanceRetryAppService(
     IServiceProvider serviceProvider,
     IRuntimeInfoProvider runtimeInfoProvider,
     IInstanceRepository instanceRepository,
+    IInstanceIncidentRepository instanceIncidentRepository,
     IInstanceTransitionRepository instanceTransitionRepository,
     IInstanceQueryGateway instanceQueryGateway,
     IInstanceRetryGateway instanceRetryGateway,
@@ -45,8 +46,15 @@ public sealed class InstanceRetryAppService(
 
         logger.InstanceRetryRequested(input.Instance, input.Workflow);
 
-        // Step 1: Load instance with details (including correlations)
-        var instanceResult = await instanceRepository.GetResultAsync(input.Instance, includeDetails: true, cancellationToken);
+        // Step 1: Load instance with details (including correlations), NO-TRACKING.
+        //
+        // Read-only on purpose. Every write on this path is performed by an inner unit of work: the
+        // unfault is a set-based CAS, and the retried transition runs in the pipeline's own scope.
+        // A tracked load here made the ambient request unit of work hold a copy of the aggregate
+        // that Unfault() had set to Active — and its commit, at the very end of the request, wrote
+        // that stale Active over the Faulted the re-failed retry had just persisted. The instance
+        // was then left Active, parked, with an open incident and no way to retry it again.
+        var instanceResult = await instanceRepository.GetResultAsReadOnlyAsync(input.Instance, cancellationToken);
         if (!instanceResult.IsSuccess)
             return Result<RetryInstanceOutput>.Fail(instanceResult.Error);
 
@@ -164,14 +172,28 @@ public sealed class InstanceRetryAppService(
         {
             var subflowCorrelation = instance.Subflow!;
 
-            // Unfault parent first
+            // Unfault parent first. Must be COMMITTED before the child retry runs: the pipeline
+            // rejects an instance whose status is still terminal, and Faulted is terminal.
             await using var uow = UnitOfWorkManager.Begin(
                 new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew, IsTransactional = true });
-            instance.Unfault();
-            await instanceRepository.UpdateAsync(instance, true, cancellationToken);
+            // Incidents live in their own table and no load path includes them; the CAS below
+            // resolves what is materialized here.
+            await instanceRepository.LoadActiveIncidentsAsync(instance, cancellationToken);
+            if (!await instanceRepository.TryUnfaultAsync(instance, cancellationToken))
+            {
+                return Result<RetryInstanceOutput>.Fail(Error.Validation(
+                    WorkflowErrorCodes.InstanceNotFaulted,
+                    $"Instance {instance.Id} is no longer in faulted state",
+                    instance.Id.ToString()));
+            }
+
+            var resolvedCount = await instanceIncidentRepository.ResolveAllAsync(
+                instance.Id, DateTime.UtcNow, cancellationToken);
             await uow.CommitAsync(cancellationToken);
 
             logger.InstanceUnfaulted(instance.Id);
+            if (resolvedCount > 0)
+                logger.IncidentsResolved(instance.Id, resolvedCount);
 
             // Delegate retry to the SubFlow via existing gateway path
             return await RetrySubFlowAsync(instance, subflowCorrelation, input, cancellationToken);
@@ -237,8 +259,14 @@ public sealed class InstanceRetryAppService(
         await using var uow = UnitOfWorkManager.Begin(
             new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew, IsTransactional = true });
 
-        var unfaulted = data.Instance.Unfault();
-        if (!unfaulted)
+        // See RetryFaultedInstanceAsync: the incidents must be loaded before the CAS resolves them.
+        await instanceRepository.LoadActiveIncidentsAsync(data.Instance, cancellationToken);
+
+        // Set-based CAS instead of UpdateAsync. Two reasons: the aggregate is detached here (loaded
+        // no-tracking in the ambient scope), so Set.Update would rewrite the entire graph — every
+        // InstanceData row included — for a four-column flip; and the CAS makes "was still Faulted"
+        // part of the write rather than a check that can go stale.
+        if (!await instanceRepository.TryUnfaultAsync(data.Instance, cancellationToken))
         {
             return Result<(Instance, WorkflowDefinition, InstanceTransition)>.Fail(
                 Error.Validation(
@@ -247,10 +275,20 @@ public sealed class InstanceRetryAppService(
                     data.Instance.Id.ToString()));
         }
 
+        // Unconditional and idempotent: the predicate excludes resolved rows, so this closes exactly
+        // what was open. The aggregate's own Resolve() calls persist nothing on this path — the rows
+        // were read outside a change tracker and are deliberately kept off its navigation.
+        var resolvedCount = await instanceIncidentRepository.ResolveAllAsync(
+            data.Instance.Id, DateTime.UtcNow, cancellationToken);
+
         logger.InstanceUnfaulted(data.Instance.Id);
 
-        await instanceRepository.UpdateAsync(data.Instance, true, cancellationToken);
+        // Must be committed before ExecuteRetryAsync: the pipeline's instance load rejects a
+        // terminal instance, and Faulted counts as terminal.
         await uow.CommitAsync(cancellationToken);
+
+        if (resolvedCount > 0)
+            logger.IncidentsResolved(data.Instance.Id, resolvedCount);
 
         return Result<(Instance, WorkflowDefinition, InstanceTransition)>.Ok(data);
     }

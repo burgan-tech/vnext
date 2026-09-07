@@ -16,6 +16,7 @@ using BBT.Workflow.Instances.DTOs;
 using BBT.Workflow.RepresentationEtag;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
+using BBT.Workflow.Shared;
 using BBT.Workflow.Tasks.Coordinator;
 using BBT.Workflow.Extentions;
 using Microsoft.Extensions.DependencyInjection;
@@ -97,6 +98,7 @@ public class InstanceQueryAppServiceStateTests : IDisposable
             instanceTransitionRepository: Substitute.For<IInstanceTransitionRepository>(),
             instanceCorrelationRepository: _instanceCorrelationRepository,
             instanceJobRepository: _instanceJobRepository,
+            instanceIncidentRepository: Substitute.For<IInstanceIncidentRepository>(),
             instanceExtensionService: Substitute.For<IInstanceExtensionService>(),
             scriptContextFactory: Substitute.For<IScriptContextFactory>(),
             instanceQueryGateway: _instanceQueryGateway,
@@ -1160,6 +1162,82 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         result.Result.Value!.Master.Href.ShouldBe("https://master-url");
     }
 
+    // ── Incident block ───────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task GetInstanceStateAsync_WithoutIncident_CarriesFlagFalseAndHistoryHref()
+    {
+        var instance = Instance.Create(Guid.NewGuid(), TestWorkflow, TestVersion, "no-incident");
+        var state = State.Create(TestState, StateType.Intermediate, StateSubType.None, VersionStrategy.IncreaseMinor.Code);
+        instance.ChangeState(state);
+        var workflow = BuildWorkflow(state);
+        SetupCommonMocks(instance, workflow);
+
+        var result = await _service.GetInstanceStateAsync(CreateInput(instance.Id.ToString()), CancellationToken.None);
+
+        result.Result.IsSuccess.ShouldBeTrue();
+        var incident = result.Result.Value!.Incident;
+        incident.ShouldNotBeNull("the block is always present so clients can branch deterministically");
+        incident.HasActiveIncident.ShouldBeFalse();
+        incident.Active.ShouldBeNull();
+        incident.HistoryHref.ShouldBe("https://incidents-url");
+        await _instanceRepository.Received(1).LoadActiveIncidentsAsync(instance, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task GetInstanceStateAsync_WithActiveIncident_ProjectsSafeSummaryWithoutStackTrace()
+    {
+        var instance = Instance.Create(Guid.NewGuid(), TestWorkflow, TestVersion, "with-incident");
+        var state = State.Create(TestState, StateType.Intermediate, StateSubType.Error, VersionStrategy.IncreaseMinor.Code);
+        instance.ChangeState(state);
+        var recorded = InstanceIncidentFactory.Create(
+            state: TestState, transition: "calculate-payment", taskKey: "payment-call",
+            message: "Payment service did not respond", errorCode: "TaskExecutionFailed", errorLayer: "Task",
+            statusCode: 503, stackTrace: "at Payment.Call()", boundaryAction: "Abort", traceId: "trace-42");
+        instance.AddIncident(recorded);
+        var workflow = BuildWorkflow(state);
+        SetupCommonMocks(instance, workflow);
+
+        var result = await _service.GetInstanceStateAsync(CreateInput(instance.Id.ToString()), CancellationToken.None);
+
+        result.Result.IsSuccess.ShouldBeTrue();
+        var incident = result.Result.Value!.Incident;
+        incident.HasActiveIncident.ShouldBeTrue();
+        incident.Active.ShouldNotBeNull();
+        incident.Active!.Id.ShouldBe(recorded.Id);
+        incident.Active.ErrorCode.ShouldBe("TaskExecutionFailed");
+        incident.Active.Message.ShouldBe("Payment service did not respond");
+        incident.Active.State.ShouldBe(TestState);
+        incident.Active.Transition.ShouldBe("calculate-payment");
+        incident.Active.Task.ShouldBe("payment-call");
+        incident.Active.StatusCode.ShouldBe(503);
+        incident.Active.BoundaryAction.ShouldBe("Abort");
+        incident.Active.TraceId.ShouldBe("trace-42");
+        incident.Active.CreatedAtUtc.ShouldBe(recorded.CreatedAt);
+        typeof(IncidentSummary).GetProperty("StackTrace").ShouldBeNull("stack traces never reach the state function");
+    }
+
+    [Fact]
+    public async Task GetInstanceStateAsync_PassesHasActiveIncidentIntoEtagFingerprint()
+    {
+        // Resolving/raising an incident without a state or status change must still move the ETag,
+        // otherwise a parked long-poller never sees the incident block change. The cache computes the
+        // ETag from the fingerprint, so the flag must travel inside it.
+        var state = State.Create(TestState, StateType.Intermediate, StateSubType.None, VersionStrategy.IncreaseMinor.Code);
+        var workflow = BuildWorkflow(state);
+        var instance = Instance.Create(Guid.NewGuid(), TestWorkflow, TestVersion, "etag-incident");
+        instance.ChangeState(state);
+        instance.AddIncident(InstanceIncidentFactory.Create(
+            state: TestState, transition: "submit", taskKey: null, message: "boom", errorCode: "E", errorLayer: "Task"));
+        SetupCommonMocks(instance, workflow);
+
+        await _service.GetInstanceStateAsync(CreateInput(instance.Id.ToString()), CancellationToken.None);
+
+        _stateFunctionCache.Received().ComputeEtag(
+            Arg.Any<GetInstanceStateInput>(),
+            Arg.Is<InstanceStateFingerprint>(f => f.HasActiveIncident));
+    }
+
     // ── State Function Cache ─────────────────────────────────────────────────
 
     /// <summary>
@@ -1477,6 +1555,8 @@ public class InstanceQueryAppServiceStateTests : IDisposable
             .Returns("https://schema-url");
         _urlTemplateBuilder.BuildMasterUrl(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>())
             .Returns("https://master-url");
+        _urlTemplateBuilder.BuildIncidentsUrl(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>())
+            .Returns("https://incidents-url");
 
         _transitionAuthorizationManager
             .FilterAuthorizedTransitionKeysAsync(

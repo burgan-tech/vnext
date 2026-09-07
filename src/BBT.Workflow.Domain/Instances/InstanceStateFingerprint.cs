@@ -25,6 +25,10 @@ namespace BBT.Workflow.Instances;
 /// <param name="LastSubFlowStateChangedAt">Newest sub-item state-change timestamp across child
 /// correlations, or null when none has reported a state. A sub item advancing its own state changes
 /// neither count.</param>
+/// <param name="HasActiveIncident">Denormalized instance column: true while an unresolved incident is
+/// recorded. The state body carries an <c>incident</c> block, and an error-boundary transition can
+/// open (Abort + transition) or close (<c>FinalizeTransitionStep</c>) an incident without moving state
+/// or status — so the flag must take part in cache validation.</param>
 /// <remarks>
 /// The four correlation members must be computed over the <em>full</em> correlation set — active and
 /// completed. See <see cref="FromInstance"/>: the aggregate's own collection is loaded with an
@@ -44,7 +48,8 @@ public sealed record InstanceStateFingerprint(
     int CorrelationCount,
     int CompletedCorrelationCount,
     DateTime? LastCorrelationCompletedAt,
-    DateTime? LastSubFlowStateChangedAt)
+    DateTime? LastSubFlowStateChangedAt,
+    bool HasActiveIncident = false)
 {
     /// <summary>
     /// Builds the fingerprint from an already-loaded aggregate — the full-build path uses this
@@ -66,5 +71,6 @@ public sealed record InstanceStateFingerprint(
             allCorrelations.Count,
             allCorrelations.Count(c => c.IsCompleted),
             allCorrelations.Select(c => c.CompletedAt).Max(),
-            allCorrelations.Select(c => c.SubFlowStateChangedAt).Max());
+            allCorrelations.Select(c => c.SubFlowStateChangedAt).Max(),
+            instance.HasActiveIncident);
 }

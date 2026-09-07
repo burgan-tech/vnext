@@ -191,6 +191,7 @@ Transitions execute through a deterministic pipeline of ordered steps. Each step
 - **Well-known transitions**: `cancel`, `updateData` and `exit` are listed in `availableTransitions` (configured key, not the well-known alias) with `kind` = `cancel` / `updateData` / `exit`, and their `roles` are role-filtered like any other transition. Full guide: `docs/domain/well-known-transitions.md`.
 - **`availableIn`**: accepts bare state keys or `{ state, roles }` objects (mixable). Per-state `roles` compose with `transition.roles` as an **AND**. State function and `authorize` enforce state+roles; the execution policy enforces state only. Use `Transition.IsAvailableInState` / `FindAvailableIn`, never the raw list.
 - No server-side hold — 304 response drives client-side polling.
+- **`incident` block** is always present (`hasActiveIncident`, client-safe `active` summary, `historyHref` → `GET …/instances/{instance}/incidents`); lifted from the leaf subflow; `HasActiveIncident` is part of the fingerprint ETag. `ResponseShapeVersion` is `v8`.
 - Subflow completion window: while parent correlation is open, State function shows **parent** main-flow transitions instead of subflow terminal view.
 
 ### User Integration (Backend-Driven View)
@@ -225,6 +226,7 @@ Backend-Driven View approach: UI changes deploy via backend only, minimizing mob
 - **Levels**: Task → State → Global (resolved by `CompiledBoundaryChain`). Rules sorted by `EffectivePriority` ASC → specificity DESC → definition order.
 - **Actions**: `Abort`, `Retry`, `Rollback`, `Ignore`, `Notify`, `Log`.
 - **Pipeline mapping** (`BoundaryOutcomeHandler`): `Log`/`Ignore` → `Continue()`; transition set → `RequestNextTransition` + `SkipToFinalize()`; abort without transition → Fail → instance fault.
+- **One failure, one incident.** A task step records the incident and *then* saves, so the row and `HasActiveIncident` commit together and the pipeline's fault path skips its fallback row. Never record an incident after a step's save.
 - Error-boundary profile disables subflow handling and skips ResourceLock; its current code does not exclude the Auto step.
 
 ### SubFlow Lifecycle
@@ -243,6 +245,8 @@ Backend-Driven View approach: UI changes deploy via backend only, minimizing mob
 - `GetResultAsync(includeDetails: false)` is lean (no DataList/correlations). `true` uses `WithDetailsAsync()`.
 - History paths use `AsNoTracking` + explicit filtered includes.
 - **Rule**: Do not add unnecessary includes. If `TransitionExecutionContext` already has the data, do not re-query.
+- Incidents (`InstanceIncidents` table) are never included; read the denormalized `Instance.HasActiveIncident` and call `IInstanceRepository.LoadActiveIncidentsAsync` only when it is true. Resolving closes the whole open set (`Instance.ResolveOpenIncidents`, or `IInstanceIncidentRepository.ResolveAllAsync` when detached).
+- Retry reads through `GetResultAsReadOnlyAsync` and unfaults with the `TryUnfaultAsync` CAS. Do not mutate an ambient-tracked aggregate and leave the write to an inner `RequiresNew` scope — the ambient commit wins and silently reverts it.
 - Inline context reuse is valid only inside the same pipeline/UoW. Never carry a tracked instance across a post-commit, retry or subflow callback boundary.
 
 ---

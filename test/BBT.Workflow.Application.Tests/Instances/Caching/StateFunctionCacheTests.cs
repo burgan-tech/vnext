@@ -69,15 +69,13 @@ public class StateFunctionCacheTests
         // state body (v2 added the workflow-level updateData/exit transitions; v3 the workflow's
         // `functions` discovery links; v4 replaced that list with a hasFunctions flag plus a catalog
         // link; v6 started listing scheduled transitions inside transitions as kind:"scheduled"
-        // entries with executeAtUtc) cannot be served from entries written by an
-        // earlier build. v7 retires entries written before caller roles became provider-resolved:
-        // the hash covers role strings, so an identically named set from a different provider would
-        // otherwise collide with one produced under different authorization inputs.
         // entries with executeAtUtc; v7 gave scheduled entries the uniform href/view/schema links
-        // with hardcoded-false flags) cannot be served from entries written by an earlier build.
+        // with hardcoded-false flags and retired entries written before caller roles became
+        // provider-resolved; v8 added the always-present `incident` block) cannot be served from
+        // entries written by an earlier build.
         // Bump this literal in the same commit as ResponseShapeVersion — the assertion exists to make
         // a silent shape change impossible.
-        key.ShouldStartWith($"state-fn:v7:{TestDomain}:{TestWorkflow}:{TestInstance}:");
+        key.ShouldStartWith($"state-fn:v8:{TestDomain}:{TestWorkflow}:{TestInstance}:");
     }
 
     [Fact]
@@ -354,15 +352,32 @@ public class StateFunctionCacheTests
         subFlowBusy.ShouldNotBe(subFlowActive);
     }
 
+    [Fact]
+    public void ComputeEtag_ChangesWhenHasActiveIncidentFlips()
+    {
+        // An error-boundary transition can open (Abort + transition) or close (FinalizeTransitionStep)
+        // an incident without moving state or status; the body's incident block must not be served
+        // from a stale 304.
+        var sut = CreateSut();
+        var input = CreateInput();
+
+        var without = sut.ComputeEtag(input, CreateFingerprint(hasActiveIncident: false));
+        var with = sut.ComputeEtag(input, CreateFingerprint(hasActiveIncident: true));
+
+        with.ShouldNotBe(without);
+    }
+
     private static InstanceStateFingerprint CreateFingerprint(
         int correlationCount = 0,
         int completedCorrelationCount = 0,
         DateTime? lastCorrelationCompletedAt = null,
-        DateTime? lastSubFlowStateChangedAt = null) =>
+        DateTime? lastSubFlowStateChangedAt = null,
+        bool hasActiveIncident = false) =>
         new(Guid.Parse("11111111-1111-1111-1111-111111111111"), "test-key", "review",
             InstanceStatus.Active, "1.0.0", HasActiveSubFlow: false,
             CorrelationCount: correlationCount,
             CompletedCorrelationCount: completedCorrelationCount,
             LastCorrelationCompletedAt: lastCorrelationCompletedAt,
-            LastSubFlowStateChangedAt: lastSubFlowStateChangedAt);
+            LastSubFlowStateChangedAt: lastSubFlowStateChangedAt,
+            HasActiveIncident: hasActiveIncident);
 }
