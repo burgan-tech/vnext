@@ -44,7 +44,10 @@ above; if they do not, the code wins.
 | `cancel` / `updateData` / `exit` | [domain/well-known-transitions.md](domain/well-known-transitions.md) |
 | Distributed events | [runtime/event-publish-modes.md](runtime/event-publish-modes.md); contracts in `src/BBT.Workflow.Events.Contracts/`; handlers in `workers/BBT.Workflow.Workers.Inbox/Handlers/` |
 | Task type numbers | `src/BBT.Workflow.Domain/Definitions/Tasks/TaskEnums.cs` (`CacheAside = 18`, `GetInstance = 19`, `FanOut = 21`, `Python = 23`) |
-| Instance load / includes | `EfCoreInstanceRepository.WithDetailsAsync()` — latest-only is gated by `WorkflowExecution:LatestOnlyInstanceLoading`; `GetResultAsync(includeDetails: false)` is lean |
+| Instance load / includes | `EfCoreInstanceRepository.WithDetailsAsync()` — latest-only is gated by `WorkflowExecution:LatestOnlyInstanceLoading`; `GetResultAsync(includeDetails: false)` is lean; incidents are never included (`LoadActiveIncidentsAsync`) |
+| Incidents (table, flag, state block) | `src/BBT.Workflow.Domain/Instances/InstanceIncident.cs`, `Instance.AddIncident/ResolveOpenIncidents`, `IInstanceIncidentRepository`; state block in `InstanceQueryAppService.BuildIncidentHref`; backfill `Migrations/*_BackfillInstanceIncidents.cs` |
+| State function cache / ETag / shape version | [runtime/state-function-cache-and-etag.md](runtime/state-function-cache-and-etag.md); `StateFunctionCache.ResponseShapeVersion` |
+| DbMigrator timeouts | `SchemaMigration:CommandTimeoutSeconds` / `LockExpirySeconds` (`SchemaMigrationOptions`), applied in `MultiSchemaMigrator` and `SchemaMigrationOrchestrator` |
 | Hosts / ports | Orchestration `4201`, Execution `4202`, Monitor `4203`; Inbox `4501`, Outbox `4401` |
 | Layer references | [architecture/dependency-map.md](architecture/dependency-map.md) |
 
@@ -55,6 +58,11 @@ above; if they do not, the code wins.
   correlation, short-circuits at `HandleUpdateDataDataOnlyStep` (21).
 - **Epilogue is Auto (80) then Schedule (90).** A satisfied auto winner must not
   arm timers that the next hop would immediately cancel.
+- **A new table's foreign key must not name a schema.** Nested `table.ForeignKey(...)` inside a
+  `CreateTable` migration keeps `principalSchema: null` (the convention since `20250523074013_Initial`).
+  `MultiSchemaNpgsqlMigrationsSqlGenerator` rewrites `CreateTableOperation.Schema` but **not** the
+  foreign keys inside it, so an explicit `"public"` pins every flow schema's FK to `public."Instances"`
+  and the first insert fails with `23503`.
 - **EventHook is deleted.** New events are `[EventName]` + Inbox `IEventHandler<T>`
   + `WorkflowLogs`. Subflow terminal events also implement `ISubflowTerminalEvent`
   (Outbox + `SubflowTerminalRelay`).

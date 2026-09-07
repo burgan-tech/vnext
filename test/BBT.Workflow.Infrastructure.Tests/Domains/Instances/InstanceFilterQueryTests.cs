@@ -258,8 +258,8 @@ public sealed class InstanceFilterQueryTests : IAsyncLifetime
         // (GENERATED ALWAYS) so it is omitted and computed by PostgreSQL.
         await ctx.Database.ExecuteSqlRawAsync(
             "INSERT INTO \"public\".\"Instances\" " +
-            "(\"Id\",\"Key\",\"Flow\",\"FlowVersion\",\"CurrentState\",\"Status\",\"Tags\",\"ExtraProperties\",\"Incidents\",\"CreatedAt\") " +
-            "VALUES ({0},{1},{2},'1.0.0',{3},{4},ARRAY[]::text[],{5},'[]'::jsonb,{6})",
+            "(\"Id\",\"Key\",\"Flow\",\"FlowVersion\",\"CurrentState\",\"Status\",\"Tags\",\"ExtraProperties\",\"CreatedAt\") " +
+            "VALUES ({0},{1},{2},'1.0.0',{3},{4},ARRAY[]::text[],{5},{6})",
             instanceId, key, Flow, currentState, status, "{}", createdAt);
 
         await ctx.Database.ExecuteSqlRawAsync(

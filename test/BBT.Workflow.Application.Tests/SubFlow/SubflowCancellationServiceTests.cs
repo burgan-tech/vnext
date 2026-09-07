@@ -112,7 +112,7 @@ public sealed class SubflowCancellationServiceTests
         correlation.CompletedAt.ShouldBe(input.CanceledAt);
         correlation.SubFlowCurrentState.ShouldBe(input.CanceledState);
         correlation.SubFlowStateChangedAt.ShouldBe(input.CanceledAt);
-        parent.GetIncidentsForMonitor().ShouldBeEmpty();
+        parent.GetLoadedIncidents().ShouldBeEmpty();
         _workflowExecution.Verify(x => x.ExecuteTransitionAsync(
             It.Is<WorkflowExecutionContext>(c =>
                 c.TriggerType == TriggerType.Automatic &&
@@ -241,7 +241,7 @@ public sealed class SubflowCancellationServiceTests
         correlation.SubFlowCurrentState.ShouldBe(input.CanceledState);
         parent.Status.ShouldBe(InstanceStatus.Completed);
         parent.GetEffectiveState.ShouldBe("terminal-parent");
-        parent.GetIncidentsForMonitor().ShouldBeEmpty();
+        parent.GetLoadedIncidents().ShouldBeEmpty();
         _componentCacheStore.VerifyNoOtherCalls();
         _workflowExecution.VerifyNoOtherCalls();
         _instanceRepository.Verify(

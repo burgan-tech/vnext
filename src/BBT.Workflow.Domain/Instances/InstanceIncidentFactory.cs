@@ -38,9 +38,8 @@ public static class InstanceIncidentFactory
         int retryCount = 0,
         string? traceId = null)
     {
-        return new InstanceIncident
+        return new InstanceIncident(Guid.NewGuid())
         {
-            Id = Guid.NewGuid(),
             CreatedAt = DateTime.UtcNow,
             State = state,
             Transition = transition,
@@ -57,8 +56,8 @@ public static class InstanceIncidentFactory
         };
     }
 
-    private const int MaxMessageLength = 1024;
-    private const int MaxStackTraceLength = 4096;
+    private const int MaxMessageLength = InstanceIncidentConstants.MaxMessageLength;
+    private const int MaxStackTraceLength = InstanceIncidentConstants.MaxStackTraceLength;
 
     private static string TruncateMessage(string? message)
         => message?.Length > MaxMessageLength ? message[..MaxMessageLength] : message ?? string.Empty;

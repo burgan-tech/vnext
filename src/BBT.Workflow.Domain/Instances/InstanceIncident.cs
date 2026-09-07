@@ -1,23 +1,38 @@
 using System.Text.Json.Serialization;
+using BBT.Aether.Domain.Entities;
 
 namespace BBT.Workflow.Instances;
 
 /// <summary>
-/// Value object representing an error boundary incident on a workflow instance.
+/// Error boundary incident recorded on a workflow instance.
 /// Captures structured error details when an error boundary triggers, enabling
 /// incident tracking, retry resolution detection, and script-level error awareness.
 /// </summary>
 /// <remarks>
-/// Stored as part of a JSONB array on the <see cref="Instance"/> aggregate.
-/// Incidents are created by the pipeline when error boundaries resolve an action,
-/// and resolved when the instance is successfully retried or the error-boundary
-/// transition completes.
+/// Persisted in its own <c>InstanceIncidents</c> table (one row per incident, unbounded history)
+/// and reachable from the <see cref="Instance"/> aggregate as a child collection that is
+/// <b>never</b> loaded by default: the pipeline reads <see cref="Instance.HasActiveIncident"/>
+/// (a denormalized column on the instance row) and only materializes the unresolved incidents
+/// through <c>IInstanceRepository.LoadActiveIncidentsAsync</c> when that flag is set.
+/// Incidents are created by the pipeline when error boundaries resolve an action, and resolved
+/// when the instance is successfully retried or the error-boundary transition completes.
+/// The JSON property names are kept camelCase because this type is exposed to workflow scripts
+/// through <c>ScriptIncidentInfo.ActiveIncident</c>.
 /// </remarks>
-public sealed class InstanceIncident
+public sealed class InstanceIncident : Entity<Guid>
 {
-    /// <summary>Unique incident identifier.</summary>
-    [JsonPropertyName("id")]
-    public Guid Id { get; init; }
+    private InstanceIncident()
+    {
+    }
+
+    /// <summary>Creates an incident with the given identifier.</summary>
+    public InstanceIncident(Guid id) : base(id)
+    {
+    }
+
+    /// <summary>Owning <see cref="Instance"/> identifier. Assigned by <see cref="Instance.AddIncident"/>.</summary>
+    [JsonPropertyName("instanceId")]
+    public Guid InstanceId { get; internal set; }
 
     /// <summary>When the incident occurred (UTC).</summary>
     [JsonPropertyName("createdAt")]
@@ -90,7 +105,4 @@ public sealed class InstanceIncident
         IsResolved = true;
         ResolvedAt = DateTime.UtcNow;
     }
-
-    /// <summary>Maximum number of incidents retained per instance to prevent unbounded JSONB growth.</summary>
-    public const int MaxRetainedIncidents = 5;
 }

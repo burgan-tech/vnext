@@ -104,6 +104,7 @@ public class InstanceQueryAppServiceVersionTests : IDisposable
             instanceTransitionRepository: Substitute.For<IInstanceTransitionRepository>(),
             instanceCorrelationRepository: Substitute.For<IInstanceCorrelationRepository>(),
             instanceJobRepository: Substitute.For<IInstanceJobRepository>(),
+            instanceIncidentRepository: CreateIncidentRepository(),
             instanceExtensionService: _instanceExtensionService,
             scriptContextFactory: _scriptContextFactory,
             instanceQueryGateway: Substitute.For<IInstanceQueryGateway>(),
@@ -250,6 +251,13 @@ public class InstanceQueryAppServiceVersionTests : IDisposable
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// metadata.incident is built from the instance's own flag plus two links, so a bare substitute
+    /// is enough — GetInstanceAsync issues no incident query at all.
+    /// </summary>
+    private static IInstanceIncidentRepository CreateIncidentRepository()
+        => Substitute.For<IInstanceIncidentRepository>();
 
     private static Instance CreateInstanceWithMultipleVersions()
     {

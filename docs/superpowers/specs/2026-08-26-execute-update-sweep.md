@@ -34,7 +34,7 @@ entity's audit columns explicitly. Per-entity matrix:
   `Complete`, `Fault`, `Cancel`, `ChangeState`, `PropagateEffectiveStateToParent`). Events are
   collected during SaveChanges and routed to the outbox — **an ExecuteUpdate on `Instances`
   silently drops them.** Non-raising mutations (convertible in principle): `Busy()`, `Active()`,
-  `ArmLongPollAck`, `ClearLongPollAck`, `SetEffectiveState`, `SetStage`, `AddTags`.
+  `Unfault()`, `ArmLongPollAck`, `ClearLongPollAck`, `SetEffectiveState`, `SetStage`, `AddTags`.
 - **Data sinks:** `EfCoreInstanceRepository` / `EfCoreInstanceTaskRepository` /
   `EfCoreInstanceTransitionRepository` fan `UpdateAsync` out to `IDataSinkManager`. No concrete
   sink is registered in the repo today, so this is a contract-level concern — but
@@ -118,6 +118,22 @@ their (narrower) load for the correlation walk but write set-based. Decisions to
 inject `ICurrentUser` if the team wants it; the status-change metric currently emitted inside
 `EfCoreInstanceRepository.UpdateAsync` must be emitted at the call site. Verify EF translates
 `SetProperty(Status, ...)` through `InstanceStatusConverter`.
+
+### C2b — `Instance.Unfault()` as compare-and-set — **DONE** (retry path)
+
+`InstanceRetryAppService` used to load the aggregate **tracked in the ambient request UoW** and call
+`Unfault()` on it inside a `RequiresNew` scope, so the ambient commit at the end of the request
+rewrote the whole graph — every `DataList` and correlation row Modified for a four-column status
+change — and, worse, overwrote the `Faulted` an inner scope had persisted with its own stale
+`Active`. `Unfault()` raises **no events**, so conversion is legal:
+`IInstanceRepository.TryUnfaultAsync` guards on `Status == Faulted` in the WHERE and writes
+`Status`, `CompletedAt`, `Duration`, `HasActiveIncident`, `ModifiedAt` in one `ExecuteUpdateAsync`,
+then aligns all four on the in-memory object's baseline (aligning `Status` alone is not enough).
+The read moved to `GetResultAsReadOnlyAsync`, so nothing is tracked to write back. `ModifiedBy` is
+deliberately not re-stamped, matching `TryTransitionStatusAsync`. No status metric is lost:
+`UpdateAsync` only emits it from a tracked entry, and this path is detached. The paired incident
+close is `IInstanceIncidentRepository.ResolveAllAsync` — one `ExecuteUpdateAsync` over the open rows
+of that instance (`InstanceIncident` has no audit columns and raises no events).
 
 ### C3 — cancellation loops: N tracked updates → one `WHERE Id IN (...)`
 

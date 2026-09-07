@@ -96,7 +96,15 @@ public sealed class TransitionContextFactory(
         using var activity = PipelineStepActivityHelper.StartOperationActivity("Instance.Load");
         var result = await instanceRepository.GetActiveAsync(instanceId, cancellationToken);
         if (!result.IsSuccess)
+        {
             activity?.SetStatus(ActivityStatusCode.Error, result.Error.Message);
+            return result;
+        }
+
+        // Incidents are never included with the aggregate; bring in the unresolved ones so the
+        // pipeline (FinalizeTransitionStep resolve, Fault's upward payload, the script context's
+        // Incident block) sees them. No query when the flag is false.
+        await instanceRepository.LoadActiveIncidentsAsync(result.Value, cancellationToken);
 
         return result;
     }

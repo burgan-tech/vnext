@@ -2,6 +2,7 @@ using BBT.Aether.DistributedLock;
 using BBT.Aether.MultiSchema;
 using BBT.Workflow.Data;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace BBT.Workflow.Schemas;
 
@@ -11,9 +12,9 @@ namespace BBT.Workflow.Schemas;
 public sealed class SchemaMigrationOrchestrator(
     IMultiSchemaMigrator<WorkflowDbContext> migrator,
     IDistributedLockService lockService,
+    IOptions<SchemaMigrationOptions> options,
     ILogger<SchemaMigrationOrchestrator> logger) : ISchemaMigrationOrchestrator
 {
-    private const int LockExpiryInSeconds = 120; // 2 minutes
     private const string LockKeyPrefix = "schema-migration";
 
     /// <inheritdoc />
@@ -33,7 +34,7 @@ public sealed class SchemaMigrationOrchestrator(
                 {
                     await migrator.MigrateSchemaAsync(schemaName, cancellationToken);
                 },
-                LockExpiryInSeconds,
+                options.Value.LockExpirySeconds,
                 cancellationToken);
 
             if (!lockOutcome)

@@ -323,6 +323,9 @@ internal sealed class ScriptContextBuilder(
             if (instance == null)
                 throw new InvalidOperationException($"Instance with ID {_instanceId.Value} not found.");
 
+            // Scripts read context.Incident.ActiveIncident; incidents are not included by the load.
+            await instanceRepository.LoadActiveIncidentsAsync(instance, cancellationToken);
+
             _instance = CreateInstanceSnapshot(instance);
             return _instance;
         }

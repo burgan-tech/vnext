@@ -108,7 +108,67 @@ A sixth profile is **composed on top of** the base, never selected instead of it
   `EnrichOutputCoreAsync`) or a fault (`Instance.Fault` publishes a SubFlow's data upward). Async settle
   skips it. The decision matrix lives on `PostCommitParentMutationService.NeedsLatestDataForSettle`;
   add a new `LatestData` reader there, not by re-widening the include.
-- **Rule**: do not add unnecessary includes; reuse data from `TransitionExecutionContext`.
+- **Incidents are never included.** `InstanceIncident` rows live in `InstanceIncidents` (unbounded
+  history, cascade with the instance) and `Instance.HasActiveIncident` is a denormalized column the
+  aggregate maintains. Guards read the flag; anything that needs the unresolved incidents (resolve on
+  retry/`FinalizeTransitionStep`, `Fault`'s upward payload, script `context.Incident`, the state body)
+  calls `IInstanceRepository.LoadActiveIncidentsAsync` first — no query when the flag is false.
+  `ResolveOpenIncidents` throws if the flag is set and nothing was loaded. New rows are inserted by
+  `EfCoreInstanceRepository.UpdateAsync` from `GetPendingIncidents()` (marked `Added` before Aether's
+  detached `Set.Update(graph)` would stamp them `Modified`). History/paging/batch reads go through
+  `IInstanceIncidentRepository`, not the aggregate.
+- **Rows read back are NOT put on the EF navigation.** `LoadActiveIncidentsAsync`'s no-tracking branch
+  hands them to `Instance.AcceptLoadedIncidents`, which keeps them in a detached list that EF cannot
+  see; `GetLoadedIncidents()` merges both sources for readers. Attaching them to the navigation made
+  every *other* context tracking that aggregate discover them as new children and re-INSERT them —
+  the retry path loads the instance in the ambient request scope and its incidents inside a
+  `RequiresNew` one, so its commit died with `23505 PK_InstanceIncidents` and a half-written response
+  body. Consequence: resolving a **detached** incident writes nothing by itself
+  (`Instance.IsDetachedIncident` says which), so `InstanceRetryAppService` persists it through
+  `IInstanceIncidentRepository.ResolveAllAsync`, unconditionally — the retry path now loads
+  no-tracking, so there is never a graph to save. Pipeline-created incidents are tracked and still
+  save through the graph. Pinned by `InstanceIncidentPersistenceTests`.
+- **A task step records the incident BEFORE its own save; nothing records one after a save.** The
+  three task steps (`RunOn{Execute,Entry,Exit}TasksStep`) call `BoundaryOutcomeHandler` and *then*
+  `UpdateAsync(instance, autoSave: true)`, so the row and the `HasActiveIncident` flag commit
+  together. Both step UoWs are non-transactional, which is what makes that save immediately visible.
+  It has to be, because an abort returns `Fail` and `TransitionPipeline.MarkInstanceFaultedAsync`
+  reloads the aggregate in its OWN `RequiresNew` UoW; it skips its fallback incident only when the
+  **committed** flag already says one exists. Recording after the save produced two rows for one
+  failure — the boundary's verdict plus a bare `ErrorBoundaryAbort` pipeline row that was the newer
+  of the two, so `incident.active` on a faulted instance carried no boundary verdict at all. The
+  unhandled path deliberately does NOT call `ApplyScriptContextChanges` (its only payload is a
+  script's `Stage` mutation, which a faulting run should not persist) and wraps the save in
+  try/catch so the step still fails with the original task error. The fallback branch stays: it is
+  the only recorder for pipeline errors with no task error (`ResourceLockConflict`,
+  `TransitionChainDepthExceeded`, policy/schema failures), for
+  `ExecutionErrors.UnhandledNonBlockingTaskFailures`, and for the low-probability failed-save path.
+  Pinned by `TaskStepIncidentPersistenceTests`.
+- **`Handle`'s `ShouldContinue` branch is unreachable from the task steps.**
+  `TaskExecutionEngine.ConvertActionResult` returns a continue-style outcome as
+  `TasksExecutionResult.SuccessWithFailedTasks`, which carries **no** boundary action, so the step's
+  `BoundaryAction != null` guard is false and `Handle` is never called for `ignore`/`log`. The
+  measured (and confirmed-correct) behaviour is therefore "no incident, and the rest of the hook is
+  skipped". Left in place so the intended semantics stay expressed.
+- **Resolve is set-based.** `Instance.ResolveOpenIncidents()` closes EVERY unresolved row on the
+  materialized aggregate and recomputes the flag from that same snapshot; there is deliberately no
+  single-row API to pick wrongly. One failure can leave more than one open row (a job-timeout
+  recovery on top of a boundary incident, a boundary transition that faults on its own, a parent
+  taking a subflow fault while it already carries one), and resolving only the newest left a
+  recovered instance reporting a stale active incident — visible to long-pollers because
+  `HasActiveIncident` is fingerprint material. `FinalizeTransitionStep` relies on the pipeline
+  aggregate being tracked and needs no repository call; the retry path is detached and always calls
+  `ResolveAllAsync`.
+- **Retry loads no-tracking and unfaults with a CAS.** `InstanceRetryAppService` reads through
+  `IInstanceRepository.GetResultAsReadOnlyAsync` and flips the status with `TryUnfaultAsync`
+  (one `ExecuteUpdateAsync` guarded on `Status == Faulted`, plus baseline alignment). Never load an
+  aggregate tracked in the ambient request UoW, mutate it, and leave the write to an inner
+  `RequiresNew` scope: the ambient commit at the end of the request wrote its own stale `Active`
+  over the `Faulted` the inner scope had persisted, leaving an instance that looked healthy, had not
+  finished its work, and could never be retried again (`Instance:100027`). The unfault must also
+  **commit before** `ExecuteRetryAsync`, because the pipeline's `GetActiveAsync` rejects a faulted
+  instance. Pinned by
+  `InstanceIncidentPersistenceTests.TryUnfaultAsync_FlipsFaultedToActiveAndLeavesNothingForAnAmbientCommitToOverwrite`.
 
 ## Long-Polling / State Function
 
@@ -117,7 +177,8 @@ A sixth profile is **composed on top of** the base, never selected instead of it
 - ETag source: `LatestData?.ETag` for entity, `IRepresentationEtagService.Generate(output)` for representation.
 - **Role filtering**: `ITransitionAuthorizationManager` filters available transitions per role. Supports `$InstanceStarter`, `$PreviousUser` pseudo-roles.
 - No server-side hold — 304 drives client-side polling.
-- **Response-shape version**: `StateFunctionCache.ResponseShapeVersion` is folded into both the ETag material and the cache key. Bump it in the same commit as any change to what the state body carries — otherwise a client polling a parked instance keeps getting 304 and never sees the new shape.
+- **Response-shape version**: `StateFunctionCache.ResponseShapeVersion` (currently `v9`) is folded into both the ETag material and the cache key. Bump it in the same commit as any change to what the state body carries — otherwise a client polling a parked instance keeps getting 304 and never sees the new shape.
+- **`incident` block**: always present, and it carries **links, not content** — `{ hasActiveIncident, active: { href } (only while the flag is true), history: { href } }`. Identical on the state body and on `metadata.incident` (single GET and list). `active.href` → `GET …/instances/{instance}/incidents/active` (newest unresolved, **404 `Instance:100037`** when none is open — a normal answer, since a retry can resolve between the poll and the follow-up); `history.href` → the paged history. Same `queryRoles` gate as the state function on both, and no stack trace anywhere. When lifted from an active subflow, `active.href` addresses the **leaf that owns the incident** while `history.href` stays on the polled instance. `HasActiveIncident` is a fingerprint member so raise/resolve without a state change moves the ETag. **Do not put incident fields back in the body**: the embedded summary is what made the state function read the incident table on its hottest path and what created the resolve-A-then-raise-B stale-`active` hole, both of which the link form removes.
 - **Scheduled entries in `transitions`**: the state body lists the runtime's armed scheduled transitions inside the existing `transitions` array as `{ name, kind: "scheduled", executeAtUtc, href, view, schema }` entries, appended after the available transitions and built from active `InstanceJob` rows (`JobType.ScheduledTransition`) whose `ExecuteAt` is stamped at scheduling time from the same instant the Dapr job is armed with. The href/view/schema links use the same url shapes as triggerable entries but with `hasView`/`loadData`/`hasSchema` hardcoded false — a TEMPORARY uniformity concession for domain clients (they will adapt); scheduled transitions remain System-actor-gated at execution, so the href is not callable. Not role-filtered; not merged from subflows. Job-set changes deliberately do NOT participate in the fingerprint ETag (team decision, issue #864) — same-state re-arms can leave the scheduled entries stale behind a 304; documented as a known gap in `docs/runtime/state-function-cache-and-etag.md`.
 
 ## Well-Known Transitions (`cancel` / `updateData` / `exit`)

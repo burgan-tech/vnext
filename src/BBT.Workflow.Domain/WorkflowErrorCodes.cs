@@ -65,6 +65,13 @@ public static class WorkflowErrorCodes
     public const string InstanceDataLockTimeout = "Instance:100035";
     public const string InstanceDataWriteTimeout = "Instance:100036";
 
+    /// <summary>
+    /// No unresolved incident is recorded for the instance. A normal answer for the active-incident
+    /// endpoint, not a fault: the link is emitted while the flag is set, but a retry can resolve the
+    /// incident between the poll and the follow-up read.
+    /// </summary>
+    public const string ActiveIncidentNotFound = "Instance:100037";
+
     #endregion
     
     #region Transition Errors (100xxx)

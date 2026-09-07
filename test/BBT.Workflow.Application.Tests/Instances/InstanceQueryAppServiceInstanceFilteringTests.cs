@@ -263,6 +263,7 @@ public sealed class InstanceQueryAppServiceInstanceFilteringTests : IDisposable
             instanceTransitionRepository: Substitute.For<IInstanceTransitionRepository>(),
             instanceCorrelationRepository: Substitute.For<IInstanceCorrelationRepository>(),
             instanceJobRepository: Substitute.For<IInstanceJobRepository>(),
+            instanceIncidentRepository: Substitute.For<IInstanceIncidentRepository>(),
             instanceExtensionService: instanceExtensionService,
             scriptContextFactory: scriptContextFactory,
             instanceQueryGateway: Substitute.For<IInstanceQueryGateway>(),

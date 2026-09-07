@@ -27,7 +27,8 @@ contracts. Remote services call public runtime APIs rather than internal reposit
 
 | Endpoint family | Behavior |
 | --- | --- |
-| `GET /{domain}/workflows/{workflow}/instances/{instance}/functions/state` | Conditional state response, available transitions, role filtering, ETag, child correlations, workflow function discovery links. |
+| `GET /{domain}/workflows/{workflow}/instances/{instance}/functions/state` | Conditional state response, available transitions, role filtering, ETag, child correlations, workflow function discovery links, incident summary. |
+| `GET /{domain}/workflows/{workflow}/instances/{instance}/incidents` | Paged error-boundary incident history (newest first), same `queryRoles` gate as the state function; never carries stack traces. |
 | `GET /{domain}/workflows/{workflow}/instances/{instance}/functions/data` | Latest data, optional extensions, ETag. |
 | `GET /{domain}/workflows/{workflow}/instances/{instance}/functions/view` | Backend-driven view selection. |
 | `GET /{domain}/workflows/{workflow}/instances/{instance}/functions/schema` | Transition-aware schema. |
@@ -169,6 +170,76 @@ render countdowns and upcoming-action information without polling anything else:
   a stale `executeAtUtc` until the next fingerprint-visible change. Clients that need the fresh
   time after triggering such an update should re-fetch without the ETag. See
   [state-function cache and fingerprint ETag](../runtime/state-function-cache-and-etag.md).
+
+### State response: incident block
+
+The state body always carries an `incident` block so a client can explain a Faulted or waiting
+instance deterministically. It carries **links, not content**:
+
+```jsonc
+"incident": {
+  "hasActiveIncident": true,
+  "active":  { "href": "/api/v1/core/workflows/onboarding/instances/{id}/incidents/active" },
+  "history": { "href": "/api/v1/core/workflows/onboarding/instances/{id}/incidents" }
+}
+```
+
+- `hasActiveIncident` is the instance's denormalized flag. `active` is present **only** while it is
+  true, so a client follows the link exactly when there is something to fetch. `history` is always
+  present. The same block, byte for byte, is `metadata.incident` on `GET …/instances/{instance}` and
+  on every item of the list view.
+- **Why links.** Embedding a summary made the state function read the incident table on the runtime's
+  hottest path, duplicated what the history endpoint already returns, and left a real staleness hole:
+  resolving incident A and raising incident B inside one parked state moved no fingerprint member, so
+  a client validating with `If-None-Match` kept its `304` and went on showing A. With only the flag
+  and two static links, that hole cannot exist.
+- `hasActiveIncident` **is** in the ETag material (`InstanceStateFingerprint.HasActiveIncident`), so
+  raising or resolving an incident without a state change still moves the ETag. Shape version `v9`.
+- When the instance delegates to an active subflow, `active.href` addresses the **subflow that owns
+  the incident**; `history.href` always addresses the polled instance, because that link answers
+  "what has gone wrong with the thing I asked about".
+- Visible to every caller who passes the state function's `queryRoles` gate. **Never** a stack trace
+  on any of these surfaces — operators read those from the Monitor API.
+
+### `GET …/instances/{instance}/incidents/active`
+
+Returns the newest unresolved incident: the target of `incident.active.href`. Same `queryRoles` gate
+as the state function, and no stack trace.
+
+- **`404` (`Instance:100037`) is a normal answer, not a failure.** The link is advertised while the
+  flag is set, but a successful retry resolves the incident and a client may follow the link just
+  after that. Treat a 404 here as "re-read the state", never as an error to surface.
+- A caller who fails the role gate gets `403`, not `404`, so "no incident" and "not allowed to know"
+  stay distinguishable.
+
+### `GET …/instances/{instance}/incidents`
+
+Pages the full history (`items`, `page`, `pageSize`, `hasNext`, `hasActiveIncident`), newest first;
+`pageSize` is clamped to 100. Incidents are unbounded — their own table, cascade-deleted with the
+instance — and nothing is capped inline any more, because no surface embeds them.
+
+- **One failure produces one incident.** An abort, or an unhandled task failure with no matching
+  rule, leaves a single row, and it is the boundary's own verdict: `boundaryAction` present when a
+  rule resolved one, omitted when none did. Earlier builds emitted a second, pipeline-layer row
+  (`errorCode: "ErrorBoundaryAbort"`, `errorLayer: "Pipeline"`, no task attribution) that became the
+  active one and hid the verdict. A client counting on two rows per failure has to adapt.
+- **`retryCount` is always `0` today.** The field is filled from the resolved boundary's retry
+  policy, which the execution engine does not attach to the action result. Read the attempt count
+  from instance data written by the task's own mapping instead.
+
+### Retry: `POST …/instances/{instance}/retry`
+
+- Accepts only a **Faulted** instance; anything else is `400` with `Instance:100027`.
+- The optional body's `attributes` are merged into instance data *before* the re-executed
+  transition's OnExecute runs, so the same task can take a different path on the retry.
+- Unfaulting closes **every** open incident on the instance, not just the newest, and clears
+  `hasActiveIncident`. The history rows stay, marked resolved, so `incident.active` disappears from
+  the block while `history` keeps answering.
+- A retry whose work faults again answers `200` with `"status": "F"` in the body, and that status is
+  durable: the instance stays Faulted and **can be retried again**. Earlier builds answered `F` and
+  then settled the instance back to `Active`, which left it unfinished and permanently unretryable —
+  a client that worked around this by treating `F`-with-`Active` as terminal should drop that
+  workaround.
 
 ### Client-facing hrefs and the `UrlTemplates` section
 

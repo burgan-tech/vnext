@@ -82,6 +82,15 @@ public sealed class GetInstanceStateOutput
     public InstanceInteractionOutput? Interaction { get; set; }
 
     /// <summary>
+    /// Incident summary for the displayed instance: the <c>hasActiveIncident</c> flag, a client-safe
+    /// projection of the newest unresolved incident, and a link to the paged history. Describes the
+    /// deepest active subflow when the instance delegates to one (same lifting as
+    /// <see cref="Interaction"/>). Always present. Part of the ETag material through
+    /// <c>InstanceStateFingerprint.HasActiveIncident</c>.
+    /// </summary>
+    public IncidentHref Incident { get; set; } = new();
+
+    /// <summary>
     /// Representation ETag (RFC 7232 quoted) for cache validation.
     /// </summary>
     public string? ETag

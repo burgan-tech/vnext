@@ -125,7 +125,7 @@ Hatalı instance'ları listeler (ayrı endpoint gerekmez, filtre yeterli). `sort
 
 ### Incident Geçmişi — `GET …/instances/{instance}/incidents`
 
-Error boundary her tetiklendiğinde pipeline bir **incident** kaydı oluşturur. Bu endpoint, instance'ın kayıtlı incident geçmişini döner (en yeni önce, maksimum 5 kayıt).
+Error boundary her tetiklendiğinde pipeline bir **incident** kaydı oluşturur. Incident'lar kendi tablosunda (`InstanceIncidents`) sınırsız saklanır; bu endpoint geçmişi sayfalı döner (en yeni önce, `page`/`pageSize` — varsayılan 1/50, en fazla 200; yanıtta `items`, `page`, `pageSize`, `hasNext`, `hasActiveIncident`). Operatör yüzeyi olduğu için `stackTrace` burada yer alır; client'a açık runtime endpoint'i (`GET …/instances/{instance}/incidents`, Orchestration) ve state function'ın `incident` bloğu stack trace taşımaz.
 
 Her incident şunları içerir:
 - Hatanın oluştuğu **state**, **transition** ve **task** (task yoksa null)

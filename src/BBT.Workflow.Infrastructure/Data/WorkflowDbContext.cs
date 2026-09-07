@@ -78,6 +78,11 @@ public class WorkflowDbContext : AetherDbContext<WorkflowDbContext>, IHasEfCoreB
     public virtual DbSet<InstanceJob> InstanceJobs { get; set; }
 
     /// <summary>
+    /// Gets or sets the error boundary incidents recorded on instances (one row per incident).
+    /// </summary>
+    public virtual DbSet<InstanceIncident> InstanceIncidents { get; set; }
+
+    /// <summary>
     /// Gets or sets the background jobs.
     /// </summary>
     /// <remarks>

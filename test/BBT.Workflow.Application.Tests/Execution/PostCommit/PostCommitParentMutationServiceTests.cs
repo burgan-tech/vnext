@@ -266,10 +266,10 @@ public sealed class PostCommitParentMutationServiceTests
         result.Value!.Status.ShouldBe(InstanceStatus.Faulted);
         result.Value.PipelineInstance.ShouldBeSameAs(authoritative);
         authoritative.Status.ShouldBe(InstanceStatus.Faulted);
-        authoritative.GetIncidentsForMonitor().Single().ErrorCode.ShouldBe(request.ErrorCode);
+        authoritative.GetLoadedIncidents().Single().ErrorCode.ShouldBe(request.ErrorCode);
         authoritative.GetDomainEvents().ShouldNotBeEmpty();
         sourceInstance.Status.ShouldBe(InstanceStatus.Busy);
-        sourceInstance.GetIncidentsForMonitor().ShouldBeEmpty();
+        sourceInstance.GetLoadedIncidents().ShouldBeEmpty();
         await fixture.Repository.Received(1).UpdateAsync(
             authoritative,
             true,
@@ -288,7 +288,7 @@ public sealed class PostCommitParentMutationServiceTests
             authoritative.Fault(Domain, sync: true);
         authoritative.ClearDomainEvents();
         var expectedStatus = authoritative.Status;
-        var existingIncidentCount = authoritative.GetIncidentsForMonitor().Count;
+        var existingIncidentCount = authoritative.GetLoadedIncidents().Count;
         var fixture = CreateFixture(authoritative);
 
         var result = await fixture.Service.FaultAsync(
@@ -299,7 +299,7 @@ public sealed class PostCommitParentMutationServiceTests
         result.IsSuccess.ShouldBeTrue();
         result.Value!.Status.ShouldBe(expectedStatus);
         authoritative.Status.ShouldBe(expectedStatus);
-        authoritative.GetIncidentsForMonitor().Count.ShouldBe(existingIncidentCount);
+        authoritative.GetLoadedIncidents().Count.ShouldBe(existingIncidentCount);
         await fixture.Repository.DidNotReceiveWithAnyArgs()
             .UpdateAsync(default!, default, default);
     }

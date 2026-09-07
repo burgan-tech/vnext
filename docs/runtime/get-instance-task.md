@@ -42,7 +42,8 @@ The response exposed to the script context is a `GetInstanceOutput`:
     "status": "A",
     "createdAt": "...",
     "modifiedAt": "...",
-    "incident": { /* present only when the instance has incidents */ }
+    "incident": { /* present when the instance has an active incident or recorded history:
+                     hasActiveIncident, totalCount, active, history (newest 5), href (paged history) */ }
   },
   "attributes": { /* instance data */ },
   "extensions": { /* present only when extensions requested */ }
