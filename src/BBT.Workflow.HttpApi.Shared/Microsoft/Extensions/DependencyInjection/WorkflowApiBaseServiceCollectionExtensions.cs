@@ -266,7 +266,12 @@ public static class WorkflowApiBaseServiceCollectionExtensions
                         // in the tags, where the full statement already sits.
                         .AddEntityFrameworkCoreInstrumentation(options =>
                             options.EnrichWithIDbCommand = static (activity, command) =>
-                                activity.DisplayName = $"Db.{DescribeSqlVerb(command.CommandText)}")
+                            {
+                                var verb = DescribeSqlVerb(command.CommandText);
+                                activity.DisplayName = $"Db.{verb}";
+                                activity.SetTag(BBT.Workflow.Logging.TelemetryConstants.TagNames.DbSystemName, "postgresql");
+                                activity.SetTag(BBT.Workflow.Logging.TelemetryConstants.TagNames.DbOperationName, verb);
+                            })
                         .AddProcessor(serviceProvider =>
                             new RequestIdSpanProcessor(serviceProvider.GetRequiredService<ICorrelationIdProvider>()));
 

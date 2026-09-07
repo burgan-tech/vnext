@@ -3,11 +3,11 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using BBT.Aether.Results;
 using BBT.Aether.Tracing;
+using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.Grpc;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks;
-using Dapr.Client;
 using Grpc.Core;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
@@ -18,6 +18,12 @@ namespace BBT.Workflow.Tasks.Executors;
 /// <summary>
 /// Implementation of IRemoteInvokerService using Dapr service invocation.
 /// Handles the communication with the Execution Service for remote task execution.
+/// <para>
+/// The HTTP transport goes through <see cref="DaprServiceInvocationClient"/> —
+/// <c>DaprClient.CreateInvokeHttpClient()</c> under the hood — because the SDK's
+/// <c>DaprClient.InvokeMethod*</c> family is <c>[Obsolete]</c> in 1.17. Same wire (HTTP to the
+/// local sidecar), same headers, same result mapping.
+/// </para>
 /// <para>
 /// Transport: HTTP (default) or gRPC via <c>ExecutionApi:Transport</c> ("http" | "grpc"),
 /// both proxied through the Dapr sidecar. Same result contract, same timeout/cancellation
@@ -37,23 +43,27 @@ namespace BBT.Workflow.Tasks.Executors;
 /// </summary>
 public sealed class RemoteInvokerService : IRemoteInvokerService
 {
-    private readonly DaprClient _daprClient;
+    private readonly DaprServiceInvocationClient _daprInvocation;
     private readonly string _executionServiceAppId;
     private readonly int _invocationTimeoutSeconds;
     private readonly ILogger<RemoteInvokerService> _logger;
     private readonly ICorrelationIdProvider _correlationIdProvider;
     private readonly bool _useGrpcTransport;
+    /// <summary>Matches the JSON options the SDK's obsolete typed invoke used (Web defaults).</summary>
+    private static readonly JsonSerializerOptions InvokeJsonOptions = new(JsonSerializerDefaults.Web);
     private readonly GrpcTaskInvokerClientProvider _grpcClientProvider;
 
     public RemoteInvokerService(
-        DaprClient daprClient,
+        DaprServiceInvocationClient daprInvocation,
         IConfiguration configuration,
         ILogger<RemoteInvokerService> logger,
         ICorrelationIdProvider correlationIdProvider,
         GrpcTaskInvokerClientProvider grpcClientProvider)
     {
-        _daprClient = daprClient;
-        _executionServiceAppId = configuration["ExecutionApi:AppId"] ?? "vnext-execution";
+        _daprInvocation = daprInvocation;
+        _executionServiceAppId = VNextAppIds.ExecutionOrDefault(
+            configuration[VNextAppIds.ConfigKeys.Execution],
+            configuration[VNextAppIds.ConfigKeys.AppDomain]);
         _invocationTimeoutSeconds = int.TryParse(
             configuration["ExecutionApi:InvocationTimeoutSeconds"], out var t) ? t : 60;
         _logger = logger;
@@ -101,7 +111,7 @@ public sealed class RemoteInvokerService : IRemoteInvokerService
 
         try
         {
-            var httpRequest = _daprClient.CreateInvokeMethodRequest(
+            var httpRequest = DaprServiceInvocationClient.CreateRequest(
                 HttpMethod.Post,
                 _executionServiceAppId,
                 $"/api/v1/execution/invoke/{taskType}/{taskKey}");
@@ -158,9 +168,15 @@ public sealed class RemoteInvokerService : IRemoteInvokerService
             if (!string.IsNullOrEmpty(traceContext.RequestId))
                 httpRequest.Headers.TryAddWithoutValidation(TelemetryConstants.HeaderNames.RequestId, traceContext.RequestId);
 
-            var response = await _daprClient.InvokeMethodAsync<TaskInvokeResponse>(
-                httpRequest, invocationCts.Token);
-
+            // Same contract the obsolete InvokeMethodAsync<T> had: a non-2xx is a failed invoke (it
+            // threw InvocationException; EnsureSuccessStatusCode throws HttpRequestException — both
+            // land in the catch-all below as a 500 failure result), and the body is deserialized
+            // with the SDK's default Web options.
+            using var httpResponse = await _daprInvocation.SendAsync(httpRequest, invocationCts.Token);
+            httpResponse.EnsureSuccessStatusCode();
+            var response = await httpResponse.Content.ReadFromJsonAsync<TaskInvokeResponse>(
+                               InvokeJsonOptions, invocationCts.Token)
+                           ?? throw new InvalidOperationException("Execution returned an empty invoke response body");
 
             var remoteResult = new TaskInvocationResult
             {

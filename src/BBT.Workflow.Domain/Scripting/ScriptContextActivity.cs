@@ -10,7 +10,7 @@ namespace BBT.Workflow.Scripting;
 /// </summary>
 internal static class ScriptContextActivity
 {
-    private static readonly ActivitySource Source = new("BBT.Workflow.Scripting");
+    private static readonly ActivitySource Source = new(Logging.TelemetryConstants.ActivitySources.Scripting);
 
     public static Activity? Start(string operation) =>
         Source.StartActivity(operation, ActivityKind.Internal);

@@ -4,6 +4,11 @@ metadata:
   name: daprConfig
   namespace: default
 spec:
+  # Local name resolution — see etc/orchestration/dapr/config.yaml for the full reasoning
+  # (explicit mdns; the cluster's `kubernetes` template cannot resolve in Docker and the pinned
+  # daprd has no `nameformat`). Kept identical across sidecars so any of them can invoke any other.
+  nameResolution:
+    component: "mdns"
   tracing:
     samplingRate: "1"
     # See etc/orchestration/dapr/config.yaml — `otel` (not `otlp`), plus an explicit

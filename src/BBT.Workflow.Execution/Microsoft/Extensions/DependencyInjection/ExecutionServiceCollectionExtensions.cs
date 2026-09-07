@@ -10,6 +10,7 @@ using BBT.Workflow.Execution.Services;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
+using Dapr.Client;
 
 namespace Microsoft.Extensions.DependencyInjection;
 
@@ -73,6 +74,13 @@ public static class ExecutionServiceCollectionExtensions
         services.TryAddSingleton<BBT.Workflow.Execution.StateStores.IStateStoreClient,
             BBT.Workflow.Execution.StateStores.DaprStateStoreClient>();
         
+        // The one service-invocation surface every Dapr-facing invoker sends through. Built on
+        // DaprClient.CreateInvokeHttpClient() — the SDK's non-obsolete invocation client — since the
+        // whole DaprClient.InvokeMethod* family is [Obsolete] in 1.17. Singleton: it targets the local
+        // sidecar, so handler rotation for DNS refresh is not a concern. TryAdd because the
+        // Application layer registers the same type for RemoteInvokerService.
+        services.TryAddSingleton(new DaprServiceInvocationClient(DaprClient.CreateInvokeHttpClient()));
+
         // Register all built-in remote execution invokers
         services.AddSingleton<ITaskInvoker, HttpTaskInvoker>();
         services.AddSingleton<ITaskInvoker, SoapTaskInvoker>();

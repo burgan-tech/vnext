@@ -25,7 +25,7 @@ public sealed class LongPollAckTimeoutJobHandler(
 
     public async Task HandleAsync(LongPollAckTimeoutPayload args, CancellationToken cancellationToken)
     {
-        using var activity = BackgroundJobActivityHelper.StartActivityAsChildWithLink("LongPollAckTimeout.Execute", args);
+        using var activity = BackgroundJobActivityHelper.StartDeferredActivity("LongPollAckTimeout.Execute", args);
         // An ack-timeout firing opens its own activation episode — see TransitionTimerJobHandler.
         using var episode = WorkflowTraceLane.UseEpisode(TelemetryConstants.ActivationTriggers.AckTimeout, transitionKey: null);
         using (currentSchema.Change(args.FlowName))

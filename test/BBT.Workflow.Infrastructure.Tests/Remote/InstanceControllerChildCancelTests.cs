@@ -170,6 +170,63 @@ public sealed class InstanceControllerChildCancelTests
             CancellationToken.None);
     }
 
+    [Fact]
+    public async Task StartSubAsync_SuppressesResponseEnrichment()
+    {
+        // The sub-start endpoint is only ever called by a parent runtime, which reads IsSuccess and
+        // nothing else from the response — so this surface never projects attributes/extensions.
+        StartInstanceInput? captured = null;
+        var commandService = Substitute.For<IInstanceCommandAppService>();
+        commandService.StartAsync(Arg.Do<StartInstanceInput>(i => captured = i), Arg.Any<CancellationToken>())
+            .Returns(Result<StartInstanceOutput>.Ok(new StartInstanceOutput()));
+        var httpContext = new DefaultHttpContext();
+        var accessor = Substitute.For<IHttpContextAccessor>();
+        accessor.HttpContext.Returns(httpContext);
+        var sut = CreateController(commandService, accessor, Substitute.For<IChildSubflowCancellationService>());
+        sut.ControllerContext = new ControllerContext { HttpContext = httpContext };
+
+        await sut.StartSubAsync(
+            "child-domain",
+            "child-flow",
+            new CreateSubInstanceDto { ExtraProperties = new Dictionary<string, object?>() },
+            sync: true,
+            cancellationToken: CancellationToken.None);
+
+        captured.ShouldNotBeNull();
+        captured!.Sync.ShouldBeTrue();
+        captured.StrictIdempotency.ShouldBeTrue();
+        captured.SuppressResponseEnrichment.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task SubflowForwardAsync_SuppressesResponseEnrichment()
+    {
+        // Same posture for the internal relay: the forwarding parent reads only Status.
+        TransitionInput? captured = null;
+        var commandService = Substitute.For<IInstanceCommandAppService>();
+        commandService.TransitionAsync(
+                Arg.Any<string>(), Arg.Any<string>(), Arg.Do<TransitionInput>(i => captured = i), Arg.Any<CancellationToken>())
+            .Returns(Result<TransitionOutput>.Ok(new TransitionOutput()));
+        var httpContext = new DefaultHttpContext();
+        var accessor = Substitute.For<IHttpContextAccessor>();
+        accessor.HttpContext.Returns(httpContext);
+        var sut = CreateController(commandService, accessor, Substitute.For<IChildSubflowCancellationService>());
+        sut.ControllerContext = new ControllerContext { HttpContext = httpContext };
+
+        await sut.SubflowForwardAsync(
+            "child-domain",
+            "child-flow",
+            Guid.NewGuid(),
+            "approve",
+            new SubflowForwardInput { Sync = true, ChainReserved = true },
+            CancellationToken.None);
+
+        captured.ShouldNotBeNull();
+        captured!.Sync.ShouldBeTrue();
+        captured.ChainReserved.ShouldBeTrue();
+        captured.SuppressResponseEnrichment.ShouldBeTrue();
+    }
+
     private static InstanceController CreateController(
         IInstanceCommandAppService commandService,
         IHttpContextAccessor accessor,

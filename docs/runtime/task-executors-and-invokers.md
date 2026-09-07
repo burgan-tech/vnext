@@ -36,7 +36,9 @@ external calls from strongly typed bindings.
 | Dapr | `DaprServiceTaskExecutor`, `DaprPubSubTaskExecutor`, `DaprBindingTaskExecutor` | Matching Dapr invokers |
 | State store | `StateStoreTaskExecutor` | `StateStoreTaskInvoker` — Dapr state store cache access ([details](state-store-task.md)) |
 | Trigger | `StartTriggerTaskExecutor`, `DirectTriggerTaskExecutor`, `SubProcessTaskExecutor` | Remote trigger invokers |
-| Data query | `GetInstancesTaskExecutor`, `GetInstanceDataTaskExecutor` | Remote data invokers |
+| Data query | `GetInstancesTaskExecutor`, `GetInstanceDataTaskExecutor`, `GetInstanceTaskExecutor` (type `19`) | Remote data / instance invokers |
+| Cache-aside | `CacheAsideTaskExecutor` (type `18`) | `CacheAsideTaskInvoker` — Dapr state-store read-through ([details](cache-aside-task.md)) |
+| Fan-out | `FanOutTaskExecutor` (type `21`) | Orchestrates inner tasks; see [FanOut Task](../domain/fan-out-task.md) |
 | Script | `ScriptTaskExecutor` | Executes in Orchestration through scripting module |
 | Python | `PythonTaskExecutor` | `PythonTaskInvoker` selects an explicit Python.NET, process, or container runtime ([details](python-task.md)) |
 | Human/notification | Human and notification executors | May remain application-owned depending on side effect type |

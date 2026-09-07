@@ -58,7 +58,7 @@ public sealed class PipelineStepActivityHelperTests : IDisposable
         var step = new FakeStep(order: 50, name: "ChangeStateStep");
 
         // Act
-        using (var activity = PipelineStepActivityHelper.StartStepActivity(step))
+        using (var activity = PipelineStepActivityHelper.StartStepActivity(step, "approve"))
         {
             Assert.NotNull(activity);
             PipelineStepActivityHelper.SetStepOutcome(activity, StepOutcome.Continue());
@@ -72,6 +72,7 @@ public sealed class PipelineStepActivityHelperTests : IDisposable
         Assert.Equal("continue", span.GetTagItem(TelemetryConstants.TagNames.StepOutcome));
         Assert.Equal(TelemetryConstants.SpanCategories.Business,
             span.GetTagItem(TelemetryConstants.TagNames.SpanCategory));
+        Assert.Equal("approve", span.GetTagItem(TelemetryConstants.TagNames.TransitionKey));
     }
 
     [Fact]

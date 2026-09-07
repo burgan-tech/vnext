@@ -24,7 +24,9 @@ public sealed class TransitionContextFactory(
         WorkflowExecutionContext input,
         CancellationToken cancellationToken)
     {
-        using var activity = PipelineStepActivityHelper.StartOperationActivity("Transition.LoadContext");
+        using var activity = PipelineStepActivityHelper.StartTransitionActivity(
+            "Transition.LoadContext", input.TransitionKey);
+        activity?.SetTag("vnext.context.source", "storage");
         var result = await ValidateDomain(input.Domain)
             .BindAsync(_ => RehydrateInstanceAsync(input, cancellationToken))
             .ThenAsync(data => Task.FromResult(ResolveStateAndTransition(data, input)))
@@ -77,10 +79,13 @@ public sealed class TransitionContextFactory(
     private Task<Result<Definitions.Workflow>> ResolveWorkflowAsync(
         WorkflowExecutionContext input,
         CancellationToken cancellationToken)
-        => input.ResolvedWorkflow is { } carried
-            ? Task.FromResult(Result<Definitions.Workflow>.Ok(carried))
-            : componentCacheStore.GetFlowAsync(
-                input.Domain, input.WorkflowKey, input.WorkflowVersion, cancellationToken);
+    {
+        if (input.ResolvedWorkflow is { } carried)
+            return Task.FromResult(Result<Definitions.Workflow>.Ok(carried));
+
+        return componentCacheStore.GetFlowAsync(
+            input.Domain, input.WorkflowKey, input.WorkflowVersion, cancellationToken);
+    }
 
     /// <summary>
     /// Loads the active instance by identifier, wrapped in its own span so instance-load
@@ -166,7 +171,8 @@ public sealed class TransitionContextFactory(
             // Telemetry
             TraceId = traceId,
             SpanId = spanId,
-            Headers = ToCaseInsensitiveHeaders(input.Headers)
+            Headers = ToCaseInsensitiveHeaders(input.Headers),
+            RouteValues = new Dictionary<string, string?>(input.RouteValues)
         };
 
         // Configure pipeline directives
@@ -211,8 +217,14 @@ public sealed class TransitionContextFactory(
         Definitions.Workflow workflow,
         Instance instance)
     {
-        return ResolveStateAndTransition((workflow, instance), input)
+        using var activity = PipelineStepActivityHelper.StartTransitionActivity(
+            "Transition.LoadContext", input.TransitionKey);
+        activity?.SetTag("vnext.context.source", "preloaded");
+        var result = ResolveStateAndTransition((workflow, instance), input)
             .Map(data => BuildExecutionContext(data, input));
+        if (!result.IsSuccess)
+            activity?.SetStatus(ActivityStatusCode.Error, result.Error.Message);
+        return result;
     }
 
     /// <summary>

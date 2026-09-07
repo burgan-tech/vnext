@@ -4,6 +4,7 @@ using BBT.Aether.Results;
 using BBT.Workflow.Caching;
 using BBT.Workflow.Execution;
 using BBT.Workflow.Instances;
+using Definitions = BBT.Workflow.Definitions;
 
 namespace Microsoft.Extensions.DependencyInjection;
 
@@ -134,6 +135,11 @@ public static class ServiceScopeFactoryExtensions
     /// the cache lookup, and leaving it null lets the loaded workflow be published back onto the
     /// context for the layers downstream. See the private helper for the full contract.
     /// </param>
+    /// <param name="resolvedWorkflow">
+    /// Optional definition the caller already holds for these coordinates without a
+    /// <see cref="WorkflowExecutionContext"/> to carry it (a post-commit snapshot, a committed
+    /// transition context). Supplying it skips the cache lookup the same way a carrying context does.
+    /// </param>
     /// <returns>A <see cref="Result{T}"/> containing the operation outcome or a workflow loading error.</returns>
     public static Task<Result<T>> ExecuteWithWorkflowAsync<T>(
         this IServiceScopeFactory scopeFactory,
@@ -142,14 +148,16 @@ public static class ServiceScopeFactoryExtensions
         string? workflowVersion,
         Func<IServiceProvider, CancellationToken, Task<Result<T>>> action,
         CancellationToken cancellationToken = default,
-        WorkflowExecutionContext? carrier = null)
+        WorkflowExecutionContext? carrier = null,
+        Definitions.Workflow? resolvedWorkflow = null)
     {
         return scopeFactory.ExecuteInScopeAsync(
             (sp, ct) => WithWorkflowScopeAsync(
                 sp, domain, workflowKey, workflowVersion, ct,
                 () => action(sp, ct),
                 Result<T>.Fail,
-                carrier),
+                carrier,
+                resolvedWorkflow),
             cancellationToken);
     }
 
@@ -258,6 +266,13 @@ public static class ServiceScopeFactoryExtensions
     /// caller has none, the workflow loaded here is published back onto it so the layers downstream
     /// resolve it once instead of once each.
     /// </param>
+    /// <param name="resolvedWorkflow">
+    /// A definition the caller already holds without a carrying context. Takes precedence over the
+    /// carrier's and skips the lookup the same way. Post-commit scopes use this: the settlement acts
+    /// on the snapshot's definition and the coordinator on the committed context's, so a lookup here
+    /// would only be re-checking that the definition still resolves — and a transient miss would fail
+    /// the settlement and strand the parent Busy for a definition the caller already has.
+    /// </param>
     private static async Task<TResult> WithWorkflowScopeAsync<TResult>(
         IServiceProvider sp,
         string domain,
@@ -266,7 +281,8 @@ public static class ServiceScopeFactoryExtensions
         CancellationToken ct,
         Func<Task<TResult>> action,
         Func<Error, TResult> onWorkflowLoadFailed,
-        WorkflowExecutionContext? carrier = null)
+        WorkflowExecutionContext? carrier = null,
+        Definitions.Workflow? resolvedWorkflow = null)
     {
         var currentSchema = sp.GetRequiredService<ICurrentSchema>();
         var componentCacheStore = sp.GetRequiredService<IComponentCacheStore>();
@@ -278,7 +294,7 @@ public static class ServiceScopeFactoryExtensions
             // the layers inside the scope — the context factory above all — do not resolve it a
             // third time. The load stays INSIDE the schema scope: on a cache miss it reaches the
             // database, which is schema-bound.
-            var carried = carrier?.ResolvedWorkflow;
+            var carried = resolvedWorkflow ?? carrier?.ResolvedWorkflow;
             if (carried is null)
             {
                 var workflowResult = await componentCacheStore.GetFlowAsync(domain, workflowKey, workflowVersion, ct);

@@ -230,7 +230,7 @@ BBT.Workflow.Monitor.HttpApi.Host
   │     └── BBT.Workflow.Application     (cache module, shared DTOs, IComponentCacheStore)
   └── BBT.Workflow.HttpApi.Shared        (ASP.NET middleware, DbContext, Dapr, telemetry)
         ├── BBT.Workflow.Domain
-        └── BBT.Workflow.Infrastructure  (EF Core repos, event hooks, gateways)
+        └── BBT.Workflow.Infrastructure  (EF Core repos, Dapr integrations, gateways)
 ```
 
 The Monitor host composes a **read-focused subset** of the full vNext stack (orchestration komutları ve execution pipeline yok):
@@ -669,4 +669,3 @@ Monitor connects to the **same** PostgreSQL database and Redis cache as Orchestr
 2. `endpoints/vnext-monitor.postman_collection.json` — kullanıcı senaryosu odaklı koleksiyon
 3. `endpoints/vnext-monitor-endpoints.postman_collection.json` — faz bazlı saf endpoint listesi (tekrarsız, hızlı test amaçlı)
 4. `docs/features/monitoring-features.md` — kullanıcı dokümanı
-

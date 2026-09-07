@@ -12,22 +12,36 @@ The fix separates two things that were conflated in one field:
 | | Field | Role |
 |---|---|---|
 | **Anchor** | `TraceRoot` | the span the hop's own span is **parented** to |
-| **Predecessor** | `TraceParent` | the previous hop, attached as an `ActivityLink` |
+| **Predecessor** | `TraceParent` | the previous hop, retained as `vnext.hop.predecessor` |
 
-Causality is preserved (link + `vnext.hop.predecessor` tag) while the spans render as siblings.
+Causality is preserved as a searchable tag while the spans render as siblings. Avoiding
+`ActivityLink` here is intentional: Elastic reorders linked siblings in ways that create apparent
+gaps around post-commit work.
 
 ## The model: one lane per instance
 
 ```
 PATCH .../instances/{id}/transitions/{key}      ← APM transaction, anchors the root lane
-├── TransitionJob.Execute        (hop 1)
-├── TransitionJob.Execute        (hop 2)        ← sibling of hop 1, not its child
-├── PostCommit.ForwardToSubflowJob              ← anchors the SUBFLOW's lane
-│   ├── TransitionJob.Execute    (subflow hop 1)
-│   └── TransitionJob.Execute    (subflow hop 2)
-├── SubFlow.Resume/{domain}/{flow}              ← back in the parent's lane
-└── TransitionJob.Execute        (parent resume)
+└── TransitionJob.Execute/{key}                 ← present only for an async accepted request
+    ├── Transition.{key}                        ← first hop
+    ├── Transition.{automatic-key}              ← awaited inline; no Scheduler job
+    ├── PostCommit.Coordinate
+    │   └── PostCommit.StartSubflowJob / ForwardToSubflowJob
+    │       └── Transition.{child-key}           ← synchronous child call, SUBFLOW lane
+    └── PostCommit.Settle | PostCommit.Fault     ← fresh-parent mutation after the handoff
+
+Inbox terminal-event delivery
+└── SubFlow.Resume/{domain}/{flow}              ← awaited parent resume
+    ├── Transition.{resume-key}
+    └── Transition.{automatic-key}              ← awaited inline; no Scheduler job
 ```
+
+For a top-level `sync=true` request the first `TransitionJob.Execute/{key}` layer is absent and the
+pipeline runs in the request. `EnqueueContinuationStrategy` / `ContinuationMode.Enqueue` remains
+as legacy code but is not registered; see
+[Async Transition Execution Modes](../architecture/async-transition-execution-modes.md). A
+separate `TransitionJob.Execute` therefore represents another accepted asynchronous transition,
+not an automatic hop or the normal parent-resume path.
 
 A new lane opens **only** at a subflow handoff, never at a service boundary. So depth is
 `O(subflow nesting)`, independent of chain length. Inside each lane item the structure is
@@ -94,7 +108,8 @@ node any more — see [Trace Span Tree](trace-span-tree.md).
 - **An anchor from another trace is linked, never parented** (`vnext.trace.lane.mismatch`), so a stale
   `AsyncLocal` or a relayed payload from an unrelated request cannot teleport a span. The comparison
   is against the *predecessor* only — a foreign **ambient** span is normal on the job path (the Dapr
-  callback is its own trace) and is demoted to a link with `vnext.dapr.callback`.
+  callback is its own trace) and is retained as searchable
+  `vnext.dapr.callback.trace_id` / `.span_id` tags with `vnext.dapr.callback=true`.
 - **No anchor ⇒ exactly the pre-lane behaviour**, plus `vnext.trace.lane=false`. Both payloads and
   events degrade in either direction, so deploy order is unconstrained. No DB migration: job payloads
   live in the Dapr scheduler store and outbox events in a serialized blob.
@@ -109,7 +124,7 @@ node any more — see [Trace Span Tree](trace-span-tree.md).
 - **`state.notify` is a lane item too.** `StateNotifyPayload` carries `TraceRoot` /
   `ParentTraceRoot`, filled by `StateNotificationScheduler`; `StateNotifyJobHandler` `Reset`s the
   lane and opens `StateNotify.Execute` via `StartFlatLaneActivity`, so the notify job is a sibling
-  of the hop that scheduled it (that hop linked as predecessor) rather than nested under it. A
+  of the hop that scheduled it (that hop tagged as predecessor) rather than nested under it. A
   payload without an anchor (older build) degrades to exactly the previous
   continue-the-predecessor parenting.
 
@@ -118,13 +133,14 @@ node any more — see [Trace Span Tree](trace-span-tree.md).
 `kind` is always the caller's choice, never forced. Job spans stay `Consumer` so Elastic APM keeps
 classifying them as transactions (apm-server keys off `SpanKind`, and OTLP carries no
 parent-is-remote flag — re-parenting onto a local anchor does not change the classification).
-In-process lane items (`PostCommit.*`, `SubFlow.Resume`) are `Internal`, so transaction counts and
-service-map edges do not move.
+In-process `PostCommit.*` spans and lane-level `SubFlow.Resume` spans are `Internal`, so transaction
+counts and service-map edges do not move. `PostCommit.*` remains a real child of the transition that
+committed; only cross-hop operations opt into lane parenting.
 
 ## Tags
 
 `vnext.trace.lane` · `vnext.trace.lane.anchor` · `vnext.trace.lane.mismatch` ·
-`vnext.hop.predecessor` (primary causality; self-joins into a chain even where a UI hides links) ·
+`vnext.hop.predecessor` (primary causality; self-joins into a chain without UI-level links) ·
 `vnext.lane.seq` (reliable ordinal — `vnext.chain.depth` resets to 0 at every resume/timeout/retry
 boundary) · `vnext.chain.depth` · `vnext.root.instance.id` (stamped unconditionally on lane spans: the
 single filter that selects a whole business request).
@@ -133,6 +149,12 @@ Episode tags, on `Instance.Activation/{key}`: `vnext.activation.outcome` · `vne
 · `vnext.activation.transition.key` · `vnext.activation.hops` (the settling hop's `vnext.lane.seq`) ·
 `vnext.activation.duration_ms` · `vnext.activation.partial` · `vnext.activation.clock_skew`. On
 `Transition.Settle`: `vnext.settle.cas` (`flipped` | `lost` | `skipped`) · `vnext.activation.emitted`.
+
+Within a lane, `vnext.transition.key` is the hop-level discriminator on pipeline steps,
+validation/persistence/commit spans and post-commit work. Background-job arms refine it with
+`vnext.job.type`, `vnext.state.from`, then the unique `vnext.job.name`. See
+[Trace Span Tree § Identity tag hierarchy](trace-span-tree.md#identity-tag-hierarchy) for the full
+logical drill-down diagram; the attributes themselves remain flat OpenTelemetry key/value pairs.
 
 ## Activation episode
 
@@ -164,8 +186,8 @@ ones, always copied together**, beside `TraceRoot` / `ParentTraceRoot`:
 
 | Carrier | Filled from the lane by | Restored by |
 |---|---|---|
-| `TransitionJobPayload` (`ITraceableJobPayload` defaults null) | `AsyncTransitionStrategy.BuildDirectPayload`, `EnqueueContinuationStrategy` | `TransitionJobHandler` → `Reset(…, payload.ToActivationEpisode())` |
-| `TransitionContinuationRequested` (`ILaneAwareDistributedEvent`) | the same two enqueue sites; `TraceStampingDistributedEventBus` additionally fills any lane-aware event `??=`-style, never overwriting a preset value | Inbox `EventTraceScope`; the `/enqueue` relay copies them onto the job payload |
+| `TransitionJobPayload` (`ITraceableJobPayload` defaults null) | `AsyncTransitionStrategy.BuildDirectPayload`; the outbox relay may reconstruct it from `TransitionContinuationRequested` | `TransitionJobHandler` → `Reset(…, payload.ToActivationEpisode())` |
+| `TransitionContinuationRequested` (`ILaneAwareDistributedEvent`) | the initial async-accept outbox/fallback path; `TraceStampingDistributedEventBus` additionally fills any lane-aware event `??=`-style, never overwriting a preset value | Inbox `EventTraceScope`; the `/enqueue` relay copies it onto the job payload |
 | `InstanceSubCompletedEvent` / `InstanceSubFaultedEvent` / `InstanceSubCanceledEvent` | `TraceStampingDistributedEventBus` | `SubflowTerminalRelay` and the Inbox `InstanceSub*EventHandler`s map them onto the inputs below |
 | `FlowCompletedInput` / `SubFlowFaultedInput` / `SubItemCanceledInput` | the relay / inbox mappings above | `internal/…/complete`, `/sub/fault`, `/sub/cancel` → `Reset`; the `Subflow*Service`s copy them back onto the event republished by a terminal revert |
 | `SubflowForwardInput` | `RemoteInstanceCommandAppService` | `internal/subflow-forward` → `Reset` |
@@ -195,10 +217,10 @@ them, and the client's question there is "fire → Active".
   the flip is not durable yet; a client sees Active only after the commit.
 - **Only status owners emit** (`OwnsStatus`). A non-owning execution beside an in-flight chain — an
   `updateData` on a Busy parent, a forwarded request — leaves the verdict to the owner.
-- **A hop that enqueued a continuation never emits.** `EnqueueContinuationStrategy` marks
-  `Directives.ContinuationEnqueued`; `TransitionPipeline` passes `chainSettled: !hadNextTransition`
-  and the post-commit settlement `chainSettled: !continuations.ContinuationEnqueued &&
-  instance.IsBusy`. The job it becomes carries the episode and settles it.
+- **An automatic winner does not close the episode.** `TransitionPipeline` passes
+  `chainSettled:false` while another inline hop is pending. `ContinuationEnqueued` remains a legacy
+  field; the current DI graph has no enqueue continuation strategy, so an automatic hop never
+  becomes a Scheduler job.
 - **A parent handing off to a live SubFlow never emits.** It is still Busy, so `busy.subflow`
   would falsely mark the activation complete. The child inherits the episode and its activation
   span records the surface that actually becomes available.
@@ -218,16 +240,15 @@ covers only that hop, and is excluded from the `workflow_activation_duration_ms`
 clock; the span is clamped to zero length rather than reported negative, and likewise excluded.
 Alert on the flags, not on the numbers.
 
-## Known cosmetic effect
+## Async timing shape
 
-On the **sync** path `PostCommit.*` is a sibling of the still-open transaction span (the HTTP server
-span, or the job span on the async path), so it renders as overlapping it. Valid OpenTelemetry, and
-the price of having post-commit work at lane level. On the **async** path the hops likewise start
-after the 202 transaction has ended. The backdated `Instance.Activation/{key}` span now gives such a
-trace a readable total: it starts with the transaction and ends after the last hop, so the waterfall
-shows one bar that is the client's wait, instead of a short transaction followed by unrelated-looking
-siblings. In Elastic the axis extends to the latest-ending span (`getWaterfallDuration` =
-max(offset + duration)), so the whole episode is visible.
+`PostCommit.*` is a real child of the transition that committed, so work after `Uow.Commit` remains
+adjacent to that commit in Elastic's tree. An async transition's initial job can still begin after
+the original 202 response has ended; that is the Scheduler boundary. Its automatic hops then run
+inline inside that job. The backdated
+`Instance.Activation/{key}` span covers trigger → durable rest point and links the final
+`Uow.Commit`, not the whole job. Any job bookkeeping after that commit is intentionally outside the
+activation duration because the instance is already observable as Available.
 
 ## Related
 

@@ -1,3 +1,4 @@
+using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.Grpc;
 using Dapr.Client;
 using Grpc.Core.Interceptors;
@@ -44,7 +45,9 @@ public sealed class GrpcTaskInvokerClientProvider : IDisposable
 
     public GrpcTaskInvokerClientProvider(IConfiguration configuration)
     {
-        _executionServiceAppId = configuration["ExecutionApi:AppId"] ?? "vnext-execution";
+        _executionServiceAppId = VNextAppIds.ExecutionOrDefault(
+            configuration[VNextAppIds.ConfigKeys.Execution],
+            configuration[VNextAppIds.ConfigKeys.AppDomain]);
 
         _channel = new Lazy<GrpcChannel>(() =>
             // Dapr.Client.CreateInvocationInvoker(appId) resolves the sidecar's gRPC endpoint

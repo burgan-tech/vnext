@@ -4,7 +4,6 @@ using System.Text.Json;
 using BBT.Workflow.Execution.Bindings;
 using BBT.Workflow.Execution.Metrics;
 using BBT.Workflow.Execution.Services;
-using Dapr.Client;
 using Microsoft.Extensions.Logging;
 
 namespace BBT.Workflow.Execution.Invokers;
@@ -14,7 +13,7 @@ namespace BBT.Workflow.Execution.Invokers;
 /// Receives prepared AppId, MethodName, HttpVerb, Headers and Body.
 /// </summary>
 public sealed class DaprServiceTaskInvoker(
-    DaprClient daprClient,
+    DaprServiceInvocationClient daprInvocation,
     ILogger<DaprServiceTaskInvoker> logger,
     ITaskMetrics? metrics = null)
     : ITaskInvoker<DaprServiceBinding>
@@ -57,7 +56,7 @@ public sealed class DaprServiceTaskInvoker(
 
         try
         {
-            var request = daprClient.CreateInvokeMethodRequest(
+            var request = DaprServiceInvocationClient.CreateRequest(
                 new HttpMethod(binding.Method),
                 binding.AppId,
                 binding.MethodName);
@@ -95,9 +94,10 @@ public sealed class DaprServiceTaskInvoker(
 
             InvokerHelpers.ApplyTrustedCorrelationHeaders(request);
 
-            // Use InvokeMethodWithResponseAsync to get full HTTP response including status codes
+            // SendAsync performs no status validation: every 2xx/4xx/5xx comes back as a response, so
+            // status codes reach output mapping (parity with the obsolete InvokeMethodWithResponseAsync)
             prepareActivity?.Dispose();
-            using var response = await daprClient.InvokeMethodWithResponseAsync(request, cancellationToken);
+            using var response = await daprInvocation.SendAsync(request, cancellationToken);
 
             var responseHeaders = InvokerHelpers.MergeHeaders(response.Headers, response.Content.Headers);
 

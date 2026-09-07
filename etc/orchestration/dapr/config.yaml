@@ -4,6 +4,26 @@ metadata:
   name: daprConfig
   namespace: default
 spec:
+  # Local name resolution — `mdns`, pinned explicitly; NOT the `kubernetes` resolver the cluster uses.
+  #
+  # The cluster template ({{.ID}}-dapr.{{.Namespace}}.svc.cluster.local:{{.Port}}) cannot resolve
+  # in Docker: there is no namespace-per-domain (one flat `bbt-development` network), no Sentry
+  # (mTLS off) and no cluster DNS. mDNS is Dapr's self-hosted default and works across containers
+  # on one bridge network — each sidecar announces "<app-id> -> <ip>:<internal grpc port>" and the
+  # caller picks it up by multicast (verified core -> partner across two compose projects, 2026-09-03).
+  #
+  # NOT `nameformat`: the `daprio/daprd` image this compose runs (1.16.x) does not ship that
+  # resolver — the sidecar logs "couldn't find name resolver nameformat/v1", initializes with NO
+  # resolver, and every service invocation answers 500. Re-evaluate once the pinned daprd has it.
+  #
+  # etc/docker/docker-compose.yml still gives every sidecar an explicit --dapr-internal-grpc-port
+  # (deterministic port, easier to read in traces) and a `{app-id}-dapr` network alias (harmless,
+  # lets a human curl a sidecar by app-id); neither is required by mDNS.
+  #
+  # Application code is identical in both environments: ServiceDiscovery:Provider=dapr either
+  # way. Only this resolver differs, which is right — name resolution is a platform concern.
+  nameResolution:
+    component: "mdns"
   tracing:
     samplingRate: "1"
     # Key MUST be `otel` — Dapr's TracingSpec has no `otlp` field, so an `otlp:` block is

@@ -1,4 +1,3 @@
-using System.Collections.Generic;
 using System.Diagnostics;
 
 namespace BBT.Workflow.Workers.Inbox.Tracing;
@@ -14,31 +13,32 @@ namespace BBT.Workflow.Workers.Inbox.Tracing;
 internal static class EventTraceParenting
 {
     /// <summary>
-    /// Resolves the parent context and links a consumer span should be started with.
+    /// Resolves the parent context a consumer span should be started with.
     /// </summary>
     /// <param name="mode">
     /// <see cref="EventTraceMode.ContinueTrace"/> parents the new span onto the event's own trace
     /// (falling back to the ambient context, then to a genuine root, when the event carries none).
-    /// <see cref="EventTraceMode.LinkedDelivery"/> always roots a new trace and links the producer's
-    /// context (and the ambient one, if present) instead of parenting onto either.
+    /// <see cref="EventTraceMode.IsolatedDelivery"/> always roots a new trace without linking the
+    /// producer or ambient transport trace. Their ids are stamped by <see cref="EventTraceScope"/>
+    /// as searchable tags instead.
     /// </param>
     /// <param name="traceParent">The event's W3C traceparent, or null/empty when it carries none.</param>
-    /// <param name="traceState">The event's W3C tracestate accompanying <paramref name="traceParent"/> — rides the link, not just the traceparent.</param>
+    /// <param name="traceState">The event's W3C tracestate accompanying <paramref name="traceParent"/>.</param>
     /// <param name="ambient">
     /// The context of whatever <see cref="Activity"/> was ambient before this call (e.g. the pub/sub
     /// delivery span), or <c>default</c> when there was none. The caller captures this BEFORE
-    /// clearing <see cref="Activity.Current"/> for <see cref="EventTraceMode.LinkedDelivery"/> — this
+    /// clearing <see cref="Activity.Current"/> for <see cref="EventTraceMode.IsolatedDelivery"/> — this
     /// method never reads ambient state itself, which is what keeps it unit-testable.
     /// </param>
     /// <returns>
-    /// The parent context to start the new span with, and the links to attach. For
-    /// <see cref="EventTraceMode.LinkedDelivery"/> the returned parent is always <c>default</c> — the
+    /// The parent context to start the new span with. For
+    /// <see cref="EventTraceMode.IsolatedDelivery"/> it is always <c>default</c> — the
     /// caller must ALSO clear <see cref="Activity.Current"/> before calling
     /// <c>ActivitySource.StartActivity</c>, or the .NET tracing API silently falls back to the
     /// ambient activity instead of creating a true root (a default <see cref="ActivityContext"/>
     /// parent alone does not force one).
     /// </returns>
-    public static (ActivityContext ParentContext, IEnumerable<ActivityLink>? Links) ResolveParenting(
+    public static ActivityContext ResolveParent(
         EventTraceMode mode,
         string? traceParent,
         string? traceState,
@@ -52,27 +52,15 @@ internal static class EventTraceParenting
         {
             if (hasOrigin)
             {
-                IEnumerable<ActivityLink>? links = hasAmbient && ambient.TraceId != originContext.TraceId
-                    ? new[] { new ActivityLink(ambient) }
-                    : null;
-                return (originContext, links);
+                return originContext;
             }
 
-            return (hasAmbient ? ambient : default, null);
+            return hasAmbient ? ambient : default;
         }
 
-        // LinkedDelivery: the handler roots its own trace; producer + ambient become links only.
-        List<ActivityLink>? links2 = null;
-        if (hasOrigin)
-        {
-            (links2 ??= new List<ActivityLink>()).Add(new ActivityLink(originContext));
-        }
-
-        if (hasAmbient)
-        {
-            (links2 ??= new List<ActivityLink>()).Add(new ActivityLink(ambient));
-        }
-
-        return (default, links2);
+        // IsolatedDelivery: cross-trace ActivityLinks make Elastic splice delayed fact/backup
+        // delivery into the business waterfall. Correlation is retained as indexed id tags by the
+        // scope instead, so this trace is genuinely isolated in both storage and presentation.
+        return default;
     }
 }

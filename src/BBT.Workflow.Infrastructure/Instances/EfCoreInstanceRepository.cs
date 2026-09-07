@@ -184,6 +184,7 @@ public sealed class EfCoreInstanceRepository(
         Guid correlationId,
         CancellationToken cancellationToken = default)
     {
+        using var activity = PipelineStepActivityHelper.StartOperationActivity("Instance.Query.Execute");
         var dbSet = await GetDbSetAsync();
         var instance = await dbSet
             .Include(i => i.DataList.Where(d => d.IsLatest))
@@ -213,12 +214,22 @@ public sealed class EfCoreInstanceRepository(
     /// <inheritdoc />
     public async Task<Instance?> FindForPostCommitSettlementAsync(
         Guid instanceId,
+        bool includeLatestData,
         CancellationToken cancellationToken = default)
     {
         var dbSet = await GetDbSetAsync();
-        var instance = await dbSet
-            .Include(i => i.DataList.Where(d => d.IsLatest))
-            .Include(i => i.ChildCorrelations.Where(c => !c.IsCompleted))
+        // Open correlations are unconditional: TransitionSettlement.HasOpenSubFlow and the
+        // Instance.Fault child cascade both read ActiveCorrelations, and an empty collection
+        // there is indistinguishable from "no open SubFlow" — the parent would be flipped Active
+        // under a live child. The data row is the caller's call (one Db.SELECT + the jsonb
+        // payload per settlement); without it the aggregate still reports partially loaded so a
+        // history read fails fast instead of answering from an empty list.
+        IQueryable<Instance> query = dbSet
+            .Include(i => i.ChildCorrelations.Where(c => !c.IsCompleted));
+        if (includeLatestData)
+            query = query.Include(i => i.DataList.Where(d => d.IsLatest));
+
+        var instance = await query
             .AsSplitQuery()
             .FirstOrDefaultAsync(i => i.Id == instanceId, cancellationToken);
         instance?.MarkDataPartiallyLoaded();
@@ -443,6 +454,7 @@ public sealed class EfCoreInstanceRepository(
     {
         var query = (await PrepareDetailedQueryAsync())
             .AsSplitQuery();
+        using var activity = PipelineStepActivityHelper.StartOperationActivity("Instance.Query.Execute");
 
         if (Guid.TryParse(identifier, out var instanceId))
         {
@@ -470,6 +482,7 @@ public sealed class EfCoreInstanceRepository(
     {
         var query = (await PrepareDetailedQueryAsync())
             .AsSplitQuery();
+        using var activity = PipelineStepActivityHelper.StartOperationActivity("Instance.Query.Execute");
 
         // Only non-terminal instances occupy a key (Active or Busy). Terminal rows
         // (Completed/Faulted/Passive) are ignored. OrderByDescending(CreatedAt) keeps the
@@ -514,6 +527,7 @@ public sealed class EfCoreInstanceRepository(
         var query = (await PrepareDetailedQueryAsync())
             .AsNoTracking()
             .AsSplitQuery();
+        using var activity = PipelineStepActivityHelper.StartOperationActivity("Instance.Query.Execute");
 
         if (Guid.TryParse(identifier, out var instanceId))
         {
@@ -1327,11 +1341,11 @@ public sealed class EfCoreInstanceRepository(
                     .FromSqlRaw(rawSql)
                     .AsNoTracking()
                     .ToListAsync(cancellationToken);
- 
+
                 hasNextPage = orderedInstances.Count > pageSize;
                 if (hasNextPage)
                     orderedInstances = orderedInstances.Take(pageSize).ToList();
- 
+
                 items = await LoadDataListAndPreserveOrderAsync(orderedInstances, cancellationToken);
             }
             else
@@ -1363,11 +1377,11 @@ public sealed class EfCoreInstanceRepository(
                         .Skip(skipCount)
                         .Take(pageSize + 1)
                         .ToListAsync(cancellationToken);
- 
+
                     hasNextPage = orderedInstances.Count > pageSize;
                     if (hasNextPage)
                         orderedInstances = orderedInstances.Take(pageSize).ToList();
- 
+
                     items = await LoadDataListAndPreserveOrderAsync(orderedInstances, cancellationToken);
                 }
                 else
@@ -1411,7 +1425,7 @@ public sealed class EfCoreInstanceRepository(
             if (hasNextPage)
                 items = items.Take(pageSize).ToList();
         }
- 
+
         var normalPagedList = new HateoasPagedList<Instance>(MarkListIfPartiallyLoaded(items), page, pageSize, hasNextPage);
         return (normalPagedList, null);
     }

@@ -15,7 +15,7 @@ namespace BBT.Workflow.Instances.Remote;
 /// Uses IDomainDiscoveryResolver to dynamically resolve endpoint URLs based on target domain.
 /// </summary>
 public sealed class RemoteInstanceQueryAppService(
-    HttpClient httpClient,
+    IRemoteTransport<IRemoteInstanceQueryAppService> transport,
     IOptions<RemoteOptions> options,
     IDomainDiscoveryResolver endpointResolver,
     ICurrentUser currentUser)
@@ -64,19 +64,17 @@ public sealed class RemoteInstanceQueryAppService(
             if (queryParams.Count > 0)
                 relativePath += "?" + string.Join("&", queryParams);
 
-            var requestUri = new Uri(endpoint.BaseUrl, relativePath.TrimStart('/'));
-            using var requestMessage = new HttpRequestMessage(HttpMethod.Get, requestUri);
-
-            // Add If-None-Match header for ETag support
-            if (!string.IsNullOrEmpty(input.IfNoneMatch))
+            var response = await transport.SendAsync(endpoint, HttpMethod.Get, relativePath, requestMessage =>
             {
-                requestMessage.Headers.TryAddWithoutValidation("If-None-Match", input.IfNoneMatch);
-            }
+                // Add If-None-Match header for ETag support
+                if (!string.IsNullOrEmpty(input.IfNoneMatch))
+                {
+                    requestMessage.Headers.TryAddWithoutValidation("If-None-Match", input.IfNoneMatch);
+                }
 
-            var forwardHeaders = currentUser.ToForwardHeaders();
-            CurrentUserForwardHeadersHelper.MergeIntoRequest(requestMessage, forwardHeaders, input.Headers);
-
-            var response = await httpClient.SendAsync(requestMessage, cancellationToken);
+                var forwardHeaders = currentUser.ToForwardHeaders();
+                CurrentUserForwardHeadersHelper.MergeIntoRequest(requestMessage, forwardHeaders, input.Headers);
+            }, cancellationToken);
 
             // Handle 304 Not Modified - special case for conditional requests
             if (response.StatusCode == System.Net.HttpStatusCode.NotModified)
@@ -133,19 +131,17 @@ public sealed class RemoteInstanceQueryAppService(
             if (queryParams.Count > 0)
                 relativePath += "?" + string.Join("&", queryParams);
 
-            var requestUri = new Uri(endpoint.BaseUrl, relativePath.TrimStart('/'));
-            using var requestMessage = new HttpRequestMessage(HttpMethod.Get, requestUri);
-
-            // Add If-None-Match header for ETag support
-            if (!string.IsNullOrEmpty(input.IfNoneMatch))
+            var response = await transport.SendAsync(endpoint, HttpMethod.Get, relativePath, requestMessage =>
             {
-                requestMessage.Headers.TryAddWithoutValidation("If-None-Match", input.IfNoneMatch);
-            }
+                // Add If-None-Match header for ETag support
+                if (!string.IsNullOrEmpty(input.IfNoneMatch))
+                {
+                    requestMessage.Headers.TryAddWithoutValidation("If-None-Match", input.IfNoneMatch);
+                }
 
-            var forwardHeaders = currentUser.ToForwardHeaders();
-            CurrentUserForwardHeadersHelper.MergeIntoRequest(requestMessage, forwardHeaders, input.Headers);
-
-            var response = await httpClient.SendAsync(requestMessage, cancellationToken);
+                var forwardHeaders = currentUser.ToForwardHeaders();
+                CurrentUserForwardHeadersHelper.MergeIntoRequest(requestMessage, forwardHeaders, input.Headers);
+            }, cancellationToken);
 
             // Handle 304 Not Modified - special case for conditional requests
             if (response.StatusCode == System.Net.HttpStatusCode.NotModified)
@@ -225,11 +221,11 @@ public sealed class RemoteInstanceQueryAppService(
             if (queryParams.Count > 0)
                 relativePath += "?" + string.Join("&", queryParams);
 
-            var requestUri = new Uri(endpoint.BaseUrl, relativePath.TrimStart('/'));
-            using var requestMessage = new HttpRequestMessage(HttpMethod.Get, requestUri);
-            var forwardHeaders = currentUser.ToForwardHeaders();
-            CurrentUserForwardHeadersHelper.MergeIntoRequest(requestMessage, forwardHeaders, input.Headers);
-            var response = await httpClient.SendAsync(requestMessage, cancellationToken);
+            var response = await transport.SendAsync(endpoint, HttpMethod.Get, relativePath, requestMessage =>
+            {
+                var forwardHeaders = currentUser.ToForwardHeaders();
+                CurrentUserForwardHeadersHelper.MergeIntoRequest(requestMessage, forwardHeaders, input.Headers);
+            }, cancellationToken);
 
             return await HandleResponseAsync<InstanceListWithGroupsResponse<GetInstanceOutput>>(response, cancellationToken);
         }
@@ -262,11 +258,11 @@ public sealed class RemoteInstanceQueryAppService(
 
             var relativePath = InstanceUrlTemplates.InstanceHistory(input.Domain, input.Workflow, input.Instance, ApiVersionPrefix);
 
-            var requestUri = new Uri(endpoint.BaseUrl, relativePath.TrimStart('/'));
-            using var requestMessage = new HttpRequestMessage(HttpMethod.Get, requestUri);
-            var forwardHeaders = currentUser.ToForwardHeaders();
-            CurrentUserForwardHeadersHelper.MergeIntoRequest(requestMessage, forwardHeaders, input.Headers);
-            var response = await httpClient.SendAsync(requestMessage, cancellationToken);
+            var response = await transport.SendAsync(endpoint, HttpMethod.Get, relativePath, requestMessage =>
+            {
+                var forwardHeaders = currentUser.ToForwardHeaders();
+                CurrentUserForwardHeadersHelper.MergeIntoRequest(requestMessage, forwardHeaders, input.Headers);
+            }, cancellationToken);
 
             // Status code → Result.Fail (per Railway Pattern)
             return await HandleResponseAsync<GetInstanceHistoryOutput>(response, cancellationToken);
@@ -322,21 +318,21 @@ public sealed class RemoteInstanceQueryAppService(
             if (queryParams.Count > 0)
                 relativePath += "?" + string.Join("&", queryParams);
 
-            var requestUri = new Uri(endpoint.BaseUrl, relativePath.TrimStart('/'));
-            using var requestMessage = new HttpRequestMessage(HttpMethod.Get, requestUri);
-            var forwardHeaders = currentUser.ToForwardHeaders();
-            // If-None-Match must come only from the typed input.IfNoneMatch below. input.Headers
-            // carries the caller's full header set, and the caller's own If-None-Match (an ETag
-            // for a DIFFERENT resource, e.g. the parent instance in the subflow window) must not
-            // leak into this request — a false 304 here would leave the consumer with no body.
-            CurrentUserForwardHeadersHelper.MergeIntoRequest(
-                requestMessage,
-                forwardHeaders,
-                input.Headers,
-                static header => string.Equals(header, "If-None-Match", StringComparison.OrdinalIgnoreCase));
-            if (!string.IsNullOrEmpty(input.IfNoneMatch))
-                requestMessage.Headers.TryAddWithoutValidation("If-None-Match", input.IfNoneMatch);
-            var response = await httpClient.SendAsync(requestMessage, cancellationToken);
+            var response = await transport.SendAsync(endpoint, HttpMethod.Get, relativePath, requestMessage =>
+            {
+                var forwardHeaders = currentUser.ToForwardHeaders();
+                // If-None-Match must come only from the typed input.IfNoneMatch below. input.Headers
+                // carries the caller's full header set, and the caller's own If-None-Match (an ETag
+                // for a DIFFERENT resource, e.g. the parent instance in the subflow window) must not
+                // leak into this request — a false 304 here would leave the consumer with no body.
+                CurrentUserForwardHeadersHelper.MergeIntoRequest(
+                    requestMessage,
+                    forwardHeaders,
+                    input.Headers,
+                    static header => string.Equals(header, "If-None-Match", StringComparison.OrdinalIgnoreCase));
+                if (!string.IsNullOrEmpty(input.IfNoneMatch))
+                    requestMessage.Headers.TryAddWithoutValidation("If-None-Match", input.IfNoneMatch);
+            }, cancellationToken);
 
             if (response.StatusCode == System.Net.HttpStatusCode.NotModified)
                 return ConditionalResult<GetInstanceStateOutput>.NotModified();
@@ -397,11 +393,11 @@ public sealed class RemoteInstanceQueryAppService(
             if (queryParams.Count > 0)
                 relativePath += "?" + string.Join("&", queryParams);
 
-            var requestUri = new Uri(endpoint.BaseUrl, relativePath.TrimStart('/'));
-            using var requestMessage = new HttpRequestMessage(HttpMethod.Get, requestUri);
-            var forwardHeaders = currentUser.ToForwardHeaders();
-            CurrentUserForwardHeadersHelper.MergeIntoRequest(requestMessage, forwardHeaders, input.Headers);
-            var response = await httpClient.SendAsync(requestMessage, cancellationToken);
+            var response = await transport.SendAsync(endpoint, HttpMethod.Get, relativePath, requestMessage =>
+            {
+                var forwardHeaders = currentUser.ToForwardHeaders();
+                CurrentUserForwardHeadersHelper.MergeIntoRequest(requestMessage, forwardHeaders, input.Headers);
+            }, cancellationToken);
 
             // Status code → Result.Fail (per Railway Pattern)
             return await HandleResponseAsync<GetViewOutput>(response, cancellationToken);
@@ -445,18 +441,18 @@ public sealed class RemoteInstanceQueryAppService(
             if (queryParams.Count > 0)
                 relativePath += "&" + string.Join("&", queryParams);
 
-            var requestUri = new Uri(endpoint.BaseUrl, relativePath.TrimStart('/'));
-            using var requestMessage = new HttpRequestMessage(HttpMethod.Get, requestUri);
-            var forwardHeaders = currentUser.ToForwardHeaders();
-            // If-None-Match must never be forwarded downstream: this is a subflow composition
-            // call whose caller ETag belongs to a DIFFERENT resource (the parent instance),
-            // and the composer always needs a body.
-            CurrentUserForwardHeadersHelper.MergeIntoRequest(
-                requestMessage,
-                forwardHeaders,
-                input.Headers,
-                static header => string.Equals(header, "If-None-Match", StringComparison.OrdinalIgnoreCase));
-            var response = await httpClient.SendAsync(requestMessage, cancellationToken);
+            var response = await transport.SendAsync(endpoint, HttpMethod.Get, relativePath, requestMessage =>
+            {
+                var forwardHeaders = currentUser.ToForwardHeaders();
+                // If-None-Match must never be forwarded downstream: this is a subflow composition
+                // call whose caller ETag belongs to a DIFFERENT resource (the parent instance),
+                // and the composer always needs a body.
+                CurrentUserForwardHeadersHelper.MergeIntoRequest(
+                    requestMessage,
+                    forwardHeaders,
+                    input.Headers,
+                    static header => string.Equals(header, "If-None-Match", StringComparison.OrdinalIgnoreCase));
+            }, cancellationToken);
 
             // Status code → Result.Fail (per Railway Pattern)
             return await HandleResponseAsync<DTOs.GetSchemaOutput>(response, cancellationToken);
@@ -507,11 +503,11 @@ public sealed class RemoteInstanceQueryAppService(
             if (queryParams.Count > 0)
                 relativePath += "?" + string.Join("&", queryParams);
 
-            var requestUri = new Uri(endpoint.BaseUrl, relativePath.TrimStart('/'));
-            using var requestMessage = new HttpRequestMessage(HttpMethod.Get, requestUri);
-            var forwardHeaders = currentUser.ToForwardHeaders();
-            CurrentUserForwardHeadersHelper.MergeIntoRequest(requestMessage, forwardHeaders, input.Headers);
-            var response = await httpClient.SendAsync(requestMessage, cancellationToken);
+            var response = await transport.SendAsync(endpoint, HttpMethod.Get, relativePath, requestMessage =>
+            {
+                var forwardHeaders = currentUser.ToForwardHeaders();
+                CurrentUserForwardHeadersHelper.MergeIntoRequest(requestMessage, forwardHeaders, input.Headers);
+            }, cancellationToken);
 
             // Status code → Result.Fail (per Railway Pattern)
             return await HandleResponseAsync<DTOs.GetExtensionsOutput>(response, cancellationToken);
@@ -554,18 +550,18 @@ public sealed class RemoteInstanceQueryAppService(
             if (queryParams.Count > 0)
                 relativePath += "?" + string.Join("&", queryParams);
 
-            var requestUri = new Uri(endpoint.BaseUrl, relativePath.TrimStart('/'));
-            using var requestMessage = new HttpRequestMessage(HttpMethod.Get, requestUri);
-            var forwardHeaders = currentUser.ToForwardHeaders();
-            // If-None-Match must never be forwarded downstream: this is a subflow composition
-            // call whose caller ETag belongs to a DIFFERENT resource (the parent instance),
-            // and the composer always needs a body.
-            CurrentUserForwardHeadersHelper.MergeIntoRequest(
-                requestMessage,
-                forwardHeaders,
-                input.Headers,
-                static header => string.Equals(header, "If-None-Match", StringComparison.OrdinalIgnoreCase));
-            var response = await httpClient.SendAsync(requestMessage, cancellationToken);
+            var response = await transport.SendAsync(endpoint, HttpMethod.Get, relativePath, requestMessage =>
+            {
+                var forwardHeaders = currentUser.ToForwardHeaders();
+                // If-None-Match must never be forwarded downstream: this is a subflow composition
+                // call whose caller ETag belongs to a DIFFERENT resource (the parent instance),
+                // and the composer always needs a body.
+                CurrentUserForwardHeadersHelper.MergeIntoRequest(
+                    requestMessage,
+                    forwardHeaders,
+                    input.Headers,
+                    static header => string.Equals(header, "If-None-Match", StringComparison.OrdinalIgnoreCase));
+            }, cancellationToken);
 
             // Status code → Result.Fail (per Railway Pattern)
             return await HandleResponseAsync<DTOs.GetSchemaOutput>(response, cancellationToken);

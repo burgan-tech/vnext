@@ -39,7 +39,7 @@ public sealed class StateNotifyJobHandler(
     public async Task HandleAsync(StateNotifyPayload args, CancellationToken cancellationToken)
     {
         // Flat lane, like the transition hops: anchored on the settling request's lane (payload
-        // TraceRoot) with the scheduling hop linked as predecessor. Reset, not Use — the ambient lane
+        // TraceRoot) with the scheduling hop tagged as predecessor. Reset, not Use — the ambient lane
         // here belongs to the Dapr scheduler callback. A payload without an anchor (older build)
         // degrades to exactly the previous continue-the-predecessor parenting.
         using var lane = WorkflowTraceLane.Reset(args.TraceRoot, args.ParentTraceRoot);

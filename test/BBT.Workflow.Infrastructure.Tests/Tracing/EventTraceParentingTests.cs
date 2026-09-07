@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Linq;
 using BBT.Workflow.Workers.Inbox.Tracing;
 using Shouldly;
 using Xunit;
@@ -7,7 +6,7 @@ using Xunit;
 namespace BBT.Workflow.Infrastructure.Tests.Tracing;
 
 /// <summary>
-/// Pins <see cref="EventTraceParenting.ResolveParenting"/> — the pure parenting decision behind
+/// Pins <see cref="EventTraceParenting.ResolveParent"/> — the pure parenting decision behind
 /// <c>EventTraceScope</c>'s command/fact split — since the Inbox worker has no test project of its
 /// own and the rest of the mode split (forcing/restoring a root <see cref="Activity"/>, per-event
 /// identity tags) is otherwise only pinned by Faz C's OpenObserve acceptance checks.
@@ -29,19 +28,18 @@ public class EventTraceParentingTests
 
     private static string TraceParentFor(string traceId, string spanId) => $"00-{traceId}-{spanId}-01";
 
-    // ----- ContinueTrace: must reproduce today's pre-split behavior exactly -----
+    // ----- ContinueTrace: continue the origin without cross-linking transport traces -----
 
     [Fact]
     public void ContinueTrace_WithValidTraceParent_AndNoAmbient_ParentsOntoOrigin_NoLinks()
     {
         var traceParent = TraceParentFor(OriginTraceId, OriginSpanId);
 
-        var (parent, links) = EventTraceParenting.ResolveParenting(
+        var parent = EventTraceParenting.ResolveParent(
             EventTraceMode.ContinueTrace, traceParent, traceState: null, ambient: default);
 
         parent.TraceId.ToString().ShouldBe(OriginTraceId);
         parent.SpanId.ToString().ShouldBe(OriginSpanId);
-        links.ShouldBeNull();
     }
 
     [Fact]
@@ -50,26 +48,22 @@ public class EventTraceParentingTests
         var traceParent = TraceParentFor(OriginTraceId, OriginSpanId);
         var ambient = MakeContext(OriginTraceId, AmbientSpanId);
 
-        var (parent, links) = EventTraceParenting.ResolveParenting(
+        var parent = EventTraceParenting.ResolveParent(
             EventTraceMode.ContinueTrace, traceParent, traceState: null, ambient);
 
         parent.TraceId.ToString().ShouldBe(OriginTraceId);
-        links.ShouldBeNull();
     }
 
     [Fact]
-    public void ContinueTrace_WithValidTraceParent_AndMismatchedAmbient_LinksAmbientOnly()
+    public void ContinueTrace_WithValidTraceParent_AndMismatchedAmbient_DoesNotCrossLinkTransport()
     {
         var traceParent = TraceParentFor(OriginTraceId, OriginSpanId);
         var ambient = MakeContext(AmbientTraceId, AmbientSpanId);
 
-        var (parent, links) = EventTraceParenting.ResolveParenting(
+        var parent = EventTraceParenting.ResolveParent(
             EventTraceMode.ContinueTrace, traceParent, traceState: null, ambient);
 
         parent.TraceId.ToString().ShouldBe(OriginTraceId);
-        var linkList = links.ShouldNotBeNull().ToList();
-        linkList.Count.ShouldBe(1);
-        linkList[0].Context.TraceId.ToString().ShouldBe(AmbientTraceId);
     }
 
     [Fact]
@@ -77,78 +71,64 @@ public class EventTraceParentingTests
     {
         var ambient = MakeContext(AmbientTraceId, AmbientSpanId);
 
-        var (parent, links) = EventTraceParenting.ResolveParenting(
+        var parent = EventTraceParenting.ResolveParent(
             EventTraceMode.ContinueTrace, traceParent: null, traceState: null, ambient);
 
         parent.ShouldBe(ambient);
-        links.ShouldBeNull();
     }
 
     [Fact]
     public void ContinueTrace_WithNoTraceParent_AndNoAmbient_ParentsOntoDefault()
     {
-        var (parent, links) = EventTraceParenting.ResolveParenting(
+        var parent = EventTraceParenting.ResolveParent(
             EventTraceMode.ContinueTrace, traceParent: null, traceState: null, ambient: default);
 
         parent.ShouldBe(default);
-        links.ShouldBeNull();
     }
 
-    // ----- LinkedDelivery: always roots; producer + ambient become links, tracestate rides the link -----
+    // ----- IsolatedDelivery: always roots; producer + ambient are not linked -----
 
     [Fact]
-    public void LinkedDelivery_WithValidTraceParentAndTraceState_RootsAndLinksOriginWithTraceState()
+    public void IsolatedDelivery_WithValidTraceParentAndTraceState_RootsWithoutLinks()
     {
         var traceParent = TraceParentFor(OriginTraceId, OriginSpanId);
         const string traceState = "vendor=value";
 
-        var (parent, links) = EventTraceParenting.ResolveParenting(
-            EventTraceMode.LinkedDelivery, traceParent, traceState, ambient: default);
+        var parent = EventTraceParenting.ResolveParent(
+            EventTraceMode.IsolatedDelivery, traceParent, traceState, ambient: default);
 
         parent.ShouldBe(default);
-        var linkList = links.ShouldNotBeNull().ToList();
-        linkList.Count.ShouldBe(1);
-        linkList[0].Context.TraceId.ToString().ShouldBe(OriginTraceId);
-        linkList[0].Context.TraceState.ShouldBe(traceState);
     }
 
     [Fact]
-    public void LinkedDelivery_WithTraceParentAndAmbient_RootsAndLinksBoth()
+    public void IsolatedDelivery_WithTraceParentAndAmbient_RootsWithoutLinks()
     {
         var traceParent = TraceParentFor(OriginTraceId, OriginSpanId);
         var ambient = MakeContext(AmbientTraceId, AmbientSpanId);
 
-        var (parent, links) = EventTraceParenting.ResolveParenting(
-            EventTraceMode.LinkedDelivery, traceParent, traceState: null, ambient);
+        var parent = EventTraceParenting.ResolveParent(
+            EventTraceMode.IsolatedDelivery, traceParent, traceState: null, ambient);
 
         parent.ShouldBe(default);
-        var linkList = links.ShouldNotBeNull().ToList();
-        linkList.Count.ShouldBe(2);
-        linkList.ShouldContain(l => l.Context.TraceId.ToString() == OriginTraceId);
-        linkList.ShouldContain(l => l.Context.TraceId.ToString() == AmbientTraceId);
     }
 
     [Fact]
-    public void LinkedDelivery_WithNoTraceParent_AndAmbientPresent_RootsAndLinksAmbientOnly()
+    public void IsolatedDelivery_WithNoTraceParent_AndAmbientPresent_RootsWithoutLinks()
     {
         var ambient = MakeContext(AmbientTraceId, AmbientSpanId);
 
-        var (parent, links) = EventTraceParenting.ResolveParenting(
-            EventTraceMode.LinkedDelivery, traceParent: null, traceState: null, ambient);
+        var parent = EventTraceParenting.ResolveParent(
+            EventTraceMode.IsolatedDelivery, traceParent: null, traceState: null, ambient);
 
         parent.ShouldBe(default);
-        var linkList = links.ShouldNotBeNull().ToList();
-        linkList.Count.ShouldBe(1);
-        linkList[0].Context.TraceId.ToString().ShouldBe(AmbientTraceId);
     }
 
     [Fact]
-    public void LinkedDelivery_WithNoTraceParent_AndNoAmbient_RootsWithNoLinks()
+    public void IsolatedDelivery_WithNoTraceParent_AndNoAmbient_RootsWithNoLinks()
     {
-        var (parent, links) = EventTraceParenting.ResolveParenting(
-            EventTraceMode.LinkedDelivery, traceParent: null, traceState: null, ambient: default);
+        var parent = EventTraceParenting.ResolveParent(
+            EventTraceMode.IsolatedDelivery, traceParent: null, traceState: null, ambient: default);
 
         parent.ShouldBe(default);
-        links.ShouldBeNull();
     }
 }

@@ -15,6 +15,7 @@ using BBT.Workflow.Remote.Configuration;
 using BBT.Workflow.SubFlow;
 using Microsoft.Extensions.Options;
 using NSubstitute;
+using BBT.Workflow.Remote;
 using Shouldly;
 using Xunit;
 
@@ -65,7 +66,7 @@ public sealed class RemoteInstanceCommandAppServiceChildCancelTests
                 new DiscoveryEndpoint(EndpointKind.Url, new Uri("https://child.example/"))));
 
         return new RemoteInstanceCommandAppService(
-            new HttpClient(handler),
+            new HttpRemoteTransport<IRemoteInstanceCommandAppService>(new HttpClient(handler)),
             Options.Create(new RemoteOptions()),
             resolver,
             Substitute.For<ICurrentUser>(),

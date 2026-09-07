@@ -30,6 +30,7 @@ namespace BBT.Workflow.Application.Tests.Execution.Transitions.Strategy;
 /// Unit tests for AsyncTransitionStrategy.
 /// Tests asynchronous transition execution strategy via ITransitionEnqueueGateway.
 /// </summary>
+[Collection(BBT.Workflow.Application.Tests.TracingDetailLevelCollection.Name)]
 public class AsyncTransitionStrategyTests
 {
     private readonly Mock<ITransitionContextFactory> _mockContextFactory = new();
@@ -157,8 +158,14 @@ public class AsyncTransitionStrategyTests
         var enqueue = collected.Single(a => a.DisplayName == "Transition.Enqueue");
         enqueue.GetTagItem(TelemetryConstants.TagNames.EnqueuePath).ShouldBe("Direct");
         enqueue.GetTagItem(TelemetryConstants.TagNames.JobName).ShouldNotBeNull();
-        var arm = collected.Single(a => a.DisplayName == "BackgroundJob.Arm");
+        enqueue.GetTagItem(TelemetryConstants.TagNames.TransitionKey).ShouldBe("test-transition");
+        var arm = collected.Single(a =>
+            a.DisplayName == "BackgroundJob.Arm/AsyncTransition/test-transition");
         arm.GetTagItem(TelemetryConstants.TagNames.SpanCategory).ShouldBe(TelemetryConstants.SpanCategories.Business);
+        arm.GetTagItem(TelemetryConstants.TagNames.JobName).ShouldNotBeNull();
+        arm.GetTagItem(TelemetryConstants.TagNames.JobType).ShouldBe("AsyncTransition");
+        arm.GetTagItem(TelemetryConstants.TagNames.TransitionKey).ShouldBe("test-transition");
+        arm.GetTagItem(TelemetryConstants.TagNames.StateFrom).ShouldBe("state1");
         _mockArmHandle.Verify(h => h.ArmAsync(It.IsAny<CancellationToken>()), Times.Once);
     }
 

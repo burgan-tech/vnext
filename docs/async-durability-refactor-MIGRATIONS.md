@@ -1,5 +1,18 @@
 # Async/Durability Refactor — Required EF Core Migrations
 
+> **STATUS: superseded, kept for history.** The `ChainToken`/`ChainHeartbeat`/`ResumePoint`
+> columns this draft specifies were added (`20260611200135_Instance_LockChainToken` and
+> follow-ups) and then dropped before the design they backed ever shipped as documented
+> runtime behavior (`20260810181548_DropInstanceChainTokenColumns`,
+> `20260812053101_DropInstanceResumePointColumn`). Current code has no `ChainToken`,
+> `ChainReaperService`, or chain-ownership gate — concurrency is the plain Busy status CAS
+> described in [`.claude/rules/vnext-workflow-developer.md`](../.claude/rules/vnext-workflow-developer.md)
+> § "Locking — one lock, at the status change". Do **not** generate the migrations below;
+> they do not correspond to anything `InstancesModelCreatingExtensions` maps today. See
+> [Async Transition Execution Modes](architecture/async-transition-execution-modes.md) §
+> "What used to be here" for the current state. The rest of this file is left as originally
+> drafted, for anyone reconstructing why those migrations once existed.
+
 > These migrations were **NOT generated** in the drafting environment (no .NET SDK /
 > restricted network). They **must be generated with the EF Core tooling** (which also
 > updates the `WorkflowDbContextModelSnapshot` + `.Designer` files) before the branch can

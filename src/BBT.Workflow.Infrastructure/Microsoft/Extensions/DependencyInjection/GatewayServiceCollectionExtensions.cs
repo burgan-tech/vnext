@@ -32,12 +32,13 @@ public static class GatewayServiceCollectionExtensions
 
         services.AddKeyedScoped<IRelatedInstanceReader, LocalRelatedInstanceReader>(RelatedReaderKeys.Local);
 
-        // RemoteRelatedInstanceReader is a typed HttpClient consumer, so it must come from the
-        // AddRemoteService registration to inherit the timeout / retry / circuit-breaker stack its
-        // siblings get. AddKeyedScoped<,> alone would hand it a default HttpClient with a 100s
-        // timeout — on the synchronous transition pipeline, with batch groups awaited sequentially,
-        // one hung domain would stall a transition for 100s per group. This keyed entry is an alias
-        // onto that typed-client registration, not a second construction path.
+        // RemoteRelatedInstanceReader sends through the IRemoteTransport shell, so it must come from
+        // the AddRemoteService registration to inherit the timeout / retry / circuit-breaker stack
+        // (and the HTTP-vs-Dapr routing) its siblings get. AddKeyedScoped<,> alone would construct it
+        // without a registered shell — and, before the shell existed, handed it a default HttpClient
+        // with a 100s timeout: on the synchronous transition pipeline, with batch groups awaited
+        // sequentially, one hung domain would stall a transition for 100s per group. This keyed
+        // entry is an alias onto that registration, not a second construction path.
         services.AddKeyedScoped<IRelatedInstanceReader>(
             RelatedReaderKeys.Remote,
             (serviceProvider, _) => serviceProvider.GetRequiredService<RemoteRelatedInstanceReader>());

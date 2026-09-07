@@ -11,7 +11,8 @@ namespace BBT.Workflow.Application.Tests.Telemetry;
 /// <summary>
 /// Pins the <see cref="ScriptActivityHelper"/> span contract: <c>Script.Compile</c> tags the
 /// cache outcome and maps a non-success status to an error span; <c>Script.Execute</c> carries
-/// the script-kind tag. This reverses the earlier "no compile span" decision — see
+/// the script-kind tag and <c>Script.Invoke</c> accounts for the compiled delegate call. This
+/// reverses the earlier "no compile span" decision — see
 /// <see cref="ScriptActivityHelper"/>'s class doc.
 /// </summary>
 public sealed class ScriptCompileSpanTests : IDisposable
@@ -79,5 +80,22 @@ public sealed class ScriptCompileSpanTests : IDisposable
         using (ScriptActivityHelper.StartExecuteActivity("lockKey")) { }
 
         Assert.Equal("lockKey", collected.Single().GetTagItem(TelemetryConstants.TagNames.ScriptKind));
+    }
+
+    [Fact]
+    public void InvokeActivity_IsChildOfExecuteActivity()
+    {
+        var collected = new List<Activity>();
+        using var listener = CreateListener("BBT.Workflow.Scripting", collected);
+
+        using (var execute = ScriptActivityHelper.StartExecuteActivity("subflowInputMapping"))
+        {
+            using var invoke = ScriptActivityHelper.StartInvokeActivity();
+        }
+
+        var executeSpan = collected.Single(x => x.DisplayName == "Script.Execute");
+        var invokeSpan = collected.Single(x => x.DisplayName == "Script.Invoke");
+        Assert.Equal(executeSpan.TraceId, invokeSpan.TraceId);
+        Assert.Equal(executeSpan.SpanId, invokeSpan.ParentSpanId);
     }
 }

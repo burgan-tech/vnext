@@ -39,7 +39,7 @@ public static class AuthorizationActivityHelper
     /// the process. A const is inlined by the compiler and triggers nothing.
     /// </para>
     /// </summary>
-    public const string SourceName = "BBT.Workflow.Authorization";
+    public const string SourceName = TelemetryConstants.ActivitySources.Authorization;
 
     /// <summary>
     /// ActivitySource for authorization operations. Hosts that register sources explicitly must list

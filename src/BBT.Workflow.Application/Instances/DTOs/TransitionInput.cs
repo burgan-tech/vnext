@@ -64,6 +64,21 @@ public sealed class TransitionInput(
     public bool ChainReserved { get; set; }
 
     /// <summary>
+    /// When true, a <see cref="Sync"/> transition still awaits the pipeline but returns an
+    /// identity-only response (<c>Id</c>, <c>Key</c>, <c>Status</c>): no read-only reload, no schema
+    /// field filter, no script context, no extension pass.
+    /// <para>
+    /// SERVER-ONLY, same posture as <see cref="ChainReserved"/>: the public transition endpoint never
+    /// binds it. Set by the runtime's subflow-forward surfaces (<c>ForwardToSubflowJobHandler</c>
+    /// locally, the internal <c>subflow-forward</c> endpoint cross-domain). The relay reads only
+    /// <c>Status</c> from the child's response — <c>ClientResponse</c> carries Id/Status/Error — and
+    /// the attributes/extensions the client receives come from the PARENT's own enrichment, so the
+    /// child's projection was discarded work on every forward, sync or async.
+    /// </para>
+    /// </summary>
+    public bool SuppressResponseEnrichment { get; set; }
+
+    /// <summary>
     /// Creates a WorkflowExecutionContext from this TransitionInput for manual transition execution.
     /// </summary>
     /// <param name="instanceId">The workflow instance identifier</param>

@@ -1,6 +1,6 @@
 # GetInstance Task
 
-`GetInstanceTask` (type `"18"`) is a trigger task that retrieves a **full single-instance
+`GetInstanceTask` (type `"19"`, `TaskType.GetInstance`) is a trigger task that retrieves a **full single-instance
 projection** — metadata **and** data — for a workflow instance. It is the task-level equivalent of:
 
 ```
@@ -13,7 +13,7 @@ It complements the two existing instance-query tasks:
 |------|------|---------|----------|
 | `GetInstancesTask` | 15 | Paged/grouped list | `GET .../instances` |
 | `GetInstanceDataTask` | 13 | Data (attributes) only | `GET .../instances/{instance}/data` |
-| **`GetInstanceTask`** | **18** | **Full projection (metadata + attributes)** | `GET .../instances/{instance}` |
+| **`GetInstanceTask`** | **19** | **Full projection (metadata + attributes)** | `GET .../instances/{instance}` |
 
 ## When to use
 
@@ -59,7 +59,7 @@ instance lives. `304 Not Modified` (ETag) is handled the same as `GetInstanceDat
 ```jsonc
 {
   "key": "load-account",
-  "type": "18",
+  "type": "19",
   "domain": "core",
   "flow": "account-opening",
   "instanceId": "d2d65771-5595-44aa-b0e5-630353d87a80",

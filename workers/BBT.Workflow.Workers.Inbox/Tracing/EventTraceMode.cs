@@ -7,8 +7,10 @@ public enum EventTraceMode
     /// (parent = the event's TraceParent). Same policy as before this change.</summary>
     ContinueTrace,
 
-    /// <summary>FACT delivery: the handler roots its own delivery trace; the producer's
-    /// TraceParent becomes an ActivityLink. Lane Reset side-effects are identical in both
-    /// modes — a genuine backup-settled resume still anchors into the parent's tree.</summary>
-    LinkedDelivery
+    /// <summary>FACT delivery: the handler roots its own delivery trace without cross-trace
+    /// ActivityLinks. Producer and transport ids remain searchable tags, preventing Elastic from
+    /// splicing delayed backup delivery into the business waterfall. Lane Reset side-effects are
+    /// identical in both modes — a genuine backup-settled resume still anchors into the parent's
+    /// tree.</summary>
+    IsolatedDelivery
 }

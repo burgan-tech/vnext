@@ -34,6 +34,20 @@ public sealed class StartInstanceInput(
     public string[]? Extensions { get; set; }
 
     /// <summary>
+    /// When true, a <see cref="Sync"/> start still awaits the pipeline but returns an identity-only
+    /// response (<c>Id</c>, <c>Key</c>, <c>Status</c>): no read-only reload, no schema field filter,
+    /// no script context, no extension pass.
+    /// <para>
+    /// SERVER-ONLY. Never bound from a client request — the public start endpoint constructs
+    /// <see cref="StartInstanceInput"/> itself. Set by the runtime's own child-start surfaces
+    /// (<c>SubflowStarter</c> locally, the <c>sub/instances/start</c> endpoint cross-domain), which
+    /// read <c>IsSuccess</c> from the response and nothing else; projecting attributes, ETag and
+    /// extensions there was discarded work on every subflow start.
+    /// </para>
+    /// </summary>
+    public bool SuppressResponseEnrichment { get; set; }
+
+    /// <summary>
     /// Creates a WorkflowExecutionContext from this StartInstanceInput for starting a new workflow instance.
     /// </summary>
     /// <param name="instanceId">The workflow instance identifier</param>

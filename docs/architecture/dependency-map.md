@@ -40,7 +40,7 @@ binding and returns a result; it does not own workflow aggregates.
 | Task executors | Domain task executor contracts | Application task executors. |
 | Task invokers | Execution abstractions / Execution services | Execution project invokers. |
 | Remote app services | Application remote interfaces | Infrastructure HTTP clients. |
-| Event hooks | Events contracts / Infrastructure registrations | Infrastructure hook classes. |
+| Distributed events | Events contracts | Inbox worker handlers via transactional outbox. Subflow terminal events also go through `SubflowTerminalRelay` (see [Event Publish Modes](../runtime/event-publish-modes.md)). |
 | Inbox handlers | Events contracts | Inbox worker handlers. |
 
 ## Failure Modes

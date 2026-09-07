@@ -188,7 +188,7 @@ public sealed class AsyncTransitionStrategy(
         // leaves an armed job behind. A null handle means the outbox relay owns delivery instead.
         if (acceptResult.IsSuccess && armHandle is not null)
         {
-            using var armActivity = BackgroundJobActivityHelper.StartArmActivity(jobName.Value);
+            using var armActivity = BackgroundJobActivityHelper.StartArmActivity(jobName);
             try
             {
                 await armHandle.ArmAsync(cancellationToken);
@@ -226,7 +226,8 @@ public sealed class AsyncTransitionStrategy(
     {
         // The durable half of the accept — job row, delivery decision, commit — runs under the
         // status lock and used to be the unnamed remainder of the server span.
-        using var enqueueActivity = PipelineStepActivityHelper.StartOperationActivity("Transition.Enqueue");
+        using var enqueueActivity = PipelineStepActivityHelper.StartTransitionActivity(
+            "Transition.Enqueue", transContext.TransitionKey);
         enqueueActivity?.SetTag(TelemetryConstants.TagNames.JobName, jobName.Value);
 
         var directPayload = BuildDirectPayload(context, transContext, jobName.Value, activity, subflowChainReserved);

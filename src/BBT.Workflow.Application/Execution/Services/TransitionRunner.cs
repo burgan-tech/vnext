@@ -67,6 +67,7 @@ public sealed class TransitionRunner(
             if (decision.FaultRequest is not null)
             {
                 return await MutateParentAsync(
+                    "PostCommit.Fault",
                     parentSnapshot,
                     (service, ct) => service.FaultAsync(parentSnapshot, decision.FaultRequest, ct),
                     cancellationToken);
@@ -81,6 +82,7 @@ public sealed class TransitionRunner(
             // HandoffToChild (and a ContinueParent job with no remaining continuation) settles
             // from a fresh authoritative reload. The old outer NextTransition is never executed.
             return await MutateParentAsync(
+                "PostCommit.Settle",
                 parentSnapshot,
                 (service, ct) => service.SettleAsync(parentSnapshot, coreOutput.Continuations, ct),
                 cancellationToken);
@@ -97,12 +99,16 @@ public sealed class TransitionRunner(
                 stageContext.TransitionKey));
     }
 
-    private Task<Result<PostCommitCoordinationResult>> CoordinatePostCommitAsync(
+    private async Task<Result<PostCommitCoordinationResult>> CoordinatePostCommitAsync(
         PostCommitParentSnapshot snapshot,
         TransitionExecutionContext sourceContext,
         CancellationToken cancellationToken)
     {
-        return scopeFactory.ExecuteWithWorkflowAsync(
+        using var activity = PipelineStepActivityHelper.StartTransitionActivity(
+            "PostCommit.Coordinate", sourceContext.TransitionKey);
+        // The committed context already holds the definition this stage ran with; the fresh scope
+        // reuses it instead of re-resolving the same coordinates from the component cache.
+        var result = await scopeFactory.ExecuteWithWorkflowAsync(
             snapshot.Domain,
             snapshot.WorkflowKey,
             snapshot.WorkflowVersion,
@@ -115,15 +121,34 @@ public sealed class TransitionRunner(
                     return await coordinator.CoordinateAsync(sourceContext, ct);
                 }
             },
-            cancellationToken);
+            cancellationToken,
+            resolvedWorkflow: sourceContext.Workflow);
+        if (!result.IsSuccess)
+            activity?.SetStatus(ActivityStatusCode.Error, result.Error.Message);
+
+        return result;
     }
 
-    private Task<Result<TransitionOutput>> MutateParentAsync(
+    /// <summary>
+    /// Runs one fresh-parent mutation (settle or fault) in its own workflow scope, under a single
+    /// <c>PostCommit.Settle</c> / <c>PostCommit.Fault</c> span. Everything the mutation does — the
+    /// status lock, the authoritative reload, <c>Transition.Settle</c>, its commit and the release —
+    /// used to land directly on the transaction as unrelated siblings after
+    /// <c>PostCommit.Coordinate</c>; the span names the phase they belong to.
+    /// </summary>
+    private async Task<Result<TransitionOutput>> MutateParentAsync(
+        string operationName,
         PostCommitParentSnapshot snapshot,
         Func<IPostCommitParentMutationService, CancellationToken, Task<Result<TransitionOutput>>> mutation,
         CancellationToken cancellationToken)
     {
-        return scopeFactory.ExecuteWithWorkflowAsync(
+        using var activity = PipelineStepActivityHelper.StartTransitionActivity(
+            operationName, snapshot.TransitionKey);
+        activity?.SetTag(TelemetryConstants.TagNames.InstanceId, snapshot.InstanceId.ToString());
+
+        // The snapshot carries the definition across the handoff (see PostCommitParentSnapshot.Workflow),
+        // and the mutation service builds its fresh context from it — the scope has nothing to resolve.
+        var result = await scopeFactory.ExecuteWithWorkflowAsync(
             snapshot.Domain,
             snapshot.WorkflowKey,
             snapshot.WorkflowVersion,
@@ -136,7 +161,12 @@ public sealed class TransitionRunner(
                     return await mutation(mutationService, ct);
                 }
             },
-            cancellationToken);
+            cancellationToken,
+            resolvedWorkflow: snapshot.Workflow);
+        if (!result.IsSuccess)
+            activity?.SetStatus(ActivityStatusCode.Error, result.Error.Message);
+
+        return result;
     }
 
     /// <summary>
@@ -170,7 +200,8 @@ public sealed class TransitionRunner(
                     if (!coreResult.IsSuccess)
                         return Result<TransitionCoreOutput>.Fail(coreResult.Error);
 
-                    using (PipelineStepActivityHelper.StartOperationActivity("Events.PublishDeferred"))
+                    using (PipelineStepActivityHelper.StartTransitionActivity(
+                               "Events.PublishDeferred", context.TransitionKey))
                     {
                         await PublishDeferredEventsAsync(sp, uowManager, coreResult.Value!, ct);
                     }
@@ -178,9 +209,25 @@ public sealed class TransitionRunner(
                     // The transaction commit — everything the hop wrote reaching the database at
                     // once. It sat outside every span, so a slow commit read as time the hop spent
                     // nowhere.
-                    using (PipelineStepActivityHelper.StartOperationActivity("Uow.Commit"))
+                    ActivityContext commitContext;
+                    using (var commitActivity = PipelineStepActivityHelper.StartTransitionActivity(
+                               "Uow.Commit", context.TransitionKey))
                     {
                         await uow.CommitAsync(ct);
+                        commitContext = commitActivity?.Context ?? default;
+                    }
+
+                    // The activation episode closes HERE, not at Transition.Settle: the settlement's
+                    // Busy→Active write only becomes visible to a client polling the state function
+                    // once this commit lands. Emitted while the transaction (job span or server
+                    // span) is still Activity.Current, parented to the lane anchor with its start
+                    // backdated to the originating request — see ActivationActivity.
+                    var executionContext = coreResult.Value!.ExecutionContext;
+                    if (executionContext.Directives.Activation is { } verdict)
+                    {
+                        ActivationActivity.Emit(executionContext, verdict, commitContext);
+                        if (verdict.CasFlipped)
+                            Activity.Current?.AddEvent(new ActivityEvent("instance.available.committed"));
                     }
 
                     // The activation episode closes HERE, not at Transition.Settle: the settlement's

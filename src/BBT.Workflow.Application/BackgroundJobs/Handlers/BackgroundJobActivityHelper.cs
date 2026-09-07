@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using BBT.Workflow.BackgroundJobs.Payloads;
+using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Telemetry;
 
@@ -13,18 +14,20 @@ namespace BBT.Workflow.BackgroundJobs.Handlers;
 public static class BackgroundJobActivityHelper
 {
     /// <summary>
-    /// ActivitySource for creating activities linked to the original trace context.
+    /// ActivitySource for creating activities correlated with the original trace context.
     /// Used by all background job handlers for distributed tracing correlation.
     /// </summary>
-    public static readonly ActivitySource ActivitySource = new("BBT.Workflow.BackgroundJobs");
+    public static readonly ActivitySource ActivitySource = new(TelemetryConstants.ActivitySources.BackgroundJobs);
 
     /// <summary>
     /// Continues the ORIGINAL trace captured at enqueue time: the payload's TraceParent becomes
     /// the real parent, so the job (and everything it spawns — pipeline, Execution invoke, remote
     /// tasks) appears inside the caller's trace tree in APM. The ambient Dapr scheduler-callback
-    /// span (POST /job/{name}) is attached as an ActivityLink instead. Use for jobs that fire
-    /// immediately after enqueue (transition jobs, state notify); deferred jobs (timers, timeouts)
-    /// must use <see cref="StartActivityAsChildWithLink"/> so hours-old traces are not resurrected.
+    /// span (POST /job/{name}) is retained as searchable id tags rather than an ActivityLink, so
+    /// Elastic does not splice the callback transport trace into the business waterfall. Use for
+    /// jobs that fire immediately after enqueue (transition jobs, state notify); deferred jobs
+    /// (timers, timeouts) must use <see cref="StartDeferredActivity"/> so hours-old traces are not
+    /// resurrected.
     /// Falls back to the ambient parent when the payload carries no or invalid trace context.
     /// </summary>
     public static Activity? StartActivityContinuingTrace(string activityName, ITraceableJobPayload payload)
@@ -32,23 +35,18 @@ public static class BackgroundJobActivityHelper
         if (!string.IsNullOrEmpty(payload.TraceParent) &&
             ActivityContext.TryParse(payload.TraceParent, payload.TraceState, isRemote: true, out var originalContext))
         {
-            IEnumerable<ActivityLink>? links = null;
             var ambient = Activity.Current;
-            if (ambient is not null && ambient.Context.TraceId != originalContext.TraceId)
-            {
-                links = [new ActivityLink(ambient.Context)];
-            }
+            var callbackContext = ambient is not null && ambient.Context.TraceId != originalContext.TraceId
+                ? ambient.Context
+                : default;
 
             var activity = ActivitySource.StartActivity(
                 activityName,
                 ActivityKind.Consumer,
                 parentContext: originalContext,
                 tags: null,
-                links: links);
-            if (links is not null)
-            {
-                activity?.SetTag("vnext.dapr.callback", true);
-            }
+                links: null);
+            StampDaprCallback(activity, callbackContext);
 
             return activity;
         }
@@ -62,35 +60,38 @@ public static class BackgroundJobActivityHelper
     /// <summary>
     /// Starts a new activity as a child of the current ambient span (e.g. the Dapr HTTP
     /// invocation span), so the full execution tree is visible under the caller's trace.
-    /// If the payload carries a TraceParent from when the job was originally enqueued,
-    /// that context is attached as an ActivityLink for cross-trace correlation.
+    /// If the payload carries a TraceParent from when the job was originally enqueued, that
+    /// context is retained as searchable id tags for cross-trace correlation.
     /// This is the DEFERRED-job policy: timer/timeout/ack jobs fire long after enqueue, so the
-    /// original trace is referenced by link only; immediate jobs should use
+    /// original trace is referenced by searchable id tags only; immediate jobs should use
     /// <see cref="StartActivityContinuingTrace"/> to stay inside the originating trace.
     /// </summary>
-    public static Activity? StartActivityAsChildWithLink(string activityName, ITraceableJobPayload payload)
+    public static Activity? StartDeferredActivity(string activityName, ITraceableJobPayload payload)
     {
-        IEnumerable<ActivityLink>? links = null;
+        var originalContext = default(ActivityContext);
+        var hasOrigin = !string.IsNullOrEmpty(payload.TraceParent) &&
+            ActivityContext.TryParse(payload.TraceParent, payload.TraceState, out originalContext) &&
+            originalContext.TraceId != Activity.Current?.Context.TraceId;
 
-        if (!string.IsNullOrEmpty(payload.TraceParent) &&
-            ActivityContext.TryParse(payload.TraceParent, payload.TraceState, out var originalContext) &&
-            originalContext.TraceId != Activity.Current?.Context.TraceId)
-        {
-            links = [new ActivityLink(originalContext)];
-        }
-
-        return ActivitySource.StartActivity(
+        var activity = ActivitySource.StartActivity(
             activityName,
             ActivityKind.Consumer,
             parentContext: Activity.Current?.Context ?? default,
             tags: null,
-            links: links);
+            links: null);
+        if (activity is not null && hasOrigin)
+        {
+            activity.SetTag(TelemetryConstants.TagNames.OriginTraceId, originalContext.TraceId.ToString());
+            activity.SetTag(TelemetryConstants.TagNames.OriginSpanId, originalContext.SpanId.ToString());
+        }
+
+        return activity;
     }
 
     /// <summary>
     /// Starts the job's span as a <em>flat-lane</em> item: parented to the payload's trace lane
-    /// anchor so that every hop of the same instance is a SIBLING, with the enqueue-time
-    /// <c>TraceParent</c> attached as an <see cref="ActivityLink"/> instead of as the parent.
+    /// anchor so that every hop of the same instance is a SIBLING. The enqueue-time
+    /// <c>TraceParent</c> is retained as the searchable <c>vnext.hop.predecessor</c> tag.
     /// <para>
     /// This is what removes the old "nesting depth == chain depth" behaviour. Kind stays
     /// <see cref="ActivityKind.Consumer"/> so Elastic APM keeps treating the job as a transaction.
@@ -114,14 +115,32 @@ public static class BackgroundJobActivityHelper
     /// tail, and the start of the dead time before the job span begins — was invisible. Implicit
     /// parent, Business category, like every other in-process span.
     /// </summary>
-    public static Activity? StartArmActivity(string jobName)
+    public static Activity? StartArmActivity(JobName jobName)
     {
-        var activity = ActivitySource.StartActivity("BackgroundJob.Arm", ActivityKind.Internal);
+        ArgumentNullException.ThrowIfNull(jobName);
+
+        var discriminator = jobName.TransitionKey is { Length: > 0 } transitionKey
+            ? $"{jobName.Type}/{transitionKey}"
+            : jobName.Type.ToString();
+        var activity = ActivitySource.StartActivity(
+            $"BackgroundJob.Arm/{discriminator}", ActivityKind.Internal);
         if (activity is null) return null;
 
         activity.SetTag(TelemetryConstants.TagNames.SpanCategory, TelemetryConstants.SpanCategories.Business);
-        activity.SetTag(TelemetryConstants.TagNames.JobName, jobName);
+        activity.SetTag(TelemetryConstants.TagNames.JobName, jobName.Value);
+        activity.SetTag(TelemetryConstants.TagNames.JobType, jobName.Type.ToString());
+        activity.SetTag(TelemetryConstants.TagNames.TransitionKey, jobName.TransitionKey);
+        activity.SetTag(TelemetryConstants.TagNames.StateFrom, jobName.SourceState);
         return activity;
+    }
+
+    private static void StampDaprCallback(Activity? activity, ActivityContext callbackContext)
+    {
+        if (activity is null || callbackContext == default) return;
+
+        activity.SetTag(TelemetryConstants.TagNames.DaprCallback, true);
+        activity.SetTag(TelemetryConstants.TagNames.DaprCallbackTraceId, callbackContext.TraceId.ToString());
+        activity.SetTag(TelemetryConstants.TagNames.DaprCallbackSpanId, callbackContext.SpanId.ToString());
     }
 
     /// <summary>
@@ -161,4 +180,3 @@ public static class BackgroundJobActivityHelper
         activity?.SetTag(TelemetryConstants.TagNames.TransitionKey, transitionKey);
     }
 }
-

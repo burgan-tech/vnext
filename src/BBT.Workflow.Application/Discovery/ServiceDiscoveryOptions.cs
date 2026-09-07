@@ -113,4 +113,48 @@ public sealed class ServiceDiscoveryOptions
     /// Default is true for security reasons.
     /// </summary>
     public bool ValidateSsl { get; set; } = true;
+
+    /// <summary>
+    /// Selects how a domain name is turned into a callable endpoint — and, as a direct
+    /// consequence, how the call travels.
+    /// <para>
+    /// <c>"http"</c> (default) keeps today's behaviour exactly: the registry supplies a
+    /// <c>baseUrl</c> and the <c>Remote*</c> typed clients call it over plain HTTP.
+    /// </para>
+    /// <para>
+    /// <c>"dapr"</c> derives the target's Dapr app-id by convention and returns a
+    /// <see cref="EndpointKind.Dapr"/> endpoint, which the remote transport shell sends through
+    /// <c>DaprClient</c> to the local sidecar (Dapr Name Resolution then resolves the address, and
+    /// mTLS applies).
+    /// </para>
+    /// <para>
+    /// Transport is deliberately NOT a second switch. A separate <c>Remote:Transport</c> key
+    /// could be set to disagree with this one, producing "resolve via Dapr, call over HTTP" —
+    /// a combination that cannot work. Because the provider's output carries the transport in
+    /// its URI scheme, that state is unrepresentable instead of merely discouraged.
+    /// </para>
+    /// <para>
+    /// Unrecognized values fall back to <c>"http"</c>: an unreadable provider name must not
+    /// silently move production traffic onto a new transport.
+    /// </para>
+    /// </summary>
+    public string Provider { get; set; } = DiscoveryProviders.Http;
+
+    /// <summary>
+    /// Settings that apply only when <see cref="Provider"/> is <c>"dapr"</c>
+    /// (configuration section <c>ServiceDiscovery:Dapr</c>).
+    /// </summary>
+    public DaprDiscoveryOptions Dapr { get; set; } = new();
+}
+
+/// <summary>
+/// Valid <see cref="ServiceDiscoveryOptions.Provider"/> values.
+/// </summary>
+public static class DiscoveryProviders
+{
+    /// <summary>Registry-supplied base URL over plain HTTP. The default.</summary>
+    public const string Http = "http";
+
+    /// <summary>Convention-derived Dapr app-id, invoked through the sidecar.</summary>
+    public const string Dapr = "dapr";
 }

@@ -13,6 +13,7 @@ using BBT.Workflow.Instances.Remote;
 using BBT.Workflow.Remote.Configuration;
 using Microsoft.Extensions.Options;
 using NSubstitute;
+using BBT.Workflow.Remote;
 using Shouldly;
 using Xunit;
 
@@ -47,7 +48,7 @@ public sealed class RemoteInstanceQueryStateCallHeaderTests
                 new DiscoveryEndpoint(EndpointKind.Url, new Uri("https://remote-domain.test/"))));
 
         return new RemoteInstanceQueryAppService(
-            new HttpClient(handler),
+            new HttpRemoteTransport<IRemoteInstanceQueryAppService>(new HttpClient(handler)),
             Options.Create(new RemoteOptions()),
             endpointResolver,
             Substitute.For<ICurrentUser>());

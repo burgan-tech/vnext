@@ -15,7 +15,7 @@ namespace BBT.Workflow.Scripting;
 public static class ScriptActivityHelper
 {
     /// <summary>ActivitySource for script spans. Registered in Telemetry:Tracing:AdditionalSources.</summary>
-    public static readonly ActivitySource ActivitySource = new("BBT.Workflow.Scripting");
+    public static readonly ActivitySource ActivitySource = new(TelemetryConstants.ActivitySources.Scripting);
 
     /// <summary>
     /// Starts the span covering one compile call, named <c>Script.Compile/{identity}</c> so the tree
@@ -67,6 +67,20 @@ public static class ScriptActivityHelper
             activity.SetTag(TelemetryConstants.TagNames.SpanCategory, TelemetryConstants.SpanCategories.Business);
         }
 
+        return activity;
+    }
+
+    /// <summary>
+    /// Starts the child span covering invocation of an already compiled script instance. Keeping
+    /// this separate from <c>Script.Compile</c> makes the remainder of <c>Script.Execute</c>
+    /// attributable instead of looking like an unexplained waterfall gap on cold executions.
+    /// </summary>
+    public static Activity? StartInvokeActivity()
+    {
+        var activity = ActivitySource.StartActivity("Script.Invoke", ActivityKind.Internal);
+        activity?.SetTag(
+            TelemetryConstants.TagNames.SpanCategory,
+            TelemetryConstants.SpanCategories.Business);
         return activity;
     }
 

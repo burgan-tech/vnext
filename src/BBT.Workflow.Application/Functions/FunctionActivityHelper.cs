@@ -12,7 +12,7 @@ namespace BBT.Workflow.Functions;
 public static class FunctionActivityHelper
 {
     /// <summary>Source name as a const so test listeners never touch the static field (type-init trap).</summary>
-    public const string SourceName = "BBT.Workflow.Functions";
+    public const string SourceName = TelemetryConstants.ActivitySources.Functions;
 
     /// <summary>ActivitySource for function-path spans. Registered in Telemetry:Tracing:AdditionalSources.</summary>
     public static readonly ActivitySource ActivitySource = new(SourceName);

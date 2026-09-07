@@ -265,9 +265,17 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
         Guid subInstanceId,
         CancellationToken cancellationToken = default);
 
-    /// <summary>Loads latest parent data and only active correlations for post-commit settlement.</summary>
+    /// <summary>
+    /// Loads the parent for post-commit settlement: always its open correlations (the settlement
+    /// guard and the fault cascade read them), and its latest data row only when
+    /// <paramref name="includeLatestData"/> is set. The returned aggregate is marked partially
+    /// loaded either way; with the data excluded, <see cref="Instance.LatestData"/> is null and
+    /// must not be read. The decision of when data is needed lives with the caller — see the
+    /// decision matrix on <c>PostCommitParentMutationService</c>.
+    /// </summary>
     Task<Instance?> FindForPostCommitSettlementAsync(
         Guid instanceId,
+        bool includeLatestData,
         CancellationToken cancellationToken = default);
 
     /// <summary>

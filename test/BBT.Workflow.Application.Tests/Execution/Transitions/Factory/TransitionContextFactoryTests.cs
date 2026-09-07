@@ -21,6 +21,65 @@ namespace BBT.Workflow.Application.Tests.Execution.Transitions.Factory;
 
 public class TransitionContextFactoryTests
 {
+    [Theory]
+    [InlineData(5)]
+    [InlineData(10)]
+    public async Task InlineChain_ShouldReduceRepositoryLoadsAndKeepHopContextsIsolated(int hops)
+    {
+        var workflow = CreateWorkflow("test-workflow", "test-domain");
+        var instance = Instance.Create(Guid.NewGuid(), workflow.Key, workflow.Version);
+        instance.ChangeState(workflow.GetState("state1").Value!);
+        var input = new WorkflowExecutionContext
+        {
+            Domain = workflow.Domain, WorkflowKey = workflow.Key, WorkflowVersion = workflow.Version,
+            InstanceId = instance.Id.ToString(), TransitionKey = "start", Mode = ExecMode.Sync,
+            RouteValues = new Dictionary<string, string?> { ["channel"] = "mobile" }
+        };
+        var repository = new Mock<IInstanceRepository>();
+        repository.Setup(x => x.GetActiveAsync(input.InstanceId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result<Instance>.Ok(instance));
+        var cache = new Mock<IComponentCacheStore>();
+        cache.Setup(x => x.GetFlowAsync(input.Domain, input.WorkflowKey, input.WorkflowVersion,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result<Definitions.Workflow>.Ok(workflow));
+        var factory = new TransitionContextFactory(repository.Object, cache.Object, Mock.Of<IRuntimeInfoProvider>());
+
+        // Baseline: the previous implementation rehydrated every hop.
+        for (var hop = 0; hop < hops; hop++)
+            (await factory.CreateAsync(input, CancellationToken.None)).IsSuccess.ShouldBeTrue();
+        repository.Verify(x => x.GetActiveAsync(input.InstanceId, It.IsAny<CancellationToken>()), Times.Exactly(hops));
+        cache.Verify(x => x.GetFlowAsync(input.Domain, input.WorkflowKey, input.WorkflowVersion,
+            It.IsAny<CancellationToken>()), Times.Exactly(hops));
+        repository.Invocations.Clear();
+        cache.Invocations.Clear();
+
+        var current = (await factory.CreateAsync(input, CancellationToken.None)).Value!;
+        for (var hop = 1; hop < hops; hop++)
+        {
+            current.Items["previous-hop"] = hop;
+            current.Directives.RequestNextTransition(new NextTransitionRequest("start"));
+            // Mutation of the carried aggregate must be visible without another repository read.
+            instance.ChangeState(workflow.GetState(hop % 2 == 0 ? "state1" : "state2").Value!);
+            instance.SetStage($"hop-{hop}");
+            var next = factory.CreateFromPreloaded(input, current.Workflow, current.Instance).Value!;
+            next.ShouldNotBeSameAs(current);
+            next.Instance.ShouldBeSameAs(instance);
+            next.Workflow.ShouldBeSameAs(workflow);
+            next.Current.Key.ShouldBe(instance.GetCurrentState);
+            next.Instance.Stage.ShouldBe($"hop-{hop}");
+            next.RouteValues["channel"].ShouldBe("mobile");
+            next.Items.ContainsKey("previous-hop").ShouldBeFalse();
+            next.Directives.NextTransition.ShouldBeNull();
+            current = next;
+        }
+        repository.Verify(x => x.GetActiveAsync(input.InstanceId, It.IsAny<CancellationToken>()), Times.Once);
+        cache.Verify(x => x.GetFlowAsync(input.Domain, input.WorkflowKey, input.WorkflowVersion,
+            It.IsAny<CancellationToken>()), Times.Once);
+        // A new stage must rehydrate, even for the same instance identity.
+        (await factory.CreateAsync(input, CancellationToken.None)).IsSuccess.ShouldBeTrue();
+        repository.Verify(x => x.GetActiveAsync(input.InstanceId, It.IsAny<CancellationToken>()), Times.Exactly(2));
+    }
+
     [Fact]
     public void TerminationContextHelpers_ShouldCreateAndPromoteCascadeContext()
     {
@@ -276,6 +335,11 @@ public class TransitionContextFactoryTests
             "states": [
                 {
                     "key": "state1",
+                    "type": "P",
+                    "transitions": []
+                },
+                {
+                    "key": "state2",
                     "type": "P",
                     "transitions": []
                 }

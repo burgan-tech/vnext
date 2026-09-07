@@ -39,7 +39,7 @@ internal sealed class InstanceSubStateChangedEventHandler(
 
         using var traceScope = EventTraceScope.Start(
             "InstanceSubStateChanged.Handle", eventData, correlationIdProvider,
-            EventTraceMode.LinkedDelivery, envelope.Id);
+            EventTraceMode.IsolatedDelivery, envelope.Id);
 
         var scopeProps = new Dictionary<string, object>
         {

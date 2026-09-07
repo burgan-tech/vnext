@@ -18,16 +18,23 @@ So `labels.vnext_script_context_memo_hits` matches nothing — the memo counters
 | `vnext.event.name`, `vnext.delivery.role` | `labels.vnext_event_name`, `labels.vnext_delivery_role` |
 | `vnext.discovery.domain`, `vnext.discovery.endpoint_kind` | `labels.vnext_discovery_domain`, … |
 | `vnext.step.outcome`, `vnext.lock.acquired`, `vnext.lock.kind` | `labels.vnext_step_outcome`, … |
+| `vnext.transition.key`, `vnext.job.type`, `vnext.job.name`, `vnext.state.from` | `labels.vnext_transition_key`, `labels.vnext_job_type`, `labels.vnext_job_name`, `labels.vnext_state_from` |
 | **`vnext.script.context.memo.hits`** | **`numeric_labels.vnext_script_context_memo_hits`** |
 | **`vnext.script.mapping.memo.hits`** | **`numeric_labels.vnext_script_mapping_memo_hits`** |
 | `vnext.step.order`, `vnext.data.size_bytes`, `vnext.chain_depth` | `numeric_labels.vnext_step_order`, … |
 
-**2. Span names carry their subject**, by design: `Cache.Get/{cacheKey}`,
-`Script.Compile/{identity}`, `Discovery.Resolve/{domain}`, `Lock.Acquire/{lockKey}`.
+**2. Some span names carry their subject**, by design: `Cache.Get/{cacheKey}`,
+`Script.Compile/{identity}`, `Discovery.Resolve/{domain}`, `Lock.Acquire/{lockKey}`, and
+`BackgroundJob.Arm/{type}/{transitionKey}`.
 A plain `terms` agg on `span.name` therefore explodes into thousands of one-hit buckets.
 The queries below normalize with a runtime field that keeps the part before the first `/`.
 It reads `doc['span.name']` (doc-values) rather than `params._source` — same result,
 much cheaper on a production-sized index.
+
+For transition analysis, filter in the logical order documented in
+[Trace Span Tree § Identity tag hierarchy](trace-span-tree.md#identity-tag-hierarchy). Group arm
+operations by `labels.vnext_job_type` or `labels.vnext_transition_key`; use
+`labels.vnext_job_name` only to inspect one concrete scheduled job.
 
 **3. Durations are INCLUSIVE of children.** Summing a parent group (`Uow.Commit`,
 `Step.*`, `Transition.LoadContext`, `TransitionJob.Execute`) counts time its children
@@ -101,7 +108,9 @@ and the cheap-but-frequent spans never make the cut. Add to `filter`:
   { "prefix": { "span.name": "Uow." } },
   { "prefix": { "span.name": "Lock." } },
   { "prefix": { "span.name": "Discovery." } },
-  { "prefix": { "span.name": "EventHook." } },
+  { "prefix": { "span.name": "Events." } },
+  { "prefix": { "span.name": "BackgroundJob." } },
+  { "prefix": { "span.name": "PostCommit." } },
   { "prefix": { "span.name": "Transition." } },
   { "prefix": { "span.name": "Step." } }
 ]}}
@@ -180,7 +189,7 @@ GET .ds-traces-apm*,traces-apm*/_search
 ```
 
 Swap the `prefix` for whatever you are hunting — `Discovery.Resolve`,
-`EventHook.`, `Script.Compile`, `Instance.Query.Prepare`. To find the *slow* ones instead
+`Events.PublishDeferred`, `BackgroundJob.Arm`, `Script.Compile`, `Instance.Query.Prepare`. To find the *slow* ones instead
 of the recent ones, sort by `{ "span.duration.us": "desc" }`.
 
 ---

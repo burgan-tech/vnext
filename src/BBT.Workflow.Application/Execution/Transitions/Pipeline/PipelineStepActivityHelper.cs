@@ -17,10 +17,10 @@ namespace BBT.Workflow.Execution.Pipeline;
 public static class PipelineStepActivityHelper
 {
     /// <summary>ActivitySource for pipeline spans. Registered in Telemetry:Tracing:AdditionalSources.</summary>
-    public static readonly ActivitySource ActivitySource = new("BBT.Workflow.Pipeline");
+    public static readonly ActivitySource ActivitySource = new(TelemetryConstants.ActivitySources.Pipeline);
 
     /// <summary>Starts the span for a pipeline step, named <c>Step.{Name}</c> (trailing "Step" trimmed).</summary>
-    public static Activity? StartStepActivity(ITransitionStep step)
+    public static Activity? StartStepActivity(ITransitionStep step, string? transitionKey = null)
     {
         var activity = ActivitySource.StartActivity(
             $"Step.{TrimStepSuffix(step.Name)}",
@@ -30,6 +30,8 @@ public static class PipelineStepActivityHelper
         {
             activity.SetTag(TelemetryConstants.TagNames.StepOrder, step.Order);
             activity.SetTag(TelemetryConstants.TagNames.SpanCategory, TelemetryConstants.SpanCategories.Business);
+            if (!string.IsNullOrWhiteSpace(transitionKey))
+                activity.SetTag(TelemetryConstants.TagNames.TransitionKey, transitionKey);
         }
 
         return activity;
@@ -79,6 +81,19 @@ public static class PipelineStepActivityHelper
             ActivityKind.Internal);
 
         activity?.SetTag(TelemetryConstants.TagNames.SpanCategory, TelemetryConstants.SpanCategories.Business);
+        return activity;
+    }
+
+    /// <summary>
+    /// Starts a pipeline operation and stamps the transition that owns it. The display name stays
+    /// stable for aggregation; <c>vnext.transition.key</c> is the searchable discriminator.
+    /// </summary>
+    public static Activity? StartTransitionActivity(string operationName, string? transitionKey)
+    {
+        var activity = StartOperationActivity(operationName);
+        if (!string.IsNullOrWhiteSpace(transitionKey))
+            activity?.SetTag(TelemetryConstants.TagNames.TransitionKey, transitionKey);
+
         return activity;
     }
 

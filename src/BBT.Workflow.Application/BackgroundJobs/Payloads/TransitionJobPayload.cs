@@ -85,8 +85,12 @@ public sealed class TransitionJobPayload : ITraceableJobPayload
     public ExecutionActor ExecutionActor { get; set; } = ExecutionActor.User;
 
     /// <summary>
-    /// Preserves the original caller's sync/async intent.
-    /// When false, subflows started from this transition will also run asynchronously.
+    /// Preserves the original caller's sync/async intent as
+    /// <see cref="BBT.Workflow.Execution.TransitionExecutionContext.CallerMode"/>.
+    /// Drives the completion/fault notification's sync flag (<c>Instance.Complete</c> /
+    /// <c>Instance.Fault</c>) so a child's terminal signal reports the way its original caller
+    /// asked for. Does NOT affect subflow start/forward mode any more — child instances always
+    /// start with <c>sync: true</c> regardless of this value; see <see cref="BBT.Workflow.SubFlow.ISubflowStarter"/>.
     /// </summary>
     public bool CallerSync { get; set; }
 

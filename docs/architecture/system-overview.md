@@ -12,9 +12,10 @@ external side effects do not collapse into one service boundary.
 | --- | --- | --- |
 | Orchestration host | `orchestration/BBT.Workflow.Orchestration.HttpApi.Host` | Public workflow API, definitions, instances, transitions, functions, subflow coordination. |
 | Execution host | `execution/BBT.Workflow.Execution.HttpApi.Host` | Stateless task invocation endpoint used by Orchestration through Dapr service invocation. |
+| Monitor host | `monitoring/BBT.Workflow.Monitor.HttpApi.Host` | Read-only operational endpoints for dashboards and support tools. |
 | Domain | `src/BBT.Workflow.Domain` | Aggregates, value objects, domain events, validation contracts, workflow definitions. |
 | Application | `src/BBT.Workflow.Application` | Use cases, DTOs, transition pipeline, task executors, query services. |
-| Infrastructure | `src/BBT.Workflow.Infrastructure` | EF Core repositories, Dapr integration, routing gateways, remote app services, event hooks. |
+| Infrastructure | `src/BBT.Workflow.Infrastructure` | EF Core repositories, Dapr integration, routing gateways and remote app services. |
 | Workers | `workers/` | Inbox, Outbox, and schema migration workloads. |
 
 ## Architecture Flow
@@ -30,6 +31,7 @@ flowchart LR
     Orch --> Dapr["Dapr service invocation"]
     Dapr --> Exec["Execution API"]
     Exec --> Invokers["Task invokers"]
+    Monitor["Monitor API"] --> Db
     Infra --> Outbox["Outbox worker"]
     Outbox --> PubSub["Dapr pub/sub"]
     PubSub --> Inbox["Inbox worker"]
@@ -59,15 +61,16 @@ events outside the request path.
 ## Observability
 
 The runtime enriches logs and traces with domain, flow, flow version, instance id,
-instance key, transition key, trigger type, chain depth, and pipeline profile. Metrics
-are registered in infrastructure monitoring types such as `WorkflowMetrics` and
-`PrometheusWorkflowMetrics`.
+instance key, transition key, trigger type, chain depth, and pipeline profile. Runtime metrics are
+registered through `WorkflowMetrics` and exported by the shared OpenTelemetry configuration.
 
 ## Change Safety
 
 - Do not move state persistence into Execution.
 - Do not make pipeline steps load EF includes ad hoc; load shape belongs to repositories.
-- New distributed domain events need both a synchronous hook and an asynchronous inbox handler.
+- New distributed domain events need an event contract, an Inbox handler and structured
+  `WorkflowLogs` entries. Subflow terminal events additionally use the post-commit terminal relay;
+  see [Event Publish Modes](../runtime/event-publish-modes.md).
 - New cross-service calls should preserve correlation, causation, and current-user headers.
 
 ## References
@@ -77,5 +80,5 @@ are registered in infrastructure monitoring types such as `WorkflowMetrics` and
 - `src/BBT.Workflow.Execution.Abstractions/TaskEnvelope.cs`
 - `src/BBT.Workflow.Infrastructure/Microsoft/Extensions/DependencyInjection/GatewayServiceCollectionExtensions.cs`
 - `workers/BBT.Workflow.Workers.Inbox/Handlers/Instances/`
-- `src/BBT.Workflow.Infrastructure/Instances/Events/`
-
+- `src/BBT.Workflow.Events.Contracts/`
+- `workers/BBT.Workflow.Workers.Inbox/Handlers/`

@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Net;
 using System.Net.Http.Json;
 using BBT.Aether.Tracing;
+using BBT.Workflow.Execution;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Shared;
 using Dapr.Client;
@@ -15,7 +16,9 @@ namespace BBT.Workflow.Workers.Inbox.Forwarding;
 /// Dapr's recommended, non-obsolete invocation API: requests to a relative path are routed through
 /// the sidecar to the target app. The orchestration app-id comes from the
 /// <c>OrchestrationApi:AppId</c> configuration key, supplied as an ENV variable (e.g.
-/// <c>OrchestrationApi__AppId</c>) to the Inbox worker, defaulting to <c>vnext-app</c>.
+/// <c>OrchestrationApi__AppId</c>) to the Inbox worker; when unset it falls back to the
+/// conventional <c>vnext-{domain}-app</c> via <see cref="VNextAppIds"/>. The old hardcoded
+/// <c>vnext-app</c> default was only correct for the <c>core</c> domain.
 /// Adds the <c>X-Workflow</c> header for schema resolution.
 /// <para>
 /// Retries (rethrows) ONLY on transient failures so the inbox processor re-delivers (at-least-once):
@@ -38,7 +41,9 @@ public sealed class DaprOrchestrationForwarder : IOrchestrationForwarder
         ICorrelationIdProvider? correlationIdProvider = null)
     {
         _correlationIdProvider = correlationIdProvider;
-        _orchestrationAppId = configuration["OrchestrationApi:AppId"] ?? "vnext-app";
+        _orchestrationAppId = VNextAppIds.OrchestratorOrDefault(
+            configuration[VNextAppIds.ConfigKeys.Orchestrator],
+            configuration[VNextAppIds.ConfigKeys.AppDomain]);
         _invocationTimeoutSeconds = int.TryParse(
             configuration["OrchestrationApi:InvocationTimeoutSeconds"], out var t) ? t : 60;
         // Invokable client: relative requests are rewritten to the Dapr invoke endpoint for appId.

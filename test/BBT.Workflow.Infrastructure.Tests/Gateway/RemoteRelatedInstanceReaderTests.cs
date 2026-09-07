@@ -14,6 +14,7 @@ using BBT.Workflow.Remote.Configuration;
 using BBT.Workflow.Scripting.Related;
 using Microsoft.Extensions.Options;
 using NSubstitute;
+using BBT.Workflow.Remote;
 using Shouldly;
 using Xunit;
 
@@ -41,7 +42,7 @@ public sealed class RemoteRelatedInstanceReaderTests
                 new DiscoveryEndpoint(EndpointKind.Url, new Uri($"https://{callInfo.Arg<string>()}.test/"))));
 
         var reader = new RemoteRelatedInstanceReader(
-            new HttpClient(handler), Options.Create(new RemoteOptions()), resolver);
+            new HttpRemoteTransport<RemoteRelatedInstanceReader>(new HttpClient(handler)), Options.Create(new RemoteOptions()), resolver);
 
         return (reader, resolver, handler);
     }
@@ -194,7 +195,7 @@ public sealed class RemoteRelatedInstanceReaderTests
             .Returns(Result<DiscoveryEndpoint>.Fail(Error.NotFound("domain_not_found", "unknown domain")));
 
         var reader = new RemoteRelatedInstanceReader(
-            new HttpClient(handler), Options.Create(new RemoteOptions()), resolver);
+            new HttpRemoteTransport<RemoteRelatedInstanceReader>(new HttpClient(handler)), Options.Create(new RemoteOptions()), resolver);
 
         var result = await reader.ReadAsync(Reference, CancellationToken.None);
 

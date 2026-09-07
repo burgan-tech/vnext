@@ -107,6 +107,7 @@ public static class TelemetryConstants
         public const string StateFrom = "vnext.state.from";
         public const string StateTo = "vnext.state.to";
         public const string JobName = "vnext.job.name";
+        public const string JobType = "vnext.job.type";
         /// <summary>
         /// Parent instance ID for subflow/subprocess correlation in traces and logs.
         /// </summary>
@@ -157,8 +158,8 @@ public static class TelemetryConstants
 
         /// <summary>
         /// Set when an anchor was rejected for belonging to a different trace. The span keeps its
-        /// ambient parent and links the anchor instead, so a stale or forged anchor cannot
-        /// teleport it into a foreign trace.
+        /// predecessor/ambient parent, so a stale or forged anchor cannot teleport it into a
+        /// foreign trace.
         /// </summary>
         public const string TraceLaneMismatch = "vnext.trace.lane.mismatch";
 
@@ -179,10 +180,23 @@ public static class TelemetryConstants
         public const string ChainDepth = "vnext.chain.depth";
 
         /// <summary>
-        /// Set when the ambient Dapr scheduler-callback span was demoted to an ActivityLink because
-        /// the span continues a different (originating) trace.
+        /// Set when the ambient Dapr scheduler-callback span belongs to a different trace from the
+        /// business span. The callback is correlated by id tags rather than an ActivityLink so
+        /// Elastic does not splice its transport trace into the business waterfall.
         /// </summary>
         public const string DaprCallback = "vnext.dapr.callback";
+
+        /// <summary>Trace id of an originating context retained for searchable correlation.</summary>
+        public const string OriginTraceId = "vnext.origin.trace_id";
+
+        /// <summary>Span id of an originating context retained for searchable correlation.</summary>
+        public const string OriginSpanId = "vnext.origin.span_id";
+
+        /// <summary>Trace id of the ambient Dapr callback/delivery transport context.</summary>
+        public const string DaprCallbackTraceId = "vnext.dapr.callback.trace_id";
+
+        /// <summary>Span id of the ambient Dapr callback/delivery transport context.</summary>
+        public const string DaprCallbackSpanId = "vnext.dapr.callback.span_id";
 
         /// <summary>
         /// Number of script compilations (hits + misses) that ran while this span was current.
@@ -205,6 +219,17 @@ public static class TelemetryConstants
 
         /// <summary>Resting status a transition settled the instance into.</summary>
         public const string SettledStatus = "vnext.settle.status";
+
+        /// <summary>
+        /// Where <c>Instance.EnrichResponse</c> took the instance it projected: <c>pipeline</c> (the
+        /// committed aggregate the execution handed back) or <c>reload</c> (a read-only re-read —
+        /// always on the start path, and on a transition whenever the pipeline instance still read
+        /// Busy or was not carried).
+        /// </summary>
+        public const string EnrichSource = "vnext.enrich.source";
+
+        /// <summary>Number of extensions the caller asked for on a sync response (0 = defaults only).</summary>
+        public const string ExtensionsRequested = "vnext.extensions.requested";
 
         /// <summary>
         /// What the Busy→Active compare-and-set at settlement actually did: <c>flipped</c> (this
@@ -369,6 +394,30 @@ public static class TelemetryConstants
         /// <summary>Endpoint kind requested from service discovery (Url or AppId). Set on every Discovery.Resolve span.</summary>
         public const string DiscoveryEndpointKind = "vnext.discovery.endpoint_kind";
 
+        /// <summary>
+        /// Which discovery provider answered: <c>http</c> (registry base URL) or <c>dapr</c>
+        /// (convention app-id + Name Resolution). Set on every Discovery.Resolve span — the
+        /// primary signal for watching a per-domain rollout, since both providers can be live
+        /// at once via <c>ServiceDiscovery:Dapr:DomainOverrides</c>.
+        /// </summary>
+        public const string DiscoveryProvider = "vnext.discovery.provider";
+
+        /// <summary>
+        /// How the endpoint was obtained: <c>convention</c>, <c>registry</c> or <c>cache</c>.
+        /// Distinguishes "resolved without touching the network" from a registry round trip.
+        /// See <see cref="DiscoveryResolutions"/>.
+        /// </summary>
+        public const string DiscoveryResolution = "vnext.discovery.resolution";
+
+        /// <summary>Resolved target Dapr app-id. Set only on the dapr provider's spans.</summary>
+        public const string DaprAppId = "vnext.dapr.app_id";
+
+        /// <summary>
+        /// Target Kubernetes namespace appended to the app-id for cross-namespace invocation.
+        /// Absent when resolution stays in the caller's own namespace.
+        /// </summary>
+        public const string DaprNamespace = "vnext.dapr.namespace";
+
         /// <summary>Execution chain id correlating hops within one auto-chain/subflow run.</summary>
         public const string ChainId = "vnext.chain.id";
 
@@ -383,6 +432,68 @@ public static class TelemetryConstants
 
         /// <summary>Delivery attempt count for a redelivered message or job.</summary>
         public const string DeliveryAttempt = "vnext.delivery.attempt";
+
+        /// <summary>Standard OpenTelemetry error.type attribute.</summary>
+        public const string ErrorType = "error.type";
+
+        /// <summary>Standard OpenTelemetry error.code attribute.</summary>
+        public const string ErrorCode = "error.code";
+
+        /// <summary>Standard OpenTelemetry db.system.name attribute (SemConv v1.25+).</summary>
+        public const string DbSystemName = "db.system.name";
+
+        /// <summary>Standard OpenTelemetry db.operation.name attribute (SemConv v1.25+).</summary>
+        public const string DbOperationName = "db.operation.name";
+
+        /// <summary>Standard OpenTelemetry rpc.system attribute.</summary>
+        public const string RpcSystem = "rpc.system";
+
+        /// <summary>Standard OpenTelemetry messaging.system attribute.</summary>
+        public const string MessagingSystem = "messaging.system";
+    }
+
+    /// <summary>
+    /// Well-known OpenTelemetry ActivitySource names used across vNext services and libraries.
+    /// Centralized to keep instrumentation, tests, and configuration (Telemetry:Tracing:AdditionalSources)
+    /// in sync without magic strings.
+    /// </summary>
+    public static class ActivitySources
+    {
+        public const string Pipeline = "BBT.Workflow.Pipeline";
+        public const string BackgroundJobs = "BBT.Workflow.BackgroundJobs";
+        public const string SubFlow = "BBT.Workflow.SubFlow";
+        public const string Tasks = "BBT.Workflow.Tasks";
+        public const string Cache = "BBT.Workflow.Cache";
+        public const string Scripting = "BBT.Workflow.Scripting";
+        public const string Authorization = "BBT.Workflow.Authorization";
+        public const string InstancesRead = "BBT.Workflow.Instances.Read";
+        public const string Functions = "BBT.Workflow.Functions";
+        public const string Extensions = "BBT.Workflow.Extensions";
+        public const string ExecutionInvokers = "BBT.Workflow.Execution.Invokers";
+        public const string Execution = "BBT.Workflow.Execution";
+        public const string ExecutionPython = "BBT.Workflow.Execution.Python";
+        public const string WorkersInbox = "BBT.Workflow.Workers.Inbox";
+
+        /// <summary>
+        /// All ActivitySource names registered by the vNext engine.
+        /// </summary>
+        public static readonly string[] All =
+        [
+            Pipeline,
+            BackgroundJobs,
+            SubFlow,
+            Tasks,
+            Cache,
+            Scripting,
+            Authorization,
+            InstancesRead,
+            Functions,
+            Extensions,
+            ExecutionInvokers,
+            Execution,
+            ExecutionPython,
+            WorkersInbox
+        ];
     }
 
     /// <summary>
@@ -452,8 +563,34 @@ public static class TelemetryConstants
     {
         /// <summary>Same domain: the gateway re-enters the query service in-process.</summary>
         public const string Local = "local";
-        /// <summary>Another domain: the gateway calls over HTTP.</summary>
+
+        /// <summary>
+        /// Another domain: the gateway calls out over the network.
+        /// <para>
+        /// Deliberately stays <c>remote</c> now that the wire may be either plain HTTP or Dapr
+        /// service invocation. The attribute describes LOCALITY (in-process vs. not), not the
+        /// transport — adding a third <c>dapr</c> value would silently break every dashboard and
+        /// query that partitions on <c>local</c> / <c>remote</c>. Which transport carried the
+        /// call is available separately as
+        /// <see cref="TelemetryConstants.TagNames.DiscoveryProvider"/>.
+        /// </para>
+        /// </summary>
         public const string Remote = "remote";
+    }
+
+    /// <summary>
+    /// Values for <see cref="TelemetryConstants.TagNames.DiscoveryResolution"/>.
+    /// </summary>
+    public static class DiscoveryResolutions
+    {
+        /// <summary>Derived from the app-id convention — no registry call was made.</summary>
+        public const string Convention = "convention";
+
+        /// <summary>Read from the discovery registry over HTTP.</summary>
+        public const string Registry = "registry";
+
+        /// <summary>Served from the provider's positive-result cache.</summary>
+        public const string Cache = "cache";
     }
 
     /// <summary>

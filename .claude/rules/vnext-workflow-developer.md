@@ -7,10 +7,10 @@ This rule complements the workflow concepts already captured in the root `CLAUDE
 | Order | Step | Responsibility |
 |-------|------|----------------|
 | 5 | HandleCancelPreflightStep | Detect cancel/exit; short-circuit if instance already completed |
-| 9 | HandleUpdateDataPreflightStep | Parent update-data / shared-transition preflight for subflows |
-| 10 | ForwardToActiveSubflowStep | Queue post-commit forward to active subflow; skip epilogue |
+| 10 | ForwardToActiveSubflowStep | Queue post-commit forward to active subflow; skip epilogue. Does not forward `updateData` or parent shared `$self` transitions. |
 | 19 | SetBusyStep | Set instance status to Busy and persist |
 | 20 | CreateTransitionRecordStep | Create transition record; duplicate key guard |
+| 21 | HandleUpdateDataDataOnlyStep | Parent with active SubFlow: persist update data and skip lifecycle/epilogue |
 | 25 | ResourceLockStep | Acquire/release/extend resource locks via script |
 | 30 | RunOnExecuteTasksStep | Run transition OnExecute tasks |
 | 38 | ApplyTimeoutStateStep | Apply timeout target into context before exit |
@@ -19,6 +19,7 @@ This rule complements the workflow concepts already captured in the root `CLAUDE
 | 50 | ChangeStateStep | Persist state change |
 | 60 | RunOnEntryTasksStep | Run target-state OnEntry tasks |
 | 70 | HandleSubFlowStep | Start subflow correlation; enqueue StartSubflowJob |
+| 75 | HandleLongPollTerminationStep | Pause after state entry and arm acknowledgment fallback when configured |
 | 79 | ClearBusyOnResumeStep | Clear busy on subflow resume path |
 | 80 | RunAutomaticTransitionsStep | Evaluate auto-transition conditions; set NextTransition |
 | 90 | ScheduleTransitionsStep | Schedule future transitions — skipped when auto selected a winner |
@@ -41,10 +42,10 @@ Flow: apply `MutateDirectives` → Stop → break; SkipTo → replan; else conti
 | Profile | Trigger | Key Exclusions |
 |---------|---------|----------------|
 | Manual | Manual (0) | None |
-| AutoChain | Automatic (1) | Preflight, CheckParentUpdateData, ForwardSubflow, SetBusy, ApplyTimeoutState (ResourceLock runs — auto-chained transitions can acquire locks) |
-| Scheduled | Scheduled (2) | Preflight, ForwardSubflow, SetBusy, ResourceLock |
-| Event | Event (3) | Preflight, ForwardSubflow, SetBusy, ResourceLock |
-| ErrorBoundary | Error boundary | Preflight, UpdateDataCheck, ForwardSubflow, ResourceLock, Auto, Schedule; `AllowAutoChain=false`, `AllowSubFlow=false` |
+| AutoChain | Automatic (1) | Preflight, ForwardSubflow, SetBusy, ApplyTimeoutState (ResourceLock runs) |
+| Scheduled | Scheduled (2) | Preflight, ForwardSubflow |
+| Event | Event (3) | Preflight, ForwardSubflow |
+| ErrorBoundary | Error boundary | Preflight, ForwardSubflow, ResourceLock; `AllowSubFlow=false` (Auto is not excluded in current code) |
 
 Resolution: `IPipelineProfileResolver.Resolve(workflowContext, transitionContext)` — if
 `IsErrorBoundaryTransition` → ErrorBoundary; else by the **workflow context's** `TriggerType` (not
@@ -95,9 +96,18 @@ A sixth profile is **composed on top of** the base, never selected instead of it
 ## Instance Repository Include Strategy
 
 - Pipeline steps do NOT call EF `Include` directly. Includes applied at load time.
-- `EfCoreInstanceRepository.WithDetailsAsync()` loads: `Include(DataList)` + `Include(ChildCorrelations.Where(!IsCompleted))` (split queries).
+- `EfCoreInstanceRepository.WithDetailsAsync()` loads `DataList` (or latest-only when
+  `WorkflowExecution:LatestOnlyInstanceLoading` is on) + `Include(ChildCorrelations.Where(!IsCompleted))`
+  (split queries).
 - `GetActiveAsync` → `GetResultAsync` → `FindByIdentifierAsync` → `WithDetailsAsync()`.
+- `GetResultAsync(includeDetails: false)` is lean (no DataList/correlations).
 - History paths: `AsNoTracking` + explicit filtered includes.
+- Post-commit settlement (`FindForPostCommitSettlementAsync(id, includeLatestData)`): open correlations
+  **always** (settlement guard + fault cascade read `ActiveCorrelations`); the latest data row only when
+  something downstream projects it — sync caller (`TransitionOutput.PipelineInstance` →
+  `EnrichOutputCoreAsync`) or a fault (`Instance.Fault` publishes a SubFlow's data upward). Async settle
+  skips it. The decision matrix lives on `PostCommitParentMutationService.NeedsLatestDataForSettle`;
+  add a new `LatestData` reader there, not by re-widening the include.
 - **Rule**: do not add unnecessary includes; reuse data from `TransitionExecutionContext`.
 
 ## Long-Polling / State Function
@@ -116,7 +126,8 @@ A sixth profile is **composed on top of** the base, never selected instead of it
   including `roles`, `view`, `schema`, `annotations`.
 - **Listed in `availableTransitions`** from every state (subject to `triggerType` Manual/Event and
   `availableIn`), and merged from the **parent** into a subflow's list — that merge is `updateData`'s
-  primary surface, since `HandleUpdateDataPreflightStep` only acts while the current state is `SubFlow`.
+  primary discovery surface. On a parent with an open SubFlow correlation, `HandleUpdateDataDataOnlyStep`
+  (21) writes data and skips to Finalize; `ForwardToActiveSubflowStep` (10) never forwards `updateData`.
 - The **configured key** is listed, never the alias (`cancel` / `update-parent-data` / `exit`): role
   filtering resolves via `FindTransitionInContext`, which matches these three on the configured key.
   Aliases stay accepted on the request side (`ResolveWellKnownKey`).
@@ -210,6 +221,38 @@ A sixth profile is **composed on top of** the base, never selected instead of it
 
 - `sync=true`: blocks until pipeline completes; full instance returned.
 - `sync=false` (default): immediate `{ id, status }`; client polls via State function.
+- Automatic continuations always execute inline and are awaited. An async request uses one initial
+  `flow.transition` job; no Scheduler job is created for each automatic hop.
+- Runtime-generated child start, active-child forward and descended retry calls always set
+  `sync=true`, independent of original caller mode and SubFlow (`S`) / SubProcess (`P`) type. The
+  call awaits the child's current activation to a rest point, not future human/event completion.
+
+### Activation episode (trace)
+
+- **Definition**: trigger → rest point. A trigger is the HTTP start/transition request, a timer or
+  timeout fire, an event delivery, a retry, a long-poll ack, a subflow resume or a child start; the
+  rest point is the Busy→Active CAS flip, Completed/Canceled, Faulted, or a deliberate rest in Busy
+  (`busy.subflow` open SubFlow correlation, `busy.parked` auto-gate not met, `busy.subtype`).
+- **One trace + one backdated `Instance.Activation/{key}` span per episode**, emitted **after** the
+  UoW commit (`TransitionRunner`, `PostCommitParentMutationService.MutateFreshAsync`,
+  `TransitionPipeline.MarkInstanceFaultedAsync`, `JobTimeoutRecoveryService`) — never at
+  `Transition.Settle`, whose flip is not durable yet. Parent = lane anchor, start = episode start,
+  settling span attached as an `ActivityLink`. Kind `Internal` (a `Consumer` would be counted as an
+  APM transaction).
+- **The episode start travels in `WorkflowTraceLane.Episode`** and, across every async boundary, as
+  `EpisodeStartedAt` / `EpisodeTrigger` / `EpisodeTransitionKey` beside `TraceRoot` in every lane
+  carrier (`TransitionJobPayload`, `TransitionContinuationRequested`, the three `InstanceSub*`
+  events, `SubflowForwardInput`, `FlowCompletedInput`, `SubFlowFaultedInput`, `SubItemCanceledInput`).
+  **A new carrier must copy all three** — a missing start degrades the consumer to a
+  `vnext.activation.partial=true` span covering only its own hop.
+- **Only status owners emit** (`OwnsStatus`). A lost CAS yields no verdict (whoever flipped emits),
+  and a fresh post-commit parent that is no longer Busy yields none (a sync child callback already
+  closed it). `Instance.Fault` emits `faulted` regardless of ownership. The legacy
+  continuation-enqueued branch is unreachable while only `InlineContinuationStrategy` is registered.
+- **`ActivationActivity` is the one explicit-parent span outside the lane helpers** and must keep its
+  `Activity.Current` save/restore: an explicit parent leaves `Activity.Parent` null, so `Stop()`
+  would null `Activity.Current` for the caller's remaining frame (`Emit_restores_Activity_Current`).
+  Full guide: `docs/runtime/trace-lanes.md` § Activation episode, `docs/runtime/trace-span-tree.md`.
 
 ### Activation episode (trace)
 
@@ -293,7 +336,8 @@ A sixth profile is **composed on top of** the base, never selected instead of it
   - Transition set → `RequestNextTransition(key, ErrorBoundary)` + `SkipToFinalize()`
   - Abort without transition → Fail → instance fault
 - Error-boundary transitions set `IsErrorBoundaryTransition = true`.
-- Error-boundary profile disables auto-chain and subflow.
+- Error-boundary profile disables subflow handling and skips ResourceLock. Its current exclusion set
+  does not remove the Auto step.
 
 ## SubFlow Lifecycle
 
@@ -301,6 +345,15 @@ A sixth profile is **composed on top of** the base, never selected instead of it
 - **SubProcess (P)**: completion → correlation complete + persist → no parent resume (fire-and-forget).
 - On resume failure, correlation reverted in a new UoW.
 - Start: `CreateInstanceInput` with parent metadata in `ExtraProperties`, `StrictIdempotency: true`.
+- `SubflowStarter`, `ForwardToSubflowJobHandler` and descended subflow retry force `sync=true`.
+  `S` versus `P` controls parent terminal-resume behavior, not the child-call mode.
+- Those runtime-internal child calls also set `SuppressResponseEnrichment` (SERVER-ONLY flag on
+  `StartInstanceInput` / `TransitionInput`, same posture as `ChainReserved`; set locally by the
+  starter/handler and cross-domain by the `sub/instances/start` and `internal/subflow-forward`
+  endpoints themselves — it is not carried in a body). The child still awaits its pipeline but
+  answers identity-only (`Id`, `Key`, `Status`): the starter reads `IsSuccess`, the relay reads
+  `Status`, and the client's attributes/extensions come from the **parent's** own
+  `EnrichOutputCoreAsync`. Do not read attributes off a sub-start or forward response.
 
 ### Accept-time chain reserve (async transitions on a parent with an active SubFlow)
 
@@ -372,11 +425,18 @@ If subflow is in terminal status (`Completed`/`Faulted`/`Passive`) while parent 
 
 ## TransitionExecutionContext
 
-- Built by `TransitionContextFactory`: workflow from `IComponentCacheStore`, instance from `instanceRepository.GetActiveAsync`.
+- Initial and fresh-stage contexts are built by `TransitionContextFactory`: workflow from
+  `IComponentCacheStore`, instance from `instanceRepository.GetActiveAsync`.
+- Every automatic hop receives a new context. Inside one uninterrupted pipeline/UoW, the next hop
+  uses `CreateFromPreloaded(previous.Workflow, previous.Instance)`; this reuses the tracked aggregate
+  and resolved definition without reusing the previous hop's directives/items/cache.
+- Reuse ends at post-commit/new-scope, subflow callback and retry/recovery boundaries. Never carry a
+  tracked instance across those boundaries. Full guide:
+  `docs/architecture/inline-chain-context-reuse.md`.
 - Request payload overlays `Data` from `input.Data?.Attributes`.
 - `Cache` dict for ephemeral data (e.g. `ScriptContext`) — cleared at Finalize.
 - `Directives` accumulate mutations (next transition, post-commit jobs, epilogue skip).
-- Same context reference flows through all steps — avoid redundant loads.
+- Within one hop, the same context reference flows through all steps — avoid redundant loads.
 
 ## Events & Instance Filtering (quick reference)
 

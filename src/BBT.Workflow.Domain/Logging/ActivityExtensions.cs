@@ -23,16 +23,39 @@ public static class ActivityExtensions
     }
 
     /// <summary>
-    /// Records an exception and sets the activity status to Error.
-    /// Wraps OpenTelemetry's RecordException and adds status.
+    /// Records an exception, sets the standard OTel error.type attribute, and sets the activity status to Error.
     /// </summary>
-    public static Activity? RecordExceptionWithStatus(this Activity? activity, Exception exception, string? description = null)
+    public static Activity? SetError(this Activity? activity, Exception exception, string? description = null)
     {
         if (activity != null)
         {
             activity.AddException(exception);
             activity.SetStatus(ActivityStatusCode.Error, description ?? exception.Message);
+            activity.SetTag(TelemetryConstants.TagNames.ErrorType, exception.GetType().FullName ?? exception.GetType().Name);
         }
         return activity;
     }
+
+    /// <summary>
+    /// Marks the activity as Error with standard OpenTelemetry error.type and error.code attributes.
+    /// </summary>
+    public static Activity? SetError(this Activity? activity, string errorMessage, string? errorType = null, string? errorCode = null)
+    {
+        if (activity != null)
+        {
+            activity.SetStatus(ActivityStatusCode.Error, errorMessage);
+            if (!string.IsNullOrEmpty(errorType))
+                activity.SetTag(TelemetryConstants.TagNames.ErrorType, errorType);
+            if (!string.IsNullOrEmpty(errorCode))
+                activity.SetTag(TelemetryConstants.TagNames.ErrorCode, errorCode);
+        }
+        return activity;
+    }
+
+    /// <summary>
+    /// Records an exception and sets the activity status to Error.
+    /// Wraps OpenTelemetry's RecordException, sets standard error.type and status.
+    /// </summary>
+    public static Activity? RecordExceptionWithStatus(this Activity? activity, Exception exception, string? description = null)
+        => SetError(activity, exception, description);
 }

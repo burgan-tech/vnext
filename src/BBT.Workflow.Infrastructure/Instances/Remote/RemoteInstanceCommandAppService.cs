@@ -21,7 +21,7 @@ namespace BBT.Workflow.Instances.Remote;
 /// Uses IDomainDiscoveryResolver to dynamically resolve endpoint URLs based on target domain.
 /// </summary>
 public sealed class RemoteInstanceCommandAppService(
-    HttpClient httpClient,
+    IRemoteTransport<IRemoteInstanceCommandAppService> transport,
     IOptions<RemoteOptions> options,
     IDomainDiscoveryResolver endpointResolver,
     ICurrentUser currentUser,
@@ -71,7 +71,6 @@ public sealed class RemoteInstanceCommandAppService(
             if (queryParams.Count > 0)
                 relativePath += "?" + string.Join("&", queryParams);
 
-            var requestUri = new Uri(endpoint.BaseUrl, relativePath.TrimStart('/'));
 
             var requestBody = new CreateInstanceInput
             {
@@ -84,15 +83,13 @@ public sealed class RemoteInstanceCommandAppService(
             var jsonContent = JsonSerializer.Serialize(requestBody, JsonSerializerConstants.JsonOptions);
             var content = new StringContent(jsonContent, Encoding.UTF8, "application/json");
 
-            var requestMessage = new HttpRequestMessage(HttpMethod.Post, requestUri)
+            var response = await transport.SendAsync(endpoint, HttpMethod.Post, relativePath, requestMessage =>
             {
-                Content = content
-            };
+                requestMessage.Content = content;
 
-            var forwardHeaders = currentUser.ToForwardHeaders();
-            CurrentUserForwardHeadersHelper.MergeIntoRequest(requestMessage, forwardHeaders, input.Headers, RemoteHttpResponseHelper.IsRestrictedHeader, correlationIdProvider.Get());
-
-            var response = await httpClient.SendAsync(requestMessage, cancellationToken);
+                var forwardHeaders = currentUser.ToForwardHeaders();
+                CurrentUserForwardHeadersHelper.MergeIntoRequest(requestMessage, forwardHeaders, input.Headers, RemoteHttpResponseHelper.IsRestrictedHeader, correlationIdProvider.Get());
+            }, cancellationToken);
 
             // Status code → Result.Fail (per Railway Pattern)
             return await HandleResponseAsync<StartInstanceOutput>(response, cancellationToken);
@@ -145,7 +142,6 @@ public sealed class RemoteInstanceCommandAppService(
             if (queryParams.Count > 0)
                 relativePath += "?" + string.Join("&", queryParams);
 
-            var requestUri = new Uri(endpoint.BaseUrl, relativePath.TrimStart('/'));
 
             var episode = WorkflowTraceLane.Episode;
             var requestBody = new
@@ -166,15 +162,13 @@ public sealed class RemoteInstanceCommandAppService(
             var jsonContent = JsonSerializer.Serialize(requestBody, JsonSerializerConstants.JsonOptions);
             var content = new StringContent(jsonContent, Encoding.UTF8, "application/json");
 
-            var requestMessage = new HttpRequestMessage(HttpMethod.Post, requestUri)
+            var response = await transport.SendAsync(endpoint, HttpMethod.Post, relativePath, requestMessage =>
             {
-                Content = content
-            };
+                requestMessage.Content = content;
 
-            var forwardHeaders = currentUser.ToForwardHeaders();
-            CurrentUserForwardHeadersHelper.MergeIntoRequest(requestMessage, forwardHeaders, input.Headers, RemoteHttpResponseHelper.IsRestrictedHeader, correlationIdProvider.Get());
-
-            var response = await httpClient.SendAsync(requestMessage, cancellationToken);
+                var forwardHeaders = currentUser.ToForwardHeaders();
+                CurrentUserForwardHeadersHelper.MergeIntoRequest(requestMessage, forwardHeaders, input.Headers, RemoteHttpResponseHelper.IsRestrictedHeader, correlationIdProvider.Get());
+            }, cancellationToken);
 
             // Status code → Result.Fail (per Railway Pattern)
             return await HandleResponseAsync<StartInstanceOutput>(response, cancellationToken);
@@ -220,7 +214,6 @@ public sealed class RemoteInstanceCommandAppService(
 
             relativePath += $"?transitionKey={Uri.EscapeDataString(transitionKey)}";
 
-            var requestUri = new Uri(endpoint.BaseUrl, relativePath.TrimStart('/'));
 
             var forwardInput = new SubflowForwardInput
             {
@@ -247,15 +240,13 @@ public sealed class RemoteInstanceCommandAppService(
             };
 
             var jsonContent = JsonSerializer.Serialize(forwardInput, JsonSerializerConstants.JsonOptions);
-            var requestMessage = new HttpRequestMessage(HttpMethod.Post, requestUri)
+            var response = await transport.SendAsync(endpoint, HttpMethod.Post, relativePath, requestMessage =>
             {
-                Content = new StringContent(jsonContent, Encoding.UTF8, "application/json")
-            };
+                requestMessage.Content = new StringContent(jsonContent, Encoding.UTF8, "application/json");
 
-            var forwardHeaders = currentUser.ToForwardHeaders();
-            CurrentUserForwardHeadersHelper.MergeIntoRequest(requestMessage, forwardHeaders, input.Headers, RemoteHttpResponseHelper.IsRestrictedHeader, correlationIdProvider.Get());
-
-            var response = await httpClient.SendAsync(requestMessage, cancellationToken);
+                var forwardHeaders = currentUser.ToForwardHeaders();
+                CurrentUserForwardHeadersHelper.MergeIntoRequest(requestMessage, forwardHeaders, input.Headers, RemoteHttpResponseHelper.IsRestrictedHeader, correlationIdProvider.Get());
+            }, cancellationToken);
 
             return await HandleResponseAsync<TransitionOutput>(response, cancellationToken);
         }
@@ -305,22 +296,19 @@ public sealed class RemoteInstanceCommandAppService(
             if (queryParams.Count > 0)
                 relativePath += "?" + string.Join("&", queryParams);
 
-            var requestUri = new Uri(endpoint.BaseUrl, relativePath.TrimStart('/'));
 
             var requestBody = input.Data is null
                 ? "{}"
                 : JsonSerializer.Serialize(input.Data, JsonSerializerConstants.JsonOptions);
             var content = new StringContent(requestBody, Encoding.UTF8, "application/json");
 
-            var requestMessage = new HttpRequestMessage(HttpMethod.Patch, requestUri)
+            var response = await transport.SendAsync(endpoint, HttpMethod.Patch, relativePath, requestMessage =>
             {
-                Content = content
-            };
+                requestMessage.Content = content;
 
-            var forwardHeaders = currentUser.ToForwardHeaders();
-            CurrentUserForwardHeadersHelper.MergeIntoRequest(requestMessage, forwardHeaders, input.Headers, RemoteHttpResponseHelper.IsRestrictedHeader, correlationIdProvider.Get());
-
-            var response = await httpClient.SendAsync(requestMessage, cancellationToken);
+                var forwardHeaders = currentUser.ToForwardHeaders();
+                CurrentUserForwardHeadersHelper.MergeIntoRequest(requestMessage, forwardHeaders, input.Headers, RemoteHttpResponseHelper.IsRestrictedHeader, correlationIdProvider.Get());
+            }, cancellationToken);
 
             // Status code → Result.Fail (per Railway Pattern)
             return await HandleResponseAsync<TransitionOutput>(response, cancellationToken);
@@ -349,27 +337,26 @@ public sealed class RemoteInstanceCommandAppService(
             if (!endpointResult.IsSuccess)
                 return Result.Fail(endpointResult.Error);
 
+            var endpoint = endpointResult.Value!;
+
             var relativePath = InstanceUrlTemplates.ChildCancel(
                 domain,
                 flow,
                 instanceId.ToString(),
                 ApiVersionPrefix);
-            var requestUri = new Uri(endpointResult.Value!.BaseUrl, relativePath.TrimStart('/'));
             var jsonContent = JsonSerializer.Serialize(input, JsonSerializerConstants.JsonOptions);
-            var requestMessage = new HttpRequestMessage(HttpMethod.Post, requestUri)
+            var response = await transport.SendAsync(endpoint, HttpMethod.Post, relativePath, requestMessage =>
             {
-                Content = new StringContent(jsonContent, Encoding.UTF8, "application/json")
-            };
+                requestMessage.Content = new StringContent(jsonContent, Encoding.UTF8, "application/json");
 
-            var forwardHeaders = currentUser.ToForwardHeaders();
-            CurrentUserForwardHeadersHelper.MergeIntoRequest(
-                requestMessage,
-                forwardHeaders,
-                null,
-                RemoteHttpResponseHelper.IsRestrictedHeader,
-                correlationIdProvider.Get());
-
-            var response = await httpClient.SendAsync(requestMessage, cancellationToken);
+                var forwardHeaders = currentUser.ToForwardHeaders();
+                CurrentUserForwardHeadersHelper.MergeIntoRequest(
+                    requestMessage,
+                    forwardHeaders,
+                    null,
+                    RemoteHttpResponseHelper.IsRestrictedHeader,
+                    correlationIdProvider.Get());
+            }, cancellationToken);
             return await HandleResponseAsync(response, cancellationToken);
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or OperationCanceledException)
@@ -401,20 +388,17 @@ public sealed class RemoteInstanceCommandAppService(
             var relativePath = InstanceUrlTemplates.Complete(input.Domain, input.Flow, input.InstanceId.ToString(),
                 ApiVersionPrefix);
 
-            var requestUri = new Uri(endpoint.BaseUrl, relativePath.TrimStart('/'));
 
             var jsonContent = JsonSerializer.Serialize(input, JsonSerializerConstants.JsonOptions);
             var content = new StringContent(jsonContent, Encoding.UTF8, "application/json");
 
-            var requestMessage = new HttpRequestMessage(HttpMethod.Post, requestUri)
+            var response = await transport.SendAsync(endpoint, HttpMethod.Post, relativePath, requestMessage =>
             {
-                Content = content
-            };
+                requestMessage.Content = content;
 
-            var forwardHeaders = currentUser.ToForwardHeaders();
-            CurrentUserForwardHeadersHelper.MergeIntoRequest(requestMessage, forwardHeaders, null, RemoteHttpResponseHelper.IsRestrictedHeader, correlationIdProvider.Get());
-
-            var response = await httpClient.SendAsync(requestMessage, cancellationToken);
+                var forwardHeaders = currentUser.ToForwardHeaders();
+                CurrentUserForwardHeadersHelper.MergeIntoRequest(requestMessage, forwardHeaders, null, RemoteHttpResponseHelper.IsRestrictedHeader, correlationIdProvider.Get());
+            }, cancellationToken);
 
             // Status code → Result.Fail (per Railway Pattern)
             return await HandleResponseAsync(response, cancellationToken);
@@ -452,20 +436,17 @@ public sealed class RemoteInstanceCommandAppService(
                 input.ParentInstanceId.ToString(),
                 ApiVersionPrefix);
 
-            var requestUri = new Uri(endpoint.BaseUrl, relativePath.TrimStart('/'));
 
             var jsonContent = JsonSerializer.Serialize(input, JsonSerializerConstants.JsonOptions);
             var content = new StringContent(jsonContent, Encoding.UTF8, "application/json");
 
-            var requestMessage = new HttpRequestMessage(HttpMethod.Post, requestUri)
+            var response = await transport.SendAsync(endpoint, HttpMethod.Post, relativePath, requestMessage =>
             {
-                Content = content
-            };
+                requestMessage.Content = content;
 
-            var forwardHeaders = currentUser.ToForwardHeaders();
-            CurrentUserForwardHeadersHelper.MergeIntoRequest(requestMessage, forwardHeaders, null, RemoteHttpResponseHelper.IsRestrictedHeader, correlationIdProvider.Get());
-
-            var response = await httpClient.SendAsync(requestMessage, cancellationToken);
+                var forwardHeaders = currentUser.ToForwardHeaders();
+                CurrentUserForwardHeadersHelper.MergeIntoRequest(requestMessage, forwardHeaders, null, RemoteHttpResponseHelper.IsRestrictedHeader, correlationIdProvider.Get());
+            }, cancellationToken);
 
             // Status code → Result.Fail (per Railway Pattern)
             return await HandleResponseAsync(response, cancellationToken);
@@ -502,20 +483,17 @@ public sealed class RemoteInstanceCommandAppService(
                 input.InstanceId.ToString(),
                 ApiVersionPrefix);
 
-            var requestUri = new Uri(endpoint.BaseUrl, relativePath.TrimStart('/'));
 
             var jsonContent = JsonSerializer.Serialize(input, JsonSerializerConstants.JsonOptions);
             var content = new StringContent(jsonContent, Encoding.UTF8, "application/json");
 
-            var requestMessage = new HttpRequestMessage(HttpMethod.Post, requestUri)
+            var response = await transport.SendAsync(endpoint, HttpMethod.Post, relativePath, requestMessage =>
             {
-                Content = content
-            };
+                requestMessage.Content = content;
 
-            var forwardHeaders = currentUser.ToForwardHeaders();
-            CurrentUserForwardHeadersHelper.MergeIntoRequest(requestMessage, forwardHeaders, null, RemoteHttpResponseHelper.IsRestrictedHeader, correlationIdProvider.Get());
-
-            var response = await httpClient.SendAsync(requestMessage, cancellationToken);
+                var forwardHeaders = currentUser.ToForwardHeaders();
+                CurrentUserForwardHeadersHelper.MergeIntoRequest(requestMessage, forwardHeaders, null, RemoteHttpResponseHelper.IsRestrictedHeader, correlationIdProvider.Get());
+            }, cancellationToken);
 
             return await HandleResponseAsync(response, cancellationToken);
         }
@@ -548,22 +526,19 @@ public sealed class RemoteInstanceCommandAppService(
                 input.Flow,
                 input.InstanceId.ToString(),
                 ApiVersionPrefix);
-            var requestUri = new Uri(endpoint.BaseUrl, relativePath.TrimStart('/'));
             var jsonContent = JsonSerializer.Serialize(input, JsonSerializerConstants.JsonOptions);
-            var requestMessage = new HttpRequestMessage(HttpMethod.Post, requestUri)
+            var response = await transport.SendAsync(endpoint, HttpMethod.Post, relativePath, requestMessage =>
             {
-                Content = new StringContent(jsonContent, Encoding.UTF8, "application/json")
-            };
+                requestMessage.Content = new StringContent(jsonContent, Encoding.UTF8, "application/json");
 
-            var forwardHeaders = currentUser.ToForwardHeaders();
-            CurrentUserForwardHeadersHelper.MergeIntoRequest(
-                requestMessage,
-                forwardHeaders,
-                null,
-                RemoteHttpResponseHelper.IsRestrictedHeader,
-                correlationIdProvider.Get());
-
-            var response = await httpClient.SendAsync(requestMessage, cancellationToken);
+                var forwardHeaders = currentUser.ToForwardHeaders();
+                CurrentUserForwardHeadersHelper.MergeIntoRequest(
+                    requestMessage,
+                    forwardHeaders,
+                    null,
+                    RemoteHttpResponseHelper.IsRestrictedHeader,
+                    correlationIdProvider.Get());
+            }, cancellationToken);
             return await HandleResponseAsync(response, cancellationToken);
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or OperationCanceledException)
@@ -598,14 +573,12 @@ public sealed class RemoteInstanceCommandAppService(
             if (!string.IsNullOrEmpty(input.Version))
                 relativePath += $"?version={Uri.EscapeDataString(input.Version)}";
 
-            var requestUri = new Uri(endpoint.BaseUrl, relativePath.TrimStart('/'));
 
-            var requestMessage = new HttpRequestMessage(HttpMethod.Put, requestUri);
-
-            var forwardHeaders = currentUser.ToForwardHeaders();
-            CurrentUserForwardHeadersHelper.MergeIntoRequest(requestMessage, forwardHeaders, null, RemoteHttpResponseHelper.IsRestrictedHeader, correlationIdProvider.Get());
-
-            var response = await httpClient.SendAsync(requestMessage, cancellationToken);
+            var response = await transport.SendAsync(endpoint, HttpMethod.Put, relativePath, requestMessage =>
+            {
+                var forwardHeaders = currentUser.ToForwardHeaders();
+                CurrentUserForwardHeadersHelper.MergeIntoRequest(requestMessage, forwardHeaders, null, RemoteHttpResponseHelper.IsRestrictedHeader, correlationIdProvider.Get());
+            }, cancellationToken);
 
             return await HandleResponseAsync(response, cancellationToken);
         }
@@ -641,14 +614,12 @@ public sealed class RemoteInstanceCommandAppService(
             if (!string.IsNullOrEmpty(input.Version))
                 relativePath += $"?version={Uri.EscapeDataString(input.Version)}";
 
-            var requestUri = new Uri(endpoint.BaseUrl, relativePath.TrimStart('/'));
 
-            var requestMessage = new HttpRequestMessage(HttpMethod.Put, requestUri);
-
-            var forwardHeaders = currentUser.ToForwardHeaders();
-            CurrentUserForwardHeadersHelper.MergeIntoRequest(requestMessage, forwardHeaders, null, RemoteHttpResponseHelper.IsRestrictedHeader, correlationIdProvider.Get());
-
-            var response = await httpClient.SendAsync(requestMessage, cancellationToken);
+            var response = await transport.SendAsync(endpoint, HttpMethod.Put, relativePath, requestMessage =>
+            {
+                var forwardHeaders = currentUser.ToForwardHeaders();
+                CurrentUserForwardHeadersHelper.MergeIntoRequest(requestMessage, forwardHeaders, null, RemoteHttpResponseHelper.IsRestrictedHeader, correlationIdProvider.Get());
+            }, cancellationToken);
 
             return await HandleResponseAsync(response, cancellationToken);
         }
@@ -689,14 +660,12 @@ public sealed class RemoteInstanceCommandAppService(
             if (query.Count > 0)
                 relativePath += "?" + string.Join("&", query);
 
-            var requestUri = new Uri(endpoint.BaseUrl, relativePath.TrimStart('/'));
 
-            var requestMessage = new HttpRequestMessage(HttpMethod.Post, requestUri);
-
-            var forwardHeaders = currentUser.ToForwardHeaders();
-            CurrentUserForwardHeadersHelper.MergeIntoRequest(requestMessage, forwardHeaders, null, RemoteHttpResponseHelper.IsRestrictedHeader, correlationIdProvider.Get());
-
-            var response = await httpClient.SendAsync(requestMessage, cancellationToken);
+            var response = await transport.SendAsync(endpoint, HttpMethod.Post, relativePath, requestMessage =>
+            {
+                var forwardHeaders = currentUser.ToForwardHeaders();
+                CurrentUserForwardHeadersHelper.MergeIntoRequest(requestMessage, forwardHeaders, null, RemoteHttpResponseHelper.IsRestrictedHeader, correlationIdProvider.Get());
+            }, cancellationToken);
 
             return await HandleResponseAsync(response, cancellationToken);
         }

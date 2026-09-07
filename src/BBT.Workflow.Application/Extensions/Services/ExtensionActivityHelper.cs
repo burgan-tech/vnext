@@ -12,7 +12,7 @@ namespace BBT.Workflow.Extentions;
 public static class ExtensionActivityHelper
 {
     /// <summary>Source name as a const so test listeners never touch the static field (type-init trap).</summary>
-    public const string SourceName = "BBT.Workflow.Extensions";
+    public const string SourceName = TelemetryConstants.ActivitySources.Extensions;
 
     /// <summary>ActivitySource for extension spans. Registered in Telemetry:Tracing:AdditionalSources.</summary>
     public static readonly ActivitySource ActivitySource = new(SourceName);

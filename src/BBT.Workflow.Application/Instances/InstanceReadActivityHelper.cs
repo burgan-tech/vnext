@@ -39,7 +39,7 @@ public static class InstanceReadActivityHelper
     /// aggregation built on one.
     /// </para>
     /// </summary>
-    public const string SourceName = "BBT.Workflow.Instances.Read";
+    public const string SourceName = TelemetryConstants.ActivitySources.InstancesRead;
 
     /// <summary>
     /// ActivitySource for instance read operations. Hosts that register sources explicitly must list

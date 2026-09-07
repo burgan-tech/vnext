@@ -27,7 +27,7 @@
     <!--
       Compile-included (not project-referenced): the Inbox worker has no test project of its own, and
       this task must not create one. EventTraceMode/EventTraceParenting hold EventTraceScope's pure
-      parenting decision (EventTraceMode.ContinueTrace vs LinkedDelivery) with zero
+      parenting decision (EventTraceMode.ContinueTrace vs IsolatedDelivery) with zero
       Activity.Current/ActivitySource access. EventTraceScope.cs itself is ALSO compile-included
       (round 1 review finding): it depends only on Domain/Events.Contracts/Aether types already
       referenced here, so its highest-risk behavior — forcing/restoring a root Activity — can be

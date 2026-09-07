@@ -23,7 +23,7 @@ public interface ISubflowStarter
     /// <param name="transition">The current transition.</param>
     /// <param name="correlation">Correlation information for tracking.</param>
     /// <param name="context">The script context containing execution data and headers.</param>
-    /// <param name="mode">The execution mode from the original request, propagated to the subflow start call.</param>
+    /// <param name="mode">The original request mode, retained for compatibility. Child starts always use sync=true.</param>
     /// <param name="cancellationToken">Token to monitor for cancellation requests.</param>
     /// <returns>Result indicating success or failure of the sub-flow initiation.</returns>
     /// <remarks>

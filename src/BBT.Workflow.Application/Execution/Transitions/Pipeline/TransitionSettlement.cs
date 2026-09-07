@@ -38,7 +38,8 @@ internal static class TransitionSettlement
         // The resting-status flip closes a transition: a status write, its lock, and the state
         // notification. It ran unnamed at the very end of the pipeline, so a trace showed the last
         // step finishing and then a stretch of nothing before the hop ended.
-        using var activity = PipelineStepActivityHelper.StartOperationActivity("Transition.Settle");
+        using var activity = PipelineStepActivityHelper.StartTransitionActivity(
+            "Transition.Settle", context.TransitionKey);
         activity?.SetTag(TelemetryConstants.TagNames.SettledStatus, resolvedStatus?.Code ?? "none");
 
         var hasOpenSubFlow = HasOpenSubFlow(context);
@@ -113,7 +114,7 @@ internal static class TransitionSettlement
 
     /// <summary>
     /// Decides whether this settlement closed the activation episode, and how. Null means the
-    /// episode goes on (or was never this execution's to close): a hop that enqueued its
+    /// episode goes on (or was never this execution's to close): a hop that requested another
     /// continuation, a non-owning execution beside an in-flight chain, a CAS lost to a concurrent
     /// settler that emits its own verdict, or an instance that was already Active.
     /// </summary>

@@ -4,7 +4,6 @@ using System.Text.Json;
 using BBT.Workflow.Execution.Bindings;
 using BBT.Workflow.Execution.Metrics;
 using BBT.Workflow.Execution.Services;
-using Dapr.Client;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
@@ -17,24 +16,26 @@ namespace BBT.Workflow.Execution.Invokers;
 /// </summary>
 public sealed class StartTriggerRemoteInvoker : ITaskInvoker<StartTriggerBinding>
 {
-    private readonly DaprClient _daprClient;
+    private readonly DaprServiceInvocationClient _daprInvocation;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILogger<StartTriggerRemoteInvoker> _logger;
     private readonly ITaskMetrics _metrics;
     private readonly string _orchestrationAppId;
 
     public StartTriggerRemoteInvoker(
-        DaprClient daprClient,
+        DaprServiceInvocationClient daprInvocation,
         IHttpClientFactory httpClientFactory,
         IConfiguration configuration,
         ILogger<StartTriggerRemoteInvoker> logger,
         ITaskMetrics? metrics = null)
     {
-        _daprClient = daprClient;
+        _daprInvocation = daprInvocation;
         _httpClientFactory = httpClientFactory;
         _logger = logger;
         _metrics = metrics ?? NullTaskMetrics.Instance;
-        _orchestrationAppId = configuration["OrchestrationApi:AppId"] ?? "vnext-app";
+        _orchestrationAppId = VNextAppIds.OrchestratorOrDefault(
+            configuration[VNextAppIds.ConfigKeys.Orchestrator],
+            configuration[VNextAppIds.ConfigKeys.AppDomain]);
     }
 
     /// <inheritdoc />
@@ -91,7 +92,7 @@ public sealed class StartTriggerRemoteInvoker : ITaskInvoker<StartTriggerBinding
             var request = CreateDaprRequest(binding, appId);
 
             prepareActivity?.Dispose();
-            using var response = await _daprClient.InvokeMethodWithResponseAsync(request, cancellationToken);
+            using var response = await _daprInvocation.SendAsync(request, cancellationToken);
 
             return await ProcessResponseAsync(binding, response, (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds, cancellationToken);
         }
@@ -244,7 +245,7 @@ public sealed class StartTriggerRemoteInvoker : ITaskInvoker<StartTriggerBinding
             attributes = binding.Body
         };
 
-        var request = _daprClient.CreateInvokeMethodRequest(
+        var request = DaprServiceInvocationClient.CreateRequest(
             HttpMethod.Post,
             appId,
             path);
