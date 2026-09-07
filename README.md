@@ -104,8 +104,7 @@ Guidance is tool-neutral and lives in one place; every agent (Claude Code, Curso
   /agent-council <the decision to make>
   ```
 
-  It also fires on phrases like "council", "karar verelim", "eklemeli miyim", "mimari karar". The council never edits code; it only produces the decision record. Sessions are recorded under [docs/agent-council/sessions/](docs/agent-council/sessions/README.md), which is the team's decision history — check it before opening a new session. Process, roles and templates: [docs/agent-council/README.md](docs/agent-council/README.md).
-- Dated specs, plans and reports from earlier design work live under [docs/superpowers/](docs/superpowers/); they explain *why* something was decided, not today's behavior.
+  It also fires on phrases like "council", "karar verelim", "eklemeli miyim", "mimari karar". The council never edits code; it only produces the decision record. Session artifacts are written locally under `ai-docs/agent-council/sessions/` (git-ignored) and indexed in the committed [decision log](docs/agent-council/sessions/README.md), which is the team's decision history — check it before opening a new session. Process, roles and templates: [docs/agent-council/README.md](docs/agent-council/README.md).
 
 ## Health Endpoints
 

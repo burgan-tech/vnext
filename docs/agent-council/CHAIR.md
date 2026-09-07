@@ -37,7 +37,7 @@ and argue why the precedent should change. It is not re-litigated silently.
   to Aether.
 - **Evidence before claims.** Performance, recovery and compatibility statements need a measurement or a
   reproducible test (precedent: the layered script-perf lab, the gRPC proxy-mode E2E report, the
-  write-path perf cherry-pick report under `docs/superpowers/`). An unmeasured claim yields
+  write-path perf cherry-pick report — dated design records). An unmeasured claim yields
   `REQUEST_EXPERIMENT`, not approval.
 
 ### Architectural decisions already taken (do not reopen without new evidence)
@@ -63,8 +63,9 @@ and argue why the precedent should change. It is not re-litigated silently.
   at the subflow handoff. Every new lane carrier copies all three episode fields.
 - **AI guidance has one source.** Rules and skills live under `.claude/`; Cursor reaches them through
   `@` pointers; `AGENTS.md` is the bootstrap for every agent. Runtime facts are linked, never copied.
-- **Decision history is committed.** Dated specs/plans/reports under `docs/superpowers/`, council
-  sessions under `docs/agent-council/sessions/` with a row in the decision log. `ai-docs/` is scratch.
+- **Decision history is recorded.** Dated specs, plans, reports and council sessions live in local
+  scratch (`ai-docs/`, git-ignored, layout in `AGENTS.md`); every council decision gets a committed row in
+  the decision log `docs/agent-council/sessions/README.md`.
 
 ### What the Chair expects from a decision record
 

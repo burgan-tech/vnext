@@ -230,7 +230,7 @@ Content lives in exactly one place; each tool has a thin entry point that points
 | `.cursor/rules/*.mdc` | Three 8-line pointers; each `@`-includes one file from `.claude/rules/` so Cursor reads the same text | only when a rule file is added/renamed |
 | `.claude/skills/*/SKILL.md` | On-demand skills — **single source**. Cursor loads `.claude/skills/` directly for compatibility; there is no `.cursor/skills/` | yes |
 | `docs/` | Implementation docs, indexed from `docs/README.md` | yes |
-| `docs/superpowers/{specs,plans,reports}/`, `docs/agent-council/` | Dated decision records — the *why*, not the current contract | append |
+| `ai-docs/superpowers/{specs,plans,reports}/`, `ai-docs/agent-council/sessions/` | Dated decision records — the *why*, not the current contract. Git-ignored local scratch since 2026-09-07; only the council log row in `docs/agent-council/sessions/README.md` is committed | local |
 | `CLAUDE.local.md`, `ai-docs/` | Machine-local, git-ignored | personal |
 
 Workflow for a rule or skill change: edit under `.claude/` and commit. Nothing is copied anywhere.

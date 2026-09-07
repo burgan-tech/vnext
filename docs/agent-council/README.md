@@ -22,7 +22,7 @@ answer would be a recommendation.
 
 ## Start A Session
 
-1. Copy `templates/TASK.md` and `templates/SESSION.md` into `sessions/<task-id>/`.
+1. Copy `templates/TASK.md` and `templates/SESSION.md` into `ai-docs/agent-council/sessions/<task-id>/` (git-ignored local scratch).
 2. Read `project/PROJECT-CONTEXT.md`, `project/ARCHITECTURE-PRINCIPLES.md`, and `project/DEFINITION-OF-DONE.md`.
 3. Select the smallest risk-appropriate council using `COUNCIL-SELECTION.md`.
 4. Collect independent proposals, then run no more than two objection rounds.
@@ -32,7 +32,7 @@ answer would be a recommendation.
 
 ## Decision History
 
-Every session lives under `sessions/<YYYY-MM-DD-slug>/` and is indexed in [sessions/README.md](sessions/README.md). Check the log before opening a new session: the question may already be decided. Sessions are committed; `ai-docs/` is scratch and is not used.
+Session artifacts live locally under `ai-docs/agent-council/sessions/<YYYY-MM-DD-slug>/` (git-ignored, not shared through git) and each session is indexed in the committed [sessions/README.md](sessions/README.md). Check the log before opening a new session: the question may already be decided. Only the log row is committed; the session folder itself stays in `ai-docs/` by team decision (2026-09-07).
 
 ## Required Artifacts
 

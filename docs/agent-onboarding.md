@@ -2,7 +2,7 @@
 
 Short map for a new coding session in this repo. Read this, then follow the
 [docs index](README.md) only for the area you are changing. Do not treat dated
-plans under `docs/superpowers/` as the current contract.
+design plans or specs as the current contract.
 
 ## When sources disagree
 
@@ -15,8 +15,8 @@ Trust this order:
    Historical records section).
 3. **`AGENTS.md`** (imported by `CLAUDE.md`) and `.claude/rules/` — Cursor reads
    the same files through `@` pointers in `.cursor/rules/`.
-4. **Dated plans/specs** in `docs/superpowers/` — the *why* of a decision, not
-   today's behavior.
+4. **Dated plans/specs** (local scratch, see the AI guidance layout table in `AGENTS.md`) — the
+   *why* of a decision, not today's behavior.
 
 `ai-docs/` is gitignored local scratch (generated dumps, vnext-docs staging).
 It is empty in git and is not a source of truth.
@@ -46,9 +46,8 @@ disagrees with the code, the code wins.
 - **Runtime fact** (step order, profile exclusions, event modes) → the owning
   `/docs` page or `.claude/rules/vnext-workflow-developer.md`, linked from
   `AGENTS.md`; do not paste the same table into a second file.
-- **Decision record** (why something was done) → dated file under
-  `docs/superpowers/{specs,plans,reports}/` or a session under
-  `docs/agent-council/sessions/`; register it in `docs/README.md`.
+- **Decision record** (why something was done) → local scratch (`ai-docs/`, git-ignored; layout in
+  `AGENTS.md`); a council decision additionally gets one row in `docs/agent-council/sessions/README.md`.
 
 ## Where is X
 

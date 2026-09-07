@@ -19,7 +19,6 @@ describe the stable mental model, boundaries, failure modes, and change-safety r
 | [Contracts](contracts/api-and-service-contracts.md) | API shapes, validation, compatibility, error behavior. |
 | [Integration](integration/forge-fanout-task-implementation.md) | Implementation specs for consumer products (Forge Studio, CLI, SDKs) that build against runtime features. |
 | [Monitoring](monitoring/correlation-and-tracing.md) | Tracing/correlation contract of the runtime, plus the read-only Monitor API (`monitoring/` host, port `4203`): [feature guide](monitoring/features/monitoring-features.md), [endpoint reference](monitoring/endpoints/vnext-monitor-api-reference.md), [GraphQL filter guide](monitoring/features/monitoring-filter-guide.md), [component query-param filters](monitoring/features/query-param-filter.md). |
-| [Plans, specs & reports](superpowers/plans/) | Dated design plans (`superpowers/plans/`), specs (`superpowers/specs/`) and verification/work reports (`superpowers/reports/`). Point-in-time records of decisions — read for the *why*, not as the current contract; the pages above win when they disagree. |
 
 ## Reading Path
 

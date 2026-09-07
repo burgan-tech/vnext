@@ -4,8 +4,7 @@ Audience: a Forge Studio engineer adding designer support for vNext task type `2
 this page assumes you have never seen fan-out.
 
 Runtime version: `0.0.80` (`common.props`). Everything below was verified against runtime source,
-the developer guide (`docs/domain/fan-out-task.md`), the design spec
-(`docs/superpowers/specs/2026-08-21-fanout-task-design.md`), `vnext-meta/`, and two real authored
+the developer guide (`docs/domain/fan-out-task.md`), `vnext-meta/`, and two real authored
 tasks in `burganbank/vnext-contract`. Anything not verifiable in those sources is marked
 **[UNVERIFIED]**.
 

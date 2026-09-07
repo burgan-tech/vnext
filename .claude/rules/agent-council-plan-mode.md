@@ -77,7 +77,7 @@ nobody argued the opposing side.
 ## Plan-mode boundary
 
 During this process, the agent may inspect repository files and produce planning
-artifacts under `docs/agent-council/`, `docs/superpowers/`, or a user-specified planning location. The agent
+artifacts under `ai-docs/agent-council/sessions/` (git-ignored) or a user-specified planning location, plus the log row in `docs/agent-council/sessions/README.md`. The agent
 must not edit production source, tests, migrations, deployment manifests, generated
 contracts, or project configuration as part of the council decision.
 

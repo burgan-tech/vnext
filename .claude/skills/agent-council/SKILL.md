@@ -1,6 +1,6 @@
 ---
 name: agent-council
-description: Runs the evidence-based Agent Council decision process for non-trivial vNext decisions — architecture, technology selection, cross-service changes, data model, security, reliability, and performance. Produces independent role proposals, two objection rounds, and a recorded decision with dissent under docs/agent-council/sessions/. Use when the user says "council", "council işlet", "karar verelim", "hangisini seçelim", "eklemeli miyim", "should we add", "mimari karar", "bunu yapmalı mıyız", or asks any design/technology/cross-service question whose answer will be a recommendation.
+description: Runs the evidence-based Agent Council decision process for non-trivial vNext decisions — architecture, technology selection, cross-service changes, data model, security, reliability, and performance. Produces independent role proposals, two objection rounds, and a recorded decision with dissent under ai-docs/agent-council/sessions/ (local, git-ignored) and one row in the committed log docs/agent-council/sessions/README.md. Use when the user says "council", "council işlet", "karar verelim", "hangisini seçelim", "eklemeli miyim", "should we add", "mimari karar", "bunu yapmalı mıyız", or asks any design/technology/cross-service question whose answer will be a recommendation.
 ---
 
 # Agent Council
@@ -56,7 +56,7 @@ violation, not a shortcut.
 
 ### 1. CONTEXT_READY — write the task record
 
-Create `docs/agent-council/sessions/<task-id>/TASK.md` from
+Create `ai-docs/agent-council/sessions/<task-id>/TASK.md` (git-ignored local scratch) from
 `templates/TASK.md`. `<task-id>` is `YYYY-MM-DD-<slug>`.
 
 Classify risk (`Low | Medium | High | Critical`). Separate **verified facts**
@@ -162,7 +162,7 @@ unconfigured Chair as an absent gate.
 ## Boundary — this is not implementation approval
 
 The council may read any repository file and write **only** under
-`docs/agent-council/sessions/` — the session folder plus one appended row in
+`ai-docs/agent-council/sessions/` (git-ignored) — the session folder, plus one appended row in
 `docs/agent-council/sessions/README.md` (the decision log). It must not touch production source, tests,
 migrations, deployment manifests, generated contracts, `etc/`, `vnext-meta/` or
 project configuration.

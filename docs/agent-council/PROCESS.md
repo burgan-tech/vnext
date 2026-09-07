@@ -8,7 +8,7 @@ Alternative outcomes: `CLARIFICATION_REQUIRED`, `EXPERIMENT_REQUIRED`, `REJECTED
 
 ## Session Contract
 
-Store each session under `sessions/<task-id>/`. `SESSION.md` is the manifest and active-state record. Artifacts are immutable in practice: revisions create a new version and reference `Supersedes`. Each artifact records Session ID, Artifact ID, Version, author actor ID, UTC timestamp, status, evidence reference, and supersession information.
+Store each session under `ai-docs/agent-council/sessions/<task-id>/` (git-ignored); the committed decision log is `docs/agent-council/sessions/README.md`. `SESSION.md` is the manifest and active-state record. Artifacts are immutable in practice: revisions create a new version and reference `Supersedes`. Each artifact records Session ID, Artifact ID, Version, author actor ID, UTC timestamp, status, evidence reference, and supersession information.
 
 The workflow/orchestrator is the only state owner. Record every transition with actor, UTC time, reason, and evidence reference. Approved artifacts require append-only storage or an equivalent immutable event log.
 
