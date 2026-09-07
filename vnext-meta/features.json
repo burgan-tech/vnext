@@ -181,7 +181,9 @@
         "GET {domain}/workflows/{workflow}/instances/{instance}/functions/state",
         "GET {domain}/workflows/{workflow}/instances/{instance}/incidents",
         "GET {domain}/workflows/{workflow}/instances/{instance}/incidents/active",
-        "GET monitor/{domain}/workflows/{workflow}/instances/{instance}/incidents"
+        "GET monitor/{domain}/workflows/{workflow}/instances/{instance}/incidents",
+        "GET {domain}/workflows/{workflow}/instances/{instance}",
+        "GET {domain}/workflows/{workflow}/instances"
       ],
       "schemaPath": "incident"
     }

@@ -1766,11 +1766,9 @@ public sealed class InstanceQueryAppService(
     }
 
     /// <summary>
-    /// Builds the state body's <c>incident</c> block. A leaf-reported block wins when it carries an
-    /// active incident; otherwise the polled instance's own loaded incidents are projected.
-    /// </summary>
-    /// <summary>
-    /// Builds the state body's <c>incident</c> block: the flag plus links, never content.
+    /// Builds the state body's <c>incident</c> block: the flag plus links, never content. A
+    /// leaf-reported block wins when it carries an active incident; otherwise the polled instance's
+    /// own flag decides.
     /// </summary>
     /// <remarks>
     /// <b>Reads nothing.</b> <c>HasActiveIncident</c> is a column on the instance already in hand, so
