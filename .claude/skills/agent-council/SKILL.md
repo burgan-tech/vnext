@@ -132,6 +132,11 @@ verification checklist, rollback.
 Verdict: `APPROVED` · `EXPERIMENT_REQUIRED` · `CLARIFICATION_REQUIRED` · `BLOCKED` ·
 `REJECTED`.
 
+**Append the decision to the log.** Add one row to `docs/agent-council/sessions/README.md`
+(`| date | [task-id](<task-id>/DECISION.md) | topic | risk | verdict | selected approach | follow-up |`).
+The log is the team's decision history; a session without a row is not recorded. If a later
+session changes the verdict, update the row and point `Follow-up` at the superseding session.
+
 ### 6. Chair
 
 `CHAIR.md` gates service-boundary and data-ownership changes, new infrastructure,
@@ -157,7 +162,8 @@ unconfigured Chair as an absent gate.
 ## Boundary — this is not implementation approval
 
 The council may read any repository file and write **only** under
-`docs/agent-council/sessions/`. It must not touch production source, tests,
+`docs/agent-council/sessions/` — the session folder plus one appended row in
+`docs/agent-council/sessions/README.md` (the decision log). It must not touch production source, tests,
 migrations, deployment manifests, generated contracts, `etc/`, `vnext-meta/` or
 project configuration.
 
@@ -165,16 +171,6 @@ After a decision, implementation needs a *separate* task and explicit user direc
 
 Do not start infrastructure or run expensive integration tests during council
 planning without explicit user approval (see `CLAUDE.local.md`).
-
-## Interaction with plan mode
-
-Plan mode prescribes its own Explore → Plan agent flow. When a council applies, the
-two compose — the council is not skipped in favour of the plan-mode phases:
-
-- Plan mode's **Explore** phase produces the council's shared evidence pack.
-- The council's **role agents replace** the generic Plan agents.
-- In plan mode only the plan file is writable. Write the council artifacts after
-  exiting plan mode, and say so rather than silently degrading the process.
 
 ## Repository-specific checks
 

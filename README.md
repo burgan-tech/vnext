@@ -89,9 +89,23 @@ dotnet test --filter "FullyQualifiedName~MyTest"   # one test
 - [Agent onboarding](docs/agent-onboarding.md) — source-of-truth order for coding agents
 - [Workflow Execution Pipeline](docs/architecture/workflow-execution-pipeline.md) — ordered steps, admission, inline auto-chain and post-commit boundaries
 - [Subflow Execution](docs/architecture/subflow-execution.md) — child start/forward/retry, `S`/`P` semantics and terminal resume
-- [CLAUDE.md](CLAUDE.md) / [AGENTS.md](AGENTS.md) — architecture overview and domain concepts for coding agents (same content)
-- [.claude/rules/](.claude/rules/) — always-on coding standards and the workflow developer reference
+- [AGENTS.md](AGENTS.md) — single bootstrap for coding agents (architecture, domain concepts, AI guidance layout); `CLAUDE.md` imports it
+- [.claude/rules/](.claude/rules/) — always-on coding standards and the workflow developer reference; `.cursor/rules/` holds `@` pointers to the same files
 - [vnext-meta/README.md](vnext-meta/README.md) — the runtime metadata package
+
+### Working with AI coding agents
+
+Guidance is tool-neutral and lives in one place; every agent (Claude Code, Cursor, Codex, Copilot) reads the same files:
+
+- [AGENTS.md](AGENTS.md) is the bootstrap, [.claude/rules/](.claude/rules/) the always-on rules, [.claude/skills/](.claude/skills/) the on-demand skills. Cursor reads the skills folder directly and reaches the rules through `@` pointers in `.cursor/rules/`; nothing is copied.
+- Non-trivial decisions (architecture, cross-service, data model, security, performance) go through the **Agent Council** before any code is written. Run:
+
+  ```
+  /agent-council <the decision to make>
+  ```
+
+  It also fires on phrases like "council", "karar verelim", "eklemeli miyim", "mimari karar". The council never edits code; it only produces the decision record. Sessions are recorded under [docs/agent-council/sessions/](docs/agent-council/sessions/README.md), which is the team's decision history — check it before opening a new session. Process, roles and templates: [docs/agent-council/README.md](docs/agent-council/README.md).
+- Dated specs, plans and reports from earlier design work live under [docs/superpowers/](docs/superpowers/); they explain *why* something was decided, not today's behavior.
 
 ## Health Endpoints
 

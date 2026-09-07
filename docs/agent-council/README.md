@@ -1,10 +1,24 @@
 # Agent Council
 
-Agent Council is vNext's evidence-backed planning gate for non-trivial engineering decisions. It runs in plan mode only: the council may inspect the repository and produce decision artifacts, but it does not implement code or change runtime behavior.
+Agent Council is vNext's evidence-backed planning gate for non-trivial engineering decisions. It is a planning process only: the council may inspect the repository and produce decision artifacts, but it does not implement code or change runtime behavior.
 
 ## Use It For
 
 Use the council for pipeline, transition, subflow, cross-service, contract, data, security, reliability, performance, deployment, and major architectural changes. Small isolated fixes may use the lightweight path in `.claude/rules/agent-council-plan-mode.md`.
+
+## Run It
+
+The council is packaged as the `agent-council` skill (`.claude/skills/agent-council/SKILL.md`,
+read by Claude Code and Cursor alike). Invoke it as a slash command in the agent prompt:
+
+```
+/agent-council <the decision to make, one or two sentences>
+```
+
+It also fires without the command on trigger phrases ("council", "karar verelim", "eklemeli
+miyim", "mimari karar", "should we add") and on any design or cross-service question whose
+answer would be a recommendation.
+
 
 ## Start A Session
 
@@ -12,9 +26,13 @@ Use the council for pipeline, transition, subflow, cross-service, contract, data
 2. Read `project/PROJECT-CONTEXT.md`, `project/ARCHITECTURE-PRINCIPLES.md`, and `project/DEFINITION-OF-DONE.md`.
 3. Select the smallest risk-appropriate council using `COUNCIL-SELECTION.md`.
 4. Collect independent proposals, then run no more than two objection rounds.
-5. Record `DECISION.md`; use `EXPERIMENT_REQUIRED`, `CLARIFICATION_REQUIRED`, or `BLOCKED` when evidence is incomplete.
+5. Record `DECISION.md`; use `EXPERIMENT_REQUIRED`, `CLARIFICATION_REQUIRED`, or `BLOCKED` when evidence is incomplete. Append the session to the [decision log](sessions/README.md) — that table is the history of every council decision.
 6. Do not create `IMPLEMENTATION-PLAN.md` as executable work until the decision and required Chair approval are complete.
 7. After approval, obtain explicit user direction before making source changes.
+
+## Decision History
+
+Every session lives under `sessions/<YYYY-MM-DD-slug>/` and is indexed in [sessions/README.md](sessions/README.md). Check the log before opening a new session: the question may already be decided. Sessions are committed; `ai-docs/` is scratch and is not used.
 
 ## Required Artifacts
 

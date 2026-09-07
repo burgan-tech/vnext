@@ -1,6 +1,6 @@
 # AGENTS.md
 
-This file provides guidance to Codex and other coding agents when working with code in this repository. It mirrors `CLAUDE.md` minus the Claude Code-specific sections (local overrides import, skills).
+This is the single session-bootstrap file for every coding agent working in this repository (Codex, Cursor, Copilot, Gemini CLI read it directly; Claude Code imports it from `CLAUDE.md`). Tool-specific wiring lives in `CLAUDE.md` (Claude skills, local overrides) and in three pointer files under `.cursor/rules/` — see [AI guidance layout](#ai-guidance-layout) at the end of this file.
 
 ## Project Rules (always apply)
 
@@ -8,8 +8,8 @@ These rules are authoritative for all work in this repo. Read them before writin
 
 - [Agent onboarding](docs/agent-onboarding.md) — source-of-truth order, where-is-X, known pitfalls. When this file disagrees with code, trust `LifecycleOrder.cs` / `PipelineExecutionProfile.cs`.
 - [.NET / Aether / vNext coding standards](.claude/rules/dotnet-coding-standards.md) — style, naming, Aether SDK usage, outbox event delivery, logging via `WorkflowLogs.cs`, Result pattern, multi-schema rules.
-- [vNext workflow developer reference](.claude/rules/vnext-workflow-developer.md) — pipeline step order, profiles, subflow lifecycle, error boundary, long-polling, instance data, `vnext-meta`. Keep `.cursor/rules/` aligned with these files.
-- [Agent Council plan mode](.claude/rules/agent-council-plan-mode.md) — non-trivial decisions must produce an evidence-backed plan before implementation; keep `.cursor/rules/` aligned.
+- [vNext workflow developer reference](.claude/rules/vnext-workflow-developer.md) — pipeline step order, profiles, subflow lifecycle, error boundary, long-polling, instance data, `vnext-meta`.
+- [Agent Council plan mode](.claude/rules/agent-council-plan-mode.md) — non-trivial decisions must produce an evidence-backed plan before implementation.
 
 ## First-Time Setup
 
@@ -116,36 +116,14 @@ delivery path by design. See `docs/runtime/event-publish-modes.md`.
 
 ### Transition Pipeline
 
-Transitions execute through a deterministic pipeline of ordered steps. Each step has a single responsibility and returns `Result<StepOutcome>`. Steps are defined in `LifecycleOrder`:
-
-| Order | Step | Responsibility |
-|-------|------|----------------|
-| 5 | HandleCancelPreflightStep | Detect cancel/exit; short-circuit if instance already completed |
-| 10 | ForwardToActiveSubflowStep | Queue post-commit forward to active subflow; skip epilogue. Does not forward `updateData` or parent shared `$self` transitions. |
-| 19 | SetBusyStep | Set instance status to Busy and persist |
-| 20 | CreateTransitionRecordStep | Create transition record; duplicate key guard |
-| 21 | HandleUpdateDataDataOnlyStep | Parent with active SubFlow: persist update data, then skip lifecycle/epilogue |
-| 25 | ResourceLockStep | Acquire/release/extend resource locks via script |
-| 30 | RunOnExecuteTasksStep | Run transition OnExecute tasks |
-| 38 | ApplyTimeoutStateStep | Apply timeout target into context before exit |
-| 39 | CancelScheduledJobsStep | Cancel scheduled jobs for current state |
-| 40 | RunOnExitTasksStep | Run leaving-state OnExit tasks |
-| 50 | ChangeStateStep | Persist state change |
-| 60 | RunOnEntryTasksStep | Run target-state OnEntry tasks |
-| 70 | HandleSubFlowStep | Start subflow correlation; enqueue StartSubflowJob |
-| 75 | HandleLongPollTerminationStep | Pause on state entry and arm acknowledgment fallback when configured |
-| 79 | ClearBusyOnResumeStep | Clear busy on subflow resume path |
-| 80 | RunAutomaticTransitionsStep | Evaluate auto-transition conditions; set NextTransition |
-| 90 | ScheduleTransitionsStep | Schedule future transitions — skipped when auto selected a winner |
-| 100 | HandleFinishStep | Complete/cancel instance on finish states |
-| 110 | FinalizeTransitionStep | Complete transition record; dispose script cache |
-| 112 | ResolveAvailableStep | Resolve deferred Active status |
-
-**StepOutcome**: `Continue()` (next step), `Stop()` (break loop), `SkipTo(order)` (jump + replan), `SkipToFinalize()` (shorthand), `With(Action<PipelineDirectives>)` (mutate directives).
-
-**PipelineExecutionProfile**: Each trigger type resolves to a profile (`IPipelineProfileResolver`) that excludes irrelevant steps. Profiles: Manual (no exclusions), AutoChain (skip Preflight/ForwardSubflow/SetBusy/ApplyTimeoutState — ResourceLock runs), Scheduled, Event, ErrorBoundary (skip Preflight/ForwardSubflow/ResourceLock; `AllowSubFlow=false`). A **self-target** variant is composed on top of any of these for **`updateData` only** (`SkipsStateLifecycle()` = target is the authored `$self` keyword AND the transition is updateData): it additionally excludes CancelScheduledJobs/OnExit/OnEntry/Schedule, because no state is left or entered. ChangeState and OnExecute deliberately still run. Every **other** `$self` transition — a `$self` shared transition above all — keeps the base profile and runs the **full** lifecycle, including the timer re-arm; `target: $self` means "do not move the instance", not "skip the state's hooks". A literal target equal to the current state does **not** count as `$self` — start and retry-after-commit both present that shape while genuinely needing the state entered. See `.claude/rules/vnext-workflow-developer.md`.
-
-**TransitionExecutionContext**: Initial/fresh entries are built by `TransitionContextFactory` (workflow from `IComponentCacheStore`, instance from `instanceRepository.GetActiveAsync`). Every automatic hop gets a new context, but an uninterrupted inline chain reuses the previous hop's tracked `Instance` and resolved `Workflow` via `CreateFromPreloaded`. Reuse ends at post-commit/new-scope, subflow callback and retry boundaries. Within one hop, the same context reference flows through all steps. `Cache` is cleared at Finalize; `Directives` are per-hop consumable mutations. See `docs/architecture/inline-chain-context-reuse.md`.
+Transitions execute through a deterministic pipeline of ordered steps (`LifecycleOrder`); each step
+returns `Result<StepOutcome>`. The **ordered step table, `StepOutcome` values, `PipelineExecutionProfile`
+exclusions, the `updateData`-only self-target composition and `TransitionExecutionContext` reuse rules
+live in one place**: [vNext workflow developer reference](.claude/rules/vnext-workflow-developer.md).
+The narrative version is [Workflow Execution Pipeline](docs/architecture/workflow-execution-pipeline.md);
+the code is `src/BBT.Workflow.Domain/Execution/Transitions/Pipeline/LifecycleOrder.cs` and
+`PipelineExecutionProfile.cs`. When they disagree, the code wins. Do not copy the step table into
+this file again — every step change then has to touch every copy.
 
 ### Status / State / Type Semantics
 
@@ -236,3 +214,27 @@ For domain/platform knowledge beyond what's in code:
 - Examples: tag `vnext-example`
 
 Detailed docs live in `/docs` (implementation). `/ai-docs` is gitignored local scratch, not a source of truth.
+
+---
+
+## AI guidance layout
+
+Content lives in exactly one place; each tool has a thin entry point that points at it.
+
+| Path | Role | Edit? |
+|------|------|-------|
+| `AGENTS.md` | Bootstrap for every agent (this file) | yes |
+| `CLAUDE.md` | Claude Code entry: imports `AGENTS.md`, lists skills, imports `CLAUDE.local.md` | yes, keep thin |
+| `docs/agent-onboarding.md` | Source-of-truth order, where-is-X, known pitfalls | yes |
+| `.claude/rules/*.md` | Always-on rules — **single source**. Claude Code loads them natively | yes |
+| `.cursor/rules/*.mdc` | Three 8-line pointers; each `@`-includes one file from `.claude/rules/` so Cursor reads the same text | only when a rule file is added/renamed |
+| `.claude/skills/*/SKILL.md` | On-demand skills — **single source**. Cursor loads `.claude/skills/` directly for compatibility; there is no `.cursor/skills/` | yes |
+| `docs/` | Implementation docs, indexed from `docs/README.md` | yes |
+| `docs/superpowers/{specs,plans,reports}/`, `docs/agent-council/` | Dated decision records — the *why*, not the current contract | append |
+| `CLAUDE.local.md`, `ai-docs/` | Machine-local, git-ignored | personal |
+
+Workflow for a rule or skill change: edit under `.claude/` and commit. Nothing is copied anywhere.
+Adding a **new** rule file also needs a matching pointer in `.cursor/rules/` (copy an existing one and
+change the `@` path); adding a skill needs nothing.
+Facts that belong to the runtime (step order, profile exclusions, event delivery modes) go in
+`.claude/rules/` or a `/docs` page and are **linked** from here, never duplicated.

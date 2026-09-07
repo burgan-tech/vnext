@@ -203,7 +203,7 @@ vNext’te katmanlar arasındaki sınırlar kasıtlı olarak sıkı tutulmuştur
 
 | Path | Content |
 |------|---------|
-| `vnext/.cursor/rules/vnext.mdc` | .NET coding standards, naming, DDD, Result pattern, logging, testing, API design, domain events |
+| `vnext/.claude/rules/dotnet-coding-standards.md` (Cursor reads it via `.cursor/rules/dotnet-coding-standards.mdc` pointer) | .NET coding standards, naming, DDD, Result pattern, logging, testing, API design, domain events |
 | `vnext/CLAUDE.md` | Build/run commands, architecture overview, layer responsibilities, transition pipeline |
 
 ### Key Source Files (Pattern Reference)

@@ -13,8 +13,8 @@ Trust this order:
    `src/BBT.Workflow.Application/Execution/Transitions/Pipeline/Steps/`.
 2. **Current `/docs` pages** linked from [README.md](README.md) (not the
    Historical records section).
-3. **`AGENTS.md` / `CLAUDE.md`** and `.claude/rules/` (they must stay aligned
-   with `.cursor/rules/`).
+3. **`AGENTS.md`** (imported by `CLAUDE.md`) and `.claude/rules/` — Cursor reads
+   the same files through `@` pointers in `.cursor/rules/`.
 4. **Dated plans/specs** in `docs/superpowers/` — the *why* of a decision, not
    today's behavior.
 
@@ -25,15 +25,30 @@ It is empty in git and is not a source of truth.
 
 | File | Role |
 | --- | --- |
-| [AGENTS.md](../AGENTS.md) / [CLAUDE.md](../CLAUDE.md) | Session bootstrap: hosts, pipeline card, events, subflow. |
+| [AGENTS.md](../AGENTS.md) | Session bootstrap for every agent: hosts, layers, events, subflow, AI guidance layout. `CLAUDE.md` imports it and adds Claude skills. |
 | [.claude/rules/dotnet-coding-standards.md](../.claude/rules/dotnet-coding-standards.md) | Style, Result pattern, logging, **outbox events** (EventHook is gone). |
 | [.claude/rules/vnext-workflow-developer.md](../.claude/rules/vnext-workflow-developer.md) | Pipeline, profiles, locking, well-known transitions, `availableIn`. |
 | [architecture/workflow-execution-pipeline.md](architecture/workflow-execution-pipeline.md) | Ordered steps, profiles, inline auto-chain, post-commit boundaries. |
 | [runtime/event-publish-modes.md](runtime/event-publish-modes.md) | Outbox vs Outbox+TerminalRelay. |
 
-Cursor always-applies `.cursor/rules/vnext.mdc` and
-`.cursor/rules/vnext-workflow-developer.mdc`. Those must match the Claude rules
-above; if they do not, the code wins.
+Cursor always-applies `.cursor/rules/*.mdc`. Each one is an 8-line pointer that
+`@`-includes the matching `.claude/rules/*.md`, and Cursor loads `.claude/skills/`
+directly — so there is no second copy of anything to keep aligned. If a rule ever
+disagrees with the code, the code wins.
+
+## Editing the AI guidance
+
+- **Rule or skill** → edit under `.claude/rules/` or `.claude/skills/` and
+  commit. A **new** rule file also gets an 8-line pointer in `.cursor/rules/`
+  (copy an existing one, change the `@` path); a new skill needs nothing.
+- **Bootstrap fact for every agent** (ports, layers, commands, concepts) →
+  `AGENTS.md`. `CLAUDE.md` only carries Claude-specific wiring.
+- **Runtime fact** (step order, profile exclusions, event modes) → the owning
+  `/docs` page or `.claude/rules/vnext-workflow-developer.md`, linked from
+  `AGENTS.md`; do not paste the same table into a second file.
+- **Decision record** (why something was done) → dated file under
+  `docs/superpowers/{specs,plans,reports}/` or a session under
+  `docs/agent-council/sessions/`; register it in `docs/README.md`.
 
 ## Where is X
 
