@@ -87,7 +87,7 @@ Resolution: `IPipelineProfileResolver.Resolve(workflowContext, transitionContext
 - Client cycle: `GET /functions/state` → `200` (changed) | `304` (not modified → wait → retry).
 - ETag source: `LatestData?.ETag` for entity, `IRepresentationEtagService.Generate(output)` for representation.
 - **Role filtering**: `ITransitionAuthorizationManager` filters available transitions per role. Supports `$InstanceStarter`, `$PreviousUser` pseudo-roles.
-- **`incident` block** (ResponseShapeVersion `v8`): always present — `{ hasActiveIncident, active | null, historyHref }`, lifted from the leaf subflow, no stack trace; `HasActiveIncident` is in the fingerprint ETag. History: `GET …/instances/{instance}/incidents` (paged, `queryRoles` gate).
+- **`incident` block** (ResponseShapeVersion `v9`): always present and **links only** — `{ hasActiveIncident, active: { href } (only while the flag is true), history: { href } }`; identical on `metadata.incident`. `active.href` → `GET …/instances/{instance}/incidents/active` (newest unresolved; **404 `Instance:100037`** when none is open, a normal answer; **403** when the role gate refuses); `history.href` → the paged history. Same `queryRoles` gate on all three surfaces, never a stack trace. Lifted from a subflow, `active.href` addresses the leaf that owns the incident, `history.href` the polled instance. `HasActiveIncident` is in the fingerprint ETag and is the block's only varying member.
 - No server-side hold — 304 response drives client polling.
 
 ## Sync vs Async Execution

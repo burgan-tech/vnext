@@ -922,7 +922,7 @@ public sealed class InstanceController(
 
     /// <summary>
     /// Pages the error-boundary incident history of an instance, newest first. This is the target of
-    /// the state function's <c>incident.historyHref</c>. Gated by the same <c>queryRoles</c> check as
+    /// the state function's <c>incident.history.href</c>. Gated by the same <c>queryRoles</c> check as
     /// the state function; stack traces are never returned here (operators use the Monitor API).
     /// </summary>
     /// <param name="domain">Domain key</param>

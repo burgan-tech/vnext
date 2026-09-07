@@ -98,7 +98,7 @@ etag = h(responseShapeVersion | instanceId | effectiveState | status | flowVersi
   same fingerprint, so 304 works with an empty cache (after TTL expiry, Redis flush, or
   failover).
 - **`responseShapeVersion` guards runtime-side body changes** (`StateFunctionCache.ResponseShapeVersion`,
-  currently `v8`). The material is derived from instance facts and caller scope only — it says nothing
+  currently `v9`). The material is derived from instance facts and caller scope only — it says nothing
   about what the body *contains*. So when a runtime release changes the body for an unchanged instance
   (v2 started listing the workflow-level `updateData` and `exit` transitions; v3 added the workflow's
   `functions` discovery links; v4 replaced that inline list with a `hasFunctions` flag plus a link to
@@ -107,8 +107,9 @@ etag = h(responseShapeVersion | instanceId | effectiveState | status | flowVersi
   transitions inside `transitions` as `kind: "scheduled"` entries with `executeAtUtc`; v7 gave the
   scheduled entries the uniform `href`/`view`/`schema` link objects with their capability flags
   hardcoded false — a temporary concession so domain clients that assume every `transitions[]` item
-  carries the three links do not break; v8 added the always-present `incident` block —
-  `hasActiveIncident`, a client-safe `active` summary, `historyHref`), every previously issued ETag must be
+  carries the three links do not break; v8 added the always-present `incident` block with an embedded
+  `active` summary; v9 replaced that block's content with links —
+  `{ hasActiveIncident, active: { href }, history: { href } }`), every previously issued ETag must be
   invalidated: otherwise a client
   long-polling an instance parked in a human state would keep receiving 304 and never observe the new
   shape. The same constant is a segment of the cache key, so bumping it also discards bodies written by
