@@ -37,6 +37,15 @@ public interface IInstanceQueryAppService : IApplicationService
     Task<Result<GetInstanceIncidentsOutput>> GetInstanceIncidentsAsync(
         GetInstanceIncidentsInput input,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns the newest unresolved incident of an instance, or <c>NotFound</c> when none is open.
+    /// The target of the <c>incident.active</c> link; gated by the same <c>queryRoles</c> check as the
+    /// state function.
+    /// </summary>
+    Task<Result<IncidentDetailDto>> GetActiveInstanceIncidentAsync(
+        GetActiveInstanceIncidentInput input,
+        CancellationToken cancellationToken = default);
     
     /// <summary>
     /// Retrieves only the instance data (attributes) with optional ETag support

@@ -9,7 +9,7 @@ namespace BBT.Workflow.Instances;
 /// <summary>
 /// Entity Framework Core implementation of <see cref="IInstanceIncidentRepository"/>.
 /// Read-side access to the <c>InstanceIncidents</c> table independent of the instance aggregate:
-/// paged history, inline "latest" blocks, counts, and the one-query batch lookup list views need.
+/// the paged history and the newest unresolved incident.
 /// Every read is no-tracking; writes go through the aggregate.
 /// </summary>
 /// <param name="dbContext">The workflow database context provider.</param>
@@ -48,31 +48,19 @@ public sealed class EfCoreInstanceIncidentRepository(
     }
 
     /// <inheritdoc />
-    public async Task<List<InstanceIncident>> GetLatestAsync(
+    public async Task<InstanceIncident?> GetActiveAsync(
         Guid instanceId,
-        int take,
         CancellationToken cancellationToken = default)
     {
-        if (take < 1)
-            return [];
-
+        // Served by IX_InstanceIncidents_InstanceId_CreatedAt; the ordering matches every other
+        // "newest incident" rule in the codebase (CreatedAt DESC, then Id DESC to break a tie
+        // between rows recorded in the same unit of work).
         return await (await GetDbSetAsync())
             .AsNoTracking()
-            .Where(i => i.InstanceId == instanceId)
+            .Where(i => i.InstanceId == instanceId && !i.IsResolved)
             .OrderByDescending(i => i.CreatedAt)
             .ThenByDescending(i => i.Id)
-            .Take(take)
-            .ToListAsync(cancellationToken);
-    }
-
-    /// <inheritdoc />
-    public async Task<int> CountByInstanceAsync(
-        Guid instanceId,
-        CancellationToken cancellationToken = default)
-    {
-        return await (await GetDbSetAsync())
-            .AsNoTracking()
-            .CountAsync(i => i.InstanceId == instanceId, cancellationToken);
+            .FirstOrDefaultAsync(cancellationToken);
     }
 
     /// <inheritdoc />
@@ -93,29 +81,5 @@ public sealed class EfCoreInstanceIncidentRepository(
                     .SetProperty(i => i.IsResolved, true)
                     .SetProperty(i => i.ResolvedAt, resolvedAt),
                 cancellationToken);
-    }
-
-    /// <inheritdoc />
-    public async Task<IReadOnlyDictionary<Guid, InstanceIncident>> GetLatestActiveByInstanceIdsAsync(
-        IReadOnlyCollection<Guid> instanceIds,
-        CancellationToken cancellationToken = default)
-    {
-        if (instanceIds.Count == 0)
-            return new Dictionary<Guid, InstanceIncident>();
-
-        var ids = instanceIds.Distinct().ToList();
-
-        // Unresolved rows are rare and few per instance, so pulling them all for the page and picking
-        // the newest in memory is cheaper than a correlated sub-query per instance.
-        var active = await (await GetDbSetAsync())
-            .AsNoTracking()
-            .Where(i => ids.Contains(i.InstanceId) && !i.IsResolved)
-            .ToListAsync(cancellationToken);
-
-        return active
-            .GroupBy(i => i.InstanceId)
-            .ToDictionary(
-                g => g.Key,
-                g => g.OrderByDescending(i => i.CreatedAt).ThenByDescending(i => i.Id).First());
     }
 }

@@ -5,7 +5,7 @@ namespace BBT.Workflow.Instances;
 
 /// <summary>
 /// Repository for <see cref="InstanceIncident"/> rows read independently of the
-/// <see cref="Instance"/> aggregate: incident history, counts and batch lookups for list views.
+/// <see cref="Instance"/> aggregate: the active incident and the paged history.
 /// Writes still go through the aggregate (<see cref="Instance.AddIncident"/> +
 /// <c>IInstanceRepository.UpdateAsync</c>) so the denormalized <see cref="Instance.HasActiveIncident"/>
 /// flag and the incident rows change in the same unit of work.
@@ -27,18 +27,10 @@ public interface IInstanceIncidentRepository : IRepository<InstanceIncident, Gui
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Returns the newest <paramref name="take"/> incidents of an instance (resolved and unresolved),
-    /// newest first. Used for the inline history block of instance metadata. No-tracking read.
+    /// Returns the newest unresolved incident of an instance, or null when none is open. Backs the
+    /// active-incident endpoint the <c>incident.active</c> link points at. No-tracking read.
     /// </summary>
-    Task<List<InstanceIncident>> GetLatestAsync(
-        Guid instanceId,
-        int take,
-        CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Counts every incident (resolved and unresolved) recorded for an instance.
-    /// </summary>
-    Task<int> CountByInstanceAsync(
+    Task<InstanceIncident?> GetActiveAsync(
         Guid instanceId,
         CancellationToken cancellationToken = default);
 
@@ -61,14 +53,5 @@ public interface IInstanceIncidentRepository : IRepository<InstanceIncident, Gui
     Task<int> ResolveAllAsync(
         Guid instanceId,
         DateTime resolvedAt,
-        CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Batch lookup for list views: for each instance id, the newest unresolved incident (if any).
-    /// One query for the whole page — never call per item. Instances without an active incident
-    /// are absent from the result. No-tracking read.
-    /// </summary>
-    Task<IReadOnlyDictionary<Guid, InstanceIncident>> GetLatestActiveByInstanceIdsAsync(
-        IReadOnlyCollection<Guid> instanceIds,
         CancellationToken cancellationToken = default);
 }

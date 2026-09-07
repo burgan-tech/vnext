@@ -89,61 +89,49 @@ public sealed class AckHref : HrefBase
 }
 
 /// <summary>
-/// Incident block of the state function body: whether the polled instance (or the deepest active
-/// subflow it delegates to) currently carries an unresolved error-boundary incident, a safe summary of
-/// that incident, and a link to the paged incident history. Always present so clients can branch on
-/// <see cref="HasActiveIncident"/> deterministically. Visible to every caller who passes the
-/// state function's <c>queryRoles</c> gate; never carries a stack trace.
+/// Link to the polled instance's active-incident endpoint. Present only while an unresolved incident
+/// exists, so a client follows it just when there is something to fetch. When the incident belongs to
+/// an active subflow this addresses the SUBFLOW that owns it, not the polled ancestor.
 /// </summary>
+public sealed class ActiveIncidentHref : HrefBase
+{
+}
+
+/// <summary>
+/// Link to the paged incident history endpoint. Always addresses the polled instance, even when the
+/// active incident was lifted from a subflow.
+/// </summary>
+public sealed class IncidentHistoryHref : HrefBase
+{
+}
+
+/// <summary>
+/// Incident block: whether the polled instance (or the deepest active subflow it delegates to) carries
+/// an unresolved error-boundary incident, plus links to fetch it and to page the history. Always
+/// present so clients can branch on <see cref="HasActiveIncident"/> deterministically. Visible to every
+/// caller who passes the surface's <c>queryRoles</c> gate.
+/// </summary>
+/// <remarks>
+/// <b>Links, not content.</b> The block deliberately carries no incident fields. Embedding a summary
+/// forced the state function to read the incident table on its hottest path, duplicated a payload the
+/// history endpoint already returns, and left a real staleness hole: resolving incident A and raising
+/// incident B inside one parked state moved no fingerprint member, so a client validating with
+/// <c>If-None-Match</c> kept a <c>304</c> and went on showing A. With only the flag — which IS
+/// fingerprint material — and two static links, that hole cannot exist.
+/// </remarks>
 public sealed class IncidentHref
 {
     /// <summary>True while an unresolved incident is recorded on the displayed instance.</summary>
     public bool HasActiveIncident { get; set; }
 
-    /// <summary>The newest unresolved incident, or null when <see cref="HasActiveIncident"/> is false.</summary>
-    public IncidentSummary? Active { get; set; }
+    /// <summary>
+    /// Link to the active incident, or null — and omitted from the JSON — when
+    /// <see cref="HasActiveIncident"/> is false.
+    /// </summary>
+    public ActiveIncidentHref? Active { get; set; }
 
-    /// <summary>Link to the paged incident history endpoint of the polled instance.</summary>
-    public string HistoryHref { get; set; } = string.Empty;
-}
-
-/// <summary>
-/// Client-safe projection of one incident: what failed, where, and how to correlate it — no stack trace.
-/// </summary>
-public sealed class IncidentSummary
-{
-    /// <summary>Unique incident identifier.</summary>
-    public Guid Id { get; set; }
-
-    /// <summary>Normalized error code (e.g. "Task:Http:503").</summary>
-    public string ErrorCode { get; set; } = string.Empty;
-
-    /// <summary>Human-readable error message (truncated by the domain).</summary>
-    public string Message { get; set; } = string.Empty;
-
-    /// <summary>State where the error occurred.</summary>
-    public string State { get; set; } = string.Empty;
-
-    /// <summary>Transition that was executing when the error occurred.</summary>
-    public string Transition { get; set; } = string.Empty;
-
-    /// <summary>Task key that failed; null for pipeline-level errors.</summary>
-    public string? Task { get; set; }
-
-    /// <summary>Error layer: "Transport", "Task", "Pipeline", "SubFlow", "Job", "PostCommit".</summary>
-    public string? ErrorLayer { get; set; }
-
-    /// <summary>HTTP status code when applicable.</summary>
-    public int? StatusCode { get; set; }
-
-    /// <summary>Error boundary action taken, e.g. "Abort", "Retry", "Notify".</summary>
-    public string? BoundaryAction { get; set; }
-
-    /// <summary>OpenTelemetry trace identifier for correlation with distributed traces.</summary>
-    public string? TraceId { get; set; }
-
-    /// <summary>When the incident occurred (UTC).</summary>
-    public DateTime CreatedAtUtc { get; set; }
+    /// <summary>Link to the paged incident history of the polled instance. Always present.</summary>
+    public IncidentHistoryHref History { get; set; } = new();
 }
 
 /// <summary>

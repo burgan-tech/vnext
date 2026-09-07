@@ -169,7 +169,7 @@ public sealed class InstanceQueryAppService(
                     }
 
                     var response = result.Value!;
-                    await EnrichIncidentMetadataAsync(response, instance, input.Domain, input.Workflow, cancellationToken);
+                    response.Metadata.Incident = BuildIncidentInfo(instance, input.Domain, input.Workflow);
                     var entityEtag = instance.LatestData?.ETag ?? string.Empty;
                     response.EntityEtag = entityEtag;
                     var representationEtag = representationEtagService.Generate(response);
@@ -367,10 +367,14 @@ public sealed class InstanceQueryAppService(
                             instanceOutputResult.Error.Target ?? string.Empty);
                     }
 
-                    list.Add(instanceOutputResult.Value!);
-                }
+                    var instanceOutput = instanceOutputResult.Value!;
 
-                await EnrichIncidentSummariesForListAsync(list, pagedList.Items, input.Domain, input.Workflow, ct);
+                    // Free: the flag is already on the loaded instance and the links are formatted
+                    // strings, so the list view no longer issues an incident query at all.
+                    instanceOutput.Metadata.Incident = BuildIncidentInfo(instance, input.Domain, input.Workflow);
+
+                    list.Add(instanceOutput);
+                }
 
                 var resultPagedList = new HateoasPagedList<GetInstanceOutput>(list, pagedList.CurrentPage,
                     pagedList.PageSize,
@@ -384,70 +388,53 @@ public sealed class InstanceQueryAppService(
     }
 
     /// <summary>
-    /// Fills <c>metadata.incident</c> for a single GET: the newest incidents (inline history, capped),
-    /// the unresolved one (loaded onto the aggregate), the total count and the history link. One
-    /// query when the instance has no incidents at all — the common case.
+    /// Fills <c>metadata.incident</c>: the denormalized flag plus the two links. Reads NOTHING — the
+    /// flag is a column on the instance already in hand. This used to issue up to three queries per
+    /// GET (newest five, the unresolved rows, a total count) to embed content the active-incident and
+    /// history endpoints already serve.
     /// </summary>
-    private async Task EnrichIncidentMetadataAsync(
-        GetInstanceOutput response,
-        Instance instance,
-        string domain,
-        string workflow,
-        CancellationToken cancellationToken)
-    {
-        var latest = await instanceIncidentRepository.GetLatestAsync(
-            instance.Id, InstanceIncidentConstants.InlineHistoryLimit, cancellationToken);
-
-        if (latest.Count == 0 && !instance.HasActiveIncident)
-        {
-            response.Metadata.Incident = null;
-            return;
-        }
-
-        await instanceRepository.LoadActiveIncidentsAsync(instance, cancellationToken);
-        var total = await instanceIncidentRepository.CountByInstanceAsync(instance.Id, cancellationToken);
-
-        response.Metadata.Incident = IncidentInfoDto.FromInstance(
+    private IncidentInfoDto BuildIncidentInfo(Instance instance, string domain, string workflow)
+        => IncidentInfoDto.FromInstance(
             instance,
-            history: latest,
-            totalCount: total,
-            href: urlTemplateBuilder.BuildIncidentsUrl(domain, workflow, instance.Id.ToString()));
-    }
+            activeHref: urlTemplateBuilder.BuildActiveIncidentUrl(domain, workflow, instance.Id.ToString()),
+            historyHref: urlTemplateBuilder.BuildIncidentsUrl(domain, workflow, instance.Id.ToString()));
 
     /// <summary>
-    /// List view: instances flagged <c>HasActiveIncident</c> get their newest unresolved incident from
-    /// ONE batch query for the whole page; nothing is queried when no item is flagged. History and
-    /// totals are not resolved per item — the block carries the flag, the active summary and the link.
+    /// Returns the newest unresolved incident of an instance, or <c>NotFound</c> when none is open —
+    /// the target of the <c>incident.active</c> link.
     /// </summary>
-    private async Task EnrichIncidentSummariesForListAsync(
-        List<GetInstanceOutput> outputs,
-        IList<Instance> instances,
-        string domain,
-        string workflow,
-        CancellationToken cancellationToken)
+    /// <remarks>
+    /// <b>404 is a normal answer here, not an error.</b> The link is emitted only while the flag says
+    /// an incident is open, but the incident can be resolved between the poll and the follow-up (a
+    /// successful retry does exactly that). A client seeing 404 should re-read the state rather than
+    /// treat it as a failure. Gated by the same <c>queryRoles</c> check as the state function and the
+    /// history endpoint, and like them it never returns a stack trace.
+    /// </remarks>
+    public async Task<Result<IncidentDetailDto>> GetActiveInstanceIncidentAsync(
+        GetActiveInstanceIncidentInput input,
+        CancellationToken cancellationToken = default)
     {
-        var flagged = instances.Where(i => i.HasActiveIncident).Select(i => i.Id).ToList();
-        if (flagged.Count == 0)
-            return;
+        runtimeInfoProvider.Check(input.Domain);
 
-        var activeByInstance = await instanceIncidentRepository.GetLatestActiveByInstanceIdsAsync(
-            flagged, cancellationToken);
-
-        foreach (var output in outputs)
-        {
-            if (output.Id is not { } outputId || !activeByInstance.TryGetValue(outputId, out var active))
-                continue;
-
-            var href = urlTemplateBuilder.BuildIncidentsUrl(domain, workflow, outputId.ToString());
-            output.Metadata.Incident = new IncidentInfoDto
+        return await GetInstanceByIdOrKeyAsync(input.Instance, cancellationToken)
+            .BindAsync(instance =>
+                componentCacheStore.GetFlowAsync(input.Domain, input.Workflow, instance.FlowVersion, cancellationToken)
+                    .MapAsync(workflow => (instance, workflow)))
+            .BindAsync(async data =>
             {
-                HasActiveIncident = true,
-                TotalCount = 1,
-                Active = IncidentDetailDto.FromIncident(active),
-                History = [IncidentDetailDto.FromIncident(active)],
-                Href = href
-            };
-        }
+                using var instanceScope = BeginInstanceScope(data.instance);
+
+                if (!await IsInstanceQueryAllowedAsync(data.workflow, data.instance, input.Roles, input.Headers, input.QueryParameters, cancellationToken))
+                    return Result<IncidentDetailDto>.Fail(WorkflowErrors.QueryAccessDenied(data.instance.GetEffectiveState));
+
+                // Trust the row, not the flag: the two are written in one unit of work, but a resolve
+                // that raced this read leaves the flag true for the moment it takes to commit.
+                var active = await instanceIncidentRepository.GetActiveAsync(data.instance.Id, cancellationToken);
+
+                return active is null
+                    ? Result<IncidentDetailDto>.Fail(WorkflowErrors.ActiveIncidentNotFound(input.Instance))
+                    : Result<IncidentDetailDto>.Ok(IncidentDetailDto.FromIncident(active));
+            });
     }
 
     public async Task<Result<GetInstanceIncidentsOutput>> GetInstanceIncidentsAsync(
@@ -1213,10 +1200,6 @@ public sealed class InstanceQueryAppService(
                     if (!await IsInstanceQueryAllowedAsync(data.workflow, data.instance, input.Roles, input.Headers, input.QueryParams, cancellationToken))
                         return ConditionalResult<GetInstanceStateOutput>.Fail(WorkflowErrors.QueryAccessDenied(data.instance.GetEffectiveState));
 
-                    // The incident block needs the newest unresolved incident; incidents are a separate
-                    // table and never ride along with the aggregate. No query when the flag is false.
-                    await instanceRepository.LoadActiveIncidentsAsync(data.instance, cancellationToken);
-
                     // Full correlation set (active + completed), ordered by creation time. The aggregate's
                     // own ChildCorrelations collection is loaded with an active-only filtered include, so
                     // the completed rows the response exposes require this dedicated read. Ordering is
@@ -1786,13 +1769,31 @@ public sealed class InstanceQueryAppService(
     /// Builds the state body's <c>incident</c> block. A leaf-reported block wins when it carries an
     /// active incident; otherwise the polled instance's own loaded incidents are projected.
     /// </summary>
+    /// <summary>
+    /// Builds the state body's <c>incident</c> block: the flag plus links, never content.
+    /// </summary>
+    /// <remarks>
+    /// <b>Reads nothing.</b> <c>HasActiveIncident</c> is a column on the instance already in hand, so
+    /// the state function — the runtime's hottest read, polled continuously by every waiting client —
+    /// touches the incident table zero times. It used to load the unresolved rows purely to embed a
+    /// summary here.
+    /// <para>
+    /// When an active subflow reports an incident, its block is taken as-is, so <c>active</c>
+    /// addresses the SUBFLOW that owns the incident. <c>history</c> is always re-pointed at the polled
+    /// instance: that link answers "what has gone wrong with the thing I asked about", and the client
+    /// polling an ancestor did not ask about the leaf's history.
+    /// </para>
+    /// </remarks>
     private IncidentHref BuildIncidentHref(
         Instance instance,
         IncidentHref? leafIncident,
         string domain,
         string workflow)
     {
-        var historyHref = urlTemplateBuilder.BuildIncidentsUrl(domain, workflow, instance.Id.ToString());
+        var history = new IncidentHistoryHref
+        {
+            Href = urlTemplateBuilder.BuildIncidentsUrl(domain, workflow, instance.Id.ToString())
+        };
 
         if (leafIncident is { HasActiveIncident: true })
         {
@@ -1800,36 +1801,22 @@ public sealed class InstanceQueryAppService(
             {
                 HasActiveIncident = true,
                 Active = leafIncident.Active,
-                HistoryHref = historyHref
+                History = history
             };
         }
-
-        var active = instance.HasActiveIncident
-            ? instance.GetLoadedIncidents().LastOrDefault(i => !i.IsResolved)
-            : null;
 
         return new IncidentHref
         {
             HasActiveIncident = instance.HasActiveIncident,
-            Active = active is null ? null : ToIncidentSummary(active),
-            HistoryHref = historyHref
+            Active = instance.HasActiveIncident
+                ? new ActiveIncidentHref
+                {
+                    Href = urlTemplateBuilder.BuildActiveIncidentUrl(domain, workflow, instance.Id.ToString())
+                }
+                : null,
+            History = history
         };
     }
-
-    private static IncidentSummary ToIncidentSummary(InstanceIncident incident) => new()
-    {
-        Id = incident.Id,
-        ErrorCode = incident.ErrorCode,
-        Message = incident.Message,
-        State = incident.State,
-        Transition = incident.Transition,
-        Task = incident.Task,
-        ErrorLayer = incident.ErrorLayer,
-        StatusCode = incident.StatusCode,
-        BoundaryAction = incident.BoundaryAction,
-        TraceId = incident.TraceId,
-        CreatedAtUtc = incident.CreatedAt
-    };
 
     /// <summary>
     /// Maps the instance's active scheduled-transition jobs to <c>kind: "scheduled"</c> entries of the

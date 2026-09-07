@@ -48,10 +48,14 @@ public sealed class StateFunctionCache(
     /// History: v7 gave the scheduled entries the uniform <c>href</c>/<c>view</c>/<c>schema</c> link
     /// objects (capability flags hardcoded false) and, being a key segment, also retired entries
     /// written before caller roles became provider-resolved. v8 added the always-present
-    /// <c>incident</c> block (<c>hasActiveIncident</c>, <c>active</c>, <c>historyHref</c>) together with
-    /// <see cref="InstanceStateFingerprint.HasActiveIncident"/> in the ETag material.
+    /// <c>incident</c> block (<c>hasActiveIncident</c>, an embedded <c>active</c> summary,
+    /// <c>historyHref</c>) together with <see cref="InstanceStateFingerprint.HasActiveIncident"/> in
+    /// the ETag material. v9 replaced that block's content with links —
+    /// <c>{ hasActiveIncident, active: { href }, history: { href } }</c>, <c>active</c> omitted when
+    /// no incident is open — which also closed the resolve-A-then-raise-B staleness hole the embedded
+    /// summary had: the body now carries only the flag, and the flag is fingerprint material.
     /// </remarks>
-    private const string ResponseShapeVersion = "v8";
+    private const string ResponseShapeVersion = "v9";
 
     private const string KeyPrefix = $"state-fn:{ResponseShapeVersion}:";
 

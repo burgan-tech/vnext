@@ -182,6 +182,36 @@ public sealed class GetInstanceIncidentsInput : IHasDomain
 }
 
 /// <summary>
+/// Input for retrieving the newest unresolved incident of an instance — the target of the
+/// <c>incident.active</c> link on the state function and instance metadata.
+/// </summary>
+public sealed class GetActiveInstanceIncidentInput : IHasDomain
+{
+    [Required]
+    [StringLength(WorkflowConstants.MaxDomainLength)]
+    public string Domain { get; set; } = string.Empty;
+
+    [Required]
+    [StringLength(WorkflowConstants.MaxFlowLength)]
+    public string Workflow { get; set; } = string.Empty;
+
+    [Required]
+    public string Instance { get; set; } = string.Empty;
+
+    /// <summary>HTTP headers from the request (dynamic role grants read them).</summary>
+    public Dictionary<string, string?>? Headers { get; set; }
+
+    /// <summary>Query parameters from the request (dynamic role grants read them).</summary>
+    public Dictionary<string, string?>? QueryParameters { get; set; }
+
+    /// <summary>
+    /// Caller roles, used to enforce the same <c>queryRoles</c> gate as the state function and the
+    /// incident history endpoint.
+    /// </summary>
+    public IReadOnlyCollection<string>? Roles { get; set; }
+}
+
+/// <summary>
 /// Input for retrieving instance data (attributes only)
 /// </summary>
 public sealed class GetInstanceDataInput : IHasDomain

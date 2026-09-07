@@ -32,6 +32,16 @@ public static class WorkflowErrors
             WorkflowErrorCodes.NotFoundInstanceData,
             $"Instance \"{instanceIdentifier}\" not found",
             target: instanceIdentifier);
+
+    /// <summary>
+    /// No unresolved incident on the instance. Expected whenever the incident was resolved between a
+    /// state poll and the follow-up read of the <c>incident.active</c> link.
+    /// </summary>
+    public static Error ActiveIncidentNotFound(string instanceIdentifier)
+        => Error.NotFound(
+            WorkflowErrorCodes.ActiveIncidentNotFound,
+            $"Instance \"{instanceIdentifier}\" has no active incident",
+            target: instanceIdentifier);
     
     /// <summary>
     /// Creates an error when instance data for a specific version is not found.

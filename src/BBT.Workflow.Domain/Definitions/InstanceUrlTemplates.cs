@@ -83,6 +83,12 @@ public static class InstanceUrlTemplates
     public const string IncidentsTemplate = "/{0}/workflows/{1}/instances/{2}/incidents";
 
     /// <summary>
+    /// URL template for the active (newest unresolved) incident of an instance.
+    /// Format: /{domain}/workflows/{workflow}/instances/{instanceId}/incidents/active
+    /// </summary>
+    public const string ActiveIncidentTemplate = "/{0}/workflows/{1}/instances/{2}/incidents/active";
+
+    /// <summary>
     /// URL template for instance authorize function endpoint.
     /// Format: /{domain}/workflows/{workflow}/instances/{instanceId}/functions/authorize
     /// </summary>

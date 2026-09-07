@@ -253,16 +253,11 @@ public class InstanceQueryAppServiceVersionTests : IDisposable
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// GetInstanceAsync enriches metadata.incident from the incident table; NSubstitute returns null
-    /// for a <c>Task&lt;List&lt;T&gt;&gt;</c>, so the "no incidents" answer has to be explicit.
+    /// metadata.incident is built from the instance's own flag plus two links, so a bare substitute
+    /// is enough — GetInstanceAsync issues no incident query at all.
     /// </summary>
     private static IInstanceIncidentRepository CreateIncidentRepository()
-    {
-        var repository = Substitute.For<IInstanceIncidentRepository>();
-        repository.GetLatestAsync(Arg.Any<Guid>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
-            .Returns(new List<InstanceIncident>());
-        return repository;
-    }
+        => Substitute.For<IInstanceIncidentRepository>();
 
     private static Instance CreateInstanceWithMultipleVersions()
     {

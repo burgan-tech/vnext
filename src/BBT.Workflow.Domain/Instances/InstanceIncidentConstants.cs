@@ -21,10 +21,6 @@ public static class InstanceIncidentConstants
     /// <summary>Maximum length of <see cref="InstanceIncident.TraceId"/>.</summary>
     public const int MaxTraceIdLength = 64;
 
-    /// <summary>
-    /// Number of most-recent incidents surfaced inline in instance metadata
-    /// (<c>GetInstanceOutput.Metadata.Incident.History</c>). Matches the pre-table retention cap so the
-    /// DTO keeps its historical shape; the full history is served by the incidents endpoint.
-    /// </summary>
-    public const int InlineHistoryLimit = 5;
+    // There is deliberately no inline-history cap any more: no read surface embeds incidents. The
+    // state body and instance metadata carry links, and the history endpoint pages the full set.
 }

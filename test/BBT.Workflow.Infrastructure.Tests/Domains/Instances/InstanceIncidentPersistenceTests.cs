@@ -340,7 +340,7 @@ public sealed class InstanceIncidentPersistenceTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task IncidentRepository_PagesNewestFirst_CountsAndBatches()
+    public async Task IncidentRepository_PagesNewestFirstAndPicksTheNewestOpenRow()
     {
         var instance = Instance.Create(Guid.NewGuid(), Flow, "1.0.0", "repo-reads");
         var other = Instance.Create(Guid.NewGuid(), Flow, "1.0.0", "repo-reads-other");
@@ -365,15 +365,17 @@ public sealed class InstanceIncidentPersistenceTests : IAsyncLifetime
         page3.Items.Select(i => i.ErrorCode).ShouldBe(["code-0"]);
         page3.HasNext.ShouldBeFalse();
 
-        (await repository.GetLatestAsync(instance.Id, 2)).Select(i => i.ErrorCode).ShouldBe(["code-6", "code-5"]);
-        (await repository.CountByInstanceAsync(instance.Id)).ShouldBe(7);
-        (await repository.CountByInstanceAsync(other.Id)).ShouldBe(0);
+        // The active-incident endpoint's read: newest UNRESOLVED, ignoring the five resolved rows.
+        var active = await repository.GetActiveAsync(instance.Id);
+        active.ShouldNotBeNull();
+        active!.ErrorCode.ShouldBe("code-6", "newest unresolved wins");
 
-        var batch = await repository.GetLatestActiveByInstanceIdsAsync([instance.Id, other.Id]);
-        batch.Count.ShouldBe(1);
-        batch[instance.Id].ErrorCode.ShouldBe("code-6", "newest unresolved wins");
+        // An instance with no incident at all answers null rather than throwing — that is the 404.
+        (await repository.GetActiveAsync(other.Id)).ShouldBeNull();
 
-        (await repository.GetLatestActiveByInstanceIdsAsync([])).ShouldBeEmpty();
+        // And once everything is closed, so does an instance that used to carry one.
+        await repository.ResolveAllAsync(instance.Id, DateTime.UtcNow);
+        (await repository.GetActiveAsync(instance.Id)).ShouldBeNull();
     }
 
     [Fact]

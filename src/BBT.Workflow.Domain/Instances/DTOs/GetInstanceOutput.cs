@@ -1,5 +1,6 @@
 using System.Text.Json;
 using BBT.Workflow.Definitions;
+using BBT.Workflow.Shared;
 
 namespace BBT.Workflow.Instances;
 
@@ -90,13 +91,8 @@ public sealed class InstanceMetadataDto
         ModifiedBy = instance.ModifiedBy;
         ModifiedByBehalfOf = instance.ModifiedByBehalfOf;
 
-        // Incidents are a separate table and are never included by default: only the unresolved
-        // rows (loaded when the flag is set) and rows added in this unit of work are on the aggregate.
-        // The query service enriches TotalCount/History/Href from IInstanceIncidentRepository.
-        if (instance.HasActiveIncident || instance.Incidents.Count > 0)
-        {
-            Incident = IncidentInfoDto.FromInstance(instance);
-        }
+        // The incident block is NOT built here: it is links now, and a link needs the domain and
+        // workflow this constructor does not have. The query service sets it for every response.
     }
     
     /// <summary>Current state key (engine internal state).</summary>
@@ -148,66 +144,46 @@ public sealed class InstanceMetadataDto
     public string? ModifiedByBehalfOf { get; set; }
 
     /// <summary>
-    /// Error boundary incident information. Null when the instance has no active incident and no
-    /// incident history was loaded for this response.
+    /// Error boundary incident block: the flag plus links. Always present.
     /// </summary>
-    public IncidentInfoDto? Incident { get; set; }
+    public IncidentInfoDto Incident { get; set; } = new();
 }
 
 /// <summary>
-/// Incident tracking information exposed in instance metadata.
+/// Incident block exposed in instance metadata: whether an unresolved error-boundary incident exists,
+/// plus links to fetch it and to page the history. Mirrors the state function's block exactly, so a
+/// client learns one shape.
 /// </summary>
+/// <remarks>
+/// <b>Links, not content.</b> This block used to embed the active incident, the newest five and a
+/// total count, which cost two reads on every instance GET and one batch read per page of the list
+/// view. Nothing is embedded now: the flag answers "is something wrong?", and a client that wants the
+/// detail follows <see cref="Active"/>.
+/// </remarks>
 public sealed class IncidentInfoDto
 {
     /// <summary>Whether the instance currently has an unresolved incident.</summary>
     public bool HasActiveIncident { get; set; }
 
-    /// <summary>Total number of incidents (resolved + unresolved) recorded for this instance.</summary>
-    public int TotalCount { get; set; }
+    /// <summary>
+    /// Link to the active incident, or null — and omitted from the JSON — when
+    /// <see cref="HasActiveIncident"/> is false.
+    /// </summary>
+    public ActiveIncidentHref? Active { get; set; }
 
-    /// <summary>The most recent unresolved incident, or null if all are resolved.</summary>
-    public IncidentDetailDto? Active { get; set; }
+    /// <summary>Link to the paged incident history of this instance. Always present.</summary>
+    public IncidentHistoryHref History { get; set; } = new();
 
     /// <summary>
-    /// The newest incidents ordered by creation time descending, capped at
-    /// <see cref="InstanceIncidentConstants.InlineHistoryLimit"/>. The full history is paged by
-    /// <see cref="Href"/>.
+    /// Builds the block from the instance's denormalized flag and the two supplied links. Reads
+    /// nothing: the flag is a column on the instance, so this costs no query.
     /// </summary>
-    public List<IncidentDetailDto> History { get; set; } = [];
-
-    /// <summary>Link to the paged incident history endpoint of this instance.</summary>
-    public string? Href { get; set; }
-
-    /// <summary>
-    /// Builds the block from what is materialized on the aggregate (unresolved incidents plus any
-    /// recorded in the current unit of work). <paramref name="history"/> and
-    /// <paramref name="totalCount"/> come from <c>IInstanceIncidentRepository</c> when the caller has
-    /// them; otherwise the loaded incidents stand in for both.
-    /// </summary>
-    public static IncidentInfoDto FromInstance(
-        Instance instance,
-        IReadOnlyList<InstanceIncident>? history = null,
-        int? totalCount = null,
-        string? href = null)
+    public static IncidentInfoDto FromInstance(Instance instance, string activeHref, string historyHref) => new()
     {
-        var loaded = instance.GetLoadedIncidents();
-        var active = loaded.LastOrDefault(i => !i.IsResolved);
-        var historySource = history ?? loaded;
-
-        return new IncidentInfoDto
-        {
-            HasActiveIncident = instance.HasActiveIncident,
-            TotalCount = totalCount ?? loaded.Count,
-            Active = active != null ? IncidentDetailDto.FromIncident(active) : null,
-            History = historySource
-                .OrderByDescending(i => i.CreatedAt)
-                .ThenByDescending(i => i.Id)
-                .Take(InstanceIncidentConstants.InlineHistoryLimit)
-                .Select(IncidentDetailDto.FromIncident)
-                .ToList(),
-            Href = href
-        };
-    }
+        HasActiveIncident = instance.HasActiveIncident,
+        Active = instance.HasActiveIncident ? new ActiveIncidentHref { Href = activeHref } : null,
+        History = new IncidentHistoryHref { Href = historyHref }
+    };
 }
 
 /// <summary>

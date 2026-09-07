@@ -68,7 +68,7 @@ SELECT Id, Key, EffectiveState, Status, FlowVersion,
   revert-then-recomplete that restores both counts moves `LastCorrelationCompletedAt`, and a sub
   item advancing its own state moves `LastSubFlowStateChangedAt`.
 - **`HasActiveIncident`** is the denormalized instance column maintained by the aggregate
-  (`AddIncident` / `ResolveOpenIncidents`), so projecting it costs nothing — no join to the
+  (`AddIncident` / `ResolveOpenIncidents`) and, since `v9`, the only incident data the body needs, so projecting it costs nothing — no join to the
   `InstanceIncidents` table. It is in the fingerprint because the body carries an `incident` block
   and an error-boundary transition can open (Abort + transition) or close (`FinalizeTransitionStep`)
   an incident without moving state or status.
@@ -142,12 +142,15 @@ etag = h(responseShapeVersion | instanceId | effectiveState | status | flowVersi
   is currently low and the team wants to observe the gap frequency before revisiting.
 - **`hasActiveIncident` is in the hash** because the body's `incident` block flips with it and the
   flag can move without a state/status change (Boundary Abort with a transition raises one,
-  `FinalizeTransitionStep` resolves it). **Known gap, accepted**: resolving incident A and raising
-  incident B within one parked state leaves the flag `true` on both sides, so the `active` summary
-  stays stale behind a `304` until another fingerprint member moves — the same class of gap as the
-  scheduled entries above. It is now rarer than it was: an abort used to raise two rows in one
-  failure and reliably produce this shape, whereas a task step now records exactly one and commits
-  it with the flag, so reaching the gap needs two separate boundary outcomes without a state change.
+  `FinalizeTransitionStep` resolves it). The flag is the block's *only* varying member: since `v9`
+  the block carries links, not the incident, so `active` is either present or absent and both states
+  are decided by the flag that is already hashed.
+- **The old resolve-A-then-raise-B gap is gone, not merely rarer.** While the block embedded a
+  summary, resolving incident A and raising incident B inside one parked state left the flag `true`
+  on both sides, so a client validating with `If-None-Match` kept its `304` and went on showing A.
+  Content no longer rides in the body, so there is nothing left to go stale: the client re-fetches
+  the incident through `active.href` and gets B. Do not reintroduce an embedded summary here without
+  bringing back this hole.
 - **A transient `hasActiveIncident = true` window is expected on a boundary transition.** The task
   step commits the incident before it saves — that is what stops the fault path recording a
   duplicate — so a `rollback`/`notify` outcome opens the row, routes to its transition, and only

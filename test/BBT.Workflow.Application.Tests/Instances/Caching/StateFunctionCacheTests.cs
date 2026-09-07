@@ -71,11 +71,12 @@ public class StateFunctionCacheTests
         // link; v6 started listing scheduled transitions inside transitions as kind:"scheduled"
         // entries with executeAtUtc; v7 gave scheduled entries the uniform href/view/schema links
         // with hardcoded-false flags and retired entries written before caller roles became
-        // provider-resolved; v8 added the always-present `incident` block) cannot be served from
+        // provider-resolved; v8 added the always-present `incident` block; v9 turned that block's
+        // content into links) cannot be served from
         // entries written by an earlier build.
         // Bump this literal in the same commit as ResponseShapeVersion — the assertion exists to make
         // a silent shape change impossible.
-        key.ShouldStartWith($"state-fn:v8:{TestDomain}:{TestWorkflow}:{TestInstance}:");
+        key.ShouldStartWith($"state-fn:v9:{TestDomain}:{TestWorkflow}:{TestInstance}:");
     }
 
     [Fact]
