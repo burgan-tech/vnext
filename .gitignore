@@ -316,5 +316,9 @@ __pycache__/
 
 docs/superpowers/specs/2026-08-27-performans-firsatlari.md
 
+<<<<<<< Updated upstream
 # etc/docker/run-docker.sh up/switch state (pids, logs, current domain)
 .vnext-local/
+=======
+graphify-out
+>>>>>>> Stashed changes
