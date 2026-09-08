@@ -61,6 +61,10 @@ disagrees with the code, the code wins.
 | Instance load / includes | `EfCoreInstanceRepository.WithDetailsAsync()` — latest-only is gated by `WorkflowExecution:LatestOnlyInstanceLoading`; `GetResultAsync(includeDetails: false)` is lean |
 | Hosts / ports | Orchestration `4201`, Execution `4202`, Monitor `4203`; Inbox `4501`, Outbox `4401` (core). Other domains run at `base + offset`; what is running right now, with ports, app-ids and database: `ai-docs/local-environments/<domain>.md` (git-ignored, written by `etc/docker/run-docker.sh up`) |
 | Layer references | [architecture/dependency-map.md](architecture/dependency-map.md) |
+| Run an integration test for a runtime change | [testing/integration-testing.md](testing/integration-testing.md); tests live in sibling `../vnext-example` (`tests/Core.IntegrationTests`, `TEST-SCENARIOS.md`); skill `runtime-integration-test` |
+| Which sibling repo owns X / where to clone it | `AGENTS.md` § Platform repositories (`../<repo>` layout, ask once, never commit absolute paths) |
+| Build against unreleased Aether | [testing/integration-testing.md](testing/integration-testing.md) §8 — `aether/build/pack-local.sh`, `nuget.config` (both blocks), `AetherPackageVersion`; revert before PR |
+| Env-only failure / new mandatory config | [testing/integration-testing.md](testing/integration-testing.md) §9 — `vnext-helm-charts/charts/vnext/values.yaml` passthrough, `RESOURCE_TUNING.md` |
 
 ## Pitfalls that have already cost work
 

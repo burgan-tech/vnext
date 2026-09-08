@@ -22,6 +22,7 @@ in `AGENTS.md`). Invoke via the `Skill` tool when the trigger phrase matches:
 - **create-github-pr** — "PR oluştur" / "open PR" / "pull request"
 - **git-commit-message** — "commit mesajı" / "git commit"
 - **cross-domain-lab** — "cross-domain test" / "çapraz domain" / "partner domain" (lokal 3-domain Dapr lab'ı; lab vnext-example `labs/cross-domain/` altında)
+- **runtime-integration-test** — "integration test" / "entegrasyon testi" / "vnext-example'da test et" / "e2e doğrula"; also fires without a phrase on a core-process change that needs end-to-end proof (runs vnext-example tests against the locally built runtime; contract [docs/testing/integration-testing.md](docs/testing/integration-testing.md))
 
 ## Personal, machine-local overrides
 

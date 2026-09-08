@@ -17,6 +17,7 @@ describe the stable mental model, boundaries, failure modes, and change-safety r
 | [Domain](domain/instance-data-merge-concept.md) | Instance lifecycle, data versioning, cache context, function-handler behavior. |
 | [Runtime](runtime/task-executors-and-invokers.md) | Task execution, invokers, scripting, remote runtime integration. |
 | [Contracts](contracts/api-and-service-contracts.md) | API shapes, validation, compatibility, error behavior. |
+| [Testing](testing/integration-testing.md) | How a runtime change is verified end to end: policy, sibling repos, local runtime, `VNEXT_BASE_URL`, scenario/index obligations, Aether local feed, Helm parity. |
 | [Integration](integration/forge-fanout-task-implementation.md) | Implementation specs for consumer products (Forge Studio, CLI, SDKs) that build against runtime features. |
 | [Monitoring](monitoring/correlation-and-tracing.md) | Tracing/correlation contract of the runtime, plus the read-only Monitor API (`monitoring/` host, port `4203`): [feature guide](monitoring/features/monitoring-features.md), [endpoint reference](monitoring/endpoints/vnext-monitor-api-reference.md), [GraphQL filter guide](monitoring/features/monitoring-filter-guide.md), [component query-param filters](monitoring/features/query-param-filter.md). |
 
@@ -55,6 +56,7 @@ describe the stable mental model, boundaries, failure modes, and change-safety r
 31. Read [State Store Task](runtime/state-store-task.md) (task type `17`) and [Cache-Aside Task](runtime/cache-aside-task.md) (task type `18`) before authoring or changing the Dapr state-store caching primitives.
 32. Read [Form URL-Encoded Payloads](contracts/form-url-encoded-payloads.md) before changing how start / transition / function endpoints accept `application/x-www-form-urlencoded` bodies.
 33. Read [Elastic Dev Tools Queries for the vNext Trace Tree](runtime/trace-elastic-queries.md) when verifying spans in Kibana — every query was executed against a real `traces-apm*` index; note the `labels.*` vs `numeric_labels.*` split.
+34. Read [Integration Testing a Runtime Change](testing/integration-testing.md) before claiming a core-process change works — it names the sibling repos, the locally-built-runtime rule, the `VNEXT_BASE_URL` external mode, the same-commit `TEST-SCENARIOS.md` obligation, and the Aether local-feed revert that must happen before a PR.
 
 ### Historical records (not current contracts)
 
