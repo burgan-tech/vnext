@@ -68,7 +68,9 @@ with core or another registered domain are refused (`--help` has the table). Fla
 
 Each host receives its `http` launch profile's environment with `APP_DOMAIN`, the connection string, the
 Dapr ports/app-ids and the cross-host references overridden per process, so no tracked file changes.
-Every `up` writes a record of the environment (ports, app-ids, database, logs, reproduce command) to
+Every `up` also registers the domain in the vNext CLI (`wf domain add`, right port and database; activate with
+`wf domain use <domain>` before `wf sync`) and starts a per-domain `init` publisher on `3005+offset`.
+It writes a record of the environment (ports, app-ids, database, logs, reproduce command) to
 `ai-docs/local-environments/<domain>.md` — git-ignored, meant for the next session or the next agent.
 The script refuses to start when the docker infra belongs to another compose file (e.g. a cross-domain
 lab), because the sidecars would land on the wrong network. The manual equivalent of `up core`:

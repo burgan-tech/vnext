@@ -57,7 +57,25 @@ Commands run without a terminal, so the script never prompts — pass everything
    `/health`. Expect a few minutes on a cold build.
 4. If it refuses with "docker infra is running from another compose file", stop: another stack (for
    example a cross-domain lab) owns the infra. Report it and let the user decide — do not `down` it yourself.
-5. Report the base URL and the record path `ai-docs/local-environments/X.md`; point integration tests
+5. Load components with the vNext CLI (`wf`, from `burgan-tech/vnext-workflow-cli`, installed
+   globally) from the domain package repo — for the examples that is `../vnext-example`. `up` has
+   already registered the domain in `wf` with the right API port and database; you only switch to it:
+   ```bash
+   cd ../vnext-example
+   wf domain use X && wf domain active      # must print X — the CLI keeps ONE global active domain
+   wf check && wf sync                      # sync = add missing; update = changed; reset = force
+   ```
+   Never run `wf sync` without the `use` step: it publishes to whatever domain was active last time.
+   System flows (`@burgan-tech/vnext-core-runtime`) go through **that domain's** init container
+   (`init` for core on :3005, `init-X` on :3005+offset, already aimed at X's orchestration):
+   `curl -X POST localhost:<3005+offset>/api/package/runtime/publish -H 'content-type: application/json' -d '{"appDomain":"X"}'`
+   — the call is **asynchronous**: it answers `{"statusUrl": "/api/package/publish/status/<id>"}`; poll
+   that URL (or `docker logs init-X`) until the job says completed before running `wf sync`.
+   Known quirk: `wf check` may print "API: Not accessible" while `/health` is 200 and `wf sync` works;
+   trust `curl localhost:<port>/health`. Verified 2026-09-08 on core: 7 system + 23 example workflows
+   loaded, smoke workflow start → transition → Completed.
+   Every port above is written in `ai-docs/local-environments/X.md` — read it instead of computing.
+6. Report the base URL and the record path `ai-docs/local-environments/X.md`; point integration tests
    at `VNEXT_BASE_URL=http://localhost:<4201+offset>`. Stop with `./run-docker.sh down X`.
 
 ## Testing

@@ -25,6 +25,7 @@
 #     outbox          4401+o       "                                   vnext-<domain>-worker-outbox
 #     inbox           4501+o       "                                   vnext-<domain>-worker-inbox
 #     db-migrator     (4301+o)     "  (pseudo app port, no listener)   vnext-<domain>-db-migrator
+#     init            3005+o       —  package publisher aimed at this domain's orchestration
 #   Every sidecar port here is published on localhost, so Dapr ports are derived from the (unique)
 #   app port instead of vnext-runtime's base+offset*100, which collides on a shared host
 #   (42110+10*100 = execution's 43110; 44110+100 = the migrator's 44210).
@@ -96,11 +97,14 @@ app_port()  { echo $(( $1 + $2 )); }
 dapr_http() { if [ "$2" = 0 ]; then f "$1" 7; else echo $(( 50000 + $(f "$1" 4) + $2 )); fi; }
 dapr_grpc() { if [ "$2" = 0 ]; then echo $(( $(f "$1" 7) + 1 )); else echo $(( 55000 + $(f "$1" 4) + $2 )); fi; }
 host_url()  { if [ "$(f "$1" 10)" = 1 ]; then printf 'http://localhost:%s' "$(app_port "$(f "$1" 4)" "$2")"; else printf '—'; fi; }
+init_port() { echo $(( 3005 + $1 )); }            # init (package publisher) service, vnext-runtime convention
+init_name() { if [ "$2" = 0 ]; then printf 'init'; else printf 'init-%s' "$1"; fi; }   # <domain> <offset>
 # every localhost port a domain publishes, one per line
 domain_ports() {   # <offset> (WITH_MONITOR honoured)
   local h; while IFS= read -r h; do
     [ "$(f "$h" 10)" = 1 ] && app_port "$(f "$h" 4)" "$1"; dapr_http "$h" "$1"; dapr_grpc "$h" "$1"
   done < <(selected_hosts; printf '%s\n' "$MIGRATOR")
+  init_port "$1"
 }
 # app-id for <base id> <domain> <offset>: offset 0 keeps the base, others insert the domain
 app_id() { if [ "$3" = 0 ]; then printf '%s' "$1"; else printf 'vnext-%s-%s' "$2" "${1#vnext-}"; fi; }
@@ -219,8 +223,10 @@ check_infra_owner() {
 }
 
 wait_sidecar() {   # wait_sidecar <container name> <http port>
+  # /v1.0/healthz stays 500 until the APP listens on --app-port, which happens after this step —
+  # /v1.0/healthz/outbound turns 204 as soon as the components are loaded, which is what we need here.
   local i=0
-  until curl -fs -o /dev/null "http://localhost:$2/v1.0/healthz"; do
+  until curl -fs -o /dev/null "http://localhost:$2/v1.0/healthz/outbound"; do
     i=$((i+1))
     if [ "$(docker inspect "$1" --format '{{.State.Running}}' 2>/dev/null)" != "true" ]; then
       docker logs --tail 5 "$1" 2>&1 | grep -i "fatal\|error" | cut -c1-300 >&2 || true
@@ -240,11 +246,21 @@ write_sidecars_json() {   # <domain> <offset> <out file>
     spec="$spec$(f "$h" 6)|$(sidecar_name "$(f "$h" 6)" "$domain" "$offset")|$(app_id "$(f "$h" 8)" "$domain" "$offset")|$([ "$(f "$h" 10)" = 1 ] && app_port "$(f "$h" 4)" "$offset")|$(dapr_http "$h" "$offset")|$(dapr_grpc "$h" "$offset")
 "
   done < <(selected_hosts; printf '%s\n' "$MIGRATOR")
-  python3 - "$out" "$domain" "$spec" <<'PYGEN'
+  python3 - "$out" "$domain" "$spec" "$(app_port 4201 "$offset")" "$(init_port "$offset")" <<'PYGEN'
 import json, sys, copy
-out, domain, spec = sys.argv[1], sys.argv[2], sys.argv[3]
+out, domain, spec, orch_port, init_port = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]
 base = json.load(open(out + ".base.json"))["services"]
 svcs = {}
+# init (package publisher) for this domain: same image/build as core's, but aimed at this domain's orchestration
+init = copy.deepcopy(base["init"])
+init["container_name"] = f"init-{domain}"
+init["environment"] = {"PACKAGE_API_PORT": "3000", "APP_DOMAIN": domain,
+                       "VNEXT_APP_URL": f"http://host.orb.local:{orch_port}"}
+init["ports"] = [{"target": 3000, "published": init_port, "protocol": "tcp"}]
+init["networks"] = {"bbt-development": None}
+init["extra_hosts"] = ["host.orb.local=host-gateway"]
+init.pop("depends_on", None)
+svcs[f"init-{domain}"] = init
 for line in spec.strip().splitlines():
     svc, cname, app_id, app_port, http, grpc = line.split("|")
     s = copy.deepcopy(base[svc]); cmd = s["command"]
@@ -259,7 +275,8 @@ for line in spec.strip().splitlines():
     s.pop("depends_on", None)
     svcs[cname] = s
 json.dump({"name": f"vnext-{domain}", "services": svcs,
-           "networks": {"bbt-development": {"external": True}}}, open(out, "w"), indent=1)
+           "networks": {"bbt-development": {"external": True}},
+           "volumes": {"npm-cache": {}}}, open(out, "w"), indent=1)
 PYGEN
   rm -f "$out.base.json"
 }
@@ -270,6 +287,7 @@ ensure_infra() {   # <domain> <offset>
   check_infra_owner
   docker network create bbt-development >/dev/null 2>&1 || true
   if [ "$offset" = 0 ]; then
+    services="$services init"
     while IFS= read -r h; do services="$services $(f "$h" 6)"; done < <(selected_hosts)
     [ "${SKIP_MIGRATE:-0}" = "1" ] || services="$services $(f "$MIGRATOR" 6)"
   fi
@@ -309,7 +327,7 @@ migrate() {   # <domain> <offset> <db>
   (cd "$ROOT/$(f "$MIGRATOR" 2)" && exec env "${ENVS[@]}" dotnet "$dll") > "$logf" 2>&1 \
     || { tail -n 30 "$logf" >&2; die "migration failed — see $logf"; }
   # SchemaMigrationRunner logs per-schema failures and continues, so the exit code alone lies
-  failed="$(grep -o "Migration failed for schema [A-Za-z0-9_-]*" "$logf" | sort -u | wc -l | tr -d ' ')"
+  failed="$( { grep -o "Migration failed for schema [A-Za-z0-9_-]*" "$logf" || true; } | sort -u | wc -l | tr -d ' ')"   # grep=1 on "no failures" must not trip pipefail
   if [ "${failed:-0}" -gt 0 ]; then
     grep -m3 -A2 "Migration failed for schema" "$logf" | cut -c1-200 >&2
     die "$failed schema migration(s) failed (usually the migrator sidecar / Dapr lock) — see $logf"
@@ -378,6 +396,20 @@ stop_domain() {   # <domain> — hosts, then its own sidecars (offset domains on
   write_record "$domain" stopped
 }
 
+# vNext CLI (`wf`) keeps its own list of domains with API url + database. Register this one so a
+# later `wf domain use <domain> && wf sync` publishes to the right port. Never switch the active domain.
+register_wf_domain() {   # <domain> <offset> <db>
+  command -v wf >/dev/null 2>&1 || { warn "vNext CLI (wf) not installed — components must be published another way"; return 0; }
+  local url="http://localhost:$(app_port 4201 "$2")"
+  if wf domain list 2>/dev/null | grep -qE "^[▸ ]*\s*$1( |$)"; then
+    ok "wf domain '$1' already registered — verify it points at $url: wf domain list"
+  elif wf domain add "$1" --API_BASE_URL "$url" --DB_NAME "$3" >/dev/null 2>&1; then
+    ok "wf domain '$1' registered → $url / $3   (activate: wf domain use $1)"
+  else
+    warn "could not register wf domain '$1' — run: wf domain add $1 --API_BASE_URL $url --DB_NAME $3"
+  fi
+}
+
 # ---------- records (ai-docs) ---------------------------------------------------------------
 
 write_record() {   # <domain> <running|stopped>
@@ -400,6 +432,7 @@ write_record() {   # <domain> <running|stopped>
 | Port offset | $offset |
 | Database | \`$db\` on localhost:5432 (postgres/postgres) |
 | Base URL | http://localhost:$(app_port 4201 "$offset") |
+| Init (package publisher) | http://localhost:$(init_port "$offset") (\`$(init_name "$domain" "$offset")\`) |
 | Monitor host | $([ "$monitor" = 1 ] && echo yes || echo no) |
 | Runtime source | \`$branch\` @ \`$rev\` |
 | Sidecar compose | $([ "$offset" = 0 ] && echo "\`etc/docker/docker-compose.yml\` (core owns the default sidecars)" || echo "\`$ddir/sidecars.json\` (project \`vnext-$domain\`)") |
@@ -414,6 +447,20 @@ $rows
 \`\`\`bash
 cd etc/docker && ./run-docker.sh up $domain --offset $offset$([ "$monitor" = 1 ] && echo " --monitor")$([ "$db" != "$(DB_OVERRIDE= db_for_domain "$domain")" ] && echo " --db $db")
 \`\`\`
+
+## Load components (vNext CLI \`wf\`)
+
+\`\`\`bash
+cd <domain package repo, e.g. ../vnext-example>
+wf domain add $domain --API_BASE_URL http://localhost:$(app_port 4201 "$offset") --DB_NAME $db   # once
+wf domain use $domain && wf check && wf sync      # sync = add missing · update = changed · reset = force
+\`\`\`
+
+\`wf\` was registered for this domain by \`up\` (API $(printf 'http://localhost:%s' "$(app_port 4201 "$offset")"), DB \`$db\`). Check \`wf domain active\` before publishing — the CLI keeps one global active domain.
+
+System flows (\`@burgan-tech/vnext-core-runtime\`) go through **this domain's** init service (container \`$(init_name "$domain" "$offset")\`, already aimed at :$(app_port 4201 "$offset")):
+\`curl -X POST localhost:$(init_port "$offset")/api/package/runtime/publish -H 'content-type: application/json' -d '{"appDomain":"$domain"}'\`
+The call is asynchronous — poll the returned \`statusUrl\` (or \`docker logs $(init_name "$domain" "$offset")\`) until the job is completed, then \`wf sync\`.
 
 Integration tests against this environment: \`VNEXT_BASE_URL=http://localhost:$(app_port 4201 "$offset")\`.
 Stop: \`./run-docker.sh down $domain\`.
@@ -453,6 +500,7 @@ print_plan() {   # <domain> <offset> <db>
     printf '  %-14s %-24s %-32s %-13s %s\n' "$(f "$h" 1)" "$(host_url "$h" "$2")" \
       "$(app_id "$(f "$h" 8)" "$1" "$2")" "$(dapr_http "$h" "$2")/$(dapr_grpc "$h" "$2")" "$(sidecar_name "$(f "$h" 6)" "$1" "$2")"
   done < <(selected_hosts; printf '%s\n' "$MIGRATOR")
+  printf '  %-14s %-24s %-32s %-13s %s\n' init "http://localhost:$(init_port "$2")" "(package publisher → :$(app_port 4201 "$2"))" "" "$(init_name "$1" "$2")"
   echo
 }
 
@@ -488,6 +536,7 @@ cmd_up() {
   log "waiting for /health (timeout ${HEALTH_TIMEOUT}s)"
   wait_healthy "$offset"
   printf '%s' "$domain" > "$STATE/last"
+  register_wf_domain "$domain" "$offset" "$db"
   write_record "$domain" running
   printf '\n\033[1;32mready\033[0m  %s  →  http://localhost:%s   record: %s\n\n' "$domain" "$(app_port 4201 "$offset")" "$RECORDS/$domain.md"
 }
