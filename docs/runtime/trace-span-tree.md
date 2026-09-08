@@ -14,9 +14,6 @@ This page is the reference for the resulting span tree: every span this plan int
 ungated, its `ActivitySource`, its tags, and the registration rule that keeps a new source from
 silently going dark in one host.
 
-Full design rationale, decisions, and work breakdown: see
-[`docs/superpowers/specs/2026-08-25-trace-span-tree-design.md`](../superpowers/specs/2026-08-25-trace-span-tree-design.md).
-
 ## Target span tree
 
 ```
@@ -462,9 +459,6 @@ helper-set resolution (`Script.ResolveHelpers`) — the latter being the invisib
 script-perf work's own analysis flagged but chose not to instrument with a span. The old
 accumulator tags and the `script.compile` event are **kept alongside**, unchanged, for query
 compatibility with existing dashboards/alerts built against them.
-
-Rationale for the reversal and the full decision record: §1 ("Decisions taken") of
-[`docs/superpowers/specs/2026-08-25-trace-span-tree-design.md`](../superpowers/specs/2026-08-25-trace-span-tree-design.md).
 
 ## Three memo layers on the script path, three ways of reporting a hit
 

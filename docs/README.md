@@ -12,13 +12,13 @@ describe the stable mental model, boundaries, failure modes, and change-safety r
 | Area | Purpose |
 | --- | --- |
 | [Agent onboarding](agent-onboarding.md) | Source-of-truth order, where-is-X, pitfalls for a new coding session. |
+| [Agent Council](agent-council/README.md) | Plan-only decision workflow, roles, session artifacts, evidence gates, and Chair approval. Decision history: [sessions/README.md](agent-council/sessions/README.md). |
 | [Architecture](architecture/system-overview.md) | Runtime shape, service boundaries, dependency direction, routing. |
 | [Domain](domain/instance-data-merge-concept.md) | Instance lifecycle, data versioning, cache context, function-handler behavior. |
 | [Runtime](runtime/task-executors-and-invokers.md) | Task execution, invokers, scripting, remote runtime integration. |
 | [Contracts](contracts/api-and-service-contracts.md) | API shapes, validation, compatibility, error behavior. |
 | [Integration](integration/forge-fanout-task-implementation.md) | Implementation specs for consumer products (Forge Studio, CLI, SDKs) that build against runtime features. |
 | [Monitoring](monitoring/correlation-and-tracing.md) | Tracing/correlation contract of the runtime, plus the read-only Monitor API (`monitoring/` host, port `4203`): [feature guide](monitoring/features/monitoring-features.md), [endpoint reference](monitoring/endpoints/vnext-monitor-api-reference.md), [GraphQL filter guide](monitoring/features/monitoring-filter-guide.md), [component query-param filters](monitoring/features/query-param-filter.md). |
-| [Plans & specs](superpowers/plans/) | Dated design plans (`superpowers/plans/`) and specs (`superpowers/specs/`). Point-in-time records of decisions — read for the *why*, not as the current contract; the pages above win when they disagree. |
 
 ## Reading Path
 

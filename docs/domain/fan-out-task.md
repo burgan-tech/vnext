@@ -460,4 +460,3 @@ Split across two layers:
 | DI registration (Orchestration-only) | `src/BBT.Workflow.Application/Microsoft/Extensions/DependencyInjection/TaskServiceCollectionExtensions.cs` (`AddTaskExecutors`) |
 | Logging | `src/BBT.Workflow.Domain/Logging/WorkflowLogs.cs` § Fan-Out Execution |
 | Activation metric (not fan-out-specific) | `src/BBT.Workflow.Application/Telemetry/WorkflowMetrics.cs` |
-| Design spec | `docs/superpowers/specs/2026-08-21-fanout-task-design.md` |

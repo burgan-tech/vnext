@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # set-domain.sh — Switch debug domain across all launchSettings.json and appsettings.json files.
 #
+# NOTE: this edits TRACKED files (they show up in `git status` and have leaked into commits before).
+# Prefer `etc/docker/run-docker.sh up <domain>` / `switch <domain>`, which injects APP_DOMAIN and the
+# connection string per process without touching any file. Keep this only for IDE F5 debugging.
+#
 # Usage:
 #   ./scripts/set-domain.sh set <domain>   — Set APP_DOMAIN and Database=vNext_<domain>
 #   ./scripts/set-domain.sh reset          — Reset to defaults (core / Aether_WorkflowDb)

@@ -77,15 +77,15 @@ Monitoring üzerinde çalışmaya başlamadan önce **doğru kaynağa** bak. Her
 |----------------|---------------|--------|
 | **Şu ana kadar ne yaptık? Hangi endpoint'ler var, nasıl çalışıyor?** | `docs/features/` (özellikle `monitoring-features.md`) | Kullanıcıya dönük, **tamamlanmış** yeteneklerin rehberi. Mevcut tüm endpoint'ler ve nasıl kullanılacakları. |
 | **Bundan sonra ne ekleyeceğiz? Büyük resim, yol haritası?** | `docs/upcoming/` (`vnext-monitoring-upcoming-features.md`) | **Eklemeyi düşündüğümüz** öğelerin kapsamlı feature map'i. Endpoint isimlerinden çok genel resmi ve önceliği görmek için. |
-| **Faz bazlı plan: bir fazda neyi, neden, hangi kontratla ekledik/ekleyeceğiz?** | `docs/superpowers/specs/` (ör. `2026-06-09-monitor-phase1-endpoints-design.md`) | Faz bazlı tasarım/spec. Her endpoint'in gerekçesi, kontratı, mimari kararları, riskleri. |
-| **Faz uygulama adımları (task-by-task)?** | `docs/superpowers/plans/` | writing-plans ile üretilen, adım adım implementasyon planları. |
+| **Faz bazlı plan: bir fazda neyi, neden, hangi kontratla ekledik/ekleyeceğiz?** | lokal `ai-docs/` (git-ignored; ör. `2026-06-09-monitor-phase1-endpoints-design.md`) | Faz bazlı tasarım/spec. Her endpoint'in gerekçesi, kontratı, mimari kararları, riskleri. |
+| **Faz uygulama adımları (task-by-task)?** | lokal `ai-docs/` (git-ignored) | writing-plans ile üretilen, adım adım implementasyon planları. |
 | **Endpoint'in orchestration karşılığı / durumu?** | `.claude/rules/monitor-endpoint-map.md` | Orchestration vs Monitor endpoint haritası ve durum tablosu. |
 | **Geçmiş değişiklik notları?** | `docs/changes/` | Operasyonel/altyapısal değişiklik kayıtları. |
 | **Doğruluğundan şüphe duyulan kararlar, güvenlik riski, onay bekleyen mimari seçimler?** | `docs/ask-correctness/` | Üstlere ya da ekibe sorulması gereken soru notları. Her dosya bir konuyu ele alır. |
 
 **Kural:**
 - **Yapılanları** görmek için → `docs/features/`.
-- **İlerleyeceğimiz yolu / planlananları** görmek için → `docs/upcoming/` (büyük resim) ve `docs/superpowers/specs/` (faz bazlı detay plan).
+- **İlerleyeceğimiz yolu / planlananları** görmek için → `docs/upcoming/` (büyük resim) ve lokal `ai-docs/` altındaki faz spec'leri (git-ignored).
 - Yeni bir endpoint planlarken önce `docs/upcoming/` ile büyük resmi, sonra ilgili `specs/` faz tasarımını oku; yoksa brainstorming → spec → plan akışını izle.
 - **Onayından emin olunmayan** bir karar, güvenlik riski veya mimari seçim söz konusuysa → `docs/ask-correctness/` altına kısa bir not bırak; uygulamaya geçmeden önce üstlerden onay al.
 
@@ -203,7 +203,7 @@ vNext’te katmanlar arasındaki sınırlar kasıtlı olarak sıkı tutulmuştur
 
 | Path | Content |
 |------|---------|
-| `vnext/.cursor/rules/vnext.mdc` | .NET coding standards, naming, DDD, Result pattern, logging, testing, API design, domain events |
+| `vnext/.claude/rules/dotnet-coding-standards.md` (Cursor reads it via `.cursor/rules/dotnet-coding-standards.mdc` pointer) | .NET coding standards, naming, DDD, Result pattern, logging, testing, API design, domain events |
 | `vnext/CLAUDE.md` | Build/run commands, architecture overview, layer responsibilities, transition pipeline |
 
 ### Key Source Files (Pattern Reference)

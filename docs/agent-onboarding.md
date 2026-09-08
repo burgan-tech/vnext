@@ -2,7 +2,7 @@
 
 Short map for a new coding session in this repo. Read this, then follow the
 [docs index](README.md) only for the area you are changing. Do not treat dated
-plans under `docs/superpowers/` as the current contract.
+design plans or specs as the current contract.
 
 ## When sources disagree
 
@@ -13,10 +13,10 @@ Trust this order:
    `src/BBT.Workflow.Application/Execution/Transitions/Pipeline/Steps/`.
 2. **Current `/docs` pages** linked from [README.md](README.md) (not the
    Historical records section).
-3. **`AGENTS.md` / `CLAUDE.md`** and `.claude/rules/` (they must stay aligned
-   with `.cursor/rules/`).
-4. **Dated plans/specs** in `docs/superpowers/` — the *why* of a decision, not
-   today's behavior.
+3. **`AGENTS.md`** (imported by `CLAUDE.md`) and `.claude/rules/` — Cursor reads
+   the same files through `@` pointers in `.cursor/rules/`.
+4. **Dated plans/specs** (local scratch, see the AI guidance layout table in `AGENTS.md`) — the
+   *why* of a decision, not today's behavior.
 
 `ai-docs/` is gitignored local scratch (generated dumps, vnext-docs staging).
 It is empty in git and is not a source of truth.
@@ -25,15 +25,29 @@ It is empty in git and is not a source of truth.
 
 | File | Role |
 | --- | --- |
-| [AGENTS.md](../AGENTS.md) / [CLAUDE.md](../CLAUDE.md) | Session bootstrap: hosts, pipeline card, events, subflow. |
+| [AGENTS.md](../AGENTS.md) | Session bootstrap for every agent: hosts, layers, events, subflow, AI guidance layout. `CLAUDE.md` imports it and adds Claude skills. |
 | [.claude/rules/dotnet-coding-standards.md](../.claude/rules/dotnet-coding-standards.md) | Style, Result pattern, logging, **outbox events** (EventHook is gone). |
 | [.claude/rules/vnext-workflow-developer.md](../.claude/rules/vnext-workflow-developer.md) | Pipeline, profiles, locking, well-known transitions, `availableIn`. |
 | [architecture/workflow-execution-pipeline.md](architecture/workflow-execution-pipeline.md) | Ordered steps, profiles, inline auto-chain, post-commit boundaries. |
 | [runtime/event-publish-modes.md](runtime/event-publish-modes.md) | Outbox vs Outbox+TerminalRelay. |
 
-Cursor always-applies `.cursor/rules/vnext.mdc` and
-`.cursor/rules/vnext-workflow-developer.mdc`. Those must match the Claude rules
-above; if they do not, the code wins.
+Cursor always-applies `.cursor/rules/*.mdc`. Each one is an 8-line pointer that
+`@`-includes the matching `.claude/rules/*.md`, and Cursor loads `.claude/skills/`
+directly — so there is no second copy of anything to keep aligned. If a rule ever
+disagrees with the code, the code wins.
+
+## Editing the AI guidance
+
+- **Rule or skill** → edit under `.claude/rules/` or `.claude/skills/` and
+  commit. A **new** rule file also gets an 8-line pointer in `.cursor/rules/`
+  (copy an existing one, change the `@` path); a new skill needs nothing.
+- **Bootstrap fact for every agent** (ports, layers, commands, concepts) →
+  `AGENTS.md`. `CLAUDE.md` only carries Claude-specific wiring.
+- **Runtime fact** (step order, profile exclusions, event modes) → the owning
+  `/docs` page or `.claude/rules/vnext-workflow-developer.md`, linked from
+  `AGENTS.md`; do not paste the same table into a second file.
+- **Decision record** (why something was done) → local scratch (`ai-docs/`, git-ignored; layout in
+  `AGENTS.md`); a council decision additionally gets one row in `docs/agent-council/sessions/README.md`.
 
 ## Where is X
 
@@ -44,11 +58,8 @@ above; if they do not, the code wins.
 | `cancel` / `updateData` / `exit` | [domain/well-known-transitions.md](domain/well-known-transitions.md) |
 | Distributed events | [runtime/event-publish-modes.md](runtime/event-publish-modes.md); contracts in `src/BBT.Workflow.Events.Contracts/`; handlers in `workers/BBT.Workflow.Workers.Inbox/Handlers/` |
 | Task type numbers | `src/BBT.Workflow.Domain/Definitions/Tasks/TaskEnums.cs` (`CacheAside = 18`, `GetInstance = 19`, `FanOut = 21`, `Python = 23`) |
-| Instance load / includes | `EfCoreInstanceRepository.WithDetailsAsync()` — latest-only is gated by `WorkflowExecution:LatestOnlyInstanceLoading`; `GetResultAsync(includeDetails: false)` is lean; incidents are never included (`LoadActiveIncidentsAsync`) |
-| Incidents (table, flag, state block) | `src/BBT.Workflow.Domain/Instances/InstanceIncident.cs`, `Instance.AddIncident/ResolveOpenIncidents`, `IInstanceIncidentRepository`; state block in `InstanceQueryAppService.BuildIncidentHref`; backfill `Migrations/*_BackfillInstanceIncidents.cs` |
-| State function cache / ETag / shape version | [runtime/state-function-cache-and-etag.md](runtime/state-function-cache-and-etag.md); `StateFunctionCache.ResponseShapeVersion` |
-| DbMigrator timeouts | `SchemaMigration:CommandTimeoutSeconds` / `LockExpirySeconds` (`SchemaMigrationOptions`), applied in `MultiSchemaMigrator` and `SchemaMigrationOrchestrator` |
-| Hosts / ports | Orchestration `4201`, Execution `4202`, Monitor `4203`; Inbox `4501`, Outbox `4401` |
+| Instance load / includes | `EfCoreInstanceRepository.WithDetailsAsync()` — latest-only is gated by `WorkflowExecution:LatestOnlyInstanceLoading`; `GetResultAsync(includeDetails: false)` is lean |
+| Hosts / ports | Orchestration `4201`, Execution `4202`, Monitor `4203`; Inbox `4501`, Outbox `4401` (core). Other domains run at `base + offset`; what is running right now, with ports, app-ids and database: `ai-docs/local-environments/<domain>.md` (git-ignored, written by `etc/docker/run-docker.sh up`) |
 | Layer references | [architecture/dependency-map.md](architecture/dependency-map.md) |
 
 ## Pitfalls that have already cost work
@@ -58,11 +69,6 @@ above; if they do not, the code wins.
   correlation, short-circuits at `HandleUpdateDataDataOnlyStep` (21).
 - **Epilogue is Auto (80) then Schedule (90).** A satisfied auto winner must not
   arm timers that the next hop would immediately cancel.
-- **A new table's foreign key must not name a schema.** Nested `table.ForeignKey(...)` inside a
-  `CreateTable` migration keeps `principalSchema: null` (the convention since `20250523074013_Initial`).
-  `MultiSchemaNpgsqlMigrationsSqlGenerator` rewrites `CreateTableOperation.Schema` but **not** the
-  foreign keys inside it, so an explicit `"public"` pins every flow schema's FK to `public."Instances"`
-  and the first insert fails with `23503`.
 - **EventHook is deleted.** New events are `[EventName]` + Inbox `IEventHandler<T>`
   + `WorkflowLogs`. Subflow terminal events also implement `ISubflowTerminalEvent`
   (Outbox + `SubflowTerminalRelay`).

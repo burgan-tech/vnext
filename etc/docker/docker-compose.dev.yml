@@ -7,6 +7,10 @@ services:
       dockerfile: orchestration/BBT.Workflow.Orchestration.HttpApi.Host/Dockerfile.dev
     env_file:
       - .env.orchestration.dev
+    environment:
+      # `environment` wins over env_file — lets run-docker.sh pick the domain per run without editing files
+      APP_DOMAIN: ${APP_DOMAIN:-core}
+      ConnectionStrings__Default: "Host=vnext-postgres;Port=5432;Database=${VNEXT_DB:-Aether_WorkflowDb};Username=postgres;Password=postgres;"
     ports:
       - "4201:5000"
     volumes:
@@ -42,6 +46,10 @@ services:
       dockerfile: execution/BBT.Workflow.Execution.HttpApi.Host/Dockerfile.dev
     env_file:
       - .env.execution.dev
+    environment:
+      # `environment` wins over env_file — lets run-docker.sh pick the domain per run without editing files
+      APP_DOMAIN: ${APP_DOMAIN:-core}
+      ConnectionStrings__Default: "Host=vnext-postgres;Port=5432;Database=${VNEXT_DB:-Aether_WorkflowDb};Username=postgres;Password=postgres;"
     ports:
       - "4202:5000"
     volumes:
@@ -79,6 +87,7 @@ services:
       - env.dev
     environment:
       - PACKAGE_API_PORT=3000
+      - APP_DOMAIN=${APP_DOMAIN:-core}   # follows run-docker.sh dev/stage <domain>; env file value is the fallback
     ports:
       - "3005:3000"
     healthcheck:
@@ -154,6 +163,10 @@ services:
       dockerfile: monitoring/BBT.Workflow.Monitor.HttpApi.Host/Dockerfile.dev
     env_file:
       - .env.monitoring.dev
+    environment:
+      # `environment` wins over env_file — lets run-docker.sh pick the domain per run without editing files
+      APP_DOMAIN: ${APP_DOMAIN:-core}
+      ConnectionStrings__Default: "Host=vnext-postgres;Port=5432;Database=${VNEXT_DB:-Aether_WorkflowDb};Username=postgres;Password=postgres;"
     ports:
       - "4203:5000"
     volumes:
@@ -242,7 +255,8 @@ services:
       context: ../..
       dockerfile: workers/BBT.Workflow.DbMigrator/Dockerfile.dev
     environment:
-      ConnectionStrings__Default: "Host=postgres;Port=5432;Database=Aether_WorkflowDb;Username=postgres;Password=postgres;"
+      APP_DOMAIN: ${APP_DOMAIN:-core}
+      ConnectionStrings__Default: "Host=postgres;Port=5432;Database=${VNEXT_DB:-Aether_WorkflowDb};Username=postgres;Password=postgres;"
       DAPR_HTTP_PORT: "44210"
       DAPR_GRPC_PORT: "44211"
       DAPR_LOCK_STORE_NAME: "vnext-lock"
