@@ -201,6 +201,25 @@ public sealed class InstanceBusyManagerTests
             It.IsAny<CancellationToken>()), Times.Once);
     }
 
+    [Fact]
+    public async Task MarkBusyWithPropagationAsync_WhenInstanceCompleted_ShouldNotPropagate()
+    {
+        // A terminal parent's correlation is being closed, not extended — Busy must not be
+        // propagated to a subflow of an instance that is already done.
+        var instanceId = Guid.NewGuid();
+        var instance = Instance.Create(instanceId, "test-flow", "1.0.0");
+        instance.Complete("test-domain");
+
+        _instanceRepository
+            .Setup(r => r.FindWithActiveSubFlowAsync(instanceId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(instance);
+
+        await CreateSut().MarkBusyWithPropagationAsync(instanceId);
+
+        _instanceRepository.Verify(r => r.TryMarkBusyAsync(instanceId, It.IsAny<CancellationToken>()), Times.Never);
+        _instanceCommandGateway.Verify(g => g.MarkBusyAsync(It.IsAny<MarkBusyInput>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
     // ─── TryMarkBusyWithPropagationAsync ─────────────────────────────────────
 
     [Fact]

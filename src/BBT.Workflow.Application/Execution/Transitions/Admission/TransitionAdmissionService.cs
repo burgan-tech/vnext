@@ -246,14 +246,19 @@ public sealed class TransitionAdmissionService(
     }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// No distributed lock: the flip is a set-based CAS
+    /// (<see cref="IInstanceRepository.TryMarkBusyAsync(System.Guid,System.Threading.CancellationToken)"/>,
+    /// guard in the WHERE), and this path runs nothing else that needs serializing alongside it —
+    /// unlike <see cref="AcceptAsync"/>, which also has to serialize the duplicate-active-job
+    /// guard's check-then-insert. Postgres's own row lock during the UPDATE is what excludes a
+    /// concurrent racer; a distributed lock here would only add latency around a guarantee the
+    /// database statement already provides.
+    /// </remarks>
     public async Task<Result> ReserveAsync(
         TransitionExecutionContext context,
         CancellationToken cancellationToken = default)
     {
-        await using var scope = await statusLock.AcquireAsync(context.LockKey, cancellationToken);
-        if (!scope.IsAcquired)
-            return Result.Fail(WorkflowErrors.InstanceLockConflict(context.InstanceId));
-
         var outcome = await busyManager.TryMarkBusyWithPropagationAsync(
             context.InstanceId, cancellationToken);
 
@@ -274,17 +279,17 @@ public sealed class TransitionAdmissionService(
     }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// No distributed lock, same reasoning as <see cref="ReserveAsync"/>: the flip is a
+    /// set-based CAS and nothing else runs alongside it here.
+    /// </remarks>
     public async Task<Result> TakeOverAsync(
         TransitionExecutionContext context,
         CancellationToken cancellationToken = default)
     {
-        await using var scope = await statusLock.AcquireAsync(context.LockKey, cancellationToken);
-        if (!scope.IsAcquired)
-            return Result.Fail(WorkflowErrors.InstanceLockConflict(context.InstanceId));
-
-        // Unconditional flip: exempt from the Busy 409, but the flip itself is serialized under
-        // the same short lock as every reserve/settle. Idempotent when already Busy; a Completed
-        // instance is left untouched — HandleCancelPreflightStep surfaces the terminal error.
+        // Exempt from the Busy 409; idempotent when already Busy (the CAS is a no-op). A
+        // Completed instance is left untouched — HandleCancelPreflightStep surfaces the terminal
+        // error.
         await busyManager.MarkBusyAsync(context.InstanceId, cancellationToken);
         logger.InstanceBusyReserved(context.InstanceId, context.TransitionKey);
         return Result.Ok();

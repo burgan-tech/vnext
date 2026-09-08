@@ -342,8 +342,7 @@ public class TransitionPipeline
                     _stateNotificationScheduler,
                     _logger,
                     cancellationToken,
-                    chainSettled: !hadNextTransition,
-                    statusLock: _statusLock);
+                    chainSettled: !hadNextTransition);
 
                 return Result<TransitionExecutionContext>.Ok(context);
             }

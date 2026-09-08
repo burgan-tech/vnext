@@ -14,10 +14,10 @@ namespace BBT.Workflow.Execution.Pipeline;
 internal static class TransitionSettlement
 {
     /// <summary>
-    /// Applies the resolved resting status. <c>statusLock</c> serializes the Busy→Active flip
-    /// with the other status writers (reserve, takeover, fault); pass null when the caller
-    /// ALREADY holds the status lock for this key (post-commit settlement) — a second acquire
-    /// would fail, not reenter.
+    /// Applies the resolved resting status. The Busy→Active flip is a set-based CAS
+    /// (<see cref="IInstanceRepository.TryReleaseBusyAsync(Instance,CancellationToken)"/>, guard
+    /// in the WHERE) — no distributed lock: a lost CAS means the row is no longer Busy and the
+    /// flip is moot, which is exactly as safe as a lock-guarded flip losing its race.
     /// </summary>
     /// <param name="chainSettled">
     /// True when no further hop continues this chain — nothing was enqueued and nothing runs
@@ -32,8 +32,7 @@ internal static class TransitionSettlement
         IStateNotificationScheduler stateNotificationScheduler,
         ILogger logger,
         CancellationToken cancellationToken,
-        bool chainSettled,
-        IInstanceStatusLock? statusLock = null)
+        bool chainSettled)
     {
         // The resting-status flip closes a transition: a status write, its lock, and the state
         // notification. It ran unnamed at the very end of the pipeline, so a trace showed the last
@@ -53,16 +52,6 @@ internal static class TransitionSettlement
 
         if (guardPassed)
         {
-            // Serialize the flip with reserves/takeovers. On acquisition failure proceed
-            // unguarded — leaving the chain's own settlement unapplied would strand the
-            // instance Busy. The write itself commits with the enclosing UoW; the lock
-            // serializes the flip moment, not the commit (documented, accepted window).
-            ITransitionLockScope? scope = null;
-            if (statusLock is not null)
-                scope = await statusLock.AcquireAsync(context.LockKey, cancellationToken);
-
-            await using var _ = scope;
-
             // One set-based CAS instead of the tracked full-row save. resolvedStatus only ever
             // carries Active (ResolveAvailableStep / ClearBusyOnResumeStep) and the old write was
             // Active() unconditionally, so Busy → Active CAS is behavior-identical; a lost CAS
