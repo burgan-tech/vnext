@@ -22,6 +22,19 @@ If the current branch equals the base branch, stop and tell the user to switch t
 
 If `gh` is not authenticated, stop and instruct the user to run `gh auth login`.
 
+### Step 1b — Pre-flight guards (run before drafting)
+
+```bash
+grep -nE '^\s*<add key="aether-local"' nuget.config          # live (uncommented) local Aether feed?
+grep -nE '<AetherPackageVersion>[^<]*-local<' Directory.Build.props   # -local version pinned?
+```
+
+If either command prints a line, **stop**: the branch builds against an unreleased Aether from
+`../aether/.local-feed`, and CI cannot restore it. Tell the user, and offer to revert — set
+`AetherPackageVersion` back to the released version and re-comment both the `aether-local` source and
+its `packageSourceMapping` block in `nuget.config` — then re-check before continuing. Procedure and
+rationale: `docs/testing/integration-testing.md` §8.
+
 ### Step 2 — Analyze commits and generate PR draft
 
 Analyze the commit log and diff stat to draft:
@@ -47,11 +60,18 @@ Analyze the commit log and diff stat to draft:
 <!-- How to verify this works -->
 - [ ] 
 
+## Integration test evidence
+<!-- Only when an integration run was part of this change (docs/testing/integration-testing.md §10). Remove otherwise. -->
+- Scenario(s): `vnext-example` `Tests/<Scenario>` (`--filter FullyQualifiedName~<Scenario>`)
+- Runtime: commit `<sha>` at `VNEXT_BASE_URL=http://localhost:<port>` (`run-docker.sh up <domain>`)
+- Result: <passed>/<total> green; remaining reds and their cause: <environment defect | known gap | regression>
+- `TEST-SCENARIOS.md` row added/updated: yes/no
+
 ## Notes
 <!-- Breaking changes, migration steps, or anything reviewers should know. Remove if not applicable. -->
 ```
 
-Fill in all sections based on actual commit messages and diff content. Remove the `## Notes` section if there is nothing breaking or noteworthy.
+Fill in all sections based on actual commit messages and diff content. Remove the `## Notes` section if there is nothing breaking or noteworthy, and the `## Integration test evidence` section when no integration run was part of the change.
 
 ### Step 3 — Show draft for approval
 

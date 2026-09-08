@@ -170,7 +170,7 @@ project configuration.
 After a decision, implementation needs a *separate* task and explicit user direction.
 
 Do not start infrastructure or run expensive integration tests during council
-planning without explicit user approval (see `CLAUDE.local.md`).
+planning without explicit user approval (see `docs/testing/integration-testing.md` §1).
 
 ## Repository-specific checks
 
@@ -178,6 +178,6 @@ planning without explicit user approval (see `CLAUDE.local.md`).
 - Code is the source of truth for current behavior; `LifecycleOrder.cs` and
   `PipelineExecutionProfile.cs` win over any doc.
 - Validation plans must follow the repo's Aether, outbox, multi-schema, logging and
-  Result-pattern policies, and the integration-test policy in `CLAUDE.local.md`.
+  Result-pattern policies, and the integration-test policy in `docs/testing/integration-testing.md`.
 - Task/component schemas live in the **external** `@burgan-tech/vnext-schema` package.
   Any decision adding a component type must record that coordination cost.

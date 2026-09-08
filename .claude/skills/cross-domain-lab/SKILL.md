@@ -8,7 +8,7 @@ description: Cross-domain (çoklu domain) davranışı lokalde test etmek — Da
 Lab **vnext-example**'da yaşar: `labs/cross-domain/` (`lab.sh`, `README.md`,
 `orchestration.overlay.env`, `VNEXT-BUILD-PLAN.md`). Runtime kodu bu repoda (vnext) derlenir; lab onu
 `ghcr.io/burgan-tech/vnext/*:dapr-nr` imajları olarak koşturur. Ürün örneğini ve testleri **asla** vnext
-reposuna yazma — vnext-example'a yaz (CLAUDE.local.md integration-test politikası).
+reposuna yazma — vnext-example'a yaz (`docs/testing/integration-testing.md` integration-test politikası).
 
 ## Ne zaman
 
@@ -48,7 +48,7 @@ reposuna yazma — vnext-example'a yaz (CLAUDE.local.md integration-test politik
    `vnext.discovery.provider=dapr`, `vnext.discovery.resolution=convention|registry|cache`,
    `vnext.dapr.app_id`, `vnext.dapr.namespace`. Sonrasında caller + callee sidecar span'leri.
 6. **Dokümantasyon zorunlu:** senaryo README'si + `TEST-SCENARIOS.md` satırı aynı commit'te
-   (CLAUDE.local.md §2).
+   (`docs/testing/integration-testing.md` §5).
 
 7. **Rollback tatbikatı:** `VNEXT_LAB_DISCOVERY_PROVIDER=http lab.sh up` ile aynı süiti koştur;
    `Remote*` servisleri registry `baseUrl` + HttpClient'a döner, `useDapr:true` task'ları Dapr'da

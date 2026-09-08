@@ -161,11 +161,8 @@ logger.InstanceCompletedCleanupEventReceived(instanceId, flow);
 - `/ai-docs` is gitignored local scratch for generated dumps (e.g. vnext-docs staging). It is not committed and is not a source of truth.
 - When the user says "add to document", update English docs and ensure Navigation/Overview grouping in `docs/README.md`.
 
-## Context7 Sources
-For platform/domain knowledge beyond the code:
-- vNext domain: `burgan-tech/vnext-runtime` (tag `vnext-runtime`)
-- Aether SDK: `burgan-tech/aether` (tag `aether`)
-- Examples: tag `vnext-example`
+## Sibling repositories
+Repo map, GitHub URLs, trust rules and Context7 tags: `AGENTS.md` § Platform repositories (single source).
 
 ## File Structure Expectation
 ```

@@ -88,6 +88,14 @@ dotnet test --filter "FullyQualifiedName~MyTest"  # Single test
 
 Test projects: `Domain.Tests`, `Application.Tests`, `Infrastructure.Tests`, `TestBase` (shared utilities).
 
+**Integration tests** live in the sibling **vnext-example** repo (`tests/Core.IntegrationTests`, on the
+`VNext.Testing.Sdk` from **vnext-integration-test**) and run against the **locally built** runtime — never
+a container image. Required for changes to core processes (pipeline, transitions, subflows, locking,
+instance data, error boundary, state function) and for regression risk; not for small isolated fixes;
+when unsure, propose and wait. Every scenario gets a README and a row in vnext-example's
+`TEST-SCENARIOS.md` in the same commit. Contract: [docs/testing/integration-testing.md](docs/testing/integration-testing.md);
+procedure: the `runtime-integration-test` skill.
+
 ## Architecture Overview
 
 This is a **distributed workflow orchestration engine** built on .NET 10, Clean Architecture, DDD, and the Aether SDK.
@@ -245,14 +253,36 @@ Backend-Driven View approach: UI changes deploy via backend only, minimizing mob
 
 ---
 
-## Context7 MCP Sources
+## Platform repositories
 
-For domain/platform knowledge beyond what's in code:
-- vNext domain: `burgan-tech/vnext-runtime` (tag `vnext-runtime`)
-- Aether SDK: `burgan-tech/aether` (tag `aether`)
-- Examples: tag `vnext-example`
+The platform is spread over sibling repositories under `github.com/burgan-tech`. Expect each as a
+sibling checkout of this one (`../<repo>`) — the layout `nuget.config`, `labs/cross-domain/lab.sh` and
+the runbook above already assume. When one is missing, ask the user **once** (clone into `../<repo>`
+or use a path they name), remember the answer (Claude: auto-memory; other agents: the developer's
+git-ignored `CLAUDE.local.md`), and never write an absolute path into a committed file. Use this table
+for impact analysis: a runtime change names the repos it touches; in-repo dependencies come from the
+knowledge graph (`code-review-graph` MCP tools, `graphify`).
 
-Detailed docs live in `/docs` (implementation). `/ai-docs` is gitignored local scratch, not a source of truth.
+| Repo | What it is | Consult when | Trust / rules |
+|------|------------|--------------|---------------|
+| [vnext](https://github.com/burgan-tech/vnext) | This runtime | — | Code is the source of truth |
+| [vnext-example](https://github.com/burgan-tech/vnext-example) | Example flows + integration tests + Python behaviour/load tests + cross-domain lab; the platform team's behavioural checkpoint | Any integration test; `TEST-SCENARIOS.md` is the scenario index | Extend an existing scenario before adding one; README + index row per scenario |
+| [vnext-integration-test](https://github.com/burgan-tech/vnext-integration-test) | `VNext.Testing.Sdk` + `VNext.Testing.Template` (Testcontainers or `VNEXT_BASE_URL` external mode); ours | SDK behaviour, assertions, fixture lifecycle | Read it, don't guess; report gaps instead of test-side workarounds. Older clones are named `vnext-integration` |
+| [aether](https://github.com/burgan-tech/aether) | Framework SDK (Result, UoW, locks, cache, jobs, multi-schema, events, OTel) | Any SDK-level behaviour | **Propose, don't edit** — the user decides. Unreleased work: `build/pack-local.sh` → `../aether/.local-feed` + `AetherPackageVersion` (`docs/testing/integration-testing.md` §8); revert before PR |
+| [vnext-schema](https://github.com/burgan-tech/vnext-schema) | Component schema contracts (`@burgan-tech/vnext-schema`) | New/changed component fields or task types | External release cadence; `npm run validate` may lag the runtime |
+| [mocklab](https://github.com/burgan-tech/mocklab) | API mock SDK; first choice for HTTP mocking in tests | Mock seeds, templates, `_admin` API | Templates render all-or-nothing; error in `X-Mocklab-Template-Error` |
+| [vnext-ai-toolkit](https://github.com/burgan-tech/vnext-ai-toolkit) | AI skills for domain flow development (`component-task`, `workflow-scaffold`, `integration-test`, ...) | Scaffolding example components | May lag a runtime change — runtime code > vnext-docs > plugin |
+| [vnext-sys-flow](https://github.com/burgan-tech/vnext-sys-flow) | Default system components (`@burgan-tech/vnext-core-runtime`), mandatory on a fresh runtime | Publishing a domain for the first time | Loaded through the domain's init container |
+| [vnext-forge](https://github.com/burgan-tech/vnext-forge) | Forge Studio — VS Code designer for flows and local dev | Designer-facing metadata (`vnext-meta`), consumer specs in `docs/integration/` | — |
+| [vnext-docs](https://github.com/burgan-tech/vnext-docs) | Product docs portal — https://burgan-tech.github.io/vnext-docs/ (technical, business, architecture, client consumption) | "How does a client consume this?", positioning, domain meaning | **May lag development** — not the truth for current runtime behaviour |
+| [vnext-helm-charts](https://github.com/burgan-tech/vnext-helm-charts) | Helm chart (`charts/vnext`) used by domain teams to deploy | Environment-only failures; a new mandatory config/env; resource sizing | Defaults are overridable per environment — give an optimum, don't hard-code; `charts/vnext/docs/RESOURCE_TUNING.md` |
+| [vnext-workflow-cli](https://github.com/burgan-tech/vnext-workflow-cli) | `wf` CLI (npm global): `domain use`, `check`, `sync`, `update`, `reset`, `csx` | Publishing components locally | One global active domain — `wf domain use X` before every `sync`; read its README, the command set changes |
+| [vnext-client-view-renderer](https://github.com/burgan-tech/vnext-client-view-renderer) | View SDK for clients | View contract questions | — |
+| [vnext-runtime](https://github.com/burgan-tech/vnext-runtime) | Docker compose templates for a local runtime (`make dev`, `create-domain.sh`) | Cross-domain lab template; someone without this repo's `etc/docker` | Optional — `etc/docker/run-docker.sh` + vnext-example is normally enough |
+| [vnext-domain-discovery](https://github.com/burgan-tech/vnext-domain-discovery) | Discovery registry runtime (`@burgan-tech/vnext-discovery-runtime`) | Cross-domain / multi-domain work | `cross-domain-lab` skill |
+
+Context7 MCP tags for the same knowledge: `vnext-runtime`, `aether`, `vnext-example`. Detailed
+implementation docs live in `/docs`; `/ai-docs` is git-ignored local scratch, not a source of truth.
 
 ---
 
@@ -268,9 +298,9 @@ Content lives in exactly one place; each tool has a thin entry point that points
 | `.claude/rules/*.md` | Always-on rules — **single source**. Claude Code loads them natively | yes |
 | `.cursor/rules/*.mdc` | Three 8-line pointers; each `@`-includes one file from `.claude/rules/` so Cursor reads the same text | only when a rule file is added/renamed |
 | `.claude/skills/*/SKILL.md` | On-demand skills — **single source**. Cursor loads `.claude/skills/` directly for compatibility; there is no `.cursor/skills/` | yes |
-| `docs/` | Implementation docs, indexed from `docs/README.md` | yes |
+| `docs/` | Implementation docs, indexed from `docs/README.md`; `docs/testing/` holds the integration-test contract that the `runtime-integration-test` skill executes | yes |
 | `ai-docs/superpowers/{specs,plans,reports}/`, `ai-docs/agent-council/sessions/` | Dated decision records — the *why*, not the current contract. Git-ignored local scratch since 2026-09-07; only the council log row in `docs/agent-council/sessions/README.md` is committed | local |
-| `CLAUDE.local.md`, `ai-docs/` | Machine-local, git-ignored | personal |
+| `CLAUDE.local.md`, `ai-docs/` | Machine-local, git-ignored. Optional per-machine notes only (repo paths, ports) — policy never lives here | personal |
 
 Workflow for a rule or skill change: edit under `.claude/` and commit. Nothing is copied anywhere.
 Adding a **new** rule file also needs a matching pointer in `.cursor/rules/` (copy an existing one and
