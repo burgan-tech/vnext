@@ -69,6 +69,7 @@ public class InstanceQueryAppServiceHistoryTests : IDisposable
             instanceTransitionRepository: _instanceTransitionRepository,
             instanceCorrelationRepository: Substitute.For<IInstanceCorrelationRepository>(),
             instanceJobRepository: Substitute.For<IInstanceJobRepository>(),
+            instanceIncidentRepository: Substitute.For<IInstanceIncidentRepository>(),
             instanceExtensionService: Substitute.For<IInstanceExtensionService>(),
             scriptContextFactory: Substitute.For<IScriptContextFactory>(),
             instanceQueryGateway: Substitute.For<IInstanceQueryGateway>(),

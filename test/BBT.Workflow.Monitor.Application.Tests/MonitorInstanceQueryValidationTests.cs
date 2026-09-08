@@ -88,5 +88,6 @@ public sealed class MonitorInstanceQueryValidationTests
         Substitute.For<IInstanceActionRepository>(),
         Substitute.For<IComponentCacheStore>(),
         Substitute.For<IInstanceCorrelationRepository>(),
+        Substitute.For<IInstanceIncidentRepository>(),
         Substitute.For<ICurrentSchema>());
 }

@@ -15,8 +15,6 @@ public static class InstancesModelCreatingExtensions
     {
         /* Configure all entities here. */
 
-        builder.Ignore<InstanceIncident>();
-
         builder.Entity<Instance>(b =>
         {
             b.ToTable("Instances", schema);
@@ -74,21 +72,31 @@ public static class InstancesModelCreatingExtensions
                 .HasDatabaseName("IX_Instances_LongPollAckToken")
                 .HasFilter("\"LongPollAckToken\" IS NOT NULL");
 
-            b.Property(p => p.Incidents)
-                .HasColumnType("jsonb")
-                .HasConversion(
-                    v => JsonSerializer.Serialize(v, JsonSerializerOptions.Default),
-                    v => JsonSerializer.Deserialize<IReadOnlyCollection<InstanceIncident>>(v, JsonSerializerOptions.Default)
-                         ?? Array.Empty<InstanceIncident>())
-                .Metadata.SetValueComparer(new ValueComparer<IReadOnlyCollection<InstanceIncident>>(
-                    (c1, c2) => JsonSerializer.Serialize(c1, JsonSerializerOptions.Default) ==
-                                JsonSerializer.Serialize(c2, JsonSerializerOptions.Default),
-                    c => c == null ? 0 : JsonSerializer.Serialize(c, JsonSerializerOptions.Default).GetHashCode(),
-                    c => JsonSerializer.Deserialize<IReadOnlyCollection<InstanceIncident>>(
-                        JsonSerializer.Serialize(c, JsonSerializerOptions.Default),
-                        JsonSerializerOptions.Default)!));
+            // Denormalized "has an unresolved incident" flag maintained by the aggregate
+            // (AddIncident / ResolveOpenIncidents). Lets every hot-path guard and the state-function
+            // fingerprint answer without touching the InstanceIncidents table. Partial index on the
+            // rare true value serves "which instances need attention" listings.
+            b.Property(p => p.HasActiveIncident)
+                .IsRequired()
+                .HasDefaultValue(false);
 
-            b.Ignore(p => p.HasActiveIncident);
+            b.HasIndex(p => p.HasActiveIncident)
+                .HasDatabaseName("IX_Instances_HasActiveIncident")
+                .HasFilter("\"HasActiveIncident\" = true");
+
+            // Runtime-only marker set by LoadActiveIncidentsAsync; never persisted.
+            b.Ignore(p => p.IncidentsLoaded);
+
+            // Incidents are a real child collection but are NEVER included by any load path — see
+            // IInstanceRepository.LoadActiveIncidentsAsync. Bound by name (the CLR property is
+            // internal) with field access on the aggregate's backing list.
+            b.HasMany<InstanceIncident>(nameof(Instance.Incidents))
+                .WithOne()
+                .HasForeignKey(i => i.InstanceId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            b.Navigation(nameof(Instance.Incidents))
+                .UsePropertyAccessMode(PropertyAccessMode.Field);
 
             // Runtime-only marker set by the repository after a latest-only materialization;
             // never persisted.
@@ -154,6 +162,58 @@ public static class InstancesModelCreatingExtensions
                     p.EffectiveState,
                     p.Status
                 });
+        });
+
+        builder.Entity<InstanceIncident>(b =>
+        {
+            b.ToTable("InstanceIncidents", schema);
+            b.ConfigureByConvention();
+
+            b.Property(p => p.State)
+                .IsRequired()
+                .HasMaxLength(StateConstants.MaxKeyLength);
+
+            b.Property(p => p.Transition)
+                .IsRequired()
+                .HasMaxLength(TransitionConstants.MaxKeyLength);
+
+            b.Property(p => p.Task)
+                .HasMaxLength(TaskConstants.MaxKeyLength);
+
+            b.Property(p => p.Message)
+                .IsRequired()
+                .HasMaxLength(InstanceIncidentConstants.MaxMessageLength);
+
+            b.Property(p => p.StackTrace)
+                .HasMaxLength(InstanceIncidentConstants.MaxStackTraceLength);
+
+            b.Property(p => p.TraceId)
+                .HasMaxLength(InstanceIncidentConstants.MaxTraceIdLength);
+
+            b.Property(p => p.ErrorCode)
+                .IsRequired()
+                .HasMaxLength(InstanceIncidentConstants.MaxErrorCodeLength);
+
+            b.Property(p => p.ErrorLayer)
+                .IsRequired()
+                .HasMaxLength(InstanceIncidentConstants.MaxShortTokenLength);
+
+            b.Property(p => p.BoundaryAction)
+                .HasMaxLength(InstanceIncidentConstants.MaxShortTokenLength);
+
+            b.Property(p => p.BoundaryLevel)
+                .HasMaxLength(InstanceIncidentConstants.MaxShortTokenLength);
+
+            b.Property(p => p.IsResolved)
+                .IsRequired();
+
+            // One composite index serves every access path: the active lookup (few rows per instance,
+            // filtered on IsResolved after the seek), newest-first history paging, and the backfill
+            // join. A separate partial "unresolved" index or a BRIN on CreatedAt would add write cost
+            // for no reader.
+            b.HasIndex(p => new { p.InstanceId, p.CreatedAt })
+                .IsDescending(false, true)
+                .HasDatabaseName("IX_InstanceIncidents_InstanceId_CreatedAt");
         });
 
         builder.Entity<InstanceCorrelation>(b =>

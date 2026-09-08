@@ -144,6 +144,74 @@ public sealed class GetInstanceHistoryInput : IHasDomain
 }
 
 /// <summary>
+/// Input for the paged incident history of an instance.
+/// </summary>
+public sealed class GetInstanceIncidentsInput : IHasDomain
+{
+    [Required]
+    [StringLength(WorkflowConstants.MaxDomainLength)]
+    public string Domain { get; set; } = string.Empty;
+
+    [Required]
+    [StringLength(WorkflowConstants.MaxFlowLength)]
+    public string Workflow { get; set; } = string.Empty;
+
+    [Required]
+    public string Instance { get; set; } = string.Empty;
+
+    /// <summary>1-based page number (default 1).</summary>
+    public int Page { get; set; } = 1;
+
+    /// <summary>Page size (default 20, max 100).</summary>
+    public int PageSize { get; set; } = 20;
+
+    /// <summary>HTTP headers from the request (dynamic role grants read them).</summary>
+    public Dictionary<string, string?>? Headers { get; set; }
+
+    /// <summary>Query parameters from the request (dynamic role grants read them).</summary>
+    public Dictionary<string, string?>? QueryParameters { get; set; }
+
+    /// <summary>
+    /// Caller roles, used to enforce state/workflow queryRoles visibility — the same gate the state
+    /// function applies, so a caller who can poll the state can read the incident history.
+    /// </summary>
+    public IReadOnlyCollection<string>? Roles { get; set; }
+
+    /// <summary>Upper bound applied to <see cref="PageSize"/>.</summary>
+    public const int MaxPageSize = 100;
+}
+
+/// <summary>
+/// Input for retrieving the newest unresolved incident of an instance — the target of the
+/// <c>incident.active</c> link on the state function and instance metadata.
+/// </summary>
+public sealed class GetActiveInstanceIncidentInput : IHasDomain
+{
+    [Required]
+    [StringLength(WorkflowConstants.MaxDomainLength)]
+    public string Domain { get; set; } = string.Empty;
+
+    [Required]
+    [StringLength(WorkflowConstants.MaxFlowLength)]
+    public string Workflow { get; set; } = string.Empty;
+
+    [Required]
+    public string Instance { get; set; } = string.Empty;
+
+    /// <summary>HTTP headers from the request (dynamic role grants read them).</summary>
+    public Dictionary<string, string?>? Headers { get; set; }
+
+    /// <summary>Query parameters from the request (dynamic role grants read them).</summary>
+    public Dictionary<string, string?>? QueryParameters { get; set; }
+
+    /// <summary>
+    /// Caller roles, used to enforce the same <c>queryRoles</c> gate as the state function and the
+    /// incident history endpoint.
+    /// </summary>
+    public IReadOnlyCollection<string>? Roles { get; set; }
+}
+
+/// <summary>
 /// Input for retrieving instance data (attributes only)
 /// </summary>
 public sealed class GetInstanceDataInput : IHasDomain

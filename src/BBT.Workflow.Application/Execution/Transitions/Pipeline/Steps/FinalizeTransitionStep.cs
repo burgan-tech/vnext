@@ -47,8 +47,16 @@ public sealed class FinalizeTransitionStep(
 
     /// <summary>
     /// If this pipeline run was an error-boundary transition and it completed successfully
-    /// (no new fault), resolve the active incident that triggered it.
+    /// (no new fault), resolve every incident the failure left open.
     /// </summary>
+    /// <remarks>
+    /// The in-memory resolution is enough here — and only here — because the pipeline's aggregate is
+    /// change-tracked and its incidents were materialized through that same tracker
+    /// (<c>TransitionContextFactory.LoadInstanceAsync</c> → <c>LoadActiveIncidentsAsync</c>), so the
+    /// unit of work writes them. A caller holding a no-tracking aggregate must resolve through
+    /// <c>IInstanceIncidentRepository.ResolveAllAsync</c> instead; if the pipeline ever switches to a
+    /// no-tracking load, this becomes a silent no-op.
+    /// </remarks>
     private static void ResolveIncidentOnSuccessfulErrorBoundaryTransition(TransitionExecutionContext context)
     {
         if (!context.IsErrorBoundaryTransition)
@@ -57,7 +65,7 @@ public sealed class FinalizeTransitionStep(
         if (context.Instance.Status.Equals(Instances.InstanceStatus.Faulted))
             return;
 
-        context.Instance.ResolveActiveIncident();
+        context.Instance.ResolveOpenIncidents();
     }
 
     /// <summary>

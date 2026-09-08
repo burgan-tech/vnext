@@ -17,8 +17,12 @@ public sealed class SchemaMigrationRunner(
     IServiceScopeFactory scopeFactory,
     ILogger<SchemaMigrationRunner> logger)
 {
+    private int _failedSchemaCount;
+
     /// <summary>
-    /// Gets whether the last run completed successfully.
+    /// Gets whether the last run completed successfully — every schema migrated. A single failed
+    /// schema (timeout, DDL error, lost lock) makes the run fail so the job exits non-zero instead of
+    /// hiding the failure in a log line.
     /// </summary>
     public bool Success { get; private set; }
 
@@ -30,6 +34,7 @@ public sealed class SchemaMigrationRunner(
     public async Task RunAsync(CancellationToken cancellationToken = default)
     {
         Success = false;
+        _failedSchemaCount = 0;
         logger.LogInformation("DbMigrator schema migration started");
 
         try
@@ -37,7 +42,16 @@ public sealed class SchemaMigrationRunner(
             await MigrateSystemSchemasAsync(cancellationToken);
             await MigrateDomainSchemasAsync(cancellationToken);
 
-            // Only after both phases have fully completed (all parallel tasks finished) we set success and log.
+            // Only after both phases have fully completed (all parallel tasks finished) we decide.
+            var failed = Volatile.Read(ref _failedSchemaCount);
+            if (failed > 0)
+            {
+                logger.LogError(
+                    "Schema migration finished with {FailedCount} failed schema(s). Exiting with failure.",
+                    failed);
+                return;
+            }
+
             Success = true;
             logger.LogInformation(
                 "All migrations completed successfully. Safe to exit process.");
@@ -199,11 +213,12 @@ public sealed class SchemaMigrationRunner(
             }
             catch (Exception ex)
             {
+                Interlocked.Increment(ref _failedSchemaCount);
                 logger.LogError(
                     ex,
-                    "Migration failed for schema {Schema}. Continuing with remaining schemas",
+                    "Migration failed for schema {Schema}. Continuing with remaining schemas; the run will exit with failure",
                     schemaName);
-                // Don't rethrow - allow other schemas to continue
+                // Don't rethrow - allow other schemas to continue; the failure is reported via Success/exit code.
             }
         }
     }

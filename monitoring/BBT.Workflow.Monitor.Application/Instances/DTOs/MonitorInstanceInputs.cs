@@ -235,6 +235,9 @@ public sealed class MonitorGetParentInput : IHasDomain
 /// <summary>Input for querying the error boundary incident history of an instance.</summary>
 public sealed class MonitorGetInstanceIncidentsInput : IHasDomain
 {
+    /// <summary>Upper bound applied to <see cref="PageSize"/>.</summary>
+    public const int MaxPageSize = 200;
+
     /// <summary>The tenant/domain key.</summary>
     [Required] public string Domain { get; set; } = string.Empty;
 
@@ -243,4 +246,10 @@ public sealed class MonitorGetInstanceIncidentsInput : IHasDomain
 
     /// <summary>The instance business key or GUID.</summary>
     [Required] public string Instance { get; set; } = string.Empty;
+
+    /// <summary>1-based page number (default 1).</summary>
+    public int Page { get; set; } = 1;
+
+    /// <summary>Page size (default 50, max 200).</summary>
+    public int PageSize { get; set; } = 50;
 }

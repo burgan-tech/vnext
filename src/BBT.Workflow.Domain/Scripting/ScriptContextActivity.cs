@@ -25,5 +25,6 @@ internal static class ScriptContextActivity
         // so they must not scan correlation collections on every sampled context operation.
         activity.SetTag("vnext.script.context.correlation_count", instance.ChildCorrelations.Count);
         activity.SetTag("vnext.script.context.incident_count", instance.Incidents.Count);
+        activity.SetTag("vnext.script.context.has_active_incident", instance.HasActiveIncident);
     }
 }

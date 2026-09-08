@@ -14,6 +14,7 @@ using BBT.Workflow.Scripting;
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Options;
 using BBT.Workflow.Authorization.Extensions;
 
 namespace Microsoft.Extensions.DependencyInjection;
@@ -79,6 +80,14 @@ public static class WorkflowInfrastructureModuleServiceCollectionExtensions
         // DbContext
         services.AddSingleton<SchemaAwareModelCacheKeyFactory>();
         services.AddScoped<IMultiSchemaMigrator<WorkflowDbContext>, MultiSchemaMigrator<WorkflowDbContext>>();
+
+        // Schema migration tunables (command timeout + lock expiry). Defaults apply when the section
+        // is absent; configuration binding only when a configuration root is available.
+        var migrationOptions = services.AddOptions<SchemaMigrationOptions>();
+        if (configuration != null)
+            migrationOptions.Bind(configuration.GetSection(SchemaMigrationOptions.SectionName));
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IValidateOptions<SchemaMigrationOptions>, SchemaMigrationOptionsValidator>());
         
         // Security - Schema Validation
         services.AddScoped<ISchemaValidator, SchemaValidator>();
@@ -93,6 +102,7 @@ public static class WorkflowInfrastructureModuleServiceCollectionExtensions
         services.AddScoped<IInstanceTaskRepository, EfCoreInstanceTaskRepository>();
         services.AddScoped<IInstanceJobRepository, EfCoreInstanceJobRepository>();
         services.AddScoped<IInstanceActionRepository, EfCoreInstanceActionRepository>();
+        services.AddScoped<IInstanceIncidentRepository, EfCoreInstanceIncidentRepository>();
 
         // Named HTTP clients for the external HTTP task executor (issue #399) — concrete
         // transport, so it lives here rather than in the Application layer that consumes it.

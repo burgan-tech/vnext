@@ -454,6 +454,16 @@ public class TransitionPipeline
         var instance = await _instanceRepository.FindWithAllCorrelationsAndDataAsync(context.InstanceId, cancellationToken)
                        ?? context.Instance;
 
+        // When an incident is already active it must be on the aggregate: Fault() copies it into the
+        // upward InstanceSubFaultedEvent payload. No query when the flag is false.
+        await _instanceRepository.LoadActiveIncidentsAsync(instance, cancellationToken);
+
+        // The fallback below is for failures that recorded NOTHING: pipeline errors with no task
+        // error behind them (resource-lock conflict, chain-depth, policy/schema rejections), the
+        // unhandled non-blocking-failure faults, and the rare case where a task step's own incident
+        // save failed. A task-level failure records and COMMITS its incident before returning Fail,
+        // so the reload above sees the flag and this branch is skipped — that commit ordering is
+        // what keeps one failure to one incident.
         if (!instance.HasActiveIncident)
         {
             var incident = InstanceIncidentFactory.Create(
@@ -466,6 +476,7 @@ public class TransitionPipeline
                 traceId: context.TraceId);
 
             instance.AddIncident(incident);
+            _logger.IncidentRecorded(instance.Id, incident.State, incident.Transition, incident.ErrorCode, incident.BoundaryAction);
         }
 
         instance.Fault(context.Domain, context.CallerMode == ExecMode.Sync);

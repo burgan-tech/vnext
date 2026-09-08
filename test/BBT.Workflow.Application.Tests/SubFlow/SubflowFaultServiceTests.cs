@@ -400,7 +400,7 @@ public sealed class SubflowFaultServiceTests
         correlation.SubFlowCurrentState.ShouldBe(input.FaultedState);
         correlation.SubFlowStateChangedAt.ShouldBe(faultedAt);
         parent.Status.ShouldBe(InstanceStatus.Active);
-        parent.GetIncidentsForMonitor().ShouldBeEmpty();
+        parent.GetLoadedIncidents().ShouldBeEmpty();
         _componentCacheStore.VerifyNoOtherCalls();
         _outputMappingService.VerifyNoOtherCalls();
         _workflowExecutionService.VerifyNoOtherCalls();
@@ -431,7 +431,7 @@ public sealed class SubflowFaultServiceTests
         correlation.SubFlowCurrentState.ShouldBe(input.FaultedState);
         parent.Status.ShouldBe(InstanceStatus.Completed);
         parent.GetEffectiveState.ShouldBe("terminal-parent");
-        parent.GetIncidentsForMonitor().ShouldBeEmpty();
+        parent.GetLoadedIncidents().ShouldBeEmpty();
         _componentCacheStore.VerifyNoOtherCalls();
         _outputMappingService.VerifyNoOtherCalls();
         _workflowExecutionService.VerifyNoOtherCalls();
@@ -485,7 +485,7 @@ public sealed class SubflowFaultServiceTests
         correlation.TerminalOutcome.ShouldBe(SubItemTerminalOutcome.Canceled);
         correlation.CompletedAt.ShouldBe(originalCompletedAt);
         correlation.SubFlowCurrentState.ShouldBeNull();
-        parent.GetIncidentsForMonitor().ShouldBeEmpty();
+        parent.GetLoadedIncidents().ShouldBeEmpty();
         _instanceRepository.Verify(
             x => x.UpdateAsync(It.IsAny<Instance>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()),
             Times.Never);
@@ -553,7 +553,7 @@ public sealed class SubflowFaultServiceTests
         await CreateService().FaultAsync(input);
 
         parent.FindCorrelationBySubInstanceId(subInstanceId)!.IsCompleted.ShouldBeFalse();
-        parent.GetIncidentsForMonitor().ShouldBeEmpty();
+        parent.GetLoadedIncidents().ShouldBeEmpty();
         _instanceRepository.Verify(
             x => x.UpdateAsync(It.IsAny<Instance>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()),
             Times.Never);
@@ -580,7 +580,7 @@ public sealed class SubflowFaultServiceTests
         correlation.SubFlowCurrentState.ShouldBe(input.FaultedState);
         parent.Status.ShouldBe(InstanceStatus.Passive);
         parent.GetEffectiveState.ShouldBe("terminal-parent");
-        parent.GetIncidentsForMonitor().ShouldBeEmpty();
+        parent.GetLoadedIncidents().ShouldBeEmpty();
         _componentCacheStore.VerifyNoOtherCalls();
         _outputMappingService.VerifyNoOtherCalls();
         _workflowExecutionService.VerifyNoOtherCalls();

@@ -28,6 +28,7 @@ public sealed class MonitorInstanceQueryService(
     IInstanceActionRepository actionRepository,
     IComponentCacheStore componentCacheStore,
     IInstanceCorrelationRepository correlationRepository,
+    IInstanceIncidentRepository incidentRepository,
     ICurrentSchema currentSchema)
     : ApplicationService(serviceProvider), IMonitorInstanceQueryService
 {
@@ -913,6 +914,8 @@ public sealed class MonitorInstanceQueryService(
         MonitorGetInstanceIncidentsInput input,
         CancellationToken cancellationToken = default)
     {
+        // The slim read resolves a business key to the row; incidents themselves come from their own
+        // table so the aggregate is never asked to carry them.
         var instance = await instanceRepository.FindByIdentifierSlimAsync(
             input.Instance, cancellationToken);
 
@@ -920,13 +923,20 @@ public sealed class MonitorInstanceQueryService(
             return Result<MonitorInstanceIncidentsResponse>.Fail(
                 Error.NotFound("instance.notFound", $"Instance '{input.Instance}' not found."));
 
-        var items = instance.GetIncidentsForMonitor()
-            .OrderByDescending(i => i.CreatedAt)
-            .Select(MapToIncident)
-            .ToList();
+        var page = input.Page < 1 ? 1 : input.Page;
+        var pageSize = Math.Clamp(input.PageSize, 1, MonitorGetInstanceIncidentsInput.MaxPageSize);
+
+        var paged = await incidentRepository.GetHistoryPagedAsync(instance.Id, page, pageSize, cancellationToken);
 
         return Result<MonitorInstanceIncidentsResponse>.Ok(
-            new MonitorInstanceIncidentsResponse { Items = items });
+            new MonitorInstanceIncidentsResponse
+            {
+                HasActiveIncident = instance.HasActiveIncident,
+                Items = paged.Items.Select(MapToIncident).ToList(),
+                Page = paged.CurrentPage,
+                PageSize = paged.PageSize,
+                HasNext = paged.HasNext
+            });
     }
 
     private static MonitorIncidentItem MapToIncident(InstanceIncident incident) => new()
