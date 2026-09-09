@@ -10,6 +10,7 @@ These rules are authoritative for all work in this repo. Read them before writin
 - [.NET / Aether / vNext coding standards](.claude/rules/dotnet-coding-standards.md) — style, naming, Aether SDK usage, outbox event delivery, logging via `WorkflowLogs.cs`, Result pattern, multi-schema rules.
 - [vNext workflow developer reference](.claude/rules/vnext-workflow-developer.md) — pipeline step order, profiles, subflow lifecycle, error boundary, long-polling, instance data, `vnext-meta`.
 - [Agent Council plan mode](.claude/rules/agent-council-plan-mode.md) — non-trivial decisions must produce an evidence-backed plan before implementation.
+- [Codebase navigation — graphify first](.claude/rules/graphify-navigation.md) — when `graphify-out/graph.json` exists, query it (`graphify path`/`explain`/`query`) before grepping or reading broadly.
 
 ## First-Time Setup
 
