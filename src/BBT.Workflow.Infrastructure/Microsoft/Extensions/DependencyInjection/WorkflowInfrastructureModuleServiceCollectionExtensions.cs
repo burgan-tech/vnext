@@ -135,7 +135,8 @@ public static class WorkflowInfrastructureModuleServiceCollectionExtensions
     /// </summary>
     public static IServiceCollection AddInfrastructureRuntimeServices(this IServiceCollection services)
     {
-        // Domain discovery (needs IDistributedCacheService)
+        // Domain discovery (needs IDistributedCacheService and IDistributedLockService when
+        // ServiceDiscovery:Cache is enabled)
         services.AddDomainDiscovery();
 
         // Post-Commit Idempotency Store (needs IDistributedCacheService)

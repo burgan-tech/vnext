@@ -20,9 +20,15 @@ namespace BBT.Workflow.Infrastructure.Tests.Discovery;
 
 /// <summary>
 /// Pins the contract of <see cref="HttpDomainDiscoveryProvider"/> — the DEFAULT provider, and the
-/// behaviour <c>ServiceDiscovery:Provider=http</c> restores: every resolution queries the discovery
-/// registry directly over HTTP, with no bulk cache, no ETag revalidation, and no
+/// behaviour <c>ServiceDiscovery:Provider=http</c> restores: the PROVIDER holds no cache of its own,
+/// performs no ETag revalidation, and takes no
 /// <c>IDistributedCacheService</c>/<c>IDistributedLockService</c> dependency.
+/// <para>
+/// Caching, where enabled, lives one layer down in <c>CachingDiscoveryRegistryClient</c> — a
+/// decorator over the registry client — and is pinned separately in
+/// <c>CachingDiscoveryRegistryClientTests</c>. The SUT below is deliberately built with the
+/// UNDECORATED client, so these tests keep describing the provider rather than the composition.
+/// </para>
 /// <para>
 /// These expectations are what makes the provider switch a real rollback rather than an
 /// approximation of one, so they must keep passing unchanged as the Dapr provider evolves. The
@@ -97,9 +103,11 @@ public sealed class DomainDiscoveryResolverTests
         first.IsSuccess.ShouldBeTrue();
         second.IsSuccess.ShouldBeTrue();
 
-        // The test that would fail if anyone reintroduces a cache: a repeated resolution for the
-        // SAME domain must still hit the wire a second time, because there is nothing to serve it
-        // from otherwise.
+        // The provider itself must never hold a cache: with the undecorated registry client behind
+        // it, a repeated resolution for the SAME domain has nothing to serve it from and must hit the
+        // wire again. Caching belongs to the decorator, which is a registration-time choice — this is
+        // what keeps ServiceDiscovery:Cache:Enabled=false a real rollback rather than an
+        // approximation of one.
         handler.Requests.Count.ShouldBe(2);
     }
 
@@ -167,6 +175,10 @@ public sealed class DomainDiscoveryResolverTests
         await resolver.GetEndpointAsync(Domain, EndpointKind.Url, CancellationToken.None);
         await resolver.GetEndpointAsync(Domain, EndpointKind.Url, CancellationToken.None);
 
+        // Guards the specific bargain that got the previous discovery cache deleted: revalidating on
+        // every hit against an endpoint with no conditional-request support, which paid full registry
+        // latency AND carried a staleness window. The cache added since makes no network call on a
+        // hit; if a conditional GET ever reappears here, that trade has been re-struck.
         handler.Requests.ShouldAllBe(r => !r.Headers.Contains("If-None-Match"));
     }
 

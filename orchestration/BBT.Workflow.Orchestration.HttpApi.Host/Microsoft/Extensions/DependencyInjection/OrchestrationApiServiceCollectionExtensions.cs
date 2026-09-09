@@ -124,6 +124,11 @@ public static class OrchestrationApiServiceCollectionExtensions
 #endif
         services.AddHostedService<DomainDiscoveryInitializationHostedService>();
 
+        // Keeps the discovery endpoint cache warm. Registered unconditionally; the config gate lives
+        // inside ExecuteAsync so enabling or disabling the cache is a config change, not a redeploy
+        // of different wiring. It returns immediately when discovery or the cache is off.
+        services.AddHostedService<DiscoveryCacheRefreshHostedService>();
+
 #if DEBUG
         // Pays the Roslyn cold cost (assembly load + JIT + reference materialization, ~seconds) at
         // startup instead of inside the first real transition's input mapping. Orchestration only —

@@ -409,6 +409,17 @@ public static class TelemetryConstants
         /// </summary>
         public const string DiscoveryResolution = "vnext.discovery.resolution";
 
+        /// <summary>
+        /// Age, in seconds, of the cached registration a resolution was served from. Present only
+        /// when <see cref="DiscoveryResolution"/> is <c>cache</c>.
+        /// </summary>
+        /// <remarks>
+        /// The tag that makes a discovery cache defensible in an incident: it is the only way to
+        /// tell a resolution that used a fresh entry from one that used an entry old enough to name
+        /// an endpoint that has since moved.
+        /// </remarks>
+        public const string DiscoveryCacheAgeSeconds = "vnext.discovery.cache.age_seconds";
+
         /// <summary>Resolved target Dapr app-id. Set only on the dapr provider's spans.</summary>
         public const string DaprAppId = "vnext.dapr.app_id";
 

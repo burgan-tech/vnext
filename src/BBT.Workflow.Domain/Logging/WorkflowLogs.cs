@@ -2524,6 +2524,124 @@ public static partial class WorkflowLogs
     #region Service Discovery
 
     /// <summary>
+    /// Logs when a pod has claimed the bulk-refresh window and started reading the registry.
+    /// </summary>
+    /// <remarks>
+    /// EventIds 50001-50005 are the ones the previous bulk cache used before it was removed in
+    /// <c>79da3b6f</c>; they are reused here deliberately so historical log queries keep working.
+    /// </remarks>
+    [LoggerMessage(
+        EventId = 50001,
+        Level = LogLevel.Information,
+        Message = "Discovery bulk cache refresh started")]
+    public static partial void BulkCacheRefreshStarted(this ILogger logger);
+
+    /// <summary>
+    /// Logs a completed bulk refresh. The count is the number of registrations actually cached.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 50002,
+        Level = LogLevel.Information,
+        Message = "Discovery bulk cache refreshed with {Count} domain(s)")]
+    public static partial void BulkCacheRefreshed(this ILogger logger, int count);
+
+    /// <summary>
+    /// Logs a bulk refresh that could not complete. The previous cache contents are left alone.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 50003,
+        Level = LogLevel.Warning,
+        Message = "Discovery bulk cache refresh failed: {Reason}. Existing entries are kept and will expire on their own")]
+    public static partial void BulkCacheRefreshFailed(this ILogger logger, string reason);
+
+    /// <summary>
+    /// Logs each page requested during a bulk refresh.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 50004,
+        Level = LogLevel.Debug,
+        Message = "Fetching discovery registration page {Page}")]
+    public static partial void FetchingDomainPage(this ILogger logger, int page);
+
+    /// <summary>
+    /// Logs a lookup that the cache could not serve and had to resolve from the registry.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 50005,
+        Level = LogLevel.Debug,
+        Message = "Domain '{Domain}' not in the discovery cache; resolving from the registry")]
+    public static partial void DomainNotFoundInCache(this ILogger logger, string domain);
+
+    /// <summary>
+    /// Logs a bulk refresh skipped because another replica already served this window.
+    /// </summary>
+    /// <remarks>
+    /// The expected outcome on all but one replica, hence Debug. A cluster where this never appears
+    /// is one where the shared marker is not being seen — which means every pod is doing its own
+    /// bulk read.
+    /// </remarks>
+    [LoggerMessage(
+        EventId = 50036,
+        Level = LogLevel.Debug,
+        Message = "Discovery bulk cache refresh skipped: the current window has already been refreshed")]
+    public static partial void BulkCacheRefreshSkippedFresh(this ILogger logger);
+
+    /// <summary>
+    /// Logs a bulk refresh skipped because another replica holds the lock right now.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 50037,
+        Level = LogLevel.Debug,
+        Message = "Discovery bulk cache refresh skipped: another replica holds the refresh lock")]
+    public static partial void BulkCacheRefreshSkippedNotOwner(this ILogger logger);
+
+    /// <summary>
+    /// Logs that the bulk read stopped at its page cap, meaning the result may be incomplete.
+    /// </summary>
+    /// <remarks>
+    /// Warning, not Debug: the domains beyond the cap are simply absent from the cache, and every
+    /// call for one of them silently pays full registry latency forever.
+    /// </remarks>
+    [LoggerMessage(
+        EventId = 50038,
+        Level = LogLevel.Warning,
+        Message = "Discovery bulk read stopped at the {MaxPages}-page cap with {Count} domain(s); the result may be truncated")]
+    public static partial void BulkPageCapReached(this ILogger logger, int maxPages, int count);
+
+    /// <summary>
+    /// Logs that pagination was abandoned because a page repeated the previous page's contents.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 50039,
+        Level = LogLevel.Warning,
+        Message = "Discovery bulk read stopped at page {Page}: the registry returned the same domains as the previous page")]
+    public static partial void BulkPaginationStalled(this ILogger logger, int page);
+
+    /// <summary>
+    /// Logs that the registry rejected the server-side status filter, so the bulk read continues
+    /// unfiltered and relies on the client-side status check.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 50040,
+        Level = LogLevel.Debug,
+        Message = "Discovery registry rejected the bulk status filter; retrying unfiltered")]
+    public static partial void BulkFilterRejectedRetryingUnfiltered(this ILogger logger);
+
+    /// <summary>
+    /// Logs a discovery cache operation that failed. Never rethrown: a cache that cannot be read or
+    /// written is a miss, not an error.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 50041,
+        Level = LogLevel.Warning,
+        Message = "Discovery cache operation '{Operation}' failed for key '{CacheKey}'")]
+    public static partial void DiscoveryCacheOperationFailed(
+        this ILogger logger,
+        Exception exception,
+        string operation,
+        string cacheKey);
+
+    /// <summary>
     /// Logs when querying a single domain from the discovery registry.
     /// </summary>
     [LoggerMessage(
