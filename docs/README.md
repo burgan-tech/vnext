@@ -57,6 +57,7 @@ describe the stable mental model, boundaries, failure modes, and change-safety r
 32. Read [Form URL-Encoded Payloads](contracts/form-url-encoded-payloads.md) before changing how start / transition / function endpoints accept `application/x-www-form-urlencoded` bodies.
 33. Read [Elastic Dev Tools Queries for the vNext Trace Tree](runtime/trace-elastic-queries.md) when verifying spans in Kibana — every query was executed against a real `traces-apm*` index; note the `labels.*` vs `numeric_labels.*` split.
 34. Read [Integration Testing a Runtime Change](testing/integration-testing.md) before claiming a core-process change works — it names the sibling repos, the locally-built-runtime rule, the `VNEXT_BASE_URL` external mode, the same-commit `TEST-SCENARIOS.md` obligation, and the Aether local-feed revert that must happen before a PR.
+35. Read [Instance Task History and Action History](runtime/instance-task-and-action-history.md) before changing the `task-history` / `action-history` system functions or exposing anything new from the task journal. Covers the metadata-only rule (journaled payloads carry mapping-built auth headers and stay on the Monitor API — the SQL projection keeps them in the database), the `queryRoles` gate, and the InstanceActions no-writer gap.
 
 ### Historical records (not current contracts)
 

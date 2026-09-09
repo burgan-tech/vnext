@@ -181,6 +181,23 @@ A sixth profile is **composed on top of** the base, never selected instead of it
 - **`incident` block**: always present, and it carries **links, not content** — `{ hasActiveIncident, active: { href } (only while the flag is true), history: { href } }`. Identical on the state body and on `metadata.incident` (single GET and list). `active.href` → `GET …/instances/{instance}/incidents/active` (newest unresolved, **404 `Instance:100037`** when none is open — a normal answer, since a retry can resolve between the poll and the follow-up); `history.href` → the paged history. Same `queryRoles` gate as the state function on both, and no stack trace anywhere. When lifted from an active subflow, `active.href` addresses the **leaf that owns the incident** while `history.href` stays on the polled instance. `HasActiveIncident` is a fingerprint member so raise/resolve without a state change moves the ETag. **Do not put incident fields back in the body**: the embedded summary is what made the state function read the incident table on its hottest path and what created the resolve-A-then-raise-B stale-`active` hole, both of which the link form removes.
 - **Scheduled entries in `transitions`**: the state body lists the runtime's armed scheduled transitions inside the existing `transitions` array as `{ name, kind: "scheduled", executeAtUtc, href, view, schema }` entries, appended after the available transitions and built from active `InstanceJob` rows (`JobType.ScheduledTransition`) whose `ExecuteAt` is stamped at scheduling time from the same instant the Dapr job is armed with. The href/view/schema links use the same url shapes as triggerable entries but with `hasView`/`loadData`/`hasSchema` hardcoded false — a TEMPORARY uniformity concession for domain clients (they will adapt); scheduled transitions remain System-actor-gated at execution, so the href is not callable. Not role-filtered; not merged from subflows. Job-set changes deliberately do NOT participate in the fingerprint ETag (team decision, issue #864) — same-state re-arms can leave the scheduled entries stale behind a 304; documented as a known gap in `docs/runtime/state-function-cache-and-etag.md`.
 
+## Task / Action History (system functions)
+
+- `GET …/instances/{instance}/functions/task-history` returns the full `InstanceTasks` journal in
+  execution order (unpaged); `GET …/functions/action-history?taskId={id}` returns one row's
+  `InstanceActions` (400 `Instance:100039` without a valid `taskId`, 404 `Instance:100038` when the
+  task isn't the instance's own). Both are `IInstanceFunctionHandler` registrations (keys in
+  `FunctionTypeConst`) under the same `queryRoles` gate as the state function. No state-body
+  involvement — no `ResponseShapeVersion` or fingerprint change.
+- **Metadata only, deliberately.** The journal's `Request`/`Response`/`InvocationResult` payloads
+  carry mapping-built headers (auth material included) and stay Monitor-only; the one payload-derived
+  public field is the faulted row's `{"error": …}` reason. The repository read projects columns in
+  SQL (`InstanceTaskHistoryRow`) so the jsonb payloads never leave the database — do not switch it
+  back to materializing the entity, and do not add payload fields here.
+- **`InstanceActions` has no writer** (never has, since the initial commit) — the action function
+  returns an empty list until one lands. `InstanceTask.FaultedTaskId` is equally never set.
+  Full guide: `docs/runtime/instance-task-and-action-history.md`.
+
 ## Well-Known Transitions (`cancel` / `updateData` / `exit`)
 
 - All three are workflow-level `Transition` objects (`Workflow.Cancel/UpdateData/Exit`) — full surface

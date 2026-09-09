@@ -42,6 +42,25 @@ public static class WorkflowErrors
             WorkflowErrorCodes.ActiveIncidentNotFound,
             $"Instance \"{instanceIdentifier}\" has no active incident",
             target: instanceIdentifier);
+
+    /// <summary>
+    /// The task journal row does not exist or belongs to a different instance than the one in the
+    /// route — the action-history function never serves a task across instances.
+    /// </summary>
+    public static Error InstanceTaskNotFound(Guid taskId, string instanceIdentifier)
+        => Error.NotFound(
+            WorkflowErrorCodes.InstanceTaskNotFound,
+            $"Task \"{taskId}\" not found for instance \"{instanceIdentifier}\"",
+            target: taskId.ToString());
+
+    /// <summary>
+    /// The action-history function needs the owning task journal row id as a query parameter.
+    /// </summary>
+    public static Error InstanceTaskIdRequired()
+        => Error.Validation(
+            WorkflowErrorCodes.InstanceTaskIdRequired,
+            "Query parameter \"taskId\" is required and must be a task journal row id (GUID) from the task-history function",
+            target: "taskId");
     
     /// <summary>
     /// Creates an error when instance data for a specific version is not found.
