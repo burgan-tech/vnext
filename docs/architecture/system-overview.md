@@ -69,7 +69,7 @@ registered through `WorkflowMetrics` and exported by the shared OpenTelemetry co
 - Do not move state persistence into Execution.
 - Do not make pipeline steps load EF includes ad hoc; load shape belongs to repositories.
 - New distributed domain events need an event contract, an Inbox handler and structured
-  `WorkflowLogs` entries. Subflow terminal events additionally use the post-commit terminal relay;
+  `WorkflowLogs` entries. Events with a registered `IPostCommitEventRelay<TEvent>` additionally use the post-commit relay;
   see [Event Publish Modes](../runtime/event-publish-modes.md).
 - New cross-service calls should preserve correlation, causation, and current-user headers.
 

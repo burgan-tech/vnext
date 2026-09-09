@@ -49,7 +49,7 @@ never accepted from a public header. Async acceptance may reserve the active cha
 Child terminal events use two delivery paths:
 
 - the event is stored in the transactional outbox;
-- after commit, `SubflowTerminalRelay` immediately invokes the parent command locally or through
+- after commit, `PostCommitRelayDispatcher` immediately invokes the parent command locally or through
   Dapr, while the Inbox handler remains a durable backup.
 
 `ISubItemTerminalGuard` deduplicates the two paths. For blocking `S`, completion prepares output
@@ -105,7 +105,8 @@ read. Do not replace these reads with the old parent object: it may still say Bu
 - `src/BBT.Workflow.Application/SubFlow/Services/SubflowStarter.cs`
 - `src/BBT.Workflow.Application/Execution/PostCommit/Handlers/ForwardToSubflowJobHandler.cs`
 - `src/BBT.Workflow.Application/SubFlow/Services/SubflowCompletionService.cs`
-- `src/BBT.Workflow.Application/SubFlow/Services/SubflowTerminalRelay.cs`
+- `src/BBT.Workflow.Application/Execution/PostCommit/Relay/PostCommitRelayDispatcher.cs`
+- `src/BBT.Workflow.Application/SubFlow/Services/Relays/`
 - `src/BBT.Workflow.Application/Instances/InstanceRetryAppService.cs`
 - [Event Publish Modes](../runtime/event-publish-modes.md)
 - [Inline Auto-Chain Context Reuse](inline-chain-context-reuse.md)

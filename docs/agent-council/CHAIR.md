@@ -53,9 +53,12 @@ and argue why the precedent should change. It is not re-litigated silently.
   `S`/`P` decides parent continuation, not transport mode. Responses are identity-only.
 - **A parent with an open SubFlow correlation stays Busy for the child's lifetime**; the client observes
   the leaf via the state function.
-- **Subflow terminal events are the only dual-delivery events** (outbox + post-commit relay, backup
-  deduplicated by `ISubItemTerminalGuard`). Every other distributed event has exactly one handler; the
-  EventHook infrastructure stays deleted.
+- **Dual delivery (outbox + post-commit relay) is granted PER EVENT TYPE by registration**, not by a
+  marker interface. Each relayed event must have a durable backup, an idempotent order-safe receiver
+  guard, measured latency evidence and a council row; the default for any new event stays
+  Outbox-only, and the EventHook infrastructure stays deleted. Amended
+  2026-09-09 by `DECISION-2026-09-08-substate-postcommit-relay`, which added
+  `InstanceSubStateChangedEvent` to the three subflow terminal events as a relayed event.
 - **Scheduled-transition job changes do not participate in the state-function ETag** (issue #864);
   documented as a known gap, not a bug to fix.
 - **Activation episode tracing**: one backdated `Instance.Activation/{key}` span per trigger→rest-point

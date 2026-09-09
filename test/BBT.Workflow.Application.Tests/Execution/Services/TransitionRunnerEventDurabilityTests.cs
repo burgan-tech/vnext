@@ -14,6 +14,7 @@ using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.Services;
 using BBT.Workflow.Instances;
+using BBT.Workflow.Execution.PostCommit.Relay;
 using BBT.Workflow.SubFlow;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -120,7 +121,7 @@ public sealed class TransitionRunnerEventDurabilityTests
         services.AddSingleton(currentSchema);
         services.AddSingleton(cacheStore);
         services.AddSingleton(Substitute.For<ICurrentUser>());
-        services.AddSingleton(Substitute.For<ISubflowTerminalRelay>());
+        services.AddSingleton(Substitute.For<IPostCommitRelayDispatcher>());
 
         var provider = services.BuildServiceProvider();
         var runner = new TransitionRunner(
