@@ -74,8 +74,10 @@ public class TaskPersistenceStrategyTests
         // Assert
         await _mockRepository.Received(1).InsertAsync(_instanceTask, true, CancellationToken.None);
         persisted.ShouldBeSameAs(_instanceTask);
+        // No database transaction: the per-instance Busy/CAS mutex already serializes task
+        // execution, and InstanceTask raises no domain events for a transaction to coordinate.
         _unitOfWorkManager.Received(1).Begin(Arg.Is<UnitOfWorkOptions>(options =>
-            options.Scope == UnitOfWorkScopeOption.RequiresNew && options.IsTransactional));
+            options.Scope == UnitOfWorkScopeOption.RequiresNew && !options.IsTransactional));
         await _unitOfWork.Received(1).CommitAsync(CancellationToken.None);
     }
 
@@ -130,8 +132,10 @@ public class TaskPersistenceStrategyTests
         // Assert — one set-based completion write, never a full-row attach-and-update
         await _mockRepository.Received(1).MarkCompletedAsync(_instanceTask, CancellationToken.None);
         await _mockRepository.DidNotReceiveWithAnyArgs().UpdateAsync(default!, default, default);
+        // No database transaction: MarkCompletedAsync is one set-based UPDATE with nothing else
+        // to coordinate alongside it.
         _unitOfWorkManager.Received(1).Begin(Arg.Is<UnitOfWorkOptions>(options =>
-            options.Scope == UnitOfWorkScopeOption.RequiresNew && options.IsTransactional));
+            options.Scope == UnitOfWorkScopeOption.RequiresNew && !options.IsTransactional));
         await _unitOfWork.Received(1).CommitAsync(CancellationToken.None);
     }
 

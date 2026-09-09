@@ -160,13 +160,18 @@ public class TransitionAdmissionServiceTests
 
     #endregion
 
+    // ReserveAsync/TakeOverAsync take no distributed lock: the flip is a set-based CAS
+    // (TryMarkBusyWithPropagationAsync / MarkBusyAsync), and neither method runs anything else
+    // that needs serializing alongside it. There is no lock-acquisition-failure mode to test here
+    // any more — the CAS's own outcome (Marked/AlreadyBusy/Skipped) is authoritative. See
+    // TransitionAdmissionService.ReserveAsync's XML remarks for the reasoning.
+
     #region ReserveAsync
 
     [Fact]
     public async Task ReserveAsync_WhenMarked_Succeeds()
     {
         var context = CreateContext();
-        SetupAcquiredLock();
         _busyManager
             .TryMarkBusyWithPropagationAsync(context.InstanceId, Arg.Any<CancellationToken>())
             .Returns(BusyMarkOutcome.Marked);
@@ -179,9 +184,8 @@ public class TransitionAdmissionServiceTests
     [Fact]
     public async Task ReserveAsync_WhenAlreadyBusy_FailsWithInstanceBusy()
     {
-        // The authoritative re-check under the lock: a competitor won the reserve race.
+        // The authoritative check is the CAS's own WHERE clause: a competitor won the reserve race.
         var context = CreateContext();
-        SetupAcquiredLock();
         _busyManager
             .TryMarkBusyWithPropagationAsync(context.InstanceId, Arg.Any<CancellationToken>())
             .Returns(BusyMarkOutcome.AlreadyBusy);
@@ -193,24 +197,9 @@ public class TransitionAdmissionServiceTests
     }
 
     [Fact]
-    public async Task ReserveAsync_WhenLockNotAcquired_FailsWithLockConflict()
-    {
-        var context = CreateContext();
-        SetupFailedLock();
-
-        var result = await CreateService().ReserveAsync(context, CancellationToken.None);
-
-        result.IsSuccess.ShouldBeFalse();
-        result.Error.Code.ShouldBe(WorkflowErrorCodes.ConflictWorkflow);
-        await _busyManager.DidNotReceive()
-            .TryMarkBusyWithPropagationAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>());
-    }
-
-    [Fact]
     public async Task ReserveAsync_WhenSkipped_FailsWithAlreadyCompleted()
     {
         var context = CreateContext();
-        SetupAcquiredLock();
         _busyManager
             .TryMarkBusyWithPropagationAsync(context.InstanceId, Arg.Any<CancellationToken>())
             .Returns(BusyMarkOutcome.Skipped);
@@ -225,33 +214,16 @@ public class TransitionAdmissionServiceTests
     #region TakeOverAsync
 
     [Fact]
-    public async Task TakeOverAsync_AcquiresLockAndMarksBusy()
+    public async Task TakeOverAsync_MarksBusy()
     {
-        // Cancel/exit/timeout skip the Busy 409 but the flip still goes through the short lock.
+        // Cancel/exit/timeout skip the Busy 409; the flip is still a CAS, just an idempotent one.
         var context = CreateContext("cancel");
-        SetupAcquiredLock();
 
         var result = await CreateService().TakeOverAsync(context, CancellationToken.None);
 
         result.IsSuccess.ShouldBeTrue();
-        await _statusLock.Received(1)
-            .AcquireAsync(context.LockKey, Arg.Any<CancellationToken>());
         await _busyManager.Received(1)
             .MarkBusyAsync(context.InstanceId, Arg.Any<CancellationToken>());
-    }
-
-    [Fact]
-    public async Task TakeOverAsync_WhenLockNotAcquired_FailsWithLockConflict()
-    {
-        var context = CreateContext("cancel");
-        SetupFailedLock();
-
-        var result = await CreateService().TakeOverAsync(context, CancellationToken.None);
-
-        result.IsSuccess.ShouldBeFalse();
-        result.Error.Code.ShouldBe(WorkflowErrorCodes.ConflictWorkflow);
-        await _busyManager.DidNotReceive()
-            .MarkBusyAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>());
     }
 
     #endregion

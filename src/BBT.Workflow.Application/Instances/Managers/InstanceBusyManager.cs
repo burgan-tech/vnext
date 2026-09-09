@@ -16,13 +16,16 @@ public sealed class InstanceBusyManager(
     public async Task<bool> MarkBusyAsync(Guid instanceId, CancellationToken cancellationToken = default)
     {
         await using var uow = uowManager.Begin(
-            new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew, IsTransactional = true });
+            new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew });
 
-        // Called with the instance status lock held. The old shape loaded the aggregate to check
-        // IsBusy/IsCompleted and then wrote Status — but the guard reduces to "Status == Active"
-        // (Busy is excluded by IsBusy; Completed/Faulted/Passive by IsCompleted), so the whole
-        // read-check-write is one compare-and-set: guard in the WHERE, decision from the database
-        // state under the lock, no aggregate load at all.
+        // The old shape loaded the aggregate to check IsBusy/IsCompleted and then wrote Status —
+        // but the guard reduces to "Status == Active" (Busy is excluded by IsBusy;
+        // Completed/Faulted/Passive by IsCompleted), so the whole read-check-write is one
+        // compare-and-set: guard in the WHERE, no aggregate load at all. The CAS is
+        // self-sufficient regardless of whether a caller also holds the distributed status lock
+        // (some do — AcceptAsync's BypassBusyCheck case; some don't — TakeOverAsync, subflow
+        // resume) — no database transaction needed either, since there is nothing else here for
+        // one to make atomic alongside.
         var flipped = await instanceRepository.TryMarkBusyAsync(instanceId, cancellationToken);
         await uow.CommitAsync(cancellationToken);
 
@@ -40,16 +43,23 @@ public sealed class InstanceBusyManager(
         Instance? instance;
 
         await using (var uow = uowManager.Begin(
-                         new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew, IsTransactional = true }))
+                         new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew }))
         {
             // The load stays: the subflow propagation below walks the correlation navigation.
             // Only the WRITE is set-based now — the tracked-update path rewrote the full row.
+            // No database transaction across the read and the write: the read is informational
+            // (propagation target, fail-fast classification), not a condition the write's CAS
+            // depends on, so there is nothing for a shared transaction to protect.
             instance = await instanceRepository.FindWithActiveSubFlowAsync(instanceId, cancellationToken);
 
-            if (instance is null)
+            // A completed instance must not have Busy propagated to its subflow — there is
+            // nothing left to resume, and a terminal parent's correlation is being closed, not
+            // extended. (An already-Busy, still-live parent is different: propagation still runs
+            // for it below — see MarkBusyWithPropagationAsync_WhenAlreadyBusyParent_ShouldStillPropagateToSubflow.)
+            if (instance is null || instance.IsCompleted)
                 return;
 
-            if (instance is { IsBusy: false, IsCompleted: false })
+            if (!instance.IsBusy)
             {
                 if (await instanceRepository.TryMarkBusyAsync(instanceId, cancellationToken))
                 {
@@ -70,20 +80,24 @@ public sealed class InstanceBusyManager(
         Instance instance;
 
         await using (var uow = uowManager.Begin(
-                         new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew, IsTransactional = true }))
+                         new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew }))
         {
+            // Informational read only — not a condition the write below depends on, so it does
+            // not need to share a database transaction with the CAS that follows. It exists to
+            // classify Skipped vs. AlreadyBusy for the caller and to load the subflow correlation
+            // for propagation; a racer that slips past this in-memory check still resolves
+            // correctly at the CAS's own WHERE clause, with or without a shared transaction.
             var current = await instanceRepository.FindWithActiveSubFlowAsync(instanceId, cancellationToken);
 
             if (current is null || current.IsCompleted)
                 return BusyMarkOutcome.Skipped;
 
-            // Authoritative second check: callers hold the distributed status lock while this
-            // transaction is active. A concurrent request that won the race is observed here.
             if (current.IsBusy)
                 return BusyMarkOutcome.AlreadyBusy;
 
             // Set-based CAS; the WHERE re-verifies Active, so a racer that slipped past the
-            // in-memory check above still resolves to AlreadyBusy instead of a double flip.
+            // in-memory check above still resolves to AlreadyBusy instead of a double flip. This
+            // is the actual mutual-exclusion mechanism — not the transaction, not an external lock.
             if (!await instanceRepository.TryMarkBusyAsync(instanceId, cancellationToken))
                 return BusyMarkOutcome.AlreadyBusy;
 
@@ -102,10 +116,11 @@ public sealed class InstanceBusyManager(
     public async Task<bool> TryReleaseAsync(Guid instanceId, CancellationToken cancellationToken = default)
     {
         await using var uow = uowManager.Begin(
-            new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew, IsTransactional = true });
+            new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew });
 
         // Same compare-and-set collapse as MarkBusyAsync: the "IsBusy && !IsCompleted" guard
         // reduces to "Status == Busy" (Busy and the terminal statuses are mutually exclusive).
+        // No transaction needed — the same reasoning as MarkBusyAsync applies.
         var flipped = await instanceRepository.TryReleaseBusyAsync(instanceId, cancellationToken);
         await uow.CommitAsync(cancellationToken);
 
