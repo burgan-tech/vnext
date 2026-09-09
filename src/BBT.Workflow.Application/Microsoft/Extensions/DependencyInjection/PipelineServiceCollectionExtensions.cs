@@ -9,11 +9,13 @@ using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Execution.Pipeline.Steps;
 using BBT.Workflow.Execution.PostCommit;
 using BBT.Workflow.Execution.PostCommit.Handlers;
+using BBT.Workflow.Execution.PostCommit.Relay;
 using BBT.Workflow.Execution.Services;
 using BBT.Workflow.Execution.Strategies;
 using BBT.Workflow.Execution.Transitions.Factory;
 using BBT.Workflow.Execution.Transitions.Services;
 using BBT.Workflow.Execution.Validation;
+using BBT.Workflow.Instances.Events;
 using BBT.Workflow.SubFlow;
 
 namespace Microsoft.Extensions.DependencyInjection;
@@ -35,8 +37,14 @@ public static class PipelineServiceCollectionExtensions
         // Transition Runner (owns chaining with isolated scope + UoW per hop)
         services.AddScoped<ITransitionRunner, TransitionRunner>();
 
-        // Post-commit COMMAND relay for subflow terminal events (Outbox + TerminalRelay mode)
-        services.AddScoped<ISubflowTerminalRelay, SubflowTerminalRelay>();
+        // Post-commit COMMAND relay (Outbox + PostCommitRelay mode). The registration below IS the
+        // per-event opt-in — the dispatcher resolves by the event's runtime type and needs no edit
+        // when an event is added or removed. Deleting one line is that event's kill switch.
+        services.AddScoped<IPostCommitRelayDispatcher, PostCommitRelayDispatcher>();
+        services.AddScoped<IPostCommitEventRelay<InstanceSubCompletedEvent>, InstanceSubCompletedRelay>();
+        services.AddScoped<IPostCommitEventRelay<InstanceSubFaultedEvent>, InstanceSubFaultedRelay>();
+        services.AddScoped<IPostCommitEventRelay<InstanceSubCanceledEvent>, InstanceSubCanceledRelay>();
+        services.AddScoped<IPostCommitEventRelay<InstanceSubStateChangedEvent>, InstanceSubStateChangedRelay>();
 
         // Execution Strategies
         services.AddScoped<IExecutionStrategyFactory, ExecutionStrategyFactory>();

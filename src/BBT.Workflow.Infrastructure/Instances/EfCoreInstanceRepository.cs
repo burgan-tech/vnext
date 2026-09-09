@@ -259,6 +259,24 @@ public sealed class EfCoreInstanceRepository(
     }
 
     /// <inheritdoc />
+    public async Task<Instance?> FindForSubflowStateChangeAsync(
+        Guid instanceId,
+        Guid subInstanceId,
+        CancellationToken cancellationToken = default)
+    {
+        // Deliberately narrower than FindForSubflowCompletionAsync: no DataList. The state path
+        // only writes EffectiveState/type/subtype and reads ExtraProperties for the upward event.
+        // Filtered to the open correlation so a closed one resolves to correlation_not_found the
+        // same way the default detail load resolves it.
+        var dbSet = await GetDbSetAsync();
+        var instance = await dbSet
+            .Include(i => i.ChildCorrelations.Where(c => c.SubFlowInstanceId == subInstanceId && !c.IsCompleted))
+            .FirstOrDefaultAsync(i => i.Id == instanceId, cancellationToken);
+        instance?.MarkDataPartiallyLoaded();
+        return instance;
+    }
+
+    /// <inheritdoc />
     public async Task<Instance?> FindForPostCommitSettlementAsync(
         Guid instanceId,
         bool includeLatestData,

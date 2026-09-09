@@ -545,7 +545,7 @@ All nine acceptance checks passed:
    the producing app's spans. Recorded here honestly: this check passed via the substitute
    command, not via the originally-named `TransitionContinuationRequested` path, which this run
    had no traffic to exercise.
-5. **Relay same-tree** — 3 sampled relay traces each contain `Subflow.TerminalRelay` ×2,
+5. **Relay same-tree** — 3 sampled relay traces each contain `PostCommit.EventRelay` ×2,
    `SubFlow.Completion` ×2, `SubFlow.Resume` ×2, and zero `*.Handle` spans: the flow's own
    settlement work stayed inside the flow trace while the duplicate backup delivery moved out.
 6. **Idle noise** — 2-minute buckets: pre-cutover every bucket had exactly 12 root `Db.*` spans

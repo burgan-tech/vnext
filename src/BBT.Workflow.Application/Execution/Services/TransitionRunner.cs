@@ -5,10 +5,10 @@ using BBT.Aether.Uow;
 using BBT.Aether.Users;
 using BBT.Workflow.CurrentUser;
 using BBT.Workflow.Execution.PostCommit;
+using BBT.Workflow.Execution.PostCommit.Relay;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Logging;
-using BBT.Workflow.SubFlow;
 using BBT.Workflow.Telemetry;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -189,7 +189,7 @@ public sealed class TransitionRunner(
                 var uowManager = sp.GetRequiredService<IUnitOfWorkManager>();
                 var core = sp.GetRequiredService<IWorkflowExecutionCore>();
                 var currentUser = sp.GetRequiredService<ICurrentUser>();
-                var terminalRelay = sp.GetRequiredService<ISubflowTerminalRelay>();
+                var relayDispatcher = sp.GetRequiredService<IPostCommitRelayDispatcher>();
 
                 using (currentUser.ChangeFromHeaders(context.Headers))
                 {
@@ -230,11 +230,14 @@ public sealed class TransitionRunner(
                             Activity.Current?.AddEvent(new ActivityEvent("instance.available.committed"));
                     }
 
-                    // Terminal relay: subflow terminal events settle the parent IMMEDIATELY as a command —
-                    // awaited here so a sync chain's response follows the settled chain, and an async job
-                    // relays with gap ≈ 0. The outbox rows written pre-commit stay the durable record; the
-                    // Inbox handlers are the backup and ISubItemTerminalGuard absorbs the duplicate.
-                    await terminalRelay.RelayAsync(coreResult.Value!.DeferredEvents, ct);
+                    // Post-commit relay: an event whose type has a registered relay is ALSO delivered
+                    // to its receiver IMMEDIATELY as a command — awaited here so a sync chain's
+                    // response follows the settled chain, and an async job relays with gap ≈ 0. The
+                    // outbox rows written pre-commit stay the durable record; the Inbox handlers are
+                    // the backup, absorbed by ISubItemTerminalGuard for the terminal events and by the
+                    // per-sub-item lock plus monotonic stamp for the state channel. Events with no
+                    // registered relay pass through untouched and travel the outbox alone.
+                    await relayDispatcher.RelayAsync(coreResult.Value!.DeferredEvents, ct);
 
                     return coreResult;
                 }

@@ -416,6 +416,33 @@ A sixth profile is **composed on top of** the base, never selected instead of it
   `Status`, and the client's attributes/extensions come from the **parent's** own
   `EnrichOutputCoreAsync`. Do not read attributes off a sub-start or forward response.
 
+### Child state → parent `EffectiveState` (`SubflowStateService`)
+
+- **It takes the SAME per-sub-item lock the three terminal paths take**
+  (`vnext:{domain}:{flow}:{parentId}:sub:{subId:N}`, bounded wait from
+  `WorkflowExecutionOptions.SubItemTerminalLockRetry`). Before that it was the only parent-mutation
+  path with no lock, which made its `SubFlowStateChangedAt` read-check-write a real TOCTOU: two
+  deliveries could both read the same stamp, both pass the check, and the OLDER one land last.
+- **Do not "fix" this with a CAS on the correlation row placed before the parent load.** Every
+  terminal path mutates the correlation and the parent in ONE `SaveChanges` batch, and EF emits
+  `Instances` before `InstancesCorrelations` — the order is always P → C. A correlation-first CAS
+  inverts that to C → P with an aggregate load in between, and deadlocks (40P01) against the
+  terminal paths on the hot path. The lock is the mechanism; the write order stays P → C.
+- **Equal `ChangedAt` is ACCEPTED and re-applied**, only strictly-older is rejected. A duplicate
+  delivery carries the same stamp; re-applying is idempotent, and rejecting it would close the only
+  recovery path a redelivery has.
+- The UoW is `RequiresNew, IsTransactional = true` — not for the lock, for atomicity: without a
+  transaction Aether stages the outbox rows *after* `UpdateAsync(autoSave)` already committed the
+  Instance row, so the upward event and the state write could diverge.
+- It loads through `FindForSubflowStateChangeAsync` (tracked parent + only this child's OPEN
+  correlation, **no `DataList`**), not the default detail load.
+- **It is the second post-commit relay call site.** When the parent is itself a subflow the write
+  raises the grandparent's `InstanceSubStateChangedEvent`; the service snapshots the aggregate's
+  events before saving, commits, releases its lock, then hands them to `IPostCommitRelayDispatcher`.
+  That is what makes the fast path walk the whole ancestor chain instead of stopping at depth 1 —
+  the runner never sees an event raised inside this service's own UoW. Capped by
+  `PostCommitRelayDispatcher.MaxRelayDepth`; past it the event still travels the outbox.
+
 ### Accept-time chain reserve (async transitions on a parent with an active SubFlow)
 
 - **The client only ever observes the leaf.** The state function walks the active-correlation chain

@@ -188,7 +188,7 @@ ones, always copied together**, beside `TraceRoot` / `ParentTraceRoot`:
 |---|---|---|
 | `TransitionJobPayload` (`ITraceableJobPayload` defaults null) | `AsyncTransitionStrategy.BuildDirectPayload`; the outbox relay may reconstruct it from `TransitionContinuationRequested` | `TransitionJobHandler` → `Reset(…, payload.ToActivationEpisode())` |
 | `TransitionContinuationRequested` (`ILaneAwareDistributedEvent`) | the initial async-accept outbox/fallback path; `TraceStampingDistributedEventBus` additionally fills any lane-aware event `??=`-style, never overwriting a preset value | Inbox `EventTraceScope`; the `/enqueue` relay copies it onto the job payload |
-| `InstanceSubCompletedEvent` / `InstanceSubFaultedEvent` / `InstanceSubCanceledEvent` | `TraceStampingDistributedEventBus` | `SubflowTerminalRelay` and the Inbox `InstanceSub*EventHandler`s map them onto the inputs below |
+| `InstanceSubCompletedEvent` / `InstanceSubFaultedEvent` / `InstanceSubCanceledEvent` | `TraceStampingDistributedEventBus` | their `IPostCommitEventRelay<TEvent>` relays and the Inbox `InstanceSub*EventHandler`s map them onto the inputs below |
 | `FlowCompletedInput` / `SubFlowFaultedInput` / `SubItemCanceledInput` | the relay / inbox mappings above | `internal/…/complete`, `/sub/fault`, `/sub/cancel` → `Reset`; the `Subflow*Service`s copy them back onto the event republished by a terminal revert |
 | `SubflowForwardInput` | `RemoteInstanceCommandAppService` | `internal/subflow-forward` → `Reset` |
 | Cross-domain child start body (`CreateSubInstanceDto`) | `RemoteInstanceCommandAppService.StartSubAsync` | `sub/instances/start` → `Use` the carried episode while preserving the child server-span anchor |
