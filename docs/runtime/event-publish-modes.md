@@ -81,6 +81,34 @@ a council row; the default for a new event stays Outbox-only.
   `PostCommitEventRelayTimedOut` (40133) or `PostCommitEventRelayDepthExceeded` (40134). The three
   EventIds carried over from the terminal-only predecessor so existing dashboards keep resolving.
 
+### `sub:state-changed` is emitted once per activation episode
+
+`Instance.ChangeState` does not publish this event — it **arms** it. `TransitionSettlement` publishes
+it at the activation episode's **rest point** (`Instance.PublishPendingSubStateChange`), inside the
+pipeline's unit of work, so the event and the state it describes commit together.
+
+An inline auto-chain crossing A→B→C→D is one episode with one observable outcome. The parent can act
+on nothing in between, because the chain has not stopped. Per-hop publishing made this the runtime's
+highest-volume signal — 6 facts per 908 ms chain against a ~1.3 s delivery, with 7.5 % of 42 803
+deliveries writing nothing at the receiver — and it moved the parent's state-function ETag on every
+hop, waking long-pollers for states they could not use (`EffectiveState` and
+`LastSubFlowStateChangedAt` are both `InstanceStateFingerprint` members).
+
+**The value is unchanged, only the count:** the old burst's last event carried the final
+`CurrentState`, and so does the single coalesced event.
+
+Rest points that publish: became Active, reached a finish state, or deliberately rests Busy — a
+parked auto-gate (`BusyParked`) or a Busy-subtype state. Two exclusions: an **open SubFlow
+correlation** (the parent is Busy for the child's lifetime and the state the client observes is the
+child's, so the parent's own move into the SubFlow state is superseded by the child's notification
+travelling up) and **Faulted** (`InstanceSubFaultedEvent` already carries the faulted state upward;
+this channel reports progression, not failure).
+
+Instance **creation** flushes explicitly: it pre-positions the instance into its initial state and
+commits in a unit of work that has no settlement. That is load-bearing when a child's start
+transition targets its own initial state — nothing moves afterwards, so this is the parent's only
+notification for that child.
+
 ### Relay depth — the whole ancestor chain, not one level
 
 Applying a sub-state change to a parent that is ITSELF a subflow raises the grandparent's

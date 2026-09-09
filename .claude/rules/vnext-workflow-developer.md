@@ -89,7 +89,7 @@ A sixth profile is **composed on top of** the base, never selected instead of it
   scoped to `SkipsStateLifecycle`, so a `$self` shared transition — which really does re-enter the
   state — still reports its state change). `Instance.ChangeState` separately suppresses
   `sub:state-changed` whenever previous == new, keyed on the states themselves rather than on
-  the transition.
+  the transition — and it only ARMS that notification; see the coalescing rule below.
 - A parent with an open SubFlow correlation short-circuits earlier, at
   `HandleUpdateDataDataOnlyStep (21)` — data only, nothing else.
 
@@ -415,6 +415,42 @@ A sixth profile is **composed on top of** the base, never selected instead of it
   answers identity-only (`Id`, `Key`, `Status`): the starter reads `IsSuccess`, the relay reads
   `Status`, and the client's attributes/extensions come from the **parent's** own
   `EnrichOutputCoreAsync`. Do not read attributes off a sub-start or forward response.
+
+### `sub:state-changed` is coalesced to one event per activation episode
+
+- **`Instance.ChangeState` does not publish. It arms.** The event is published at the episode's
+  **rest point** by `Instance.PublishPendingSubStateChange()`, called from
+  `TransitionSettlement.ApplyAsync` inside the pipeline's unit of work — so the event and the state
+  it describes commit together.
+- **Why:** an inline auto-chain crossing A→B→C→D is ONE episode with one observable outcome. The
+  parent can act on nothing in between, because the chain has not stopped. Per-hop publishing made
+  this the runtime's highest-volume signal (6 facts per 908 ms chain against a ~1.3 s delivery;
+  7.5 % of 42 803 deliveries wrote nothing at the receiver) and moved the parent's state-function
+  ETag on every hop, waking long-pollers for states they could not use. `EffectiveState` and
+  `LastSubFlowStateChangedAt` are both `InstanceStateFingerprint` members.
+- **The value is unchanged, only the count.** The old burst's LAST event carried the final
+  `CurrentState`; the single coalesced event carries the same one. `PreviousState` is now the state
+  the episode STARTED in (nothing reads it — pinned as unread by the parent-notification council).
+- **Rest point ⊋ Active.** `ShouldPublishSubState` publishes on `chainSettled && OwnsStatus`, with
+  two exclusions. It is deliberately broader than the activation verdict: a lost CAS or an
+  already-Active owner yields no verdict, but the state that hop wrote is real and the parent must
+  hear it. Parked Busy (`BusyParked`, an unmet auto-gate) and `BusySubtype` **do** publish — they are
+  rest points, the instance is sitting there waiting for input.
+- **Two exclusions.** An open SubFlow correlation: the parent is Busy for the child's lifetime and
+  the state the client observes is the child's, so the parent's own move into the SubFlow state is
+  an intermediate superseded by the child's notification travelling up. And `Faulted`:
+  `InstanceSubFaultedEvent` already carries the faulted state upward; this channel reports
+  progression, not failure.
+- **Creation flushes explicitly.** `InstanceCommandAppService` pre-positions a new instance into its
+  initial state and commits in a unit of work with no settlement, so it calls
+  `PublishPendingSubStateChange()` itself. **Load-bearing:** when a child's start transition targets
+  its own initial state (e.g. `subflow-orchestration-grandchild` → `grandchild-initial`) nothing
+  moves afterwards, so the pipeline's rest point has nothing to publish and this is the parent's
+  ONLY notification for that child. Removing it silently strands the parent's `effectiveState`.
+- The coalescing state is two unmapped private fields on the aggregate. Their lifetime is the
+  tracked instance's, which is exactly one episode: the inline auto-chain reuses it
+  (`CreateFromPreloaded`), every post-commit / retry / subflow-callback boundary loads a fresh one.
+- Pinned by `SubStateChangeCoalescingTests`.
 
 ### Child state → parent `EffectiveState` (`SubflowStateService`)
 

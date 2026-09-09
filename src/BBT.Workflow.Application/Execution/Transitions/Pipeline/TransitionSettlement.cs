@@ -91,6 +91,27 @@ internal static class TransitionSettlement
             context.Directives.RecordActivation(verdict);
         activity?.SetTag(TelemetryConstants.TagNames.ActivationEmitted, verdict is not null);
 
+        // The episode's ONE sub:state-changed, published here so it commits with the state it
+        // describes. Intentionally broader than the activation verdict: a lost CAS or an already
+        // Active owner yields no verdict, but the state this hop wrote is still real and the parent
+        // must hear about it. See Instance.PublishPendingSubStateChange.
+        if (ShouldPublishSubState(context, hasOpenSubFlow, chainSettled) &&
+            context.Instance.PublishPendingSubStateChange())
+        {
+            // ChangeStateStep drains the aggregate into the pipeline's deferred events the moment it
+            // changes the state — long before this. Publishing after that drain leaves the event on
+            // the aggregate, where the runner's outbox staging and the post-commit relay both read
+            // DeferredEvents and would never see it. Drain again.
+            //
+            // Guarded on an ACTUAL publish, never called unconditionally: only the pipeline consumes
+            // DeferredEvents (WorkflowExecutionService -> TransitionRunner). PostCommitParentMutationService
+            // settles through this same method and consumes nothing, so an unconditional drain there
+            // would move events raised on that fresh aggregate — Instance.Fault's upward event among
+            // them — off the aggregate and into a list nobody reads. A post-commit settlement never
+            // calls ChangeState, so it never has a pending change and never reaches this branch.
+            context.ExtractAndDeferInstanceEvents();
+        }
+
         if (scheduleNotification && context.Target?.HasStateNotifications == true)
         {
             await stateNotificationScheduler.ScheduleAsync(context, cancellationToken);
@@ -161,6 +182,28 @@ internal static class TransitionSettlement
 
         return new ActivationVerdict(TelemetryConstants.ActivationOutcomes.BusyParked, CasFlipped: false, stateTo);
     }
+
+    /// <summary>
+    /// Whether this settlement is the rest point that should publish the episode's coalesced
+    /// <c>sub:state-changed</c>.
+    /// <list type="bullet">
+    ///   <item><c>chainSettled</c> — the whole point: mid-chain hops publish nothing.</item>
+    ///   <item><c>OwnsStatus</c> — a non-owner beside an in-flight chain is not the one to report.</item>
+    ///   <item>no open SubFlow — the parent is Busy for the child's lifetime and the state the
+    ///   client observes is the child's; its own move into the SubFlow state is an intermediate,
+    ///   superseded by the child's own notification travelling up.</item>
+    ///   <item>not Faulted — <c>InstanceSubFaultedEvent</c> already carries the faulted state
+    ///   upward. This channel reports progression, not failure.</item>
+    /// </list>
+    /// </summary>
+    private static bool ShouldPublishSubState(
+        TransitionExecutionContext context,
+        bool hasOpenSubFlow,
+        bool chainSettled) =>
+        chainSettled &&
+        context.OwnsStatus &&
+        !hasOpenSubFlow &&
+        !context.Instance.Status.Equals(InstanceStatus.Faulted);
 
     private static bool HasOpenSubFlow(TransitionExecutionContext context) =>
         context.Instance.ActiveCorrelations.Any(c =>
