@@ -1,4 +1,5 @@
 using BBT.Workflow.Discovery;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using BBT.Workflow.Runtime;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
@@ -36,13 +37,103 @@ public static class DiscoveryServiceCollectionExtensions
             services.Configure(configureOptions);
         }
 
+        // Cross-field cache invariants (L1Ttl < RefreshInterval < L2Ttl, and friends). Every one of
+        // them fails SILENTLY when broken - the cache either stops serving or widens its staleness
+        // window, with no exception and no error log - so startup is the only place they are visible.
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IValidateOptions<ServiceDiscoveryOptions>, ServiceDiscoveryOptionsValidator>());
+
         var options = optionsSection.Get<ServiceDiscoveryOptions>() ?? new ServiceDiscoveryOptions();
 
         // Outbound trace-id stamping for every discovery call (registration + resolution).
         services.AddTransient<DiscoveryTraceHeaderHandler>();
 
         // Register HttpClient with Polly policies
-        services.AddHttpClient(DomainRegistrationService.HttpClientName, (sp, client) =>
+        services.AddDiscoveryHttpClient(DomainRegistrationService.HttpClientName, options);
+
+        // The bulk read gets its OWN client, with identical settings but a SEPARATE circuit breaker.
+        // Sharing one would let a bulk refresh that fails on every tick trip the breaker guarding the
+        // per-domain lookup - the path a cache miss falls back to - so the refresh would break the
+        // very thing it degrades into.
+        services.AddDiscoveryHttpClient(DiscoveryRegistryClient.BulkHttpClientName, options);
+
+        services.AddScoped<IDomainRegistrationService, DomainRegistrationService>();
+
+        // The dapr provider caches positive results; harmless when it is not selected.
+        services.AddMemoryCache();
+
+        // Provider selection. Singleton, matching the previous resolver's lifetime.
+        //
+        // An unrecognized value falls back to http rather than throwing: a typo in an
+        // environment variable must not move production traffic onto a new transport, and it
+        // must not stop the host from starting either. The chosen provider is logged so the
+        // decision is visible at boot.
+        var provider = options.Provider?.Trim() ?? string.Empty;
+        var isDaprProvider = provider.Equals(DiscoveryProviders.Dapr, StringComparison.OrdinalIgnoreCase);
+
+        // The registry-read cache is scoped to the DEFAULT provider only.
+        //
+        // Under "dapr" the app-id comes from a naming convention and the common path makes no
+        // network call at all, so there is nothing here for it to win - while its own short-lived
+        // in-process app-id cache would become a second TTL stacked on this one, and a staleness
+        // window built from two multiplying TTLs is one nobody can reason about mid-incident.
+        //
+        // Both conditions are decided HERE rather than inside the decorator, deliberately. A flag
+        // checked at read time would leave entries written before the flip still readable after it,
+        // so "Cache:Enabled=false" would not restore the previous behaviour - only approximate it.
+        var cacheEnabled = !isDaprProvider && options.Cache.Enabled;
+
+        services.AddSingleton<DiscoveryRegistryClient>();
+
+        if (cacheEnabled)
+        {
+            services.AddSingleton<IDiscoveryL1Cache, DiscoveryL1Cache>();
+            services.AddSingleton<CachingDiscoveryRegistryClient>();
+            services.AddSingleton<IDiscoveryRegistryClient>(
+                sp => sp.GetRequiredService<CachingDiscoveryRegistryClient>());
+            services.AddSingleton<IDiscoveryCacheWriter>(
+                sp => sp.GetRequiredService<CachingDiscoveryRegistryClient>());
+            services.AddSingleton<IDiscoveryCacheRefresher, DiscoveryCacheRefresher>();
+        }
+        else
+        {
+            services.AddSingleton<IDiscoveryRegistryClient>(
+                sp => sp.GetRequiredService<DiscoveryRegistryClient>());
+        }
+
+        if (isDaprProvider)
+        {
+            services.AddSingleton<IDomainDiscoveryResolver, DaprDomainDiscoveryProvider>();
+        }
+        else
+        {
+            services.AddSingleton<IDomainDiscoveryResolver, HttpDomainDiscoveryProvider>();
+        }
+
+        return services;
+    }
+
+    /// <summary>
+    /// Registers a named discovery <see cref="HttpClient"/> with the shared settings and the
+    /// timeout -> retry -> circuit-breaker policy chain.
+    /// </summary>
+    /// <remarks>
+    /// Policies are registered outermost-first. <c>client.Timeout</c> additionally bounds the whole
+    /// <c>SendAsync</c>, so it caps the ENTIRE retry sequence rather than one attempt - raising
+    /// <see cref="ServiceDiscoveryOptions.MaxRetryAttempts"/> without raising
+    /// <see cref="ServiceDiscoveryOptions.TimeoutSeconds"/> buys nothing, because the extra attempts
+    /// cannot fit inside the outer timeout.
+    /// <para>
+    /// Each named client gets its own policy instances, and therefore its own circuit-breaker state.
+    /// That separation is the point of calling this twice.
+    /// </para>
+    /// </remarks>
+    private static IServiceCollection AddDiscoveryHttpClient(
+        this IServiceCollection services,
+        string clientName,
+        ServiceDiscoveryOptions options)
+    {
+        services.AddHttpClient(clientName, (sp, client) =>
             {
                 var runtimeInfoProvider = sp.GetRequiredService<IRuntimeInfoProvider>();
                 var clientOptions = sp.GetRequiredService<IOptions<ServiceDiscoveryOptions>>().Value;
@@ -79,42 +170,9 @@ public static class DiscoveryServiceCollectionExtensions
                 return handler;
             })
             .AddHttpMessageHandler<DiscoveryTraceHeaderHandler>()
-            // Registered outermost-first: timeout wraps retry wraps circuit breaker. client.Timeout
-            // (set above from clientOptions.TimeoutSeconds) additionally bounds the whole SendAsync,
-            // so it caps the ENTIRE retry sequence, not one attempt. Raising MaxRetryAttempts without
-            // also raising TimeoutSeconds buys nothing — the extra attempts simply can't fit inside
-            // the outer timeout. See docs/superpowers/specs/2026-08-28-discovery-direct-and-load-gap-spec.md
-            // ("Decisions taken" / TimeoutSeconds) for the arithmetic.
             .AddPolicyHandler(GetTimeoutPolicy(options))
             .AddPolicyHandler(GetRetryPolicy(options))
             .AddPolicyHandler(GetCircuitBreakerPolicy(options));
-
-        services.AddScoped<IDomainRegistrationService, DomainRegistrationService>();
-
-        // Registry reads are shared by both providers: the http provider needs the baseUrl, the
-        // dapr provider only the optional appId override. Registration and health are untouched
-        // by the Dapr migration — only address resolution moved.
-        services.AddSingleton<IDiscoveryRegistryClient, DiscoveryRegistryClient>();
-
-        // The dapr provider caches positive results; harmless when it is not selected.
-        services.AddMemoryCache();
-
-        // Provider selection. Singleton, matching the previous resolver's lifetime.
-        //
-        // An unrecognized value falls back to http rather than throwing: a typo in an
-        // environment variable must not move production traffic onto a new transport, and it
-        // must not stop the host from starting either. The chosen provider is logged so the
-        // decision is visible at boot.
-        var provider = options.Provider?.Trim() ?? string.Empty;
-
-        if (provider.Equals(DiscoveryProviders.Dapr, StringComparison.OrdinalIgnoreCase))
-        {
-            services.AddSingleton<IDomainDiscoveryResolver, DaprDomainDiscoveryProvider>();
-        }
-        else
-        {
-            services.AddSingleton<IDomainDiscoveryResolver, HttpDomainDiscoveryProvider>();
-        }
 
         return services;
     }

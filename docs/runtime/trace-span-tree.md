@@ -14,9 +14,6 @@ This page is the reference for the resulting span tree: every span this plan int
 ungated, its `ActivitySource`, its tags, and the registration rule that keeps a new source from
 silently going dark in one host.
 
-Full design rationale, decisions, and work breakdown: see
-[`docs/superpowers/specs/2026-08-25-trace-span-tree-design.md`](../superpowers/specs/2026-08-25-trace-span-tree-design.md).
-
 ## Target span tree
 
 ```
@@ -463,9 +460,6 @@ script-perf work's own analysis flagged but chose not to instrument with a span.
 accumulator tags and the `script.compile` event are **kept alongside**, unchanged, for query
 compatibility with existing dashboards/alerts built against them.
 
-Rationale for the reversal and the full decision record: §1 ("Decisions taken") of
-[`docs/superpowers/specs/2026-08-25-trace-span-tree-design.md`](../superpowers/specs/2026-08-25-trace-span-tree-design.md).
-
 ## Three memo layers on the script path, three ways of reporting a hit
 
 The script path has three caches, and a reader following a trace needs a different signal from
@@ -551,7 +545,7 @@ All nine acceptance checks passed:
    the producing app's spans. Recorded here honestly: this check passed via the substitute
    command, not via the originally-named `TransitionContinuationRequested` path, which this run
    had no traffic to exercise.
-5. **Relay same-tree** — 3 sampled relay traces each contain `Subflow.TerminalRelay` ×2,
+5. **Relay same-tree** — 3 sampled relay traces each contain `PostCommit.EventRelay` ×2,
    `SubFlow.Completion` ×2, `SubFlow.Resume` ×2, and zero `*.Handle` spans: the flow's own
    settlement work stayed inside the flow trace while the duplicate backup delivery moved out.
 6. **Idle noise** — 2-minute buckets: pre-cutover every bucket had exactly 12 root `Db.*` spans

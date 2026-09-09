@@ -39,6 +39,7 @@ public sealed class InstanceQueryAppService(
     IInstanceTransitionRepository instanceTransitionRepository,
     IInstanceCorrelationRepository instanceCorrelationRepository,
     IInstanceJobRepository instanceJobRepository,
+    IInstanceIncidentRepository instanceIncidentRepository,
     IInstanceExtensionService instanceExtensionService,
     IScriptContextFactory scriptContextFactory,
     IInstanceQueryGateway instanceQueryGateway,
@@ -168,6 +169,7 @@ public sealed class InstanceQueryAppService(
                     }
 
                     var response = result.Value!;
+                    response.Metadata.Incident = BuildIncidentInfo(instance, input.Domain, input.Workflow);
                     var entityEtag = instance.LatestData?.ETag ?? string.Empty;
                     response.EntityEtag = entityEtag;
                     var representationEtag = representationEtagService.Generate(response);
@@ -365,7 +367,13 @@ public sealed class InstanceQueryAppService(
                             instanceOutputResult.Error.Target ?? string.Empty);
                     }
 
-                    list.Add(instanceOutputResult.Value!);
+                    var instanceOutput = instanceOutputResult.Value!;
+
+                    // Free: the flag is already on the loaded instance and the links are formatted
+                    // strings, so the list view no longer issues an incident query at all.
+                    instanceOutput.Metadata.Incident = BuildIncidentInfo(instance, input.Domain, input.Workflow);
+
+                    list.Add(instanceOutput);
                 }
 
                 var resultPagedList = new HateoasPagedList<GetInstanceOutput>(list, pagedList.CurrentPage,
@@ -377,6 +385,91 @@ public sealed class InstanceQueryAppService(
                 return response;
             },
             cancellationToken);
+    }
+
+    /// <summary>
+    /// Fills <c>metadata.incident</c>: the denormalized flag plus the two links. Reads NOTHING — the
+    /// flag is a column on the instance already in hand. This used to issue up to three queries per
+    /// GET (newest five, the unresolved rows, a total count) to embed content the active-incident and
+    /// history endpoints already serve.
+    /// </summary>
+    private IncidentInfoDto BuildIncidentInfo(Instance instance, string domain, string workflow)
+        => IncidentInfoDto.FromInstance(
+            instance,
+            activeHref: urlTemplateBuilder.BuildActiveIncidentUrl(domain, workflow, instance.Id.ToString()),
+            historyHref: urlTemplateBuilder.BuildIncidentsUrl(domain, workflow, instance.Id.ToString()));
+
+    /// <summary>
+    /// Returns the newest unresolved incident of an instance, or <c>NotFound</c> when none is open —
+    /// the target of the <c>incident.active</c> link.
+    /// </summary>
+    /// <remarks>
+    /// <b>404 is a normal answer here, not an error.</b> The link is emitted only while the flag says
+    /// an incident is open, but the incident can be resolved between the poll and the follow-up (a
+    /// successful retry does exactly that). A client seeing 404 should re-read the state rather than
+    /// treat it as a failure. Gated by the same <c>queryRoles</c> check as the state function and the
+    /// history endpoint, and like them it never returns a stack trace.
+    /// </remarks>
+    public async Task<Result<IncidentDetailDto>> GetActiveInstanceIncidentAsync(
+        GetActiveInstanceIncidentInput input,
+        CancellationToken cancellationToken = default)
+    {
+        runtimeInfoProvider.Check(input.Domain);
+
+        return await GetInstanceByIdOrKeyAsync(input.Instance, cancellationToken)
+            .BindAsync(instance =>
+                componentCacheStore.GetFlowAsync(input.Domain, input.Workflow, instance.FlowVersion, cancellationToken)
+                    .MapAsync(workflow => (instance, workflow)))
+            .BindAsync(async data =>
+            {
+                using var instanceScope = BeginInstanceScope(data.instance);
+
+                if (!await IsInstanceQueryAllowedAsync(data.workflow, data.instance, input.Roles, input.Headers, input.QueryParameters, cancellationToken))
+                    return Result<IncidentDetailDto>.Fail(WorkflowErrors.QueryAccessDenied(data.instance.GetEffectiveState));
+
+                // Trust the row, not the flag: the two are written in one unit of work, but a resolve
+                // that raced this read leaves the flag true for the moment it takes to commit.
+                var active = await instanceIncidentRepository.GetActiveAsync(data.instance.Id, cancellationToken);
+
+                return active is null
+                    ? Result<IncidentDetailDto>.Fail(WorkflowErrors.ActiveIncidentNotFound(input.Instance))
+                    : Result<IncidentDetailDto>.Ok(IncidentDetailDto.FromIncident(active));
+            });
+    }
+
+    public async Task<Result<GetInstanceIncidentsOutput>> GetInstanceIncidentsAsync(
+        GetInstanceIncidentsInput input,
+        CancellationToken cancellationToken = default)
+    {
+        runtimeInfoProvider.Check(input.Domain);
+
+        var page = input.Page < 1 ? 1 : input.Page;
+        var pageSize = Math.Clamp(input.PageSize, 1, GetInstanceIncidentsInput.MaxPageSize);
+
+        return await GetInstanceByIdOrKeyAsync(input.Instance, cancellationToken)
+            .BindAsync(instance =>
+                componentCacheStore.GetFlowAsync(input.Domain, input.Workflow, instance.FlowVersion, cancellationToken)
+                    .MapAsync(workflow => (instance, workflow)))
+            .BindAsync(async data =>
+            {
+                using var instanceScope = BeginInstanceScope(data.instance);
+
+                // Same gate as the state function: a caller who may poll the state may read why it stalled.
+                if (!await IsInstanceQueryAllowedAsync(data.workflow, data.instance, input.Roles, input.Headers, input.QueryParameters, cancellationToken))
+                    return Result<GetInstanceIncidentsOutput>.Fail(WorkflowErrors.QueryAccessDenied(data.instance.GetEffectiveState));
+
+                var paged = await instanceIncidentRepository.GetHistoryPagedAsync(
+                    data.instance.Id, page, pageSize, cancellationToken);
+
+                return Result<GetInstanceIncidentsOutput>.Ok(new GetInstanceIncidentsOutput
+                {
+                    HasActiveIncident = data.instance.HasActiveIncident,
+                    Items = paged.Items.Select(IncidentDetailDto.FromIncident).ToList(),
+                    Page = paged.CurrentPage,
+                    PageSize = paged.PageSize,
+                    HasNext = paged.HasNext
+                });
+            });
     }
 
     public async Task<Result<GetInstanceHistoryOutput>> GetInstanceHistoryAsync(
@@ -600,7 +693,9 @@ public sealed class InstanceQueryAppService(
                     SubFlowCorrelations: subFlowValue.Correlations,
                     SubFlowTransitionItems: subFlowValue.Transitions,
                     // Bubble the (possibly deeper) subflow's long-poll termination signal up the chain.
-                    Interaction: subFlowValue.Interaction);
+                    Interaction: subFlowValue.Interaction,
+                    // The client observes the leaf: its incident is what explains a stalled chain.
+                    Incident: subFlowValue.Incident);
             }
         }
         catch (Exception ex)
@@ -1631,6 +1726,12 @@ public sealed class InstanceQueryAppService(
             : await ResolveInteractionAsync(
                 input, instance, currentStateValue, displayedState, cancellationToken);
 
+        // Incident block: the leaf's when an active subflow reported one (a stalled chain is explained
+        // by the deepest incident), otherwise this instance's own. The history link always points to the
+        // polled instance — a client follows it on the instance it is polling. Never a stack trace.
+        var incidentHref = BuildIncidentHref(
+            instance, subFlowStateInfo.Incident, input.Domain, input.Workflow);
+
         // Only the flag and the link — never the list. Enumerating the functions means one component
         // read per declared function plus a role evaluation each, which this response cannot afford.
         var functionsHref = new FunctionsHref
@@ -1659,8 +1760,66 @@ public sealed class InstanceQueryAppService(
             Correlations = allCorrelationHrefs,
             Transitions = transitionItems,
             Functions = functionsHref,
-            Interaction = interaction
+            Interaction = interaction,
+            Incident = incidentHref
         });
+    }
+
+    /// <summary>
+    /// Builds the state body's <c>incident</c> block: the flag plus links, never content. A
+    /// leaf-reported block wins when it carries an active incident; otherwise the polled instance's
+    /// own flag decides.
+    /// </summary>
+    /// <remarks>
+    /// <b>Reads nothing.</b> <c>HasActiveIncident</c> is a column on the instance already in hand, so
+    /// the state function — the runtime's hottest read, polled continuously by every waiting client —
+    /// touches the incident table zero times. It used to load the unresolved rows purely to embed a
+    /// summary here.
+    /// <para>
+    /// When an active subflow reports an incident, its block is taken as-is, so <c>active</c>
+    /// addresses the SUBFLOW that owns the incident. <c>history</c> is always re-pointed at the polled
+    /// instance: that link answers "what has gone wrong with the thing I asked about", and the client
+    /// polling an ancestor did not ask about the leaf's history.
+    /// </para>
+    /// </remarks>
+    /// <remarks>
+    /// <c>internal</c> rather than private so the subflow-lifting rule — which instance each link
+    /// addresses — can be pinned directly (<c>InternalsVisibleTo</c>). Reaching it through
+    /// <c>GetInstanceStateAsync</c> would need a whole active-subflow gateway setup to assert four
+    /// lines.
+    /// </remarks>
+    internal IncidentHref BuildIncidentHref(
+        Instance instance,
+        IncidentHref? leafIncident,
+        string domain,
+        string workflow)
+    {
+        var history = new IncidentHistoryHref
+        {
+            Href = urlTemplateBuilder.BuildIncidentsUrl(domain, workflow, instance.Id.ToString())
+        };
+
+        if (leafIncident is { HasActiveIncident: true })
+        {
+            return new IncidentHref
+            {
+                HasActiveIncident = true,
+                Active = leafIncident.Active,
+                History = history
+            };
+        }
+
+        return new IncidentHref
+        {
+            HasActiveIncident = instance.HasActiveIncident,
+            Active = instance.HasActiveIncident
+                ? new ActiveIncidentHref
+                {
+                    Href = urlTemplateBuilder.BuildActiveIncidentUrl(domain, workflow, instance.Id.ToString())
+                }
+                : null,
+            History = history
+        };
     }
 
     /// <summary>
@@ -2928,7 +3087,8 @@ public sealed class InstanceQueryAppService(
         List<ActiveCorrelationHref>? SubFlowActiveCorrelations = null,
         List<ActiveCorrelationHref>? SubFlowCorrelations = null,
         List<TransitionItem>? SubFlowTransitionItems = null,
-        InstanceInteractionOutput? Interaction = null);
+        InstanceInteractionOutput? Interaction = null,
+        IncidentHref? Incident = null);
 
     private static Dictionary<string, SubFlowTransitionOverride>? TryGetParentTransitionRoleOverrides(Instance instance)
     {

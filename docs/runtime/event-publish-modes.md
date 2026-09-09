@@ -1,15 +1,14 @@
-# Event Publish Modes: Outbox-Only Events, Subflow Terminal Relay, Wakeup Signal
+# Event Publish Modes: Outbox-Only Events, Post-Commit Relay, Wakeup Signal
 
 ## Purpose
 
 Every distributed event in the runtime used to be intercepted by `HookedDistributedEventBus`,
 which ran a per-event hook either inline pre-commit or inside `uow.OnCompleted` (blocking the
 commit), then wrote an outbox row on top for durability. The EventHook infrastructure has been
-deleted outright. All distributed events now ride the transactional outbox uniformly; the three
-subflow-terminal events additionally get an immediate post-commit **relay** — a direct command
-call, not an event — so parent resume keeps a near-zero gap on both sync and async paths. Aether
-gained a wakeup signal so the outbox/inbox poll loop no longer needs to wait out its idle
-interval on the common path.
+deleted outright. All distributed events now ride the transactional outbox uniformly; events that
+opt in additionally get an immediate post-commit **relay** — a direct command call, not an event —
+so the receiver keeps a near-zero gap on both sync and async paths. Aether gained a wakeup signal so
+the outbox/inbox poll loop no longer needs to wait out its idle interval on the common path.
 
 This page describes the resulting publish-mode taxonomy, the relay's semantics and independence
 guarantees, the wakeup mechanism, and the accepted risks. It replaces the old hook model as the
@@ -20,7 +19,7 @@ canonical reference for how a distributed event gets from "committed" to "handle
 | Mode | Declared by | Behavior |
 |---|---|---|
 | **Outbox** (default, ALL events) | nothing | transactional outbox row → wakeup nudge → Outbox worker publish → broker → Inbox worker (in-process nudge) → Inbox handler |
-| **Outbox + TerminalRelay** | implementing `ISubflowTerminalEvent` | everything above PLUS: the runner relays the event as a **command** immediately after commit via `SubflowTerminalRelay` → `IInstanceCommandGateway` (routed in-process or via Dapr service invocation); the Inbox handler is demoted to a durable backup, deduplicated via `ISubItemTerminalGuard` |
+| **Outbox + PostCommitRelay** | a `IPostCommitEventRelay<TEvent>` REGISTRATION in DI | everything above PLUS: the runner relays the event as a **command** immediately after commit via `PostCommitRelayDispatcher` → `IInstanceCommandGateway` (routed in-process or via Dapr service invocation); the Inbox handler is demoted to a durable backup, deduplicated by the receiver's own guard |
 
 There is no third mode. Nothing publishes synchronously inline anymore — `TraceStampingDistributedEventBus`
 (the renamed, shrunk `HookedDistributedEventBus`) only stamps trace context and delegates to the
@@ -30,25 +29,41 @@ outbox; it no longer knows about hooks, `EventHookMode`, or per-event dispatch.
 
 | Event | Mode |
 |---|---|
-| `InstanceSubCompletedEvent`, `InstanceSubFaultedEvent`, `InstanceSubCanceledEvent` | Outbox + TerminalRelay (all three share the same terminal-settlement semantics and one relay code path) |
-| `InstanceCanceledEvent`, `InstanceCompletedCleanupEvent`, `InstanceFaultedCleanupEvent`, `InstanceSubStateChangedEvent`, `ChildSubflow*`, `TransitionContinuationRequested` | Pure Outbox |
+| `InstanceSubCompletedEvent`, `InstanceSubFaultedEvent`, `InstanceSubCanceledEvent` | Outbox + PostCommitRelay (the three share terminal-settlement semantics; each has its own relay class over a common base) |
+| `InstanceSubStateChangedEvent` | Outbox + PostCommitRelay (receiver guard = the per-sub-item lock plus the monotonic `SubFlowStateChangedAt` stamp in `SubflowStateService`) |
+| `InstanceCanceledEvent`, `InstanceCompletedCleanupEvent`, `InstanceFaultedCleanupEvent`, `ChildSubflow*`, `TransitionContinuationRequested` | Pure Outbox |
 
-Only the three sub-terminal events implement `ISubflowTerminalEvent`. Adding the relay mode to a
-new event means implementing that marker interface — nothing else opts an event into the relay
-path.
+**The DI registration is the opt-in — there is no marker interface and no central switch.** Adding
+the relay mode to a new event is one relay class plus one
+`AddScoped<IPostCommitEventRelay<TEvent>, …>()` line in `AddPipelineServices`; removing that line
+is that event's kill switch. `ISubflowTerminalEvent` still exists, but only as the shape the three
+terminal relays read their route and span tags from — implementing it opts nothing in.
+
+Registration alone is not sufficient grounds. Per the standing Chair precedent, each relayed event
+also needs a durable backup, an idempotent order-safe receiver guard, measured latency evidence and
+a council row; the default for a new event stays Outbox-only.
 
 ## Relay semantics
 
 - The runner (`TransitionRunner`), after `uow.CommitAsync` succeeds, calls
-  `SubflowTerminalRelay.RelayAsync(coreOutput.DeferredEvents, ct)`. The relay filters the deferred
-  events down to `ISubflowTerminalEvent` payloads and processes them **sequentially** — a single
-  hop produces at most one terminal event by domain construction (terminal outcomes are mutually
-  exclusive, pinned by `SubItemTerminalProbe.Conflict`), so the loop is defensive rather than a
-  real fan-out.
-- Per event: the exact mapping code that used to live in the event hooks (moved verbatim) builds
-  the gateway input, then calls `CompleteAsync` / `FaultAsync` / `CancelAsync` on
-  `IInstanceCommandGateway`, which routes in-process for the same domain or via Dapr service
-  invocation cross-domain (`RoutedInstanceCommandGateway`).
+  `PostCommitRelayDispatcher.RelayAsync(coreOutput.DeferredEvents, ct)`. The dispatcher resolves
+  `IPostCommitEventRelay<TEvent>` for each event's RUNTIME type — the same open-generic
+  `MakeGenericType` + `GetService` shape `PostCommitExecutor` uses for `IPostCommitHandler<TJob>` —
+  and processes envelopes **sequentially**. An event with no registration is skipped and travels the
+  outbox alone.
+- Per event: the relay's `Describe` supplies route and span metadata (read BEFORE the call so the
+  span is complete even when it throws), then `RelayAsync` builds the gateway input — the exact
+  mapping code that used to live in the event hooks, moved verbatim — and calls `CompleteAsync` /
+  `FaultAsync` / `CancelAsync` / `UpdateSubFlowStateAsync` on `IInstanceCommandGateway`, which
+  routes in-process for the same domain or via Dapr service invocation cross-domain
+  (`RoutedInstanceCommandGateway`).
+- **The cross-domain bound belongs to the relay, not the dispatcher.** A relay may declare a
+  `RemoteTimeout` on its target; the dispatcher then bounds the REMOTE leg with a linked CTS and
+  reports outcome `timeout`. The three terminal relays declare none and keep their historical
+  behaviour under the gateway's own timeout. `InstanceSubStateChangedRelay` declares **2 s**: that
+  channel carries roughly an order of magnitude more traffic than the three terminal channels
+  combined, and unlike a terminal outcome a missed state change is corrected by the next one, so a
+  slow remote must release the child's hop rather than hold it.
 - `CallerMode` follows the event's own `Sync` flag (`evt.Sync ? ExecMode.Sync : ExecMode.Async`) —
   identical to what the hook did.
 - **Sync chain stays sync end-to-end**: the relay is awaited before the stage returns, so a
@@ -59,10 +74,59 @@ path.
   must not lie about that. The outbox row, written unconditionally pre-commit, guarantees the
   Inbox backup picks the work up shortly after. Relay calls are bounded by the gateway's existing
   invocation timeouts.
-- Observability: each relay attempt opens a `Subflow.TerminalRelay` activity (see
+- Observability: each relay attempt opens a `PostCommit.EventRelay` activity (see
   [Observability contract](#observability-contract) below) and logs
-  `SubflowTerminalRelayed` (EventId 40124) on success, `SubflowTerminalRelayFailed` (40125,
-  exception path) or `SubflowTerminalRelayRejected` (40126, failed-`Result` path) otherwise.
+  `PostCommitEventRelayed` (EventId 40124) on success, `PostCommitEventRelayFailed` (40125,
+  exception path), `PostCommitEventRelayRejected` (40126, failed-`Result` path),
+  `PostCommitEventRelayTimedOut` (40133) or `PostCommitEventRelayDepthExceeded` (40134). The three
+  EventIds carried over from the terminal-only predecessor so existing dashboards keep resolving.
+
+### `sub:state-changed` is emitted once per activation episode
+
+`Instance.ChangeState` does not publish this event — it **arms** it. `TransitionSettlement` publishes
+it at the activation episode's **rest point** (`Instance.PublishPendingSubStateChange`), inside the
+pipeline's unit of work, so the event and the state it describes commit together.
+
+An inline auto-chain crossing A→B→C→D is one episode with one observable outcome. The parent can act
+on nothing in between, because the chain has not stopped. Per-hop publishing made this the runtime's
+highest-volume signal — 6 facts per 908 ms chain against a ~1.3 s delivery, with 7.5 % of 42 803
+deliveries writing nothing at the receiver — and it moved the parent's state-function ETag on every
+hop, waking long-pollers for states they could not use (`EffectiveState` and
+`LastSubFlowStateChangedAt` are both `InstanceStateFingerprint` members).
+
+**The value is unchanged, only the count:** the old burst's last event carried the final
+`CurrentState`, and so does the single coalesced event.
+
+Rest points that publish: became Active, reached a finish state, or deliberately rests Busy — a
+parked auto-gate (`BusyParked`) or a Busy-subtype state. Two exclusions: an **open SubFlow
+correlation** (the parent is Busy for the child's lifetime and the state the client observes is the
+child's, so the parent's own move into the SubFlow state is superseded by the child's notification
+travelling up) and **Faulted** (`InstanceSubFaultedEvent` already carries the faulted state upward;
+this channel reports progression, not failure).
+
+Instance **creation** flushes explicitly: it pre-positions the instance into its initial state and
+commits in a unit of work that has no settlement. That is load-bearing when a child's start
+transition targets its own initial state — nothing moves afterwards, so this is the parent's only
+notification for that child.
+
+### Relay depth — the whole ancestor chain, not one level
+
+Applying a sub-state change to a parent that is ITSELF a subflow raises the grandparent's
+`InstanceSubStateChangedEvent` inside that write. That event is raised in `SubflowStateService`'s own
+unit of work, which the runner never sees — so a runner-only relay would stop at depth 1 and every
+level above it would fall back to broker latency.
+
+`SubflowStateService` therefore holds the **second dispatcher call site**: it snapshots the
+aggregate's events before saving (the SaveChanges sink drains them), commits, releases its lock, and
+hands them to the same dispatcher. The fast path walks up the chain recursively, each level taking
+and releasing only its own `:sub:{subId}` lock.
+
+`PostCommitRelayDispatcher.MaxRelayDepth` (10) caps the nested in-process walk. Real chains are a
+handful of levels and terminate at the root; the cap only stops a pathological graph from turning
+one hop into an unbounded awaited walk. Past it the event still travels the outbox — only the
+immediacy is lost, logged as `depth_exceeded`. Cross-domain legs start a fresh request on the far
+side and therefore a fresh count, which is correct: that hop is bounded by the relay's own remote
+timeout instead.
 
 ## Independence guarantees
 
@@ -72,9 +136,14 @@ The relay and the outbox/Inbox pipeline are deliberately independent along four 
    worker/broker outage does not affect the relay, and a relay failure does not affect the outbox
    flow (the row is already committed).
 2. **Order independence** — the relay may finish before its outbox row is even published; the
-   later Inbox delivery is absorbed by `ISubItemTerminalGuard` as `AlreadySettled`. Pure-outbox
-   events flow at their own pace; a stale `InstanceSubStateChangedEvent` arriving after completion
-   is rejected by the existing monotonic `SubFlowStateChangedAt` guard in `SubflowStateService`.
+   later Inbox delivery is absorbed by `ISubItemTerminalGuard` as `AlreadySettled` for the terminal
+   events, and for `InstanceSubStateChangedEvent` by `SubflowStateService`'s monotonic
+   `SubFlowStateChangedAt` guard, which now runs under the SAME per-sub-item lock the terminal paths
+   take (`vnext:{domain}:{flow}:{parentId}:sub:{subId:N}`). That lock is what makes the guard sound:
+   before it, two deliveries could both read the same stamp, both pass the check, and the older one
+   land last. Equal timestamps are accepted and re-applied — a duplicate delivery carries the same
+   `ChangedAt`, re-applying it is idempotent, and rejecting it would close the only recovery path a
+   redelivery has. Pure-outbox events flow at their own pace.
 3. **Failure independence** — no relay or outbox failure faults the child instance; each mechanism
    has its own retry path (relay → Inbox backup; outbox → processor retry; Inbox → broker
    redelivery).
@@ -177,19 +246,22 @@ keep it from polluting a transition's trace:
 
 ## Observability contract
 
-- **Relay span**: `Subflow.TerminalRelay`, opened via `PipelineStepActivityHelper.StartOperationActivity`
+- **Relay span**: `PostCommit.EventRelay`, opened via `PipelineStepActivityHelper.StartOperationActivity`
   (the same activity source used by `Events.PublishDeferred` / `Uow.Commit`, already registered on
   both hosts). Tags:
   - `vnext.event.name` — the event's CLR type name
-  - parent/subflow instance id tags
-  - `vnext.relay.sync` (`terminal.Sync`)
+  - parent/subflow instance id tags, from the relay's `Describe`
+  - `vnext.relay.sync` — only when the event carries a `Sync` flag (the three terminal events do;
+    `InstanceSubStateChangedEvent` does not, so the tag stays unwritten for that channel)
   - `vnext.relay.route` = `local` | `remote`, derived from `IRuntimeInfoProvider.IsDomainMatch` —
     the same source the gateway itself routes by, so the tag can never disagree with the actual
     route taken
-  - `vnext.relay.outcome` = `relayed` | `failed` | `skipped`, set after dispatch
-- **Inbox backup role**: the three sub-terminal Inbox handlers (`InstanceSubCompletedEventHandler`,
-  `InstanceSubFaultedEventHandler`, `InstanceSubCanceledEventHandler`) tag
-  `vnext.delivery.role = backup` on their activity right after `EventTraceScope.Start(...)`.
+  - `vnext.relay.outcome` = `relayed` | `failed` | `skipped` | `timeout` | `depth_exceeded`
+  - `vnext.delivery.role = relay` — the counterpart of the Inbox handlers' `backup`
+- **Inbox backup role**: the four relayed events' Inbox handlers (`InstanceSubCompletedEventHandler`,
+  `InstanceSubFaultedEventHandler`, `InstanceSubCanceledEventHandler`,
+  `InstanceSubStateChangedEventHandler`) tag `vnext.delivery.role = backup` on their activity right
+  after `EventTraceScope.Start(...)`.
 - **Inbox delivery trace shape**: every Inbox handler calls `EventTraceScope.Start(...)` with an
   explicit `EventTraceMode` — there is no default, so each call site states its classification.
   - `ContinueTrace` covers the three **command** events (`TransitionContinuationRequested`,
@@ -219,11 +291,16 @@ keep it from polluting a transition's trace:
 - **Health signal**: watch backup deliveries by outcome, not just volume. A backup delivery that
   actually **settles** the parent (the relay missed it) is a real signal the relay path degraded —
   investigate it. A backup delivery that resolves as `AlreadySettled` is expected, ordinary noise
-  from the dual-delivery-by-design model; it does not indicate a problem.
+  from the dual-delivery-by-design model; it does not indicate a problem. For the state channel the
+  same reading applies to `SubFlowStateChangeOutOfOrder` (40131): a backup delivery that lands
+  out-of-order is the guard absorbing the duplicate, which is the expected case.
 - **WorkflowLogs** (`src/BBT.Workflow.Domain/Logging/WorkflowLogs.cs`, 40xxx range):
-  `SubflowTerminalRelayed` (40124, Information), `SubflowTerminalRelayFailed` (40125, Warning),
-  `SubflowTerminalRelayRejected` (40126, Warning), `SubflowTerminalRearmed` (40127, Warning),
-  `SubflowTerminalRearmExhausted` (40128, Error).
+  `PostCommitEventRelayed` (40124, Information), `PostCommitEventRelayFailed` (40125, Warning),
+  `PostCommitEventRelayRejected` (40126, Warning), `SubflowTerminalRearmed` (40127, Warning),
+  `SubflowTerminalRearmExhausted` (40128, Error), `SubFlowStateChangeParentNotFound` (40129, Warning),
+  `SubFlowStateChangeCorrelationNotFound` (40130, Warning), `SubFlowStateChangeOutOfOrder` (40131,
+  Warning), `SubFlowStateChangeLockNotAcquired` (40132, Warning), `PostCommitEventRelayTimedOut`
+  (40133, Warning), `PostCommitEventRelayDepthExceeded` (40134, Warning).
 
 ## Accepted risks
 
@@ -293,7 +370,7 @@ production-scale broker delay, multi-replica contention, and cross-region hops.
 ## Related
 
 - [End-to-End Trace/Span Tree](trace-span-tree.md) — span-name → source → tags reference,
-  including `Subflow.TerminalRelay`'s place in the trace.
+  including `PostCommit.EventRelay`'s place in the trace.
 - [Trace Lanes](trace-lanes.md) — why a relay (a synchronous command) stays in the same trace as
   its parent rather than starting a new lane.
 - `.claude/rules/dotnet-coding-standards.md` § Domain Events (Dual Processing) — the authoring

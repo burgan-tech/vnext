@@ -481,11 +481,23 @@ public sealed class MonitorParentItem
 /// <summary>Response envelope for the instance incident history endpoint.</summary>
 public sealed class MonitorInstanceIncidentsResponse
 {
+    /// <summary>Whether the instance currently has an unresolved incident.</summary>
+    public bool HasActiveIncident { get; set; }
+
     /// <summary>
-    /// Error boundary incidents recorded for this instance, ordered newest-first.
-    /// At most <c>5</c> incidents are retained by the domain.
+    /// Error boundary incidents recorded for this instance on the requested page, ordered newest-first.
+    /// History is unbounded; page through it with <c>page</c>/<c>pageSize</c>.
     /// </summary>
     public List<MonitorIncidentItem> Items { get; set; } = [];
+
+    /// <summary>1-based page number.</summary>
+    public int Page { get; set; }
+
+    /// <summary>Page size.</summary>
+    public int PageSize { get; set; }
+
+    /// <summary>Whether a next page exists.</summary>
+    public bool HasNext { get; set; }
 }
 
 /// <summary>A single error boundary incident recorded on a workflow instance.</summary>

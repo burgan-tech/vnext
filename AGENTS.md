@@ -1,6 +1,6 @@
 # AGENTS.md
 
-This file provides guidance to Codex and other coding agents when working with code in this repository. It mirrors `CLAUDE.md` minus the Claude Code-specific sections (local overrides import, skills).
+This is the single session-bootstrap file for every coding agent working in this repository (Codex, Cursor, Copilot, Gemini CLI read it directly; Claude Code imports it from `CLAUDE.md`). Tool-specific wiring lives in `CLAUDE.md` (Claude skills, local overrides) and in three pointer files under `.cursor/rules/` — see [AI guidance layout](#ai-guidance-layout) at the end of this file.
 
 ## Project Rules (always apply)
 
@@ -8,7 +8,9 @@ These rules are authoritative for all work in this repo. Read them before writin
 
 - [Agent onboarding](docs/agent-onboarding.md) — source-of-truth order, where-is-X, known pitfalls. When this file disagrees with code, trust `LifecycleOrder.cs` / `PipelineExecutionProfile.cs`.
 - [.NET / Aether / vNext coding standards](.claude/rules/dotnet-coding-standards.md) — style, naming, Aether SDK usage, outbox event delivery, logging via `WorkflowLogs.cs`, Result pattern, multi-schema rules.
-- [vNext workflow developer reference](.claude/rules/vnext-workflow-developer.md) — pipeline step order, profiles, subflow lifecycle, error boundary, long-polling, instance data, `vnext-meta`. Keep `.cursor/rules/` aligned with these files.
+- [vNext workflow developer reference](.claude/rules/vnext-workflow-developer.md) — pipeline step order, profiles, subflow lifecycle, error boundary, long-polling, instance data, `vnext-meta`.
+- [Agent Council plan mode](.claude/rules/agent-council-plan-mode.md) — non-trivial decisions must produce an evidence-backed plan before implementation.
+- [Codebase navigation — graphify first](.claude/rules/graphify-navigation.md) — when `graphify-out/graph.json` exists, query it (`graphify path`/`explain`/`query`) before grepping or reading broadly.
 
 ## First-Time Setup
 
@@ -25,18 +27,57 @@ On macOS/Linux, run the setup script before building (required for PostSharp com
 dotnet restore
 dotnet build
 
-# Run with full infrastructure (recommended for development)
+# Single entry point: etc/docker/run-docker.sh (--help lists everything)
 cd etc/docker && ./run-docker.sh          # Infrastructure only (default)
-cd etc/docker && ./run-docker.sh dev      # Dev mode with debugger
-cd etc/docker && ./run-docker.sh stage    # Staging mode
+cd etc/docker && ./run-docker.sh dev      # Dev mode: apps in containers, with debugger (asks the domain)
+cd etc/docker && ./run-docker.sh stage    # Staging mode (asks the domain)
+cd etc/docker && ./run-docker.sh up       # Infra + sidecars + DbMigrator + all hosts as local binaries on a
+                                          # domain (asks which). `up sales --offset 10` runs a second domain
+                                          # beside core; `plan` shows ports without starting; records land in
+                                          # ai-docs/local-environments/<domain>.md
 
-# Run API hosts locally (requires infrastructure running)
+# Or run API hosts by hand (requires infrastructure running)
 dotnet run --project orchestration/BBT.Workflow.Orchestration.HttpApi.Host
 dotnet run --project execution/BBT.Workflow.Execution.HttpApi.Host
 dotnet run --project monitoring/BBT.Workflow.Monitor.HttpApi.Host
 ```
 
 **Ports**: Orchestration → 4201, Execution → 4202, Monitor → 4203
+
+### Runbook: "bring up domain X" (for agents)
+
+Commands run without a terminal, so the script never prompts — pass everything explicitly.
+
+1. `cd etc/docker && ./run-docker.sh status` and read `ai-docs/local-environments/README.md` (if present):
+   is X already registered, which offset does it have, is anything else running?
+2. Decide the offset: `core` → none (offset 0). Another domain → its recorded offset, else the next
+   free multiple of 10 (`./run-docker.sh plan X --offset N` shows ports and app-ids; it refuses collisions).
+   Tell the user the offset you picked before starting.
+3. `./run-docker.sh up X --offset N` (`--monitor` only if asked; `--no-build` only if the build is
+   known to be fresh). It brings up infra + sidecars, runs DbMigrator, starts the hosts and waits for
+   `/health`. Expect a few minutes on a cold build.
+4. If it refuses with "docker infra is running from another compose file", stop: another stack (for
+   example a cross-domain lab) owns the infra. Report it and let the user decide — do not `down` it yourself.
+5. Load components with the vNext CLI (`wf`, from `burgan-tech/vnext-workflow-cli`, installed
+   globally) from the domain package repo — for the examples that is `../vnext-example`. `up` has
+   already registered the domain in `wf` with the right API port and database; you only switch to it:
+   ```bash
+   cd ../vnext-example
+   wf domain use X && wf domain active      # must print X — the CLI keeps ONE global active domain
+   wf check && wf sync                      # sync = add missing; update = changed; reset = force
+   ```
+   Never run `wf sync` without the `use` step: it publishes to whatever domain was active last time.
+   System flows (`@burgan-tech/vnext-core-runtime`) go through **that domain's** init container
+   (`init` for core on :3005, `init-X` on :3005+offset, already aimed at X's orchestration):
+   `curl -X POST localhost:<3005+offset>/api/package/runtime/publish -H 'content-type: application/json' -d '{"appDomain":"X"}'`
+   — the call is **asynchronous**: it answers `{"statusUrl": "/api/package/publish/status/<id>"}`; poll
+   that URL (or `docker logs init-X`) until the job says completed before running `wf sync`.
+   Known quirk: `wf check` may print "API: Not accessible" while `/health` is 200 and `wf sync` works;
+   trust `curl localhost:<port>/health`. Verified 2026-09-08 on core: 7 system + 23 example workflows
+   loaded, smoke workflow start → transition → Completed.
+   Every port above is written in `ai-docs/local-environments/X.md` — read it instead of computing.
+6. Report the base URL and the record path `ai-docs/local-environments/X.md`; point integration tests
+   at `VNEXT_BASE_URL=http://localhost:<4201+offset>`. Stop with `./run-docker.sh down X`.
 
 ## Testing
 
@@ -47,6 +88,14 @@ dotnet test --filter "FullyQualifiedName~MyTest"  # Single test
 ```
 
 Test projects: `Domain.Tests`, `Application.Tests`, `Infrastructure.Tests`, `TestBase` (shared utilities).
+
+**Integration tests** live in the sibling **vnext-example** repo (`tests/Core.IntegrationTests`, on the
+`VNext.Testing.Sdk` from **vnext-integration-test**) and run against the **locally built** runtime — never
+a container image. Required for changes to core processes (pipeline, transitions, subflows, locking,
+instance data, error boundary, state function) and for regression risk; not for small isolated fixes;
+when unsure, propose and wait. Every scenario gets a README and a row in vnext-example's
+`TEST-SCENARIOS.md` in the same commit. Contract: [docs/testing/integration-testing.md](docs/testing/integration-testing.md);
+procedure: the `runtime-integration-test` skill.
 
 ## Architecture Overview
 
@@ -103,11 +152,15 @@ the transactional outbox and requires:
 - **Event Handler** (`IEventHandler<T>` in `workers/BBT.Workflow.Workers.Inbox/Handlers/`) — asynchronous, distributed, fault-tolerant
 - **WorkflowLogs** entries (`BBT.Workflow.Domain/Logging/WorkflowLogs.cs`)
 
-The three subflow terminal events (`InstanceSubCompletedEvent`, `InstanceSubFaultedEvent`,
-`InstanceSubCanceledEvent`) additionally implement `ISubflowTerminalEvent`: post-commit, `SubflowTerminalRelay`
-relays them as an immediate command via `IInstanceCommandGateway`, and their Inbox handler is a
-durable backup deduplicated by `ISubItemTerminalGuard` — the only event category with a second
-delivery path by design. See `docs/runtime/event-publish-modes.md`.
+An event gains a second, immediate delivery path by REGISTERING a relay —
+`AddScoped<IPostCommitEventRelay<TEvent>, …>()` in `AddPipelineServices`, no marker interface, no
+central switch. Post-commit, `PostCommitRelayDispatcher` relays it as a command via
+`IInstanceCommandGateway`, and its Inbox handler becomes a durable backup. Four events are
+registered today: the three subflow terminal events (backup deduplicated by `ISubItemTerminalGuard`)
+and `InstanceSubStateChangedEvent` (guarded by the per-sub-item lock plus the monotonic
+`SubFlowStateChangedAt` stamp). Registration alone is not licence: each relayed event needs a durable
+backup, an idempotent order-safe receiver guard, measured latency evidence and a council row. See
+`docs/runtime/event-publish-modes.md`.
 
 ---
 
@@ -115,36 +168,14 @@ delivery path by design. See `docs/runtime/event-publish-modes.md`.
 
 ### Transition Pipeline
 
-Transitions execute through a deterministic pipeline of ordered steps. Each step has a single responsibility and returns `Result<StepOutcome>`. Steps are defined in `LifecycleOrder`:
-
-| Order | Step | Responsibility |
-|-------|------|----------------|
-| 5 | HandleCancelPreflightStep | Detect cancel/exit; short-circuit if instance already completed |
-| 10 | ForwardToActiveSubflowStep | Queue post-commit forward to active subflow; skip epilogue. Does not forward `updateData` or parent shared `$self` transitions. |
-| 19 | SetBusyStep | Set instance status to Busy and persist |
-| 20 | CreateTransitionRecordStep | Create transition record; duplicate key guard |
-| 21 | HandleUpdateDataDataOnlyStep | Parent with active SubFlow: persist update data, then skip lifecycle/epilogue |
-| 25 | ResourceLockStep | Acquire/release/extend resource locks via script |
-| 30 | RunOnExecuteTasksStep | Run transition OnExecute tasks |
-| 38 | ApplyTimeoutStateStep | Apply timeout target into context before exit |
-| 39 | CancelScheduledJobsStep | Cancel scheduled jobs for current state |
-| 40 | RunOnExitTasksStep | Run leaving-state OnExit tasks |
-| 50 | ChangeStateStep | Persist state change |
-| 60 | RunOnEntryTasksStep | Run target-state OnEntry tasks |
-| 70 | HandleSubFlowStep | Start subflow correlation; enqueue StartSubflowJob |
-| 75 | HandleLongPollTerminationStep | Pause on state entry and arm acknowledgment fallback when configured |
-| 79 | ClearBusyOnResumeStep | Clear busy on subflow resume path |
-| 80 | RunAutomaticTransitionsStep | Evaluate auto-transition conditions; set NextTransition |
-| 90 | ScheduleTransitionsStep | Schedule future transitions — skipped when auto selected a winner |
-| 100 | HandleFinishStep | Complete/cancel instance on finish states |
-| 110 | FinalizeTransitionStep | Complete transition record; dispose script cache |
-| 112 | ResolveAvailableStep | Resolve deferred Active status |
-
-**StepOutcome**: `Continue()` (next step), `Stop()` (break loop), `SkipTo(order)` (jump + replan), `SkipToFinalize()` (shorthand), `With(Action<PipelineDirectives>)` (mutate directives).
-
-**PipelineExecutionProfile**: Each trigger type resolves to a profile (`IPipelineProfileResolver`) that excludes irrelevant steps. Profiles: Manual (no exclusions), AutoChain (skip Preflight/ForwardSubflow/SetBusy/ApplyTimeoutState — ResourceLock runs), Scheduled, Event, ErrorBoundary (skip Preflight/ForwardSubflow/ResourceLock; `AllowSubFlow=false`). A **self-target** variant is composed on top of any of these for **`updateData` only** (`SkipsStateLifecycle()` = target is the authored `$self` keyword AND the transition is updateData): it additionally excludes CancelScheduledJobs/OnExit/OnEntry/Schedule, because no state is left or entered. ChangeState and OnExecute deliberately still run. Every **other** `$self` transition — a `$self` shared transition above all — keeps the base profile and runs the **full** lifecycle, including the timer re-arm; `target: $self` means "do not move the instance", not "skip the state's hooks". A literal target equal to the current state does **not** count as `$self` — start and retry-after-commit both present that shape while genuinely needing the state entered. See `.claude/rules/vnext-workflow-developer.md`.
-
-**TransitionExecutionContext**: Initial/fresh entries are built by `TransitionContextFactory` (workflow from `IComponentCacheStore`, instance from `instanceRepository.GetActiveAsync`). Every automatic hop gets a new context, but an uninterrupted inline chain reuses the previous hop's tracked `Instance` and resolved `Workflow` via `CreateFromPreloaded`. Reuse ends at post-commit/new-scope, subflow callback and retry boundaries. Within one hop, the same context reference flows through all steps. `Cache` is cleared at Finalize; `Directives` are per-hop consumable mutations. See `docs/architecture/inline-chain-context-reuse.md`.
+Transitions execute through a deterministic pipeline of ordered steps (`LifecycleOrder`); each step
+returns `Result<StepOutcome>`. The **ordered step table, `StepOutcome` values, `PipelineExecutionProfile`
+exclusions, the `updateData`-only self-target composition and `TransitionExecutionContext` reuse rules
+live in one place**: [vNext workflow developer reference](.claude/rules/vnext-workflow-developer.md).
+The narrative version is [Workflow Execution Pipeline](docs/architecture/workflow-execution-pipeline.md);
+the code is `src/BBT.Workflow.Domain/Execution/Transitions/Pipeline/LifecycleOrder.cs` and
+`PipelineExecutionProfile.cs`. When they disagree, the code wins. Do not copy the step table into
+this file again — every step change then has to touch every copy.
 
 ### Status / State / Type Semantics
 
@@ -227,11 +258,57 @@ Backend-Driven View approach: UI changes deploy via backend only, minimizing mob
 
 ---
 
-## Context7 MCP Sources
+## Platform repositories
 
-For domain/platform knowledge beyond what's in code:
-- vNext domain: `burgan-tech/vnext-runtime` (tag `vnext-runtime`)
-- Aether SDK: `burgan-tech/aether` (tag `aether`)
-- Examples: tag `vnext-example`
+The platform is spread over sibling repositories under `github.com/burgan-tech`. Expect each as a
+sibling checkout of this one (`../<repo>`) — the layout `nuget.config`, `labs/cross-domain/lab.sh` and
+the runbook above already assume. When one is missing, ask the user **once** (clone into `../<repo>`
+or use a path they name), remember the answer (Claude: auto-memory; other agents: the developer's
+git-ignored `CLAUDE.local.md`), and never write an absolute path into a committed file. Use this table
+for impact analysis: a runtime change names the repos it touches; in-repo dependencies come from the
+knowledge graph (`code-review-graph` MCP tools, `graphify`).
 
-Detailed docs live in `/docs` (implementation). `/ai-docs` is gitignored local scratch, not a source of truth.
+| Repo | What it is | Consult when | Trust / rules |
+|------|------------|--------------|---------------|
+| [vnext](https://github.com/burgan-tech/vnext) | This runtime | — | Code is the source of truth |
+| [vnext-example](https://github.com/burgan-tech/vnext-example) | Example flows + integration tests + Python behaviour/load tests + cross-domain lab; the platform team's behavioural checkpoint | Any integration test; `TEST-SCENARIOS.md` is the scenario index | Extend an existing scenario before adding one; README + index row per scenario |
+| [vnext-integration-test](https://github.com/burgan-tech/vnext-integration-test) | `VNext.Testing.Sdk` + `VNext.Testing.Template` (Testcontainers or `VNEXT_BASE_URL` external mode); ours | SDK behaviour, assertions, fixture lifecycle | Read it, don't guess; report gaps instead of test-side workarounds. Older clones are named `vnext-integration` |
+| [aether](https://github.com/burgan-tech/aether) | Framework SDK (Result, UoW, locks, cache, jobs, multi-schema, events, OTel) | Any SDK-level behaviour | **Propose, don't edit** — the user decides. Unreleased work: `build/pack-local.sh` → `../aether/.local-feed` + `AetherPackageVersion` (`docs/testing/integration-testing.md` §8); revert before PR |
+| [vnext-schema](https://github.com/burgan-tech/vnext-schema) | Component schema contracts (`@burgan-tech/vnext-schema`) | New/changed component fields or task types | External release cadence; `npm run validate` may lag the runtime |
+| [mocklab](https://github.com/burgan-tech/mocklab) | API mock SDK; first choice for HTTP mocking in tests | Mock seeds, templates, `_admin` API | Templates render all-or-nothing; error in `X-Mocklab-Template-Error` |
+| [vnext-ai-toolkit](https://github.com/burgan-tech/vnext-ai-toolkit) | AI skills for domain flow development (`component-task`, `workflow-scaffold`, `integration-test`, ...) | Scaffolding example components | May lag a runtime change — runtime code > vnext-docs > plugin |
+| [vnext-sys-flow](https://github.com/burgan-tech/vnext-sys-flow) | Default system components (`@burgan-tech/vnext-core-runtime`), mandatory on a fresh runtime | Publishing a domain for the first time | Loaded through the domain's init container |
+| [vnext-forge](https://github.com/burgan-tech/vnext-forge) | Forge Studio — VS Code designer for flows and local dev | Designer-facing metadata (`vnext-meta`), consumer specs in `docs/integration/` | — |
+| [vnext-docs](https://github.com/burgan-tech/vnext-docs) | Product docs portal — https://burgan-tech.github.io/vnext-docs/ (technical, business, architecture, client consumption) | "How does a client consume this?", positioning, domain meaning | **May lag development** — not the truth for current runtime behaviour |
+| [vnext-helm-charts](https://github.com/burgan-tech/vnext-helm-charts) | Helm chart (`charts/vnext`) used by domain teams to deploy | Environment-only failures; a new mandatory config/env; resource sizing | Defaults are overridable per environment — give an optimum, don't hard-code; `charts/vnext/docs/RESOURCE_TUNING.md` |
+| [vnext-workflow-cli](https://github.com/burgan-tech/vnext-workflow-cli) | `wf` CLI (npm global): `domain use`, `check`, `sync`, `update`, `reset`, `csx` | Publishing components locally | One global active domain — `wf domain use X` before every `sync`; read its README, the command set changes |
+| [vnext-client-view-renderer](https://github.com/burgan-tech/vnext-client-view-renderer) | View SDK for clients | View contract questions | — |
+| [vnext-runtime](https://github.com/burgan-tech/vnext-runtime) | Docker compose templates for a local runtime (`make dev`, `create-domain.sh`) | Cross-domain lab template; someone without this repo's `etc/docker` | Optional — `etc/docker/run-docker.sh` + vnext-example is normally enough |
+| [vnext-domain-discovery](https://github.com/burgan-tech/vnext-domain-discovery) | Discovery registry runtime (`@burgan-tech/vnext-discovery-runtime`) | Cross-domain / multi-domain work | `cross-domain-lab` skill |
+
+Context7 MCP tags for the same knowledge: `vnext-runtime`, `aether`, `vnext-example`. Detailed
+implementation docs live in `/docs`; `/ai-docs` is git-ignored local scratch, not a source of truth.
+
+---
+
+## AI guidance layout
+
+Content lives in exactly one place; each tool has a thin entry point that points at it.
+
+| Path | Role | Edit? |
+|------|------|-------|
+| `AGENTS.md` | Bootstrap for every agent (this file) | yes |
+| `CLAUDE.md` | Claude Code entry: imports `AGENTS.md`, lists skills, imports `CLAUDE.local.md` | yes, keep thin |
+| `docs/agent-onboarding.md` | Source-of-truth order, where-is-X, known pitfalls | yes |
+| `.claude/rules/*.md` | Always-on rules — **single source**. Claude Code loads them natively | yes |
+| `.cursor/rules/*.mdc` | Three 8-line pointers; each `@`-includes one file from `.claude/rules/` so Cursor reads the same text | only when a rule file is added/renamed |
+| `.claude/skills/*/SKILL.md` | On-demand skills — **single source**. Cursor loads `.claude/skills/` directly for compatibility; there is no `.cursor/skills/` | yes |
+| `docs/` | Implementation docs, indexed from `docs/README.md`; `docs/testing/` holds the integration-test contract that the `runtime-integration-test` skill executes | yes |
+| `ai-docs/superpowers/{specs,plans,reports}/`, `ai-docs/agent-council/sessions/` | Dated decision records — the *why*, not the current contract. Git-ignored local scratch since 2026-09-07; only the council log row in `docs/agent-council/sessions/README.md` is committed | local |
+| `CLAUDE.local.md`, `ai-docs/` | Machine-local, git-ignored. Optional per-machine notes only (repo paths, ports) — policy never lives here | personal |
+
+Workflow for a rule or skill change: edit under `.claude/` and commit. Nothing is copied anywhere.
+Adding a **new** rule file also needs a matching pointer in `.cursor/rules/` (copy an existing one and
+change the `@` path); adding a skill needs nothing.
+Facts that belong to the runtime (step order, profile exclusions, event delivery modes) go in
+`.claude/rules/` or a `/docs` page and are **linked** from here, never duplicated.

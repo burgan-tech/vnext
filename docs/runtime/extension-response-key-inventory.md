@@ -1,7 +1,6 @@
 # Extension Response Key — Consumer Inventory
 
-Date: 2026-08-28 · Task 1 of `docs/superpowers/plans/2026-08-28-extension-response-key.md`
-Spec: `docs/superpowers/specs/2026-08-28-extension-response-key-spec.md`
+Date: 2026-08-28 · Task 1 of the extension-response-key plan (design record, local scratch)
 
 ## Question
 
@@ -48,7 +47,7 @@ Read both in full. Both `OutputHandler`s build their `ScriptResponse.Data` from 
 ### 3. `docs/` and `ai-docs/` in this repo
 
 ```
-grep -rn "TaskResponse\|OutputResponse" docs/ --include="*.md" | grep -v "docs/superpowers/"
+grep -rn "TaskResponse\|OutputResponse" docs/ --include="*.md"
 grep -rn "TaskResponse\|OutputResponse" ai-docs/ 2>/dev/null
 ```
 
@@ -62,8 +61,8 @@ grep -rn "TaskResponse\|OutputResponse" ai-docs/ 2>/dev/null
 - `docs/domain/fan-out-task.md:316` — mentions the shared `TaskResponse` dictionary in the context of
   why Fan-Out deliberately does **not** use `MergeParallelBranch` (duplicate-key collision risk). Not
   a consumer, an architecture note about the same collision class this fix addresses elsewhere.
-- All other `docs/` hits are under `docs/superpowers/` (this feature's own plan/spec/scratch docs and
-  unrelated internal planning docs) — internal SDD artifacts, not author-facing documentation.
+- All other hits were this feature's own plan/spec/scratch docs and unrelated internal planning
+  docs — internal SDD artifacts, not author-facing documentation.
 - `ai-docs/script-perf-analysis-2026-08-23.md:45` — a performance note about `CreateParallelBranch`
   JSON-round-tripping the dictionaries; not a read by key.
 
@@ -126,8 +125,7 @@ This is **not a breaking consumer of the planned fix**, because:
 1. The fix's key-injection is opt-in per call (`TaskEngineExecutionOptions.ResponseVariableKey`,
    default `null` = today's `taskKey.ToVariableName()` behavior), not a global switch keyed off
    `TaskTrigger.Extension`.
-2. Per the plan (`docs/superpowers/plans/2026-08-28-extension-response-key.md` Architecture section
-   and Task 3 scope), **only** `InstanceExtensionService`'s call sets `ResponseVariableKey`.
+2. Per the plan (Architecture section and Task 3 scope), **only** `InstanceExtensionService`'s call sets `ResponseVariableKey`.
    `FunctionAppService`'s call is never modified, so its tasks keep `ResponseVariableKey = null` and
    continue to be keyed by task name exactly as documented above.
 
@@ -147,8 +145,8 @@ grep -rln "TaskResponse\|OutputResponse" /Users/U0B006/Documents/repos/burgan-te
 ```
 
 Hits: `docs/components/mappings.md`, `docs/components/interfaces.md`, `docs/components/tasks/fan-out.md`,
-`docs/components/functions/custom.md` (+ EN i18n mirrors), plus internal
-`docs/superpowers/plans/2026-04-24-...` and a blog migration note (not author guidance).
+`docs/components/functions/custom.md` (+ EN i18n mirrors), plus an internal
+planning doc and a blog migration note (not author guidance).
 
 - `mappings.md:313-319` and `interfaces.md:598` document `context.TaskResponse["httpTask"]` /
   `context.TaskResponse["scriptTask"]` generically, in the context of `IMapping.OutputHandler`

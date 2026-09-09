@@ -1,12 +1,15 @@
 namespace BBT.Workflow.Events;
 
 /// <summary>
-/// Declares the "Outbox + TerminalRelay" publish mode: the event still rides the transactional
-/// outbox as a durable fact (Inbox handler = backup, deduplicated by ISubItemTerminalGuard), and
-/// the transition runner ADDITIONALLY relays it as an immediate post-commit command so the parent
-/// settles with gap ≈ 0 — inline for the same domain, one Dapr invocation across domains. The
-/// marker interface IS the mode declaration: the terminal set is closed by the subflow protocol,
-/// so no attribute/enum registry is warranted.
+/// The shape the three subflow terminal events share: which parent a terminal outcome settles, and
+/// which child produced it. The post-commit relays for those events read their route and span tags
+/// from here, so the description is written once rather than three times.
+/// <para>
+/// This is NOT the publish-mode declaration. Dual delivery (outbox + post-commit relay) is granted
+/// per event type by REGISTRATION — an <c>IPostCommitEventRelay&lt;TEvent&gt;</c> in DI — so an
+/// event opts in without implementing any marker, and implementing this one does not opt anything
+/// in. See <c>docs/runtime/event-publish-modes.md</c>.
+/// </para>
 /// </summary>
 public interface ISubflowTerminalEvent
 {

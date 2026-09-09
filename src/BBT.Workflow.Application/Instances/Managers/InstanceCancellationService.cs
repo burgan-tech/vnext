@@ -111,8 +111,13 @@ public sealed class InstanceCancellationService(
         }))
         try
         {
+            // No database transaction: the reads below only decide WHICH jobs to try cancelling,
+            // they never gate MarkManyAsProcessedAsync's own WHERE clause, and everything between
+            // here and that final set-based write is an external scheduler call (no DB I/O) — an
+            // open transaction would just hold a pooled connection across that whole loop for no
+            // reason.
             await using var uow = uowManager.Begin(
-                new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew, IsTransactional = true });
+                new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew });
 
             var instance = await instanceRepository.FindAsync(instanceId, true, cancellationToken);
             if (instance == null)

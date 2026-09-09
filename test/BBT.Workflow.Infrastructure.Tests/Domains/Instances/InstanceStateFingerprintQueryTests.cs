@@ -182,12 +182,21 @@ public sealed class InstanceStateFingerprintQueryTests : IAsyncLifetime
     /// Runs with a mixed correlation set (active, completed, state-advanced) to exercise every member.
     /// </summary>
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task ProjectionAndFromInstance_ProduceIdenticalFingerprints(bool withCorrelations)
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public async Task ProjectionAndFromInstance_ProduceIdenticalFingerprints(bool withCorrelations, bool withActiveIncident)
     {
-        var instance = Instance.Create(Guid.NewGuid(), Flow, FlowVersion, $"fp-parity-{withCorrelations}");
+        var instance = Instance.Create(Guid.NewGuid(), Flow, FlowVersion, $"fp-parity-{withCorrelations}-{withActiveIncident}");
         instance.SetEffectiveState("review");
+
+        if (withActiveIncident)
+        {
+            // Persists through the navigation and raises the denormalized flag both paths must agree on.
+            instance.AddIncident(InstanceIncidentFactory.Create(
+                state: "review", transition: "submit", taskKey: null,
+                message: "boom", errorCode: "Task:Http:503", errorLayer: "Task"));
+        }
 
         if (withCorrelations)
         {
@@ -224,6 +233,7 @@ public sealed class InstanceStateFingerprintQueryTests : IAsyncLifetime
 
         projected.ShouldNotBeNull();
         fromInstance.ShouldBe(projected);
+        projected!.HasActiveIncident.ShouldBe(withActiveIncident);
     }
 
     [Fact]

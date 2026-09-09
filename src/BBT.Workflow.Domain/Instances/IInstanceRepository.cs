@@ -166,6 +166,20 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
         Definitions.GraphQL.GraphQLFilterRequest? request,
         CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// The no-tracking twin of <see cref="GetResultAsync"/>: same detailed includes and the same
+    /// not-found error, but nothing is attached to the caller's unit of work.
+    /// </summary>
+    /// <remarks>
+    /// For request handlers that only READ the aggregate and let an inner unit of work (or the
+    /// pipeline) perform the writes. A tracked load there is a live hazard: whatever the handler
+    /// mutates in memory is written by the ambient commit at the end of the request, after — and
+    /// therefore over — the authoritative value the inner scope persisted.
+    /// </remarks>
+    Task<Result<Instance>> GetResultAsReadOnlyAsync(
+        string identifier,
+        CancellationToken cancellationToken = default);
+
     Task<Result<Instance>> GetResultAsync(string identifier, bool includeDetails = true,
         CancellationToken cancellationToken = default);
 
@@ -201,6 +215,36 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
     /// alignment as <see cref="TryMarkBusyAsync(Instance,CancellationToken)"/>.
     /// </summary>
     Task<bool> TryReleaseBusyAsync(Instance instance, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Compare-and-set Faulted → Active for a retry: one set-based UPDATE that also clears
+    /// <c>CompletedAt</c>, <c>Duration</c> and <c>HasActiveIncident</c>, then applies
+    /// <c>Unfault()</c> in memory and aligns the change tracker's baseline for those columns.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Set-based because the retry request loads the aggregate no-tracking in the ambient scope and
+    /// the pipeline writes the authoritative status from its own unit of work. Persisting the
+    /// unfault through <c>UpdateAsync</c> instead would (a) rewrite the whole aggregate graph —
+    /// every <c>InstanceData</c> row included — for a four-column flip, and (b) on a tracked
+    /// aggregate leave the ambient unit of work holding a stale Active that its own commit would
+    /// later write over the fault the retry produced.
+    /// </para>
+    /// <para>
+    /// Legal as a set-based write because <c>Unfault()</c> raises no domain events (unlike
+    /// <c>Complete</c>/<c>Fault</c>/<c>Cancel</c>). <c>ModifiedAt</c> is stamped explicitly since
+    /// ExecuteUpdate bypasses the audit interceptor; <c>ModifiedBy</c> is deliberately not
+    /// re-stamped, the same rule as the Busy CAS.
+    /// </para>
+    /// <para>
+    /// The caller must resolve the incident rows separately
+    /// (<c>IInstanceIncidentRepository.ResolveAllAsync</c>): the flag lives on the instance row, the
+    /// incidents do not.
+    /// </para>
+    /// </remarks>
+    /// <returns>True when exactly this call flipped Faulted → Active; false when the instance was
+    /// no longer faulted, in which case the aggregate is left untouched.</returns>
+    Task<bool> TryUnfaultAsync(Instance instance, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Writes the long-poll acknowledge token as one set-based UPDATE — the arm is a single
@@ -266,6 +310,20 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Loads a change-tracked parent for a SubFlow state change: ONLY the open correlation of the
+    /// given sub-instance, and NO data. The state path writes
+    /// <see cref="Instance.EffectiveState"/>/type/subtype and reads only <c>ExtraProperties</c> for
+    /// the upward event, so pulling <see cref="Instance.DataList"/> — which the default detail load
+    /// does, unsplit — costs the whole jsonb history for nothing on the runtime's highest-volume
+    /// subflow signal. The aggregate is marked partially loaded; <see cref="Instance.LatestData"/>
+    /// is null and must not be read.
+    /// </summary>
+    Task<Instance?> FindForSubflowStateChangeAsync(
+        Guid instanceId,
+        Guid subInstanceId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Loads the parent for post-commit settlement: always its open correlations (the settlement
     /// guard and the fault cascade read them), and its latest data row only when
     /// <paramref name="includeLatestData"/> is set. The returned aggregate is marked partially
@@ -277,6 +335,19 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
         Guid instanceId,
         bool includeLatestData,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Materializes the instance's <b>unresolved</b> incidents onto the aggregate. Incidents live in
+    /// their own table and are never included by any load path; this is the single way to bring them
+    /// in. Cheap by design: when <see cref="Instance.HasActiveIncident"/> is false no query is issued
+    /// and the aggregate is simply marked loaded, so callers may invoke it unconditionally.
+    /// Works for tracked aggregates (collection load through the change tracker, so a subsequent
+    /// <see cref="Instance.ResolveOpenIncidents"/> is persisted by the next update) and for
+    /// no-tracking aggregates (rows are read no-tracking and accepted onto the aggregate).
+    /// </summary>
+    /// <param name="instance">The aggregate to load incidents for.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task LoadActiveIncidentsAsync(Instance instance, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Returns active instances with Human state subtype.

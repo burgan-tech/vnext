@@ -48,7 +48,8 @@ SELECT Id, Key, EffectiveState, Status, FlowVersion,
        COUNT(correlations)                     AS CorrelationCount,
        COUNT(correlations WHERE IsCompleted)   AS CompletedCorrelationCount,
        MAX(correlations.CompletedAt)           AS LastCorrelationCompletedAt,
-       MAX(correlations.SubFlowStateChangedAt) AS LastSubFlowStateChangedAt
+       MAX(correlations.SubFlowStateChangedAt) AS LastSubFlowStateChangedAt,
+       HasActiveIncident
 ```
 
 - Identifier resolution mirrors `FindByIdentifierAsReadOnlyAsync`: id first, then the most
@@ -66,6 +67,11 @@ SELECT Id, Key, EffectiveState, Status, FlowVersion,
   `CorrelationCount`, terminating (or a revert) moves `CompletedCorrelationCount`, a
   revert-then-recomplete that restores both counts moves `LastCorrelationCompletedAt`, and a sub
   item advancing its own state moves `LastSubFlowStateChangedAt`.
+- **`HasActiveIncident`** is the denormalized instance column maintained by the aggregate
+  (`AddIncident` / `ResolveOpenIncidents`) and, since `v9`, the only incident data the body needs, so projecting it costs nothing — no join to the
+  `InstanceIncidents` table. It is in the fingerprint because the body carries an `incident` block
+  and an error-boundary transition can open (Abort + transition) or close (`FinalizeTransitionStep`)
+  an incident without moving state or status.
 - **Scheduled-job rows are deliberately not projected** (team decision, issue #864). The body's
   `kind: "scheduled"` transition entries are therefore *not* covered by cache validation — see the known-gap
   note under the ETag section below.
@@ -85,14 +91,14 @@ Computed by `IStateFunctionCache.ComputeEtag` — a deterministic SHA-256 hash (
 ```
 etag = h(responseShapeVersion | instanceId | effectiveState | status | flowVersion | callerHash
          | correlationCount | completedCorrelationCount
-         | lastCorrelationCompletedAt | lastSubFlowStateChangedAt)
+         | lastCorrelationCompletedAt | lastSubFlowStateChangedAt | hasActiveIncident)
 ```
 
 - **Deterministic across pods**: any instance of the service computes the same ETag for the
   same fingerprint, so 304 works with an empty cache (after TTL expiry, Redis flush, or
   failover).
 - **`responseShapeVersion` guards runtime-side body changes** (`StateFunctionCache.ResponseShapeVersion`,
-  currently `v7`). The material is derived from instance facts and caller scope only — it says nothing
+  currently `v9`). The material is derived from instance facts and caller scope only — it says nothing
   about what the body *contains*. So when a runtime release changes the body for an unchanged instance
   (v2 started listing the workflow-level `updateData` and `exit` transitions; v3 added the workflow's
   `functions` discovery links; v4 replaced that inline list with a `hasFunctions` flag plus a link to
@@ -101,7 +107,9 @@ etag = h(responseShapeVersion | instanceId | effectiveState | status | flowVersi
   transitions inside `transitions` as `kind: "scheduled"` entries with `executeAtUtc`; v7 gave the
   scheduled entries the uniform `href`/`view`/`schema` link objects with their capability flags
   hardcoded false — a temporary concession so domain clients that assume every `transitions[]` item
-  carries the three links do not break), every previously issued ETag must be
+  carries the three links do not break; v8 added the always-present `incident` block with an embedded
+  `active` summary; v9 replaced that block's content with links —
+  `{ hasActiveIncident, active: { href }, history: { href } }`), every previously issued ETag must be
   invalidated: otherwise a client
   long-polling an instance parked in a human state would keep receiving 304 and never observe the new
   shape. The same constant is a segment of the cache key, so bumping it also discards bodies written by
@@ -133,6 +141,22 @@ etag = h(responseShapeVersion | instanceId | effectiveState | status | flowVersi
   `executeAtUtc` until the next fingerprint-visible change. The accepted mitigation is the
   transient Busy flip on the non-reserved paths plus natural state changes; conditional-GET usage
   is currently low and the team wants to observe the gap frequency before revisiting.
+- **`hasActiveIncident` is in the hash** because the body's `incident` block flips with it and the
+  flag can move without a state/status change (Boundary Abort with a transition raises one,
+  `FinalizeTransitionStep` resolves it). The flag is the block's *only* varying member: since `v9`
+  the block carries links, not the incident, so `active` is either present or absent and both states
+  are decided by the flag that is already hashed.
+- **The old resolve-A-then-raise-B gap is gone, not merely rarer.** While the block embedded a
+  summary, resolving incident A and raising incident B inside one parked state left the flag `true`
+  on both sides, so a client validating with `If-None-Match` kept its `304` and went on showing A.
+  Content no longer rides in the body, so there is nothing left to go stale: the client re-fetches
+  the incident through `active.href` and gets B. Do not reintroduce an embedded summary here without
+  bringing back this hole.
+- **A transient `hasActiveIncident = true` window is expected on a boundary transition.** The task
+  step commits the incident before it saves — that is what stops the fault path recording a
+  duplicate — so a `rollback`/`notify` outcome opens the row, routes to its transition, and only
+  then closes it at `FinalizeTransitionStep`. A client polling mid-flight can legitimately observe
+  the flag set on a `Busy` instance; the final committed state is unchanged.
 - The ETag intentionally does **not** track instance-data-only changes: the state function
   signals state/status transitions, not data versions. `X-Entity-ETag` served from cache may
   lag data-only updates until the next state/status change (accepted by design — the data

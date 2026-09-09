@@ -206,27 +206,105 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
 
     public ExtraPropertyDictionary ExtraProperties { get; private set; }
 
-    private List<InstanceIncident> _incidents = new();
+    private readonly List<InstanceIncident> _incidents = new();
+    private readonly List<InstanceIncident> _pendingIncidents = new();
+    private readonly List<InstanceIncident> _detachedIncidents = new();
 
     /// <summary>
-    /// Error boundary incidents recorded for this instance.
-    /// Stored as JSONB; pruned to <see cref="InstanceIncident.MaxRetainedIncidents"/> entries.
-    /// Internal to prevent Aether's TrackRelatedEntities from discovering via reflection.
+    /// Coalescing state for <c>sub:state-changed</c>: the state this activation episode STARTED in,
+    /// and whether it moved at all. In-memory only — never mapped, never persisted. Its lifetime is
+    /// the tracked aggregate's, which is exactly one episode: the inline auto-chain reuses the same
+    /// instance across its hops (<c>CreateFromPreloaded</c>), while every post-commit, retry or
+    /// subflow-callback boundary loads a fresh one. See
+    /// <see cref="PublishPendingSubStateChange"/>.
+    /// </summary>
+    private string? _pendingSubStateChangeFrom;
+    private bool _hasPendingSubStateChange;
+
+    /// <summary>
+    /// Incidents materialized on this aggregate. A real child collection (table
+    /// <c>InstanceIncidents</c>) that is <b>never</b> included by default — every load path leaves it
+    /// empty and <see cref="IncidentsLoaded"/> false. Callers that need the unresolved incidents
+    /// (resolve, upward fault payload, script context, state function) check
+    /// <see cref="HasActiveIncident"/> first and load them through
+    /// <c>IInstanceRepository.LoadActiveIncidentsAsync</c>. Kept internal so the collection is only
+    /// reachable through the aggregate's own operations; EF binds it by name with field access.
     /// </summary>
     internal IReadOnlyCollection<InstanceIncident> Incidents => _incidents.AsReadOnly();
 
     /// <summary>
-    /// Returns the incident list for read-only monitoring queries.
-    /// Exposed as a method (not a property) so Aether's TrackRelatedEntities reflection scan
-    /// does not discover the incidents collection as a navigation candidate.
+    /// Returns the incidents currently loaded on this aggregate — never the full history. Empty
+    /// unless <c>LoadActiveIncidentsAsync</c> ran (unresolved rows) or incidents were added in this
+    /// unit of work. Full history is served by <c>IInstanceIncidentRepository</c>.
     /// </summary>
-    public IReadOnlyList<InstanceIncident> GetIncidentsForMonitor() => _incidents.AsReadOnly();
+    /// <remarks>
+    /// Two sources, deliberately kept apart underneath: rows this unit of work owns (the EF
+    /// navigation) and rows read back outside the change tracker (see
+    /// <see cref="AcceptLoadedIncidents"/>). Readers do not care which is which; the aggregate does.
+    /// </remarks>
+    public IReadOnlyList<InstanceIncident> GetLoadedIncidents() =>
+        _detachedIncidents.Count == 0
+            ? _incidents.AsReadOnly()
+            : _incidents.Concat(_detachedIncidents).OrderBy(i => i.CreatedAt).ThenBy(i => i.Id).ToList();
 
     /// <summary>
-    /// Indicates whether the instance has at least one unresolved incident.
-    /// Backed by a stored generated column with partial B-tree index for efficient querying.
+    /// Incidents added through <see cref="AddIncident"/> that have not been persisted yet. Read by
+    /// the repository so a new row is always inserted as <c>Added</c> — even when the aggregate
+    /// itself is detached and EF's graph walk would otherwise mark a client-keyed child as
+    /// <c>Modified</c>. A method, not a property: Aether's <c>TrackRelatedEntities</c> reflects over
+    /// public <c>IEnumerable</c> properties at SaveChanges and would stamp the root's state onto
+    /// these rows, and EF's convention discovery would turn a property into a second navigation.
     /// </summary>
-    public bool HasActiveIncident => _incidents.Any(i => !i.IsResolved);
+    public IReadOnlyCollection<InstanceIncident> GetPendingIncidents() => _pendingIncidents.AsReadOnly();
+
+    /// <summary>Forgets the pending incidents after the repository has persisted them.</summary>
+    public void ClearPendingIncidents() => _pendingIncidents.Clear();
+
+    /// <summary>
+    /// Indicates whether the instance has at least one unresolved incident. A persisted,
+    /// denormalized column on the instance row (partial index on <c>true</c>) maintained by
+    /// <see cref="AddIncident"/> and <see cref="ResolveOpenIncidents"/>, so the hot path never has
+    /// to touch the incidents table to answer it.
+    /// </summary>
+    public bool HasActiveIncident { get; private set; }
+
+    /// <summary>
+    /// True once the unresolved incidents have been materialized on this aggregate (or the flag says
+    /// there are none). Runtime-only marker, never persisted; guards
+    /// <see cref="ResolveOpenIncidents"/> against silently resolving nothing.
+    /// </summary>
+    public bool IncidentsLoaded { get; private set; }
+
+    /// <summary>
+    /// Marks the unresolved incidents as loaded. Called by the repository after a tracked
+    /// collection load, or when <see cref="HasActiveIncident"/> is false and no query was needed.
+    /// </summary>
+    public void MarkIncidentsLoaded() => IncidentsLoaded = true;
+
+    /// <summary>
+    /// Accepts incidents materialized outside the change tracker (no-tracking loads) and marks the
+    /// aggregate as loaded. Rows already present (e.g. added in this unit of work) are not duplicated.
+    /// </summary>
+    public void AcceptLoadedIncidents(IReadOnlyList<InstanceIncident> incidents)
+    {
+        foreach (var incident in incidents.OrderBy(i => i.CreatedAt).ThenBy(i => i.Id))
+        {
+            if (_incidents.All(existing => existing.Id != incident.Id) &&
+                _detachedIncidents.All(existing => existing.Id != incident.Id))
+            {
+                // NOT the EF navigation. These rows already exist in the database and are read
+                // outside the change tracker, so putting them in `_incidents` would make every
+                // DbContext that tracks this aggregate — including one that loaded it earlier, in
+                // an outer unit of work — discover them as NEW children of a tracked root and
+                // INSERT them again. That is a duplicate-key crash on the retry path, where the
+                // aggregate is loaded by the ambient request scope and the incidents are loaded
+                // inside a RequiresNew scope. Measured, then fixed.
+                _detachedIncidents.Add(incident);
+            }
+        }
+
+        IncidentsLoaded = true;
+    }
 
     public void SetMetaData(ExtraPropertyDictionary data)
     {
@@ -343,7 +421,9 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
             CreatedByBehalfOf = CreatedByBehalfOf,
             ModifiedBy = ModifiedBy,
             ModifiedByBehalfOf = ModifiedByBehalfOf,
-            ExtraProperties = new ExtraPropertyDictionary(ExtraProperties)
+            ExtraProperties = new ExtraPropertyDictionary(ExtraProperties),
+            HasActiveIncident = HasActiveIncident,
+            IncidentsLoaded = IncidentsLoaded
         };
 
         foreach (var data in _dataList)
@@ -364,7 +444,11 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
             snapshot._childCorrelations.Add(correlation.CreateSnapshot());
         }
 
-        snapshot._incidents = _incidents.ToList();
+        // Shallow copy on purpose: snapshots are read-only projections (script context) and are
+        // never handed to UpdateAsync, so sharing the incident objects is safe. Both sources are
+        // copied into the snapshot's DETACHED list: a snapshot must never look like an aggregate
+        // with new children to insert.
+        snapshot._detachedIncidents.AddRange(GetLoadedIncidents());
 
         return snapshot;
     }
@@ -508,8 +592,15 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
     /// <summary>
     /// Unfaults the instance, allowing it to be retried.
     /// Changes the status from Faulted to Active, clears completion time,
-    /// and resolves the active incident.
+    /// and resolves every open incident.
     /// </summary>
+    /// <remarks>
+    /// The incidents must be materialized first (<c>IInstanceRepository.LoadActiveIncidentsAsync</c>)
+    /// or <see cref="ResolveOpenIncidents"/> throws. When the aggregate was loaded outside a change
+    /// tracker — the retry path — the resolutions also have to be written explicitly through
+    /// <c>IInstanceIncidentRepository.ResolveAllAsync</c>; the in-memory <c>Resolve()</c> alone
+    /// persists nothing there.
+    /// </remarks>
     /// <returns>True if the instance was successfully unfaulted, false if it was not in Faulted state.</returns>
     public bool Unfault()
     {
@@ -519,29 +610,83 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
         Status = InstanceStatus.Active;
         CompletedAt = null;
         Duration = null;
-        ResolveActiveIncident();
+        ResolveOpenIncidents();
         return true;
     }
 
     /// <summary>
-    /// Records an error boundary incident on this instance.
-    /// Prunes oldest resolved incidents to stay within <see cref="InstanceIncident.MaxRetainedIncidents"/>.
+    /// Records an error boundary incident on this instance. The incident becomes a pending child
+    /// row (persisted by the repository on the next update) and, when unresolved, raises
+    /// <see cref="HasActiveIncident"/>. History is unbounded — nothing is pruned.
     /// </summary>
     public void AddIncident(InstanceIncident incident)
     {
+        ArgumentNullException.ThrowIfNull(incident);
+
+        incident.InstanceId = Id;
         _incidents.Add(incident);
-        PruneIncidents();
+        _pendingIncidents.Add(incident);
+
+        if (!incident.IsResolved)
+            HasActiveIncident = true;
     }
 
     /// <summary>
-    /// Resolves the most recent unresolved incident (if any).
-    /// Called on successful retry or when an error-boundary transition completes.
+    /// Resolves EVERY unresolved incident materialized on this aggregate and recomputes
+    /// <see cref="HasActiveIncident"/>. Called on successful retry (<see cref="Unfault"/>) and when
+    /// an error-boundary transition completes without a new fault.
     /// </summary>
-    public void ResolveActiveIncident()
+    /// <remarks>
+    /// Set-based on purpose. One failure can leave more than one open row — a job-timeout recovery
+    /// on top of a boundary incident, a boundary transition that faults on its own, a parent taking
+    /// a subflow fault while it already carries one — and resolving only the newest left
+    /// <see cref="HasActiveIncident"/> stuck true on an instance that had recovered and completed.
+    /// A client rendering "why is this instance stuck?" then showed a stale reason on a healthy
+    /// instance.
+    /// </remarks>
+    /// <returns>The incidents this call resolved, oldest first; empty when nothing was open.</returns>
+    /// <exception cref="InvalidOperationException">
+    /// The flag says an incident is active but the unresolved incidents were never loaded on this
+    /// aggregate — resolving would silently do nothing and leave the flag stuck. Call
+    /// <c>IInstanceRepository.LoadActiveIncidentsAsync</c> first.
+    /// </exception>
+    public IReadOnlyList<InstanceIncident> ResolveOpenIncidents()
     {
-        var active = _incidents.LastOrDefault(i => !i.IsResolved);
-        active?.Resolve();
+        var loaded = GetLoadedIncidents();
+
+        // An empty list satisfies All(IsResolved), so a flag-only aggregate — which is what every
+        // default load path produces — fails fast instead of quietly resolving nothing.
+        if (HasActiveIncident && !IncidentsLoaded && loaded.All(i => i.IsResolved))
+        {
+            throw new InvalidOperationException(
+                $"Instance {Id} has an active incident but the unresolved incidents are not loaded on this aggregate. " +
+                "Call IInstanceRepository.LoadActiveIncidentsAsync before resolving.");
+        }
+
+        var open = loaded.Where(i => !i.IsResolved).ToList();
+        foreach (var incident in open)
+        {
+            incident.Resolve();
+        }
+
+        // Recomputed from the same snapshot rather than hard-set to false, so a partially
+        // materialized aggregate can never claim the flag is clear.
+        HasActiveIncident = loaded.Any(i => !i.IsResolved);
+        return open;
     }
+
+    /// <summary>
+    /// True when the incident is a row read outside the change tracker, so the in-memory
+    /// <c>Resolve()</c> will not be written by the graph.
+    /// </summary>
+    /// <remarks>
+    /// The retry path no longer asks: it persists resolutions unconditionally through
+    /// <c>IInstanceIncidentRepository.ResolveAllAsync</c>, which is idempotent and correct for
+    /// tracked and detached rows alike. Kept because it is the only way to tell the two sources
+    /// apart from outside the aggregate.
+    /// </remarks>
+    public bool IsDetachedIncident(InstanceIncident incident) =>
+        _detachedIncidents.Any(existing => ReferenceEquals(existing, incident));
     /// <summary>
     /// Cancels the instance and publishes a cancellation event.
     /// Sets the instance status to Canceled and records the completion time.
@@ -873,13 +1018,59 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
             Status = InstanceStatus.Busy;
         }
 
-        // Domain Logic: Publish state change event if this is a SubFlow.
-        // A same-state change ($self target) is not a state change — publishing it would emit a
+        // Domain Logic: Arm the SubFlow state notification — do NOT publish it here.
+        // A same-state change ($self target) is not a state change; arming it would emit a
         // sub:state-changed with previous == new on every self transition.
+        //
+        // The event is COALESCED to the activation episode's rest point (see
+        // PublishPendingSubStateChange). An auto-chain crossing A→B→C→D is one episode with one
+        // observable outcome, D; the parent can act on nothing in between, because the chain has
+        // not stopped. Emitting per hop made this the runtime's highest-volume signal — measured at
+        // 6 facts per 908 ms chain against a ~1.3 s delivery, with 7.5% of deliveries writing
+        // nothing at the receiver — and moved the parent's state-function ETag on every hop, so a
+        // long-polling client woke for states it could not use.
         if (IsSubFlow && !string.Equals(previousState, state.Key, StringComparison.Ordinal))
         {
-            PublishSubStateChangedEvent(previousState, state.Key);
+            _pendingSubStateChangeFrom ??= previousState;
+            _hasPendingSubStateChange = true;
         }
+    }
+
+    /// <summary>
+    /// Publishes the coalesced <c>sub:state-changed</c> for the activation episode that just ended,
+    /// if any state change happened during it. Called once, at the episode's REST POINT — the
+    /// instance became Active, reached a finish state, or deliberately rests Busy (a parked
+    /// auto-gate, a Busy-subtype state). Callers must invoke it inside the unit of work that
+    /// persists the state, so the event and the state it describes commit together.
+    /// <para>
+    /// The instance's own creation is its own such point: it is pre-positioned into the initial
+    /// state and committed in a unit of work that has no settlement, so
+    /// <c>InstanceCommandAppService</c> flushes it there. That matters for a child whose start
+    /// transition targets its own initial state — nothing moves afterwards, so this is the only
+    /// notification the parent ever gets for it.
+    /// </para>
+    /// </summary>
+    /// <returns><c>true</c> when an event was published.</returns>
+    public bool PublishPendingSubStateChange()
+    {
+        if (!_hasPendingSubStateChange)
+            return false;
+
+        var previousState = _pendingSubStateChangeFrom ?? string.Empty;
+        _pendingSubStateChangeFrom = null;
+        _hasPendingSubStateChange = false;
+
+        if (!IsSubFlow)
+            return false;
+
+        // The chain came back to where it started: nothing was published in between, so from the
+        // parent's point of view nothing happened.
+        var newState = GetCurrentState;
+        if (string.Equals(previousState, newState, StringComparison.Ordinal))
+            return false;
+
+        PublishSubStateChangedEvent(previousState, newState);
+        return true;
     }
 
     public void AddTags(string[]? tags)
@@ -1025,21 +1216,6 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
                 .Where(d => d.Version == version)
                 .OrderByDescending(d => d.VersionNo)
                 .FirstOrDefault();
-        }
-    }
-
-    /// <summary>
-    /// Removes oldest resolved incidents when the list exceeds <see cref="InstanceIncident.MaxRetainedIncidents"/>.
-    /// Active (unresolved) incidents are never pruned.
-    /// </summary>
-    private void PruneIncidents()
-    {
-        while (_incidents.Count > InstanceIncident.MaxRetainedIncidents)
-        {
-            var oldestResolved = _incidents.FirstOrDefault(i => i.IsResolved);
-            if (oldestResolved == null)
-                break;
-            _incidents.Remove(oldestResolved);
         }
     }
 }

@@ -89,7 +89,7 @@ A sixth profile is **composed on top of** the base, never selected instead of it
   scoped to `SkipsStateLifecycle`, so a `$self` shared transition — which really does re-enter the
   state — still reports its state change). `Instance.ChangeState` separately suppresses
   `sub:state-changed` whenever previous == new, keyed on the states themselves rather than on
-  the transition.
+  the transition — and it only ARMS that notification; see the coalescing rule below.
 - A parent with an open SubFlow correlation short-circuits earlier, at
   `HandleUpdateDataDataOnlyStep (21)` — data only, nothing else.
 
@@ -108,7 +108,67 @@ A sixth profile is **composed on top of** the base, never selected instead of it
   `EnrichOutputCoreAsync`) or a fault (`Instance.Fault` publishes a SubFlow's data upward). Async settle
   skips it. The decision matrix lives on `PostCommitParentMutationService.NeedsLatestDataForSettle`;
   add a new `LatestData` reader there, not by re-widening the include.
-- **Rule**: do not add unnecessary includes; reuse data from `TransitionExecutionContext`.
+- **Incidents are never included.** `InstanceIncident` rows live in `InstanceIncidents` (unbounded
+  history, cascade with the instance) and `Instance.HasActiveIncident` is a denormalized column the
+  aggregate maintains. Guards read the flag; anything that needs the unresolved incidents (resolve on
+  retry/`FinalizeTransitionStep`, `Fault`'s upward payload, script `context.Incident`, the state body)
+  calls `IInstanceRepository.LoadActiveIncidentsAsync` first — no query when the flag is false.
+  `ResolveOpenIncidents` throws if the flag is set and nothing was loaded. New rows are inserted by
+  `EfCoreInstanceRepository.UpdateAsync` from `GetPendingIncidents()` (marked `Added` before Aether's
+  detached `Set.Update(graph)` would stamp them `Modified`). History/paging/batch reads go through
+  `IInstanceIncidentRepository`, not the aggregate.
+- **Rows read back are NOT put on the EF navigation.** `LoadActiveIncidentsAsync`'s no-tracking branch
+  hands them to `Instance.AcceptLoadedIncidents`, which keeps them in a detached list that EF cannot
+  see; `GetLoadedIncidents()` merges both sources for readers. Attaching them to the navigation made
+  every *other* context tracking that aggregate discover them as new children and re-INSERT them —
+  the retry path loads the instance in the ambient request scope and its incidents inside a
+  `RequiresNew` one, so its commit died with `23505 PK_InstanceIncidents` and a half-written response
+  body. Consequence: resolving a **detached** incident writes nothing by itself
+  (`Instance.IsDetachedIncident` says which), so `InstanceRetryAppService` persists it through
+  `IInstanceIncidentRepository.ResolveAllAsync`, unconditionally — the retry path now loads
+  no-tracking, so there is never a graph to save. Pipeline-created incidents are tracked and still
+  save through the graph. Pinned by `InstanceIncidentPersistenceTests`.
+- **A task step records the incident BEFORE its own save; nothing records one after a save.** The
+  three task steps (`RunOn{Execute,Entry,Exit}TasksStep`) call `BoundaryOutcomeHandler` and *then*
+  `UpdateAsync(instance, autoSave: true)`, so the row and the `HasActiveIncident` flag commit
+  together. Both step UoWs are non-transactional, which is what makes that save immediately visible.
+  It has to be, because an abort returns `Fail` and `TransitionPipeline.MarkInstanceFaultedAsync`
+  reloads the aggregate in its OWN `RequiresNew` UoW; it skips its fallback incident only when the
+  **committed** flag already says one exists. Recording after the save produced two rows for one
+  failure — the boundary's verdict plus a bare `ErrorBoundaryAbort` pipeline row that was the newer
+  of the two, so `incident.active` on a faulted instance carried no boundary verdict at all. The
+  unhandled path deliberately does NOT call `ApplyScriptContextChanges` (its only payload is a
+  script's `Stage` mutation, which a faulting run should not persist) and wraps the save in
+  try/catch so the step still fails with the original task error. The fallback branch stays: it is
+  the only recorder for pipeline errors with no task error (`ResourceLockConflict`,
+  `TransitionChainDepthExceeded`, policy/schema failures), for
+  `ExecutionErrors.UnhandledNonBlockingTaskFailures`, and for the low-probability failed-save path.
+  Pinned by `TaskStepIncidentPersistenceTests`.
+- **`Handle`'s `ShouldContinue` branch is unreachable from the task steps.**
+  `TaskExecutionEngine.ConvertActionResult` returns a continue-style outcome as
+  `TasksExecutionResult.SuccessWithFailedTasks`, which carries **no** boundary action, so the step's
+  `BoundaryAction != null` guard is false and `Handle` is never called for `ignore`/`log`. The
+  measured (and confirmed-correct) behaviour is therefore "no incident, and the rest of the hook is
+  skipped". Left in place so the intended semantics stay expressed.
+- **Resolve is set-based.** `Instance.ResolveOpenIncidents()` closes EVERY unresolved row on the
+  materialized aggregate and recomputes the flag from that same snapshot; there is deliberately no
+  single-row API to pick wrongly. One failure can leave more than one open row (a job-timeout
+  recovery on top of a boundary incident, a boundary transition that faults on its own, a parent
+  taking a subflow fault while it already carries one), and resolving only the newest left a
+  recovered instance reporting a stale active incident — visible to long-pollers because
+  `HasActiveIncident` is fingerprint material. `FinalizeTransitionStep` relies on the pipeline
+  aggregate being tracked and needs no repository call; the retry path is detached and always calls
+  `ResolveAllAsync`.
+- **Retry loads no-tracking and unfaults with a CAS.** `InstanceRetryAppService` reads through
+  `IInstanceRepository.GetResultAsReadOnlyAsync` and flips the status with `TryUnfaultAsync`
+  (one `ExecuteUpdateAsync` guarded on `Status == Faulted`, plus baseline alignment). Never load an
+  aggregate tracked in the ambient request UoW, mutate it, and leave the write to an inner
+  `RequiresNew` scope: the ambient commit at the end of the request wrote its own stale `Active`
+  over the `Faulted` the inner scope had persisted, leaving an instance that looked healthy, had not
+  finished its work, and could never be retried again (`Instance:100027`). The unfault must also
+  **commit before** `ExecuteRetryAsync`, because the pipeline's `GetActiveAsync` rejects a faulted
+  instance. Pinned by
+  `InstanceIncidentPersistenceTests.TryUnfaultAsync_FlipsFaultedToActiveAndLeavesNothingForAnAmbientCommitToOverwrite`.
 
 ## Long-Polling / State Function
 
@@ -117,7 +177,8 @@ A sixth profile is **composed on top of** the base, never selected instead of it
 - ETag source: `LatestData?.ETag` for entity, `IRepresentationEtagService.Generate(output)` for representation.
 - **Role filtering**: `ITransitionAuthorizationManager` filters available transitions per role. Supports `$InstanceStarter`, `$PreviousUser` pseudo-roles.
 - No server-side hold — 304 drives client-side polling.
-- **Response-shape version**: `StateFunctionCache.ResponseShapeVersion` is folded into both the ETag material and the cache key. Bump it in the same commit as any change to what the state body carries — otherwise a client polling a parked instance keeps getting 304 and never sees the new shape.
+- **Response-shape version**: `StateFunctionCache.ResponseShapeVersion` (currently `v9`) is folded into both the ETag material and the cache key. Bump it in the same commit as any change to what the state body carries — otherwise a client polling a parked instance keeps getting 304 and never sees the new shape.
+- **`incident` block**: always present, and it carries **links, not content** — `{ hasActiveIncident, active: { href } (only while the flag is true), history: { href } }`. Identical on the state body and on `metadata.incident` (single GET and list). `active.href` → `GET …/instances/{instance}/incidents/active` (newest unresolved, **404 `Instance:100037`** when none is open — a normal answer, since a retry can resolve between the poll and the follow-up); `history.href` → the paged history. Same `queryRoles` gate as the state function on both, and no stack trace anywhere. When lifted from an active subflow, `active.href` addresses the **leaf that owns the incident** while `history.href` stays on the polled instance. `HasActiveIncident` is a fingerprint member so raise/resolve without a state change moves the ETag. **Do not put incident fields back in the body**: the embedded summary is what made the state function read the incident table on its hottest path and what created the resolve-A-then-raise-B stale-`active` hole, both of which the link form removes.
 - **Scheduled entries in `transitions`**: the state body lists the runtime's armed scheduled transitions inside the existing `transitions` array as `{ name, kind: "scheduled", executeAtUtc, href, view, schema }` entries, appended after the available transitions and built from active `InstanceJob` rows (`JobType.ScheduledTransition`) whose `ExecuteAt` is stamped at scheduling time from the same instant the Dapr job is armed with. The href/view/schema links use the same url shapes as triggerable entries but with `hasView`/`loadData`/`hasSchema` hardcoded false — a TEMPORARY uniformity concession for domain clients (they will adapt); scheduled transitions remain System-actor-gated at execution, so the href is not callable. Not role-filtered; not merged from subflows. Job-set changes deliberately do NOT participate in the fingerprint ETag (team decision, issue #864) — same-state re-arms can leave the scheduled entries stale behind a 304; documented as a known gap in `docs/runtime/state-function-cache-and-etag.md`.
 
 ## Well-Known Transitions (`cancel` / `updateData` / `exit`)
@@ -354,6 +415,69 @@ A sixth profile is **composed on top of** the base, never selected instead of it
   answers identity-only (`Id`, `Key`, `Status`): the starter reads `IsSuccess`, the relay reads
   `Status`, and the client's attributes/extensions come from the **parent's** own
   `EnrichOutputCoreAsync`. Do not read attributes off a sub-start or forward response.
+
+### `sub:state-changed` is coalesced to one event per activation episode
+
+- **`Instance.ChangeState` does not publish. It arms.** The event is published at the episode's
+  **rest point** by `Instance.PublishPendingSubStateChange()`, called from
+  `TransitionSettlement.ApplyAsync` inside the pipeline's unit of work — so the event and the state
+  it describes commit together.
+- **Why:** an inline auto-chain crossing A→B→C→D is ONE episode with one observable outcome. The
+  parent can act on nothing in between, because the chain has not stopped. Per-hop publishing made
+  this the runtime's highest-volume signal (6 facts per 908 ms chain against a ~1.3 s delivery;
+  7.5 % of 42 803 deliveries wrote nothing at the receiver) and moved the parent's state-function
+  ETag on every hop, waking long-pollers for states they could not use. `EffectiveState` and
+  `LastSubFlowStateChangedAt` are both `InstanceStateFingerprint` members.
+- **The value is unchanged, only the count.** The old burst's LAST event carried the final
+  `CurrentState`; the single coalesced event carries the same one. `PreviousState` is now the state
+  the episode STARTED in (nothing reads it — pinned as unread by the parent-notification council).
+- **Rest point ⊋ Active.** `ShouldPublishSubState` publishes on `chainSettled && OwnsStatus`, with
+  two exclusions. It is deliberately broader than the activation verdict: a lost CAS or an
+  already-Active owner yields no verdict, but the state that hop wrote is real and the parent must
+  hear it. Parked Busy (`BusyParked`, an unmet auto-gate) and `BusySubtype` **do** publish — they are
+  rest points, the instance is sitting there waiting for input.
+- **Two exclusions.** An open SubFlow correlation: the parent is Busy for the child's lifetime and
+  the state the client observes is the child's, so the parent's own move into the SubFlow state is
+  an intermediate superseded by the child's notification travelling up. And `Faulted`:
+  `InstanceSubFaultedEvent` already carries the faulted state upward; this channel reports
+  progression, not failure.
+- **Creation flushes explicitly.** `InstanceCommandAppService` pre-positions a new instance into its
+  initial state and commits in a unit of work with no settlement, so it calls
+  `PublishPendingSubStateChange()` itself. **Load-bearing:** when a child's start transition targets
+  its own initial state (e.g. `subflow-orchestration-grandchild` → `grandchild-initial`) nothing
+  moves afterwards, so the pipeline's rest point has nothing to publish and this is the parent's
+  ONLY notification for that child. Removing it silently strands the parent's `effectiveState`.
+- The coalescing state is two unmapped private fields on the aggregate. Their lifetime is the
+  tracked instance's, which is exactly one episode: the inline auto-chain reuses it
+  (`CreateFromPreloaded`), every post-commit / retry / subflow-callback boundary loads a fresh one.
+- Pinned by `SubStateChangeCoalescingTests`.
+
+### Child state → parent `EffectiveState` (`SubflowStateService`)
+
+- **It takes the SAME per-sub-item lock the three terminal paths take**
+  (`vnext:{domain}:{flow}:{parentId}:sub:{subId:N}`, bounded wait from
+  `WorkflowExecutionOptions.SubItemTerminalLockRetry`). Before that it was the only parent-mutation
+  path with no lock, which made its `SubFlowStateChangedAt` read-check-write a real TOCTOU: two
+  deliveries could both read the same stamp, both pass the check, and the OLDER one land last.
+- **Do not "fix" this with a CAS on the correlation row placed before the parent load.** Every
+  terminal path mutates the correlation and the parent in ONE `SaveChanges` batch, and EF emits
+  `Instances` before `InstancesCorrelations` — the order is always P → C. A correlation-first CAS
+  inverts that to C → P with an aggregate load in between, and deadlocks (40P01) against the
+  terminal paths on the hot path. The lock is the mechanism; the write order stays P → C.
+- **Equal `ChangedAt` is ACCEPTED and re-applied**, only strictly-older is rejected. A duplicate
+  delivery carries the same stamp; re-applying is idempotent, and rejecting it would close the only
+  recovery path a redelivery has.
+- The UoW is `RequiresNew, IsTransactional = true` — not for the lock, for atomicity: without a
+  transaction Aether stages the outbox rows *after* `UpdateAsync(autoSave)` already committed the
+  Instance row, so the upward event and the state write could diverge.
+- It loads through `FindForSubflowStateChangeAsync` (tracked parent + only this child's OPEN
+  correlation, **no `DataList`**), not the default detail load.
+- **It is the second post-commit relay call site.** When the parent is itself a subflow the write
+  raises the grandparent's `InstanceSubStateChangedEvent`; the service snapshots the aggregate's
+  events before saving, commits, releases its lock, then hands them to `IPostCommitRelayDispatcher`.
+  That is what makes the fast path walk the whole ancestor chain instead of stopping at depth 1 —
+  the runner never sees an event raised inside this service's own UoW. Capped by
+  `PostCommitRelayDispatcher.MaxRelayDepth`; past it the event still travels the outbox.
 
 ### Accept-time chain reserve (async transitions on a parent with an active SubFlow)
 

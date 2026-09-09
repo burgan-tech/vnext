@@ -1,5 +1,6 @@
 using System.Text.Json;
 using BBT.Workflow.Definitions;
+using BBT.Workflow.Shared;
 
 namespace BBT.Workflow.Instances;
 
@@ -90,10 +91,8 @@ public sealed class InstanceMetadataDto
         ModifiedBy = instance.ModifiedBy;
         ModifiedByBehalfOf = instance.ModifiedByBehalfOf;
 
-        if (instance.HasActiveIncident || instance.Incidents.Count > 0)
-        {
-            Incident = IncidentInfoDto.FromInstance(instance);
-        }
+        // The incident block is NOT built here: it is links now, and a link needs the domain and
+        // workflow this constructor does not have. The query service sets it for every response.
     }
     
     /// <summary>Current state key (engine internal state).</summary>
@@ -144,45 +143,47 @@ public sealed class InstanceMetadataDto
     /// <summary>Modifier behalf-of user identifier.</summary>
     public string? ModifiedByBehalfOf { get; set; }
 
-    /// <summary>Error boundary incident information. Null when no incidents have occurred.</summary>
-    public IncidentInfoDto? Incident { get; set; }
+    /// <summary>
+    /// Error boundary incident block: the flag plus links. Always present.
+    /// </summary>
+    public IncidentInfoDto Incident { get; set; } = new();
 }
 
 /// <summary>
-/// Incident tracking information exposed in instance metadata.
+/// Incident block exposed in instance metadata: whether an unresolved error-boundary incident exists,
+/// plus links to fetch it and to page the history. Mirrors the state function's block exactly, so a
+/// client learns one shape.
 /// </summary>
+/// <remarks>
+/// <b>Links, not content.</b> This block used to embed the active incident, the newest five and a
+/// total count, which cost two reads on every instance GET and one batch read per page of the list
+/// view. Nothing is embedded now: the flag answers "is something wrong?", and a client that wants the
+/// detail follows <see cref="Active"/>.
+/// </remarks>
 public sealed class IncidentInfoDto
 {
     /// <summary>Whether the instance currently has an unresolved incident.</summary>
     public bool HasActiveIncident { get; set; }
 
-    /// <summary>Total number of incidents (resolved + unresolved) retained for this instance.</summary>
-    public int TotalCount { get; set; }
+    /// <summary>
+    /// Link to the active incident, or null — and omitted from the JSON — when
+    /// <see cref="HasActiveIncident"/> is false.
+    /// </summary>
+    public ActiveIncidentHref? Active { get; set; }
 
-    /// <summary>The most recent unresolved incident, or null if all are resolved.</summary>
-    public IncidentDetailDto? Active { get; set; }
+    /// <summary>Link to the paged incident history of this instance. Always present.</summary>
+    public IncidentHistoryHref History { get; set; } = new();
 
-    /// <summary>All retained incidents ordered by creation time descending.</summary>
-    public List<IncidentDetailDto> History { get; set; } = [];
-
-    internal static IncidentInfoDto FromInstance(Instance instance)
+    /// <summary>
+    /// Builds the block from the instance's denormalized flag and the two supplied links. Reads
+    /// nothing: the flag is a column on the instance, so this costs no query.
+    /// </summary>
+    public static IncidentInfoDto FromInstance(Instance instance, string activeHref, string historyHref) => new()
     {
-        var incidents = instance.Incidents;
-        var active = incidents.LastOrDefault(i => !i.IsResolved);
-
-        var dto = new IncidentInfoDto
-        {
-            HasActiveIncident = instance.HasActiveIncident,
-            TotalCount = incidents.Count,
-            Active = active != null ? IncidentDetailDto.FromIncident(active) : null,
-            History = incidents
-                .OrderByDescending(i => i.CreatedAt)
-                .Select(IncidentDetailDto.FromIncident)
-                .ToList()
-        };
-
-        return dto;
-    }
+        HasActiveIncident = instance.HasActiveIncident,
+        Active = instance.HasActiveIncident ? new ActiveIncidentHref { Href = activeHref } : null,
+        History = new IncidentHistoryHref { Href = historyHref }
+    };
 }
 
 /// <summary>
@@ -235,7 +236,7 @@ public sealed class IncidentDetailDto
     /// <summary>Number of retry attempts before resolution or exhaustion.</summary>
     public int RetryCount { get; set; }
 
-    internal static IncidentDetailDto FromIncident(InstanceIncident incident) => new()
+    public static IncidentDetailDto FromIncident(InstanceIncident incident) => new()
     {
         Id = incident.Id,
         CreatedAt = incident.CreatedAt,
@@ -253,6 +254,27 @@ public sealed class IncidentDetailDto
         ResolvedAt = incident.ResolvedAt,
         RetryCount = incident.RetryCount
     };
+}
+
+/// <summary>
+/// One page of an instance's incident history, newest first.
+/// </summary>
+public sealed class GetInstanceIncidentsOutput
+{
+    /// <summary>Whether the instance currently has an unresolved incident.</summary>
+    public bool HasActiveIncident { get; set; }
+
+    /// <summary>Incidents on this page, newest first. Stack traces are never included.</summary>
+    public List<IncidentDetailDto> Items { get; set; } = [];
+
+    /// <summary>1-based page number.</summary>
+    public int Page { get; set; }
+
+    /// <summary>Page size.</summary>
+    public int PageSize { get; set; }
+
+    /// <summary>Whether a next page exists.</summary>
+    public bool HasNext { get; set; }
 }
 
 /// <summary>

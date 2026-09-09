@@ -16,6 +16,7 @@ using BBT.Workflow.Security;
 using BBT.Workflow.BackgroundJobs.Options;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.ChangeTracking;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using BBT.Workflow.Definitions.Schemas;
@@ -179,6 +180,52 @@ public sealed class EfCoreInstanceRepository(
     }
 
     /// <inheritdoc />
+    public async Task LoadActiveIncidentsAsync(Instance instance, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(instance);
+
+        if (!instance.HasActiveIncident)
+        {
+            // Nothing unresolved to fetch — the flag is authoritative, so no query is issued.
+            instance.MarkIncidentsLoaded();
+            return;
+        }
+
+        if (instance.IncidentsLoaded)
+            return;
+
+        var context = await GetDbContextAsync();
+        var entry = context.Entry(instance);
+
+        if (entry.State != EntityState.Detached)
+        {
+            // Tracked aggregate: load through the change tracker so fixup fills the backing field and
+            // a later Resolve() on one of these rows is persisted by the next SaveChanges.
+            await entry.Collection(nameof(Instance.Incidents))
+                .Query()
+                .Cast<InstanceIncident>()
+                .Where(i => !i.IsResolved)
+                .OrderBy(i => i.CreatedAt)
+                .ThenBy(i => i.Id)
+                .LoadAsync(cancellationToken);
+
+            instance.MarkIncidentsLoaded();
+            return;
+        }
+
+        // No-tracking aggregate (state function, GET, monitor, script context): read the rows
+        // no-tracking too and hand them to the aggregate.
+        var active = await context.Set<InstanceIncident>()
+            .AsNoTracking()
+            .Where(i => i.InstanceId == instance.Id && !i.IsResolved)
+            .OrderBy(i => i.CreatedAt)
+            .ThenBy(i => i.Id)
+            .ToListAsync(cancellationToken);
+
+        instance.AcceptLoadedIncidents(active);
+    }
+
+    /// <inheritdoc />
     public async Task<Instance?> FindForSubflowStartAsync(
         Guid instanceId,
         Guid correlationId,
@@ -206,6 +253,24 @@ public sealed class EfCoreInstanceRepository(
             .Include(i => i.DataList.Where(d => d.IsLatest))
             .Include(i => i.ChildCorrelations.Where(c => c.SubFlowInstanceId == subInstanceId))
             .AsSplitQuery()
+            .FirstOrDefaultAsync(i => i.Id == instanceId, cancellationToken);
+        instance?.MarkDataPartiallyLoaded();
+        return instance;
+    }
+
+    /// <inheritdoc />
+    public async Task<Instance?> FindForSubflowStateChangeAsync(
+        Guid instanceId,
+        Guid subInstanceId,
+        CancellationToken cancellationToken = default)
+    {
+        // Deliberately narrower than FindForSubflowCompletionAsync: no DataList. The state path
+        // only writes EffectiveState/type/subtype and reads ExtraProperties for the upward event.
+        // Filtered to the open correlation so a closed one resolves to correlation_not_found the
+        // same way the default detail load resolves it.
+        var dbSet = await GetDbSetAsync();
+        var instance = await dbSet
+            .Include(i => i.ChildCorrelations.Where(c => c.SubFlowInstanceId == subInstanceId && !c.IsCompleted))
             .FirstOrDefaultAsync(i => i.Id == instanceId, cancellationToken);
         instance?.MarkDataPartiallyLoaded();
         return instance;
@@ -281,7 +346,20 @@ public sealed class EfCoreInstanceRepository(
             }
         }
 
+        // Incidents recorded in this unit of work must always be inserted. When the aggregate is
+        // detached (RequiresNew retry/fault scopes), Aether's base UpdateAsync calls Set.Update(root),
+        // whose graph walk marks every reachable child with a non-default key as Modified — a new
+        // client-keyed incident would then become a 0-row UPDATE and a concurrency exception.
+        // Marking the pending rows Added first pins them; Update(root) skips already-tracked entries.
+        foreach (var incident in entity.GetPendingIncidents())
+        {
+            var incidentEntry = dbContext.Entry(incident);
+            if (incidentEntry.State == EntityState.Detached)
+                incidentEntry.State = EntityState.Added;
+        }
+
         var result = await base.UpdateAsync(entity, autoSave, cancellationToken);
+        entity.ClearPendingIncidents();
 
         if (originalStatus != null && !originalStatus.Equals(entity.Status))
         {
@@ -339,6 +417,33 @@ public sealed class EfCoreInstanceRepository(
         return true;
     }
 
+    /// <inheritdoc />
+    public async Task<bool> TryUnfaultAsync(Instance instance, CancellationToken cancellationToken = default)
+    {
+        // One UPDATE for the whole unfault, guarded on the status we read. Four columns rather than
+        // one because Unfault() clears the completion stamps and the incident flag alongside the
+        // status; leaving any of them to a later SaveChanges is what let a stale ambient copy
+        // overwrite the fault a re-failed retry had just persisted.
+        var affected = await (await GetDbSetAsync())
+            .Where(i => i.Id == instance.Id && i.Status == InstanceStatus.Faulted)
+            .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(i => i.Status, InstanceStatus.Active)
+                    .SetProperty(i => i.CompletedAt, (DateTime?)null)
+                    .SetProperty(i => i.Duration, (TimeSpan?)null)
+                    .SetProperty(i => i.HasActiveIncident, false)
+                    .SetProperty(i => i.ModifiedAt, DateTime.UtcNow),
+                cancellationToken);
+
+        if (affected != 1)
+        {
+            return false;
+        }
+
+        instance.Unfault();
+        await AlignUnfaultBaselineAsync(instance);
+        return true;
+    }
+
     /// <summary>
     /// The shared CAS: guard in the WHERE, single UPDATE, no aggregate load. ModifiedAt is set
     /// explicitly because ExecuteUpdate bypasses the audit interceptor — without it the computed
@@ -385,6 +490,35 @@ public sealed class EfCoreInstanceRepository(
         var status = entry.Property(nameof(Instance.Status));
         status.OriginalValue = instance.Status;
         status.IsModified = false;
+    }
+
+    /// <summary>
+    /// The <see cref="AlignStatusBaselineAsync"/> counterpart for the unfault CAS, which writes four
+    /// columns. Aligning only <c>Status</c> would leave <c>CompletedAt</c>, <c>Duration</c> and
+    /// <c>HasActiveIncident</c> marked Modified, and a later SaveChanges in the same unit of work
+    /// would write them a second time — the smaller version of the bug the CAS exists to prevent.
+    /// No-op for detached aggregates, which is the retry path's normal shape.
+    /// </summary>
+    private async Task AlignUnfaultBaselineAsync(Instance instance)
+    {
+        var dbContext = await GetDbContextAsync();
+        var entry = dbContext.Entry(instance);
+        if (entry.State == EntityState.Detached)
+        {
+            return;
+        }
+
+        AlignProperty(entry, nameof(Instance.Status), instance.Status);
+        AlignProperty(entry, nameof(Instance.CompletedAt), instance.CompletedAt);
+        AlignProperty(entry, nameof(Instance.Duration), instance.Duration);
+        AlignProperty(entry, nameof(Instance.HasActiveIncident), instance.HasActiveIncident);
+
+        static void AlignProperty(EntityEntry<Instance> entry, string name, object? currentValue)
+        {
+            var property = entry.Property(name);
+            property.OriginalValue = currentValue;
+            property.IsModified = false;
+        }
     }
 
     /// <inheritdoc />
@@ -659,7 +793,8 @@ public sealed class EfCoreInstanceRepository(
             i.ChildCorrelations.Count,
             i.ChildCorrelations.Count(c => c.IsCompleted),
             i.ChildCorrelations.Select(c => c.CompletedAt).Max(),
-            i.ChildCorrelations.Select(c => c.SubFlowStateChangedAt).Max()));
+            i.ChildCorrelations.Select(c => c.SubFlowStateChangedAt).Max(),
+            i.HasActiveIncident));
 
     /// <inheritdoc />
     public async Task<InstanceExecutionSnapshot?> GetExecutionSnapshotAsync(
@@ -809,7 +944,8 @@ public sealed class EfCoreInstanceRepository(
                         i.ChildCorrelations.Count,
                         i.ChildCorrelations.Count(c => c.IsCompleted),
                         i.ChildCorrelations.Select(c => c.CompletedAt).Max(),
-                        i.ChildCorrelations.Select(c => c.SubFlowStateChangedAt).Max()))
+                        i.ChildCorrelations.Select(c => c.SubFlowStateChangedAt).Max(),
+                        i.HasActiveIncident))
                     .FirstOrDefault());
 
         public readonly Func<WorkflowDbContext, string, CancellationToken, Task<InstanceStateFingerprint?>> StateByKey =
@@ -828,7 +964,8 @@ public sealed class EfCoreInstanceRepository(
                         i.ChildCorrelations.Count,
                         i.ChildCorrelations.Count(c => c.IsCompleted),
                         i.ChildCorrelations.Select(c => c.CompletedAt).Max(),
-                        i.ChildCorrelations.Select(c => c.SubFlowStateChangedAt).Max()))
+                        i.ChildCorrelations.Select(c => c.SubFlowStateChangedAt).Max(),
+                        i.HasActiveIncident))
                     .FirstOrDefault());
 
         public readonly Func<WorkflowDbContext, Guid, CancellationToken, Task<InstanceDataFingerprint?>> DataById =
@@ -1583,6 +1720,24 @@ public sealed class EfCoreInstanceRepository(
     /// Gets an instance by ID using Result pattern.
     /// Returns Result.NotFound if instance doesn't exist.
     /// </summary>
+    /// <inheritdoc />
+    public async Task<Result<Instance>> GetResultAsReadOnlyAsync(
+        string identifier,
+        CancellationToken cancellationToken = default)
+    {
+        var instance = await FindByIdentifierAsReadOnlyAsync(identifier, cancellationToken);
+
+        if (instance is null)
+        {
+            return Result<Instance>.Fail(Error.NotFound(
+                WorkflowErrorCodes.InstanceNotFound,
+                $"Instance with ID {identifier} not found",
+                identifier));
+        }
+
+        return Result<Instance>.Ok(instance);
+    }
+
     public async Task<Result<Instance>> GetResultAsync(string identifier, bool includeDetails = true,
         CancellationToken cancellationToken = default)
     {

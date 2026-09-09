@@ -14,10 +14,10 @@ namespace BBT.Workflow.Execution.Pipeline;
 internal static class TransitionSettlement
 {
     /// <summary>
-    /// Applies the resolved resting status. <c>statusLock</c> serializes the Busy→Active flip
-    /// with the other status writers (reserve, takeover, fault); pass null when the caller
-    /// ALREADY holds the status lock for this key (post-commit settlement) — a second acquire
-    /// would fail, not reenter.
+    /// Applies the resolved resting status. The Busy→Active flip is a set-based CAS
+    /// (<see cref="IInstanceRepository.TryReleaseBusyAsync(Instance,CancellationToken)"/>, guard
+    /// in the WHERE) — no distributed lock: a lost CAS means the row is no longer Busy and the
+    /// flip is moot, which is exactly as safe as a lock-guarded flip losing its race.
     /// </summary>
     /// <param name="chainSettled">
     /// True when no further hop continues this chain — nothing was enqueued and nothing runs
@@ -32,8 +32,7 @@ internal static class TransitionSettlement
         IStateNotificationScheduler stateNotificationScheduler,
         ILogger logger,
         CancellationToken cancellationToken,
-        bool chainSettled,
-        IInstanceStatusLock? statusLock = null)
+        bool chainSettled)
     {
         // The resting-status flip closes a transition: a status write, its lock, and the state
         // notification. It ran unnamed at the very end of the pipeline, so a trace showed the last
@@ -53,16 +52,6 @@ internal static class TransitionSettlement
 
         if (guardPassed)
         {
-            // Serialize the flip with reserves/takeovers. On acquisition failure proceed
-            // unguarded — leaving the chain's own settlement unapplied would strand the
-            // instance Busy. The write itself commits with the enclosing UoW; the lock
-            // serializes the flip moment, not the commit (documented, accepted window).
-            ITransitionLockScope? scope = null;
-            if (statusLock is not null)
-                scope = await statusLock.AcquireAsync(context.LockKey, cancellationToken);
-
-            await using var _ = scope;
-
             // One set-based CAS instead of the tracked full-row save. resolvedStatus only ever
             // carries Active (ResolveAvailableStep / ClearBusyOnResumeStep) and the old write was
             // Active() unconditionally, so Busy → Active CAS is behavior-identical; a lost CAS
@@ -101,6 +90,27 @@ internal static class TransitionSettlement
         if (verdict is not null)
             context.Directives.RecordActivation(verdict);
         activity?.SetTag(TelemetryConstants.TagNames.ActivationEmitted, verdict is not null);
+
+        // The episode's ONE sub:state-changed, published here so it commits with the state it
+        // describes. Intentionally broader than the activation verdict: a lost CAS or an already
+        // Active owner yields no verdict, but the state this hop wrote is still real and the parent
+        // must hear about it. See Instance.PublishPendingSubStateChange.
+        if (ShouldPublishSubState(context, hasOpenSubFlow, chainSettled) &&
+            context.Instance.PublishPendingSubStateChange())
+        {
+            // ChangeStateStep drains the aggregate into the pipeline's deferred events the moment it
+            // changes the state — long before this. Publishing after that drain leaves the event on
+            // the aggregate, where the runner's outbox staging and the post-commit relay both read
+            // DeferredEvents and would never see it. Drain again.
+            //
+            // Guarded on an ACTUAL publish, never called unconditionally: only the pipeline consumes
+            // DeferredEvents (WorkflowExecutionService -> TransitionRunner). PostCommitParentMutationService
+            // settles through this same method and consumes nothing, so an unconditional drain there
+            // would move events raised on that fresh aggregate — Instance.Fault's upward event among
+            // them — off the aggregate and into a list nobody reads. A post-commit settlement never
+            // calls ChangeState, so it never has a pending change and never reaches this branch.
+            context.ExtractAndDeferInstanceEvents();
+        }
 
         if (scheduleNotification && context.Target?.HasStateNotifications == true)
         {
@@ -172,6 +182,28 @@ internal static class TransitionSettlement
 
         return new ActivationVerdict(TelemetryConstants.ActivationOutcomes.BusyParked, CasFlipped: false, stateTo);
     }
+
+    /// <summary>
+    /// Whether this settlement is the rest point that should publish the episode's coalesced
+    /// <c>sub:state-changed</c>.
+    /// <list type="bullet">
+    ///   <item><c>chainSettled</c> — the whole point: mid-chain hops publish nothing.</item>
+    ///   <item><c>OwnsStatus</c> — a non-owner beside an in-flight chain is not the one to report.</item>
+    ///   <item>no open SubFlow — the parent is Busy for the child's lifetime and the state the
+    ///   client observes is the child's; its own move into the SubFlow state is an intermediate,
+    ///   superseded by the child's own notification travelling up.</item>
+    ///   <item>not Faulted — <c>InstanceSubFaultedEvent</c> already carries the faulted state
+    ///   upward. This channel reports progression, not failure.</item>
+    /// </list>
+    /// </summary>
+    private static bool ShouldPublishSubState(
+        TransitionExecutionContext context,
+        bool hasOpenSubFlow,
+        bool chainSettled) =>
+        chainSettled &&
+        context.OwnsStatus &&
+        !hasOpenSubFlow &&
+        !context.Instance.Status.Equals(InstanceStatus.Faulted);
 
     private static bool HasOpenSubFlow(TransitionExecutionContext context) =>
         context.Instance.ActiveCorrelations.Any(c =>

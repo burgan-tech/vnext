@@ -162,10 +162,6 @@ because retrying would re-invoke tasks that can have side effects — a decision
 class's own remarks, not an oversight. Proxy mode does not touch either of these: the same app-id,
 the same 60-second budget, and the same no-retry policy carry over to the gRPC path unchanged.
 
-Full design (proto contract, `RemoteInvokerService`'s transport switch, error mapping, context
-propagation, and success criteria): see
-[`docs/superpowers/specs/2026-08-26-execution-grpc-transport-spec.md`](../superpowers/specs/2026-08-26-execution-grpc-transport-spec.md).
-
 ## Cross-domain Remote* services: DaprClient, HTTP to the sidecar, and why not gRPC (2026-09)
 
 The `Remote*` app services (`RemoteInstance{Command,Query,Retry}AppService`,

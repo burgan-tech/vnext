@@ -54,19 +54,22 @@ event MUST have:
    - Standard multi-schema and UoW patterns
 3. **Logging extensions** in `BBT.Workflow.Domain/Logging/WorkflowLogs.cs` — never raw `logger.Log*`
 
-**Subflow terminal events are the one exception carrying extra behavior.** `InstanceSubCompletedEvent`,
-`InstanceSubFaultedEvent`, and `InstanceSubCanceledEvent` additionally implement
-`ISubflowTerminalEvent`, which opts them into the **Outbox + TerminalRelay** mode: after commit,
-`SubflowTerminalRelay` relays the event as an immediate command via `IInstanceCommandGateway`
-(local in-process, or Dapr service invocation cross-domain), and their Inbox handler is a durable
-**backup**, deduplicated via `ISubItemTerminalGuard`. This is the only event category where a
-second delivery path exists by design — every other event has exactly one handler. Full contract,
-relay semantics, and the wakeup signal that makes the outbox path near-instant:
-`docs/runtime/event-publish-modes.md`.
+**Registering a relay is what gives an event a second delivery path.** An
+`IPostCommitEventRelay<TEvent>` registered in `AddPipelineServices` opts that event into the
+**Outbox + PostCommitRelay** mode: after commit, `PostCommitRelayDispatcher` relays it as an
+immediate command via `IInstanceCommandGateway` (local in-process, or Dapr service invocation
+cross-domain), and its Inbox handler becomes a durable **backup**. There is no marker interface and
+no central switch to edit; removing the registration is the kill switch. Four events are registered
+today — the three subflow terminal events (backup deduplicated by `ISubItemTerminalGuard`) and
+`InstanceSubStateChangedEvent` (guarded by the per-sub-item lock plus the monotonic
+`SubFlowStateChangedAt` stamp). Every other event has exactly one handler, and that stays the
+default: a new relayed event needs a durable backup, an idempotent order-safe receiver guard,
+measured latency evidence and a council row. Full contract, relay semantics, and the wakeup signal
+that makes the outbox path near-instant: `docs/runtime/event-publish-modes.md`.
 
 ### Event development checklist
-- [ ] Event contract in `*.Events.Contracts/*/Events/` with `[EventName]` (add `ISubflowTerminalEvent`
-      only for a new subflow-terminal-class event)
+- [ ] Event contract in `*.Events.Contracts/*/Events/` with `[EventName]` (no marker interface — a
+      relay is opted in by DI registration, not by the contract)
 - [ ] Event handler implementing `IEventHandler<TEvent>`
 - [ ] Logging extensions in `BBT.Workflow.Domain/Logging/WorkflowLogs.cs`:
   - `{EventName}Received` (Information)
@@ -75,8 +78,9 @@ relay semantics, and the wakeup signal that makes the outbox path near-instant:
   - `{EventName}ProcessingFailed` (Error)
 - [ ] Handler auto-registered by `AddAetherEventBus` (assembly scanning) — no manual hook registration
 - [ ] Use `WorkflowLogs.cs` extension methods — never raw `logger.Log*`
-- [ ] If the event implements `ISubflowTerminalEvent`: wire it into `SubflowTerminalRelay`'s
-      dispatch switch and tag its Inbox handler's activity `vnext.delivery.role = backup`
+- [ ] If the event needs the immediate path: add an `IPostCommitEventRelay<TEvent>` class, register
+      it in `AddPipelineServices`, and tag its Inbox handler's activity `vnext.delivery.role = backup`.
+      Nothing in the dispatcher changes.
 
 ### Why the Inbox handler alone is enough
 - **Outbox-first**: the outbox row is written before commit succeeds, so a handler always has
@@ -161,11 +165,8 @@ logger.InstanceCompletedCleanupEventReceived(instanceId, flow);
 - `/ai-docs` is gitignored local scratch for generated dumps (e.g. vnext-docs staging). It is not committed and is not a source of truth.
 - When the user says "add to document", update English docs and ensure Navigation/Overview grouping in `docs/README.md`.
 
-## Context7 Sources
-For platform/domain knowledge beyond the code:
-- vNext domain: `burgan-tech/vnext-runtime` (tag `vnext-runtime`)
-- Aether SDK: `burgan-tech/aether` (tag `aether`)
-- Examples: tag `vnext-example`
+## Sibling repositories
+Repo map, GitHub URLs, trust rules and Context7 tags: `AGENTS.md` § Platform repositories (single source).
 
 ## File Structure Expectation
 ```

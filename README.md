@@ -37,16 +37,45 @@ dotnet restore
 dotnet build
 ```
 
-Start the infrastructure (PostgreSQL, Redis, Dapr, observability) with Docker:
+`etc/docker/run-docker.sh` is the single entry point. Docker stacks:
 
 ```bash
 cd etc/docker
-./run-docker.sh          # infrastructure only (default)
-./run-docker.sh dev      # dev mode with debugger
-./run-docker.sh stage    # staging mode
+./run-docker.sh                   # infrastructure only (default)
+./run-docker.sh dev [domain]      # dev mode: apps built into containers, with debugger
+./run-docker.sh stage [domain]    # staging mode: release images
 ```
 
-Run the apps locally against that infrastructure (each in its own terminal; the
+`dev` and `stage` ask for the domain when none is given (default: last used, else `core`) and pass it
+to the containers as `APP_DOMAIN` / `VNEXT_DB` through compose interpolation, so the `.env.*` files stay
+untouched.
+
+Local development, one or more domains side by side (infra in docker, runtime as locally built binaries):
+
+```bash
+./run-docker.sh up                     # asks for the domain (default: last used, else core), then
+                                       # infra + sidecars → DbMigrator → 4 hosts, waits for /health
+./run-docker.sh up sales --offset 10   # second domain next to core: ports 4211/4212/4511/4411, own sidecars
+./run-docker.sh plan hr --offset 20    # print ports, app-ids, env overrides; start nothing
+./run-docker.sh status | domains | logs sales orchestration | down sales | down --all [--infra]
+```
+
+Port offsets follow [vnext-runtime](https://github.com/burgan-tech/vnext-runtime): `core` is offset 0 and
+keeps the sidecars from `docker-compose.yml`; any other domain gets `base + offset` app ports, its own
+`<service>-<domain>` sidecar containers and `vnext-<domain>-…` Dapr app-ids. Offsets that would collide
+with core or another registered domain are refused (`--help` has the table). Flags: `--monitor`,
+`--no-build`, `--skip-migrate`, `--db <name>`, `--offset N`.
+
+Each host receives its `http` launch profile's environment with `APP_DOMAIN`, the connection string, the
+Dapr ports/app-ids and the cross-host references overridden per process, so no tracked file changes.
+Every `up` also registers the domain in the vNext CLI (`wf domain add`, right port and database; activate with
+`wf domain use <domain>` before `wf sync`) and starts a per-domain `init` publisher on `3005+offset`.
+It writes a record of the environment (ports, app-ids, database, logs, reproduce command) to
+`ai-docs/local-environments/<domain>.md` — git-ignored, meant for the next session or the next agent.
+The script refuses to start when the docker infra belongs to another compose file (e.g. a cross-domain
+lab), because the sidecars would land on the wrong network. The manual equivalent of `up core`:
+
+Run the apps against the infrastructure by hand (each in its own terminal; the
 `Properties/launchSettings.json` profiles carry the `APP_DOMAIN` / `DAPR_*` / `OTEL_*` environment):
 
 ```bash
@@ -89,9 +118,58 @@ dotnet test --filter "FullyQualifiedName~MyTest"   # one test
 - [Agent onboarding](docs/agent-onboarding.md) — source-of-truth order for coding agents
 - [Workflow Execution Pipeline](docs/architecture/workflow-execution-pipeline.md) — ordered steps, admission, inline auto-chain and post-commit boundaries
 - [Subflow Execution](docs/architecture/subflow-execution.md) — child start/forward/retry, `S`/`P` semantics and terminal resume
-- [CLAUDE.md](CLAUDE.md) / [AGENTS.md](AGENTS.md) — architecture overview and domain concepts for coding agents (same content)
-- [.claude/rules/](.claude/rules/) — always-on coding standards and the workflow developer reference
+- [AGENTS.md](AGENTS.md) — single bootstrap for coding agents (architecture, domain concepts, AI guidance layout); `CLAUDE.md` imports it
+- [.claude/rules/](.claude/rules/) — always-on coding standards and the workflow developer reference; `.cursor/rules/` holds `@` pointers to the same files
 - [vnext-meta/README.md](vnext-meta/README.md) — the runtime metadata package
+
+### Working with AI coding agents
+
+Guidance is tool-neutral and lives in one place; every agent (Claude Code, Cursor, Codex, Copilot) reads the same files:
+
+- [AGENTS.md](AGENTS.md) is the bootstrap, [.claude/rules/](.claude/rules/) the always-on rules, [.claude/skills/](.claude/skills/) the on-demand skills. Cursor reads the skills folder directly and reaches the rules through `@` pointers in `.cursor/rules/`; nothing is copied.
+- Non-trivial decisions (architecture, cross-service, data model, security, performance) go through the **Agent Council** before any code is written. Run:
+
+  ```
+  /agent-council <the decision to make>
+  ```
+
+  It also fires on phrases like "council", "karar verelim", "eklemeli miyim", "mimari karar". The council never edits code; it only produces the decision record. Session artifacts are written locally under `ai-docs/agent-council/sessions/` (git-ignored) and indexed in the committed [decision log](docs/agent-council/sessions/README.md), which is the team's decision history — check it before opening a new session. Process, roles and templates: [docs/agent-council/README.md](docs/agent-council/README.md).
+
+- Every change is discoverable through a queryable knowledge graph, not by grepping blindly. See
+  [.claude/rules/graphify-navigation.md](.claude/rules/graphify-navigation.md) for when agents must
+  consult it first.
+
+  **Setup (once per machine):**
+  ```bash
+  # 1. Install uv, if you don't already have it (macOS/Linux):
+  curl -LsSf https://astral.sh/uv/install.sh | sh
+  # macOS via Homebrew: brew install uv
+  # Windows (PowerShell): powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+
+  # 2. Install graphify with uv (falls back to pip if uv isn't available):
+  uv tool install graphifyy
+  # If `graphify` isn't found afterwards, your shell's PATH needs ~/.local/bin — run:
+  uv tool update-shell   # then restart your terminal
+  ```
+
+  **Build the graph (once, or after large structural changes):**
+  ```bash
+  /graphify .        # inside Claude Code — full pipeline, respects .graphifyignore
+  # or, from a plain terminal:
+  graphify .
+  ```
+  Output lands in `graphify-out/` (gitignored). `.graphifyignore` already excludes EF Core migration
+  scaffolding, Postman/Mockoon exports and lockfiles — see the file for the full list.
+
+  **Keep it fresh automatically — post-commit hook:**
+  ```bash
+  graphify hook install     # re-extracts changed code files and rebuilds graph.json after every commit
+  graphify hook status      # check whether it's installed
+  graphify hook uninstall   # remove it
+  ```
+  The hook only re-processes code files changed by the commit (via `git diff HEAD~1`); doc/image
+  changes still need a manual `/graphify --update`. If a post-commit hook already exists, graphify
+  appends to it rather than replacing it.
 
 ## Health Endpoints
 

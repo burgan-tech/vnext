@@ -1287,6 +1287,62 @@ public static partial class WorkflowLogs
         string newState);
 
     /// <summary>
+    /// Logs when the parent instance named by a SubFlow state change cannot be found.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40129,
+        Level = LogLevel.Warning,
+        Message = "Parent instance {ParentInstanceId} not found for SubFlow state change from {SubInstanceId}")]
+    public static partial void SubFlowStateChangeParentNotFound(
+        this ILogger logger,
+        Guid parentInstanceId,
+        Guid subInstanceId);
+
+    /// <summary>
+    /// Logs when the parent carries no OPEN correlation for the sub-instance. Expected when the
+    /// correlation closed between publish and delivery: the terminal path owns the parent's
+    /// effective state from that point on.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40130,
+        Level = LogLevel.Warning,
+        Message = "Correlation not found for SubInstance {SubInstanceId} in parent {ParentInstanceId}")]
+    public static partial void SubFlowStateChangeCorrelationNotFound(
+        this ILogger logger,
+        Guid subInstanceId,
+        Guid parentInstanceId);
+
+    /// <summary>
+    /// Logs when a SubFlow state change is rejected because the correlation already carries a
+    /// newer state stamp. Both delivery paths (post-commit relay and Inbox backup) land here for
+    /// the loser of a duplicate delivery; it is the ordering guard doing its job, not a fault.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40131,
+        Level = LogLevel.Warning,
+        Message = "Rejecting out-of-order SubFlow state event for {SubInstanceId}. Event timestamp {EventTime} is older than correlation's last update {CorrelationTime}. Correlation state: '{CorrelationState}', Event state: '{EventState}'")]
+    public static partial void SubFlowStateChangeOutOfOrder(
+        this ILogger logger,
+        Guid subInstanceId,
+        DateTime eventTime,
+        DateTime correlationTime,
+        string? correlationState,
+        string eventState);
+
+    /// <summary>
+    /// Logs when the per-sub-item lock guarding a SubFlow state change could not be acquired within
+    /// the bounded wait. The caller throws so the Inbox redelivers.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40132,
+        Level = LogLevel.Warning,
+        Message = "SubFlow state-change lock {LockKey} could not be acquired for SubInstance {SubInstanceId}")]
+    public static partial void SubFlowStateChangeLockNotAcquired(
+        this ILogger logger,
+        string lockKey,
+        Guid subInstanceId);
+
+    /// <summary>
     /// Logs when a SubFlow state changed event is received by the hook.
     /// </summary>
     [LoggerMessage(
@@ -1609,46 +1665,70 @@ public static partial class WorkflowLogs
         Guid parentInstanceId);
 
     /// <summary>
-    /// Logs when a subflow terminal event (completed/faulted/canceled) is relayed to the parent
-    /// instance as an immediate post-commit command (Outbox + TerminalRelay mode).
+    /// Logs when a post-commit relay delivers an event to its receiver as an immediate command
+    /// (Outbox + PostCommitRelay mode). EventId kept from the terminal-only predecessor so existing
+    /// dashboards and alerts keep resolving.
     /// </summary>
     [LoggerMessage(
         EventId = 40124,
         Level = LogLevel.Information,
-        Message = "Subflow terminal {EventName} relayed to parent (sub {SubInstanceId} -> parent {ParentInstanceId})")]
-    public static partial void SubflowTerminalRelayed(
+        Message = "Post-commit relay delivered {EventName} (sub {SubInstanceId} -> parent {ParentInstanceId})")]
+    public static partial void PostCommitEventRelayed(
         this ILogger logger,
         string eventName,
         Guid subInstanceId,
         Guid parentInstanceId);
 
     /// <summary>
-    /// Logs when a subflow terminal relay attempt throws. The child's commit already stands, so the
-    /// durable Inbox backup will settle the parent shortly after.
+    /// Logs when a post-commit relay attempt throws. The originating commit already stands, so the
+    /// durable Inbox backup delivers the same command shortly after.
     /// </summary>
     [LoggerMessage(
         EventId = 40125,
         Level = LogLevel.Warning,
-        Message = "Subflow terminal relay failed for {EventName} (sub {SubInstanceId} -> parent {ParentInstanceId}); Inbox backup will settle")]
-    public static partial void SubflowTerminalRelayFailed(
+        Message = "Post-commit relay failed for {EventName}; Inbox backup will deliver")]
+    public static partial void PostCommitEventRelayFailed(
         this ILogger logger,
         Exception exception,
-        string eventName,
-        Guid subInstanceId,
-        Guid parentInstanceId);
+        string eventName);
 
     /// <summary>
-    /// Logs when a subflow terminal relay's gateway call returns a failed <c>Result</c> (not an
-    /// exception). The durable Inbox backup will settle the parent shortly after.
+    /// Logs when a post-commit relay's gateway call returns a failed <c>Result</c> (not an
+    /// exception). The durable Inbox backup delivers the same command shortly after.
     /// </summary>
     [LoggerMessage(
         EventId = 40126,
         Level = LogLevel.Warning,
-        Message = "Subflow terminal relay rejected for {EventName}: {Error}; Inbox backup will settle")]
-    public static partial void SubflowTerminalRelayRejected(
+        Message = "Post-commit relay rejected for {EventName}: {Error}; Inbox backup will deliver")]
+    public static partial void PostCommitEventRelayRejected(
         this ILogger logger,
         string eventName,
         string error);
+
+    /// <summary>
+    /// Logs when a post-commit relay's CROSS-DOMAIN leg exceeded the relay's own bound. The hop is
+    /// released rather than held on a slow remote; the Inbox backup delivers.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40133,
+        Level = LogLevel.Warning,
+        Message = "Post-commit relay timed out for {EventName}; Inbox backup will deliver")]
+    public static partial void PostCommitEventRelayTimedOut(
+        this ILogger logger,
+        string eventName);
+
+    /// <summary>
+    /// Logs when the nested in-process relay chain hit its depth cap. Delivery is not lost — the
+    /// remaining hops fall back to the outbox — but the fast path stops here.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40134,
+        Level = LogLevel.Warning,
+        Message = "Post-commit relay depth cap reached at {Depth} for {EventName}; remaining hops fall back to the outbox")]
+    public static partial void PostCommitEventRelayDepthExceeded(
+        this ILogger logger,
+        string eventName,
+        int depth);
 
     /// <summary>
     /// Logs when a terminal-revert re-publishes the subflow terminal event as a durable-delivery
@@ -2524,6 +2604,124 @@ public static partial class WorkflowLogs
     #region Service Discovery
 
     /// <summary>
+    /// Logs when a pod has claimed the bulk-refresh window and started reading the registry.
+    /// </summary>
+    /// <remarks>
+    /// EventIds 50001-50005 are the ones the previous bulk cache used before it was removed in
+    /// <c>79da3b6f</c>; they are reused here deliberately so historical log queries keep working.
+    /// </remarks>
+    [LoggerMessage(
+        EventId = 50001,
+        Level = LogLevel.Information,
+        Message = "Discovery bulk cache refresh started")]
+    public static partial void BulkCacheRefreshStarted(this ILogger logger);
+
+    /// <summary>
+    /// Logs a completed bulk refresh. The count is the number of registrations actually cached.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 50002,
+        Level = LogLevel.Information,
+        Message = "Discovery bulk cache refreshed with {Count} domain(s)")]
+    public static partial void BulkCacheRefreshed(this ILogger logger, int count);
+
+    /// <summary>
+    /// Logs a bulk refresh that could not complete. The previous cache contents are left alone.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 50003,
+        Level = LogLevel.Warning,
+        Message = "Discovery bulk cache refresh failed: {Reason}. Existing entries are kept and will expire on their own")]
+    public static partial void BulkCacheRefreshFailed(this ILogger logger, string reason);
+
+    /// <summary>
+    /// Logs each page requested during a bulk refresh.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 50004,
+        Level = LogLevel.Debug,
+        Message = "Fetching discovery registration page {Page}")]
+    public static partial void FetchingDomainPage(this ILogger logger, int page);
+
+    /// <summary>
+    /// Logs a lookup that the cache could not serve and had to resolve from the registry.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 50005,
+        Level = LogLevel.Debug,
+        Message = "Domain '{Domain}' not in the discovery cache; resolving from the registry")]
+    public static partial void DomainNotFoundInCache(this ILogger logger, string domain);
+
+    /// <summary>
+    /// Logs a bulk refresh skipped because another replica already served this window.
+    /// </summary>
+    /// <remarks>
+    /// The expected outcome on all but one replica, hence Debug. A cluster where this never appears
+    /// is one where the shared marker is not being seen — which means every pod is doing its own
+    /// bulk read.
+    /// </remarks>
+    [LoggerMessage(
+        EventId = 50036,
+        Level = LogLevel.Debug,
+        Message = "Discovery bulk cache refresh skipped: the current window has already been refreshed")]
+    public static partial void BulkCacheRefreshSkippedFresh(this ILogger logger);
+
+    /// <summary>
+    /// Logs a bulk refresh skipped because another replica holds the lock right now.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 50037,
+        Level = LogLevel.Debug,
+        Message = "Discovery bulk cache refresh skipped: another replica holds the refresh lock")]
+    public static partial void BulkCacheRefreshSkippedNotOwner(this ILogger logger);
+
+    /// <summary>
+    /// Logs that the bulk read stopped at its page cap, meaning the result may be incomplete.
+    /// </summary>
+    /// <remarks>
+    /// Warning, not Debug: the domains beyond the cap are simply absent from the cache, and every
+    /// call for one of them silently pays full registry latency forever.
+    /// </remarks>
+    [LoggerMessage(
+        EventId = 50038,
+        Level = LogLevel.Warning,
+        Message = "Discovery bulk read stopped at the {MaxPages}-page cap with {Count} domain(s); the result may be truncated")]
+    public static partial void BulkPageCapReached(this ILogger logger, int maxPages, int count);
+
+    /// <summary>
+    /// Logs that pagination was abandoned because a page repeated the previous page's contents.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 50039,
+        Level = LogLevel.Warning,
+        Message = "Discovery bulk read stopped at page {Page}: the registry returned the same domains as the previous page")]
+    public static partial void BulkPaginationStalled(this ILogger logger, int page);
+
+    /// <summary>
+    /// Logs that the registry rejected the server-side status filter, so the bulk read continues
+    /// unfiltered and relies on the client-side status check.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 50040,
+        Level = LogLevel.Debug,
+        Message = "Discovery registry rejected the bulk status filter; retrying unfiltered")]
+    public static partial void BulkFilterRejectedRetryingUnfiltered(this ILogger logger);
+
+    /// <summary>
+    /// Logs a discovery cache operation that failed. Never rethrown: a cache that cannot be read or
+    /// written is a miss, not an error.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 50041,
+        Level = LogLevel.Warning,
+        Message = "Discovery cache operation '{Operation}' failed for key '{CacheKey}'")]
+    public static partial void DiscoveryCacheOperationFailed(
+        this ILogger logger,
+        Exception exception,
+        string operation,
+        string cacheKey);
+
+    /// <summary>
     /// Logs when querying a single domain from the discovery registry.
     /// </summary>
     [LoggerMessage(
@@ -2963,8 +3161,42 @@ public static partial class WorkflowLogs
         Guid incidentId);
 
     /// <summary>
+    /// Logs when every open incident of an instance is resolved (retry, or a completed
+    /// error-boundary transition).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20203,
+        Level = LogLevel.Information,
+        Message = "Resolved {Count} open incident(s) on instance {InstanceId}")]
+    public static partial void IncidentsResolved(
+        this ILogger logger,
+        Guid instanceId,
+        int count);
+
+    /// <summary>
+    /// Logs when an incident could not be persisted at the point it was recorded. The transition
+    /// still faults with its ORIGINAL error; the pipeline's fault path then records its own
+    /// fallback incident, so the failure is not lost — only its boundary attribution is.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20204,
+        Level = LogLevel.Error,
+        Message = "Failed to persist the incident recorded for instance {InstanceId} on transition {TransitionKey}")]
+    public static partial void IncidentPersistFailed(
+        this ILogger logger,
+        Exception exception,
+        Guid instanceId,
+        string transitionKey);
+
+    /// <summary>
     /// Logs when an informational incident is recorded (Log/Ignore action - already resolved).
     /// </summary>
+    /// <remarks>
+    /// Currently unreachable: the task engine reports a continue-style boundary outcome as a result
+    /// with no boundary action attached (<c>TasksExecutionResult.SuccessWithFailedTasks</c>), so the
+    /// pipeline step never enters the branch that would record an informational incident. Kept for
+    /// the day that changes.
+    /// </remarks>
     [LoggerMessage(
         EventId = 20202,
         Level = LogLevel.Debug,

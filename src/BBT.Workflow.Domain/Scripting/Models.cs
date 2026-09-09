@@ -182,6 +182,14 @@ public sealed class ScriptTransitionRequest
 /// Lightweight projection of incident information exposed to workflow scripts.
 /// Provides awareness of active error incidents without exposing the full incident history.
 /// </summary>
+/// <remarks>
+/// Incidents live in their own table and are loaded onto the instance only when
+/// <see cref="HasActiveIncident"/> is set (unresolved rows only). <see cref="HasActiveIncident"/> is
+/// therefore always exact; <see cref="ActiveIncident"/> is exact whenever the runtime built this
+/// context (it loads the unresolved incidents first); <see cref="TotalIncidentCount"/> counts the
+/// incidents materialized on the instance — the unresolved ones plus any recorded in the current
+/// transition — not the full persisted history. Full history: <c>GET .../instances/{id}/incidents</c>.
+/// </remarks>
 public sealed class ScriptIncidentInfo
 {
     /// <summary>Whether the instance has at least one unresolved incident.</summary>
@@ -190,8 +198,15 @@ public sealed class ScriptIncidentInfo
     /// <summary>The most recent unresolved incident (null if all resolved).</summary>
     public InstanceIncident? ActiveIncident { get; init; }
 
-    /// <summary>Total number of incidents (resolved + unresolved) retained on the instance.</summary>
+    /// <summary>Number of incidents materialized on the instance for this context (see remarks).</summary>
     public int TotalIncidentCount { get; init; }
+
+    /// <summary>
+    /// True when the unresolved incidents were loaded onto the instance before this context was built,
+    /// i.e. <see cref="ActiveIncident"/> can be trusted. False only for contexts built from an aggregate
+    /// that skipped the load.
+    /// </summary>
+    public bool IncidentsLoaded { get; init; }
 }
 
 public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncDisposable
@@ -613,7 +628,8 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
         {
             HasActiveIncident = snapshot.HasActiveIncident,
             ActiveIncident = snapshot.Incidents.LastOrDefault(i => !i.IsResolved),
-            TotalIncidentCount = snapshot.Incidents.Count
+            TotalIncidentCount = snapshot.Incidents.Count,
+            IncidentsLoaded = snapshot.IncidentsLoaded
         };
     }
 
@@ -783,7 +799,8 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
             {
                 HasActiveIncident = branch.Instance.HasActiveIncident,
                 ActiveIncident = branch.Instance.Incidents.LastOrDefault(incident => !incident.IsResolved),
-                TotalIncidentCount = branch.Instance.Incidents.Count
+                TotalIncidentCount = branch.Instance.Incidents.Count,
+                IncidentsLoaded = branch.Instance.IncidentsLoaded
             };
         }
 
@@ -1027,7 +1044,8 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
             {
                 HasActiveIncident = instance.HasActiveIncident,
                 ActiveIncident = instance.Incidents.LastOrDefault(i => !i.IsResolved),
-                TotalIncidentCount = instance.Incidents.Count
+                TotalIncidentCount = instance.Incidents.Count,
+                IncidentsLoaded = instance.IncidentsLoaded
             };
             return this;
         }

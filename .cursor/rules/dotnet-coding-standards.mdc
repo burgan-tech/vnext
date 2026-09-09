@@ -1,0 +1,9 @@
+---
+description: .NET / Aether / vNext coding standards — style, Result pattern, logging via WorkflowLogs, outbox events, multi-schema
+globs:
+alwaysApply: true
+---
+Apply the referenced file exactly as written. It is the single source of this rule, shared with
+Claude Code (`.claude/rules/`); edit it there — nothing lives in this pointer.
+
+@.claude/rules/dotnet-coding-standards.md

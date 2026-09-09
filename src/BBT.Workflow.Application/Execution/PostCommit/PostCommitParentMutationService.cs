@@ -68,6 +68,9 @@ public sealed class PostCommitParentMutationService(
             if (instance.IsCompleted)
                 return null;
 
+            // Fault() projects the active incident into the upward event; load it when one exists.
+            await instanceRepository.LoadActiveIncidentsAsync(instance, ct);
+
             if (!instance.HasActiveIncident)
             {
                 instance.AddIncident(InstanceIncidentFactory.Create(

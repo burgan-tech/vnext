@@ -40,8 +40,13 @@ public sealed class ServiceDiscoveryOptions
 
     /// <summary>
     /// Timeout in seconds for HTTP requests (default: 5 seconds).
-    /// With the endpoint cache removed, this timeout now sits in front of every cross-domain
-    /// resolution instead of a rare cache miss, so it is kept short deliberately.
+    /// <para>
+    /// Kept short deliberately: with <c>Cache:Enabled=false</c> — still the code default — this
+    /// timeout sits in front of EVERY cross-domain resolution, not a rare cache miss. With the cache
+    /// on it governs the miss path and the bulk refresh, and it also caps the whole Polly retry
+    /// sequence rather than one attempt, so raising <see cref="MaxRetryAttempts"/> without raising
+    /// this buys nothing.
+    /// </para>
     /// </summary>
     public int TimeoutSeconds { get; set; } = 5;
 
@@ -145,6 +150,17 @@ public sealed class ServiceDiscoveryOptions
     /// (configuration section <c>ServiceDiscovery:Dapr</c>).
     /// </summary>
     public DaprDiscoveryOptions Dapr { get; set; } = new();
+
+    /// <summary>
+    /// Settings for the registry-read cache, which applies only when <see cref="Provider"/> is
+    /// <c>"http"</c> (configuration section <c>ServiceDiscovery:Cache</c>).
+    /// </summary>
+    /// <remarks>
+    /// Disabled by default. The provider scope is enforced where the client is registered, not by a
+    /// branch inside the cache, so under <c>"dapr"</c> the plain registry client is wired up and
+    /// nothing on that path changes.
+    /// </remarks>
+    public DiscoveryCacheOptions Cache { get; set; } = new();
 }
 
 /// <summary>

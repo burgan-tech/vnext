@@ -1,7 +1,9 @@
 using BBT.Aether.Results;
 using BBT.Workflow.Execution.ErrorHandling;
 using BBT.Workflow.Instances;
+using BBT.Workflow.Logging;
 using BBT.Workflow.Tasks.Coordinator;
+using Microsoft.Extensions.Logging;
 
 namespace BBT.Workflow.Execution.Pipeline.Steps;
 
@@ -16,6 +18,12 @@ namespace BBT.Workflow.Execution.Pipeline.Steps;
 /// - Abort/Notify/Rollback with transition: Sets error transition and skips to Finalize
 /// - Abort/Unhandled without transition: Returns Fail so instance is marked Faulted
 /// </remarks>
+/// <remarks>
+/// <b>The caller persists what this records.</b> Every method here only mutates the aggregate; the
+/// step MUST save immediately afterwards. The pipeline's fault path reloads the instance in its own
+/// unit of work and skips its fallback incident only when the committed <c>HasActiveIncident</c>
+/// column says one exists — recording without saving is what made an abort produce two incidents.
+/// </remarks>
 public static class BoundaryOutcomeHandler
 {
     /// <summary>
@@ -27,7 +35,8 @@ public static class BoundaryOutcomeHandler
     /// <returns>A Result containing the step outcome based on the boundary action.</returns>
     public static Result<StepOutcome> Handle(
         TransitionExecutionContext context,
-        TasksExecutionResult result)
+        TasksExecutionResult result,
+        ILogger logger)
     {
         var action = result.BoundaryAction;
         if (action == null)
@@ -35,16 +44,24 @@ public static class BoundaryOutcomeHandler
             return Result<StepOutcome>.Ok(StepOutcome.Continue());
         }
 
-        // Log/Ignore - continue pipeline execution (record informational incident as already-resolved)
+        // Log/Ignore - continue pipeline execution (record informational incident as already-resolved).
+        //
+        // UNREACHABLE from the task steps as the engine stands: a continue-style outcome comes back as
+        // TasksExecutionResult.SuccessWithFailedTasks, which carries NO boundary action, so the step's
+        // BoundaryAction guard is false and this method is never called for Log/Ignore. The measured
+        // behaviour is therefore "no incident, and the rest of the hook is skipped". Left in place so
+        // the intended semantics are still expressed if the engine starts attaching the action.
         if (action.ShouldContinue)
         {
             var resolvedIncident = BuildIncident(context, result);
             resolvedIncident.Resolve();
             context.Instance.AddIncident(resolvedIncident);
+            logger.IncidentRecordedInformational(
+                context.Instance.Id, resolvedIncident.ErrorCode, resolvedIncident.BoundaryAction);
             return Result<StepOutcome>.Ok(StepOutcome.Continue());
         }
 
-        RecordIncident(context, result);
+        RecordIncident(context, result, logger);
 
         // Abort/Notify/Rollback with transition - request next transition and skip to finalize
         if (!string.IsNullOrEmpty(action.TransitionKey))
@@ -64,10 +81,13 @@ public static class BoundaryOutcomeHandler
     /// </summary>
     internal static void RecordIncident(
         TransitionExecutionContext context,
-        TasksExecutionResult result)
+        TasksExecutionResult result,
+        ILogger logger)
     {
         var incident = BuildIncident(context, result);
         context.Instance.AddIncident(incident);
+        logger.IncidentRecorded(
+            context.Instance.Id, incident.State, incident.Transition, incident.ErrorCode, incident.BoundaryAction);
     }
 
     /// <summary>
@@ -76,7 +96,8 @@ public static class BoundaryOutcomeHandler
     /// </summary>
     internal static void RecordUnhandledIncident(
         TransitionExecutionContext context,
-        ExecutionError executionError)
+        ExecutionError executionError,
+        ILogger logger)
     {
         var incident = InstanceIncidentFactory.Create(
             state: context.Instance.GetCurrentState,
@@ -90,6 +111,8 @@ public static class BoundaryOutcomeHandler
             traceId: context.TraceId);
 
         context.Instance.AddIncident(incident);
+        logger.IncidentRecorded(
+            context.Instance.Id, incident.State, incident.Transition, incident.ErrorCode, incident.BoundaryAction);
     }
 
     private static InstanceIncident BuildIncident(

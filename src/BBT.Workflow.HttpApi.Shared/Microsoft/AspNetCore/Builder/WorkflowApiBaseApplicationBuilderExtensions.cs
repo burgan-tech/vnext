@@ -2,8 +2,10 @@ using BBT.Aether.Threading;
 using BBT.Workflow.Data;
 using BBT.Workflow.Middlewares;
 using BBT.Workflow.Runtime;
+using BBT.Workflow.Schemas;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 
 namespace Microsoft.AspNetCore.Builder;
 
@@ -63,6 +65,9 @@ public static class WorkflowApiBaseApplicationBuilderExtensions
             var dbContext = scope.ServiceProvider.GetRequiredService<MessagingDbContext>();
             if (dbContext.Database.IsRelational())
             {
+                var migrationOptions = scope.ServiceProvider.GetService<IOptions<SchemaMigrationOptions>>()?.Value
+                                       ?? new SchemaMigrationOptions();
+                dbContext.Database.SetCommandTimeout(migrationOptions.CommandTimeoutSeconds);
                 await dbContext.Database.MigrateAsync();
             }
         });

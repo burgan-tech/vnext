@@ -218,9 +218,10 @@ namespace BBT.Workflow.Migrations
                         .HasMaxLength(180)
                         .HasColumnType("character varying(180)");
 
-                    b.Property<string>("Incidents")
-                        .IsRequired()
-                        .HasColumnType("jsonb");
+                    b.Property<bool>("HasActiveIncident")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(false);
 
                     b.Property<string>("Key")
                         .HasMaxLength(100)
@@ -265,6 +266,10 @@ namespace BBT.Workflow.Migrations
 
                     b.HasIndex("EffectiveState")
                         .HasDatabaseName("IX_Instances_EffectiveState");
+
+                    b.HasIndex("HasActiveIncident")
+                        .HasDatabaseName("IX_Instances_HasActiveIncident")
+                        .HasFilter("\"HasActiveIncident\" = true");
 
                     b.HasIndex("LongPollAckToken")
                         .HasDatabaseName("IX_Instances_LongPollAckToken")
@@ -485,6 +490,99 @@ namespace BBT.Workflow.Migrations
                         .HasDatabaseName("UX_InstancesData_Instance_Version_VersionNo");
 
                     b.ToTable("InstancesData", "public");
+                });
+
+            modelBuilder.Entity("BBT.Workflow.Instances.InstanceIncident", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("BoundaryAction")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasJsonPropertyName("boundaryAction");
+
+                    b.Property<string>("BoundaryLevel")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasJsonPropertyName("boundaryLevel");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasJsonPropertyName("createdAt");
+
+                    b.Property<string>("ErrorCode")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasJsonPropertyName("errorCode");
+
+                    b.Property<string>("ErrorLayer")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasJsonPropertyName("errorLayer");
+
+                    b.Property<Guid>("InstanceId")
+                        .HasColumnType("uuid")
+                        .HasJsonPropertyName("instanceId");
+
+                    b.Property<bool>("IsResolved")
+                        .HasColumnType("boolean")
+                        .HasJsonPropertyName("isResolved");
+
+                    b.Property<string>("Message")
+                        .IsRequired()
+                        .HasMaxLength(1024)
+                        .HasColumnType("character varying(1024)")
+                        .HasJsonPropertyName("message");
+
+                    b.Property<DateTime?>("ResolvedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasJsonPropertyName("resolvedAt");
+
+                    b.Property<int>("RetryCount")
+                        .HasColumnType("integer")
+                        .HasJsonPropertyName("retryCount");
+
+                    b.Property<string>("StackTrace")
+                        .HasMaxLength(4096)
+                        .HasColumnType("character varying(4096)")
+                        .HasJsonPropertyName("stackTrace");
+
+                    b.Property<string>("State")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasJsonPropertyName("state");
+
+                    b.Property<int?>("StatusCode")
+                        .HasColumnType("integer")
+                        .HasJsonPropertyName("statusCode");
+
+                    b.Property<string>("Task")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasJsonPropertyName("task");
+
+                    b.Property<string>("TraceId")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasJsonPropertyName("traceId");
+
+                    b.Property<string>("Transition")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasJsonPropertyName("transition");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("InstanceId", "CreatedAt")
+                        .IsDescending(false, true)
+                        .HasDatabaseName("IX_InstanceIncidents_InstanceId_CreatedAt");
+
+                    b.ToTable("InstanceIncidents", "public");
                 });
 
             modelBuilder.Entity("BBT.Workflow.Instances.InstanceJob", b =>
@@ -783,6 +881,15 @@ namespace BBT.Workflow.Migrations
                         .IsRequired();
                 });
 
+            modelBuilder.Entity("BBT.Workflow.Instances.InstanceIncident", b =>
+                {
+                    b.HasOne("BBT.Workflow.Instances.Instance", null)
+                        .WithMany("Incidents")
+                        .HasForeignKey("InstanceId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("BBT.Workflow.Instances.InstanceTask", b =>
                 {
                     b.HasOne("BBT.Workflow.Instances.InstanceTask", null)
@@ -918,6 +1025,8 @@ namespace BBT.Workflow.Migrations
                     b.Navigation("ChildCorrelations");
 
                     b.Navigation("DataList");
+
+                    b.Navigation("Incidents");
                 });
 #pragma warning restore 612, 618
         }

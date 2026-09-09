@@ -357,11 +357,11 @@ public sealed class MonitorInstanceController(
     }
 
     /// <summary>
-    /// Returns the error boundary incident history for a workflow instance.
-    /// At most 5 incidents are retained; items are ordered newest-first.
+    /// Returns one page of the error boundary incident history for a workflow instance, newest-first.
+    /// History is unbounded; page through it with <c>page</c>/<c>pageSize</c> (default 1/50, max 200).
     /// Returns an empty items list when no incidents have been recorded.
     /// </summary>
-    /// <response code="200">Incident list returned successfully</response>
+    /// <response code="200">Incident page returned successfully</response>
     /// <response code="404">Instance not found</response>
     [HttpGet("{domain}/workflows/{workflow}/instances/{instance}/incidents")]
     [ProducesResponseType(typeof(MonitorInstanceIncidentsResponse), StatusCodes.Status200OK)]
@@ -370,13 +370,17 @@ public sealed class MonitorInstanceController(
         [FromRoute] string domain,
         [FromRoute] string workflow,
         [FromRoute] string instance,
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 50,
         CancellationToken cancellationToken = default)
     {
         var input = new MonitorGetInstanceIncidentsInput
         {
             Domain   = domain,
             Workflow = workflow,
-            Instance = instance
+            Instance = instance,
+            Page     = page,
+            PageSize = pageSize
         };
         return FromResult(await queryService.GetInstanceIncidentsAsync(input, cancellationToken));
     }

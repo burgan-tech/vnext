@@ -52,10 +52,14 @@ public sealed class StandardTaskPersistenceStrategy(
         bool skipLookup = false,
         CancellationToken cancellationToken = default)
     {
+        // No database transaction: task execution for one instance is already serialized by the
+        // per-instance Busy/CAS mutex (one owner runs the pipeline at a time — see
+        // InstanceBusyManager), so this idempotency read is never racing a concurrent insert the
+        // way the accept-time duplicate-job guard is. InstanceTask raises no domain events either,
+        // so there is nothing here for a transaction to coordinate.
         await using var uow = unitOfWorkManager.Begin(new UnitOfWorkOptions
         {
-            Scope = UnitOfWorkScopeOption.RequiresNew,
-            IsTransactional = true
+            Scope = UnitOfWorkScopeOption.RequiresNew
         });
 
         var existing = skipLookup
@@ -82,10 +86,11 @@ public sealed class StandardTaskPersistenceStrategy(
     /// <param name="cancellationToken">Cancellation token for async operation control.</param>
     public async Task HandleCompletionAsync(InstanceTask instanceTask, CancellationToken cancellationToken = default)
     {
+        // No database transaction: MarkCompletedAsync is one set-based UPDATE with nothing else
+        // to coordinate alongside it.
         await using var uow = unitOfWorkManager.Begin(new UnitOfWorkOptions
         {
-            Scope = UnitOfWorkScopeOption.RequiresNew,
-            IsTransactional = true
+            Scope = UnitOfWorkScopeOption.RequiresNew
         });
         await instanceTaskRepository.MarkCompletedAsync(instanceTask, cancellationToken);
         await uow.CommitAsync(cancellationToken);
