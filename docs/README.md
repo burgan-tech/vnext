@@ -57,6 +57,7 @@ describe the stable mental model, boundaries, failure modes, and change-safety r
 32. Read [Form URL-Encoded Payloads](contracts/form-url-encoded-payloads.md) before changing how start / transition / function endpoints accept `application/x-www-form-urlencoded` bodies.
 33. Read [Elastic Dev Tools Queries for the vNext Trace Tree](runtime/trace-elastic-queries.md) when verifying spans in Kibana — every query was executed against a real `traces-apm*` index; note the `labels.*` vs `numeric_labels.*` split.
 34. Read [Integration Testing a Runtime Change](testing/integration-testing.md) before claiming a core-process change works — it names the sibling repos, the locally-built-runtime rule, the `VNEXT_BASE_URL` external mode, the same-commit `TEST-SCENARIOS.md` obligation, and the Aether local-feed revert that must happen before a PR.
+35. Read [Discovery Endpoint Cache](runtime/discovery-endpoint-cache.md) before changing how a domain name is resolved to an endpoint under `ServiceDiscovery:Provider=http`. Covers the staleness budget and the startup-enforced TTL invariants, the lock + marker refresh protocol (and why the registration hosted service's never-released lease is the wrong shape here), why the page number is incremented rather than `links.next` followed, why the entry carries its own fetch time instead of trusting the state store's TTL, and what the 2026-08-28 removal of the previous cache actually proved.
 
 ### Historical records (not current contracts)
 

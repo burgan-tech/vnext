@@ -11,11 +11,20 @@ namespace BBT.Workflow.Discovery;
 /// <c>Remote*</c> typed clients then call that URL over plain HTTP.
 /// </summary>
 /// <remarks>
-/// Behaviour is unchanged from the pre-Dapr resolver, deliberately and down to the details:
-/// every call queries the registry (no cache, so a moved or de-registered endpoint is never
-/// masked by a stale entry) and a registration without a <c>baseUrl</c> is an error. This is
-/// what <c>ServiceDiscovery:Provider=http</c> restores, which is why it is a real rollback
-/// rather than an approximation of one.
+/// <para>
+/// The provider itself holds no cache and asks <see cref="IDiscoveryRegistryClient"/> on every call;
+/// a registration without a <c>baseUrl</c> is an error. This is what
+/// <c>ServiceDiscovery:Provider=http</c> restores, which is why it is a real rollback rather than an
+/// approximation of one.
+/// </para>
+/// <para>
+/// Caching, when enabled, lives one layer down — a decorator over the registry client, wired up only
+/// for this provider. It is kept out of here deliberately: what is cacheable is the caller-independent
+/// <c>DomainRegistration</c>, not the <see cref="DiscoveryEndpoint"/> this class produces, whose
+/// <c>Kind</c> depends on the calling site's <c>preferredKind</c>. Caching the endpoint
+/// under a domain-keyed entry lets a Dapr-preferring caller and a URL caller overwrite each other's
+/// answer — a real defect in the implementation removed in <c>79da3b6f</c>.
+/// </para>
 /// </remarks>
 public sealed class HttpDomainDiscoveryProvider(
     IDiscoveryRegistryClient registryClient,
@@ -50,9 +59,17 @@ public sealed class HttpDomainDiscoveryProvider(
                 WorkflowErrors.DomainDiscoveryFailed(domain, "Empty or invalid response"));
         }
 
-        activity?.SetTag(
-            TelemetryConstants.TagNames.DiscoveryResolution,
-            TelemetryConstants.DiscoveryResolutions.Registry);
+        // Only claim "registry" if nothing already claimed the tag. The caching decorator sits
+        // BELOW this call and tags a hit as `cache` before returning, so an unconditional set here
+        // would overwrite it on every single hit — leaving the span permanently reporting `registry`
+        // and the cache invisible in traces, which is precisely the observability this feature is
+        // required to have.
+        if (activity?.GetTagItem(TelemetryConstants.TagNames.DiscoveryResolution) is null)
+        {
+            activity?.SetTag(
+                TelemetryConstants.TagNames.DiscoveryResolution,
+                TelemetryConstants.DiscoveryResolutions.Registry);
+        }
 
         var baseUrl = registration.BaseUrl.TrimEnd('/') + "/";
         Logger.DomainResolvedFromRegistry(domain, baseUrl);
