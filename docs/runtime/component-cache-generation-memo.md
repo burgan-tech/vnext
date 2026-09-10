@@ -98,7 +98,7 @@ gain saturates at small N, while the CD window grows linearly with it.
 The code default stays `0` (a unit test pins the "correctness first" default deliberately);
 activation ships as an `appsettings.json` value in the **orchestration host** — the only host
 that wires the component cache module and resolves component versions (the execution host
-receives already-resolved work; the read-only monitor host keeps the code default):
+receives already-resolved work):
 
 ```json
 "ComponentCache": {

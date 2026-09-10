@@ -24,7 +24,6 @@ services:
     networks:
       - bbt-development
     depends_on:
-      - dapr-placement
       - dapr-scheduler
       - postgres
       
@@ -52,7 +51,6 @@ services:
     networks:
       - bbt-development
     depends_on:
-      - dapr-placement
       - dapr-scheduler
       - postgres
 
@@ -96,7 +94,6 @@ services:
       "--dapr-grpc-port", "42111",
       "--dapr-http-port", "42110",
       "--scheduler-host-address", "dapr-scheduler:50007",
-      "--placement-host-address", "dapr-placement:50005"
     ]
     volumes:
       - "../../etc/orchestration/dapr/components:/components"
@@ -104,7 +101,6 @@ services:
     network_mode: "service:vnext-app"
     depends_on:
       - vnext-app
-      - dapr-placement
       - dapr-scheduler
       - redis
       - vault
@@ -121,7 +117,6 @@ services:
       "--dapr-grpc-port", "43111",
       "--dapr-http-port", "43110",
       "--scheduler-host-address", "dapr-scheduler:50007",
-      "--placement-host-address", "dapr-placement:50005"
     ]
     volumes:
       - "../../etc/execution/dapr/components:/components"
@@ -129,60 +124,6 @@ services:
     network_mode: "service:vnext-execution-app"
     depends_on:
       - vnext-execution-app
-      - dapr-placement
-      - dapr-scheduler
-      - redis
-      - vault
-
-  vnext-monitoring-app:
-    container_name: vnext-monitoring-app
-    build:
-      context: ../..
-      dockerfile: monitoring/BBT.Workflow.Monitor.HttpApi.Host/Dockerfile
-      args:
-        ENVIRONMENT: stage
-    env_file:
-      - .env.monitoring.stage
-    environment:
-      # `environment` wins over env_file — lets run-docker.sh pick the domain per run without editing files
-      APP_DOMAIN: ${APP_DOMAIN:-core}
-      ConnectionStrings__Default: "Host=vnext-postgres;Port=5432;Database=${VNEXT_DB:-Aether_WorkflowDb};Username=postgres;Password=postgres;"
-    healthcheck:
-      test: [ "CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:5000/health" ]
-      interval: 10s
-      retries: 5
-      start_period: 35s
-      timeout: 30s
-    ports:
-      - "4203:5000"
-    networks:
-      - bbt-development
-    depends_on:
-      - dapr-placement
-      - dapr-scheduler
-      - postgres
-
-  vnext-monitoring-dapr:
-    image: "daprio/daprd"
-    container_name: vnext-monitoring-dapr
-    command: [
-      "./daprd",
-      "--config", "/dapr-config.yaml",
-      "--app-id", "vnext-monitoring",
-      "--app-port", "5000",
-      "--resources-path", "./components",
-      "--dapr-grpc-port", "42131",
-      "--dapr-http-port", "42130",
-      "--scheduler-host-address", "dapr-scheduler:50007",
-      "--placement-host-address", "dapr-placement:50005"
-    ]
-    volumes:
-      - "../../etc/monitoring/dapr/components:/components"
-      - "../../etc/monitoring/dapr/config.yaml:/dapr-config.yaml"
-    network_mode: "service:vnext-monitoring-app"
-    depends_on:
-      - vnext-monitoring-app
-      - dapr-placement
       - dapr-scheduler
       - redis
       - vault
@@ -198,7 +139,6 @@ services:
       "--dapr-grpc-port", "44211",
       "--dapr-http-port", "44210",
       "--scheduler-host-address", "dapr-scheduler:50007",
-      "--placement-host-address", "dapr-placement:50005"
     ]
     volumes:
       - "../../etc/workers/db-migrator/dapr/components:/components"
@@ -209,7 +149,6 @@ services:
     networks:
       - bbt-development
     depends_on:
-      - dapr-placement
       - dapr-scheduler
       - redis
       - vault
@@ -232,15 +171,6 @@ services:
       - postgres
       - redis
     restart: "no"
-
-  dapr-placement:
-    image: "daprio/dapr"
-    container_name: dapr-placement
-    command: ["./placement"]
-    ports:
-      - "50005:50005"
-    networks:
-      - bbt-development
 
   dapr-scheduler:
     image: "daprio/scheduler"
@@ -448,5 +378,5 @@ volumes:
   postgres:
   openobserve:
   elasticsearch:
-  vnext-monitoring-app:
+
   npm-cache: {}

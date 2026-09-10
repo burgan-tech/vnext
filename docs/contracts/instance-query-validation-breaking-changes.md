@@ -2,6 +2,9 @@
 
 **Target release:** 0.0.80 (unreleased — confirm against `vnext-meta/version-manifest.json` before publishing)
 **Affects:** Orchestration instance list API, Monitoring instance/counter APIs, `GetInstancesTask` in workflow definitions
+
+> Historical record — kept as authored. The Monitor API host (`/api/v1/monitor`, port `4203`) has
+> since been removed from this repository; its rows below describe behaviour at the time of the change.
 **Severity:** High — running workflow definitions and working client calls can break on deploy, without any code change on the consumer side.
 
 ## Purpose

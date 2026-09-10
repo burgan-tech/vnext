@@ -18,7 +18,6 @@ Describe the product or runtime problem without proposing a solution.
 |---|---|---|---|---|
 | vNext orchestration | Workflow definitions, instances and transitions | Orchestration domain | | Dapr, PostgreSQL, Redis |
 | vNext execution | Task execution for transitions | Execution domain | | Dapr, task invokers |
-| vNext monitor | Read-only operational queries | Monitor domain | | PostgreSQL |
 
 ## Technology Stack
 
