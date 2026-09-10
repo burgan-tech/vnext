@@ -19,5 +19,5 @@ spec:
       isSecure: false
   secrets:
     scopes:
-      - storeName: vnext-execution-secret
+      - storeName: vnext-secret
         defaultAccess: allow

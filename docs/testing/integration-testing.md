@@ -7,7 +7,7 @@ agent (Codex, Cursor, Copilot, Gemini) reads this page directly.
 
 Related: [Platform repositories](../../AGENTS.md#platform-repositories) (who owns what),
 [Runbook: bring up domain X](../../AGENTS.md#runbook-bring-up-domain-x-for-agents),
-[Correlation and tracing](../monitoring/correlation-and-tracing.md),
+[Correlation and tracing](../runtime/correlation-and-tracing.md),
 [Elastic queries for the trace tree](../runtime/trace-elastic-queries.md).
 
 ## 1. Policy — when an integration test is required

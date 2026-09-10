@@ -12,7 +12,6 @@ external side effects do not collapse into one service boundary.
 | --- | --- | --- |
 | Orchestration host | `orchestration/BBT.Workflow.Orchestration.HttpApi.Host` | Public workflow API, definitions, instances, transitions, functions, subflow coordination. |
 | Execution host | `execution/BBT.Workflow.Execution.HttpApi.Host` | Stateless task invocation endpoint used by Orchestration through Dapr service invocation. |
-| Monitor host | `monitoring/BBT.Workflow.Monitor.HttpApi.Host` | Read-only operational endpoints for dashboards and support tools. |
 | Domain | `src/BBT.Workflow.Domain` | Aggregates, value objects, domain events, validation contracts, workflow definitions. |
 | Application | `src/BBT.Workflow.Application` | Use cases, DTOs, transition pipeline, task executors, query services. |
 | Infrastructure | `src/BBT.Workflow.Infrastructure` | EF Core repositories, Dapr integration, routing gateways and remote app services. |
@@ -31,7 +30,6 @@ flowchart LR
     Orch --> Dapr["Dapr service invocation"]
     Dapr --> Exec["Execution API"]
     Exec --> Invokers["Task invokers"]
-    Monitor["Monitor API"] --> Db
     Infra --> Outbox["Outbox worker"]
     Outbox --> PubSub["Dapr pub/sub"]
     PubSub --> Inbox["Inbox worker"]

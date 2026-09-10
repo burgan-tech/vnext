@@ -199,7 +199,7 @@ instance deterministically. It carries **links, not content**:
   the incident**; `history.href` always addresses the polled instance, because that link answers
   "what has gone wrong with the thing I asked about".
 - Visible to every caller who passes the state function's `queryRoles` gate. **Never** a stack trace
-  on any of these surfaces — operators read those from the Monitor API.
+  on any of these surfaces — operators read those from the logs / APM.
 
 ### `GET …/instances/{instance}/incidents/active`
 
@@ -252,7 +252,7 @@ the API gateway route rather than at the pod.
 So a host configures **one key**:
 
 ```json
-"UrlTemplates": { "BasePath": "/api/v1/monitor" }
+"UrlTemplates": { "BasePath": "/api/v1/gateway" }
 ```
 
 Omit the section entirely and the application serves its own prefix, `/api/v1` — the same one its

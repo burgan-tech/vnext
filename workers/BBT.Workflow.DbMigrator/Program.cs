@@ -36,7 +36,6 @@ builder.Services
     .AddDbContext(configuration)
     .AddTelemetry(configuration)
     .AddDistributedLock(configuration)
-    .AddRedis()
     .AddSingleton<SchemaMigrationRunner>()
     .AddHostedService<SchemaMigrationHostedService>();
 

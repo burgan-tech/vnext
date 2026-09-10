@@ -408,8 +408,8 @@ creation rule, the `business` category, and the L1-hit tag — mirroring
 
 **Every new `ActivitySource` must be added to `Telemetry:Tracing:AdditionalSources` in the same
 commit that introduces it, in all four hosts' `appsettings.json`** (Orchestration, Execution,
-Workers.Inbox, Workers.Outbox — plus `BBT.Workflow.DbMigrator` and
-`BBT.Workflow.Monitor.HttpApi.Host` where applicable). This is not optional polish: a source that
+Workers.Inbox, Workers.Outbox — plus `BBT.Workflow.DbMigrator` where applicable). This is not
+optional polish: a source that
 isn't registered produces spans that Aether's `ActivitySource.StartActivity` still creates
 in-process, but the `TracerProvider` never subscribes to them, so they are silently dropped before
 export — no error, no warning, just a gap in the trace.
@@ -606,7 +606,7 @@ field.
 - [Trace Lanes](trace-lanes.md) — the anchor/predecessor split that keeps chained hops and
   subflow handoffs siblings instead of a deep nest; the parenting model every span in this plan's
   tree relies on.
-- [Correlation and Tracing](../monitoring/correlation-and-tracing.md) — gateway trace-continuation
+- [Correlation and Tracing](correlation-and-tracing.md) — gateway trace-continuation
   contract, `X-Request-Id` propagation, task-binding header handling.
 - [Component Cache Generation Memo](component-cache-generation-memo.md) — the generation-token
   invalidation model the `Cache.*` spans' `cache.generation` tag reflects.

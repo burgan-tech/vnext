@@ -46,7 +46,6 @@ public static class OrchestrationApiServiceCollectionExtensions
             .AddDistributedLock(configuration)
             .AddTransitionLockScope()
             .AddBackgroundJob()
-            .AddRedis()
             .AddExceptionHandling()
             .AddRuntimeMiddleware()
             .AddHeaderService()

@@ -39,10 +39,9 @@ cd etc/docker && ./run-docker.sh up       # Infra + sidecars + DbMigrator + all 
 # Or run API hosts by hand (requires infrastructure running)
 dotnet run --project orchestration/BBT.Workflow.Orchestration.HttpApi.Host
 dotnet run --project execution/BBT.Workflow.Execution.HttpApi.Host
-dotnet run --project monitoring/BBT.Workflow.Monitor.HttpApi.Host
 ```
 
-**Ports**: Orchestration → 4201, Execution → 4202, Monitor → 4203
+**Ports**: Orchestration → 4201, Execution → 4202, Outbox → 4401, Inbox → 4501
 
 ### Runbook: "bring up domain X" (for agents)
 
@@ -53,7 +52,7 @@ Commands run without a terminal, so the script never prompts — pass everything
 2. Decide the offset: `core` → none (offset 0). Another domain → its recorded offset, else the next
    free multiple of 10 (`./run-docker.sh plan X --offset N` shows ports and app-ids; it refuses collisions).
    Tell the user the offset you picked before starting.
-3. `./run-docker.sh up X --offset N` (`--monitor` only if asked; `--no-build` only if the build is
+3. `./run-docker.sh up X --offset N` (`--no-build` only if the build is
    known to be fresh). It brings up infra + sidecars, runs DbMigrator, starts the hosts and waits for
    `/health`. Expect a few minutes on a cold build.
 4. If it refuses with "docker infra is running from another compose file", stop: another stack (for
@@ -107,10 +106,8 @@ This is a **distributed workflow orchestration engine** built on .NET 10, Clean 
 |------|---------|---------|
 | Orchestration | `orchestration/BBT.Workflow.Orchestration.HttpApi.Host` | Public-facing: manages workflow definitions, instances, transitions |
 | Execution | `execution/BBT.Workflow.Execution.HttpApi.Host` | Internal: executes task invokers for a specific transition |
-| Monitor | `monitoring/BBT.Workflow.Monitor.HttpApi.Host` | Read-only operational queries for monitoring clients |
 
-Orchestration and Execution communicate through **Dapr service invocation**. Monitor reads the
-runtime's operational data without owning transition execution.
+Orchestration and Execution communicate through **Dapr service invocation**.
 
 ### Layer Responsibilities (`src/`)
 

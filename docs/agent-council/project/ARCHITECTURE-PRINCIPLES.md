@@ -1,7 +1,7 @@
 # Architecture Principles
 
 1. Components have explicit responsibilities and data ownership.
-2. API, orchestration, execution and monitoring boundaries remain explicit.
+2. API, orchestration and execution boundaries remain explicit.
 3. External contracts are versioned and observable.
 4. Workflow/orchestrator state is the single source of truth for process state.
 5. Agents reason and propose; the workflow system owns state and policy.

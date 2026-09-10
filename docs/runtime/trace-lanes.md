@@ -254,7 +254,7 @@ activation duration because the instance is already observable as Available.
 
 - [Trace Span Tree](trace-span-tree.md) — every span name, source and tag, including the
   `Instance.Activation/{key}` row and the accept/start gap spans.
-- [Correlation and Tracing](../monitoring/correlation-and-tracing.md) — carriers, job
+- [Correlation and Tracing](correlation-and-tracing.md) — carriers, job
   trace-continuation matrix, reserved-header rule for cross-domain calls.
 - `docs/runtime/state-function-cache-and-etag.md`
 - `.claude/rules/vnext-workflow-developer.md` — pipeline step order, subflow lifecycle
