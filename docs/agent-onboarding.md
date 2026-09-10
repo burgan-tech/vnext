@@ -29,7 +29,7 @@ It is empty in git and is not a source of truth.
 | [.claude/rules/dotnet-coding-standards.md](../.claude/rules/dotnet-coding-standards.md) | Style, Result pattern, logging, **outbox events** (EventHook is gone). |
 | [.claude/rules/vnext-workflow-developer.md](../.claude/rules/vnext-workflow-developer.md) | Pipeline, profiles, locking, well-known transitions, `availableIn`. |
 | [architecture/workflow-execution-pipeline.md](architecture/workflow-execution-pipeline.md) | Ordered steps, profiles, inline auto-chain, post-commit boundaries. |
-| [runtime/event-publish-modes.md](runtime/event-publish-modes.md) | Outbox vs Outbox+TerminalRelay. |
+| [runtime/event-publish-modes.md](runtime/event-publish-modes.md) | Outbox vs Outbox+PostCommitRelay. |
 
 Cursor always-applies `.cursor/rules/*.mdc`. Each one is an 8-line pointer that
 `@`-includes the matching `.claude/rules/*.md`, and Cursor loads `.claude/skills/`
@@ -74,8 +74,9 @@ disagrees with the code, the code wins.
 - **Epilogue is Auto (80) then Schedule (90).** A satisfied auto winner must not
   arm timers that the next hop would immediately cancel.
 - **EventHook is deleted.** New events are `[EventName]` + Inbox `IEventHandler<T>`
-  + `WorkflowLogs`. Subflow terminal events also implement `ISubflowTerminalEvent`
-  (Outbox + `SubflowTerminalRelay`).
+  + `WorkflowLogs`. An event gets the immediate post-commit path by registering an
+  `IPostCommitEventRelay<TEvent>`
+  (Outbox + `PostCommitRelayDispatcher`).
 - **`$self` does not skip state lifecycle** except `updateData`
   (`SkipsStateLifecycle`). A `$self` shared transition still runs OnExit/OnEntry
   and re-arms timers.

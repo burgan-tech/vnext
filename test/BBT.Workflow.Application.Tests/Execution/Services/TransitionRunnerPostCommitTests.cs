@@ -18,6 +18,7 @@ using BBT.Workflow.Execution.PostCommit;
 using BBT.Workflow.Execution.Services;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
+using BBT.Workflow.Execution.PostCommit.Relay;
 using BBT.Workflow.SubFlow;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -459,7 +460,7 @@ public sealed class TransitionRunnerPostCommitTests
             CacheStore = cacheStore;
             services.AddSingleton(currentSchema);
             services.AddSingleton(cacheStore);
-            services.AddSingleton(Substitute.For<ISubflowTerminalRelay>());
+            services.AddSingleton(Substitute.For<IPostCommitRelayDispatcher>());
             services.AddScoped(_ =>
             {
                 var probe = new CurrentUserScopeProbe();

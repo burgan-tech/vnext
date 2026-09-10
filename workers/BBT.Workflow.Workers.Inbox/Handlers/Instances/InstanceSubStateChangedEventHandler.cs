@@ -41,6 +41,11 @@ internal sealed class InstanceSubStateChangedEventHandler(
             "InstanceSubStateChanged.Handle", eventData, correlationIdProvider,
             EventTraceMode.IsolatedDelivery, envelope.Id);
 
+        // This delivery is the durable BACKUP of the post-commit sub-state relay: in the normal case
+        // the relay already applied the change and SubflowStateService answers out_of_order for this
+        // one under the same per-sub-item lock. Dashboards separate primary vs backup on this tag.
+        Activity.Current?.SetTag(TelemetryConstants.TagNames.DeliveryRole, "backup");
+
         var scopeProps = new Dictionary<string, object>
         {
             [TelemetryConstants.TagNames.Domain] = eventData.Domain,

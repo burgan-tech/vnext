@@ -310,6 +310,20 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Loads a change-tracked parent for a SubFlow state change: ONLY the open correlation of the
+    /// given sub-instance, and NO data. The state path writes
+    /// <see cref="Instance.EffectiveState"/>/type/subtype and reads only <c>ExtraProperties</c> for
+    /// the upward event, so pulling <see cref="Instance.DataList"/> — which the default detail load
+    /// does, unsplit — costs the whole jsonb history for nothing on the runtime's highest-volume
+    /// subflow signal. The aggregate is marked partially loaded; <see cref="Instance.LatestData"/>
+    /// is null and must not be read.
+    /// </summary>
+    Task<Instance?> FindForSubflowStateChangeAsync(
+        Guid instanceId,
+        Guid subInstanceId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Loads the parent for post-commit settlement: always its open correlations (the settlement
     /// guard and the fault cascade read them), and its latest data row only when
     /// <paramref name="includeLatestData"/> is set. The returned aggregate is marked partially

@@ -939,6 +939,13 @@ public sealed class InstanceCommandAppService(
                 instance.SetInfoMetadata(isSync, callback, workflow.Type.Code, metadata);
                 instance.ChangeState(initialState);
 
+                // Creation commits in its own unit of work, with no settlement to coalesce into, so
+                // the pre-positioned initial state is flushed here. Load-bearing for a child whose
+                // start transition targets its own initial state: nothing moves afterwards, so the
+                // pipeline's rest point has nothing to publish and this is the parent's ONLY
+                // notification for it.
+                instance.PublishPendingSubStateChange();
+
                 if (instance.IsSubItem)
                     instance.Busy();
 

@@ -135,6 +135,42 @@ Guidance is tool-neutral and lives in one place; every agent (Claude Code, Curso
 
   It also fires on phrases like "council", "karar verelim", "eklemeli miyim", "mimari karar". The council never edits code; it only produces the decision record. Session artifacts are written locally under `ai-docs/agent-council/sessions/` (git-ignored) and indexed in the committed [decision log](docs/agent-council/sessions/README.md), which is the team's decision history — check it before opening a new session. Process, roles and templates: [docs/agent-council/README.md](docs/agent-council/README.md).
 
+- Every change is discoverable through a queryable knowledge graph, not by grepping blindly. See
+  [.claude/rules/graphify-navigation.md](.claude/rules/graphify-navigation.md) for when agents must
+  consult it first.
+
+  **Setup (once per machine):**
+  ```bash
+  # 1. Install uv, if you don't already have it (macOS/Linux):
+  curl -LsSf https://astral.sh/uv/install.sh | sh
+  # macOS via Homebrew: brew install uv
+  # Windows (PowerShell): powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+
+  # 2. Install graphify with uv (falls back to pip if uv isn't available):
+  uv tool install graphifyy
+  # If `graphify` isn't found afterwards, your shell's PATH needs ~/.local/bin — run:
+  uv tool update-shell   # then restart your terminal
+  ```
+
+  **Build the graph (once, or after large structural changes):**
+  ```bash
+  /graphify .        # inside Claude Code — full pipeline, respects .graphifyignore
+  # or, from a plain terminal:
+  graphify .
+  ```
+  Output lands in `graphify-out/` (gitignored). `.graphifyignore` already excludes EF Core migration
+  scaffolding, Postman/Mockoon exports and lockfiles — see the file for the full list.
+
+  **Keep it fresh automatically — post-commit hook:**
+  ```bash
+  graphify hook install     # re-extracts changed code files and rebuilds graph.json after every commit
+  graphify hook status      # check whether it's installed
+  graphify hook uninstall   # remove it
+  ```
+  The hook only re-processes code files changed by the commit (via `git diff HEAD~1`); doc/image
+  changes still need a manual `/graphify --update`. If a post-commit hook already exists, graphify
+  appends to it rather than replacing it.
+
 ## Health Endpoints
 
 Every host maps `/health`, `/ready` and `/live`:

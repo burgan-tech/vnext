@@ -10,6 +10,7 @@ These rules are authoritative for all work in this repo. Read them before writin
 - [.NET / Aether / vNext coding standards](.claude/rules/dotnet-coding-standards.md) — style, naming, Aether SDK usage, outbox event delivery, logging via `WorkflowLogs.cs`, Result pattern, multi-schema rules.
 - [vNext workflow developer reference](.claude/rules/vnext-workflow-developer.md) — pipeline step order, profiles, subflow lifecycle, error boundary, long-polling, instance data, `vnext-meta`.
 - [Agent Council plan mode](.claude/rules/agent-council-plan-mode.md) — non-trivial decisions must produce an evidence-backed plan before implementation.
+- [Codebase navigation — graphify first](.claude/rules/graphify-navigation.md) — when `graphify-out/graph.json` exists, query it (`graphify path`/`explain`/`query`) before grepping or reading broadly.
 
 ## First-Time Setup
 
@@ -151,11 +152,15 @@ the transactional outbox and requires:
 - **Event Handler** (`IEventHandler<T>` in `workers/BBT.Workflow.Workers.Inbox/Handlers/`) — asynchronous, distributed, fault-tolerant
 - **WorkflowLogs** entries (`BBT.Workflow.Domain/Logging/WorkflowLogs.cs`)
 
-The three subflow terminal events (`InstanceSubCompletedEvent`, `InstanceSubFaultedEvent`,
-`InstanceSubCanceledEvent`) additionally implement `ISubflowTerminalEvent`: post-commit, `SubflowTerminalRelay`
-relays them as an immediate command via `IInstanceCommandGateway`, and their Inbox handler is a
-durable backup deduplicated by `ISubItemTerminalGuard` — the only event category with a second
-delivery path by design. See `docs/runtime/event-publish-modes.md`.
+An event gains a second, immediate delivery path by REGISTERING a relay —
+`AddScoped<IPostCommitEventRelay<TEvent>, …>()` in `AddPipelineServices`, no marker interface, no
+central switch. Post-commit, `PostCommitRelayDispatcher` relays it as a command via
+`IInstanceCommandGateway`, and its Inbox handler becomes a durable backup. Four events are
+registered today: the three subflow terminal events (backup deduplicated by `ISubItemTerminalGuard`)
+and `InstanceSubStateChangedEvent` (guarded by the per-sub-item lock plus the monotonic
+`SubFlowStateChangedAt` stamp). Registration alone is not licence: each relayed event needs a durable
+backup, an idempotent order-safe receiver guard, measured latency evidence and a council row. See
+`docs/runtime/event-publish-modes.md`.
 
 ---
 

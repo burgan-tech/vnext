@@ -211,6 +211,17 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
     private readonly List<InstanceIncident> _detachedIncidents = new();
 
     /// <summary>
+    /// Coalescing state for <c>sub:state-changed</c>: the state this activation episode STARTED in,
+    /// and whether it moved at all. In-memory only — never mapped, never persisted. Its lifetime is
+    /// the tracked aggregate's, which is exactly one episode: the inline auto-chain reuses the same
+    /// instance across its hops (<c>CreateFromPreloaded</c>), while every post-commit, retry or
+    /// subflow-callback boundary loads a fresh one. See
+    /// <see cref="PublishPendingSubStateChange"/>.
+    /// </summary>
+    private string? _pendingSubStateChangeFrom;
+    private bool _hasPendingSubStateChange;
+
+    /// <summary>
     /// Incidents materialized on this aggregate. A real child collection (table
     /// <c>InstanceIncidents</c>) that is <b>never</b> included by default — every load path leaves it
     /// empty and <see cref="IncidentsLoaded"/> false. Callers that need the unresolved incidents
@@ -1007,13 +1018,59 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
             Status = InstanceStatus.Busy;
         }
 
-        // Domain Logic: Publish state change event if this is a SubFlow.
-        // A same-state change ($self target) is not a state change — publishing it would emit a
+        // Domain Logic: Arm the SubFlow state notification — do NOT publish it here.
+        // A same-state change ($self target) is not a state change; arming it would emit a
         // sub:state-changed with previous == new on every self transition.
+        //
+        // The event is COALESCED to the activation episode's rest point (see
+        // PublishPendingSubStateChange). An auto-chain crossing A→B→C→D is one episode with one
+        // observable outcome, D; the parent can act on nothing in between, because the chain has
+        // not stopped. Emitting per hop made this the runtime's highest-volume signal — measured at
+        // 6 facts per 908 ms chain against a ~1.3 s delivery, with 7.5% of deliveries writing
+        // nothing at the receiver — and moved the parent's state-function ETag on every hop, so a
+        // long-polling client woke for states it could not use.
         if (IsSubFlow && !string.Equals(previousState, state.Key, StringComparison.Ordinal))
         {
-            PublishSubStateChangedEvent(previousState, state.Key);
+            _pendingSubStateChangeFrom ??= previousState;
+            _hasPendingSubStateChange = true;
         }
+    }
+
+    /// <summary>
+    /// Publishes the coalesced <c>sub:state-changed</c> for the activation episode that just ended,
+    /// if any state change happened during it. Called once, at the episode's REST POINT — the
+    /// instance became Active, reached a finish state, or deliberately rests Busy (a parked
+    /// auto-gate, a Busy-subtype state). Callers must invoke it inside the unit of work that
+    /// persists the state, so the event and the state it describes commit together.
+    /// <para>
+    /// The instance's own creation is its own such point: it is pre-positioned into the initial
+    /// state and committed in a unit of work that has no settlement, so
+    /// <c>InstanceCommandAppService</c> flushes it there. That matters for a child whose start
+    /// transition targets its own initial state — nothing moves afterwards, so this is the only
+    /// notification the parent ever gets for it.
+    /// </para>
+    /// </summary>
+    /// <returns><c>true</c> when an event was published.</returns>
+    public bool PublishPendingSubStateChange()
+    {
+        if (!_hasPendingSubStateChange)
+            return false;
+
+        var previousState = _pendingSubStateChangeFrom ?? string.Empty;
+        _pendingSubStateChangeFrom = null;
+        _hasPendingSubStateChange = false;
+
+        if (!IsSubFlow)
+            return false;
+
+        // The chain came back to where it started: nothing was published in between, so from the
+        // parent's point of view nothing happened.
+        var newState = GetCurrentState;
+        if (string.Equals(previousState, newState, StringComparison.Ordinal))
+            return false;
+
+        PublishSubStateChangedEvent(previousState, newState);
+        return true;
     }
 
     public void AddTags(string[]? tags)
