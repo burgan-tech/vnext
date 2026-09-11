@@ -1229,6 +1229,18 @@ public sealed class InstanceQueryAppService(
                         ? stateFunctionCache.ComputeEtag(input, fingerprint, output)
                         : stateFunctionCache.ComputeEtag(input, fingerprint);
 
+                    // Drift detector: this is the one place that holds BOTH the live descent's status
+                    // and the stored projection, so the comparison is free. The projection is
+                    // fingerprint material only — the body above carries the live value — and this
+                    // measures whether it is ever trustworthy enough to be served instead.
+                    if (data.instance.HasActiveSubFlow
+                        && output.Status is not null
+                        && !data.instance.EffectiveStatus.Equals(output.Status))
+                    {
+                        logger.EffectiveStatusDrift(
+                            data.instance.Id, data.instance.EffectiveStatus.Code, output.Status.Code);
+                    }
+
                     // Active-child state cannot be validated from the parent row, so keep it only
                     // for a short freshness window. Parent changes still invalidate immediately;
                     // concurrent misses are coalesced by the per-key build lease.

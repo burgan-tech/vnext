@@ -3675,6 +3675,27 @@ public static partial class WorkflowLogs
         Guid instanceId,
         string stateKey);
 
+    /// <summary>
+    /// Logs when the stored <c>EffectiveStatus</c> projection disagrees with the status the live
+    /// subflow descent just produced for the same instance.
+    /// </summary>
+    /// <remarks>
+    /// The drift detector. Both values are already in hand on the full-build path, so this costs no
+    /// query; it exists to measure whether the projection is trustworthy enough to be SERVED (which
+    /// would remove the live descent from the read path) before anyone decides that it is. Drift is
+    /// not an error today: the response carries the live value, and the projection's only job is to
+    /// move the ETag.
+    /// </remarks>
+    [LoggerMessage(
+        EventId = 20445,
+        Level = LogLevel.Warning,
+        Message = "Effective-status drift for instance {InstanceId}: projection={Projected}, live={Live}")]
+    public static partial void EffectiveStatusDrift(
+        this ILogger logger,
+        Guid instanceId,
+        string projected,
+        string live);
+
     #endregion
 
     #region Instance Query Filtering

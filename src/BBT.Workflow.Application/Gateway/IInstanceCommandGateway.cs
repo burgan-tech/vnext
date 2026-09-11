@@ -109,7 +109,10 @@ public interface IInstanceCommandGateway
     /// <param name="input">Target domain, workflow, and instance id.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>Result indicating success or failure of remote or local persistence.</returns>
-    Task<Result> MarkBusyAsync(
+    /// <returns>The status at the bottom of the chain, so the caller can stamp its own
+    /// <c>EffectiveStatus</c>. A <c>MarkBusyOutput</c> with a null code means "unknown" — an older
+    /// runtime on the far side of a cross-domain hop — and must not be read as Busy.</returns>
+    Task<Result<MarkBusyOutput>> MarkBusyAsync(
         MarkBusyInput input,
         CancellationToken cancellationToken = default);
 

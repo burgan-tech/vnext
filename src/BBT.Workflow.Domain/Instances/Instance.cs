@@ -29,6 +29,7 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
         FlowVersion = Check.NotNullOrWhiteSpace(flowVersion, nameof(FlowVersion), WorkflowConstants.MaxVersionLength);
         Key = Check.Length(key, nameof(Key), InstanceConstants.MaxKeyLength);
         Status = InstanceStatus.Active;
+        EffectiveStatus = InstanceStatus.Active;
 
         Tags = [];
 
@@ -123,6 +124,29 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
     /// Status
     /// </summary>
     public InstanceStatus Status { get; private set; }
+
+    /// <summary>
+    /// Effective status — the status a client polling THIS instance observes: the deepest active
+    /// SubFlow's status when an active SubFlow correlation exists, otherwise this instance's own
+    /// <see cref="Status"/>. The status counterpart of <see cref="EffectiveState"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// It exists because the parent row alone cannot see a subflow-internal Busy/Active flip: an
+    /// accept that reserves the chain flips only the LEAF's status, so nothing in an ancestor's
+    /// row changed and a state-function response cached against that row stayed valid while the
+    /// client-visible status had already moved. This column is what makes that flip visible to
+    /// <see cref="InstanceStateFingerprint"/>.
+    /// </para>
+    /// <para>
+    /// AUTHORITY: fingerprint material only. It is NOT served in any response and NOT read by any
+    /// runtime decision — the served status still comes from the live subflow descent. That is what
+    /// keeps a missed propagation fail-stale (a cached body survives a moment too long) instead of
+    /// fail-wrong (the runtime reports a status nobody holds). Promoting it to a served value is a
+    /// separate decision that needs drift evidence first.
+    /// </para>
+    /// </remarks>
+    public InstanceStatus EffectiveStatus { get; private set; }
 
     /// <summary>
     /// Long-poll acknowledge token. Set when the pipeline pauses on entering a state whose
@@ -464,6 +488,7 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
         Status = InstanceStatus.Completed;
         CompletedAt = DateTime.UtcNow;
         Duration = CompletedAt - CreatedAt;
+        SyncEffectiveStatusFromOwn();
 
         // Publish cleanup event to cancel all scheduled jobs
         var rootId = this.GetRootInstanceId();
@@ -517,6 +542,7 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
         Status = InstanceStatus.Faulted;
         CompletedAt = DateTime.UtcNow;
         Duration = CompletedAt - CreatedAt;
+        SyncEffectiveStatusFromOwn();
 
         var rootId = this.GetRootInstanceId();
         AddDistributedEvent(new InstanceFaultedCleanupEvent
@@ -610,6 +636,7 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
         Status = InstanceStatus.Active;
         CompletedAt = null;
         Duration = null;
+        SyncEffectiveStatusFromOwn();
         ResolveOpenIncidents();
         return true;
     }
@@ -701,6 +728,7 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
         Status = InstanceStatus.Completed;
         CompletedAt = DateTime.UtcNow;
         Duration = CompletedAt - CreatedAt;
+        SyncEffectiveStatusFromOwn();
 
         // Publish cancellation event - event handler will handle cleanup (jobs, correlations)
         var rootId = this.GetRootInstanceId();
@@ -911,6 +939,34 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
     }
 
     /// <summary>
+    /// Writes <see cref="EffectiveStatus"/> explicitly. Used by the propagation edges that know the
+    /// chain's shape: the busy walk (top-down, synchronous) stamps every visited level with the
+    /// leaf's resulting status, and the sub-item's upward notification stamps the ancestor with the
+    /// status the child settled into.
+    /// </summary>
+    /// <param name="effectiveStatus">The status a client polling this instance would observe.</param>
+    public void SetEffectiveStatus(InstanceStatus effectiveStatus)
+    {
+        EffectiveStatus = effectiveStatus ?? throw new ArgumentNullException(nameof(effectiveStatus));
+    }
+
+    /// <summary>
+    /// Re-derives <see cref="EffectiveStatus"/> from this instance's own <see cref="Status"/>, which
+    /// is the visible status only while no active SubFlow owns it. Mirrors the EffectiveState rule
+    /// in <c>ChangeState</c> and, like it, reads <see cref="HasActiveSubFlow"/> — so call it only
+    /// where the child correlations are known to be loaded (the pipeline aggregate and the terminal
+    /// mutators). A status flip on a lean, correlation-less load must go through the repository's
+    /// set-based CAS instead.
+    /// </summary>
+    private void SyncEffectiveStatusFromOwn()
+    {
+        if (!HasActiveSubFlow)
+        {
+            EffectiveStatus = Status;
+        }
+    }
+
+    /// <summary>
     /// Sets the effective state (external world state).
     /// Called when state changes or when SubFlow state is propagated to parent.
     /// </summary>
@@ -1016,6 +1072,7 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
         if (state.SubType == StateSubType.Busy && !IsCompleted)
         {
             Status = InstanceStatus.Busy;
+            SyncEffectiveStatusFromOwn();
         }
 
         // Domain Logic: Arm the SubFlow state notification — do NOT publish it here.

@@ -200,7 +200,7 @@ public sealed class LocalInstanceCommandGateway : IInstanceCommandGateway
     }
 
     /// <inheritdoc />
-    public Task<Result> MarkBusyAsync(
+    public Task<Result<MarkBusyOutput>> MarkBusyAsync(
         MarkBusyInput input,
         CancellationToken cancellationToken = default)
     {
@@ -208,8 +208,11 @@ public sealed class LocalInstanceCommandGateway : IInstanceCommandGateway
             async (sp, ct) =>
             {
                 var busyManager = sp.GetRequiredService<IInstanceBusyManager>();
-                await busyManager.MarkBusyWithPropagationAsync(input.InstanceId, ct);
-                return Result.Ok();
+                var effectiveStatus = await busyManager.MarkBusyWithPropagationAsync(input.InstanceId, ct);
+                return Result<MarkBusyOutput>.Ok(new MarkBusyOutput
+                {
+                    EffectiveStatusCode = effectiveStatus?.Code
+                });
             }, cancellationToken);
     }
 

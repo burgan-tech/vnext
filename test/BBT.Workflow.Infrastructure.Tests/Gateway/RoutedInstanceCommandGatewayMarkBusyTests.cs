@@ -28,7 +28,7 @@ public sealed class RoutedInstanceCommandGatewayMarkBusyTests
         var input = new MarkBusyInput { Domain = "remote-domain", Workflow = "wf", InstanceId = Guid.NewGuid() };
         var remoteService = Substitute.For<IRemoteInstanceCommandAppService>();
         remoteService.MarkBusyAsync(Arg.Any<MarkBusyInput>(), Arg.Any<CancellationToken>())
-            .Returns(Result.Ok());
+            .Returns(Result<MarkBusyOutput>.Ok(MarkBusyOutput.None));
 
         var runtimeInfo = Substitute.For<IRuntimeInfoProvider>();
         runtimeInfo.IsDomainMatch(Arg.Any<string>()).Returns(false);

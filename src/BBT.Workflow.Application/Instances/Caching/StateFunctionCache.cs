@@ -100,6 +100,11 @@ public sealed class StateFunctionCache(
             fingerprint.Id,
             fingerprint.EffectiveState ?? string.Empty,
             fingerprint.Status.Code,
+            // The client-visible status. The instance's own Status cannot move when the accept
+            // reserves a chain below it — only the leaf's row is flipped — so without this member
+            // an active-subflow snapshot stays valid across exactly the transition it must not
+            // survive. See Instance.EffectiveStatus.
+            fingerprint.EffectiveStatus.Code,
             fingerprint.FlowVersion ?? string.Empty,
             BuildCallerHash(input),
             displayedState ?? string.Empty,

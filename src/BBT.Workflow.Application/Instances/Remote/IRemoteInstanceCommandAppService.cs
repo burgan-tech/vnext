@@ -68,7 +68,7 @@ public interface IRemoteInstanceCommandAppService
     /// Marks an instance Busy and propagates recursively to nested SubFlows.
     /// PUT {baseUrl}/api/v{version}/{domain}/workflows/{workflow}/instances/{instanceId}/busy
     /// </summary>
-    Task<Result> MarkBusyAsync(
+    Task<Result<MarkBusyOutput>> MarkBusyAsync(
         MarkBusyInput input,
         CancellationToken cancellationToken = default);
 

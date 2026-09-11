@@ -382,23 +382,59 @@ public sealed class EfCoreInstanceRepository(
     // No need for manual transaction tracking helpers
 
     /// <inheritdoc />
-    public async Task<bool> TryMarkBusyAsync(Guid instanceId, CancellationToken cancellationToken = default)
-        => await TryTransitionStatusAsync(instanceId, InstanceStatus.Active, InstanceStatus.Busy, cancellationToken);
+    public async Task<bool> TryMarkBusyAsync(
+        Guid instanceId,
+        CancellationToken cancellationToken = default,
+        InstanceStatus? effectiveStatus = null)
+        => await TryTransitionStatusAsync(
+            instanceId, InstanceStatus.Active, InstanceStatus.Busy, cancellationToken, effectiveStatus);
 
     /// <inheritdoc />
-    public async Task<bool> TryReleaseBusyAsync(Guid instanceId, CancellationToken cancellationToken = default)
-        => await TryTransitionStatusAsync(instanceId, InstanceStatus.Busy, InstanceStatus.Active, cancellationToken);
+    public async Task<bool> TryReleaseBusyAsync(
+        Guid instanceId,
+        CancellationToken cancellationToken = default,
+        InstanceStatus? effectiveStatus = null)
+        => await TryTransitionStatusAsync(
+            instanceId, InstanceStatus.Busy, InstanceStatus.Active, cancellationToken, effectiveStatus);
+
+    /// <inheritdoc />
+    public async Task SetEffectiveStatusAsync(
+        Guid instanceId,
+        InstanceStatus effectiveStatus,
+        CancellationToken cancellationToken = default)
+    {
+        // Single-column, set-based, unguarded: this row's OWN status is not changing — the level
+        // below it moved — so there is no state to compare and nothing to lose a race against. A
+        // terminal row is excluded because a completed instance no longer projects a child status.
+        await (await GetDbSetAsync())
+            .Where(i => i.Id == instanceId
+                        && i.EffectiveStatus != effectiveStatus
+                        && i.Status != InstanceStatus.Completed
+                        && i.Status != InstanceStatus.Faulted
+                        && i.Status != InstanceStatus.Passive)
+            .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(i => i.EffectiveStatus, effectiveStatus)
+                    .SetProperty(i => i.ModifiedAt, DateTime.UtcNow),
+                cancellationToken);
+    }
 
     /// <inheritdoc />
     public async Task<bool> TryMarkBusyAsync(Instance instance, CancellationToken cancellationToken = default)
     {
+        // The aggregate is loaded with its active correlations on every caller of this overload
+        // (pipeline and settlement), so HasActiveSubFlow is answerable here: this row owns the
+        // client-visible status only while no SubFlow does.
+        var effectiveStatus = instance.HasActiveSubFlow ? null : InstanceStatus.Busy;
+
         if (!await TryTransitionStatusAsync(
-                instance.Id, InstanceStatus.Active, InstanceStatus.Busy, cancellationToken))
+                instance.Id, InstanceStatus.Active, InstanceStatus.Busy, cancellationToken, effectiveStatus))
         {
             return false;
         }
 
         instance.Busy();
+        if (effectiveStatus is not null)
+            instance.SetEffectiveStatus(effectiveStatus);
         await AlignStatusBaselineAsync(instance);
         return true;
     }
@@ -406,13 +442,17 @@ public sealed class EfCoreInstanceRepository(
     /// <inheritdoc />
     public async Task<bool> TryReleaseBusyAsync(Instance instance, CancellationToken cancellationToken = default)
     {
+        var effectiveStatus = instance.HasActiveSubFlow ? null : InstanceStatus.Active;
+
         if (!await TryTransitionStatusAsync(
-                instance.Id, InstanceStatus.Busy, InstanceStatus.Active, cancellationToken))
+                instance.Id, InstanceStatus.Busy, InstanceStatus.Active, cancellationToken, effectiveStatus))
         {
             return false;
         }
 
         instance.Active();
+        if (effectiveStatus is not null)
+            instance.SetEffectiveStatus(effectiveStatus);
         await AlignStatusBaselineAsync(instance);
         return true;
     }
@@ -454,12 +494,24 @@ public sealed class EfCoreInstanceRepository(
         Guid instanceId,
         InstanceStatus expected,
         InstanceStatus next,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        InstanceStatus? effectiveStatus = null)
     {
-        var affected = await (await GetDbSetAsync())
-            .Where(i => i.Id == instanceId && i.Status == expected)
-            .ExecuteUpdateAsync(setters => setters
+        var set = await GetDbSetAsync();
+        var guarded = set.Where(i => i.Id == instanceId && i.Status == expected);
+
+        // EffectiveStatus rides along in the SAME statement when the caller knows this row owns the
+        // client-visible status (no active SubFlow below it). Writing it separately would leave a
+        // window where the status and the projection disagree, which is the whole defect this
+        // column exists to close.
+        var affected = effectiveStatus is null
+            ? await guarded.ExecuteUpdateAsync(setters => setters
                     .SetProperty(i => i.Status, next)
+                    .SetProperty(i => i.ModifiedAt, DateTime.UtcNow),
+                cancellationToken)
+            : await guarded.ExecuteUpdateAsync(setters => setters
+                    .SetProperty(i => i.Status, next)
+                    .SetProperty(i => i.EffectiveStatus, effectiveStatus)
                     .SetProperty(i => i.ModifiedAt, DateTime.UtcNow),
                 cancellationToken);
 
@@ -490,6 +542,12 @@ public sealed class EfCoreInstanceRepository(
         var status = entry.Property(nameof(Instance.Status));
         status.OriginalValue = instance.Status;
         status.IsModified = false;
+
+        // The CAS may have written EffectiveStatus in the same statement; leaving it Modified would
+        // have a later SaveChanges in this unit of work write it a second time.
+        var effectiveStatus = entry.Property(nameof(Instance.EffectiveStatus));
+        effectiveStatus.OriginalValue = instance.EffectiveStatus;
+        effectiveStatus.IsModified = false;
     }
 
     /// <summary>
@@ -788,6 +846,7 @@ public sealed class EfCoreInstanceRepository(
             i.Key,
             i.EffectiveState,
             i.Status,
+            i.EffectiveStatus,
             i.FlowVersion,
             i.ChildCorrelations.Any(c => !c.IsCompleted && c.SubFlowType == SubFlowType.SubFlow),
             i.ChildCorrelations.Count,
@@ -939,6 +998,7 @@ public sealed class EfCoreInstanceRepository(
                         i.Key,
                         i.EffectiveState,
                         i.Status,
+                        i.EffectiveStatus,
                         i.FlowVersion,
                         i.ChildCorrelations.Any(c => !c.IsCompleted && c.SubFlowType == SubFlowType.SubFlow),
                         i.ChildCorrelations.Count,
@@ -959,6 +1019,7 @@ public sealed class EfCoreInstanceRepository(
                         i.Key,
                         i.EffectiveState,
                         i.Status,
+                        i.EffectiveStatus,
                         i.FlowVersion,
                         i.ChildCorrelations.Any(c => !c.IsCompleted && c.SubFlowType == SubFlowType.SubFlow),
                         i.ChildCorrelations.Count,
