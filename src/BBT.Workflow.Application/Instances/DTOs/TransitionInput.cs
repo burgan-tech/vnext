@@ -36,12 +36,6 @@ public sealed class TransitionInput(
     public ExecutionActor Actor { get; set; } = ExecutionActor.User;
 
     /// <summary>
-    /// Extension data to evaluate and include in the sync response. Keys are extension identifiers.
-    /// Evaluated only when <see cref="Sync"/> is true.
-    /// </summary>
-    public string[]? Extensions { get; set; }
-
-    /// <summary>
     /// Business correlation id carried over from the originating execution (e.g. restored from a
     /// background-job payload) so an async hop continues the SAME correlation instead of minting
     /// a new one. Null on fresh client requests — a new id is minted in ToExecutionContext.

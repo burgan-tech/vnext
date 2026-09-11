@@ -17,7 +17,6 @@ using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Execution.Services;
 using BBT.Workflow.Execution.Transitions.Services;
 using BBT.Workflow.Execution.Validation;
-using BBT.Workflow.Extentions;
 using BBT.Workflow.Gateway;
 using BBT.Workflow.Headers;
 using BBT.Workflow.Logging;
@@ -83,7 +82,6 @@ public class InstanceCommandAppServiceBusyFastFailTests : IDisposable
             transitionAdmissionService: _admissionService,
             representationEtagService: Substitute.For<IRepresentationEtagService>(),
             schemaFieldFilterService: Substitute.For<ISchemaFieldFilterService>(),
-            instanceExtensionService: Substitute.For<IInstanceExtensionService>(),
             scriptContextFactory: Substitute.For<IScriptContextFactory>(),
             timerEvaluator: Substitute.For<ITimerEvaluator>(),
             transitionAuthorizationManager: Substitute.For<ITransitionAuthorizationManager>(),

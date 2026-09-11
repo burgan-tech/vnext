@@ -19,7 +19,6 @@ using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Execution.Services;
 using BBT.Workflow.Execution.Transitions.Services;
 using BBT.Workflow.Execution.Validation;
-using BBT.Workflow.Extentions;
 using BBT.Workflow.Gateway;
 using BBT.Workflow.Headers;
 using BBT.Workflow.Logging;
@@ -37,8 +36,9 @@ namespace BBT.Workflow.Instances;
 
 /// <summary>
 /// The sync response projection (<c>EnrichOutputCoreAsync</c>): it is one attributable phase
-/// (<c>Instance.EnrichResponse</c>), and runtime-internal child calls — sub-start and subflow
-/// forward — skip it entirely because nothing reads what it produces.
+/// (<c>Instance.EnrichResponse</c>), runtime-internal child calls — sub-start and subflow
+/// forward — skip it entirely because nothing reads what it produces, and the phase no longer
+/// evaluates extensions or builds a script context for a workflow with no output mapping.
 /// </summary>
 public class InstanceCommandAppServiceResponseEnrichmentTests : IDisposable
 {
@@ -49,7 +49,7 @@ public class InstanceCommandAppServiceResponseEnrichmentTests : IDisposable
     private readonly IInstanceRepository _instanceRepository = Substitute.For<IInstanceRepository>();
     private readonly IComponentCacheStore _componentCacheStore = Substitute.For<IComponentCacheStore>();
     private readonly IWorkflowExecutionService _executionService = Substitute.For<IWorkflowExecutionService>();
-    private readonly IInstanceExtensionService _extensionService = Substitute.For<IInstanceExtensionService>();
+    private readonly IScriptContextFactory _scriptContextFactory = Substitute.For<IScriptContextFactory>();
     private readonly InstanceCommandAppService _service;
     private readonly IServiceProvider _ambient;
     private readonly IServiceProvider? _previousAmbient;
@@ -84,8 +84,7 @@ public class InstanceCommandAppServiceResponseEnrichmentTests : IDisposable
             transitionAdmissionService: Substitute.For<ITransitionAdmissionService>(),
             representationEtagService: Substitute.For<IRepresentationEtagService>(),
             schemaFieldFilterService: Substitute.For<ISchemaFieldFilterService>(),
-            instanceExtensionService: _extensionService,
-            scriptContextFactory: Substitute.For<IScriptContextFactory>(),
+            scriptContextFactory: _scriptContextFactory,
             timerEvaluator: Substitute.For<ITimerEvaluator>(),
             transitionAuthorizationManager: Substitute.For<ITransitionAuthorizationManager>(),
             cancellationService: Substitute.For<IInstanceCancellationService>(),
@@ -151,8 +150,44 @@ public class InstanceCommandAppServiceResponseEnrichmentTests : IDisposable
         collected.ShouldNotContain(a => a.DisplayName == "Instance.EnrichResponse");
         await _instanceRepository.DidNotReceiveWithAnyArgs()
             .FindByIdentifierAsReadOnlyAsync(default!, default);
-        await _extensionService.DidNotReceiveWithAnyArgs()
-            .ProcessExtensionsAsync(default, default!, default!, default, default);
+    }
+
+    [Fact]
+    public async Task TransitionAsync_SyncRequest_ReturnsAnEmptyExtensionsMapWithoutEvaluatingAnything()
+    {
+        using var root = StartRoot();
+        var instanceId = Guid.NewGuid();
+        SetupActiveSnapshot(instanceId);
+        SetupExecution(instanceId);
+        SetupReload(instanceId);
+
+        var result = await _service.TransitionAsync(
+            instanceId.ToString(), "regular-transition", CreateInput(sync: true), CancellationToken.None);
+
+        // The key survives so the response shape does not change, but it is always empty:
+        // extensions are enrichment and belong to the read surfaces, not to a write response.
+        result.IsSuccess.ShouldBeTrue();
+        result.Value!.Extensions.ShouldNotBeNull();
+        result.Value.Extensions!.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task TransitionAsync_SyncRequestOnAWorkflowWithNoOutputScript_BuildsNoScriptContext()
+    {
+        using var root = StartRoot();
+        var instanceId = Guid.NewGuid();
+        SetupActiveSnapshot(instanceId);
+        SetupExecution(instanceId);
+        SetupReload(instanceId);
+
+        var result = await _service.TransitionAsync(
+            instanceId.ToString(), "regular-transition", CreateInput(sync: true), CancellationToken.None);
+
+        // Extensions were the only other consumer of the projection's ScriptContext. With them
+        // gone, a workflow without an output mapping must not pay for one — building it
+        // serializes the instance's whole latest data.
+        result.IsSuccess.ShouldBeTrue();
+        _scriptContextFactory.DidNotReceiveWithAnyArgs().NewBuilder(default!);
     }
 
     [Fact]
@@ -178,6 +213,11 @@ public class InstanceCommandAppServiceResponseEnrichmentTests : IDisposable
             .GetExecutionSnapshotAsync(instanceId.ToString(), Arg.Any<CancellationToken>())
             .Returns(new InstanceExecutionSnapshot(
                 instanceId, "key", InstanceStatus.Active, "state1", Flow, Version, false));
+
+    private void SetupReload(Guid instanceId)
+        => _instanceRepository
+            .FindByIdentifierAsReadOnlyAsync(instanceId.ToString(), Arg.Any<CancellationToken>())
+            .Returns(Instance.Create(instanceId, Flow, Version, "key"));
 
     private void SetupExecution(Guid instanceId)
         => _executionService

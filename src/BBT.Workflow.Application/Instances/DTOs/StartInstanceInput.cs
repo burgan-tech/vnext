@@ -28,12 +28,6 @@ public sealed class StartInstanceInput(
     public bool StrictIdempotency { get; set; } = false;
 
     /// <summary>
-    /// Extension data to evaluate and include in the sync response. Keys are extension identifiers.
-    /// Evaluated only when <see cref="Sync"/> is true.
-    /// </summary>
-    public string[]? Extensions { get; set; }
-
-    /// <summary>
     /// When true, a <see cref="Sync"/> start still awaits the pipeline but returns an identity-only
     /// response (<c>Id</c>, <c>Key</c>, <c>Status</c>): no read-only reload, no schema field filter,
     /// no script context, no extension pass.
