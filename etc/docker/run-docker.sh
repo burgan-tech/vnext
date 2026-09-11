@@ -3,11 +3,11 @@
 #
 # Docker stacks (unchanged behaviour, attached, Ctrl+C stops them):
 #   ./run-docker.sh                     # infrastructure only (postgres, redis, vault, dapr, otel …)  [default]
-#   ./run-docker.sh dev   [domain]      # infra + orchestration/execution/monitoring/migrator built into containers
+#   ./run-docker.sh dev   [domain]      # infra + orchestration/execution/workers/migrator built into containers
 #   ./run-docker.sh stage [domain]      # same with release images        (dev/stage: one domain at a time)
 #
 # Local hosts, one or MORE domains side by side (infra in docker, runtime as locally built binaries):
-#   ./run-docker.sh up [domain] [--offset N] [--monitor] [--no-build] [--skip-migrate] [--db <name>]
+#   ./run-docker.sh up [domain] [--offset N] [--no-build] [--skip-migrate] [--db <name>]
 #   ./run-docker.sh plan <domain> [--offset N]     # show ports / app-ids / env, write the sidecar compose — start nothing
 #   ./run-docker.sh switch <domain>                # stop every running domain, then `up <domain>`
 #   ./run-docker.sh down [domain|--all] [--infra]  # stop one domain's hosts+sidecars (default: all)
@@ -21,7 +21,6 @@
 #     host            app port     dapr http / grpc (offset domains)   app-id (offset domains)
 #     orchestration   4201+o       50000+app / 55000+app               vnext-<domain>-app
 #     execution       4202+o       "                                   vnext-<domain>-execution-app
-#     monitor         4203+o       "                                   vnext-<domain>-monitor-app
 #     outbox          4401+o       "                                   vnext-<domain>-worker-outbox
 #     inbox           4501+o       "                                   vnext-<domain>-worker-inbox
 #     db-migrator     (4301+o)     "  (pseudo app port, no listener)   vnext-<domain>-db-migrator
@@ -54,14 +53,13 @@ COMPOSE_FILE="$HERE/docker-compose.yml"
 DEFAULT_DOMAIN="core"
 DEFAULT_DB="Aether_WorkflowDb"
 HEALTH_TIMEOUT="${VNEXT_HEALTH_TIMEOUT:-120}"
-BASE_SERVICES="postgres redis vault dapr-placement dapr-scheduler otel-collector"
+BASE_SERVICES="postgres redis vault dapr-scheduler otel-collector"
 
 # name|project dir|launch profile|base app port|needs db|base sidecar compose service|base dapr http port|base app-id|extra env for offset domains (; separated; {orch_url} {exec_id} {orch_id} substituted)|listens on app port
 HOSTS="orchestration|orchestration/BBT.Workflow.Orchestration.HttpApi.Host|http|4201|1|vnext-orchestration-dapr|42110|vnext-app|ExecutionApi__AppId={exec_id};vNextApi__BaseUrl={orch_url}|1
 execution|execution/BBT.Workflow.Execution.HttpApi.Host|http|4202|0|vnext-execution-dapr|43110|vnext-execution-app|OrchestrationApi__AppId={orch_id}|1
 inbox|workers/BBT.Workflow.Workers.Inbox|http|4501|1|vnext-worker-inbox-dapr|45110|vnext-worker-inbox|OrchestrationApi__AppId={orch_id}|1
 outbox|workers/BBT.Workflow.Workers.Outbox|http|4401|1|vnext-worker-outbox-dapr|44110|vnext-worker-outbox||1"
-MONITOR="monitor|monitoring/BBT.Workflow.Monitor.HttpApi.Host|http|4203|1|vnext-monitoring-dapr|42130|vnext-monitor-app||1"
 MIGRATOR="migrator|workers/BBT.Workflow.DbMigrator|DbMigrator|4301|1|vnext-db-migrator-dapr|44210|vnext-db-migrator||0"
 
 # ---------- helpers -------------------------------------------------------------------------
@@ -75,7 +73,7 @@ need() { command -v "$1" >/dev/null 2>&1 || die "'$1' is required but not instal
 compose() { docker compose -f "$COMPOSE_FILE" "$@"; }
 f() { printf '%s' "$1" | cut -d'|' -f"$2"; }          # f <row> <field>
 
-selected_hosts() { printf '%s\n' "$HOSTS"; [ "${WITH_MONITOR:-0}" = "1" ] && printf '%s\n' "$MONITOR"; return 0; }
+selected_hosts() { printf '%s\n' "$HOSTS"; }
 pid_alive() { [ -n "${1:-}" ] && kill -0 "$1" 2>/dev/null; }
 port_busy() { lsof -nP -iTCP:"$1" -sTCP:LISTEN >/dev/null 2>&1; }
 
@@ -100,7 +98,7 @@ host_url()  { if [ "$(f "$1" 10)" = 1 ]; then printf 'http://localhost:%s' "$(ap
 init_port() { echo $(( 3005 + $1 )); }            # init (package publisher) service, vnext-runtime convention
 init_name() { if [ "$2" = 0 ]; then printf 'init'; else printf 'init-%s' "$1"; fi; }   # <domain> <offset>
 # every localhost port a domain publishes, one per line
-domain_ports() {   # <offset> (WITH_MONITOR honoured)
+domain_ports() {   # <offset>
   local h; while IFS= read -r h; do
     [ "$(f "$h" 10)" = 1 ] && app_port "$(f "$h" 4)" "$1"; dapr_http "$h" "$1"; dapr_grpc "$h" "$1"
   done < <(selected_hosts; printf '%s\n' "$MIGRATOR")
@@ -143,13 +141,13 @@ resolve_offset() {   # resolve_offset <domain> [offset] → explicit, else store
   [[ "$offset" =~ ^[0-9]+$ ]] && [ "$offset" -ge 1 ] && [ "$offset" -le 99 ] || die "offset must be 1..99 (core owns 0)"
   [ "$offset" = 5 ] && die "offset 5 is reserved for the discovery domain (vnext-runtime convention)"
   local mine theirs clash
-  mine="$(WITH_MONITOR=1 domain_ports "$offset" | sort -u)"
-  clash="$(printf '%s\n' "$mine" | grep -xF -f <(WITH_MONITOR=1 domain_ports 0) || true)"
+  mine="$(domain_ports "$offset" | sort -u)"
+  clash="$(printf '%s\n' "$mine" | grep -xF -f <(domain_ports 0) || true)"
   [ -z "$clash" ] || die "offset $offset collides with core on port(s): $(echo $clash)"
   for d in $(registered_domains); do
     [ "$d" = "$domain" ] && continue
     o="$(stored "$d" offset)"; [ "$o" = "$offset" ] && die "offset $offset is already used by domain '$d'"
-    theirs="$(WITH_MONITOR=1 domain_ports "$o")"
+    theirs="$(domain_ports "$o")"
     clash="$(printf '%s\n' "$mine" | grep -xF -f <(printf '%s\n' "$theirs") || true)"
     [ -z "$clash" ] || die "offset $offset collides with domain '$d' (offset $o) on port(s): $(echo $clash)"
   done
@@ -413,8 +411,8 @@ register_wf_domain() {   # <domain> <offset> <db>
 # ---------- records (ai-docs) ---------------------------------------------------------------
 
 write_record() {   # <domain> <running|stopped>
-  local domain="$1" status="$2" ddir offset db monitor h name port rows="" now rev branch
-  ddir="$(dom_dir "$domain")"; offset="$(stored "$domain" offset)"; db="$(stored "$domain" db)"; monitor="$(stored "$domain" monitor)"
+  local domain="$1" status="$2" ddir offset db h name port rows="" now rev branch
+  ddir="$(dom_dir "$domain")"; offset="$(stored "$domain" offset)"; db="$(stored "$domain" db)"
   [ -n "$offset" ] || return 0
   mkdir -p "$RECORDS"
   now="$(date '+%Y-%m-%d %H:%M:%S %Z')"; rev="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo '-')"; branch="$(git -C "$ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo '-')"
@@ -422,7 +420,7 @@ write_record() {   # <domain> <running|stopped>
     name="$(f "$h" 1)"
     rows="$rows| $name | $(host_url "$h" "$offset") | $(app_id "$(f "$h" 8)" "$domain" "$offset") | $(dapr_http "$h" "$offset") / $(dapr_grpc "$h" "$offset") | $(sidecar_name "$(f "$h" 6)" "$domain" "$offset") | \`$ddir/logs/$name.log\` |
 "
-  done < <(WITH_MONITOR="$monitor" selected_hosts; printf '%s\n' "$MIGRATOR")
+  done < <(selected_hosts; printf '%s\n' "$MIGRATOR")
   cat > "$RECORDS/$domain.md" <<MD
 # Local environment — domain \`$domain\`
 
@@ -433,7 +431,6 @@ write_record() {   # <domain> <running|stopped>
 | Database | \`$db\` on localhost:5432 (postgres/postgres) |
 | Base URL | http://localhost:$(app_port 4201 "$offset") |
 | Init (package publisher) | http://localhost:$(init_port "$offset") (\`$(init_name "$domain" "$offset")\`) |
-| Monitor host | $([ "$monitor" = 1 ] && echo yes || echo no) |
 | Runtime source | \`$branch\` @ \`$rev\` |
 | Sidecar compose | $([ "$offset" = 0 ] && echo "\`etc/docker/docker-compose.yml\` (core owns the default sidecars)" || echo "\`$ddir/sidecars.json\` (project \`vnext-$domain\`)") |
 
@@ -445,7 +442,7 @@ $rows
 ## Reproduce
 
 \`\`\`bash
-cd etc/docker && ./run-docker.sh up $domain --offset $offset$([ "$monitor" = 1 ] && echo " --monitor")$([ "$db" != "$(DB_OVERRIDE= db_for_domain "$domain")" ] && echo " --db $db")
+cd etc/docker && ./run-docker.sh up $domain --offset $offset$([ "$db" != "$(DB_OVERRIDE= db_for_domain "$domain")" ] && echo " --db $db")
 \`\`\`
 
 ## Load components (vNext CLI \`wf\`)
@@ -494,7 +491,7 @@ for d,v in sorted(json.load(open(sys.argv[1])).items()):
 
 print_plan() {   # <domain> <offset> <db>
   local h
-  printf '\n\033[1mdomain=%s  offset=%s  database=%s%s\033[0m\n' "$1" "$2" "$3" "$([ "${WITH_MONITOR:-0}" = 1 ] && echo '  +monitor')"
+  printf '\n\033[1mdomain=%s  offset=%s  database=%s\033[0m\n' "$1" "$2" "$3"
   printf '  %-14s %-24s %-32s %-13s %s\n' host url dapr-app-id dapr-http/grpc sidecar
   while IFS= read -r h; do
     printf '  %-14s %-24s %-32s %-13s %s\n' "$(f "$h" 1)" "$(host_url "$h" "$2")" \
@@ -526,7 +523,7 @@ cmd_up() {
   DDIR="$(dom_dir "$domain")"; mkdir -p "$DDIR/logs" "$DDIR/pids" "$STATE"
   print_plan "$domain" "$offset" "$db"
   if domain_running "$domain"; then log "stopping running $domain hosts"; stop_domain "$domain"; fi
-  printf '%s' "$offset" > "$DDIR/offset"; printf '%s' "$db" > "$DDIR/db"; printf '%s' "${WITH_MONITOR:-0}" > "$DDIR/monitor"
+  printf '%s' "$offset" > "$DDIR/offset"; printf '%s' "$db" > "$DDIR/db"
   check_ports_free "$offset" "$domain"
   ensure_infra "$domain" "$offset"
   [ "${NO_BUILD:-0}" = "1" ] || build_all
@@ -566,7 +563,7 @@ cmd_status() {
       else
         printf '  %-14s stopped\n' "$name"
       fi
-    done < <(WITH_MONITOR="$(stored "$d" monitor)" selected_hosts)
+    done < <(selected_hosts)
   done
   [ -n "$(registered_domains)" ] || echo "no domains registered yet (run: ./run-docker.sh up <domain>)"
 }
@@ -603,7 +600,6 @@ CMD="${1:-}"; [ $# -gt 0 ] && shift
 POSITIONAL=()
 while [ $# -gt 0 ]; do
   case "$1" in
-    --monitor)      WITH_MONITOR=1 ;;
     --no-build)     NO_BUILD=1 ;;
     --skip-migrate) SKIP_MIGRATE=1 ;;
     --infra)        WITH_INFRA=1 ;;
@@ -623,7 +619,7 @@ case "$CMD" in
   up)       cmd_up "${1:-}" ;;
   plan)     cmd_plan "${1:-}" ;;
   switch)   cmd_down --all; cmd_up "${1:-}" ;;
-  restart)  d="$(resolve_domain "${1:-}")"; WITH_MONITOR="$(stored "$d" monitor)"; OFFSET_ARG="$(stored "$d" offset)"; cmd_up "$d" ;;
+  restart)  d="$(resolve_domain "${1:-}")"; OFFSET_ARG="$(stored "$d" offset)"; cmd_up "$d" ;;
   down)     cmd_down "${1:-}" ;;
   status)   cmd_status ;;
   record)   d="$(resolve_domain "${1:-}")"; [ -f "$(dom_dir "$d")/offset" ] || die "unknown domain '$d'"; write_record "$d" "$(domain_running "$d" && echo running || echo stopped)"; ok "record written: $RECORDS/$d.md" ;;

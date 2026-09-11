@@ -1,11 +1,10 @@
 # vNext Platform
 
 The vNext workflow runtime is a .NET-based orchestration system built with Clean Architecture
-and DDD. It ships three API hosts and three workers:
+and DDD. It ships two API hosts and three workers:
 
 - **Orchestration API**: client-facing workflow/instance operations (port `4201`)
 - **Execution API**: internal task execution for a transition (port `4202`)
-- **Monitor API**: read-only monitoring endpoints for dashboards (port `4203`)
 - **Workers**: Inbox (event consumption), Outbox (transactional outbox publishing), DbMigrator (EF Core schema migrations)
 
 ## Prerequisites
@@ -63,8 +62,8 @@ Local development, one or more domains side by side (infra in docker, runtime as
 Port offsets follow [vnext-runtime](https://github.com/burgan-tech/vnext-runtime): `core` is offset 0 and
 keeps the sidecars from `docker-compose.yml`; any other domain gets `base + offset` app ports, its own
 `<service>-<domain>` sidecar containers and `vnext-<domain>-…` Dapr app-ids. Offsets that would collide
-with core or another registered domain are refused (`--help` has the table). Flags: `--monitor`,
-`--no-build`, `--skip-migrate`, `--db <name>`, `--offset N`.
+with core or another registered domain are refused (`--help` has the table). Flags: `--no-build`,
+`--skip-migrate`, `--db <name>`, `--offset N`.
 
 Each host receives its `http` launch profile's environment with `APP_DOMAIN`, the connection string, the
 Dapr ports/app-ids and the cross-host references overridden per process, so no tracked file changes.
@@ -84,7 +83,6 @@ dotnet run --project orchestration/BBT.Workflow.Orchestration.HttpApi.Host
 dotnet run --project execution/BBT.Workflow.Execution.HttpApi.Host
 dotnet run --project workers/BBT.Workflow.Workers.Inbox
 dotnet run --project workers/BBT.Workflow.Workers.Outbox
-dotnet run --project monitoring/BBT.Workflow.Monitor.HttpApi.Host   # optional
 ```
 
 Tests:
@@ -99,7 +97,6 @@ dotnet test --filter "FullyQualifiedName~MyTest"   # one test
 
 - `orchestration/`: Orchestration API host (public-facing)
 - `execution/`: Execution API host (internal; task invokers)
-- `monitoring/`: Monitor API host and its application layer (read-only)
 - `workers/`: Inbox, Outbox and DbMigrator workers
 - `src/`: Domain, Application, Infrastructure, Events.Contracts, Execution (+ Abstractions), Tasks.Abstractions, HttpApi.Shared
 - `modules/`: Roslyn-based C# scripting module
@@ -177,7 +174,6 @@ Every host maps `/health`, `/ready` and `/live`:
 
 - Orchestration: `http://localhost:4201/health`
 - Execution: `http://localhost:4202/health`
-- Monitor: `http://localhost:4203/health` (plus `http://localhost:4203/monitor/health/detail`)
 - Outbox worker: `http://localhost:4401/health`
 - Inbox worker: `http://localhost:4501/health`
 
