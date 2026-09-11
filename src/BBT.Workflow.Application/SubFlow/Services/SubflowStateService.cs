@@ -152,12 +152,16 @@ public sealed class SubflowStateService(
         // carries the same number, re-applying it is idempotent, and rejecting it would close the
         // only recovery path a redelivery has.
         //
-        // The timestamp comparison remains for events from a publisher that predates the counter
-        // (NotificationSeq == 0). It is a weaker guard — a wall clock cannot order two pods — and it
-        // is kept only for the rollout window, not as the long-term rule. Both sides are truncated
+        // Sequences are compared only when BOTH sides have one; anything else falls back to the
+        // timestamp. A seq-less delivery is either a publisher that predates the counter — the two
+        // runtimes coexist during a rolling deploy — or a hand-driven call, and measuring it
+        // against a watermark some other node already raised would silently drop every one of
+        // them (caught by vnext-example's AFreshSubStateDelivery_IsApplied, which posts sub/state
+        // by hand). The timestamp guard is weaker, since a wall clock cannot order two pods, but
+        // for that traffic it is exactly the guard that was there before. Both sides are truncated
         // to microseconds because PostgreSQL stores that precision while .NET DateTime carries
         // 100ns ticks.
-        var stale = input.NotificationSeq > 0 || correlation.SubFlowNotificationSeq > 0
+        var stale = input.NotificationSeq > 0 && correlation.SubFlowNotificationSeq > 0
             ? input.NotificationSeq < correlation.SubFlowNotificationSeq
             : correlation.SubFlowStateChangedAt.HasValue &&
               TruncateToMicroseconds(input.ChangedAt) <

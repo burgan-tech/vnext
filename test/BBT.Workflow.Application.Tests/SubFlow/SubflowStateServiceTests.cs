@@ -400,4 +400,46 @@ public sealed class SubflowStateServiceTests
                 It.IsAny<CancellationToken>()),
             Times.Once);
     }
+
+    /// <summary>
+    /// A delivery that carries no sequence is measured by the timestamp, even when the correlation
+    /// already holds a watermark from a publisher that does. Comparing it against that watermark
+    /// instead would drop every seq-less delivery for the rest of the correlation's life — which is
+    /// what a rolling deploy produces (old and new runtime publishing side by side) and what a
+    /// hand-driven sub/state call is. Found by vnext-example's AFreshSubStateDelivery_IsApplied.
+    /// </summary>
+    [Fact]
+    public async Task Applies_A_Fresh_Delivery_That_Carries_No_Sequence_Even_With_A_Watermark_Set()
+    {
+        var parent = CreateParent(out var subInstanceId);
+        var applied = DateTime.UtcNow;
+        parent.FindCorrelationBySubInstanceId(subInstanceId)!.UpdateSubFlowState("older", applied, 5);
+        Loads(parent, subInstanceId);
+
+        await CreateSut().UpdateParentStateAsync(
+            Input(parent.Id, subInstanceId, applied.AddSeconds(5), newStatus: null, notificationSeq: 0));
+
+        parent.FindCorrelationBySubInstanceId(subInstanceId)!.SubFlowCurrentState.ShouldBe("child-running");
+        _instanceRepository.Verify(
+            x => x.UpdateAsync(parent, true, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    /// <summary>
+    /// …and the watermark it does not carry is not lowered by it either: the next sequenced
+    /// delivery is still ordered against the highest number seen.
+    /// </summary>
+    [Fact]
+    public async Task A_Sequenceless_Delivery_Does_Not_Lower_The_Watermark()
+    {
+        var parent = CreateParent(out var subInstanceId);
+        var applied = DateTime.UtcNow;
+        var correlation = parent.FindCorrelationBySubInstanceId(subInstanceId)!;
+        correlation.UpdateSubFlowState("older", applied, 5);
+        Loads(parent, subInstanceId);
+
+        await CreateSut().UpdateParentStateAsync(
+            Input(parent.Id, subInstanceId, applied.AddSeconds(5), newStatus: null, notificationSeq: 0));
+
+        correlation.SubFlowNotificationSeq.ShouldBe(5);
+    }
 }
