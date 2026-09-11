@@ -146,33 +146,51 @@ public sealed class SubflowStateService(
             return null;
         }
 
-        // Out-of-order event detection using timestamp:
-        // If correlation already has a state update with a later timestamp,
-        // this event is out-of-order/stale - reject it to prevent downgrade.
-        // Both sides are truncated to microseconds to avoid false rejections caused
-        // by precision loss when DateTime (100ns ticks) is stored in PostgreSQL (microseconds).
-        // Equal timestamps are ACCEPTED and re-applied: a duplicate delivery carries the same
-        // ChangedAt, re-applying it is idempotent, and rejecting it would close the only recovery
-        // path a redelivery has.
-        if (correlation.SubFlowStateChangedAt.HasValue &&
-            TruncateToMicroseconds(input.ChangedAt) < TruncateToMicroseconds(correlation.SubFlowStateChangedAt.Value))
+        // Out-of-order detection. The authority is the sub-item's own notification counter, written
+        // in the same transaction that published the event, so two notifications produced on
+        // different pods are still ordered. Equal is ACCEPTED and re-applied: a duplicate delivery
+        // carries the same number, re-applying it is idempotent, and rejecting it would close the
+        // only recovery path a redelivery has.
+        //
+        // Sequences are compared only when BOTH sides have one; anything else falls back to the
+        // timestamp. A seq-less delivery is either a publisher that predates the counter — the two
+        // runtimes coexist during a rolling deploy — or a hand-driven call, and measuring it
+        // against a watermark some other node already raised would silently drop every one of
+        // them (caught by vnext-example's AFreshSubStateDelivery_IsApplied, which posts sub/state
+        // by hand). The timestamp guard is weaker, since a wall clock cannot order two pods, but
+        // for that traffic it is exactly the guard that was there before. Both sides are truncated
+        // to microseconds because PostgreSQL stores that precision while .NET DateTime carries
+        // 100ns ticks.
+        var stale = input.NotificationSeq > 0 && correlation.SubFlowNotificationSeq > 0
+            ? input.NotificationSeq < correlation.SubFlowNotificationSeq
+            : correlation.SubFlowStateChangedAt.HasValue &&
+              TruncateToMicroseconds(input.ChangedAt) <
+              TruncateToMicroseconds(correlation.SubFlowStateChangedAt.Value);
+
+        if (stale)
         {
             logger.SubFlowStateChangeOutOfOrder(
                 input.SubInstanceId,
                 input.ChangedAt,
-                correlation.SubFlowStateChangedAt.Value,
+                correlation.SubFlowStateChangedAt ?? input.ChangedAt,
                 correlation.SubFlowCurrentState,
                 input.NewState);
             activity?.SetTag("vnext.subflow.result", "out_of_order");
             return null;
         }
 
-        // Update correlation's SubFlowCurrentState with timestamp
-        correlation.UpdateSubFlowState(input.NewState, input.ChangedAt);
+        // Update correlation's SubFlowCurrentState with timestamp and the ordering watermark
+        correlation.UpdateSubFlowState(input.NewState, input.ChangedAt, input.NotificationSeq);
 
-        // Propagate EffectiveState with type and subtype to parent. When the parent is itself a
-        // SubFlow this raises the upward InstanceSubStateChangedEvent for ITS parent.
-        parentInstance.PropagateEffectiveStateToParent(input.NewState, input.NewStateType, input.NewStateSubType);
+        // Propagate EffectiveState AND the sub-item's effective status to the parent. When the
+        // parent is itself a SubFlow this raises the upward InstanceSubStateChangedEvent for ITS
+        // parent — for a status-only change too, which is what walks the release of a chain reserve
+        // all the way back to the level the client is polling.
+        parentInstance.PropagateEffectiveStateToParent(
+            input.NewState,
+            input.NewStateType,
+            input.NewStateSubType,
+            InstanceStatus.TryFromCode(input.NewStatus));
 
         // Snapshot BEFORE the save: the SaveChanges sink drains and clears the aggregate's events.
         var upwardEvents = parentInstance.GetDomainEvents().ToList();

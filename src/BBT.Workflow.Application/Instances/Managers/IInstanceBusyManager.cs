@@ -37,7 +37,14 @@ public interface IInstanceBusyManager
     /// instance command gateway (cross-domain capable).
     /// Idempotent: silently no-ops when the instance is already Busy or Completed.
     /// </summary>
-    Task MarkBusyWithPropagationAsync(Guid instanceId, CancellationToken cancellationToken = default);
+    /// <returns>
+    /// The status a client polling <paramref name="instanceId"/> would observe once the walk reached
+    /// the bottom of the chain — the leaf's status, or this instance's own when it has no active
+    /// SubFlow. Null when nothing could be determined (instance gone, or a cross-domain hop whose
+    /// far side reported no status); a null must never be read as Busy. Every visited level's
+    /// <see cref="Instance.EffectiveStatus"/> is stamped with it on the way back up.
+    /// </returns>
+    Task<InstanceStatus?> MarkBusyWithPropagationAsync(Guid instanceId, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Attempts to mark an instance as Busy with SubFlow propagation, reporting the prior state.
@@ -52,7 +59,12 @@ public interface IInstanceBusyManager
     /// to Active. No-ops when the instance is not Busy or is Completed. Must be called under
     /// the short status lock and only by the accept path that performed the reserve.
     /// </summary>
-    Task<bool> TryReleaseAsync(Guid instanceId, CancellationToken cancellationToken = default);
+    /// <param name="effectiveStatus">Written with the flip when the caller knows this instance owns
+    /// the client-visible status (no active SubFlow below it); omitted otherwise.</param>
+    Task<bool> TryReleaseAsync(
+        Guid instanceId,
+        CancellationToken cancellationToken = default,
+        InstanceStatus? effectiveStatus = null);
 
     /// <summary>
     /// Compensating mirror of <see cref="MarkBusyWithPropagationAsync"/>: walks the active SubFlow

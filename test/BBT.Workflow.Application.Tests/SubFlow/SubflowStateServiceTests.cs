@@ -284,4 +284,162 @@ public sealed class SubflowStateServiceTests
         relayed.ShouldNotBeNull();
         relayed!.ShouldBeEmpty();
     }
+
+    // ─── ordering by sequence, and the status the notification carries ───────
+
+    private static SubFlowStateChangedInput Input(
+        Guid parentId,
+        Guid subInstanceId,
+        DateTime changedAt,
+        string? newStatus,
+        long notificationSeq,
+        string newState = "child-running") =>
+        Input(parentId, subInstanceId, changedAt) with
+        {
+            NewState = newState,
+            NewStatus = newStatus,
+            NotificationSeq = notificationSeq
+        };
+
+    /// <summary>
+    /// The sequence replaces the wall clock as the ordering authority. Here the stale delivery
+    /// carries a NEWER timestamp and a LOWER sequence — exactly the shape two pods with skewed
+    /// clocks produce — and it must still be rejected.
+    /// </summary>
+    [Fact]
+    public async Task Rejects_A_Lower_Sequence_Even_When_Its_Timestamp_Looks_Newer()
+    {
+        var parent = CreateParent(out var subInstanceId);
+        var applied = DateTime.UtcNow;
+        parent.FindCorrelationBySubInstanceId(subInstanceId)!.UpdateSubFlowState("newer", applied, 7);
+        Loads(parent, subInstanceId);
+
+        await CreateSut().UpdateParentStateAsync(
+            Input(parent.Id, subInstanceId, applied.AddSeconds(5), InstanceStatus.Active.Code, 6));
+
+        parent.FindCorrelationBySubInstanceId(subInstanceId)!.SubFlowCurrentState.ShouldBe("newer");
+        _instanceRepository.Verify(
+            x => x.UpdateAsync(It.IsAny<Instance>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    /// <summary>
+    /// The mirror of the case above and the reason the sequence exists: a legitimate notification
+    /// whose clock runs behind the one already applied. Under the timestamp guard it was discarded,
+    /// and when it was the one taking the ancestors OUT of Busy nothing later corrected it.
+    /// </summary>
+    [Fact]
+    public async Task Accepts_A_Higher_Sequence_Even_When_Its_Timestamp_Looks_Older()
+    {
+        var parent = CreateParent(out var subInstanceId);
+        var applied = DateTime.UtcNow;
+        parent.FindCorrelationBySubInstanceId(subInstanceId)!.UpdateSubFlowState("older", applied, 3);
+        Loads(parent, subInstanceId);
+
+        await CreateSut().UpdateParentStateAsync(
+            Input(parent.Id, subInstanceId, applied.AddSeconds(-5), InstanceStatus.Active.Code, 4));
+
+        var correlation = parent.FindCorrelationBySubInstanceId(subInstanceId)!;
+        correlation.SubFlowCurrentState.ShouldBe("child-running");
+        correlation.SubFlowNotificationSeq.ShouldBe(4);
+        _instanceRepository.Verify(
+            x => x.UpdateAsync(parent, true, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task Applies_The_Reported_Status_To_The_Parents_Projection()
+    {
+        var parent = CreateParent(out var subInstanceId);
+        Loads(parent, subInstanceId);
+
+        await CreateSut().UpdateParentStateAsync(
+            Input(parent.Id, subInstanceId, DateTime.UtcNow, InstanceStatus.Active.Code, 1));
+
+        parent.EffectiveStatus.ShouldBe(InstanceStatus.Active);
+    }
+
+    /// <summary>
+    /// A notification with no status — an older publisher — must leave the projection alone rather
+    /// than guess one.
+    /// </summary>
+    [Fact]
+    public async Task Leaves_The_Projection_Alone_When_No_Status_Was_Reported()
+    {
+        var parent = CreateParent(out var subInstanceId);
+        parent.SetEffectiveStatus(InstanceStatus.Busy);
+        Loads(parent, subInstanceId);
+
+        await CreateSut().UpdateParentStateAsync(
+            Input(parent.Id, subInstanceId, DateTime.UtcNow, newStatus: null, notificationSeq: 1));
+
+        parent.EffectiveStatus.ShouldBe(InstanceStatus.Busy);
+    }
+
+    /// <summary>
+    /// The upward half of the release: when only the STATUS moved, the parent must still raise its
+    /// own notification, or the walk stops one level below the instance the client is polling.
+    /// </summary>
+    [Fact]
+    public async Task Raises_The_Grandparent_Notification_For_A_Status_Only_Change()
+    {
+        var parent = CreateParent(out var subInstanceId, asSubflow: true);
+        var applied = DateTime.UtcNow;
+        parent.FindCorrelationBySubInstanceId(subInstanceId)!.UpdateSubFlowState("child-running", applied, 1);
+        parent.SetEffectiveState("child-running");
+        parent.SetEffectiveStatus(InstanceStatus.Busy);
+        parent.ClearDomainEvents();
+        Loads(parent, subInstanceId);
+
+        await CreateSut().UpdateParentStateAsync(
+            Input(parent.Id, subInstanceId, applied, InstanceStatus.Active.Code, 2));
+
+        parent.EffectiveStatus.ShouldBe(InstanceStatus.Active);
+        _relayDispatcher.Verify(
+            x => x.RelayAsync(
+                It.Is<IReadOnlyList<DomainEventEnvelope>>(e => e.Count > 0),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    /// <summary>
+    /// A delivery that carries no sequence is measured by the timestamp, even when the correlation
+    /// already holds a watermark from a publisher that does. Comparing it against that watermark
+    /// instead would drop every seq-less delivery for the rest of the correlation's life — which is
+    /// what a rolling deploy produces (old and new runtime publishing side by side) and what a
+    /// hand-driven sub/state call is. Found by vnext-example's AFreshSubStateDelivery_IsApplied.
+    /// </summary>
+    [Fact]
+    public async Task Applies_A_Fresh_Delivery_That_Carries_No_Sequence_Even_With_A_Watermark_Set()
+    {
+        var parent = CreateParent(out var subInstanceId);
+        var applied = DateTime.UtcNow;
+        parent.FindCorrelationBySubInstanceId(subInstanceId)!.UpdateSubFlowState("older", applied, 5);
+        Loads(parent, subInstanceId);
+
+        await CreateSut().UpdateParentStateAsync(
+            Input(parent.Id, subInstanceId, applied.AddSeconds(5), newStatus: null, notificationSeq: 0));
+
+        parent.FindCorrelationBySubInstanceId(subInstanceId)!.SubFlowCurrentState.ShouldBe("child-running");
+        _instanceRepository.Verify(
+            x => x.UpdateAsync(parent, true, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    /// <summary>
+    /// …and the watermark it does not carry is not lowered by it either: the next sequenced
+    /// delivery is still ordered against the highest number seen.
+    /// </summary>
+    [Fact]
+    public async Task A_Sequenceless_Delivery_Does_Not_Lower_The_Watermark()
+    {
+        var parent = CreateParent(out var subInstanceId);
+        var applied = DateTime.UtcNow;
+        var correlation = parent.FindCorrelationBySubInstanceId(subInstanceId)!;
+        correlation.UpdateSubFlowState("older", applied, 5);
+        Loads(parent, subInstanceId);
+
+        await CreateSut().UpdateParentStateAsync(
+            Input(parent.Id, subInstanceId, applied.AddSeconds(5), newStatus: null, notificationSeq: 0));
+
+        correlation.SubFlowNotificationSeq.ShouldBe(5);
+    }
 }

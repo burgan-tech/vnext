@@ -1385,7 +1385,7 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         _instanceRepository
             .GetStateFingerprintAsync(instance.Id.ToString(), Arg.Any<CancellationToken>())
             .Returns(new InstanceStateFingerprint(instance.Id, "test-key", TestState, InstanceStatus.Busy,
-                TestVersion, HasActiveSubFlow: true,
+                InstanceStatus.Busy, TestVersion, HasActiveSubFlow: true,
                 CorrelationCount: 1, CompletedCorrelationCount: 0,
                 LastCorrelationCompletedAt: null, LastSubFlowStateChangedAt: null));
 
@@ -1450,7 +1450,7 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         _instanceRepository
             .GetStateFingerprintAsync(instanceId.ToString(), Arg.Any<CancellationToken>())
             .Returns(new InstanceStateFingerprint(instanceId, "test-key", TestState, InstanceStatus.Active,
-                TestVersion, HasActiveSubFlow: false,
+                InstanceStatus.Active, TestVersion, HasActiveSubFlow: false,
                 CorrelationCount: 0, CompletedCorrelationCount: 0,
                 LastCorrelationCompletedAt: null, LastSubFlowStateChangedAt: null));
 

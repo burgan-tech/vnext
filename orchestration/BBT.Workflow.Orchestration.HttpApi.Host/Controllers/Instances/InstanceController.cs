@@ -288,6 +288,8 @@ public sealed class InstanceController(
             },
             cancellationToken);
 
+        // The body carries the status at the bottom of this side's chain so the CALLING side can
+        // stamp its own ancestors' EffectiveStatus. A caller that predates it simply ignores it.
         return FromResult(result);
     }
 
