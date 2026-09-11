@@ -59,4 +59,16 @@ public record SubFlowStateChangedInput
     /// When the state change occurred
     /// </summary>
     public required DateTime ChangedAt { get; init; }
+
+    /// <summary>
+    /// The sub-item's effective status at rest. Null when the publisher reported none, which leaves
+    /// the parent's <c>EffectiveStatus</c> untouched rather than guessing one.
+    /// </summary>
+    public string? NewStatus { get; init; }
+
+    /// <summary>
+    /// Per-instance strictly increasing notification number from the sub-item; the ordering
+    /// authority. Zero means "not reported" and the receiver falls back to <see cref="ChangedAt"/>.
+    /// </summary>
+    public long NotificationSeq { get; init; }
 }

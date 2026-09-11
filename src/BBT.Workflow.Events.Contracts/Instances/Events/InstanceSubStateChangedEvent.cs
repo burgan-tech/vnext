@@ -64,6 +64,28 @@ public class InstanceSubStateChangedEvent : IDistributedEvent, ITraceableDistrib
     public required DateTime ChangedAt { get; init; }
 
     /// <summary>
+    /// The sub-item's effective status at the moment it came to rest — the status the ancestor
+    /// chain should project for it. Null from a publisher that predates the field, which the
+    /// receiver reads as "no status reported" and leaves the ancestor's projection untouched.
+    /// </summary>
+    public string? NewStatus { get; init; }
+
+    /// <summary>
+    /// Per-instance, strictly increasing notification number, assigned by the sub-item inside the
+    /// same transaction that publishes this event. It is the ordering authority the receiver uses
+    /// instead of <see cref="ChangedAt"/>.
+    /// </summary>
+    /// <remarks>
+    /// A wall-clock comparison cannot order two notifications produced by different pods, and the
+    /// consequence of getting it wrong is not symmetric: dropping a state change is corrected by the
+    /// next one, but dropping the notification that takes an ancestor OUT of Busy strands a client
+    /// long-polling on a chain that has already finished — nothing later moves it. A counter
+    /// incremented in the publisher's own transaction has no clock in it at all. Zero from a
+    /// publisher that predates the field; the receiver then falls back to the timestamp guard.
+    /// </remarks>
+    public long NotificationSeq { get; init; }
+
+    /// <summary>
     /// The root ancestor instance ID for nested subflow chains.
     /// <c>null</c> when this is a root (non-subflow) instance.
     /// </summary>

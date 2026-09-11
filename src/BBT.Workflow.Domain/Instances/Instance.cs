@@ -149,6 +149,20 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
     public InstanceStatus EffectiveStatus { get; private set; }
 
     /// <summary>
+    /// Strictly increasing notification number for this instance's <c>sub:state-changed</c> events,
+    /// incremented inside the same transaction that publishes one. Travels on the event and is the
+    /// receiver's ordering authority.
+    /// </summary>
+    /// <remarks>
+    /// It exists because <c>ChangedAt</c> is a wall clock and two consecutive episodes of the same
+    /// sub-item can run on different pods. Ordering the STATE dimension by a skewed clock is
+    /// survivable — the next change corrects it — but the notification that takes an ancestor out of
+    /// Busy is not: drop it and a client long-polling that ancestor waits on a chain that already
+    /// finished. A counter written in the publisher's own transaction cannot be skewed.
+    /// </remarks>
+    public long SubStateNotificationSeq { get; private set; }
+
+    /// <summary>
     /// Long-poll acknowledge token. Set when the pipeline pauses on entering a state whose
     /// <c>interaction.longPoll.terminate</c> is true; the State (long-poll) function surfaces the
     /// termination signal while this is non-null, and the pipeline resumes when the client
@@ -998,24 +1012,56 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
     /// This prevents duplicate events and unnecessary processing.
     /// </remarks>
     public void PropagateEffectiveStateToParent(string effectiveState, StateType stateType, StateSubType stateSubType)
+        => PropagateEffectiveStateToParent(effectiveState, stateType, stateSubType, childStatus: null);
+
+    /// <summary>
+    /// Applies a sub-item's reported state AND its effective status to this instance's projection,
+    /// then carries the change one level further up when this instance is itself a SubFlow.
+    /// </summary>
+    /// <param name="childStatus">
+    /// The status the sub-item came to rest in, or null when the notification reported none (a
+    /// publisher that predates the field) — then the projection keeps whatever it holds rather than
+    /// guessing.
+    /// </param>
+    /// <remarks>
+    /// The status is why the early return below is not on the state alone. A sub-item can come to
+    /// rest in the state it started in — a <c>$self</c> shared transition, a retry — and returning
+    /// early there would leave every ancestor projecting the Busy the accept stamped on the way
+    /// down, with nothing later to clear it.
+    /// </remarks>
+    public void PropagateEffectiveStateToParent(
+        string effectiveState,
+        StateType stateType,
+        StateSubType stateSubType,
+        InstanceStatus? childStatus)
     {
         var currentEffectiveState = GetEffectiveState;
-        
-        // Idempotency: If already at this state with same type/subtype, skip update
-        if (currentEffectiveState == effectiveState 
-            && EffectiveStateType == stateType 
-            && EffectiveStateSubType == stateSubType)
+
+        var stateMoved = currentEffectiveState != effectiveState
+                         || EffectiveStateType != stateType
+                         || EffectiveStateSubType != stateSubType;
+        var statusMoved = childStatus is not null && !EffectiveStatus.Equals(childStatus);
+
+        // Idempotency: nothing observable changed for this level, so nothing travels further up.
+        if (!stateMoved && !statusMoved)
         {
             return;
         }
-        
-        // Update EffectiveState with type and subtype
-        SetEffectiveState(effectiveState);
-        EffectiveStateType = stateType;
-        EffectiveStateSubType = stateSubType;
-        
+
+        if (stateMoved)
+        {
+            SetEffectiveState(effectiveState);
+            EffectiveStateType = stateType;
+            EffectiveStateSubType = stateSubType;
+        }
+
+        if (statusMoved)
+        {
+            EffectiveStatus = childStatus!;
+        }
+
         // IMPORTANT: Do NOT modify Status here - status management happens in ChangeState only
-        
+
         // If this instance is also a SubFlow, propagate upward to its parent
         if (IsSubFlow)
         {
@@ -1035,6 +1081,7 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
         if (contractInfo.Id != Guid.Empty)
         {
             var rootId = this.GetRootInstanceId();
+            SubStateNotificationSeq++;
             AddDistributedEvent(new InstanceSubStateChangedEvent
             {
                 ParentInstanceId = contractInfo.Id,
@@ -1047,6 +1094,11 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
                 NewStateType = (int)(EffectiveStateType ?? StateType.Intermediate),
                 NewStateSubType = (int)(EffectiveStateSubType ?? StateSubType.None),
                 ChangedAt = DateTime.UtcNow,
+                // What the ancestors must project for this sub-item. At a rest point the sub-item
+                // owns its own visible status (a level with an open SubFlow correlation does not
+                // publish here at all), so EffectiveStatus and Status agree.
+                NewStatus = EffectiveStatus.Code,
+                NotificationSeq = SubStateNotificationSeq,
                 RootInstanceId = rootId != Id ? rootId : (Guid?)null
             });
         }
@@ -1107,26 +1159,40 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
     /// notification the parent ever gets for it.
     /// </para>
     /// </summary>
+    /// <param name="statusChanged">
+    /// True when this episode also moved the instance's own status — in practice, when the
+    /// settlement's Busy→Active CAS actually flipped. It is what closes the hole a state-only
+    /// trigger leaves: an episode that ends in the state it started in (a <c>$self</c> shared
+    /// transition, a retry landing back in the same state) publishes nothing, and the ancestors
+    /// that the accept stamped Busy on the way down would sit at Busy forever, with the client
+    /// long-polling a chain that has already come to rest. Nothing later moves them — which is why
+    /// this is the one residual failure that does not self-heal.
+    /// </param>
     /// <returns><c>true</c> when an event was published.</returns>
-    public bool PublishPendingSubStateChange()
+    public bool PublishPendingSubStateChange(bool statusChanged = false)
     {
-        if (!_hasPendingSubStateChange)
-            return false;
-
         var previousState = _pendingSubStateChangeFrom ?? string.Empty;
+        var hadPendingState = _hasPendingSubStateChange;
         _pendingSubStateChangeFrom = null;
         _hasPendingSubStateChange = false;
+
+        if (!hadPendingState && !statusChanged)
+            return false;
 
         if (!IsSubFlow)
             return false;
 
-        // The chain came back to where it started: nothing was published in between, so from the
-        // parent's point of view nothing happened.
         var newState = GetCurrentState;
-        if (string.Equals(previousState, newState, StringComparison.Ordinal))
+
+        // The chain came back to where it started: nothing was published in between, so from the
+        // parent's point of view the STATE did not move. The status still may have — and then the
+        // notification is the only thing that releases the ancestors' projection.
+        var stateMoved = hadPendingState
+                         && !string.Equals(previousState, newState, StringComparison.Ordinal);
+        if (!stateMoved && !statusChanged)
             return false;
 
-        PublishSubStateChangedEvent(previousState, newState);
+        PublishSubStateChangedEvent(stateMoved ? previousState : newState, newState);
         return true;
     }
 

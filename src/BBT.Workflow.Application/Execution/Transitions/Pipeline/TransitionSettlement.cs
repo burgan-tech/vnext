@@ -95,8 +95,11 @@ internal static class TransitionSettlement
         // describes. Intentionally broader than the activation verdict: a lost CAS or an already
         // Active owner yields no verdict, but the state this hop wrote is still real and the parent
         // must hear about it. See Instance.PublishPendingSubStateChange.
+        // `flipped` is the status half of the trigger: an episode that ends in the state it started
+        // in still has to tell the ancestors it is no longer Busy, or the projection the accept
+        // stamped on the way down never clears and a long-polling client waits on a finished chain.
         if (ShouldPublishSubState(context, hasOpenSubFlow, chainSettled) &&
-            context.Instance.PublishPendingSubStateChange())
+            context.Instance.PublishPendingSubStateChange(statusChanged: flipped))
         {
             // ChangeStateStep drains the aggregate into the pipeline's deferred events the moment it
             // changes the state — long before this. Publishing after that drain leaves the event on
