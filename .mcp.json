@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "openobserve": {
+      "type": "http",
+      "url": "http://localhost:5080/api/default/mcp",
+      "headers": {
+        "Authorization": "Basic cm9vdEBleGFtcGxlLmNvbTpDb21wbGV4cGFzcyNAMTIz"
+      }
+    }
+  }
+}

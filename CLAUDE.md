@@ -24,6 +24,16 @@ in `AGENTS.md`). Invoke via the `Skill` tool when the trigger phrase matches:
 - **cross-domain-lab** — "cross-domain test" / "çapraz domain" / "partner domain" (lokal 3-domain Dapr lab'ı; lab vnext-example `labs/cross-domain/` altında)
 - **runtime-integration-test** — "integration test" / "entegrasyon testi" / "vnext-example'da test et" / "e2e doğrula"; also fires without a phrase on a core-process change that needs end-to-end proof (runs vnext-example tests against the locally built runtime; contract [docs/testing/integration-testing.md](docs/testing/integration-testing.md))
 
+## Project MCP servers (`.mcp.json`)
+
+- **openobserve** — the local OpenObserve instance started by `etc/docker/run-docker.sh`
+  (`http://localhost:5080`, org `default`). **During local development and while running or
+  debugging tests, query runtime logs and traces through this server** (search the `default`
+  org's log streams by `instanceId`, `flow`, `transitionKey`, trace id) instead of guessing from
+  host stdout. It only answers while the docker infra is up (`./run-docker.sh status`). The header
+  is the compose-file root login, not a secret beyond what `etc/docker/docker-compose*.yml`
+  already contains.
+
 ## Personal, machine-local overrides
 
 @CLAUDE.local.md
