@@ -68,7 +68,6 @@ public sealed class InstanceController(
         [FromBody] JsonElement? body,
         [FromQuery] string? version = null,
         [FromQuery] bool sync = false,
-        [FromQuery] string[]? extensions = null,
         CancellationToken cancellationToken = default
     )
     {
@@ -95,8 +94,7 @@ public sealed class InstanceController(
                 Tags = request.Tags,
                 Attributes = request.Attributes,
                 Stage = request.Stage
-            },
-            Extensions = extensions
+            }
         };
         if (httpContext is not null)
         {
@@ -116,7 +114,6 @@ public sealed class InstanceController(
         [FromBody] CreateSubInstanceDto request,
         [FromQuery] string? version = null,
         [FromQuery] bool sync = false,
-        [FromQuery] string[]? extensions = null,
         CancellationToken cancellationToken = default
     )
     {
@@ -144,9 +141,8 @@ public sealed class InstanceController(
                 ExtraProperties = new ExtraPropertyDictionary(request.ExtraProperties)
             },
             StrictIdempotency = true,
-            Extensions = extensions,
             // This surface is called only by a parent runtime, which reads IsSuccess from the
-            // response and nothing else — never project attributes/extensions here.
+            // response and nothing else — never project attributes here.
             SuppressResponseEnrichment = true
         };
         var httpContext = httpContextAccessor.HttpContext;
@@ -583,7 +579,6 @@ public sealed class InstanceController(
         [FromRoute] string transitionKey,
         [FromBody] JsonElement? body = null,
         [FromQuery] bool sync = false,
-        [FromQuery] string[]? extensions = null,
         CancellationToken cancellationToken = default
     )
     {
@@ -604,10 +599,7 @@ public sealed class InstanceController(
             data = new TransitionDataInput(body);
         }
 
-        var input = new TransitionInput(domain, workflow, data, sync)
-        {
-            Extensions = extensions
-        };
+        var input = new TransitionInput(domain, workflow, data, sync);
         if (httpContext is not null)
         {
             input.Headers = httpContext.Request.Headers.ToDictionary(s => s.Key.ToLower(), s => s.Value.FirstOrDefault()?.ToString());

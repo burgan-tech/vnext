@@ -288,7 +288,7 @@ Two more back the accept-time SubFlow chain reserve (see
 
 | Method | Route | Response |
 | --- | --- | --- |
-| POST | `.../instances/{instance}/internal/subflow-forward?transitionKey=` | Same contract as the public transition endpoint: `200` (sync) / `202` (async), or the mapped error. The sync body is identity-only (`id`, `key`, `status`): the relay reads `status` and nothing else, so response enrichment (attributes, ETag, extensions) is suppressed on this surface. |
+| POST | `.../instances/{instance}/internal/subflow-forward?transitionKey=` | Same contract as the public transition endpoint: `200` (sync) / `202` (async), or the mapped error. The sync body is identity-only (`id`, `key`, `status`): the relay reads `status` and nothing else, so response enrichment (attributes, ETag) is suppressed on this surface. (Extensions are not evaluated on any sync write response since 0.0.93.) |
 | PUT | `.../instances/{instance}/internal/busy-release` | `200`, also when the instance is absent (no-op). |
 
 The endpoint contract can represent both response modes, but current runtime-generated active-child

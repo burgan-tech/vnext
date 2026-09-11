@@ -59,14 +59,6 @@ public sealed class RemoteInstanceCommandAppService(
                 queryParams.Add($"version={Uri.EscapeDataString(input.Version)}");
             if (input.Sync)
                 queryParams.Add($"sync={input.Sync}");
-            
-            if (input.Extensions?.Length > 0)
-            {
-                foreach (var ext in input.Extensions)
-                {
-                    queryParams.Add($"extensions={Uri.EscapeDataString(ext)}");
-                }
-            }
 
             if (queryParams.Count > 0)
                 relativePath += "?" + string.Join("&", queryParams);
@@ -130,14 +122,6 @@ public sealed class RemoteInstanceCommandAppService(
                 queryParams.Add($"sync={input.Sync}");
 
             queryParams.Add("strictIdempotency=true");
-            
-            if (input.Extensions?.Length > 0)
-            {
-                foreach (var ext in input.Extensions)
-                {
-                    queryParams.Add($"extensions={Uri.EscapeDataString(ext)}");
-                }
-            }
 
             if (queryParams.Count > 0)
                 relativePath += "?" + string.Join("&", queryParams);
@@ -284,14 +268,6 @@ public sealed class RemoteInstanceCommandAppService(
             var queryParams = new List<string>();
             if (input.Sync)
                 queryParams.Add("sync=true");
-            
-            if (input.Extensions?.Length > 0)
-            {
-                foreach (var ext in input.Extensions)
-                {
-                    queryParams.Add($"extensions={Uri.EscapeDataString(ext)}");
-                }
-            }
 
             if (queryParams.Count > 0)
                 relativePath += "?" + string.Join("&", queryParams);

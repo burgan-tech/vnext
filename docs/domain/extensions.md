@@ -8,6 +8,27 @@ State/Data/Master read and merges their results into the response. Each `Extensi
 carries a `Task` (a `Reference` to a task definition) plus its own `Mapping` (an inline C# script)
 and optional `ErrorBoundary`.
 
+## Extensions run on READ surfaces only
+
+Since **0.0.93** a `sync=true` `start` or `transition` response does **not** evaluate extensions.
+The `extensions` key is still on the response (so the shape is unchanged) but is always an empty
+object, and the `?extensions=` query parameter is gone from those two endpoints. Extensions are
+enrichment, not data: the client workflow manager never read them off a write response, and a
+service-to-service caller already receives `attributes`.
+
+The surfaces that DO run them — all of them read-only — are unchanged:
+
+| Surface | Scope |
+|---------|-------|
+| `GET .../instances/{instance}` | `GetInstance` |
+| `GET .../instances` (list) | `GetAllInstances` |
+| `GET .../instances/{instance}/functions/data?extensions=` | `GetInstance` |
+| the dedicated extensions endpoint | `GetInstance` |
+
+The state function has never run extensions; it only carries the requested keys into the `data`
+href. So a client that needs an extension value after a transition asks the data function for it —
+one extra call, made only when the value is actually wanted, instead of on every write.
+
 ## Two extensions may legitimately share one task definition
 
 `Extension.Task` is only a **reference** to a task, not a private copy of it. Nothing in

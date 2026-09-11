@@ -287,6 +287,16 @@ A sixth profile is **composed on top of** the base, never selected instead of it
 - Runtime-generated child start, active-child forward and descended retry calls always set
   `sync=true`, independent of original caller mode and SubFlow (`S`) / SubProcess (`P`) type. The
   call awaits the child's current activation to a rest point, not future human/event completion.
+- **A sync response never evaluates extensions** (0.0.93). `EnrichOutputCoreAsync` projects
+  reload-or-reuse → schema field filter → (only when `workflow.Output` has mapping code and the
+  instance is not a subflow) script context + output mapping. `extensions` stays on the DTO as an
+  always-empty map so the shape does not change, and the `?extensions=` query parameter is gone
+  from start/transition. `IInstanceExtensionService` is no longer a dependency of
+  `InstanceCommandAppService` — that is the kill switch, enforced by the compiler. Extensions run
+  only on read surfaces (`InstanceQueryAppService`: instance GET, instance list, data function,
+  extensions endpoint). Do not reintroduce the pass "just for parity": it cost an extension task
+  round (HTTP calls included) plus a full-instance-data `ScriptContext` build per sync transition
+  for a field no client read.
 
 ### Activation episode (trace)
 

@@ -46,7 +46,11 @@ public abstract class InstanceOutputBase
     private string? _entityEtag;
 
     /// <summary>
-    /// Computed extension fields. Populated only when sync=true.
+    /// Always an EMPTY map on a sync response, and absent on an async one. Start and transition
+    /// stopped evaluating extensions in 0.0.93 — they are enrichment no client reads off a write
+    /// response — but the key is kept so the response shape does not change. Ask a read surface
+    /// for extension values: <c>GET .../functions/data?extensions=</c>, the instance GET/list, or
+    /// the extensions endpoint.
     /// </summary>
     public Dictionary<string, object>? Extensions { get; set; }
 
