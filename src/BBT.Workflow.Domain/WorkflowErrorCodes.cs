@@ -72,6 +72,17 @@ public static class WorkflowErrorCodes
     /// </summary>
     public const string ActiveIncidentNotFound = "Instance:100037";
 
+    /// <summary>
+    /// The task journal row addressed by the action-history function does not exist or does not
+    /// belong to the instance in the route.
+    /// </summary>
+    public const string InstanceTaskNotFound = "Instance:100038";
+
+    /// <summary>
+    /// The action-history function was called without a usable <c>taskId</c> query parameter.
+    /// </summary>
+    public const string InstanceTaskIdRequired = "Instance:100039";
+
     #endregion
     
     #region Transition Errors (100xxx)

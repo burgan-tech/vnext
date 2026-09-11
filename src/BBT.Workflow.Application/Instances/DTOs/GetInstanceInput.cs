@@ -182,6 +182,69 @@ public sealed class GetInstanceIncidentsInput : IHasDomain
 }
 
 /// <summary>
+/// Input for the task-history system function of an instance.
+/// </summary>
+public sealed class GetInstanceTasksInput : IHasDomain
+{
+    [Required]
+    [StringLength(WorkflowConstants.MaxDomainLength)]
+    public string Domain { get; set; } = string.Empty;
+
+    [Required]
+    [StringLength(WorkflowConstants.MaxFlowLength)]
+    public string Workflow { get; set; } = string.Empty;
+
+    [Required]
+    public string Instance { get; set; } = string.Empty;
+
+    /// <summary>HTTP headers from the request (dynamic role grants read them).</summary>
+    public Dictionary<string, string?>? Headers { get; set; }
+
+    /// <summary>Query parameters from the request (dynamic role grants read them).</summary>
+    public Dictionary<string, string?>? QueryParameters { get; set; }
+
+    /// <summary>
+    /// Caller roles, used to enforce state/workflow queryRoles visibility — the same gate the state
+    /// function applies, so a caller who can poll the state can read the task history.
+    /// </summary>
+    public IReadOnlyCollection<string>? Roles { get; set; }
+}
+
+/// <summary>
+/// Input for the action-history system function — the recorded execution sub-steps of one task
+/// journal entry.
+/// </summary>
+public sealed class GetInstanceTaskActionsInput : IHasDomain
+{
+    [Required]
+    [StringLength(WorkflowConstants.MaxDomainLength)]
+    public string Domain { get; set; } = string.Empty;
+
+    [Required]
+    [StringLength(WorkflowConstants.MaxFlowLength)]
+    public string Workflow { get; set; } = string.Empty;
+
+    [Required]
+    public string Instance { get; set; } = string.Empty;
+
+    /// <summary>Task journal row identifier the actions belong to. Must belong to the instance.</summary>
+    [Required]
+    public Guid TaskId { get; set; }
+
+    /// <summary>HTTP headers from the request (dynamic role grants read them).</summary>
+    public Dictionary<string, string?>? Headers { get; set; }
+
+    /// <summary>Query parameters from the request (dynamic role grants read them).</summary>
+    public Dictionary<string, string?>? QueryParameters { get; set; }
+
+    /// <summary>
+    /// Caller roles, used to enforce the same <c>queryRoles</c> gate as the state function and the
+    /// task-history function.
+    /// </summary>
+    public IReadOnlyCollection<string>? Roles { get; set; }
+}
+
+/// <summary>
 /// Input for retrieving the newest unresolved incident of an instance — the target of the
 /// <c>incident.active</c> link on the state function and instance metadata.
 /// </summary>

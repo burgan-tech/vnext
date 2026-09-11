@@ -101,6 +101,8 @@ public class InstanceQueryAppServiceStateTests : IDisposable
             instanceCorrelationRepository: _instanceCorrelationRepository,
             instanceJobRepository: _instanceJobRepository,
             instanceIncidentRepository: _instanceIncidentRepository,
+            instanceTaskRepository: Substitute.For<IInstanceTaskRepository>(),
+            instanceActionRepository: Substitute.For<IInstanceActionRepository>(),
             instanceExtensionService: Substitute.For<IInstanceExtensionService>(),
             scriptContextFactory: Substitute.For<IScriptContextFactory>(),
             instanceQueryGateway: _instanceQueryGateway,

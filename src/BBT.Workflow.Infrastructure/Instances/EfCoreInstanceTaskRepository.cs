@@ -254,4 +254,53 @@ public class EfCoreInstanceTaskRepository(
             r.TriggerType
         )).ToList();
     }
+
+    /// <inheritdoc />
+    public async Task<List<InstanceTaskHistoryRow>> GetHistoryByInstanceIdAsync(
+        Guid instanceId,
+        CancellationToken cancellationToken = default)
+    {
+        var context = await GetDbContextAsync();
+
+        // Column projection on purpose: the constructor arguments become the SELECT list, so the
+        // jsonb payload columns are never read off disk for this endpoint. The Faulted-row Response
+        // is the one exception, fetched through a CASE so only the small {"error": ...} objects of
+        // faulted rows travel.
+        return await (
+            from task in context.InstanceTasks.AsNoTracking()
+            join tr in context.InstanceTransitions.AsNoTracking()
+                on task.TransitionId equals tr.Id
+            where tr.InstanceId == instanceId
+            orderby task.StartedAt, task.Id
+            select new InstanceTaskHistoryRow(
+                task.Id,
+                task.TaskId,
+                tr.TransitionId,
+                tr.FromState,
+                tr.ToState,
+                tr.TriggerType,
+                task.Status,
+                task.BusinessStatus,
+                task.StartedAt,
+                task.FinishedAt,
+                task.Duration,
+                task.Status == WorkflowTaskStatus.Faulted ? task.Response.Json : null)
+        ).ToListAsync(cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async Task<InstanceTaskRef?> GetRefForInstanceAsync(
+        Guid instanceId,
+        Guid taskId,
+        CancellationToken cancellationToken = default)
+    {
+        var context = await GetDbContextAsync();
+        return await (
+            from task in context.InstanceTasks.AsNoTracking()
+            join tr in context.InstanceTransitions.AsNoTracking()
+                on task.TransitionId equals tr.Id
+            where task.Id == taskId && tr.InstanceId == instanceId
+            select new InstanceTaskRef(task.Id, task.TaskId)
+        ).FirstOrDefaultAsync(cancellationToken);
+    }
 }

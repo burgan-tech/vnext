@@ -22,5 +22,9 @@ namespace BBT.Workflow.Definitions.Functions
         public const string Master = "master";
         /// <summary>System function: returns the workflow's declared functions, each linked to its info endpoint.</summary>
         public const string Catalog = "catalog";
+        /// <summary>System function: returns the instance's task execution journal (metadata only).</summary>
+        public const string TaskHistory = "task-history";
+        /// <summary>System function: returns the recorded actions (execution sub-steps) of one task journal row.</summary>
+        public const string ActionHistory = "action-history";
     }
 }

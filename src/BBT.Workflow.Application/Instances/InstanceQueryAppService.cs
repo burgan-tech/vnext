@@ -40,6 +40,8 @@ public sealed class InstanceQueryAppService(
     IInstanceCorrelationRepository instanceCorrelationRepository,
     IInstanceJobRepository instanceJobRepository,
     IInstanceIncidentRepository instanceIncidentRepository,
+    IInstanceTaskRepository instanceTaskRepository,
+    IInstanceActionRepository instanceActionRepository,
     IInstanceExtensionService instanceExtensionService,
     IScriptContextFactory scriptContextFactory,
     IInstanceQueryGateway instanceQueryGateway,
@@ -434,6 +436,80 @@ public sealed class InstanceQueryAppService(
                 return active is null
                     ? Result<IncidentDetailDto>.Fail(WorkflowErrors.ActiveIncidentNotFound(input.Instance))
                     : Result<IncidentDetailDto>.Ok(IncidentDetailDto.FromIncident(active));
+            });
+    }
+
+    /// <summary>
+    /// Returns the task execution history of an instance in execution order — the task-history
+    /// system function. Only execution metadata and the fault reason leave this surface — the
+    /// journaled request/response/invocation payloads stay on the Monitor API, since mapping
+    /// scripts write their built headers into them.
+    /// </summary>
+    public async Task<Result<GetInstanceTasksOutput>> GetInstanceTasksAsync(
+        GetInstanceTasksInput input,
+        CancellationToken cancellationToken = default)
+    {
+        runtimeInfoProvider.Check(input.Domain);
+
+        return await GetInstanceByIdOrKeyAsync(input.Instance, cancellationToken)
+            .BindAsync(instance =>
+                componentCacheStore.GetFlowAsync(input.Domain, input.Workflow, instance.FlowVersion, cancellationToken)
+                    .MapAsync(workflow => (instance, workflow)))
+            .BindAsync(async data =>
+            {
+                using var instanceScope = BeginInstanceScope(data.instance);
+
+                // Same gate as the state function: a caller who may poll the state may read what ran.
+                if (!await IsInstanceQueryAllowedAsync(data.workflow, data.instance, input.Roles, input.Headers, input.QueryParameters, cancellationToken))
+                    return Result<GetInstanceTasksOutput>.Fail(WorkflowErrors.QueryAccessDenied(data.instance.GetEffectiveState));
+
+                var rows = await instanceTaskRepository.GetHistoryByInstanceIdAsync(
+                    data.instance.Id, cancellationToken);
+
+                return Result<GetInstanceTasksOutput>.Ok(new GetInstanceTasksOutput
+                {
+                    Items = rows.Select(InstanceTaskDto.FromRow).ToList()
+                });
+            });
+    }
+
+    /// <summary>
+    /// Returns the recorded actions (execution sub-steps) of one task journal entry in execution
+    /// order — the action-history system function. The task must belong to the addressed instance —
+    /// otherwise <c>NotFound</c> (<c>Instance:100038</c>), so a task can never be read through
+    /// another instance's gate.
+    /// </summary>
+    public async Task<Result<GetInstanceTaskActionsOutput>> GetInstanceTaskActionsAsync(
+        GetInstanceTaskActionsInput input,
+        CancellationToken cancellationToken = default)
+    {
+        runtimeInfoProvider.Check(input.Domain);
+
+        return await GetInstanceByIdOrKeyAsync(input.Instance, cancellationToken)
+            .BindAsync(instance =>
+                componentCacheStore.GetFlowAsync(input.Domain, input.Workflow, instance.FlowVersion, cancellationToken)
+                    .MapAsync(workflow => (instance, workflow)))
+            .BindAsync(async data =>
+            {
+                using var instanceScope = BeginInstanceScope(data.instance);
+
+                if (!await IsInstanceQueryAllowedAsync(data.workflow, data.instance, input.Roles, input.Headers, input.QueryParameters, cancellationToken))
+                    return Result<GetInstanceTaskActionsOutput>.Fail(WorkflowErrors.QueryAccessDenied(data.instance.GetEffectiveState));
+
+                var taskRef = await instanceTaskRepository.GetRefForInstanceAsync(
+                    data.instance.Id, input.TaskId, cancellationToken);
+                if (taskRef is null)
+                    return Result<GetInstanceTaskActionsOutput>.Fail(
+                        WorkflowErrors.InstanceTaskNotFound(input.TaskId, input.Instance));
+
+                var actions = await instanceActionRepository.GetByTaskIdAsync(input.TaskId, cancellationToken);
+
+                return Result<GetInstanceTaskActionsOutput>.Ok(new GetInstanceTaskActionsOutput
+                {
+                    TaskId = taskRef.Id,
+                    TaskKey = taskRef.TaskKey,
+                    Items = actions.Select(InstanceTaskActionDto.FromAction).ToList()
+                });
             });
     }
 

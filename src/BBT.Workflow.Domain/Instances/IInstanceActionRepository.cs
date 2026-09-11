@@ -3,8 +3,8 @@ using BBT.Aether.Domain.Repositories;
 namespace BBT.Workflow.Instances;
 
 /// <summary>
-/// Read-only repository for <see cref="InstanceAction"/> entities.
-/// Additive — monitor-only.
+/// Read-only repository for <see cref="InstanceAction"/> entities. Read by the Monitor task detail
+/// and the public action-history function; nothing in the runtime writes these rows yet.
 /// </summary>
 public interface IInstanceActionRepository : IRepository<InstanceAction, Guid>
 {

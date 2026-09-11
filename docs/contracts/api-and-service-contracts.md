@@ -29,6 +29,8 @@ contracts. Remote services call public runtime APIs rather than internal reposit
 | --- | --- |
 | `GET /{domain}/workflows/{workflow}/instances/{instance}/functions/state` | Conditional state response, available transitions, role filtering, ETag, child correlations, workflow function discovery links, incident summary. |
 | `GET /{domain}/workflows/{workflow}/instances/{instance}/incidents` | Paged error-boundary incident history (newest first), same `queryRoles` gate as the state function; never carries stack traces. |
+| `GET /{domain}/workflows/{workflow}/instances/{instance}/functions/task-history` | Full task execution history in execution order (unpaged), same `queryRoles` gate. Execution metadata + fault reason only — journaled payloads stay on the Monitor API. |
+| `GET /{domain}/workflows/{workflow}/instances/{instance}/functions/action-history?taskId={id}` | Action history (execution sub-steps) of one task journal row in execution order (unpaged); `400` (`Instance:100039`) without a valid `taskId`, `404` (`Instance:100038`) when the task is not the instance's own. Same `queryRoles` gate. |
 | `GET /{domain}/workflows/{workflow}/instances/{instance}/functions/data` | Latest data, optional extensions, ETag. |
 | `GET /{domain}/workflows/{workflow}/instances/{instance}/functions/view` | Backend-driven view selection. |
 | `GET /{domain}/workflows/{workflow}/instances/{instance}/functions/schema` | Transition-aware schema. |
