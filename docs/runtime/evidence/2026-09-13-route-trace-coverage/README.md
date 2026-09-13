@@ -228,7 +228,7 @@ Kibana is **not** started by `run-docker.sh`; `docker compose up -d kibana` from
 **Recorded dissent:** the council `REJECTED` committing screenshots (cost and rot versus the text
 trees). They are here at the requester's explicit direction, capped at one viewport each and ~200 KB.
 
-## 9. Orphans: zero from vNext, some from the Dapr sidecar
+## 9. Orphans: zero from vNext, and the Dapr sidecar's are a collector question
 
 Acceptance check 3 asked for zero orphan spans — a span whose parent document is absent, which Elastic
 silently re-roots. Measured across the five cross-domain traces:
@@ -241,12 +241,52 @@ silently re-roots. Measured across the five cross-domain traces:
 | D | 21 | 1 | 0 | — |
 | E | 45 | 1 | 5 | `…/{GetState,SaveState}` |
 
-Every orphan is a **Dapr sidecar gRPC span**, and no vNext span is orphaned in any trace. The cause is
-known and predates this work: the sidecar exports its server-side gRPC span while the .NET side has no
-matching gRPC **client** span to be its parent, so the parent id names a document that was never
-written. Kibana shows it as the "Incomplete trace" badge. It is a sidecar-instrumentation gap, not a
-lane-propagation defect — the ladder this branch is about (`Remote.Send` → Dapr client → callee
-`CallLocal`) is unbroken in all five.
+**No vNext span is orphaned in any trace, and each has exactly one root.** Every orphan is a Dapr
+**sidecar** span, and the cause is narrower than "no gRPC instrumentation":
+
+- The app-side gRPC client span **exists and nests correctly** — `AddGrpcClientInstrumentation()` has
+  been registered since the trace-tree work (`WorkflowApiBaseServiceCollectionExtensions.cs`). In
+  trace C it sits under `Cache.GenerationGet` and `Cache.Get` as `external/grpc`.
+- What is missing is the **HttpClient activity between that span and the wire**: its id goes into
+  `traceparent` but it is never exported, so the sidecar's server span (`db/state`) names a parent no
+  backend saw.
+- The hole is specific to the **state-store and lock client construction path**. Over 300 sidecar
+  spans in the lab window: every `GetState` (101), `SaveState` (27), `TryLockAlpha1` (61) and
+  `UnlockAlpha1` (59) was orphaned — **248** — while every `PublishEvent` (20), `ScheduleJobAlpha1`
+  (16) and `DeleteJobAlpha1` (16) had an exported parent. **52** of them nest fine.
+
+### Why the lab shows these at all and `etc/docker` shows none
+
+The two stacks run different collector configurations. `etc/docker` carries a
+`filter/dapr-internals` processor; the lab's generated config (from vnext-runtime) carries none.
+
+That filter was also **dropping more than it documented**. Its pattern was
+`IsMatch(name, "^/?dapr\.proto\.runtime\.v1\.Dapr/")`, and the optional slash matched the app-side
+client span too — the one its own comment said "must survive". Measured 2026-09-13:
+
+| Ten-minute window | app-side `dapr.proto…` | sidecar `/dapr.proto…` |
+|---|---|---|
+| lab collector (no filter) | 254 GetState, 161 TryLock, … | 254 GetState, 224 TryLock, … |
+| `etc/docker` collector, old pattern | **0** | **0** |
+| `etc/docker` collector, anchored `^/` | 13 GetState, 6 SaveState (probe traffic) | **0** |
+
+So on the `etc/docker` stack `Cache.Get` and `Lock.Acquire` had no child at all showing the actual
+round trip. The anchor is now `^/`, and a post-fix probe trace confirms the intended shape:
+
+```
+GET …/functions/state                       6 ms   vnext.read.fastpath=cacheHit
+├─ Db.SELECT                                2 ms
+└─ Cache.Get/state-fn:v9:core:…             2 ms
+   └─ dapr.proto.runtime.v1.Dapr/GetState   2 ms   ← the wire time, previously invisible
+```
+
+Zero sidecar spans, zero orphans, and the cache read now says where its time went.
+
+Two things stay open, deliberately. The filter still drops the 52-in-300 sidecar spans that *would*
+nest correctly (PublishEvent, Jobs) — one simple rule is worth more than a method allowlist that
+would silently let a future orphaning method through. And the underlying HttpClient hole in the
+state-store/lock client construction is untouched: fixing it is what would let the processor be
+removed altogether.
 
 ## 10. What this does not cover
 
