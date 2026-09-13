@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using BBT.Workflow.Logging;
 using Shouldly;
 using Xunit;
@@ -74,6 +75,55 @@ public sealed class ActivitySourceRegistrationTests
 
         orphaned.ShouldBeEmpty(
             $"{relativePath} ({host}) registers sources nothing declares: {string.Join(", ", orphaned)}");
+    }
+
+    /// <summary>
+    /// Every ActivitySource name literal in the runtime must be a name the runtime declares.
+    /// <para>
+    /// Two helpers cannot use the constant and that is structural, not sloppiness:
+    /// <c>BBT.Workflow.Execution.Abstractions</c> has no project references at all and
+    /// <c>BBT.Workflow.Execution</c> references only it, so neither can reach
+    /// <c>TelemetryConstants</c> in the Domain. Duplicated literals are therefore permitted — but a
+    /// literal that has DRIFTED from the declared name is the failure this catches, and it is
+    /// silent: listeners match sources by name, so a one-character difference produces a source
+    /// nothing subscribes to and spans that are created and never exported.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void EverySourceNameLiteral_MatchesADeclaredSource()
+    {
+        var declared = TelemetryConstants.ActivitySources.All.ToHashSet(StringComparer.Ordinal);
+        var offenders = new List<string>();
+
+        foreach (var file in Directory.EnumerateFiles(RepositoryRoot(), "*.cs", SearchOption.AllDirectories))
+        {
+            if (file.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal) ||
+                file.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.Ordinal) ||
+                file.Contains($"{Path.DirectorySeparatorChar}test", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            foreach (var line in File.ReadLines(file))
+            {
+                if (!line.Contains("ActivitySource", StringComparison.Ordinal) &&
+                    !line.Contains("InstrumentationName", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                foreach (Match match in Regex.Matches(line, "\"(BBT\\.Workflow\\.[A-Za-z.]+)\""))
+                {
+                    var literal = match.Groups[1].Value;
+                    if (!declared.Contains(literal))
+                        offenders.Add($"{Path.GetFileName(file)}: \"{literal}\"");
+                }
+            }
+        }
+
+        offenders.ShouldBeEmpty(
+            "these ActivitySource name literals match no declared source: " +
+            string.Join(", ", offenders));
     }
 
     private static bool Matches(string entry, string source) =>

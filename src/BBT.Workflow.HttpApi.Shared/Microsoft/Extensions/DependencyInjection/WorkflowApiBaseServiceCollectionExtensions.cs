@@ -222,6 +222,11 @@ public static class WorkflowApiBaseServiceCollectionExtensions
 
     public static IServiceCollection AddTelemetry(this IServiceCollection services, IConfiguration configuration)
     {
+        // Reads the MERGED configuration at startup and warns when a source every host must carry is
+        // absent. The repository-level guard cannot see a deployment override, and this failure is
+        // otherwise completely silent — StartActivity just returns null.
+        services.AddHostedService<BBT.Workflow.Telemetry.ActivitySourceRegistrationCheck>();
+
         // The RequestIdLogProcessor runs after Aether's header enricher and before the exporter,
         // stamping the originating request id on every log record of every service — including
         // paths with no HttpContext, where the enricher is silent. See the processor's remarks
