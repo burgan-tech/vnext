@@ -87,6 +87,25 @@ public static class TelemetryConstants
         /// boundary.
         /// </summary>
         public const string AuthDecision = "vnext.auth.decision";
+
+        /// <summary>How many transition keys a filtering pass was asked about.</summary>
+        public const string AuthKeysEvaluated = "vnext.auth.keys.evaluated";
+
+        /// <summary>How many of them survived the filter.</summary>
+        public const string AuthKeysAllowed = "vnext.auth.keys.allowed";
+
+        /// <summary>
+        /// How many role-grant evaluators the pass constructed. One is the healthy shape; a number
+        /// tracking the key count is the N+1 — and building an evaluator serializes the instance's
+        /// full latest data, so it is not a cheap allocation.
+        /// </summary>
+        public const string AuthEvaluatorCreations = "vnext.auth.evaluator.creations";
+
+        /// <summary>How many view rules were evaluated before one matched.</summary>
+        public const string ViewRulesEvaluated = "vnext.view.rules.evaluated";
+
+        /// <summary>The key of the view that won, or absent when none matched.</summary>
+        public const string ViewSelected = "vnext.view.selected";
         /// <summary>
         /// The caller's organizational posting. Part of the identity the provider keys its answer on
         /// (with sub and act_sub), so a wrong or missing role set is unexplainable without it.
@@ -108,6 +127,25 @@ public static class TelemetryConstants
         public const string DescentTransport = "vnext.descent.transport";
         /// <summary>Which built-in function descended: <c>state</c>, <c>data</c>, <c>schema</c>, <c>master</c>, <c>view</c>, <c>extensions</c>, <c>authorize</c>.</summary>
         public const string DescentFunction = "vnext.descent.function";
+
+        /// <summary>
+        /// Which built-in read a request performed, stamped on the TRANSACTION. Built-in and custom
+        /// functions share one route template, so without this the APM transaction name is identical
+        /// for a state poll, a view read and a custom-function call. Costs zero span documents.
+        /// </summary>
+        public const string FunctionKey = "vnext.function.key";
+
+        /// <summary>
+        /// How a state/data read was answered: <c>notModified</c> (304 from the fingerprint),
+        /// <c>cacheHit</c> (cached body), <c>build</c> (full build after a miss) or <c>disabled</c>
+        /// (the response cache is off, so it always builds).
+        /// <para>
+        /// Written on every branch, not only the fast ones. Tagging the fast path alone would leave
+        /// the two outcomes on different document types, so every query would need an OR across a
+        /// transaction tag and a span tag for one question.
+        /// </para>
+        /// </summary>
+        public const string ReadFastPath = "vnext.read.fastpath";
         /// <summary>
         /// Set only when a descent did NOT yield a usable answer, naming why. Absent on the normal
         /// path — a fallback that leaves no mark is indistinguishable from a successful descent.

@@ -48,6 +48,78 @@ public static class InstanceReadActivityHelper
     /// </summary>
     public static readonly ActivitySource ActivitySource = new(SourceName);
 
+    /// <summary>The read was answered 304 from the fingerprint projection alone.</summary>
+    public const string FastPathNotModified = "notModified";
+
+    /// <summary>The read was answered from the cached response body.</summary>
+    public const string FastPathCacheHit = "cacheHit";
+
+    /// <summary>The read fell through and built the response.</summary>
+    public const string FastPathBuild = "build";
+
+    /// <summary>The response cache is disabled, so this read always builds.</summary>
+    public const string FastPathDisabled = "disabled";
+
+    /// <summary>
+    /// Records which read ran and how it was answered — on the TRANSACTION, at zero span documents.
+    /// <para>
+    /// This is the hot path's whole design. The state function is the highest-QPS route in the
+    /// runtime and its 304 branch returns before any cache read, aggregate load or response build,
+    /// so today it costs one transaction document plus a single <c>Db.SELECT</c>. Opening an
+    /// envelope there would be a permanent +50&#160;% on documents for that route, to record that
+    /// nothing happened — and the binding objection is not cost but fidelity: no sampler is
+    /// configured in any host, so with untuned OpenTelemetry defaults a burst drops spans
+    /// indiscriminately, including the pipeline spans this tree exists to protect.
+    /// </para>
+    /// <para>
+    /// Written on EVERY branch, including the ones that go on to open an envelope. Tagging only the
+    /// fast path would put the two outcomes on different document types and force every query to
+    /// OR across a transaction tag and a span tag to answer one question.
+    /// </para>
+    /// </summary>
+    /// <param name="transaction">
+    /// The ambient activity captured at entry — the ASP.NET server span, since no vNext span is open
+    /// yet. Passed in rather than read here so it cannot accidentally pick up an envelope opened later.
+    /// </param>
+    public static void SetReadOutcome(Activity? transaction, string kind, string outcome)
+    {
+        if (transaction is null) return;
+
+        transaction.SetTag(TelemetryConstants.TagNames.FunctionKey, kind);
+        transaction.SetTag(TelemetryConstants.TagNames.ReadFastPath, outcome);
+    }
+
+    /// <summary>Operation name for view-rule resolution.</summary>
+    public const string OperationViewResolve = "View.Resolve";
+
+    /// <summary>
+    /// Starts the span covering view-rule evaluation — the ordered walk through a state's or
+    /// transition's <c>views</c> array until a rule matches.
+    /// <para>
+    /// Each rule is a compiled C# script, and on the warm path it is completely invisible today:
+    /// <c>Script.Compile</c> appears only on a cold compile, so a request that evaluated four rules
+    /// and one that evaluated none look identical. One span for the whole walk, with the rule count
+    /// and the winner as tags — not one span per rule, which would turn a slow view definition into
+    /// a wide trace instead of a readable number.
+    /// </para>
+    /// </summary>
+    public static Activity? StartViewResolve()
+    {
+        var activity = ActivitySource.StartActivity(OperationViewResolve, ActivityKind.Internal);
+        activity?.SetTag(TelemetryConstants.TagNames.SpanCategory, TelemetryConstants.SpanCategories.Business);
+        return activity;
+    }
+
+    /// <summary>Records how many rules ran and which view won.</summary>
+    public static void SetViewResolution(Activity? activity, int rulesEvaluated, string? selectedView)
+    {
+        if (activity is null) return;
+
+        activity.SetTag(TelemetryConstants.TagNames.ViewRulesEvaluated, rulesEvaluated);
+        if (selectedView is { Length: > 0 })
+            activity.SetTag(TelemetryConstants.TagNames.ViewSelected, selectedView);
+    }
+
     /// <summary>One level of descent into an active subflow.</summary>
     public const string OperationDescend = "Subflow.Descend";
 

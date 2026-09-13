@@ -26,14 +26,14 @@ namespace BBT.Workflow.Application.Tests.Telemetry;
 /// </summary>
 public sealed class InstanceReadEnvelopeTests
 {
-    private static readonly string[] DeferredEntryPoints =
-    [
-        // Sequenced behind the effective-status-fingerprint plan (council condition G-2): it
-        // rewrites these two methods' fast paths, and the hot-path decision for them is a
-        // transaction tag rather than an envelope — zero added span documents on the 304 branch.
-        "GetInstanceStateAsync",
-        "GetInstanceDataAsync"
-    ];
+    /// <summary>
+    /// Empty on purpose. State and data were sequenced behind the effective-status-fingerprint
+    /// change while it was unmerged; it has since landed (#983) and both now open an envelope — on
+    /// their BUILD branch only. The 304 / cache-hit branch creates nothing, which
+    /// <c>GetInstanceStateAsync_304Branch_CreatesNoSpansAndTagsTheTransaction</c> enforces as a
+    /// number rather than a convention.
+    /// </summary>
+    private static readonly string[] DeferredEntryPoints = [];
 
     [Fact]
     public void EveryPublicRead_OpensAnEnvelope()
@@ -89,9 +89,12 @@ public sealed class InstanceReadEnvelopeTests
         var start = source.IndexOf($" {methodName}(", StringComparison.Ordinal);
         if (start < 0) return false;
 
-        // The envelope is the first statement after the domain check, so a short window is enough
-        // and keeps the check from accidentally matching the NEXT method's envelope.
-        var window = source[start..Math.Min(source.Length, start + 1600)];
+        // Window = this method's body, bounded by the next public entry point rather than by a fixed
+        // character count. The state and data methods open their envelope AFTER a long fast-path
+        // block — deliberately, so the 304 branch creates nothing — so a short window reports them
+        // as missing, which is exactly backwards.
+        var next = source.IndexOf("\n    public ", start + 1, StringComparison.Ordinal);
+        var window = next < 0 ? source[start..] : source[start..next];
         return window.Contains("InstanceReadActivityHelper.StartRead", StringComparison.Ordinal);
     }
 
