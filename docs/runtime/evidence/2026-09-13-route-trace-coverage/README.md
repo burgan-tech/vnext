@@ -84,13 +84,76 @@ VNEXT_BASE_URL=http://localhost:4201 VNEXT_DAPR_HTTP_URL=http://localhost:42110 
 Kibana renders the same data at `:5601` (Observability → APM → Traces). It is **not** started by
 `run-docker.sh`; bring it up with `docker compose up -d kibana` from `etc/docker`.
 
-## 5. What this does not cover
+## 5. Cross-domain: the descent ladder and `Remote.Send`
 
-- **Cross-domain.** `Remote.Send` and the descent ladder are not exercised here; that needs the
-  vnext-example cross-domain lab, whose collector currently exports to OpenObserve only.
-- **`Instance.Read/data`, `/view`, `/schema`, `/master`, `/extensions`, `/history`, `/hierarchy`,
-  `/humanTasks`** — implemented and unit-guarded, but the traffic in this window did not reach them.
-  Absence here is absence of traffic, not absence of the span.
-- **`Auth.Decide`, `Auth.PreviousUserLookup`, `View.Resolve`, `Schema.Validate`, `Remote.Send`,
-  `SubFlow.ChildFault`, the function response cache** — same: no traffic in this window.
+Second window, **2026-09-13 06:25–06:35 UTC**, produced by the vnext-example cross-domain lab
+(`labs/cross-domain/lab.sh`) running the 11 `CrossDomainLab` tests. Three domains — `core` (:4201),
+`partner` (:4211), `discovery` (:4231) — talking over Dapr service invocation, with the retained
+`vnext-apm-server` joined to the lab network under the alias `apm-server`.
+
+Span counts in that window:
+
+| Span | Count |
+|---|---|
+| `Instance.Read/instance` | 95 |
+| `Discovery.Resolve/partner` | 59 |
+| `Remote.Send/IRemoteInstanceCommandAppService` | 51 |
+| `SubFlow.StateChange/core/xd-parent` | 45 |
+| `Instance.Read/state` | 39 |
+| `Discovery.Resolve/core` | 28 |
+| `Auth.FilterTransitions` | 25 |
+| `SubFlow.Completion/core/xd-parent` | 22 |
+| `Subflow.Descend/xd-child` | 19 |
+| `Remote.Send/IRemoteInstanceQueryAppService` | 17 |
+| `SubFlow.Start/partner/xd-child` | 11 |
+| `SubFlow.Forward/partner/xd-child/child-approve` | 6 |
+| `SubFlow.Resume/core/xd-parent` | 6 |
+| `Instance.Read/data` | 5 |
+| `Auth.Decide` / `Schema.Validate` / `Instance.Read/schema` / `Instance.Read/view` / `Remote.Send/IRemoteAuthorizeAppService` | 2 each |
+| `View.Resolve` | 1 |
+
+### Representative traces
+
+| # | Trace id | What it proves |
+|---|---|---|
+| A | `e74ff55d89ddc838ceef497c81399e2b` | Cross-domain subflow **start**: `SubFlow.Start/partner/xd-child` → `Discovery.Resolve/partner` → `Remote.Send/IRemoteInstanceCommandAppService` → partner's own transaction; partner calls **back** into core (`Discovery.Resolve/core` → `Remote.Send` → `SubFlow.StateChange/core/xd-parent`), and the discovery domain's own function call appears as a third service. |
+| B | `15b8679f77f35c18684d4c436c437b85` | Cross-domain **forward + completion + resume**: the accept-time chain reserve (`PUT …/instances/{id}/busy` on partner), `SubFlow.Forward/partner/xd-child/child-approve`, partner → core `SubFlow.Completion`, then `SubFlow.Resume/core/xd-parent` with the parent's `auto-after-subflow` hop under it. Two `Instance.Activation` spans, one per domain. |
+| C | `7f955b3a50aa52544d48f722d263f104` | Cross-domain **view**: `Instance.Read/view` (core) → `Subflow.Descend/xd-child` → `Remote.Send/IRemoteInstanceQueryAppService` → partner's `Instance.Read/view` → `ScriptContext.Build` → `View.Resolve` with its two cache lookups. |
+| D | `0da2f9ce438da6bdb72c8fcfd621fa04` | Cross-domain **authorize**: `Subflow.Descend/xd-child` → `Remote.Send/IRemoteAuthorizeAppService` → partner's `Auth.Decide`. |
+| E | `c455c317beb72b2aa85810f58419e691` | Cross-domain **state read**: `Instance.Read/state` on both sides of the descent, `Auth.FilterTransitions` in each. |
+
+Every `Remote.Send` is the direct parent of the Dapr client span, which is the direct parent of the
+callee's `CallLocal/*` transaction — the nesting Elastic resolves strictly through `parent.id`, so an
+unbroken ladder here means the lane carriers are intact across the domain boundary.
+
+## 6. Lab tracing configuration is stale (found by the startup self-check)
+
+Bringing the lab up made `ActivitySourceRegistrationCheck` (added in this branch) log
+`ActivitySourcesMissingFromConfiguration`:
+
+```
+Tracing sources missing from this host's effective configuration:
+BBT.Workflow.Pipeline, BBT.Workflow.Execution.Invokers
+```
+
+Cause: the lab's generated `docker/domains/*/appsettings*.Development.json` files each **replace**
+`Telemetry:Tracing:AdditionalSources` wholesale (.NET configuration arrays merge by index, so
+`AdditionalSources__0` overwrites rather than appends), and that list had drifted — it had lost
+`BBT.Workflow.Instances.Events` and never gained `BBT.Workflow.Gateway`. Without `Gateway`,
+`StartActivity` returns null and `Remote.Send` silently does not exist.
+
+Patching the 15 files to the full 13-source list and restarting made the warning disappear and
+`Remote.Send` appear. Those files come from **vnext-runtime**'s templates and are git-ignored clones
+here, so the fix above is local; the template needs the same change upstream.
+
+This is the self-check earning its keep on its first real deployment.
+
+## 7. What this does not cover
+
+- **`Instance.Read/master`, `/history`, `/hierarchy`, `/humanTasks`, `/list`, `/extensions`,
+  `/incidents`** — implemented and unit-guarded, but neither window drove enough traffic to show
+  them all. Absence here is absence of traffic, not absence of the span.
+- **`Auth.PreviousUserLookup`** — needs a `$PreviousUser` grant on the polled state; the lab flows
+  do not declare one.
+- **`SubFlow.ChildFault`** — needs a faulting child; no cross-domain fault scenario exists yet.
 - **`Instance.Read.BuildGate`** is the one catalogue item not implemented at all.
