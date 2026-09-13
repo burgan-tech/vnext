@@ -83,7 +83,15 @@ processors:
   # same traffic through a collector without this processor contained 254 app-side and 254
   # sidecar GetState spans. The anchor is now `^/` so only the sidecar's are dropped.
   #
-  # Why the sidecar's orphan, root cause measured 2026-09-13: Aether's HttpClient
+  # FIXED UPSTREAM 2026-09-13 — this processor is now a VOLUME choice, not a correctness one.
+  # Aether's FilteredSpanRedirect applies the diagnostic-request predicate at injection time, so the
+  # sidecar's span now parents on the exported gRPC client span instead of on the filtered HTTP one.
+  # Verified against a local Aether feed: with this processor OFF, a full window audits at zero
+  # orphans. Keeping the drop saves ~6.8 % of trace documents and costs the sidecar's own handling
+  # time; removing it buys that timing back. Either is defensible now — before the upstream fix only
+  # keeping it was.
+  #
+  # Why the sidecar's orphan was happening, root cause measured 2026-09-13: Aether's HttpClient
   # instrumentation filter. `AetherTelemetryServiceCollectionExtensions.ShouldTraceHttpRequest`
   # is `IsVerbose || !IsDaprDiagnosticRequest(uri)`, and `IsDaprDiagnosticRequest` lists exactly
   # GetState / GetBulkState / SaveState / DeleteState / ExecuteStateTransaction / GetSecret /
