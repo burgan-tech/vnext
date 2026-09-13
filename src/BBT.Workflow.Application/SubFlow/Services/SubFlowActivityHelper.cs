@@ -170,6 +170,44 @@ public static class SubFlowActivityHelper
     }
 
     /// <summary>
+    /// Enriches the activity with child SubFlow fault context.
+    /// <para>
+    /// The twin of <see cref="EnrichWithCancellation"/>. A parent faulting cascades downward to
+    /// every active SubFlow child, and that leg had no span at all while its cancel twin did — so a
+    /// fault cascade was the one child-termination path a trace could not show.
+    /// </para>
+    /// </summary>
+    public static void EnrichWithChildFault(
+        Activity? activity,
+        Guid instanceId,
+        Guid parentInstanceId,
+        string domain,
+        string flow)
+    {
+        if (activity is null) return;
+
+        activity.SetTag(TelemetryConstants.TagNames.Domain, domain);
+        activity.SetTag(TelemetryConstants.TagNames.Flow, flow);
+        activity.SetTag(TelemetryConstants.TagNames.SubflowInstanceId, instanceId);
+        activity.SetTag(TelemetryConstants.TagNames.ParentInstanceId, parentInstanceId);
+        activity.SetTag("vnext.subflow.operation", "child_fault");
+    }
+
+    /// <summary>
+    /// Records what a SubFlow operation actually did, under <c>vnext.subflow.result</c>.
+    /// <para>
+    /// The early returns on these paths are "nothing happened" answers — the child was gone, or it
+    /// was already terminal — and without this they are indistinguishable from a completed
+    /// operation: same span name, same duration, no error. Same tag key the sub-state path uses, so
+    /// one query covers both.
+    /// </para>
+    /// </summary>
+    public static void SetOutcome(Activity? activity, string outcome)
+    {
+        activity?.SetTag("vnext.subflow.result", outcome);
+    }
+
+    /// <summary>
     /// Sets the activity status to OK.
     /// </summary>
     /// <param name="activity">The activity to update.</param>
