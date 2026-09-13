@@ -84,8 +84,12 @@ processors:
   # sidecar GetState spans. The anchor is now `^/` so only the sidecar's are dropped.
   #
   # FIXED UPSTREAM 2026-09-13 — this processor is now a VOLUME choice, not a correctness one.
-  # Aether's FilteredSpanRedirect applies the diagnostic-request predicate at injection time, so the
-  # sidecar's span now parents on the exported gRPC client span instead of on the filtered HTTP one.
+  # Aether `fix/filtered-span-wire-parent` (commit c41e1d4): FilteredSpanRedirect applies the
+  # diagnostic-request predicate at injection time, so the sidecar's span now parents on the exported
+  # gRPC client span instead of on the filtered HTTP one.
+  #
+  # ORDERING: removing this processor from an environment that still runs the OLD Aether brings the
+  # orphans back at full volume. Deploy the Aether release there first, then decide.
   # Verified against a local Aether feed: with this processor OFF, a full window audits at zero
   # orphans. Keeping the drop saves ~6.8 % of trace documents and costs the sidecar's own handling
   # time; removing it buys that timing back. Either is defensible now — before the upstream fix only

@@ -293,16 +293,44 @@ GET …/functions/state                       6 ms   vnext.read.fastpath=cacheHi
 
 Zero sidecar spans, zero orphans, and the cache read now says where its time went.
 
-Two things stay open, deliberately. The filter still drops the 52-in-300 sidecar spans that *would*
-nest correctly (PublishEvent, Jobs) — one simple rule is worth more than a method allowlist that
-would silently let a future orphaning method through.
+### Fixed upstream the same day
 
-And the real fix belongs in **Aether**, which this repo proposes to rather than edits. The filter
-there is doing the right thing for the wrong layer: it suppresses noise by dropping the span, but the
-Activity it leaves behind is what the sidecar parents on, so the noise reappears downstream as
-orphans that Elastic re-roots. A filter that also stopped the request from carrying that id (or that
-kept a minimal span purely to anchor it) would let this collector processor be deleted outright, and
-would give back the app→sidecar breakdown for state and lock calls in `Business` mode.
+The cause was Aether's HttpClient trace filter, not this repo's collector.
+`AetherTelemetryServiceCollectionExtensions.ShouldTraceHttpRequest` is
+`IsVerbose || !IsDaprDiagnosticRequest(uri)`, and dropping a span does not remove its `Activity` —
+the id that goes into `traceparent` belongs to a document nobody will ever write.
+
+Three narrower fixes were measured and **refuted** before the working one, recorded here so the same
+hours are not spent twice:
+
+| Hypothesis | Result |
+|---|---|
+| "If the context is not recorded, propagate its nearest recorded ancestor" | Refuted. Logging every injection showed the context arriving as **Recorded**, with `Activity.Current = System.Net.Http.HttpRequestOut`. OpenTelemetry injects the headers *before* `FilterHttpRequestMessage` runs, so at injection time nothing distinguishes a span that will be exported from one that will not. |
+| `GrpcNetClient.SuppressDownstreamInstrumentation` | Refuted in both positions — the HTTP activity is created regardless. |
+| Dapr sidecar `samplingRate: "0"` | Refuted. It is an off switch, not a parent-based sampler: it silenced `PublishEvent` and Jobs spans whose parents *were* exported and sampled. |
+
+What works is applying the filter's own predicate at injection time — the carrier is the
+`HttpRequestMessage`, so the same question can be asked before the header is written, and the parent
+is redirected to the enclosing gRPC client span. Both injection layers must be wrapped: .NET injects
+first and OpenTelemetry overwrites it, so wrapping only `DistributedContextPropagator` left the
+orphans in place.
+
+Aether `fix/filtered-span-wire-parent`, commit `c41e1d4`. Verified from this repo against a local
+feed (`1.0.40-local`): with the collector processor **switched off**, a full window audits at **zero
+orphans**, against 8-in-48 before, and the chain nests end to end:
+
+```
+GET …/functions/state                              5 ms   vnext.read.fastpath=cacheHit
+└─ Cache.Get/state-fn:v9:core:…                    1 ms
+   └─ dapr.proto.runtime.v1.Dapr/GetState          1 ms   ← app-side gRPC client span
+      └─ /dapr.proto.runtime.v1.Dapr/GetState      0 ms   ← sidecar, now attached
+```
+
+**So `filter/dapr-internals` is now a volume choice, not a correctness one.** Keeping it saves
+~6.8 % of trace documents and costs the sidecar's own handling time; removing it buys that timing
+back. Both are defensible once the Aether release is deployed — before it, only keeping it was. The
+ordering matters: removing the processor from an environment still running the old Aether brings the
+orphans back at full volume.
 
 ## 10. What this does not cover
 
