@@ -142,4 +142,38 @@ public static class AuthorizationActivityHelper
         activity.SetTag(TelemetryConstants.TagNames.AuthMemoHit, true);
         activity.SetStatus(ActivityStatusCode.Error, "caller roles unresolved (memoized failure)");
     }
+
+    /// <summary>Operation name for the authorization decision itself.</summary>
+    public const string OperationDecide = "Auth.Decide";
+
+    /// <summary>
+    /// Starts the span covering one authorization decision.
+    /// <para>
+    /// The decision — the single bit this endpoint exists to produce — was nowhere in the trace.
+    /// Role resolution had a span, the subflow forward had a span, and the answer had neither, so a
+    /// 403 could be seen arriving and not explained. This carries the verdict and, when denied, a
+    /// bounded reason code.
+    /// </para>
+    /// <para>
+    /// It deliberately carries NO grant expression, role name or caller identity beyond the
+    /// <c>sub</c>/<c>act.sub</c> the platform already propagates: a span is exported to a system with
+    /// a different access boundary than the workflow's, so an authorization span that repeated the
+    /// grants would move an access-control decision's inputs into telemetry.
+    /// </para>
+    /// </summary>
+    public static Activity? StartDecide()
+    {
+        var activity = ActivitySource.StartActivity(OperationDecide, ActivityKind.Internal);
+        activity?.SetTag(TelemetryConstants.TagNames.SpanCategory, TelemetryConstants.SpanCategories.Business);
+        return activity;
+    }
+
+    /// <summary>Records the verdict and how many roles it was evaluated against.</summary>
+    public static void SetDecision(Activity? activity, bool allowed, int roleCount)
+    {
+        if (activity is null) return;
+
+        activity.SetTag(TelemetryConstants.TagNames.AuthDecision, allowed);
+        activity.SetTag(TelemetryConstants.TagNames.AuthRoleCount, roleCount);
+    }
 }

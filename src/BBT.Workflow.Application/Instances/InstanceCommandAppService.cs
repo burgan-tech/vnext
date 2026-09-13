@@ -193,6 +193,20 @@ public sealed class InstanceCommandAppService(
             var sub = instance.Subflow;
             if (sub is not null)
             {
+                // The one chain descent in the codebase that had no descend span. Every other
+                // descent — the five built-in function helpers, the authorize forward, the retry —
+                // opens one; InstanceRetryAppService explicitly argues why. Without it a
+                // same-domain ack hop produced no span at all (the local gateway creates a DI
+                // scope, not a span), so the cheap hop was invisible while the cross-domain one
+                // showed up as a bare HttpClient call.
+                using var descent = InstanceReadActivityHelper.StartDescendScope(
+                    runtimeInfoProvider,
+                    sub.SubFlowDomain,
+                    sub.SubFlowName,
+                    sub.SubFlowInstanceId.ToString(),
+                    instance.Id.ToString(),
+                    TelemetryConstants.DescentFunctions.Ack);
+
                 return await instanceCommandGateway.AcknowledgeLongPollAsync(new AcknowledgeLongPollInput
                 {
                     Domain = sub.SubFlowDomain,

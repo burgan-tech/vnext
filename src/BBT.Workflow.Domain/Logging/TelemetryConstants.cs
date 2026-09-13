@@ -1,3 +1,5 @@
+using System;
+using System.Collections.Generic;
 namespace BBT.Workflow.Logging;
 
 /// <summary>
@@ -78,6 +80,13 @@ public static class TelemetryConstants
         public const string AuthRoleCount = "vnext.auth.roles.count";
         /// <summary><c>resolved</c> | <c>empty</c> | <c>failed</c>.</summary>
         public const string AuthOutcome = "vnext.auth.outcome";
+        /// <summary>
+        /// The authorization verdict itself: true when the caller was allowed. Deliberately just the
+        /// bit plus the role COUNT — never grant expressions, role names or caller identity, which
+        /// would move an access decision's inputs into a telemetry system with a different access
+        /// boundary.
+        /// </summary>
+        public const string AuthDecision = "vnext.auth.decision";
         /// <summary>
         /// The caller's organizational posting. Part of the identity the provider keys its answer on
         /// (with sub and act_sub), so a wrong or missing role set is unexplainable without it.
@@ -421,6 +430,20 @@ public static class TelemetryConstants
         public const string DaprAppId = "vnext.dapr.app_id";
 
         /// <summary>
+        /// Which wire an outbound cross-domain call took: <c>dapr</c> or <c>http</c>. Read from the
+        /// endpoint kind the discovery provider decided, so it can never disagree with the transport
+        /// actually used. Distinct from <see cref="DescentTransport"/>, which describes LOCALITY
+        /// (in-process vs not) rather than the wire.
+        /// </summary>
+        public const string RemoteTransport = "vnext.remote.transport";
+
+        /// <summary>
+        /// Host of the resolved endpoint. Bounded by the domain catalogue; the relative path is
+        /// deliberately never tagged, because it carries instance ids.
+        /// </summary>
+        public const string RemoteHost = "vnext.remote.host";
+
+        /// <summary>
         /// Target Kubernetes namespace appended to the app-id for cross-namespace invocation.
         /// Absent when resolution stays in the caller's own namespace.
         /// </summary>
@@ -483,6 +506,13 @@ public static class TelemetryConstants
         public const string WorkersInbox = "BBT.Workflow.Workers.Inbox";
 
         /// <summary>
+        /// Cross-domain transport (<c>Remote.Send</c>). Its own source because the family crosses a
+        /// network boundary and carries both command and query traffic — folding it into
+        /// <c>Pipeline</c> would skew every pipeline duration aggregation built on that name.
+        /// </summary>
+        public const string Gateway = "BBT.Workflow.Gateway";
+
+        /// <summary>
         /// All ActivitySource names registered by the vNext engine.
         /// </summary>
         public static readonly string[] All =
@@ -500,8 +530,41 @@ public static class TelemetryConstants
             ExecutionInvokers,
             Execution,
             ExecutionPython,
-            WorkersInbox
+            WorkersInbox,
+            Gateway
         ];
+
+        /// <summary>
+        /// Sources a given host deliberately does NOT register, because nothing in that host can
+        /// emit them.
+        /// <para>
+        /// Registration is per-host, not global, and that is the whole reason this map exists: a
+        /// guard that asserted "every source in every host" would be asserting a rule the codebase
+        /// does not follow, and would have to be silenced the first time it fired — which is worse
+        /// than no guard. Registering a source a host cannot emit is not harmful at runtime, but it
+        /// sends the next reader hunting for spans that can never appear.
+        /// </para>
+        /// <para>
+        /// Adding a source with no entry here means "every host registers it". That is the safe
+        /// default: the failure this guards is a source going dark in ONE host, silently —
+        /// <c>StartActivity</c> returns null, the span is never created, and its children flatten
+        /// onto the nearest ancestor with no error anywhere.
+        /// </para>
+        /// </summary>
+        public static readonly IReadOnlyDictionary<string, string[]> DeliberatelyUnregistered =
+            new Dictionary<string, string[]>(StringComparer.Ordinal)
+            {
+                // The Execution service's own handler span. Only the Execution host runs it; its
+                // wildcard entry covers it there.
+                [Execution] = ["orchestration", "workers-inbox", "workers-outbox"],
+
+                // The Python task runner lives on the Execution host alone.
+                [ExecutionPython] = ["orchestration", "workers-inbox", "workers-outbox"],
+
+                // EventTraceScope's source; only the Inbox worker consumes events, and its own
+                // wildcard covers it there.
+                [WorkersInbox] = ["orchestration", "execution", "workers-outbox"]
+            };
     }
 
     /// <summary>
@@ -612,6 +675,12 @@ public static class TelemetryConstants
         public const string View = "view";
         public const string Extensions = "extensions";
         public const string Authorize = "authorize";
+
+        /// <summary>The authorization matrix forward — the sibling of <see cref="Authorize"/>.</summary>
+        public const string Matrix = "matrix";
+
+        /// <summary>A long-poll acknowledgement descending the chain to find the level that is waiting.</summary>
+        public const string Ack = "ack";
     }
 
     public static class AuthOutcomes
