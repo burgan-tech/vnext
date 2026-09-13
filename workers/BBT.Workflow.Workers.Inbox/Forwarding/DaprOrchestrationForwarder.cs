@@ -4,6 +4,7 @@ using System.Net.Http.Json;
 using BBT.Aether.Tracing;
 using BBT.Workflow.Execution;
 using BBT.Workflow.Logging;
+using BBT.Workflow.Workers.Inbox.Tracing;
 using BBT.Workflow.Shared;
 using Dapr.Client;
 using Microsoft.AspNetCore.Http;
@@ -62,6 +63,16 @@ public sealed class DaprOrchestrationForwarder : IOrchestrationForwarder
         Guid instanceId,
         CancellationToken cancellationToken)
     {
+        // The Inbox worker's ONLY outbound call. Without this span the timeout budget, the
+        // transient/non-transient decision and the deliberate drop all collapse into one generic
+        // HTTP client span — so a delayed delivery and a permanently dropped one look the same.
+        using var activity = EventTraceScope.ActivitySource.StartActivity(
+            "Inbox.Forward", ActivityKind.Client);
+        activity?.SetTag(TelemetryConstants.TagNames.SpanCategory, TelemetryConstants.SpanCategories.Business);
+        activity?.SetTag(TelemetryConstants.TagNames.Domain, domain);
+        activity?.SetTag(TelemetryConstants.TagNames.Flow, workflow);
+        activity?.SetTag(TelemetryConstants.TagNames.InstanceId, instanceId);
+
         // Per-invocation timeout; parent cancellation takes priority.
         using var invocationCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         invocationCts.CancelAfter(TimeSpan.FromSeconds(_invocationTimeoutSeconds));
@@ -98,6 +109,7 @@ public sealed class DaprOrchestrationForwarder : IOrchestrationForwarder
         {
             // Per-invocation timeout fired (parent token not cancelled): the service is unreachable
             // or too slow. Transient — rethrow so the inbox processor re-delivers.
+            SetOutcome(activity, "timeout");
             _logger.LogError(
                 ex,
                 "Timed out forwarding {Method} {Route} to {AppId} for instance {InstanceId}; will re-deliver",
@@ -109,6 +121,7 @@ public sealed class DaprOrchestrationForwarder : IOrchestrationForwarder
             // Could not reach the orchestration service (connection refused / DNS / socket).
             // Transient — rethrow so the inbox processor re-delivers (at-least-once); orchestration-side
             // services are idempotent (active-job/terminal-state guards).
+            SetOutcome(activity, "unreachable");
             _logger.LogError(
                 ex,
                 "Failed to reach {AppId} forwarding {Method} {Route} for instance {InstanceId}; will re-deliver",
@@ -120,6 +133,7 @@ public sealed class DaprOrchestrationForwarder : IOrchestrationForwarder
         {
             if (response.IsSuccessStatusCode)
             {
+                SetOutcome(activity, "ok");
                 _logger.LogDebug(
                     "Forwarded {Method} {Route} to {AppId} for instance {InstanceId}",
                     method, route, _orchestrationAppId, instanceId);
@@ -132,6 +146,7 @@ public sealed class DaprOrchestrationForwarder : IOrchestrationForwarder
             if (TransientHttpStatus.IsTransient(response.StatusCode))
             {
                 // Transient server-side failure — rethrow so the inbox processor re-delivers.
+                SetOutcome(activity, "transient", statusCode);
                 _logger.LogError(
                     "Transient {StatusCode} forwarding {Method} {Route} to {AppId} for instance {InstanceId}; will re-deliver. Response: {Response}",
                     statusCode, method, route, _orchestrationAppId, instanceId, responseBody);
@@ -142,11 +157,28 @@ public sealed class DaprOrchestrationForwarder : IOrchestrationForwarder
             }
 
             // Non-transient error response (e.g. 4xx): the request will never succeed on retry.
-            // Log and ignore so the inbox does not re-deliver it forever.
+            // Log and ignore so the inbox does not re-deliver it forever. This is the outcome most
+            // worth seeing: the delivery is gone on purpose and nothing downstream will say so.
+            SetOutcome(activity, "non_transient", statusCode);
             _logger.LogError(
                 "Non-transient {StatusCode} forwarding {Method} {Route} to {AppId} for instance {InstanceId}; ignoring. Response: {Response}",
                 statusCode, method, route, _orchestrationAppId, instanceId, responseBody);
         }
+    }
+
+    /// <summary>
+    /// Stamps how the forward ended. A dropped delivery is not an exception anywhere, so without
+    /// this tag it is indistinguishable from a successful one in the trace.
+    /// </summary>
+    private static void SetOutcome(Activity? activity, string outcome, int? statusCode = null)
+    {
+        if (activity is null) return;
+
+        activity.SetTag(TelemetryConstants.TagNames.ForwardOutcome, outcome);
+        if (statusCode.HasValue)
+            activity.SetTag(TelemetryConstants.TagNames.ForwardStatusCode, statusCode.Value);
+        if (outcome is not "ok")
+            activity.SetStatus(ActivityStatusCode.Error, outcome);
     }
 
     /// <summary>

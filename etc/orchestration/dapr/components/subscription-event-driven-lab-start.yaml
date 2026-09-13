@@ -1,0 +1,15 @@
+# Routes the start topic to the runtime's event endpoint.
+#
+# Subscriptions are DOMAIN-OWNED: the runtime exposes the endpoint and the domain decides which
+# topic reaches it. That is why this file lives with the example domain rather than in the runtime,
+# and why the route carries the domain and workflow in its path.
+apiVersion: dapr.io/v1alpha1
+kind: Subscription
+metadata:
+  name: event-driven-lab-start-subscription
+spec:
+  topic: core.event-driven-lab
+  route: /api/v1/core/workflows/event-driven-lab/instances/events?action=start
+  pubsubname: vnext-pubsub
+scopes:
+  - vnext-app

@@ -5,6 +5,7 @@ using BBT.Workflow.Definitions;
 using BBT.Workflow.Definitions.Events;
 using BBT.Workflow.ExceptionHandling;
 using BBT.Workflow.Instances;
+using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
@@ -50,6 +51,17 @@ public sealed class EventAppService(
         {
             return Result<object?>.Fail(Error.NotFound("EventDomainMismatch", exception.Message));
         }
+
+        // The intake half — definition resolve, event-definition lookup, CloudEvent unwrap, mapping
+        // script, and the correlation that finds the target instance. All of it ran as one unnamed
+        // region under the endpoint's server span, so "why did this event take a second" had no
+        // answer, and the store scan below had none either.
+        using var intake = PipelineStepActivityHelper.StartOperationActivity("Event.Intake");
+        intake?.SetTag(TelemetryConstants.TagNames.Domain, input.Domain);
+        intake?.SetTag(TelemetryConstants.TagNames.Flow, input.Workflow);
+        intake?.SetTag(TelemetryConstants.TagNames.EventAction, input.Action.ToString());
+        if (!string.IsNullOrEmpty(input.TransitionKey))
+            intake?.SetTag(TelemetryConstants.TagNames.TransitionKey, input.TransitionKey);
 
         logger.EventReceived(input.Domain, input.Workflow, input.Action.ToString(), input.TransitionKey);
 
@@ -155,8 +167,23 @@ public sealed class EventAppService(
             && string.IsNullOrWhiteSpace(mapping.InstanceKey)
             && mapping.Selector is not null)
         {
-            mapping.InstanceKey = await instanceSelectorResolver.ResolveKeyAsync(
-                input.Domain, input.Workflow, mapping.Selector, cancellationToken);
+            // A filtered scan of the instance store — the one unbounded read on this path, and the
+            // reason an event with no business key in its payload can still find its instance.
+            using (PipelineStepActivityHelper.StartOperationActivity("Event.ResolveInstance"))
+            {
+                mapping.InstanceKey = await instanceSelectorResolver.ResolveKeyAsync(
+                    input.Domain, input.Workflow, mapping.Selector, cancellationToken);
+            }
+
+            intake?.SetTag(
+                TelemetryConstants.TagNames.EventCorrelation,
+                string.IsNullOrWhiteSpace(mapping.InstanceKey) ? "none" : "selector");
+        }
+        else
+        {
+            intake?.SetTag(
+                TelemetryConstants.TagNames.EventCorrelation,
+                string.IsNullOrWhiteSpace(mapping.InstanceKey) ? "none" : "mappingKey");
         }
 
         return input.Action == EventAction.Start

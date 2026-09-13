@@ -106,6 +106,27 @@ public static class TelemetryConstants
 
         /// <summary>The key of the view that won, or absent when none matched.</summary>
         public const string ViewSelected = "vnext.view.selected";
+
+        /// <summary>
+        /// How an Inbox forward ended: <c>ok</c>, <c>transient</c> (will be re-delivered),
+        /// <c>non_transient</c> (dropped on purpose), <c>timeout</c> or <c>unreachable</c>. All five
+        /// currently collapse into a generic HTTP client span, which is why a delayed delivery
+        /// cannot be told from a dropped one.
+        /// </summary>
+        public const string ForwardOutcome = "vnext.forward.outcome";
+
+        /// <summary>HTTP status of a forward that got a response, for the two failing outcomes.</summary>
+        public const string ForwardStatusCode = "vnext.forward.status_code";
+
+        /// <summary>Which event action an intake handled: <c>start</c> or <c>transition</c>.</summary>
+        public const string EventAction = "vnext.event.action";
+
+        /// <summary>
+        /// How an incoming event was correlated to an instance: <c>mappingKey</c> (the mapping
+        /// returned an InstanceKey), <c>selector</c> (a query resolved one), <c>none</c> (no active
+        /// instance matched — a normal answer, acked on purpose) or <c>dropped</c>.
+        /// </summary>
+        public const string EventCorrelation = "vnext.event.correlation";
         /// <summary>
         /// The caller's organizational posting. Part of the identity the provider keys its answer on
         /// (with sub and act_sub), so a wrong or missing role set is unexplainable without it.
