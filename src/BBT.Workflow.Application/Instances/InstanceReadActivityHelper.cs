@@ -120,6 +120,51 @@ public static class InstanceReadActivityHelper
             activity.SetTag(TelemetryConstants.TagNames.ViewSelected, selectedView);
     }
 
+    /// <summary>Operation name for the wait on the active-subflow build gate.</summary>
+    public const string OperationBuildGate = "Instance.Read.BuildGate";
+
+    /// <summary>This request went on to build the response itself.</summary>
+    public const string BuildGateBuild = "build";
+
+    /// <summary>The wait paid off: the holder populated the cache and this request served that.</summary>
+    public const string BuildGateCoalesced = "coalesced";
+
+    /// <summary>
+    /// Starts the span covering the wait on the per-key build gate that serialises concurrent state
+    /// builds for an instance with an active subflow.
+    /// <para>
+    /// An active-subflow state read cannot be validated from the parent row, so it bypasses the
+    /// long-poll fast path and performs a live descent. The gate exists so that N simultaneous polls
+    /// on the same parent produce ONE descent; without a span, the time a request spends queued
+    /// behind another request's descent is indistinguishable from its own work, and the coalescing
+    /// the gate performs — the entire reason it exists — leaves no trace at all.
+    /// </para>
+    /// <para>
+    /// Opened on the gate path only, which is already the build branch: the 304 and cache-hit
+    /// branches return before reaching it, so this adds no documents to the hot path.
+    /// </para>
+    /// </summary>
+    public static Activity? StartBuildGate()
+    {
+        var activity = ActivitySource.StartActivity(OperationBuildGate, ActivityKind.Internal);
+        activity?.SetTag(TelemetryConstants.TagNames.SpanCategory, TelemetryConstants.SpanCategories.Business);
+        return activity;
+    }
+
+    /// <summary>
+    /// Records whether the request actually waited and what the wait bought.
+    /// </summary>
+    /// <param name="activity">The gate span, or null when nothing is listening.</param>
+    /// <param name="contended">True when the gate was held on arrival.</param>
+    /// <param name="outcome"><see cref="BuildGateBuild"/> or <see cref="BuildGateCoalesced"/>.</param>
+    public static void SetBuildGateOutcome(Activity? activity, bool contended, string outcome)
+    {
+        if (activity is null) return;
+
+        activity.SetTag(TelemetryConstants.TagNames.BuildGateContended, contended);
+        activity.SetTag(TelemetryConstants.TagNames.BuildGateOutcome, outcome);
+    }
+
     /// <summary>One level of descent into an active subflow.</summary>
     public const string OperationDescend = "Subflow.Descend";
 

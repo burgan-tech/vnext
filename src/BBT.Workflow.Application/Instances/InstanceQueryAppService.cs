@@ -1364,6 +1364,10 @@ public sealed class InstanceQueryAppService(
             if (cached.HasValue)
                 return new(cached, null);
 
+            // The gate span covers the wait AND the double-check, because the double-check is what
+            // the wait was for: a request that queued behind another descent and then served that
+            // descent's cache entry is the coalescing working, and it is only legible as one span.
+            using var gate = InstanceReadActivityHelper.StartBuildGate();
             var lease = await AcquireBuildGateAsync(cacheKey, cancellationToken);
 
             // Double-check after entering the gate: another request may have populated the short
@@ -1372,10 +1376,14 @@ public sealed class InstanceQueryAppService(
                 input, cacheKey, parentEtag, fingerprint, cancellationToken);
             if (cached.HasValue)
             {
+                InstanceReadActivityHelper.SetBuildGateOutcome(
+                    gate, lease.Contended, InstanceReadActivityHelper.BuildGateCoalesced);
                 lease.Dispose();
                 return new(cached, null);
             }
 
+            InstanceReadActivityHelper.SetBuildGateOutcome(
+                gate, lease.Contended, InstanceReadActivityHelper.BuildGateBuild);
             logger.StateFunctionCacheBypassedForSubFlow(input.Instance);
             return new(null, lease);
         }
@@ -1449,8 +1457,14 @@ public sealed class InstanceQueryAppService(
             {
                 try
                 {
-                    await gate.Semaphore.WaitAsync(cancellationToken);
-                    return new BuildGateLease(key, gate);
+                    // Non-blocking attempt first, purely to learn whether anyone else held the gate.
+                    // Without it the span's duration cannot be read: an uncontended acquisition and a
+                    // wait that happened to be short are the same number.
+                    var contended = !gate.Semaphore.Wait(0, CancellationToken.None);
+                    if (contended)
+                        await gate.Semaphore.WaitAsync(cancellationToken);
+
+                    return new BuildGateLease(key, gate, contended);
                 }
                 catch
                 {
@@ -1478,9 +1492,12 @@ public sealed class InstanceQueryAppService(
         internal int Users;
     }
 
-    private sealed class BuildGateLease(string key, BuildGate gate) : IDisposable
+    private sealed class BuildGateLease(string key, BuildGate gate, bool contended) : IDisposable
     {
         private int _disposed;
+
+        /// <summary>True when the gate was already held on arrival, so this request really waited.</summary>
+        internal bool Contended { get; } = contended;
 
         public void Dispose()
         {

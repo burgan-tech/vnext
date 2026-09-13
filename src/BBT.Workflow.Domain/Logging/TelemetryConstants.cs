@@ -168,6 +168,25 @@ public static class TelemetryConstants
         /// </summary>
         public const string ReadFastPath = "vnext.read.fastpath";
         /// <summary>
+        /// How the wait on the per-key build gate ended: <c>build</c> (this request owns the build)
+        /// or <c>coalesced</c> (while it waited, the request that held the gate populated the short
+        /// active-subflow cache, so this one served that instead of building).
+        /// <para>
+        /// The ratio of the two is the only measure of whether the gate earns its place: all
+        /// <c>build</c> means it is serialising requests for nothing, and a healthy <c>coalesced</c>
+        /// share is the duplicate work it prevented.
+        /// </para>
+        /// </summary>
+        public const string BuildGateOutcome = "vnext.buildgate.outcome";
+
+        /// <summary>
+        /// True when the gate was already held on arrival, so this request actually waited. A gate
+        /// span with <c>false</c> cost nothing but a span; the span's duration is only a wait when
+        /// this is true.
+        /// </summary>
+        public const string BuildGateContended = "vnext.buildgate.contended";
+
+        /// <summary>
         /// Set only when a descent did NOT yield a usable answer, naming why. Absent on the normal
         /// path — a fallback that leaves no mark is indistinguishable from a successful descent.
         /// </summary>

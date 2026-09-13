@@ -1363,6 +1363,114 @@ public class InstanceQueryAppServiceStateTests : IDisposable
     }
 
     /// <summary>
+    /// An active-subflow read passes through the build gate, and the gate says so.
+    /// <para>
+    /// This path is the one the long-poll fast path cannot serve: a parent's own row cannot see
+    /// subflow-internal status flips, so the read has to descend live. The gate around that descent
+    /// is what stops N simultaneous polls on the same parent from performing N descents — and until
+    /// this span existed, the waiting was indistinguishable from the working and the coalescing left
+    /// no trace at all.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task GetInstanceStateAsync_ActiveSubflowBuild_OpensTheBuildGateSpan()
+    {
+        var collected = CollectReadSpans(out var listener);
+        using var _ = listener;
+
+        var (instance, workflow) = CreateSimpleActiveInstance();
+        SetupCommonMocks(instance, workflow);
+        EnableCache();
+        SetupFingerprint(instance.Id, hasActiveSubFlow: true);
+
+        await _service.GetInstanceStateAsync(CreateInput(instance.Id.ToString()), CancellationToken.None);
+
+        var gate = collected.SingleOrDefault(a =>
+            a.OperationName == InstanceReadActivityHelper.OperationBuildGate);
+
+        gate.ShouldNotBeNull("an active-subflow read must open the build gate span");
+        gate!.GetTagItem(TelemetryConstants.TagNames.BuildGateOutcome)
+            .ShouldBe(InstanceReadActivityHelper.BuildGateBuild);
+
+        // Nothing else held the gate, so the span's duration is not a wait. Saying so is the whole
+        // point of the tag: otherwise every gate span looks like contention.
+        gate.GetTagItem(TelemetryConstants.TagNames.BuildGateContended).ShouldBe(false);
+    }
+
+    /// <summary>
+    /// The payoff case: the request waited, and while it waited the gate's holder populated the
+    /// short active-subflow cache — so this request served that instead of descending again.
+    /// <para>
+    /// Driven here by the cache answering miss-then-hit rather than by real concurrency, because the
+    /// claim under test is the tagging of the double-check, not the semaphore.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task GetInstanceStateAsync_WhenTheGateHolderWarmedTheCache_TagsTheWaitAsCoalesced()
+    {
+        var collected = CollectReadSpans(out var listener);
+        using var _ = listener;
+
+        var instanceId = Guid.NewGuid();
+        EnableCache();
+        SetupFingerprint(instanceId, hasActiveSubFlow: true);
+
+        var snapshot = new Caching.StateFunctionCacheEntry
+        {
+            Etag = "etag-subflow",
+            ParentEtag = "etag-current",
+            IsActiveSubflowSnapshot = true,
+            EntityEtag = "entity-1",
+            Output = new GetInstanceStateOutput
+            {
+                State = TestState,
+                Status = InstanceStatus.Active,
+                Transitions = [],
+                ActiveCorrelations = []
+            }
+        };
+
+        // Miss on the pre-gate probe, hit on the double-check inside it.
+        _stateFunctionCache.GetAsync(TestCacheKey, Arg.Any<CancellationToken>())
+            .Returns(_ => null, _ => snapshot);
+
+        var result = await _service.GetInstanceStateAsync(
+            CreateInput(instanceId.ToString()), CancellationToken.None);
+
+        result.Result.IsSuccess.ShouldBeTrue();
+
+        var gate = collected.SingleOrDefault(a =>
+            a.OperationName == InstanceReadActivityHelper.OperationBuildGate);
+
+        gate.ShouldNotBeNull();
+        gate!.GetTagItem(TelemetryConstants.TagNames.BuildGateOutcome)
+            .ShouldBe(InstanceReadActivityHelper.BuildGateCoalesced);
+
+        // The aggregate was never loaded: the wait replaced a descent, which is the gate's reason
+        // for existing.
+        await _instanceRepository.DidNotReceive()
+            .FindByIdentifierAsReadOnlyAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// Listener over the read source only. Returned rather than declared inline so the two gate
+    /// tests cannot drift apart on sampling or disposal.
+    /// </summary>
+    private static List<Activity> CollectReadSpans(out ActivityListener listener)
+    {
+        var collected = new List<Activity>();
+        listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == InstanceReadActivityHelper.SourceName,
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) =>
+                ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStopped = collected.Add
+        };
+        ActivitySource.AddActivityListener(listener);
+        return collected;
+    }
+
+    /// <summary>
     /// Without a current If-None-Match, a cache entry carrying the current fingerprint ETag
     /// serves the cached response without loading the aggregate.
     /// </summary>
@@ -1516,11 +1624,11 @@ public class InstanceQueryAppServiceStateTests : IDisposable
             .Returns("etag-subflow");
     }
 
-    private void SetupFingerprint(Guid instanceId) =>
+    private void SetupFingerprint(Guid instanceId, bool hasActiveSubFlow = false) =>
         _instanceRepository
             .GetStateFingerprintAsync(instanceId.ToString(), Arg.Any<CancellationToken>())
             .Returns(new InstanceStateFingerprint(instanceId, "test-key", TestState, InstanceStatus.Active,
-                InstanceStatus.Active, TestVersion, HasActiveSubFlow: false,
+                InstanceStatus.Active, TestVersion, HasActiveSubFlow: hasActiveSubFlow,
                 CorrelationCount: 0, CompletedCorrelationCount: 0,
                 LastCorrelationCompletedAt: null, LastSubFlowStateChangedAt: null));
 

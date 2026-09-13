@@ -217,7 +217,7 @@ name is also readable as `BackgroundJob.Arm/{type}/{key}`, but the full unique n
 | `Subflow.Descend/{targetFlow}` | `BBT.Workflow.Instances.Read` | `vnext.subflow.depth`, `vnext.descent.transport` (`local` \| `remote`), `vnext.descent.function` (`state` \| `master` \| `schema` \| `view` \| `extensions` \| `authorize` \| `matrix` \| `ack`), target `vnext.domain`/`vnext.flow.key`/`vnext.instance.id`, `vnext.parent.instance.id`, `vnext.descent.outcome` (only when the descent produced no usable answer) | One level of a built-in function's walk into an active subflow. Emitted by the five `InstanceQueryAppService` descent helpers, `AuthorizeAppService`'s subflow forward and its authorization-matrix forward, `ViewContentResolutionService`'s cross-domain resolve, `InstanceCommandAppService.AcknowledgeLongPollAsync`'s chain descent and `InstanceRetryAppService`. See "Reading the descent ladder" below. |
 | `Auth.ResolveRoles` | `BBT.Workflow.Authorization` | `vnext.auth.provider`, `vnext.auth.memo.hit`, `vnext.auth.roles.count`, `vnext.auth.outcome` (`resolved` \| `empty` \| `failed`), `vnext.auth.position`, `sub`, `act.sub` | Caller-role resolution through an external provider. Emitted on BOTH the provider call and the request-scope memo hit, with the difference in `memo.hit` — the compile cache's rule. Only providers that do I/O are instrumented; the default provider reads `ICurrentUser` in-process. |
 | `Instance.Read/{kind}` | `BBT.Workflow.Instances.Read` | `vnext.domain`, `vnext.flow.key`, `vnext.layer=orchestration`, `span.category=business` | Envelope for one built-in instance read; `{kind}` is a closed set (`InstanceReadKinds`). **The only thing that can carry per-function latency**: built-in and custom functions share one route template (`FunctionController.cs:187`), so the APM transaction name is identical for a state poll, a view read and a custom-function call. Opened in `InstanceQueryAppService`, not the controller — a descent re-enters the service once per level, so a controller-level envelope would count one read where the request performed three. The five kinds that also name a descent reuse the descent vocabulary's exact strings. `state` and `data` open it on the BUILD branch only; the 304 / cache-hit branch creates **no span at all**, and the discriminator travels instead as `vnext.function.key` + `vnext.read.fastpath` (`notModified` \| `cacheHit` \| `build` \| `disabled`) on the TRANSACTION, written on every branch at zero span documents. Pinned by `GetInstanceStateAsync_304Branch_CreatesNoSpansAndTagsTheTransaction`. |
-| `Instance.Read.BuildGate` | `BBT.Workflow.Instances.Read` | `span.category=business` | Wait on the per-key build gate that coalesces concurrent active-subflow state builds. Not yet shipped — see the open items at the end of this page. |
+| `Instance.Read.BuildGate` | `BBT.Workflow.Instances.Read` | `vnext.buildgate.outcome` (`build` \| `coalesced`), `vnext.buildgate.contended`, `span.category=business` | The wait on the per-key gate that coalesces concurrent active-subflow state builds. A parent's own row cannot see subflow-internal status flips, so this read bypasses the long-poll fast path and descends live; the gate is what stops N simultaneous polls on one parent from performing N descents. The span covers the wait **and** the double-check after it, because the double-check is what the wait was for — `coalesced` means the holder's descent answered this request too. `contended` is measured with a non-blocking acquire first: without it an uncontended acquisition and a short wait are the same number. Opened on the gate path only, which is already the build branch, so it adds nothing to the hot path. Pinned by `GetInstanceStateAsync_ActiveSubflowBuild_OpensTheBuildGateSpan` and `…_TagsTheWaitAsCoalesced`. |
 | `Auth.Decide` | `BBT.Workflow.Authorization` | `vnext.auth.decision` (the verdict), `vnext.auth.roles.count`, `span.category=business` | The authorization decision itself, in `AuthorizeAppService`. Role resolution had a span and the subflow forward had a span, while the verdict they exist to produce had neither — so a denial could be seen arriving and never explained. **Carries no grant expression, role name or caller identity** beyond the `sub`/`act.sub` the platform already propagates: a span is exported to a system with a different access boundary than the workflow's. |
 | `Auth.FilterTransitions` | `BBT.Workflow.Authorization` | `vnext.auth.keys.evaluated`, `vnext.auth.keys.allowed`, `vnext.auth.evaluator.creations`, `span.category=business` | One transition role-filtering pass in the state function. **One span for the pass, never one per key**: the parent-override branch filters key by key and builds a fresh evaluator each time, and a span per key would turn an O(N) latency problem into an O(N) telemetry problem inside the very trace meant to reveal it. Building an evaluator serializes the instance's full latest data, so `evaluator.creations` is the number to read — one is healthy, a count tracking the key count is the defect. Opened only when there are keys to filter. |
 | `Auth.PreviousUserLookup` | `BBT.Workflow.Authorization` | `span.category=business` | The conditional previous-manual-transition read, the one database round trip an authorization evaluation can add. Opened **inside** the branch that performs it, so its presence means the query ran — a span outside the guard would report a lookup that never happened and "no `PreviousUserLookup` in this trace" would stop meaning "no extra query was needed". |
@@ -639,9 +639,8 @@ field.
 Recorded here rather than in a plan, because the next reader of this table is the person who will
 notice they are missing.
 
-- **`Instance.Read.BuildGate`** is the one catalogue item still unshipped: the wait on the per-key
-  gate that coalesces concurrent active-subflow state builds. Everything else on this page is live.
-  The state/data envelopes and the transaction tags landed once the effective-status-fingerprint
+- **The catalogue is complete.** `Instance.Read.BuildGate` was the last unshipped item and is now
+  live. The state/data envelopes and the transaction tags landed once the effective-status-fingerprint
   change reached master (`#983`) and lifted their sequencing condition.
 - **Hot path.** The council settled unanimously that the 304 / cache-hit branch of the state and data
   functions adds **zero span documents**: no envelope, no children. The discriminator travels as a
@@ -650,14 +649,11 @@ notice they are missing.
   fidelity rather than cost: no sampler is configured in any host, so with untuned OpenTelemetry
   defaults a burst on the highest-QPS route drops spans indiscriminately — including the pipeline
   spans this whole tree exists to protect.
-- **Four of the six contested families shipped** — `Auth.FilterTransitions`,
-  `Auth.PreviousUserLookup`, the function path's `Schema.Validate` and `View.Resolve` — each with the
-  question it answers written into its row above. Two remain: `Inbox.Forward` (the Inbox worker's
-  only outbound call, where timeout and transient/permanent classification currently collapse into a
-  generic HTTP span) and `Event.Intake` (the instance-selector scan that correlates an incoming event
-  to an instance). `Event.Intake` additionally needs a scenario first: `instances/events` has **no
-  integration test at all**, and instrumenting a route nothing exercises is how a span ships
-  uncertified.
+- **All six contested families shipped** — `Auth.FilterTransitions`, `Auth.PreviousUserLookup`, the
+  function path's `Schema.Validate`, `View.Resolve`, `Inbox.Forward` and `Event.Intake` — each with
+  the question it answers written into its row above. `Event.Intake` was gated on a scenario, because
+  `instances/events` had **no integration test at all** and instrumenting a route nothing exercises is
+  how a span ships uncertified; the `event-driven-lab` scenario in vnext-example closed that gate.
 
 ## Related pages
 
