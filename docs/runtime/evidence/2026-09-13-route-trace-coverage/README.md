@@ -148,12 +148,113 @@ here, so the fix above is local; the template needs the same change upstream.
 
 This is the self-check earning its keep on its first real deployment.
 
-## 7. What this does not cover
+## 7. `Instance.Read.BuildGate` and `Auth.PreviousUserLookup`
+
+Third window, **2026-09-13 10:40–10:55 UTC**, core domain only (`run-docker.sh up core`, hosts as
+local binaries built from this branch). It exists to certify the two spans the first two windows
+could not reach.
+
+| Span | Count |
+|---|---|
+| `Instance.Read/instance` | 497 |
+| `Auth.PreviousUserLookup` | 376 |
+| `Inbox.Invoke` / `Inbox.Forward` | 210 / 178 |
+| `Instance.Read/state` | 138 |
+| `Instance.Read.BuildGate` | 126 |
+| `Auth.FilterTransitions` | 116 |
+| `Subflow.Descend/subflow-orchestration-child` | 72 |
+| `Schema.Validate` | 9 |
+
+### The build gate, measured
+
+The gate spans split **78 `build` / 48 `coalesced`**, and every one of the 48 also carries
+`contended=true` — so the tag pair is internally consistent: a request only coalesces if it waited.
+
+The split is not an accident of load. The integration suite polls sequentially and produced 74 gate
+spans, **all** `build`, **all** uncontended — the gate serialised nothing, which is the honest reading
+of a suite that never polls one parent twice at once. Three bursts of 25 concurrent state reads
+against one parent holding an active subflow then produced the other 52 spans, of which 48 coalesced:
+48 descents that did not happen.
+
+Two traces, the same instance, minutes apart:
+
+| Trace id | What it shows |
+|---|---|
+| `725f515d0663a34d56735ce4f9d8bafc` | `outcome=build`, `contended=false`: the gate is entered, the double-check misses, and `Instance.Read/state` (27 ms) runs the full descent — `Subflow.Descend/subflow-orchestration-child`, the cache write, `Auth.FilterTransitions`. |
+| `9e4e067a1388d1a5de80914c8359774d` | `outcome=coalesced`, `contended=true`: a 10 ms wait, then a 495 µs cache read and nothing else. 14 ms total, no aggregate load, no descent — this is the work the gate prevented, and until this span existed it was indistinguishable from a fast read. |
+
+### The previous-user lookup, in the branch that performs it
+
+`Auth.PreviousUserLookup` appears 376 times, all on `account-opening` reads — that flow's master
+schema is the only one in vnext-example declaring `$PreviousUser` field grants
+(`branchCode` allow, `accountName` deny). Representative trace
+**`9ee593f349f826a1db2a938f11ab712c`**:
+
+```
+GET …/instances/{instance}
+└─ Instance.Read/instance
+   ├─ Instance.Query.Execute → 3 × Db.SELECT
+   ├─ Cache.Get/sys-schemas:core:account-opening-master:…
+   └─ Auth.PreviousUserLookup
+      └─ Db.SELECT
+```
+
+The span sits **inside** the `grantsForPrefetchHint.Any(ReferencesPreviousTransition)` branch and
+wraps exactly one query. Every other read in the same window — every flow without such a grant —
+has no `Auth.PreviousUserLookup` at all, which is what makes its absence meaningful.
+
+## 8. Screenshots
+
+Committed under `screenshots/`, captured from Kibana's APM waterfall (`:5601`) against the same
+Elasticsearch the text trees above were read from. The **text trees are the authoritative artifact** —
+several of these traces are far deeper than one viewport, and each screenshot is framed on the part
+that carries the claim.
+
+| File | Trace | Framed on |
+|---|---|---|
+| `a-crossdomain-subflow-start.png` | A | `SubFlow.Start/partner/xd-child` and the mapping script above it |
+| `b-crossdomain-forward-resume.png` | B | `SubFlow.Forward/partner/xd-child/child-approve` |
+| `c-crossdomain-view-resolve.png` | C | the descent ladder, core → partner |
+| `c2-crossdomain-view-resolve-rules.png` | C | the same ladder through to `View.Resolve` and its two cache reads — the single most complete frame in the set |
+| `d-crossdomain-authorize.png` | D | `Remote.Send/IRemoteAuthorizeAppService` → partner's `Auth.Decide`. The sample is a **403**, so the Dapr hop is marked `failure`: a denial is a normal outcome of this route, not a defect |
+| `e-crossdomain-state-read.png` | E | `Instance.Read/state` on both sides of the descent |
+| `f-buildgate-build.png` | `725f515d…` | gate → build → full descent |
+| `g-buildgate-coalesced.png` | `9e4e067a…` | the whole 14 ms trace: gate wait, cache read, nothing else |
+| `h-auth-previous-user-lookup.png` | `9ee593f3…` | `Auth.PreviousUserLookup` with its single `Db.SELECT` |
+
+Reproduce a link with `http://localhost:5601/app/apm/link-to/trace/<TRACE_ID>?rangeFrom=now-12h&rangeTo=now`.
+Kibana is **not** started by `run-docker.sh`; `docker compose up -d kibana` from `etc/docker`.
+
+**Recorded dissent:** the council `REJECTED` committing screenshots (cost and rot versus the text
+trees). They are here at the requester's explicit direction, capped at one viewport each and ~200 KB.
+
+## 9. Orphans: zero from vNext, some from the Dapr sidecar
+
+Acceptance check 3 asked for zero orphan spans — a span whose parent document is absent, which Elastic
+silently re-roots. Measured across the five cross-domain traces:
+
+| Trace | Docs | Roots | Orphans | What they are |
+|---|---|---|---|---|
+| A | 184 | 1 | 8 | `/dapr.proto.runtime.v1.Dapr/{GetState,TryLockAlpha1,UnlockAlpha1}` |
+| B | 202 | 1 | 8 | `…/{TryLockAlpha1,UnlockAlpha1}` |
+| C | 32 | 1 | 2 | `…/GetState` |
+| D | 21 | 1 | 0 | — |
+| E | 45 | 1 | 5 | `…/{GetState,SaveState}` |
+
+Every orphan is a **Dapr sidecar gRPC span**, and no vNext span is orphaned in any trace. The cause is
+known and predates this work: the sidecar exports its server-side gRPC span while the .NET side has no
+matching gRPC **client** span to be its parent, so the parent id names a document that was never
+written. Kibana shows it as the "Incomplete trace" badge. It is a sidecar-instrumentation gap, not a
+lane-propagation defect — the ladder this branch is about (`Remote.Send` → Dapr client → callee
+`CallLocal`) is unbroken in all five.
+
+## 10. What this does not cover
 
 - **`Instance.Read/master`, `/history`, `/hierarchy`, `/humanTasks`, `/list`, `/extensions`,
-  `/incidents`** — implemented and unit-guarded, but neither window drove enough traffic to show
-  them all. Absence here is absence of traffic, not absence of the span.
-- **`Auth.PreviousUserLookup`** — needs a `$PreviousUser` grant on the polled state; the lab flows
-  do not declare one.
+  `/incidents`** — implemented and unit-guarded, but no window drove enough traffic to show them all.
+  Absence here is absence of traffic, not absence of the span.
 - **`SubFlow.ChildFault`** — needs a faulting child; no cross-domain fault scenario exists yet.
-- **`Instance.Read.BuildGate`** is the one catalogue item not implemented at all.
+- **`AccountOpeningTests.HappyPath_OpensADemandDepositAccount` failed** in the third window (the
+  application never left `account-type-selection`). It is an environment dependency of that scenario,
+  unrelated to tracing, and the 27 other tests in the run passed; the reads it did perform are what
+  produced the `Auth.PreviousUserLookup` evidence above.
