@@ -83,13 +83,25 @@ processors:
   # same traffic through a collector without this processor contained 254 app-side and 254
   # sidecar GetState spans. The anchor is now `^/` so only the sidecar's are dropped.
   #
-  # Why the sidecar's orphan: the HttpClient activity between the gRPC client span and the
-  # wire puts its id in traceparent without ever being exported, so the sidecar names a
-  # parent no backend saw and Elastic APM re-roots it (45 -> 173 spans on one transition).
-  # It is NOT a missing gRPC client span — that one exists. The hole is specific to the
-  # state-store and lock client construction path: measured over 300 sidecar spans, every
-  # GetState/SaveState/TryLock/Unlock one was orphaned (248) while every PublishEvent and
-  # Jobs one had an exported parent (52).
+  # Why the sidecar's orphan, root cause measured 2026-09-13: Aether's HttpClient
+  # instrumentation filter. `AetherTelemetryServiceCollectionExtensions.ShouldTraceHttpRequest`
+  # is `IsVerbose || !IsDaprDiagnosticRequest(uri)`, and `IsDaprDiagnosticRequest` lists exactly
+  # GetState / GetBulkState / SaveState / DeleteState / ExecuteStateTransaction / GetSecret /
+  # GetBulkSecret / GetConfiguration / SubscribeConfiguration / TryLockAlpha1 / UnlockAlpha1.
+  # In the default Business profile those HttpClient spans are dropped — but dropping a span
+  # does not remove the Activity, and it is that Activity's id which goes into `traceparent`.
+  # The sidecar therefore parents its span on an id no backend ever received, and Elastic APM
+  # re-roots it (45 -> 173 spans on one transition).
+  #
+  # The evidence is a clean split. Over 300 sidecar spans, every GetState/SaveState/TryLock/
+  # Unlock one was orphaned (248) while every PublishEvent and Jobs one — none of them on that
+  # list — had an exported parent (52). Restarting one host with
+  # `Telemetry__Tracing__DetailLevel=Verbose` made the four missing HttpClient spans appear
+  # immediately (13 GetState, 7 TryLock, 7 Unlock, 2 SaveState) with no other change.
+  #
+  # It is NOT a missing gRPC client span — that one exists and nests correctly — and it is NOT
+  # GrpcNetClient's SuppressDownstreamInstrumentation: setting that to false changed nothing.
+  # The fix belongs in Aether; until it lands, this processor is the mitigation.
   #
   # Service-invocation spans (`CallLocal/*`) are deliberately untouched — those are the ones
   # that reconnect orchestration to Execution. Remove this processor once that HttpClient

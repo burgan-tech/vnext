@@ -247,13 +247,24 @@ silently re-roots. Measured across the five cross-domain traces:
 - The app-side gRPC client span **exists and nests correctly** — `AddGrpcClientInstrumentation()` has
   been registered since the trace-tree work (`WorkflowApiBaseServiceCollectionExtensions.cs`). In
   trace C it sits under `Cache.GenerationGet` and `Cache.Get` as `external/grpc`.
-- What is missing is the **HttpClient activity between that span and the wire**: its id goes into
-  `traceparent` but it is never exported, so the sidecar's server span (`db/state`) names a parent no
-  backend saw.
-- The hole is specific to the **state-store and lock client construction path**. Over 300 sidecar
-  spans in the lab window: every `GetState` (101), `SaveState` (27), `TryLockAlpha1` (61) and
-  `UnlockAlpha1` (59) was orphaned — **248** — while every `PublishEvent` (20), `ScheduleJobAlpha1`
-  (16) and `DeleteJobAlpha1` (16) had an exported parent. **52** of them nest fine.
+- What is missing is the **HttpClient span for that call's HTTP/2 request**. Dropping a span does
+  not remove the `Activity`, and it is that Activity's id which goes into `traceparent` — so the
+  sidecar's server span (`db/state`) names a parent no backend ever received.
+- **Root cause, measured: Aether's HttpClient trace filter.**
+  `AetherTelemetryServiceCollectionExtensions.ShouldTraceHttpRequest` is
+  `IsVerbose || !IsDaprDiagnosticRequest(uri)`, and `IsDaprDiagnosticRequest` lists exactly
+  `GetState`, `GetBulkState`, `SaveState`, `DeleteState`, `ExecuteStateTransaction`, `GetSecret`,
+  `GetBulkSecret`, `GetConfiguration`, `SubscribeConfiguration`, `TryLockAlpha1`, `UnlockAlpha1`.
+  In the default `Business` profile those HttpClient spans are filtered out.
+- The split matches that list exactly. Over 300 sidecar spans in the lab window: every `GetState`
+  (101), `SaveState` (27), `TryLockAlpha1` (61) and `UnlockAlpha1` (59) was orphaned — **248** —
+  while every `PublishEvent` (20), `ScheduleJobAlpha1` (16) and `DeleteJobAlpha1` (16), none of them
+  on the list, had an exported parent. **52** nest fine.
+- **Confirmed by experiment, not inference.** Restarting one orchestration host with
+  `Telemetry__Tracing__DetailLevel=Verbose` and changing nothing else made the missing spans appear
+  at once: 13 `GetState`, 7 `TryLockAlpha1`, 7 `UnlockAlpha1`, 2 `SaveState`. The competing
+  hypothesis was tested and refuted first — setting GrpcNetClient's
+  `SuppressDownstreamInstrumentation = false` produced **zero** additional spans.
 
 ### Why the lab shows these at all and `etc/docker` shows none
 
@@ -284,9 +295,14 @@ Zero sidecar spans, zero orphans, and the cache read now says where its time wen
 
 Two things stay open, deliberately. The filter still drops the 52-in-300 sidecar spans that *would*
 nest correctly (PublishEvent, Jobs) — one simple rule is worth more than a method allowlist that
-would silently let a future orphaning method through. And the underlying HttpClient hole in the
-state-store/lock client construction is untouched: fixing it is what would let the processor be
-removed altogether.
+would silently let a future orphaning method through.
+
+And the real fix belongs in **Aether**, which this repo proposes to rather than edits. The filter
+there is doing the right thing for the wrong layer: it suppresses noise by dropping the span, but the
+Activity it leaves behind is what the sidecar parents on, so the noise reappears downstream as
+orphans that Elastic re-roots. A filter that also stopped the request from carrying that id (or that
+kept a minimal span purely to anchor it) would let this collector processor be deleted outright, and
+would give back the app→sidecar breakdown for state and lock calls in `Business` mode.
 
 ## 10. What this does not cover
 
