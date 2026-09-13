@@ -144,6 +144,9 @@ public sealed class InstanceQueryAppService(
     {
         runtimeInfoProvider.Check(input.Domain);
 
+        using var read = InstanceReadActivityHelper.StartRead(
+            InstanceReadKinds.Instance, input.Domain, input.Workflow);
+
         return await GetInstanceByIdOrKeyAsync(input.Instance, input.Version, cancellationToken)
             .MatchAsync(
                 onSuccess: async instance =>
@@ -190,6 +193,9 @@ public sealed class InstanceQueryAppService(
         CancellationToken cancellationToken = default)
     {
         runtimeInfoProvider.Check(input.Domain);
+
+        using var read = InstanceReadActivityHelper.StartRead(
+            InstanceReadKinds.List, input.Domain, input.Workflow);
 
         // Validate before any query is built. A filter the runtime cannot honor must be rejected,
         // never silently ignored — ignoring it widens the result set instead of narrowing it.
@@ -416,6 +422,9 @@ public sealed class InstanceQueryAppService(
     {
         runtimeInfoProvider.Check(input.Domain);
 
+        using var read = InstanceReadActivityHelper.StartRead(
+            InstanceReadKinds.IncidentActive, input.Domain, input.Workflow);
+
         return await GetInstanceByIdOrKeyAsync(input.Instance, cancellationToken)
             .BindAsync(instance =>
                 componentCacheStore.GetFlowAsync(input.Domain, input.Workflow, instance.FlowVersion, cancellationToken)
@@ -442,6 +451,9 @@ public sealed class InstanceQueryAppService(
         CancellationToken cancellationToken = default)
     {
         runtimeInfoProvider.Check(input.Domain);
+
+        using var read = InstanceReadActivityHelper.StartRead(
+            InstanceReadKinds.IncidentHistory, input.Domain, input.Workflow);
 
         var page = input.Page < 1 ? 1 : input.Page;
         var pageSize = Math.Clamp(input.PageSize, 1, GetInstanceIncidentsInput.MaxPageSize);
@@ -477,6 +489,9 @@ public sealed class InstanceQueryAppService(
         CancellationToken cancellationToken = default)
     {
         runtimeInfoProvider.Check(input.Domain);
+
+        using var read = InstanceReadActivityHelper.StartRead(
+            InstanceReadKinds.History, input.Domain, input.Workflow);
 
         return await GetInstanceWithFullHistoryAsync(input.Instance, cancellationToken)
             .ThenAsync(async instance =>
@@ -2013,6 +2028,9 @@ public sealed class InstanceQueryAppService(
     {
         runtimeInfoProvider.Check(input.Domain);
 
+        using var read = InstanceReadActivityHelper.StartRead(
+            InstanceReadKinds.View, input.Domain, input.Workflow);
+
         // Railway chain: Get Instance → Get Workflow → Resolve State → Get View
         return await GetInstanceByIdOrKeyAsync(input.Instance, cancellationToken)
             .BindAsync(instance =>
@@ -2038,6 +2056,9 @@ public sealed class InstanceQueryAppService(
         CancellationToken cancellationToken = default)
     {
         runtimeInfoProvider.Check(input.Domain);
+
+        using var read = InstanceReadActivityHelper.StartRead(
+            InstanceReadKinds.Schema, input.Domain, input.Workflow);
 
         // Fast path: the ETag is a deterministic hash of the data fingerprint (instance id +
         // latest data ETag + effective state + flow version) plus caller scope and transition
@@ -2179,6 +2200,9 @@ public sealed class InstanceQueryAppService(
     {
         runtimeInfoProvider.Check(input.Domain);
 
+        using var read = InstanceReadActivityHelper.StartRead(
+            InstanceReadKinds.Extensions, input.Domain, input.Workflow);
+
         // Railway chain: Get Instance → Get Workflow → Build Extensions Output
         return await GetInstanceByIdOrKeyAsync(input.Instance, cancellationToken)
             .BindAsync(instance =>
@@ -2200,6 +2224,9 @@ public sealed class InstanceQueryAppService(
         CancellationToken cancellationToken = default)
     {
         runtimeInfoProvider.Check(input.Domain);
+
+        using var read = InstanceReadActivityHelper.StartRead(
+            InstanceReadKinds.Master, input.Domain, input.Workflow);
 
         // Fast path: the master ETag is a deterministic hash of the data fingerprint
         // (instance id + latest data ETag + flow version) plus the caller scope — the
@@ -2758,6 +2785,9 @@ public sealed class InstanceQueryAppService(
     {
         runtimeInfoProvider.Check(input.Domain);
 
+        using var read = InstanceReadActivityHelper.StartRead(
+            InstanceReadKinds.Hierarchy, input.Domain, input.Workflow);
+
         var instanceResult = await GetInstanceByIdOrKeyAsync(input.Instance, cancellationToken);
         if (!instanceResult.IsSuccess)
         {
@@ -2799,6 +2829,9 @@ public sealed class InstanceQueryAppService(
         CancellationToken cancellationToken = default)
     {
         runtimeInfoProvider.Check(domain);
+
+        using var read = InstanceReadActivityHelper.StartRead(
+            InstanceReadKinds.HumanTasks, domain);
 
         List<InstanceKeyModel> workflowSchemas;
         using (currentSchema.Change(RuntimeSysSchemaInfo.Flows))

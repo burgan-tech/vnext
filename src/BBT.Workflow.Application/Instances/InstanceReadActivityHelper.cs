@@ -51,6 +51,42 @@ public static class InstanceReadActivityHelper
     /// <summary>One level of descent into an active subflow.</summary>
     public const string OperationDescend = "Subflow.Descend";
 
+    /// <summary>Envelope for one built-in instance read.</summary>
+    public const string OperationRead = "Instance.Read";
+
+    /// <summary>
+    /// Starts the envelope span for one built-in read, named <c>Instance.Read/{kind}</c>.
+    /// <para>
+    /// This is the one genuine does-not-exist gap on the read path. Built-in and custom functions
+    /// share a single route template (<c>{domain}/workflows/{workflow}/instances/{instance}/functions/{function}</c>),
+    /// so Elastic's <c>transaction.name</c> is identical for a state poll, a view read and a
+    /// custom-function call. Per-function latency is therefore unobtainable from the transaction —
+    /// and the leaf layer does not help: <c>Db.*</c> and <c>Cache.*</c> are always on and are by far
+    /// the top emitters, so the read path is densely instrumented at the bottom and unstructured at
+    /// the top. A bounded-cardinality envelope is the only thing that can carry the distinction.
+    /// </para>
+    /// <para>
+    /// Opened in the query service rather than the controller on purpose: a descent re-enters this
+    /// service once per level, so an envelope at the controller would count one read where the
+    /// request actually performed three.
+    /// </para>
+    /// </summary>
+    /// <param name="kind">One of <see cref="InstanceReadKinds"/> — a closed set, so it can sit in the span name.</param>
+    /// <param name="domain">Owning domain, for aggregation. Bounded by the domain catalogue.</param>
+    /// <param name="flow">Owning workflow key. Bounded by the component catalogue.</param>
+    public static Activity? StartRead(string kind, string? domain = null, string? flow = null)
+    {
+        // Implicit parent, for the same baggage reason as StartDescend below.
+        var activity = ActivitySource.StartActivity($"{OperationRead}/{kind}", ActivityKind.Internal);
+        if (activity is null) return null;
+
+        activity.SetTag(TelemetryConstants.TagNames.SpanCategory, TelemetryConstants.SpanCategories.Business);
+        activity.SetTag(TelemetryConstants.TagNames.Layer, TelemetryConstants.Layers.Orchestration);
+        if (domain is { Length: > 0 }) activity.SetTag(TelemetryConstants.TagNames.Domain, domain);
+        if (flow is { Length: > 0 }) activity.SetTag(TelemetryConstants.TagNames.Flow, flow);
+        return activity;
+    }
+
     /// <summary>
     /// Starts the descent span for one level.
     /// <para>
