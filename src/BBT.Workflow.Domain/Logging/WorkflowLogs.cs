@@ -3076,17 +3076,6 @@ public static partial class WorkflowLogs
     #region Extensions
 
     /// <summary>
-    /// Logs when extension processing fails but execution continues (non-blocking).
-    /// </summary>
-    [LoggerMessage(
-        EventId = 20101,
-        Level = LogLevel.Warning,
-        Message = "Extension processing failed but continuing. Error: {ErrorCode}")]
-    public static partial void ExtensionProcessingFailedNonBlocking(
-        this ILogger logger,
-        string errorCode);
-
-    /// <summary>
     /// Logs when the SAME extension reference is listed more than once in a workflow's
     /// <c>Extensions</c> (or in the runtime's core-extension set). Unlike two DIFFERENT extensions
     /// sharing one task Reference (a supported pattern, see <see cref="DuplicateTaskKeyAtSameOrder"/>

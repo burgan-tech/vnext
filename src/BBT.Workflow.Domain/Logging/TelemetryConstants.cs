@@ -228,9 +228,6 @@ public static class TelemetryConstants
         /// </summary>
         public const string EnrichSource = "vnext.enrich.source";
 
-        /// <summary>Number of extensions the caller asked for on a sync response (0 = defaults only).</summary>
-        public const string ExtensionsRequested = "vnext.extensions.requested";
-
         /// <summary>
         /// What the Busy→Active compare-and-set at settlement actually did: <c>flipped</c> (this
         /// hop made the instance Active), <c>lost</c> (the row was no longer Busy — somebody else

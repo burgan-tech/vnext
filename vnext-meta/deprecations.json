@@ -43,6 +43,17 @@
       "replacement": "Orchestration instance/query APIs for operational reads; logs and APM for diagnostics",
       "severity": "error",
       "message": "The read-only Monitor API host (base path /api/v1/monitor, port 4203) has been removed from the runtime together with its Dapr sidecar and components. Dashboards that called monitor/* endpoints must move to the Orchestration instance query, incident and stats surfaces, or read from logs/APM."
+    },
+    {
+      "id": "start-transition-extensions-query-parameter-removed",
+      "type": "field",
+      "component": "extension",
+      "path": "POST .../instances/start?extensions= , POST .../instances/{instance}/transitions/{transitionKey}?extensions=",
+      "deprecatedSince": "0.0.93",
+      "removedAt": "0.0.93",
+      "replacement": "GET .../instances/{instance}/functions/data?extensions=<key>",
+      "severity": "warning",
+      "message": "The `extensions` query parameter is gone from the start and transition endpoints, together with the extension pass on the sync response. It is no longer bound, so a caller that still sends it is not rejected — the parameter is simply ignored and the response's `extensions` key is always an empty object. Request extension values from a read surface instead: the data function, the instance GET, the instance list, or the extensions endpoint. Extension components themselves are unchanged."
     }
   ]
 }

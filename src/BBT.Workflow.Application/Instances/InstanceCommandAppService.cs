@@ -54,7 +54,6 @@ public sealed class InstanceCommandAppService(
     ITransitionAdmissionService transitionAdmissionService,
     IRepresentationEtagService representationEtagService,
     ISchemaFieldFilterService schemaFieldFilterService,
-    IInstanceExtensionService instanceExtensionService,
     IScriptContextFactory scriptContextFactory,
     ITimerEvaluator timerEvaluator,
     ITransitionAuthorizationManager transitionAuthorizationManager,
@@ -89,7 +88,7 @@ public sealed class InstanceCommandAppService(
         if (existingInstanceResult.HasValue)
         {
             if (input.Sync && existingInstanceResult.Value.IsSuccess)
-                return await EnrichSyncOutputAsync(existingInstanceResult.Value.Value!, existingInstanceResult.Value.Value!.Id, workflow, input.Extensions, new AuthorizationRequestContext(input.Headers), cancellationToken);
+                return await EnrichSyncOutputAsync(existingInstanceResult.Value.Value!, existingInstanceResult.Value.Value!.Id, workflow, new AuthorizationRequestContext(input.Headers), cancellationToken);
             return existingInstanceResult.Value;
         }
 
@@ -443,7 +442,7 @@ public sealed class InstanceCommandAppService(
                 Status = transitionOutput.Status
             })
             .ThenAsync(output => input.Sync && !input.SuppressResponseEnrichment
-                ? EnrichSyncOutputAsync(output, output.Id, data.Workflow, input.Extensions, new AuthorizationRequestContext(input.Headers), cancellationToken)
+                ? EnrichSyncOutputAsync(output, output.Id, data.Workflow, new AuthorizationRequestContext(input.Headers), cancellationToken)
                 : Task.FromResult(Result<StartInstanceOutput>.Ok(output)));
     }
 
@@ -701,7 +700,7 @@ public sealed class InstanceCommandAppService(
                 // A runtime-internal relay (SuppressResponseEnrichment) awaits the pipeline like any
                 // sync caller but takes the identity-only response — see TransitionInput.
                 if (input.Sync && !input.SuppressResponseEnrichment)
-                    return EnrichSyncOutputAsync(output, output.Id, workflowDefinition, input.Extensions, new AuthorizationRequestContext(input.Headers), cancellationToken);
+                    return EnrichSyncOutputAsync(output, output.Id, workflowDefinition, new AuthorizationRequestContext(input.Headers), cancellationToken);
                 output.Key = snapshot.Key;
                 return Task.FromResult(Result<TransitionOutput>.Ok(output));
             });
@@ -765,48 +764,45 @@ public sealed class InstanceCommandAppService(
     }
 
     /// <summary>
-    /// Enriches a sync=true StartInstanceOutput with attributes (schema-filtered), etag, entityEtag, key and extensions.
+    /// Enriches a sync=true StartInstanceOutput with attributes (schema-filtered), etag, entityEtag and key.
     /// The instance is reloaded from the repository to ensure post-execution state is reflected.
     /// </summary>
     private Task<Result<StartInstanceOutput>> EnrichSyncOutputAsync(
         StartInstanceOutput output,
         Guid instanceId,
         Definitions.Workflow? workflow,
-        string[]? extensionRequested,
         AuthorizationRequestContext? requestContext,
         CancellationToken cancellationToken)
-        => EnrichOutputCoreAsync(output, instanceId, workflow, extensionRequested, requestContext, cancellationToken);
+        => EnrichOutputCoreAsync(output, instanceId, workflow, requestContext, cancellationToken);
 
     /// <summary>
-    /// Enriches a sync=true TransitionOutput with attributes (schema-filtered), etag, entityEtag, key and extensions.
+    /// Enriches a sync=true TransitionOutput with attributes (schema-filtered), etag, entityEtag and key.
     /// The instance is reloaded from the repository to ensure post-execution state is reflected.
     /// </summary>
     private Task<Result<TransitionOutput>> EnrichSyncOutputAsync(
         TransitionOutput output,
         Guid instanceId,
         Definitions.Workflow? workflow,
-        string[]? extensionRequested,
         AuthorizationRequestContext? requestContext,
         CancellationToken cancellationToken)
-        => EnrichOutputCoreAsync(output, instanceId, workflow, extensionRequested, requestContext, cancellationToken);
+        => EnrichOutputCoreAsync(output, instanceId, workflow, requestContext, cancellationToken);
 
     private async Task<Result<TOutput>> EnrichOutputCoreAsync<TOutput>(
         TOutput output,
         Guid instanceId,
         Definitions.Workflow? workflow,
-        string[]? extensionRequested,
         AuthorizationRequestContext? requestContext,
         CancellationToken cancellationToken)
         where TOutput : class
     {
-        // The sync response projection is one phase: reload (or reuse), schema field filter, script
-        // context, output mapping, extensions. It ran unnamed, so its children — Instance.Query.*,
-        // the schema Cache.Get, ScriptContext.*, Extension.Process — landed on whatever span was
-        // ambient (SubFlow.Start, SubFlow.Forward, the server span) as unrelated siblings.
+        // The sync response projection is one phase: reload (or reuse), schema field filter and —
+        // only when a workflow output script is configured — script context plus output mapping.
+        // It ran unnamed, so its children — Instance.Query.*, the schema Cache.Get, ScriptContext.*
+        // — landed on whatever span was ambient (SubFlow.Start, SubFlow.Forward, the server span)
+        // as unrelated siblings.
         using var activity = PipelineStepActivityHelper.StartOperationActivity("Instance.EnrichResponse");
         activity?.SetTag(TelemetryConstants.TagNames.InstanceId, instanceId.ToString());
         activity?.SetTag(TelemetryConstants.TagNames.Flow, workflow?.Key);
-        activity?.SetTag(TelemetryConstants.TagNames.ExtensionsRequested, extensionRequested?.Length ?? 0);
 
         // Use pipeline instance if available (already committed, avoids redundant DB read).
         // A Busy snapshot may be stale — a sync subflow completion resumes and finalizes the
@@ -842,9 +838,21 @@ public sealed class InstanceCommandAppService(
         var entityEtag = latestData?.ETag;
         var attributes = filteredAttributes ?? rawAttributes;
 
-        Dictionary<string, object> extensions = new();
         WorkflowOutputResult? outputResponse = null;
-        if (workflow is not null)
+
+        // Extensions are NOT evaluated here. They are enrichment, not data: the client workflow
+        // manager never reads them off a start/transition response, and a service-to-service
+        // caller already gets `attributes`. Anyone who needs them asks a READ surface for them
+        // (GET instance, GET instances, functions/data, the extensions endpoint) — which is where
+        // IInstanceExtensionService is still called from. Running them here cost an extension task
+        // pass (HTTP calls included) per sync transition for a response field nobody read.
+        //
+        // Workflow output mapping bypasses the standard envelope, but NEVER for subflow instances:
+        // correlation forward (sub start) and subflow transitions rely on the standard model, so
+        // output is ignored even when configured. With extensions gone it is the only consumer of
+        // the ScriptContext here, so building one is now gated on the script actually existing —
+        // ScriptContext construction serializes the instance's whole latest data.
+        if (workflow is not null && !instance.IsSubFlow && workflow.Output is { HasMappingCode: true })
         {
             var scriptContext = await scriptContextFactory.NewBuilder(instanceRepository)
                 .WithWorkflow(workflow)
@@ -854,27 +862,9 @@ public sealed class InstanceCommandAppService(
                 .WithBody(latestData?.Data ?? new JsonData("{}"))
                 .BuildAsync(cancellationToken);
 
-            // Workflow output mapping bypasses the standard envelope, but NEVER for subflow
-            // instances: correlation forward (sub start) and subflow transitions rely on the
-            // standard model, so output is ignored even when configured.
-            if (!instance.IsSubFlow)
-            {
-                var outputResult = await workflowOutputMappingService.ApplyAsync(workflow, scriptContext, cancellationToken);
-                if (outputResult.IsSuccess && outputResult.Value is { } wo)
-                    outputResponse = wo;
-            }
-
-            var extensionsResult = await instanceExtensionService.ProcessExtensionsAsync(
-                extensionRequested,
-                scriptContext,
-                workflow,
-                ExtensionScope.GetInstance,
-                cancellationToken);
-
-            if (!extensionsResult.IsSuccess)
-                logger.ExtensionProcessingFailedNonBlocking(extensionsResult.Error.Code);
-            else
-                extensions = extensionsResult.Value!;
+            var outputResult = await workflowOutputMappingService.ApplyAsync(workflow, scriptContext, cancellationToken);
+            if (outputResult.IsSuccess && outputResult.Value is { } wo)
+                outputResponse = wo;
         }
 
         if (output is StartInstanceOutput start)
@@ -882,7 +872,7 @@ public sealed class InstanceCommandAppService(
             start.Key = key;
             start.Attributes = attributes;
             start.EntityEtag = entityEtag;
-            start.Extensions = extensions;
+            start.Extensions = new Dictionary<string, object>();
             start.PipelineInstance = null;
             start.ETag = representationEtagService.Generate(start);
             ApplyOutputResponse(start, outputResponse);
@@ -892,7 +882,7 @@ public sealed class InstanceCommandAppService(
             transition.Key = key;
             transition.Attributes = attributes;
             transition.EntityEtag = entityEtag;
-            transition.Extensions = extensions;
+            transition.Extensions = new Dictionary<string, object>();
             transition.PipelineInstance = null;
             transition.ETag = representationEtagService.Generate(transition);
             ApplyOutputResponse(transition, outputResponse);
