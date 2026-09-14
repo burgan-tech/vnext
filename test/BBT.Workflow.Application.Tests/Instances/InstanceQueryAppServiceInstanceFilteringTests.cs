@@ -1,4 +1,6 @@
 using System;
+using System.Diagnostics;
+using System.Linq;
 using System.Collections.Generic;
 using System.Text.Json;
 using System.Threading;
@@ -226,6 +228,54 @@ public sealed class InstanceQueryAppServiceInstanceFilteringTests : IDisposable
             null,
             Arg.Is<SchemaFilterContext?>(c => c != null),
             Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task GetInstanceListAsync_MetadataEndsBeforeQueryAndOutput()
+    {
+        using var parent = new Activity("list-phase-test").Start();
+        var started = new List<Activity>();
+        var stopped = new List<Activity>();
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == InstanceReadActivityHelper.SourceName,
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllData,
+            ActivityStarted = activity =>
+            {
+                if (activity.TraceId == parent.TraceId) started.Add(activity);
+            },
+            ActivityStopped = activity =>
+            {
+                if (activity.TraceId == parent.TraceId) stopped.Add(activity);
+            }
+        };
+        ActivitySource.AddActivityListener(listener);
+        var emptyPage = new HateoasPagedList<Instance>([], 1, 10, false);
+        _instanceRepository.GetPagedResultsWithGroupsAsync(
+                Arg.Any<int>(), Arg.Any<int>(), Arg.Any<string?>(), Arg.Any<string?>(),
+                Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<SchemaFilterContext?>(), Arg.Any<CancellationToken>())
+            .Returns(_ =>
+            {
+                stopped.ShouldContain(activity => activity.OperationName == "Instances.List.metadata");
+                Activity.Current!.OperationName.ShouldBe("Instances.List.query");
+                return Task.FromResult((emptyPage, (List<GroupSummary>?)null));
+            });
+        var urlBuilder = Substitute.For<IUrlTemplateBuilder>();
+        urlBuilder.BuildInstanceListUrl(Domain, WorkflowKey).Returns("/route");
+        var service = CreateService(urlBuilder, Options.Create(new InstanceFilteringOptions()));
+        var result = await service.GetInstanceListAsync(new GetInstanceListInput
+        {
+            Domain = Domain, Workflow = WorkflowKey, Page = 1, PageSize = 10
+        }, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        var metadata = started.Single(activity => activity.OperationName == "Instances.List.metadata");
+        foreach (var phase in started.Where(activity => activity.OperationName is "Instances.List.query" or "Instances.List.output"))
+        {
+            phase.ParentSpanId.ShouldBe(metadata.ParentSpanId);
+            phase.StartTimeUtc.ShouldBeGreaterThanOrEqualTo(metadata.StartTimeUtc + metadata.Duration);
+        }
+        started.ShouldContain(activity => activity.OperationName == "Instances.List.output");
     }
 
     private InstanceQueryAppService CreateService(

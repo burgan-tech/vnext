@@ -1,3 +1,5 @@
+using System.Threading;
+using NSubstitute;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -9,7 +11,10 @@ using BBT.Workflow.Definitions.GraphQL;
 using BBT.Workflow.Definitions.Schemas;
 using BBT.Workflow.Schemas;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Caching.Memory;
+using BBT.Aether.DistributedCache;
+using BBT.Aether.DistributedLock;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -48,8 +53,11 @@ public sealed class AttributeIndexIntegrationTests(AttributeIndexPostgresFixture
             ["AttributeIndexes:Enabled"] = enabled.ToString()
         }).Build();
         var settings = new AttributeIndexOptions { Enabled = enabled, DisabledFlows = disabled ?? [] };
+        var locks = NSubstitute.Substitute.For<IDistributedLockService>();
+        locks.TryAcquireLockAsync(NSubstitute.Arg.Any<string>(), NSubstitute.Arg.Any<int>(), NSubstitute.Arg.Any<CancellationToken>())
+            .Returns(NSubstitute.Substitute.For<IDistributedLockHandle>());
         return new LegacyAttributeIndexFixture(configuration, new Monitor(settings), new StaticCurrentSchema("public"), new DefaultSchemaNameFormatter(),
-            new MemoryCache(new MemoryCacheOptions()));
+            new NetCoreDistributedCacheService(new MemoryDistributedCache(Options.Create(new MemoryDistributedCacheOptions()))), locks);
     }
 
     private async Task<string> SeedAsync()

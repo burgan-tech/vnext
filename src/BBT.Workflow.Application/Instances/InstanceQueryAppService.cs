@@ -226,28 +226,30 @@ public sealed class InstanceQueryAppService(
             async ct =>
             {
 
-                using var metadataActivity = InstanceReadActivityHelper.StartListPhase("metadata");
-                // Resolve schema-driven filter/sort metadata from workflow's master schema
                 SchemaFilterContext? schemaContext = null;
-                var flowResult = await componentCacheStore.GetFlowAsync(input.Domain, input.Workflow, null, ct);
-                if (flowResult.IsSuccess && flowResult.Value?.Schema is not null)
+                using (InstanceReadActivityHelper.StartListPhase("metadata"))
                 {
-                    var schemaResult = await componentCacheStore.GetSchemaAsync(flowResult.Value.Schema, ct);
-                    if (schemaResult.IsSuccess)
-                        schemaContext = SchemaFilterMetadataResolver.Resolve(schemaResult.Value!.Schema);
-                }
-
-                if (schemaContext != null)
-                {
-                    var catalog = serviceProvider.GetService<IAttributeIndexCatalog>();
-                    var ready = catalog == null || !schemaContext.Fields.Values.Any(f => f.Indexed)
-                        ? new HashSet<string>()
-                        : await catalog.GetReadyAsync(currentSchema.Name ?? input.Workflow, ct);
-                    schemaContext = new SchemaFilterContext(schemaContext.Fields)
+                    // Resolve schema-driven filter/sort metadata from workflow's master schema
+                    var flowResult = await componentCacheStore.GetFlowAsync(input.Domain, input.Workflow, null, ct);
+                    if (flowResult.IsSuccess && flowResult.Value?.Schema is not null)
                     {
-                        EnforceFiltering = instanceFilteringOptions.Value.EnforceMasterSchemaFiltering,
-                        ReadyIndexes = ready
-                    };
+                        var schemaResult = await componentCacheStore.GetSchemaAsync(flowResult.Value.Schema, ct);
+                        if (schemaResult.IsSuccess)
+                            schemaContext = SchemaFilterMetadataResolver.Resolve(schemaResult.Value!.Schema);
+                    }
+
+                    if (schemaContext != null)
+                    {
+                        var catalog = serviceProvider.GetService<IAttributeIndexCatalog>();
+                        var ready = catalog == null || !schemaContext.Fields.Values.Any(f => f.Indexed)
+                            ? new HashSet<string>()
+                            : await catalog.GetReadyAsync(currentSchema.Name ?? input.Workflow, ct);
+                        schemaContext = new SchemaFilterContext(schemaContext.Fields)
+                        {
+                            EnforceFiltering = instanceFilteringOptions.Value.EnforceMasterSchemaFiltering,
+                            ReadyIndexes = ready
+                        };
+                    }
                 }
 
                 // Parse filter parameter - check if it's in GraphQLFilterRequest format

@@ -63,7 +63,6 @@ public static class WorkflowInfrastructureModuleServiceCollectionExtensions
         IConfiguration? configuration)
     {
         services.AddAetherInfrastructure();
-        services.AddMemoryCache();
         var queryOptions = services.AddOptions<InstanceQueryOptions>();
         if (configuration != null) queryOptions.Bind(configuration.GetSection(InstanceQueryOptions.SectionName));
         var attributeOptions = services.AddOptions<BBT.Workflow.Schemas.AttributeIndexOptions>();

@@ -31,6 +31,8 @@ public sealed record AttributeIndexDefinition(string Path, string StorageType)
             return;
         }
         if (node.ValueKind != JsonValueKind.Object) return;
+        supported = supported && !node.EnumerateObject().Any(property =>
+            property.Name is "$ref" or "allOf" or "anyOf" or "oneOf" or "not" or "if" or "then" or "else" or "dependentSchemas");
         if (node.TryGetProperty("x-indexed", out var indexed))
         {
             if (indexed.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
@@ -51,9 +53,9 @@ public sealed record AttributeIndexDefinition(string Path, string StorageType)
                 foreach (var child in property.Value.EnumerateObject())
                     Visit(child.Value, path.Length == 0 ? child.Name : $"{path}.{child.Name}", supported && objectParent && !child.Name.Contains('.'));
             }
-            else if (property.Name is "items" or "prefixItems" or "$defs" or "definitions" or "allOf" or "anyOf" or "oneOf" or "if" or "then" or "else" or "additionalProperties" or "patternProperties")
+            else if (property.Name is "items" or "prefixItems" or "$defs" or "definitions" or "allOf" or "anyOf" or "oneOf" or "if" or "then" or "else" or "additionalProperties" or "patternProperties" or "not" or "dependentSchemas")
             {
-                if (property.Name is "$defs" or "definitions" or "patternProperties" && property.Value.ValueKind == JsonValueKind.Object)
+                if (property.Name is "$defs" or "definitions" or "patternProperties" or "dependentSchemas" && property.Value.ValueKind == JsonValueKind.Object)
                     foreach (var child in property.Value.EnumerateObject()) Visit(child.Value, path, false);
                 else Visit(property.Value, path, false);
             }

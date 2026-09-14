@@ -3,7 +3,7 @@
 Attribute index maintenance is owned by the DBA team. Publishing a Master schema or workflow does
 not schedule index work and does not prepare generated columns or attribute indexes. The runtime
 contains only a read-only ready-index catalog and query routing; normal EF schema migrations remain
-separate. `SchemaMigrationRunner` lives in Infrastructure and DbMigrator invokes it for normal EF migrations.
+separate. DbMigrator retains its own `SchemaMigrationRunner` for normal EF migrations.
 
 ## Generate SQL in a domain workspace
 
@@ -70,8 +70,8 @@ wf indexes generate --flow money-transfer --retire-obsolete
 ```
 
 Use this only with **every still-active workflow version** represented locally. Drain runtime readers and
-writers for retirement and wait out catalog caches (or restart drained hosts). Retired catalog entries are
-marked not ready; their generated expressions and owned indexes are removed while columns/stored values
+writers for retirement and wait out the shared catalog TTL. Restarting hosts does not clear the
+distributed cache. Retired catalog entries are marked not ready; their generated expressions and owned indexes are removed while columns/stored values
 remain. This stops an obsolete numeric/date cast from rejecting future writes after a type change. Old
 columns are never converted in place and no `CASCADE` is issued. A same-name column with an unexpected
 marker/type/expression fails rather than silently changing the physical contract. Reintroducing a retired
@@ -83,9 +83,14 @@ projection validates data and recreates its stored column.
 can disable individual workflows. These options never enable DDL. Missing/unfinished projections use the
 existing JSON query expression; filter authorization remains independent.
 
-`CatalogCacheSeconds` defaults to 30. After the DBA commits, each host discovers readiness on the next
-catalog refresh. Roll back routing with `AttributeIndexes:DisabledFlows`, leaving data and columns in
-place for a later DBA cleanup. Removed settings: `AttributeIndexPreparation`, maintenance connection,
+The ready catalog uses the Aether distributed cache, scoped by database, database role and flow schema.
+A distributed refresh lock coalesces cache misses across replicas; contenders use the JSON fallback
+until the shared snapshot is available. `CatalogCacheSeconds` sets an absolute TTL (30 seconds by
+default), also checked in the snapshot itself. DBA retirement still requires draining readers/writers
+as described above.
+
+After the DBA commits, replicas discover readiness through the next shared catalog refresh. Roll back
+routing with `AttributeIndexes:DisabledFlows`, leaving data and columns in place for a later DBA cleanup. Removed settings: `AttributeIndexPreparation`, maintenance connection,
 maintenance timeout options and the `attribute-index.prepare` handler. Aether is unchanged.
 
 ## Verification (2026-09-14)

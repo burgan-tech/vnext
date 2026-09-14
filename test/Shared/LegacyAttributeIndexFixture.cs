@@ -10,7 +10,8 @@ using BBT.Workflow.Definitions;
 using BBT.Workflow.Definitions.Schemas;
 using BBT.Workflow.Security;
 
-using Microsoft.Extensions.Caching.Memory;
+using BBT.Aether.DistributedCache;
+using BBT.Aether.DistributedLock;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Options;
 using Npgsql;
@@ -20,7 +21,7 @@ namespace BBT.Workflow.Schemas;
 /// <summary>Explicit maintenance DDL and a read-only catalog. Never performs DDL on a query request.</summary>
 public sealed class LegacyAttributeIndexFixture(
     IConfiguration configuration, IOptionsMonitor<AttributeIndexOptions> options,
-    ICurrentSchema currentSchema, ISchemaNameFormatter schemaNameFormatter, IMemoryCache cache)
+    ICurrentSchema currentSchema, ISchemaNameFormatter schemaNameFormatter, IDistributedCacheService cache, IDistributedLockService locks)
     : IAttributeIndexCatalog
 {
     private string ConnectionString => configuration.GetConnectionString("Default")
@@ -41,7 +42,7 @@ public sealed class LegacyAttributeIndexFixture(
     }
 
     public Task<IReadOnlySet<string>> GetReadyAsync(string schema, CancellationToken cancellationToken = default)
-        => new PostgresAttributeIndexService(configuration, options, currentSchema, schemaNameFormatter, cache)
+        => new PostgresAttributeIndexService(configuration, options, currentSchema, schemaNameFormatter, cache, locks)
             .GetReadyAsync(schema, cancellationToken);
 
     public async Task ReconcileAsync(string schema, SchemaFilterContext context, CancellationToken cancellationToken = default)
@@ -184,7 +185,7 @@ public sealed class LegacyAttributeIndexFixture(
         }
         await ExecuteAsync(connection, transaction, $"ANALYZE \"{schema}\".\"InstancesData\"", cancellationToken);
         await transaction.CommitAsync(cancellationToken);
-        cache.Remove((typeof(PostgresAttributeIndexService), ConnectionString, schema));
+        await cache.RemoveAsync(PostgresAttributeIndexService.BuildCacheKey(ConnectionString, schema), cancellationToken);
 
     }
 

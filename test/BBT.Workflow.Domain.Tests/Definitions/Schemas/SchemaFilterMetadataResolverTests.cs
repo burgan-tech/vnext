@@ -1,3 +1,4 @@
+using System;
 using System.Text.Json;
 using BBT.Workflow.Definitions.Schemas;
 using Shouldly;
@@ -145,5 +146,39 @@ public sealed class SchemaFilterMetadataResolverTests
         var field = context.GetFieldMetadata("readOnly");
         field.ShouldNotBeNull();
         field.IsFilterable.ShouldBeFalse();
+    }
+    [Theory]
+    [InlineData("oneOf", "[{}]")]
+    [InlineData("anyOf", "[{}]")]
+    [InlineData("allOf", "[{}]")]
+    [InlineData("not", "{}")]
+    [InlineData("if", "{}")]
+    [InlineData("then", "{}")]
+    [InlineData("else", "{}")]
+    [InlineData("dependentSchemas", "{}")]
+    public void Resolve_RejectsConditionalIndexedNodeAndAncestors(string keyword, string value)
+    {
+        foreach (var schema in new[]
+        {
+            "{\"properties\":{\"amount\":{\"type\":\"number\",\"x-indexed\":true,\"" + keyword + "\":" + value + "}}}",
+            "{\"" + keyword + "\":" + value + ",\"properties\":{\"amount\":{\"type\":\"number\",\"x-indexed\":true}}}"
+        })
+        {
+            using var document = JsonDocument.Parse(schema);
+            Should.Throw<ArgumentException>(() => SchemaFilterMetadataResolver.Resolve(document.RootElement))
+                .Message.ShouldContain("amount");
+        }
+    }
+
+    [Fact]
+    public void Resolve_AllowsConditionalUnindexedFieldsBesideIndexedFields()
+    {
+        using var document = JsonDocument.Parse("""
+            {"properties": {
+              "amount": {"type":"number", "x-indexed":true},
+              "other": {"type":"string", "oneOf":[{"maxLength":10}]}
+            }}
+            """);
+        SchemaFilterMetadataResolver.Resolve(document.RootElement)!.GetFieldMetadata("amount")!.Indexed.ShouldBeTrue();
     }
 }
