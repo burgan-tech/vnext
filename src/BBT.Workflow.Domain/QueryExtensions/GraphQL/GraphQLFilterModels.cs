@@ -41,6 +41,7 @@ public sealed class GraphQLFilterRequest
     /// </summary>
     [JsonIgnore]
     public SchemaFilterContext? SchemaContext { get; set; }
+
 }
 
 /// <summary>
@@ -426,7 +427,20 @@ public sealed class AggregationRequest
     /// Count of records (true for COUNT(*), or field name for COUNT(field))
     /// </summary>
     [JsonPropertyName("count")]
-    public object? Count { get; set; }
+    public object? Count
+    {
+        get => _count;
+        set => _count = value is JsonElement json ? json.ValueKind switch
+        {
+            JsonValueKind.String => json.GetString(),
+            JsonValueKind.True => true,
+            JsonValueKind.False => false,
+            JsonValueKind.Null => null,
+            _ => value
+        } : value;
+    }
+
+    private object? _count;
 
     /// <summary>
     /// Sum of numeric field values (field name)
@@ -523,6 +537,9 @@ public sealed class GroupByResponse
 /// </summary>
 public sealed class GraphQLFilterResponse<T>
 {
+    [JsonIgnore]
+    public bool HasNextPage { get; set; }
+
     /// <summary>
     /// Filtered data (when no aggregation/groupBy is requested)
     /// </summary>

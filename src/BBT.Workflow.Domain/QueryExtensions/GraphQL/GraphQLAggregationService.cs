@@ -2,6 +2,7 @@ using System.Data;
 using System.Text;
 using BBT.Workflow.Definitions;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
 using Npgsql;
 using NpgsqlTypes;
 using BBT.Workflow.Definitions.Schemas;
@@ -42,39 +43,48 @@ public static class GraphQLAggregationService
         var parameters = new List<NpgsqlParameter>();
         var parameterIndex = 0;
 
-        var (selectClause, _) = BuildAggregationSelectClause(aggregations, jsonColumnName);
+        var (selectClause, _) = BuildAggregationSelectClause(aggregations, jsonColumnName, schemaContext);
         var (jsonWhereClause, instanceWhereClause) = GraphQLJsonFilterService.BuildSeparatedWhereClausesForSql(
             filterNode, jsonColumnName, parameters, ref parameterIndex, schemaContext: schemaContext);
 
         var sql = BuildAggregationSql(selectClause, jsonWhereClause, instanceWhereClause, null, schema);
 
-        using var connection = dbContext.Database.GetDbConnection();
-        if (connection.State != ConnectionState.Open)
-            await connection.OpenAsync(cancellationToken);
-
-        using var command = connection.CreateCommand();
-        command.CommandText = ReplacePlaceholders(sql, parameters.Count);
-        
-        foreach (var param in parameters)
+        await dbContext.Database.OpenConnectionAsync(cancellationToken);
+        try
         {
-            var npgsqlParam = new NpgsqlParameter
+            var connection = dbContext.Database.GetDbConnection();
+
+            using var command = connection.CreateCommand();
+            command.CommandText = ReplacePlaceholders(sql, parameters.Count);
+            command.Transaction = dbContext.Database.CurrentTransaction?.GetDbTransaction();
+            if (dbContext.Database.GetCommandTimeout() is { } timeout)
+                command.CommandTimeout = timeout;
+
+            foreach (var param in parameters)
             {
-                Value = param.Value,
-                NpgsqlDbType = param.NpgsqlDbType
-            };
-            command.Parameters.Add(npgsqlParam);
-        }
+                var npgsqlParam = new NpgsqlParameter
+                {
+                    Value = param.Value,
+                    NpgsqlDbType = param.NpgsqlDbType
+                };
+                command.Parameters.Add(npgsqlParam);
+            }
 
-        using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        
-        var response = new AggregationResponse();
-        
-        if (await reader.ReadAsync(cancellationToken))
+            using var reader = await command.ExecuteReaderAsync(cancellationToken);
+
+            var response = new AggregationResponse();
+
+            if (await reader.ReadAsync(cancellationToken))
+            {
+                response = ReadAggregationResult(reader, aggregations);
+            }
+
+            return response;
+        }
+        finally
         {
-            response = ReadAggregationResult(reader, aggregations);
+            await dbContext.Database.CloseConnectionAsync();
         }
-
-        return response;
     }
 
     /// <summary>
@@ -109,7 +119,7 @@ public static class GraphQLAggregationService
         var parameterIndex = 0;
 
         var (selectClause, groupByClause, needsInstanceJoin) = BuildGroupBySelectClause(
-            groupByFields, groupBy.Aggregations ?? new AggregationRequest { Count = true }, jsonColumnName);
+            groupByFields, groupBy.Aggregations ?? new AggregationRequest { Count = true }, jsonColumnName, schemaContext);
 
         var (jsonWhereClause, instanceWhereClause) = GraphQLJsonFilterService.BuildSeparatedWhereClausesForSql(
             filterNode, jsonColumnName, parameters, ref parameterIndex, schemaContext: schemaContext);
@@ -122,51 +132,60 @@ public static class GraphQLAggregationService
             schema,
             forceInstanceJoin: needsInstanceJoin);
 
-        using var connection = dbContext.Database.GetDbConnection();
-        if (connection.State != ConnectionState.Open)
-            await connection.OpenAsync(cancellationToken);
-
-        using var command = connection.CreateCommand();
-        command.CommandText = ReplacePlaceholders(sql, parameters.Count);
-        
-        foreach (var param in parameters)
+        await dbContext.Database.OpenConnectionAsync(cancellationToken);
+        try
         {
-            var npgsqlParam = new NpgsqlParameter
-            {
-                Value = param.Value,
-                NpgsqlDbType = param.NpgsqlDbType
-            };
-            command.Parameters.Add(npgsqlParam);
-        }
+            var connection = dbContext.Database.GetDbConnection();
 
-        using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        
-        var results = new List<GroupByResponse>();
-        
-        while (await reader.ReadAsync(cancellationToken))
-        {
-            var group = new GroupByResponse();
-            
-            // Read group key values
-            for (int i = 0; i < groupByFields.Count; i++)
+            using var command = connection.CreateCommand();
+            command.CommandText = ReplacePlaceholders(sql, parameters.Count);
+            command.Transaction = dbContext.Database.CurrentTransaction?.GetDbTransaction();
+            if (dbContext.Database.GetCommandTimeout() is { } timeout)
+                command.CommandTimeout = timeout;
+
+            foreach (var param in parameters)
             {
-                var fieldName = groupByFields[i];
-                var value = reader.IsDBNull(i) ? null : reader.GetValue(i);
-                group.Keys[fieldName] = value;
+                var npgsqlParam = new NpgsqlParameter
+                {
+                    Value = param.Value,
+                    NpgsqlDbType = param.NpgsqlDbType
+                };
+                command.Parameters.Add(npgsqlParam);
             }
-            
-            // Read aggregation values (starting after group keys)
-            group.Aggregations = ReadAggregationResult(reader, groupBy.Aggregations ?? new AggregationRequest { Count = true }, groupByFields.Count);
-            
-            results.Add(group);
-        }
 
-        return results;
+            using var reader = await command.ExecuteReaderAsync(cancellationToken);
+
+            var results = new List<GroupByResponse>();
+
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                var group = new GroupByResponse();
+
+                // Read group key values
+                for (int i = 0; i < groupByFields.Count; i++)
+                {
+                    var fieldName = groupByFields[i];
+                    var value = reader.IsDBNull(i) ? null : reader.GetValue(i);
+                    group.Keys[fieldName] = value;
+                }
+
+                // Read aggregation values (starting after group keys)
+                group.Aggregations = ReadAggregationResult(reader, groupBy.Aggregations ?? new AggregationRequest { Count = true }, groupByFields.Count);
+
+                results.Add(group);
+            }
+
+            return results;
+        }
+        finally
+        {
+            await dbContext.Database.CloseConnectionAsync();
+        }
     }
 
     private static (string selectClause, string? groupByClause) BuildAggregationSelectClause(
         AggregationRequest aggregations,
-        string jsonColumnName)
+        string jsonColumnName, SchemaFilterContext? schemaContext = null)
     {
         var selectParts = new List<string>();
 
@@ -178,7 +197,7 @@ public static class GraphQLAggregationService
             }
             else if (aggregations.Count is string countField)
             {
-                var accessor = BuildJsonTextAccessor(countField, jsonColumnName);
+                var accessor = ResolveAccessor(countField, jsonColumnName, schemaContext);
                 selectParts.Add($"COUNT({accessor}) AS count_result");
             }
             else
@@ -189,25 +208,25 @@ public static class GraphQLAggregationService
 
         if (!string.IsNullOrEmpty(aggregations.Sum))
         {
-            var accessor = BuildJsonTextAccessor(aggregations.Sum, jsonColumnName);
-            selectParts.Add($"SUM(({accessor})::numeric) AS sum_result");
+            var accessor = ResolveAccessor(aggregations.Sum, jsonColumnName, schemaContext, numeric: true);
+            selectParts.Add($"SUM({accessor}) AS sum_result");
         }
 
         if (!string.IsNullOrEmpty(aggregations.Avg))
         {
-            var accessor = BuildJsonTextAccessor(aggregations.Avg, jsonColumnName);
-            selectParts.Add($"AVG(({accessor})::numeric) AS avg_result");
+            var accessor = ResolveAccessor(aggregations.Avg, jsonColumnName, schemaContext, numeric: true);
+            selectParts.Add($"AVG({accessor}) AS avg_result");
         }
 
         if (!string.IsNullOrEmpty(aggregations.Min))
         {
-            var accessor = BuildJsonTextAccessor(aggregations.Min, jsonColumnName);
+            var accessor = ResolveAccessor(aggregations.Min, jsonColumnName, schemaContext);
             selectParts.Add($"MIN({accessor}) AS min_result");
         }
 
         if (!string.IsNullOrEmpty(aggregations.Max))
         {
-            var accessor = BuildJsonTextAccessor(aggregations.Max, jsonColumnName);
+            var accessor = ResolveAccessor(aggregations.Max, jsonColumnName, schemaContext);
             selectParts.Add($"MAX({accessor}) AS max_result");
         }
 
@@ -222,7 +241,7 @@ public static class GraphQLAggregationService
     internal static (string selectClause, string groupByClause, bool needsInstanceJoin) BuildGroupBySelectClause(
         List<string> groupByFields,
         AggregationRequest aggregations,
-        string jsonColumnName)
+        string jsonColumnName, SchemaFilterContext? schemaContext = null)
     {
         var selectParts = new List<string>();
         var groupByParts = new List<string>();
@@ -242,7 +261,7 @@ public static class GraphQLAggregationService
             }
             else
             {
-                accessor = BuildJsonTextAccessor(trimmed, jsonColumnName);
+                accessor = ResolveAccessor(trimmed, jsonColumnName, schemaContext);
             }
 
             selectParts.Add($"{accessor} AS \"{alias}\"");
@@ -258,7 +277,7 @@ public static class GraphQLAggregationService
             }
             else if (aggregations.Count is string countField)
             {
-                var accessor = BuildJsonTextAccessor(countField, jsonColumnName);
+                var accessor = ResolveAccessor(countField, jsonColumnName, schemaContext);
                 selectParts.Add($"COUNT({accessor}) AS count_result");
             }
             else
@@ -269,25 +288,25 @@ public static class GraphQLAggregationService
 
         if (!string.IsNullOrEmpty(aggregations.Sum))
         {
-            var accessor = BuildJsonTextAccessor(aggregations.Sum, jsonColumnName);
-            selectParts.Add($"SUM(({accessor})::numeric) AS sum_result");
+            var accessor = ResolveAccessor(aggregations.Sum, jsonColumnName, schemaContext, numeric: true);
+            selectParts.Add($"SUM({accessor}) AS sum_result");
         }
 
         if (!string.IsNullOrEmpty(aggregations.Avg))
         {
-            var accessor = BuildJsonTextAccessor(aggregations.Avg, jsonColumnName);
-            selectParts.Add($"AVG(({accessor})::numeric) AS avg_result");
+            var accessor = ResolveAccessor(aggregations.Avg, jsonColumnName, schemaContext, numeric: true);
+            selectParts.Add($"AVG({accessor}) AS avg_result");
         }
 
         if (!string.IsNullOrEmpty(aggregations.Min))
         {
-            var accessor = BuildJsonTextAccessor(aggregations.Min, jsonColumnName);
+            var accessor = ResolveAccessor(aggregations.Min, jsonColumnName, schemaContext);
             selectParts.Add($"MIN({accessor}) AS min_result");
         }
 
         if (!string.IsNullOrEmpty(aggregations.Max))
         {
-            var accessor = BuildJsonTextAccessor(aggregations.Max, jsonColumnName);
+            var accessor = ResolveAccessor(aggregations.Max, jsonColumnName, schemaContext);
             selectParts.Add($"MAX({accessor}) AS max_result");
         }
 
@@ -364,6 +383,15 @@ public static class GraphQLAggregationService
         }
 
         return $"(\"{jsonColumnName}\" ->> '{InputValidator.EscapePostgresSingleQuotedString(path)}')";
+    }
+
+    private static string ResolveAccessor(string field, string column, SchemaFilterContext? context, bool numeric = false)
+    {
+        var fallback = BuildJsonTextAccessor(field, column);
+        if (numeric) fallback = $"({fallback})::numeric";
+        var path = field.Trim();
+        if (path.StartsWith("attributes.", StringComparison.OrdinalIgnoreCase)) path = path[11..].Trim();
+        return column == "Data" ? AttributeSqlExpression.Resolve(path, numeric ? "numeric" : "text", fallback, context) : fallback;
     }
 
     private static string SanitizeAlias(string field)
@@ -465,5 +493,4 @@ public static class GraphQLAggregationService
         return response;
     }
 }
-
 

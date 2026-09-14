@@ -65,7 +65,20 @@ public static class GraphQLJsonFilterService
         ISchemaValidator? schemaValidator = null,
         ILogger? logger = null,
         string? orderByClause = null,
-        SchemaFilterContext? schemaContext = null) where T : class
+        SchemaFilterContext? schemaContext = null,
+        int? offset = null, int? limit = null) where T : class
+    {
+        var (sql, parameters) = BuildInstanceQuery(filterNode, jsonColumnName, tableName, schema,
+            schemaValidator, logger, orderByClause, schemaContext, offset, limit);
+        return dbSet.FromSqlRaw(sql, parameters).AsNoTracking();
+    }
+
+    /// <summary>Compiles the instance query once for entity and narrow identity-page execution.</summary>
+    internal static (string Sql, NpgsqlParameter[] Parameters) BuildInstanceQuery(
+        GraphQLFilterNode filterNode, string jsonColumnName, string tableName, string schema,
+        ISchemaValidator? schemaValidator = null, ILogger? logger = null,
+        string? orderByClause = null, SchemaFilterContext? schemaContext = null,
+        int? offset = null, int? limit = null, bool useLatestJoin = false)
     {
         if (schemaValidator != null)
         {
@@ -81,8 +94,9 @@ public static class GraphQLJsonFilterService
         var parameters = new List<NpgsqlParameter>();
         var parameterIndex = 0;
 
-        var (jsonWhereClause, instanceWhereClause) = BuildSeparatedWhereClauses(
-            filterNode, jsonColumnName, parameters, ref parameterIndex, logger, schemaContext);
+        var (jsonWhereClause, instanceWhereClause) = RequiresUnifiedPredicate(filterNode)
+            ? (string.Empty, BuildUnifiedPredicate(filterNode, jsonColumnName, parameters, ref parameterIndex, schemaContext, schema, useLatestJoin))
+            : BuildSeparatedWhereClauses(filterNode, jsonColumnName, parameters, ref parameterIndex, logger, schemaContext);
 
         if (string.IsNullOrEmpty(jsonWhereClause) && string.IsNullOrEmpty(instanceWhereClause))
         {
@@ -96,17 +110,17 @@ public static class GraphQLJsonFilterService
                     "check the filter's operators and field names.");
             }
 
-            return dbSet;
+
         }
 
         if (string.IsNullOrEmpty(tableName))
         {
-            tableName = typeof(T).Name + "s";
+            tableName = "Instances";
         }
 
         var hasJsonFilter = !string.IsNullOrEmpty(jsonWhereClause);
         var hasInstanceFilter = !string.IsNullOrEmpty(instanceWhereClause);
-        var orderBy = string.IsNullOrWhiteSpace(orderByClause) ? "s.\"CreatedAt\" DESC" : orderByClause;
+        var orderBy = string.IsNullOrWhiteSpace(orderByClause) ? "s.\"CreatedAt\" DESC, s.\"Id\" ASC" : orderByClause;
 
         string rawSql;
         if (hasJsonFilter && !hasInstanceFilter)
@@ -134,7 +148,7 @@ public static class GraphQLJsonFilterService
             AND {instanceWhereClause}
             ORDER BY {orderBy}";
         }
-        else
+        else if (hasInstanceFilter)
         {
             rawSql = $@"
             SELECT s.*
@@ -143,7 +157,36 @@ public static class GraphQLJsonFilterService
             ORDER BY {orderBy}";
         }
 
-        return dbSet.FromSqlRaw(rawSql, parameters.ToArray()).AsNoTracking();
+        else
+        {
+            rawSql = $"SELECT s.* FROM \"{schema}\".\"Instances\" s ORDER BY {orderBy}";
+        }
+
+        if (useLatestJoin && (hasJsonFilter || RequiresUnifiedPredicate(filterNode) ||
+                              orderBy.Contains("_latest.", StringComparison.Ordinal)))
+        {
+            // The unique partial InstanceId index guarantees at most one latest row. A LEFT
+            // JOIN preserves instances without data for mixed predicates and attribute sorting.
+            var join = hasJsonFilter ? "JOIN" : "LEFT JOIN";
+            var predicate = hasJsonFilter ? jsonWhereClause : string.Empty;
+            if (hasInstanceFilter)
+                predicate = predicate.Length == 0 ? instanceWhereClause : $"({predicate}) AND ({instanceWhereClause})";
+            rawSql = $"SELECT s.* FROM \"{schema}\".\"Instances\" s {join} \"{schema}\".\"InstancesData\" _latest " +
+                     $"ON _latest.\"InstanceId\" = s.\"Id\" AND _latest.\"IsLatest\" = true" +
+                     (predicate.Length == 0 ? "" : $" WHERE {predicate}") + $" ORDER BY {orderBy}";
+        }
+
+        if (offset.HasValue || limit.HasValue)
+        {
+            if (offset is null or < 0 || limit is null or < 1)
+                throw new ArgumentOutOfRangeException(nameof(offset));
+            var limitIndex = parameterIndex++;
+            var offsetIndex = parameterIndex++;
+            parameters.Add(new NpgsqlParameter { Value = limit.Value });
+            parameters.Add(new NpgsqlParameter { Value = offset.Value });
+            rawSql += $" LIMIT {{{limitIndex}}} OFFSET {{{offsetIndex}}}";
+        }
+        return (rawSql, parameters.ToArray());
     }
 
     /// <summary>
@@ -154,7 +197,8 @@ public static class GraphQLJsonFilterService
         string schema,
         string instanceAlias = "s",
         string dataTableName = "InstancesData",
-        SchemaFilterContext? schemaContext = null)
+        SchemaFilterContext? schemaContext = null,
+        string? latestAlias = null)
     {
         if (orderBy == null)
             return null;
@@ -189,8 +233,10 @@ public static class GraphQLJsonFilterService
                         $"Field '{jsonPath}' is not sortable.");
                 }
 
-                var accessor = BuildJsonTextAccessorForOrderBy(jsonPath);
-                parts.Add($"(SELECT {accessor} FROM \"{schema}\".\"{dataTableName}\" _d WHERE _d.\"InstanceId\" = {instanceAlias}.\"Id\" AND _d.\"IsLatest\" = true LIMIT 1) {dir}");
+                var accessor = AttributeSqlExpression.Resolve(jsonPath, "text", BuildJsonTextAccessorForOrderBy(jsonPath), schemaContext);
+                parts.Add(latestAlias == null
+                    ? $"(SELECT {accessor} FROM \"{schema}\".\"{dataTableName}\" _d WHERE _d.\"InstanceId\" = {instanceAlias}.\"Id\" AND _d.\"IsLatest\" = true LIMIT 1) {dir}"
+                    : $"{(accessor.Contains("\"Data\"", StringComparison.Ordinal) ? accessor.Replace("\"Data\"", $"{latestAlias}.\"Data\"") : $"{latestAlias}.{accessor}")} {dir}");
             }
             else if (InstanceFieldDiscriminator.IsInstanceColumn(trimmed))
             {
@@ -206,6 +252,8 @@ public static class GraphQLJsonFilterService
         }
         if (parts.Count == 0)
             return null;
+        if (!entries.Any(e => e.Field.Trim().Equals("id", StringComparison.OrdinalIgnoreCase)))
+            parts.Add($"{instanceAlias}.\"Id\" ASC");
         return string.Join(", ", parts);
     }
 
@@ -266,7 +314,58 @@ public static class GraphQLJsonFilterService
         if (filterNode == null || filterNode.NodeType == FilterNodeType.Empty)
             return (string.Empty, string.Empty);
 
-        return BuildSeparatedWhereClauses(filterNode, jsonColumnName, parameters, ref parameterIndex, logger, schemaContext);
+        return RequiresUnifiedPredicate(filterNode)
+            ? (string.Empty, BuildUnifiedPredicate(filterNode, jsonColumnName, parameters, ref parameterIndex, schemaContext))
+            : BuildSeparatedWhereClauses(filterNode, jsonColumnName, parameters, ref parameterIndex, logger, schemaContext);
+    }
+
+    private static bool RequiresUnifiedPredicate(GraphQLFilterNode node)
+    {
+        var (instance, json, logical) = Inspect(node);
+        return instance && json && logical;
+    }
+
+    private static (bool Instance, bool Json, bool Logical) Inspect(GraphQLFilterNode node)
+    {
+        var instance = node.Attributes?.Keys.Any(InstanceFieldDiscriminator.IsInstanceColumn) == true;
+        var json = node.Attributes?.Keys.Any(k => !InstanceFieldDiscriminator.IsInstanceColumn(k)) == true;
+        var logical = node.NodeType is FilterNodeType.Or or FilterNodeType.Not;
+        var children = node.And ?? node.Or ?? (node.Not == null ? [] : new List<GraphQLFilterNode> { node.Not });
+        foreach (var child in children)
+        {
+            var c = Inspect(child);
+            instance |= c.Instance; json |= c.Json; logical |= c.Logical;
+        }
+        return (instance, json, logical);
+    }
+
+    private static string BuildUnifiedPredicate(GraphQLFilterNode node, string column,
+        List<NpgsqlParameter> parameters, ref int index, SchemaFilterContext? context, string? schema = null, bool useLatestJoin = false)
+    {
+        if (node.NodeType == FilterNodeType.Not)
+            return $"NOT ({BuildUnifiedPredicate(node.Not!, column, parameters, ref index, context, schema, useLatestJoin)})";
+        var parts = new List<string>();
+        if (node.NodeType is FilterNodeType.And or FilterNodeType.Or)
+        {
+            foreach (var child in (node.And ?? node.Or)!)
+                parts.Add(BuildUnifiedPredicate(child, column, parameters, ref index, context, schema, useLatestJoin));
+            return "(" + string.Join(node.NodeType == FilterNodeType.Or ? " OR " : " AND ", parts) + ")";
+        }
+        if (node.Attributes == null) throw new FilterCompilationException("Empty logical filter node.");
+        foreach (var (field, condition) in node.Attributes)
+        {
+            if (InstanceFieldDiscriminator.IsInstanceColumn(field))
+                parts.AddRange(BuildInstanceFieldConditions(field, condition, parameters, ref index, null));
+            else
+            {
+                var predicate = string.Join(" AND ", BuildFieldConditions(field, condition, column, parameters, ref index, context));
+                if (string.IsNullOrEmpty(predicate)) throw new FilterCompilationException("Empty attribute predicate.");
+                parts.Add(useLatestJoin ? $"(CASE WHEN _latest.\"Id\" IS NULL THEN NULL ELSE ({predicate}) END)" :
+                    schema == null ? $"({predicate})" :
+                    $"(SELECT ({predicate}) FROM \"{schema}\".\"InstancesData\" WHERE \"InstanceId\" = s.\"Id\" AND \"IsLatest\" = true LIMIT 1)");
+            }
+        }
+        return "(" + string.Join(" AND ", parts) + ")";
     }
 
     /// <summary>
@@ -504,7 +603,7 @@ public static class GraphQLJsonFilterService
         var sanitizedField = SanitizeFieldName(fieldName);
         var conditions = new List<string>();
 
-        if (schemaContext != null && !schemaContext.IsFieldFilterable(sanitizedField))
+        if (schemaContext != null && condition.GetOperators().Any() && !schemaContext.IsFieldFilterable(sanitizedField))
             throw new SchemaFilterValidationException($"Field '{sanitizedField}' is not filterable.");
 
         var operatorList = condition.GetOperators().ToList();
@@ -628,512 +727,10 @@ public static class GraphQLJsonFilterService
         };
     }
 
-    private static string BuildOperatorCondition(
-        string field,
-        string operatorType,
-        object? value,
-        string jsonColumnName,
-        List<NpgsqlParameter> parameters,
-        ref int parameterIndex,
-        SchemaFilterContext? schemaContext = null)
-    {
-        return operatorType.ToLowerInvariant() switch
-        {
-            "eq" => BuildEqualsCondition(field, value, jsonColumnName, parameters, ref parameterIndex),
-            "ne" => BuildNotEqualsCondition(field, value, jsonColumnName, parameters, ref parameterIndex),
-            "gt" => BuildComparisonCondition(field, value, ">", jsonColumnName, parameters, ref parameterIndex, schemaContext),
-            "ge" => BuildComparisonCondition(field, value, ">=", jsonColumnName, parameters, ref parameterIndex, schemaContext),
-            "lt" => BuildComparisonCondition(field, value, "<", jsonColumnName, parameters, ref parameterIndex, schemaContext),
-            "le" => BuildComparisonCondition(field, value, "<=", jsonColumnName, parameters, ref parameterIndex, schemaContext),
-            "between" => BuildBetweenCondition(field, value, jsonColumnName, parameters, ref parameterIndex, schemaContext),
-            "like" or "match" => BuildLikeCondition(field, value, jsonColumnName, parameters, ref parameterIndex),
-            "startswith" => BuildStartsWithCondition(field, value, jsonColumnName, parameters, ref parameterIndex),
-            "endswith" => BuildEndsWithCondition(field, value, jsonColumnName, parameters, ref parameterIndex),
-            "in" => BuildInCondition(field, value, jsonColumnName, parameters, ref parameterIndex),
-            "nin" => BuildNotInCondition(field, value, jsonColumnName, parameters, ref parameterIndex),
-            "isnull" => BuildIsNullCondition(field, value, jsonColumnName),
-            "includes" => BuildIncludesCondition(field, value, jsonColumnName, parameters, ref parameterIndex),
-            _ => throw new ArgumentException($"Unsupported operator: {operatorType}")
-        };
-    }
+    private static string BuildOperatorCondition(string field, string op, object? value,
+        string column, List<NpgsqlParameter> parameters, ref int index, SchemaFilterContext? context = null)
+        => AttributeConditionBuilder.BuildOperatorCondition(field, op, value, column, parameters, ref index, context);
 
-    /// <summary>
-    /// Builds <c>jsonb @&gt;</c> for "array at field path contains an element matching partial object".
-    /// </summary>
-    private static string BuildIncludesCondition(
-        string field,
-        object? value,
-        string jsonColumnName,
-        List<NpgsqlParameter> parameters,
-        ref int parameterIndex)
-    {
-        InputValidator.ValidateSqlJsonColumnIdentifier(jsonColumnName);
-
-        if (value is not JsonElement partial || partial.ValueKind != JsonValueKind.Object)
-            throw new ArgumentException("includes value must be a JSON object.");
-
-        InputValidator.ValidateIncludesObject(partial);
-
-        var parts = field.Split('.');
-        if (parts.Length == 0)
-            throw new ArgumentException("Field path cannot be empty.");
-
-        JsonNode inner = JsonNode.Parse(partial.GetRawText())!;
-        JsonNode current = new JsonArray(inner);
-        for (var i = parts.Length - 1; i >= 0; i--)
-        {
-            var wrap = new JsonObject { [parts[i]] = current };
-            current = wrap;
-        }
-
-        var jsonText = current.ToJsonString(new JsonSerializerOptions
-        {
-            Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
-        });
-
-        if (jsonText.Length > InputValidator.MaxFilterLength)
-            throw new ArgumentException($"includes pattern exceeds maximum length ({jsonText.Length} characters).");
-
-        var idx = parameterIndex++;
-        parameters.Add(new NpgsqlParameter { Value = jsonText, NpgsqlDbType = NpgsqlDbType.Jsonb });
-        return $"\"{jsonColumnName}\" @> {{{idx}}}";
-    }
-
-    private static string SanitizeFieldName(string field)
-    {
-        // Validate field name with comprehensive checks
-        InputValidator.ValidateFieldName(field);
-        
-        // Must start with a letter
-        if (!char.IsLetter(field[0]))
-        {
-            throw new ArgumentException($"Invalid field name: {field}. Must start with a letter.");
-        }
-        
-        // Only allow alphanumeric characters, dots, and underscores
-        var regex = new System.Text.RegularExpressions.Regex(
-            @"^[a-zA-Z][a-zA-Z0-9._]*$",
-            System.Text.RegularExpressions.RegexOptions.None,
-            TimeSpan.FromMilliseconds(100));
-            
-        try
-        {
-            if (!regex.IsMatch(field))
-            {
-                throw new ArgumentException($"Invalid field name: {field}. Only alphanumeric, dots, and underscores allowed.");
-            }
-        }
-        catch (System.Text.RegularExpressions.RegexMatchTimeoutException)
-        {
-            throw new ArgumentException($"Field name validation timeout: {field}");
-        }
-        
-        return field;
-    }
-
-    private static bool IsNestedPath(string field) => field.Contains('.');
-
-    private static string BuildJsonTextAccessor(string field, string jsonColumnName)
-    {
-        InputValidator.ValidateSqlJsonColumnIdentifier(jsonColumnName);
-        if (IsNestedPath(field))
-        {
-            var parts = field.Split('.');
-            var arrayElements = string.Join(",", parts.Select(p =>
-                $"'{InputValidator.EscapePostgresSingleQuotedString(p)}'"));
-            return $"(\"{jsonColumnName}\" #>> ARRAY[{arrayElements}])";
-        }
-
-        return $"(\"{jsonColumnName}\" ->> '{InputValidator.EscapePostgresSingleQuotedString(field)}')";
-    }
-
-    private static string BuildNestedJsonContainmentPattern(string field, object? value, bool isNumeric, bool isBoolean)
-    {
-        var parts = field.Split('.');
-        var stringValue = ConvertToString(value);
-        
-        // Build the innermost value as proper object
-        object innerValue;
-        if (isBoolean && bool.TryParse(stringValue, out var boolVal))
-        {
-            innerValue = boolVal;
-        }
-        else if (isNumeric && decimal.TryParse(stringValue, NumberStyles.Number, CultureInfo.InvariantCulture, out var numVal))
-        {
-            innerValue = numVal;
-        }
-        else
-        {
-            innerValue = stringValue; // JsonSerializer will properly escape strings
-        }
-        
-        // Build nested object from inside out using Dictionary for proper JSON serialization
-        object currentLevel = new Dictionary<string, object> { [parts[^1]] = innerValue };
-        
-        for (int i = parts.Length - 2; i >= 0; i--)
-        {
-            currentLevel = new Dictionary<string, object> { [parts[i]] = currentLevel };
-        }
-        
-        // Use JsonSerializer for proper escaping and formatting
-        return System.Text.Json.JsonSerializer.Serialize(currentLevel, new System.Text.Json.JsonSerializerOptions 
-        { 
-            WriteIndented = false,
-            Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping
-        });
-    }
-
-    private static string ConvertToString(object? value)
-    {
-        return value switch
-        {
-            null => string.Empty,
-            string s => s,
-            bool b => b.ToString().ToLowerInvariant(),
-            int i => i.ToString(CultureInfo.InvariantCulture),
-            long l => l.ToString(CultureInfo.InvariantCulture),
-            decimal d => d.ToString(CultureInfo.InvariantCulture),
-            double dbl => dbl.ToString(CultureInfo.InvariantCulture),
-            _ => value.ToString() ?? string.Empty
-        };
-    }
-
-    /// <summary>
-    /// Converts an operator value to the string form expected by
-    /// <see cref="InstanceColumnConditionBuilder"/>. Array values (used by in/nin/between)
-    /// are flattened to a comma-separated string by converting each element individually;
-    /// scalar values fall back to <see cref="ConvertToString"/>.
-    /// </summary>
-    private static string ConvertOperatorValueToString(object? value)
-    {
-        if (value is object[] array)
-        {
-            return string.Join(",", array.Select(ConvertToString));
-        }
-
-        return ConvertToString(value);
-    }
-
-    private static string BuildEqualsCondition(
-        string field, object? value, string jsonColumnName,
-        List<NpgsqlParameter> parameters, ref int parameterIndex)
-    {
-        var stringValue = ConvertToString(value);
-        var conditions = new List<string>();
-        var isNested = IsNestedPath(field);
-
-        // String comparison
-        var stringIndex = parameterIndex++;
-        var stringJsonPattern = isNested
-            ? BuildNestedJsonContainmentPattern(field, value, isNumeric: false, isBoolean: false)
-            : $"{{\"{field}\":\"{stringValue}\"}}";
-        parameters.Add(new NpgsqlParameter { Value = stringJsonPattern, NpgsqlDbType = NpgsqlDbType.Jsonb });
-        conditions.Add($"\"{jsonColumnName}\" @> {{{stringIndex}}}");
-
-        // Numeric comparison
-        if (decimal.TryParse(stringValue, NumberStyles.Number, CultureInfo.InvariantCulture, out _))
-        {
-            var numIndex = parameterIndex++;
-            var numJsonPattern = isNested
-                ? BuildNestedJsonContainmentPattern(field, value, isNumeric: true, isBoolean: false)
-                : $"{{\"{field}\":{decimal.Parse(stringValue, NumberStyles.Number, CultureInfo.InvariantCulture)}}}";
-            parameters.Add(new NpgsqlParameter { Value = numJsonPattern, NpgsqlDbType = NpgsqlDbType.Jsonb });
-            conditions.Add($"\"{jsonColumnName}\" @> {{{numIndex}}}");
-        }
-
-        // Boolean comparison
-        if (bool.TryParse(stringValue, out _))
-        {
-            var boolIndex = parameterIndex++;
-            var boolJsonPattern = isNested
-                ? BuildNestedJsonContainmentPattern(field, value, isNumeric: false, isBoolean: true)
-                : $"{{\"{field}\":{bool.Parse(stringValue).ToString().ToLowerInvariant()}}}";
-            parameters.Add(new NpgsqlParameter { Value = boolJsonPattern, NpgsqlDbType = NpgsqlDbType.Jsonb });
-            conditions.Add($"\"{jsonColumnName}\" @> {{{boolIndex}}}");
-        }
-
-        return $"({string.Join(" OR ", conditions)})";
-    }
-
-    private static string BuildNotEqualsCondition(
-        string field, object? value, string jsonColumnName,
-        List<NpgsqlParameter> parameters, ref int parameterIndex)
-    {
-        var stringValue = ConvertToString(value);
-        var conditions = new List<string>();
-        var isNested = IsNestedPath(field);
-
-        // String comparison
-        var stringIndex = parameterIndex++;
-        var stringJsonPattern = isNested
-            ? BuildNestedJsonContainmentPattern(field, value, isNumeric: false, isBoolean: false)
-            : $"{{\"{field}\":\"{stringValue}\"}}";
-        parameters.Add(new NpgsqlParameter { Value = stringJsonPattern, NpgsqlDbType = NpgsqlDbType.Jsonb });
-        conditions.Add($"NOT (\"{jsonColumnName}\" @> {{{stringIndex}}})");
-
-        // Numeric comparison
-        if (decimal.TryParse(stringValue, NumberStyles.Number, CultureInfo.InvariantCulture, out _))
-        {
-            var numIndex = parameterIndex++;
-            var numJsonPattern = isNested
-                ? BuildNestedJsonContainmentPattern(field, value, isNumeric: true, isBoolean: false)
-                : $"{{\"{field}\":{decimal.Parse(stringValue, NumberStyles.Number, CultureInfo.InvariantCulture)}}}";
-            parameters.Add(new NpgsqlParameter { Value = numJsonPattern, NpgsqlDbType = NpgsqlDbType.Jsonb });
-            conditions.Add($"NOT (\"{jsonColumnName}\" @> {{{numIndex}}})");
-        }
-
-        // Boolean comparison
-        if (bool.TryParse(stringValue, out _))
-        {
-            var boolIndex = parameterIndex++;
-            var boolJsonPattern = isNested
-                ? BuildNestedJsonContainmentPattern(field, value, isNumeric: false, isBoolean: true)
-                : $"{{\"{field}\":{bool.Parse(stringValue).ToString().ToLowerInvariant()}}}";
-            parameters.Add(new NpgsqlParameter { Value = boolJsonPattern, NpgsqlDbType = NpgsqlDbType.Jsonb });
-            conditions.Add($"NOT (\"{jsonColumnName}\" @> {{{boolIndex}}})");
-        }
-
-        return $"({string.Join(" AND ", conditions)})";
-    }
-
-    /// <summary>
-    /// Resolves the effective schema type for a field. When schema context is available,
-    /// uses the declared type; otherwise falls back to "number" for backward compatibility.
-    /// </summary>
-    private static string ResolveFieldType(string field, SchemaFilterContext? schemaContext)
-    {
-        if (schemaContext == null)
-            return "number";
-
-        var metadata = schemaContext.GetFieldMetadata(field);
-        return metadata?.Type ?? "number";
-    }
-
-    private static string BuildComparisonCondition(
-        string field, object? value, string sqlOperator, string jsonColumnName,
-        List<NpgsqlParameter> parameters, ref int parameterIndex,
-        SchemaFilterContext? schemaContext = null)
-    {
-        var fieldType = ResolveFieldType(field, schemaContext);
-        var accessor = BuildJsonTextAccessor(field, jsonColumnName);
-
-        return fieldType switch
-        {
-            "number" or "integer" => BuildNumericCompare(accessor, value, sqlOperator, parameters, ref parameterIndex),
-            "string" => BuildDateTimeCompare(accessor, value, sqlOperator, parameters, ref parameterIndex),
-            _ => BuildNumericCompare(accessor, value, sqlOperator, parameters, ref parameterIndex)
-        };
-    }
-
-    private static string BuildNumericCompare(
-        string accessor, object? value, string sqlOperator,
-        List<NpgsqlParameter> parameters, ref int parameterIndex)
-    {
-        var stringValue = ConvertToString(value);
-
-        if (!decimal.TryParse(stringValue, NumberStyles.Number, CultureInfo.InvariantCulture, out var numValue))
-        {
-            throw new ArgumentException($"Value '{stringValue}' is not numeric for comparison operator '{sqlOperator}'");
-        }
-
-        var paramIndex = parameterIndex++;
-        parameters.Add(new NpgsqlParameter { Value = numValue });
-        return $"{accessor}::numeric {sqlOperator} {{{paramIndex}}}";
-    }
-
-    private static string BuildDateTimeCompare(
-        string accessor, object? value, string sqlOperator,
-        List<NpgsqlParameter> parameters, ref int parameterIndex)
-    {
-        var stringValue = ConvertToString(value);
-
-        if (!DateTime.TryParse(stringValue, CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal, out var dateValue))
-        {
-            throw new ArgumentException($"Value '{stringValue}' is not a valid date/datetime for comparison operator '{sqlOperator}'");
-        }
-
-        var paramIndex = parameterIndex++;
-        parameters.Add(new NpgsqlParameter { Value = dateValue, NpgsqlDbType = NpgsqlDbType.TimestampTz });
-        return $"{accessor}::timestamptz {sqlOperator} {{{paramIndex}}}";
-    }
-
-    private static string BuildBetweenCondition(
-        string field, object? value, string jsonColumnName,
-        List<NpgsqlParameter> parameters, ref int parameterIndex,
-        SchemaFilterContext? schemaContext = null)
-    {
-        object[] values;
-        if (value is object[] arr)
-        {
-            values = arr;
-        }
-        else
-        {
-            var stringValue = ConvertToString(value);
-            values = stringValue.Split(',').Select(v => (object)v.Trim()).ToArray();
-        }
-
-        if (values.Length != 2)
-            throw new ArgumentException($"Invalid between format. Expected 2 values, got {values.Length}");
-
-        var fieldType = ResolveFieldType(field, schemaContext);
-        var accessor = BuildJsonTextAccessor(field, jsonColumnName);
-
-        return fieldType switch
-        {
-            "number" or "integer" => BuildNumericBetween(accessor, values, parameters, ref parameterIndex),
-            "string" => BuildDateTimeBetween(accessor, values, parameters, ref parameterIndex),
-            _ => BuildNumericBetween(accessor, values, parameters, ref parameterIndex)
-        };
-    }
-
-    private static string BuildNumericBetween(
-        string accessor, object[] values,
-        List<NpgsqlParameter> parameters, ref int parameterIndex)
-    {
-        var minString = ConvertToString(values[0]);
-        var maxString = ConvertToString(values[1]);
-
-        if (!decimal.TryParse(minString, NumberStyles.Number, CultureInfo.InvariantCulture, out var minNum) ||
-            !decimal.TryParse(maxString, NumberStyles.Number, CultureInfo.InvariantCulture, out var maxNum))
-        {
-            throw new ArgumentException($"Between values must be numeric: '{minString}', '{maxString}'");
-        }
-
-        var minIndex = parameterIndex++;
-        var maxIndex = parameterIndex++;
-        parameters.Add(new NpgsqlParameter { Value = minNum });
-        parameters.Add(new NpgsqlParameter { Value = maxNum });
-        return $"{accessor}::numeric BETWEEN {{{minIndex}}} AND {{{maxIndex}}}";
-    }
-
-    private static string BuildDateTimeBetween(
-        string accessor, object[] values,
-        List<NpgsqlParameter> parameters, ref int parameterIndex)
-    {
-        var minString = ConvertToString(values[0]);
-        var maxString = ConvertToString(values[1]);
-
-        if (!DateTime.TryParse(minString, CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal, out var minDate) ||
-            !DateTime.TryParse(maxString, CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal, out var maxDate))
-        {
-            throw new ArgumentException($"Between values must be valid date/datetime: '{minString}', '{maxString}'");
-        }
-
-        var minIndex = parameterIndex++;
-        var maxIndex = parameterIndex++;
-        parameters.Add(new NpgsqlParameter { Value = minDate, NpgsqlDbType = NpgsqlDbType.TimestampTz });
-        parameters.Add(new NpgsqlParameter { Value = maxDate, NpgsqlDbType = NpgsqlDbType.TimestampTz });
-        return $"{accessor}::timestamptz BETWEEN {{{minIndex}}} AND {{{maxIndex}}}";
-    }
-
-    private static string BuildLikeCondition(
-        string field, object? value, string jsonColumnName,
-        List<NpgsqlParameter> parameters, ref int parameterIndex)
-    {
-        var stringValue = ConvertToString(value);
-        var paramIndex = parameterIndex++;
-        parameters.Add(new NpgsqlParameter { Value = $"%{stringValue}%" });
-
-        var accessor = BuildJsonTextAccessor(field, jsonColumnName);
-        return $"{accessor} COLLATE \"tr-TR-x-icu\" ILIKE {{{paramIndex}}}";
-    }
-
-    private static string BuildStartsWithCondition(
-        string field, object? value, string jsonColumnName,
-        List<NpgsqlParameter> parameters, ref int parameterIndex)
-    {
-        var stringValue = ConvertToString(value);
-        var paramIndex = parameterIndex++;
-        parameters.Add(new NpgsqlParameter { Value = $"{stringValue}%" });
-
-        var accessor = BuildJsonTextAccessor(field, jsonColumnName);
-        return $"{accessor} COLLATE \"tr-TR-x-icu\" ILIKE {{{paramIndex}}}";
-    }
-
-    private static string BuildEndsWithCondition(
-        string field, object? value, string jsonColumnName,
-        List<NpgsqlParameter> parameters, ref int parameterIndex)
-    {
-        var stringValue = ConvertToString(value);
-        var paramIndex = parameterIndex++;
-        parameters.Add(new NpgsqlParameter { Value = $"%{stringValue}" });
-
-        var accessor = BuildJsonTextAccessor(field, jsonColumnName);
-        return $"{accessor} COLLATE \"tr-TR-x-icu\" ILIKE {{{paramIndex}}}";
-    }
-
-    private static string BuildInCondition(
-        string field, object? value, string jsonColumnName,
-        List<NpgsqlParameter> parameters, ref int parameterIndex)
-    {
-        object[] values;
-        if (value is object[] arr)
-        {
-            values = arr;
-        }
-        else
-        {
-            var stringValue = ConvertToString(value);
-            values = stringValue.Split(',').Select(v => (object)v.Trim()).ToArray();
-        }
-
-        var paramPlaceholders = new List<string>();
-
-        foreach (var val in values)
-        {
-            var paramIndex = parameterIndex++;
-            parameters.Add(new NpgsqlParameter { Value = ConvertToString(val) });
-            paramPlaceholders.Add($"{{{paramIndex}}}");
-        }
-
-        var accessor = BuildJsonTextAccessor(field, jsonColumnName);
-        return $"{accessor} IN ({string.Join(", ", paramPlaceholders)})";
-    }
-
-    private static string BuildNotInCondition(
-        string field, object? value, string jsonColumnName,
-        List<NpgsqlParameter> parameters, ref int parameterIndex)
-    {
-        object[] values;
-        if (value is object[] arr)
-        {
-            values = arr;
-        }
-        else
-        {
-            var stringValue = ConvertToString(value);
-            values = stringValue.Split(',').Select(v => (object)v.Trim()).ToArray();
-        }
-
-        var paramPlaceholders = new List<string>();
-
-        foreach (var val in values)
-        {
-            var paramIndex = parameterIndex++;
-            parameters.Add(new NpgsqlParameter { Value = ConvertToString(val) });
-            paramPlaceholders.Add($"{{{paramIndex}}}");
-        }
-
-        var accessor = BuildJsonTextAccessor(field, jsonColumnName);
-        return $"{accessor} IS NOT NULL AND {accessor} NOT IN ({string.Join(", ", paramPlaceholders)})";
-    }
-
-    private static string BuildIsNullCondition(
-        string field, object? value, string jsonColumnName)
-    {
-        var isNull = value switch
-        {
-            bool b => b,
-            string s when bool.TryParse(s, out var parsed) => parsed,
-            _ => true
-        };
-
-        var accessor = BuildJsonTextAccessor(field, jsonColumnName);
-        return isNull 
-            ? $"{accessor} IS NULL" 
-            : $"{accessor} IS NOT NULL";
-    }
+    private static string SanitizeFieldName(string field) => AttributeConditionBuilder.SanitizeFieldName(field);
+    private static string ConvertOperatorValueToString(object? value) => AttributeConditionBuilder.ConvertOperatorValueToString(value);
 }
-
-

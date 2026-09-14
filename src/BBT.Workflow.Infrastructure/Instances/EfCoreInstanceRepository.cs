@@ -1,3 +1,4 @@
+using BBT.Workflow.ExceptionHandling;
 using System.Diagnostics;
 using System.Text.Json;
 using BBT.Aether;
@@ -30,20 +31,12 @@ public sealed class EfCoreInstanceRepository(
      ICurrentSchema currentSchema,
     ISchemaValidator schemaValidator,
     IOptions<WorkflowExecutionOptions> executionOptions,
-    ILogger<EfCoreInstanceRepository> logger)
+    ILogger<EfCoreInstanceRepository> logger,
+    IOptionsMonitor<InstanceQueryOptions>? queryOptions = null)
     : EfCoreRepository<WorkflowDbContext, Instance, Guid>(dbContext, serviceProvider),
         IInstanceRepository
 {
     private const string DefaultSchemaName = "public";
-
-    // Cached and reused: JsonSerializerOptions caches serialization metadata internally, so a fresh
-    // instance per call would rebuild that metadata every time (CA1869). All wire-filter
-    // serialization in this repository uses the same camelCase + compact shape.
-    private static readonly JsonSerializerOptions CamelCaseCompactJson = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        WriteIndented = false
-    };
 
     public override async Task<IQueryable<Instance>> WithDetailsAsync()
     {
@@ -1256,101 +1249,9 @@ public sealed class EfCoreInstanceRepository(
         CancellationToken cancellationToken = default,
         SchemaFilterContext? schemaContext = null)
     {
-        // If groupBy or aggregations are provided, use ApplyFilterWithAggregationsAsync
-        if (!string.IsNullOrWhiteSpace(groupBy) || !string.IsNullOrWhiteSpace(aggregations))
-        {
-            var context = await GetDbContextAsync();
-            var dbSet = await GetDbSetAsync();
-
-            string? combinedFilter = null;
-            if (!string.IsNullOrWhiteSpace(filter))
-            {
-                if (FilterFormatDetector.DetectFormat(filter) == FilterFormat.GraphQL)
-                {
-                    if (GraphQLFilterParser.TryParseRequest(filter, out var parsedRequest) && parsedRequest?.Filter != null)
-                    {
-                        combinedFilter = JsonSerializer.Serialize(parsedRequest.Filter, CamelCaseCompactJson);
-                    }
-                    else
-                    {
-                        var combinedNode = FilterFormatDetector.CombineFilters(filter);
-                        if (combinedNode != null)
-                        {
-                            combinedFilter = JsonSerializer.Serialize(combinedNode, CamelCaseCompactJson);
-                        }
-                    }
-                }
-                else
-                {
-                    var legacyNode = FilterFormatDetector.ConvertLegacyToGraphQL(filter);
-                    if (legacyNode != null)
-                    {
-                        combinedFilter = JsonSerializer.Serialize(legacyNode, CamelCaseCompactJson);
-                    }
-                }
-            }
-
-            var response = await UnifiedFilterService.ApplyFilterWithAggregationsAsync(
-                context,
-                dbSet,
-                combinedFilter,
-                groupBy,
-                aggregations,
-                "Data",
-                currentSchema.Name ?? DefaultSchemaName,
-                query => IncludeListData(query).AsSplitQuery(),
-                schemaValidator,
-                cancellationToken,
-                schemaContext);
-
-            // If response has groups or aggregations, return empty paged list
-            // (groups and aggregations are handled separately in the response)
-            if (response.Groups != null || response.Aggregations != null)
-            {
-                return new HateoasPagedList<Instance>(
-                    new List<Instance>(),
-                    page,
-                    pageSize,
-                    false);
-            }
-
-            // If response has data, convert to HateoasPagedList
-            if (response.Data != null)
-            {
-                var totalCount = response.Data.Count;
-                var skip = (page - 1) * pageSize;
-                var pagedData = response.Data.Skip(skip).Take(pageSize).ToList();
-                var hasNext = skip + pageSize < totalCount;
-
-                return new HateoasPagedList<Instance>(MarkListIfPartiallyLoaded(pagedData), page, pageSize, hasNext);
-            }
-
-            // Fallback to empty list
-            return new HateoasPagedList<Instance>(
-                new List<Instance>(),
-                page,
-                pageSize,
-                false);
-        }
-
-        // Normal flow without groupBy/aggregations
-        // GetFilteredQueryAsync already includes DataList, no need to include again
-        var query = await GetFilteredQueryAsync(filter, null, cancellationToken);
-
-        // Manually materialize to ensure DataList is loaded
-        var skipCount = (page - 1) * pageSize;
-        var items = await query
-            .Skip(skipCount)
-            .Take(pageSize + 1) // Take one extra to check if there's a next page
-            .ToListAsync(cancellationToken);
-
-        var hasNextPage = items.Count > pageSize;
-        if (hasNextPage)
-        {
-            items = items.Take(pageSize).ToList();
-        }
-
-        return new HateoasPagedList<Instance>(MarkListIfPartiallyLoaded(items), page, pageSize, hasNextPage);
+        var result = await GetPagedResultsWithGroupsAsync(page, pageSize, filter, groupBy,
+            aggregations, null, schemaContext, cancellationToken);
+        return result.PagedList;
     }
 
     public async Task<(HateoasPagedList<Instance> PagedList, List<GroupSummary>? Groups)> GetPagedResultsWithGroupsAsync(
@@ -1363,269 +1264,21 @@ public sealed class EfCoreInstanceRepository(
         SchemaFilterContext? schemaContext = null,
         CancellationToken cancellationToken = default)
     {
-        // If groupBy is provided, use ApplyFilterWithAggregationsAsync
-        if (!string.IsNullOrWhiteSpace(groupBy))
+        var request = GraphQLFilterParser.ParseRequest(null, groupBy, aggregations);
+        if (!string.IsNullOrWhiteSpace(filter))
         {
-            var context = await GetDbContextAsync();
-            var dbSet = await GetDbSetAsync();
-
-            string? combinedFilter = null;
-            if (!string.IsNullOrWhiteSpace(filter))
+            InputValidator.ValidateFilters(filter);
+            request.Filter = FilterFormatDetector.DetectFormat(filter) switch
             {
-                if (FilterFormatDetector.DetectFormat(filter) == FilterFormat.GraphQL)
-                {
-                    if (GraphQLFilterParser.TryParseRequest(filter, out var parsedRequest) && parsedRequest?.Filter != null)
-                    {
-                        combinedFilter = JsonSerializer.Serialize(parsedRequest.Filter, CamelCaseCompactJson);
-                    }
-                    else
-                    {
-                        var combinedNode = FilterFormatDetector.CombineFilters(filter);
-                        if (combinedNode != null)
-                        {
-                            combinedFilter = JsonSerializer.Serialize(combinedNode, CamelCaseCompactJson);
-                        }
-                    }
-                }
-                else
-                {
-                    var legacyNode = FilterFormatDetector.ConvertLegacyToGraphQL(filter);
-                    if (legacyNode != null)
-                    {
-                        combinedFilter = JsonSerializer.Serialize(legacyNode, CamelCaseCompactJson);
-                    }
-                }
-            }
-
-            var response = await UnifiedFilterService.ApplyFilterWithAggregationsAsync(
-                context,
-                dbSet,
-                combinedFilter,
-                groupBy,
-                aggregations,
-                "Data",
-                currentSchema.Name ?? DefaultSchemaName,
-                query => IncludeListData(query).AsSplitQuery(),
-                schemaValidator,
-                cancellationToken,
-                schemaContext);
-
-            // Convert GroupByResponse to GroupSummary
-            List<GroupSummary>? groups = null;
-            if (response.Groups is { Count: > 0 })
-            {
-                groups = new List<GroupSummary>();
-                var groupByRequest = GraphQLFilterParser.ParseGroupBy(groupBy);
-                var groupByFields = groupByRequest?.GetFields() ?? new List<string>();
-
-                foreach (var group in response.Groups)
-                {
-                    var summary = new GroupSummary();
-
-                    // Concatenate all groupBy field values for the name
-                    // This preserves all grouping keys (e.g., "USD_pending" for currency and status)
-                    if (groupByFields.Count > 0 && group.Keys.Count > 0)
-                    {
-                        var keyValues = new List<string>();
-                        foreach (var field in groupByFields)
-                        {
-                            if (group.Keys.TryGetValue(field, out var keyValue) && keyValue != null)
-                            {
-                                keyValues.Add(keyValue.ToString() ?? string.Empty);
-                            }
-                        }
-                        summary.Name = string.Join("_", keyValues);
-                    }
-                    if (group.Keys.Count > 0)
-                        summary.Keys = new Dictionary<string, object?>(group.Keys);
-                    // Map aggregations
-                    if (group.Aggregations != null)
-                    {
-                        summary.Count = group.Aggregations.Count;
-                        summary.Sum = group.Aggregations.Sum;
-                        summary.Avg = group.Aggregations.Avg;
-                        summary.Min = group.Aggregations.Min;
-                        summary.Max = group.Aggregations.Max;
-                    }
-
-                    groups.Add(summary);
-                }
-            }
-
-            // Return empty paged list with groups
-            return (new HateoasPagedList<Instance>(
-                new List<Instance>(),
-                page,
-                pageSize,
-                false), groups);
+                FilterFormat.Legacy => FilterFormatDetector.ConvertLegacyToGraphQL(filter),
+                FilterFormat.GraphQL => GraphQLFilterParser.TryParseRequest(filter, out var parsed) && parsed != null
+                    ? parsed.Filter : GraphQLFilterParser.ParseFilter(filter),
+                _ => throw new FilterCompilationException("Filter format is not recognized.")
+            };
         }
-
-        // If only aggregations (no groupBy), return empty groups
-        if (!string.IsNullOrWhiteSpace(aggregations))
-        {
-            var context = await GetDbContextAsync();
-            var dbSet = await GetDbSetAsync();
-
-            string? combinedFilter = null;
-            if (!string.IsNullOrWhiteSpace(filter))
-            {
-                if (FilterFormatDetector.DetectFormat(filter) == FilterFormat.GraphQL)
-                {
-                    var combinedNode = FilterFormatDetector.CombineFilters(filter);
-                    if (combinedNode != null)
-                    {
-                        combinedFilter = JsonSerializer.Serialize(combinedNode, CamelCaseCompactJson);
-                    }
-                }
-                else
-                {
-                    combinedFilter = filter;
-                }
-            }
-
-            var response = await UnifiedFilterService.ApplyFilterWithAggregationsAsync(
-                context,
-                dbSet,
-                combinedFilter,
-                null, // no groupBy
-                aggregations,
-                "Data",
-                currentSchema.Name ?? DefaultSchemaName,
-                query => IncludeListData(query).AsSplitQuery(),
-                schemaValidator,
-                cancellationToken,
-                schemaContext);
-
-            // Aggregations without groupBy - return empty groups
-            HateoasPagedList<Instance> pagedList;
-            if (response.Data != null)
-            {
-                var totalCount = response.Data.Count;
-                var skip = (page - 1) * pageSize;
-                var pagedData = response.Data.Skip(skip).Take(pageSize).ToList();
-                var hasNext = skip + pageSize < totalCount;
-
-                pagedList = new HateoasPagedList<Instance>(MarkListIfPartiallyLoaded(pagedData), page, pageSize, hasNext);
-            }
-            else
-            {
-                pagedList = new HateoasPagedList<Instance>(
-                    new List<Instance>(),
-                    page,
-                    pageSize,
-                    false);
-            }
-
-            return (pagedList, null);
-        }
-
-        // Normal flow without groupBy/aggregations
-        var orderBy = GraphQLFilterParser.ParseOrderBy(sort);
-        var hasAttributesOrderBy = orderBy != null && orderBy.GetEntries().Any(e => e.Field.Trim().StartsWith("attributes.", StringComparison.OrdinalIgnoreCase));
-        var schema = currentSchema.Name ?? DefaultSchemaName;
-
-        var skipCount = (page - 1) * pageSize;
-        List<Instance> items;
-        bool hasNextPage;
-
-        if (string.IsNullOrWhiteSpace(filter) && hasAttributesOrderBy)
-        {
-            var orderByClause = GraphQLJsonFilterService.BuildOrderByClause(orderBy, schema, schemaContext: schemaContext);
-            if (!string.IsNullOrEmpty(orderByClause))
-            {
-                var dbSet = await GetDbSetAsync();
-                var rawSql = $"SELECT s.* FROM \"{schema}\".\"Instances\" s ORDER BY {orderByClause} OFFSET {skipCount} LIMIT {pageSize + 1}";
-                var orderedInstances = await dbSet
-                    .FromSqlRaw(rawSql)
-                    .AsNoTracking()
-                    .ToListAsync(cancellationToken);
-
-                hasNextPage = orderedInstances.Count > pageSize;
-                if (hasNextPage)
-                    orderedInstances = orderedInstances.Take(pageSize).ToList();
-
-                items = await LoadDataListAndPreserveOrderAsync(orderedInstances, cancellationToken);
-            }
-            else
-            {
-                var query = await GetFilteredQueryAsync(filter, schemaContext, cancellationToken);
-                if (orderBy != null)
-                    query = InstanceOrderByApplicator.Apply(query, orderBy);
-                items = await query
-                    .Skip(skipCount)
-                    .Take(pageSize + 1)
-                    .ToListAsync(cancellationToken);
-                hasNextPage = items.Count > pageSize;
-                if (hasNextPage)
-                    items = items.Take(pageSize).ToList();
-            }
-        }
-        else if (!string.IsNullOrWhiteSpace(filter) && hasAttributesOrderBy)
-        {
-            var combinedFilter = BuildCombinedFilterJson(filter);
-            var orderByClause = GraphQLJsonFilterService.BuildOrderByClause(orderBy, schema, schemaContext: schemaContext);
-            if (!string.IsNullOrEmpty(combinedFilter) && !string.IsNullOrEmpty(orderByClause))
-            {
-                var dbSet = await GetDbSetAsync();
-                var filterNode = GraphQLFilterParser.ParseFilter(combinedFilter);
-                if (filterNode != null && filterNode.NodeType != FilterNodeType.Empty)
-                {
-                    var query = dbSet.ApplyGraphQLFilter(filterNode, "Data", "InstancesData", schema, schemaValidator, null, orderByClause, schemaContext: schemaContext);
-                    var orderedInstances = await query
-                        .Skip(skipCount)
-                        .Take(pageSize + 1)
-                        .ToListAsync(cancellationToken);
-
-                    hasNextPage = orderedInstances.Count > pageSize;
-                    if (hasNextPage)
-                        orderedInstances = orderedInstances.Take(pageSize).ToList();
-
-                    items = await LoadDataListAndPreserveOrderAsync(orderedInstances, cancellationToken);
-                }
-                else
-                {
-                    var query = await GetFilteredQueryAsync(filter, schemaContext, cancellationToken);
-                    if (orderBy != null)
-                        query = InstanceOrderByApplicator.Apply(query, orderBy);
-                    items = await query
-                        .Skip(skipCount)
-                        .Take(pageSize + 1)
-                        .ToListAsync(cancellationToken);
-                    hasNextPage = items.Count > pageSize;
-                    if (hasNextPage)
-                        items = items.Take(pageSize).ToList();
-                }
-            }
-            else
-            {
-                var query = await GetFilteredQueryAsync(filter, schemaContext, cancellationToken);
-                if (orderBy != null)
-                    query = InstanceOrderByApplicator.Apply(query, orderBy);
-                items = await query
-                    .Skip(skipCount)
-                    .Take(pageSize + 1)
-                    .ToListAsync(cancellationToken);
-                hasNextPage = items.Count > pageSize;
-                if (hasNextPage)
-                    items = items.Take(pageSize).ToList();
-            }
-        }
-        else
-        {
-            var query = await GetFilteredQueryAsync(filter, schemaContext, cancellationToken);
-            if (orderBy != null)
-                query = InstanceOrderByApplicator.Apply(query, orderBy);
-            items = await query
-                .Skip(skipCount)
-                .Take(pageSize + 1)
-                .ToListAsync(cancellationToken);
-            hasNextPage = items.Count > pageSize;
-            if (hasNextPage)
-                items = items.Take(pageSize).ToList();
-        }
-
-        var normalPagedList = new HateoasPagedList<Instance>(MarkListIfPartiallyLoaded(items), page, pageSize, hasNextPage);
-        return (normalPagedList, null);
+        request.OrderBy = GraphQLFilterParser.ParseOrderBy(sort);
+        request.SchemaContext = schemaContext;
+        return await GetPagedResultsWithGroupsAsync(page, pageSize, request, cancellationToken);
     }
 
     /// <summary>
@@ -1641,30 +1294,42 @@ public sealed class EfCoreInstanceRepository(
         var dbSet = await GetDbSetAsync();
 
         var schema = currentSchema.Name ?? DefaultSchemaName;
+
+        request ??= new Definitions.GraphQL.GraphQLFilterRequest();
+        var readOptions = queryOptions?.CurrentValue ?? new InstanceQueryOptions();
+        if (readOptions.IdentityPaging && !readOptions.DisabledSchemas.Contains(schema, StringComparer.Ordinal) &&
+            request.GroupBy?.GetFields().Count is not > 0 && request.Aggregations?.HasAggregations != true)
+        {
+            var selected = await UnifiedFilterService.ExecutePageIdsAsync(
+                context, request, schema, page, pageSize, schemaValidator, cancellationToken, readOptions.LatestJoin);
+            var hydrated = await LoadDataListAndPreserveOrderAsync(selected.Ids, cancellationToken);
+            return (new HateoasPagedList<Instance>(
+                MarkListIfPartiallyLoaded(hydrated), page, pageSize, selected.HasNext), null);
+        }
         var response = await UnifiedFilterService.ExecuteRequestAsync(
             context,
             dbSet,
             request ?? new Definitions.GraphQL.GraphQLFilterRequest(),
             "Data",
             schema,
-            query => IncludeListData(query).AsSplitQuery(),
+            includeFunc: null,
             applyOrderBy: (q, orderBy) => InstanceOrderByApplicator.Apply((IQueryable<Instance>)q, orderBy),
             applyOrderByRaw: (ctx, sch, orderBy) =>
             {
                 if (orderBy == null) return ((WorkflowDbContext)ctx).Instances.AsQueryable();
-                var clause = GraphQLJsonFilterService.BuildOrderByClause(orderBy, sch);
+                var clause = GraphQLJsonFilterService.BuildOrderByClause(orderBy, sch, schemaContext: request?.SchemaContext);
                 if (string.IsNullOrEmpty(clause)) return ((WorkflowDbContext)ctx).Instances.AsQueryable();
                 return ((WorkflowDbContext)ctx).Instances
                     .FromSqlRaw($"SELECT s.* FROM \"{sch}\".\"Instances\" s ORDER BY {clause}")
                     .AsNoTracking();
             },
             schemaValidator,
-            cancellationToken);
+            cancellationToken, page, pageSize);
 
         // Handle GroupBy response
         if (response.Groups is { Count: > 0 })
         {
-            var groups = new List<GroupSummary>();
+            var groups = new List<GroupSummary>(response.Groups.Count);
             var groupByFields = request?.GroupBy?.GetFields() ?? new List<string>();
 
             foreach (var group in response.Groups)
@@ -1706,52 +1371,9 @@ public sealed class EfCoreInstanceRepository(
                 false), groups);
         }
 
-        // Handle aggregations without groupBy
-        if (response.Aggregations != null)
-        {
-            HateoasPagedList<Instance> pagedList;
-            if (response.Data != null)
-            {
-                var totalCount = response.Data.Count;
-                var skip = (page - 1) * pageSize;
-                var pagedData = response.Data.Skip(skip).Take(pageSize).ToList();
-                var hasNext = skip + pageSize < totalCount;
-
-                pagedList = new HateoasPagedList<Instance>(MarkListIfPartiallyLoaded(pagedData), page, pageSize, hasNext);
-            }
-            else
-            {
-                pagedList = new HateoasPagedList<Instance>(
-                    new List<Instance>(),
-                    page,
-                    pageSize,
-                    false);
-            }
-
-            return (pagedList, null);
-        }
-
-        // Handle regular filter (no aggregations)
-        HateoasPagedList<Instance> resultPagedList;
-        if (response.Data != null)
-        {
-            var totalCount = response.Data.Count;
-            var skip = (page - 1) * pageSize;
-            var pagedData = response.Data.Skip(skip).Take(pageSize).ToList();
-            var hasNext = skip + pageSize < totalCount;
-
-            resultPagedList = new HateoasPagedList<Instance>(MarkListIfPartiallyLoaded(pagedData), page, pageSize, hasNext);
-        }
-        else
-        {
-            resultPagedList = new HateoasPagedList<Instance>(
-                new List<Instance>(),
-                page,
-                pageSize,
-                false);
-        }
-
-        return (resultPagedList, null);
+        var items = await LoadDataListAndPreserveOrderAsync(response.Data?.Select(i => i.Id).ToList() ?? [], cancellationToken);
+        return (new HateoasPagedList<Instance>(
+            MarkListIfPartiallyLoaded(items), page, pageSize, response.HasNextPage), null);
     }
 
 
@@ -1981,49 +1603,21 @@ public sealed class EfCoreInstanceRepository(
     /// <summary>
     /// Loads DataList for instances (ordered by id list) and returns list in the same order. Used when ORDER BY must be preserved (EF Include breaks order).
     /// </summary>
-    private async Task<List<Instance>> LoadDataListAndPreserveOrderAsync(List<Instance> orderedInstances, CancellationToken cancellationToken)
+    private async Task<List<Instance>> LoadDataListAndPreserveOrderAsync(List<Guid> ids, CancellationToken cancellationToken)
     {
-        if (orderedInstances.Count == 0)
+        if (ids.Count == 0)
             return [];
-        var ids = orderedInstances.Select(i => i.Id).ToList();
         var dbSet = await GetDbSetAsync();
         var instancesWithData = await IncludeListData(
                 dbSet.Where(i => ids.Contains(i.Id)))
             .AsNoTracking()
             .ToListAsync(cancellationToken);
         var byId = instancesWithData.ToDictionary(i => i.Id);
-        return ids.Select(id => byId[id]).ToList();
+        // READ COMMITTED permits deletion between identity selection and hydration. Preserve the
+        // selected order for surviving rows instead of turning that race into KeyNotFoundException.
+        return ids.Where(byId.ContainsKey).Select(id => byId[id]).ToList();
     }
 
-    /// <summary>
-    /// Builds a single GraphQL filter JSON from the filter string (same logic as groupBy/aggregations path).
-    /// </summary>
-    private static string? BuildCombinedFilterJson(string? filter)
-    {
-        if (string.IsNullOrWhiteSpace(filter))
-            return null;
-        if (FilterFormatDetector.DetectFormat(filter) == FilterFormat.GraphQL)
-        {
-            if (GraphQLFilterParser.TryParseRequest(filter, out var parsedRequest) && parsedRequest?.Filter != null)
-            {
-                return JsonSerializer.Serialize(parsedRequest.Filter, CamelCaseCompactJson);
-            }
-            var combinedNode = FilterFormatDetector.CombineFilters(filter);
-            if (combinedNode != null)
-            {
-                return JsonSerializer.Serialize(combinedNode, CamelCaseCompactJson);
-            }
-        }
-        else
-        {
-            var legacyNode = FilterFormatDetector.ConvertLegacyToGraphQL(filter);
-            if (legacyNode != null)
-            {
-                return JsonSerializer.Serialize(legacyNode, CamelCaseCompactJson);
-            }
-        }
-        return null;
-    }
 
     /// <summary>
     /// Handles metrics recording for instance status changes

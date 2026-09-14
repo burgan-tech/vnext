@@ -63,6 +63,12 @@ public static class WorkflowInfrastructureModuleServiceCollectionExtensions
         IConfiguration? configuration)
     {
         services.AddAetherInfrastructure();
+        services.AddMemoryCache();
+        var queryOptions = services.AddOptions<InstanceQueryOptions>();
+        if (configuration != null) queryOptions.Bind(configuration.GetSection(InstanceQueryOptions.SectionName));
+        var attributeOptions = services.AddOptions<BBT.Workflow.Schemas.AttributeIndexOptions>();
+        if (configuration != null) attributeOptions.Bind(configuration.GetSection(BBT.Workflow.Schemas.AttributeIndexOptions.SectionName));
+        services.AddScoped<BBT.Workflow.Definitions.Schemas.IAttributeIndexCatalog, PostgresAttributeIndexService>();
         
         // Ensure IDistributedCache is available for SchemaValidator
         // If not registered by Application/API layer, use in-memory fallback

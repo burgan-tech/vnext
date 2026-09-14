@@ -73,7 +73,7 @@ public sealed class InstanceQueryAppServiceInstanceFilteringTests : IDisposable
     }
 
     [Fact]
-    public async Task GetInstanceListAsync_When_enforcement_disabled_passes_null_schema_context_despite_resolved_schema()
+    public async Task GetInstanceListAsync_When_enforcement_disabled_preserves_physical_metadata_without_enforcing_filter_permissions()
     {
         var workflow = DeserializeWorkflow("""
             {
@@ -123,7 +123,7 @@ public sealed class InstanceQueryAppServiceInstanceFilteringTests : IDisposable
                 Arg.Any<string?>(),
                 Arg.Any<string?>(),
                 Arg.Any<string?>(),
-                Arg.Is<SchemaFilterContext?>(c => c == null),
+                Arg.Is<SchemaFilterContext?>(c => c != null && !c.EnforceFiltering),
                 Arg.Any<CancellationToken>())
             .Returns(_ => Task.FromResult((emptyPage, (List<GroupSummary>?)null)));
 
@@ -146,7 +146,7 @@ public sealed class InstanceQueryAppServiceInstanceFilteringTests : IDisposable
             null,
             null,
             null,
-            Arg.Is<SchemaFilterContext?>(c => c == null),
+            Arg.Is<SchemaFilterContext?>(c => c != null && !c.EnforceFiltering),
             Arg.Any<CancellationToken>());
     }
 

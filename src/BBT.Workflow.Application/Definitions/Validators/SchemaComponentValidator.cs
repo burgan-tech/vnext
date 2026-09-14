@@ -38,6 +38,16 @@ public sealed class SchemaComponentValidator : IComponentValidator
                 result.AddError("Schema definition is required.", $"{nameof(SchemaDefinition)}.{nameof(SchemaDefinition.Schema)}");
             }
 
+            if (schema.Schema.ValueKind == JsonValueKind.Object)
+            {
+                try {
+                    Definitions.Schemas.AttributeIndexDefinition.ValidateSchema(schema.Schema);
+                }
+                catch (ArgumentException ex) {
+                    result.AddError(ex.Message, "schema.x-indexed");
+                }
+            }
+
             return result;
         }
         catch (JsonException ex)

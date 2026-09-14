@@ -154,6 +154,9 @@ public static class InstancesModelCreatingExtensions
                 .HasFilter("\"Status\" = 'A'")
                 .HasDatabaseName("IX_Instances_Active_LastTouched_Id");
 
+            b.HasIndex(new[] { "CreatedAt", "Id" }, "IX_Instances_CreatedAt_Id")
+                .IsDescending(true, false);
+
             // Partial covering index for GetHumanTaskInstancesAsync.
             // Filters: Status IN ('A','B'), EffectiveStateSubType = Human,
             // ExtraProperties does NOT contain 'parent.id'.
@@ -334,7 +337,7 @@ public static class InstancesModelCreatingExtensions
                     .HasColumnName(nameof(InstanceData.Data));
 
                 // Partial GIN index serving the attribute (JSONB containment) filters. The equals
-                // path already emits "Data" @> {param} (GraphQLJsonFilterService.BuildEqualsCondition),
+                // path already emits "Data" @> {param} (AttributeConditionBuilder),
                 // which without this index is a sequential scan over InstancesData. jsonb_path_ops
                 // only supports @> — smaller and faster than the default opclass, and the ->> text
                 // accessors used by like/comparison operators cannot use a GIN index either way.
