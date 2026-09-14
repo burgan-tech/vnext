@@ -5,12 +5,18 @@ namespace BBT.Workflow.Definitions;
 
 public sealed class PublishInput : PublishBaseInput
 {
+    /// <summary>Schema component purpose at the envelope root: master, transition, view or function.</summary>
+    public string? Type { get; set; }
+
     [Required] public JsonElement Attributes { get; set; }
     public List<PublishDataInput>? Data { get; set; }
 }
 
 public sealed class PublishDataInput
 {
+    /// <summary>Root purpose when the seed item is a schema component.</summary>
+    public string? Type { get; set; }
+
     /// <summary>
     /// If present, it is the more readable key value of the record.
     /// </summary>

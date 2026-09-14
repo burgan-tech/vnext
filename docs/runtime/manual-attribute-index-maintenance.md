@@ -32,6 +32,40 @@ the manifest with the intended deployed versions before execution.
 existing permissions. Nested scalar string/number/integer/boolean fields are supported; date fields use
 `format: "date-time"`. Array, object, reference, conditional and ambiguous indexed paths are rejected.
 
+
+Schema components may declare `type` at the document root (alongside `key`, `domain`, and
+`flow`): `master`, `transition`, `view`, or `function`. Unknown non-empty values fail validation.
+The field is optional and has no default. Missing, null or blank values never mean master.
+This is independent of the existing `attributes.type` and JSON Schema `type` keywords.
+Only a referenced `type: master` schema contributes index SQL. Other schema purposes are skipped;
+`x-indexed` (including `false`) is invalid in their schema nodes. A latest reference resolving to a
+non-master schema does not fall back to an older master version. No matching masters means no SQL batch.
+Schemas using `x-indexed` must explicitly declare root `type: master` before publication or SQL generation.
+
+```json
+{
+  "key": "order-master",
+  "domain": "sales",
+  "flow": "sys-schemas",
+  "version": "1.0.0",
+  "flowVersion": "1.0.0",
+  "tags": ["orders"],
+  "type": "master",
+  "attributes": {
+    "type": "workflow",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "amount": { "type": "number", "x-indexed": true, "x-filterOperators": ["gt"] }
+      }
+    }
+  }
+}
+```
+
+The envelope purpose is validated during publication (including schema seed items); it does not
+replace `SchemaDefinition.Type`, which continues to represent `attributes.type`.
+
 ## What the DBA executes
 
 ```sh

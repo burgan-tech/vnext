@@ -21,13 +21,17 @@ public sealed record AttributeIndexDefinition(string Path, string StorageType)
             return types.Select(t => new AttributeIndexDefinition(f.Key, t));
         }).ToArray();
 
-    public static void ValidateSchema(JsonElement root) => Visit(root, "", true);
+    public static void ValidateSchema(JsonElement root) => Visit(root, "", true, true);
 
-    private static void Visit(JsonElement node, string path, bool supported)
+    /// <summary>Validates index metadata against the component envelope's root type.</summary>
+    public static void ValidateSchema(JsonElement root, string? schemaType)
+        => Visit(root, "", true, schemaType == "master");
+
+    private static void Visit(JsonElement node, string path, bool supported, bool allowIndexes)
     {
         if (node.ValueKind == JsonValueKind.Array)
         {
-            foreach (var child in node.EnumerateArray()) Visit(child, path, false);
+            foreach (var child in node.EnumerateArray()) Visit(child, path, false, allowIndexes);
             return;
         }
         if (node.ValueKind != JsonValueKind.Object) return;
@@ -35,6 +39,8 @@ public sealed record AttributeIndexDefinition(string Path, string StorageType)
             property.Name is "$ref" or "allOf" or "anyOf" or "oneOf" or "not" or "if" or "then" or "else" or "dependentSchemas");
         if (node.TryGetProperty("x-indexed", out var indexed))
         {
+            if (!allowIndexes)
+                throw new ArgumentException($"Field '{path}': x-indexed is only allowed when root.type is 'master'.");
             if (indexed.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
                 throw new ArgumentException($"Field '{path}': x-indexed must be a boolean.");
             if (indexed.ValueKind == JsonValueKind.True &&
@@ -51,13 +57,13 @@ public sealed record AttributeIndexDefinition(string Path, string StorageType)
                 var objectParent = !node.TryGetProperty("type", out var parentType) ||
                     (parentType.ValueKind == JsonValueKind.String && parentType.GetString() == "object");
                 foreach (var child in property.Value.EnumerateObject())
-                    Visit(child.Value, path.Length == 0 ? child.Name : $"{path}.{child.Name}", supported && objectParent && !child.Name.Contains('.'));
+                    Visit(child.Value, path.Length == 0 ? child.Name : $"{path}.{child.Name}", supported && objectParent && !child.Name.Contains('.'), allowIndexes);
             }
-            else if (property.Name is "items" or "prefixItems" or "$defs" or "definitions" or "allOf" or "anyOf" or "oneOf" or "if" or "then" or "else" or "additionalProperties" or "patternProperties" or "not" or "dependentSchemas")
+            else if (property.Name is "items" or "prefixItems" or "$defs" or "definitions" or "allOf" or "anyOf" or "oneOf" or "if" or "then" or "else" or "additionalProperties" or "patternProperties" or "not" or "dependentSchemas" or "contains" or "propertyNames" or "additionalItems" or "unevaluatedProperties" or "unevaluatedItems")
             {
                 if (property.Name is "$defs" or "definitions" or "patternProperties" or "dependentSchemas" && property.Value.ValueKind == JsonValueKind.Object)
-                    foreach (var child in property.Value.EnumerateObject()) Visit(child.Value, path, false);
-                else Visit(property.Value, path, false);
+                    foreach (var child in property.Value.EnumerateObject()) Visit(child.Value, path, false, allowIndexes);
+                else Visit(property.Value, path, false, allowIndexes);
             }
         }
     }

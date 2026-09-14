@@ -12,6 +12,25 @@ public sealed class SchemaComponentValidator : IComponentValidator
     /// <inheritdoc />
     public bool CanHandle(string componentType) => componentType == RuntimeSysSchemaInfo.Schemas;
 
+    /// <summary>Validates schema purpose independently of attributes.type and JSON Schema types.</summary>
+    public static void ValidateRootType(JsonElement attributes, string? rootType, ComponentValidationResult result)
+    {
+        if (!string.IsNullOrWhiteSpace(rootType) && rootType is not ("master" or "transition" or "view" or "function"))
+            result.AddError("Schema root.type must be one of: master, transition, view, function.", "type");
+
+        if (attributes.ValueKind == JsonValueKind.Object && attributes.TryGetProperty("schema", out var schema))
+        {
+            try
+            {
+                Definitions.Schemas.AttributeIndexDefinition.ValidateSchema(schema, rootType);
+            }
+            catch (ArgumentException ex)
+            {
+                result.AddError(ex.Message, "attributes.schema.x-indexed");
+            }
+        }
+    }
+
     /// <inheritdoc />
     public ComponentValidationResult Validate(JsonElement attributes)
     {

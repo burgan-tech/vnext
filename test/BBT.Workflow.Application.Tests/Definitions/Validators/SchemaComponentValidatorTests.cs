@@ -117,4 +117,61 @@ public class SchemaComponentValidatorTests
         // Assert
         result.IsValid.ShouldBeFalse();
     }
+
+    [Theory]
+    [InlineData("master", true)]
+    [InlineData("transition", false)]
+    [InlineData("view", false)]
+    [InlineData("function", false)]
+    [InlineData(null, false)]
+    [InlineData("MASTER", false)]
+    [InlineData("workflow", false)]
+    public void RootType_ControlsIndexes_WithoutChangingOtherTypes(string? type, bool valid)
+    {
+        var input = JsonSerializer.Deserialize<PublishInput>(JsonSerializer.Serialize(new
+        {
+            type,
+            attributes = new
+            {
+                type = "workflow",
+                schema = new { type = "object", properties = new { amount = new { type = "number" } } }
+            }
+        }), JsonSerializerConstants.JsonOptions)!;
+        var attributes = JsonDocument.Parse(input.Attributes.GetRawText().Replace(
+            "\"type\":\"number\"", "\"type\":\"number\",\"x-indexed\":true")).RootElement;
+        var result = _validator.Validate(attributes);
+        SchemaComponentValidator.ValidateRootType(attributes, input.Type, result);
+        result.IsValid.ShouldBe(valid);
+        input.Attributes.GetProperty("type").GetString().ShouldBe("workflow");
+        input.Attributes.GetProperty("schema").GetProperty("type").GetString().ShouldBe("object");
+    }
+
+    [Theory]
+    [InlineData("master")]
+    [InlineData("transition")]
+    [InlineData("view")]
+    [InlineData("function")]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void RootType_AllPurposesAllowUnindexedSchemas(string? type)
+    {
+        var attributes = JsonDocument.Parse("""{"type":"json-schema","schema":{"type":"object"}}""").RootElement;
+        var result = _validator.Validate(attributes);
+        SchemaComponentValidator.ValidateRootType(attributes, type, result);
+        result.IsValid.ShouldBeTrue();
+    }
+
+    [Fact]
+    public void NonMaster_RejectsFalseMetadata_ButDoesNotInspectExampleData()
+    {
+        var attributes = JsonDocument.Parse("""{"type":"view","schema":{"properties":{"nested":{"properties":{"value":{"type":"string","x-indexed":false}}}}}}""").RootElement;
+        var result = _validator.Validate(attributes);
+        SchemaComponentValidator.ValidateRootType(attributes, "view", result);
+        result.IsValid.ShouldBeFalse();
+        var example = JsonDocument.Parse("""{"schema":{"type":"object","examples":[{"x-indexed":true}]}}""").RootElement;
+        var exampleResult = new ComponentValidationResult();
+        SchemaComponentValidator.ValidateRootType(example, "view", exampleResult);
+        exampleResult.IsValid.ShouldBeTrue();
+    }
 }
