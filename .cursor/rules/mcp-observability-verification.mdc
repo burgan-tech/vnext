@@ -1,0 +1,9 @@
+---
+description: Verifying a change through the MCP servers — traces, span durations, logs and persisted rows are the evidence, not the test summary
+globs:
+alwaysApply: true
+---
+Apply the referenced file exactly as written. It is the single source of this rule, shared with
+Claude Code (`.claude/rules/`); edit it there — nothing lives in this pointer.
+
+@.claude/rules/mcp-observability-verification.md

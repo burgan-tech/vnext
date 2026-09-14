@@ -34,6 +34,10 @@ in `AGENTS.md`). Invoke via the `Skill` tool when the trigger phrase matches:
   is the compose-file root login, not a secret beyond what `etc/docker/docker-compose*.yml`
   already contains.
 
+How to use these servers as verification evidence — query mechanics, the traps that have produced
+wrong conclusions, and the `postgres` connect-timeout cause — is the always-on rule
+[Verifying a change through the MCP servers](.claude/rules/mcp-observability-verification.md).
+
 ## Personal, machine-local overrides
 
 @CLAUDE.local.md
