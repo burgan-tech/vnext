@@ -66,6 +66,14 @@ public static class InstancesModelCreatingExtensions
                 .HasMaxLength(InstanceConstants.MaxStatusLength)
                 .HasConversion(new InstanceStatusConverter());
 
+            // Client-visible status (deepest active SubFlow's status, else own). Fingerprint
+            // material for the state function only — never served, see Instance.EffectiveStatus.
+            b.Property(p => p.EffectiveStatus)
+                .IsRequired()
+                .HasMaxLength(InstanceConstants.MaxStatusLength)
+                .HasConversion(new InstanceStatusConverter())
+                .HasDefaultValue(InstanceStatus.Active);
+
             // Long-poll acknowledge marker (declarative long-poll termination on state entry).
             b.Property(p => p.LongPollAckToken);
             b.HasIndex(p => p.LongPollAckToken)

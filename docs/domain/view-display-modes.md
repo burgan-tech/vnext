@@ -71,10 +71,10 @@ modes read `modes` and pick the value for the interface they are in.
 This applies to both resolution paths — local (`IComponentCacheStore`) and remote (another
 domain's instance read) — and to the function contract endpoint, which embeds the same view shape.
 
-## Monitoring
+## Component summary projection
 
 The component summary projects `display` from either shape, reading `sdi` out of the object form,
-so the existing monitor display filter keeps matching regardless of how a view was authored.
+so an existing display filter keeps matching regardless of how a view was authored.
 
 ## Change safety
 

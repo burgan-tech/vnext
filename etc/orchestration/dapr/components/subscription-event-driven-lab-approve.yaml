@@ -1,0 +1,16 @@
+# Routes the approval topic to the same endpoint with action=transition.
+#
+# transitionKey is required for action=transition and must name a transition whose triggerType is 3;
+# anything else is answered 400 NotAnEventTransition. sync=true makes the delivery block until the
+# pipeline reaches a rest point, which is what lets a test assert on the instance immediately after
+# the publish is acknowledged instead of polling for an indeterminate window.
+apiVersion: dapr.io/v1alpha1
+kind: Subscription
+metadata:
+  name: event-driven-lab-approve-subscription
+spec:
+  topic: core.event-driven-lab.approve
+  route: "/api/v1/core/workflows/event-driven-lab/instances/events?action=transition&transitionKey=approve-by-event&sync=true"
+  pubsubname: vnext-pubsub
+scopes:
+  - vnext-app

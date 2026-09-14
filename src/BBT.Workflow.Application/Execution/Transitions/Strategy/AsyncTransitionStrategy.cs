@@ -337,7 +337,8 @@ public sealed class AsyncTransitionStrategy(
             EpisodeTraceRoot = WorkflowTraceLane.Episode?.TraceRoot,
             CorrelationId = transContext.CorrelationId,
             ChainDepth = transContext.ChainDepth,
-            SubflowChainReserved = subflowChainReserved
+            SubflowChainReserved = subflowChainReserved,
+            RootInstanceId = transContext.Instance?.GetRootInstanceId()
         };
     }
 

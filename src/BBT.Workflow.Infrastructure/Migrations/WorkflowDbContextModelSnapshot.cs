@@ -203,6 +203,13 @@ namespace BBT.Workflow.Migrations
                     b.Property<int?>("EffectiveStateType")
                         .HasColumnType("integer");
 
+                    b.Property<string>("EffectiveStatus")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(3)
+                        .HasColumnType("character varying(3)")
+                        .HasDefaultValue("A");
+
                     b.Property<string>("ExtraProperties")
                         .IsRequired()
                         .HasColumnType("text")
@@ -257,6 +264,9 @@ namespace BBT.Workflow.Migrations
                         .IsRequired()
                         .HasMaxLength(3)
                         .HasColumnType("character varying(3)");
+
+                    b.Property<long>("SubStateNotificationSeq")
+                        .HasColumnType("bigint");
 
                     b.PrimitiveCollection<List<string>>("Tags")
                         .IsRequired()
@@ -399,6 +409,9 @@ namespace BBT.Workflow.Migrations
                         .IsRequired()
                         .HasMaxLength(100)
                         .HasColumnType("character varying(100)");
+
+                    b.Property<long>("SubFlowNotificationSeq")
+                        .HasColumnType("bigint");
 
                     b.Property<DateTime?>("SubFlowStateChangedAt")
                         .HasColumnType("timestamp with time zone");

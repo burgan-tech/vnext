@@ -191,14 +191,35 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
     /// </summary>
     /// <returns>True when exactly this call flipped Active → Busy; false when the instance was
     /// missing, already Busy, or terminal (Completed/Faulted/Passive).</returns>
-    Task<bool> TryMarkBusyAsync(Guid instanceId, CancellationToken cancellationToken = default);
+    /// <param name="effectiveStatus">When supplied, written in the SAME statement as the status —
+    /// pass it only when the caller knows this row owns the client-visible status (no active SubFlow
+    /// below it). See <see cref="Instance.EffectiveStatus"/>.</param>
+    Task<bool> TryMarkBusyAsync(
+        Guid instanceId,
+        CancellationToken cancellationToken = default,
+        InstanceStatus? effectiveStatus = null);
 
     /// <summary>
     /// Compare-and-set Busy → Active; the set-based counterpart of <see cref="TryMarkBusyAsync(Guid,CancellationToken)"/>
     /// with the same event rules.
     /// </summary>
     /// <returns>True when exactly this call flipped Busy → Active.</returns>
-    Task<bool> TryReleaseBusyAsync(Guid instanceId, CancellationToken cancellationToken = default);
+    /// <param name="effectiveStatus">Same contract as
+    /// <see cref="TryMarkBusyAsync(Guid,CancellationToken,InstanceStatus)"/>.</param>
+    Task<bool> TryReleaseBusyAsync(
+        Guid instanceId,
+        CancellationToken cancellationToken = default,
+        InstanceStatus? effectiveStatus = null);
+
+    /// <summary>
+    /// Writes <see cref="Instance.EffectiveStatus"/> alone, for an ancestor whose own status does
+    /// not change when the level below it moves. One single-column UPDATE, no aggregate load and no
+    /// guard on the current value beyond "not terminal" — the row below is the authority here.
+    /// </summary>
+    Task SetEffectiveStatusAsync(
+        Guid instanceId,
+        InstanceStatus effectiveStatus,
+        CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Aggregate-aware variant of <see cref="TryMarkBusyAsync(Guid,CancellationToken)"/> for

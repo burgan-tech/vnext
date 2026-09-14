@@ -7,10 +7,6 @@
   <Folder Name="/execution/">
     <Project Path="execution/BBT.Workflow.Execution.HttpApi.Host/BBT.Workflow.Execution.HttpApi.Host.csproj" />
   </Folder>
-  <Folder Name="/monitoring/">
-    <Project Path="monitoring/BBT.Workflow.Monitor.Application/BBT.Workflow.Monitor.Application.csproj" />
-    <Project Path="monitoring/BBT.Workflow.Monitor.HttpApi.Host/BBT.Workflow.Monitor.HttpApi.Host.csproj" />
-  </Folder>
   <Folder Name="/modules/">
     <Project Path="modules/BBT.Workflow.Modules.Scripting/BBT.Workflow.Modules.Scripting.csproj" />
   </Folder>
@@ -32,7 +28,6 @@
     <Project Path="test/BBT.Workflow.Benchmarks/BBT.Workflow.Benchmarks.csproj" />
     <Project Path="test/BBT.Workflow.Domain.Tests/BBT.Workflow.Domain.Tests.csproj" />
     <Project Path="test/BBT.Workflow.Infrastructure.Tests/BBT.Workflow.Infrastructure.Tests.csproj" />
-    <Project Path="test/BBT.Workflow.Monitor.Application.Tests/BBT.Workflow.Monitor.Application.Tests.csproj" />
     <Project Path="test/BBT.Workflow.TestBase/BBT.Workflow.TestBase.csproj" />
   </Folder>
   <Folder Name="/tools/">

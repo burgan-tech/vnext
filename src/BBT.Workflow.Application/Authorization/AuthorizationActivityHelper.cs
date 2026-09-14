@@ -142,4 +142,89 @@ public static class AuthorizationActivityHelper
         activity.SetTag(TelemetryConstants.TagNames.AuthMemoHit, true);
         activity.SetStatus(ActivityStatusCode.Error, "caller roles unresolved (memoized failure)");
     }
+
+    /// <summary>Operation name for the authorization decision itself.</summary>
+    public const string OperationDecide = "Auth.Decide";
+
+    /// <summary>
+    /// Starts the span covering one authorization decision.
+    /// <para>
+    /// The decision — the single bit this endpoint exists to produce — was nowhere in the trace.
+    /// Role resolution had a span, the subflow forward had a span, and the answer had neither, so a
+    /// 403 could be seen arriving and not explained. This carries the verdict and, when denied, a
+    /// bounded reason code.
+    /// </para>
+    /// <para>
+    /// It deliberately carries NO grant expression, role name or caller identity beyond the
+    /// <c>sub</c>/<c>act.sub</c> the platform already propagates: a span is exported to a system with
+    /// a different access boundary than the workflow's, so an authorization span that repeated the
+    /// grants would move an access-control decision's inputs into telemetry.
+    /// </para>
+    /// </summary>
+    public static Activity? StartDecide()
+    {
+        var activity = ActivitySource.StartActivity(OperationDecide, ActivityKind.Internal);
+        activity?.SetTag(TelemetryConstants.TagNames.SpanCategory, TelemetryConstants.SpanCategories.Business);
+        return activity;
+    }
+
+    /// <summary>Records the verdict and how many roles it was evaluated against.</summary>
+    public static void SetDecision(Activity? activity, bool allowed, int roleCount)
+    {
+        if (activity is null) return;
+
+        activity.SetTag(TelemetryConstants.TagNames.AuthDecision, allowed);
+        activity.SetTag(TelemetryConstants.TagNames.AuthRoleCount, roleCount);
+    }
+
+    /// <summary>Operation name for the conditional previous-manual-transition lookup.</summary>
+    public const string OperationPreviousUserLookup = "Auth.PreviousUserLookup";
+
+    /// <summary>
+    /// Starts the span for the conditional <c>$PreviousUser</c> lookup.
+    /// <para>
+    /// Called only from inside the branch that performs the query, so its presence in a trace means
+    /// the extra read happened. It is the one database round trip an authorization evaluation can
+    /// add, and it fires only when some grant in the batch actually references the previous user —
+    /// which is exactly what makes "was this read paying for a $PreviousUser grant?" unanswerable
+    /// without it.
+    /// </para>
+    /// </summary>
+    public static Activity? StartPreviousUserLookup()
+    {
+        var activity = ActivitySource.StartActivity(OperationPreviousUserLookup, ActivityKind.Internal);
+        activity?.SetTag(TelemetryConstants.TagNames.SpanCategory, TelemetryConstants.SpanCategories.Business);
+        return activity;
+    }
+
+    /// <summary>Operation name for a transition role-filtering pass.</summary>
+    public const string OperationFilterTransitions = "Auth.FilterTransitions";
+
+    /// <summary>
+    /// Starts the span covering one transition role-filtering pass.
+    /// <para>
+    /// ONE span for the whole pass, with counts as tags — never one per key. The state function
+    /// filters the available transitions of an instance, and on the parent-override path it does so
+    /// key by key, creating a fresh evaluator each time; a span per key would turn that O(N) latency
+    /// problem into an O(N) telemetry problem and bury it in the very trace meant to reveal it.
+    /// Building an evaluator serializes the instance's full latest data, so the creation count is
+    /// the number that matters: one is healthy, a number tracking the key count is the defect.
+    /// </para>
+    /// </summary>
+    public static Activity? StartFilterTransitions()
+    {
+        var activity = ActivitySource.StartActivity(OperationFilterTransitions, ActivityKind.Internal);
+        activity?.SetTag(TelemetryConstants.TagNames.SpanCategory, TelemetryConstants.SpanCategories.Business);
+        return activity;
+    }
+
+    /// <summary>Records the shape of a filtering pass: how many keys, how many survived, how many evaluators it cost.</summary>
+    public static void SetFilterResult(Activity? activity, int evaluated, int allowed, int evaluatorCreations)
+    {
+        if (activity is null) return;
+
+        activity.SetTag(TelemetryConstants.TagNames.AuthKeysEvaluated, evaluated);
+        activity.SetTag(TelemetryConstants.TagNames.AuthKeysAllowed, allowed);
+        activity.SetTag(TelemetryConstants.TagNames.AuthEvaluatorCreations, evaluatorCreations);
+    }
 }

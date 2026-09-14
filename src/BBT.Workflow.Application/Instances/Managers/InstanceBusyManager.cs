@@ -38,7 +38,8 @@ public sealed class InstanceBusyManager(
     }
 
     /// <inheritdoc />
-    public async Task MarkBusyWithPropagationAsync(Guid instanceId, CancellationToken cancellationToken = default)
+    public async Task<InstanceStatus?> MarkBusyWithPropagationAsync(
+        Guid instanceId, CancellationToken cancellationToken = default)
     {
         Instance? instance;
 
@@ -56,12 +57,22 @@ public sealed class InstanceBusyManager(
             // nothing left to resume, and a terminal parent's correlation is being closed, not
             // extended. (An already-Busy, still-live parent is different: propagation still runs
             // for it below — see MarkBusyWithPropagationAsync_WhenAlreadyBusyParent_ShouldStillPropagateToSubflow.)
-            if (instance is null || instance.IsCompleted)
-                return;
+            if (instance is null)
+                return null;
+
+            if (instance.IsCompleted)
+                return instance.Status;
 
             if (!instance.IsBusy)
             {
-                if (await instanceRepository.TryMarkBusyAsync(instanceId, cancellationToken))
+                // A level with no active SubFlow below it owns the client-visible status, so the
+                // projection rides along in the same CAS. A level that HAS one does not: its
+                // EffectiveStatus is the leaf's and is stamped after the walk returns.
+                var ownsVisibleStatus = instance.Subflow is null;
+                if (await instanceRepository.TryMarkBusyAsync(
+                        instanceId,
+                        cancellationToken,
+                        ownsVisibleStatus ? InstanceStatus.Busy : null))
                 {
                     logger.InstanceMarkedBusy(instance.Id);
                 }
@@ -70,7 +81,7 @@ public sealed class InstanceBusyManager(
             }
         }
 
-        await PropagateToSubflowAsync(instance, cancellationToken);
+        return await PropagateAndStampAsync(instance, InstanceStatus.Busy, cancellationToken);
     }
 
     /// <inheritdoc />
@@ -98,7 +109,10 @@ public sealed class InstanceBusyManager(
             // Set-based CAS; the WHERE re-verifies Active, so a racer that slipped past the
             // in-memory check above still resolves to AlreadyBusy instead of a double flip. This
             // is the actual mutual-exclusion mechanism — not the transaction, not an external lock.
-            if (!await instanceRepository.TryMarkBusyAsync(instanceId, cancellationToken))
+            if (!await instanceRepository.TryMarkBusyAsync(
+                    instanceId,
+                    cancellationToken,
+                    current.Subflow is null ? InstanceStatus.Busy : null))
                 return BusyMarkOutcome.AlreadyBusy;
 
             await uow.CommitAsync(cancellationToken);
@@ -107,13 +121,16 @@ public sealed class InstanceBusyManager(
             instance = current;
         }
 
-        await PropagateToSubflowAsync(instance, cancellationToken);
+        await PropagateAndStampAsync(instance, InstanceStatus.Busy, cancellationToken);
 
         return BusyMarkOutcome.Marked;
     }
 
     /// <inheritdoc />
-    public async Task<bool> TryReleaseAsync(Guid instanceId, CancellationToken cancellationToken = default)
+    public async Task<bool> TryReleaseAsync(
+        Guid instanceId,
+        CancellationToken cancellationToken = default,
+        InstanceStatus? effectiveStatus = null)
     {
         await using var uow = uowManager.Begin(
             new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew });
@@ -121,7 +138,8 @@ public sealed class InstanceBusyManager(
         // Same compare-and-set collapse as MarkBusyAsync: the "IsBusy && !IsCompleted" guard
         // reduces to "Status == Busy" (Busy and the terminal statuses are mutually exclusive).
         // No transaction needed — the same reasoning as MarkBusyAsync applies.
-        var flipped = await instanceRepository.TryReleaseBusyAsync(instanceId, cancellationToken);
+        var flipped = await instanceRepository.TryReleaseBusyAsync(
+            instanceId, cancellationToken, effectiveStatus);
         await uow.CommitAsync(cancellationToken);
 
         return flipped;
@@ -141,22 +159,55 @@ public sealed class InstanceBusyManager(
         if (instance.Subflow is not null)
         {
             await PropagateReleaseToSubflowAsync(instance, cancellationToken);
+
+            // The reserve this compensates stamped every level with Busy; undoing it must put the
+            // projection back or the ancestors keep reporting a chain that is no longer reserved.
+            await using var uow = uowManager.Begin(
+                new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew });
+            await instanceRepository.SetEffectiveStatusAsync(
+                instance.Id, InstanceStatus.Active, cancellationToken);
+            await uow.CommitAsync(cancellationToken);
             return;
         }
 
-        await TryReleaseAsync(instanceId, cancellationToken);
+        // The leaf owns its own visible status, so the projection goes back with the flip.
+        await TryReleaseAsync(instanceId, cancellationToken, InstanceStatus.Active);
     }
 
     /// <summary>
-    /// Propagates the Busy mark to the active SubFlow (if any) via the instance command gateway.
+    /// Propagates the Busy mark to the active SubFlow (if any) via the instance command gateway and
+    /// stamps THIS level's <see cref="Instance.EffectiveStatus"/> with whatever the bottom of the
+    /// chain turned out to be.
     /// </summary>
-    private async Task PropagateToSubflowAsync(Instance instance, CancellationToken cancellationToken)
+    /// <remarks>
+    /// The walk is top-down and synchronous, so the leaf's status is known by the time the recursive
+    /// call returns — that return value is the whole reason the gateway answers with a status. An
+    /// unknown answer (older runtime across a domain hop, or a level that reported nothing) writes
+    /// NOTHING: assuming Busy there would park a client on a chain that may already be at rest.
+    /// </remarks>
+    /// <returns>The status a client polling <paramref name="instance"/> would observe.</returns>
+    private async Task<InstanceStatus?> PropagateAndStampAsync(
+        Instance instance,
+        InstanceStatus ownStatus,
+        CancellationToken cancellationToken)
     {
         var subflow = instance.Subflow;
-        if (subflow is not null)
-        {
-            await instanceCommandGateway.MarkBusyAsync(ToBusyInput(subflow), cancellationToken);
-        }
+        if (subflow is null)
+            return ownStatus;
+
+        var result = await instanceCommandGateway.MarkBusyAsync(ToBusyInput(subflow), cancellationToken);
+        var leafStatus = result.IsSuccess
+            ? InstanceStatus.TryFromCode(result.Value?.EffectiveStatusCode)
+            : null;
+
+        if (leafStatus is null)
+            return null;
+
+        await using var uow = uowManager.Begin(
+            new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew });
+        await instanceRepository.SetEffectiveStatusAsync(instance.Id, leafStatus, cancellationToken);
+        await uow.CommitAsync(cancellationToken);
+        return leafStatus;
     }
 
     /// <summary>

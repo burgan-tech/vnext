@@ -86,7 +86,7 @@ public sealed class InstanceBusyManagerTests
         // The manager is a compare-and-set now: no aggregate load, the guard lives in the
         // repository's WHERE clause and the flag is the authoritative outcome.
         _instanceRepository
-            .Setup(r => r.TryMarkBusyAsync(instanceId, It.IsAny<CancellationToken>()))
+            .Setup(r => r.TryMarkBusyAsync(instanceId, It.IsAny<CancellationToken>(), It.IsAny<InstanceStatus?>()))
             .ReturnsAsync(true);
 
         // Act
@@ -96,7 +96,7 @@ public sealed class InstanceBusyManagerTests
         flipped.ShouldBeTrue();
         _uowManager.Verify(m => m.Begin(It.Is<UnitOfWorkOptions>(o =>
             o.Scope == UnitOfWorkScopeOption.RequiresNew)), Times.Once);
-        _instanceRepository.Verify(r => r.TryMarkBusyAsync(instanceId, It.IsAny<CancellationToken>()), Times.Once);
+        _instanceRepository.Verify(r => r.TryMarkBusyAsync(instanceId, It.IsAny<CancellationToken>(), It.IsAny<InstanceStatus?>()), Times.Once);
         _uow.Verify(u => u.CommitAsync(It.IsAny<CancellationToken>()), Times.Once);
     }
 
@@ -132,7 +132,7 @@ public sealed class InstanceBusyManagerTests
             .ReturnsAsync(instance);
 
         _instanceRepository
-            .Setup(r => r.TryMarkBusyAsync(instanceId, It.IsAny<CancellationToken>()))
+            .Setup(r => r.TryMarkBusyAsync(instanceId, It.IsAny<CancellationToken>(), It.IsAny<InstanceStatus?>()))
             .ReturnsAsync(true);
 
         // Act
@@ -140,7 +140,7 @@ public sealed class InstanceBusyManagerTests
 
         // Assert — UoW opened, CAS write, gateway NOT called
         _uowManager.Verify(m => m.Begin(It.IsAny<UnitOfWorkOptions>()), Times.Once);
-        _instanceRepository.Verify(r => r.TryMarkBusyAsync(instanceId, It.IsAny<CancellationToken>()), Times.Once);
+        _instanceRepository.Verify(r => r.TryMarkBusyAsync(instanceId, It.IsAny<CancellationToken>(), It.IsAny<InstanceStatus?>()), Times.Once);
         _uow.Verify(u => u.CommitAsync(It.IsAny<CancellationToken>()), Times.Once);
         _instanceCommandGateway.Verify(g => g.MarkBusyAsync(It.IsAny<MarkBusyInput>(), It.IsAny<CancellationToken>()), Times.Never);
     }
@@ -190,7 +190,8 @@ public sealed class InstanceBusyManagerTests
 
         _instanceCommandGateway
             .Setup(g => g.MarkBusyAsync(It.IsAny<MarkBusyInput>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(BBT.Aether.Results.Result.Ok());
+            .ReturnsAsync(BBT.Aether.Results.Result<BBT.Workflow.Gateway.MarkBusyOutput>.Ok(
+                new BBT.Workflow.Gateway.MarkBusyOutput { EffectiveStatusCode = InstanceStatus.Busy.Code }));
 
         // Act
         await CreateSut().MarkBusyWithPropagationAsync(instanceId);
@@ -216,7 +217,7 @@ public sealed class InstanceBusyManagerTests
 
         await CreateSut().MarkBusyWithPropagationAsync(instanceId);
 
-        _instanceRepository.Verify(r => r.TryMarkBusyAsync(instanceId, It.IsAny<CancellationToken>()), Times.Never);
+        _instanceRepository.Verify(r => r.TryMarkBusyAsync(instanceId, It.IsAny<CancellationToken>(), It.IsAny<InstanceStatus?>()), Times.Never);
         _instanceCommandGateway.Verify(g => g.MarkBusyAsync(It.IsAny<MarkBusyInput>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
@@ -273,7 +274,7 @@ public sealed class InstanceBusyManagerTests
             .ReturnsAsync(instance);
 
         _instanceRepository
-            .Setup(r => r.TryMarkBusyAsync(instanceId, It.IsAny<CancellationToken>()))
+            .Setup(r => r.TryMarkBusyAsync(instanceId, It.IsAny<CancellationToken>(), It.IsAny<InstanceStatus?>()))
             .ReturnsAsync(true);
 
         // Act
@@ -283,7 +284,7 @@ public sealed class InstanceBusyManagerTests
         outcome.ShouldBe(BusyMarkOutcome.Marked);
         _uowManager.Verify(m => m.Begin(It.Is<UnitOfWorkOptions>(o =>
             o.Scope == UnitOfWorkScopeOption.RequiresNew)), Times.Once);
-        _instanceRepository.Verify(r => r.TryMarkBusyAsync(instanceId, It.IsAny<CancellationToken>()), Times.Once);
+        _instanceRepository.Verify(r => r.TryMarkBusyAsync(instanceId, It.IsAny<CancellationToken>(), It.IsAny<InstanceStatus?>()), Times.Once);
         _uow.Verify(u => u.CommitAsync(It.IsAny<CancellationToken>()), Times.Once);
     }
 
@@ -346,13 +347,13 @@ public sealed class InstanceBusyManagerTests
             .Setup(r => r.FindWithActiveSubFlowAsync(leafId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(leaf);
         _instanceRepository
-            .Setup(r => r.TryReleaseBusyAsync(leafId, It.IsAny<CancellationToken>()))
+            .Setup(r => r.TryReleaseBusyAsync(leafId, It.IsAny<CancellationToken>(), It.IsAny<InstanceStatus?>()))
             .ReturnsAsync(true);
 
         await CreateSut().ReleaseWithPropagationAsync(leafId);
 
         // The settle is a set-based CAS in the repository; the in-memory copy is untouched.
-        _instanceRepository.Verify(r => r.TryReleaseBusyAsync(leafId, It.IsAny<CancellationToken>()), Times.Once);
+        _instanceRepository.Verify(r => r.TryReleaseBusyAsync(leafId, It.IsAny<CancellationToken>(), It.IsAny<InstanceStatus?>()), Times.Once);
         _uow.Verify(u => u.CommitAsync(It.IsAny<CancellationToken>()), Times.Once);
         _instanceCommandGateway.Verify(g => g.ReleaseBusyAsync(
             It.IsAny<MarkBusyInput>(), It.IsAny<CancellationToken>()), Times.Never);
@@ -382,5 +383,112 @@ public sealed class InstanceBusyManagerTests
             Guid.NewGuid(), parentId, "waiting-child", subInstanceId,
             SubFlowType.SubFlow.Code, "bank", "child-flow", "1.0.0"));
         return parent;
+    }
+
+    // ─── EffectiveStatus propagation (Edge A) ────────────────────────────────
+
+    private Instance ParentWithActiveSubflow(Guid parentId, Guid subflowInstanceId) =>
+        WithCorrelation(Instance.Create(parentId, "test-flow", "1.0.0"), parentId, subflowInstanceId);
+
+    private static Instance WithCorrelation(Instance instance, Guid parentId, Guid subflowInstanceId)
+    {
+        instance.AddCorrelation(InstanceCorrelation.Create(
+            Guid.NewGuid(), parentId, "state-waiting", subflowInstanceId, "S", "sub-domain", "sub-flow", "1.0.0"));
+        return instance;
+    }
+
+    [Fact]
+    public async Task MarkBusyWithPropagationAsync_ShouldStampAncestorWithTheLeafStatusTheWalkReported()
+    {
+        // A parent inside an active SubFlow is already Busy and its own row never moves, so the
+        // leaf's flip is invisible to anything validating against the parent. The stamp is what
+        // makes it visible — and the value must be the one the walk brought back, not an assumption.
+        var parentId = Guid.NewGuid();
+        var leafId = Guid.NewGuid();
+
+        _instanceRepository
+            .Setup(r => r.FindWithActiveSubFlowAsync(parentId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(ParentWithActiveSubflow(parentId, leafId));
+
+        _instanceCommandGateway
+            .Setup(g => g.MarkBusyAsync(It.IsAny<MarkBusyInput>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result<MarkBusyOutput>.Ok(
+                new MarkBusyOutput { EffectiveStatusCode = InstanceStatus.Busy.Code }));
+
+        var reported = await CreateSut().MarkBusyWithPropagationAsync(parentId);
+
+        reported.ShouldBe(InstanceStatus.Busy);
+        _instanceRepository.Verify(
+            r => r.SetEffectiveStatusAsync(parentId, InstanceStatus.Busy, It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task MarkBusyWithPropagationAsync_WhenTheFarSideReportsNoStatus_ShouldWriteNothing()
+    {
+        // A cross-domain hop whose far side predates the status answer returns an empty body. That
+        // is "unknown", and guessing Busy there would park a client on a chain that may be at rest.
+        var parentId = Guid.NewGuid();
+        var leafId = Guid.NewGuid();
+
+        _instanceRepository
+            .Setup(r => r.FindWithActiveSubFlowAsync(parentId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(ParentWithActiveSubflow(parentId, leafId));
+
+        _instanceCommandGateway
+            .Setup(g => g.MarkBusyAsync(It.IsAny<MarkBusyInput>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result<MarkBusyOutput>.Ok(MarkBusyOutput.None));
+
+        var reported = await CreateSut().MarkBusyWithPropagationAsync(parentId);
+
+        reported.ShouldBeNull();
+        _instanceRepository.Verify(
+            r => r.SetEffectiveStatusAsync(It.IsAny<Guid>(), It.IsAny<InstanceStatus>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task MarkBusyWithPropagationAsync_WhenLeafHasNoSubflow_ShouldWriteItsOwnStatusWithTheFlip()
+    {
+        // The bottom of the chain owns the visible status, so the projection rides along in the CAS
+        // rather than costing a second statement.
+        var leafId = Guid.NewGuid();
+        _instanceRepository
+            .Setup(r => r.FindWithActiveSubFlowAsync(leafId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Instance.Create(leafId, "test-flow", "1.0.0"));
+        _instanceRepository
+            .Setup(r => r.TryMarkBusyAsync(leafId, It.IsAny<CancellationToken>(), It.IsAny<InstanceStatus?>()))
+            .ReturnsAsync(true);
+
+        var reported = await CreateSut().MarkBusyWithPropagationAsync(leafId);
+
+        reported.ShouldBe(InstanceStatus.Busy);
+        _instanceRepository.Verify(
+            r => r.TryMarkBusyAsync(leafId, It.IsAny<CancellationToken>(), InstanceStatus.Busy), Times.Once);
+        _instanceRepository.Verify(
+            r => r.SetEffectiveStatusAsync(It.IsAny<Guid>(), It.IsAny<InstanceStatus>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task ReleaseWithPropagationAsync_ShouldPutTheAncestorProjectionBack()
+    {
+        // Compensation: the reserve stamped Busy down the chain, so undoing it must clear the
+        // ancestor's projection too or it keeps reporting a reservation that no longer exists.
+        var parentId = Guid.NewGuid();
+        var leafId = Guid.NewGuid();
+
+        _instanceRepository
+            .Setup(r => r.FindWithActiveSubFlowAsync(parentId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(ParentWithActiveSubflow(parentId, leafId));
+        _instanceCommandGateway
+            .Setup(g => g.ReleaseBusyAsync(It.IsAny<MarkBusyInput>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result.Ok());
+
+        await CreateSut().ReleaseWithPropagationAsync(parentId);
+
+        _instanceRepository.Verify(
+            r => r.SetEffectiveStatusAsync(parentId, InstanceStatus.Active, It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 }

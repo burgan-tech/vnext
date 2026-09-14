@@ -8,7 +8,7 @@ namespace BBT.Workflow.Instances.Events;
 /// Contains all necessary information about the state change for parent instance synchronization.
 /// </summary>
 [EventName("instance.sub.state.changed")]
-public class InstanceSubStateChangedEvent : IDistributedEvent, ITraceableDistributedEvent
+public class InstanceSubStateChangedEvent : IDistributedEvent, ILaneAwareDistributedEvent
 {
     /// <summary>
     /// The ID of the Parent instance
@@ -64,6 +64,28 @@ public class InstanceSubStateChangedEvent : IDistributedEvent, ITraceableDistrib
     public required DateTime ChangedAt { get; init; }
 
     /// <summary>
+    /// The sub-item's effective status at the moment it came to rest — the status the ancestor
+    /// chain should project for it. Null from a publisher that predates the field, which the
+    /// receiver reads as "no status reported" and leaves the ancestor's projection untouched.
+    /// </summary>
+    public string? NewStatus { get; init; }
+
+    /// <summary>
+    /// Per-instance, strictly increasing notification number, assigned by the sub-item inside the
+    /// same transaction that publishes this event. It is the ordering authority the receiver uses
+    /// instead of <see cref="ChangedAt"/>.
+    /// </summary>
+    /// <remarks>
+    /// A wall-clock comparison cannot order two notifications produced by different pods, and the
+    /// consequence of getting it wrong is not symmetric: dropping a state change is corrected by the
+    /// next one, but dropping the notification that takes an ancestor OUT of Busy strands a client
+    /// long-polling on a chain that has already finished — nothing later moves it. A counter
+    /// incremented in the publisher's own transaction has no clock in it at all. Zero from a
+    /// publisher that predates the field; the receiver then falls back to the timestamp guard.
+    /// </remarks>
+    public long NotificationSeq { get; init; }
+
+    /// <summary>
     /// The root ancestor instance ID for nested subflow chains.
     /// <c>null</c> when this is a root (non-subflow) instance.
     /// </summary>
@@ -83,4 +105,30 @@ public class InstanceSubStateChangedEvent : IDistributedEvent, ITraceableDistrib
     {
         return $"{nameof(InstanceSubStateChangedEvent)}: ParentInstanceId={ParentInstanceId} SubInstanceId={SubInstanceId} Domain={Domain} Flow={Flow} PreviousState={PreviousState} NewState={NewState}";
     }
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// This event is lane-aware because its consumer opens a top-level operation, not an
+    /// informational read: <c>SubflowStateService</c> takes the per-sub-item lock, runs its own
+    /// transactional unit of work against the parent and relays the resulting event to the
+    /// grandparent. Without the anchor that work parented to the internal relay endpoint's server
+    /// span, so a cross-domain sub-state change detached from the business trace entirely — the one
+    /// sub/* path with that gap.
+    /// </remarks>
+    public string? TraceRoot { get; set; }
+
+    /// <inheritdoc />
+    public string? ParentTraceRoot { get; set; }
+
+    /// <inheritdoc />
+    public DateTimeOffset? EpisodeStartedAt { get; set; }
+
+    /// <inheritdoc />
+    public string? EpisodeTrigger { get; set; }
+
+    /// <inheritdoc />
+    public string? EpisodeTransitionKey { get; set; }
+
+    /// <inheritdoc />
+    public string? EpisodeTraceRoot { get; set; }
 }

@@ -1,5 +1,5 @@
 {
-  "runtimeVersion": "0.0.80",
+  "runtimeVersion": "0.0.90",
   "engine": {
     "pythonTask": {
       "since": "0.0.80",
@@ -181,11 +181,19 @@
         "GET {domain}/workflows/{workflow}/instances/{instance}/functions/state",
         "GET {domain}/workflows/{workflow}/instances/{instance}/incidents",
         "GET {domain}/workflows/{workflow}/instances/{instance}/incidents/active",
-        "GET monitor/{domain}/workflows/{workflow}/instances/{instance}/incidents",
         "GET {domain}/workflows/{workflow}/instances/{instance}",
         "GET {domain}/workflows/{workflow}/instances"
       ],
       "schemaPath": "incident"
+    },
+    "taskAndActionHistory": {
+      "since": "0.0.90",
+      "status": "stable",
+      "description": "tasks and actions system functions over the task journal (issue #939), dispatched like state/data/hierarchy via the {function} route segment (IInstanceFunctionHandler registrations, keys in FunctionTypeConst - a custom function named tasks or actions is shadowed, the standard system-function-key rule). GET .../instances/{instance}/functions/tasks returns the instance's FULL InstanceTasks journal in execution order (StartedAt ascending, unpaged) under the same queryRoles gate as the state function. Each row carries execution METADATA ONLY: journal row id, taskKey, the owning transition's context (transitionKey, fromState, toState, triggerType), status (waiting/busy/completed/faulted), businessStatus (unknown/success/failed), startedAt/finishedAt/durationMs, and error - the fault reason extracted from the journaled {\"error\":...} response of a faulted task. The journaled request/response/invocationResult payloads are deliberately NOT exposed: mapping scripts write their built headers (including auth material) into them, so full payloads are served by NO API since the Monitor host removal (#982, monitor-api-host deprecation) - they stay in the journal table, operator/DB material only; the repository read projects the metadata columns in SQL (InstanceTaskHistoryRow), so the jsonb payloads never even leave the database (the Faulted rows' small {\"error\":...} Response is the one CASE-fetched exception). GET .../functions/actions?taskId={id} returns the recorded execution sub-steps (InstanceActions) of one journal row in execution order, answers 400 (Instance:100039) without a valid taskId query parameter and 404 (Instance:100038) when the task does not belong to the instance in the route, and echoes the owning taskId/taskKey. KNOWN GAP: nothing in the runtime writes InstanceAction rows yet - the function contract is in place and returns an empty list until a writer lands (tracked as a follow-up to #939). Neither function touches the state function body, so no ResponseShapeVersion change.",
+      "apiEndpoints": [
+        "GET {domain}/workflows/{workflow}/instances/{instance}/functions/tasks",
+        "GET {domain}/workflows/{workflow}/instances/{instance}/functions/actions?taskId={taskId}"
+      ]
     }
   }
 }

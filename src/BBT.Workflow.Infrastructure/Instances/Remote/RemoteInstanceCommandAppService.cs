@@ -59,14 +59,6 @@ public sealed class RemoteInstanceCommandAppService(
                 queryParams.Add($"version={Uri.EscapeDataString(input.Version)}");
             if (input.Sync)
                 queryParams.Add($"sync={input.Sync}");
-            
-            if (input.Extensions?.Length > 0)
-            {
-                foreach (var ext in input.Extensions)
-                {
-                    queryParams.Add($"extensions={Uri.EscapeDataString(ext)}");
-                }
-            }
 
             if (queryParams.Count > 0)
                 relativePath += "?" + string.Join("&", queryParams);
@@ -130,14 +122,6 @@ public sealed class RemoteInstanceCommandAppService(
                 queryParams.Add($"sync={input.Sync}");
 
             queryParams.Add("strictIdempotency=true");
-            
-            if (input.Extensions?.Length > 0)
-            {
-                foreach (var ext in input.Extensions)
-                {
-                    queryParams.Add($"extensions={Uri.EscapeDataString(ext)}");
-                }
-            }
 
             if (queryParams.Count > 0)
                 relativePath += "?" + string.Join("&", queryParams);
@@ -284,14 +268,6 @@ public sealed class RemoteInstanceCommandAppService(
             var queryParams = new List<string>();
             if (input.Sync)
                 queryParams.Add("sync=true");
-            
-            if (input.Extensions?.Length > 0)
-            {
-                foreach (var ext in input.Extensions)
-                {
-                    queryParams.Add($"extensions={Uri.EscapeDataString(ext)}");
-                }
-            }
 
             if (queryParams.Count > 0)
                 relativePath += "?" + string.Join("&", queryParams);
@@ -551,7 +527,7 @@ public sealed class RemoteInstanceCommandAppService(
     /// Marks instance Busy recursively by calling the remote API.
     /// PUT {baseUrl}/api/v{version}/{domain}/workflows/{workflow}/instances/{instanceId}/busy
     /// </summary>
-    public async Task<Result> MarkBusyAsync(
+    public async Task<Result<MarkBusyOutput>> MarkBusyAsync(
         MarkBusyInput input,
         CancellationToken cancellationToken = default)
     {
@@ -560,7 +536,7 @@ public sealed class RemoteInstanceCommandAppService(
             var endpointResult = await endpointResolver.GetEndpointAsync(input.Domain, EndpointKind.Url, cancellationToken);
 
             if (!endpointResult.IsSuccess)
-                return Result.Fail(endpointResult.Error);
+                return Result<MarkBusyOutput>.Fail(endpointResult.Error);
 
             var endpoint = endpointResult.Value!;
 
@@ -580,11 +556,43 @@ public sealed class RemoteInstanceCommandAppService(
                 CurrentUserForwardHeadersHelper.MergeIntoRequest(requestMessage, forwardHeaders, null, RemoteHttpResponseHelper.IsRestrictedHeader, correlationIdProvider.Get());
             }, cancellationToken);
 
-            return await HandleResponseAsync(response, cancellationToken);
+            return await HandleMarkBusyResponseAsync(response, cancellationToken);
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or OperationCanceledException)
         {
-            return Result.Fail(Error.Transient("remote_network_error", ex.Message));
+            return Result<MarkBusyOutput>.Fail(Error.Transient("remote_network_error", ex.Message));
+        }
+    }
+
+    /// <summary>
+    /// Reads a busy-propagation answer. Deliberately tolerant of a missing or unparseable body: a
+    /// far side running a version that predates <see cref="MarkBusyOutput"/> answers 200 with no
+    /// content, and that is a successful propagation whose leaf status is simply unknown — not a
+    /// failure, and not an excuse to assume Busy.
+    /// </summary>
+    private static async Task<Result<MarkBusyOutput>> HandleMarkBusyResponseAsync(
+        HttpResponseMessage response,
+        CancellationToken cancellationToken)
+    {
+        if (!response.IsSuccessStatusCode)
+        {
+            var error = await RemoteHttpResponseHelper.MapToErrorAsync(
+                response, cancellationToken, JsonSerializerConstants.JsonOptions);
+            return Result<MarkBusyOutput>.Fail(error);
+        }
+
+        try
+        {
+            var content = await response.ReadDecompressedContentAsync(cancellationToken);
+            if (string.IsNullOrWhiteSpace(content))
+                return Result<MarkBusyOutput>.Ok(MarkBusyOutput.None);
+
+            var parsed = JsonSerializer.Deserialize<MarkBusyOutput>(content, JsonSerializerConstants.JsonOptions);
+            return Result<MarkBusyOutput>.Ok(parsed ?? MarkBusyOutput.None);
+        }
+        catch (JsonException)
+        {
+            return Result<MarkBusyOutput>.Ok(MarkBusyOutput.None);
         }
     }
 

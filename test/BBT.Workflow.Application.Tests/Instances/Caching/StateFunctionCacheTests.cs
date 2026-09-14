@@ -240,6 +240,7 @@ public class StateFunctionCacheTests
         sut.ComputeEtag(input, fingerprint with { Id = Guid.NewGuid() }).ShouldNotBe(baseline);
         sut.ComputeEtag(input, fingerprint with { EffectiveState = "approved" }).ShouldNotBe(baseline);
         sut.ComputeEtag(input, fingerprint with { Status = InstanceStatus.Busy }).ShouldNotBe(baseline);
+        sut.ComputeEtag(input, fingerprint with { EffectiveStatus = InstanceStatus.Busy }).ShouldNotBe(baseline);
         sut.ComputeEtag(input, fingerprint with { FlowVersion = "2.0.0" }).ShouldNotBe(baseline);
     }
 
@@ -368,6 +369,24 @@ public class StateFunctionCacheTests
         with.ShouldNotBe(without);
     }
 
+    [Fact]
+    public void ComputeEtag_ChangesWhenOnlyTheEffectiveStatusMoves()
+    {
+        // The reported defect in one assertion: an accept that reserves a SubFlow chain flips the
+        // LEAF's status and nothing else. The parent's own Status, state, correlation counts and
+        // timestamps are all untouched, so EffectiveStatus is the only member that can carry that
+        // flip — without it the cached body stays valid across exactly the transition it must not
+        // survive.
+        var sut = CreateSut();
+        var input = CreateInput();
+        var parked = CreateFingerprint() with { Status = InstanceStatus.Busy, HasActiveSubFlow = true };
+
+        var beforeAccept = sut.ComputeEtag(input, parked with { EffectiveStatus = InstanceStatus.Active });
+        var afterAccept = sut.ComputeEtag(input, parked with { EffectiveStatus = InstanceStatus.Busy });
+
+        afterAccept.ShouldNotBe(beforeAccept);
+    }
+
     private static InstanceStateFingerprint CreateFingerprint(
         int correlationCount = 0,
         int completedCorrelationCount = 0,
@@ -375,7 +394,7 @@ public class StateFunctionCacheTests
         DateTime? lastSubFlowStateChangedAt = null,
         bool hasActiveIncident = false) =>
         new(Guid.Parse("11111111-1111-1111-1111-111111111111"), "test-key", "review",
-            InstanceStatus.Active, "1.0.0", HasActiveSubFlow: false,
+            InstanceStatus.Active, InstanceStatus.Active, "1.0.0", HasActiveSubFlow: false,
             CorrelationCount: correlationCount,
             CompletedCorrelationCount: completedCorrelationCount,
             LastCorrelationCompletedAt: lastCorrelationCompletedAt,

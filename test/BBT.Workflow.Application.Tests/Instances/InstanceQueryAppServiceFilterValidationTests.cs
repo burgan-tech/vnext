@@ -228,6 +228,8 @@ public sealed class InstanceQueryAppServiceFilterValidationTests : IDisposable
             instanceCorrelationRepository: Substitute.For<IInstanceCorrelationRepository>(),
             instanceJobRepository: Substitute.For<IInstanceJobRepository>(),
             instanceIncidentRepository: Substitute.For<IInstanceIncidentRepository>(),
+            instanceTaskRepository: Substitute.For<IInstanceTaskRepository>(),
+            instanceActionRepository: Substitute.For<IInstanceActionRepository>(),
             instanceExtensionService: Substitute.For<IInstanceExtensionService>(),
             scriptContextFactory: scriptContextFactory,
             instanceQueryGateway: Substitute.For<IInstanceQueryGateway>(),

@@ -31,6 +31,24 @@ public interface IInstanceQueryAppService : IApplicationService
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Returns the task execution history of an instance in execution order — the tasks system
+    /// function. Execution metadata only — the journaled payloads are not exposed on any API.
+    /// Gated by the same <c>queryRoles</c> check as the state function.
+    /// </summary>
+    Task<Result<GetInstanceTasksOutput>> GetInstanceTasksAsync(
+        GetInstanceTasksInput input,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns the recorded actions (execution sub-steps) of one task journal entry in execution
+    /// order — the actions system function. <c>NotFound</c> when the task does not belong to
+    /// the instance. Gated by the same <c>queryRoles</c> check as the state function.
+    /// </summary>
+    Task<Result<GetInstanceTaskActionsOutput>> GetInstanceTaskActionsAsync(
+        GetInstanceTaskActionsInput input,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Pages the error-boundary incident history of an instance, newest first. Gated by the same
     /// <c>queryRoles</c> check as the state function.
     /// </summary>

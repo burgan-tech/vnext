@@ -24,7 +24,7 @@ build", "mimari karar", "hangi yaklaşım".
 honest answer is a *recommendation* rather than a fact, and the subject is one of:
 
 - a new component type, task type, service, endpoint family or public contract
-- moving a responsibility between services (Orchestration / Execution / Monitor / workers)
+- moving a responsibility between services (Orchestration / Execution / workers)
 - adopting or dropping a technology, broker, library or infrastructure dependency
 - a data model, schema, migration or consistency change
 - an authentication, authorization, secret or PII boundary

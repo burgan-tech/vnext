@@ -48,8 +48,161 @@ public static class InstanceReadActivityHelper
     /// </summary>
     public static readonly ActivitySource ActivitySource = new(SourceName);
 
+    /// <summary>The read was answered 304 from the fingerprint projection alone.</summary>
+    public const string FastPathNotModified = "notModified";
+
+    /// <summary>The read was answered from the cached response body.</summary>
+    public const string FastPathCacheHit = "cacheHit";
+
+    /// <summary>The read fell through and built the response.</summary>
+    public const string FastPathBuild = "build";
+
+    /// <summary>The response cache is disabled, so this read always builds.</summary>
+    public const string FastPathDisabled = "disabled";
+
+    /// <summary>
+    /// Records which read ran and how it was answered — on the TRANSACTION, at zero span documents.
+    /// <para>
+    /// This is the hot path's whole design. The state function is the highest-QPS route in the
+    /// runtime and its 304 branch returns before any cache read, aggregate load or response build,
+    /// so today it costs one transaction document plus a single <c>Db.SELECT</c>. Opening an
+    /// envelope there would be a permanent +50&#160;% on documents for that route, to record that
+    /// nothing happened — and the binding objection is not cost but fidelity: no sampler is
+    /// configured in any host, so with untuned OpenTelemetry defaults a burst drops spans
+    /// indiscriminately, including the pipeline spans this tree exists to protect.
+    /// </para>
+    /// <para>
+    /// Written on EVERY branch, including the ones that go on to open an envelope. Tagging only the
+    /// fast path would put the two outcomes on different document types and force every query to
+    /// OR across a transaction tag and a span tag to answer one question.
+    /// </para>
+    /// </summary>
+    /// <param name="transaction">
+    /// The ambient activity captured at entry — the ASP.NET server span, since no vNext span is open
+    /// yet. Passed in rather than read here so it cannot accidentally pick up an envelope opened later.
+    /// </param>
+    public static void SetReadOutcome(Activity? transaction, string kind, string outcome)
+    {
+        if (transaction is null) return;
+
+        transaction.SetTag(TelemetryConstants.TagNames.FunctionKey, kind);
+        transaction.SetTag(TelemetryConstants.TagNames.ReadFastPath, outcome);
+    }
+
+    /// <summary>Operation name for view-rule resolution.</summary>
+    public const string OperationViewResolve = "View.Resolve";
+
+    /// <summary>
+    /// Starts the span covering view-rule evaluation — the ordered walk through a state's or
+    /// transition's <c>views</c> array until a rule matches.
+    /// <para>
+    /// Each rule is a compiled C# script, and on the warm path it is completely invisible today:
+    /// <c>Script.Compile</c> appears only on a cold compile, so a request that evaluated four rules
+    /// and one that evaluated none look identical. One span for the whole walk, with the rule count
+    /// and the winner as tags — not one span per rule, which would turn a slow view definition into
+    /// a wide trace instead of a readable number.
+    /// </para>
+    /// </summary>
+    public static Activity? StartViewResolve()
+    {
+        var activity = ActivitySource.StartActivity(OperationViewResolve, ActivityKind.Internal);
+        activity?.SetTag(TelemetryConstants.TagNames.SpanCategory, TelemetryConstants.SpanCategories.Business);
+        return activity;
+    }
+
+    /// <summary>Records how many rules ran and which view won.</summary>
+    public static void SetViewResolution(Activity? activity, int rulesEvaluated, string? selectedView)
+    {
+        if (activity is null) return;
+
+        activity.SetTag(TelemetryConstants.TagNames.ViewRulesEvaluated, rulesEvaluated);
+        if (selectedView is { Length: > 0 })
+            activity.SetTag(TelemetryConstants.TagNames.ViewSelected, selectedView);
+    }
+
+    /// <summary>Operation name for the wait on the active-subflow build gate.</summary>
+    public const string OperationBuildGate = "Instance.Read.BuildGate";
+
+    /// <summary>This request went on to build the response itself.</summary>
+    public const string BuildGateBuild = "build";
+
+    /// <summary>The wait paid off: the holder populated the cache and this request served that.</summary>
+    public const string BuildGateCoalesced = "coalesced";
+
+    /// <summary>
+    /// Starts the span covering the wait on the per-key build gate that serialises concurrent state
+    /// builds for an instance with an active subflow.
+    /// <para>
+    /// An active-subflow state read cannot be validated from the parent row, so it bypasses the
+    /// long-poll fast path and performs a live descent. The gate exists so that N simultaneous polls
+    /// on the same parent produce ONE descent; without a span, the time a request spends queued
+    /// behind another request's descent is indistinguishable from its own work, and the coalescing
+    /// the gate performs — the entire reason it exists — leaves no trace at all.
+    /// </para>
+    /// <para>
+    /// Opened on the gate path only, which is already the build branch: the 304 and cache-hit
+    /// branches return before reaching it, so this adds no documents to the hot path.
+    /// </para>
+    /// </summary>
+    public static Activity? StartBuildGate()
+    {
+        var activity = ActivitySource.StartActivity(OperationBuildGate, ActivityKind.Internal);
+        activity?.SetTag(TelemetryConstants.TagNames.SpanCategory, TelemetryConstants.SpanCategories.Business);
+        return activity;
+    }
+
+    /// <summary>
+    /// Records whether the request actually waited and what the wait bought.
+    /// </summary>
+    /// <param name="activity">The gate span, or null when nothing is listening.</param>
+    /// <param name="contended">True when the gate was held on arrival.</param>
+    /// <param name="outcome"><see cref="BuildGateBuild"/> or <see cref="BuildGateCoalesced"/>.</param>
+    public static void SetBuildGateOutcome(Activity? activity, bool contended, string outcome)
+    {
+        if (activity is null) return;
+
+        activity.SetTag(TelemetryConstants.TagNames.BuildGateContended, contended);
+        activity.SetTag(TelemetryConstants.TagNames.BuildGateOutcome, outcome);
+    }
+
     /// <summary>One level of descent into an active subflow.</summary>
     public const string OperationDescend = "Subflow.Descend";
+
+    /// <summary>Envelope for one built-in instance read.</summary>
+    public const string OperationRead = "Instance.Read";
+
+    /// <summary>
+    /// Starts the envelope span for one built-in read, named <c>Instance.Read/{kind}</c>.
+    /// <para>
+    /// This is the one genuine does-not-exist gap on the read path. Built-in and custom functions
+    /// share a single route template (<c>{domain}/workflows/{workflow}/instances/{instance}/functions/{function}</c>),
+    /// so Elastic's <c>transaction.name</c> is identical for a state poll, a view read and a
+    /// custom-function call. Per-function latency is therefore unobtainable from the transaction —
+    /// and the leaf layer does not help: <c>Db.*</c> and <c>Cache.*</c> are always on and are by far
+    /// the top emitters, so the read path is densely instrumented at the bottom and unstructured at
+    /// the top. A bounded-cardinality envelope is the only thing that can carry the distinction.
+    /// </para>
+    /// <para>
+    /// Opened in the query service rather than the controller on purpose: a descent re-enters this
+    /// service once per level, so an envelope at the controller would count one read where the
+    /// request actually performed three.
+    /// </para>
+    /// </summary>
+    /// <param name="kind">One of <see cref="InstanceReadKinds"/> — a closed set, so it can sit in the span name.</param>
+    /// <param name="domain">Owning domain, for aggregation. Bounded by the domain catalogue.</param>
+    /// <param name="flow">Owning workflow key. Bounded by the component catalogue.</param>
+    public static Activity? StartRead(string kind, string? domain = null, string? flow = null)
+    {
+        // Implicit parent, for the same baggage reason as StartDescend below.
+        var activity = ActivitySource.StartActivity($"{OperationRead}/{kind}", ActivityKind.Internal);
+        if (activity is null) return null;
+
+        activity.SetTag(TelemetryConstants.TagNames.SpanCategory, TelemetryConstants.SpanCategories.Business);
+        activity.SetTag(TelemetryConstants.TagNames.Layer, TelemetryConstants.Layers.Orchestration);
+        if (domain is { Length: > 0 }) activity.SetTag(TelemetryConstants.TagNames.Domain, domain);
+        if (flow is { Length: > 0 }) activity.SetTag(TelemetryConstants.TagNames.Flow, flow);
+        return activity;
+    }
 
     /// <summary>
     /// Starts the descent span for one level.

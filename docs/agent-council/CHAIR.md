@@ -63,7 +63,7 @@ and argue why the precedent should change. It is not re-litigated silently.
   documented as a known gap, not a bug to fix.
 - **Activation episode tracing**: one backdated `Instance.Activation/{key}` span per trigger→rest-point
   episode, emitted after commit, kind `Internal`; timers stay separate traces; the parent episode ends
-  at the subflow handoff. Every new lane carrier copies all three episode fields.
+  at the subflow handoff. Every new lane carrier copies all four episode fields.
 - **AI guidance has one source.** Rules and skills live under `.claude/`; Cursor reaches them through
   `@` pointers; `AGENTS.md` is the bootstrap for every agent. Runtime facts are linked, never copied.
 - **Decision history is recorded.** Dated specs, plans, reports and council sessions live in local

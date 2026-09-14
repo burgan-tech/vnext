@@ -34,7 +34,6 @@ public class UrlTemplateConfigCompletenessTests
     private static readonly string[] HostAppSettings =
     [
         "orchestration/BBT.Workflow.Orchestration.HttpApi.Host/appsettings.json",
-        "monitoring/BBT.Workflow.Monitor.HttpApi.Host/appsettings.json",
     ];
 
     /// <summary>
@@ -67,8 +66,8 @@ public class UrlTemplateConfigCompletenessTests
     /// dedicated template such as the long-poll acknowledge URL, must pick it up.
     /// </summary>
     [Theory]
-    [InlineData("/api/v1/monitor")]
-    [InlineData("api/v1/monitor/")]
+    [InlineData("/api/v1/edge")]
+    [InlineData("api/v1/edge/")]
     [InlineData("/gateway")]
     public void ConfiguredBasePath_PrefixesEveryHref(string basePath)
     {

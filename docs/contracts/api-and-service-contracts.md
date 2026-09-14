@@ -29,6 +29,8 @@ contracts. Remote services call public runtime APIs rather than internal reposit
 | --- | --- |
 | `GET /{domain}/workflows/{workflow}/instances/{instance}/functions/state` | Conditional state response, available transitions, role filtering, ETag, child correlations, workflow function discovery links, incident summary. |
 | `GET /{domain}/workflows/{workflow}/instances/{instance}/incidents` | Paged error-boundary incident history (newest first), same `queryRoles` gate as the state function; never carries stack traces. |
+| `GET /{domain}/workflows/{workflow}/instances/{instance}/functions/tasks` | Full task execution history in execution order (unpaged), same `queryRoles` gate. Execution metadata + fault reason only — journaled payloads are not exposed on any API. |
+| `GET /{domain}/workflows/{workflow}/instances/{instance}/functions/actions?taskId={id}` | Action history (execution sub-steps) of one task journal row in execution order (unpaged); `400` (`Instance:100039`) without a valid `taskId`, `404` (`Instance:100038`) when the task is not the instance's own. Same `queryRoles` gate. |
 | `GET /{domain}/workflows/{workflow}/instances/{instance}/functions/data` | Latest data, optional extensions, ETag. |
 | `GET /{domain}/workflows/{workflow}/instances/{instance}/functions/view` | Backend-driven view selection. |
 | `GET /{domain}/workflows/{workflow}/instances/{instance}/functions/schema` | Transition-aware schema. |
@@ -199,7 +201,7 @@ instance deterministically. It carries **links, not content**:
   the incident**; `history.href` always addresses the polled instance, because that link answers
   "what has gone wrong with the thing I asked about".
 - Visible to every caller who passes the state function's `queryRoles` gate. **Never** a stack trace
-  on any of these surfaces — operators read those from the Monitor API.
+  on any of these surfaces — operators read those from the logs / APM.
 
 ### `GET …/instances/{instance}/incidents/active`
 
@@ -252,7 +254,7 @@ the API gateway route rather than at the pod.
 So a host configures **one key**:
 
 ```json
-"UrlTemplates": { "BasePath": "/api/v1/monitor" }
+"UrlTemplates": { "BasePath": "/api/v1/gateway" }
 ```
 
 Omit the section entirely and the application serves its own prefix, `/api/v1` — the same one its
@@ -288,7 +290,7 @@ Two more back the accept-time SubFlow chain reserve (see
 
 | Method | Route | Response |
 | --- | --- | --- |
-| POST | `.../instances/{instance}/internal/subflow-forward?transitionKey=` | Same contract as the public transition endpoint: `200` (sync) / `202` (async), or the mapped error. The sync body is identity-only (`id`, `key`, `status`): the relay reads `status` and nothing else, so response enrichment (attributes, ETag, extensions) is suppressed on this surface. |
+| POST | `.../instances/{instance}/internal/subflow-forward?transitionKey=` | Same contract as the public transition endpoint: `200` (sync) / `202` (async), or the mapped error. The sync body is identity-only (`id`, `key`, `status`): the relay reads `status` and nothing else, so response enrichment (attributes, ETag) is suppressed on this surface. (Extensions are not evaluated on any sync write response since 0.0.93.) |
 | PUT | `.../instances/{instance}/internal/busy-release` | `200`, also when the instance is absent (no-op). |
 
 The endpoint contract can represent both response modes, but current runtime-generated active-child

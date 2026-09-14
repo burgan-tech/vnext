@@ -99,6 +99,13 @@ public sealed class InstanceCorrelation : AuditedEntity<Guid>
     public DateTime? SubFlowStateChangedAt { get; private set; }
 
     /// <summary>
+    /// Highest notification number applied from this sub-item (<c>Instance.SubStateNotificationSeq</c>).
+    /// Zero until the first notification that carries one. The receiver's ordering authority:
+    /// strictly lower is stale, equal is a duplicate and re-applied idempotently.
+    /// </summary>
+    public long SubFlowNotificationSeq { get; private set; }
+
+    /// <summary>
     /// Is completed
     /// </summary>
     public bool IsCompleted { get; private set; }
@@ -165,10 +172,17 @@ public sealed class InstanceCorrelation : AuditedEntity<Guid>
     /// </summary>
     /// <param name="newState">The new state of the SubFlow</param>
     /// <param name="changedAt">Timestamp when the state change occurred</param>
-    public void UpdateSubFlowState(string newState, DateTime changedAt)
+    public void UpdateSubFlowState(string newState, DateTime changedAt, long notificationSeq = 0)
     {
         SubFlowCurrentState = Check.Length(newState, nameof(newState), StateConstants.MaxKeyLength);
         SubFlowStateChangedAt = changedAt;
+
+        // Never move the watermark backwards: a duplicate delivery carries the same number and a
+        // stale one a lower number, and neither may lower the bar for the notifications after it.
+        if (notificationSeq > SubFlowNotificationSeq)
+        {
+            SubFlowNotificationSeq = notificationSeq;
+        }
     }
 
     internal InstanceCorrelation CreateSnapshot()
@@ -185,6 +199,7 @@ public sealed class InstanceCorrelation : AuditedEntity<Guid>
             SubFlowType = SubFlowType,
             SubFlowCurrentState = SubFlowCurrentState,
             SubFlowStateChangedAt = SubFlowStateChangedAt,
+            SubFlowNotificationSeq = SubFlowNotificationSeq,
             IsCompleted = IsCompleted,
             CompletedAt = CompletedAt,
             TerminalOutcome = TerminalOutcome,

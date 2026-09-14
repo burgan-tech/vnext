@@ -164,4 +164,73 @@ public class SubStateChangeCoalescingTests : DomainTestBase<DomainEntryPoint>
         published.PreviousState.ShouldBe("b");
         published.NewState.ShouldBe("c");
     }
+
+    // ─── the status half of the trigger (Edge B) ─────────────────────────────
+
+    /// <summary>
+    /// The hole a state-only trigger leaves. An episode can come to rest in the state it started
+    /// in — a <c>$self</c> shared transition, a retry landing back in the same state — and the
+    /// accept stamped every ancestor Busy on the way down. With nothing published, those ancestors
+    /// stay Busy and a client long-polling one of them waits on a chain that has already finished.
+    /// Nothing later moves them, which is why this case, unlike a dropped state change, does not
+    /// heal itself.
+    /// </summary>
+    [Fact]
+    public void AnEpisodeThatOnlyChangedStatus_StillReportsToTheParent()
+    {
+        var instance = CreateSubFlow();
+
+        var published = instance.PublishPendingSubStateChange(statusChanged: true);
+
+        published.ShouldBeTrue();
+        var evt = SubStateEvents(instance).ShouldHaveSingleItem();
+        evt.NewState.ShouldBe(instance.GetCurrentState);
+        evt.PreviousState.ShouldBe(instance.GetCurrentState);
+        evt.NewStatus.ShouldBe(InstanceStatus.Active.Code);
+    }
+
+    [Fact]
+    public void AnEpisodeThatMovedNothing_StillPublishesNothing()
+    {
+        var instance = CreateSubFlow();
+
+        instance.PublishPendingSubStateChange().ShouldBeFalse();
+
+        SubStateEvents(instance).ShouldBeEmpty();
+    }
+
+    /// <summary>
+    /// A state change and a status change in the same episode are still ONE event — the coalescing
+    /// contract is unchanged, the status only adds a reason to publish, never a second publish.
+    /// </summary>
+    [Fact]
+    public void AStateAndStatusChangeInOneEpisode_RemainOneEvent()
+    {
+        var instance = CreateSubFlow();
+
+        instance.ChangeState(S("b"));
+        instance.ChangeState(S("c"));
+        instance.PublishPendingSubStateChange(statusChanged: true);
+
+        var evt = SubStateEvents(instance).ShouldHaveSingleItem();
+        evt.NewState.ShouldBe("c");
+    }
+
+    /// <summary>
+    /// The ordering authority. A wall clock cannot order two notifications produced on different
+    /// pods; a counter incremented inside the publishing transaction can.
+    /// </summary>
+    [Fact]
+    public void EveryNotification_CarriesAStrictlyIncreasingSequence()
+    {
+        var instance = CreateSubFlow();
+
+        instance.ChangeState(S("b"));
+        instance.PublishPendingSubStateChange();
+        instance.ChangeState(S("c"));
+        instance.PublishPendingSubStateChange();
+
+        var sequences = SubStateEvents(instance).Select(e => e.NotificationSeq).ToArray();
+        sequences.ShouldBe([1L, 2L]);
+    }
 }

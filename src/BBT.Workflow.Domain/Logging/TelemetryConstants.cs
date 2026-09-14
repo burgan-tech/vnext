@@ -1,3 +1,5 @@
+using System;
+using System.Collections.Generic;
 namespace BBT.Workflow.Logging;
 
 /// <summary>
@@ -79,6 +81,53 @@ public static class TelemetryConstants
         /// <summary><c>resolved</c> | <c>empty</c> | <c>failed</c>.</summary>
         public const string AuthOutcome = "vnext.auth.outcome";
         /// <summary>
+        /// The authorization verdict itself: true when the caller was allowed. Deliberately just the
+        /// bit plus the role COUNT — never grant expressions, role names or caller identity, which
+        /// would move an access decision's inputs into a telemetry system with a different access
+        /// boundary.
+        /// </summary>
+        public const string AuthDecision = "vnext.auth.decision";
+
+        /// <summary>How many transition keys a filtering pass was asked about.</summary>
+        public const string AuthKeysEvaluated = "vnext.auth.keys.evaluated";
+
+        /// <summary>How many of them survived the filter.</summary>
+        public const string AuthKeysAllowed = "vnext.auth.keys.allowed";
+
+        /// <summary>
+        /// How many role-grant evaluators the pass constructed. One is the healthy shape; a number
+        /// tracking the key count is the N+1 — and building an evaluator serializes the instance's
+        /// full latest data, so it is not a cheap allocation.
+        /// </summary>
+        public const string AuthEvaluatorCreations = "vnext.auth.evaluator.creations";
+
+        /// <summary>How many view rules were evaluated before one matched.</summary>
+        public const string ViewRulesEvaluated = "vnext.view.rules.evaluated";
+
+        /// <summary>The key of the view that won, or absent when none matched.</summary>
+        public const string ViewSelected = "vnext.view.selected";
+
+        /// <summary>
+        /// How an Inbox forward ended: <c>ok</c>, <c>transient</c> (will be re-delivered),
+        /// <c>non_transient</c> (dropped on purpose), <c>timeout</c> or <c>unreachable</c>. All five
+        /// currently collapse into a generic HTTP client span, which is why a delayed delivery
+        /// cannot be told from a dropped one.
+        /// </summary>
+        public const string ForwardOutcome = "vnext.forward.outcome";
+
+        /// <summary>HTTP status of a forward that got a response, for the two failing outcomes.</summary>
+        public const string ForwardStatusCode = "vnext.forward.status_code";
+
+        /// <summary>Which event action an intake handled: <c>start</c> or <c>transition</c>.</summary>
+        public const string EventAction = "vnext.event.action";
+
+        /// <summary>
+        /// How an incoming event was correlated to an instance: <c>mappingKey</c> (the mapping
+        /// returned an InstanceKey), <c>selector</c> (a query resolved one), <c>none</c> (no active
+        /// instance matched — a normal answer, acked on purpose) or <c>dropped</c>.
+        /// </summary>
+        public const string EventCorrelation = "vnext.event.correlation";
+        /// <summary>
         /// The caller's organizational posting. Part of the identity the provider keys its answer on
         /// (with sub and act_sub), so a wrong or missing role set is unexplainable without it.
         /// </summary>
@@ -99,6 +148,44 @@ public static class TelemetryConstants
         public const string DescentTransport = "vnext.descent.transport";
         /// <summary>Which built-in function descended: <c>state</c>, <c>data</c>, <c>schema</c>, <c>master</c>, <c>view</c>, <c>extensions</c>, <c>authorize</c>.</summary>
         public const string DescentFunction = "vnext.descent.function";
+
+        /// <summary>
+        /// Which built-in read a request performed, stamped on the TRANSACTION. Built-in and custom
+        /// functions share one route template, so without this the APM transaction name is identical
+        /// for a state poll, a view read and a custom-function call. Costs zero span documents.
+        /// </summary>
+        public const string FunctionKey = "vnext.function.key";
+
+        /// <summary>
+        /// How a state/data read was answered: <c>notModified</c> (304 from the fingerprint),
+        /// <c>cacheHit</c> (cached body), <c>build</c> (full build after a miss) or <c>disabled</c>
+        /// (the response cache is off, so it always builds).
+        /// <para>
+        /// Written on every branch, not only the fast ones. Tagging the fast path alone would leave
+        /// the two outcomes on different document types, so every query would need an OR across a
+        /// transaction tag and a span tag for one question.
+        /// </para>
+        /// </summary>
+        public const string ReadFastPath = "vnext.read.fastpath";
+        /// <summary>
+        /// How the wait on the per-key build gate ended: <c>build</c> (this request owns the build)
+        /// or <c>coalesced</c> (while it waited, the request that held the gate populated the short
+        /// active-subflow cache, so this one served that instead of building).
+        /// <para>
+        /// The ratio of the two is the only measure of whether the gate earns its place: all
+        /// <c>build</c> means it is serialising requests for nothing, and a healthy <c>coalesced</c>
+        /// share is the duplicate work it prevented.
+        /// </para>
+        /// </summary>
+        public const string BuildGateOutcome = "vnext.buildgate.outcome";
+
+        /// <summary>
+        /// True when the gate was already held on arrival, so this request actually waited. A gate
+        /// span with <c>false</c> cost nothing but a span; the span's duration is only a wait when
+        /// this is true.
+        /// </summary>
+        public const string BuildGateContended = "vnext.buildgate.contended";
+
         /// <summary>
         /// Set only when a descent did NOT yield a usable answer, naming why. Absent on the normal
         /// path — a fallback that leaves no mark is indistinguishable from a successful descent.
@@ -227,9 +314,6 @@ public static class TelemetryConstants
         /// Busy or was not carried).
         /// </summary>
         public const string EnrichSource = "vnext.enrich.source";
-
-        /// <summary>Number of extensions the caller asked for on a sync response (0 = defaults only).</summary>
-        public const string ExtensionsRequested = "vnext.extensions.requested";
 
         /// <summary>
         /// What the Busy→Active compare-and-set at settlement actually did: <c>flipped</c> (this
@@ -424,6 +508,20 @@ public static class TelemetryConstants
         public const string DaprAppId = "vnext.dapr.app_id";
 
         /// <summary>
+        /// Which wire an outbound cross-domain call took: <c>dapr</c> or <c>http</c>. Read from the
+        /// endpoint kind the discovery provider decided, so it can never disagree with the transport
+        /// actually used. Distinct from <see cref="DescentTransport"/>, which describes LOCALITY
+        /// (in-process vs not) rather than the wire.
+        /// </summary>
+        public const string RemoteTransport = "vnext.remote.transport";
+
+        /// <summary>
+        /// Host of the resolved endpoint. Bounded by the domain catalogue; the relative path is
+        /// deliberately never tagged, because it carries instance ids.
+        /// </summary>
+        public const string RemoteHost = "vnext.remote.host";
+
+        /// <summary>
         /// Target Kubernetes namespace appended to the app-id for cross-namespace invocation.
         /// Absent when resolution stays in the caller's own namespace.
         /// </summary>
@@ -486,6 +584,13 @@ public static class TelemetryConstants
         public const string WorkersInbox = "BBT.Workflow.Workers.Inbox";
 
         /// <summary>
+        /// Cross-domain transport (<c>Remote.Send</c>). Its own source because the family crosses a
+        /// network boundary and carries both command and query traffic — folding it into
+        /// <c>Pipeline</c> would skew every pipeline duration aggregation built on that name.
+        /// </summary>
+        public const string Gateway = "BBT.Workflow.Gateway";
+
+        /// <summary>
         /// All ActivitySource names registered by the vNext engine.
         /// </summary>
         public static readonly string[] All =
@@ -503,8 +608,41 @@ public static class TelemetryConstants
             ExecutionInvokers,
             Execution,
             ExecutionPython,
-            WorkersInbox
+            WorkersInbox,
+            Gateway
         ];
+
+        /// <summary>
+        /// Sources a given host deliberately does NOT register, because nothing in that host can
+        /// emit them.
+        /// <para>
+        /// Registration is per-host, not global, and that is the whole reason this map exists: a
+        /// guard that asserted "every source in every host" would be asserting a rule the codebase
+        /// does not follow, and would have to be silenced the first time it fired — which is worse
+        /// than no guard. Registering a source a host cannot emit is not harmful at runtime, but it
+        /// sends the next reader hunting for spans that can never appear.
+        /// </para>
+        /// <para>
+        /// Adding a source with no entry here means "every host registers it". That is the safe
+        /// default: the failure this guards is a source going dark in ONE host, silently —
+        /// <c>StartActivity</c> returns null, the span is never created, and its children flatten
+        /// onto the nearest ancestor with no error anywhere.
+        /// </para>
+        /// </summary>
+        public static readonly IReadOnlyDictionary<string, string[]> DeliberatelyUnregistered =
+            new Dictionary<string, string[]>(StringComparer.Ordinal)
+            {
+                // The Execution service's own handler span. Only the Execution host runs it; its
+                // wildcard entry covers it there.
+                [Execution] = ["orchestration", "workers-inbox", "workers-outbox"],
+
+                // The Python task runner lives on the Execution host alone.
+                [ExecutionPython] = ["orchestration", "workers-inbox", "workers-outbox"],
+
+                // EventTraceScope's source; only the Inbox worker consumes events, and its own
+                // wildcard covers it there.
+                [WorkersInbox] = ["orchestration", "execution", "workers-outbox"]
+            };
     }
 
     /// <summary>
@@ -615,6 +753,12 @@ public static class TelemetryConstants
         public const string View = "view";
         public const string Extensions = "extensions";
         public const string Authorize = "authorize";
+
+        /// <summary>The authorization matrix forward — the sibling of <see cref="Authorize"/>.</summary>
+        public const string Matrix = "matrix";
+
+        /// <summary>A long-poll acknowledgement descending the chain to find the level that is waiting.</summary>
+        public const string Ack = "ack";
     }
 
     public static class AuthOutcomes

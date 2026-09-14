@@ -93,7 +93,7 @@ public sealed class RemoteInstanceCommandGateway : IInstanceCommandGateway
     }
 
     /// <inheritdoc />
-    public Task<Result> MarkBusyAsync(
+    public Task<Result<MarkBusyOutput>> MarkBusyAsync(
         MarkBusyInput input,
         CancellationToken cancellationToken = default)
     {

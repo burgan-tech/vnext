@@ -37,7 +37,6 @@ services:
       "--dapr-grpc-port", "42111",
       "--dapr-http-port", "42110",
       "--scheduler-host-address", "dapr-scheduler:50007",
-      "--placement-host-address", "dapr-placement:50005",
       # Explicit so the sidecar-to-sidecar port is deterministic (mDNS advertises whatever
       # the sidecar listens on; a fixed port is easier to read in traces and tcpdump).
       "--dapr-internal-grpc-port", "50002",
@@ -57,7 +56,6 @@ services:
     extra_hosts:
       - "host.orb.local:host-gateway"
     depends_on:
-      - dapr-placement
       - dapr-scheduler
       - redis
       - vault
@@ -86,7 +84,6 @@ services:
       "--dapr-grpc-port", "43111",
       "--dapr-http-port", "43110",
       "--scheduler-host-address", "dapr-scheduler:50007",
-      "--placement-host-address", "dapr-placement:50005",
       # Explicit so the sidecar-to-sidecar port is deterministic (mDNS advertises whatever
       # the sidecar listens on; a fixed port is easier to read in traces and tcpdump).
       "--dapr-internal-grpc-port", "50002",
@@ -106,7 +103,6 @@ services:
     extra_hosts:
       - "host.orb.local:host-gateway"
     depends_on:
-      - dapr-placement
       - dapr-scheduler
       - redis
       - vault
@@ -123,7 +119,6 @@ services:
       "--dapr-grpc-port", "44111",
       "--dapr-http-port", "44110",
       "--scheduler-host-address", "dapr-scheduler:50007",
-      "--placement-host-address", "dapr-placement:50005",
       # Explicit so the sidecar-to-sidecar port is deterministic (mDNS advertises whatever
       # the sidecar listens on; a fixed port is easier to read in traces and tcpdump).
       "--dapr-internal-grpc-port", "50002",
@@ -143,7 +138,6 @@ services:
     extra_hosts:
       - "host.orb.local:host-gateway"
     depends_on:
-      - dapr-placement
       - dapr-scheduler
       - redis
       - vault
@@ -160,7 +154,6 @@ services:
       "--dapr-grpc-port", "45111",
       "--dapr-http-port", "45110",
       "--scheduler-host-address", "dapr-scheduler:50007",
-      "--placement-host-address", "dapr-placement:50005",
       # Explicit so the sidecar-to-sidecar port is deterministic (mDNS advertises whatever
       # the sidecar listens on; a fixed port is easier to read in traces and tcpdump).
       "--dapr-internal-grpc-port", "50002",
@@ -180,7 +173,6 @@ services:
     extra_hosts:
       - "host.orb.local:host-gateway"
     depends_on:
-      - dapr-placement
       - dapr-scheduler
       - redis
       - vault
@@ -196,7 +188,6 @@ services:
       "--dapr-grpc-port", "44211",
       "--dapr-http-port", "44210",
       "--scheduler-host-address", "dapr-scheduler:50007",
-      "--placement-host-address", "dapr-placement:50005",
       # Explicit so the sidecar-to-sidecar port is deterministic (mDNS advertises whatever
       # the sidecar listens on; a fixed port is easier to read in traces and tcpdump).
       "--dapr-internal-grpc-port", "50002",
@@ -216,56 +207,9 @@ services:
     extra_hosts:
       - "host.orb.local:host-gateway"
     depends_on:
-      - dapr-placement
       - dapr-scheduler
       - redis
       - vault
-
-  vnext-monitoring-dapr:
-    image: "daprio/daprd"
-    container_name: vnext-monitoring-dapr
-    command: [
-      "./daprd",
-      "--config", "/dapr-config.yaml",
-      "--app-id", "vnext-monitoring",
-      "--app-port", "4203",
-      "--resources-path", "./components",
-      "--dapr-grpc-port", "42131",
-      "--dapr-http-port", "42130",
-      "--scheduler-host-address", "dapr-scheduler:50007",
-      "--placement-host-address", "dapr-placement:50005",
-      # Explicit so the sidecar-to-sidecar port is deterministic (mDNS advertises whatever
-      # the sidecar listens on; a fixed port is easier to read in traces and tcpdump).
-      "--dapr-internal-grpc-port", "50002",
-      "--app-channel-address", "host.orb.local"
-    ]
-    volumes:
-      - "../../etc/monitoring/dapr/components:/components"
-      - "../../etc/monitoring/dapr/config.yaml:/dapr-config.yaml"
-    ports:
-      - "42130:42130"
-      - "42131:42131"
-    networks:
-      bbt-development:
-        # Convenience alias "{app-id}-dapr" (the container is named after its ROLE, not its
-        # app-id). Name resolution is mDNS and does not need it; humans curling a sidecar do.
-        aliases: ["vnext-monitoring-dapr"]
-    extra_hosts:
-      - "host.orb.local:host-gateway"
-    depends_on:
-      - dapr-placement
-      - dapr-scheduler
-      - redis
-      - vault
-
-  dapr-placement:
-    image: "daprio/dapr"
-    container_name: dapr-placement
-    command: ["./placement"]
-    ports:
-      - "50005:50005"
-    networks:
-      - bbt-development
 
   dapr-scheduler:
     image: "daprio/scheduler"

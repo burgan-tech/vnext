@@ -68,7 +68,6 @@ public sealed class InstanceController(
         [FromBody] JsonElement? body,
         [FromQuery] string? version = null,
         [FromQuery] bool sync = false,
-        [FromQuery] string[]? extensions = null,
         CancellationToken cancellationToken = default
     )
     {
@@ -95,8 +94,7 @@ public sealed class InstanceController(
                 Tags = request.Tags,
                 Attributes = request.Attributes,
                 Stage = request.Stage
-            },
-            Extensions = extensions
+            }
         };
         if (httpContext is not null)
         {
@@ -116,7 +114,6 @@ public sealed class InstanceController(
         [FromBody] CreateSubInstanceDto request,
         [FromQuery] string? version = null,
         [FromQuery] bool sync = false,
-        [FromQuery] string[]? extensions = null,
         CancellationToken cancellationToken = default
     )
     {
@@ -144,9 +141,8 @@ public sealed class InstanceController(
                 ExtraProperties = new ExtraPropertyDictionary(request.ExtraProperties)
             },
             StrictIdempotency = true,
-            Extensions = extensions,
             // This surface is called only by a parent runtime, which reads IsSuccess from the
-            // response and nothing else — never project attributes/extensions here.
+            // response and nothing else — never project attributes here.
             SuppressResponseEnrichment = true
         };
         var httpContext = httpContextAccessor.HttpContext;
@@ -200,6 +196,19 @@ public sealed class InstanceController(
         CancellationToken cancellationToken = default
     )
     {
+        // Adopt the child's lane, exactly as /complete, /sub/fault and /sub/cancel do. This was the
+        // only sub/* relay endpoint without it: the parent write, its upward relay to the
+        // grandparent and every Db/Cache span underneath parented to THIS endpoint's server span
+        // instead of the business trace, so a cross-domain sub-state change was detached from the
+        // request that caused it. Reset (not Use) is the entry policy here — a Dapr/HTTP relay
+        // callback is its own request, and inheriting its span would anchor the lane on transport.
+        using var lane = WorkflowTraceLane.Reset(
+            request.TraceRoot,
+            request.ParentTraceRoot,
+            episode: ActivationEpisode.FromCarrier(
+                request.EpisodeStartedAt, request.EpisodeTrigger, request.EpisodeTransitionKey,
+                request.EpisodeTraceRoot));
+
         await subflowStateService.UpdateParentStateAsync(request, cancellationToken);
         return Ok();
     }
@@ -288,6 +297,8 @@ public sealed class InstanceController(
             },
             cancellationToken);
 
+        // The body carries the status at the bottom of this side's chain so the CALLING side can
+        // stamp its own ancestors' EffectiveStatus. A caller that predates it simply ignores it.
         return FromResult(result);
     }
 
@@ -581,7 +592,6 @@ public sealed class InstanceController(
         [FromRoute] string transitionKey,
         [FromBody] JsonElement? body = null,
         [FromQuery] bool sync = false,
-        [FromQuery] string[]? extensions = null,
         CancellationToken cancellationToken = default
     )
     {
@@ -602,10 +612,7 @@ public sealed class InstanceController(
             data = new TransitionDataInput(body);
         }
 
-        var input = new TransitionInput(domain, workflow, data, sync)
-        {
-            Extensions = extensions
-        };
+        var input = new TransitionInput(domain, workflow, data, sync);
         if (httpContext is not null)
         {
             input.Headers = httpContext.Request.Headers.ToDictionary(s => s.Key.ToLower(), s => s.Value.FirstOrDefault()?.ToString());

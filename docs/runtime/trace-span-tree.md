@@ -214,8 +214,18 @@ name is also readable as `BackgroundJob.Arm/{type}/{key}`, but the full unique n
 | `Transition.Enqueue` | `BBT.Workflow.Pipeline` | `vnext.transition.key`, `vnext.job.name`, `vnext.enqueue.path` (`Direct` \| `Outbox` — which delivery path the enqueue gateway took) | `AsyncTransitionStrategy.EnqueueAndSaveJobAsync`: the durable half of the async accept — job row, gateway decision, `RequiresNew` commit — run under the status lock. Was the unnamed remainder of the 202 server span. |
 | `BackgroundJob.Arm/{type}/{key}` | `BBT.Workflow.BackgroundJobs` | `vnext.job.name`, `vnext.job.type`, `vnext.transition.key`, `vnext.state.from`, `span.category=business`; `ActivityStatusCode.Error` + message when `ArmAsync` throws (rethrown) | `BackgroundJobActivityHelper.StartArmActivity` around `IBackgroundJobArmHandle.ArmAsync` in `AsyncTransitionStrategy`: the controlled-cardinality type and transition key are visible in the waterfall, while the unique scheduler job name remains a tag. Aether's own `BackgroundJob.Schedule*` spans are Verbose-gated. Automatic continuations do not arm jobs. |
 | `Events.PublishDeferred` | `BBT.Workflow.Pipeline` | `vnext.transition.key` | Staging deferred domain events onto the transactional outbox before the commit. The removed `EventHook.*` model is documented only as historical evidence in [Event Trace Chain](event-trace-chain.md). |
-| `Subflow.Descend/{targetFlow}` | `BBT.Workflow.Instances.Read` | `vnext.subflow.depth`, `vnext.descent.transport` (`local` \| `remote`), `vnext.descent.function` (`state` \| `master` \| `schema` \| `view` \| `extensions` \| `authorize`), target `vnext.domain`/`vnext.flow.key`/`vnext.instance.id`, `vnext.parent.instance.id`, `vnext.descent.outcome` (only when the descent produced no usable answer) | One level of a built-in function's walk into an active subflow. Emitted by the five `InstanceQueryAppService` descent helpers, `AuthorizeAppService`'s subflow forward and `InstanceRetryAppService`. See "Reading the descent ladder" below. |
+| `Subflow.Descend/{targetFlow}` | `BBT.Workflow.Instances.Read` | `vnext.subflow.depth`, `vnext.descent.transport` (`local` \| `remote`), `vnext.descent.function` (`state` \| `master` \| `schema` \| `view` \| `extensions` \| `authorize` \| `matrix` \| `ack`), target `vnext.domain`/`vnext.flow.key`/`vnext.instance.id`, `vnext.parent.instance.id`, `vnext.descent.outcome` (only when the descent produced no usable answer) | One level of a built-in function's walk into an active subflow. Emitted by the five `InstanceQueryAppService` descent helpers, `AuthorizeAppService`'s subflow forward and its authorization-matrix forward, `ViewContentResolutionService`'s cross-domain resolve, `InstanceCommandAppService.AcknowledgeLongPollAsync`'s chain descent and `InstanceRetryAppService`. See "Reading the descent ladder" below. |
 | `Auth.ResolveRoles` | `BBT.Workflow.Authorization` | `vnext.auth.provider`, `vnext.auth.memo.hit`, `vnext.auth.roles.count`, `vnext.auth.outcome` (`resolved` \| `empty` \| `failed`), `vnext.auth.position`, `sub`, `act.sub` | Caller-role resolution through an external provider. Emitted on BOTH the provider call and the request-scope memo hit, with the difference in `memo.hit` — the compile cache's rule. Only providers that do I/O are instrumented; the default provider reads `ICurrentUser` in-process. |
+| `Instance.Read/{kind}` | `BBT.Workflow.Instances.Read` | `vnext.domain`, `vnext.flow.key`, `vnext.layer=orchestration`, `span.category=business` | Envelope for one built-in instance read; `{kind}` is a closed set (`InstanceReadKinds`). **The only thing that can carry per-function latency**: built-in and custom functions share one route template (`FunctionController.cs:187`), so the APM transaction name is identical for a state poll, a view read and a custom-function call. Opened in `InstanceQueryAppService`, not the controller — a descent re-enters the service once per level, so a controller-level envelope would count one read where the request performed three. The five kinds that also name a descent reuse the descent vocabulary's exact strings. `state` and `data` open it on the BUILD branch only; the 304 / cache-hit branch creates **no span at all**, and the discriminator travels instead as `vnext.function.key` + `vnext.read.fastpath` (`notModified` \| `cacheHit` \| `build` \| `disabled`) on the TRANSACTION, written on every branch at zero span documents. Pinned by `GetInstanceStateAsync_304Branch_CreatesNoSpansAndTagsTheTransaction`. |
+| `Instance.Read.BuildGate` | `BBT.Workflow.Instances.Read` | `vnext.buildgate.outcome` (`build` \| `coalesced`), `vnext.buildgate.contended`, `span.category=business` | The wait on the per-key gate that coalesces concurrent active-subflow state builds. A parent's own row cannot see subflow-internal status flips, so this read bypasses the long-poll fast path and descends live; the gate is what stops N simultaneous polls on one parent from performing N descents. The span covers the wait **and** the double-check after it, because the double-check is what the wait was for — `coalesced` means the holder's descent answered this request too. `contended` is measured with a non-blocking acquire first: without it an uncontended acquisition and a short wait are the same number. Opened on the gate path only, which is already the build branch, so it adds nothing to the hot path. Pinned by `GetInstanceStateAsync_ActiveSubflowBuild_OpensTheBuildGateSpan` and `…_TagsTheWaitAsCoalesced`. |
+| `Auth.Decide` | `BBT.Workflow.Authorization` | `vnext.auth.decision` (the verdict), `vnext.auth.roles.count`, `span.category=business` | The authorization decision itself, in `AuthorizeAppService`. Role resolution had a span and the subflow forward had a span, while the verdict they exist to produce had neither — so a denial could be seen arriving and never explained. **Carries no grant expression, role name or caller identity** beyond the `sub`/`act.sub` the platform already propagates: a span is exported to a system with a different access boundary than the workflow's. |
+| `Auth.FilterTransitions` | `BBT.Workflow.Authorization` | `vnext.auth.keys.evaluated`, `vnext.auth.keys.allowed`, `vnext.auth.evaluator.creations`, `span.category=business` | One transition role-filtering pass in the state function. **One span for the pass, never one per key**: the parent-override branch filters key by key and builds a fresh evaluator each time, and a span per key would turn an O(N) latency problem into an O(N) telemetry problem inside the very trace meant to reveal it. Building an evaluator serializes the instance's full latest data, so `evaluator.creations` is the number to read — one is healthy, a count tracking the key count is the defect. Opened only when there are keys to filter. |
+| `Auth.PreviousUserLookup` | `BBT.Workflow.Authorization` | `span.category=business` | The conditional previous-manual-transition read, the one database round trip an authorization evaluation can add. Opened **inside** the branch that performs it, so its presence means the query ran — a span outside the guard would report a lookup that never happened and "no `PreviousUserLookup` in this trace" would stop meaning "no extra query was needed". |
+| `View.Resolve` | `BBT.Workflow.Instances.Read` | `vnext.view.rules.evaluated`, `vnext.view.selected`, `span.category=business` | The ordered walk through a state's or transition's `views` array until a rule matches. Each rule is a compiled C# script and is invisible on the warm path — `Script.Compile` appears only on a cold compile, so a request that evaluated four rules and one that evaluated none look identical. One span for the walk with the count and the winner as tags, not one span per rule. |
+| `Schema.Validate` (function path) | `BBT.Workflow.Pipeline` | `span.category=business` | JSON-schema evaluation of a function request body. The transition path has carried this span since the trace-tree work while the function path did the same work unmeasured, so the two surfaces disagreed about whether schema evaluation is visible. Wraps evaluation only — the schema cache read before it is already a `Cache.Get`. |
+| `Remote.Send/{clientType}` | `BBT.Workflow.Gateway` | `vnext.remote.transport` (`dapr` \| `http`), `vnext.remote.host`, `vnext.dapr.app_id` (Dapr only), error status on throw | The one outbound cross-domain call every `Remote*` service makes, at `RemoteTransportRouter.SendAsync`. Kind `Client`. **One span per logical call, never per attempt** — per-attempt spans multiply export volume during the very outage they describe, and the client instrumentation already draws each attempt; this span therefore covers retries, circuit-breaker waits and the sidecar's `ERR_DIRECT_INVOKE` normalization, which were invisible before. The relative path is neither named nor tagged: it carries instance ids. The router's public method stays synchronous (its two contract throws are synchronous) and awaits inside a private core — a `using` span in the old non-async body would have been disposed before the first attempt ran. |
+| `SubFlow.ChildFault/{domain}/{flow}` | `BBT.Workflow.SubFlow` | `vnext.subflow.operation=child_fault`, `vnext.subflow.result` (`faulted` \| `not_found` \| `already_terminal`), subflow/parent instance ids | One child terminated by a parent's downward fault cascade (`ChildSubflowFaultService`). Its cancel twin has had a span since the subflow work; this leg had none, so a fault cascade was the one child-termination path invisible in a trace. The `result` tag exists because the two early returns are otherwise indistinguishable from a completed fault. |
+| `Cache.Get` / `Cache.Set` (function response cache) | `BBT.Workflow.Cache` | `cache.key` (tag only), `cache.hit`, `cache.component_type=function-response` | The function response cache in `StateStoreCacheGateway`. The only cache in the runtime whose hit/miss was invisible: it reaches its store through the Execution service, so it appeared as an `Invoke.*` span with nothing marking it a cache — while a hit there skips the function's entire task set. **Its key is authored by the domain, so it stays out of the span name** and is carried as a tag; the existing `Cache.Get/{key}` names are already unbounded enough to need a query-time runtime field to normalise them. |
 | `Cache.GenerationGet/{redisKey}` | `BBT.Workflow.Cache` | `cache.component_type`, `cache.store` | The generation-token read that precedes EVERY component resolution. The caller's `Cache.Get` sits after it, not around it, so this round trip was previously attributed to nothing. |
 | `Db.{VERB}` | `OpenTelemetry.Instrumentation.EntityFrameworkCore` | `db.statement` (text, `@p0` placeholders — parameter VALUES stay behind `OTEL_DOTNET_EXPERIMENTAL_EFCORE_ENABLE_TRACE_DB_QUERY_PARAMETERS`, false unless set) | One span per EF Core command, so a DB region resolves into the commands it actually ran. `VERB` is `SELECT`/`INSERT`/`UPDATE`/`DELETE`/`MERGE`, or `Query` when the first token is none of those. Renamed from the default DisplayName, which is the **database name** — a single transition showed fifteen siblings all called `Aether_WorkflowDb`. Reads as a check on the documented include strategy: `Instance.Load` should contain exactly three `Db.SELECT` children (instance + `DataList` + `ChildCorrelations`, split queries). |
 | `Transition.ValidatePolicy` | `BBT.Workflow.Pipeline` | `span.category=business`, `vnext.transition.key`, error status + message on failure | Wraps `ValidatePolicyAsync`. No I/O, but it runs on every auto-chain hop — the transition tag identifies which hop was validated without increasing span-name cardinality. |
@@ -252,7 +262,7 @@ name is also readable as `BackgroundJob.Arm/{type}/{key}`, but the full unique n
 | `Function.Authorize` | `BBT.Workflow.Functions` | `vnext.layer=orchestration`, `span.category=business` | Wraps `functionAccessPolicy.AuthorizeAsync` — the function's access-policy check, before contract (verb/schema) enforcement. |
 | `Function.ValidateRequest` | `BBT.Workflow.Functions` | `vnext.layer=orchestration`, `span.category=business` | Wraps `functionRequestValidationService.ValidateRequestAsync` — verb + input-schema validation; may run schema rule scripts against the lazily-built `ScriptContext`. |
 | `Function.BuildResponse` | `BBT.Workflow.Functions` | `vnext.layer=orchestration`, `span.category=business` | Wraps response building — representation building or the function's `IOutputHandler` script. Contains the `Script.Execute` (`vnext.script.kind=functionOutput`) child above when the function declares an output handler. |
-| `Instance.EnrichResponse` | `BBT.Workflow.Pipeline` | `vnext.instance.id`, `vnext.flow.key`, `vnext.enrich.source` (`pipeline` \| `reload`), `vnext.extensions.requested`, `span.category=business` | Envelope for the sync response projection (`InstanceCommandAppService.EnrichOutputCoreAsync`): reload-or-reuse of the instance, schema field filter, script context, workflow output mapping, extension pass. Its children (`Instance.Query.*`, the schema `Cache.Get`, `ScriptContext.*`, `Extension.Process/GetInstance`) used to land on whatever was ambient — `SubFlow.Start`, `SubFlow.Forward`, the server span — as unrelated siblings. `vnext.enrich.source=reload` is the read-only re-read: always on the start path (its output carries no `PipelineInstance`) and on a transition whose pipeline instance still read Busy. **Absent on runtime-internal child calls**: sub-start and subflow-forward set `SuppressResponseEnrichment` (their responses are read for `IsSuccess`/`Status` only), so a `SubFlow.Start`/`SubFlow.Forward` subtree no longer contains this phase at all. |
+| `Instance.EnrichResponse` | `BBT.Workflow.Pipeline` | `vnext.instance.id`, `vnext.flow.key`, `vnext.enrich.source` (`pipeline` \| `reload`), `span.category=business` | Envelope for the sync response projection (`InstanceCommandAppService.EnrichOutputCoreAsync`): reload-or-reuse of the instance, schema field filter, and — only when the workflow has output mapping code and the instance is not a subflow — script context plus workflow output mapping. Its children (`Instance.Query.*`, the schema `Cache.Get`, `ScriptContext.*`) used to land on whatever was ambient — `SubFlow.Start`, `SubFlow.Forward`, the server span — as unrelated siblings. **No `Extension.Process` child since 0.0.93**: the write path stopped evaluating extensions (`extensions` is an always-empty map on the response), which also removed the `vnext.extensions.requested` tag and left output mapping as the only consumer of the script context — hence the gate, so a workflow without an output script builds none. `vnext.enrich.source=reload` is the read-only re-read: always on the start path (its output carries no `PipelineInstance`) and on a transition whose pipeline instance still read Busy. **Absent on runtime-internal child calls**: sub-start and subflow-forward set `SuppressResponseEnrichment` (their responses are read for `IsSuccess`/`Status` only), so a `SubFlow.Start`/`SubFlow.Forward` subtree no longer contains this phase at all. |
 | `Extension.Process/{scope}` | `BBT.Workflow.Extensions` | `vnext.flow.key` (workflow key), `vnext.layer=orchestration`, `span.category=business` | Envelope span for one instance-data extension enrichment pass (`InstanceExtensionService.ProcessExtensionsAsync`), named after the `ExtensionScope` being processed. Previously the extension path produced no spans at all — cache reads like `sys-extensions` were orphaned on the root transaction. |
 | `Extension.Resolve` | `BBT.Workflow.Extensions` | `vnext.extension.ref.count`, `span.category=business` | Wraps extension component-ref resolution (the parallel cache fetches for the resolved extension references). `vnext.extension.ref.count` records how many references the resolve covered. |
 
@@ -408,8 +418,8 @@ creation rule, the `business` category, and the L1-hit tag — mirroring
 
 **Every new `ActivitySource` must be added to `Telemetry:Tracing:AdditionalSources` in the same
 commit that introduces it, in all four hosts' `appsettings.json`** (Orchestration, Execution,
-Workers.Inbox, Workers.Outbox — plus `BBT.Workflow.DbMigrator` and
-`BBT.Workflow.Monitor.HttpApi.Host` where applicable). This is not optional polish: a source that
+Workers.Inbox, Workers.Outbox — plus `BBT.Workflow.DbMigrator` where applicable). This is not
+optional polish: a source that
 isn't registered produces spans that Aether's `ActivitySource.StartActivity` still creates
 in-process, but the `TracerProvider` never subscribes to them, so they are silently dropped before
 export — no error, no warning, just a gap in the trace.
@@ -421,6 +431,32 @@ spans well before they were added to `AdditionalSources`. `BBT.Workflow.Pipeline
 plan — check `appsettings.json`'s `Telemetry:Tracing:AdditionalSources` array before assuming a new
 source will simply work, and remember to check `vnext-helm-charts` for the corresponding
 environment-level values if the host config is templated there.
+
+**`BBT.Workflow.Gateway` joined on 2026-09-13** (`Remote.Send/{clientType}`), registered in all four
+hosts in the same commit. Two guards now enforce the rule instead of reviewer memory, and they see
+different things:
+
+- `ActivitySourceRegistrationTests` reads all four committed `appsettings.json` files, both
+  directions — a declared source missing from a host that can emit it, and a registered entry nothing
+  declares. Registration is **per-host, not global**: the Execution host and the workers each cover
+  their own family with a wildcard and deliberately omit the others, so that intent lives in the
+  Domain as data (`TelemetryConstants.ActivitySources.DeliberatelyUnregistered`). A guard asserting
+  "every source in every host" would assert a rule this codebase does not follow and would be
+  silenced the first time it fired.
+- `ActivitySourceRegistrationCheck` (an `IHostedService` registered by `AddTelemetry`) reads the
+  **merged** configuration at startup and warns — never throws — when a source every host must carry
+  is absent. This is the only check that can see a deployment: .NET merges configuration arrays by
+  **index**, so one `Telemetry__Tracing__AdditionalSources__0` entry in a chart's free-form
+  environment block *replaces* the first declared source rather than appending to it. Today that is
+  `BBT.Workflow.Pipeline`, and with it every pipeline span and the activation metric — while the
+  repository files still look correct.
+
+A third guard pins every ActivitySource **name literal** against the declared set.
+`InvokerActivityHelper` and `HttpTaskInvocation` cannot use the constant and that is structural, not
+sloppiness: `BBT.Workflow.Execution.Abstractions` has no project references at all and
+`BBT.Workflow.Execution` references only it, so neither can reach `TelemetryConstants`. Duplicated
+literals are therefore allowed; a literal that has **drifted** is the failure, and it is silent,
+because listeners match sources by name.
 
 Three more sources joined the same way in this plan's final task: `BBT.Workflow.Functions`
 (`FunctionActivityHelper`), `BBT.Workflow.Extensions` (`ExtensionActivityHelper` — note its C#
@@ -565,6 +601,14 @@ All nine acceptance checks passed:
    **sidecar**'s `pubsub/…aether.outbox.wakeup…` spans still exist (241 of them), but 10/10
    sampled are standalone traces with zero occurrences inside business traces — the documented
    collector-filter knob remains the way to remove them at the source.
+**Renderer caveat, added 2026-09-13.** Checks 1-9 below were computed in **OpenObserve**, and check 8
+(duration containment) is precisely the property on which OpenObserve and Elastic disagree: Elastic
+resolves nesting strictly through `parent.id` and re-parents an orphan to the trace root, while
+OpenObserve groups by trace id and is far more forgiving. The section's *shape* — nine mechanically
+decidable checks — is worth reusing; its **numbers are not a baseline**, and any future parentage or
+containment claim must be re-measured in Elastic. See
+[Correlation and Tracing § Verifying against Elastic APM locally](correlation-and-tracing.md).
+
 8. **Duration containment** — the recorded pre-change baseline trace
    (`c4b324894c9f9f8236841b820b09f8e3`, 367 spans) had 14 violations where a child span started
    7–44 ms after its parent had already ended, every one of them event-plumbing (`*.Handle`
@@ -590,6 +634,27 @@ nonsense containment results. This run hit that trap mid-measurement and correct
 corrected containment math (check 8 above) was validated against `end_time`, not the `duration`
 field.
 
+## Open items on this page's catalogue
+
+Recorded here rather than in a plan, because the next reader of this table is the person who will
+notice they are missing.
+
+- **The catalogue is complete.** `Instance.Read.BuildGate` was the last unshipped item and is now
+  live. The state/data envelopes and the transaction tags landed once the effective-status-fingerprint
+  change reached master (`#983`) and lifted their sequencing condition.
+- **Hot path.** The council settled unanimously that the 304 / cache-hit branch of the state and data
+  functions adds **zero span documents**: no envelope, no children. The discriminator travels as a
+  tag on the transaction, written on **every** branch — writing it only on the fast path would
+  reintroduce the two-document-type `OR` the envelope was meant to remove. The binding reason is
+  fidelity rather than cost: no sampler is configured in any host, so with untuned OpenTelemetry
+  defaults a burst on the highest-QPS route drops spans indiscriminately — including the pipeline
+  spans this whole tree exists to protect.
+- **All six contested families shipped** — `Auth.FilterTransitions`, `Auth.PreviousUserLookup`, the
+  function path's `Schema.Validate`, `View.Resolve`, `Inbox.Forward` and `Event.Intake` — each with
+  the question it answers written into its row above. `Event.Intake` was gated on a scenario, because
+  `instances/events` had **no integration test at all** and instrumenting a route nothing exercises is
+  how a span ships uncertified; the `event-driven-lab` scenario in vnext-example closed that gate.
+
 ## Related pages
 
 - [Event Trace Chain](event-trace-chain.md) — historical evidence for the removed
@@ -606,7 +671,7 @@ field.
 - [Trace Lanes](trace-lanes.md) — the anchor/predecessor split that keeps chained hops and
   subflow handoffs siblings instead of a deep nest; the parenting model every span in this plan's
   tree relies on.
-- [Correlation and Tracing](../monitoring/correlation-and-tracing.md) — gateway trace-continuation
+- [Correlation and Tracing](correlation-and-tracing.md) — gateway trace-continuation
   contract, `X-Request-Id` propagation, task-binding header handling.
 - [Component Cache Generation Memo](component-cache-generation-memo.md) — the generation-token
   invalidation model the `Cache.*` spans' `cache.generation` tag reflects.

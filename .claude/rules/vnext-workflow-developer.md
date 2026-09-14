@@ -181,6 +181,24 @@ A sixth profile is **composed on top of** the base, never selected instead of it
 - **`incident` block**: always present, and it carries **links, not content** — `{ hasActiveIncident, active: { href } (only while the flag is true), history: { href } }`. Identical on the state body and on `metadata.incident` (single GET and list). `active.href` → `GET …/instances/{instance}/incidents/active` (newest unresolved, **404 `Instance:100037`** when none is open — a normal answer, since a retry can resolve between the poll and the follow-up); `history.href` → the paged history. Same `queryRoles` gate as the state function on both, and no stack trace anywhere. When lifted from an active subflow, `active.href` addresses the **leaf that owns the incident** while `history.href` stays on the polled instance. `HasActiveIncident` is a fingerprint member so raise/resolve without a state change moves the ETag. **Do not put incident fields back in the body**: the embedded summary is what made the state function read the incident table on its hottest path and what created the resolve-A-then-raise-B stale-`active` hole, both of which the link form removes.
 - **Scheduled entries in `transitions`**: the state body lists the runtime's armed scheduled transitions inside the existing `transitions` array as `{ name, kind: "scheduled", executeAtUtc, href, view, schema }` entries, appended after the available transitions and built from active `InstanceJob` rows (`JobType.ScheduledTransition`) whose `ExecuteAt` is stamped at scheduling time from the same instant the Dapr job is armed with. The href/view/schema links use the same url shapes as triggerable entries but with `hasView`/`loadData`/`hasSchema` hardcoded false — a TEMPORARY uniformity concession for domain clients (they will adapt); scheduled transitions remain System-actor-gated at execution, so the href is not callable. Not role-filtered; not merged from subflows. Job-set changes deliberately do NOT participate in the fingerprint ETag (team decision, issue #864) — same-state re-arms can leave the scheduled entries stale behind a 304; documented as a known gap in `docs/runtime/state-function-cache-and-etag.md`.
 
+## Task / Action History (system functions)
+
+- `GET …/instances/{instance}/functions/tasks` returns the full `InstanceTasks` journal in
+  execution order (unpaged); `GET …/functions/actions?taskId={id}` returns one row's
+  `InstanceActions` (400 `Instance:100039` without a valid `taskId`, 404 `Instance:100038` when the
+  task isn't the instance's own). Both are `IInstanceFunctionHandler` registrations (keys in
+  `FunctionTypeConst.TaskHistory/ActionHistory`) under the same `queryRoles` gate as the state
+  function. No state-body involvement — no `ResponseShapeVersion` or fingerprint change.
+- **Metadata only, deliberately.** The journal's `Request`/`Response`/`InvocationResult` payloads
+  carry mapping-built headers (auth material included) and are served by NO API since the Monitor
+  host's removal (#982); the one payload-derived public field is the faulted row's `{"error": …}`
+  reason. The repository read projects columns in SQL (`InstanceTaskHistoryRow`) so the jsonb
+  payloads never leave the database — do not switch it back to materializing the entity, and do not
+  add payload fields here.
+- **`InstanceActions` has no writer** (never has, since the initial commit) — the action function
+  returns an empty list until one lands. `InstanceTask.FaultedTaskId` is equally never set.
+  Full guide: `docs/runtime/instance-task-and-action-history.md`.
+
 ## Well-Known Transitions (`cancel` / `updateData` / `exit`)
 
 - All three are workflow-level `Transition` objects (`Workflow.Cancel/UpdateData/Exit`) — full surface
@@ -287,6 +305,16 @@ A sixth profile is **composed on top of** the base, never selected instead of it
 - Runtime-generated child start, active-child forward and descended retry calls always set
   `sync=true`, independent of original caller mode and SubFlow (`S`) / SubProcess (`P`) type. The
   call awaits the child's current activation to a rest point, not future human/event completion.
+- **A sync response never evaluates extensions** (0.0.93). `EnrichOutputCoreAsync` projects
+  reload-or-reuse → schema field filter → (only when `workflow.Output` has mapping code and the
+  instance is not a subflow) script context + output mapping. `extensions` stays on the DTO as an
+  always-empty map so the shape does not change, and the `?extensions=` query parameter is gone
+  from start/transition. `IInstanceExtensionService` is no longer a dependency of
+  `InstanceCommandAppService` — that is the kill switch, enforced by the compiler. Extensions run
+  only on read surfaces (`InstanceQueryAppService`: instance GET, instance list, data function,
+  extensions endpoint). Do not reintroduce the pass "just for parity": it cost an extension task
+  round (HTTP calls included) plus a full-instance-data `ScriptContext` build per sync transition
+  for a field no client read.
 
 ### Activation episode (trace)
 
@@ -301,10 +329,10 @@ A sixth profile is **composed on top of** the base, never selected instead of it
   settling span attached as an `ActivityLink`. Kind `Internal` (a `Consumer` would be counted as an
   APM transaction).
 - **The episode start travels in `WorkflowTraceLane.Episode`** and, across every async boundary, as
-  `EpisodeStartedAt` / `EpisodeTrigger` / `EpisodeTransitionKey` beside `TraceRoot` in every lane
+  `EpisodeStartedAt` / `EpisodeTrigger` / `EpisodeTransitionKey` / `EpisodeTraceRoot` beside `TraceRoot` in every lane
   carrier (`TransitionJobPayload`, `TransitionContinuationRequested`, the three `InstanceSub*`
   events, `SubflowForwardInput`, `FlowCompletedInput`, `SubFlowFaultedInput`, `SubItemCanceledInput`).
-  **A new carrier must copy all three** — a missing start degrades the consumer to a
+  **A new carrier must copy all four** — a missing start degrades the consumer to a
   `vnext.activation.partial=true` span covering only its own hop.
 - **Only status owners emit** (`OwnsStatus`). A lost CAS yields no verdict (whoever flipped emits),
   and a fresh post-commit parent that is no longer Busy yields none (a sync child callback already
@@ -328,10 +356,10 @@ A sixth profile is **composed on top of** the base, never selected instead of it
   settling span attached as an `ActivityLink`. Kind `Internal` (a `Consumer` would be counted as an
   APM transaction).
 - **The episode start travels in `WorkflowTraceLane.Episode`** and, across every async boundary, as
-  `EpisodeStartedAt` / `EpisodeTrigger` / `EpisodeTransitionKey` beside `TraceRoot` in every lane
+  `EpisodeStartedAt` / `EpisodeTrigger` / `EpisodeTransitionKey` / `EpisodeTraceRoot` beside `TraceRoot` in every lane
   carrier (`TransitionJobPayload`, `TransitionContinuationRequested`, the three `InstanceSub*`
   events, `SubflowForwardInput`, `FlowCompletedInput`, `SubFlowFaultedInput`, `SubItemCanceledInput`).
-  **A new carrier must copy all three** — a missing start degrades the consumer to a
+  **A new carrier must copy all four** — a missing start degrades the consumer to a
   `vnext.activation.partial=true` span covering only its own hop.
 - **Only status owners emit** (`OwnsStatus`), and **a hop that enqueued a continuation never emits**
   (`PipelineDirectives.ContinuationEnqueued` → `chainSettled:false`); a lost CAS yields no verdict

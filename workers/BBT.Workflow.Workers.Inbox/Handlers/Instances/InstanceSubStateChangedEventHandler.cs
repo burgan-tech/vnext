@@ -79,7 +79,15 @@ internal sealed class InstanceSubStateChangedEventHandler(
                 PreviousState = eventData.PreviousState,
                 NewStateType = (StateType)eventData.NewStateType,
                 NewStateSubType = (StateSubType)eventData.NewStateSubType,
-                ChangedAt = eventData.ChangedAt
+                ChangedAt = eventData.ChangedAt,
+                NewStatus = eventData.NewStatus,
+                NotificationSeq = eventData.NotificationSeq,
+                TraceRoot = eventData.TraceRoot,
+                ParentTraceRoot = eventData.ParentTraceRoot,
+                EpisodeStartedAt = eventData.EpisodeStartedAt,
+                EpisodeTrigger = eventData.EpisodeTrigger,
+                EpisodeTransitionKey = eventData.EpisodeTransitionKey,
+                EpisodeTraceRoot = eventData.EpisodeTraceRoot
             };
 
             var route = $"api/v1/{eventData.Domain}/workflows/{eventData.Flow}/instances/{eventData.ParentInstanceId}/sub/state";

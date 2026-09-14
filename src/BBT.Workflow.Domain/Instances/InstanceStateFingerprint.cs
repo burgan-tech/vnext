@@ -10,6 +10,11 @@ namespace BBT.Workflow.Instances;
 /// <param name="Key">Instance business key.</param>
 /// <param name="EffectiveState">Externally exposed state column (includes subflow propagation).</param>
 /// <param name="Status">Instance status.</param>
+/// <param name="EffectiveStatus">Externally exposed status column — the deepest active SubFlow's
+/// status when one exists, otherwise the instance's own. The parent row alone cannot see a
+/// subflow-internal Busy/Active flip, so without this member an accept that reserves the chain
+/// (which writes only the LEAF's status) leaves the parent's fingerprint bit-identical and a cached
+/// state response stays valid while the client-visible status has already moved.</param>
 /// <param name="FlowVersion">Bound flow version; a version migration can change transitions/views
 /// without a state or status change.</param>
 /// <param name="HasActiveSubFlow">True when an open SubFlow-type correlation exists. The state
@@ -43,6 +48,7 @@ public sealed record InstanceStateFingerprint(
     string? Key,
     string? EffectiveState,
     InstanceStatus Status,
+    InstanceStatus EffectiveStatus,
     string? FlowVersion,
     bool HasActiveSubFlow,
     int CorrelationCount,
@@ -66,6 +72,7 @@ public sealed record InstanceStateFingerprint(
             instance.Key,
             instance.EffectiveState,
             instance.Status,
+            instance.EffectiveStatus,
             instance.FlowVersion,
             instance.HasActiveSubFlow,
             allCorrelations.Count,
