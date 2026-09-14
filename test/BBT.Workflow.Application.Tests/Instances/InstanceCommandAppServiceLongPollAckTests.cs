@@ -48,6 +48,7 @@ public class InstanceCommandAppServiceLongPollAckTests : IDisposable
     private readonly ITransitionAuthorizationManager _authManager = Substitute.For<ITransitionAuthorizationManager>();
     private readonly IInstanceCancellationService _cancellationService = Substitute.For<IInstanceCancellationService>();
     private readonly ILongPollAckResumeService _resumeService = Substitute.For<ILongPollAckResumeService>();
+    private readonly ILongPollRuleGate _longPollRuleGate = Substitute.For<ILongPollRuleGate>();
     private readonly IInstanceCommandGateway _gateway = Substitute.For<IInstanceCommandGateway>();
     private readonly InstanceCommandAppService _service;
     private readonly IServiceProvider _ambient;
@@ -91,6 +92,7 @@ public class InstanceCommandAppServiceLongPollAckTests : IDisposable
             transitionAuthorizationManager: _authManager,
             cancellationService: _cancellationService,
             longPollAckResumeService: _resumeService,
+            longPollRuleGate: _longPollRuleGate,
             instanceCommandGateway: _gateway,
             workflowOutputMappingService: Substitute.For<IWorkflowOutputMappingService>(),
             callerRoleResolver: new DefaultCallerRoleResolver(Substitute.For<ICurrentUser>()),
@@ -148,6 +150,85 @@ public class InstanceCommandAppServiceLongPollAckTests : IDisposable
         result.IsSuccess.ShouldBeTrue();
         await _gateway.DidNotReceiveWithAnyArgs().AcknowledgeLongPollAsync(default!, default);
         await _resumeService.DidNotReceiveWithAnyArgs().ResumeAsync(default!, default!, default, default, default);
+    }
+
+    [Fact]
+    public async Task AcknowledgeLongPollAsync_WhenInteractionRuleAdmits_Resumes()
+    {
+        var instance = CreateInstance(awaiting: true, withSubflow: false);
+        _instanceRepository.GetActiveAsync(instance.Id.ToString(), Arg.Any<CancellationToken>())
+            .Returns(Result<Instance>.Ok(instance));
+        _componentCacheStore.GetFlowAsync(Domain, Workflow, Arg.Any<string?>(), Arg.Any<CancellationToken>())
+            .Returns(Result<Definitions.Workflow>.Ok(BuildWorkflowWithRuleInteraction()));
+        SetupRuleGate(admitted: true);
+
+        var result = await _service.AcknowledgeLongPollAsync(Input(instance.Id.ToString()), CancellationToken.None);
+
+        // The rule arm admitted the acknowledge; the role evaluator was never consulted.
+        result.IsSuccess.ShouldBeTrue();
+        await _resumeService.Received(1).ResumeAsync(Domain, Workflow, Version, instance.Id, Arg.Any<CancellationToken>());
+        await _authManager.DidNotReceiveWithAnyArgs().IsAnyRoleAllowedForGrantsAsync(
+            default!, default!, default!, default, default);
+    }
+
+    [Fact]
+    public async Task AcknowledgeLongPollAsync_WhenInteractionRuleDenies_ReturnsAccessDenied()
+    {
+        var instance = CreateInstance(awaiting: true, withSubflow: false);
+        _instanceRepository.GetActiveAsync(instance.Id.ToString(), Arg.Any<CancellationToken>())
+            .Returns(Result<Instance>.Ok(instance));
+        _componentCacheStore.GetFlowAsync(Domain, Workflow, Arg.Any<string?>(), Arg.Any<CancellationToken>())
+            .Returns(Result<Definitions.Workflow>.Ok(BuildWorkflowWithRuleInteraction()));
+        SetupRuleGate(admitted: false);
+
+        var result = await _service.AcknowledgeLongPollAsync(Input(instance.Id.ToString()), CancellationToken.None);
+
+        // Fail-closed: the acknowledge is rejected and the pipeline stays paused (fallback resumes).
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.AuthorizationRoleDenied);
+        await _resumeService.DidNotReceiveWithAnyArgs().ResumeAsync(default!, default!, default, default, default);
+    }
+
+    private void SetupRuleGate(bool admitted) =>
+        _longPollRuleGate.IsAdmittedAsync(
+                Arg.Any<ScriptCode>(),
+                Arg.Any<Instance>(),
+                Arg.Any<Definitions.Workflow>(),
+                Arg.Any<State>(),
+                Arg.Any<Dictionary<string, string?>?>(),
+                Arg.Any<Dictionary<string, string?>?>(),
+                "ack",
+                Arg.Any<CancellationToken>())
+            .Returns(admitted);
+
+    /// <summary>
+    /// Workflow whose entered state declares <c>interaction.longPoll</c> with a condition RULE —
+    /// the rule-based authorization arm of issue #936.
+    /// </summary>
+    private static Definitions.Workflow BuildWorkflowWithRuleInteraction()
+    {
+        var state = System.Text.Json.JsonSerializer.Deserialize<State>("""
+        {
+            "key": "review",
+            "stateType": "intermediate",
+            "subType": "none",
+            "versionStrategy": "Patch",
+            "interaction": {
+                "longPoll": {
+                    "terminate": true,
+                    "rule": { "location": "./gate.csx", "code": "cmV0dXJuIHRydWU7" }
+                }
+            }
+        }
+        """, JsonSerializerConstants.JsonOptions)!;
+
+        var workflow = Definitions.Workflow.Create();
+        workflow.SetReference(new Reference(Workflow, Domain, "sys-flows", Version));
+        workflow.SetType("F");
+        workflow.SetStartTransition(Transition.Create("start", null, StateKey, TriggerType.Manual,
+            VersionStrategy.IncreasePatch.Code));
+        workflow.AddState(state);
+        return workflow;
     }
 
     private static Instance CreateInstance(bool awaiting, bool withSubflow)

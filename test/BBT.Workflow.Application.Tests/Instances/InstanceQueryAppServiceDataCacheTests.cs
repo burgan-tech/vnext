@@ -116,6 +116,7 @@ public class InstanceQueryAppServiceDataCacheTests : IDisposable
             instanceIncidentRepository: Substitute.For<IInstanceIncidentRepository>(),
             instanceTaskRepository: Substitute.For<IInstanceTaskRepository>(),
             instanceActionRepository: Substitute.For<IInstanceActionRepository>(),
+            longPollRuleGate: NSubstitute.Substitute.For<BBT.Workflow.Execution.LongPoll.ILongPollRuleGate>(),
             instanceExtensionService: _instanceExtensionService,
             scriptContextFactory: _scriptContextFactory,
             instanceQueryGateway: Substitute.For<IInstanceQueryGateway>(),

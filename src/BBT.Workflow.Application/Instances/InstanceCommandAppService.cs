@@ -59,6 +59,7 @@ public sealed class InstanceCommandAppService(
     ITransitionAuthorizationManager transitionAuthorizationManager,
     IInstanceCancellationService cancellationService,
     ILongPollAckResumeService longPollAckResumeService,
+    ILongPollRuleGate longPollRuleGate,
     IInstanceCommandGateway instanceCommandGateway,
     IWorkflowOutputMappingService workflowOutputMappingService,
     ICallerRoleResolver callerRoleResolver,
@@ -228,10 +229,19 @@ public sealed class InstanceCommandAppService(
 
         var workflow = workflowResult.Value!;
 
-        // Role check against the entered state's interaction.longPoll.roles (default-allow when none).
+        // Authorization against the entered state's interaction.longPoll: the rule arm when one is
+        // declared (fail-closed, same gate the State function's signal emit uses), otherwise the
+        // role grants (default-allow when none).
         var state = workflow.FindState(instance.GetCurrentState);
-        var ackRoles = state?.LongPollAckRoles;
-        if (ackRoles is { Count: > 0 })
+        if (state?.LongPollRule is { } rule)
+        {
+            var admitted = await longPollRuleGate.IsAdmittedAsync(
+                rule, instance, workflow, state, input.Headers, queryParameters: null,
+                surface: "ack", cancellationToken);
+            if (!admitted)
+                return Result.Fail(WorkflowErrors.LongPollAckAccessDenied(instance.Id));
+        }
+        else if (state?.LongPollAckRoles is { Count: > 0 } ackRoles)
         {
             var callerRolesResult = await BuildCallerRolesAsync(input.Role, input.Headers, cancellationToken);
             if (!callerRolesResult.IsSuccess)

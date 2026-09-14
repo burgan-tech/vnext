@@ -42,6 +42,7 @@ public sealed class InstanceQueryAppService(
     IInstanceIncidentRepository instanceIncidentRepository,
     IInstanceTaskRepository instanceTaskRepository,
     IInstanceActionRepository instanceActionRepository,
+    Execution.LongPoll.ILongPollRuleGate longPollRuleGate,
     IInstanceExtensionService instanceExtensionService,
     IScriptContextFactory scriptContextFactory,
     IInstanceQueryGateway instanceQueryGateway,
@@ -1381,10 +1382,22 @@ public sealed class InstanceQueryAppService(
                             data.instance.Id, data.instance.EffectiveStatus.Code, output.Status.Code);
                     }
 
+                    // A rule-gated interaction verdict depends on request inputs (headers, query
+                    // parameters, instance data) that CallerScopeHash does not cover, so a body
+                    // carrying one must never enter the shared cache: two callers with the same
+                    // scope hash could legitimately receive different interactions. Own-state rules
+                    // are visible here; a bubbled subflow interaction's gating arm is not (the
+                    // child evaluated it), so any bubbled interaction skips caching conservatively.
+                    // The fingerprint 304 path is untouched — the accepted staleness gap is
+                    // documented in docs/domain/long-poll-termination.md.
+                    var interactionIsRuleGated =
+                        data.workflow.FindState(data.instance.GetCurrentState)?.LongPollRule is not null
+                        || (data.instance.HasActiveSubFlow && output.Interaction is not null);
+
                     // Active-child state cannot be validated from the parent row, so keep it only
                     // for a short freshness window. Parent changes still invalidate immediately;
                     // concurrent misses are coalesced by the per-key build lease.
-                    if (stateCacheKey is not null)
+                    if (stateCacheKey is not null && !interactionIsRuleGated)
                     {
                         var cacheEntry = new Caching.StateFunctionCacheEntry
                         {
@@ -1911,7 +1924,7 @@ public sealed class InstanceQueryAppService(
                     : null
             }
             : await ResolveInteractionAsync(
-                input, instance, currentStateValue, displayedState, cancellationToken);
+                input, instance, currentWorkflow, currentStateValue, displayedState, cancellationToken);
 
         // Incident block: the leaf's when an active subflow reported one (a stalled chain is explained
         // by the deepest incident), otherwise this instance's own. The history link always points to the
@@ -2056,14 +2069,17 @@ public sealed class InstanceQueryAppService(
     /// <summary>
     /// Resolves the client-workflow-manager interaction directives for the response, or null when none
     /// apply. Today this is the long-poll directive: emitted on the main-flow current state whenever the
-    /// state declares <c>interaction.longPoll</c> and the caller's role is granted by
-    /// <c>interaction.longPoll.roles</c> (default-allow when no roles configured). The <c>terminate</c>
-    /// flag and <c>fallbackTimeoutSeconds</c> are surfaced as configured; the ack href is included only
-    /// when <c>terminate</c> is true (the pipeline pauses awaiting acknowledge in that case).
+    /// state declares <c>interaction.longPoll</c> and the caller is admitted by its authorization arm —
+    /// either the <c>roles</c> grants (default-allow when no roles configured) or the <c>rule</c>
+    /// condition script; the two are alternatives, the validator rejects both. A failed rule evaluation
+    /// denies (fail-closed), same as notification rules. The <c>terminate</c> flag and
+    /// <c>fallbackTimeoutSeconds</c> are surfaced as configured; the ack href is included only when
+    /// <c>terminate</c> is true (the pipeline pauses awaiting acknowledge in that case).
     /// </summary>
     private async Task<InstanceInteractionOutput?> ResolveInteractionAsync(
         GetInstanceStateInput input,
         Instance instance,
+        Definitions.Workflow currentWorkflow,
         State currentStateValue,
         string? displayedState,
         CancellationToken cancellationToken)
@@ -2080,8 +2096,15 @@ public sealed class InstanceQueryAppService(
                 return null;
         }
 
-        var ackRoles = currentStateValue.LongPollAckRoles;
-        if (ackRoles is { Count: > 0 })
+        if (currentStateValue.LongPollRule is { } rule)
+        {
+            var admitted = await longPollRuleGate.IsAdmittedAsync(
+                rule, instance, currentWorkflow, currentStateValue,
+                input.Headers, input.QueryParams, surface: "state", cancellationToken);
+            if (!admitted)
+                return null;
+        }
+        else if (currentStateValue.LongPollAckRoles is { Count: > 0 } ackRoles)
         {
             var requestContext = new AuthorizationRequestContext(input.Headers, input.QueryParams);
             var callerRoles = input.Roles ?? (string.IsNullOrWhiteSpace(input.Role) ? [] : [input.Role]);

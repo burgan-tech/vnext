@@ -3267,6 +3267,22 @@ public static partial class WorkflowLogs
         Guid instanceId,
         string reason);
 
+    /// <summary>
+    /// Logs when an <c>interaction.longPoll.rule</c> evaluation fails. The caller is denied
+    /// (fail-closed) on the surface named by {Surface}: "state" (signal not emitted) or
+    /// "ack" (acknowledge rejected).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20304,
+        Level = LogLevel.Warning,
+        Message = "Long-poll interaction rule evaluation failed on {Surface} for instance {InstanceId} at state {State}; caller denied: {Reason}")]
+    public static partial void LongPollInteractionRuleEvaluationFailed(
+        this ILogger logger,
+        string surface,
+        Guid instanceId,
+        string state,
+        string reason);
+
     #endregion
 
     #region State Function Cache

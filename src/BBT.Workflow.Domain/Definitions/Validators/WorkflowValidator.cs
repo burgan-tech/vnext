@@ -41,6 +41,7 @@ public class WorkflowValidator
         ValidateStateNotifications(workflow, result);
         ValidateWizardStateTransitions(workflow, result);
         ValidateDefaultAutoTransitions(workflow, result);
+        ValidateLongPollInteractions(workflow, result);
         foreach (var state in workflow.States)
             ValidateRoleGrants(state.QueryRoles, $"{nameof(Workflow)}.States[{state.Key}].{nameof(State.QueryRoles)}", result);
 
@@ -319,6 +320,35 @@ public class WorkflowValidator
 
                 index++;
             }
+        }
+    }
+
+    /// <summary>
+    /// Validates <c>interaction.longPoll</c> authorization: role grants and the condition rule are
+    /// alternatives — a state authors one or the other, never both — and the grants themselves must
+    /// be well-formed. The rule's script body is validated with the other compilable slots in
+    /// <see cref="ValidateWorkflowScriptCodes"/>.
+    /// </summary>
+    private static void ValidateLongPollInteractions(Workflow workflow, WorkflowValidationResult result)
+    {
+        foreach (var state in workflow.States)
+        {
+            var longPoll = state.Interaction?.LongPoll;
+            if (longPoll is null)
+                continue;
+
+            var longPollPath =
+                $"{nameof(Workflow)}.{nameof(Workflow.States)}[{state.Key}].{nameof(State.Interaction)}.{nameof(StateInteraction.LongPoll)}";
+
+            if (longPoll.Roles.Count > 0 && longPoll.Rule is not null)
+            {
+                result.AddError(new ValidationResult(
+                    $"State '{state.Key}' declares both interaction.longPoll.roles and interaction.longPoll.rule. " +
+                    "Role-based and rule-based interaction authorization are alternatives — define one or the other.",
+                    [$"{longPollPath}.{nameof(LongPollInteraction.Rule)}"]));
+            }
+
+            ValidateRoleGrants(longPoll.Roles, $"{longPollPath}.{nameof(LongPollInteraction.Roles)}", result);
         }
     }
 
@@ -807,6 +837,11 @@ public class WorkflowValidator
                 ScriptCodeValidator.Validate(notification.Rule, $"{path}.{nameof(StateNotification.Rule)}", errors);
                 ScriptCodeValidator.Validate(notification.Mapping, $"{path}.{nameof(StateNotification.Mapping)}", errors);
             }
+
+            ScriptCodeValidator.Validate(
+                state.LongPollRule,
+                $"{statePath}.{nameof(State.Interaction)}.{nameof(StateInteraction.LongPoll)}.{nameof(LongPollInteraction.Rule)}",
+                errors);
 
             ValidateViewRules(state.View, $"{statePath}.{nameof(State.View)}", errors);
         }

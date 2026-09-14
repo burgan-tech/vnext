@@ -53,6 +53,8 @@ public class InstanceQueryAppServiceStateTests : IDisposable
     private readonly IInstanceCorrelationRepository _instanceCorrelationRepository;
     private readonly IInstanceJobRepository _instanceJobRepository;
     private readonly Caching.IStateFunctionCache _stateFunctionCache;
+    private readonly Execution.LongPoll.ILongPollRuleGate _longPollRuleGate =
+        Substitute.For<Execution.LongPoll.ILongPollRuleGate>();
     private readonly InstanceQueryAppService _service;
     private readonly IServiceProvider _ambientServiceProvider;
     private readonly IServiceProvider? _previousAmbientServiceProvider;
@@ -107,6 +109,7 @@ public class InstanceQueryAppServiceStateTests : IDisposable
             instanceIncidentRepository: _instanceIncidentRepository,
             instanceTaskRepository: Substitute.For<IInstanceTaskRepository>(),
             instanceActionRepository: Substitute.For<IInstanceActionRepository>(),
+            longPollRuleGate: _longPollRuleGate,
             instanceExtensionService: Substitute.For<IInstanceExtensionService>(),
             scriptContextFactory: Substitute.For<IScriptContextFactory>(),
             instanceQueryGateway: _instanceQueryGateway,
@@ -2143,4 +2146,114 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         Headers = new Dictionary<string, string?>(),
         QueryParams = new Dictionary<string, string?>()
     };
+
+    // ── Rule-gated long-poll interaction ─────────────────────────────────────
+
+    /// <summary>
+    /// Builds an active instance whose current state declares <c>interaction.longPoll</c> with a
+    /// condition RULE (no roles) — the rule-based authorization arm of issue #936.
+    /// </summary>
+    private (Instance instance, Definitions.Workflow workflow) CreateInteractionRuleInstance()
+    {
+        var state = System.Text.Json.JsonSerializer.Deserialize<State>("""
+        {
+            "key": "review",
+            "stateType": "intermediate",
+            "subType": "none",
+            "versionStrategy": "Minor",
+            "interaction": {
+                "longPoll": {
+                    "terminate": true,
+                    "fallbackTimeoutSeconds": 45,
+                    "rule": { "location": "./gate.csx", "code": "cmV0dXJuIHRydWU7" }
+                }
+            }
+        }
+        """, JsonSerializerConstants.JsonOptions)!;
+
+        var instance = Instance.Create(Guid.NewGuid(), TestWorkflow, TestVersion, "test-key");
+        instance.ChangeState(state);
+        return (instance, BuildWorkflow(state));
+    }
+
+    private void SetupRuleGate(bool admitted) =>
+        _longPollRuleGate.IsAdmittedAsync(
+                Arg.Any<ScriptCode>(),
+                Arg.Any<Instance>(),
+                Arg.Any<Definitions.Workflow>(),
+                Arg.Any<State>(),
+                Arg.Any<Dictionary<string, string?>?>(),
+                Arg.Any<Dictionary<string, string?>?>(),
+                "state",
+                Arg.Any<CancellationToken>())
+            .Returns(admitted);
+
+    [Fact]
+    public async Task GetInstanceStateAsync_WhenInteractionRuleAdmits_EmitsInteraction()
+    {
+        // Arrange
+        var (instance, workflow) = CreateInteractionRuleInstance();
+        SetupCommonMocks(instance, workflow);
+        SetupRuleGate(admitted: true);
+
+        // Act
+        var result = await _service.GetInstanceStateAsync(CreateInput(instance.Id.ToString()), CancellationToken.None);
+
+        // Assert — the rule arm admitted the caller; roles were never consulted.
+        result.Result.IsSuccess.ShouldBeTrue();
+        var interaction = result.Result.Value!.Interaction;
+        interaction.ShouldNotBeNull();
+        interaction!.TerminateLongPoll.ShouldBeTrue();
+        interaction.FallbackTimeoutSeconds.ShouldBe(45);
+        interaction.Ack.ShouldNotBeNull();
+        await _transitionAuthorizationManager.DidNotReceive().IsAnyRoleAllowedForGrantsAsync(
+            Arg.Any<IReadOnlyCollection<string>>(),
+            Arg.Any<IReadOnlyCollection<RoleGrant>>(),
+            Arg.Any<Instance>(),
+            Arg.Any<AuthorizationRequestContext?>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task GetInstanceStateAsync_WhenInteractionRuleDenies_OmitsInteraction()
+    {
+        // Arrange
+        var (instance, workflow) = CreateInteractionRuleInstance();
+        SetupCommonMocks(instance, workflow);
+        SetupRuleGate(admitted: false);
+
+        // Act
+        var result = await _service.GetInstanceStateAsync(CreateInput(instance.Id.ToString()), CancellationToken.None);
+
+        // Assert — fail-closed: no interaction block for this caller, response otherwise intact.
+        result.Result.IsSuccess.ShouldBeTrue();
+        result.Result.Value!.Interaction.ShouldBeNull();
+    }
+
+    /// <summary>
+    /// A rule-gated interaction verdict varies on inputs CallerScopeHash does not cover (headers,
+    /// query parameters, instance data), so the built body must never be stored in the shared cache.
+    /// </summary>
+    [Fact]
+    public async Task GetInstanceStateAsync_WhenInteractionRuleGated_SkipsBodyCacheStore()
+    {
+        // Arrange
+        var (instance, workflow) = CreateInteractionRuleInstance();
+        SetupCommonMocks(instance, workflow);
+        SetupRuleGate(admitted: true);
+        EnableCache();
+        SetupFingerprint(instance.Id);
+
+        // Act
+        var result = await _service.GetInstanceStateAsync(CreateInput(instance.Id.ToString()), CancellationToken.None);
+
+        // Assert — built and served, but not cached (contrast: WhenCacheMiss_BuildsAndWarmsCache).
+        result.Result.IsSuccess.ShouldBeTrue();
+        result.Result.Value!.Interaction.ShouldNotBeNull();
+        await _stateFunctionCache.DidNotReceive().SetAsync(
+            Arg.Any<string>(), Arg.Any<Caching.StateFunctionCacheEntry>(), Arg.Any<CancellationToken>());
+        await _stateFunctionCache.DidNotReceive().SetAsync(
+            Arg.Any<string>(), Arg.Any<Caching.StateFunctionCacheEntry>(), Arg.Any<TimeSpan>(),
+            Arg.Any<CancellationToken>());
+    }
 }

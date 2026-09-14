@@ -84,6 +84,7 @@ public class InstanceCommandAppServiceStartProbeTests : IDisposable
             transitionAuthorizationManager: Substitute.For<ITransitionAuthorizationManager>(),
             cancellationService: Substitute.For<IInstanceCancellationService>(),
             longPollAckResumeService: Substitute.For<ILongPollAckResumeService>(),
+            longPollRuleGate: NSubstitute.Substitute.For<BBT.Workflow.Execution.LongPoll.ILongPollRuleGate>(),
             instanceCommandGateway: Substitute.For<IInstanceCommandGateway>(),
             workflowOutputMappingService: Substitute.For<IWorkflowOutputMappingService>(),
             callerRoleResolver: Substitute.For<ICallerRoleResolver>(),

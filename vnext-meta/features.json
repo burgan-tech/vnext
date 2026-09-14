@@ -1,5 +1,5 @@
 {
-  "runtimeVersion": "0.0.90",
+  "runtimeVersion": "0.0.92",
   "engine": {
     "pythonTask": {
       "since": "0.0.80",
@@ -34,6 +34,16 @@
         "Scripting:Sandbox:BannedNamespaces",
         "Scripting:Sandbox:PluginDirectory",
         "Scripting:Sandbox:AllowUnsafe"
+      ]
+    },
+    "longPollInteractionRule": {
+      "since": "0.0.92",
+      "status": "stable",
+      "description": "Rule-based authorization arm for interaction.longPoll (issue #936): instead of roles, a state may declare interaction.longPoll.rule - ONE condition script (scriptCode slot, IConditionMapping contract, same shape as view/notification rules) compiled and cached by the shared script engine. The two arms are mutually exclusive: WorkflowValidator rejects a longPoll declaring both roles (non-empty) and rule, validates the rule's script body like every compilable slot, and (new) validates longPoll.roles dynamic-grant syntax; the vnext-schema longPoll contract enforces exactly one of roles|rule at authoring time. Both enforcement surfaces admit through one gate (ILongPollRuleGate): the State function emits the interaction object only when the rule returns true, and the acknowledge endpoint (POST .../longpoll/ack) rejects with 403 when it does not - so which clients see and may acknowledge a Human Task interaction can be driven by request headers, query parameters or instance data (e.g. admit when header x-channel=mobile). Fail-closed: a rule returning false, throwing or failing to compile denies on both surfaces; the fallbackTimeoutSeconds job still auto-resumes the paused pipeline, so a broken rule cannot strand an instance. Caching posture: a state body whose interaction is rule-gated is never stored in the shared state body cache (CallerScopeHash does not cover rule inputs; bubbled subflow interactions skip caching conservatively); the fingerprint 304 fast path is unchanged, leaving an accepted #864-class gap where rule-input changes behind an unchanged fingerprint keep answering 304 with the previous verdict until the next state/status change - the acknowledge always evaluates fresh. No state-body shape change (ResponseShapeVersion untouched).",
+      "schemaPath": "state.interaction.longPoll.rule",
+      "apiEndpoints": [
+        "GET {domain}/workflows/{workflow}/instances/{instance}/functions/state",
+        "POST {domain}/workflows/{workflow}/instances/{instance}/longpoll/ack"
       ]
     },
     "longPollTermination": {
