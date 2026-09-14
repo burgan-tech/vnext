@@ -6,6 +6,41 @@
       "headers": {
         "Authorization": "Basic cm9vdEBleGFtcGxlLmNvbTpDb21wbGV4cGFzcyNAMTIz"
       }
+    },
+    "postgres": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": [
+        "--with",
+        "mcp<2",
+        "postgres-mcp",
+        "--access-mode=restricted"
+      ],
+      "env": {
+        "DATABASE_URI": "postgresql://${VNEXT_PG_USER:-postgres}:${VNEXT_PG_PASSWORD:-postgres}@${VNEXT_PG_HOST:-localhost}:${VNEXT_PG_PORT:-5432}/${VNEXT_PG_DATABASE:-Aether_WorkflowDb}"
+      }
+    },
+    "elasticsearch": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@elastic/mcp-server-elasticsearch"
+      ],
+      "env": {
+        "ES_URL": "${VNEXT_ES_URL:-http://localhost:9200}"
+      }
+    },
+    "redis": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": [
+        "--from",
+        "redis-mcp-server",
+        "redis-mcp-server",
+        "--url",
+        "${VNEXT_REDIS_URL:-redis://localhost:6379/0}"
+      ]
     }
   }
 }
