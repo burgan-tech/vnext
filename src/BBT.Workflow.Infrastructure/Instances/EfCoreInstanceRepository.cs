@@ -579,35 +579,6 @@ public sealed class EfCoreInstanceRepository(
         }
     }
 
-    /// <summary>
-    /// The <see cref="AlignStatusBaselineAsync"/> counterpart for the unfault CAS, which writes four
-    /// columns. Aligning only <c>Status</c> would leave <c>CompletedAt</c>, <c>Duration</c> and
-    /// <c>HasActiveIncident</c> marked Modified, and a later SaveChanges in the same unit of work
-    /// would write them a second time — the smaller version of the bug the CAS exists to prevent.
-    /// No-op for detached aggregates, which is the retry path's normal shape.
-    /// </summary>
-    private async Task AlignUnfaultBaselineAsync(Instance instance)
-    {
-        var dbContext = await GetDbContextAsync();
-        var entry = dbContext.Entry(instance);
-        if (entry.State == EntityState.Detached)
-        {
-            return;
-        }
-
-        AlignProperty(entry, nameof(Instance.Status), instance.Status);
-        AlignProperty(entry, nameof(Instance.CompletedAt), instance.CompletedAt);
-        AlignProperty(entry, nameof(Instance.Duration), instance.Duration);
-        AlignProperty(entry, nameof(Instance.HasActiveIncident), instance.HasActiveIncident);
-
-        static void AlignProperty(EntityEntry<Instance> entry, string name, object? currentValue)
-        {
-            var property = entry.Property(name);
-            property.OriginalValue = currentValue;
-            property.IsModified = false;
-        }
-    }
-
     /// <inheritdoc />
     public async Task ArmLongPollAckAsync(Guid instanceId, Guid token, CancellationToken cancellationToken = default)
     {
