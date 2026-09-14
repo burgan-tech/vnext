@@ -329,10 +329,10 @@ A sixth profile is **composed on top of** the base, never selected instead of it
   settling span attached as an `ActivityLink`. Kind `Internal` (a `Consumer` would be counted as an
   APM transaction).
 - **The episode start travels in `WorkflowTraceLane.Episode`** and, across every async boundary, as
-  `EpisodeStartedAt` / `EpisodeTrigger` / `EpisodeTransitionKey` beside `TraceRoot` in every lane
+  `EpisodeStartedAt` / `EpisodeTrigger` / `EpisodeTransitionKey` / `EpisodeTraceRoot` beside `TraceRoot` in every lane
   carrier (`TransitionJobPayload`, `TransitionContinuationRequested`, the three `InstanceSub*`
   events, `SubflowForwardInput`, `FlowCompletedInput`, `SubFlowFaultedInput`, `SubItemCanceledInput`).
-  **A new carrier must copy all three** — a missing start degrades the consumer to a
+  **A new carrier must copy all four** — a missing start degrades the consumer to a
   `vnext.activation.partial=true` span covering only its own hop.
 - **Only status owners emit** (`OwnsStatus`). A lost CAS yields no verdict (whoever flipped emits),
   and a fresh post-commit parent that is no longer Busy yields none (a sync child callback already
@@ -356,10 +356,10 @@ A sixth profile is **composed on top of** the base, never selected instead of it
   settling span attached as an `ActivityLink`. Kind `Internal` (a `Consumer` would be counted as an
   APM transaction).
 - **The episode start travels in `WorkflowTraceLane.Episode`** and, across every async boundary, as
-  `EpisodeStartedAt` / `EpisodeTrigger` / `EpisodeTransitionKey` beside `TraceRoot` in every lane
+  `EpisodeStartedAt` / `EpisodeTrigger` / `EpisodeTransitionKey` / `EpisodeTraceRoot` beside `TraceRoot` in every lane
   carrier (`TransitionJobPayload`, `TransitionContinuationRequested`, the three `InstanceSub*`
   events, `SubflowForwardInput`, `FlowCompletedInput`, `SubFlowFaultedInput`, `SubItemCanceledInput`).
-  **A new carrier must copy all three** — a missing start degrades the consumer to a
+  **A new carrier must copy all four** — a missing start degrades the consumer to a
   `vnext.activation.partial=true` span covering only its own hop.
 - **Only status owners emit** (`OwnsStatus`), and **a hop that enqueued a continuation never emits**
   (`PipelineDirectives.ContinuationEnqueued` → `chainSettled:false`); a lost CAS yields no verdict

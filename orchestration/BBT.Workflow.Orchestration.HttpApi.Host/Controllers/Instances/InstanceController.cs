@@ -196,6 +196,19 @@ public sealed class InstanceController(
         CancellationToken cancellationToken = default
     )
     {
+        // Adopt the child's lane, exactly as /complete, /sub/fault and /sub/cancel do. This was the
+        // only sub/* relay endpoint without it: the parent write, its upward relay to the
+        // grandparent and every Db/Cache span underneath parented to THIS endpoint's server span
+        // instead of the business trace, so a cross-domain sub-state change was detached from the
+        // request that caused it. Reset (not Use) is the entry policy here — a Dapr/HTTP relay
+        // callback is its own request, and inheriting its span would anchor the lane on transport.
+        using var lane = WorkflowTraceLane.Reset(
+            request.TraceRoot,
+            request.ParentTraceRoot,
+            episode: ActivationEpisode.FromCarrier(
+                request.EpisodeStartedAt, request.EpisodeTrigger, request.EpisodeTransitionKey,
+                request.EpisodeTraceRoot));
+
         await subflowStateService.UpdateParentStateAsync(request, cancellationToken);
         return Ok();
     }

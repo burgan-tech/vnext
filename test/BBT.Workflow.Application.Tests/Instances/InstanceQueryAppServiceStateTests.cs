@@ -1,4 +1,8 @@
 using System;
+using BBT.Workflow.Logging;
+using System;
+using System.Diagnostics;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
@@ -1295,6 +1299,180 @@ public class InstanceQueryAppServiceStateTests : IDisposable
     }
 
     /// <summary>
+    /// The hot-path budget, as a number a test can fail on: the 304 branch creates **zero** vNext
+    /// activities.
+    /// <para>
+    /// The council settled this unanimously and the binding reason is fidelity, not cost. No sampler
+    /// is configured in any host, so every recorded span is exported; with untuned OpenTelemetry
+    /// defaults (queue 2048, batch 512, 5s) a burst on the runtime's highest-QPS route overflows the
+    /// queue and drops spans *indiscriminately* — including the pipeline spans the whole trace tree
+    /// exists to protect. An envelope here would also be a permanent +50&#160;% on documents for this
+    /// route, to record that nothing happened.
+    /// </para>
+    /// <para>
+    /// The discriminator still travels, as a tag on the transaction, at zero documents — which is
+    /// what keeps a state poll distinguishable from a view read despite the shared route template.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task GetInstanceStateAsync_304Branch_CreatesNoSpansAndTagsTheTransaction()
+    {
+        var collected = new List<Activity>();
+        using var listener = new ActivityListener
+        {
+            // Every vNext source, not just the read one: the budget is "nothing of ours", so a span
+            // added later under any other helper has to fail this too.
+            ShouldListenTo = source => source.Name.StartsWith("BBT.Workflow.", StringComparison.Ordinal),
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) =>
+                ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStopped = collected.Add
+        };
+        ActivitySource.AddActivityListener(listener);
+
+        // The stand-in for the ASP.NET server span. It needs its own listener: the one above
+        // deliberately only listens to BBT.Workflow.* so that anything of ours shows up as a
+        // failure, and an ActivitySource with no listener returns null.
+        var serverSource = new ActivitySource("test.server");
+        using var serverListener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == "test.server",
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) =>
+                ActivitySamplingResult.AllDataAndRecorded
+        };
+        ActivitySource.AddActivityListener(serverListener);
+
+        using var transaction = serverSource.StartActivity("GET /functions/state");
+
+        var instanceId = Guid.NewGuid();
+        EnableCache();
+        SetupFingerprint(instanceId);
+
+        var input = CreateInput(instanceId.ToString());
+        input.IfNoneMatch = "\"etag-current\"";
+
+        var result = await _service.GetInstanceStateAsync(input, CancellationToken.None);
+
+        result.IsNotModified.ShouldBeTrue();
+        collected.ShouldBeEmpty(
+            "the 304 branch must create no vNext span at all; found: " +
+            string.Join(", ", collected.Select(a => a.DisplayName)));
+
+        // The transaction still says which read ran and how it was answered.
+        transaction.ShouldNotBeNull();
+        transaction!.GetTagItem(TelemetryConstants.TagNames.FunctionKey).ShouldBe(InstanceReadKinds.State);
+        transaction.GetTagItem(TelemetryConstants.TagNames.ReadFastPath)
+            .ShouldBe(InstanceReadActivityHelper.FastPathNotModified);
+    }
+
+    /// <summary>
+    /// An active-subflow read passes through the build gate, and the gate says so.
+    /// <para>
+    /// This path is the one the long-poll fast path cannot serve: a parent's own row cannot see
+    /// subflow-internal status flips, so the read has to descend live. The gate around that descent
+    /// is what stops N simultaneous polls on the same parent from performing N descents — and until
+    /// this span existed, the waiting was indistinguishable from the working and the coalescing left
+    /// no trace at all.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task GetInstanceStateAsync_ActiveSubflowBuild_OpensTheBuildGateSpan()
+    {
+        var collected = CollectReadSpans(out var listener);
+        using var _ = listener;
+
+        var (instance, workflow) = CreateSimpleActiveInstance();
+        SetupCommonMocks(instance, workflow);
+        EnableCache();
+        SetupFingerprint(instance.Id, hasActiveSubFlow: true);
+
+        await _service.GetInstanceStateAsync(CreateInput(instance.Id.ToString()), CancellationToken.None);
+
+        var gate = collected.SingleOrDefault(a =>
+            a.OperationName == InstanceReadActivityHelper.OperationBuildGate);
+
+        gate.ShouldNotBeNull("an active-subflow read must open the build gate span");
+        gate!.GetTagItem(TelemetryConstants.TagNames.BuildGateOutcome)
+            .ShouldBe(InstanceReadActivityHelper.BuildGateBuild);
+
+        // Nothing else held the gate, so the span's duration is not a wait. Saying so is the whole
+        // point of the tag: otherwise every gate span looks like contention.
+        gate.GetTagItem(TelemetryConstants.TagNames.BuildGateContended).ShouldBe(false);
+    }
+
+    /// <summary>
+    /// The payoff case: the request waited, and while it waited the gate's holder populated the
+    /// short active-subflow cache — so this request served that instead of descending again.
+    /// <para>
+    /// Driven here by the cache answering miss-then-hit rather than by real concurrency, because the
+    /// claim under test is the tagging of the double-check, not the semaphore.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task GetInstanceStateAsync_WhenTheGateHolderWarmedTheCache_TagsTheWaitAsCoalesced()
+    {
+        var collected = CollectReadSpans(out var listener);
+        using var _ = listener;
+
+        var instanceId = Guid.NewGuid();
+        EnableCache();
+        SetupFingerprint(instanceId, hasActiveSubFlow: true);
+
+        var snapshot = new Caching.StateFunctionCacheEntry
+        {
+            Etag = "etag-subflow",
+            ParentEtag = "etag-current",
+            IsActiveSubflowSnapshot = true,
+            EntityEtag = "entity-1",
+            Output = new GetInstanceStateOutput
+            {
+                State = TestState,
+                Status = InstanceStatus.Active,
+                Transitions = [],
+                ActiveCorrelations = []
+            }
+        };
+
+        // Miss on the pre-gate probe, hit on the double-check inside it.
+        _stateFunctionCache.GetAsync(TestCacheKey, Arg.Any<CancellationToken>())
+            .Returns(_ => null, _ => snapshot);
+
+        var result = await _service.GetInstanceStateAsync(
+            CreateInput(instanceId.ToString()), CancellationToken.None);
+
+        result.Result.IsSuccess.ShouldBeTrue();
+
+        var gate = collected.SingleOrDefault(a =>
+            a.OperationName == InstanceReadActivityHelper.OperationBuildGate);
+
+        gate.ShouldNotBeNull();
+        gate!.GetTagItem(TelemetryConstants.TagNames.BuildGateOutcome)
+            .ShouldBe(InstanceReadActivityHelper.BuildGateCoalesced);
+
+        // The aggregate was never loaded: the wait replaced a descent, which is the gate's reason
+        // for existing.
+        await _instanceRepository.DidNotReceive()
+            .FindByIdentifierAsReadOnlyAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// Listener over the read source only. Returned rather than declared inline so the two gate
+    /// tests cannot drift apart on sampling or disposal.
+    /// </summary>
+    private static List<Activity> CollectReadSpans(out ActivityListener listener)
+    {
+        var collected = new List<Activity>();
+        listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == InstanceReadActivityHelper.SourceName,
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) =>
+                ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStopped = collected.Add
+        };
+        ActivitySource.AddActivityListener(listener);
+        return collected;
+    }
+
+    /// <summary>
     /// Without a current If-None-Match, a cache entry carrying the current fingerprint ETag
     /// serves the cached response without loading the aggregate.
     /// </summary>
@@ -1448,11 +1626,11 @@ public class InstanceQueryAppServiceStateTests : IDisposable
             .Returns("etag-subflow");
     }
 
-    private void SetupFingerprint(Guid instanceId) =>
+    private void SetupFingerprint(Guid instanceId, bool hasActiveSubFlow = false) =>
         _instanceRepository
             .GetStateFingerprintAsync(instanceId.ToString(), Arg.Any<CancellationToken>())
             .Returns(new InstanceStateFingerprint(instanceId, "test-key", TestState, InstanceStatus.Active,
-                InstanceStatus.Active, TestVersion, HasActiveSubFlow: false,
+                InstanceStatus.Active, TestVersion, HasActiveSubFlow: hasActiveSubFlow,
                 CorrelationCount: 0, CompletedCorrelationCount: 0,
                 LastCorrelationCompletedAt: null, LastSubFlowStateChangedAt: null));
 

@@ -25,11 +25,19 @@ public sealed class ChildSubflowFaultService(
         TerminationContext termination,
         CancellationToken cancellationToken = default)
     {
+        // The cancel twin (ChildSubflowCancellationService) has always opened a span here and this
+        // one never did, so a downward fault cascade — the leg that actually terminates children
+        // when a parent faults — was the one child-termination path invisible in a trace. Same
+        // source and same shape as the twin, so the two legs read alike.
+        using var activity = SubFlowActivityHelper.StartActivity($"SubFlow.ChildFault/{domain}/{flow}");
+        SubFlowActivityHelper.EnrichWithChildFault(activity, instanceId, parentInstanceId, domain, flow);
+
         var childInstance = await instanceRepository.FindAsync(instanceId, true, cancellationToken);
 
         if (childInstance is null)
         {
             logger.InstanceNotFound(instanceId, flow);
+            SubFlowActivityHelper.SetOutcome(activity, "not_found");
             return Result.Ok();
         }
 
@@ -37,6 +45,7 @@ public sealed class ChildSubflowFaultService(
         if (childInstance.Status.Equals(InstanceStatus.Faulted) ||
             childInstance.Status.Equals(InstanceStatus.Completed))
         {
+            SubFlowActivityHelper.SetOutcome(activity, "already_terminal");
             return Result.Ok();
         }
 
@@ -44,6 +53,8 @@ public sealed class ChildSubflowFaultService(
         await instanceRepository.UpdateAsync(childInstance, true, cancellationToken);
 
         logger.ChildSubflowFaultApplied(instanceId, parentInstanceId);
+        SubFlowActivityHelper.SetOutcome(activity, "faulted");
+        SubFlowActivityHelper.SetSuccess(activity);
         return Result.Ok();
     }
 }

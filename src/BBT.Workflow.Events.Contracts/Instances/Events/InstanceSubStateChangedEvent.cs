@@ -8,7 +8,7 @@ namespace BBT.Workflow.Instances.Events;
 /// Contains all necessary information about the state change for parent instance synchronization.
 /// </summary>
 [EventName("instance.sub.state.changed")]
-public class InstanceSubStateChangedEvent : IDistributedEvent, ITraceableDistributedEvent
+public class InstanceSubStateChangedEvent : IDistributedEvent, ILaneAwareDistributedEvent
 {
     /// <summary>
     /// The ID of the Parent instance
@@ -105,4 +105,30 @@ public class InstanceSubStateChangedEvent : IDistributedEvent, ITraceableDistrib
     {
         return $"{nameof(InstanceSubStateChangedEvent)}: ParentInstanceId={ParentInstanceId} SubInstanceId={SubInstanceId} Domain={Domain} Flow={Flow} PreviousState={PreviousState} NewState={NewState}";
     }
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// This event is lane-aware because its consumer opens a top-level operation, not an
+    /// informational read: <c>SubflowStateService</c> takes the per-sub-item lock, runs its own
+    /// transactional unit of work against the parent and relays the resulting event to the
+    /// grandparent. Without the anchor that work parented to the internal relay endpoint's server
+    /// span, so a cross-domain sub-state change detached from the business trace entirely — the one
+    /// sub/* path with that gap.
+    /// </remarks>
+    public string? TraceRoot { get; set; }
+
+    /// <inheritdoc />
+    public string? ParentTraceRoot { get; set; }
+
+    /// <inheritdoc />
+    public DateTimeOffset? EpisodeStartedAt { get; set; }
+
+    /// <inheritdoc />
+    public string? EpisodeTrigger { get; set; }
+
+    /// <inheritdoc />
+    public string? EpisodeTransitionKey { get; set; }
+
+    /// <inheritdoc />
+    public string? EpisodeTraceRoot { get; set; }
 }

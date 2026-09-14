@@ -225,6 +225,26 @@ public static partial class WorkflowLogs
         Guid instanceId);
 
     /// <summary>
+    /// Logs at startup when a declared ActivitySource is missing from this host's MERGED
+    /// configuration.
+    /// <para>
+    /// The unit test that checks the same rule reads the repository's <c>appsettings.json</c>; this
+    /// reads what the process actually resolved, which is the only place a deployment-time override
+    /// is visible. .NET merges configuration arrays by INDEX, so a single
+    /// <c>…AdditionalSources__0</c> entry in a chart's free-form env block replaces the first entry
+    /// — today <c>BBT.Workflow.Pipeline</c> — with no code change and no error anywhere. Every
+    /// pipeline span and the activation metric would simply stop existing.
+    /// </para>
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10157,
+        Level = LogLevel.Warning,
+        Message = "Tracing sources missing from this host's effective configuration: {MissingSources}. Spans from them are created but never exported.")]
+    public static partial void ActivitySourcesMissingFromConfiguration(
+        this ILogger logger,
+        string missingSources);
+
+    /// <summary>
     /// Logs when a retry re-entry reuses the ORIGINAL transition record so the task journal
     /// lines up and already-completed tasks are bypassed instead of re-running side effects.
     /// </summary>

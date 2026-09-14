@@ -71,4 +71,29 @@ public record SubFlowStateChangedInput
     /// authority. Zero means "not reported" and the receiver falls back to <see cref="ChangedAt"/>.
     /// </summary>
     public long NotificationSeq { get; init; }
+
+    /// <summary>
+    /// Lane anchor of the child that published the change — see
+    /// <c>ILaneAwareDistributedEvent.TraceRoot</c>. Internal-only, never read from a request header:
+    /// a caller-supplied anchor would let anyone graft spans onto an unrelated trace.
+    /// </summary>
+    public string? TraceRoot { get; init; }
+
+    /// <summary>The enclosing lane's anchor.</summary>
+    public string? ParentTraceRoot { get; init; }
+
+    /// <summary>
+    /// Episode start. These four episode fields are always copied together — a carrier that copies
+    /// some of them degrades its consumer to a partial activation span covering only its own hop.
+    /// </summary>
+    public DateTimeOffset? EpisodeStartedAt { get; init; }
+
+    /// <summary>What opened the episode.</summary>
+    public string? EpisodeTrigger { get; init; }
+
+    /// <summary>The transition the episode was triggered with.</summary>
+    public string? EpisodeTransitionKey { get; init; }
+
+    /// <summary>The trace root under which the episode began.</summary>
+    public string? EpisodeTraceRoot { get; init; }
 }

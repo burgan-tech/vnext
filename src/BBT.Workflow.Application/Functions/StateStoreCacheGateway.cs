@@ -1,3 +1,4 @@
+using BBT.Workflow.Caching;
 using System.Text.Json;
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
@@ -32,13 +33,27 @@ public sealed class StateStoreCacheGateway(IRemoteInvokerService remoteInvoker) 
 {
     private const string TaskKey = "function-cache";
 
+    /// <summary>Groups these spans apart from component-cache reads in the same query.</summary>
+    private const string ComponentType = "function-response";
+
     /// <inheritdoc />
     public async Task<CacheGetResult> GetAsync(
         string key, string? storeName, string? consistency, TaskTraceContext traceContext, CancellationToken cancellationToken = default)
     {
+        // The only cache in the runtime whose hit/miss was invisible. Every other cache read draws a
+        // Cache.Get with cache.hit; this one goes out through the Execution service to a Dapr state
+        // store, so it appeared as an Invoke.* span with nothing saying it was a cache at all — and
+        // a hit here skips the function's whole task set, which makes it the branch most worth
+        // seeing. The key is authored by the domain, so it is tagged and deliberately NOT in the
+        // span name.
+        using var activity = CacheActivityHelper.StartActivity(
+            CacheActivityHelper.OperationGet, componentType: ComponentType);
+        CacheActivityHelper.SetCacheKey(activity, key);
+
         var envelope = BuildEnvelope("get", key, storeName, consistency, ttlInSeconds: null, value: null);
         if (!envelope.IsSuccess)
         {
+            CacheActivityHelper.SetError(activity, null);
             return new CacheGetResult(CacheOk: false, Hit: false, Value: default);
         }
 
@@ -47,6 +62,10 @@ public sealed class StateStoreCacheGateway(IRemoteInvokerService remoteInvoker) 
 
         if (!result.IsSuccess || !result.Value!.IsSuccess)
         {
+            // A cache that cannot be read is not a failed request — the caller falls through to the
+            // tasks — but it is not a miss either, and reporting it as one would hide an outage
+            // behind a plausible hit ratio.
+            CacheActivityHelper.SetError(activity, null);
             return new CacheGetResult(CacheOk: false, Hit: false, Value: default);
         }
 
@@ -54,9 +73,11 @@ public sealed class StateStoreCacheGateway(IRemoteInvokerService remoteInvoker) 
         if (result.Value.Data is JsonElement value &&
             value.ValueKind is not (JsonValueKind.Undefined or JsonValueKind.Null))
         {
+            CacheActivityHelper.SetCacheHit(activity, true);
             return new CacheGetResult(CacheOk: true, Hit: true, Value: value);
         }
 
+        CacheActivityHelper.SetCacheHit(activity, false);
         return new CacheGetResult(CacheOk: true, Hit: false, Value: default);
     }
 
@@ -64,16 +85,25 @@ public sealed class StateStoreCacheGateway(IRemoteInvokerService remoteInvoker) 
     public async Task<bool> SetAsync(
         string key, object? value, int? ttlInSeconds, string? storeName, string? consistency, TaskTraceContext traceContext, CancellationToken cancellationToken = default)
     {
+        using var activity = CacheActivityHelper.StartActivity(
+            CacheActivityHelper.OperationSet, componentType: ComponentType);
+        CacheActivityHelper.SetCacheKey(activity, key);
+
         var envelope = BuildEnvelope("set", key, storeName, consistency, ttlInSeconds, value);
         if (!envelope.IsSuccess)
         {
+            CacheActivityHelper.SetError(activity, null);
             return false;
         }
 
         var result = await remoteInvoker.InvokeAsync(
             BBT.Workflow.Execution.TaskTypes.StateStore, TaskKey, envelope.Value!, traceContext, cancellationToken);
 
-        return result.IsSuccess && result.Value!.IsSuccess;
+        var written = result.IsSuccess && result.Value!.IsSuccess;
+        if (!written)
+            CacheActivityHelper.SetError(activity, null);
+
+        return written;
     }
 
     private static Result<TaskEnvelope> BuildEnvelope(

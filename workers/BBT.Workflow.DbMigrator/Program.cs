@@ -34,7 +34,7 @@ builder.Services
     .AddDomainModule()
     .AddInfrastructureModule(configuration)
     .AddDbContext(configuration)
-    .AddTelemetry(configuration)
+    .AddTelemetry(configuration, verifyActivitySources: false)
     .AddDistributedLock(configuration)
     .AddSingleton<SchemaMigrationRunner>()
     .AddHostedService<SchemaMigrationHostedService>();

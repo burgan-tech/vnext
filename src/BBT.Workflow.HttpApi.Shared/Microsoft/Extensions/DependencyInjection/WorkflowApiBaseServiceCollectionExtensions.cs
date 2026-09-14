@@ -220,8 +220,23 @@ public static class WorkflowApiBaseServiceCollectionExtensions
         return services;
     }
 
-    public static IServiceCollection AddTelemetry(this IServiceCollection services, IConfiguration configuration)
+    /// <param name="verifyActivitySources">
+    /// Whether this host is expected to carry the full ActivitySource catalogue. False only for the
+    /// DbMigrator, which runs EF migrations and exits: it emits none of the runtime's spans, so its
+    /// (correct) minimal source list would otherwise produce a twelve-name warning on every deploy —
+    /// and a check that cries wolf on a healthy deployment stops being read on an unhealthy one.
+    /// </param>
+    public static IServiceCollection AddTelemetry(
+        this IServiceCollection services,
+        IConfiguration configuration,
+        bool verifyActivitySources = true)
     {
+        // Reads the MERGED configuration at startup and warns when a source every host must carry is
+        // absent. The repository-level guard cannot see a deployment override, and this failure is
+        // otherwise completely silent — StartActivity just returns null.
+        if (verifyActivitySources)
+            services.AddHostedService<BBT.Workflow.Telemetry.ActivitySourceRegistrationCheck>();
+
         // The RequestIdLogProcessor runs after Aether's header enricher and before the exporter,
         // stamping the originating request id on every log record of every service — including
         // paths with no HttpContext, where the enricher is silent. See the processor's remarks

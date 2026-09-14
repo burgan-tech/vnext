@@ -63,28 +63,67 @@ exporters:
 processors:
   batch:
 
-  # Drops the sidecar's own span for state-store and lock gRPC calls.
+  # Drops the SIDECAR's own span for Dapr gRPC calls, and only the sidecar's.
   #
-  # These are pure duplicates with a broken parent. The app already emits
-  # `dapr.proto.runtime.v1.Dapr/GetState` (GrpcNetClient instrumentation) with the call's
-  # timing, correctly nested under the business span. The sidecar's counterpart adds only
-  # its internal handling time — and arrives orphaned, because the HttpClient activity
-  # between the two puts its id on the wire without ever being exported. Elastic APM
-  # re-roots such a span to the trace root, so a single transition litters the waterfall
-  # with ~50 detached GetState spans (45 -> 173 spans measured on one transition).
+  # The two span kinds are told apart by the leading slash, which is the gRPC full-method
+  # name the sidecar's server span carries:
   #
-  # Scoped by instrumentation scope, NOT by name: the app-side client span carries the same
-  # `…/GetState` suffix and must survive. `dapr-diagnostics` is the sidecar's scope.
+  #   `dapr.proto.runtime.v1.Dapr/GetState`   — the APP's client span (GrpcNetClient
+  #                                             instrumentation), correctly nested under the
+  #                                             business span. MUST SURVIVE: it is the only
+  #                                             thing that says how long `Cache.Get` or
+  #                                             `Lock.Acquire` actually spent on the wire.
+  #   `/dapr.proto.runtime.v1.Dapr/GetState`  — the sidecar's server span. Adds only its own
+  #                                             handling time, and for state-store and lock
+  #                                             calls it arrives ORPHANED.
+  #
+  # The pattern used to be `^/?dapr…`, and the optional slash made it drop BOTH — including
+  # the app-side span this comment has always said must survive. Measured on 2026-09-13: a
+  # ten-minute window through this collector contained ZERO spans of either kind, while the
+  # same traffic through a collector without this processor contained 254 app-side and 254
+  # sidecar GetState spans. The anchor is now `^/` so only the sidecar's are dropped.
+  #
+  # FIXED UPSTREAM 2026-09-13 — this processor is now a VOLUME choice, not a correctness one.
+  # Aether `fix/filtered-span-wire-parent` (commit c41e1d4): FilteredSpanRedirect applies the
+  # diagnostic-request predicate at injection time, so the sidecar's span now parents on the exported
+  # gRPC client span instead of on the filtered HTTP one.
+  #
+  # ORDERING: removing this processor from an environment that still runs the OLD Aether brings the
+  # orphans back at full volume. Deploy the Aether release there first, then decide.
+  # Verified against a local Aether feed: with this processor OFF, a full window audits at zero
+  # orphans. Keeping the drop saves ~6.8 % of trace documents and costs the sidecar's own handling
+  # time; removing it buys that timing back. Either is defensible now — before the upstream fix only
+  # keeping it was.
+  #
+  # Why the sidecar's orphan was happening, root cause measured 2026-09-13: Aether's HttpClient
+  # instrumentation filter. `AetherTelemetryServiceCollectionExtensions.ShouldTraceHttpRequest`
+  # is `IsVerbose || !IsDaprDiagnosticRequest(uri)`, and `IsDaprDiagnosticRequest` lists exactly
+  # GetState / GetBulkState / SaveState / DeleteState / ExecuteStateTransaction / GetSecret /
+  # GetBulkSecret / GetConfiguration / SubscribeConfiguration / TryLockAlpha1 / UnlockAlpha1.
+  # In the default Business profile those HttpClient spans are dropped — but dropping a span
+  # does not remove the Activity, and it is that Activity's id which goes into `traceparent`.
+  # The sidecar therefore parents its span on an id no backend ever received, and Elastic APM
+  # re-roots it (45 -> 173 spans on one transition).
+  #
+  # The evidence is a clean split. Over 300 sidecar spans, every GetState/SaveState/TryLock/
+  # Unlock one was orphaned (248) while every PublishEvent and Jobs one — none of them on that
+  # list — had an exported parent (52). Restarting one host with
+  # `Telemetry__Tracing__DetailLevel=Verbose` made the four missing HttpClient spans appear
+  # immediately (13 GetState, 7 TryLock, 7 Unlock, 2 SaveState) with no other change.
+  #
+  # It is NOT a missing gRPC client span — that one exists and nests correctly — and it is NOT
+  # GrpcNetClient's SuppressDownstreamInstrumentation: setting that to false changed nothing.
+  # The fix belongs in Aether; until it lands, this processor is the mitigation.
+  #
   # Service-invocation spans (`CallLocal/*`) are deliberately untouched — those are the ones
-  # that reconnect orchestration to Execution.
-  #
-  # This hides a symptom rather than fixing the missing HttpClient span; the underlying hole
-  # lives in the cache/lock client construction path. Remove this processor when that is fixed.
+  # that reconnect orchestration to Execution. Remove this processor once that HttpClient
+  # hole is fixed; until then it is dropping 52 spans that would nest correctly, which is
+  # the price of one simple rule.
   filter/dapr-internals:
     error_mode: ignore
     traces:
       span:
-        - 'IsMatch(name, "^/?dapr\\.proto\\.runtime\\.v1\\.Dapr/")'
+        - 'IsMatch(name, "^/dapr\\.proto\\.runtime\\.v1\\.Dapr/")'
 
 # Configure pipelines. Pipeline defines a path the data follows in the Collector
 # starting from reception, then further processing or modification and finally

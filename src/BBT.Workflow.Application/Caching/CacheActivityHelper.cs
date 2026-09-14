@@ -100,6 +100,22 @@ public static class CacheActivityHelper
     /// <summary>
     /// Records whether the distributed cache returned a hit or miss.
     /// </summary>
+    /// <summary>
+    /// Tags a cache key WITHOUT putting it in the span name.
+    /// <para>
+    /// For caches whose key is authored rather than derived — the function response cache keys off a
+    /// domain-supplied expression — the key is unbounded, and an unbounded span NAME breaks
+    /// aggregation for everyone (the existing <c>Cache.Get/{key}</c> names already force a runtime
+    /// field to normalize them at query time). The key stays queryable as a tag, which is where
+    /// queries group on it anyway.
+    /// </para>
+    /// </summary>
+    public static void SetCacheKey(Activity? activity, string? cacheKey)
+    {
+        if (activity is null || string.IsNullOrEmpty(cacheKey)) return;
+        activity.SetTag(TagCacheKey, cacheKey);
+    }
+
     public static void SetCacheHit(Activity? activity, bool hit)
     {
         activity?.SetTag(TagCacheHit, hit);
