@@ -8,18 +8,18 @@ those transitions.
 
 | Function | Returns |
 | --- | --- |
-| `GET /{domain}/workflows/{workflow}/instances/{instance}/functions/task-history` | The instance's full task journal (`InstanceTasks`), in execution order (StartedAt ascending). |
-| `GET /{domain}/workflows/{workflow}/instances/{instance}/functions/action-history?taskId={id}` | One journal row's recorded execution sub-steps (`InstanceActions`), in execution order. |
+| `GET /{domain}/workflows/{workflow}/instances/{instance}/functions/tasks` | The instance's full task journal (`InstanceTasks`), in execution order (StartedAt ascending). |
+| `GET /{domain}/workflows/{workflow}/instances/{instance}/functions/actions?taskId={id}` | One journal row's recorded execution sub-steps (`InstanceActions`), in execution order. |
 
 Both are `IInstanceFunctionHandler` registrations dispatched by the `{function}` route segment
 (`TaskHistoryFunctionHandler` / `ActionHistoryFunctionHandler`, keys in `FunctionTypeConst`), like
-`state`, `data` and `hierarchy` — so a custom function named `task-history` or `action-history` is
+`state`, `data` and `hierarchy` — so a custom function named `tasks` or `actions` is
 shadowed, the same rule every system function key has always had. `{instance}` accepts the instance
 id or business key. Responses are **unpaged** — the full set returns at once; a task list is bounded
 by the instance's own transition count, and actions by one task's sub-steps.
 
-`action-history` takes the owning journal row id as the `taskId` **query parameter** (the `id` field
-of a task-history item). Missing or non-GUID → `400` (`Instance:100039`).
+`actions` takes the owning journal row id as the `taskId` **query parameter** (the `id` field
+of a tasks item). Missing or non-GUID → `400` (`Instance:100039`).
 
 ## Authorization
 
@@ -37,7 +37,7 @@ Each item projects one `InstanceTask` journal row joined with its owning transit
 {
   "items": [
     {
-      "id": "6f9c…",                 // journal row id — the taskId the action-history function takes
+      "id": "6f9c…",                 // journal row id — the taskId the actions function takes
       "taskKey": "send-otp",         // task definition key
       "transitionKey": "approve",    // owning transition + its state context
       "fromState": "draft",
@@ -55,11 +55,10 @@ Each item projects one `InstanceTask` journal row joined with its owning transit
 **Metadata only — deliberately.** The journal's `Request`, `Response` and `InvocationResult`
 payloads are NOT exposed here: mapping scripts write the headers they build (including auth
 material resolved from secret stores) into those columns, so full payloads are operator material.
-Operators read them on the Monitor API
-(`GET monitor/{domain}/workflows/{workflow}/instances/{instance}/tasks[/{taskId}]`), the same
-public/Monitor split incidents use for stack traces. The one payload-derived field is `error`: a
-faulted row stores its reason as `{"error": "…"}` in `Response` (`InstanceTask.Faulted`), and that
-string is surfaced.
+Since the Monitor API host was removed (#982, `monitor-api-host` deprecation), no API serves those
+payloads at all — operators read them from the journal table (or APM) directly. The one
+payload-derived field is `error`: a faulted row stores its reason as `{"error": "…"}` in `Response`
+(`InstanceTask.Faulted`), and that string is surfaced.
 
 **The payloads never leave the database either.** `GetHistoryByInstanceIdAsync` projects the
 metadata columns in the SQL SELECT itself (constructor projection into `InstanceTaskHistoryRow`),

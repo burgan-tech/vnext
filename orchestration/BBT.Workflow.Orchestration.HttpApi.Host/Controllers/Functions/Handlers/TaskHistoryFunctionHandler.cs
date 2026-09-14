@@ -8,8 +8,8 @@ using Microsoft.AspNetCore.Mvc;
 namespace BBT.Workflow.Controllers.Instances;
 
 /// <summary>
-/// Handles the <c>task-history</c> system function: the instance's task execution journal in
-/// execution order, metadata only — journaled payloads stay on the Monitor API.
+/// Handles the <c>tasks</c> system function: the instance's task execution journal in execution
+/// order, metadata only — the journaled payloads are not exposed on any API.
 /// </summary>
 public sealed class TaskHistoryFunctionHandler(
     IInstanceQueryAppService queryAppService,

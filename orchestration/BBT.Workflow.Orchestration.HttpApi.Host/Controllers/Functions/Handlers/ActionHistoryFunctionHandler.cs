@@ -9,8 +9,8 @@ using Microsoft.AspNetCore.Mvc;
 namespace BBT.Workflow.Controllers.Instances;
 
 /// <summary>
-/// Handles the <c>action-history</c> system function: the recorded execution sub-steps of one task
-/// journal row, addressed by the <c>taskId</c> query parameter (a row id from the task-history
+/// Handles the <c>actions</c> system function: the recorded execution sub-steps of one task
+/// journal row, addressed by the <c>taskId</c> query parameter (a row id from the tasks
 /// function). Answers 404 (<c>Instance:100038</c>) when the task is not the instance's own.
 /// </summary>
 public sealed class ActionHistoryFunctionHandler(

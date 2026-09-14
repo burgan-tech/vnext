@@ -19,7 +19,7 @@ using TaskStatus = BBT.Workflow.Definitions.TaskStatus;
 namespace BBT.Workflow.Domains.Instances;
 
 /// <summary>
-/// Pins the reads behind the task-history and action-history system functions against a real
+/// Pins the reads behind the tasks and actions system functions against a real
 /// PostgreSQL (the shared SQLite entry point cannot represent the jsonb model):
 /// <list type="bullet">
 ///   <item><see cref="EfCoreInstanceTaskRepository.GetHistoryByInstanceIdAsync"/> — execution

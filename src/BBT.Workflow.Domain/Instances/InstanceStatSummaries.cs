@@ -37,7 +37,7 @@ public sealed record InstanceTaskRow(
 );
 
 /// <summary>
-/// Column projection behind the public task-history function: exactly the metadata the response
+/// Column projection behind the public tasks function: exactly the metadata the response
 /// carries, selected in SQL so the journal's jsonb payloads never leave the database.
 /// <see cref="FaultedResponseJson"/> is the one deliberate exception — the Response column, fetched
 /// only when the row is Faulted (its content is then the small <c>{"error": ...}</c> object the
@@ -60,6 +60,6 @@ public sealed record InstanceTaskHistoryRow(
 
 /// <summary>
 /// Minimal identity of one task journal row, scoped to its owning instance — what the
-/// action-history function needs to admit a taskId and echo the owning task.
+/// actions function needs to admit a taskId and echo the owning task.
 /// </summary>
 public sealed record InstanceTaskRef(Guid Id, string TaskKey);

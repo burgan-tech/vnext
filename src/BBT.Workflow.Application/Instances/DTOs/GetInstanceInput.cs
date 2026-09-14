@@ -182,7 +182,7 @@ public sealed class GetInstanceIncidentsInput : IHasDomain
 }
 
 /// <summary>
-/// Input for the task-history system function of an instance.
+/// Input for the tasks system function of an instance.
 /// </summary>
 public sealed class GetInstanceTasksInput : IHasDomain
 {
@@ -211,7 +211,7 @@ public sealed class GetInstanceTasksInput : IHasDomain
 }
 
 /// <summary>
-/// Input for the action-history system function — the recorded execution sub-steps of one task
+/// Input for the actions system function — the recorded execution sub-steps of one task
 /// journal entry.
 /// </summary>
 public sealed class GetInstanceTaskActionsInput : IHasDomain
@@ -239,7 +239,7 @@ public sealed class GetInstanceTaskActionsInput : IHasDomain
 
     /// <summary>
     /// Caller roles, used to enforce the same <c>queryRoles</c> gate as the state function and the
-    /// task-history function.
+    /// tasks function.
     /// </summary>
     public IReadOnlyCollection<string>? Roles { get; set; }
 }

@@ -344,12 +344,13 @@ public sealed class InstanceTransitionDto
 
 /// <summary>
 /// One task journal entry of an instance — execution metadata plus the fault reason. The journaled
-/// request/response/invocation payloads deliberately stay on the Monitor API: mapping scripts write
-/// their built headers into them, so they are operator material, not client material.
+/// request/response/invocation payloads are deliberately not exposed on any API: mapping scripts
+/// write their built headers into them, so they are operator material (journal table only), not
+/// client material.
 /// </summary>
 public sealed class InstanceTaskDto
 {
-    /// <summary>Journal row identifier — the <c>taskId</c> the action-history function takes.</summary>
+    /// <summary>Journal row identifier — the <c>taskId</c> the actions function takes.</summary>
     public Guid Id { get; set; }
 
     /// <summary>Task definition key that was executed.</summary>

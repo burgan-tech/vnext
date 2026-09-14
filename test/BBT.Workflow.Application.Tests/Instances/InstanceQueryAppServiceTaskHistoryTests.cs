@@ -26,7 +26,7 @@ using Xunit;
 namespace BBT.Workflow.Instances;
 
 /// <summary>
-/// Unit tests for the task-history and action-history system function reads
+/// Unit tests for the tasks and actions system function reads
 /// (<see cref="InstanceQueryAppService.GetInstanceTasksAsync"/> /
 /// <see cref="InstanceQueryAppService.GetInstanceTaskActionsAsync"/>). Pins the queryRoles gate,
 /// the metadata-only DTO projection (fault reason extracted from the conditionally fetched

@@ -125,7 +125,7 @@ public interface IInstanceTaskRepository : IRepository<InstanceTask, Guid>
 
     /// <summary>
     /// Read-only: the instance's full task journal in execution order (StartedAt ascending), joined
-    /// with each task's parent transition context. Backs the public task-history function. Selects
+    /// with each task's parent transition context. Backs the public tasks function. Selects
     /// only the metadata columns — the jsonb payloads stay in the database (the Faulted rows'
     /// Response is the one conditional exception, see <see cref="InstanceTaskHistoryRow"/>).
     /// </summary>
@@ -136,7 +136,7 @@ public interface IInstanceTaskRepository : IRepository<InstanceTask, Guid>
     /// <summary>
     /// Read-only: the identity of the task journal row <paramref name="taskId"/> — but only when
     /// that task belongs to <paramref name="instanceId"/>. Returns null otherwise, so the
-    /// action-history function cannot serve a task across instances.
+    /// actions function cannot serve a task across instances.
     /// </summary>
     Task<InstanceTaskRef?> GetRefForInstanceAsync(
         Guid instanceId,

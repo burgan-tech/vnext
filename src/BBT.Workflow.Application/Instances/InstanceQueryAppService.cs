@@ -440,10 +440,10 @@ public sealed class InstanceQueryAppService(
     }
 
     /// <summary>
-    /// Returns the task execution history of an instance in execution order — the task-history
-    /// system function. Only execution metadata and the fault reason leave this surface — the
-    /// journaled request/response/invocation payloads stay on the Monitor API, since mapping
-    /// scripts write their built headers into them.
+    /// Returns the task execution history of an instance in execution order — the tasks system
+    /// function. Only execution metadata and the fault reason leave this surface — the journaled
+    /// request/response/invocation payloads are not exposed on any API, since mapping scripts
+    /// write their built headers into them; they stay in the journal table.
     /// </summary>
     public async Task<Result<GetInstanceTasksOutput>> GetInstanceTasksAsync(
         GetInstanceTasksInput input,
@@ -475,7 +475,7 @@ public sealed class InstanceQueryAppService(
 
     /// <summary>
     /// Returns the recorded actions (execution sub-steps) of one task journal entry in execution
-    /// order — the action-history system function. The task must belong to the addressed instance —
+    /// order — the actions system function. The task must belong to the addressed instance —
     /// otherwise <c>NotFound</c> (<c>Instance:100038</c>), so a task can never be read through
     /// another instance's gate.
     /// </summary>
