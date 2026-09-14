@@ -11,6 +11,7 @@ These rules are authoritative for all work in this repo. Read them before writin
 - [vNext workflow developer reference](.claude/rules/vnext-workflow-developer.md) — pipeline step order, profiles, subflow lifecycle, error boundary, long-polling, instance data, `vnext-meta`.
 - [Agent Council plan mode](.claude/rules/agent-council-plan-mode.md) — non-trivial decisions must produce an evidence-backed plan before implementation.
 - [Codebase navigation — graphify first](.claude/rules/graphify-navigation.md) — when `graphify-out/graph.json` exists, query it (`graphify path`/`explain`/`query`) before grepping or reading broadly.
+- [Verifying a change through the MCP servers](.claude/rules/mcp-observability-verification.md) — after exercising a change locally, confirm it with traces, span durations, logs and persisted rows (`.mcp.json`: openobserve, postgres, redis, elasticsearch); a green test run is not evidence on its own.
 
 ## First-Time Setup
 
