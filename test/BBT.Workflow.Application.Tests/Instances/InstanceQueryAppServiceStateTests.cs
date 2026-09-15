@@ -53,8 +53,8 @@ public class InstanceQueryAppServiceStateTests : IDisposable
     private readonly IInstanceCorrelationRepository _instanceCorrelationRepository;
     private readonly IInstanceJobRepository _instanceJobRepository;
     private readonly Caching.IStateFunctionCache _stateFunctionCache;
-    private readonly Execution.LongPoll.ILongPollRuleGate _longPollRuleGate =
-        Substitute.For<Execution.LongPoll.ILongPollRuleGate>();
+    private readonly Execution.LongPoll.ILongPollInteractionGate _longPollInteractionGate =
+        Substitute.For<Execution.LongPoll.ILongPollInteractionGate>();
     private readonly InstanceQueryAppService _service;
     private readonly IServiceProvider _ambientServiceProvider;
     private readonly IServiceProvider? _previousAmbientServiceProvider;
@@ -84,6 +84,9 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         // cache-specific tests opt in explicitly.
         _stateFunctionCache = Substitute.For<Caching.IStateFunctionCache>();
 
+        // Default: the unified gate admits; deny tests override with a later, matching stub.
+        SetupRuleGate(admitted: true);
+
         // Set up AmbientServiceProvider.Current needed by PostSharp UnitOfWorkAttribute
         var mockUoW = Substitute.For<IUnitOfWork>();
         var mockUoWManager = Substitute.For<IUnitOfWorkManager>();
@@ -109,7 +112,7 @@ public class InstanceQueryAppServiceStateTests : IDisposable
             instanceIncidentRepository: _instanceIncidentRepository,
             instanceTaskRepository: Substitute.For<IInstanceTaskRepository>(),
             instanceActionRepository: Substitute.For<IInstanceActionRepository>(),
-            longPollRuleGate: _longPollRuleGate,
+            longPollInteractionGate: _longPollInteractionGate,
             instanceExtensionService: Substitute.For<IInstanceExtensionService>(),
             scriptContextFactory: Substitute.For<IScriptContextFactory>(),
             instanceQueryGateway: _instanceQueryGateway,
@@ -448,15 +451,17 @@ public class InstanceQueryAppServiceStateTests : IDisposable
     }
 
     /// <summary>
-    /// When the state declares interaction.longPoll.roles and the caller's role is not granted,
-    /// no interaction block is emitted (role filtering preserved).
+    /// When the state declares interaction.longPoll.roles and the gate denies the caller, no
+    /// interaction block is emitted. The roles-arm evaluation itself lives in
+    /// <see cref="Execution.LongPoll.ILongPollInteractionGate"/> and is pinned by its own tests.
     /// </summary>
     [Fact]
     public async Task GetInstanceStateAsync_WhenLongPollRolesDenyCaller_NoInteraction()
     {
-        // Arrange — role grants present; IsAnyRoleAllowedForGrantsAsync defaults to false (caller not allowed)
+        // Arrange — role grants present; the gate answers deny for this caller.
         var (instance, workflow) = CreateInstanceWithLongPollState(terminate: true, fallbackSeconds: 30, withRoles: true);
         SetupCommonMocks(instance, workflow);
+        SetupRuleGate(admitted: false);
 
         var input = CreateInput(instance.Id.ToString());
 
@@ -2177,16 +2182,16 @@ public class InstanceQueryAppServiceStateTests : IDisposable
     }
 
     private void SetupRuleGate(bool admitted) =>
-        _longPollRuleGate.IsAdmittedAsync(
-                Arg.Any<ScriptCode>(),
+        _longPollInteractionGate.IsAdmittedAsync(
                 Arg.Any<Instance>(),
                 Arg.Any<Definitions.Workflow>(),
-                Arg.Any<State>(),
+                Arg.Any<State?>(),
                 Arg.Any<Dictionary<string, string?>?>(),
                 Arg.Any<Dictionary<string, string?>?>(),
+                Arg.Any<Func<CancellationToken, Task<Result<IReadOnlyCollection<string>>>>>(),
                 "state",
                 Arg.Any<CancellationToken>())
-            .Returns(admitted);
+            .Returns(Result<bool>.Ok(admitted));
 
     [Fact]
     public async Task GetInstanceStateAsync_WhenInteractionRuleAdmits_EmitsInteraction()
@@ -2199,19 +2204,14 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         // Act
         var result = await _service.GetInstanceStateAsync(CreateInput(instance.Id.ToString()), CancellationToken.None);
 
-        // Assert — the rule arm admitted the caller; roles were never consulted.
+        // Assert — the gate admitted the caller, so the block is emitted intact. (Rule-over-roles
+        // arm selection is the gate's own contract, pinned in LongPollInteractionGateTests.)
         result.Result.IsSuccess.ShouldBeTrue();
         var interaction = result.Result.Value!.Interaction;
         interaction.ShouldNotBeNull();
         interaction!.TerminateLongPoll.ShouldBeTrue();
         interaction.FallbackTimeoutSeconds.ShouldBe(45);
         interaction.Ack.ShouldNotBeNull();
-        await _transitionAuthorizationManager.DidNotReceive().IsAnyRoleAllowedForGrantsAsync(
-            Arg.Any<IReadOnlyCollection<string>>(),
-            Arg.Any<IReadOnlyCollection<RoleGrant>>(),
-            Arg.Any<Instance>(),
-            Arg.Any<AuthorizationRequestContext?>(),
-            Arg.Any<CancellationToken>());
     }
 
     [Fact]

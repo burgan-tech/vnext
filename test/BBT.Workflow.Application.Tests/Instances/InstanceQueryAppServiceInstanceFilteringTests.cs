@@ -266,7 +266,7 @@ public sealed class InstanceQueryAppServiceInstanceFilteringTests : IDisposable
             instanceIncidentRepository: Substitute.For<IInstanceIncidentRepository>(),
             instanceTaskRepository: Substitute.For<IInstanceTaskRepository>(),
             instanceActionRepository: Substitute.For<IInstanceActionRepository>(),
-            longPollRuleGate: NSubstitute.Substitute.For<BBT.Workflow.Execution.LongPoll.ILongPollRuleGate>(),
+            longPollInteractionGate: NSubstitute.Substitute.For<BBT.Workflow.Execution.LongPoll.ILongPollInteractionGate>(),
             instanceExtensionService: instanceExtensionService,
             scriptContextFactory: scriptContextFactory,
             instanceQueryGateway: Substitute.For<IInstanceQueryGateway>(),

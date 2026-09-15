@@ -59,7 +59,7 @@ public sealed class InstanceCommandAppService(
     ITransitionAuthorizationManager transitionAuthorizationManager,
     IInstanceCancellationService cancellationService,
     ILongPollAckResumeService longPollAckResumeService,
-    ILongPollRuleGate longPollRuleGate,
+    ILongPollInteractionGate longPollInteractionGate,
     IInstanceCommandGateway instanceCommandGateway,
     IWorkflowOutputMappingService workflowOutputMappingService,
     ICallerRoleResolver callerRoleResolver,
@@ -229,30 +229,20 @@ public sealed class InstanceCommandAppService(
 
         var workflow = workflowResult.Value!;
 
-        // Authorization against the entered state's interaction.longPoll: the rule arm when one is
-        // declared (fail-closed, same gate the State function's signal emit uses), otherwise the
-        // role grants (default-allow when none).
+        // Authorization against the entered state's interaction.longPoll — the gate owns the arm
+        // selection (rule, else roles, else allow), the same gate the State function's signal emit
+        // uses. Role resolution stays this surface's own (additive explicit role, see
+        // BuildCallerRolesAsync) and runs only when the roles arm applies; a resolution failure
+        // propagates as its own error rather than an access denial.
         var state = workflow.FindState(instance.GetCurrentState);
-        if (state?.LongPollRule is { } rule)
-        {
-            var admitted = await longPollRuleGate.IsAdmittedAsync(
-                rule, instance, workflow, state, input.Headers, queryParameters: null,
-                surface: "ack", cancellationToken);
-            if (!admitted)
-                return Result.Fail(WorkflowErrors.LongPollAckAccessDenied(instance.Id));
-        }
-        else if (state?.LongPollAckRoles is { Count: > 0 } ackRoles)
-        {
-            var callerRolesResult = await BuildCallerRolesAsync(input.Role, input.Headers, cancellationToken);
-            if (!callerRolesResult.IsSuccess)
-                return Result.Fail(callerRolesResult.Error);
-
-            var allowed = await transitionAuthorizationManager.IsAnyRoleAllowedForGrantsAsync(
-                callerRolesResult.Value, ackRoles, instance,
-                new AuthorizationRequestContext(input.Headers), cancellationToken);
-            if (!allowed)
-                return Result.Fail(WorkflowErrors.LongPollAckAccessDenied(instance.Id));
-        }
+        var admitted = await longPollInteractionGate.IsAdmittedAsync(
+            instance, workflow, state, input.Headers, queryParameters: null,
+            ct => BuildCallerRolesAsync(input.Role, input.Headers, ct),
+            surface: "ack", cancellationToken);
+        if (!admitted.IsSuccess)
+            return Result.Fail(admitted.Error);
+        if (!admitted.Value)
+            return Result.Fail(WorkflowErrors.LongPollAckAccessDenied(instance.Id));
 
         // Best-effort cancel the fallback timeout job; the token guard in the resume path keeps the
         // operation safe even if cancellation is missed.

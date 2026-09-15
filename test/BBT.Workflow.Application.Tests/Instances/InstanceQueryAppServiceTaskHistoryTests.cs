@@ -82,7 +82,7 @@ public class InstanceQueryAppServiceTaskHistoryTests : IDisposable
             instanceIncidentRepository: Substitute.For<IInstanceIncidentRepository>(),
             instanceTaskRepository: _instanceTaskRepository,
             instanceActionRepository: _instanceActionRepository,
-            longPollRuleGate: NSubstitute.Substitute.For<BBT.Workflow.Execution.LongPoll.ILongPollRuleGate>(),
+            longPollInteractionGate: NSubstitute.Substitute.For<BBT.Workflow.Execution.LongPoll.ILongPollInteractionGate>(),
             instanceExtensionService: Substitute.For<IInstanceExtensionService>(),
             scriptContextFactory: Substitute.For<IScriptContextFactory>(),
             instanceQueryGateway: Substitute.For<IInstanceQueryGateway>(),

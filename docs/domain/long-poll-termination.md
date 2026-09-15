@@ -41,6 +41,33 @@ shared script engine:
 }
 ```
 
+```csharp
+// InteractionGate.csx — admit only mobile-channel callers.
+// NOTE: context.Headers is DYNAMIC — index it and cast; `TryGetValue(out var …)`
+// does not compile against a dynamic receiver (CS8197).
+using System;
+using System.Threading.Tasks;
+using BBT.Workflow.Scripting;
+
+public class InteractionGate : IConditionMapping
+{
+    public Task<bool> Handler(ScriptContext context)
+    {
+        try
+        {
+            if (context.Headers == null)
+                return Task.FromResult(false);
+            string channel = (string)context.Headers["x-channel"];
+            return Task.FromResult(channel == "mobile");
+        }
+        catch (Exception)
+        {
+            return Task.FromResult(false); // missing key ⇒ deny, matching the gate's fail-closed posture
+        }
+    }
+}
+```
+
 - **One arm or the other, never both.** `roles` and `rule` are alternatives; `WorkflowValidator`
   rejects a `longPoll` declaring both, validates the rule's script body like every compilable slot,
   and validates the `roles` grants' dynamic-role syntax. The `vnext-schema` contract enforces
@@ -48,8 +75,10 @@ shared script engine:
 - **One rule per interaction.** Unlike `views[]`, there is no rule list and no fallback entry — the
   single rule decides.
 - **Both surfaces, one gate.** The State function's signal emit and the acknowledge endpoint admit
-  through the same `ILongPollRuleGate`, so their verdicts cannot diverge. The script context carries
-  the workflow, the instance's latest data, request headers and query parameters (the acknowledge
+  through the same `ILongPollInteractionGate`, which owns the whole arm selection (rule, else roles,
+  else allow) — so their verdicts cannot diverge. Caller roles are resolved lazily through a
+  surface-supplied factory, only when the roles arm applies. The rule's script context carries the
+  workflow, the instance's latest data, request headers and query parameters (the acknowledge
   endpoint forwards headers only) — e.g. *"admit when header `x-channel` is `mobile`"*.
 - **Fail-closed.** A rule returning `false`, throwing, or failing to compile denies: the signal is
   not emitted and the acknowledge answers `403`. A broken rule cannot strand the instance — the
@@ -135,7 +164,7 @@ error-boundary and auto-chained transitions must never pause.
 - `LongPollAckResumeService`, `LongPollAckTimeoutJobHandler` — `src/BBT.Workflow.Application/`
 - State signal — `InstanceQueryAppService.ResolveInteractionAsync`
 - Acknowledge — `InstanceController.AcknowledgeLongPollAsync` → `InstanceCommandAppService.AcknowledgeLongPollAsync`
-- Rule gate (both surfaces) — `LongPollRuleGate` — `src/BBT.Workflow.Application/Execution/LongPoll/`
+- Interaction gate (both surfaces; rule/roles/allow arm selection) — `LongPollInteractionGate` — `src/BBT.Workflow.Application/Execution/LongPoll/`
 
 ## Change-Safety
 

@@ -48,7 +48,7 @@ public class InstanceCommandAppServiceLongPollAckTests : IDisposable
     private readonly ITransitionAuthorizationManager _authManager = Substitute.For<ITransitionAuthorizationManager>();
     private readonly IInstanceCancellationService _cancellationService = Substitute.For<IInstanceCancellationService>();
     private readonly ILongPollAckResumeService _resumeService = Substitute.For<ILongPollAckResumeService>();
-    private readonly ILongPollRuleGate _longPollRuleGate = Substitute.For<ILongPollRuleGate>();
+    private readonly ILongPollInteractionGate _longPollInteractionGate = Substitute.For<ILongPollInteractionGate>();
     private readonly IInstanceCommandGateway _gateway = Substitute.For<IInstanceCommandGateway>();
     private readonly InstanceCommandAppService _service;
     private readonly IServiceProvider _ambient;
@@ -71,6 +71,10 @@ public class InstanceCommandAppServiceLongPollAckTests : IDisposable
         _gateway.AcknowledgeLongPollAsync(Arg.Any<AcknowledgeLongPollInput>(), Arg.Any<CancellationToken>())
             .Returns(Result.Ok());
 
+        // Default: the unified gate admits (a state without interaction constraints). Rule tests
+        // override with a surface-specific stub, which NSubstitute prefers as the later setup.
+        SetupRuleGate(admitted: true);
+
         _service = new InstanceCommandAppService(
             serviceProvider: _ambient,
             runtimeInfoProvider: Substitute.For<IRuntimeInfoProvider>(),
@@ -92,7 +96,7 @@ public class InstanceCommandAppServiceLongPollAckTests : IDisposable
             transitionAuthorizationManager: _authManager,
             cancellationService: _cancellationService,
             longPollAckResumeService: _resumeService,
-            longPollRuleGate: _longPollRuleGate,
+            longPollInteractionGate: _longPollInteractionGate,
             instanceCommandGateway: _gateway,
             workflowOutputMappingService: Substitute.For<IWorkflowOutputMappingService>(),
             callerRoleResolver: new DefaultCallerRoleResolver(Substitute.For<ICurrentUser>()),
@@ -164,11 +168,10 @@ public class InstanceCommandAppServiceLongPollAckTests : IDisposable
 
         var result = await _service.AcknowledgeLongPollAsync(Input(instance.Id.ToString()), CancellationToken.None);
 
-        // The rule arm admitted the acknowledge; the role evaluator was never consulted.
+        // The gate admitted the acknowledge, so the paused pipeline resumes. (Rule-over-roles arm
+        // selection and roles-arm laziness are the gate's contract, pinned in LongPollInteractionGateTests.)
         result.IsSuccess.ShouldBeTrue();
         await _resumeService.Received(1).ResumeAsync(Domain, Workflow, Version, instance.Id, Arg.Any<CancellationToken>());
-        await _authManager.DidNotReceiveWithAnyArgs().IsAnyRoleAllowedForGrantsAsync(
-            default!, default!, default!, default, default);
     }
 
     [Fact]
@@ -190,16 +193,16 @@ public class InstanceCommandAppServiceLongPollAckTests : IDisposable
     }
 
     private void SetupRuleGate(bool admitted) =>
-        _longPollRuleGate.IsAdmittedAsync(
-                Arg.Any<ScriptCode>(),
+        _longPollInteractionGate.IsAdmittedAsync(
                 Arg.Any<Instance>(),
                 Arg.Any<Definitions.Workflow>(),
-                Arg.Any<State>(),
+                Arg.Any<State?>(),
                 Arg.Any<Dictionary<string, string?>?>(),
                 Arg.Any<Dictionary<string, string?>?>(),
-                "ack",
+                Arg.Any<Func<CancellationToken, Task<Result<IReadOnlyCollection<string>>>>>(),
+                Arg.Any<string>(),
                 Arg.Any<CancellationToken>())
-            .Returns(admitted);
+            .Returns(Result<bool>.Ok(admitted));
 
     /// <summary>
     /// Workflow whose entered state declares <c>interaction.longPoll</c> with a condition RULE —

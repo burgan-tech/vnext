@@ -89,7 +89,7 @@ public class InstanceCommandAppServiceResponseEnrichmentTests : IDisposable
             transitionAuthorizationManager: Substitute.For<ITransitionAuthorizationManager>(),
             cancellationService: Substitute.For<IInstanceCancellationService>(),
             longPollAckResumeService: Substitute.For<ILongPollAckResumeService>(),
-            longPollRuleGate: NSubstitute.Substitute.For<BBT.Workflow.Execution.LongPoll.ILongPollRuleGate>(),
+            longPollInteractionGate: NSubstitute.Substitute.For<BBT.Workflow.Execution.LongPoll.ILongPollInteractionGate>(),
             instanceCommandGateway: Substitute.For<IInstanceCommandGateway>(),
             workflowOutputMappingService: Substitute.For<IWorkflowOutputMappingService>(),
             callerRoleResolver: new DefaultCallerRoleResolver(Substitute.For<ICurrentUser>()),

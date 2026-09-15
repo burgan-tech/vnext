@@ -42,7 +42,7 @@ public sealed class InstanceQueryAppService(
     IInstanceIncidentRepository instanceIncidentRepository,
     IInstanceTaskRepository instanceTaskRepository,
     IInstanceActionRepository instanceActionRepository,
-    Execution.LongPoll.ILongPollRuleGate longPollRuleGate,
+    Execution.LongPoll.ILongPollInteractionGate longPollInteractionGate,
     IInstanceExtensionService instanceExtensionService,
     IScriptContextFactory scriptContextFactory,
     IInstanceQueryGateway instanceQueryGateway,
@@ -2096,23 +2096,15 @@ public sealed class InstanceQueryAppService(
                 return null;
         }
 
-        if (currentStateValue.LongPollRule is { } rule)
-        {
-            var admitted = await longPollRuleGate.IsAdmittedAsync(
-                rule, instance, currentWorkflow, currentStateValue,
-                input.Headers, input.QueryParams, surface: "state", cancellationToken);
-            if (!admitted)
-                return null;
-        }
-        else if (currentStateValue.LongPollAckRoles is { Count: > 0 } ackRoles)
-        {
-            var requestContext = new AuthorizationRequestContext(input.Headers, input.QueryParams);
-            var callerRoles = input.Roles ?? (string.IsNullOrWhiteSpace(input.Role) ? [] : [input.Role]);
-            var allowed = await transitionAuthorizationManager.IsAnyRoleAllowedForGrantsAsync(
-                callerRoles, ackRoles, instance, requestContext, cancellationToken);
-            if (!allowed)
-                return null;
-        }
+        // The gate owns the arm selection (rule, else roles, else allow). This surface's roles are
+        // already provider-resolved on the input, so the factory just hands them over.
+        var admitted = await longPollInteractionGate.IsAdmittedAsync(
+            instance, currentWorkflow, currentStateValue, input.Headers, input.QueryParams,
+            _ => Task.FromResult(Result<IReadOnlyCollection<string>>.Ok(
+                input.Roles ?? (string.IsNullOrWhiteSpace(input.Role) ? [] : [input.Role]))),
+            surface: "state", cancellationToken);
+        if (admitted is not { IsSuccess: true, Value: true })
+            return null;
 
         var terminate = currentStateValue.TerminatesLongPollOnEntry;
         return new InstanceInteractionOutput
