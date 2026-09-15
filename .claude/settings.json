@@ -2,6 +2,12 @@
   "permissions": {
     "allow": [
       "Bash(git checkout:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(gh pr view:*)",
+      "Bash(gh pr diff:*)",
+      "Bash(gh pr list:*)",
+      "Bash(gh repo view:*)",
       "Skill(dapr-integration)",
       "Skill(dapr-integration:*)"
     ]
