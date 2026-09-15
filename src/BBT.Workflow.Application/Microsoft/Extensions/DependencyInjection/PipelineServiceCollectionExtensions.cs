@@ -125,6 +125,7 @@ public static class PipelineServiceCollectionExtensions
 
         // Long-poll termination resume (acknowledge endpoint + fallback timeout job)
         services.AddScoped<ILongPollAckResumeService, LongPollAckResumeService>();
+        services.AddScoped<ILongPollInteractionGate, LongPollInteractionGate>();
 
         return services;
     }

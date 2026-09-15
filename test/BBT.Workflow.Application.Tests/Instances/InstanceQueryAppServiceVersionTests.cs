@@ -107,6 +107,7 @@ public class InstanceQueryAppServiceVersionTests : IDisposable
             instanceIncidentRepository: CreateIncidentRepository(),
             instanceTaskRepository: Substitute.For<IInstanceTaskRepository>(),
             instanceActionRepository: Substitute.For<IInstanceActionRepository>(),
+            longPollInteractionGate: NSubstitute.Substitute.For<BBT.Workflow.Execution.LongPoll.ILongPollInteractionGate>(),
             instanceExtensionService: _instanceExtensionService,
             scriptContextFactory: _scriptContextFactory,
             instanceQueryGateway: Substitute.For<IInstanceQueryGateway>(),

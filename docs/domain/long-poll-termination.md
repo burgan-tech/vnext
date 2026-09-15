@@ -23,8 +23,79 @@ A state declares the behavior under a generic, extensible `interaction` containe
 ```
 
 The runtime reads only through `State` helpers (`TerminatesLongPollOnEntry`, `LongPollAckRoles`,
-`LongPollFallbackTimeoutSeconds`), so future `interaction` facets never touch the pipeline or
-State-function code.
+`LongPollRule`, `LongPollFallbackTimeoutSeconds`), so future `interaction` facets never touch the
+pipeline or State-function code.
+
+### Rule-based authorization (issue #936)
+
+Instead of `roles`, a state may gate the interaction with a **condition rule** — the same
+`IConditionMapping` script contract view and notification rules use, compiled and cached by the
+shared script engine:
+
+```jsonc
+"interaction": {
+  "longPoll": {
+    "terminate": true,
+    "rule": { "location": "./InteractionGate.csx", "code": "<base64>" }  // IConditionMapping
+  }
+}
+```
+
+```csharp
+// InteractionGate.csx — admit only mobile-channel callers.
+// NOTE: context.Headers is DYNAMIC — index it and cast; `TryGetValue(out var …)`
+// does not compile against a dynamic receiver (CS8197).
+using System;
+using System.Threading.Tasks;
+using BBT.Workflow.Scripting;
+
+public class InteractionGate : IConditionMapping
+{
+    public Task<bool> Handler(ScriptContext context)
+    {
+        try
+        {
+            if (context.Headers == null)
+                return Task.FromResult(false);
+            string channel = (string)context.Headers["x-channel"];
+            return Task.FromResult(channel == "mobile");
+        }
+        catch (Exception)
+        {
+            return Task.FromResult(false); // missing key ⇒ deny, matching the gate's fail-closed posture
+        }
+    }
+}
+```
+
+- **One arm or the other, never both.** `roles` and `rule` are alternatives; `WorkflowValidator`
+  rejects a `longPoll` declaring both, validates the rule's script body like every compilable slot,
+  and validates the `roles` grants' dynamic-role syntax. The `vnext-schema` contract enforces
+  exactly-one at authoring time.
+- **One rule per interaction.** Unlike `views[]`, there is no rule list and no fallback entry — the
+  single rule decides.
+- **Both surfaces, one gate.** The State function's signal emit and the acknowledge endpoint admit
+  through the same `ILongPollInteractionGate`, which owns the whole arm selection (rule, else roles,
+  else allow) — so their verdicts cannot diverge. Caller roles are resolved lazily through a
+  surface-supplied factory, only when the roles arm applies. The rule's script context carries the
+  workflow, the instance, request headers and query parameters (the acknowledge endpoint forwards
+  headers only) — e.g. *"admit when header `x-channel` is `mobile`"*. Read instance data through
+  `context.Instance.Data` (materialized lazily, only when the rule touches it). **`context.Body` is
+  deliberately NOT populated** — unlike a view rule's context, this surface has no request payload,
+  and pre-filling Body with the latest data cost a full serialize+parse on every poll even for
+  header-only rules. A view rule reused as an interaction rule must switch `context.Body.*` reads to
+  `context.Instance.Data.*`, or it will throw and deny (fail-closed).
+- **Fail-closed.** A rule returning `false`, throwing, or failing to compile denies: the signal is
+  not emitted and the acknowledge answers `403`. A broken rule cannot strand the instance — the
+  fallback-timeout job resumes the pipeline regardless of callers.
+
+**Caching posture.** A rule's inputs (headers, query parameters, instance data) are not part of
+`CallerScopeHash`, so a state body whose interaction is rule-gated is **never stored in the shared
+body cache** (the same applies conservatively to a bubbled subflow interaction, whose gating arm the
+parent cannot see). The fingerprint 304 fast path is unchanged, which leaves one accepted gap,
+same class as the scheduled-entries gap (#864): a caller whose rule inputs change while the state
+fingerprint does not can keep receiving 304 with the previous verdict until the next state/status
+change. Enforcement is never stale — the acknowledge evaluates the rule fresh on every request.
 
 ## Flow
 
@@ -36,9 +107,9 @@ State-function code.
    same resting shape as a SubFlow pause.
 2. **Signal.** While `LongPollAckToken` is set, the State (long-poll) function returns **HTTP 200**
    (no error code; ETag/304 path unchanged) with an `interaction` object — grouping client directives
-   under one key — but only for callers whose role satisfies `interaction.longPoll.roles`
-   (default-allow when none). The response still carries the entered state name + view href so the
-   client can render.
+   under one key — but only for callers admitted by the interaction's authorization arm: the
+   `roles` grants (default-allow when none) or the condition `rule` (see *Rule-based authorization*).
+   The response still carries the entered state name + view href so the client can render.
 
    ```jsonc
    "interaction": {
@@ -50,8 +121,8 @@ State-function code.
    The `ack` href follows the same `{ "href": "…" }` shape as `data`/`view`. The `interaction` object
    is omitted entirely when no directive applies.
 3. **Acknowledge.** The client stops polling, renders the screen, and `POST`s to
-   `…/instances/{instance}/longpoll/ack`. The endpoint role-checks, best-effort cancels the fallback
-   job, and resumes the pipeline.
+   `…/instances/{instance}/longpoll/ack`. The endpoint runs the same authorization arm as the signal
+   (role grants or rule), best-effort cancels the fallback job, and resumes the pipeline.
 4. **Resume.** Acknowledge (or the fallback timeout) resumes via
    `ExecMode.Resume` + `ResumeFrom = ClearBusyOnResumeStep` + `IsLongPollAckResume`. `ClearBusyOnResumeStep`
    (79) compare-and-clears the token, clears Busy, and the epilogue runs (Schedule → Auto → Finish →
@@ -96,8 +167,9 @@ error-boundary and auto-chained transitions must never pause.
 - `Instance.LongPollAckToken` / `ArmLongPollAck` / `ClearLongPollAck` — `src/BBT.Workflow.Domain/Instances/Instance.cs`
 - `HandleLongPollTerminationStep`, `ClearBusyOnResumeStep` — `src/BBT.Workflow.Application/Execution/Transitions/Pipeline/Steps/`
 - `LongPollAckResumeService`, `LongPollAckTimeoutJobHandler` — `src/BBT.Workflow.Application/`
-- State signal — `InstanceQueryAppService.ResolveLongPollTerminationAsync`
+- State signal — `InstanceQueryAppService.ResolveInteractionAsync`
 - Acknowledge — `InstanceController.AcknowledgeLongPollAsync` → `InstanceCommandAppService.AcknowledgeLongPollAsync`
+- Interaction gate (both surfaces; rule/roles/allow arm selection) — `LongPollInteractionGate` — `src/BBT.Workflow.Application/Execution/LongPoll/`
 
 ## Change-Safety
 

@@ -21,11 +21,13 @@ public sealed class LongPollInteraction
     private LongPollInteraction(
         bool terminate,
         int? fallbackTimeoutSeconds,
-        List<RoleGrant>? roles)
+        List<RoleGrant>? roles,
+        ScriptCode? rule)
     {
         Terminate = terminate;
         FallbackTimeoutSeconds = fallbackTimeoutSeconds;
         this.roles = roles ?? [];
+        Rule = rule;
     }
 
     /// <summary>
@@ -47,7 +49,18 @@ public sealed class LongPollInteraction
     /// Role grants controlling which callers receive the long-poll termination signal.
     /// Empty means default-allow (every caller is signalled). Evaluated with the
     /// standard DENY-wins / allowlist semantics used elsewhere for role grants.
+    /// Mutually exclusive with <see cref="Rule"/> — the workflow validator rejects both.
     /// </summary>
     [JsonIgnore]
     public IReadOnlyCollection<RoleGrant> Roles => roles.AsReadOnly();
+
+    /// <summary>
+    /// Optional condition script (<c>IConditionMapping</c>, same contract as view and notification
+    /// rules) deciding per caller whether the interaction applies: <c>true</c> emits the signal and
+    /// admits the acknowledge, <c>false</c> — or a failed evaluation — denies both. The alternative
+    /// to <see cref="Roles"/>; a state authors one or the other, never both.
+    /// </summary>
+    [JsonInclude]
+    [JsonPropertyName("rule")]
+    public ScriptCode? Rule { get; private set; }
 }
