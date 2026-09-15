@@ -10,6 +10,9 @@ public sealed class SchemaFieldMetadata
     /// </summary>
     public string Type { get; init; } = "string";
 
+    public string? Format { get; init; }
+    public bool Indexed { get; init; }
+
     /// <summary>
     /// Allowed filter operators from x-filterOperators.
     /// Empty means the field is not filterable.

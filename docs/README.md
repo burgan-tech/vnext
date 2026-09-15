@@ -79,6 +79,10 @@ Kept for archaeology; read the canonical page linked from each before relying on
 - If code and docs conflict, fix the docs or document the divergence.
 - `/ai-docs` is gitignored local scratch. Do not treat it as committed documentation.
 
+## Instance data indexing
+
+- [Manual attribute index maintenance](runtime/manual-attribute-index-maintenance.md) — offline CLI SQL batches, DBA execution, idempotency, readiness and rollback.
+
 ## Local Development
 
 Run first-time setup before building on macOS/Linux:

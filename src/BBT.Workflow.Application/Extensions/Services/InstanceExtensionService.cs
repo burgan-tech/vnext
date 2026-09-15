@@ -22,8 +22,17 @@ public sealed class InstanceExtensionService(
     IRuntimeInfoProvider runtimeInfoProvider,
     ICurrentSchema currentSchema,
     IServiceScopeFactory serviceScopeFactory,
-    ILogger<InstanceExtensionService> logger) : IInstanceExtensionService
+    ILogger<InstanceExtensionService> logger) : IInstanceExtensionService, IListExtensionServiceFactory
 {
+    private bool _reuseListDefinitions;
+    private Result<IEnumerable<Extension>>? _coreDefinitions;
+    private readonly Dictionary<(string Domain, string Flow, string Key, string Version), Extension> _definitions = new();
+
+    /// <inheritdoc />
+    public IInstanceExtensionService CreateForList() => new InstanceExtensionService(
+        componentCacheStore, taskCoordinator, runtimeInfoProvider, currentSchema, serviceScopeFactory, logger)
+        { _reuseListDefinitions = true };
+
     /// <inheritdoc />
     public async Task<Result<Dictionary<string, object>>> ProcessExtensionsAsync(
         string[]? extensionRequested,
@@ -139,9 +148,11 @@ public sealed class InstanceExtensionService(
     {
         using (currentSchema.Change(RuntimeSysSchemaInfo.Extensions))
         {
-            var allExtensionsResult = await componentCacheStore.GetAllExtensionsAsync(
+            var allExtensionsResult = _coreDefinitions ?? await componentCacheStore.GetAllExtensionsAsync(
                 runtimeInfoProvider.Domain,
                 cancellationToken);
+            if (_reuseListDefinitions && allExtensionsResult.IsSuccess)
+                _coreDefinitions = allExtensionsResult;
             
             return allExtensionsResult
                 .Map(extensions => extensions
@@ -187,6 +198,8 @@ public sealed class InstanceExtensionService(
 
         var extensionTasks = extensionReferences.Select(async reference =>
         {
+            var key = (reference.Domain, reference.Flow, reference.Key, reference.Version);
+            if (_reuseListDefinitions && _definitions.TryGetValue(key, out var prepared)) return prepared;
             await using var scope = serviceScopeFactory.CreateAsyncScope();
             var scopedCacheStore = scope.ServiceProvider.GetRequiredService<IComponentCacheStore>();
             var result = await scopedCacheStore.GetExtensionAsync(reference, cancellationToken);
@@ -194,6 +207,13 @@ public sealed class InstanceExtensionService(
         });
 
         var extensionResults = await Task.WhenAll(extensionTasks);
+        if (_reuseListDefinitions)
+            for (var i = 0; i < extensionReferences.Count; i++)
+                if (extensionResults[i] is { } definition)
+                {
+                    var reference = extensionReferences[i];
+                    _definitions[(reference.Domain, reference.Flow, reference.Key, reference.Version)] = definition;
+                }
         return extensionResults.Where(ext => ext != null).ToList()!;
     }
 

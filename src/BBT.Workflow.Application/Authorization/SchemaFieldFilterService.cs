@@ -1,5 +1,6 @@
 using System.Text.Json;
 using BBT.Workflow.Caching;
+using BBT.Workflow.Definitions;
 using BBT.Workflow.Definitions.Schemas;
 using BBT.Workflow.Instances;
 
@@ -12,8 +13,15 @@ namespace BBT.Workflow.Authorization;
 public sealed class SchemaFieldFilterService(
     IComponentCacheStore componentCacheStore,
     ITransitionAuthorizationManager transitionAuthorizationManager,
-    ICallerRoleResolver callerRoleResolver) : ISchemaFieldFilterService
+    ICallerRoleResolver callerRoleResolver) : ISchemaFieldFilterService, IListSchemaFieldFilterFactory
 {
+    private Dictionary<(string Domain, string Flow, string Key, string Version),
+        IReadOnlyDictionary<string, IReadOnlyList<RoleGrant>>>? _listMetadata;
+
+    /// <inheritdoc />
+    public ISchemaFieldFilterService CreateForList() => new SchemaFieldFilterService(
+        componentCacheStore, transitionAuthorizationManager, callerRoleResolver) { _listMetadata = new() };
+
     /// <inheritdoc />
     public async Task<JsonElement?> ApplyAsync(
         Definitions.Workflow? workflow,
@@ -28,12 +36,17 @@ public sealed class SchemaFieldFilterService(
         if (element.ValueKind != JsonValueKind.Object)
             return data;
 
-        var schemaResult = await componentCacheStore.GetSchemaAsync(workflow.Schema, cancellationToken);
-        if (!schemaResult.IsSuccess)
-            return data;
-
-        var pathRoleGrants = SchemaRolesParser.ParsePropertyRoles(schemaResult.Value!.Schema);
-        if (pathRoleGrants.Count == 0)
+        var reference = workflow.Schema;
+        var key = (reference.Domain, reference.Flow, reference.Key, reference.Version);
+        IReadOnlyDictionary<string, IReadOnlyList<RoleGrant>>? pathRoleGrants = null;
+        if (_listMetadata?.TryGetValue(key, out pathRoleGrants) != true)
+        {
+            var schemaResult = await componentCacheStore.GetSchemaAsync(reference, cancellationToken);
+            if (!schemaResult.IsSuccess) return data;
+            pathRoleGrants = SchemaRolesParser.ParsePropertyRoles(schemaResult.Value!.Schema);
+            _listMetadata?.Add(key, pathRoleGrants);
+        }
+        if (pathRoleGrants!.Count == 0)
             return data;
 
         // The role set must match how the surrounding read was authorized and cache-keyed, otherwise

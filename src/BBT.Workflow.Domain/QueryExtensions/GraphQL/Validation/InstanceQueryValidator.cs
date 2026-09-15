@@ -85,6 +85,8 @@ public static class InstanceQueryValidator
         switch (format)
         {
             case FilterFormat.Legacy:
+                var (field, op, value) = FilterOperatorParser.ParseOperator(filter);
+                ValidateOperatorValue(op, value, $"filter.{field}.{op}", errors);
                 // DetectFormat's regex already whitelists the legacy operator set, so a legacy
                 // filter is executable on the plain list path. The aggregation path is different:
                 // it feeds the filter straight into the GraphQL parser without converting it.
@@ -336,6 +338,46 @@ public static class InstanceQueryValidator
             Add(errors, "filter.noOperator",
                 $"Field '{fieldName}' must specify at least one operator. Supported operators: {FilterOperators.SupportedList}.",
                 fieldPath);
+        }
+
+        foreach (var (op, value) in condition.GetOperators())
+            ValidateOperatorValue(op, value, $"{fieldPath}.{op}", errors);
+
+        if (condition.NestedConditions != null)
+        {
+            foreach (var (nestedField, nestedCondition) in condition.NestedConditions)
+            {
+                if (nestedCondition is JsonElement element)
+                    ValidateNestedValues(element, $"{fieldPath}.{nestedField}", errors);
+            }
+        }
+    }
+
+    private static void ValidateNestedValues(JsonElement element, string path, List<FilterValidationError> errors)
+    {
+        if (element.ValueKind != JsonValueKind.Object || IsFull(errors))
+            return;
+
+        foreach (var property in element.EnumerateObject())
+        {
+            var propertyPath = $"{path}.{property.Name}";
+            if (FilterOperators.Supported.Contains(property.Name))
+                ValidateOperatorValue(property.Name, property.Value, propertyPath, errors);
+            else
+                ValidateNestedValues(property.Value, propertyPath, errors);
+        }
+    }
+
+    private static void ValidateOperatorValue(
+        string op, object? value, string path, List<FilterValidationError> errors)
+    {
+        try
+        {
+            InputValidator.ValidateOperatorValue(op, value);
+        }
+        catch (ArgumentException ex)
+        {
+            Add(errors, "filter.valueTooLong", ex.Message, path);
         }
     }
 
