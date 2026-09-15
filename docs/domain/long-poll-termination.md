@@ -78,8 +78,13 @@ public class InteractionGate : IConditionMapping
   through the same `ILongPollInteractionGate`, which owns the whole arm selection (rule, else roles,
   else allow) — so their verdicts cannot diverge. Caller roles are resolved lazily through a
   surface-supplied factory, only when the roles arm applies. The rule's script context carries the
-  workflow, the instance's latest data, request headers and query parameters (the acknowledge
-  endpoint forwards headers only) — e.g. *"admit when header `x-channel` is `mobile`"*.
+  workflow, the instance, request headers and query parameters (the acknowledge endpoint forwards
+  headers only) — e.g. *"admit when header `x-channel` is `mobile`"*. Read instance data through
+  `context.Instance.Data` (materialized lazily, only when the rule touches it). **`context.Body` is
+  deliberately NOT populated** — unlike a view rule's context, this surface has no request payload,
+  and pre-filling Body with the latest data cost a full serialize+parse on every poll even for
+  header-only rules. A view rule reused as an interaction rule must switch `context.Body.*` reads to
+  `context.Instance.Data.*`, or it will throw and deny (fail-closed).
 - **Fail-closed.** A rule returning `false`, throwing, or failing to compile denies: the signal is
   not emitted and the acknowledge answers `403`. A broken rule cannot strand the instance — the
   fallback-timeout job resumes the pipeline regardless of callers.

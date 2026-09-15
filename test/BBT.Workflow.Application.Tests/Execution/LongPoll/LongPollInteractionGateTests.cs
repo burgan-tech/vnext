@@ -28,6 +28,7 @@ namespace BBT.Workflow.Execution.LongPoll;
 public class LongPollInteractionGateTests
 {
     private readonly IScriptContextFactory _scriptContextFactory = Substitute.For<IScriptContextFactory>();
+    private readonly IScriptContextBuilder _scriptContextBuilder = Substitute.For<IScriptContextBuilder>();
     private readonly ITaskConditionService _taskConditionService = Substitute.For<ITaskConditionService>();
     private readonly ITransitionAuthorizationManager _authorizationManager =
         Substitute.For<ITransitionAuthorizationManager>();
@@ -35,12 +36,11 @@ public class LongPollInteractionGateTests
 
     public LongPollInteractionGateTests()
     {
-        var builder = Substitute.For<IScriptContextBuilder>();
+        var builder = _scriptContextBuilder;
         builder.WithWorkflow(Arg.Any<Definitions.Workflow?>()).Returns(builder);
         builder.WithInstance(Arg.Any<Instance>()).Returns(builder);
         builder.WithRuntime(Arg.Any<IRuntimeInfoProvider>()).Returns(builder);
         builder.WithTransition(Arg.Any<string>()).Returns(builder);
-        builder.WithBody(Arg.Any<object?>()).Returns(builder);
         builder.WithHeaders(Arg.Any<Dictionary<string, string?>?>()).Returns(builder);
         builder.WithQueryParameters(Arg.Any<Dictionary<string, string?>?>()).Returns(builder);
         builder.BuildAsync(Arg.Any<CancellationToken>())
@@ -78,6 +78,9 @@ public class LongPollInteractionGateTests
         rolesResolved.ShouldBeFalse();
         await _authorizationManager.DidNotReceiveWithAnyArgs().IsAnyRoleAllowedForGrantsAsync(
             default, default!, default, default, default);
+        // No Body pre-materialization: this surface has no request payload, and filling Body with the
+        // latest instance data cost a serialize+parse per poll — rules read context.Instance.Data.
+        _scriptContextBuilder.DidNotReceiveWithAnyArgs().WithBody(default);
     }
 
     [Fact]

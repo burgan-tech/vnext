@@ -11,13 +11,18 @@ using Microsoft.Extensions.Logging;
 namespace BBT.Workflow.Execution.LongPoll;
 
 /// <summary>
-/// Default <see cref="ILongPollInteractionGate"/>. The rule arm builds the same script context the
-/// view and notification rules run against (workflow, instance latest data, headers, query
-/// parameters) and evaluates through the shared condition service, so a compiled rule is cached by
-/// content hash like every other condition script; deny-on-failure is deliberate and mirrors
-/// <c>StateNotifyJobHandler</c> — an interaction a broken rule cannot vouch for is not offered.
-/// The roles arm delegates to the one role evaluator (<see cref="ITransitionAuthorizationManager"/>),
-/// resolving the caller's roles lazily through the surface-supplied factory.
+/// Default <see cref="ILongPollInteractionGate"/>. The rule arm builds the same script context shape
+/// the view and notification rules run against (workflow, instance, headers, query parameters) and
+/// evaluates through the shared condition service, so a compiled rule is cached by content hash like
+/// every other condition script. One deliberate difference from the view-rule context:
+/// <c>context.Body</c> is NOT populated — this surface has no request payload, and pre-materializing
+/// the latest instance data into Body costs a full serialize+parse per evaluation (per poll, since
+/// rule-gated bodies skip the shared state body cache) even for rules that never read data. Rules
+/// read instance data through the lazy, memoized <c>context.Instance.Data</c> instead.
+/// Deny-on-failure is deliberate and mirrors <c>StateNotifyJobHandler</c> — an interaction a broken
+/// rule cannot vouch for is not offered. The roles arm delegates to the one role evaluator
+/// (<see cref="ITransitionAuthorizationManager"/>), resolving the caller's roles lazily through the
+/// surface-supplied factory.
 /// </summary>
 public sealed class LongPollInteractionGate(
     IScriptContextFactory scriptContextFactory,
@@ -77,7 +82,6 @@ public sealed class LongPollInteractionGate(
             .WithInstance(instance)
             .WithRuntime(runtimeInfoProvider)
             .WithTransition(string.Empty)
-            .WithBody(instance.LatestData?.Data ?? new JsonData("{}"))
             .WithHeaders(headers)
             .WithQueryParameters(queryParameters)
             .BuildAsync(cancellationToken);

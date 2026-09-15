@@ -20,7 +20,7 @@ public interface ILongPollInteractionGate
     /// instance) — and <c>Fail</c> only when <paramref name="callerRolesFactory"/> fails, so the
     /// surface can propagate the role-resolution error rather than masking it as a deny.
     /// </summary>
-    /// <param name="instance">The polled/acknowledged instance; its latest data feeds the rule's script context.</param>
+    /// <param name="instance">The polled/acknowledged instance, exposed to the rule as <c>context.Instance</c> (data read lazily via <c>context.Instance.Data</c>; <c>context.Body</c> is not populated on this surface).</param>
     /// <param name="workflow">The instance's workflow definition (flow-level scripts for compilation).</param>
     /// <param name="state">The state whose interaction gates the caller; null or no interaction ⇒ admitted.</param>
     /// <param name="headers">Request headers — exposed to the rule's script context and to dynamic role grants.</param>
