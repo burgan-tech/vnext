@@ -80,8 +80,6 @@ public sealed class DefinitionAppService(
     private Result ValidateComponent(PublishInput input)
     {
         var validationResult = componentValidatorProcessor.Validate(input.Flow, input.Attributes);
-        if (input.Flow == RuntimeSysSchemaInfo.Schemas)
-            SchemaComponentValidator.ValidateRootType(input.Attributes, input.Type, validationResult);
 
         if (!validationResult.IsValid)
         {
@@ -258,9 +256,6 @@ public sealed class DefinitionAppService(
         {
             return Result.Ok();
         }
-
-        if (componentType == RuntimeSysSchemaInfo.Schemas)
-            SchemaComponentValidator.ValidateRootType(dataItem.Attributes, dataItem.Type, validationResult);
 
         if (!validationResult.IsValid)
         {

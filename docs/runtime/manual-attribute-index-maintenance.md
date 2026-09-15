@@ -33,14 +33,13 @@ existing permissions. Nested scalar string/number/integer/boolean fields are sup
 `format: "date-time"`. Array, object, reference, conditional and ambiguous indexed paths are rejected.
 
 
-Schema components may declare `type` at the document root (alongside `key`, `domain`, and
-`flow`): `master`, `transition`, `view`, or `function`. Unknown non-empty values fail validation.
-The field is optional and has no default. Missing, null or blank values never mean master.
-This is independent of the existing `attributes.type` and JSON Schema `type` keywords.
-Only a referenced `type: master` schema contributes index SQL. Other schema purposes are skipped;
-`x-indexed` (including `false`) is invalid in their schema nodes. A latest reference resolving to a
-non-master schema does not fall back to an older master version. No matching masters means no SQL batch.
-Schemas using `x-indexed` must explicitly declare root `type: master` before publication or SQL generation.
+Schema components use the existing `attributes.type` string. Its values are not restricted to an enum;
+legacy and custom types remain valid. Only the exact value `master` permits `x-indexed` metadata
+(including `false`) and contributes index SQL. Missing, null, blank or other values never mean master.
+The existing publication requirement for a non-empty schema type is unchanged. JSON Schema `type`
+keywords within `attributes.schema` retain their existing meaning.
+A latest reference resolving to a non-master schema does not fall back to an older master version.
+No matching masters means no SQL batch. There is no separate component root `type` field.
 
 ```json
 {
@@ -50,9 +49,8 @@ Schemas using `x-indexed` must explicitly declare root `type: master` before pub
   "version": "1.0.0",
   "flowVersion": "1.0.0",
   "tags": ["orders"],
-  "type": "master",
   "attributes": {
-    "type": "workflow",
+    "type": "master",
     "schema": {
       "type": "object",
       "properties": {
@@ -63,8 +61,8 @@ Schemas using `x-indexed` must explicitly declare root `type: master` before pub
 }
 ```
 
-The envelope purpose is validated during publication (including schema seed items); it does not
-replace `SchemaDefinition.Type`, which continues to represent `attributes.type`.
+The schema validator reads `SchemaDefinition.Type` (`attributes.type`) during publication, including
+schema seed items. No extra envelope metadata is required.
 
 ## What the DBA executes
 

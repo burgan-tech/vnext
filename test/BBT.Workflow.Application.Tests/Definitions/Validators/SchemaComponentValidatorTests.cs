@@ -118,60 +118,69 @@ public class SchemaComponentValidatorTests
         result.IsValid.ShouldBeFalse();
     }
 
+
     [Theory]
     [InlineData("master", true)]
     [InlineData("transition", false)]
     [InlineData("view", false)]
     [InlineData("function", false)]
-    [InlineData(null, false)]
-    [InlineData("MASTER", false)]
     [InlineData("workflow", false)]
-    public void RootType_ControlsIndexes_WithoutChangingOtherTypes(string? type, bool valid)
+    [InlineData("custom-schema", false)]
+    [InlineData("MASTER", false)]
+    [InlineData(null, false)]
+    [InlineData("", false)]
+    [InlineData("   ", false)]
+    public void AttributesType_ControlsIndexes(string? type, bool valid)
     {
-        var input = JsonSerializer.Deserialize<PublishInput>(JsonSerializer.Serialize(new
+        foreach (var indexed in new[] { true, false })
         {
-            type,
-            attributes = new
+            var attributes = JsonSerializer.SerializeToElement(new
             {
-                type = "workflow",
-                schema = new { type = "object", properties = new { amount = new { type = "number" } } }
-            }
-        }), JsonSerializerConstants.JsonOptions)!;
-        var attributes = JsonDocument.Parse(input.Attributes.GetRawText().Replace(
-            "\"type\":\"number\"", "\"type\":\"number\",\"x-indexed\":true")).RootElement;
-        var result = _validator.Validate(attributes);
-        SchemaComponentValidator.ValidateRootType(attributes, input.Type, result);
-        result.IsValid.ShouldBe(valid);
-        input.Attributes.GetProperty("type").GetString().ShouldBe("workflow");
-        input.Attributes.GetProperty("schema").GetProperty("type").GetString().ShouldBe("object");
+                type,
+                schema = new { type = "object", properties = new
+                {
+                    amount = new System.Collections.Generic.Dictionary<string, object>
+                    {
+                        ["type"] = "number", ["x-indexed"] = indexed
+                    }
+                } }
+            });
+            _validator.Validate(attributes).IsValid.ShouldBe(valid);
+            attributes.GetProperty("schema").GetProperty("type").GetString().ShouldBe("object");
+        }
     }
 
     [Theory]
+    [InlineData("workflow")]
+    [InlineData("task")]
+    [InlineData("headers")]
+    [InlineData("json-schema")]
+    [InlineData("custom-schema")]
+    [InlineData("MASTER")]
     [InlineData("master")]
-    [InlineData("transition")]
-    [InlineData("view")]
-    [InlineData("function")]
-    [InlineData(null)]
-    [InlineData("")]
-    [InlineData("   ")]
-    public void RootType_AllPurposesAllowUnindexedSchemas(string? type)
+    public void AttributesType_RemainsFreeText_ForUnindexedSchemas(string type)
     {
-        var attributes = JsonDocument.Parse("""{"type":"json-schema","schema":{"type":"object"}}""").RootElement;
-        var result = _validator.Validate(attributes);
-        SchemaComponentValidator.ValidateRootType(attributes, type, result);
-        result.IsValid.ShouldBeTrue();
+        var attributes = JsonSerializer.SerializeToElement(new { type, schema = new { type = "object" } });
+        _validator.Validate(attributes).IsValid.ShouldBeTrue();
+    }
+
+    [Theory]
+    [InlineData("master", "view", false)]
+    [InlineData("view", "master", true)]
+    public void RootType_DoesNotControlIndexValidation(string rootType, string attributeType, bool valid)
+    {
+        var json = """{"type":"ROOT","attributes":{"type":"ATTRIBUTE","schema":{"properties":{"amount":{"type":"number","x-indexed":true}}}}}"""
+            .Replace("ROOT", rootType).Replace("ATTRIBUTE", attributeType);
+        var input = JsonSerializer.Deserialize<PublishInput>(json, JsonSerializerConstants.JsonOptions)!;
+        _validator.Validate(input.Attributes).IsValid.ShouldBe(valid);
     }
 
     [Fact]
-    public void NonMaster_RejectsFalseMetadata_ButDoesNotInspectExampleData()
+    public void NonMaster_RejectsNestedMetadata_ButDoesNotInspectExampleData()
     {
         var attributes = JsonDocument.Parse("""{"type":"view","schema":{"properties":{"nested":{"properties":{"value":{"type":"string","x-indexed":false}}}}}}""").RootElement;
-        var result = _validator.Validate(attributes);
-        SchemaComponentValidator.ValidateRootType(attributes, "view", result);
-        result.IsValid.ShouldBeFalse();
-        var example = JsonDocument.Parse("""{"schema":{"type":"object","examples":[{"x-indexed":true}]}}""").RootElement;
-        var exampleResult = new ComponentValidationResult();
-        SchemaComponentValidator.ValidateRootType(example, "view", exampleResult);
-        exampleResult.IsValid.ShouldBeTrue();
+        _validator.Validate(attributes).IsValid.ShouldBeFalse();
+        var example = JsonDocument.Parse("""{"type":"view","schema":{"type":"object","examples":[{"x-indexed":true}]}}""").RootElement;
+        _validator.Validate(example).IsValid.ShouldBeTrue();
     }
 }

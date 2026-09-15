@@ -23,7 +23,7 @@ public sealed record AttributeIndexDefinition(string Path, string StorageType)
 
     public static void ValidateSchema(JsonElement root) => Visit(root, "", true, true);
 
-    /// <summary>Validates index metadata against the component envelope's root type.</summary>
+    /// <summary>Validates index metadata against the component attributes.type.</summary>
     public static void ValidateSchema(JsonElement root, string? schemaType)
         => Visit(root, "", true, schemaType == "master");
 
@@ -40,7 +40,7 @@ public sealed record AttributeIndexDefinition(string Path, string StorageType)
         if (node.TryGetProperty("x-indexed", out var indexed))
         {
             if (!allowIndexes)
-                throw new ArgumentException($"Field '{path}': x-indexed is only allowed when root.type is 'master'.");
+                throw new ArgumentException($"Field '{path}': x-indexed is only allowed when attributes.type is 'master'.");
             if (indexed.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
                 throw new ArgumentException($"Field '{path}': x-indexed must be a boolean.");
             if (indexed.ValueKind == JsonValueKind.True &&
