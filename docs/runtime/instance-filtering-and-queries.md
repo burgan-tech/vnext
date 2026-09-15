@@ -238,6 +238,13 @@ and `GetAbsenceEntryFilterSpecMapping.csx` / `GetRezervationsFilterSpecMapping.c
 - Event `Selector` filters are automatically scoped to the target workflow (`flow` condition added
   by the runtime).
 - Column names are whitelisted; a typo throws instead of silently matching nothing.
+- Filter scalar values are limited to 1000 characters (`string.Length` after JSON decoding).
+  The limit applies to attributes and instance columns in GraphQL and legacy filters, including
+  nested/logical conditions and aggregation envelopes. `in`, `nin`, and `between` check each
+  operand separately, so a list can exceed 1000 characters overall. Oversized operands return
+  HTTP 400 with a field-specific validation message before query execution; values are never
+  truncated. The separate 5000-character total-filter limit still applies. Structured `includes`
+  payloads retain their own size, depth, and property-count limits in `ValidateIncludesObject`.
 
 ## References
 

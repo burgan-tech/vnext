@@ -1,4 +1,5 @@
 using System;
+using System.Globalization;
 using System.Text.Json;
 
 namespace BBT.Workflow.Security;
@@ -138,6 +139,45 @@ public static class InputValidator
 
         if (value.Length > MaxValueLength)
             throw new ArgumentException($"Value too long: {value.Length} characters. Maximum allowed: {MaxValueLength}");
+    }
+
+    /// <summary>
+    /// Applies the value length limit before SQL compilation. Membership/range operands are
+    /// checked individually; the structured includes payload retains its own validation limits.
+    /// </summary>
+    /// <param name="operatorType">Filter operator name.</param>
+    /// <param name="value">Decoded scalar, array, or legacy comma-separated operand.</param>
+    /// <exception cref="ArgumentException">A scalar operand exceeds <see cref="MaxValueLength"/>.</exception>
+    public static void ValidateOperatorValue(string operatorType, object? value)
+    {
+        if (operatorType.Equals("includes", StringComparison.OrdinalIgnoreCase))
+            return; // ValidateIncludesObject owns the structured payload's size/depth/property limits.
+
+        if (value is JsonElement { ValueKind: JsonValueKind.Array } array)
+        {
+            foreach (var item in array.EnumerateArray())
+                ValidateValue(item.ToString());
+            return;
+        }
+
+        if (value is object[] values)
+        {
+            foreach (var item in values)
+                ValidateValue(Convert.ToString(item, CultureInfo.InvariantCulture));
+            return;
+        }
+
+        if (value is string text &&
+            (operatorType.Equals("in", StringComparison.OrdinalIgnoreCase) ||
+             operatorType.Equals("nin", StringComparison.OrdinalIgnoreCase) ||
+             operatorType.Equals("between", StringComparison.OrdinalIgnoreCase)))
+        {
+            foreach (var item in text.Split(','))
+                ValidateValue(item.Trim());
+            return;
+        }
+
+        ValidateValue(Convert.ToString(value, CultureInfo.InvariantCulture));
     }
 
     /// <summary>

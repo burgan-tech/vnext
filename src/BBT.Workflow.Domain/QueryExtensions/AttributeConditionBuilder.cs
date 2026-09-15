@@ -22,6 +22,7 @@ public static class AttributeConditionBuilder
     {
         SanitizeFieldName(field);
         InputValidator.ValidateSqlJsonColumnIdentifier(jsonColumnName);
+        InputValidator.ValidateOperatorValue(operatorType, value);
         if (schemaContext != null && (!schemaContext.IsFieldFilterable(field) ||
             !schemaContext.IsOperatorAllowed(field, operatorType)))
             throw new BBT.Workflow.ExceptionHandling.SchemaFilterValidationException(

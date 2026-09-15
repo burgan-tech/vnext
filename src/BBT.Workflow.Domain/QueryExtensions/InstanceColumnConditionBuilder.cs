@@ -1,4 +1,5 @@
 using System.Globalization;
+using BBT.Workflow.Security;
 using Npgsql;
 using NpgsqlTypes;
 
@@ -24,6 +25,7 @@ public static class InstanceColumnConditionBuilder
         string value,
         ref int parameterIndex)
     {
+        InputValidator.ValidateOperatorValue(operatorType, value);
         // Validate column name against whitelist
         if (!InstanceFieldDiscriminator.IsInstanceColumn(columnName))
         {

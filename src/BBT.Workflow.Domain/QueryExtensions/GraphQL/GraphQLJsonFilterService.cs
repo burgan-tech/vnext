@@ -578,6 +578,7 @@ public static class GraphQLJsonFilterService
             // filter syntax. InstanceColumnConditionBuilder expects a comma-separated
             // string, so flatten the array element-by-element instead of calling
             // ConvertToString on the array itself (which would yield "System.Object[]").
+            InputValidator.ValidateOperatorValue(op, value);
             var stringValue = ConvertOperatorValueToString(value);
             var (conditionSql, conditionParams) = InstanceColumnConditionBuilder.BuildCondition(
                 columnName, op, stringValue, ref parameterIndex);
