@@ -560,7 +560,11 @@ public sealed class InstanceController(
             EpisodeTrigger = continuation.EpisodeTrigger,
             EpisodeTransitionKey = continuation.EpisodeTransitionKey,
             EpisodeTraceRoot = continuation.EpisodeTraceRoot,
-            CorrelationId = continuation.CorrelationId
+            CorrelationId = continuation.CorrelationId,
+            // The accept-time chain-reserve claim must survive this relay: the accept already
+            // flipped the whole active SubFlow chain Busy, so a payload without the claim makes
+            // the leaf reject its own forward as Busy (Instance:100031).
+            SubflowChainReserved = continuation.SubflowChainReserved
         };
 
         await transitionJobEnqueuer.EnqueueAsync(payload, continuation.JobId, cancellationToken);
