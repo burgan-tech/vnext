@@ -147,6 +147,17 @@ public interface ITransitionAdmissionService
     Task ReleaseSubflowChainAsync(TransitionExecutionContext context, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Identity-only overload of <see cref="ReleaseSubflowChainAsync(TransitionExecutionContext, CancellationToken)"/>,
+    /// for compensating after the execution context's scope has already been disposed — the
+    /// post-commit barrier is past the stage scope, so the only thing that legitimately crosses it
+    /// is identity. Never throws.
+    /// </summary>
+    /// <param name="instanceId">The instance whose chain reserve is being undone.</param>
+    /// <param name="lockKey">That instance's status lock key (<c>vnext:{domain}:{flow}:{id}</c>).</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task ReleaseSubflowChainAsync(Guid instanceId, string lockKey, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Admits an asynchronous accept under a SINGLE status lock: acquires
     /// <see cref="TransitionExecutionContext.LockKey"/> once, performs the status flip the
     /// request's <see cref="AdmissionKind"/> calls for, then runs <paramref name="underLock"/>

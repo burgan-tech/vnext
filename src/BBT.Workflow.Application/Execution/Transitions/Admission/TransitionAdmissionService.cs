@@ -314,26 +314,33 @@ public sealed class TransitionAdmissionService(
     }
 
     /// <inheritdoc />
-    public async Task ReleaseSubflowChainAsync(
+    public Task ReleaseSubflowChainAsync(
         TransitionExecutionContext context,
+        CancellationToken cancellationToken = default)
+        => ReleaseSubflowChainAsync(context.InstanceId, context.LockKey, cancellationToken);
+
+    /// <inheritdoc />
+    public async Task ReleaseSubflowChainAsync(
+        Guid instanceId,
+        string lockKey,
         CancellationToken cancellationToken = default)
     {
         try
         {
-            await using var scope = await statusLock.AcquireAsync(context.LockKey, cancellationToken);
+            await using var scope = await statusLock.AcquireAsync(lockKey, cancellationToken);
             if (!scope.IsAcquired)
             {
-                logger.StatusLockAcquireFailed(context.LockKey);
+                logger.StatusLockAcquireFailed(lockKey);
                 return;
             }
 
-            await busyManager.ReleaseWithPropagationAsync(context.InstanceId, cancellationToken);
+            await busyManager.ReleaseWithPropagationAsync(instanceId, cancellationToken);
         }
         catch (Exception exception)
         {
             // Compensation must never mask the original failure; a stranded Busy is
             // recovered by job-timeout recovery.
-            logger.ReservationReleaseFailed(exception, context.InstanceId);
+            logger.ReservationReleaseFailed(exception, instanceId);
         }
     }
 

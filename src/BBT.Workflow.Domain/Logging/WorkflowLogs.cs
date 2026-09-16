@@ -225,6 +225,22 @@ public static partial class WorkflowLogs
         Guid instanceId);
 
     /// <summary>
+    /// Logs when an accept-time subflow chain reserve is compensated because post-commit work
+    /// failed and the failure policy declined to fault the instance. That path runs neither
+    /// settlement nor fault, so without this compensation every level the reserve marked stays
+    /// Busy permanently — Busy has no recovery API.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10149,
+        Level = LogLevel.Warning,
+        Message = "Releasing subflow chain reserve for instance {InstanceId} after post-commit failure on transition {TransitionKey}: {ErrorCode}")]
+    public static partial void SubflowChainReserveReleasing(
+        this ILogger logger,
+        Guid instanceId,
+        string transitionKey,
+        string errorCode);
+
+    /// <summary>
     /// Logs at startup when a declared ActivitySource is missing from this host's MERGED
     /// configuration.
     /// <para>
