@@ -13,6 +13,7 @@ describe the stable mental model, boundaries, failure modes, and change-safety r
 | --- | --- |
 | [Agent onboarding](agent-onboarding.md) | Source-of-truth order, where-is-X, pitfalls for a new coding session. |
 | [Agent Council](agent-council/README.md) | Plan-only decision workflow, roles, session artifacts, evidence gates, and Chair approval. Decision history: [sessions/README.md](agent-council/sessions/README.md). |
+| [Code Review](code-review/README.md) | What a review of this repository checks: the four reviewer checklists, severity and verdict vocabularies, and the noise rules. Single source for the `pr-review` and `workflow-code-review` skills. |
 | [Architecture](architecture/system-overview.md) | Runtime shape, service boundaries, dependency direction, routing. |
 | [Domain](domain/instance-data-merge-concept.md) | Instance lifecycle, data versioning, cache context, function-handler behavior. |
 | [Runtime](runtime/task-executors-and-invokers.md) | Task execution, invokers, scripting, remote runtime integration. |
