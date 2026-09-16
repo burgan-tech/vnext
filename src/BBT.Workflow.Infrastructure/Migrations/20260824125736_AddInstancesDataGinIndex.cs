@@ -1,4 +1,4 @@
-﻿using Microsoft.EntityFrameworkCore.Migrations;
+using Microsoft.EntityFrameworkCore.Migrations;
 
 #nullable disable
 
@@ -8,7 +8,7 @@ namespace BBT.Workflow.Migrations
     /// Adds a partial GIN index (<c>jsonb_path_ops</c>, <c>IsLatest = true</c>) on
     /// <c>InstancesData.Data</c>. Attribute equality filters already emit
     /// <c>"Data" @&gt; {param}</c> containment predicates joined to the latest data row
-    /// (see <c>GraphQLJsonFilterService.BuildEqualsCondition</c>); without this index every
+    /// (see <c>AttributeConditionBuilder</c>); without this index every
     /// such filter is a sequential scan over the whole data table. History rows are excluded
     /// to keep the index small and its write amplification bounded.
     /// </summary>

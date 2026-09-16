@@ -11,6 +11,7 @@ using BBT.Aether.Uow;
 using BBT.Workflow.Authorization;
 using BBT.Workflow.Caching;
 using BBT.Workflow.Definitions;
+using BBT.Workflow.Definitions.Schemas;
 using BBT.Workflow.Gateway;
 using BBT.Workflow.Instances.DTOs;
 using BBT.Workflow.RepresentationEtag;
@@ -97,6 +98,7 @@ public class InstanceQueryAppServiceMasterTests : IDisposable
             callerRoleResolver: new DefaultCallerRoleResolver(Substitute.For<ICurrentUser>()),
             paginationLinkGenerator: Substitute.For<BBT.Aether.Application.Pagination.IPaginationLinkGenerator>(),
             instanceFilteringOptions: Options.Create(new InstanceFilteringOptions()),
+            attributeIndexCatalog: Substitute.For<IAttributeIndexCatalog>(),
             stateFunctionCache: Substitute.For<Caching.IStateFunctionCache>(),
             dataFunctionCache: Substitute.For<Caching.IDataFunctionCache>(),
             instanceSchemaFunctionCache: _instanceSchemaFunctionCache,

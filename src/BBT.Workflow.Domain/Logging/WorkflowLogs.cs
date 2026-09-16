@@ -4171,5 +4171,17 @@ public static partial class WorkflowLogs
         string operation,
         string cacheKey);
 
+    /// <summary>
+    /// Logs an optional attribute-index catalog failure before using JSON query expressions.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 70021,
+        Level = LogLevel.Warning,
+        Message = "Attribute-index catalog lookup failed for schema {Schema}; using JSON query expressions")]
+    public static partial void AttributeIndexCatalogFallback(
+        this ILogger logger,
+        Exception exception,
+        string schema);
+
     #endregion
 }

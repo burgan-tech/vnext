@@ -153,6 +153,30 @@
       "title": "Sync start and transition responses no longer evaluate extensions",
       "description": "A sync=true start or transition used to run the workflow's Extensions while projecting its response and return them under `extensions`. It no longer does: extensions are enrichment, not data. The client workflow manager never read them off a write response, and a service-to-service caller already receives `attributes`. The `extensions` key is KEPT on the response and is always an empty object, so the response shape is unchanged. Extensions still run unchanged on every READ surface — GET instance, GET instances, the data function (GET .../functions/data?extensions=) and the extensions endpoint — so anything that needs an extension value asks for it there. Two side effects: the `?extensions=` query parameter was removed from the start and transition endpoints (it is a no-op parameter now, and an old caller that still sends it is not rejected), and the response projection no longer builds a ScriptContext for a workflow without an output mapping, because extensions were its only other consumer.",
       "action": "Move any client that read `extensions` off a sync start/transition response to a read surface — GET .../instances/{instance}/functions/data?extensions=<key>, the instance GET or the instance list — and drop `?extensions=` from start and transition calls (it is no longer bound; sending it is harmless). Expect `\"extensions\": {}` on every sync start/transition response: the key stays so the shape does not change, the content never fills."
+    },
+    {
+      "id": "instance-filter-value-length-enforced",
+      "type": "behavior",
+      "component": "query",
+      "path": "instances.filter / GetInstancesTask.filter",
+      "since": "0.0.90",
+      "severity": "error",
+      "title": "Instance filter scalar operands longer than 1000 characters are now rejected",
+      "description": "BREAKING CHANGE: MaxValueLength previously existed without enforcement on instance filters, so an operand longer than 1000 characters could succeed while the full filter remained within 5000 characters. HTTP queries now return 400 with filter.valueTooLong before SQL execution. GetInstancesTask validates before both local and remote dispatch; invalid operands fail the task and can trigger its workflow error boundary, potentially faulting the instance depending on boundary rules. The limit is inclusive and counts decoded UTF-16 code units (.NET string.Length). Arrays and legacy comma-separated in/nin/between operands are checked per element, not by combined length. Includes keeps its separate object-payload limits; stored instance data is not truncated and the overall filter-string limit is unchanged.",
+      "action": "Before upgrading, audit client-generated filters, authored GetInstancesTask filters and mapping-generated operands. Replace oversized query operands with suitable short lookup keys or revise the query contract; do not blindly truncate values and change matching semantics. Verify workflow boundary handling for filter.valueTooLong. There is no configuration switch to relax this limit.",
+      "documentation": "docs/runtime/instance-filtering-and-queries.md"
+    },
+    {
+      "id": "x-indexed-requires-master-schema",
+      "type": "behavior",
+      "component": "schema",
+      "path": "schema.attributes.schema.properties[].x-indexed",
+      "since": "0.0.90",
+      "severity": "error",
+      "title": "x-indexed metadata is validated against attributes.type master",
+      "description": "Schema publication, including schema seed items, rejects any x-indexed metadata outside a component whose attributes.type is exactly master, even when the annotation is false. A true annotation additionally requires an explicit supported scalar property path. Other attributes.type values remain valid without x-indexed; JSON Schema type keywords inside attributes.schema do not declare the component a Master, and there is no new root type field. Declaring x-indexed does not create indexes.",
+      "action": "Remove x-indexed from non-master schema components; use attributes.type=master only for actual Master schemas. Keep true annotations on supported scalar properties and retain x-filterOperators/x-sortable permissions. Use compatible vnext-schema and vnext-workflow-cli releases for authoring validation and offline SQL generation. Have the DBA review and execute generated SQL before enabling AttributeIndexes:Enabled; do not rely on sync/update or host startup to run DDL.",
+      "documentation": "docs/runtime/manual-attribute-index-maintenance.md"
     }
   ]
 }

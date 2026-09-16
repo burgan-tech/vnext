@@ -118,7 +118,8 @@ public static class UnifiedFilterService
         Func<IQueryable<T>, OrderByRequest?, IQueryable<T>>? applyOrderBy = null,
         Func<DbContext, string, OrderByRequest?, IQueryable<T>>? applyOrderByRaw = null,
         ISchemaValidator? schemaValidator = null,
-        CancellationToken cancellationToken = default) where T : class
+        CancellationToken cancellationToken = default,
+        int? page = null, int? pageSize = null) where T : class
     {
         var response = new GraphQLFilterResponse<T>();
 
@@ -156,8 +157,28 @@ public static class UnifiedFilterService
         var orderByClause = request.OrderBy != null ? GraphQLJsonFilterService.BuildOrderByClause(request.OrderBy, schema, schemaContext: sc) : null;
         var orderByHasAttributes = request.OrderBy != null && request.OrderBy.GetEntries().Any(e => e.Field.Trim().StartsWith("attributes.", StringComparison.OrdinalIgnoreCase));
 
+        int? offset = null;
+        int? limit = null;
+        if (page.HasValue || pageSize.HasValue)
+        {
+            if (page is null or < 1 || pageSize is null or < 1 || pageSize == int.MaxValue)
+                throw new ArgumentOutOfRangeException(nameof(page), "Page and pageSize must be positive.");
+            var requestedOffset = (long)(page.Value - 1) * pageSize.Value;
+            if (requestedOffset > int.MaxValue)
+                throw new ArgumentOutOfRangeException(nameof(page), "Requested page offset exceeds the supported range.");
+            offset = (int)requestedOffset;
+            limit = pageSize.Value + 1;
+        }
+        var sqlPaging = offset.HasValue && (request.Filter != null || orderByHasAttributes);
         IQueryable<T> query;
-        if (request.Filter != null)
+        if (sqlPaging)
+        {
+            // ORDER BY and LIMIT belong to the same SELECT. Composing EF Take over raw SQL
+            // does not carry the inner ORDER BY into the outer relational query.
+            query = dbSet.ApplyGraphQLFilter(request.Filter ?? new GraphQLFilterNode(), jsonColumnName,
+                "", schema, schemaValidator, orderByClause: orderByClause, schemaContext: sc, offset: offset, limit: limit);
+        }
+        else if (request.Filter != null)
         {
             query = dbSet.ApplyGraphQLFilter(request.Filter, jsonColumnName, "", schema, schemaValidator, orderByClause: orderByClause, schemaContext: sc);
         }
@@ -177,14 +198,44 @@ public static class UnifiedFilterService
         }
 
         // Apply orderBy via applicator only when no filter and no attributes (filter/raw path already has ORDER BY)
-        if (request.Filter == null && !orderByHasAttributes && request.OrderBy != null && request.OrderBy.GetEntries().Count > 0 && applyOrderBy != null)
+        if (!sqlPaging && request.Filter == null && !orderByHasAttributes && applyOrderBy != null)
         {
             query = applyOrderBy(query, request.OrderBy);
         }
 
-        response.Data = await query.ToListAsync(cancellationToken);
+        if (offset.HasValue && !sqlPaging)
+            query = query.Skip(offset.Value).Take(limit!.Value);
+        response.Data = await query.AsNoTracking().ToListAsync(cancellationToken);
+        if (pageSize.HasValue && response.Data.Count > pageSize.Value)
+        {
+            response.HasNextPage = true;
+            response.Data.RemoveAt(response.Data.Count - 1);
+        }
 
         return response;
+    }
+
+    /// <summary>
+    /// Selects only the ordered page identities and one sentinel. Hydration is performed only for
+    /// the returned identities; no root entity or history is loaded for skipped rows or the sentinel.
+    /// </summary>
+    public static async Task<(List<Guid> Ids, bool HasNext)> ExecutePageIdsAsync(
+        DbContext dbContext, GraphQLFilterRequest request, string schema, int page, int pageSize,
+        ISchemaValidator? schemaValidator = null, CancellationToken cancellationToken = default, bool useLatestJoin = true)
+    {
+        if (page < 1 || pageSize < 1 || pageSize == int.MaxValue || (long)(page - 1) * pageSize > int.MaxValue)
+            throw new ArgumentOutOfRangeException(nameof(page));
+        var order = GraphQLJsonFilterService.BuildOrderByClause(request.OrderBy, schema, schemaContext: request.SchemaContext, latestAlias: useLatestJoin ? "_latest" : null);
+        var (sql, parameters) = GraphQLJsonFilterService.BuildInstanceQuery(
+            request.Filter ?? new GraphQLFilterNode(), "Data", "Instances", schema, schemaValidator,
+            orderByClause: order, schemaContext: request.SchemaContext,
+            offset: (page - 1) * pageSize, limit: pageSize + 1, useLatestJoin: useLatestJoin);
+        // This is an internal compiler-owned projection, never caller-supplied SQL.
+        sql = sql.Replace("SELECT s.*", "SELECT s.\"Id\" AS \"Value\"");
+        var ids = await dbContext.Database.SqlQueryRaw<Guid>(sql, parameters).ToListAsync(cancellationToken);
+        var hasNext = ids.Count > pageSize;
+        if (hasNext) ids.RemoveAt(ids.Count - 1);
+        return (ids, hasNext);
     }
 
     /// <summary>
@@ -211,5 +262,4 @@ public static class UnifiedFilterService
     }
 
 }
-
 

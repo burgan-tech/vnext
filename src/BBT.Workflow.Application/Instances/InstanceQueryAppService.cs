@@ -56,6 +56,7 @@ public sealed class InstanceQueryAppService(
     ICallerRoleResolver callerRoleResolver,
     IPaginationLinkGenerator paginationLinkGenerator,
     IOptions<InstanceFilteringOptions> instanceFilteringOptions,
+    IAttributeIndexCatalog attributeIndexCatalog,
     Caching.IStateFunctionCache stateFunctionCache,
     Caching.IDataFunctionCache dataFunctionCache,
     Caching.IInstanceSchemaFunctionCache instanceSchemaFunctionCache,
@@ -195,6 +196,7 @@ public sealed class InstanceQueryAppService(
         GetInstanceListInput input,
         CancellationToken cancellationToken = default)
     {
+        using var listActivity = InstanceReadActivityHelper.StartListPhase("request");
         runtimeInfoProvider.Check(input.Domain);
 
         using var read = InstanceReadActivityHelper.StartRead(
@@ -226,18 +228,30 @@ public sealed class InstanceQueryAppService(
             async ct =>
             {
 
-                // Resolve schema-driven filter/sort metadata from workflow's master schema
                 SchemaFilterContext? schemaContext = null;
-                var flowResult = await componentCacheStore.GetFlowAsync(input.Domain, input.Workflow, null, ct);
-                if (flowResult.IsSuccess && flowResult.Value?.Schema is not null)
+                using (InstanceReadActivityHelper.StartListPhase("metadata"))
                 {
-                    var schemaResult = await componentCacheStore.GetSchemaAsync(flowResult.Value.Schema, ct);
-                    if (schemaResult.IsSuccess)
-                        schemaContext = SchemaFilterMetadataResolver.Resolve(schemaResult.Value!.Schema);
-                }
+                    // Resolve schema-driven filter/sort metadata from workflow's master schema
+                    var flowResult = await componentCacheStore.GetFlowAsync(input.Domain, input.Workflow, null, ct);
+                    if (flowResult.IsSuccess && flowResult.Value?.Schema is not null)
+                    {
+                        var schemaResult = await componentCacheStore.GetSchemaAsync(flowResult.Value.Schema, ct);
+                        if (schemaResult.IsSuccess)
+                            schemaContext = SchemaFilterMetadataResolver.Resolve(schemaResult.Value!.Schema);
+                    }
 
-                if (!instanceFilteringOptions.Value.EnforceMasterSchemaFiltering)
-                    schemaContext = null;
+                    if (schemaContext != null)
+                    {
+                        var ready = !schemaContext.Fields.Values.Any(f => f.Indexed)
+                            ? new HashSet<string>()
+                            : await attributeIndexCatalog.GetReadyAsync(currentSchema.Name ?? input.Workflow, ct);
+                        schemaContext = new SchemaFilterContext(schemaContext.Fields)
+                        {
+                            EnforceFiltering = instanceFilteringOptions.Value.EnforceMasterSchemaFiltering,
+                            ReadyIndexes = ready
+                        };
+                    }
+                }
 
                 // Parse filter parameter - check if it's in GraphQLFilterRequest format
                 string? groupBy = input.GroupBy;
@@ -283,6 +297,7 @@ public sealed class InstanceQueryAppService(
                 List<GroupSummary>? groups;
                 try
                 {
+                    using var queryActivity = InstanceReadActivityHelper.StartListPhase("query");
                     if (parsedRequest != null)
                     {
                         parsedRequest.SchemaContext = schemaContext;
@@ -351,8 +366,14 @@ public sealed class InstanceQueryAppService(
                     return groupedResponse;
                 }
 
+                using var outputActivity = InstanceReadActivityHelper.StartListPhase("output");
                 // Normal flow: build instance outputs
                 var list = new List<GetInstanceOutput>();
+                var preparedFlows = new Dictionary<string, Definitions.Workflow>(StringComparer.Ordinal);
+                var listFieldFilter = schemaFieldFilterService is IListSchemaFieldFilterFactory filterFactory
+                    ? filterFactory.CreateForList() : schemaFieldFilterService;
+                var listExtensions = instanceExtensionService is IListExtensionServiceFactory extensionFactory
+                    ? extensionFactory.CreateForList() : instanceExtensionService;
                 foreach (var instance in pagedList.Items)
                 {
                     var instanceOutputResult = await BuildInstanceOutputAsync(
@@ -364,7 +385,10 @@ public sealed class InstanceQueryAppService(
                         ExtensionScope.GetAllInstances,
                         input.Headers,
                         input.QueryParameters,
-                        ct);
+                        ct,
+                        preparedFlows,
+                        listFieldFilter,
+                        listExtensions);
 
                     // Propagate extension errors - fail-fast behavior
                     if (!instanceOutputResult.IsSuccess)
@@ -938,12 +962,19 @@ public sealed class InstanceQueryAppService(
         ExtensionScope currentScope,
         Dictionary<string, string?>? headers,
         Dictionary<string, string?>? queryParameters,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Dictionary<string, Definitions.Workflow>? preparedFlows = null,
+        ISchemaFieldFilterService? preparedFieldFilter = null,
+        IInstanceExtensionService? preparedExtensions = null)
     {
-        var flowResult =
-            await componentCacheStore.GetFlowAsync(domain, workflow, instance.FlowVersion ?? null, cancellationToken);
-
-        var flow = flowResult.IsSuccess ? flowResult.Value! : null;
+        Definitions.Workflow? flow = null;
+        var version = instance.FlowVersion ?? string.Empty;
+        if (preparedFlows?.TryGetValue(version, out flow) != true)
+        {
+            var flowResult = await componentCacheStore.GetFlowAsync(domain, workflow, instance.FlowVersion, cancellationToken);
+            flow = flowResult.IsSuccess ? flowResult.Value : null;
+            if (flow != null) preparedFlows?.Add(version, flow);
+        }
 
         var response = new GetInstanceOutput
         {
@@ -974,7 +1005,7 @@ public sealed class InstanceQueryAppService(
             .BuildAsync(cancellationToken);
 
         // Execute extensions with fail-fast behavior
-        var extensionsResult = await instanceExtensionService.ProcessExtensionsAsync(
+        var extensionsResult = await (preparedExtensions ?? instanceExtensionService).ProcessExtensionsAsync(
             extensionRequested,
             scriptContext,
             flow,
@@ -990,7 +1021,7 @@ public sealed class InstanceQueryAppService(
         response.Extensions = extensionsResult.Value!;
 
         response.Attributes =
-            await schemaFieldFilterService.ApplyAsync(
+            await (preparedFieldFilter ?? schemaFieldFilterService).ApplyAsync(
                 flow, response.Attributes, instance,
                 new AuthorizationRequestContext(headers, queryParameters), cancellationToken) ??
             response.Attributes;

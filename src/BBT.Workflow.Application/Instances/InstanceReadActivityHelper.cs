@@ -48,6 +48,14 @@ public static class InstanceReadActivityHelper
     /// </summary>
     public static readonly ActivitySource ActivitySource = new(SourceName);
 
+    /// <summary>Starts a bounded list-read phase; callers never include raw filters or attribute values.</summary>
+    public static Activity? StartListPhase(string phase)
+    {
+        var activity = ActivitySource.StartActivity($"Instances.List.{phase}", ActivityKind.Internal);
+        activity?.SetTag(TelemetryConstants.TagNames.SpanCategory, TelemetryConstants.SpanCategories.Business);
+        return activity;
+    }
+
     /// <summary>The read was answered 304 from the fingerprint projection alone.</summary>
     public const string FastPathNotModified = "notModified";
 

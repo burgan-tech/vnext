@@ -23,11 +23,11 @@ public static class InstanceOrderByApplicator
     public static IQueryable<Instance> Apply(IQueryable<Instance> query, OrderByRequest? orderBy)
     {
         if (orderBy == null)
-            return query;
+            return query.OrderByDescending(i => i.CreatedAt).ThenBy(i => i.Id);
 
         var entries = orderBy.GetEntries();
         if (entries.Count == 0)
-            return query;
+            return query.OrderByDescending(i => i.CreatedAt).ThenBy(i => i.Id);
 
         // Count what actually landed rather than the loop position: keying off the position meant a
         // sort key that failed to apply shifted the next one into the ThenBy branch, which needs an
@@ -48,7 +48,8 @@ public static class InstanceOrderByApplicator
             applied++;
         }
 
-        return query;
+        return applied > 0 && !entries.Any(e => e.Field.Trim().Equals("id", StringComparison.OrdinalIgnoreCase))
+            ? ((IOrderedQueryable<Instance>)query).ThenBy(i => i.Id) : query;
     }
 
     private static bool IsAttributesPath(string field) =>

@@ -24,6 +24,7 @@ public static class SchemaFilterMetadataResolver
         if (schemaRoot.ValueKind != JsonValueKind.Object)
             return null;
 
+        AttributeIndexDefinition.ValidateSchema(schemaRoot);
         var fields = new Dictionary<string, SchemaFieldMetadata>(StringComparer.Ordinal);
         ParsePropertiesRecursive(schemaRoot, string.Empty, fields);
 
@@ -57,6 +58,8 @@ public static class SchemaFilterMetadataResolver
             result[path] = new SchemaFieldMetadata
             {
                 Type = type,
+                Format = ReadStringProperty(propValue, "format"),
+                Indexed = ReadBooleanProperty(propValue, "x-indexed"),
                 FilterOperators = filterOperators,
                 Sortable = sortable,
                 DisplayFormat = displayFormat,
