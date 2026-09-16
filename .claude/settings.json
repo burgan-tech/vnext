@@ -11,5 +11,24 @@
     "code-review@claude-plugins-official": true,
     "supabase@claude-plugins-official": true,
     "context-mode@context-mode": true
+  },
+  "enabledMcpjsonServers": [
+    "openobserve",
+    "postgres",
+    "elasticsearch",
+    "redis"
+  ],
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/check-mcp-infra.sh"
+          }
+        ]
+      }
+    ]
   }
 }

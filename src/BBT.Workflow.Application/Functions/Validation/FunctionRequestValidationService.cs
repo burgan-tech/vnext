@@ -1,6 +1,7 @@
 using System.Text.Json;
 using BBT.Aether.Results;
 using BBT.Workflow.Caching;
+using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Functions.Contracts;
 using BBT.Workflow.Logging;
@@ -53,6 +54,11 @@ public sealed class FunctionRequestValidationService(
         var schemaResult = await componentCacheStore.GetSchemaAsync(inputSchema, cancellationToken);
         if (!schemaResult.IsSuccess)
             return Result.Fail(schemaResult.Error);
+
+        // The transition path has had this span since the trace-tree work; the function path did the
+        // same work unmeasured, so the two surfaces disagreed about whether schema evaluation is
+        // visible. Wraps evaluation only — the schema cache read above is already a Cache.Get.
+        using var validation = PipelineStepActivityHelper.StartOperationActivity("Schema.Validate");
 
         var validationResult = schemaValidator.Validate(
             schemaResult.Value!.Schema,

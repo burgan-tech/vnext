@@ -472,6 +472,11 @@ pre-existing deferred pub/sub-publish spans), the same 3 as the pre-fix HTTP bas
 (`6b85c250d727e7bdd98a620f0e019563`, 118 docs) and the same 3 as the pre-fix gRPC trace. The fix
 introduces no new orphan pattern.
 
+> Superseded for the orphans themselves, 2026-09-13: that pattern — an app-side `System.Net.Http`
+> span whose parent was never exported — was Aether's HttpClient trace filter writing a filtered
+> activity's id to the wire, and is fixed upstream. The measurement above stands as a record of the
+> transport change; the orphan count it reports is no longer the current behaviour.
+
 **Business correctness, both transports:** `MoneyTransferTests` `Failed: 0, Passed: 5` over gRPC
 (2026-08-26T15:56Z) and `Failed: 0, Passed: 5` again after reverting to the HTTP default
 (2026-08-26T16:0xZ). gRPC remains **opt-in**; the committed state is `ExecutionApi:Transport = http`

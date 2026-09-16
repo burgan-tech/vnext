@@ -164,6 +164,13 @@ public sealed class State : IHasKey
     public IReadOnlyCollection<RoleGrant>? LongPollAckRoles => interaction?.LongPoll?.Roles;
 
     /// <summary>
+    /// Optional condition rule deciding per caller whether the long-poll interaction applies —
+    /// the rule-based alternative to <see cref="LongPollAckRoles"/> (mutually exclusive).
+    /// </summary>
+    [JsonIgnore]
+    public ScriptCode? LongPollRule => interaction?.LongPoll?.Rule;
+
+    /// <summary>
     /// Acknowledge fallback window in seconds for long-poll termination (default 60).
     /// </summary>
     [JsonIgnore]

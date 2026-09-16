@@ -16,7 +16,6 @@ using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Execution.Services;
 using BBT.Workflow.Execution.Transitions.Services;
 using BBT.Workflow.Execution.Validation;
-using BBT.Workflow.Extentions;
 using BBT.Workflow.Gateway;
 using BBT.Workflow.Headers;
 using BBT.Workflow.RepresentationEtag;
@@ -80,12 +79,12 @@ public class InstanceCommandAppServiceStartProbeTests : IDisposable
             transitionAdmissionService: Substitute.For<ITransitionAdmissionService>(),
             representationEtagService: Substitute.For<IRepresentationEtagService>(),
             schemaFieldFilterService: Substitute.For<ISchemaFieldFilterService>(),
-            instanceExtensionService: Substitute.For<IInstanceExtensionService>(),
             scriptContextFactory: Substitute.For<IScriptContextFactory>(),
             timerEvaluator: Substitute.For<ITimerEvaluator>(),
             transitionAuthorizationManager: Substitute.For<ITransitionAuthorizationManager>(),
             cancellationService: Substitute.For<IInstanceCancellationService>(),
             longPollAckResumeService: Substitute.For<ILongPollAckResumeService>(),
+            longPollInteractionGate: NSubstitute.Substitute.For<BBT.Workflow.Execution.LongPoll.ILongPollInteractionGate>(),
             instanceCommandGateway: Substitute.For<IInstanceCommandGateway>(),
             workflowOutputMappingService: Substitute.For<IWorkflowOutputMappingService>(),
             callerRoleResolver: Substitute.For<ICallerRoleResolver>(),

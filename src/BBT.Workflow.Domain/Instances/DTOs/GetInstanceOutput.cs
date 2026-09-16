@@ -77,6 +77,7 @@ public sealed class InstanceMetadataDto
         CurrentState = instance.CurrentState;
         EffectiveState = instance.EffectiveState;
         Status = instance.Status;
+        EffectiveStatus = instance.GetEffectiveStatus;
         EffectiveStateType = instance.EffectiveStateType;
         EffectiveStateSubType = instance.EffectiveStateSubType;
         CurrentStateType = instance.CurrentStateType;
@@ -103,6 +104,21 @@ public sealed class InstanceMetadataDto
 
     /// <summary>Instance status (Active, Completed, Faulted, etc.).</summary>
     public InstanceStatus? Status { get; set; }
+
+    /// <summary>
+    /// The status a client observes for this instance: the deepest active SubFlow's status when one
+    /// is running, otherwise this instance's own <see cref="Status"/>. The status counterpart of
+    /// <see cref="EffectiveState"/>, and the same value the state function reports as its
+    /// <c>status</c> — so a client can branch on either surface and get one answer.
+    /// </summary>
+    /// <remarks>
+    /// Differs from <see cref="Status"/> exactly while a SubFlow is running: the parent is <c>Busy</c>
+    /// for the child's whole lifetime by design, so <see cref="Status"/> says "something is in
+    /// flight" and this says what that something is currently doing (for example <c>Active</c> while
+    /// the child waits on a human task). Null only on a cross-domain response from a runtime that
+    /// predates the field.
+    /// </remarks>
+    public InstanceStatus? EffectiveStatus { get; set; }
 
     /// <summary>Type of the effective state (Initial, Intermediate, Finish, SubFlow, Wizard).</summary>
     public StateType? EffectiveStateType { get; set; }
@@ -340,6 +356,143 @@ public sealed class InstanceTransitionDto
 
     /// <summary>Behalf-of user identifier captured when the transition was created.</summary>
     public string? CreatedByBehalfOf { get; set; }
+}
+
+/// <summary>
+/// One task journal entry of an instance — execution metadata plus the fault reason. The journaled
+/// request/response/invocation payloads are deliberately not exposed on any API: mapping scripts
+/// write their built headers into them, so they are operator material (journal table only), not
+/// client material.
+/// </summary>
+public sealed class InstanceTaskDto
+{
+    /// <summary>Journal row identifier — the <c>taskId</c> the actions function takes.</summary>
+    public Guid Id { get; set; }
+
+    /// <summary>Task definition key that was executed.</summary>
+    public string TaskKey { get; set; } = string.Empty;
+
+    /// <summary>Definition key of the transition the task ran under.</summary>
+    public string TransitionKey { get; set; } = string.Empty;
+
+    /// <summary>State the owning transition started from.</summary>
+    public string FromState { get; set; } = string.Empty;
+
+    /// <summary>State the owning transition moved to. Null while that transition is in progress.</summary>
+    public string? ToState { get; set; }
+
+    /// <summary>Trigger type of the owning transition.</summary>
+    public TriggerType TriggerType { get; set; }
+
+    /// <summary>Platform execution status (Waiting, Busy, Completed, Faulted).</summary>
+    public Definitions.TaskStatus Status { get; set; }
+
+    /// <summary>Business outcome (Unknown, Success, Failed) — separate from platform status.</summary>
+    public BusinessStatus BusinessStatus { get; set; }
+
+    /// <summary>UTC timestamp when the task started.</summary>
+    public DateTime StartedAt { get; set; }
+
+    /// <summary>UTC timestamp when the task finished. Null while still executing.</summary>
+    public DateTime? FinishedAt { get; set; }
+
+    /// <summary>Total task duration in milliseconds. Null while still executing.</summary>
+    public double? DurationMs { get; set; }
+
+    /// <summary>Fault reason of a Faulted task. Null otherwise; never a stack trace.</summary>
+    public string? Error { get; set; }
+
+    public static InstanceTaskDto FromRow(InstanceTaskHistoryRow row) => new()
+    {
+        Id = row.Id,
+        TaskKey = row.TaskKey,
+        TransitionKey = row.TransitionKey,
+        FromState = row.FromState,
+        ToState = row.ToState,
+        TriggerType = row.TriggerType,
+        Status = row.Status,
+        BusinessStatus = row.BusinessStatus,
+        StartedAt = row.StartedAt,
+        FinishedAt = row.FinishedAt,
+        DurationMs = row.Duration?.TotalMilliseconds,
+        Error = ExtractFaultReason(row.FaultedResponseJson)
+    };
+
+    /// <summary>
+    /// A faulted journal row stores its reason as <c>{"error": "..."}</c> in Response
+    /// (<see cref="InstanceTask.Faulted"/>); the projection carries that column for faulted rows
+    /// only, and nothing else from the payload is surfaced here.
+    /// </summary>
+    private static string? ExtractFaultReason(string? faultedResponseJson)
+    {
+        if (string.IsNullOrWhiteSpace(faultedResponseJson))
+            return null;
+
+        using var response = JsonDocument.Parse(faultedResponseJson);
+        return response.RootElement.ValueKind == JsonValueKind.Object &&
+               response.RootElement.TryGetProperty("error", out var reason) &&
+               reason.ValueKind == JsonValueKind.String
+            ? reason.GetString()
+            : null;
+    }
+}
+
+/// <summary>
+/// The instance's task execution history, in execution order (oldest first).
+/// </summary>
+public sealed class GetInstanceTasksOutput
+{
+    /// <summary>All task journal entries of the instance, oldest first. Metadata only — no payloads.</summary>
+    public List<InstanceTaskDto> Items { get; set; } = [];
+}
+
+/// <summary>
+/// One recorded execution sub-step (action) of a task journal entry.
+/// </summary>
+public sealed class InstanceTaskActionDto
+{
+    /// <summary>Unique action identifier.</summary>
+    public Guid Id { get; set; }
+
+    /// <summary>Free-form sub-step status label.</summary>
+    public string Status { get; set; } = string.Empty;
+
+    /// <summary>UTC timestamp when the sub-step started.</summary>
+    public DateTime StartedAt { get; set; }
+
+    /// <summary>UTC timestamp when the sub-step finished. Null while open.</summary>
+    public DateTime? FinishedAt { get; set; }
+
+    /// <summary>Sub-step duration in milliseconds. Null while open.</summary>
+    public double? DurationMs { get; set; }
+
+    /// <summary>Structured detail recorded with the sub-step.</summary>
+    public JsonElement? Detail { get; set; }
+
+    public static InstanceTaskActionDto FromAction(InstanceAction action) => new()
+    {
+        Id = action.Id,
+        Status = action.Status,
+        StartedAt = action.StartedAt,
+        FinishedAt = action.FinishedAt,
+        DurationMs = action.Duration?.TotalMilliseconds,
+        Detail = action.Detail?.JsonElement
+    };
+}
+
+/// <summary>
+/// The recorded actions of one task journal entry, in execution order (oldest first).
+/// </summary>
+public sealed class GetInstanceTaskActionsOutput
+{
+    /// <summary>Journal row identifier of the owning task.</summary>
+    public Guid TaskId { get; set; }
+
+    /// <summary>Task definition key of the owning task.</summary>
+    public string TaskKey { get; set; } = string.Empty;
+
+    /// <summary>All recorded actions of the task, oldest first.</summary>
+    public List<InstanceTaskActionDto> Items { get; set; } = [];
 }
 
 /// <summary>

@@ -92,6 +92,24 @@ public sealed class TransitionContinuationRequested : IDistributedEvent, ILaneAw
     /// </summary>
     public bool SubflowChainReserved { get; init; }
 
+    /// <summary>
+    /// Root (ancestor) instance id of the business request — constant at the top-level flow's id
+    /// regardless of subflow nesting.
+    /// <para>
+    /// Nullable and NOT <c>required</c> on purpose: the other seven members are <c>required</c> and
+    /// System.Text.Json enforces that, so a required addition would poison-loop the Inbox on outbox
+    /// rows written before the deploy. Absent ⇒ the consumer simply sets no root baggage, exactly
+    /// the behaviour before this field existed.
+    /// </para>
+    /// <para>
+    /// Why it exists: this was the only lane-aware event without it, so its Inbox handler could set
+    /// no <c>vnext.root.instance.id</c> baggage — and <c>DaprOrchestrationForwarder</c> reads that
+    /// baggage to stamp <c>X-Root-Instance-Id</c> on the forwarded call. The continuation was
+    /// therefore the one hop where a trace lost the single tag that selects a whole business request.
+    /// </para>
+    /// </summary>
+    public Guid? RootInstanceId { get; init; }
+
     public override string ToString() =>
         $"{nameof(TransitionContinuationRequested)}: InstanceId={InstanceId} Domain={Domain} Flow={Flow} Version={Version} TransitionKey={TransitionKey} JobName={JobName} ChainDepth={ChainDepth}";
 

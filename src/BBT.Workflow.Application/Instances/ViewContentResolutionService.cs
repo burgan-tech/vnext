@@ -4,6 +4,7 @@ using BBT.Workflow.Caching;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Gateway;
 using BBT.Workflow.Logging;
+using BBT.Workflow.Runtime;
 using Microsoft.Extensions.Logging;
 
 namespace BBT.Workflow.Instances;
@@ -15,6 +16,7 @@ namespace BBT.Workflow.Instances;
 public sealed class ViewContentResolutionService(
     IComponentCacheStore componentCacheStore,
     IInstanceQueryGateway instanceQueryGateway,
+    IRuntimeInfoProvider runtimeInfoProvider,
     ILogger<ViewContentResolutionService> logger) : IViewContentResolutionService
 {
     private static readonly JsonSerializerOptions AttributesJsonOptions = new()
@@ -64,6 +66,19 @@ public sealed class ViewContentResolutionService(
             viewRef.Flow,
             viewRef.Key,
             requestDomain);
+
+        // A view whose component lives in another domain is resolved by reading it as an instance
+        // THERE — a genuine cross-domain hop, and the only one on the read path that had no span of
+        // its own. It appeared as a bare HttpClient call with no vNext context, while the five
+        // descents in InstanceQueryAppService were all visible; the cheap-looking local branch just
+        // above reports a Cache.Get, so the expensive branch was the invisible one.
+        using var descent = InstanceReadActivityHelper.StartDescendScope(
+            runtimeInfoProvider,
+            viewRef.Domain,
+            viewRef.Flow,
+            viewRef.Key,
+            parentInstanceId: null,
+            TelemetryConstants.DescentFunctions.View);
 
         var instanceInput = new GetInstanceInput
         {

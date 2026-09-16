@@ -106,9 +106,9 @@ A field that lives in instance data needs the `attributes.` prefix:
 `sort={"field":"attributes.musteriNo"}`.
 
 Valid instance columns (case-insensitive): `id`, `key`, `flow`, `currentState`, `state`, `status`,
-`createdAt`, `modifiedAt`, `completedAt`, `isTransient`, `effectiveState`, `currentStateType`,
-`currentStateSubType`, `effectiveStateType`, `effectiveStateSubType`, `stage`, `createdBy`,
-`createdByBehalfOf`, `modifiedBy`, `modifiedByBehalfOf`.
+`effectiveStatus`, `createdAt`, `modifiedAt`, `completedAt`, `isTransient`, `effectiveState`,
+`currentStateType`, `currentStateSubType`, `effectiveStateType`, `effectiveStateSubType`, `stage`,
+`createdBy`, `createdByBehalfOf`, `modifiedBy`, `modifiedByBehalfOf`.
 
 ### 1.5 Unsafe `attributes.` path
 

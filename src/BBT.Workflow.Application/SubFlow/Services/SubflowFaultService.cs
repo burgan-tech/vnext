@@ -199,6 +199,7 @@ public sealed class SubflowFaultService(
                     }
 
                     parentInstance.SetEffectiveState(parentInstance.GetCurrentState);
+                    parentInstance.ResyncEffectiveStatus();
 
                     var parentWorkflowResult = await componentCacheStore.GetFlowAsync(
                         input.Domain,

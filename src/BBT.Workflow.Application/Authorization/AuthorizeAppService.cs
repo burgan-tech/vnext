@@ -145,7 +145,13 @@ public sealed class AuthorizeAppService(
         var callerRolesResult = await GetCallerRolesAsync(role, requestContext, cancellationToken);
         if (!callerRolesResult.IsSuccess)
             return Result<AuthorizeOutput>.Fail(callerRolesResult.Error);
+        // The decision itself. Everything around it was already traceable — role resolution, the
+        // subflow forward, the instance load — while the answer they exist to produce was not, so a
+        // denial could be seen arriving and never explained.
+        using var decision = AuthorizationActivityHelper.StartDecide();
         var allowed = await EvaluateAuthorizeAsync(wf, callerRolesResult.Value, transitionKey, functionKey, instance, checkQueryRoles, domain, workflowVersion, requestContext, cancellationToken);
+        AuthorizationActivityHelper.SetDecision(decision, allowed, callerRolesResult.Value?.Count ?? 0);
+
         logger.AuthorizeRequest(domain, workflow, Describe(callerRolesResult.Value), allowed);
         return Result<AuthorizeOutput>.Ok(new AuthorizeOutput { Allowed = allowed });
     }
@@ -268,6 +274,19 @@ public sealed class AuthorizeAppService(
         if (instance?.Subflow != null)
         {
             var subflow = instance.Subflow;
+
+            // The sibling of the authorize forward above, which has had this span since the
+            // descent ladder was introduced. This one never did, so the matrix was the single
+            // subflow forward in this service a trace could not show — and it is the more
+            // expensive of the two, since it resolves every function the workflow declares.
+            using var descent = InstanceReadActivityHelper.StartDescendScope(
+                runtimeInfoProvider,
+                subflow.SubFlowDomain,
+                subflow.SubFlowName,
+                subflow.SubFlowInstanceId.ToString(),
+                instance.Id.ToString(),
+                TelemetryConstants.DescentFunctions.Matrix);
+
             var subFlowMatrixResult = await authorizeGateway.GetAuthorizationMatrixForInstanceAsync(
                 subflow.SubFlowDomain,
                 subflow.SubFlowName,

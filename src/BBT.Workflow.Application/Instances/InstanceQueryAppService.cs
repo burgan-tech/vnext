@@ -40,6 +40,9 @@ public sealed class InstanceQueryAppService(
     IInstanceCorrelationRepository instanceCorrelationRepository,
     IInstanceJobRepository instanceJobRepository,
     IInstanceIncidentRepository instanceIncidentRepository,
+    IInstanceTaskRepository instanceTaskRepository,
+    IInstanceActionRepository instanceActionRepository,
+    Execution.LongPoll.ILongPollInteractionGate longPollInteractionGate,
     IInstanceExtensionService instanceExtensionService,
     IScriptContextFactory scriptContextFactory,
     IInstanceQueryGateway instanceQueryGateway,
@@ -60,13 +63,6 @@ public sealed class InstanceQueryAppService(
     : ApplicationService(serviceProvider), IInstanceQueryAppService
 {
     private static readonly ConcurrentDictionary<string, BuildGate> ActiveSubflowBuildGates = new();
-
-    private static readonly HashSet<InstanceStatus> TerminalStatuses =
-    [
-        InstanceStatus.Completed,
-        InstanceStatus.Faulted,
-        InstanceStatus.Passive
-    ];
 
     /// <summary>
     /// Converts a failed query validation into a 400-mapping <see cref="Error"/>, carrying every
@@ -144,6 +140,9 @@ public sealed class InstanceQueryAppService(
     {
         runtimeInfoProvider.Check(input.Domain);
 
+        using var read = InstanceReadActivityHelper.StartRead(
+            InstanceReadKinds.Instance, input.Domain, input.Workflow);
+
         return await GetInstanceByIdOrKeyAsync(input.Instance, input.Version, cancellationToken)
             .MatchAsync(
                 onSuccess: async instance =>
@@ -190,6 +189,9 @@ public sealed class InstanceQueryAppService(
         CancellationToken cancellationToken = default)
     {
         runtimeInfoProvider.Check(input.Domain);
+
+        using var read = InstanceReadActivityHelper.StartRead(
+            InstanceReadKinds.List, input.Domain, input.Workflow);
 
         // Validate before any query is built. A filter the runtime cannot honor must be rejected,
         // never silently ignored — ignoring it widens the result set instead of narrowing it.
@@ -416,6 +418,9 @@ public sealed class InstanceQueryAppService(
     {
         runtimeInfoProvider.Check(input.Domain);
 
+        using var read = InstanceReadActivityHelper.StartRead(
+            InstanceReadKinds.IncidentActive, input.Domain, input.Workflow);
+
         return await GetInstanceByIdOrKeyAsync(input.Instance, cancellationToken)
             .BindAsync(instance =>
                 componentCacheStore.GetFlowAsync(input.Domain, input.Workflow, instance.FlowVersion, cancellationToken)
@@ -437,11 +442,88 @@ public sealed class InstanceQueryAppService(
             });
     }
 
+    /// <summary>
+    /// Returns the task execution history of an instance in execution order — the tasks system
+    /// function. Only execution metadata and the fault reason leave this surface — the journaled
+    /// request/response/invocation payloads are not exposed on any API, since mapping scripts
+    /// write their built headers into them; they stay in the journal table.
+    /// </summary>
+    public async Task<Result<GetInstanceTasksOutput>> GetInstanceTasksAsync(
+        GetInstanceTasksInput input,
+        CancellationToken cancellationToken = default)
+    {
+        runtimeInfoProvider.Check(input.Domain);
+
+        return await GetInstanceByIdOrKeyAsync(input.Instance, cancellationToken)
+            .BindAsync(instance =>
+                componentCacheStore.GetFlowAsync(input.Domain, input.Workflow, instance.FlowVersion, cancellationToken)
+                    .MapAsync(workflow => (instance, workflow)))
+            .BindAsync(async data =>
+            {
+                using var instanceScope = BeginInstanceScope(data.instance);
+
+                // Same gate as the state function: a caller who may poll the state may read what ran.
+                if (!await IsInstanceQueryAllowedAsync(data.workflow, data.instance, input.Roles, input.Headers, input.QueryParameters, cancellationToken))
+                    return Result<GetInstanceTasksOutput>.Fail(WorkflowErrors.QueryAccessDenied(data.instance.GetEffectiveState));
+
+                var rows = await instanceTaskRepository.GetHistoryByInstanceIdAsync(
+                    data.instance.Id, cancellationToken);
+
+                return Result<GetInstanceTasksOutput>.Ok(new GetInstanceTasksOutput
+                {
+                    Items = rows.Select(InstanceTaskDto.FromRow).ToList()
+                });
+            });
+    }
+
+    /// <summary>
+    /// Returns the recorded actions (execution sub-steps) of one task journal entry in execution
+    /// order — the actions system function. The task must belong to the addressed instance —
+    /// otherwise <c>NotFound</c> (<c>Instance:100038</c>), so a task can never be read through
+    /// another instance's gate.
+    /// </summary>
+    public async Task<Result<GetInstanceTaskActionsOutput>> GetInstanceTaskActionsAsync(
+        GetInstanceTaskActionsInput input,
+        CancellationToken cancellationToken = default)
+    {
+        runtimeInfoProvider.Check(input.Domain);
+
+        return await GetInstanceByIdOrKeyAsync(input.Instance, cancellationToken)
+            .BindAsync(instance =>
+                componentCacheStore.GetFlowAsync(input.Domain, input.Workflow, instance.FlowVersion, cancellationToken)
+                    .MapAsync(workflow => (instance, workflow)))
+            .BindAsync(async data =>
+            {
+                using var instanceScope = BeginInstanceScope(data.instance);
+
+                if (!await IsInstanceQueryAllowedAsync(data.workflow, data.instance, input.Roles, input.Headers, input.QueryParameters, cancellationToken))
+                    return Result<GetInstanceTaskActionsOutput>.Fail(WorkflowErrors.QueryAccessDenied(data.instance.GetEffectiveState));
+
+                var taskRef = await instanceTaskRepository.GetRefForInstanceAsync(
+                    data.instance.Id, input.TaskId, cancellationToken);
+                if (taskRef is null)
+                    return Result<GetInstanceTaskActionsOutput>.Fail(
+                        WorkflowErrors.InstanceTaskNotFound(input.TaskId, input.Instance));
+
+                var actions = await instanceActionRepository.GetByTaskIdAsync(input.TaskId, cancellationToken);
+
+                return Result<GetInstanceTaskActionsOutput>.Ok(new GetInstanceTaskActionsOutput
+                {
+                    TaskId = taskRef.Id,
+                    TaskKey = taskRef.TaskKey,
+                    Items = actions.Select(InstanceTaskActionDto.FromAction).ToList()
+                });
+            });
+    }
+
     public async Task<Result<GetInstanceIncidentsOutput>> GetInstanceIncidentsAsync(
         GetInstanceIncidentsInput input,
         CancellationToken cancellationToken = default)
     {
         runtimeInfoProvider.Check(input.Domain);
+
+        using var read = InstanceReadActivityHelper.StartRead(
+            InstanceReadKinds.IncidentHistory, input.Domain, input.Workflow);
 
         var page = input.Page < 1 ? 1 : input.Page;
         var pageSize = Math.Clamp(input.PageSize, 1, GetInstanceIncidentsInput.MaxPageSize);
@@ -477,6 +559,9 @@ public sealed class InstanceQueryAppService(
         CancellationToken cancellationToken = default)
     {
         runtimeInfoProvider.Check(input.Domain);
+
+        using var read = InstanceReadActivityHelper.StartRead(
+            InstanceReadKinds.History, input.Domain, input.Workflow);
 
         return await GetInstanceWithFullHistoryAsync(input.Instance, cancellationToken)
             .ThenAsync(async instance =>
@@ -921,6 +1006,8 @@ public sealed class InstanceQueryAppService(
         // A validated cache entry does NOT short-circuit the build: it supplies the DATA portion
         // (skipping the x-roles field filtering) while extensions are ALWAYS computed fresh —
         // the cache holds pure instance data, never extension output.
+        var transaction = System.Diagnostics.Activity.Current;
+
         var isLatestRequest = InstanceDataVersionComparer.IsRequestingLatest(input.Version);
         string? dataCacheKey = null;
         Caching.DataFunctionCacheEntry? validatedEntry = null;
@@ -928,10 +1015,30 @@ public sealed class InstanceQueryAppService(
         {
             var fastPath = await TryServeDataFromFingerprintAsync(input, cancellationToken);
             if (fastPath.NotModified.HasValue)
+            {
+                // 304 from the fingerprint projection alone — no span created.
+                InstanceReadActivityHelper.SetReadOutcome(
+                    transaction, InstanceReadKinds.Data, InstanceReadActivityHelper.FastPathNotModified);
                 return fastPath.NotModified.Value;
+            }
+
             validatedEntry = fastPath.ValidatedEntry;
             dataCacheKey = dataFunctionCache.BuildKey(input);
         }
+
+        // A validated entry does NOT short-circuit: it supplies the data portion while extensions
+        // still run, so this is a build that reused the cached body, not a cache hit.
+        InstanceReadActivityHelper.SetReadOutcome(
+            transaction,
+            InstanceReadKinds.Data,
+            validatedEntry is not null
+                ? InstanceReadActivityHelper.FastPathCacheHit
+                : dataFunctionCache.Enabled && isLatestRequest
+                    ? InstanceReadActivityHelper.FastPathBuild
+                    : InstanceReadActivityHelper.FastPathDisabled);
+
+        using var readEnvelope = InstanceReadActivityHelper.StartRead(
+            InstanceReadKinds.Data, input.Domain, input.Workflow);
 
         // Railway chain: Get Instance → Load Flow (using instance.FlowVersion) → Match to ConditionalResult
         return await GetInstanceByIdOrKeyAsync(input.Instance, input.Version, cancellationToken)
@@ -1173,6 +1280,11 @@ public sealed class InstanceQueryAppService(
         // If-None-Match match can be answered with 304 from a single projection query — no cache
         // entry, aggregate load or response build needed. The body cache only serves callers
         // without a current ETag.
+        // The transaction, captured before anything of ours opens a span. Every branch below stamps
+        // its outcome here — at zero span documents, which is the point on the runtime's
+        // highest-QPS route.
+        var transaction = System.Diagnostics.Activity.Current;
+
         string? stateCacheKey = null;
         IDisposable? activeSubflowBuildLease = null;
         if (stateFunctionCache.Enabled)
@@ -1183,12 +1295,34 @@ public sealed class InstanceQueryAppService(
                 stateCacheKey,
                 cancellationToken);
             if (fastResult.Result.HasValue)
+            {
+                // Answered without building. NO span is created on this branch — not an envelope,
+                // not a child — so a long-poll that returns 304 forever adds nothing to the trace.
+                InstanceReadActivityHelper.SetReadOutcome(
+                    transaction,
+                    InstanceReadKinds.State,
+                    fastResult.Result.Value.IsNotModified
+                        ? InstanceReadActivityHelper.FastPathNotModified
+                        : InstanceReadActivityHelper.FastPathCacheHit);
                 return fastResult.Result.Value;
+            }
+
             activeSubflowBuildLease = fastResult.BuildLease;
         }
 
+        InstanceReadActivityHelper.SetReadOutcome(
+            transaction,
+            InstanceReadKinds.State,
+            stateFunctionCache.Enabled
+                ? InstanceReadActivityHelper.FastPathBuild
+                : InstanceReadActivityHelper.FastPathDisabled);
+
         try
         {
+            // Opened only here, after the fast path has declined: the envelope measures a build.
+            using var read = InstanceReadActivityHelper.StartRead(
+                InstanceReadKinds.State, input.Domain, input.Workflow);
+
             return await GetInstanceByIdOrKeyAsync(input.Instance, cancellationToken)
             .BindAsync(instance =>
                 componentCacheStore.GetFlowAsync(input.Domain, input.Workflow, instance.FlowVersion ?? input.Version, cancellationToken)
@@ -1241,10 +1375,22 @@ public sealed class InstanceQueryAppService(
                             data.instance.Id, data.instance.EffectiveStatus.Code, output.Status.Code);
                     }
 
+                    // A rule-gated interaction verdict depends on request inputs (headers, query
+                    // parameters, instance data) that CallerScopeHash does not cover, so a body
+                    // carrying one must never enter the shared cache: two callers with the same
+                    // scope hash could legitimately receive different interactions. Own-state rules
+                    // are visible here; a bubbled subflow interaction's gating arm is not (the
+                    // child evaluated it), so any bubbled interaction skips caching conservatively.
+                    // The fingerprint 304 path is untouched — the accepted staleness gap is
+                    // documented in docs/domain/long-poll-termination.md.
+                    var interactionIsRuleGated =
+                        data.workflow.FindState(data.instance.GetCurrentState)?.LongPollRule is not null
+                        || (data.instance.HasActiveSubFlow && output.Interaction is not null);
+
                     // Active-child state cannot be validated from the parent row, so keep it only
                     // for a short freshness window. Parent changes still invalidate immediately;
                     // concurrent misses are coalesced by the per-key build lease.
-                    if (stateCacheKey is not null)
+                    if (stateCacheKey is not null && !interactionIsRuleGated)
                     {
                         var cacheEntry = new Caching.StateFunctionCacheEntry
                         {
@@ -1300,6 +1446,10 @@ public sealed class InstanceQueryAppService(
             if (cached.HasValue)
                 return new(cached, null);
 
+            // The gate span covers the wait AND the double-check, because the double-check is what
+            // the wait was for: a request that queued behind another descent and then served that
+            // descent's cache entry is the coalescing working, and it is only legible as one span.
+            using var gate = InstanceReadActivityHelper.StartBuildGate();
             var lease = await AcquireBuildGateAsync(cacheKey, cancellationToken);
 
             // Double-check after entering the gate: another request may have populated the short
@@ -1308,10 +1458,14 @@ public sealed class InstanceQueryAppService(
                 input, cacheKey, parentEtag, fingerprint, cancellationToken);
             if (cached.HasValue)
             {
+                InstanceReadActivityHelper.SetBuildGateOutcome(
+                    gate, lease.Contended, InstanceReadActivityHelper.BuildGateCoalesced);
                 lease.Dispose();
                 return new(cached, null);
             }
 
+            InstanceReadActivityHelper.SetBuildGateOutcome(
+                gate, lease.Contended, InstanceReadActivityHelper.BuildGateBuild);
             logger.StateFunctionCacheBypassedForSubFlow(input.Instance);
             return new(null, lease);
         }
@@ -1385,8 +1539,14 @@ public sealed class InstanceQueryAppService(
             {
                 try
                 {
-                    await gate.Semaphore.WaitAsync(cancellationToken);
-                    return new BuildGateLease(key, gate);
+                    // Non-blocking attempt first, purely to learn whether anyone else held the gate.
+                    // Without it the span's duration cannot be read: an uncontended acquisition and a
+                    // wait that happened to be short are the same number.
+                    var contended = !gate.Semaphore.Wait(0, CancellationToken.None);
+                    if (contended)
+                        await gate.Semaphore.WaitAsync(cancellationToken);
+
+                    return new BuildGateLease(key, gate, contended);
                 }
                 catch
                 {
@@ -1414,9 +1574,12 @@ public sealed class InstanceQueryAppService(
         internal int Users;
     }
 
-    private sealed class BuildGateLease(string key, BuildGate gate) : IDisposable
+    private sealed class BuildGateLease(string key, BuildGate gate, bool contended) : IDisposable
     {
         private int _disposed;
+
+        /// <summary>True when the gate was already held on arrival, so this request really waited.</summary>
+        internal bool Contended { get; } = contended;
 
         public void Dispose()
         {
@@ -1475,8 +1638,10 @@ public sealed class InstanceQueryAppService(
             // The parent is Busy handling the SubFlow completion; returning the SubFlow's terminal
             // status would falsely signal to clients that the whole flow is done.
             // Fall back to the parent's own state so the client receives Status=Busy and retries.
-            var sfStatus = subFlowStateInfo.Status;
-            var subFlowIsTerminal = sfStatus is not null && TerminalStatuses.Contains(sfStatus);
+            // InstanceStatus.IsTerminal is the single definition; Instance.GetEffectiveStatus
+            // clamps on the same predicate so the served metadata.effectiveStatus agrees with the
+            // body this branch produces.
+            var subFlowIsTerminal = subFlowStateInfo.Status?.IsTerminal == true;
 
             if (subFlowIsTerminal)
             {
@@ -1508,6 +1673,17 @@ public sealed class InstanceQueryAppService(
             // allow it. Without it those namespaces are empty and the grant silently never matches.
             var authRequestContext = new AuthorizationRequestContext(input.Headers, input.QueryParams);
 
+            // One span for the pass, opened only when there is something to filter. Counts rather
+            // than per-key spans: the parent-override branch below evaluates key by key and builds
+            // a fresh evaluator each time, and each evaluator serializes the instance's full latest
+            // data — so "how many evaluators did this cost" is the number worth reading, and a span
+            // per key would bury it.
+            var keysToFilter = keysForTransitions.Count;
+            using var filterPass = keysToFilter > 0
+                ? AuthorizationActivityHelper.StartFilterTransitions()
+                : null;
+            var evaluatorCreations = 0;
+
             var parentTransitionOverrides = TryGetParentTransitionRoleOverrides(instance);
             if (parentTransitionOverrides is { Count: > 0 })
             {
@@ -1520,6 +1696,7 @@ public sealed class InstanceQueryAppService(
                         // Parent override (replace mode): use parent-defined grants verbatim.
                         // No availableIn narrowing here — these overrides key off the SUBFLOW's
                         // transitions, so the parent's availableIn states would not apply to them.
+                        evaluatorCreations++;
                         var allowed = await transitionAuthorizationManager
                             .IsRoleAllowedForGrantsAsync(input.Role, tOverride.Roles!, instance, authRequestContext, cancellationToken);
                         if (allowed) filteredKeys.Add(key);
@@ -1531,6 +1708,7 @@ public sealed class InstanceQueryAppService(
                         var ownTransition = currentWorkflow.FindTransitionInContext(key);
                         if (ownTransition != null)
                         {
+                            evaluatorCreations++;
                             var result = await transitionAuthorizationManager.FilterAuthorizedTransitionKeysAsync(
                                 currentWorkflow, currentStateValue, instance, [key], input.Role, authRequestContext, cancellationToken);
                             filteredKeys.AddRange(result);
@@ -1553,6 +1731,7 @@ public sealed class InstanceQueryAppService(
                 var parentSharedKeys = keysForTransitions
                     .Where(k => !subFlowTransitionKeys.Contains(k))
                     .ToList();
+                evaluatorCreations += parentSharedKeys.Count > 0 ? 1 : 0;
                 var filteredParentSharedKeys = parentSharedKeys.Count > 0
                     ? (await transitionAuthorizationManager.FilterAuthorizedTransitionKeysAsync(
                             currentWorkflow, currentStateValue, instance, parentSharedKeys, input.Role, authRequestContext, cancellationToken))
@@ -1565,10 +1744,14 @@ public sealed class InstanceQueryAppService(
             }
             else
             {
+                evaluatorCreations++;
                 keysForTransitions = (await transitionAuthorizationManager.FilterAuthorizedTransitionKeysAsync(
                         currentWorkflow, currentStateValue, instance, keysForTransitions, input.Role, authRequestContext, cancellationToken))
                     .ToList();
             }
+
+            AuthorizationActivityHelper.SetFilterResult(
+                filterPass, keysToFilter, keysForTransitions.Count, evaluatorCreations);
         }
 
         List<TransitionItem> transitionItems;
@@ -1736,7 +1919,7 @@ public sealed class InstanceQueryAppService(
                     : null
             }
             : await ResolveInteractionAsync(
-                input, instance, currentStateValue, displayedState, cancellationToken);
+                input, instance, currentWorkflow, currentStateValue, displayedState, cancellationToken);
 
         // Incident block: the leaf's when an active subflow reported one (a stalled chain is explained
         // by the deepest incident), otherwise this instance's own. The history link always points to the
@@ -1881,14 +2064,17 @@ public sealed class InstanceQueryAppService(
     /// <summary>
     /// Resolves the client-workflow-manager interaction directives for the response, or null when none
     /// apply. Today this is the long-poll directive: emitted on the main-flow current state whenever the
-    /// state declares <c>interaction.longPoll</c> and the caller's role is granted by
-    /// <c>interaction.longPoll.roles</c> (default-allow when no roles configured). The <c>terminate</c>
-    /// flag and <c>fallbackTimeoutSeconds</c> are surfaced as configured; the ack href is included only
-    /// when <c>terminate</c> is true (the pipeline pauses awaiting acknowledge in that case).
+    /// state declares <c>interaction.longPoll</c> and the caller is admitted by its authorization arm —
+    /// either the <c>roles</c> grants (default-allow when no roles configured) or the <c>rule</c>
+    /// condition script; the two are alternatives, the validator rejects both. A failed rule evaluation
+    /// denies (fail-closed), same as notification rules. The <c>terminate</c> flag and
+    /// <c>fallbackTimeoutSeconds</c> are surfaced as configured; the ack href is included only when
+    /// <c>terminate</c> is true (the pipeline pauses awaiting acknowledge in that case).
     /// </summary>
     private async Task<InstanceInteractionOutput?> ResolveInteractionAsync(
         GetInstanceStateInput input,
         Instance instance,
+        Definitions.Workflow currentWorkflow,
         State currentStateValue,
         string? displayedState,
         CancellationToken cancellationToken)
@@ -1905,16 +2091,15 @@ public sealed class InstanceQueryAppService(
                 return null;
         }
 
-        var ackRoles = currentStateValue.LongPollAckRoles;
-        if (ackRoles is { Count: > 0 })
-        {
-            var requestContext = new AuthorizationRequestContext(input.Headers, input.QueryParams);
-            var callerRoles = input.Roles ?? (string.IsNullOrWhiteSpace(input.Role) ? [] : [input.Role]);
-            var allowed = await transitionAuthorizationManager.IsAnyRoleAllowedForGrantsAsync(
-                callerRoles, ackRoles, instance, requestContext, cancellationToken);
-            if (!allowed)
-                return null;
-        }
+        // The gate owns the arm selection (rule, else roles, else allow). This surface's roles are
+        // already provider-resolved on the input, so the factory just hands them over.
+        var admitted = await longPollInteractionGate.IsAdmittedAsync(
+            instance, currentWorkflow, currentStateValue, input.Headers, input.QueryParams,
+            _ => Task.FromResult(Result<IReadOnlyCollection<string>>.Ok(
+                input.Roles ?? (string.IsNullOrWhiteSpace(input.Role) ? [] : [input.Role]))),
+            surface: "state", cancellationToken);
+        if (admitted is not { IsSuccess: true, Value: true })
+            return null;
 
         var terminate = currentStateValue.TerminatesLongPollOnEntry;
         return new InstanceInteractionOutput
@@ -2013,6 +2198,9 @@ public sealed class InstanceQueryAppService(
     {
         runtimeInfoProvider.Check(input.Domain);
 
+        using var read = InstanceReadActivityHelper.StartRead(
+            InstanceReadKinds.View, input.Domain, input.Workflow);
+
         // Railway chain: Get Instance → Get Workflow → Resolve State → Get View
         return await GetInstanceByIdOrKeyAsync(input.Instance, cancellationToken)
             .BindAsync(instance =>
@@ -2038,6 +2226,9 @@ public sealed class InstanceQueryAppService(
         CancellationToken cancellationToken = default)
     {
         runtimeInfoProvider.Check(input.Domain);
+
+        using var read = InstanceReadActivityHelper.StartRead(
+            InstanceReadKinds.Schema, input.Domain, input.Workflow);
 
         // Fast path: the ETag is a deterministic hash of the data fingerprint (instance id +
         // latest data ETag + effective state + flow version) plus caller scope and transition
@@ -2179,6 +2370,9 @@ public sealed class InstanceQueryAppService(
     {
         runtimeInfoProvider.Check(input.Domain);
 
+        using var read = InstanceReadActivityHelper.StartRead(
+            InstanceReadKinds.Extensions, input.Domain, input.Workflow);
+
         // Railway chain: Get Instance → Get Workflow → Build Extensions Output
         return await GetInstanceByIdOrKeyAsync(input.Instance, cancellationToken)
             .BindAsync(instance =>
@@ -2200,6 +2394,9 @@ public sealed class InstanceQueryAppService(
         CancellationToken cancellationToken = default)
     {
         runtimeInfoProvider.Check(input.Domain);
+
+        using var read = InstanceReadActivityHelper.StartRead(
+            InstanceReadKinds.Master, input.Domain, input.Workflow);
 
         // Fast path: the master ETag is a deterministic hash of the data fingerprint
         // (instance id + latest data ETag + flow version) plus the caller scope — the
@@ -2616,6 +2813,13 @@ public sealed class InstanceQueryAppService(
             .WithQueryParameters(input.QueryParameters)
             .BuildAsync(cancellationToken);
 
+        // One span for the whole ordered walk, not one per rule: the question is "how many rules ran
+        // and which won", and a span per rule turns a slow view definition into a wide trace rather
+        // than a readable number. Warm rule evaluation is otherwise invisible — Script.Compile only
+        // appears on a cold compile, so four evaluated rules and none look identical today.
+        using var viewResolve = InstanceReadActivityHelper.StartViewResolve();
+        var rulesEvaluated = 0;
+
         // Iterate through views array and evaluate rules
         ViewEntry? selectedViewEntry = null;
         foreach (var viewEntry in viewDefinition.Views)
@@ -2628,6 +2832,7 @@ public sealed class InstanceQueryAppService(
             }
 
             // Evaluate rule using condition service
+            rulesEvaluated++;
             var ruleResult = await taskConditionService.ExecuteConditionAsync(
                 viewEntry.Rule,
                 scriptContext,
@@ -2649,6 +2854,9 @@ public sealed class InstanceQueryAppService(
                     ruleResult.Error.Message);
             }
         }
+
+        InstanceReadActivityHelper.SetViewResolution(
+            viewResolve, rulesEvaluated, selectedViewEntry?.View.Key);
 
         // If no matching view found, return error
         if (selectedViewEntry == null)
@@ -2758,6 +2966,9 @@ public sealed class InstanceQueryAppService(
     {
         runtimeInfoProvider.Check(input.Domain);
 
+        using var read = InstanceReadActivityHelper.StartRead(
+            InstanceReadKinds.Hierarchy, input.Domain, input.Workflow);
+
         var instanceResult = await GetInstanceByIdOrKeyAsync(input.Instance, cancellationToken);
         if (!instanceResult.IsSuccess)
         {
@@ -2799,6 +3010,9 @@ public sealed class InstanceQueryAppService(
         CancellationToken cancellationToken = default)
     {
         runtimeInfoProvider.Check(domain);
+
+        using var read = InstanceReadActivityHelper.StartRead(
+            InstanceReadKinds.HumanTasks, domain);
 
         List<InstanceKeyModel> workflowSchemas;
         using (currentSchema.Change(RuntimeSysSchemaInfo.Flows))

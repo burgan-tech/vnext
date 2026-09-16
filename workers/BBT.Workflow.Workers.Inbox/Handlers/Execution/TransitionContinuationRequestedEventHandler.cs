@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using BBT.Aether.Events;
 using BBT.Workflow.Execution.Events;
 using BBT.Workflow.Logging;
@@ -38,6 +39,17 @@ internal sealed class TransitionContinuationRequestedEventHandler(
         using var traceScope = EventTraceScope.Start(
             "TransitionContinuationRequested.Handle", eventData, correlationIdProvider,
             EventTraceMode.ContinueTrace, envelope.Id);
+
+        // The only lane-aware handler that set no root baggage. DaprOrchestrationForwarder reads
+        // exactly this to stamp X-Root-Instance-Id on the forwarded call, so without it the
+        // continuation hop was the one place a trace lost the tag that selects a whole business
+        // request. Absent on an event from a pre-field producer — then this is a no-op, as before.
+        if (eventData.RootInstanceId.HasValue)
+        {
+            Activity.Current?.SetBaggage(
+                TelemetryConstants.TagNames.RootInstanceId,
+                eventData.RootInstanceId.Value.ToString());
+        }
 
         logger.TransitionContinuationReceived(
             eventData.InstanceId, eventData.TransitionKey, eventData.JobName);

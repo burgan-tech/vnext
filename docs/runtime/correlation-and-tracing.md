@@ -324,7 +324,11 @@ too (`Transition.Intake`, `Transition.Enqueue`, `BackgroundJob.Arm`, `Instance.C
    span id exists on the wire but no document for it reached the backend. Confirm by fetching the
    orphan's `parent.id` from Elasticsearch and searching the trace for that `span.id`; if it is
    absent, find who owns that span. For the Orchestration → Execution hop the owner is the Dapr
-   sidecar — see "Verifying against Elastic APM locally". Task-phase spans (`Task.PrepareInput` /
+   sidecar — see "Verifying against Elastic APM locally". One whole class of these is closed as of
+   2026-09-13: Dapr state-store, lock, secret and configuration calls used to orphan their sidecar
+   span because Aether filtered the HttpClient span *after* its id had already been written to the
+   wire. Fixed upstream; if you still see that pattern, the environment is running an Aether older
+   than `fix/filtered-span-wire-parent`. Task-phase spans (`Task.PrepareInput` /
    `Task.Invoke` / `Task.ProcessOutput`) are always-on Business spans today, so they are there to
    nest under in the default detail level.
 7. No `Instance.Activation/*` span for an episode, or one tagged `vnext.activation.partial=true` →

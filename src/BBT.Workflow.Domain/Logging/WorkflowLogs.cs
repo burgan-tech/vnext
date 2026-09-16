@@ -241,6 +241,26 @@ public static partial class WorkflowLogs
         string errorCode);
 
     /// <summary>
+    /// Logs at startup when a declared ActivitySource is missing from this host's MERGED
+    /// configuration.
+    /// <para>
+    /// The unit test that checks the same rule reads the repository's <c>appsettings.json</c>; this
+    /// reads what the process actually resolved, which is the only place a deployment-time override
+    /// is visible. .NET merges configuration arrays by INDEX, so a single
+    /// <c>…AdditionalSources__0</c> entry in a chart's free-form env block replaces the first entry
+    /// — today <c>BBT.Workflow.Pipeline</c> — with no code change and no error anywhere. Every
+    /// pipeline span and the activation metric would simply stop existing.
+    /// </para>
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10157,
+        Level = LogLevel.Warning,
+        Message = "Tracing sources missing from this host's effective configuration: {MissingSources}. Spans from them are created but never exported.")]
+    public static partial void ActivitySourcesMissingFromConfiguration(
+        this ILogger logger,
+        string missingSources);
+
+    /// <summary>
     /// Logs when a retry re-entry reuses the ORIGINAL transition record so the task journal
     /// lines up and already-completed tasks are bypassed instead of re-running side effects.
     /// </summary>
@@ -3092,17 +3112,6 @@ public static partial class WorkflowLogs
     #region Extensions
 
     /// <summary>
-    /// Logs when extension processing fails but execution continues (non-blocking).
-    /// </summary>
-    [LoggerMessage(
-        EventId = 20101,
-        Level = LogLevel.Warning,
-        Message = "Extension processing failed but continuing. Error: {ErrorCode}")]
-    public static partial void ExtensionProcessingFailedNonBlocking(
-        this ILogger logger,
-        string errorCode);
-
-    /// <summary>
     /// Logs when the SAME extension reference is listed more than once in a workflow's
     /// <c>Extensions</c> (or in the runtime's core-extension set). Unlike two DIFFERENT extensions
     /// sharing one task Reference (a supported pattern, see <see cref="DuplicateTaskKeyAtSameOrder"/>
@@ -3272,6 +3281,22 @@ public static partial class WorkflowLogs
     public static partial void LongPollAckResumeFailed(
         this ILogger logger,
         Guid instanceId,
+        string reason);
+
+    /// <summary>
+    /// Logs when an <c>interaction.longPoll.rule</c> evaluation fails. The caller is denied
+    /// (fail-closed) on the surface named by {Surface}: "state" (signal not emitted) or
+    /// "ack" (acknowledge rejected).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20304,
+        Level = LogLevel.Warning,
+        Message = "Long-poll interaction rule evaluation failed on {Surface} for instance {InstanceId} at state {State}; caller denied: {Reason}")]
+    public static partial void LongPollInteractionRuleEvaluationFailed(
+        this ILogger logger,
+        string surface,
+        Guid instanceId,
+        string state,
         string reason);
 
     #endregion

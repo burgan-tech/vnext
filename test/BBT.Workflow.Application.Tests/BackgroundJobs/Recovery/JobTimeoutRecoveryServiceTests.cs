@@ -1,3 +1,6 @@
+using System.Collections.Generic;
+using System.Linq;
+using System.Diagnostics;
 using System;
 using System.Threading;
 using System.Threading.Tasks;
@@ -29,6 +32,14 @@ public class JobTimeoutRecoveryServiceTests
         _uow.Setup(u => u.SaveChangesAsync(It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
         _uow.Setup(u => u.DisposeAsync()).Returns(ValueTask.CompletedTask);
 
+        // The service calls the SYNCHRONOUS Begin. Only BeginAsync was mocked, so Begin returned
+        // null, the body threw a NullReferenceException on the first await and the service's own
+        // catch swallowed it — every test in this class exercised the catch block instead of the
+        // recovery path. That is how a triplicated activation emit survived here with all
+        // behavioural assertions green.
+        _uowManager
+            .Setup(m => m.Begin(It.IsAny<UnitOfWorkOptions>()))
+            .Returns(_uow.Object);
         _uowManager
             .Setup(m => m.BeginAsync(It.IsAny<UnitOfWorkOptions>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(_uow.Object);
@@ -95,6 +106,50 @@ public class JobTimeoutRecoveryServiceTests
     /// <summary>
     /// Instance is Busy and has an open TransitionRecord → fault + incident + close transition + commit.
     /// </summary>
+    /// <summary>
+    /// One activation episode, one <c>Instance.Activation</c> span. The emit block stood here three
+    /// times — identical outcome, instance and episode — so a recovered timeout produced three
+    /// spans, two detached from the commit that made the rest point durable, and three samples in
+    /// the activation histogram for one activation.
+    /// <para>
+    /// The defect compiled cleanly and every behavioural assertion in this class still passed, so
+    /// only a cardinality invariant catches it. That is why this test counts rather than checks.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task FaultInstanceAsync_EmitsExactlyOneActivationSpan()
+    {
+        var collected = new List<Activity>();
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == "BBT.Workflow.Pipeline",
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) =>
+                ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStopped = collected.Add
+        };
+        ActivitySource.AddActivityListener(listener);
+
+        var instanceId = Guid.NewGuid();
+        var payload = CreatePayload(instanceId);
+        var instance = Instance.Create(instanceId, "test_flow", "1.0.0", "key");
+        instance.Busy();
+
+        _instanceRepo
+            .Setup(r => r.FindAsync(instanceId, true, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(instance);
+        _instanceRepo
+            .Setup(r => r.UpdateAsync(instance, true, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(instance);
+        _transitionRepo
+            .Setup(r => r.GetLatestIncompleteAsync(instanceId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((InstanceTransition?)null);
+
+        await CreateService().FaultInstanceAsync(payload, CancellationToken.None);
+
+        collected.Count(a => a.DisplayName.StartsWith("Instance.Activation", StringComparison.Ordinal))
+            .ShouldBe(1);
+    }
+
     [Fact]
     public async Task FaultInstanceAsync_WhenBusyWithOpenTransition_FaultsAndClosesTransition()
     {

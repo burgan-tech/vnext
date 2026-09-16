@@ -42,6 +42,12 @@ public sealed class TransitionAuthorizationManager(
         InstanceTransition? previousTransition = null;
         if (grantsForPrefetchHint.Any(g => ReferencesPreviousTransition(g.Role)))
         {
+            // Spanned INSIDE the branch, so the span exists only when the query ran. A span on the
+            // other side of this guard would report a lookup that never happened, and "this trace
+            // has no PreviousUserLookup" would stop meaning "no extra query was needed" — the same
+            // rule the pipeline follows when it drops a step that did no work.
+            using var lookup = AuthorizationActivityHelper.StartPreviousUserLookup();
+
             previousTransition = await instanceTransitionRepository
                 .GetLastCompletedManualTransitionAsync(instance.Id, cancellationToken);
         }
