@@ -194,6 +194,33 @@
         "GET {domain}/workflows/{workflow}/instances/{instance}/functions/tasks",
         "GET {domain}/workflows/{workflow}/instances/{instance}/functions/actions?taskId={taskId}"
       ]
+    },
+    "instanceQueryPaging": {
+      "since": "0.0.90",
+      "status": "stable",
+      "description": "Instance lists apply sorting and pagination in PostgreSQL. Non-grouped, non-aggregate requests select pageSize + 1 identities to determine hasNext, hydrate only the requested page and preserve the selected order. An instance Id tie-breaker makes equal sort values deterministic; this is offset pagination, not a snapshot across concurrent writes. InstanceQueries:IdentityPaging and InstanceQueries:LatestJoin default to true. DisabledSchemas contains physical schema names that use the entity-list route instead. Grouped/aggregate requests keep their separate SQL path. These routing switches do not change filter authorization or remove physical indexes.",
+      "relatedConfig": [
+        "InstanceQueries:IdentityPaging",
+        "InstanceQueries:LatestJoin",
+        "InstanceQueries:DisabledSchemas"
+      ],
+      "apiEndpoints": [
+        "GET {domain}/workflows/{workflow}/instances"
+      ],
+      "documentation": "docs/runtime/instance-filtering-and-queries.md"
+    },
+    "masterAttributeIndexes": {
+      "since": "0.0.90",
+      "status": "stable",
+      "configFlag": "AttributeIndexes:Enabled",
+      "description": "Boolean x-indexed metadata opts Master schema scalar fields into manually prepared PostgreSQL projections. Any occurrence of x-indexed, including false, requires the exact component attributes.type value master; other schema type strings remain valid without this metadata. True supports explicit string, number, integer and boolean properties, including nested object properties and string format date-time; array, object, reference, conditional and ambiguous indexed paths are rejected. x-filterOperators and x-sortable still control filter/sort permissions independently. The sibling vnext-workflow-cli command wf indexes generate produces offline SQL for DBA review and execution in a maintenance window; publishing schemas, reading instances and starting hosts never prepare indexes or schedule preparation jobs. Routing is disabled by default. When enabled, ready projections are discovered through a distributed catalog cache scoped by database, database role and flow schema, with a distributed refresh lock and a default 30-second absolute TTL. Missing/unready projections, a missing catalog table or refresh-lock contention without a snapshot use JSON expressions. Catalog connection/read, cache and refresh-lock failures also fall back to JSON expressions and emit a warning without caching a failure as an empty snapshot. Caller cancellation and invalid schema names still propagate. This fallback does not repair database failures that also prevent the underlying instance query. Disable routing globally or by flow to return to JSON expressions; retirement of physical projections is a separate DBA operation requiring drained readers/writers and expiry of the shared catalog cache.",
+      "schemaPath": "schema.attributes.schema.properties[].x-indexed",
+      "relatedConfig": [
+        "AttributeIndexes:Enabled",
+        "AttributeIndexes:DisabledFlows",
+        "AttributeIndexes:CatalogCacheSeconds"
+      ],
+      "documentation": "docs/runtime/manual-attribute-index-maintenance.md"
     }
   }
 }
