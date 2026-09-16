@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Instances;
 using Xunit;
@@ -21,6 +22,13 @@ public class InstanceColumnFilterTests
     [InlineData("status", true)]
     [InlineData("EffectiveStatus", true)]
     [InlineData("effectivestatus", true)]
+    [InlineData("InstanceType", true)]
+    [InlineData("instanceType", true)]
+    // The start-origin column is deliberately NOT claimed under the bare name "type": columns and
+    // data attributes share one dictionary here, so claiming it would retarget every existing
+    // filter of every domain whose schema has a business field called "type".
+    [InlineData("type", false)]
+    [InlineData("Type", false)]
     [InlineData("Flow", true)]
     [InlineData("flow", true)]
     [InlineData("CurrentState", true)]
@@ -55,6 +63,8 @@ public class InstanceColumnFilterTests
     [InlineData("status", "Status")]
     [InlineData("State", "EffectiveState")] // Alias mapping
     [InlineData("state", "EffectiveState")]
+    [InlineData("InstanceType", "Type")] // Alias mapping: public filter name -> column name
+    [InlineData("instancetype", "Type")]
     [InlineData("CreatedAt", "CreatedAt")]
     [InlineData("createdat", "CreatedAt")]
     [InlineData("CreatedBy", "CreatedBy")]
@@ -150,6 +160,40 @@ public class InstanceColumnFilterTests
         result[0].ShouldBe("A");
         result[1].ShouldBe("B");
         result[2].ShouldBe("A");
+    }
+
+    [Theory]
+    [InlineData("Root", "R")]
+    [InlineData("root", "R")]
+    [InlineData("SubFlow", "S")]
+    [InlineData("subprocess", "P")]
+    [InlineData("R", "R")] // Direct code
+    [InlineData("S", "S")]
+    [InlineData("P", "P")]
+    [InlineData("nonsense", "nonsense")] // Unknown values pass through for the database to reject
+    public void ResolveTypeValue_ShouldMapTypeNamesToCodes(string input, string expected)
+    {
+        // Act
+        var result = InstanceFieldDiscriminator.ResolveTypeValue(input);
+
+        // Assert
+        result.ShouldBe(expected);
+    }
+
+    [Fact]
+    public void ResolveTypeValues_ShouldMapMultipleValues()
+    {
+        // Arrange
+        var values = new[] { "Root", "SubProcess", "S" };
+
+        // Act
+        var result = InstanceFieldDiscriminator.ResolveTypeValues(values);
+
+        // Assert
+        result.Length.ShouldBe(3);
+        result[0].ShouldBe("R");
+        result[1].ShouldBe("P");
+        result[2].ShouldBe("S");
     }
 
     #endregion
@@ -623,5 +667,109 @@ public class InstanceColumnFilterTests
         parameters.Count.ShouldBe(2);
         parameters[0].Value.ShouldBe("A");
         parameters[1].Value.ShouldBe("B");
+    }
+
+    /// <summary>
+    /// The public filter name resolves to the "Type" column and the value is resolved from its name
+    /// to its stored code, exactly as the status columns behave.
+    /// </summary>
+    [Theory]
+    [InlineData("root", "R")]
+    [InlineData("SubFlow", "S")]
+    [InlineData("P", "P")]
+    public void BuildCondition_InstanceTypeEquals_ResolvesNameAndColumn(string value, string expectedCode)
+    {
+        // Arrange
+        var parameterIndex = 0;
+
+        // Act
+        var (condition, parameters) = InstanceColumnConditionBuilder.BuildCondition(
+            "instanceType", "eq", value, ref parameterIndex);
+
+        // Assert
+        condition.ShouldBe("s.\"Type\" = {0}");
+        parameters.Count.ShouldBe(1);
+        parameters[0].Value.ShouldBe(expectedCode);
+    }
+
+    [Fact]
+    public void BuildCondition_InstanceTypeIn_ResolvesEveryValue()
+    {
+        // Arrange
+        var parameterIndex = 0;
+
+        // Act
+        var (condition, parameters) = InstanceColumnConditionBuilder.BuildCondition(
+            "instanceType", "in", "Root,SubProcess", ref parameterIndex);
+
+        // Assert
+        condition.ShouldContain("s.\"Type\"");
+        parameters.Select(p => p.Value).ShouldBe(new object[] { "R", "P" }, ignoreOrder: true);
+    }
+
+    /// <summary>
+    /// The GraphQL condition path resolves the caller's field name to a column name FIRST and then
+    /// calls BuildCondition with the result, so BuildCondition must accept an already-resolved name.
+    /// Every pre-existing alias resolves to a name that is itself user-facing ("State" ->
+    /// "EffectiveState"), so this only bites the alias-only column: filtering on instanceType threw
+    /// "Invalid Instance column name: Type" and the list endpoint answered 500.
+    /// </summary>
+    [Fact]
+    public void BuildCondition_AcceptsAnAlreadyResolvedColumnName()
+    {
+        var parameterIndex = 0;
+        var resolved = InstanceFieldDiscriminator.GetInstanceColumnName("instanceType");
+        resolved.ShouldBe("Type");
+
+        var (condition, parameters) = InstanceColumnConditionBuilder.BuildCondition(
+            resolved, "eq", "SubFlow", ref parameterIndex);
+
+        condition.ShouldBe("s.\"Type\" = {0}");
+        parameters[0].Value.ShouldBe("S");
+    }
+
+    /// <summary>
+    /// Resolution must be idempotent, because the same name can be resolved once by the caller and
+    /// again inside BuildCondition.
+    /// </summary>
+    [Fact]
+    public void GetInstanceColumnName_IsIdempotentForTheAliasOnlyColumn()
+    {
+        InstanceFieldDiscriminator.GetInstanceColumnName(
+            InstanceFieldDiscriminator.GetInstanceColumnName("instanceType")).ShouldBe("Type");
+    }
+
+    /// <summary>
+    /// The resolved-name guard must NOT leak into caller-facing discrimination: a bare "type" stays
+    /// a data attribute, which is the entire reason the public name is instanceType.
+    /// </summary>
+    [Fact]
+    public void IsResolvedInstanceColumn_AcceptsTypeWhileIsInstanceColumnStillRejectsIt()
+    {
+        InstanceFieldDiscriminator.IsResolvedInstanceColumn("Type").ShouldBeTrue();
+        InstanceFieldDiscriminator.IsInstanceColumn("Type").ShouldBeFalse();
+        InstanceFieldDiscriminator.IsInstanceColumn("type").ShouldBeFalse();
+
+        var (instanceFilters, jsonFilters) =
+            InstanceFieldDiscriminator.SeparateFilters(["type=eq:invoice", "instanceType=eq:S"]);
+
+        jsonFilters.ShouldBe(["type=eq:invoice"]);
+        instanceFilters.ShouldBe(["instanceType=eq:S"]);
+    }
+
+    /// <summary>
+    /// Restricted to the set operators, like the status columns: a substring match against a
+    /// one-character code bypasses name resolution and cannot express anything eq/ne/in/nin cannot.
+    /// </summary>
+    [Theory]
+    [InlineData("like")]
+    [InlineData("startswith")]
+    [InlineData("gt")]
+    public void BuildCondition_InstanceTypeWithAnUnsupportedOperator_Throws(string operatorType)
+    {
+        var parameterIndex = 0;
+
+        Should.Throw<ArgumentException>(() => InstanceColumnConditionBuilder.BuildCondition(
+            "instanceType", operatorType, "Root", ref parameterIndex));
     }
 }

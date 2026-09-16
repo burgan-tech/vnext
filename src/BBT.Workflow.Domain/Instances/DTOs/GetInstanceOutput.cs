@@ -78,6 +78,7 @@ public sealed class InstanceMetadataDto
         EffectiveState = instance.EffectiveState;
         Status = instance.Status;
         EffectiveStatus = instance.GetEffectiveStatus;
+        Type = instance.Type;
         EffectiveStateType = instance.EffectiveStateType;
         EffectiveStateSubType = instance.EffectiveStateSubType;
         CurrentStateType = instance.CurrentStateType;
@@ -119,6 +120,18 @@ public sealed class InstanceMetadataDto
     /// predates the field.
     /// </remarks>
     public InstanceStatus? EffectiveStatus { get; set; }
+
+    /// <summary>
+    /// How this instance was STARTED: <c>R</c> root, <c>S</c> SubFlow child, <c>P</c> SubProcess
+    /// child. Immutable — stamped at creation and never updated, so it stays answerable long after
+    /// the instance has finished.
+    /// </summary>
+    /// <remarks>
+    /// This records the start origin, not a live relationship: it says a child was created by a
+    /// parent's SubFlow state or SubProcess task, not that the link is still open. Null only on a
+    /// cross-domain response from a runtime that predates the field.
+    /// </remarks>
+    public InstanceType? Type { get; set; }
 
     /// <summary>Type of the effective state (Initial, Intermediate, Finish, SubFlow, Wizard).</summary>
     public StateType? EffectiveStateType { get; set; }

@@ -67,12 +67,24 @@ public static class InstancesModelCreatingExtensions
                 .HasConversion(new InstanceStatusConverter());
 
             // Client-visible status (deepest active SubFlow's status, else own). Fingerprint
-            // material for the state function only — never served, see Instance.EffectiveStatus.
+            // material, a filter/sort column, and served through the Instance.GetEffectiveStatus
+            // clamp — see Instance.EffectiveStatus.
             b.Property(p => p.EffectiveStatus)
                 .IsRequired()
                 .HasMaxLength(InstanceConstants.MaxStatusLength)
                 .HasConversion(new InstanceStatusConverter())
                 .HasDefaultValue(InstanceStatus.Active);
+
+            // How the instance was STARTED: R root, S SubFlow child, P SubProcess child. Written
+            // once by the aggregate at creation and never again — EfCoreInstanceRepository.UpdateAsync
+            // pins the column clean so no save can rewrite it. No ValueGeneratedNever() here: it
+            // contradicts HasDefaultValue, which is what keeps the model snapshot in step with the
+            // migration's defaultValue and stops the next scaffold emitting a spurious AlterColumn.
+            b.Property(p => p.Type)
+                .IsRequired()
+                .HasMaxLength(InstanceConstants.MaxTypeLength)
+                .HasConversion(new InstanceTypeConverter())
+                .HasDefaultValue(InstanceType.Root);
 
             // Long-poll acknowledge marker (declarative long-poll termination on state entry).
             b.Property(p => p.LongPollAckToken);

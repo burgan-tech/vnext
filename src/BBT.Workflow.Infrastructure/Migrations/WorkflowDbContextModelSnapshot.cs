@@ -272,6 +272,13 @@ namespace BBT.Workflow.Migrations
                         .IsRequired()
                         .HasColumnType("text[]");
 
+                    b.Property<string>("Type")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(3)
+                        .HasColumnType("character varying(3)")
+                        .HasDefaultValue("R");
+
                     b.HasKey("Id");
 
                     b.HasIndex("EffectiveState")

@@ -193,6 +193,28 @@ Additive — `status` is unchanged. Instance queries may also filter and sort on
 `effectiveStatus`, but a filter matches the **stored** column rather than the served value; see
 [instance filtering](../runtime/instance-filtering-and-queries.md).
 
+### Instance metadata: `type`
+
+The same three surfaces carry `metadata.type` — how the instance was **started**:
+
+| Value | Meaning |
+|---|---|
+| `R` | Root — started directly through `POST …/instances/start`, an event, or a start-trigger task. |
+| `S` | SubFlow child — started by a parent's SubFlow state. |
+| `P` | SubProcess child — started by a parent's SubProcess task or SubProcess state. |
+
+Stamped once at creation and never updated, so the origin stays answerable long after the instance
+has finished — which is what makes it usable for reporting, unlike the `parent.*` metadata it is
+derived from (a JSON blob in a `text` column). It is derived from the presence of a parent id, so a
+workflow whose definition declares `type: "S"` but is started directly is correctly reported as `R`.
+
+Additive and independent: the `parent.*` ExtraProperties contracts are unchanged and remain the
+source of truth for the parent/child relationship itself. `type` says a child *was created by* a
+parent, not that the correlation is still open. Null only on a cross-domain response from a runtime
+that predates the field. Filterable and sortable as **`instanceType`**, not `type` — see
+[instance filtering](../runtime/instance-filtering-and-queries.md) for why. Not carried in the state
+function body, so `ResponseShapeVersion` is unaffected.
+
 ### State response: incident block
 
 The state body always carries an `incident` block so a client can explain a Faulted or waiting
