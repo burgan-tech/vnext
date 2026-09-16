@@ -42,8 +42,9 @@ public static class InstanceColumnConditionBuilder
             return BuildIsNullCondition(properColumnName, value);
         }
 
-        // Special handling for Status column - resolve names to codes
-        if (properColumnName.Equals("Status", StringComparison.OrdinalIgnoreCase))
+        // Special handling for the status columns - resolve names to codes
+        if (properColumnName.Equals("Status", StringComparison.OrdinalIgnoreCase)
+            || properColumnName.Equals("EffectiveStatus", StringComparison.OrdinalIgnoreCase))
         {
             return BuildStatusCondition(properColumnName, operatorType, value, ref parameterIndex);
         }
@@ -322,6 +323,7 @@ public static class InstanceColumnConditionBuilder
             "CurrentStateSubType" => ColumnType.Integer,
             "Stage" => ColumnType.String,
             "Status" => ColumnType.String,
+            "EffectiveStatus" => ColumnType.String,
             "CreatedAt" => ColumnType.DateTime,
             "ModifiedAt" => ColumnType.DateTime,
             "CompletedAt" => ColumnType.DateTime,

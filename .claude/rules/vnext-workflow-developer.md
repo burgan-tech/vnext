@@ -177,6 +177,23 @@ A sixth profile is **composed on top of** the base, never selected instead of it
 - ETag source: `LatestData?.ETag` for entity, `IRepresentationEtagService.Generate(output)` for representation.
 - **Role filtering**: `ITransitionAuthorizationManager` filters available transitions per role. Supports `$InstanceStarter`, `$PreviousUser` pseudo-roles.
 - No server-side hold — 304 drives client-side polling.
+- **`effectiveStatus` is served, and it is CLAMPED.** `Instance.GetEffectiveStatus` — not the
+  raw `EffectiveStatus` column — feeds `metadata.effectiveStatus` on the instance GET, the list view,
+  `GetInstanceTask` and sync `start`/`transition` responses. Rule:
+  `Status.IsTerminal || EffectiveStatus.IsTerminal ? Status : EffectiveStatus` — the projection is
+  served only while NEITHER side is terminal. Both arms match what the state function already answers:
+  a terminal projection on a running level is the SubFlow completion window (`subFlowIsTerminal` drops
+  the subflow view and says `Busy`), and a terminal own status with a stale non-terminal projection is
+  a cancel/fault cascade the write side cannot repair (it completes the level while the correlation is
+  still open, so `ResyncEffectiveStatus` no-ops, and cleanup closes the correlation afterwards) — that
+  arm was found by running it: cancelled parents served `effectiveStatus: A` against the state
+  function's `C`. `InstanceStatus.IsTerminal` is the single definition; do not re-spell the terminal
+  set anywhere.
+  **Never rewrite the clamp as `HasActiveSubFlow ? EffectiveStatus : Status`.** The list query does not
+  include child correlations (`EfCoreInstanceRepository.IncludeListData` loads `DataList` only), so that
+  predicate is false for every list item and every parent inside a subflow would report its own `Busy`.
+  The raw column stays the fingerprint member and the filter/sort target; `WorkflowLogs.EffectiveStatusDrift`
+  (20445) is now a regression sentinel for a served value, not a measurement.
 - **Response-shape version**: `StateFunctionCache.ResponseShapeVersion` (currently `v9`) is folded into both the ETag material and the cache key. Bump it in the same commit as any change to what the state body carries — otherwise a client polling a parked instance keeps getting 304 and never sees the new shape.
 - **`incident` block**: always present, and it carries **links, not content** — `{ hasActiveIncident, active: { href } (only while the flag is true), history: { href } }`. Identical on the state body and on `metadata.incident` (single GET and list). `active.href` → `GET …/instances/{instance}/incidents/active` (newest unresolved, **404 `Instance:100037`** when none is open — a normal answer, since a retry can resolve between the poll and the follow-up); `history.href` → the paged history. Same `queryRoles` gate as the state function on both, and no stack trace anywhere. When lifted from an active subflow, `active.href` addresses the **leaf that owns the incident** while `history.href` stays on the polled instance. `HasActiveIncident` is a fingerprint member so raise/resolve without a state change moves the ETag. **Do not put incident fields back in the body**: the embedded summary is what made the state function read the incident table on its hottest path and what created the resolve-A-then-raise-B stale-`active` hole, both of which the link form removes.
 - **Scheduled entries in `transitions`**: the state body lists the runtime's armed scheduled transitions inside the existing `transitions` array as `{ name, kind: "scheduled", executeAtUtc, href, view, schema }` entries, appended after the available transitions and built from active `InstanceJob` rows (`JobType.ScheduledTransition`) whose `ExecuteAt` is stamped at scheduling time from the same instant the Dapr job is armed with. The href/view/schema links use the same url shapes as triggerable entries but with `hasView`/`loadData`/`hasSchema` hardcoded false — a TEMPORARY uniformity concession for domain clients (they will adapt); scheduled transitions remain System-actor-gated at execution, so the href is not callable. Not role-filtered; not merged from subflows. Job-set changes deliberately do NOT participate in the fingerprint ETag (team decision, issue #864) — same-state re-arms can leave the scheduled entries stale behind a 304; documented as a known gap in `docs/runtime/state-function-cache-and-etag.md`.

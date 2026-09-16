@@ -22,6 +22,7 @@ internal sealed class InstanceFilterSqlBuilder
             ["key"] = "Key",
             ["flow"] = "Flow",
             ["status"] = "Status",
+            ["effectivestatus"] = "EffectiveStatus",
             ["state"] = "CurrentState",
             ["currentstate"] = "CurrentState",
             ["effectivestate"] = "EffectiveState",

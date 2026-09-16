@@ -19,6 +19,9 @@ public static class InstanceFieldDiscriminator
         "CurrentState",
         "State", // Alias for EffectiveState
         "Status",
+        // The propagated projection, not the clamped read-time answer Instance.GetEffectiveStatus
+        // returns: a filter runs in SQL over the column as stored. See the note in the filtering doc.
+        "EffectiveStatus",
         "CreatedAt",
         "ModifiedAt",
         "EffectiveState",

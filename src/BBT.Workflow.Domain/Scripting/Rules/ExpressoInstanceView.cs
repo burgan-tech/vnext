@@ -29,6 +29,13 @@ public sealed class ExpressoInstanceView
     /// <summary>Effective state subtype name.</summary>
     public string? EffectiveStateSubType { get; init; }
 
+    /// <summary>
+    /// The status code a client observes for this instance ("A", "B", "C", "F", "P") — the deepest
+    /// active SubFlow's status when one is running, otherwise the instance's own. The status
+    /// counterpart of <see cref="EffectiveState"/>; same value as <c>metadata.effectiveStatus</c>.
+    /// </summary>
+    public string? EffectiveStatus { get; init; }
+
     /// <summary>Latest instance data payload (JSON object/array root).</summary>
     public RuleJsonDynamic Data { get; init; } = RuleJsonDynamic.Empty;
 }

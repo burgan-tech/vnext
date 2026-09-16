@@ -19,9 +19,15 @@ consumes, so no endpoint or engine changes are involved; when no spec is used, n
 
 Two kinds of fields, distinguished by the name you pass:
 
-- **Instance columns** — bare names, whitelisted: `id`, `key`, `flow`, `status`, `state` /
-  `currentState`, `effectiveState`, `effectiveStateType`, `effectiveStateSubType`, `stage`,
+- **Instance columns** — bare names, whitelisted: `id`, `key`, `flow`, `status`, `effectiveStatus`,
+  `state` / `currentState`, `effectiveState`, `effectiveStateType`, `effectiveStateSubType`, `stage`,
   `createdAt`, `modifiedAt`, `completedAt`. Unknown column names throw at build/SQL time.
+  `status` and `effectiveStatus` both accept names or codes (`Active` / `A`).
+
+> **`effectiveStatus` filters the stored column, not the served field.** A filter runs in SQL; the
+> served `metadata.effectiveStatus` goes through a read-time clamp for the SubFlow completion window
+> (see `docs/runtime/state-function-cache-and-etag.md`). So `effectiveStatus eq Completed` can match
+> a parent whose served `effectiveStatus` reads `Busy` — for "is this flow done?", filter on `status`.
 - **Instance-data attributes** — prefixed with `attributes.`, dotted for nesting:
   `attributes.amount`, `attributes.address.city`, `attributes.employment.department.name`.
 

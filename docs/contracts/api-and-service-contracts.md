@@ -173,6 +173,26 @@ render countdowns and upcoming-action information without polling anything else:
   time after triggering such an update should re-fetch without the ETag. See
   [state-function cache and fingerprint ETag](../runtime/state-function-cache-and-etag.md).
 
+### Instance metadata: `status` vs `effectiveStatus`
+
+`GET …/instances/{instance}`, every item of the list view and `GetInstanceTask` (type 19) carry both
+in `metadata`:
+
+| Field | Meaning |
+|---|---|
+| `status` | This instance's own row status. A parent is `Busy` for its child SubFlow's entire lifetime by design, so on its own it only says "something is in flight". |
+| `effectiveStatus` | What a client observes: the deepest active SubFlow's status while one is running, otherwise the same value as `status`. The status counterpart of `effectiveState`. |
+
+**`effectiveStatus` is the field to branch on**, and it is the same value the state function reports
+as its own `status` — the two surfaces never disagree, including in the SubFlow completion window
+(where both answer `Busy` while the parent resumes). Sync `start`/`transition` responses carry it
+too; an async `202` does not (it answers from the admission decision, and the client polls the state
+function next).
+
+Additive — `status` is unchanged. Instance queries may also filter and sort on
+`effectiveStatus`, but a filter matches the **stored** column rather than the served value; see
+[instance filtering](../runtime/instance-filtering-and-queries.md).
+
 ### State response: incident block
 
 The state body always carries an `incident` block so a client can explain a Faulted or waiting

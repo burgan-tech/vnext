@@ -262,6 +262,10 @@ internal sealed class RoleGrantEvaluator : IRoleGrantEvaluator
                 writer.WriteString("Flow", instance.Flow);
                 writer.WriteString("FlowVersion", instance.FlowVersion);
                 writer.WriteString("Status", instance.Status.ToString());
+                // Rendered the same way as Status above, deliberately: a grant that compares the two
+                // must compare like with like, and Status' existing "Active (A)" rendering is a
+                // shipped contract that cannot change under it.
+                writer.WriteString("EffectiveStatus", instance.GetEffectiveStatus.ToString());
                 writer.WriteString("CurrentState", instance.CurrentState);
                 writer.WriteString("EffectiveState", instance.EffectiveState);
                 writer.WriteString("EffectiveStateType", instance.EffectiveStateType?.ToString());

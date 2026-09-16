@@ -43,7 +43,7 @@ build — toggling the flag never changes ETag semantics.
 aggregate materialization:
 
 ```
-SELECT Id, Key, EffectiveState, Status, FlowVersion,
+SELECT Id, Key, EffectiveState, Status, EffectiveStatus, FlowVersion,
        EXISTS(active SubFlow correlation)      AS HasActiveSubFlow,
        COUNT(correlations)                     AS CorrelationCount,
        COUNT(correlations WHERE IsCompleted)   AS CompletedCorrelationCount,
@@ -59,6 +59,14 @@ SELECT Id, Key, EffectiveState, Status, FlowVersion,
   AND SubFlowType = 'S'`) — a single B-tree probe, not a correlation load.
 - `EffectiveState` (not `CurrentState`) is used because subflow state changes are propagated
   upward into the parent's `EffectiveState` column.
+- `EffectiveStatus` is its status counterpart: the deepest active SubFlow's status, else the row's
+  own. Maintained by the busy walk on the way down and by the sub-item's rest-point notification on
+  the way up. An accept that reserves a chain flips only the LEAF's row, so without this member an
+  ancestor's fingerprint would be bit-identical across exactly the transition a cached body must not
+  survive. **It is also served now**, as `metadata.effectiveStatus` — but responses read it
+  through `Instance.GetEffectiveStatus`, which clamps a terminal propagated status on a still-running
+  level back to that level's own status (see below). The column itself, and therefore this
+  fingerprint, keeps the raw propagated value.
 - The four **correlation aggregates** exist because the response body carries the full
   `correlations` list (active *and* completed). They run over the unfiltered correlation set and
   are served by `IX_InstancesCorrelations_ByParent` (`ParentInstanceId`, no filter) — the two
@@ -124,9 +132,9 @@ etag = h(responseShapeVersion | instanceId | effectiveState | status | flowVersi
   so a caller switching role, actor, or culture must never receive a false 304.
 - **Subflow variant**: when an active subflow exists, the response content comes from a live
   subflow call, so the displayed state and status are folded into the hash:
-  `h(... | displayedState | displayedStatus)`. The parent row alone cannot see
-  subflow-internal Busy/Active flips (`PropagateEffectiveStateToParent` updates only
-  `EffectiveState`, never `Status`, and is asynchronous via the Inbox worker).
+  `h(... | displayedState | displayedStatus)`. The parent row's own `Status` cannot see
+  subflow-internal Busy/Active flips (`PropagateEffectiveStateToParent` never touches `Status`) —
+  that is what `EffectiveStatus` covers.
 - **Correlation members are in the hash** because the body exposes the full `correlations` list:
   a sub item starting, terminating or advancing its state changes the body without touching the
   instance's own state or status, and a long-polling client would otherwise keep getting 304 and
@@ -186,12 +194,20 @@ callerHash = h(role | roles | actor identity | culture | extensions | version)
 
 ## Subflow behavior
 
-Instances with an open SubFlow correlation bypass both the 304 fast path and the cache — the
-response is composed from a live call to the subflow's own state function
-(`IInstanceQueryGateway`, in-process for same-domain, HTTP/Dapr for cross-domain). That call
-benefits from the *subflow side's* own fingerprint cache: the subflow service answers it from
-its Redis entry or fingerprint fast path like any other state request. Nothing is ever written
-to the parent's cache while the correlation is open.
+Instances with an open SubFlow correlation bypass the plain 304 fast path — the response is composed
+from a live call to the subflow's own state function (`IInstanceQueryGateway`, in-process for
+same-domain, HTTP/Dapr for cross-domain). That call benefits from the *subflow side's* own
+fingerprint cache: the subflow service answers it from its Redis entry or fingerprint fast path like
+any other state request.
+
+The composed body is then written to the parent's cache as an **active-subflow snapshot**, under
+`ActiveSubflowTtlMilliseconds` (default 500 ms) rather than the normal TTL, and carrying the parent's
+own fingerprint ETag as `ParentEtag`. A later poll serves it only while BOTH hold: the entry has not
+expired, and the parent's freshly computed fingerprint ETag still equals that `ParentEtag`. So on
+this path a stale parent projection can hold a body for at most one snapshot TTL — unlike the
+no-subflow path, where a matching ETag answers 304 with no TTL at all, and where `EffectiveStatus`
+therefore cannot disagree with `Status` (the aggregate and the status CAS keep them equal whenever no
+SubFlow owns the row). Concurrent misses are coalesced by a per-key build lease.
 
 **The subflow call always returns a body — a 304 from the subflow is impossible by contract.**
 The parent needs the subflow response to compose its own; it never sends `If-None-Match`
@@ -199,6 +215,47 @@ downstream. The in-process gateway maps only the typed `input.IfNoneMatch` (neve
 call), and the remote path (`RemoteInstanceQueryAppService.GetFunctionWithStateAsync`)
 explicitly strips `If-None-Match` from the forwarded caller headers — the caller's ETag belongs
 to a different resource (the parent), and a false 304 would leave the composer with no body.
+
+### `effectiveStatus` as a served value
+
+`metadata.effectiveStatus` on the instance GET, the list view and `GetInstanceTask` comes from
+`Instance.GetEffectiveStatus`, **not** from the raw column:
+
+```
+effectiveStatus = Status.IsTerminal || EffectiveStatus.IsTerminal ? Status : EffectiveStatus
+```
+
+**The propagated projection is served only while neither side is terminal.** A terminal status on
+either side means the projection can no longer be trusted, and in both directions the state function
+already answers with the instance's own status. `InstanceStatus.IsTerminal` is the single definition
+both read.
+
+- **Terminal projection, running level** — the SubFlow completion window. The child reached a
+  terminal status and published it upward at its rest point, so the column holds `C`/`F` while the
+  parent's correlation is still open and the parent is resuming. `BuildInstanceStateOutputAsync`'s
+  `subFlowIsTerminal` guard drops the subflow view and answers `Busy`; the clamp matches it.
+- **Terminal own status, non-terminal projection** — a cancelled or faulted level whose child was
+  still Active. The write side cannot fix this one: the cascade completes the level while the child's
+  correlation is still open (so `Instance.ResyncEffectiveStatus` no-ops), and cleanup closes the
+  correlation afterwards with nothing left to restamp the column. The state function's descent finds
+  no active correlation and reports the own status. Without this arm a cancelled parent served
+  `effectiveStatus: "A"` against the state function's `"C"` — measured on 15 pre-existing rows in a
+  local core database. The stale `EffectiveState` those same rows carry is the identical gap one
+  column over, and is unchanged by this work.
+
+It is deliberately **not** written as "active subflow ? projection : own status": the list query does
+not include child correlations (`EfCoreInstanceRepository.IncludeListData` loads `DataList` only), so
+that predicate is false for every list item and every parent inside a subflow would report its own
+`Busy`. A columns-only rule answers identically on all three surfaces.
+
+Two consequences worth knowing:
+
+- **Filters and sorts see the raw column, not the clamp** — they run in SQL. A
+  `filter={"effectiveStatus":{"eq":"Completed"}}` can therefore return a parent that is in the
+  completion window and whose served `effectiveStatus` reads `Busy`.
+- **`WorkflowLogs.EffectiveStatusDrift` (EventId 20445) is now a regression sentinel**, not a
+  measurement. It fires on the full-build path whenever the stored projection disagrees with the live
+  descent for an instance with an active SubFlow. Before it was served, drift only shortened a cached body's life; now it means a served field is wrong.
 
 ## Data function
 

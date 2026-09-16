@@ -835,13 +835,19 @@ public sealed class InstanceCommandAppService(
         if (instance is null)
             return Result<TOutput>.Ok(output);
 
-        // The pipeline reported Busy but the chain has settled to a terminal status meanwhile
-        // (subflow resume finalized the parent in another scope) — surface the settled status.
-        if (output is InstanceOutputBase outputBase
-            && outputBase.Status?.Equals(InstanceStatus.Busy) == true
-            && instance.IsCompleted)
+        if (output is InstanceOutputBase outputBase)
         {
-            outputBase.Status = instance.Status;
+            // The pipeline reported Busy but the chain has settled to a terminal status meanwhile
+            // (subflow resume finalized the parent in another scope) — surface the settled status.
+            if (outputBase.Status?.Equals(InstanceStatus.Busy) == true && instance.IsCompleted)
+            {
+                outputBase.Status = instance.Status;
+            }
+
+            // Sync only, by construction: this method runs on the sync path. An async accept answers
+            // {id, status} from the admission decision with no instance in hand, and its caller polls
+            // the state function anyway.
+            outputBase.EffectiveStatus = instance.GetEffectiveStatus;
         }
 
         var latestData = instance.LatestData;

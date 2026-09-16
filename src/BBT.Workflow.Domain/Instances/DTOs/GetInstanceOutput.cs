@@ -77,6 +77,7 @@ public sealed class InstanceMetadataDto
         CurrentState = instance.CurrentState;
         EffectiveState = instance.EffectiveState;
         Status = instance.Status;
+        EffectiveStatus = instance.GetEffectiveStatus;
         EffectiveStateType = instance.EffectiveStateType;
         EffectiveStateSubType = instance.EffectiveStateSubType;
         CurrentStateType = instance.CurrentStateType;
@@ -103,6 +104,21 @@ public sealed class InstanceMetadataDto
 
     /// <summary>Instance status (Active, Completed, Faulted, etc.).</summary>
     public InstanceStatus? Status { get; set; }
+
+    /// <summary>
+    /// The status a client observes for this instance: the deepest active SubFlow's status when one
+    /// is running, otherwise this instance's own <see cref="Status"/>. The status counterpart of
+    /// <see cref="EffectiveState"/>, and the same value the state function reports as its
+    /// <c>status</c> — so a client can branch on either surface and get one answer.
+    /// </summary>
+    /// <remarks>
+    /// Differs from <see cref="Status"/> exactly while a SubFlow is running: the parent is <c>Busy</c>
+    /// for the child's whole lifetime by design, so <see cref="Status"/> says "something is in
+    /// flight" and this says what that something is currently doing (for example <c>Active</c> while
+    /// the child waits on a human task). Null only on a cross-domain response from a runtime that
+    /// predates the field.
+    /// </remarks>
+    public InstanceStatus? EffectiveStatus { get; set; }
 
     /// <summary>Type of the effective state (Initial, Intermediate, Finish, SubFlow, Wizard).</summary>
     public StateType? EffectiveStateType { get; set; }
