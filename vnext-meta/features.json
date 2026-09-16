@@ -1,6 +1,15 @@
 {
   "runtimeVersion": "0.0.92",
   "engine": {
+    "instanceStartType": {
+      "since": "0.0.92",
+      "status": "stable",
+      "description": "metadata.type on the instance projection - how the instance was STARTED: R root, S SubFlow child, P SubProcess child. Stamped once at creation and never updated, so the origin stays answerable long after the instance has finished, which is what makes it usable for reporting. Derivation, applied once inside the aggregate in Instance.SetInfoMetadata: a non-empty parent.id in the start metadata means the instance was started as a child and parent.flowtype says which kind; anything else is R. parent.flowtype ALONE is deliberately not consulted, because SetInfoMetadata TryAdds the instance's OWN workflow type code into that key when it is absent - so a workflow whose definition declares type \"S\" and is started directly through the API carries parent.flowtype \"S\" with no parent at all, and is correctly reported as R. PURELY ADDITIVE: the parent.* ExtraProperties contracts are untouched and remain the source of truth for the parent/child relationship itself, and Instance.IsSubFlow / IsSubItem keep their existing behaviour including that mislabel; type records the start origin, not a live relationship. Served as metadata.type on GET .../instances/{instance}, on every item of the list view and on the GetInstanceTask (type 19) projection - one constructor feeds all three. NOT carried on sync start/transition responses and NOT in the state function body, so StateFunctionCache.ResponseShapeVersion stays v9 and the state fingerprint is unchanged (an immutable column can never invalidate a cached response). The rule script context (instance.Type) and the role-grant context ($.context.Instance.Type) carry the bare code. Filterable and sortable as instanceType - accepting names or codes (Root/R, SubFlow/S, SubProcess/P) with eq/ne/in/nin only - and deliberately NOT under the bare name type: instance columns and data attributes share one namespace on the legacy and GraphQL filter surfaces and are told apart purely by name, so claiming type would silently retarget the existing filters of every domain whose schema has a business field called type. The .First()/.Last() selector terminal has no name resolution for any short-code column and takes codes only. Existing rows are backfilled by the AddInstanceType migration from the parent block.",
+      "apiEndpoints": [
+        "GET {domain}/workflows/{workflow}/instances/{instance}",
+        "GET {domain}/workflows/{workflow}/instances"
+      ]
+    },
     "instanceEffectiveStatus": {
       "since": "0.0.92",
       "status": "stable",

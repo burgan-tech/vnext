@@ -266,6 +266,11 @@ internal sealed class RoleGrantEvaluator : IRoleGrantEvaluator
                 // must compare like with like, and Status' existing "Active (A)" rendering is a
                 // shipped contract that cannot change under it.
                 writer.WriteString("EffectiveStatus", instance.GetEffectiveStatus.ToString());
+                // The bare CODE, unlike the two above. Status and EffectiveStatus carry a shipped
+                // "Active (A)" rendering that cannot change under existing grants; Type is new, so
+                // it gets the form a grant author actually wants to compare against —
+                // $.context.Instance.Type == "S". Do not "fix" the inconsistency.
+                writer.WriteString("Type", instance.Type.Code);
                 writer.WriteString("CurrentState", instance.CurrentState);
                 writer.WriteString("EffectiveState", instance.EffectiveState);
                 writer.WriteString("EffectiveStateType", instance.EffectiveStateType?.ToString());

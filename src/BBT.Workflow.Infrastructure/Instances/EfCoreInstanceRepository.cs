@@ -337,6 +337,17 @@ public sealed class EfCoreInstanceRepository(
             {
                 originalStatus = (InstanceStatus)statusProperty.OriginalValue!;
             }
+
+            // Type is write-once: the aggregate stamps it at creation and nothing may rewrite it.
+            // Pinning the property clean keeps the column out of every UPDATE statement.
+            // SetAfterSaveBehavior(Throw) would be the declarative form and is NOT usable here —
+            // on the detached retry/fault scopes Aether's base UpdateAsync calls Set.Update(root),
+            // whose graph walk marks every scalar Modified, so Throw would fail those saves. That
+            // detached branch is safe without a pin anyway: the value it re-sends comes from the
+            // aggregate it loaded, so it round-trips unchanged.
+            var typeProperty = entry.Property(nameof(Instance.Type));
+            typeProperty.OriginalValue = entity.Type;
+            typeProperty.IsModified = false;
         }
 
         // Incidents recorded in this unit of work must always be inserted. When the aggregate is

@@ -26,8 +26,11 @@ public static class InstanceColumnConditionBuilder
         ref int parameterIndex)
     {
         InputValidator.ValidateOperatorValue(operatorType, value);
-        // Validate column name against whitelist
-        if (!InstanceFieldDiscriminator.IsInstanceColumn(columnName))
+        // Validate column name against the whitelist. IsResolvedInstanceColumn, not IsInstanceColumn:
+        // callers may pass either the caller-supplied name or one GetInstanceColumnName has already
+        // resolved, and an alias-only column ("Type", reached as "instanceType") is a valid resolved
+        // name that is deliberately absent from the user-facing list.
+        if (!InstanceFieldDiscriminator.IsResolvedInstanceColumn(columnName))
         {
             throw new ArgumentException($"Invalid Instance column name: {columnName}", nameof(columnName));
         }
@@ -47,6 +50,14 @@ public static class InstanceColumnConditionBuilder
             || properColumnName.Equals("EffectiveStatus", StringComparison.OrdinalIgnoreCase))
         {
             return BuildStatusCondition(properColumnName, operatorType, value, ref parameterIndex);
+        }
+
+        // Same treatment for the start-origin column: names resolve to codes, and only the
+        // set operators are allowed. Reached as "instanceType", which GetInstanceColumnName
+        // aliases to the "Type" column.
+        if (properColumnName.Equals("Type", StringComparison.OrdinalIgnoreCase))
+        {
+            return BuildTypeCondition(properColumnName, operatorType, value, ref parameterIndex);
         }
 
         // Route to appropriate condition builder based on operator
@@ -306,6 +317,35 @@ public static class InstanceColumnConditionBuilder
     }
 
     /// <summary>
+    /// Build a condition for the instance Type column, resolving names (Root/SubFlow/SubProcess)
+    /// to their stored codes (R/S/P).
+    /// </summary>
+    /// <remarks>
+    /// Restricted to the set operators on purpose, exactly like the status columns: <c>like</c> or
+    /// <c>startswith</c> against a one-character code bypasses name resolution and cannot express
+    /// anything the set operators do not already.
+    /// </remarks>
+    private static (string, List<NpgsqlParameter>) BuildTypeCondition(
+        string columnName, string operatorType, string value, ref int parameterIndex)
+    {
+        var resolvedValue = operatorType.ToLowerInvariant() switch
+        {
+            "in" or "nin" => string.Join(",", InstanceFieldDiscriminator.ResolveTypeValues(
+                value.Split(',').Select(v => v.Trim()).ToArray())),
+            _ => InstanceFieldDiscriminator.ResolveTypeValue(value)
+        };
+
+        return operatorType.ToLowerInvariant() switch
+        {
+            "eq" => BuildEqualsCondition(columnName, resolvedValue, ref parameterIndex),
+            "ne" => BuildNotEqualsCondition(columnName, resolvedValue, ref parameterIndex),
+            "in" => BuildInCondition(columnName, resolvedValue, ref parameterIndex),
+            "nin" => BuildNotInCondition(columnName, resolvedValue, ref parameterIndex),
+            _ => throw new ArgumentException($"Type column does not support operator: {operatorType}")
+        };
+    }
+
+    /// <summary>
     /// Get the data type of an Instance column
     /// </summary>
     private static ColumnType GetColumnType(string columnName)
@@ -324,6 +364,7 @@ public static class InstanceColumnConditionBuilder
             "Stage" => ColumnType.String,
             "Status" => ColumnType.String,
             "EffectiveStatus" => ColumnType.String,
+            "Type" => ColumnType.String,
             "CreatedAt" => ColumnType.DateTime,
             "ModifiedAt" => ColumnType.DateTime,
             "CompletedAt" => ColumnType.DateTime,

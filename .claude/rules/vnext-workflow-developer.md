@@ -194,6 +194,22 @@ A sixth profile is **composed on top of** the base, never selected instead of it
   predicate is false for every list item and every parent inside a subflow would report its own `Busy`.
   The raw column stays the fingerprint member and the filter/sort target; `WorkflowLogs.EffectiveStatusDrift`
   (20445) is now a regression sentinel for a served value, not a measurement.
+- **`Instance.Type` is write-once, and it is NOT the relationship check.** `R`/`S`/`P` records how
+  the instance was *started*, derived once in `SetInfoMetadata` from `parent.id` + `parent.flowtype`
+  and never updated (latched on `IsTransient`; the EF property is pinned clean in
+  `EfCoreInstanceRepository.UpdateAsync`). **`parent.flowtype` alone is not a discriminator** —
+  `SetInfoMetadata` `TryAdd`s the instance's OWN workflow type code there when the key is absent, so
+  a workflow whose definition declares `type: "S"` and is started directly through the API carries
+  `parent.flowtype: "S"` with no parent at all, and `IsSubFlow` answers true for it. Several
+  vnext-example workflows are in exactly that shape. `IsSubFlow`/`IsSubItem` and every `parent.*`
+  reader are deliberately UNTOUCHED — do not "unify" them with `Type`; that is a behaviour change
+  (it would restore output mapping for those roots and stop their empty-parent subflow-terminal
+  events) and needs its own council row and measured evidence. Served as `metadata.type` on the
+  instance GET, the list view and `GetInstanceTask`; filterable/sortable as **`instanceType`**, never
+  the bare `type`, which would collide with a same-named business attribute. Not in the state body,
+  so `ResponseShapeVersion` is unaffected. Adding a column to the aggregate? Add it to
+  `CreateSnapshot` too — `EffectiveStatus` was forgotten there once and every script read the
+  constructor default.
 - **Response-shape version**: `StateFunctionCache.ResponseShapeVersion` (currently `v9`) is folded into both the ETag material and the cache key. Bump it in the same commit as any change to what the state body carries — otherwise a client polling a parked instance keeps getting 304 and never sees the new shape.
 - **`incident` block**: always present, and it carries **links, not content** — `{ hasActiveIncident, active: { href } (only while the flag is true), history: { href } }`. Identical on the state body and on `metadata.incident` (single GET and list). `active.href` → `GET …/instances/{instance}/incidents/active` (newest unresolved, **404 `Instance:100037`** when none is open — a normal answer, since a retry can resolve between the poll and the follow-up); `history.href` → the paged history. Same `queryRoles` gate as the state function on both, and no stack trace anywhere. When lifted from an active subflow, `active.href` addresses the **leaf that owns the incident** while `history.href` stays on the polled instance. `HasActiveIncident` is a fingerprint member so raise/resolve without a state change moves the ETag. **Do not put incident fields back in the body**: the embedded summary is what made the state function read the incident table on its hottest path and what created the resolve-A-then-raise-B stale-`active` hole, both of which the link form removes.
 - **Scheduled entries in `transitions`**: the state body lists the runtime's armed scheduled transitions inside the existing `transitions` array as `{ name, kind: "scheduled", executeAtUtc, href, view, schema }` entries, appended after the available transitions and built from active `InstanceJob` rows (`JobType.ScheduledTransition`) whose `ExecuteAt` is stamped at scheduling time from the same instant the Dapr job is armed with. The href/view/schema links use the same url shapes as triggerable entries but with `hasView`/`loadData`/`hasSchema` hardcoded false — a TEMPORARY uniformity concession for domain clients (they will adapt); scheduled transitions remain System-actor-gated at execution, so the href is not callable. Not role-filtered; not merged from subflows. Job-set changes deliberately do NOT participate in the fingerprint ETag (team decision, issue #864) — same-state re-arms can leave the scheduled entries stale behind a 304; documented as a known gap in `docs/runtime/state-function-cache-and-etag.md`.

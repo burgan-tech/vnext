@@ -22,6 +22,13 @@ public static class InstanceFieldDiscriminator
         // The propagated projection, not the clamped read-time answer Instance.GetEffectiveStatus
         // returns: a filter runs in SQL over the column as stored. See the note in the filtering doc.
         "EffectiveStatus",
+        // Exposed under this name, NOT the bare "Type", and the alias is load-bearing. Columns and
+        // data attributes share one dictionary here and are told apart purely by name (see
+        // SeparateFilters / GraphQLJsonFilterService.BuildConditions), and ExtractFieldName strips
+        // the "attributes=" prefix BEFORE the column check — so claiming "type" would silently
+        // retarget every existing filter of every domain whose schema has a business field named
+        // "type", with no escape hatch on the legacy surface. Aliased to the "Type" column below.
+        "InstanceType",
         "CreatedAt",
         "ModifiedAt",
         "EffectiveState",
@@ -39,6 +46,21 @@ public static class InstanceFieldDiscriminator
     };
 
     /// <summary>
+    /// Physical column names that are reachable ONLY through an alias, i.e. that are deliberately
+    /// not user-facing names in <see cref="InstanceColumns"/>.
+    /// </summary>
+    /// <remarks>
+    /// <c>"Type"</c> is the one entry: the start-origin column is exposed to callers as
+    /// <c>instanceType</c> so that a bare <c>type</c> keeps meaning the caller's own data attribute.
+    /// Every other alias (<c>State</c> → <c>EffectiveState</c>, …) resolves to a name that is itself
+    /// in <see cref="InstanceColumns"/>, which is why this set did not exist before.
+    /// </remarks>
+    private static readonly HashSet<string> AliasOnlyColumns = new(StringComparer.Ordinal)
+    {
+        "Type"
+    };
+
+    /// <summary>
     /// Status code to description mapping for filter value resolution
     /// </summary>
     private static readonly Dictionary<string, string> StatusNameToCode = new(StringComparer.OrdinalIgnoreCase)
@@ -53,6 +75,21 @@ public static class InstanceFieldDiscriminator
         { "B", "B" },
         { "C", "C" },
         { "F", "F" },
+        { "P", "P" }
+    };
+
+    /// <summary>
+    /// Instance type name to code mapping for filter value resolution (see
+    /// <see cref="StatusNameToCode"/> for the pattern).
+    /// </summary>
+    private static readonly Dictionary<string, string> TypeNameToCode = new(StringComparer.OrdinalIgnoreCase)
+    {
+        { "Root", "R" },
+        { "SubFlow", "S" },
+        { "SubProcess", "P" },
+        // Also support direct code values
+        { "R", "R" },
+        { "S", "S" },
         { "P", "P" }
     };
 
@@ -88,6 +125,27 @@ public static class InstanceFieldDiscriminator
     }
 
     /// <summary>
+    /// True when <paramref name="columnName"/> is a physical Instance column name that
+    /// <see cref="GetInstanceColumnName"/> has already resolved.
+    /// </summary>
+    /// <remarks>
+    /// Guard for callers that resolve the caller-supplied name first and only then build the
+    /// condition (<c>GraphQLJsonFilterService.BuildInstanceFieldConditions</c> does exactly that).
+    /// Re-checking a resolved name against <see cref="IsInstanceColumn"/> alone rejects every
+    /// alias-only column — it threw <c>Invalid Instance column name: Type</c> for a perfectly valid
+    /// <c>instanceType</c> filter. Deliberately SEPARATE from <see cref="IsInstanceColumn"/>: the
+    /// discrimination surfaces must keep answering false for a bare <c>type</c>, or a caller's data
+    /// attribute of that name would be hijacked into the column.
+    /// </remarks>
+    public static bool IsResolvedInstanceColumn(string fieldName)
+    {
+        if (string.IsNullOrWhiteSpace(fieldName))
+            return false;
+
+        return AliasOnlyColumns.Contains(fieldName) || IsInstanceColumn(fieldName);
+    }
+
+    /// <summary>
     /// Get the properly cased Instance column name for SQL generation
     /// </summary>
     /// <param name="fieldName">Field name (e.g., "key", "status", "createdAt")</param>
@@ -108,6 +166,16 @@ public static class InstanceFieldDiscriminator
         // Handle alias: "StateSubType" -> "EffectiveStateSubType"
         if (fieldName.Equals("StateSubType", StringComparison.OrdinalIgnoreCase))
             return "EffectiveStateSubType";
+
+        // Handle alias: "InstanceType" -> "Type". The column is named Type; the filter name is not,
+        // so that it cannot collide with a business attribute called "type". See the whitelist note.
+        if (fieldName.Equals("InstanceType", StringComparison.OrdinalIgnoreCase))
+            return "Type";
+
+        // Idempotent for an alias-only column: a caller that resolved the name first and passes the
+        // result back in (the GraphQL condition path) must get the same answer, not an exception.
+        if (AliasOnlyColumns.Contains(fieldName))
+            return fieldName;
 
         // Find the matching column name (case-insensitive match)
         var matchedColumn = InstanceColumns.FirstOrDefault(c => 
@@ -187,6 +255,39 @@ public static class InstanceFieldDiscriminator
 
         return statusValues.Select(ResolveStatusValue).ToArray();
     }
+
+    /// <summary>
+    /// Resolve an instance Type value to its database code.
+    /// Handles both names (Root, SubFlow, SubProcess) and codes (R, S, P).
+    /// </summary>
+    /// <param name="typeValue">Type value from filter (e.g., "Root", "R")</param>
+    /// <returns>Type code for database (e.g., "R")</returns>
+    public static string ResolveTypeValue(string typeValue)
+    {
+        if (string.IsNullOrWhiteSpace(typeValue))
+            return typeValue;
+
+        // Try to resolve from mapping
+        if (TypeNameToCode.TryGetValue(typeValue, out var code))
+            return code;
+
+        // Return as-is if not found (will be validated by database)
+        return typeValue;
+    }
+
+    /// <summary>
+    /// Resolve multiple instance Type values for IN/NIN operators
+    /// </summary>
+    /// <param name="typeValues">Array of type values</param>
+    /// <returns>Array of type codes</returns>
+    public static string[] ResolveTypeValues(string[] typeValues)
+    {
+        if (typeValues == null || typeValues.Length == 0)
+            return typeValues ?? Array.Empty<string>();
+
+        return typeValues.Select(ResolveTypeValue).ToArray();
+    }
+
 
     /// <summary>
     /// Extract field name from filter string

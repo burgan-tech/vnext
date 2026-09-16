@@ -36,6 +36,13 @@ public sealed class ExpressoInstanceView
     /// </summary>
     public string? EffectiveStatus { get; init; }
 
+    /// <summary>
+    /// How this instance was STARTED: <c>"R"</c> root, <c>"S"</c> SubFlow child, <c>"P"</c>
+    /// SubProcess child. Immutable, so a rule can branch on the origin without re-deriving it —
+    /// <c>instance.Type == "S"</c>.
+    /// </summary>
+    public string? Type { get; init; }
+
     /// <summary>Latest instance data payload (JSON object/array root).</summary>
     public RuleJsonDynamic Data { get; init; } = RuleJsonDynamic.Empty;
 }

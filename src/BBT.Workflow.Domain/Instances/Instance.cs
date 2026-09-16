@@ -30,6 +30,7 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
         Key = Check.Length(key, nameof(Key), InstanceConstants.MaxKeyLength);
         Status = InstanceStatus.Active;
         EffectiveStatus = InstanceStatus.Active;
+        Type = InstanceType.Root;
 
         Tags = [];
 
@@ -149,6 +150,27 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
     /// </para>
     /// </remarks>
     public InstanceStatus EffectiveStatus { get; private set; }
+
+    /// <summary>
+    /// How this instance was STARTED: <c>R</c> root, <c>S</c> SubFlow child, <c>P</c> SubProcess
+    /// child. Write-once — derived in <see cref="SetInfoMetadata"/> from the parent block the
+    /// starter supplied, and never updated for the rest of the instance's life.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This is NOT the parent/child relationship check and must not be conflated with one.
+    /// <see cref="IsSubFlow"/> / <see cref="IsSubItem"/> read <c>parent.flowtype</c> and are
+    /// deliberately left untouched; the <c>parent.*</c> metadata contracts remain the source of
+    /// truth for the relationship itself. <c>Type</c> answers only "how did this row come into
+    /// existence", which is the question a report can still ask once the instance has finished.
+    /// </para>
+    /// <para>
+    /// Stored as a column rather than computed over <see cref="ExtraProperties"/> on purpose:
+    /// <see cref="SetMetaData"/> replaces that dictionary wholesale, so a computed answer could
+    /// change after the fact. A column cannot.
+    /// </para>
+    /// </remarks>
+    public InstanceType Type { get; private set; } = InstanceType.Root;
 
     /// <summary>
     /// The status a client observes for THIS instance — the served counterpart of
@@ -411,6 +433,16 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
         metadata.TryAdd(DomainConsts.MetaDataKeys.FlowType, flowType);
 
         SetMetaData(metadata);
+
+        // Write-once, and latched on IsTransient: that flag is set by the creating constructor and
+        // is Ignore()d in the EF model, so it is true only on an aggregate that has never been
+        // persisted. A stray SetInfoMetadata on a rehydrated aggregate therefore cannot reclassify
+        // a stored row. Derived here rather than in Create() because the parent block only lands in
+        // `metadata`, and only the three TryAdds above have finished populating it by this point.
+        if (IsTransient)
+        {
+            Type = InstanceType.FromStartMetadata(metadata);
+        }
     }
 
     private readonly List<InstanceData> _dataList = new();
@@ -493,6 +525,10 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
             // (ScriptContextBuilder), so omitting it left every script reading the constructor's
             // Active default instead of the client-visible status.
             EffectiveStatus = EffectiveStatus,
+            // Same reason: the script context reads Type off the snapshot, so leaving it out would
+            // make every .csx see the constructor's Root default regardless of how the instance
+            // was actually started.
+            Type = Type,
             CompletedAt = CompletedAt,
             CurrentState = CurrentState,
             CurrentStateType = CurrentStateType,

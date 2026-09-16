@@ -20,14 +20,30 @@ consumes, so no endpoint or engine changes are involved; when no spec is used, n
 Two kinds of fields, distinguished by the name you pass:
 
 - **Instance columns** — bare names, whitelisted: `id`, `key`, `flow`, `status`, `effectiveStatus`,
-  `state` / `currentState`, `effectiveState`, `effectiveStateType`, `effectiveStateSubType`, `stage`,
-  `createdAt`, `modifiedAt`, `completedAt`. Unknown column names throw at build/SQL time.
-  `status` and `effectiveStatus` both accept names or codes (`Active` / `A`).
+  `instanceType`, `state` / `currentState`, `effectiveState`, `effectiveStateType`,
+  `effectiveStateSubType`, `stage`, `createdAt`, `modifiedAt`, `completedAt`. Unknown column names
+  throw at build/SQL time. `status`, `effectiveStatus` and `instanceType` accept names or codes
+  (`Active` / `A`, `SubFlow` / `S`) — on the list, GraphQL and `.Build()` spec terminals. The
+  `.First()` / `.Last()` selector terminal has no name resolution for any of the three: it compares
+  the literal text against the stored code, so pass codes there.
 
 > **`effectiveStatus` filters the stored column, not the served field.** A filter runs in SQL; the
 > served `metadata.effectiveStatus` goes through a read-time clamp for the SubFlow completion window
 > (see `docs/runtime/state-function-cache-and-etag.md`). So `effectiveStatus eq Completed` can match
 > a parent whose served `effectiveStatus` reads `Busy` — for "is this flow done?", filter on `status`.
+
+> **`instanceType` records how the instance was STARTED, not a live relationship.** `Root` / `R`,
+> `SubFlow` / `S`, `SubProcess` / `P`, stamped once at creation and never updated — so it stays
+> answerable after the instance finishes, but it says a child *was created by* a parent, not that
+> the correlation is still open. The `parent.*` ExtraProperties remain the source of truth for the
+> relationship itself. Only `eq` / `ne` / `in` / `nin` are accepted, as for the status columns.
+>
+> It is deliberately **not** exposed as the bare name `type`. Instance columns and data attributes
+> share one namespace on the legacy and GraphQL filter surfaces and are told apart purely by name —
+> and the legacy surface strips the `attributes=` prefix *before* that check — so claiming `type`
+> would silently retarget the existing filters of every domain whose schema has a business field
+> called `type`, with no escape hatch. `type` keeps meaning your own attribute; the column is
+> `instanceType`.
 - **Instance-data attributes** — prefixed with `attributes.`, dotted for nesting:
   `attributes.amount`, `attributes.address.city`, `attributes.employment.department.name`.
 
