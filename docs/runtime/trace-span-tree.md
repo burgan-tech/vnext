@@ -580,7 +580,10 @@ All nine acceptance checks passed:
    `ChildSubflowCancelRequested.Handle`: post-cutover it has a parent and shares its trace with
    the producing app's spans. Recorded here honestly: this check passed via the substitute
    command, not via the originally-named `TransitionContinuationRequested` path, which this run
-   had no traffic to exercise.
+   had no traffic to exercise. **Closed on 2026-09-15** — see
+   [Follow-up verification](#follow-up-verification-2026-09-15-issue-935-outbox-continuation-mode)
+   below: the path was exercised directly with `WorkflowExecution:DirectEnqueueContinuations=false`
+   and the check passed on the real event, with two defects found and fixed on the way.
 5. **Relay same-tree** — 3 sampled relay traces each contain `PostCommit.EventRelay` ×2,
    `SubFlow.Completion` ×2, `SubFlow.Resume` ×2, and zero `*.Handle` spans: the flow's own
    settlement work stayed inside the flow trace while the duplicate backup delivery moved out.
@@ -633,6 +636,44 @@ are **nanoseconds** while `duration` is **microseconds** — mixing the two unit
 nonsense containment results. This run hit that trap mid-measurement and corrected it; the
 corrected containment math (check 8 above) was validated against `end_time`, not the `duration`
 field.
+
+## Follow-up verification (2026-09-15, issue #935, outbox continuation mode)
+
+The 2026-08-30 run left three recorded caveats (issue #935): the `vnext.activation.partial` /
+`vnext.activation.clock_skew` degradation tags, the cosmetic `PostCommit.*` overlap, and — the open
+one — zero traffic through `TransitionContinuationRequested`. Closed as follows, against a scratch
+side stack (domain `lab935`, branch binaries, isolated DB, shared infra) running with
+`WorkflowExecution:DirectEnqueueContinuations=false` so **every** async continuation took the
+outbox → Inbox → `transitions/{key}/enqueue` relay path. Numbers measured in OpenObserve (the
+renderer caveat above applies to containment claims only; these are presence/tag/trace-id claims).
+
+- **The path carries the episode.** 7+ `TransitionContinuationRequested.Handle` spans; a sampled
+  transition trace contains the full chain in ONE trace id — accept transaction,
+  `Transition.Enqueue`, outbox `EventBus.Publish`, `Uow.Commit`, the Inbox handler +
+  `Inbox.Forward`, the `/enqueue` relay endpoint, `ScheduleJobAlpha1`, `TransitionJob.Execute/{key}`
+  and the covering `Instance.Activation/{key}`. **Zero** `vnext.activation.partial` and **zero**
+  `vnext.activation.clock_skew` across all 8 activation spans of the run: every settling hop
+  received the carried start through the event.
+- **The tags work as designed.** One instance's continuation event sat unconsumed while the Inbox
+  sidecar was down; on recovery its activation span honestly reported 235 s trigger→rest — the
+  backdated span measuring an outage, exactly its contract. The flags stayed absent because the
+  start was carried; they remain reachable only by rolling-deploy carriers and cross-replica clock
+  skew, which is what they are for. The `PostCommit.*` overlap caveat had already been closed by the
+  un-flatten shipped with #986 (`PostCommit.*` is a real child again — see
+  [Trace Lanes § Async timing shape](trace-lanes.md#async-timing-shape)).
+- **Defect found: the relay dropped the chain-reserve claim.** The `/enqueue` endpoint's
+  event→payload copy omitted `SubflowChainReserved`, so in outbox mode (or the direct-enqueue
+  fallback) a forwarded transition on a parent with an active SubFlow reached the leaf without the
+  claim its own accept had taken — rejected as Busy (`Instance:100031`). Fixed; the field-by-field
+  relay copy (episode fields included) is now pinned by `InstanceControllerEnqueueRelayTests`,
+  whose reflection guard fails for the NEXT field added to both carriers but not to the copy.
+  Live-proven: parent → active child → async `approve-child` on the parent through the outbox path;
+  child completed, parent resumed, zero `Instance:100031`.
+- **Defect found: a bare `Instance.Activation/` span.** A subflow-completion resume settles with an
+  EMPTY (not null) transition key, which defeated the documented name fallback (settling key, else
+  episode key, else `resume`). `ActivationActivity` now normalizes the empty key; the resume settle
+  emits `Instance.Activation/{episode key}` (observed live), pinned by
+  `ActivationActivityTests.Emit_with_an_empty_settling_key_falls_back_to_the_episode_key_then_resume`.
 
 ## Open items on this page's catalogue
 
