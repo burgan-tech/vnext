@@ -121,6 +121,13 @@ until the shared snapshot is available. `CatalogCacheSeconds` sets an absolute T
 default), also checked in the snapshot itself. DBA retirement still requires draining readers/writers
 as described above.
 
+Catalog connection/read failures (including permissions and incompatible catalog columns), cache
+failures and refresh-lock failures also fall back to JSON expressions. The runtime logs
+`AttributeIndexCatalogFallback` (warning, event 70021) with the schema and exception. It does not cache
+these failures as empty readiness snapshots, so a later request can recover immediately. Caller
+cancellation and invalid schema names still propagate. This protects the optional index lookup;
+a database failure that also prevents the underlying instance query can still fail the request.
+
 After the DBA commits, replicas discover readiness through the next shared catalog refresh. Roll back
 routing with `AttributeIndexes:DisabledFlows`, leaving data and columns in place for a later DBA cleanup. Removed settings: `AttributeIndexPreparation`, maintenance connection,
 maintenance timeout options and the `attribute-index.prepare` handler. Aether is unchanged.

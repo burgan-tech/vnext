@@ -83,6 +83,83 @@ public sealed class AttributeIndexIntegrationTests(AttributeIndexPostgresFixture
         await command.ExecuteNonQueryAsync();
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CatalogFailureKeepsJsonQueryWorkingAndRecoversWithoutCachingFailure(bool denyPermission)
+    {
+        var schema = await SeedAsync();
+        var metadata = Metadata();
+        await Service().ReconcileAsync(schema, metadata);
+        var reader = "reader_" + Guid.NewGuid().ToString("N");
+        await SqlAsync($$"""
+            CREATE ROLE "{{reader}}" LOGIN PASSWORD 'test';
+            GRANT USAGE ON SCHEMA "{{schema}}" TO "{{reader}}";
+            GRANT SELECT ON "{{schema}}"."Instances", "{{schema}}"."InstancesData" TO "{{reader}}";
+            """);
+        if (!denyPermission)
+            await SqlAsync($$"""
+                GRANT SELECT ON "{{schema}}"."AttributeIndexCatalog" TO "{{reader}}";
+                ALTER TABLE "{{schema}}"."AttributeIndexCatalog" RENAME COLUMN "PgType" TO "SavedPgType";
+                """);
+        var connection = new NpgsqlConnectionStringBuilder(fixture.Postgres.GetConnectionString()) { Username = reader };
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["ConnectionStrings:Default"] = connection.ConnectionString
+        }).Build();
+        var cache = new NetCoreDistributedCacheService(new MemoryDistributedCache(Options.Create(new MemoryDistributedCacheOptions())));
+        var locks = Substitute.For<IDistributedLockService>();
+        locks.TryAcquireLockAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(Substitute.For<IDistributedLockHandle>());
+        var catalog = new PostgresAttributeIndexService(configuration, new Monitor(new AttributeIndexOptions { Enabled = true }),
+            new StaticCurrentSchema("public"), new DefaultSchemaNameFormatter(), cache, locks,
+            NullLogger<PostgresAttributeIndexService>.Instance);
+
+        var ready = await catalog.GetReadyAsync(schema);
+        Assert.Empty(ready);
+        Assert.Null(await cache.GetAsync<PostgresAttributeIndexService.ReadyIndexSnapshot>(
+            PostgresAttributeIndexService.BuildCacheKey(connection.ConnectionString, schema)));
+        var fallback = new SchemaFilterContext(metadata.Fields) { ReadyIndexes = ready };
+        await using var db = new QueryContext(connection.ConnectionString);
+        var filter = GraphQLFilterParser.ParseFilter("""{"attributes":{"amount":{"gt":190}}}""")!;
+        var rows = await db.Rows.ApplyGraphQLFilter(filter, schema: schema, schemaContext: fallback).ToListAsync();
+        Assert.Equal(10, rows.Count);
+        Assert.DoesNotContain("q_", db.Commands.Last());
+
+        if (denyPermission)
+            await SqlAsync($$"""GRANT SELECT ON "{{schema}}"."AttributeIndexCatalog" TO "{{reader}}";""");
+        else
+            await SqlAsync($$"""ALTER TABLE "{{schema}}"."AttributeIndexCatalog" RENAME COLUMN "SavedPgType" TO "PgType";""");
+        Assert.Equal(5, (await catalog.GetReadyAsync(schema)).Count);
+    }
+
+    [Fact]
+    public async Task CatalogCacheWriteFailureFallsBackAfterSuccessfulDatabaseRead()
+    {
+        var schema = await SeedAsync();
+        await Service().ReconcileAsync(schema, Metadata());
+        var cache = Substitute.For<IDistributedCacheService>();
+        cache.SetAsync(Arg.Any<string>(), Arg.Any<PostgresAttributeIndexService.ReadyIndexSnapshot>(),
+                Arg.Any<BBT.Aether.DistributedCache.DistributedCacheEntryOptions>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromException(new TimeoutException("Cache write timed out")));
+        var handle = Substitute.For<IDistributedLockHandle>();
+        var locks = Substitute.For<IDistributedLockService>();
+        locks.TryAcquireLockAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>()).Returns(handle);
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["ConnectionStrings:Default"] = fixture.Postgres.GetConnectionString()
+        }).Build();
+        var catalog = new PostgresAttributeIndexService(configuration, new Monitor(new AttributeIndexOptions { Enabled = true }),
+            new StaticCurrentSchema("public"), new DefaultSchemaNameFormatter(), cache, locks,
+            NullLogger<PostgresAttributeIndexService>.Instance);
+
+        Assert.Empty(await catalog.GetReadyAsync(schema));
+        await cache.Received(1).SetAsync(Arg.Any<string>(),
+            Arg.Is<PostgresAttributeIndexService.ReadyIndexSnapshot>(snapshot => snapshot.Keys.Length == 5),
+            Arg.Any<BBT.Aether.DistributedCache.DistributedCacheEntryOptions>(), Arg.Any<CancellationToken>());
+        await handle.Received(1).DisposeAsync();
+    }
+
     [Fact]
     public async Task Projections_PreserveResultsAndPagination_AndStaySchemaScoped()
     {

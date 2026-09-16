@@ -4,8 +4,10 @@ using BBT.Aether.DistributedCache;
 using BBT.Aether.DistributedLock;
 using BBT.Aether.MultiSchema;
 using BBT.Workflow.Definitions.Schemas;
+using BBT.Workflow.Logging;
 using BBT.Workflow.Security;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Npgsql;
 
@@ -15,7 +17,7 @@ namespace BBT.Workflow.Schemas;
 public sealed class PostgresAttributeIndexService(
     IConfiguration configuration, IOptionsMonitor<AttributeIndexOptions> options,
     ICurrentSchema currentSchema, ISchemaNameFormatter schemaNameFormatter,
-    IDistributedCacheService cache, IDistributedLockService locks)
+    IDistributedCacheService cache, IDistributedLockService locks, ILogger<PostgresAttributeIndexService> logger)
     : IAttributeIndexCatalog
 {
     private string ConnectionString => configuration.GetConnectionString("Default")
@@ -25,10 +27,27 @@ public sealed class PostgresAttributeIndexService(
 
     public async Task<IReadOnlySet<string>> GetReadyAsync(string schema, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var settings = options.CurrentValue;
         if (!settings.Enabled) return new HashSet<string>();
         schema = new SyncSchemaValidator().ValidateSchemaSync(schemaNameFormatter.Format(schema));
         if (settings.DisabledFlows.Any(f => schemaNameFormatter.Format(f) == schema)) return new HashSet<string>();
+        try
+        {
+            return await GetReadyCoreAsync(schema, settings, cancellationToken);
+        }
+        catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            // Projections are optional. Keep schema validation and caller cancellation outside
+            // this fallback, and never cache an infrastructure failure as a ready snapshot.
+            logger.AttributeIndexCatalogFallback(exception, schema);
+            return new HashSet<string>();
+        }
+    }
+
+    private async Task<IReadOnlySet<string>> GetReadyCoreAsync(
+        string schema, AttributeIndexOptions settings, CancellationToken cancellationToken)
+    {
         var cacheKey = BuildCacheKey(ConnectionString, schema);
         var cached = await cache.GetAsync<ReadyIndexSnapshot>(cacheKey, cancellationToken);
         if (cached != null && cached.ExpiresAt > DateTimeOffset.UtcNow)

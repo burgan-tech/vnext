@@ -14,6 +14,7 @@ using BBT.Aether.DistributedCache;
 using BBT.Aether.DistributedLock;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Logging.Abstractions;
 using Npgsql;
 
 namespace BBT.Workflow.Schemas;
@@ -42,7 +43,7 @@ public sealed class LegacyAttributeIndexFixture(
     }
 
     public Task<IReadOnlySet<string>> GetReadyAsync(string schema, CancellationToken cancellationToken = default)
-        => new PostgresAttributeIndexService(configuration, options, currentSchema, schemaNameFormatter, cache, locks)
+        => new PostgresAttributeIndexService(configuration, options, currentSchema, schemaNameFormatter, cache, locks, NullLogger<PostgresAttributeIndexService>.Instance)
             .GetReadyAsync(schema, cancellationToken);
 
     public async Task ReconcileAsync(string schema, SchemaFilterContext context, CancellationToken cancellationToken = default)
