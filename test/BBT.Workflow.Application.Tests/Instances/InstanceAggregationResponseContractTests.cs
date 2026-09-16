@@ -229,6 +229,7 @@ public sealed class InstanceAggregationResponseContractTests : IDisposable
             callerRoleResolver: Substitute.For<ICallerRoleResolver>(),
             paginationLinkGenerator: _paginationLinkGenerator,
             instanceFilteringOptions: Options.Create(new InstanceFilteringOptions()),
+            attributeIndexCatalog: Substitute.For<IAttributeIndexCatalog>(),
             stateFunctionCache: Substitute.For<Caching.IStateFunctionCache>(),
             dataFunctionCache: Substitute.For<Caching.IDataFunctionCache>(),
             instanceSchemaFunctionCache: Substitute.For<Caching.IInstanceSchemaFunctionCache>(),

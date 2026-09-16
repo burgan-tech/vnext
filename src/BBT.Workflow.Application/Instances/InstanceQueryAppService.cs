@@ -55,6 +55,7 @@ public sealed class InstanceQueryAppService(
     ICallerRoleResolver callerRoleResolver,
     IPaginationLinkGenerator paginationLinkGenerator,
     IOptions<InstanceFilteringOptions> instanceFilteringOptions,
+    IAttributeIndexCatalog attributeIndexCatalog,
     Caching.IStateFunctionCache stateFunctionCache,
     Caching.IDataFunctionCache dataFunctionCache,
     Caching.IInstanceSchemaFunctionCache instanceSchemaFunctionCache,
@@ -240,10 +241,9 @@ public sealed class InstanceQueryAppService(
 
                     if (schemaContext != null)
                     {
-                        var catalog = serviceProvider.GetService<IAttributeIndexCatalog>();
-                        var ready = catalog == null || !schemaContext.Fields.Values.Any(f => f.Indexed)
+                        var ready = !schemaContext.Fields.Values.Any(f => f.Indexed)
                             ? new HashSet<string>()
-                            : await catalog.GetReadyAsync(currentSchema.Name ?? input.Workflow, ct);
+                            : await attributeIndexCatalog.GetReadyAsync(currentSchema.Name ?? input.Workflow, ct);
                         schemaContext = new SchemaFilterContext(schemaContext.Fields)
                         {
                             EnforceFiltering = instanceFilteringOptions.Value.EnforceMasterSchemaFiltering,
