@@ -1,6 +1,17 @@
 {
   "runtimeVersion": "0.0.92",
   "engine": {
+    "instanceEffectiveStatus": {
+      "since": "0.0.92",
+      "status": "stable",
+      "description": "metadata.effectiveStatus on the instance projection - the status counterpart of metadata.effectiveState, and the value a client should branch on. Instance.EffectiveStatus has existed as a column since the EffectiveStatus migration but was state-function ETag fingerprint material only and was never served; it is now exposed as metadata.effectiveStatus on GET .../instances/{instance}, on every item of the list view, on the GetInstanceTask (type 19) projection, and as effectiveStatus on sync start/transition responses (an async 202 does not carry it - it answers from the admission decision with no instance projection in hand). Semantics: the deepest active SubFlow's status while one is running, otherwise the instance's own status. metadata.status is unchanged and still reports the instance's own row status, which is Busy for a parent's entire child lifetime by design and therefore cannot distinguish a child waiting on a human task from real work. Responses read Instance.GetEffectiveStatus, not the raw column: the propagated projection is served only while NEITHER side is terminal, otherwise the instance's own status answers. Both arms match the state function, so metadata.effectiveStatus and the state function's own status give ONE answer in every regime. A terminal projection on a running level is the SubFlow completion window (the child stamped its C/F upward at its rest point while this level's correlation is still open and this level is still resuming) - the columns-only form of the state function's subFlowIsTerminal guard. A terminal own status with a stale non-terminal projection is a cancel or fault cascade, which the write side cannot repair: it completes the level while the child's correlation is still open so the resync no-ops, and cleanup closes the correlation afterwards with nothing left to restamp the column. The clamp deliberately does not test HasActiveSubFlow: the list query does not include child correlations, so that predicate would be false for every list item. Instance queries may also filter and sort on effectiveStatus (names or codes, Active/A like status), but a filter runs in SQL against the STORED column and therefore does not see the clamp - effectiveStatus eq Completed can match a parent whose served effectiveStatus reads Busy; filter on status for 'is this flow done?'. The rule/role-grant script context carries it too (ExpressoInstanceView.EffectiveStatus as a code, $.context.Instance.EffectiveStatus rendered like Status). Purely additive: no field changed or was removed, the state function body is untouched and ResponseShapeVersion stays v9.",
+      "apiEndpoints": [
+        "GET {domain}/workflows/{workflow}/instances/{instance}",
+        "GET {domain}/workflows/{workflow}/instances",
+        "POST {domain}/workflows/{workflow}/instances/start",
+        "PATCH {domain}/workflows/{workflow}/instances/{instance}/transitions/{transition}"
+      ]
+    },
     "pythonTask": {
       "since": "0.0.80",
       "status": "experimental",

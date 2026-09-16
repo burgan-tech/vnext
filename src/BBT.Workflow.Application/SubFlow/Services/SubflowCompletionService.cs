@@ -501,6 +501,12 @@ public sealed class SubflowCompletionService(
             // Reset parent's EffectiveState back to its own CurrentState for blocking SubFlows.
             // A SubProcess completion only closes its persisted correlation.
             parentInstance.SetEffectiveState(parentInstance.GetCurrentState);
+
+            // ... and the status projection with it. The child stamped its terminal status upward at
+            // its own rest point; leaving it here would have the parent's fingerprint describe a
+            // finished chain while the parent is about to resume. No-op while another SubFlow
+            // correlation is still open.
+            parentInstance.ResyncEffectiveStatus();
         }
         else
         {

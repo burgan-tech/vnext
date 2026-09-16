@@ -19,6 +19,8 @@ public class InstanceColumnFilterTests
     [InlineData("key", true)]
     [InlineData("Status", true)]
     [InlineData("status", true)]
+    [InlineData("EffectiveStatus", true)]
+    [InlineData("effectivestatus", true)]
     [InlineData("Flow", true)]
     [InlineData("flow", true)]
     [InlineData("CurrentState", true)]
@@ -590,5 +592,36 @@ public class InstanceColumnFilterTests
     }
 
     #endregion
-}
 
+    /// <summary>
+    /// <c>effectiveStatus</c> is a first-class instance column: filterable and sortable like
+    /// <c>effectiveState</c>. It goes through the SAME name-to-code resolution as <c>Status</c> —
+    /// without that, <c>effectiveStatus=Active</c> would be compared against a column that stores
+    /// <c>"A"</c> and would silently match nothing.
+    /// </summary>
+    [Fact]
+    public void BuildCondition_EffectiveStatus_ResolvesStatusNamesToCodesLikeStatus()
+    {
+        var parameterIndex = 0;
+
+        var (condition, parameters) = InstanceColumnConditionBuilder.BuildCondition(
+            "effectiveStatus", "eq", "Active", ref parameterIndex);
+
+        condition.ShouldBe("s.\"EffectiveStatus\" = {0}");
+        parameters.Count.ShouldBe(1);
+        parameters[0].Value.ShouldBe("A");
+    }
+
+    [Fact]
+    public void BuildCondition_EffectiveStatus_ResolvesEveryValueOfAnInList()
+    {
+        var parameterIndex = 0;
+
+        var (_, parameters) = InstanceColumnConditionBuilder.BuildCondition(
+            "effectiveStatus", "in", "Active,Busy", ref parameterIndex);
+
+        parameters.Count.ShouldBe(2);
+        parameters[0].Value.ShouldBe("A");
+        parameters[1].Value.ShouldBe("B");
+    }
+}

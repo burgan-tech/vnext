@@ -21,6 +21,14 @@ public abstract class InstanceOutputBase
     public InstanceStatus? Status { get; set; }
 
     /// <summary>
+    /// The status a client observes for this instance: the deepest active SubFlow's status when one
+    /// is running, otherwise <see cref="Status"/>. Same value as <c>metadata.effectiveStatus</c> on
+    /// the instance GET and as the state function's <c>status</c>. Populated only when sync=true —
+    /// an async accept answers from the admission decision with no instance projection in hand.
+    /// </summary>
+    public InstanceStatus? EffectiveStatus { get; set; }
+
+    /// <summary>
     /// Instance attributes filtered by master-schema role grants. Populated only when sync=true.
     /// </summary>
     public JsonElement? Attributes { get; set; }

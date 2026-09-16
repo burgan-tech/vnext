@@ -64,13 +64,6 @@ public sealed class InstanceQueryAppService(
 {
     private static readonly ConcurrentDictionary<string, BuildGate> ActiveSubflowBuildGates = new();
 
-    private static readonly HashSet<InstanceStatus> TerminalStatuses =
-    [
-        InstanceStatus.Completed,
-        InstanceStatus.Faulted,
-        InstanceStatus.Passive
-    ];
-
     /// <summary>
     /// Converts a failed query validation into a 400-mapping <see cref="Error"/>, carrying every
     /// rejection reason so the caller can fix them all in one round trip.
@@ -1645,8 +1638,10 @@ public sealed class InstanceQueryAppService(
             // The parent is Busy handling the SubFlow completion; returning the SubFlow's terminal
             // status would falsely signal to clients that the whole flow is done.
             // Fall back to the parent's own state so the client receives Status=Busy and retries.
-            var sfStatus = subFlowStateInfo.Status;
-            var subFlowIsTerminal = sfStatus is not null && TerminalStatuses.Contains(sfStatus);
+            // InstanceStatus.IsTerminal is the single definition; Instance.GetEffectiveStatus
+            // clamps on the same predicate so the served metadata.effectiveStatus agrees with the
+            // body this branch produces.
+            var subFlowIsTerminal = subFlowStateInfo.Status?.IsTerminal == true;
 
             if (subFlowIsTerminal)
             {

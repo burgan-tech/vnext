@@ -40,6 +40,7 @@ The response exposed to the script context is a `GetInstanceOutput`:
     "currentState": "...",
     "effectiveState": "...",
     "status": "A",
+    "effectiveStatus": "A",
     "createdAt": "...",
     "modifiedAt": "...",
     "incident": { /* present when the instance has an active incident or recorded history:
@@ -49,6 +50,12 @@ The response exposed to the script context is a `GetInstanceOutput`:
   "extensions": { /* present only when extensions requested */ }
 }
 ```
+
+`status` is the instance's own row status; `effectiveStatus` is what a client observes — the deepest
+active SubFlow's status while one is running, otherwise the same value as `status`. Branch on
+`effectiveStatus`: a parent is `Busy` for its child's entire lifetime by design, so `status` alone
+cannot tell a waiting human task from real work. It is the same value the state function reports as
+its own `status`, so the two surfaces never disagree.
 
 Same-domain execution runs in-process through `IInstanceQueryGateway.GetInstanceAsync`; cross-domain
 execution calls the same REST endpoint on the target domain (HTTP or Dapr). **Both paths surface the
