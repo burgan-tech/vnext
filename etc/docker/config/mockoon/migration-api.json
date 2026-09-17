@@ -187,6 +187,10 @@
       "children": [
         {
           "type": "route",
+          "uuid": "c71f3b18-0a45-4e2a-9b07-2f1c5d8a4e31"
+        },
+        {
+          "type": "route",
           "uuid": "d417072e-9a13-49ff-9a4e-8ef223c1fae6"
         },
         {
@@ -2049,6 +2053,42 @@
           "latency": 200,
           "statusCode": 200,
           "label": "Success Response",
+          "headers": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "bodyType": "INLINE",
+          "filePath": "",
+          "databucketID": "",
+          "sendFileAsBody": false,
+          "rules": [],
+          "rulesOperator": "OR",
+          "disableTemplating": false,
+          "fallbackTo404": false,
+          "default": true,
+          "crudKey": "id",
+          "callbacks": []
+        }
+      ],
+      "responseMode": null,
+      "streamingMode": null,
+      "streamingInterval": 0
+    },
+    {
+      "uuid": "c71f3b18-0a45-4e2a-9b07-2f1c5d8a4e31",
+      "type": "http",
+      "documentation": "Domain List - the whole registry in one call; fills the discovery cache",
+      "method": "get",
+      "endpoint": "api/v1/discovery/functions/domain-list",
+      "responses": [
+        {
+          "uuid": "9b2e6d40-7c11-4f55-8f0a-3d6b9c2a1e77",
+          "body": "{\n    \"items\": [\n        {\n            \"domainName\": \"core\",\n            \"baseUrl\": \"http://localhost:4201\",\n            \"appId\": \"vnext-core-app\",\n            \"healthUrl\": \"http://localhost:4201/health\"\n        }\n    ]\n}",
+          "latency": 0,
+          "statusCode": 200,
+          "label": "Active domains",
           "headers": [
             {
               "key": "Content-Type",

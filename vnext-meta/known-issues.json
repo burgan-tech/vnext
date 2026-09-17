@@ -109,6 +109,16 @@
       "title": "Arming a past-due one-shot races the Dapr scheduler's immediate fire: the job callback can arrive before the armer commits Pending->Scheduled, JobDispatcher answers 'not found in an active state; skipping' with HTTP 200, Dapr deletes the consumed one-shot, and the armer then commits Scheduled - leaving a Scheduled row with no scheduler entry, permanently. The VisibilityTimeout reaper covers Running rows only, so nothing recovers it. Observed live (issue #935 chaos test, outbox mode + poller on): dispatcher skip at 12:17:38Z, row Scheduled for 11+ minutes, instance Busy. Aether-level defect; the same orphan also results from a failed rollback after a direct-arm timeout whose server-side registration succeeded.",
       "workaround": "Manual: set the orphaned sys_queues.BackgroundJobs row Status back to 5 (Pending) so the poller re-arms it (Dapr one-shot arming is overwrite-idempotent). No configuration prevents the race.",
       "fixedIn": null
+    },
+    {
+      "id": "discovery-domain-list-single-page-ceiling",
+      "affectedVersions": ">=0.0.92",
+      "severity": "warning",
+      "component": "runtime",
+      "path": "ServiceDiscovery:Cache (bulk warm-up)",
+      "title": "The registry's domain-list function serves a single page (500 rows today) and its response carries no truncation signal, so a registry holding more domains than that warms only the first 500.",
+      "workaround": "The runtime logs WorkflowLogs 50038 DomainListCeilingReached at Warning when the list comes back at or above ServiceDiscovery:Cache:DomainListExpectedMax, and publishes it anyway - the domains beyond the ceiling are simply not warmed and each pays a live per-domain lookup, which is the behaviour with the cache switched off. Raising the ceiling is a change on the registry side (vnext-domain-discovery, DomainListMapping.csx pageSize).",
+      "fixedIn": null
     }
   ]
 }

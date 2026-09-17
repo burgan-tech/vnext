@@ -24,7 +24,8 @@ namespace BBT.Workflow.Discovery;
 /// </para>
 /// <para>
 /// <b>Staleness budget.</b> A domain whose <c>baseUrl</c> moves is routed to the old address for at
-/// most <c>RefreshIntervalSeconds + fetch + L1TtlSeconds</c> — about an hour with these defaults,
+/// most <c>RefreshIntervalSeconds + fetch + L1TtlSeconds</c> — about seventy minutes with these
+/// defaults,
 /// which is a deliberate choice: a domain's registered address changes on the order of deployments,
 /// not minutes, so the window is sized to how often the data actually moves rather than to how
 /// quickly it could. The hour is safe only because it is not the only mitigation —
@@ -73,18 +74,26 @@ public sealed class DiscoveryCacheOptions
     public bool L1Enabled { get; set; } = true;
 
     /// <summary>
-    /// How long an entry may be served from the in-process layer, in seconds. Default 60.
+    /// How long an entry may be served from the in-process layer, in seconds. Default 600.
     /// </summary>
     /// <remarks>
     /// L1 is the only layer the refresher cannot overwrite, so it is the one that lets two pods
     /// disagree about where a domain lives — and this value is exactly how long that disagreement can
-    /// last. It is also, and more importantly, the residual staleness after a forced refresh: the
-    /// endpoint corrects the shared layer immediately, but each pod's own copy clears on its own
-    /// schedule. Keep it short even though the refresh window is long; a minute is already noise
-    /// against an hour, and shrinking it further buys only faster incident recovery.
+    /// last. It is also, and more importantly, <b>the residual staleness after a forced refresh</b>:
+    /// <c>POST utilities/discovery/refresh</c> corrects the shared layer immediately, but every pod
+    /// except the one that ran it keeps serving its own copy until this expires. That is the number
+    /// to look at when sizing this, not the L2 read it saves — the saving is one cache read per
+    /// domain per expiry, which is negligible at any value in this range.
+    /// <para>
+    /// Ten minutes is a deliberate trade against the 60 s this shipped with: a domain's address moves
+    /// on the order of deployments, so a ten-minute disagreement is acceptable, but it does mean the
+    /// forced-refresh endpoint now takes up to ten minutes to take effect fleet-wide rather than one.
+    /// Keep it well under <see cref="RefreshIntervalSeconds"/> (the validator enforces it): at parity
+    /// a pod could serve a stale endpoint for twice the window the cluster takes to correct it.
+    /// </para>
     /// </remarks>
     [Range(1, 3600)]
-    public int L1TtlSeconds { get; set; } = 60;
+    public int L1TtlSeconds { get; set; } = 600;
 
     /// <summary>
     /// How often each pod wakes up to consider refreshing, in seconds. Default 60.
@@ -138,47 +147,35 @@ public sealed class DiscoveryCacheOptions
     public int WarmupLockLeaseSeconds { get; set; } = 30;
 
     /// <summary>
-    /// Page size for the bulk read. Default 100, which is also the registry API's maximum.
-    /// </summary>
-    [Range(1, 100)]
-    public int BulkPageSize { get; set; } = 100;
-
-    /// <summary>
-    /// Hard cap on pages fetched in one refresh. Default 20 (2000 domains).
-    /// </summary>
-    /// <remarks>
-    /// A runaway guard against a registry that ignores <c>page</c>. Hitting it is logged at Warning:
-    /// silent truncation is how the previous implementation cached only the first page, forever,
-    /// with nothing to show for it in the logs.
-    /// </remarks>
-    [Range(1, 1000)]
-    public int MaxPages { get; set; } = 20;
-
-    /// <summary>
     /// Relative URL template for the bulk read, appended to
-    /// <see cref="ServiceDiscoveryOptions.BaseUrl"/>.
-    /// <c>{0}</c> = registry domain, <c>{1}</c> = page, <c>{2}</c> = page size.
-    /// </summary>
-    public string BulkEndpointTemplate { get; set; } = "/{0}/workflows/domain/instances?page={1}&pageSize={2}";
-
-    /// <summary>
-    /// Server-side filter sent with the bulk read. Empty disables it.
+    /// <see cref="ServiceDiscoveryOptions.BaseUrl"/>. <c>{0}</c> = registry domain.
     /// </summary>
     /// <remarks>
-    /// An optimisation only. The client re-checks each item's status regardless, because older
-    /// runtimes answer <c>400</c> for this filter shape and the refresher then retries unfiltered.
+    /// Points at the registry's <c>domain-list</c> function, which is Domain-scope and answers
+    /// <c>{ "items": [ { domainName, baseUrl, appId, healthUrl } ] }</c> for the whole registry in
+    /// one request. The registry owns the projection — it filters to active registrations, orders
+    /// them, resolves the domain name from the instance key and drops anything unroutable — so there
+    /// is nothing left to re-derive here and no pagination to drive.
+    /// <para>
+    /// <b>The registry must actually carry that function.</b> A discovery deployment whose package
+    /// predates it answers 404, every refresh window fails, and the cache simply stays cold: lookups
+    /// fall back to the live per-domain path, which is the behaviour with the cache switched off.
+    /// The template is configurable so an API-gateway path variation stays a config change.
+    /// </para>
     /// </remarks>
-    public string BulkFilter { get; set; } = "{\"status\":{\"eq\":\"A\"}}";
+    public string DomainListEndpointTemplate { get; set; } = "/{0}/functions/domain-list";
 
     /// <summary>
-    /// Instance statuses accepted from the bulk read. Default <c>A</c> (Active).
+    /// Number of listed domains at which the list is assumed to be truncated. Default 500.
     /// </summary>
     /// <remarks>
-    /// This is the status of the <i>registration workflow instance</i>, not a health signal. A
-    /// registration flow that reaches a Finish state becomes <c>C</c>, and requiring <c>A</c> would
-    /// then drop a perfectly live domain from the warm-up — the lookup still works, but every call
-    /// for it pays full registry latency. Configurable so a deployment whose registration flow
-    /// completes can add <c>C</c> without a code change.
+    /// The registry function serves a single page and its response carries no truncation signal, so
+    /// a full page is the only evidence that domains may be missing. Reaching this count is logged at
+    /// Warning and the list is published anyway: a partial warm-up still serves the domains it holds,
+    /// and the ones it does not simply pay a live lookup — where refusing to publish would leave the
+    /// cache empty and every domain paying it. Keep it aligned with the registry function's own page
+    /// size; lowering it only makes the warning fire earlier.
     /// </remarks>
-    public HashSet<string> AcceptedStatuses { get; set; } = new(StringComparer.OrdinalIgnoreCase) { "A" };
+    [Range(1, 100000)]
+    public int DomainListExpectedMax { get; set; } = 500;
 }

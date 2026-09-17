@@ -98,8 +98,10 @@ public sealed class DiscoveryCacheRegistrationTests
         // Twice the window: survive one missed refresh, expire after roughly two.
         options.L2TtlSeconds.ShouldBe(options.RefreshIntervalSeconds * 2);
 
-        // Short despite the long window — it is the residual staleness after a forced refresh.
-        options.L1TtlSeconds.ShouldBe(60);
+        // Ten minutes: short relative to the window, because it is the residual staleness after a
+        // forced refresh — the shared layer is corrected at once, each pod's own copy is not.
+        options.L1TtlSeconds.ShouldBe(600);
+        options.L1TtlSeconds.ShouldBeLessThan(options.RefreshIntervalSeconds);
 
         // Also short: a tick inside a served window costs one cache read, and what it buys is
         // retrying a FAILED window within a minute rather than at the end of the hour.
@@ -163,17 +165,18 @@ public sealed class DiscoveryCacheRegistrationTests
     }
 
     [Fact]
-    public void An_empty_accepted_status_set_is_rejected()
+    public void An_empty_domain_list_endpoint_template_is_rejected()
     {
         var result = Validate(new DiscoveryCacheOptions
         {
             Enabled = true,
-            AcceptedStatuses = []
+            DomainListEndpointTemplate = string.Empty
         });
 
-        // Would warm nothing at all while looking perfectly healthy.
+        // The bulk read is the only thing that fills the cache; with nowhere to read from it warms
+        // nothing at all while looking perfectly healthy.
         result.Failed.ShouldBeTrue();
-        result.FailureMessage.ShouldContain("AcceptedStatuses");
+        result.FailureMessage.ShouldContain("DomainListEndpointTemplate");
     }
 
     [Fact]

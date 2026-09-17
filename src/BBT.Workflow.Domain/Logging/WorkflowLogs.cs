@@ -2671,13 +2671,13 @@ public static partial class WorkflowLogs
     public static partial void BulkCacheRefreshFailed(this ILogger logger, string reason);
 
     /// <summary>
-    /// Logs each page requested during a bulk refresh.
+    /// Logs the single registry read a bulk refresh performs.
     /// </summary>
     [LoggerMessage(
         EventId = 50004,
         Level = LogLevel.Debug,
-        Message = "Fetching discovery registration page {Page}")]
-    public static partial void FetchingDomainPage(this ILogger logger, int page);
+        Message = "Fetching the discovery domain list from {Url}")]
+    public static partial void FetchingDomainList(this ILogger logger, string url);
 
     /// <summary>
     /// Logs a lookup that the cache could not serve and had to resolve from the registry.
@@ -2712,36 +2712,28 @@ public static partial class WorkflowLogs
     public static partial void BulkCacheRefreshSkippedNotOwner(this ILogger logger);
 
     /// <summary>
-    /// Logs that the bulk read stopped at its page cap, meaning the result may be incomplete.
+    /// Logs that the domain list came back full, so the registry may be holding more than it served.
     /// </summary>
     /// <remarks>
-    /// Warning, not Debug: the domains beyond the cap are simply absent from the cache, and every
-    /// call for one of them silently pays full registry latency forever.
+    /// Warning, not Debug: the response looks perfectly normal and carries no truncation signal, and
+    /// the domains beyond the ceiling are simply absent from the cache — every call for one of them
+    /// silently pays full registry latency until the ceiling is raised on the registry side.
     /// </remarks>
     [LoggerMessage(
         EventId = 50038,
         Level = LogLevel.Warning,
-        Message = "Discovery bulk read stopped at the {MaxPages}-page cap with {Count} domain(s); the result may be truncated")]
-    public static partial void BulkPageCapReached(this ILogger logger, int maxPages, int count);
+        Message = "Discovery domain list returned {Count} domain(s), at or above the expected maximum of {ExpectedMax}; the list may be truncated")]
+    public static partial void DomainListCeilingReached(this ILogger logger, int count, int expectedMax);
 
     /// <summary>
-    /// Logs that pagination was abandoned because a page repeated the previous page's contents.
+    /// Logs a bulk read that 404'd, which means the registry does not expose the domain-list
+    /// function this runtime warms from.
     /// </summary>
     [LoggerMessage(
         EventId = 50039,
         Level = LogLevel.Warning,
-        Message = "Discovery bulk read stopped at page {Page}: the registry returned the same domains as the previous page")]
-    public static partial void BulkPaginationStalled(this ILogger logger, int page);
-
-    /// <summary>
-    /// Logs that the registry rejected the server-side status filter, so the bulk read continues
-    /// unfiltered and relies on the client-side status check.
-    /// </summary>
-    [LoggerMessage(
-        EventId = 50040,
-        Level = LogLevel.Debug,
-        Message = "Discovery registry rejected the bulk status filter; retrying unfiltered")]
-    public static partial void BulkFilterRejectedRetryingUnfiltered(this ILogger logger);
+        Message = "Discovery domain-list endpoint {Url} answered 404; the registry deployment may predate the domain-list function. The cache stays cold and every lookup resolves live")]
+    public static partial void DomainListEndpointMissing(this ILogger logger, string url);
 
     /// <summary>
     /// Logs a discovery cache operation that failed. Never rethrown: a cache that cannot be read or

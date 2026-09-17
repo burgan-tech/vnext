@@ -41,16 +41,15 @@ public interface IDiscoveryRegistryClient
     Task<Result<DomainRegistration>> LookupAsync(string domain, CancellationToken cancellationToken);
 
     /// <summary>
-    /// Reads every registration the registry holds, following its pagination.
+    /// Reads every registration the registry holds, in one call to its <c>domain-list</c> function.
     /// </summary>
     /// <returns>
-    /// All accepted registrations; <c>DomainDiscoveryFailed</c> if ANY page fails.
+    /// Every registration the registry published; <c>DomainDiscoveryFailed</c> if the read fails.
     /// </returns>
     /// <remarks>
     /// All-or-nothing on purpose. A partially fetched list is indistinguishable from a registry that
-    /// genuinely lost domains, and publishing one would evict good entries in favour of nothing. The
-    /// previous implementation broke out of its page loop on error and cached what it had, which is
-    /// how it came to hold only the first page — silently, for as long as the process lived.
+    /// genuinely lost domains, and publishing one would evict good entries in favour of nothing —
+    /// which is why a failed read returns an error rather than whatever it managed to collect.
     /// </remarks>
     Task<Result<IReadOnlyList<DomainRegistration>>> ListAllAsync(CancellationToken cancellationToken);
 }
@@ -167,101 +166,9 @@ public sealed class DiscoveryRegistryClient(
         }
 
         var cache = options.Cache;
-        var accumulated = new List<DomainRegistration>();
-        var previousPageKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var applyFilter = !string.IsNullOrWhiteSpace(cache.BulkFilter);
+        var requestUrl = BuildDomainListUrl(options);
 
-        for (var page = 1; page <= cache.MaxPages; page++)
-        {
-            logger.FetchingDomainPage(page);
-
-            var fetch = await FetchPageAsync(options, page, applyFilter, cancellationToken);
-
-            // An older runtime rejects this filter shape with 4xx: its legacy path parses the status
-            // through Enum.Parse, and InstanceStatus is a sealed class rather than an enum. Retry the
-            // page unfiltered and drop the filter for the rest of the run — the client-side status
-            // check below is authoritative anyway, so the filter was only ever an optimisation.
-            if (fetch.FilterRejected)
-            {
-                logger.BulkFilterRejectedRetryingUnfiltered();
-                applyFilter = false;
-                fetch = await FetchPageAsync(options, page, applyFilter: false, cancellationToken);
-            }
-
-            if (!fetch.Succeeded)
-                return Result<IReadOnlyList<DomainRegistration>>.Fail(fetch.Error);
-
-            var items = fetch.Items;
-
-            if (items.Count == 0)
-                return Result<IReadOnlyList<DomainRegistration>>.Ok(accumulated);
-
-            // A registry that ignores `page` would otherwise loop to MaxPages, re-adding the same
-            // domains each time and burning the whole lease to achieve nothing.
-            var pageKeys = items
-                .Select(ResolveDomainName)
-                .Where(n => !string.IsNullOrWhiteSpace(n))
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
-
-            if (page > 1 && pageKeys.Count > 0 && pageKeys.SetEquals(previousPageKeys))
-            {
-                logger.BulkPaginationStalled(page);
-                break;
-            }
-
-            previousPageKeys = pageKeys;
-
-            foreach (var item in items)
-            {
-                if (ToRegistration(item, cache.AcceptedStatuses) is { } registration)
-                    accumulated.Add(registration);
-            }
-
-            // A short page is the last page.
-            if (items.Count < cache.BulkPageSize)
-                return Result<IReadOnlyList<DomainRegistration>>.Ok(accumulated);
-
-            if (page == cache.MaxPages)
-            {
-                // Loud on purpose. Silent truncation is exactly how the removed implementation ended
-                // up holding only the first hundred domains, with nothing in the logs to say so.
-                logger.BulkPageCapReached(cache.MaxPages, accumulated.Count);
-            }
-        }
-
-        return Result<IReadOnlyList<DomainRegistration>>.Ok(accumulated);
-    }
-
-    /// <summary>
-    /// Domain placeholder for errors raised by the bulk read, which is not about one domain.
-    /// </summary>
-    private const string AllDomains = "*";
-
-    /// <summary>
-    /// Outcome of one page fetch. <see cref="FilterRejected"/> is separate from failure because it
-    /// is recoverable by retrying without the server-side filter.
-    /// </summary>
-    private readonly record struct PageFetch(
-        bool Succeeded,
-        bool FilterRejected,
-        Error Error,
-        List<FunctionDataItem> Items)
-    {
-        public static PageFetch Ok(List<FunctionDataItem> items) => new(true, false, Error.None, items);
-        public static PageFetch Failed(Error error) => new(false, false, error, []);
-        public static PageFetch RejectedFilter() => new(false, true, Error.None, []);
-    }
-
-    /// <summary>
-    /// Fetches one page of registrations.
-    /// </summary>
-    private async Task<PageFetch> FetchPageAsync(
-        ServiceDiscoveryOptions options,
-        int page,
-        bool applyFilter,
-        CancellationToken cancellationToken)
-    {
-        var requestUrl = BuildBulkUrl(options, page, applyFilter);
+        logger.FetchingDomainList(requestUrl);
 
         try
         {
@@ -272,21 +179,41 @@ public sealed class DiscoveryRegistryClient(
             {
                 var errorContent = await response.ReadDecompressedContentAsync(cancellationToken);
 
-                if (applyFilter && (int)response.StatusCode is >= 400 and < 500)
-                    return PageFetch.RejectedFilter();
+                // Called out separately because it is the one failure with a configuration cause
+                // rather than an operational one, and the message is the only guidance left now that
+                // the paginated instance-list fallback is gone.
+                if (response.StatusCode == HttpStatusCode.NotFound)
+                    logger.DomainListEndpointMissing(requestUrl);
+                else
+                    logger.LogWarning(
+                        "Discovery domain-list read returned {StatusCode}: {Error}",
+                        response.StatusCode, errorContent);
 
-                logger.LogWarning(
-                    "Discovery bulk read returned {StatusCode} for page {Page}: {Error}",
-                    response.StatusCode, page, errorContent);
-
-                return PageFetch.Failed(
+                return Result<IReadOnlyList<DomainRegistration>>.Fail(
                     WorkflowErrors.DomainDiscoveryFailed(AllDomains, $"HTTP {response.StatusCode}"));
             }
 
-            var dto = await response.Content.ReadFromJsonAsync<FunctionDataListResponse>(
+            var dto = await response.Content.ReadFromJsonAsync<DomainListResponse>(
                 JsonSerializerConstants.JsonOptions, cancellationToken);
 
-            return PageFetch.Ok(dto?.Items ?? []);
+            var items = dto?.Items ?? [];
+
+            // The registry function serves ONE page, sized by its own ceiling, and its response
+            // carries no truncation signal. Sitting exactly on the expected maximum is therefore the
+            // only evidence available that domains may be missing — loud, because the list looks
+            // perfectly normal and would otherwise be published and cached as complete.
+            if (items.Count >= cache.DomainListExpectedMax)
+                logger.DomainListCeilingReached(items.Count, cache.DomainListExpectedMax);
+
+            var registrations = new List<DomainRegistration>(items.Count);
+
+            foreach (var item in items)
+            {
+                if (ToRegistration(item) is { } registration)
+                    registrations.Add(registration);
+            }
+
+            return Result<IReadOnlyList<DomainRegistration>>.Ok(registrations);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -294,80 +221,58 @@ public sealed class DiscoveryRegistryClient(
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
         {
-            logger.LogWarning(ex, "Discovery bulk read failed for page {Page}", page);
-            return PageFetch.Failed(WorkflowErrors.DomainDiscoveryFailed(AllDomains, ex.Message));
+            logger.LogWarning(ex, "Discovery domain-list read failed");
+            return Result<IReadOnlyList<DomainRegistration>>.Fail(
+                WorkflowErrors.DomainDiscoveryFailed(AllDomains, ex.Message));
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Unexpected error during discovery bulk read, page {Page}", page);
-            return PageFetch.Failed(WorkflowErrors.DomainDiscoveryFailed(AllDomains, ex.Message));
+            logger.LogError(ex, "Unexpected error during the discovery domain-list read");
+            return Result<IReadOnlyList<DomainRegistration>>.Fail(
+                WorkflowErrors.DomainDiscoveryFailed(AllDomains, ex.Message));
         }
     }
 
     /// <summary>
-    /// The registry sets the instance key to the domain name, so it is a sound fallback for a
-    /// registration whose attributes predate the <c>domainName</c> field.
+    /// Domain placeholder for errors raised by the bulk read, which is not about one domain.
     /// </summary>
-    private static string ResolveDomainName(FunctionDataItem item)
-        => string.IsNullOrWhiteSpace(item.Attributes.DomainName) ? item.Key : item.Attributes.DomainName;
+    private const string AllDomains = "*";
 
     /// <summary>
-    /// Maps one list item to a registration, or <c>null</c> when it should not be warmed.
+    /// Builds the bulk-read URL from <see cref="DiscoveryCacheOptions.DomainListEndpointTemplate"/>.
     /// </summary>
     /// <remarks>
-    /// The status check is client-side and authoritative, because the server-side filter is optional
-    /// and may have been dropped (see <see cref="ListAllAsync"/>). Note that <c>metadata.status</c>
-    /// is the status of the registration WORKFLOW INSTANCE and not a health signal — which is why
-    /// the accepted set is configurable rather than hard-coded to <c>A</c>. A deployment whose
-    /// registration flow runs through to a Finish state leaves its instances <c>C</c>, and hard-coding
-    /// would silently skip every one of its domains: still correct, since a miss falls back to a live
-    /// lookup, but the warm-up would achieve nothing at all.
+    /// The registry's <c>domain-list</c> is a Domain-scope function, so the whole registry fits in
+    /// one request and there is no pagination to drive: status filtering, ordering and the
+    /// key-versus-<c>domainName</c> decision all happen server-side, where the registry owns them.
     /// </remarks>
-    private static DomainRegistration? ToRegistration(FunctionDataItem item, HashSet<string> acceptedStatuses)
+    private static string BuildDomainListUrl(ServiceDiscoveryOptions options)
     {
-        if (!acceptedStatuses.Contains(item.Metadata.Status))
-            return null;
+        var relativePath = string.Format(
+            options.Cache.DomainListEndpointTemplate,
+            Uri.EscapeDataString(options.Domain));
 
-        var domainName = ResolveDomainName(item);
-
-        if (string.IsNullOrWhiteSpace(domainName))
-            return null;
-
-        var attributes = item.Attributes;
-
-        return new DomainRegistration(
-            domainName,
-            string.IsNullOrWhiteSpace(attributes.BaseUrl) ? null : attributes.BaseUrl,
-            string.IsNullOrWhiteSpace(attributes.AppId) ? null : attributes.AppId,
-            attributes.HealthUrl);
+        return options.BaseUrl.TrimEnd('/') + relativePath;
     }
 
     /// <summary>
-    /// Builds a bulk page URL.
+    /// Maps one listed domain to a registration, or <c>null</c> when it cannot be warmed.
     /// </summary>
     /// <remarks>
-    /// The page number is carried explicitly rather than by following the response's
-    /// <c>links.next</c>. Those links are generated with the REMOTE's API-gateway base path, which by
-    /// design bears no relation to <see cref="ServiceDiscoveryOptions.BaseUrl"/>; a rooted link
-    /// resolves against the authority alone and silently drops the configured path prefix. That is
-    /// not hypothetical — it is how the removed implementation truncated itself to a single page.
+    /// Only the name is required here. A registration with no <c>baseUrl</c> is already dropped by
+    /// the registry function, and requiring one again would be the HTTP provider's rule leaking into
+    /// a shared read — the same reasoning as <see cref="LookupAsync"/>.
     /// </remarks>
-    private static string BuildBulkUrl(ServiceDiscoveryOptions options, int page, bool applyFilter)
+    private static DomainRegistration? ToRegistration(FunctionData item)
     {
-        var cache = options.Cache;
+        if (string.IsNullOrWhiteSpace(item.DomainName))
+            return null;
 
-        var relativePath = string.Format(
-            cache.BulkEndpointTemplate,
-            Uri.EscapeDataString(options.Domain),
-            page,
-            cache.BulkPageSize);
-
-        var url = options.BaseUrl.TrimEnd('/') + relativePath;
-
-        if (applyFilter && !string.IsNullOrWhiteSpace(cache.BulkFilter))
-            url += (url.Contains('?') ? "&" : "?") + "filter=" + Uri.EscapeDataString(cache.BulkFilter);
-
-        return url;
+        return new DomainRegistration(
+            item.DomainName,
+            string.IsNullOrWhiteSpace(item.BaseUrl) ? null : item.BaseUrl,
+            string.IsNullOrWhiteSpace(item.AppId) ? null : item.AppId,
+            item.HealthUrl);
     }
 
     /// <summary>
@@ -392,33 +297,16 @@ public sealed class DiscoveryRegistryClient(
     }
 
     /// <summary>
-    /// Response DTO for the paginated registration list.
+    /// Response DTO for the registry's <c>domain-list</c> function.
     /// </summary>
     /// <remarks>
-    /// Deliberately NOT <see cref="SingleDomainResponse"/>: the list endpoint answers
-    /// <c>{ links, items: [ { key, metadata, attributes } ] }</c> while the single-domain lookup
-    /// answers <c>{ data, eTag }</c>. Same registration, different envelope.
+    /// Deliberately NOT <see cref="SingleDomainResponse"/>: the list function answers
+    /// <c>{ items: [ { domainName, baseUrl, appId, healthUrl } ] }</c> while the single-domain lookup
+    /// answers <c>{ data, eTag }</c>. Same registration, different envelope — and an empty
+    /// <c>items</c> is a valid 200, never a 404.
     /// </remarks>
-    private sealed record FunctionDataListResponse
+    private sealed record DomainListResponse
     {
-        public List<FunctionDataItem> Items { get; init; } = [];
-    }
-
-    /// <summary>
-    /// One registration in the paginated list. <c>attributes</c> carries the registration itself.
-    /// </summary>
-    private sealed record FunctionDataItem
-    {
-        public string Key { get; init; } = string.Empty;
-        public FunctionData Attributes { get; init; } = new();
-        public InstanceMetadata Metadata { get; init; } = new();
-    }
-
-    /// <summary>
-    /// The subset of a list item's <c>metadata</c> the refresher reads.
-    /// </summary>
-    private sealed record InstanceMetadata
-    {
-        public string Status { get; init; } = string.Empty;
+        public List<FunctionData> Items { get; init; } = [];
     }
 }
