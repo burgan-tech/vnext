@@ -65,9 +65,11 @@ public static class WorkflowInfrastructureModuleServiceCollectionExtensions
         services.AddAetherInfrastructure();
         var queryOptions = services.AddOptions<InstanceQueryOptions>();
         if (configuration != null) queryOptions.Bind(configuration.GetSection(InstanceQueryOptions.SectionName));
+        // Options only: the catalog implementation itself needs IDistributedCacheService and is
+        // registered by AddInfrastructureRuntimeServices, so minimal hosts (DbMigrator) can still
+        // call this module without a distributed cache.
         var attributeOptions = services.AddOptions<BBT.Workflow.Schemas.AttributeIndexOptions>();
         if (configuration != null) attributeOptions.Bind(configuration.GetSection(BBT.Workflow.Schemas.AttributeIndexOptions.SectionName));
-        services.AddScoped<BBT.Workflow.Definitions.Schemas.IAttributeIndexCatalog, PostgresAttributeIndexService>();
         
         // Ensure IDistributedCache is available for SchemaValidator
         // If not registered by Application/API layer, use in-memory fallback
@@ -134,7 +136,8 @@ public static class WorkflowInfrastructureModuleServiceCollectionExtensions
     /// Registers runtime-only infrastructure services that require external dependencies:
     /// domain discovery (requires <see cref="BBT.Aether.DistributedCache.IDistributedCacheService"/>),
     /// embedded scripting (requires <see cref="BBT.Workflow.Caching.IComponentCacheStore"/> from Application layer),
-    /// and post-commit idempotency store (requires <see cref="BBT.Aether.DistributedCache.IDistributedCacheService"/>).
+    /// post-commit idempotency store and the attribute index catalog (both require
+    /// <see cref="BBT.Aether.DistributedCache.IDistributedCacheService"/>).
     /// Call this only from hosts that register <c>AddApplicationModule()</c> and <c>AddDistributedCache()</c>.
     /// Do NOT call from DbMigrator or other minimal hosts.
     /// </summary>
@@ -146,6 +149,10 @@ public static class WorkflowInfrastructureModuleServiceCollectionExtensions
 
         // Post-Commit Idempotency Store (needs IDistributedCacheService)
         services.AddSingleton<IPostCommitIdempotencyStore, DistributedCacheIdempotencyStore>();
+
+        // Attribute index catalog — read path only (InstanceQueryAppService); needs
+        // IDistributedCacheService + IDistributedLockService.
+        services.AddScoped<BBT.Workflow.Definitions.Schemas.IAttributeIndexCatalog, PostgresAttributeIndexService>();
 
         // Embedded Script Services (needs IComponentCacheStore from Application layer)
         services.AddEmbeddedScriptServices();
