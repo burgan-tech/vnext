@@ -251,6 +251,16 @@
         "AttributeIndexes:CatalogCacheSeconds"
       ],
       "documentation": "docs/runtime/manual-attribute-index-maintenance.md"
+    },
+    "discoveryDomainListWarmup": {
+      "since": "0.0.92",
+      "status": "stable",
+      "description": "The discovery endpoint cache's bulk warm-up reads the registry's domain-list function - GET {ServiceDiscovery:BaseUrl}/{ServiceDiscovery:Domain}/functions/domain-list - once per refresh window, instead of paging the raw domain instance list. The function is Domain-scope, answers { items: [ { domainName, baseUrl, appId, healthUrl } ] } for the whole registry in one call, and is itself cached on the registry side for 24h under discovery:domains:active with write-through eviction on domain create/update. Nothing else about the cache's mechanics changed: the hour-long window, the distributed lock, the refresh marker, the L2 dead-man switch and the fail-open behaviour are unchanged, and an unreadable registry still leaves every lookup resolving live. The in-process L1 TTL default did move in the same release, from 60s to 600s - see the deprecations entry service-discovery-cache-l1-ttl-default. Requires a discovery registry that exposes domain-list; there is no fallback to the previous paged read.",
+      "configuration": {
+        "ServiceDiscovery:Cache:DomainListEndpointTemplate": "/{0}/functions/domain-list",
+        "ServiceDiscovery:Cache:DomainListExpectedMax": 500,
+        "ServiceDiscovery:Cache:L1TtlSeconds": 600
+      }
     }
   }
 }

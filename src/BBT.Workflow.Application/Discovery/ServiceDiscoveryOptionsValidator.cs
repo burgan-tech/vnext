@@ -75,15 +75,8 @@ public sealed class ServiceDiscoveryOptionsValidator : IValidateOptions<ServiceD
                 "window does not expire the whole cache.");
         }
 
-        if (cache.AcceptedStatuses.Count == 0)
-        {
-            failures.Add(
-                "ServiceDiscovery:Cache:AcceptedStatuses must not be empty; an empty set discards every " +
-                "registration and warms nothing.");
-        }
-
-        if (string.IsNullOrWhiteSpace(cache.BulkEndpointTemplate))
-            failures.Add("ServiceDiscovery:Cache:BulkEndpointTemplate must not be empty.");
+        if (string.IsNullOrWhiteSpace(cache.DomainListEndpointTemplate))
+            failures.Add("ServiceDiscovery:Cache:DomainListEndpointTemplate must not be empty.");
 
         return failures.Count == 0
             ? ValidateOptionsResult.Success
