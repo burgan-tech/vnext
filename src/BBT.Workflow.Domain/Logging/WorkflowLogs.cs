@@ -884,6 +884,18 @@ public static partial class WorkflowLogs
         this ILogger logger, string taskKey, string taskType, string reason);
 
     /// <summary>
+    /// Logs when an in-process (orchestrator-local) task invocation fails at the transport layer —
+    /// no HTTP status code came back, so this is a connection/DNS/timeout failure rather than an
+    /// error response from the target.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10161,
+        Level = LogLevel.Error,
+        Message = "In-process invocation of task {TaskKey} ({TaskType}) failed at the transport layer: {Error}")]
+    public static partial void LocalTaskInvocationFailed(
+        this ILogger logger, string? taskKey, string taskType, string error);
+
+    /// <summary>
     /// Logs when task instance resolution fails (for DirectTrigger, GetInstanceData).
     /// </summary>
     [LoggerMessage(

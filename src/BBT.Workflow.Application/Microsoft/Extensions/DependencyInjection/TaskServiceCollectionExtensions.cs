@@ -142,6 +142,9 @@ public static class TaskServiceCollectionExtensions
         services.TryAddScoped<LocalHttpTaskInvoker>();
         services.AddScoped<ILocalTaskInvoker>(sp => sp.GetRequiredService<LocalHttpTaskInvoker>());
 
+        // In-process Dapr service-invocation invoker (issue #1007): serves the DaprService local path.
+        services.AddLocalTaskInvoker<LocalDaprServiceTaskInvoker>();
+
         // External HTTP executor (issue #399): the orchestrator performs the user-defined URL call
         // in-process — no /execution/invoke hop. The named HTTP clients it sends through are
         // concrete transport and are registered by the Infrastructure module
