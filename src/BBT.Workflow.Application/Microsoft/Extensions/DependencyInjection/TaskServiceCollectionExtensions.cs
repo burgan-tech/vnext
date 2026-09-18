@@ -13,6 +13,7 @@ using BBT.Workflow.Tasks.Evaluation;
 using BBT.Workflow.Tasks.Evaluators;
 using BBT.Workflow.Tasks.Executors;
 using BBT.Workflow.Tasks.Factory;
+using BBT.Workflow.Tasks.Invocation;
 using BBT.Workflow.Tasks.Persistence;
 using BBT.Workflow.Tasks.Persistence.Strategies;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -102,6 +103,19 @@ public static class TaskServiceCollectionExtensions
         // DaprClient.CreateInvokeHttpClient() (the InvokeMethod* family is [Obsolete] in 1.17). Singleton,
         // shared with the Execution invokers when both layers live in one host (TryAdd).
         services.TryAddSingleton(new DaprServiceInvocationClient(DaprClient.CreateInvokeHttpClient()));
+
+        // Local-versus-remote task invocation routing (issue #1007). Ships Remote-by-default:
+        // the section below is what an operator flips, per type or globally. The router's
+        // capability gate means an entry naming a type with no in-process invoker degrades to
+        // the remote path rather than failing the task.
+        services.AddOptions<TaskInvocationOptions>()
+            .BindConfiguration(TaskInvocationOptions.SectionName)
+            .ValidateOnStart();
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IValidateOptions<TaskInvocationOptions>, TaskInvocationOptionsValidator>());
+        services.TryAddScoped<ILocalTaskInvokerRegistry, LocalTaskInvokerRegistry>();
+        services.TryAddScoped<ITaskInvocationRouter, TaskInvocationRouter>();
+        services.TryAddScoped<ITaskInvocationDispatcher, TaskInvocationDispatcher>();
 
         // Remote invoker service for Dapr invocation
         services.TryAddScoped<IRemoteInvokerService, RemoteInvokerService>();
@@ -359,6 +373,17 @@ public static class TaskServiceCollectionExtensions
         Func<IServiceProvider, ITaskExecutor> implementationFactory)
     {
         services.AddScoped(implementationFactory);
+        return services;
+    }
+
+    /// <summary>
+    /// Registers an in-process task invoker (issue #1007). Scoped to match the executors that
+    /// consume it and the named-HttpClient/state-store gateways it composes.
+    /// </summary>
+    public static IServiceCollection AddLocalTaskInvoker<TInvoker>(this IServiceCollection services)
+        where TInvoker : class, ILocalTaskInvoker
+    {
+        services.AddScoped<ILocalTaskInvoker, TInvoker>();
         return services;
     }
 }

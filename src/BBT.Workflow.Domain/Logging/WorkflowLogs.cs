@@ -873,6 +873,17 @@ public static partial class WorkflowLogs
         string url);
 
     /// <summary>
+    /// Logs when a task's prepared binding is invoked in-process by the orchestrator instead of
+    /// being shipped to the Execution service (issue #1007).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10160,
+        Level = LogLevel.Debug,
+        Message = "Task {TaskKey} ({TaskType}) invoked in-process by the orchestrator [reason={Reason}]")]
+    public static partial void TaskInvokedLocally(
+        this ILogger logger, string taskKey, string taskType, string reason);
+
+    /// <summary>
     /// Logs when task instance resolution fails (for DirectTrigger, GetInstanceData).
     /// </summary>
     [LoggerMessage(
