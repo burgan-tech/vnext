@@ -1678,6 +1678,14 @@ public sealed class EfCoreInstanceRepository(
         int maxFlowsPerStatement,
         CancellationToken cancellationToken = default)
     {
+        // Argument guards, not configuration validation — the configured values are already checked
+        // at startup (HumanTaskFunctionOptions, ValidateOnStart). These exist because this is a
+        // public repository method and the batching loop below advances by maxFlowsPerStatement:
+        // a 0 leaves the offset where it was and spins forever, holding a connection, with nothing
+        // in any log to find. A caller that gets this wrong should learn about it immediately.
+        ArgumentOutOfRangeException.ThrowIfLessThan(perFlowLimit, 1);
+        ArgumentOutOfRangeException.ThrowIfLessThan(maxFlowsPerStatement, 1);
+
         if (flowKeys.Count == 0)
             return [];
 

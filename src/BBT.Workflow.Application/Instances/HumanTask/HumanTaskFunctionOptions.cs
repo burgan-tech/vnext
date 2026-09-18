@@ -1,3 +1,5 @@
+using System.ComponentModel.DataAnnotations;
+
 namespace BBT.Workflow.Instances.HumanTask;
 
 /// <summary>
@@ -20,11 +22,13 @@ public sealed class HumanTaskFunctionOptions
     /// Maximum candidate rows read from one workflow schema, enforced in SQL. Applied before
     /// authorization, so the caller's own list can be shorter.
     /// </summary>
+    [Range(1, 5_000, ErrorMessage = "PerSchemaLimit must be between 1 and 5000")]
     public int PerSchemaLimit { get; set; } = 200;
 
     /// <summary>
     /// Maximum rows in the merged response, applied after authorization and ordering.
     /// </summary>
+    [Range(1, 10_000, ErrorMessage = "ResultCap must be between 1 and 10000")]
     public int ResultCap { get; set; } = 500;
 
     /// <summary>
@@ -36,6 +40,7 @@ public sealed class HumanTaskFunctionOptions
     /// a correlation graph that somehow cycles would otherwise walk forever on a public read path.
     /// Exceeding it is logged and counted, never silently treated as "no task here".
     /// </remarks>
+    [Range(1, 100, ErrorMessage = "MaxDescentDepth must be between 1 and 100")]
     public int MaxDescentDepth { get; set; } = 10;
 
     /// <summary>
@@ -47,7 +52,15 @@ public sealed class HumanTaskFunctionOptions
     /// Statement size and plan-cache churn, not connections: every batch shares the one connection,
     /// so raising or lowering this changes round trips, never concurrency. A domain with fewer flows
     /// than this issues exactly one statement, which is the common case.
+    /// <para>
+    /// Validated at startup, because the batching loop advances by this value: a configured 0 or a
+    /// negative would leave the offset where it was and spin forever on a public read path, holding
+    /// a connection open, with no error to find. A boot failure is the only acceptable way for that
+    /// value to surface. The upper bound is measured territory — 400 arms planned in 49.8 ms —
+    /// not a hard limit of the database.
+    /// </para>
     /// </remarks>
+    [Range(1, 1_000, ErrorMessage = "FlowsPerScanStatement must be between 1 and 1000")]
     public int FlowsPerScanStatement { get; set; } = 64;
 
     /// <summary>
@@ -70,6 +83,7 @@ public sealed class HumanTaskFunctionOptions
     /// that shares a pool with the pipeline.
     /// </para>
     /// </remarks>
+    [Range(1, 256, ErrorMessage = "FanoutParallelism must be between 1 and 256")]
     public int FanoutParallelism { get; set; } = 10;
 
     /// <summary>
@@ -81,5 +95,6 @@ public sealed class HumanTaskFunctionOptions
     /// so a single request is never throttled, and below the pool's size so this endpoint cannot
     /// starve the write path. Enforced by <see cref="HumanTaskDescentLimiter"/>.
     /// </remarks>
+    [Range(1, 1_024, ErrorMessage = "MaxConcurrentDescents must be between 1 and 1024")]
     public int MaxConcurrentDescents { get; set; } = 32;
 }

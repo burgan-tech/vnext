@@ -2739,6 +2739,21 @@ public static partial class WorkflowLogs
     /// Logs a discovery cache operation that failed. Never rethrown: a cache that cannot be read or
     /// written is a miss, not an error.
     /// </summary>
+    /// <summary>
+    /// The refresh loop found no <c>IDiscoveryCacheRefresher</c> and exited without ticking.
+    /// </summary>
+    /// <remarks>
+    /// Information, not a warning: this is the expected shape under
+    /// <c>ServiceDiscovery:Provider = "dapr"</c> or with the cache disabled. It is logged at all
+    /// because a silently absent refresher and a running-but-idle one look identical from outside.
+    /// </remarks>
+    [LoggerMessage(
+        EventId = 50042,
+        Level = LogLevel.Information,
+        Message = "Discovery cache refresh is not running: no {Service} is registered, which is the expected shape under ServiceDiscovery:Provider = \"dapr\" or with the cache disabled")]
+    public static partial void DiscoveryCacheRefresherNotRegistered(
+        this ILogger logger, string service);
+
     [LoggerMessage(
         EventId = 50041,
         Level = LogLevel.Warning,

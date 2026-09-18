@@ -73,14 +73,24 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
             .BindConfiguration(InstanceFilteringOptions.SectionName);
         // Bounds for the human-task fan-out. Separate from any cache options: these apply whether
         // or not a cache is enabled, and an unbounded query there is unbounded end to end.
+        // Validated at startup, not at first use. Every bound here is a positive-integer loop or
+        // semaphore bound: FlowsPerScanStatement is the batching loop's stride and a configured 0
+        // would spin forever, MaxConcurrentDescents sizes a semaphore that 0 would deadlock, and
+        // FanoutParallelism reaches Parallel.ForEachAsync, which treats a negative as UNBOUNDED.
+        // Each of those is a hang or a connection storm discovered in production; a boot failure is
+        // the only acceptable way for a bad value to surface.
         services.AddOptions<HumanTaskFunctionOptions>()
-            .BindConfiguration(HumanTaskFunctionOptions.SectionName);
+            .BindConfiguration(HumanTaskFunctionOptions.SectionName)
+            .ValidateDataAnnotations()
+            .ValidateOnStart();
         services.AddScoped<IHumanTaskLeafResolver, HumanTaskLeafResolver>();
         // Singleton on purpose: a per-request ceiling caps nothing across requests, and it is the
         // product of the two that meets the connection pool.
         services.AddSingleton<HumanTaskDescentLimiter>();
         services.AddOptions<HumanTaskFunctionCacheOptions>()
-            .BindConfiguration(HumanTaskFunctionCacheOptions.SectionName);
+            .BindConfiguration(HumanTaskFunctionCacheOptions.SectionName)
+            .ValidateDataAnnotations()
+            .ValidateOnStart();
         services.AddScoped<IHumanTaskFunctionCache, HumanTaskFunctionCache>();
 
         services.AddOptions<StateFunctionCacheOptions>()

@@ -1,3 +1,5 @@
+using System.ComponentModel.DataAnnotations;
+
 namespace BBT.Workflow.Instances.Caching;
 
 /// <summary>
@@ -28,6 +30,12 @@ public sealed class HumanTaskFunctionCacheOptions
     public bool Enabled { get; set; } = true;
 
     /// <summary>Entry lifetime. See the staleness note on this type.</summary>
+    /// <remarks>
+    /// Validated at startup. A non-positive TTL would not disable the cache — it would write
+    /// entries that are already expired, so every request pays a full fan-out AND a pair of cache
+    /// round trips. <see cref="Enabled"/> is the kill switch; this is not one.
+    /// </remarks>
+    [Range(1, 86_400, ErrorMessage = "TtlSeconds must be between 1 and 86400")]
     public int TtlSeconds { get; set; } = 60;
 
     /// <summary>

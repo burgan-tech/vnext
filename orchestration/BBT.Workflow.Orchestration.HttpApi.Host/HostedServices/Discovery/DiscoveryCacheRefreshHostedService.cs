@@ -1,4 +1,5 @@
 using BBT.Workflow.Discovery;
+using BBT.Workflow.Logging;
 using Microsoft.Extensions.Options;
 
 namespace BBT.Workflow.HostedServices;
@@ -74,10 +75,7 @@ public sealed class DiscoveryCacheRefreshHostedService(
         // is nothing for this loop to drive and no tick will ever change that.
         if (!IsRefresherRegistered())
         {
-            logger.LogInformation(
-                "Discovery cache refresh is not running: no {Service} is registered, which is the " +
-                "expected shape under ServiceDiscovery:Provider = \"dapr\" or with the cache disabled.",
-                nameof(IDiscoveryCacheRefresher));
+            logger.DiscoveryCacheRefresherNotRegistered(nameof(IDiscoveryCacheRefresher));
             return;
         }
 
