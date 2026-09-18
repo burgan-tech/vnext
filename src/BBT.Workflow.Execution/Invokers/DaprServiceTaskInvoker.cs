@@ -63,10 +63,34 @@ public sealed class DaprServiceTaskInvoker(
             : HttpTaskInvocation.WasCancelled(result) ? "cancelled" : "failure";
         _metrics.RecordDaprServiceInvocation(binding.AppId, binding.MethodName, status);
 
-        if (!result.IsSuccess && result.StatusCode is null)
-            logger.LogError("Dapr service invocation failed for {TaskKey} - AppId: {AppId}, Error: {Error}",
-                taskKey, binding.AppId, result.ErrorMessage);
+        // The shared core never logs; restore the original two-branch split (Warning for a
+        // cancellation, Error for everything else) instead of collapsing both into one Error
+        // line — a cancellation is ordinary traffic (a caller timing out, an instance cancelled
+        // mid-call) and must not trip anything alerting on this invoker's Error rate. Same shape
+        // HttpTaskInvoker already uses for the HTTP path extracted the same way.
+        if (!result.IsSuccess && HttpTaskInvocation.WasCancelled(result))
+        {
+            logger.LogWarning("Dapr service invocation was cancelled for task {TaskKey} - AppId: {AppId}",
+                taskKey, binding.AppId);
+        }
+        else if (!result.IsSuccess && result.StatusCode is null)
+        {
+            logger.LogError("Dapr service invocation failed for {TaskKey} - AppId: {AppId}, Error: {Error}, ExceptionType: {ExceptionType}",
+                taskKey, binding.AppId, result.ErrorMessage, ExceptionTypeOf(result));
+        }
 
         return result;
     }
+
+    /// <summary>
+    /// Reads the transport-failure exception type name the shared core stamps into
+    /// <c>Metadata["ExceptionType"]</c> on the unhandled-exception path. The core swallows the
+    /// exception itself by contract (it returns a <see cref="TaskInvocationResult"/>, never
+    /// throws), so this is the only way the wrapper's error log can still name the failure type —
+    /// the same trade already made for <c>HttpTaskInvoker</c> when its core was extracted.
+    /// </summary>
+    private static string ExceptionTypeOf(TaskInvocationResult result) =>
+        result.Metadata?.TryGetValue("ExceptionType", out var value) == true && value is string type
+            ? type
+            : string.Empty;
 }
