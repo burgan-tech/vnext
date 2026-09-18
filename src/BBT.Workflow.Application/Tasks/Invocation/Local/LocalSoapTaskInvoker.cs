@@ -35,6 +35,11 @@ public sealed class LocalSoapTaskInvoker(
                 taskType: TaskTypes.Soap);
         }
 
+        if (!typedBinding.ValidateSSL)
+        {
+            logger.LocalTaskInvocationSslValidationDisabled(taskKey, TaskTypes.Soap, typedBinding.Url);
+        }
+
         var result = await SoapInvocation.SendAsync(
             httpClientFactory.CreateClient,
             typedBinding,

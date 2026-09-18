@@ -909,6 +909,21 @@ public static partial class WorkflowLogs
         this ILogger logger, string? taskKey, string taskType);
 
     /// <summary>
+    /// Logs when an in-process (orchestrator-local) task invocation bypasses SSL certificate
+    /// validation — a security-relevant signal every other invocation path already announces
+    /// (the Execution host's HTTP and SOAP invokers, and the local HTTP path's
+    /// <c>ExternalHttpTaskSslValidationDisabled</c>). Generic across local task types deliberately:
+    /// unlike that HTTP-specific event, this one is meant to be shared by every local invoker that
+    /// has an SSL-validation flag, starting with SOAP.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10163,
+        Level = LogLevel.Debug,
+        Message = "SSL certificate validation is disabled for in-process task {TaskKey} ({TaskType}) - Url: {Url}")]
+    public static partial void LocalTaskInvocationSslValidationDisabled(
+        this ILogger logger, string? taskKey, string taskType, string url);
+
+    /// <summary>
     /// Logs when task instance resolution fails (for DirectTrigger, GetInstanceData).
     /// </summary>
     [LoggerMessage(
