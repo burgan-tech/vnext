@@ -34,7 +34,7 @@ public sealed class LocalHttpTaskInvokerTests
         result.IsSuccess.ShouldBeTrue();
         result.StatusCode.ShouldBe(200);
         ((JsonElement)result.Data!).GetProperty("orderId").GetInt32().ShouldBe(42);
-        result.TaskType.ShouldBe("Http");
+        result.TaskType.ShouldBe(TaskTypes.Http);
         result.Metadata!["Url"].ShouldBe("https://workflow.local/endpoint");
     }
 

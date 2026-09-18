@@ -1,5 +1,4 @@
 using System.Text.Json;
-using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.Bindings;
 using BBT.Workflow.Logging;
@@ -32,11 +31,11 @@ public sealed class LocalHttpTaskInvoker(
         {
             return TaskInvocationResult.Failure(
                 error: $"HTTP task {taskKey} produced an empty HTTP binding.",
-                taskType: Definitions.TaskType.Http.ToString());
+                taskType: TaskTypes.Http);
         }
 
         return await InvokeAsync(
-            taskKey, typedBinding, traceContext, Definitions.TaskType.Http.ToString(), cancellationToken);
+            taskKey, typedBinding, traceContext, TaskTypes.Http, cancellationToken);
     }
 
     /// <summary>
