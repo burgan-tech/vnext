@@ -1,8 +1,8 @@
 using System.Diagnostics;
 using System.Text.Json;
 using BBT.Workflow.Execution.Bindings;
+using BBT.Workflow.Execution.Core.StateStores;
 using BBT.Workflow.Execution.Services;
-using BBT.Workflow.Execution.StateStores;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 

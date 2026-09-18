@@ -2,7 +2,7 @@ using System.Text.Json;
 using Dapr.Client;
 using Microsoft.Extensions.Configuration;
 
-namespace BBT.Workflow.Execution.StateStores;
+namespace BBT.Workflow.Execution.Core.StateStores;
 
 /// <summary>
 /// Dapr-backed implementation of <see cref="IStateStoreClient"/>. This is the single place that talks to

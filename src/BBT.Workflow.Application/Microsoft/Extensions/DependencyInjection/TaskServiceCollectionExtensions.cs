@@ -24,6 +24,7 @@ using ITimerEvaluator = BBT.Workflow.Tasks.Evaluation.ITimerEvaluator;
 using TaskFactory = BBT.Workflow.Tasks.Factory.TaskFactory;
 using Dapr.Client;
 using BBT.Workflow.Execution;
+using BBT.Workflow.Execution.Core.StateStores;
 
 namespace Microsoft.Extensions.DependencyInjection;
 
@@ -160,7 +161,15 @@ public static class TaskServiceCollectionExtensions
         services.AddTaskExecutor<DaprPubSubTaskExecutor>();
         services.AddTaskExecutor<DaprConversationTaskExecutor>();
         services.AddTaskExecutor<PythonTaskExecutor>();
+
+        // Shared Dapr state-store gateway, also used by the function response cache (issue #1007).
+        // TryAdd because the Execution host registers the same implementation, and both layers
+        // can live in one process.
+        services.TryAddSingleton<IStateStoreClient, DaprStateStoreClient>();
         services.AddTaskExecutor<StateStoreTaskExecutor>();
+
+        // In-process state-store invoker (issue #1007): serves the StateStore local path.
+        services.AddLocalTaskInvoker<LocalStateStoreTaskInvoker>();
 
         // Cache-Aside (read-through) executor: cache get/set is dispatched to the Execution service via
         // the StateStore invoker; the source task on a miss is orchestrated locally.
