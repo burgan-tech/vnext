@@ -14,6 +14,7 @@ using BBT.Workflow.Tasks.Evaluators;
 using BBT.Workflow.Tasks.Executors;
 using BBT.Workflow.Tasks.Factory;
 using BBT.Workflow.Tasks.Invocation;
+using BBT.Workflow.Tasks.Invocation.Local;
 using BBT.Workflow.Tasks.Persistence;
 using BBT.Workflow.Tasks.Persistence.Strategies;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -132,6 +133,14 @@ public static class TaskServiceCollectionExtensions
         // HTTP, SOAP and Dapr remote executors
         services.AddTaskExecutor<HttpTaskExecutor>();
         services.AddTaskExecutor<SoapTaskExecutor>();
+
+        // In-process HTTP invoker (issue #1007): serves the type-6 local path and is the body the
+        // type-22 wrapper below delegates to. Registered as a delegating factory rather than
+        // AddLocalTaskInvoker<T> so the concrete type (which the type-22 wrapper takes directly)
+        // and the ILocalTaskInvoker registration resolve to the SAME scoped instance instead of
+        // two separate invoker instances per scope.
+        services.TryAddScoped<LocalHttpTaskInvoker>();
+        services.AddScoped<ILocalTaskInvoker>(sp => sp.GetRequiredService<LocalHttpTaskInvoker>());
 
         // External HTTP executor (issue #399): the orchestrator performs the user-defined URL call
         // in-process — no /execution/invoke hop. The named HTTP clients it sends through are
