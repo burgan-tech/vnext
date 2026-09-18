@@ -896,6 +896,19 @@ public static partial class WorkflowLogs
         this ILogger logger, string? taskKey, string taskType, string error);
 
     /// <summary>
+    /// Logs when an in-process (orchestrator-local) task invocation is cancelled — ordinary
+    /// traffic (a caller timing out, an instance cancelled mid-call), carved out of
+    /// <see cref="LocalTaskInvocationFailed"/> so cancellation does not trip anything alerting on
+    /// this invoker's Error rate.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10162,
+        Level = LogLevel.Warning,
+        Message = "In-process invocation of task {TaskKey} ({TaskType}) was cancelled")]
+    public static partial void LocalTaskInvocationCancelled(
+        this ILogger logger, string? taskKey, string taskType);
+
+    /// <summary>
     /// Logs when task instance resolution fails (for DirectTrigger, GetInstanceData).
     /// </summary>
     [LoggerMessage(

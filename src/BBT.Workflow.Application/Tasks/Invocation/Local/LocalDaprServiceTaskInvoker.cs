@@ -44,7 +44,11 @@ public sealed class LocalDaprServiceTaskInvoker(
             LocalInvocationResultMapper.ToWireTraceContext(traceContext),
             taskKey);
 
-        if (!result.IsSuccess && result.StatusCode is null)
+        if (!result.IsSuccess && HttpTaskInvocation.WasCancelled(result))
+        {
+            logger.LocalTaskInvocationCancelled(taskKey, TaskTypes.DaprService);
+        }
+        else if (!result.IsSuccess && result.StatusCode is null)
         {
             logger.LocalTaskInvocationFailed(
                 taskKey, TaskTypes.DaprService, result.ErrorMessage ?? "Unknown error");

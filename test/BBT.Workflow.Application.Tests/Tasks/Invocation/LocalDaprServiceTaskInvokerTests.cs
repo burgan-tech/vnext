@@ -47,6 +47,20 @@ public sealed class LocalDaprServiceTaskInvokerTests
         invoker.TaskType.ShouldBe(TaskTypes.DaprService);
     }
 
+    [Fact]
+    public async Task InvokeAsync_EmptyBinding_FailsWithTheDaprServiceTaskTypeLabel()
+    {
+        var invoker = new LocalDaprServiceTaskInvoker(
+            new DaprServiceInvocationClient(new HttpClient(new StubHttpMessageHandler(new HttpResponseMessage()))),
+            NullLogger<LocalDaprServiceTaskInvoker>.Instance);
+
+        var result = await invoker.InvokeAsync(
+            "partner-call", JsonSerializer.SerializeToElement((object?)null), traceContext: null);
+
+        result.IsSuccess.ShouldBeFalse();
+        result.TaskType.ShouldBe(TaskTypes.DaprService);
+    }
+
     private static JsonElement Binding() => JsonSerializer.SerializeToElement(new DaprServiceBinding
     {
         AppId = "partner-api",
