@@ -22,6 +22,7 @@
     <PackageReference Include="pythonnet" Version="$(PythonNetPackageVersion)" />
     <PackageReference Include="KubernetesClient" Version="$(KubernetesClientPackageVersion)" />
     <ProjectReference Include="..\BBT.Workflow.Execution.Abstractions\BBT.Workflow.Execution.Abstractions.csproj" />
+    <ProjectReference Include="..\BBT.Workflow.Execution.Core\BBT.Workflow.Execution.Core.csproj" />
   </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="BBT.Workflow.Application.Tests" />
