@@ -50,6 +50,15 @@ public sealed class SoapTaskInvoker(
         SoapTaskBinding binding,
         CancellationToken cancellationToken)
     {
+        // The shared core doesn't log; this line was on the pre-extraction CreateHttpClient and
+        // must fire on the same condition (ValidateSSL false) before the call goes out, not after —
+        // same placement HttpTaskInvoker uses for its own copy of this guard.
+        if (!binding.ValidateSSL)
+        {
+            logger.LogDebug("SSL certificate validation is disabled for SOAP task {TaskKey} - URL: {Url}",
+                taskKey, binding.Url);
+        }
+
         var result = await SoapInvocation.SendAsync(
             httpClientFactory.CreateClient, binding, TaskType, cancellationToken, trusted: null, taskKey: taskKey);
 

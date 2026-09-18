@@ -48,6 +48,7 @@ public sealed class LocalSoapTaskInvokerTests
 
         result.IsSuccess.ShouldBeFalse();
         result.Metadata!["IsSoapFault"].ShouldBe(true);
+        result.ErrorMessage.ShouldNotBeNull();
         result.ErrorMessage.ShouldContain("bad request");
         result.TaskType.ShouldBe(TaskTypes.Soap);
     }
