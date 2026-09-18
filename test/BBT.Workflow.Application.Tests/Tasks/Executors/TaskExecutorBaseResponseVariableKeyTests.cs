@@ -11,6 +11,7 @@ using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks;
 using BBT.Workflow.Tasks.Executors;
+using BBT.Workflow.Tasks.Invocation;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using Shouldly;
@@ -113,8 +114,22 @@ public sealed class TaskExecutorBaseResponseVariableKeyTests
 
         public Task<Result<StandardTaskResponse>> ExecuteAsync(TaskTrigger trigger, string? responseVariableKey)
         {
+            // This test is about the two response-variable-name derivation points, not about
+            // routing — the dispatcher stub simply forwards to the same stubbed RemoteInvoker so
+            // today's behavior (remote-only) is preserved byte-for-byte.
+            var dispatcher = Substitute.For<ITaskInvocationDispatcher>();
+            dispatcher.DispatchAsync(
+                    Arg.Any<WorkflowTask>(), Arg.Any<string>(), Arg.Any<TaskEnvelope>(),
+                    Arg.Any<TaskTraceContext>(), Arg.Any<CancellationToken>())
+                .Returns(call => RemoteInvoker.InvokeAsync(
+                    call.ArgAt<string>(1),
+                    call.ArgAt<WorkflowTask>(0).Key,
+                    call.ArgAt<TaskEnvelope>(2),
+                    call.ArgAt<TaskTraceContext>(3),
+                    call.ArgAt<CancellationToken>(4)));
+
             var executor = new HttpTaskExecutor(
-                RemoteInvoker, Substitute.For<IScriptEngine>(), NullLogger<HttpTaskExecutor>.Instance);
+                RemoteInvoker, Substitute.For<IScriptEngine>(), dispatcher, NullLogger<HttpTaskExecutor>.Instance);
 
             var onExecute = OnExecuteTask.Create(0, _task, ScriptCode.FromNative(string.Empty));
             var context = new TaskExecutorContext(_task, onExecute, ScriptContext, null, trigger, TaskExecutionOrigin.Flow)
