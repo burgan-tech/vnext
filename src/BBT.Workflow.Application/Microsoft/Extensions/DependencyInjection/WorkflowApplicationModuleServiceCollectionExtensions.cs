@@ -6,6 +6,7 @@ using BBT.Workflow.Definitions.CastHandlers;
 using BBT.Workflow.Definitions.Validators;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Instances.Caching;
+using BBT.Workflow.Instances.HumanTask;
 using BBT.Workflow.Instances.Related;
 using BBT.Workflow.RepresentationEtag;
 using BBT.Workflow.Resilience;
@@ -70,6 +71,18 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
     {
            services.AddOptions<InstanceFilteringOptions>()
             .BindConfiguration(InstanceFilteringOptions.SectionName);
+        // Bounds for the human-task fan-out. Separate from any cache options: these apply whether
+        // or not a cache is enabled, and an unbounded query there is unbounded end to end.
+        services.AddOptions<HumanTaskFunctionOptions>()
+            .BindConfiguration(HumanTaskFunctionOptions.SectionName);
+        services.AddScoped<IHumanTaskLeafResolver, HumanTaskLeafResolver>();
+        // Singleton on purpose: a per-request ceiling caps nothing across requests, and it is the
+        // product of the two that meets the connection pool.
+        services.AddSingleton<HumanTaskDescentLimiter>();
+        services.AddOptions<HumanTaskFunctionCacheOptions>()
+            .BindConfiguration(HumanTaskFunctionCacheOptions.SectionName);
+        services.AddScoped<IHumanTaskFunctionCache, HumanTaskFunctionCache>();
+
         services.AddOptions<StateFunctionCacheOptions>()
             .BindConfiguration(StateFunctionCacheOptions.SectionName);
         services.AddScoped<IStateFunctionCache, StateFunctionCache>();

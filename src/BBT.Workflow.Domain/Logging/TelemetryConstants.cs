@@ -533,6 +533,42 @@ public static class TelemetryConstants
         /// <summary>Name of the pipeline execution profile resolved for the transition (e.g. Manual, AutoChain).</summary>
         public const string PipelineProfile = "vnext.pipeline.profile";
 
+        /// <summary>Workflow schemas the human-task fan-out visited.</summary>
+        public const string HumanTaskSchemasScanned = "vnext.humantask.schemas_scanned";
+
+        /// <summary>Candidate rows the fan-out selected, before authorization filtering.</summary>
+        public const string HumanTaskCandidates = "vnext.humantask.candidates";
+
+        /// <summary>Rows that survived authorization and were returned.</summary>
+        public const string HumanTaskReturned = "vnext.humantask.returned";
+
+        /// <summary>
+        /// Rows dropped for a reason that is not "the caller may not act on it" — an unresolvable
+        /// definition or state. A non-zero value means the list is incomplete.
+        /// </summary>
+        public const string HumanTaskDropped = "vnext.humantask.dropped";
+
+        /// <summary>Whole workflows whose contribution was discarded because the flow would not resolve.</summary>
+        public const string HumanTaskWorkflowsDropped = "vnext.humantask.workflows_dropped";
+
+        /// <summary>True when a per-schema limit or the merged cap cut the result.</summary>
+        public const string HumanTaskTruncated = "vnext.humantask.truncated";
+
+        /// <summary>Instances resolved by one descent hop — the hop is per (domain, flow), not per instance.</summary>
+        public const string HumanTaskHopSize = "vnext.humantask.hop_size";
+
+        /// <summary>Leaves authorized at one level of one flow's descent.</summary>
+        public const string HumanTaskLeaves = "vnext.humantask.leaves";
+
+        /// <summary>Roots handed to one flow's descent.</summary>
+        public const string HumanTaskRoots = "vnext.humantask.roots";
+
+        /// <summary>Roots whose descent produced a usable leaf.</summary>
+        public const string HumanTaskResolved = "vnext.humantask.resolved";
+
+        /// <summary>Rows the caller may act on.</summary>
+        public const string HumanTaskAuthorized = "vnext.humantask.authorized";
+
         /// <summary>Causation id linking a hop to the execution chain that produced it.</summary>
         public const string CausationId = "vnext.causation.id";
 

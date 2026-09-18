@@ -31,6 +31,8 @@ using NSubstitute;
 using Shouldly;
 using Xunit;
 
+using BBT.Workflow.Instances.HumanTask;
+
 namespace BBT.Workflow.Instances;
 
 /// <summary>
@@ -127,10 +129,15 @@ public class InstanceQueryAppServiceStateTests : IDisposable
             callerRoleResolver: new DefaultCallerRoleResolver(Substitute.For<ICurrentUser>()),
             paginationLinkGenerator: Substitute.For<BBT.Aether.Application.Pagination.IPaginationLinkGenerator>(),
             instanceFilteringOptions: Options.Create(new InstanceFilteringOptions()),
+            humanTaskOptions: Options.Create(new HumanTaskFunctionOptions()),
             attributeIndexCatalog: Substitute.For<IAttributeIndexCatalog>(),
             stateFunctionCache: _stateFunctionCache,
             dataFunctionCache: Substitute.For<Caching.IDataFunctionCache>(),
             instanceSchemaFunctionCache: Substitute.For<Caching.IInstanceSchemaFunctionCache>(),
+
+            humanTaskFunctionCache: Substitute.For<Caching.IHumanTaskFunctionCache>(),
+            descentLimiter: new HumanTask.HumanTaskDescentLimiter(
+                Microsoft.Extensions.Options.Options.Create(new HumanTask.HumanTaskFunctionOptions())),
             logger: Substitute.For<ILogger<InstanceQueryAppService>>());
     }
 
@@ -882,7 +889,7 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         var workflow = BuildWorkflow(state);
         SetupCommonMocks(instance, workflow);
         _transitionAuthorizationManager
-            .IsRoleAllowedForGrantsAsync(Arg.Any<string?>(), Arg.Any<IReadOnlyCollection<RoleGrant>>(),
+            .IsRoleAllowedForGrantsAsync(Arg.Any<IReadOnlyCollection<string>?>(), Arg.Any<IReadOnlyCollection<RoleGrant>>(),
                 Arg.Any<Instance?>(), Arg.Any<AuthorizationRequestContext?>(), Arg.Any<CancellationToken>())
             .Returns(true);
 
@@ -910,7 +917,7 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         var workflow = BuildWorkflow(state);
         SetupCommonMocks(instance, workflow);
         _transitionAuthorizationManager
-            .IsRoleAllowedForGrantsAsync(Arg.Any<string?>(), Arg.Any<IReadOnlyCollection<RoleGrant>>(),
+            .IsRoleAllowedForGrantsAsync(Arg.Any<IReadOnlyCollection<string>?>(), Arg.Any<IReadOnlyCollection<RoleGrant>>(),
                 Arg.Any<Instance?>(), Arg.Any<AuthorizationRequestContext?>(), Arg.Any<CancellationToken>())
             .Returns(false);
 
@@ -945,7 +952,7 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         result.Result.IsSuccess.ShouldBeTrue();
         result.Result.Value!.State.ShouldBe(TestState);
         await _transitionAuthorizationManager.DidNotReceive()
-            .IsRoleAllowedForGrantsAsync(Arg.Any<string?>(), Arg.Any<IReadOnlyCollection<RoleGrant>>(),
+            .IsRoleAllowedForGrantsAsync(Arg.Any<IReadOnlyCollection<string>?>(), Arg.Any<IReadOnlyCollection<RoleGrant>>(),
                 Arg.Any<Instance?>(), Arg.Any<AuthorizationRequestContext?>(), Arg.Any<CancellationToken>());
     }
 
@@ -963,7 +970,7 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         var workflow = BuildWorkflow(state);
         SetupCommonMocks(instance, workflow);
         _transitionAuthorizationManager
-            .IsRoleAllowedForGrantsAsync(Arg.Any<string?>(), Arg.Any<IReadOnlyCollection<RoleGrant>>(),
+            .IsRoleAllowedForGrantsAsync(Arg.Any<IReadOnlyCollection<string>?>(), Arg.Any<IReadOnlyCollection<RoleGrant>>(),
                 Arg.Any<Instance?>(), Arg.Any<AuthorizationRequestContext?>(), Arg.Any<CancellationToken>())
             .Returns(false, true);
 
@@ -999,7 +1006,7 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         var workflow = BuildWorkflow(state);
         SetupCommonMocks(instance, workflow);
         _transitionAuthorizationManager
-            .IsRoleAllowedForGrantsAsync(Arg.Any<string?>(), Arg.Any<IReadOnlyCollection<RoleGrant>>(),
+            .IsRoleAllowedForGrantsAsync(Arg.Any<IReadOnlyCollection<string>?>(), Arg.Any<IReadOnlyCollection<RoleGrant>>(),
                 Arg.Any<Instance?>(), Arg.Any<AuthorizationRequestContext?>(), Arg.Any<CancellationToken>())
             .Returns(true);
 
@@ -1036,7 +1043,7 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         var workflow = BuildWorkflow(state);
         SetupCommonMocks(instance, workflow);
         _transitionAuthorizationManager
-            .IsRoleAllowedForGrantsAsync(Arg.Any<string?>(), Arg.Any<IReadOnlyCollection<RoleGrant>>(),
+            .IsRoleAllowedForGrantsAsync(Arg.Any<IReadOnlyCollection<string>?>(), Arg.Any<IReadOnlyCollection<RoleGrant>>(),
                 Arg.Any<Instance?>(), Arg.Any<AuthorizationRequestContext?>(), Arg.Any<CancellationToken>())
             .Returns(true);
 
@@ -1064,7 +1071,7 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         var workflow = BuildWorkflow(state);
         SetupCommonMocks(instance, workflow);
         _transitionAuthorizationManager
-            .IsRoleAllowedForGrantsAsync(Arg.Any<string?>(), Arg.Any<IReadOnlyCollection<RoleGrant>>(),
+            .IsRoleAllowedForGrantsAsync(Arg.Any<IReadOnlyCollection<string>?>(), Arg.Any<IReadOnlyCollection<RoleGrant>>(),
                 Arg.Any<Instance?>(), Arg.Any<AuthorizationRequestContext?>(), Arg.Any<CancellationToken>())
             .Returns(true);
 
@@ -1759,7 +1766,7 @@ public class InstanceQueryAppServiceStateTests : IDisposable
                 Arg.Any<State>(),
                 Arg.Any<Instance?>(),
                 Arg.Any<IReadOnlyList<string>>(),
-                Arg.Any<string?>(),
+                Arg.Any<IReadOnlyCollection<string>?>(),
                 Arg.Any<AuthorizationRequestContext?>(),
                 Arg.Any<CancellationToken>())
             .Returns(callInfo => Task.FromResult(callInfo.ArgAt<IReadOnlyList<string>>(3)));
@@ -1940,7 +1947,7 @@ public class InstanceQueryAppServiceStateTests : IDisposable
                 Arg.Any<State>(),
                 Arg.Any<Instance?>(),
                 Arg.Any<IReadOnlyList<string>>(),
-                Arg.Any<string?>(),
+                Arg.Any<IReadOnlyCollection<string>?>(),
                 Arg.Any<AuthorizationRequestContext?>(),
                 Arg.Any<CancellationToken>())
             .Returns(callInfo => Task.FromResult<IReadOnlyList<string>>(

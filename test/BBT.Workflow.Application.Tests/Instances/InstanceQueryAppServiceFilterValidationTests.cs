@@ -27,6 +27,8 @@ using NSubstitute;
 using Shouldly;
 using Xunit;
 
+using BBT.Workflow.Instances.HumanTask;
+
 namespace BBT.Workflow.Instances;
 
 /// <summary>
@@ -244,10 +246,15 @@ public sealed class InstanceQueryAppServiceFilterValidationTests : IDisposable
             callerRoleResolver: Substitute.For<ICallerRoleResolver>(),
             paginationLinkGenerator: _paginationLinkGenerator,
             instanceFilteringOptions: Options.Create(new InstanceFilteringOptions()),
+            humanTaskOptions: Options.Create(new HumanTaskFunctionOptions()),
             attributeIndexCatalog: Substitute.For<IAttributeIndexCatalog>(),
             stateFunctionCache: Substitute.For<Caching.IStateFunctionCache>(),
             dataFunctionCache: Substitute.For<Caching.IDataFunctionCache>(),
             instanceSchemaFunctionCache: Substitute.For<Caching.IInstanceSchemaFunctionCache>(),
+
+            humanTaskFunctionCache: Substitute.For<Caching.IHumanTaskFunctionCache>(),
+            descentLimiter: new HumanTask.HumanTaskDescentLimiter(
+                Microsoft.Extensions.Options.Options.Create(new HumanTask.HumanTaskFunctionOptions())),
             logger: Substitute.For<ILogger<InstanceQueryAppService>>());
     }
 }
