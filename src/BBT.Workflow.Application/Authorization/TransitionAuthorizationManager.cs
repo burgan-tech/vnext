@@ -66,18 +66,55 @@ public sealed class TransitionAuthorizationManager(
         WorkflowDefinition workflow,
         Transition transition,
         Instance? instance,
-        string? role,
+        IReadOnlyCollection<string>? callerRoles,
         AuthorizationRequestContext? requestContext = null,
         CancellationToken cancellationToken = default)
     {
-        var roleGrants = transition.Roles;
+        // The parent's stamped override wins outright, and it REPLACES: a parent that narrowed this
+        // transition meant to narrow it, so the child's own grants do not also get a say. Absent an
+        // override, the transition's own definition applies. Resolved here rather than per surface —
+        // see EffectiveTransitionGrants.
+        var roleGrants = EffectiveTransitionGrants(instance, transition);
         if (roleGrants.Count == 0)
             return true; // No roles defined → allow
 
         var evaluator = await CreateEvaluatorAsync(
             instance, workflow, requestContext, roleGrants, cancellationToken);
 
-        return evaluator.IsRoleAllowed(role, roleGrants, transition);
+        return evaluator.IsAnyRoleAllowed(callerRoles, roleGrants, transition);
+    }
+
+    /// <summary>
+    /// The grants that actually decide a transition for this instance: the parent's stamped override
+    /// when there is one, otherwise the transition's own <c>roles</c>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Override wins, and it replaces.</b> There is no merge: a parent narrowing a child's
+    /// transition meant to narrow it, and OR-ing the child's own grants back in would hand the
+    /// narrowing straight back to the roles it was taken from.
+    /// </para>
+    /// <para>
+    /// Resolved in ONE place because resolving it per surface is how the surfaces diverged. The
+    /// state function read the map stamped on the child and honoured the narrowing; <c>authorize</c>
+    /// read <c>subFlowConfig.Overrides</c> off the PARENT's definition, which a directly-addressed
+    /// leaf does not have, and answered from the child's own grants — measured at such a leaf, the
+    /// two gave opposite answers for both roles.
+    /// </para>
+    /// <para>
+    /// No <c>availableIn</c> narrowing is applied on the override branch: these overrides key off the
+    /// SUBFLOW's transitions, so the parent's <c>availableIn</c> states do not describe them.
+    /// </para>
+    /// </remarks>
+    private static IReadOnlyCollection<RoleGrant> EffectiveTransitionGrants(
+        Instance? instance,
+        Transition transition)
+    {
+        if (instance is null)
+            return transition.Roles;
+
+        return SubFlowTransitionOverrideReader.TryReadRoles(instance, transition.Key)
+               ?? transition.Roles;
     }
 
     /// <inheritdoc />
@@ -86,7 +123,7 @@ public sealed class TransitionAuthorizationManager(
         Transition transition,
         string? currentStateKey,
         Instance? instance,
-        string? role,
+        IReadOnlyCollection<string>? callerRoles,
         AuthorizationRequestContext? requestContext = null,
         CancellationToken cancellationToken = default)
     {
@@ -94,13 +131,27 @@ public sealed class TransitionAuthorizationManager(
         // transition-level grant check (workflow-scoped authorize keeps its previous behaviour).
         if (string.IsNullOrEmpty(currentStateKey))
             return await IsTransitionAllowedForRoleAsync(
-                workflow, transition, instance, role, requestContext, cancellationToken);
+                workflow, transition, instance, callerRoles, requestContext, cancellationToken);
 
         // State gate first: a transition not offered in this state is denied without evaluating roles.
         if (!transition.IsAvailableInState(currentStateKey))
             return false;
 
         var stateEntry = transition.FindAvailableIn(currentStateKey);
+
+        // A stamped override replaces the transition's own grants AND skips availableIn narrowing:
+        // the override describes the SUBFLOW's transition, which the parent's availableIn states do
+        // not speak about.
+        var stamped = instance is null
+            ? null
+            : SubFlowTransitionOverrideReader.TryReadRoles(instance, transition.Key);
+
+        if (stamped is { Count: > 0 })
+        {
+            var overrideEvaluator = await CreateEvaluatorAsync(
+                instance, workflow, requestContext, stamped, cancellationToken);
+            return overrideEvaluator.IsAnyRoleAllowed(callerRoles, stamped, transition);
+        }
 
         if (transition.Roles.Count == 0 && stateEntry is not { HasRoles: true })
             return true; // No grants on either level → allow
@@ -112,7 +163,7 @@ public sealed class TransitionAuthorizationManager(
             transition.Roles.Concat(stateEntry?.Roles ?? []),
             cancellationToken);
 
-        return IsAllowedWithStateNarrowing(evaluator, role, transition, stateEntry);
+        return IsAllowedWithStateNarrowing(evaluator, callerRoles, transition, stateEntry);
     }
 
     /// <summary>
@@ -128,15 +179,15 @@ public sealed class TransitionAuthorizationManager(
     /// </summary>
     private static bool IsAllowedWithStateNarrowing(
         IRoleGrantEvaluator evaluator,
-        string? role,
+        IReadOnlyCollection<string>? callerRoles,
         Transition transition,
         AvailableInEntry? stateEntry)
     {
-        if (!evaluator.IsRoleAllowed(role, transition.Roles, transition))
+        if (!evaluator.IsAnyRoleAllowed(callerRoles, transition.Roles, transition))
             return false;
 
         return stateEntry is not { HasRoles: true }
-               || evaluator.IsRoleAllowed(role, stateEntry.Roles, transition);
+               || evaluator.IsAnyRoleAllowed(callerRoles, stateEntry.Roles, transition);
     }
 
     /// <inheritdoc />
@@ -145,7 +196,7 @@ public sealed class TransitionAuthorizationManager(
         State currentState,
         Instance? instance,
         IReadOnlyList<string> transitionKeys,
-        string? role,
+        IReadOnlyCollection<string>? callerRoles,
         AuthorizationRequestContext? requestContext = null,
         CancellationToken cancellationToken = default)
     {
@@ -167,17 +218,29 @@ public sealed class TransitionAuthorizationManager(
         if (candidates.Count == 0)
             return [];
 
+        // The prefetch hint must cover the grants that will actually be evaluated, which for an
+        // overridden transition is the parent's set and not the child's — a $PreviousUser grant
+        // missing from the hint can never match.
         var evaluator = await CreateEvaluatorAsync(
             instance,
             workflow,
             requestContext,
-            candidates.SelectMany(c => c.Transition.Roles.Concat(c.StateEntry?.Roles ?? [])),
+            candidates.SelectMany(c =>
+                EffectiveTransitionGrants(instance, c.Transition).Concat(c.StateEntry?.Roles ?? [])),
             cancellationToken);
 
         var result = new List<string>(candidates.Count);
         foreach (var (key, transition, stateEntry) in candidates)
         {
-            if (IsAllowedWithStateNarrowing(evaluator, role, transition, stateEntry))
+            var stamped = instance is null
+                ? null
+                : SubFlowTransitionOverrideReader.TryReadRoles(instance, transition.Key);
+
+            var allowed = stamped is { Count: > 0 }
+                ? evaluator.IsAnyRoleAllowed(callerRoles, stamped, transition)
+                : IsAllowedWithStateNarrowing(evaluator, callerRoles, transition, stateEntry);
+
+            if (allowed)
                 result.Add(key);
         }
         return result;
@@ -185,7 +248,7 @@ public sealed class TransitionAuthorizationManager(
 
     /// <inheritdoc />
     public async Task<bool> IsRoleAllowedForGrantsAsync(
-        string? role,
+        IReadOnlyCollection<string>? callerRoles,
         IReadOnlyCollection<RoleGrant> roleGrants,
         Instance? instance,
         AuthorizationRequestContext? requestContext = null,
@@ -197,7 +260,7 @@ public sealed class TransitionAuthorizationManager(
         var evaluator = await CreateEvaluatorAsync(
             instance, workflow: null, requestContext, roleGrants, cancellationToken);
 
-        return evaluator.IsRoleAllowed(role, roleGrants);
+        return evaluator.IsAnyRoleAllowed(callerRoles, roleGrants);
     }
 
     /// <inheritdoc />
@@ -227,7 +290,24 @@ public sealed class TransitionAuthorizationManager(
     {
         var currentStateKey = instance.GetEffectiveState;
         var state = string.IsNullOrWhiteSpace(currentStateKey) ? null : workflow.FindState(currentStateKey);
-        var queryRoles = state is { QueryRoles.Count: > 0 } ? state.QueryRoles : workflow.QueryRoles;
+
+        // Precedence: the parent's stamped state override, then the state's own queryRoles, then the
+        // workflow root's.
+        //
+        // The override goes first and it REPLACES rather than merges — a parent that narrowed a
+        // child's visibility meant to narrow it. Reading the stamp here rather than in each surface
+        // is the point: this method is the single queryRoles gate behind the state, data, view,
+        // schema and incident functions, behind `authorize`'s query branch and behind the human-task
+        // list, so the narrowing now applies wherever the child is reached from. The parent-side
+        // reader (`AuthorizeAppService`, `subFlowConfig.Overrides.States`) cannot serve that: it
+        // needs an active SubFlow correlation, which the child being asked about does not have.
+        var overridden = string.IsNullOrWhiteSpace(currentStateKey)
+            ? null
+            : SubFlowStateOverrideReader.TryReadQueryRoles(instance, currentStateKey);
+
+        var queryRoles = overridden is { Count: > 0 }
+            ? overridden
+            : state is { QueryRoles.Count: > 0 } ? state.QueryRoles : workflow.QueryRoles;
 
         return await IsAnyRoleAllowedForGrantsAsync(callerRoles, queryRoles, instance, requestContext, cancellationToken);
     }
@@ -257,23 +337,70 @@ public sealed class TransitionAuthorizationManager(
     /// </param>
     public static bool EvaluateRolesStatic(string? role, IReadOnlyCollection<RoleGrant> roleGrants,
         bool defaultAllowWhenNoAllowGrant = true)
+        => EvaluateRolesStatic(
+            role is null ? [] : [role], roleGrants, defaultAllowWhenNoAllowGrant);
+
+    /// <summary>
+    /// The multi-role form, and the one <see cref="IRoleGrantEvaluator"/> degrades to when it holds
+    /// no instance. Same two phases as the instance-bound path: the DENY group is an AND evaluated
+    /// first, the ALLOW group an OR evaluated only if nothing denied.
+    /// </summary>
+    /// <remarks>
+    /// This twin must move whenever the instance-bound evaluator moves. They are two spellings of
+    /// one rule, and the equivalence is asserted by <c>RoleGrantEvaluatorTests</c> — letting them
+    /// drift would mean an authorization answer that depends on whether an instance happened to be
+    /// loaded, which is not a distinction any caller can see or reason about.
+    /// <para>
+    /// Static comparison only: with no instance there is nothing for a predefined or dynamic grant
+    /// to resolve against, so those grants simply never match here.
+    /// </para>
+    /// </remarks>
+    public static bool EvaluateRolesStatic(
+        IReadOnlyCollection<string> roles,
+        IReadOnlyCollection<RoleGrant> roleGrants,
+        bool defaultAllowWhenNoAllowGrant = true)
     {
         if (roleGrants.Count == 0)
             return true; // No roles defined → allow
-        var normalizedRole = role?.Trim() ?? string.Empty;
-        foreach (var g in roleGrants)
+
+        var normalized = new List<string>(roles.Count);
+        foreach (var role in roles)
         {
-            if (string.Equals(g.Role, normalizedRole, StringComparison.OrdinalIgnoreCase) && g.IsDeny)
+            if (!string.IsNullOrWhiteSpace(role))
+                normalized.Add(role.Trim());
+        }
+
+        // Phase 1 - DENY group, AND. One matching deny refuses, whatever else the caller carries.
+        foreach (var grant in roleGrants)
+        {
+            if (grant.IsDeny && MatchesAnyStatic(grant, normalized))
                 return false;
         }
-        foreach (var g in roleGrants)
+
+        // Phase 2 - ALLOW group, OR.
+        var hasAllowGrant = false;
+        foreach (var grant in roleGrants)
         {
-            if (string.Equals(g.Role, normalizedRole, StringComparison.OrdinalIgnoreCase) && g.IsAllow)
+            if (!grant.IsAllow)
+                continue;
+
+            hasAllowGrant = true;
+            if (MatchesAnyStatic(grant, normalized))
                 return true;
         }
+
         // Blacklist (deny-only) set: no ALLOW grant defined → allow when not explicitly denied.
-        if (defaultAllowWhenNoAllowGrant && !roleGrants.Any(g => g.IsAllow))
-            return true;
+        return defaultAllowWhenNoAllowGrant && !hasAllowGrant;
+    }
+
+    private static bool MatchesAnyStatic(RoleGrant grant, List<string> roles)
+    {
+        foreach (var role in roles)
+        {
+            if (string.Equals(grant.Role, role, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
         return false;
     }
 }

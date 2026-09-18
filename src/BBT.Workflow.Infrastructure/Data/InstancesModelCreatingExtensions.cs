@@ -169,22 +169,27 @@ public static class InstancesModelCreatingExtensions
             b.HasIndex(new[] { "CreatedAt", "Id" }, "IX_Instances_CreatedAt_Id")
                 .IsDescending(true, false);
 
-            // Partial covering index for GetHumanTaskInstancesAsync.
-            // Filters: Status IN ('A','B'), EffectiveStateSubType = Human,
-            // ExtraProperties does NOT contain 'parent.id'.
-            // CreatedAt DESC is the leading column to serve ORDER BY without a sort.
-            b.HasIndex(new[] { "CreatedAt" }, "IX_Instances_HumanTask")
-                .IsDescending(true)
-                .HasFilter("\"Status\" IN ('A','B') AND \"EffectiveStateSubType\" = 6 AND NOT (\"ExtraProperties\"::jsonb ? 'parent.id')")
-                .IncludeProperties(p => new
-                {
-                    p.Key,
-                    p.Flow,
-                    p.FlowVersion,
-                    p.CurrentState,
-                    p.EffectiveState,
-                    p.Status
-                });
+            // Partial index serving the human-task list on the instance's OWN columns, replacing
+            // the ::jsonb existence probe below. Type IN ('R','P') keeps roots and SubProcess
+            // children — a SubProcess is fire-and-forget, so it is its own unit of work — while
+            // excluding 'S' children, whose state is already projected onto their root.
+            //
+            // The filter text comes from the same constant the query emits — see HumanTaskQuerySql
+            // for why a re-spelling silently costs the index.
+            //
+            // Covering: the candidate scan selects exactly Id, Key, Type, CreatedAt. Id and
+            // CreatedAt are the index key, so Key and Type go in INCLUDE and the scan never touches
+            // the heap. Type has to be INCLUDEd even though it also appears in the filter below —
+            // a partial index's predicate columns are not retrievable from the index, so selecting
+            // Type without including it silently turns an index-only scan into heap fetches. Its
+            // predecessor IX_Instances_HumanTask carried six INCLUDE columns that could never be
+            // reached, because its query was SELECT * — a covering payload only pays off when the
+            // projection is narrower than the row. That index is dropped by
+            // 20260917210000_DropLegacyHumanTaskIndex.
+            b.HasIndex(new[] { "CreatedAt", "Id" }, "IX_Instances_HumanTaskV2")
+                .IsDescending(true, false)
+                .HasFilter(HumanTaskQuerySql.Predicate)
+                .IncludeProperties(p => new { p.Key, p.Type });
         });
 
         builder.Entity<InstanceIncident>(b =>

@@ -2739,6 +2739,21 @@ public static partial class WorkflowLogs
     /// Logs a discovery cache operation that failed. Never rethrown: a cache that cannot be read or
     /// written is a miss, not an error.
     /// </summary>
+    /// <summary>
+    /// The refresh loop found no <c>IDiscoveryCacheRefresher</c> and exited without ticking.
+    /// </summary>
+    /// <remarks>
+    /// Information, not a warning: this is the expected shape under
+    /// <c>ServiceDiscovery:Provider = "dapr"</c> or with the cache disabled. It is logged at all
+    /// because a silently absent refresher and a running-but-idle one look identical from outside.
+    /// </remarks>
+    [LoggerMessage(
+        EventId = 50042,
+        Level = LogLevel.Information,
+        Message = "Discovery cache refresh is not running: no {Service} is registered, which is the expected shape under ServiceDiscovery:Provider = \"dapr\" or with the cache disabled")]
+    public static partial void DiscoveryCacheRefresherNotRegistered(
+        this ILogger logger, string service);
+
     [LoggerMessage(
         EventId = 50041,
         Level = LogLevel.Warning,
@@ -3728,6 +3743,146 @@ public static partial class WorkflowLogs
         Guid instanceId,
         string projected,
         string live);
+
+    #endregion
+
+    #region Human Task Function
+
+    /// <summary>
+    /// Logs when a whole workflow's contribution to the human-task list is discarded because its
+    /// definition would not resolve. Every instance waiting in that workflow disappears from the
+    /// list, so this is the widest silent drop on the path.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20459,
+        Level = LogLevel.Warning,
+        Message = "Human task {InstanceId} dropped: state {State} of flow {Flow} in domain {Domain} "
+                  + "declares no queryRoles, and neither does its workflow root. The task list fails "
+                  + "closed rather than publishing it to every caller — author queryRoles on the state "
+                  + "or the workflow to make it visible")]
+    public static partial void HumanTaskQueryRolesUndeclared(
+        this ILogger logger,
+        Guid instanceId,
+        string flow,
+        string state,
+        string domain);
+
+    [LoggerMessage(
+        EventId = 20458,
+        Level = LogLevel.Warning,
+        Message = "Human-task scan skipped flow {Flow}: its key is not a plain SQL identifier, so it "
+                  + "cannot be embedded in the cross-schema scan statement")]
+    public static partial void HumanTaskScanSkippedFlowKey(
+        this ILogger logger,
+        string flow);
+
+    [LoggerMessage(
+        EventId = 20450,
+        Level = LogLevel.Warning,
+        Message = "Human-task list dropped workflow {Flow} in domain {Domain}: its definition did not resolve")]
+    public static partial void HumanTaskWorkflowDropped(
+        this ILogger logger,
+        string flow,
+        string domain);
+
+    /// <summary>
+    /// Logs when an instance leaves the human-task list because its own current state is absent
+    /// from the resolved workflow definition.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20451,
+        Level = LogLevel.Warning,
+        Message = "Human-task list dropped instance {InstanceId}: state {StateKey} is not in workflow {Flow}")]
+    public static partial void HumanTaskStateUnresolved(
+        this ILogger logger,
+        Guid instanceId,
+        string stateKey,
+        string flow);
+
+    /// <summary>
+    /// Logs when an instance leaves the human-task list because its active subflow's definition or
+    /// state could not be resolved — the case a cross-domain child used to hit silently.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20452,
+        Level = LogLevel.Warning,
+        Message = "Human-task list dropped instance {InstanceId}: subflow {SubFlow} (domain {SubFlowDomain}, version {SubFlowVersion}) did not resolve")]
+    public static partial void HumanTaskSubflowUnresolved(
+        this ILogger logger,
+        Guid instanceId,
+        string subFlow,
+        string subFlowDomain,
+        string? subFlowVersion);
+
+    /// <summary>
+    /// Logs when an instance's resolved state offers no user transition at all, so there is nothing
+    /// for any caller to act on. Expected for some states — Debug, not Warning.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20453,
+        Level = LogLevel.Debug,
+        Message = "Human-task list skipped instance {InstanceId}: state {StateKey} offers no user transition")]
+    public static partial void HumanTaskNoUserTransitions(
+        this ILogger logger,
+        Guid instanceId,
+        string stateKey);
+
+    /// <summary>
+    /// Logs when the human-task list was cut by a per-schema limit or by the merged result cap.
+    /// The response carries a truncation header; this records which bound bit and by how much.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20454,
+        Level = LogLevel.Warning,
+        Message = "Human-task list truncated in domain {Domain}: {Bound} bound hit, {Returned} of {Selected} rows returned")]
+    public static partial void HumanTaskResultTruncated(
+        this ILogger logger,
+        string domain,
+        string bound,
+        int returned,
+        int selected);
+
+    /// <summary>
+    /// Logs when a human-task descent hit its depth bound. The instances are reported unresolved
+    /// rather than as "nothing to do", because the two are not the same answer.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20455,
+        Level = LogLevel.Warning,
+        Message = "Human-task descent stopped at the depth bound in domain {Domain}, flow {Flow}: {Count} instance(s) left unresolved")]
+    public static partial void HumanTaskDescentDepthExceeded(
+        this ILogger logger,
+        string domain,
+        string flow,
+        int count);
+
+    /// <summary>
+    /// Logs when one hop of a human-task descent failed — typically an unreachable partner domain.
+    /// Only that hop's instances are lost; the rest of the list still answers.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20456,
+        Level = LogLevel.Warning,
+        Message = "Human-task descent hop to domain {Domain}, flow {Flow} failed: {Reason}")]
+    public static partial void HumanTaskDescentHopFailed(
+        this ILogger logger,
+        string domain,
+        string flow,
+        string reason);
+
+    /// <summary>
+    /// Logs a human-task response-cache failure. Always a miss, never a failed request — a broken
+    /// cache must degrade to the work it was avoiding, not to an error.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20457,
+        Level = LogLevel.Warning,
+        Message = "Human task function cache {Operation} failed for key {CacheKey}; treating as miss")]
+    public static partial void HumanTaskFunctionCacheError(
+        this ILogger logger,
+        Exception exception,
+        string operation,
+        string cacheKey);
 
     #endregion
 

@@ -411,7 +411,7 @@ public sealed class AuthorizeAppService(
     /// If any caller role is allowed, returns true. Caller validates exactly one target is specified.
     /// Resolves predefined instance roles ($InstanceStarter, $PreviousUser) when instance is present.
     /// </summary>
-    private async Task<bool> EvaluateAuthorizeAsync(
+    private Task<bool> EvaluateAuthorizeAsync(
         Definitions.Workflow workflow,
         IReadOnlyList<string>? callerRoles,
         string? transitionKey,
@@ -422,24 +422,17 @@ public sealed class AuthorizeAppService(
         string? workflowVersion,
         AuthorizationRequestContext? requestContext,
         CancellationToken cancellationToken)
-    {
-        if (callerRoles is null || callerRoles.Count == 0)
-            return await EvaluateAuthorizeForSingleRoleAsync(workflow, null, transitionKey, functionKey, instance, checkQueryRoles, domain, workflowVersion, requestContext, cancellationToken);
+        // ONE evaluation with the whole role set. This used to loop the caller's roles and return
+        // on the first one that was allowed — the canonical rule's composition rebuilt a layer up,
+        // and the wrong one: the deny group is an AND across every role the caller carries, so
+        // asking role by role lets an allowed role answer before a denied one is ever considered.
+        => EvaluateAuthorizeCoreAsync(
+            workflow, callerRoles, transitionKey, functionKey, instance,
+            checkQueryRoles, domain, workflowVersion, requestContext, cancellationToken);
 
-        foreach (var role in callerRoles)
-        {
-            if (string.IsNullOrWhiteSpace(role))
-                continue;
-            var allowed = await EvaluateAuthorizeForSingleRoleAsync(workflow, role.Trim(), transitionKey, functionKey, instance, checkQueryRoles, domain, workflowVersion, requestContext, cancellationToken);
-            if (allowed)
-                return true;
-        }
-        return false;
-    }
-
-    private async Task<bool> EvaluateAuthorizeForSingleRoleAsync(
+    private async Task<bool> EvaluateAuthorizeCoreAsync(
         Definitions.Workflow workflow,
-        string? role,
+        IReadOnlyCollection<string>? callerRoles,
         string? transitionKey,
         string? functionKey,
         Instance? instance,
@@ -450,7 +443,7 @@ public sealed class AuthorizeAppService(
         CancellationToken cancellationToken)
     {
         if (checkQueryRoles)
-            return await EvaluateQueryRolesAsync(workflow, role, instance, requestContext, cancellationToken);
+            return await EvaluateQueryRolesAsync(workflow, callerRoles, instance, requestContext, cancellationToken);
 
         if (!string.IsNullOrWhiteSpace(transitionKey))
         {
@@ -472,7 +465,7 @@ public sealed class AuthorizeAppService(
                 transition,
                 instance?.CurrentState,
                 instance,
-                role,
+                callerRoles,
                 requestContext,
                 cancellationToken);
         }
@@ -484,7 +477,7 @@ public sealed class AuthorizeAppService(
                 return false;
             if (fnResult.Value!.Roles.Count == 0)
                 return true; // No roles defined on function → allow
-            return await transitionAuthorizationManager.IsRoleAllowedForGrantsAsync(role, fnResult.Value!.Roles, instance, requestContext, cancellationToken);
+            return await transitionAuthorizationManager.IsRoleAllowedForGrantsAsync(callerRoles, fnResult.Value!.Roles, instance, requestContext, cancellationToken);
         }
 
         return false;
@@ -494,24 +487,19 @@ public sealed class AuthorizeAppService(
     /// Evaluates a list of role grants against the caller roles (multi-role: any allowed → allow).
     /// Used to apply SubFlow override grants locally without forwarding to the SubFlow.
     /// </summary>
-    private async Task<bool> EvaluateWithGrantsAsync(
+    private Task<bool> EvaluateWithGrantsAsync(
         IReadOnlyList<string>? callerRoles,
         IReadOnlyCollection<RoleGrant> grants,
         Instance instance,
         AuthorizationRequestContext? requestContext,
         CancellationToken cancellationToken)
-    {
-        if (callerRoles is null || callerRoles.Count == 0)
-            return false;
-        foreach (var r in callerRoles)
-        {
-            if (string.IsNullOrWhiteSpace(r))
-                continue;
-            if (await transitionAuthorizationManager.IsRoleAllowedForGrantsAsync(r, grants, instance, requestContext, cancellationToken))
-                return true;
-        }
-        return false;
-    }
+        // ONE call with the whole role set, not a loop that returns on the first role that is
+        // allowed. That loop was the canonical rule's composition rebuilt a layer up, and it
+        // rebuilt the wrong one: with the deny group now an AND evaluated across every role the
+        // caller carries, asking role by role would let an allowed role answer before a denied one
+        // was ever considered — the exact defect the evaluator was changed to remove.
+        => transitionAuthorizationManager.IsRoleAllowedForGrantsAsync(
+            callerRoles, grants, instance, requestContext, cancellationToken);
 
     /// <summary>
     /// Evaluates state-based query roles: instance effective state → state queryRoles or workflow root queryRoles.
@@ -519,7 +507,7 @@ public sealed class AuthorizeAppService(
     /// </summary>
     private async Task<bool> EvaluateQueryRolesAsync(
         Definitions.Workflow workflow,
-        string? role,
+        IReadOnlyCollection<string>? callerRoles,
         Instance? instance,
         AuthorizationRequestContext? requestContext,
         CancellationToken cancellationToken)
@@ -527,6 +515,6 @@ public sealed class AuthorizeAppService(
         if (instance == null)
             return false;
         return await transitionAuthorizationManager.IsQueryAllowedAsync(
-            workflow, instance, role is null ? null : [role], requestContext, cancellationToken);
+            workflow, instance, callerRoles, requestContext, cancellationToken);
     }
 }

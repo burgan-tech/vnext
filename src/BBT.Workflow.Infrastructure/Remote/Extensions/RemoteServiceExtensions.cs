@@ -57,6 +57,12 @@ public static class RemoteServiceExtensions
             options, RemoteServiceProfile.Read);
         services.AddRemoteService<RemoteRelatedInstanceReader, RemoteRelatedInstanceReader>(
             options, RemoteServiceProfile.Read);
+        // Like the related-instance reader, this one IS its own client: it holds the
+        // IRemoteTransport shell rather than delegating to a Remote*AppService that holds it. It
+        // must therefore be registered here and not with a plain AddScoped, which would construct
+        // it with no registered shell at all.
+        services.AddRemoteService<Gateway.RemoteHumanTaskLeafGateway, Gateway.RemoteHumanTaskLeafGateway>(
+            options, RemoteServiceProfile.Read);
 
         return services;
     }

@@ -498,9 +498,17 @@ public sealed class SubflowCompletionService(
 
         if (correlation.SubFlowType.Equals(SubFlowType.SubFlow))
         {
-            // Reset parent's EffectiveState back to its own CurrentState for blocking SubFlows.
-            // A SubProcess completion only closes its persisted correlation.
-            parentInstance.SetEffectiveState(parentInstance.GetCurrentState);
+            // Reset parent's effective projection back to its own current state for blocking
+            // SubFlows. A SubProcess completion only closes its persisted correlation.
+            //
+            // The whole trio moves, not just the state key: EffectiveStateSubType has no other
+            // reset writer, so leaving it behind kept a finished child's Human sub type on the
+            // parent forever and offered an already-completed task in the human-task list. The
+            // guard lives inside the method — a second still-open SubFlow correlation makes it a
+            // no-op, exactly like ResyncEffectiveStatus below, so the surviving child keeps owning
+            // both halves of the projection instead of them diverging. CompleteCorrelation above
+            // has already closed this correlation, so the guard sees only the survivors.
+            parentInstance.ResyncEffectiveStateFromCurrent();
 
             // ... and the status projection with it. The child stamped its terminal status upward at
             // its own rest point; leaving it here would have the parent's fingerprint describe a

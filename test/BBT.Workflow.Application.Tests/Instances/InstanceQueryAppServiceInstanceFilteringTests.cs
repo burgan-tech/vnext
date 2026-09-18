@@ -330,10 +330,15 @@ public sealed class InstanceQueryAppServiceInstanceFilteringTests : IDisposable
             callerRoleResolver: new DefaultCallerRoleResolver(Substitute.For<ICurrentUser>()),
             paginationLinkGenerator: _paginationLinkGenerator,
             instanceFilteringOptions: instanceFilteringOptions,
+            humanTaskOptions: Options.Create(new BBT.Workflow.Instances.HumanTask.HumanTaskFunctionOptions()),
             attributeIndexCatalog: Substitute.For<IAttributeIndexCatalog>(),
             stateFunctionCache: Substitute.For<Caching.IStateFunctionCache>(),
             dataFunctionCache: Substitute.For<Caching.IDataFunctionCache>(),
             instanceSchemaFunctionCache: Substitute.For<Caching.IInstanceSchemaFunctionCache>(),
+
+            humanTaskFunctionCache: Substitute.For<Caching.IHumanTaskFunctionCache>(),
+            descentLimiter: new HumanTask.HumanTaskDescentLimiter(
+                Microsoft.Extensions.Options.Options.Create(new HumanTask.HumanTaskFunctionOptions())),
             logger: Substitute.For<ILogger<InstanceQueryAppService>>());
     }
 
