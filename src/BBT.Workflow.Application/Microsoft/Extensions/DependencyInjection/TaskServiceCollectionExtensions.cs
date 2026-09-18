@@ -171,9 +171,14 @@ public static class TaskServiceCollectionExtensions
         // In-process state-store invoker (issue #1007): serves the StateStore local path.
         services.AddLocalTaskInvoker<LocalStateStoreTaskInvoker>();
 
-        // Cache-Aside (read-through) executor: cache get/set is dispatched to the Execution service via
-        // the StateStore invoker; the source task on a miss is orchestrated locally.
+        // Cache-Aside (read-through) executor: the read-through (state-store get/set, source task
+        // on a miss) is dispatched locally or to the Execution service via ITaskInvocationDispatcher.
         services.AddTaskExecutor<CacheAsideTaskExecutor>();
+
+        // In-process cache-aside invoker (issue #1007): serves the CacheAside local path. On a miss
+        // it dispatches the source task through this same local registry when possible, falling
+        // back to the Execution service otherwise (see LocalCacheAsideTaskInvoker).
+        services.AddLocalTaskInvoker<LocalCacheAsideTaskInvoker>();
 
         // Notification task executor (multi-channel direct Dapr binding dispatch)
         services.TryAddScoped<IStateChannelMessageBuilder, StateChannelMessageBuilder>();

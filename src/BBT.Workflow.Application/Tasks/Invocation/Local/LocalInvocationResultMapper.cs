@@ -22,6 +22,25 @@ internal static class LocalInvocationResultMapper
     };
 
     /// <summary>
+    /// The reverse direction, needed by <c>LocalCacheAsideTaskInvoker</c>: its source-dispatch
+    /// delegate must hand the shared <c>CacheAsideInvocation</c> core a wire-side result, whether
+    /// the source ran through a local invoker (which returns the orchestrator-side type) or through
+    /// the remote fallback.
+    /// </summary>
+    public static Execution.TaskInvocationResult ToWireResult(TaskInvocationResult result) => new()
+    {
+        IsSuccess = result.IsSuccess,
+        StatusCode = result.StatusCode,
+        Body = result.Body,
+        Data = result.Data,
+        ErrorMessage = result.ErrorMessage,
+        Headers = result.Headers,
+        Metadata = result.Metadata,
+        TaskType = result.TaskType,
+        ExecutionDurationMs = result.ExecutionDurationMs
+    };
+
+    /// <summary>
     /// Carries only the correlation and identity fields: the cores read nothing else, and the
     /// heavy placeholder fields (request headers, instance data JSON) have no business on an
     /// in-process call.

@@ -24,6 +24,9 @@ internal sealed class FakeStateStoreClient(string? defaultStoreName) : IStateSto
         _entries[PrefixKey(key)] = (value, etag ?? $"etag-{++_etagSequence}");
     }
 
+    /// <summary>Whether a value is currently stored under a logical (unprefixed) key.</summary>
+    public bool Contains(string key) => _entries.ContainsKey(PrefixKey(key));
+
     /// <inheritdoc />
     public string? ResolveStoreName(string? storeName) =>
         !string.IsNullOrWhiteSpace(storeName) ? storeName : defaultStoreName;

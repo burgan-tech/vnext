@@ -4,9 +4,11 @@ using BBT.Workflow;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.Bindings;
+using BBT.Workflow.Logging;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks.Evaluators;
 using BBT.Workflow.Tasks.Factory;
+using BBT.Workflow.Tasks.Invocation;
 using BBT.Workflow.Tasks.Mapping;
 using Microsoft.Extensions.Logging;
 
@@ -14,11 +16,12 @@ namespace BBT.Workflow.Tasks.Executors;
 
 /// <summary>
 /// Executor for Cache-Aside (read-through) tasks.
-/// Mirrors <c>StateStoreTaskExecutor</c>: it runs the input mapping locally, delegates the cache
-/// read-through to the Execution service via <see cref="IRemoteInvokerService"/> (the <c>cacheaside</c>
-/// invoker performs the state-store get/set and runs the source task on a miss), then runs the output
-/// mapping locally to shape the cached raw result. The dynamic cache key is set by the input mapping's
-/// <c>InputHandler</c> via <c>task.SetCacheKey(...)</c>, exactly as the State Store task does.
+/// Mirrors <c>StateStoreTaskExecutor</c>: it runs the input mapping locally, then dispatches the
+/// prepared <c>cacheaside</c> envelope through <see cref="ITaskInvocationDispatcher"/>, which runs
+/// the read-through (state-store get/set, source task on a miss) locally or via the Execution
+/// service per <see cref="ITaskInvocationRouter"/>, then runs the output mapping locally to shape
+/// the cached raw result. The dynamic cache key is set by the input mapping's <c>InputHandler</c>
+/// via <c>task.SetCacheKey(...)</c>, exactly as the State Store task does.
 /// </summary>
 public sealed class CacheAsideTaskExecutor : TaskExecutorBase<CacheAsideTask>
 {
@@ -26,6 +29,7 @@ public sealed class CacheAsideTaskExecutor : TaskExecutorBase<CacheAsideTask>
     private readonly IScriptEngine _scriptEngine;
     private readonly ITaskFactory _taskFactory;
     private readonly IDynamicExpressoValueEvaluator _expressoEvaluator;
+    private readonly ITaskInvocationDispatcher _dispatcher;
 
     /// <summary>
     /// Initializes a new instance of <see cref="CacheAsideTaskExecutor"/>.
@@ -35,6 +39,7 @@ public sealed class CacheAsideTaskExecutor : TaskExecutorBase<CacheAsideTask>
         IScriptEngine scriptEngine,
         ITaskFactory taskFactory,
         IDynamicExpressoValueEvaluator expressoEvaluator,
+        ITaskInvocationDispatcher dispatcher,
         ILogger<CacheAsideTaskExecutor> logger)
         : base(logger)
     {
@@ -42,6 +47,7 @@ public sealed class CacheAsideTaskExecutor : TaskExecutorBase<CacheAsideTask>
         _scriptEngine = scriptEngine;
         _taskFactory = taskFactory;
         _expressoEvaluator = expressoEvaluator;
+        _dispatcher = dispatcher;
     }
 
     /// <inheritdoc />
@@ -145,8 +151,20 @@ public sealed class CacheAsideTaskExecutor : TaskExecutorBase<CacheAsideTask>
         };
 
         var traceContext = _remoteInvoker.CreateTraceContext(context.ScriptContext);
-        return await _remoteInvoker.InvokeAsync(
-            TaskTypes.CacheAside, task.Key, envelope, traceContext, cancellationToken);
+
+        var result = await _dispatcher.DispatchAsync(
+            task, Execution.TaskTypes.CacheAside, envelope, traceContext, cancellationToken);
+
+        if (!result.IsSuccess)
+        {
+            Logger.TaskInvocationFailed(
+                task.Key,
+                TaskType.ToString(),
+                context.ScriptContext.Instance?.Id ?? Guid.Empty,
+                result.Error.Message ?? "Unknown error");
+        }
+
+        return result;
     }
 
     /// <inheritdoc />

@@ -13,6 +13,7 @@ using BBT.Workflow.Tasks;
 using BBT.Workflow.Tasks.Evaluators;
 using BBT.Workflow.Tasks.Executors;
 using BBT.Workflow.Tasks.Factory;
+using BBT.Workflow.Tasks.Invocation;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using Shouldly;
@@ -20,6 +21,15 @@ using Xunit;
 
 namespace BBT.Workflow.Application.Tests.Tasks.Executors;
 
+/// <summary>
+/// The executor now dispatches through <see cref="ITaskInvocationDispatcher"/> instead of calling
+/// <see cref="IRemoteInvokerService"/> directly (issue #1007). These tests compose a REAL
+/// <c>TaskInvocationDispatcher</c> over a router stubbed to always resolve Remote, so every
+/// assertion that used to check the remote-invoker call directly still does — the point of this
+/// suite is the envelope the executor BUILDS (cache key, options, embedded source), not the
+/// local/remote routing decision, which is <c>TaskInvocationDispatcherTests</c>' and
+/// <c>TaskInvocationRouterTests</c>' job. Same harness shape as <c>HttpTaskExecutorRoutingTests</c>.
+/// </summary>
 public sealed class CacheAsideTaskExecutorTests
 {
     private const string CacheAsideType = "cacheaside";
@@ -143,11 +153,25 @@ public sealed class CacheAsideTaskExecutorTests
             _task = CacheAsideTask.Create(JsonSerializer.SerializeToElement(config));
             _task.SetReference(new Reference("customer-cache", "core", "sys-tasks", "1.0.0"));
 
+            // Router always resolves Remote for this suite: it verifies the envelope the executor
+            // builds (cache key, options, embedded source), not the local/remote decision itself.
+            var router = Substitute.For<ITaskInvocationRouter>();
+            router.Resolve(Arg.Any<WorkflowTask>(), CacheAsideType)
+                .Returns(new TaskInvocationDecision(ExecutionMode.Remote, "test"));
+            var localInvokers = Substitute.For<ILocalTaskInvokerRegistry>();
+
+            // A REAL dispatcher over stubbed collaborators, same convention as
+            // HttpTaskExecutorRoutingTests: this suite is about the executor's envelope, not about
+            // mocking the dispatcher away.
+            var dispatcher = new TaskInvocationDispatcher(
+                router, localInvokers, RemoteInvoker, NullLogger<TaskInvocationDispatcher>.Instance);
+
             Executor = new CacheAsideTaskExecutor(
                 RemoteInvoker,
                 Substitute.For<IScriptEngine>(),
                 TaskFactory,
                 ExpressoEvaluator,
+                dispatcher,
                 NullLogger<CacheAsideTaskExecutor>.Instance);
         }
 
