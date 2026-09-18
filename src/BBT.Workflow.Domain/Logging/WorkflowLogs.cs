@@ -884,14 +884,16 @@ public static partial class WorkflowLogs
         this ILogger logger, string taskKey, string taskType, string reason);
 
     /// <summary>
-    /// Logs when an in-process (orchestrator-local) task invocation fails at the transport layer —
-    /// no HTTP status code came back, so this is a connection/DNS/timeout failure rather than an
-    /// error response from the target.
+    /// Logs when an in-process (orchestrator-local) task invocation fails. Generic across local
+    /// task types deliberately: for the HTTP-shaped invokers (HTTP, SOAP, Dapr service invocation)
+    /// this is a connection/DNS/timeout failure with no status code; for a type with no wire status
+    /// code at all (state store) it covers any non-cancelled failure. The message stays agnostic to
+    /// which so it does not mislabel a non-transport failure as one.
     /// </summary>
     [LoggerMessage(
         EventId = 10161,
         Level = LogLevel.Error,
-        Message = "In-process invocation of task {TaskKey} ({TaskType}) failed at the transport layer: {Error}")]
+        Message = "In-process invocation of task {TaskKey} ({TaskType}) failed: {Error}")]
     public static partial void LocalTaskInvocationFailed(
         this ILogger logger, string? taskKey, string taskType, string error);
 

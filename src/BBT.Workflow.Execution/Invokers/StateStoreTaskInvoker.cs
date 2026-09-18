@@ -89,11 +89,18 @@ public sealed class StateStoreTaskInvoker : ITaskInvoker<StateStoreBinding>
 
         _metrics.RecordStateStoreOperation(storeName, command, result.IsSuccess ? "success" : "failure");
 
-        if (!result.IsSuccess)
+        // Only an actual thrown exception (the Core's catch-all, stamped with Metadata
+        // ["ExceptionType"]) is logged at Error — matching the pre-extraction behavior, where the
+        // only two live `catch` blocks were cancellation (Warning, above) and an unhandled
+        // exception (Error). A returned validation failure (missing key, bad command, an
+        // unresolved store name) was only ever metered, never logged: the Execution host is still
+        // the live production path for every domain today, and a chronically misconfigured
+        // StateStore task must not newly flood its Error stream where it was previously silent.
+        if (!result.IsSuccess && TryGetExceptionType(result, out var exceptionType))
         {
             _logger.LogError(
                 "State store operation failed: {StoreName}/{Command}, Error: {Error}, ExceptionType: {ExceptionType}",
-                storeName, command, result.ErrorMessage, ExceptionTypeOf(result));
+                storeName, command, result.ErrorMessage, exceptionType);
         }
 
         return result;
@@ -105,13 +112,21 @@ public sealed class StateStoreTaskInvoker : ITaskInvoker<StateStoreBinding>
             : null;
 
     /// <summary>
-    /// Reads the transport-failure exception type name the shared core stamps into
-    /// <c>Metadata["ExceptionType"]</c> on the unhandled-exception path. The core swallows the
-    /// exception itself by contract (it returns a <see cref="TaskInvocationResult"/>, never
-    /// throws), so this is the only way this wrapper's error log can still name the failure type.
+    /// Reads the exception type name the shared core stamps into <c>Metadata["ExceptionType"]</c>
+    /// on its unhandled-exception path. The core swallows the exception itself by contract (it
+    /// returns a <see cref="TaskInvocationResult"/>, never throws), so this is both the only way
+    /// this wrapper's error log can still name the failure type, and the signal that distinguishes
+    /// a genuine thrown exception from a returned validation failure (which sets no such key).
     /// </summary>
-    private static string ExceptionTypeOf(TaskInvocationResult result) =>
-        result.Metadata?.TryGetValue("ExceptionType", out var value) == true && value is string type
-            ? type
-            : string.Empty;
+    private static bool TryGetExceptionType(TaskInvocationResult result, out string exceptionType)
+    {
+        if (result.Metadata?.TryGetValue("ExceptionType", out var value) == true && value is string type)
+        {
+            exceptionType = type;
+            return true;
+        }
+
+        exceptionType = string.Empty;
+        return false;
+    }
 }
