@@ -35,7 +35,12 @@ public sealed class TaskInvocationOptions
     /// HTTP clients shared by every in-process HTTP and SOAP task and by the (deprecated) type-22
     /// External HTTP task. Before issue #1007 this bounded only type-22 egress; it now bounds all
     /// HTTP/SOAP egress the orchestrator performs, so it is an operator dial rather than a
-    /// hardcoded constant. 50 is the shipped default — the previous hardcoded value was 10.
+    /// hardcoded constant. 50 is the shipped default — the previous hardcoded value was 10; it
+    /// does not change the Execution host's own named clients, which stay hardcoded at 10 (see
+    /// <c>WorkflowInfrastructureModuleServiceCollectionExtensions.AddExternalHttpTaskClients</c>,
+    /// which resolves this property lazily through <see cref="IServiceProvider"/> rather than
+    /// reading raw configuration a second time, since it registers before the container that
+    /// would bind this options object is built).
     /// </summary>
     [Range(1, int.MaxValue)]
     public int MaxConnectionsPerServer { get; set; } = 50;

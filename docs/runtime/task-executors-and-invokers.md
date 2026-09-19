@@ -79,7 +79,7 @@ unavailable requested mode is a task failure and never causes a silent mode fall
 [Task Invocation Routing](task-invocation-routing.md). That makes `ExternalHttpTask` (type
 `22`) functionally redundant: both types now execute the same call, in the same host, through
 the same shared send core, under the shipped configuration. Type `22` is **deprecated, not
-removed** (`vnext-meta/deprecations.json`, id `externalHttpTask`) — existing definitions keep
+removed** (`vnext-meta/deprecations.json`, id `external-http-task`) — existing definitions keep
 working unchanged, but new definitions should use type `6`. The distinction that used to matter
 — "runs in Orchestration vs. runs in Execution" — is now a router configuration decision, not a
 task-type decision.

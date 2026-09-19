@@ -78,7 +78,7 @@
       "message": "The in-process (L1) discovery cache TTL default changed from 60 to 600 seconds. L1 is the one layer the bulk refresher cannot overwrite on other pods, so this value is how long a forced POST utilities/discovery/refresh takes to reach the whole fleet: that recovery is now up to ten minutes instead of one, and two pods can disagree about a domain's address for that long. Worst-case staleness after a domain moves goes from about 61 to about 70 minutes (RefreshIntervalSeconds + fetch + L1TtlSeconds). Deployments that need the previous behaviour set ServiceDiscovery:Cache:L1TtlSeconds back to 60; it must stay below RefreshIntervalSeconds, which the options validator enforces at startup."
     },
     {
-      "id": "externalHttpTask",
+      "id": "external-http-task",
       "type": "component",
       "component": "task",
       "path": "task.type=22",

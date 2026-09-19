@@ -158,7 +158,7 @@ prefix scan / delete is required, so it stays Dapr-store-agnostic. Absent a stam
 - `src/BBT.Workflow.Application/Tasks/Executors/Cache/CacheAsideTaskExecutor.cs`
 - `src/BBT.Workflow.Application/Tasks/Evaluators/DynamicExpressoValueEvaluator.cs`
 - `src/BBT.Workflow.Execution/Invokers/CacheAsideTaskInvoker.cs`
-- `src/BBT.Workflow.Execution/StateStores/IStateStoreClient.cs`
+- `src/BBT.Workflow.Execution.Core/StateStores/IStateStoreClient.cs`
 - `src/BBT.Workflow.Domain/Definitions/Functions/FunctionCache.cs`
 - `src/BBT.Workflow.Application/Functions/StateStoreCacheGateway.cs`
 - `src/BBT.Workflow.Application/Tasks/Invocation/Local/LocalCacheAsideTaskInvoker.cs`
