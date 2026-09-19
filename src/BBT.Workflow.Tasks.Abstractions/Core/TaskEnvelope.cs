@@ -29,15 +29,5 @@ public sealed class TaskEnvelope
     /// The actual type depends on TaskType.
     /// </summary>
     public required JsonElement Binding { get; init; }
-    
-    /// <summary>
-    /// Creates a TaskInvocationContext from this envelope.
-    /// </summary>
-    /// <param name="traceContext">Optional trace context.</param>
-    /// <returns>A context for remote invocation.</returns>
-    public TaskInvocationContext ToContext(TaskTraceContext? traceContext = null)
-    {
-        return TaskInvocationContext.ForRemote(TaskType, TaskKey, Binding, traceContext);
-    }
 }
 
