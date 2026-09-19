@@ -5,6 +5,7 @@ using BBT.Workflow.Execution.Core.Invocation;
 using BBT.Workflow.Execution.Core.StateStores;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Tasks.Executors;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace BBT.Workflow.Tasks.Invocation.Local;
@@ -27,8 +28,7 @@ namespace BBT.Workflow.Tasks.Invocation.Local;
 /// </summary>
 public sealed class LocalCacheAsideTaskInvoker(
     IStateStoreClient stateStore,
-    ILocalTaskInvokerRegistry localInvokers,
-    ITaskInvocationRouter router,
+    IServiceProvider serviceProvider,
     IRemoteInvokerService remoteInvoker,
     ILogger<LocalCacheAsideTaskInvoker> logger) : ILocalTaskInvoker
 {
@@ -95,11 +95,30 @@ public sealed class LocalCacheAsideTaskInvoker(
     /// asked with a null task, which resolves purely on type-config/default (see
     /// <see cref="ITaskInvocationRouter.Resolve"/>'s remarks).
     /// </summary>
+    /// <remarks>
+    /// <paramref name="serviceProvider"/> — NOT <see cref="ILocalTaskInvokerRegistry"/> and
+    /// <see cref="ITaskInvocationRouter"/> as constructor parameters — is deliberate: this invoker
+    /// is itself discovered by <see cref="ILocalTaskInvokerRegistry"/> via
+    /// <c>IEnumerable&lt;ILocalTaskInvoker&gt;</c>, whose constructor builds its lookup table
+    /// eagerly by constructing every registered invoker. Taking the registry (or the router, which
+    /// also depends on the registry) as a constructor parameter closes a cycle at container-build
+    /// time: <c>HttpTaskExecutor → ITaskInvocationDispatcher → ITaskInvocationRouter →
+    /// ILocalTaskInvokerRegistry → IEnumerable&lt;ILocalTaskInvoker&gt; →
+    /// LocalCacheAsideTaskInvoker → ILocalTaskInvokerRegistry</c> — this failed
+    /// <c>ValidateOnBuild</c> and kept the Orchestration host from starting at all (issue #1007
+    /// follow-up). Both are resolved HERE instead, lazily, only on an actual cache miss/forceRefresh
+    /// — exactly mirroring the Execution host's own <c>CacheAsideTaskInvoker</c>, which resolves its
+    /// <c>ITaskInvokerRegistry</c> the same way for the same reason. Do not "clean this up" back into
+    /// constructor parameters; that reintroduces the cycle and a host that cannot boot.
+    /// </remarks>
     private async Task<Execution.TaskInvocationResult> DispatchSourceAsync(
         Execution.TaskEnvelope sourceEnvelope,
         TaskTraceContext? traceContext,
         CancellationToken cancellationToken)
     {
+        var router = serviceProvider.GetRequiredService<ITaskInvocationRouter>();
+        var localInvokers = serviceProvider.GetRequiredService<ILocalTaskInvokerRegistry>();
+
         var decision = router.Resolve(task: null, sourceEnvelope.TaskType);
 
         if (decision.Mode == ExecutionMode.Local

@@ -12,6 +12,7 @@ using BBT.Workflow.Tasks; // ExecutionMode only — TaskEnvelope/TaskInvocationR
 using BBT.Workflow.Tasks.Executors;
 using BBT.Workflow.Tasks.Invocation;
 using BBT.Workflow.Tasks.Invocation.Local;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
@@ -107,7 +108,7 @@ public sealed class LocalCacheAsideTaskInvokerTests
             });
 
         var invoker = new LocalCacheAsideTaskInvoker(
-            store, registry, router, remoteInvoker, NullLogger<LocalCacheAsideTaskInvoker>.Instance);
+            store, BuildProvider(registry, router), remoteInvoker, NullLogger<LocalCacheAsideTaskInvoker>.Instance);
 
         var result = await invoker.InvokeAsync("cfg", Binding("cfg:1"), traceContext: null);
 
@@ -130,8 +131,7 @@ public sealed class LocalCacheAsideTaskInvokerTests
         var logger = new RecordingLogger<LocalCacheAsideTaskInvoker>();
         var invoker = new LocalCacheAsideTaskInvoker(
             store,
-            new StubRegistry(TaskTypes.Http, _ => SourceSuccess()),
-            AlwaysLocalRouter(),
+            BuildProvider(new StubRegistry(TaskTypes.Http, _ => SourceSuccess()), AlwaysLocalRouter()),
             Substitute.For<IRemoteInvokerService>(),
             logger);
 
@@ -154,8 +154,7 @@ public sealed class LocalCacheAsideTaskInvokerTests
         var store = new FakeStateStoreClient("statestore") { ThrowOnGet = new InvalidOperationException("redis down") };
         var invoker = new LocalCacheAsideTaskInvoker(
             store,
-            new StubRegistry(TaskTypes.Http, _ => SourceSuccess()),
-            AlwaysLocalRouter(),
+            BuildProvider(new StubRegistry(TaskTypes.Http, _ => SourceSuccess()), AlwaysLocalRouter()),
             Substitute.For<IRemoteInvokerService>(),
             new ThrowingLogger<LocalCacheAsideTaskInvoker>());
 
@@ -176,8 +175,7 @@ public sealed class LocalCacheAsideTaskInvokerTests
         var logger = new RecordingLogger<LocalCacheAsideTaskInvoker>();
         var invoker = new LocalCacheAsideTaskInvoker(
             store,
-            new StubRegistry(TaskTypes.Http, _ => SourceSuccess()),
-            AlwaysLocalRouter(),
+            BuildProvider(new StubRegistry(TaskTypes.Http, _ => SourceSuccess()), AlwaysLocalRouter()),
             Substitute.For<IRemoteInvokerService>(),
             logger);
 
@@ -217,8 +215,7 @@ public sealed class LocalCacheAsideTaskInvokerTests
         FakeStateStoreClient store,
         Func<BBT.Workflow.Execution.TaskEnvelope, BBT.Workflow.Execution.TaskInvocationResult> onSource) =>
         new(store,
-            new StubRegistry(TaskTypes.Http, onSource),
-            AlwaysLocalRouter(),
+            BuildProvider(new StubRegistry(TaskTypes.Http, onSource), AlwaysLocalRouter()),
             Substitute.For<IRemoteInvokerService>(),
             NullLogger<LocalCacheAsideTaskInvoker>.Instance);
 
@@ -245,10 +242,27 @@ public sealed class LocalCacheAsideTaskInvokerTests
 
         return new LocalCacheAsideTaskInvoker(
             store,
-            new StubRegistry(),
-            AlwaysLocalRouter(),
+            BuildProvider(new StubRegistry(), AlwaysLocalRouter()),
             remoteInvoker,
             NullLogger<LocalCacheAsideTaskInvoker>.Instance);
+    }
+
+    /// <summary>
+    /// Stands in for the real container: production resolves
+    /// <see cref="ILocalTaskInvokerRegistry"/> and <see cref="ITaskInvocationRouter"/> lazily from
+    /// an <see cref="IServiceProvider"/> (see <c>LocalCacheAsideTaskInvoker.DispatchSourceAsync</c>'s
+    /// remarks) to break the container-build-time cycle through
+    /// <c>IEnumerable&lt;ILocalTaskInvoker&gt;</c>. A real, tiny <see cref="ServiceCollection"/> is
+    /// used rather than an NSubstitute stand-in for <see cref="IServiceProvider"/> itself, since the
+    /// two instances handed in are exactly what the constructor-injected parameters used to be.
+    /// </summary>
+    private static IServiceProvider BuildProvider(
+        ILocalTaskInvokerRegistry registry, ITaskInvocationRouter router)
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton(registry);
+        services.AddSingleton(router);
+        return services.BuildServiceProvider();
     }
 
     private static BBT.Workflow.Execution.TaskInvocationResult SourceSuccess() =>
