@@ -15,6 +15,10 @@ namespace BBT.Workflow.Tasks.Invocation.Local;
 /// the opposite of what a cache is for. On a miss the source task is dispatched through the local
 /// invoker registry when its type has one, and falls back to the Execution service otherwise, so a
 /// source type that only exists remotely (python, conversation, triggers) keeps working unchanged.
+/// A cache read/write failure swallowed under <c>bypassOnCacheError=true</c> is reported by the
+/// shared core through a callback and logged here via a <c>[LoggerMessage]</c> generator (the
+/// repo's no-raw-<c>LogWarning</c> rule) — the Execution host's own <c>CacheAsideTaskInvoker</c>
+/// restores the same signal with its own message text.
 /// </summary>
 public sealed class LocalCacheAsideTaskInvoker(
     IStateStoreClient stateStore,
@@ -46,7 +50,9 @@ public sealed class LocalCacheAsideTaskInvoker(
             (sourceEnvelope, ct) => DispatchSourceAsync(sourceEnvelope, traceContext, ct),
             TaskTypes.CacheAside,
             cancellationToken,
-            taskKey);
+            taskKey,
+            onBypassedCacheError: (stage, ex) => logger.LocalCacheAsideBypassedCacheError(
+                ex, taskKey, stage == CacheAsideInvocation.CacheAsideBypassStage.Read ? "read" : "write"));
 
         // The shared core never throws (a caller cancellation aside, rethrown as-is) or logs;
         // classify the returned result here so this host's log lines carry the workflow-structured
@@ -95,6 +101,12 @@ public sealed class LocalCacheAsideTaskInvoker(
             sourceEnvelope.TaskType, sourceEnvelope.TaskKey, envelope,
             traceContext ?? new TaskTraceContext(), cancellationToken);
 
+        // The `!remote.IsSuccess` arm is unreachable with today's IRemoteInvokerService
+        // implementation (RemoteInvokerService): every failure path — transport error, own-timeout,
+        // gRPC failure — wraps `Result.Ok(TaskInvocationResult.Failure(...))`, never `Result.Fail`,
+        // and a parent-cancelled call rethrows OperationCanceledException instead of returning.
+        // Kept as defensive handling for a future IRemoteInvokerService implementation that DOES use
+        // Result.Fail for a pre-flight failure, not a live gap in the current wiring.
         return remote.IsSuccess
             ? LocalInvocationResultMapper.ToWireResult(remote.Value!)
             : Execution.TaskInvocationResult.Failure(

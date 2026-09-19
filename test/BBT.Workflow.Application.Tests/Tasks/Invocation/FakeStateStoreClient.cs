@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
@@ -27,6 +28,12 @@ internal sealed class FakeStateStoreClient(string? defaultStoreName) : IStateSto
     /// <summary>Whether a value is currently stored under a logical (unprefixed) key.</summary>
     public bool Contains(string key) => _entries.ContainsKey(PrefixKey(key));
 
+    /// <summary>
+    /// When set, <see cref="GetAsync"/> throws this instead of reading — simulates a state-store
+    /// outage for the cache-aside <c>bypassOnCacheError</c> tests.
+    /// </summary>
+    public Exception? ThrowOnGet { get; set; }
+
     /// <inheritdoc />
     public string? ResolveStoreName(string? storeName) =>
         !string.IsNullOrWhiteSpace(storeName) ? storeName : defaultStoreName;
@@ -42,6 +49,11 @@ internal sealed class FakeStateStoreClient(string? defaultStoreName) : IStateSto
         IReadOnlyDictionary<string, string>? metadata,
         CancellationToken cancellationToken = default)
     {
+        if (ThrowOnGet is { } ex)
+        {
+            throw ex;
+        }
+
         return Task.FromResult(_entries.TryGetValue(PrefixKey(key), out var entry)
             ? new StateEntry(true, entry.Value, entry.ETag)
             : new StateEntry(false, default, null));

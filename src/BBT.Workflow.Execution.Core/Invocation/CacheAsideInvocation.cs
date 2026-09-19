@@ -25,18 +25,26 @@ namespace BBT.Workflow.Execution.Core.Invocation;
 /// Orchestration host cannot reference <c>BBT.Workflow.Execution</c> (pythonnet, KubernetesClient,
 /// Dapr.AI, a hosted service). Mirrors <see cref="StateStoreInvocation"/> /
 /// <see cref="SoapInvocation"/> / <see cref="DaprServiceInvocation"/>: no logging or metrics happen
-/// here. One deliberate consequence of that: the pre-extraction invoker logged a warning at Warning
-/// level when a cache read/write error was swallowed under <c>bypassOnCacheError</c> — this core
-/// cannot reproduce that log line (no logger dependency), and the two hosts that call it cannot
-/// reconstruct it reliably either, since a subsequent source-task failure/null-data must be
-/// returned UNCHANGED (see below) and the success metadata shape is fixed
-/// (<see cref="BuildMetadata"/>). Only the two genuine failure paths (a read/write error WITHOUT
-/// bypass) still carry an <c>ExceptionType</c> metadata entry for a host to log at Error, matching
-/// every other extracted core.
+/// here — but a swallowed <c>bypassOnCacheError</c> failure still needs to be OBSERVABLE, because
+/// the flag defaults to <c>true</c>: without a signal, a state-store outage silently degrades every
+/// cache-aside task to its source task, at every level. The core still does not log; it reports,
+/// through <see cref="CacheAsideBypassStage"/> and the optional <c>onBypassedCacheError</c>
+/// notification, so each host can log its own message with its own logger and its own structured
+/// fields (the pre-extraction invoker's two <c>LogWarning</c> lines, restored verbatim by each
+/// host). Only the two genuine failure paths (a read/write error WITHOUT bypass) still additionally
+/// carry an <c>ExceptionType</c> metadata entry for a host to log at Error, matching every other
+/// extracted core.
 /// </para>
 /// </summary>
 public static class CacheAsideInvocation
 {
+    /// <summary>Which cache operation was bypassed, for the host's diagnostic line.</summary>
+    public enum CacheAsideBypassStage
+    {
+        Read,
+        Write
+    }
+
     /// <summary>
     /// Deliberately the SAME source name as the Execution host's <c>InvokerActivityHelper</c> and
     /// as the other extracted invocation cores (ActivitySource listeners match by name): the
@@ -78,16 +86,24 @@ public static class CacheAsideInvocation
     /// <param name="taskType">Task-type label stamped on the result (each host stamps its own).</param>
     /// <param name="cancellationToken">Caller cancellation; a fire during a cache read/write is
     /// rethrown rather than converted into a failed result.</param>
-    /// <param name="taskKey">Task key. Currently unused by this core (the pre-extraction invoker
-    /// only used it in the LogWarning lines this core does not reproduce — see the type doc) but
-    /// kept in the signature for parity with the other extracted cores.</param>
+    /// <param name="taskKey">Task key. Not used by this core's own control flow; passed through to
+    /// <paramref name="onBypassedCacheError"/> so a host's diagnostic line can include it, matching
+    /// the pre-extraction message shape.</param>
+    /// <param name="onBypassedCacheError">Fired synchronously, right where the pre-extraction
+    /// invoker's own <c>LogWarning</c> used to sit, when a read or write failure is swallowed under
+    /// <c>bypassOnCacheError=true</c> — never for a failure that is returned (bypass disabled).
+    /// The core still does not log — it reports. Each host owns its own logger, its own message and
+    /// its own structured fields, so the two bypass warnings survive the extraction verbatim instead
+    /// of a degraded cache going silent. Optional (defaults to <c>null</c>) so existing call sites
+    /// keep compiling; a caller that does not care about the signal simply omits it.</param>
     public static async Task<TaskInvocationResult> ExecuteAsync(
         IStateStoreClient stateStore,
         CacheAsideBinding binding,
         Func<TaskEnvelope, CancellationToken, Task<TaskInvocationResult>> dispatchSource,
         string taskType,
         CancellationToken cancellationToken,
-        string? taskKey = null)
+        string? taskKey = null,
+        Action<CacheAsideBypassStage, Exception>? onBypassedCacheError = null)
     {
         var startTimestamp = Stopwatch.GetTimestamp();
 
@@ -149,8 +165,9 @@ public static class CacheAsideInvocation
                 }
 
                 // bypassOnCacheError=true: swallow and fall through to the source task, exactly as
-                // the pre-extraction invoker did. See the type doc — the pre-extraction LogWarning
-                // at this exact point cannot be reproduced here or reconstructed by a caller.
+                // the pre-extraction invoker did. Report (never log) right at the swallow point, so
+                // the caller's diagnostic line fires exactly once, exactly here.
+                onBypassedCacheError?.Invoke(CacheAsideBypassStage.Read, ex);
             }
         }
 
@@ -189,7 +206,8 @@ public static class CacheAsideInvocation
                 }
 
                 // bypassOnCacheError=true: swallow and return the source result anyway. Same
-                // LogWarning-reproduction note as the read path above.
+                // report-not-log split as the read path above.
+                onBypassedCacheError?.Invoke(CacheAsideBypassStage.Write, ex);
             }
         }
 

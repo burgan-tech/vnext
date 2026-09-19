@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -9,6 +10,7 @@ using BBT.Workflow.Execution.Bindings;
 using BBT.Workflow.Tasks.Executors;
 using BBT.Workflow.Tasks.Invocation;
 using BBT.Workflow.Tasks.Invocation.Local;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using Shouldly;
@@ -70,6 +72,31 @@ public sealed class LocalCacheAsideTaskInvokerTests
         await invoker.InvokeAsync("cfg", BindingWithPythonSource("cfg:1"), traceContext: null);
 
         remoteCalls.ShouldBe(1);
+    }
+
+    /// <summary>
+    /// A cache read failure under the (default-true) <c>bypassOnCacheError</c> flag must not fail
+    /// the task — it falls through to the source task, exactly as before the extraction — and the
+    /// swallow must still be OBSERVABLE: the shared core reports it through the
+    /// <c>onBypassedCacheError</c> callback rather than logging it itself, and this host turns that
+    /// into its own <c>LocalCacheAsideBypassedCacheError</c> warning (fix round 1, issue #1007).
+    /// </summary>
+    [Fact]
+    public async Task InvokeAsync_ReadErrorWithBypass_StillReturnsSourceResult_AndLogsTheBypassOnce()
+    {
+        var store = new FakeStateStoreClient("statestore") { ThrowOnGet = new InvalidOperationException("redis down") };
+        var logger = new RecordingLogger<LocalCacheAsideTaskInvoker>();
+        var invoker = new LocalCacheAsideTaskInvoker(
+            store,
+            new StubRegistry(TaskTypes.Http, _ => SourceSuccess()),
+            Substitute.For<IRemoteInvokerService>(),
+            logger);
+
+        var result = await invoker.InvokeAsync("cfg", Binding("cfg:1"), traceContext: null);
+
+        result.IsSuccess.ShouldBeTrue();
+        store.Contains("cfg:1").ShouldBeTrue();
+        logger.Entries.Count(e => e.EventId.Id == 10164 && e.Level == LogLevel.Warning).ShouldBe(1);
     }
 
     private static LocalCacheAsideTaskInvoker CreateInvoker(
@@ -196,5 +223,24 @@ public sealed class LocalCacheAsideTaskInvokerTests
             var wireResult = onInvoke(envelope);
             return Task.FromResult(LocalInvocationResultMapper.ToOrchestratorResult(wireResult));
         }
+    }
+
+    /// <summary>
+    /// Minimal <see cref="ILogger{T}"/> recorder — cheaper for this one assertion (did the
+    /// generated <c>LocalCacheAsideBypassedCacheError</c> call fire, exactly once, at Warning) than
+    /// matching NSubstitute against the source-generated <c>Log&lt;TState&gt;</c> call shape.
+    /// </summary>
+    private sealed class RecordingLogger<T> : ILogger<T>
+    {
+        public List<(LogLevel Level, EventId EventId, string Message)> Entries { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter) =>
+            Entries.Add((logLevel, eventId, formatter(state, exception)));
     }
 }

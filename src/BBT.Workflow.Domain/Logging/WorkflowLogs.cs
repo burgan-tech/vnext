@@ -926,6 +926,24 @@ public static partial class WorkflowLogs
         this ILogger logger, string? taskKey, string taskType, string url);
 
     /// <summary>
+    /// Logs when the local cache-aside invoker swallows a cache read or write failure under
+    /// <c>bypassOnCacheError=true</c> and continues without the cache (read: falls through to the
+    /// source task; write: returns the source result anyway). <c>bypassOnCacheError</c> defaults to
+    /// <c>true</c>, so without this line a state-store outage silently degrades every cache-aside
+    /// task to its source task with no signal at any level — this is the sole diagnostic for that
+    /// degradation on the Orchestration host, restored via <c>CacheAsideInvocation</c>'s
+    /// notification callback (the shared core still does not log; it reports, and each host owns
+    /// its own message). Mirrors the Execution host's own <c>LogWarning</c> at the same two call
+    /// sites.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10164,
+        Level = LogLevel.Warning,
+        Message = "CacheAside {TaskKey}: cache {Stage} failed; continuing without the cache (bypassOnCacheError=true)")]
+    public static partial void LocalCacheAsideBypassedCacheError(
+        this ILogger logger, Exception exception, string? taskKey, string stage);
+
+    /// <summary>
     /// Logs when task instance resolution fails (for DirectTrigger, GetInstanceData).
     /// </summary>
     [LoggerMessage(
