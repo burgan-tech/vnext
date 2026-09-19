@@ -228,6 +228,26 @@ from configuration archaeology. The decision's `Reason` (`task-override` / `type
 `default` / `no-local-invoker`) is logged (`TaskInvokedLocally`) but is not currently a separate
 span tag.
 
+## What it costs, measured
+
+The hop this change removes was measured on 2026-09-19 against the local stack, same hosts and
+components in both modes, with only `Workflow:TaskInvocation:Modes:*` differing. `Task.Invoke` p50:
+
+| Wire type | Local | Remote | Δ |
+|---|---:|---:|---:|
+| `http` | 5.87 ms | 8.29 ms | +2.42 ms |
+| `soap` | 6.46 ms | 8.34 ms | +1.88 ms |
+| `statestore` | 0.69 ms | 2.24 ms | +1.55 ms |
+| `cacheaside` | 0.70 ms | 2.40 ms | +1.70 ms |
+
+The function response cache pays the same toll: `Cache.Get` on a hit is 0.68 ms local against
+2.19 ms remote.
+
+**Do not read this as a transition-level speedup.** At one task per transition, 1.5–2.4 ms sits
+inside run-to-run variance of a 30–50 ms transition; the saving multiplies with task count, and
+that is where it becomes visible. Full method, trace-integrity check and the cache numbers:
+[evidence/2026-09-19-task-invocation-routing](evidence/2026-09-19-task-invocation-routing/README.md).
+
 ## Environment prerequisites
 
 The local `statestore`/`cacheaside` invokers resolve their Dapr state store component through
@@ -292,6 +312,8 @@ a config rollback into a new throughput bottleneck.
 - [Task Executors and Invokers](task-executors-and-invokers.md)
 - [Dapr Invocation Transport](dapr-invocation-transport.md)
 - [State Store Task](state-store-task.md), [Cache-Aside Task](cache-aside-task.md)
+- [Live evidence — task invocation routing](evidence/2026-09-19-task-invocation-routing/README.md) —
+  trace integrity in both modes plus the measured hop cost
 - [Dapr Component Footprint](dapr-component-footprint.md) — per-host component matrix, including
   why Orchestration needs the `state` component for the platform cache and, since this change,
   for local `statestore`/`cacheaside` domain tasks by default
