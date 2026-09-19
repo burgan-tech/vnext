@@ -96,8 +96,8 @@ public sealed class LocalCacheAsideTaskInvoker(
     /// <see cref="ITaskInvocationRouter.Resolve"/>'s remarks).
     /// </summary>
     /// <remarks>
-    /// <paramref name="serviceProvider"/> — NOT <see cref="ILocalTaskInvokerRegistry"/> and
-    /// <see cref="ITaskInvocationRouter"/> as constructor parameters — is deliberate: this invoker
+    /// The <see cref="IServiceProvider"/> — NOT <see cref="ILocalTaskInvokerRegistry"/> and
+    /// <see cref="ITaskInvocationRouter"/> — is resolved as a constructor parameter deliberately: this invoker
     /// is itself discovered by <see cref="ILocalTaskInvokerRegistry"/> via
     /// <c>IEnumerable&lt;ILocalTaskInvoker&gt;</c>, whose constructor builds its lookup table
     /// eagerly by constructing every registered invoker. Taking the registry (or the router, which

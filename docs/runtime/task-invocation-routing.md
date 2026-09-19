@@ -115,8 +115,8 @@ for what it bounds and why it matters most for `daprservice`/`statestore`/`cache
 | Wire type | Task type(s) | Local invoker | Notes |
 | --- | --- | --- | --- |
 | `http` | HTTP (type `6`) | `LocalHttpTaskInvoker` | Same `HttpTaskInvocation` core as the Execution service's `HttpTaskInvoker` and the (now redundant) type-`22` `ExternalHttpTaskInvoker`. See [Task Executors and Invokers](task-executors-and-invokers.md). |
-| `daprservice` | Dapr service invocation (type `7`) | `LocalDaprServiceTaskInvoker` | Calls another domain app directly from Orchestration instead of relaying through Execution. |
-| `soap` | SOAP (type `8`) | `LocalSoapTaskInvoker` | Shares the same named HTTP clients (and the same connection cap) as `http`. |
+| `daprservice` | Dapr service invocation (type `3`) | `LocalDaprServiceTaskInvoker` | Calls another domain app directly from Orchestration instead of relaying through Execution. |
+| `soap` | SOAP (type `16`) | `LocalSoapTaskInvoker` | Shares the same named HTTP clients (and the same connection cap) as `http`. |
 | `statestore` | State Store (type `17`) | `LocalStateStoreTaskInvoker` | Runs through `StateStoreInvocation` over the shared `IStateStoreClient`; also backs the function response cache (`StateStoreCacheGateway`). See [State Store Task](state-store-task.md). |
 | `cacheaside` | Cache-Aside (type `18`) | `LocalCacheAsideTaskInvoker` | On a cache miss, dispatches the pre-resolved source-task envelope back through the same router/dispatcher — so a `http` source task run from a `cacheaside` task is itself subject to this table. See [Cache-Aside Task](cache-aside-task.md). |
 
