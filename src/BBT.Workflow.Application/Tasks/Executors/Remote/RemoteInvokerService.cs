@@ -185,9 +185,9 @@ public sealed class RemoteInvokerService : IRemoteInvokerService
                 Body = response.Result.Body,
                 Data = response.Result.Data,
                 ErrorMessage = response.Result.ErrorMessage,
-                Headers = response.Result.Headers,
+                Headers = NormalizeKeyCasing(response.Result.Headers),
                 TaskType = response.Result.TaskType,
-                Metadata = response.Result.Metadata,
+                Metadata = NormalizeKeyCasing(response.Result.Metadata),
                 ExecutionDurationMs = (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds
             };
 
@@ -328,9 +328,9 @@ public sealed class RemoteInvokerService : IRemoteInvokerService
                 Body = response.Result.Body,
                 Data = response.Result.Data,
                 ErrorMessage = response.Result.ErrorMessage,
-                Headers = response.Result.Headers,
+                Headers = NormalizeKeyCasing(response.Result.Headers),
                 TaskType = response.Result.TaskType,
-                Metadata = response.Result.Metadata,
+                Metadata = NormalizeKeyCasing(response.Result.Metadata),
                 ExecutionDurationMs = (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds
             };
 
@@ -481,6 +481,34 @@ public sealed class RemoteInvokerService : IRemoteInvokerService
             actSub: actSub,
             requestId: requestId);
     }
+
+    /// <summary>
+    /// Rebuilds a wire-deserialized dictionary keyed by <see cref="StringComparer.OrdinalIgnoreCase"/>
+    /// so a Dapr round trip cannot change lookup semantics versus the in-process path.
+    /// <para>
+    /// <c>HttpTaskInvocation.SendAsync</c> is the SAME code that builds <c>Metadata</c>
+    /// (<c>"ExceptionType"</c>, PascalCase) for both the in-process (type 22) and Execution-host
+    /// (type 6) HTTP task, so on the local path this dictionary is the exact in-memory instance —
+    /// its default <see cref="StringComparer.Ordinal"/> comparer matches because the producer and
+    /// consumer (<c>ErrorNormalizer</c>) agree on casing by construction. On the remote path this
+    /// same dictionary is JSON-serialized by the Execution host and deserialized here by
+    /// <c>System.Text.Json</c> with <c>JsonSerializerDefaults.Web</c> — which camelCases string
+    /// dictionary keys on the way out — so <c>ErrorNormalizer</c>'s ordinal
+    /// <c>TryGetValue("ExceptionType", ...)</c> silently misses on a lowercased
+    /// <c>"exceptionType"</c> key, and every <c>errorTypes</c> error-boundary rule stops matching
+    /// for that task the moment its invocation mode flips from Local to Remote (or a task type's
+    /// default routing changes). Rebuilding with a case-insensitive comparer here — the one seam
+    /// every remote task type passes through (<see cref="InvokeAsync"/> and
+    /// <see cref="InvokeOverGrpcAsync"/>) — restores parity for every metadata/header consumer at
+    /// once instead of patching each lookup site individually.
+    /// </para>
+    /// <para>
+    /// A null source is returned as null, never promoted to an empty dictionary: this must not
+    /// change whether metadata/headers are considered present, only how their keys compare.
+    /// </para>
+    /// </summary>
+    private static Dictionary<string, TValue>? NormalizeKeyCasing<TValue>(Dictionary<string, TValue>? source) =>
+        source is null ? null : new Dictionary<string, TValue>(source, StringComparer.OrdinalIgnoreCase);
 
     private static string? GetIdentityClaim(
         IReadOnlyDictionary<string, string>? headers,
