@@ -1,3 +1,5 @@
+using System.ComponentModel.DataAnnotations;
+
 namespace BBT.Workflow.Tasks.Invocation;
 
 /// <summary>
@@ -27,4 +29,14 @@ public sealed class TaskInvocationOptions
     /// </summary>
     public Dictionary<string, ExecutionMode> Modes { get; set; } =
         new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Per-target connection cap (<c>HttpClientHandler.MaxConnectionsPerServer</c>) for the named
+    /// HTTP clients shared by every in-process HTTP and SOAP task and by the (deprecated) type-22
+    /// External HTTP task. Before issue #1007 this bounded only type-22 egress; it now bounds all
+    /// HTTP/SOAP egress the orchestrator performs, so it is an operator dial rather than a
+    /// hardcoded constant. 50 is the shipped default — the previous hardcoded value was 10.
+    /// </summary>
+    [Range(1, int.MaxValue)]
+    public int MaxConnectionsPerServer { get; set; } = 50;
 }

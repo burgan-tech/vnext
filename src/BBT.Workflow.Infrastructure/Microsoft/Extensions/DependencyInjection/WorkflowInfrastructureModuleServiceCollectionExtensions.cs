@@ -173,6 +173,13 @@ public static class WorkflowInfrastructureModuleServiceCollectionExtensions
     /// </summary>
     private static IServiceCollection AddExternalHttpTaskClients(this IServiceCollection services)
     {
+        // Orchestration is now the default egress host for HTTP and SOAP tasks (issue #1007), so
+        // this cap bounds every outbound task call to a given target, not just the type-22 ones it
+        // was written for. 10 is a throughput cliff for a hot single-target flow; make it an
+        // operator dial with the previous value as the floor-compatible default.
+        var maxConnectionsPerServer = services.GetConfiguration()
+            .GetValue<int?>("Workflow:TaskInvocation:MaxConnectionsPerServer") ?? 50;
+
         // Default HTTP client with SSL validation enabled
         services.AddHttpClient(BBT.Workflow.Execution.WorkflowHttpClientNames.Default, client =>
             {
@@ -183,7 +190,7 @@ public static class WorkflowInfrastructureModuleServiceCollectionExtensions
             .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
             {
                 AutomaticDecompression = System.Net.DecompressionMethods.GZip | System.Net.DecompressionMethods.Deflate,
-                MaxConnectionsPerServer = 10,
+                MaxConnectionsPerServer = maxConnectionsPerServer,
                 UseCookies = false
             });
 
@@ -197,7 +204,7 @@ public static class WorkflowInfrastructureModuleServiceCollectionExtensions
             .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
             {
                 AutomaticDecompression = System.Net.DecompressionMethods.GZip | System.Net.DecompressionMethods.Deflate,
-                MaxConnectionsPerServer = 10,
+                MaxConnectionsPerServer = maxConnectionsPerServer,
                 UseCookies = false,
                 ServerCertificateCustomValidationCallback = (_, _, _, _) => true
             });

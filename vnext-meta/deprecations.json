@@ -76,6 +76,17 @@
       "replacement": null,
       "severity": "info",
       "message": "The in-process (L1) discovery cache TTL default changed from 60 to 600 seconds. L1 is the one layer the bulk refresher cannot overwrite on other pods, so this value is how long a forced POST utilities/discovery/refresh takes to reach the whole fleet: that recovery is now up to ten minutes instead of one, and two pods can disagree about a domain's address for that long. Worst-case staleness after a domain moves goes from about 61 to about 70 minutes (RefreshIntervalSeconds + fetch + L1TtlSeconds). Deployments that need the previous behaviour set ServiceDiscovery:Cache:L1TtlSeconds back to 60; it must stay below RefreshIntervalSeconds, which the options validator enforces at startup."
+    },
+    {
+      "id": "externalHttpTask",
+      "type": "component",
+      "component": "task",
+      "path": "task.type=22",
+      "deprecatedSince": "0.0.92",
+      "removedAt": null,
+      "replacement": "task.type=6 (HttpTask) with the default Workflow:TaskInvocation routing",
+      "severity": "warning",
+      "message": "ExternalHttpTask (type 22) was introduced so a user-defined URL call could run directly inside the Orchestrator instead of being shipped to the Execution service. As of issue #1007, task.type=6 (the ordinary HTTP task) also runs in-process inside Orchestration by default under Workflow:TaskInvocation:Modes.http=Local, through the same shared HttpTaskInvocation send core - so type 22 is now functionally redundant with type 6 under the shipped configuration. Type 22 is deprecated, not removed: existing definitions keep working unchanged (ExternalHttpTaskInvoker still runs unconditionally in-process, independent of the TaskInvocation router). New task definitions should use type 6 instead, which additionally gets a per-type Remote fallback switch (Workflow:TaskInvocation:Modes.http) that type 22 never had. See docs/runtime/task-invocation-routing.md and docs/runtime/task-executors-and-invokers.md § External HTTP tasks."
     }
   ]
 }

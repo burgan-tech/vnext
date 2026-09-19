@@ -112,6 +112,7 @@ public static class TaskServiceCollectionExtensions
         // the remote path rather than failing the task.
         services.AddOptions<TaskInvocationOptions>()
             .BindConfiguration(TaskInvocationOptions.SectionName)
+            .ValidateDataAnnotations()
             .ValidateOnStart();
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IValidateOptions<TaskInvocationOptions>, TaskInvocationOptionsValidator>());

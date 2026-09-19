@@ -8,8 +8,15 @@ function pipeline. It is the caching primitive for flows: read a cached value, w
 or delete one or more. Command names mirror the Dapr state API verbs.
 
 It follows the same split as the other Dapr tasks: `StateStoreTaskExecutor` (Orchestration /
-Application) performs input/output mapping and sends a `TaskEnvelope` to the Execution service,
-where `StateStoreTaskInvoker` performs the state store call through `DaprClient`.
+Application) performs input/output mapping and hands the prepared `TaskEnvelope` to
+`ITaskInvocationDispatcher`. Where the actual state-store call executes is a routing decision,
+not fixed: **by shipped default it runs in-process on Orchestration** (`LocalStateStoreTaskInvoker`,
+over the shared `IStateStoreClient` — the same client backing the function response cache), and
+falls back to the Execution service (`StateStoreTaskInvoker`, over `DaprClient`) only if the
+`statestore` wire type is reconfigured Remote. See
+[Task Invocation Routing](task-invocation-routing.md) for the resolution order, the config, and
+what the local path trades away (no Dapr sidecar circuit breaker, no
+`ExecutionApi:InvocationTimeoutSeconds` layer).
 
 ## Commands
 
@@ -62,12 +69,15 @@ Result metadata (`Key`) reports the prefixed store key.
 
 ## Component requirement
 
-The invoker runs in the **Execution** service. When `storeName` is omitted, the store is resolved
-from the Execution runtime's `DAPR_STATE_STORE_NAME` configuration value (`vnext-state` in the
-shipped environments), so no component name is hard-coded. An explicit `storeName` must be
-exposed by the Execution sidecar — the shipped `etc/execution/dapr/components/state.yaml`
-defines the `vnext-state` component (Redis, `keyPrefix: vnext`), matching the
-orchestration-side component.
+The invoker runs **in the host the task invocation router resolves for `statestore`** —
+Orchestration by shipped default, Execution if reconfigured Remote (see
+[Task Invocation Routing](task-invocation-routing.md)). When `storeName` is omitted, the store
+is resolved from the *executing* runtime's `DAPR_STATE_STORE_NAME` configuration value
+(`vnext-state` in the shipped environments), so no component name is hard-coded — this reads
+Orchestration's own value under the default Local routing. An explicit `storeName` must be
+exposed by whichever sidecar actually performs the call — the shipped
+`etc/execution/dapr/components/state.yaml` defines the `vnext-state` component (Redis,
+`keyPrefix: vnext`) on the Execution side, matching the orchestration-side component.
 
 ## Example task definition
 
@@ -91,4 +101,6 @@ orchestration-side component.
 - `src/BBT.Workflow.Application/Tasks/Executors/Dapr/StateStoreTaskExecutor.cs`
 - `src/BBT.Workflow.Application/Tasks/Mapping/TaskBindingMapper.cs`
 - `src/BBT.Workflow.Execution/Invokers/StateStoreTaskInvoker.cs`
+- `src/BBT.Workflow.Application/Tasks/Invocation/Local/LocalStateStoreTaskInvoker.cs`
 - `etc/execution/dapr/components/state.yaml`
+- `docs/runtime/task-invocation-routing.md`

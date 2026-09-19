@@ -16,16 +16,25 @@ On execution it:
 
 ## Architecture
 
-It follows the exact same split as the [State Store task](./state-store-task.md):
+It follows the exact same split as the [State Store task](./state-store-task.md), and — like
+state store — its actual invocation now goes through the **task invocation router** rather than
+being hardcoded to the Execution service. See
+[Task Invocation Routing](task-invocation-routing.md) for the resolution order and how to
+revert it.
 
 - **`CacheAsideTaskExecutor`** (Orchestration / Application) runs the input mapping, resolves the source
-  task into an envelope, then sends a `cacheaside` `TaskEnvelope` to the Execution service through
-  `IRemoteInvokerService`, and finally runs the output mapping.
-- **`CacheAsideTaskInvoker`** (Execution) performs the actual state-store access through `DaprClient`
-  (get / set), applying the shared `custom:` key prefix, TTL and consistency — mirroring
-  `StateStoreTaskInvoker`. On a miss it dispatches the pre-resolved **source task envelope** through the
-  local `ITaskInvokerRegistry`, so an HTTP source runs on the same Execution service (its own invoker),
-  and writes the raw result back to the cache.
+  task into a pre-built envelope, then hands the prepared `cacheaside` `TaskEnvelope` to
+  `ITaskInvocationDispatcher`, and finally runs the output mapping.
+- **The read-through itself (get / set, `custom:` key prefix, TTL and consistency) runs where the
+  router resolves it, by default in-process:**
+  - **Local (shipped default)** — `LocalCacheAsideTaskInvoker` (Orchestration) performs the
+    state-store get/set directly through the shared `IStateStoreClient`. On a miss it dispatches
+    the pre-resolved **source task envelope** back through the same `ITaskInvocationDispatcher` —
+    so an HTTP source task runs under its own routing decision (local by default too), not
+    forced onto a specific host — and writes the raw result back to the cache.
+  - **Remote (if reconfigured)** — `CacheAsideTaskInvoker` (Execution) performs the same logic
+    through `DaprClient`, dispatching the source task through the local `ITaskInvokerRegistry`
+    so it runs on the Execution service.
 
 Because the scripting engine only exists in the Orchestration runtime, the **cache stores the raw source
 result** and any shaping (`sourceMapping`) is applied by the executor's output stage on every read (hit
@@ -67,11 +76,14 @@ task. Example: `key: "customer:42:profile"` → store key `custom:customer:42:pr
 
 ## Component requirement
 
-The cache `get`/`set` runs in the **Execution** service (`CacheAsideTaskInvoker`), dispatched from the
-Orchestration executor via Dapr service invocation. When `storeName` is omitted, the store is resolved
-from the Execution runtime's `DAPR_STATE_STORE_NAME` value (`vnext-state` in the shipped environments);
-an explicit `storeName` must be exposed by the Execution sidecar
-(`etc/execution/dapr/components/state.yaml`).
+The cache `get`/`set` runs wherever the task invocation router resolves the `cacheaside` type —
+**in-process on Orchestration by default** (`LocalCacheAsideTaskInvoker`), or on the
+**Execution** service (`CacheAsideTaskInvoker`, dispatched via Dapr service invocation) if
+reconfigured Remote. When `storeName` is omitted, the store is resolved from the *executing*
+runtime's `DAPR_STATE_STORE_NAME` value (`vnext-state` in the shipped environments) — Orchestration's
+own value under the default Local routing, Execution's under Remote; an explicit `storeName` must be
+exposed by whichever sidecar actually performs the call
+(`etc/execution/dapr/components/state.yaml` for Execution).
 
 ## Example task definition
 
@@ -110,11 +122,15 @@ CacheAside task, by adding a `cache` block to the function definition:
 `FunctionAppService` wraps execution: it resolves the key (Dynamic Expresso `keyExpression` — evaluated
 against the request/script context — or a static `key`), reads the cache; on a **hit** it returns the
 cached `FunctionResponseOutput` (Data + StatusCode + Headers) and skips the tasks; on a **miss** it runs
-the function and writes the response back. The cache get/set goes through the Execution `statestore`
-invoker (same `custom:` prefix / TTL / consistency). Only side-effect-free (read) functions should opt
-in. A deterministic `sha256(string)` helper is available in `keyExpression` for bounded, vary-by-correct
-keys; the config's own version is available as `context.Instance.Version`, so folding it into the key
-makes a new config version produce a new key (no active deletion needed for config changes).
+the function and writes the response back. The cache get/set goes through `StateStoreCacheGateway`,
+which reads/writes via `ITaskInvocationDispatcher` on the `statestore` wire type — in-process on
+Orchestration by default, or the Execution service if that type is reconfigured Remote (same
+`custom:` prefix / TTL / consistency either way; see
+[Task Invocation Routing](task-invocation-routing.md)). Only side-effect-free (read) functions should
+opt in. A deterministic `sha256(string)` helper is available in `keyExpression` for bounded,
+vary-by-correct keys; the config's own version is available as `context.Instance.Version`, so folding
+it into the key makes a new config version produce a new key (no active deletion needed for config
+changes).
 
 ### Invalidation (generation-namespace)
 
@@ -145,4 +161,6 @@ prefix scan / delete is required, so it stays Dapr-store-agnostic. Absent a stam
 - `src/BBT.Workflow.Execution/StateStores/IStateStoreClient.cs`
 - `src/BBT.Workflow.Domain/Definitions/Functions/FunctionCache.cs`
 - `src/BBT.Workflow.Application/Functions/StateStoreCacheGateway.cs`
+- `src/BBT.Workflow.Application/Tasks/Invocation/Local/LocalCacheAsideTaskInvoker.cs`
 - `docs/runtime/state-store-task.md`
+- `docs/runtime/task-invocation-routing.md`

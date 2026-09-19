@@ -261,6 +261,18 @@
         "ServiceDiscovery:Cache:DomainListExpectedMax": 500,
         "ServiceDiscovery:Cache:L1TtlSeconds": 600
       }
+    },
+    "taskInvocationRouting": {
+      "since": "0.0.92",
+      "status": "stable",
+      "description": "Task invocation is now mode-driven instead of hardcoded to the Execution service (issue #1007). ITaskInvocationRouter resolves, per call, first match wins: a per-task-definition override hook (config.executionMode - reserved for a future vnext-schema release, always null today, never actually decides yet), the per-type entry in Workflow:TaskInvocation:Modes (matched case-insensitively against the wire task type), the configured Workflow:TaskInvocation:DefaultMode, and finally an unconditional capability gate - Local only resolves if an ILocalTaskInvoker is registered for that wire type, otherwise the decision degrades to Remote so a misconfiguration never fails a task. The shipped appsettings.json sets DefaultMode=Remote and routes exactly five wire types Local: http (TaskType 6), daprservice (TaskType 7), soap (TaskType 8), statestore (TaskType 17) and cacheaside (TaskType 18); every other wire type (daprbinding, daprhttpendpoint, daprpubsub, daprconversation, python, the trigger/query types) has no local invoker and always resolves Remote regardless of configuration. A Local task runs in-process inside Orchestration through the same shared send/invocation cores the Execution-side invokers use (HttpTaskInvocation, StateStoreInvocation), so output shapes are identical to the Remote path by construction; a CacheAside miss re-enters the same router for its source task rather than being forced onto one host. Running locally trades away two things the Dapr hop to Execution provided: the sidecar's circuit breaker, and the ExecutionApi:InvocationTimeoutSeconds (60s) layer that used to sit between the task's own timeoutSeconds and the job execution budget - on the local path the task's own timeoutSeconds (default 30) is the only bound below the job budget (WorkflowExecutionOptionsValidator, which still enforces the remote-path budget hierarchy, is deliberately unchanged by this feature; a locally-run task whose timeoutSeconds meets or exceeds the job budget is not rejected at publish time, it is simply inert because the job budget fires first). ExecutionMode.Custom is rejected at options-validation time (ValidateOnStart) for both DefaultMode and every Modes entry. The resolved mode is tagged on the ambient task span as vnext.task.invocation.mode (Local|Remote) so the path a given invocation took is answerable from a trace. Reverting a type to Remote is a one-line appsettings.json change under Workflow:TaskInvocation:Modes, no code change or Execution redeploy required. The HTTP/SOAP named-client connection cap (previously hardcoded MaxConnectionsPerServer=10, written only for the type-22 External HTTP task) is now Workflow:TaskInvocation:MaxConnectionsPerServer, default 50, since it now bounds every HTTP/SOAP egress call the orchestrator performs, not just type 22's.",
+      "relatedConfig": [
+        "Workflow:TaskInvocation:DefaultMode",
+        "Workflow:TaskInvocation:Modes",
+        "Workflow:TaskInvocation:MaxConnectionsPerServer"
+      ],
+      "schemaPath": "task.type=6|7|8|17|18",
+      "documentation": "docs/runtime/task-invocation-routing.md"
     }
   }
 }
