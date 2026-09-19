@@ -15,6 +15,7 @@ using BBT.Workflow.Tasks.Executors;
 using BBT.Workflow.Tasks.Factory;
 using BBT.Workflow.Tasks.Invocation;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using NSubstitute;
 using Shouldly;
 using Xunit;
@@ -164,7 +165,8 @@ public sealed class CacheAsideTaskExecutorTests
             // HttpTaskExecutorRoutingTests: this suite is about the executor's envelope, not about
             // mocking the dispatcher away.
             var dispatcher = new TaskInvocationDispatcher(
-                router, localInvokers, RemoteInvoker, NullLogger<TaskInvocationDispatcher>.Instance);
+                router, localInvokers, RemoteInvoker,
+                Options.Create(new TaskInvocationOptions()), NullLogger<TaskInvocationDispatcher>.Instance);
 
             Executor = new CacheAsideTaskExecutor(
                 RemoteInvoker,

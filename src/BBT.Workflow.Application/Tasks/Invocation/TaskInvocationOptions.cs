@@ -44,4 +44,17 @@ public sealed class TaskInvocationOptions
     /// </summary>
     [Range(1, int.MaxValue)]
     public int MaxConnectionsPerServer { get; set; } = 50;
+
+    /// <summary>
+    /// Per-invocation deadline <see cref="TaskInvocationDispatcher"/> applies around every
+    /// in-process (local) task call — the local-path counterpart of the remote path's
+    /// <c>ExecutionApi:InvocationTimeoutSeconds</c> (see <c>RemoteInvokerService</c>). Only
+    /// <c>HttpTaskBinding</c> and <c>SoapTaskBinding</c> carry their own <c>timeoutSeconds</c>
+    /// field; <c>DaprServiceBinding</c>, <c>StateStoreBinding</c> and <c>CacheAsideBinding</c> have
+    /// none, so without this dial those three types had NO deadline at all on the local path — not
+    /// even the job budget behind a <c>sync=true</c> transition. Applied uniformly to every local
+    /// invoker regardless of task type, on top of whichever per-task-binding timeout also applies.
+    /// </summary>
+    [Range(1, int.MaxValue)]
+    public int LocalInvocationTimeoutSeconds { get; set; } = 60;
 }

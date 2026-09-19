@@ -944,6 +944,21 @@ public static partial class WorkflowLogs
         this ILogger logger, Exception exception, string? taskKey, string stage);
 
     /// <summary>
+    /// Logs when an in-process (orchestrator-local) task invocation is aborted by
+    /// <see cref="BBT.Workflow.Tasks.Invocation.TaskInvocationOptions.LocalInvocationTimeoutSeconds"/> —
+    /// the local-path counterpart of the remote path's own-timer log line
+    /// (<c>RemoteInvokerService</c>, <c>[timeout.layer=remote]</c>). Distinct from
+    /// <see cref="LocalTaskInvocationCancelled"/>: this fires only when OUR linked timer expired,
+    /// never when the caller's own token did.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10165,
+        Level = LogLevel.Error,
+        Message = "In-process invocation of task {TaskKey} ({TaskType}) timed out after {TimeoutSeconds}s [timeout.layer=local]")]
+    public static partial void LocalTaskInvocationTimedOut(
+        this ILogger logger, string? taskKey, string taskType, int timeoutSeconds);
+
+    /// <summary>
     /// Logs when task instance resolution fails (for DirectTrigger, GetInstanceData).
     /// </summary>
     [LoggerMessage(

@@ -10,6 +10,7 @@ using BBT.Workflow.Tasks;
 using BBT.Workflow.Tasks.Executors;
 using BBT.Workflow.Tasks.Invocation;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using NSubstitute;
 using Shouldly;
 using Xunit;
@@ -123,7 +124,8 @@ public sealed class StateStoreCacheGatewayRoutingTests
             var remoteInvoker = new RecordingRemoteInvoker(this);
 
             var dispatcher = new TaskInvocationDispatcher(
-                router, registry, remoteInvoker, NullLogger<TaskInvocationDispatcher>.Instance);
+                router, registry, remoteInvoker,
+                Options.Create(new TaskInvocationOptions()), NullLogger<TaskInvocationDispatcher>.Instance);
 
             Gateway = new StateStoreCacheGateway(dispatcher);
         }

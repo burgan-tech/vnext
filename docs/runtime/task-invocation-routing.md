@@ -77,7 +77,7 @@ silent fallback to the pre-#1007 behavior, not an outage.
 }
 ```
 
-`DefaultMode` stays `Remote`: only the five measured and tested types below are local. A task
+`DefaultMode` stays `Remote`: only the five tested types below are local. A task
 type added to the runtime tomorrow with no entry in `Modes` runs Remote automatically — it does
 not silently start performing egress from the orchestrator just by existing. Pinned by
 `TaskInvocationDefaultsTests` (`test/BBT.Workflow.Application.Tests/Tasks/Invocation/`), which
@@ -102,6 +102,13 @@ file otherwise. This value only ever applies to Orchestration's own named HTTP c
 Execution host's equivalent clients are a separate, still-hardcoded `10` (see
 [What the local path loses](#what-the-local-path-loses) and Reverting a type to Remote below for
 why that gap matters when reverting under load).
+
+**A fourth key, also absent from the shipped file:**
+`Workflow:TaskInvocation:LocalInvocationTimeoutSeconds` (int, `[Range(1, int.MaxValue)]`,
+`TaskInvocationOptions.LocalInvocationTimeoutSeconds`, code default **`60`**). The local-path
+counterpart of `ExecutionApi:InvocationTimeoutSeconds` — see
+[What the local path loses](#what-the-local-path-loses) and [Timeout layering](#timeout-layering)
+for what it bounds and why it matters most for `daprservice`/`statestore`/`cacheaside`.
 
 ## Which types have a local invoker
 
@@ -129,9 +136,31 @@ used to provide:
    such breaker between it and its target: a failing/slow downstream is felt directly by the
    orchestrator's own thread pool and connection pool, not absorbed by a separate service's
    sidecar first.
-2. **No `ExecutionApi:InvocationTimeoutSeconds` layer (60s).** On the remote path this sits
-   between the task's own `timeoutSeconds` and the job execution budget (see Timeout layering
-   below). The local path has no equivalent middle layer — see below.
+2. **No `ExecutionApi:InvocationTimeoutSeconds` layer (60s) of its own — `LocalInvocationTimeoutSeconds`
+   (default 60s) is the local-path counterpart.** `TaskInvocationDispatcher` wraps every in-process
+   call in a linked cancellation token bounded by
+   `Workflow:TaskInvocation:LocalInvocationTimeoutSeconds`, on top of whatever the task's own
+   binding carries. This matters unevenly across the five local types: `http` and `soap` bindings
+   already carry their own `timeoutSeconds`, so for them this is a backstop; `daprservice`,
+   `statestore` and `cacheaside` bindings have **no `timeoutSeconds` field at all**, so before this
+   dial existed a locally-run task of one of those three types had no deadline whatsoever below the
+   job execution budget (300s) — not even the 60s the remote path always enforced. See Timeout
+   layering below for exactly where this sits.
+3. **The state path (`statestore`, `cacheaside`, and the function response cache) now shares the
+   orchestrator sidecar's Dapr state component — and its go-redis connection pool — with the
+   platform's own `IDistributedCacheService` consumers** (`ComponentCacheStore`,
+   `StateFunctionCache`, `DistributedCacheIdempotencyStore`). Under `Remote` this domain-task
+   traffic sat on the Execution sidecar's own pool, isolated from the platform's cache/lock/component
+   traffic; local `statestore`/`cacheaside` puts both on the same connection pool on the same
+   sidecar. `Workflow:TaskInvocation:MaxConnectionsPerServer` bounds HTTP/SOAP egress only — there
+   is no equivalent cap on the state path, and this is the widest blast radius of the three items
+   in this section: a noisy domain-owned `statestore`/`cacheaside` task can, in principle, starve
+   the platform's own component cache or state-function cache reads on the same pool. An operator
+   running cache-heavy domains should raise the orchestrator's Dapr Redis `poolSize` — the Helm
+   chart (`vnext-helm-charts`, `charts/vnext`) already tunes Redis connection metadata per component
+   kind; point the change there rather than restating its contents here. **A bulkhead for the state
+   path (separating domain-task traffic from platform-cache traffic on distinct pools/components) is
+   a tracked follow-up, not something this change ships.**
 
 Trade-offs for `http` specifically (shared with the now-deprecated type-`22` External HTTP
 task) are covered in [Task Executors and Invokers](task-executors-and-invokers.md).
@@ -160,12 +189,21 @@ for), which is itself inside the enforced hierarchy above:
 task's own timeoutSeconds  ⊂  ExecutionApi:InvocationTimeoutSeconds (60s)  ⊂  TransitionJobTimeoutSeconds (job budget, 300s)  ⊂  chain lock lease (330s)
 ```
 
-**Local path** — the 60s `ExecutionApi:InvocationTimeoutSeconds` layer does not exist between
-the task and the job budget, because there is no second hop to bound, so the task's own
-`timeoutSeconds` sits directly inside the job budget instead:
+**Local path** — `ExecutionApi:InvocationTimeoutSeconds` itself does not apply (there is no second
+hop to Execution to bound), but `TaskInvocationDispatcher` applies its own
+`Workflow:TaskInvocation:LocalInvocationTimeoutSeconds` (default 60s) as the equivalent middle
+layer around every in-process call, regardless of task type:
 
 ```
-task's own timeoutSeconds (default 30s)  ⊂  TransitionJobTimeoutSeconds (job budget, 300s)  ⊂  chain lock lease (330s)
+task's own timeoutSeconds (http/soap only; default 30s)  ⊂  LocalInvocationTimeoutSeconds (60s)  ⊂  TransitionJobTimeoutSeconds (job budget, 300s)  ⊂  chain lock lease (330s)
+```
+
+For `daprservice`, `statestore` and `cacheaside` — whose bindings carry no `timeoutSeconds` field —
+the innermost layer does not exist, so `LocalInvocationTimeoutSeconds` is the first bound of any
+kind, not a backstop behind a tighter one:
+
+```
+LocalInvocationTimeoutSeconds (60s)  ⊂  TransitionJobTimeoutSeconds (job budget, 300s)  ⊂  chain lock lease (330s)
 ```
 
 Neither diagram's outermost relationship (task `timeoutSeconds` vs. the next layer in) is

@@ -22,7 +22,7 @@ public sealed class TaskInvocationRouter(
     private readonly TaskInvocationOptions _options = options.Value;
 
     /// <inheritdoc />
-    public TaskInvocationDecision Resolve(WorkflowTask task, string wireTaskType)
+    public TaskInvocationDecision Resolve(WorkflowTask? task, string wireTaskType)
     {
         var (mode, reason) = ResolveRequested(task, wireTaskType);
 
@@ -32,7 +32,7 @@ public sealed class TaskInvocationRouter(
         return new TaskInvocationDecision(mode, reason);
     }
 
-    private (ExecutionMode Mode, string Reason) ResolveRequested(WorkflowTask task, string wireTaskType)
+    private (ExecutionMode Mode, string Reason) ResolveRequested(WorkflowTask? task, string wireTaskType)
     {
         if (TryGetTaskOverride(task) is { } taskMode)
             return (taskMode, "task-override");
@@ -47,7 +47,8 @@ public sealed class TaskInvocationRouter(
     /// Phase 2 hook: the per-task-definition override (<c>config.executionMode</c>) lands here
     /// once the matching vnext-schema release ships. Kept as an explicit seam rather than an
     /// inline TODO so adding the field never has to reshape the resolution order. Always null
-    /// today.
+    /// today — including when <paramref name="task"/> itself is null (see
+    /// <see cref="ITaskInvocationRouter.Resolve"/>'s remarks on the cache-aside source-dispatch case).
     /// </summary>
-    private static ExecutionMode? TryGetTaskOverride(WorkflowTask task) => null;
+    private static ExecutionMode? TryGetTaskOverride(WorkflowTask? task) => null;
 }

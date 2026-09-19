@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using BBT.Workflow.Execution.Bindings;
@@ -133,7 +132,7 @@ public static class DaprServiceInvocation
             prepareActivity?.Dispose();
             using var response = await client.SendAsync(request, cancellationToken);
 
-            var responseHeaders = MergeHeaders(response.Headers, response.Content.Headers);
+            var responseHeaders = InvocationHelpers.MergeHeaders(response.Headers, response.Content.Headers);
 
             var content = await response.Content.ReadAsStringAsync(cancellationToken);
             var responseData = TryParseJson(content);
@@ -224,25 +223,4 @@ public static class DaprServiceInvocation
         }
     }
 
-    /// <summary>
-    /// Merges response headers and content headers into a single dictionary. Copied (not shared)
-    /// from the Execution host's internal <c>InvokerHelpers.MergeHeaders</c> for the same reason
-    /// as <see cref="TryParseJson"/>.
-    /// </summary>
-    private static Dictionary<string, string> MergeHeaders(
-        HttpResponseHeaders responseHeaders,
-        HttpContentHeaders contentHeaders)
-    {
-        var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-
-        foreach (var header in responseHeaders.Concat(contentHeaders))
-        {
-            var value = string.Join(", ", header.Value);
-            result[header.Key] = result.TryGetValue(header.Key, out var existing)
-                ? $"{existing}, {value}"
-                : value;
-        }
-
-        return result;
-    }
 }

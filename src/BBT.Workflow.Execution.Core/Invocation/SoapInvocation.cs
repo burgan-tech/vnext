@@ -130,7 +130,7 @@ public static class SoapInvocation
             prepareActivity?.Dispose();
             var response = await httpClient.SendAsync(request, cancellationToken);
 
-            var responseHeaders = MergeHeaders(response.Headers, response.Content.Headers);
+            var responseHeaders = InvocationHelpers.MergeHeaders(response.Headers, response.Content.Headers);
             var content = await response.Content.ReadAsStringAsync(cancellationToken);
 
             var (parsedData, isSoapFault, faultCode, faultString) = TryParseSoapResponse(content, isSoap12);
@@ -296,26 +296,4 @@ public static class SoapInvocation
         return dict;
     }
 
-    /// <summary>
-    /// Merges response headers and content headers into a single dictionary. Copied (not shared)
-    /// from the Execution host's internal <c>InvokerHelpers.MergeHeaders</c> — see
-    /// <see cref="SendAsync"/>'s remarks for why the host assembly is not reachable from this
-    /// project.
-    /// </summary>
-    private static Dictionary<string, string> MergeHeaders(
-        System.Net.Http.Headers.HttpResponseHeaders responseHeaders,
-        System.Net.Http.Headers.HttpContentHeaders contentHeaders)
-    {
-        var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-
-        foreach (var header in responseHeaders.Concat(contentHeaders))
-        {
-            var value = string.Join(", ", header.Value);
-            result[header.Key] = result.TryGetValue(header.Key, out var existing)
-                ? $"{existing}, {value}"
-                : value;
-        }
-
-        return result;
-    }
 }

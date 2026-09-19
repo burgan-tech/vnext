@@ -10,6 +10,7 @@ using BBT.Workflow.Tasks;
 using BBT.Workflow.Tasks.Executors;
 using BBT.Workflow.Tasks.Invocation;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using NSubstitute;
 using Shouldly;
 using Xunit;
@@ -90,6 +91,34 @@ public sealed class TaskInvocationDispatcherTests
         result.Value.ErrorMessage.ShouldBe("connection refused");
     }
 
+    [Fact]
+    public async Task DispatchAsync_LocalInvocationExceedsTheLocalTimeout_ReturnsA408ResultNotAnException()
+    {
+        // F1: before this, a local invocation carried the caller's token straight through with no
+        // deadline of its own. A local invoker whose underlying core propagates cancellation (the
+        // real behaviour of CacheAsideInvocation's own state-store step) must come back as a failed
+        // RESULT, not an unhandled OperationCanceledException, when OUR timer — not the caller's — fires.
+        var harness = new Harness(ExecutionMode.Local, hangUntilCancelled: true, localInvocationTimeoutSeconds: 1);
+
+        var result = await harness.DispatchAsync();
+
+        result.IsSuccess.ShouldBeTrue();
+        result.Value!.IsSuccess.ShouldBeFalse();
+        result.Value.StatusCode.ShouldBe(408);
+    }
+
+    [Fact]
+    public async Task DispatchAsync_CallerCancelsBeforeTheLocalTimeout_PropagatesTheCancellation()
+    {
+        // The caller's own token firing must still propagate as an exception, exactly as it did
+        // before this timeout existed — only OUR timer produces a result.
+        var harness = new Harness(ExecutionMode.Local, hangUntilCancelled: true, localInvocationTimeoutSeconds: 60);
+        using var callerCts = new CancellationTokenSource();
+        callerCts.Cancel();
+
+        await Should.ThrowAsync<OperationCanceledException>(() => harness.DispatchAsync(callerCts.Token));
+    }
+
     private sealed class Harness
     {
         public IRemoteInvokerService RemoteInvoker { get; } = Substitute.For<IRemoteInvokerService>();
@@ -102,7 +131,9 @@ public sealed class TaskInvocationDispatcherTests
         public Harness(
             ExecutionMode mode,
             bool registerLocalInvoker = true,
-            BBT.Workflow.Tasks.TaskInvocationResult? localResult = null)
+            BBT.Workflow.Tasks.TaskInvocationResult? localResult = null,
+            bool hangUntilCancelled = false,
+            int localInvocationTimeoutSeconds = 60)
         {
             _task = WorkflowTaskFactory.CreateHttpTask("probe");
 
@@ -117,14 +148,20 @@ public sealed class TaskInvocationDispatcherTests
 
             var registry = Substitute.For<ILocalTaskInvokerRegistry>();
             registry.Get(TaskTypes.Http).Returns(registerLocalInvoker
-                ? new RecordingLocalInvoker(LocalBindings, localResult)
+                ? new RecordingLocalInvoker(LocalBindings, localResult, hangUntilCancelled)
                 : null);
 
+            var options = Options.Create(new TaskInvocationOptions
+            {
+                LocalInvocationTimeoutSeconds = localInvocationTimeoutSeconds
+            });
+
             _dispatcher = new TaskInvocationDispatcher(
-                router, registry, RemoteInvoker, NullLogger<TaskInvocationDispatcher>.Instance);
+                router, registry, RemoteInvoker, options, NullLogger<TaskInvocationDispatcher>.Instance);
         }
 
-        public Task<Result<BBT.Workflow.Tasks.TaskInvocationResult>> DispatchAsync()
+        public Task<Result<BBT.Workflow.Tasks.TaskInvocationResult>> DispatchAsync(
+            CancellationToken cancellationToken = default)
         {
             var envelope = new BBT.Workflow.Tasks.TaskEnvelope
             {
@@ -134,20 +171,32 @@ public sealed class TaskInvocationDispatcherTests
             };
 
             return _dispatcher.DispatchAsync(
-                _task, TaskTypes.Http, envelope, new BBT.Workflow.Tasks.TaskTraceContext(), CancellationToken.None);
+                _task, TaskTypes.Http, envelope, new BBT.Workflow.Tasks.TaskTraceContext(), cancellationToken);
         }
 
         private sealed class RecordingLocalInvoker(
-            List<JsonElement> bindings, BBT.Workflow.Tasks.TaskInvocationResult? result) : ILocalTaskInvoker
+            List<JsonElement> bindings,
+            BBT.Workflow.Tasks.TaskInvocationResult? result,
+            bool hangUntilCancelled = false) : ILocalTaskInvoker
         {
             public string TaskType => TaskTypes.Http;
 
-            public Task<BBT.Workflow.Tasks.TaskInvocationResult> InvokeAsync(
+            public async Task<BBT.Workflow.Tasks.TaskInvocationResult> InvokeAsync(
                 string? taskKey, JsonElement binding, BBT.Workflow.Tasks.TaskTraceContext? traceContext,
                 CancellationToken cancellationToken = default)
             {
                 bindings.Add(binding.Clone());
-                return Task.FromResult(result ?? BBT.Workflow.Tasks.TaskInvocationResult.Success());
+
+                if (hangUntilCancelled)
+                {
+                    // Mirrors CacheAsideInvocation's own state-store step, the one local invocation
+                    // core that actually propagates cancellation instead of swallowing it into a
+                    // failed result — see StateStoreInvocation/HttpTaskInvocation/DaprServiceInvocation
+                    // for the contrasting swallow-into-result behaviour.
+                    await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                }
+
+                return result ?? BBT.Workflow.Tasks.TaskInvocationResult.Success();
             }
         }
     }

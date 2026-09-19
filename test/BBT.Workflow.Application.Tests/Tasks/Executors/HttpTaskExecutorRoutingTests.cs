@@ -13,6 +13,7 @@ using BBT.Workflow.Tasks;
 using BBT.Workflow.Tasks.Executors;
 using BBT.Workflow.Tasks.Invocation;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using NSubstitute;
 using Shouldly;
 using Xunit;
@@ -113,7 +114,8 @@ public sealed class HttpTaskExecutorRoutingTests
             // A REAL dispatcher over stubbed collaborators: this test is about the executor
             // honouring the routing decision end to end, not about mocking the dispatcher away.
             var dispatcher = new TaskInvocationDispatcher(
-                router, registry, RemoteInvoker, NullLogger<TaskInvocationDispatcher>.Instance);
+                router, registry, RemoteInvoker,
+                Options.Create(new TaskInvocationOptions()), NullLogger<TaskInvocationDispatcher>.Instance);
 
             _executor = new HttpTaskExecutor(
                 RemoteInvoker,

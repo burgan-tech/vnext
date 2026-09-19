@@ -167,7 +167,10 @@ public static class CacheAsideInvocation
                 // bypassOnCacheError=true: swallow and fall through to the source task, exactly as
                 // the pre-extraction invoker did. Report (never log) right at the swallow point, so
                 // the caller's diagnostic line fires exactly once, exactly here.
-                onBypassedCacheError?.Invoke(CacheAsideBypassStage.Read, ex);
+                // A diagnostic callback must never change control flow — a throwing logger sink
+                // must not escape this core, which no caller wraps and which this type's own docs
+                // promise "never throws".
+                try { onBypassedCacheError?.Invoke(CacheAsideBypassStage.Read, ex); } catch { /* diagnostic only */ }
             }
         }
 
@@ -206,8 +209,8 @@ public static class CacheAsideInvocation
                 }
 
                 // bypassOnCacheError=true: swallow and return the source result anyway. Same
-                // report-not-log split as the read path above.
-                onBypassedCacheError?.Invoke(CacheAsideBypassStage.Write, ex);
+                // report-not-log split as the read path above. Same never-throws guarantee, too.
+                try { onBypassedCacheError?.Invoke(CacheAsideBypassStage.Write, ex); } catch { /* diagnostic only */ }
             }
         }
 

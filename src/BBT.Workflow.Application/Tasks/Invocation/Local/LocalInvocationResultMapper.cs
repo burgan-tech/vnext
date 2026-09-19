@@ -41,6 +41,31 @@ internal static class LocalInvocationResultMapper
     };
 
     /// <summary>
+    /// Reads the exception type name the shared invocation cores stamp into
+    /// <c>Metadata["ExceptionType"]</c> on their unhandled-exception path. The cores swallow the
+    /// exception themselves by contract (they return a <see cref="Execution.TaskInvocationResult"/>,
+    /// never throw), so this is both the only way a local invoker's error log can still name the
+    /// failure type, and the signal that distinguishes a genuine thrown exception from a returned
+    /// validation failure (missing key, unsupported command, unresolvable store name — which sets
+    /// no such key). Mirrors the gate the Execution host's own invokers apply (e.g.
+    /// <c>StateStoreTaskInvoker.TryGetExceptionType</c>): a returned validation failure is metered,
+    /// never logged at Error, on either host — the Execution host was the live production path
+    /// when that reasoning was written, and the local path is now the live one, so the two must
+    /// stay silent on the same definition errors.
+    /// </summary>
+    public static bool HasExceptionType(Execution.TaskInvocationResult result, out string exceptionType)
+    {
+        if (result.Metadata?.TryGetValue("ExceptionType", out var value) == true && value is string type)
+        {
+            exceptionType = type;
+            return true;
+        }
+
+        exceptionType = string.Empty;
+        return false;
+    }
+
+    /// <summary>
     /// Carries only the correlation and identity fields: the cores read nothing else, and the
     /// heavy placeholder fields (request headers, instance data JSON) have no business on an
     /// in-process call.

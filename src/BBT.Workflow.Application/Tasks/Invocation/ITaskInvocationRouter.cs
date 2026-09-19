@@ -17,5 +17,15 @@ public readonly record struct TaskInvocationDecision(ExecutionMode Mode, string 
 /// </summary>
 public interface ITaskInvocationRouter
 {
-    TaskInvocationDecision Resolve(WorkflowTask task, string wireTaskType);
+    /// <summary>
+    /// Resolves where <paramref name="wireTaskType"/> should run.
+    /// </summary>
+    /// <param name="task">
+    /// The task definition, when one exists — feeds the (currently always-null) task-override
+    /// hook. Legitimately <see langword="null"/> for a cache-aside source dispatch: the source
+    /// task there is a flattened <c>TaskEnvelope</c> recovered from the cache-aside binding, not a
+    /// resolved <see cref="WorkflowTask"/> — there is no task definition to read an override from,
+    /// so the resolution simply falls through to the per-type/default rules below it.
+    /// </param>
+    TaskInvocationDecision Resolve(WorkflowTask? task, string wireTaskType);
 }

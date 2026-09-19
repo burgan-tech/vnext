@@ -5,8 +5,10 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using BBT.Aether.Results;
+using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.Bindings;
+using BBT.Workflow.Tasks; // ExecutionMode only — TaskEnvelope/TaskInvocationResult/TaskTraceContext stay fully qualified below (see the class remarks).
 using BBT.Workflow.Tasks.Executors;
 using BBT.Workflow.Tasks.Invocation;
 using BBT.Workflow.Tasks.Invocation.Local;
@@ -75,6 +77,46 @@ public sealed class LocalCacheAsideTaskInvokerTests
     }
 
     /// <summary>
+    /// F2: the source-dispatch decision must consult the router (the POLICY gate), not just the
+    /// registry (the CAPABILITY gate). A source type with a registered local invoker but a router
+    /// verdict of Remote — e.g. an operator's <c>Modes.http = Remote</c> meant to stop orchestrator
+    /// HTTP egress — must still go out through the Execution service, not the local invoker.
+    /// </summary>
+    [Fact]
+    public async Task InvokeAsync_CacheMiss_SourceTypeHasLocalInvokerButRouterSaysRemote_UsesTheRemotePath()
+    {
+        var store = new FakeStateStoreClient("statestore");
+        var localCalls = 0;
+        var remoteCalls = 0;
+
+        var registry = new StubRegistry(TaskTypes.Http, _ => { localCalls++; return SourceSuccess(); });
+        var router = Substitute.For<ITaskInvocationRouter>();
+        router.Resolve(null, TaskTypes.Http).Returns(
+            new TaskInvocationDecision(ExecutionMode.Remote, "type-config"));
+
+        var remoteInvoker = Substitute.For<IRemoteInvokerService>();
+        remoteInvoker.InvokeAsync(
+                Arg.Any<string>(), Arg.Any<string>(), Arg.Any<BBT.Workflow.Tasks.TaskEnvelope>(),
+                Arg.Any<BBT.Workflow.Tasks.TaskTraceContext>(), Arg.Any<CancellationToken>())
+            .Returns(_ =>
+            {
+                remoteCalls++;
+                return Result<BBT.Workflow.Tasks.TaskInvocationResult>.Ok(
+                    BBT.Workflow.Tasks.TaskInvocationResult.Success(
+                        data: JsonSerializer.SerializeToElement(new { limit = 5 })));
+            });
+
+        var invoker = new LocalCacheAsideTaskInvoker(
+            store, registry, router, remoteInvoker, NullLogger<LocalCacheAsideTaskInvoker>.Instance);
+
+        var result = await invoker.InvokeAsync("cfg", Binding("cfg:1"), traceContext: null);
+
+        result.IsSuccess.ShouldBeTrue();
+        localCalls.ShouldBe(0);
+        remoteCalls.ShouldBe(1);
+    }
+
+    /// <summary>
     /// A cache read failure under the (default-true) <c>bypassOnCacheError</c> flag must not fail
     /// the task — it falls through to the source task, exactly as before the extraction — and the
     /// swallow must still be OBSERVABLE: the shared core reports it through the
@@ -89,6 +131,7 @@ public sealed class LocalCacheAsideTaskInvokerTests
         var invoker = new LocalCacheAsideTaskInvoker(
             store,
             new StubRegistry(TaskTypes.Http, _ => SourceSuccess()),
+            AlwaysLocalRouter(),
             Substitute.For<IRemoteInvokerService>(),
             logger);
 
@@ -99,11 +142,83 @@ public sealed class LocalCacheAsideTaskInvokerTests
         logger.Entries.Count(e => e.EventId.Id == 10164 && e.Level == LogLevel.Warning).ShouldBe(1);
     }
 
+    /// <summary>
+    /// M2: <c>CacheAsideInvocation</c>'s <c>onBypassedCacheError</c> callback is a diagnostic hook
+    /// and must never change control flow. A throwing logger sink (the callback here) must not
+    /// escape <c>ExecuteAsync</c>, which no caller wraps — the task must still complete via the
+    /// source-task fallback, exactly as if the logger had not thrown.
+    /// </summary>
+    [Fact]
+    public async Task InvokeAsync_ReadErrorWithBypassAndAThrowingLogger_StillReturnsSourceResult()
+    {
+        var store = new FakeStateStoreClient("statestore") { ThrowOnGet = new InvalidOperationException("redis down") };
+        var invoker = new LocalCacheAsideTaskInvoker(
+            store,
+            new StubRegistry(TaskTypes.Http, _ => SourceSuccess()),
+            AlwaysLocalRouter(),
+            Substitute.For<IRemoteInvokerService>(),
+            new ThrowingLogger<LocalCacheAsideTaskInvoker>());
+
+        var result = await invoker.InvokeAsync("cfg", Binding("cfg:1"), traceContext: null);
+
+        result.IsSuccess.ShouldBeTrue();
+        store.Contains("cfg:1").ShouldBeTrue();
+    }
+
+    /// <summary>
+    /// M4: a returned validation failure (no store name configured, bypass disabled — no exception
+    /// was thrown) must not log at Error, matching the Execution host's own invokers.
+    /// </summary>
+    [Fact]
+    public async Task InvokeAsync_NoStoreNameConfiguredAndBypassDisabled_DoesNotLogAtError()
+    {
+        var store = new FakeStateStoreClient(defaultStoreName: null);
+        var logger = new RecordingLogger<LocalCacheAsideTaskInvoker>();
+        var invoker = new LocalCacheAsideTaskInvoker(
+            store,
+            new StubRegistry(TaskTypes.Http, _ => SourceSuccess()),
+            AlwaysLocalRouter(),
+            Substitute.For<IRemoteInvokerService>(),
+            logger);
+
+        var binding = JsonSerializer.SerializeToElement(new CacheAsideBinding
+        {
+            Key = "cfg:1",
+            StoreName = null,
+            BypassOnCacheError = false,
+            SourceTask = new BBT.Workflow.Execution.TaskEnvelope
+            {
+                TaskType = TaskTypes.Http,
+                TaskKey = "get-customer-http",
+                Binding = JsonSerializer.SerializeToElement(new { })
+            }
+        });
+
+        var result = await invoker.InvokeAsync("cfg", binding, traceContext: null);
+
+        result.IsSuccess.ShouldBeFalse();
+        logger.Entries.ShouldNotContain(e => e.Level == LogLevel.Error);
+    }
+
+    /// <summary>
+    /// A router that always resolves to Local for any type — the default posture for the tests
+    /// above that exercise the registry-driven capability gate and are not themselves testing the
+    /// router/policy gate added by F2 (issue #1007).
+    /// </summary>
+    private static ITaskInvocationRouter AlwaysLocalRouter()
+    {
+        var router = Substitute.For<ITaskInvocationRouter>();
+        router.Resolve(Arg.Any<WorkflowTask>(), Arg.Any<string>())
+            .Returns(new TaskInvocationDecision(ExecutionMode.Local, "test"));
+        return router;
+    }
+
     private static LocalCacheAsideTaskInvoker CreateInvoker(
         FakeStateStoreClient store,
         Func<BBT.Workflow.Execution.TaskEnvelope, BBT.Workflow.Execution.TaskInvocationResult> onSource) =>
         new(store,
             new StubRegistry(TaskTypes.Http, onSource),
+            AlwaysLocalRouter(),
             Substitute.For<IRemoteInvokerService>(),
             NullLogger<LocalCacheAsideTaskInvoker>.Instance);
 
@@ -131,6 +246,7 @@ public sealed class LocalCacheAsideTaskInvokerTests
         return new LocalCacheAsideTaskInvoker(
             store,
             new StubRegistry(),
+            AlwaysLocalRouter(),
             remoteInvoker,
             NullLogger<LocalCacheAsideTaskInvoker>.Instance);
     }
@@ -242,5 +358,22 @@ public sealed class LocalCacheAsideTaskInvokerTests
             LogLevel logLevel, EventId eventId, TState state, Exception? exception,
             Func<TState, Exception?, string> formatter) =>
             Entries.Add((logLevel, eventId, formatter(state, exception)));
+    }
+
+    /// <summary>
+    /// A logger sink that throws on every <see cref="Log{TState}"/> call — stands in for a broken
+    /// logging pipeline (a misconfigured sink, a provider that throws) to prove M2's fix: the
+    /// diagnostic callback must not let that escape and change control flow.
+    /// </summary>
+    private sealed class ThrowingLogger<T> : ILogger<T>
+    {
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter) =>
+            throw new InvalidOperationException("Simulated logging sink failure.");
     }
 }

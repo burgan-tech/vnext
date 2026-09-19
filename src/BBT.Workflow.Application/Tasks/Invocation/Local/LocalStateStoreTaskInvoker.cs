@@ -44,14 +44,17 @@ public sealed class LocalStateStoreTaskInvoker(
         // and must not trip anything alerting on this invoker's Error rate — checked first, same
         // split every other local invoker makes. A state-store result never carries a numeric
         // StatusCode on any path (there is no wire status code for a Dapr state-store call), so
-        // unlike the HTTP-shaped local invokers this "transport failure" branch is reached by
+        // unlike the HTTP-shaped local invokers this branch's condition alone would be reached by
         // every non-cancelled failure here — a missing store name and an unsupported command
-        // included, not only a connection-level failure.
+        // included. The ExceptionType gate below narrows that to a genuine thrown exception,
+        // matching the Execution host's own StateStoreTaskInvoker: a returned validation failure
+        // is metered by the caller through the result's IsSuccess, never logged at Error.
         if (!result.IsSuccess && HttpTaskInvocation.WasCancelled(result))
         {
             logger.LocalTaskInvocationCancelled(taskKey, TaskTypes.StateStore);
         }
-        else if (!result.IsSuccess && result.StatusCode is null)
+        else if (!result.IsSuccess && result.StatusCode is null
+                 && LocalInvocationResultMapper.HasExceptionType(result, out _))
         {
             logger.LocalTaskInvocationFailed(
                 taskKey, TaskTypes.StateStore, result.ErrorMessage ?? "Unknown error");

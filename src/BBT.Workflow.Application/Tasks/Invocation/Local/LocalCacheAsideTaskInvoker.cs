@@ -12,17 +12,23 @@ namespace BBT.Workflow.Tasks.Invocation.Local;
 /// <summary>
 /// Cache-aside read-through executed in the Orchestration host. The hit path costs one state-store
 /// call and nothing else — before this, even a hit paid a full remote invoke round trip, which is
-/// the opposite of what a cache is for. On a miss the source task is dispatched through the local
-/// invoker registry when its type has one, and falls back to the Execution service otherwise, so a
-/// source type that only exists remotely (python, conversation, triggers) keeps working unchanged.
-/// A cache read/write failure swallowed under <c>bypassOnCacheError=true</c> is reported by the
-/// shared core through a callback and logged here via a <c>[LoggerMessage]</c> generator (the
-/// repo's no-raw-<c>LogWarning</c> rule) — the Execution host's own <c>CacheAsideTaskInvoker</c>
-/// restores the same signal with its own message text.
+/// the opposite of what a cache is for. On a miss the source task is dispatched locally only when
+/// BOTH gates agree: the registry has an in-process invoker for its type AND the router's own
+/// policy verdict for that type is <see cref="ExecutionMode.Local"/> — asking only the registry
+/// would let an operator's <c>Modes.http = Remote</c> (meant to stop orchestrator HTTP egress) be
+/// silently bypassed by an <c>http</c> source task reached through a cache-aside miss, since the
+/// registry is a pure capability check with no awareness of the configured policy. Falls back to
+/// the Execution service when either gate says no, so a source type that only exists remotely
+/// (python, conversation, triggers) keeps working unchanged. A cache read/write failure swallowed
+/// under <c>bypassOnCacheError=true</c> is reported by the shared core through a callback and
+/// logged here via a <c>[LoggerMessage]</c> generator (the repo's no-raw-<c>LogWarning</c> rule) —
+/// the Execution host's own <c>CacheAsideTaskInvoker</c> restores the same signal with its own
+/// message text.
 /// </summary>
 public sealed class LocalCacheAsideTaskInvoker(
     IStateStoreClient stateStore,
     ILocalTaskInvokerRegistry localInvokers,
+    ITaskInvocationRouter router,
     IRemoteInvokerService remoteInvoker,
     ILogger<LocalCacheAsideTaskInvoker> logger) : ILocalTaskInvoker
 {
@@ -59,12 +65,16 @@ public sealed class LocalCacheAsideTaskInvoker(
         // events, same split every other local invoker makes (cancellation checked first). Reachable
         // only through a propagated source-task result whose own invoker flagged it cancelled — a
         // cancellation during the cache read/write itself is rethrown by the core, never returned as
-        // a result to classify (see CacheAsideInvocation's type doc).
+        // a result to classify (see CacheAsideInvocation's type doc). The ExceptionType gate below
+        // matches the Execution host's own invokers (e.g. StateStoreTaskInvoker): a returned
+        // validation failure (a missing key, a source task's own business failure) is not logged
+        // at Error here — only a genuine thrown exception the shared core caught is.
         if (!result.IsSuccess && HttpTaskInvocation.WasCancelled(result))
         {
             logger.LocalTaskInvocationCancelled(taskKey, TaskTypes.CacheAside);
         }
-        else if (!result.IsSuccess && result.StatusCode is null)
+        else if (!result.IsSuccess && result.StatusCode is null
+                 && LocalInvocationResultMapper.HasExceptionType(result, out _))
         {
             logger.LocalTaskInvocationFailed(
                 taskKey, TaskTypes.CacheAside, result.ErrorMessage ?? "Unknown error");
@@ -74,16 +84,26 @@ public sealed class LocalCacheAsideTaskInvoker(
     }
 
     /// <summary>
-    /// Runs the source task on a miss. Local when its type has an in-process invoker, remote
-    /// otherwise — the same capability gate the router applies, expressed here because the source
-    /// envelope is already flattened and carries no <c>WorkflowTask</c> to route on.
+    /// Runs the source task on a miss. Local only when the router's policy verdict for the source
+    /// type is <see cref="ExecutionMode.Local"/> AND the registry actually has an invoker for it —
+    /// the router is asked (not just the registry) so an operator's per-type
+    /// <c>Modes.&lt;type&gt; = Remote</c> is honoured for a source task reached through a
+    /// cache-aside miss exactly as it would be for that type invoked directly. The registry lookup
+    /// is a defensive re-check, same posture as <c>TaskInvocationDispatcher</c>: this is the code
+    /// that would dereference a missing invoker, so it must not depend on the router being right.
+    /// <paramref name="sourceEnvelope"/> carries no <c>WorkflowTask</c> to route on — the router is
+    /// asked with a null task, which resolves purely on type-config/default (see
+    /// <see cref="ITaskInvocationRouter.Resolve"/>'s remarks).
     /// </summary>
     private async Task<Execution.TaskInvocationResult> DispatchSourceAsync(
         Execution.TaskEnvelope sourceEnvelope,
         TaskTraceContext? traceContext,
         CancellationToken cancellationToken)
     {
-        if (localInvokers.Get(sourceEnvelope.TaskType) is { } local)
+        var decision = router.Resolve(task: null, sourceEnvelope.TaskType);
+
+        if (decision.Mode == ExecutionMode.Local
+            && localInvokers.Get(sourceEnvelope.TaskType) is { } local)
         {
             var localResult = await local.InvokeAsync(
                 sourceEnvelope.TaskKey, sourceEnvelope.Binding, traceContext, cancellationToken);
