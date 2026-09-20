@@ -119,6 +119,40 @@ public sealed class TaskInvocationDispatcherTests
         await Should.ThrowAsync<OperationCanceledException>(() => harness.DispatchAsync(callerCts.Token));
     }
 
+    [Fact]
+    public async Task DispatchAsync_SwallowingCoreHitsTheLocalTimeout_StillReturnsA408Result()
+    {
+        // The gap the catch-only version had. Four of the five cores catch cancellation themselves
+        // — guarded on the token the dispatcher handed them, which is its OWN linked token, so the
+        // guard holds no matter which side cancelled — and return a failed result stamped
+        // Metadata["Cancelled"]. Nothing ever reaches the catch clause, so before the result was
+        // inspected a local timeout surfaced as the core's own failure (no status code, no
+        // LocalTaskInvocationTimedOut log) instead of the documented 408.
+        var harness = new Harness(
+            ExecutionMode.Local, swallowCancellation: true, localInvocationTimeoutSeconds: 1);
+
+        var result = await harness.DispatchAsync();
+
+        result.IsSuccess.ShouldBeTrue();
+        result.Value!.IsSuccess.ShouldBeFalse();
+        result.Value.StatusCode.ShouldBe(408);
+    }
+
+    [Fact]
+    public async Task DispatchAsync_SwallowingCoreAndCallerCancels_StillPropagatesTheCancellation()
+    {
+        // The half that actually changes pipeline behaviour: with the cancellation swallowed into a
+        // result, caller cancellation was downgraded to an ordinary task failure, which the error
+        // boundary would then act on — retrying or routing a shutting-down instance — instead of
+        // unwinding. The remote path has always rethrown here; the local path must agree.
+        var harness = new Harness(
+            ExecutionMode.Local, swallowCancellation: true, localInvocationTimeoutSeconds: 60);
+        using var callerCts = new CancellationTokenSource();
+        callerCts.Cancel();
+
+        await Should.ThrowAsync<OperationCanceledException>(() => harness.DispatchAsync(callerCts.Token));
+    }
+
     private sealed class Harness
     {
         public IRemoteInvokerService RemoteInvoker { get; } = Substitute.For<IRemoteInvokerService>();
@@ -133,7 +167,8 @@ public sealed class TaskInvocationDispatcherTests
             bool registerLocalInvoker = true,
             BBT.Workflow.Tasks.TaskInvocationResult? localResult = null,
             bool hangUntilCancelled = false,
-            int localInvocationTimeoutSeconds = 60)
+            int localInvocationTimeoutSeconds = 60,
+            bool swallowCancellation = false)
         {
             _task = WorkflowTaskFactory.CreateHttpTask("probe");
 
@@ -148,7 +183,7 @@ public sealed class TaskInvocationDispatcherTests
 
             var registry = Substitute.For<ILocalTaskInvokerRegistry>();
             registry.Get(TaskTypes.Http).Returns(registerLocalInvoker
-                ? new RecordingLocalInvoker(LocalBindings, localResult, hangUntilCancelled)
+                ? new RecordingLocalInvoker(LocalBindings, localResult, hangUntilCancelled, swallowCancellation)
                 : null);
 
             var options = Options.Create(new TaskInvocationOptions
@@ -177,7 +212,8 @@ public sealed class TaskInvocationDispatcherTests
         private sealed class RecordingLocalInvoker(
             List<JsonElement> bindings,
             BBT.Workflow.Tasks.TaskInvocationResult? result,
-            bool hangUntilCancelled = false) : ILocalTaskInvoker
+            bool hangUntilCancelled = false,
+            bool swallowCancellation = false) : ILocalTaskInvoker
         {
             public string TaskType => TaskTypes.Http;
 
@@ -186,6 +222,27 @@ public sealed class TaskInvocationDispatcherTests
                 CancellationToken cancellationToken = default)
             {
                 bindings.Add(binding.Clone());
+
+                if (swallowCancellation)
+                {
+                    // What HttpTaskInvocation / DaprServiceInvocation / SoapInvocation /
+                    // StateStoreInvocation actually do: catch the cancellation and report it as a
+                    // failed result carrying Metadata["Cancelled"] = true.
+                    try
+                    {
+                        await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                    }
+                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                    {
+                        return new BBT.Workflow.Tasks.TaskInvocationResult
+                        {
+                            IsSuccess = false,
+                            ErrorMessage = "request was cancelled",
+                            TaskType = TaskTypes.Http,
+                            Metadata = new Dictionary<string, object> { ["Cancelled"] = true }
+                        };
+                    }
+                }
 
                 if (hangUntilCancelled)
                 {

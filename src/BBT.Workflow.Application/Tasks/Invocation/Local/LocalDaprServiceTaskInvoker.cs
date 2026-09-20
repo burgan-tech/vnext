@@ -51,7 +51,10 @@ public sealed class LocalDaprServiceTaskInvoker(
         else if (!result.IsSuccess && result.StatusCode is null)
         {
             logger.LocalTaskInvocationFailed(
-                taskKey, TaskTypes.DaprService, result.ErrorMessage ?? "Unknown error");
+                taskKey, TaskTypes.DaprService, result.ErrorMessage ?? "Unknown error",
+                LocalInvocationResultMapper.HasExceptionType(result, out var exceptionType)
+                    ? exceptionType
+                    : null);
         }
 
         return LocalInvocationResultMapper.ToOrchestratorResult(result);

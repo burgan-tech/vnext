@@ -54,10 +54,10 @@ public sealed class LocalStateStoreTaskInvoker(
             logger.LocalTaskInvocationCancelled(taskKey, TaskTypes.StateStore);
         }
         else if (!result.IsSuccess && result.StatusCode is null
-                 && LocalInvocationResultMapper.HasExceptionType(result, out _))
+                 && LocalInvocationResultMapper.HasExceptionType(result, out var exceptionType))
         {
             logger.LocalTaskInvocationFailed(
-                taskKey, TaskTypes.StateStore, result.ErrorMessage ?? "Unknown error");
+                taskKey, TaskTypes.StateStore, result.ErrorMessage ?? "Unknown error", exceptionType);
         }
 
         return LocalInvocationResultMapper.ToOrchestratorResult(result);

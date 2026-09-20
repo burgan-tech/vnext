@@ -74,10 +74,10 @@ public sealed class LocalCacheAsideTaskInvoker(
             logger.LocalTaskInvocationCancelled(taskKey, TaskTypes.CacheAside);
         }
         else if (!result.IsSuccess && result.StatusCode is null
-                 && LocalInvocationResultMapper.HasExceptionType(result, out _))
+                 && LocalInvocationResultMapper.HasExceptionType(result, out var exceptionType))
         {
             logger.LocalTaskInvocationFailed(
-                taskKey, TaskTypes.CacheAside, result.ErrorMessage ?? "Unknown error");
+                taskKey, TaskTypes.CacheAside, result.ErrorMessage ?? "Unknown error", exceptionType);
         }
 
         return LocalInvocationResultMapper.ToOrchestratorResult(result);

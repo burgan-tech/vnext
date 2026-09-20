@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
+using BBT.Workflow.Execution;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Tasks.Executors;
 using Microsoft.Extensions.Logging;
@@ -55,8 +56,23 @@ public sealed class TaskInvocationDispatcher(
     /// field at all. Follows the remote path's own-timer-vs-caller-token distinction: if only our
     /// linked timer fired, this is a local timeout and comes back as a failed result (408) the
     /// error boundary can act on, never an exception; if the caller's token fired, the
-    /// <see cref="OperationCanceledException"/> is left to propagate so the pipeline's own
-    /// cancellation handling runs, exactly as it would have before this timeout existed.
+    /// <see cref="OperationCanceledException"/> propagates so the pipeline's own cancellation
+    /// handling runs, exactly as it would have before this timeout existed.
+    /// <para>
+    /// <b>That distinction has to be made on the RESULT, not only in a catch clause.</b> The
+    /// difference between this and the remote path is that here the invocation core runs
+    /// in-process, and four of the five cores (<c>HttpTaskInvocation</c>,
+    /// <c>DaprServiceInvocation</c>, <c>SoapInvocation</c>, <c>StateStoreInvocation</c>) catch
+    /// cancellation themselves — guarded on <c>cancellationToken.IsCancellationRequested</c>, which
+    /// is OUR linked token, so the guard holds whichever side cancelled — and return a failed
+    /// result stamped <c>Metadata["Cancelled"] = true</c> rather than letting the exception out.
+    /// Relying on the catch alone therefore made both branches unreachable for those four: a local
+    /// timeout surfaced as the core's own failure instead of a 408, <c>LocalTaskInvocationTimedOut</c>
+    /// never fired, and — the part that actually changes pipeline behaviour — caller cancellation
+    /// was downgraded to an ordinary task failure that the error boundary then acted on, instead of
+    /// unwinding. Only <c>CacheAsideInvocation</c> rethrows, which is why the catch below stays:
+    /// both shapes are real and both must map to the same two outcomes.
+    /// </para>
     /// </summary>
     private async Task<Result<TaskInvocationResult>> InvokeLocalWithTimeoutAsync(
         WorkflowTask task,
@@ -74,19 +90,46 @@ public sealed class TaskInvocationDispatcher(
             var localResult = await localInvoker.InvokeAsync(
                 task.Key, envelope.Binding, traceContext, timeoutCts.Token);
 
+            // A core that swallowed the cancellation: recover the same decision the catch makes.
+            if (!localResult.IsSuccess && HttpTaskInvocation.WasCancelled(ToWire(localResult)))
+            {
+                // Caller cancelled — the pipeline owns this, exactly as on the remote path.
+                cancellationToken.ThrowIfCancellationRequested();
+
+                if (timeoutCts.IsCancellationRequested)
+                    return LocalTimeout(task.Key, wireTaskType);
+            }
+
             return Result<TaskInvocationResult>.Ok(localResult);
         }
         catch (OperationCanceledException) when (
             timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
         {
-            // Own per-invocation timeout — not caused by parent pipeline cancellation.
-            logger.LocalTaskInvocationTimedOut(
-                task.Key, wireTaskType, _options.LocalInvocationTimeoutSeconds);
-
-            return Result<TaskInvocationResult>.Ok(TaskInvocationResult.Failure(
-                error: $"Local invocation timeout after {_options.LocalInvocationTimeoutSeconds}s",
-                statusCode: 408,
-                taskType: wireTaskType));
+            // A core that let the cancellation out (CacheAsideInvocation): own per-invocation
+            // timeout, not caused by parent pipeline cancellation.
+            return LocalTimeout(task.Key, wireTaskType);
         }
     }
+
+    /// <summary>
+    /// The one shape a local per-invocation timeout takes, whichever way the core reported it: a
+    /// failed result the error boundary can match on (<c>408</c>), never an exception.
+    /// </summary>
+    private Result<TaskInvocationResult> LocalTimeout(string taskKey, string wireTaskType)
+    {
+        logger.LocalTaskInvocationTimedOut(taskKey, wireTaskType, _options.LocalInvocationTimeoutSeconds);
+
+        return Result<TaskInvocationResult>.Ok(TaskInvocationResult.Failure(
+            error: $"Local invocation timeout after {_options.LocalInvocationTimeoutSeconds}s",
+            statusCode: 408,
+            taskType: wireTaskType));
+    }
+
+    /// <summary>
+    /// <c>WasCancelled</c> is a metadata probe that happens to hang off the wire-side result type;
+    /// the dispatcher holds the orchestrator-side twin. Only <c>Metadata</c> is read, so this
+    /// carries nothing else.
+    /// </summary>
+    private static Execution.TaskInvocationResult ToWire(TaskInvocationResult result) =>
+        new() { Metadata = result.Metadata };
 }

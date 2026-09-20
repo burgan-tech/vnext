@@ -110,7 +110,13 @@ default Local configuration — see
 [What the local path loses](task-invocation-routing.md#what-the-local-path-loses)):
 
 - No Dapr hop means no sidecar circuit breaker and no `ExecutionApi:InvocationTimeoutSeconds`
-  layer — the task's own `timeoutSeconds` (default 30) is the only bound below the job budget.
+  layer. **The replacement bound differs between the two types, and this is the one place they are
+  not equivalent:** a local type `6` goes through `TaskInvocationDispatcher`, which wraps every
+  in-process call in `Workflow:TaskInvocation:LocalInvocationTimeoutSeconds` (default 60s), so its
+  layering is `timeoutSeconds ⊂ LocalInvocationTimeoutSeconds ⊂ job budget`. Type `22` does **not**
+  go through the dispatcher — `ExternalHttpTaskExecutor` calls `IExternalHttpTaskInvoker` directly
+  — so for it the task's own `timeoutSeconds` (default 30) really is the only bound below the job
+  budget. See [Timeout layering](task-invocation-routing.md#timeout-layering).
 - The outbound call runs in the host that owns the database; the Execution service exists
   precisely to isolate arbitrary egress. For untrusted or high-volume targets, revert type `6`
   to `Remote` per-type (see [Task Invocation Routing](task-invocation-routing.md)) rather than

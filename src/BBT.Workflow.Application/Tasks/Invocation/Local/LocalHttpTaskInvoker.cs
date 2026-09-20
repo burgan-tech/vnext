@@ -100,7 +100,11 @@ public sealed class LocalHttpTaskInvoker(
             if (isExternalHttpLabel)
                 logger.ExternalHttpTaskRequestFailed(taskKey, binding.Url, result.ErrorMessage ?? "Unknown error");
             else
-                logger.LocalTaskInvocationFailed(taskKey, taskTypeLabel, result.ErrorMessage ?? "Unknown error");
+                logger.LocalTaskInvocationFailed(
+                    taskKey, taskTypeLabel, result.ErrorMessage ?? "Unknown error",
+                    LocalInvocationResultMapper.HasExceptionType(result, out var exceptionType)
+                        ? exceptionType
+                        : null);
         }
 
         return LocalInvocationResultMapper.ToOrchestratorResult(result);
