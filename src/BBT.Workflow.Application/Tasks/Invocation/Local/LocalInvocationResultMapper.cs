@@ -4,7 +4,11 @@ namespace BBT.Workflow.Tasks.Invocation.Local;
 /// Translates between the wire-side types the shared invocation cores speak
 /// (<c>BBT.Workflow.Execution.*</c>) and the orchestrator-side twins the executor pipeline
 /// consumes. This is the same translation the remote path performs when it unwraps an
-/// <c>/execution/invoke</c> response — kept in one place so every local invoker maps identically.
+/// <c>/execution/invoke</c> response — kept in one place so every local invoker maps identically,
+/// and that sameness now includes the key-casing normalization the remote seam applies (see
+/// <see cref="InvocationKeyNormalizer"/>): the two seams must not drift, because the difference
+/// between them is exactly what "which routing mode ran this task" would otherwise be readable
+/// from.
 /// </summary>
 internal static class LocalInvocationResultMapper
 {
@@ -15,8 +19,8 @@ internal static class LocalInvocationResultMapper
         Body = result.Body,
         Data = result.Data,
         ErrorMessage = result.ErrorMessage,
-        Headers = result.Headers,
-        Metadata = result.Metadata,
+        Headers = InvocationKeyNormalizer.Normalize(result.Headers),
+        Metadata = InvocationKeyNormalizer.Normalize(result.Metadata),
         TaskType = result.TaskType,
         ExecutionDurationMs = result.ExecutionDurationMs
     };
@@ -34,8 +38,8 @@ internal static class LocalInvocationResultMapper
         Body = result.Body,
         Data = result.Data,
         ErrorMessage = result.ErrorMessage,
-        Headers = result.Headers,
-        Metadata = result.Metadata,
+        Headers = InvocationKeyNormalizer.Normalize(result.Headers),
+        Metadata = InvocationKeyNormalizer.Normalize(result.Metadata),
         TaskType = result.TaskType,
         ExecutionDurationMs = result.ExecutionDurationMs
     };
