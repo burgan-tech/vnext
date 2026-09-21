@@ -23,6 +23,9 @@ in `AGENTS.md`). Invoke via the `Skill` tool when the trigger phrase matches:
   [docs/code-review/](docs/code-review/README.md)
 - **workflow-code-review** — "code review" / "review et" / "incele"; the same checklists run against a
   local diff, single session, no PR
+- **domain-performance-audit** — "domain performans" / "performans incele" / "bu domaini incele";
+  performance audit of a **domain package** (vnext-onboarding, vnext-onboarding-ekyc, …) against the
+  current runtime — static scan + a short prioritised report. Not a diff review of this repo
 - **create-github-issue** — "issue aç" / "open issue" / "projeyi tara"
 - **create-github-pr** — "PR oluştur" / "open PR" / "pull request"
 - **git-commit-message** — "commit mesajı" / "git commit"
