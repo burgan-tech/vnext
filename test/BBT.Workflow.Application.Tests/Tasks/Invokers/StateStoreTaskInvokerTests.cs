@@ -6,7 +6,7 @@ using System.Threading.Tasks;
 using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.Bindings;
 using BBT.Workflow.Execution.Invokers;
-using BBT.Workflow.Execution.StateStores;
+using BBT.Workflow.Execution.Core.StateStores;
 using Dapr.Client;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;

@@ -92,6 +92,13 @@ Both gates run inside `FunctionAppService.ExecuteFunctionAsync`, after scope enf
 authorization and before any task executes. System functions (`state`, `view`, `data`, …) never
 reach this path — they are served by their own handlers — so they are unaffected.
 
+A function's declared tasks execute wherever the task invocation router resolves each one —
+by shipped default, HTTP/Dapr-service/SOAP/state-store/cache-aside tasks run in-process inside
+Orchestration rather than being shipped to the Execution service; see
+[Task Invocation Routing](../runtime/task-invocation-routing.md). The function-level response
+cache (`cache` block, [Cache-Aside Task](../runtime/cache-aside-task.md) § Related) goes through
+the same routing for its `statestore` reads/writes.
+
 | Condition | Result |
 | --- | --- |
 | `verbs[]` empty or absent | Every routed verb accepted. |

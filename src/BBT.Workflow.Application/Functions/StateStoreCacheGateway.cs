@@ -3,16 +3,17 @@ using System.Text.Json;
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Tasks;
-using BBT.Workflow.Tasks.Executors;
+using BBT.Workflow.Tasks.Invocation;
 using BBT.Workflow.Tasks.Mapping;
 
 namespace BBT.Workflow.Functions;
 
 /// <summary>
-/// Reads/writes a cached value through the Execution service's <c>statestore</c> invoker (via
-/// <see cref="IRemoteInvokerService"/>), rather than talking to Dapr directly from Orchestration.
-/// Used for function-level read-through caching; shares the State Store task's <c>custom:</c> key
-/// prefix, TTL and consistency semantics.
+/// Reads/writes a cached value through the <c>statestore</c> task invocation path (via
+/// <see cref="ITaskInvocationDispatcher"/>), which runs in-process when the host routes state-store
+/// tasks locally and falls back to the Execution service otherwise. Used for function-level
+/// read-through caching; shares the State Store task's <c>custom:</c> key prefix, TTL and
+/// consistency semantics.
 /// </summary>
 public interface IStateStoreCacheGateway
 {
@@ -29,7 +30,7 @@ public interface IStateStoreCacheGateway
 public readonly record struct CacheGetResult(bool CacheOk, bool Hit, JsonElement Value);
 
 /// <inheritdoc />
-public sealed class StateStoreCacheGateway(IRemoteInvokerService remoteInvoker) : IStateStoreCacheGateway
+public sealed class StateStoreCacheGateway(ITaskInvocationDispatcher dispatcher) : IStateStoreCacheGateway
 {
     private const string TaskKey = "function-cache";
 
@@ -50,15 +51,14 @@ public sealed class StateStoreCacheGateway(IRemoteInvokerService remoteInvoker) 
             CacheActivityHelper.OperationGet, componentType: ComponentType);
         CacheActivityHelper.SetCacheKey(activity, key);
 
-        var envelope = BuildEnvelope("get", key, storeName, consistency, ttlInSeconds: null, value: null);
-        if (!envelope.IsSuccess)
+        var built = BuildEnvelope("get", key, storeName, consistency, ttlInSeconds: null, value: null);
+        if (!built.IsSuccess)
         {
             CacheActivityHelper.SetError(activity, null);
             return new CacheGetResult(CacheOk: false, Hit: false, Value: default);
         }
 
-        var result = await remoteInvoker.InvokeAsync(
-            BBT.Workflow.Execution.TaskTypes.StateStore, TaskKey, envelope.Value!, traceContext, cancellationToken);
+        var result = await DispatchAsync(built.Value!.Task, built.Value!.Envelope, traceContext, cancellationToken);
 
         if (!result.IsSuccess || !result.Value!.IsSuccess)
         {
@@ -89,15 +89,14 @@ public sealed class StateStoreCacheGateway(IRemoteInvokerService remoteInvoker) 
             CacheActivityHelper.OperationSet, componentType: ComponentType);
         CacheActivityHelper.SetCacheKey(activity, key);
 
-        var envelope = BuildEnvelope("set", key, storeName, consistency, ttlInSeconds, value);
-        if (!envelope.IsSuccess)
+        var built = BuildEnvelope("set", key, storeName, consistency, ttlInSeconds, value);
+        if (!built.IsSuccess)
         {
             CacheActivityHelper.SetError(activity, null);
             return false;
         }
 
-        var result = await remoteInvoker.InvokeAsync(
-            BBT.Workflow.Execution.TaskTypes.StateStore, TaskKey, envelope.Value!, traceContext, cancellationToken);
+        var result = await DispatchAsync(built.Value!.Task, built.Value!.Envelope, traceContext, cancellationToken);
 
         var written = result.IsSuccess && result.Value!.IsSuccess;
         if (!written)
@@ -106,7 +105,20 @@ public sealed class StateStoreCacheGateway(IRemoteInvokerService remoteInvoker) 
         return written;
     }
 
-    private static Result<TaskEnvelope> BuildEnvelope(
+    /// <summary>
+    /// Dispatched exactly like a real state-store task, so the function cache follows the host's
+    /// statestore routing instead of hard-wiring the Execution hop. The task is synthetic (key
+    /// "function-cache", sys reference), so the router's per-task-definition arm can never match
+    /// here — per-function control belongs on the function's own cache config, a later phase.
+    /// </summary>
+    private Task<Result<TaskInvocationResult>> DispatchAsync(
+        StateStoreTask task, TaskEnvelope envelope, TaskTraceContext traceContext, CancellationToken cancellationToken)
+    {
+        return dispatcher.DispatchAsync(
+            task, BBT.Workflow.Execution.TaskTypes.StateStore, envelope, traceContext, cancellationToken);
+    }
+
+    private static Result<(StateStoreTask Task, TaskEnvelope Envelope)> BuildEnvelope(
         string command, string key, string? storeName, string? consistency, int? ttlInSeconds, object? value)
     {
         var config = new Dictionary<string, object?>
@@ -143,6 +155,6 @@ public sealed class StateStoreCacheGateway(IRemoteInvokerService remoteInvoker) 
         var task = StateStoreTask.Create(configElement);
         task.SetReference(new Reference(TaskKey, "sys", "sys-tasks", "1.0.0"));
 
-        return TaskBindingMapper.CreateEnvelope(task);
+        return TaskBindingMapper.CreateEnvelope(task).Map(envelope => (task, envelope));
     }
 }

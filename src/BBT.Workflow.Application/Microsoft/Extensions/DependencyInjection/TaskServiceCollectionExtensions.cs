@@ -13,6 +13,8 @@ using BBT.Workflow.Tasks.Evaluation;
 using BBT.Workflow.Tasks.Evaluators;
 using BBT.Workflow.Tasks.Executors;
 using BBT.Workflow.Tasks.Factory;
+using BBT.Workflow.Tasks.Invocation;
+using BBT.Workflow.Tasks.Invocation.Local;
 using BBT.Workflow.Tasks.Persistence;
 using BBT.Workflow.Tasks.Persistence.Strategies;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -22,6 +24,7 @@ using ITimerEvaluator = BBT.Workflow.Tasks.Evaluation.ITimerEvaluator;
 using TaskFactory = BBT.Workflow.Tasks.Factory.TaskFactory;
 using Dapr.Client;
 using BBT.Workflow.Execution;
+using BBT.Workflow.Execution.Core.StateStores;
 
 namespace Microsoft.Extensions.DependencyInjection;
 
@@ -103,6 +106,20 @@ public static class TaskServiceCollectionExtensions
         // shared with the Execution invokers when both layers live in one host (TryAdd).
         services.TryAddSingleton(new DaprServiceInvocationClient(DaprClient.CreateInvokeHttpClient()));
 
+        // Local-versus-remote task invocation routing (issue #1007). Ships Remote-by-default:
+        // the section below is what an operator flips, per type or globally. The router's
+        // capability gate means an entry naming a type with no in-process invoker degrades to
+        // the remote path rather than failing the task.
+        services.AddOptions<TaskInvocationOptions>()
+            .BindConfiguration(TaskInvocationOptions.SectionName)
+            .ValidateDataAnnotations()
+            .ValidateOnStart();
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IValidateOptions<TaskInvocationOptions>, TaskInvocationOptionsValidator>());
+        services.TryAddScoped<ILocalTaskInvokerRegistry, LocalTaskInvokerRegistry>();
+        services.TryAddScoped<ITaskInvocationRouter, TaskInvocationRouter>();
+        services.TryAddScoped<ITaskInvocationDispatcher, TaskInvocationDispatcher>();
+
         // Remote invoker service for Dapr invocation
         services.TryAddScoped<IRemoteInvokerService, RemoteInvokerService>();
 
@@ -119,6 +136,20 @@ public static class TaskServiceCollectionExtensions
         services.AddTaskExecutor<HttpTaskExecutor>();
         services.AddTaskExecutor<SoapTaskExecutor>();
 
+        // In-process HTTP invoker (issue #1007): serves the type-6 local path and is the body the
+        // type-22 wrapper below delegates to. Registered as a delegating factory rather than
+        // AddLocalTaskInvoker<T> so the concrete type (which the type-22 wrapper takes directly)
+        // and the ILocalTaskInvoker registration resolve to the SAME scoped instance instead of
+        // two separate invoker instances per scope.
+        services.TryAddScoped<LocalHttpTaskInvoker>();
+        services.AddScoped<ILocalTaskInvoker>(sp => sp.GetRequiredService<LocalHttpTaskInvoker>());
+
+        // In-process Dapr service-invocation invoker (issue #1007): serves the DaprService local path.
+        services.AddLocalTaskInvoker<LocalDaprServiceTaskInvoker>();
+
+        // In-process SOAP invoker (issue #1007): serves the Soap local path.
+        services.AddLocalTaskInvoker<LocalSoapTaskInvoker>();
+
         // External HTTP executor (issue #399): the orchestrator performs the user-defined URL call
         // in-process — no /execution/invoke hop. The named HTTP clients it sends through are
         // concrete transport and are registered by the Infrastructure module
@@ -131,11 +162,24 @@ public static class TaskServiceCollectionExtensions
         services.AddTaskExecutor<DaprPubSubTaskExecutor>();
         services.AddTaskExecutor<DaprConversationTaskExecutor>();
         services.AddTaskExecutor<PythonTaskExecutor>();
+
+        // Shared Dapr state-store gateway, also used by the function response cache (issue #1007).
+        // TryAdd because the Execution host registers the same implementation, and both layers
+        // can live in one process.
+        services.TryAddSingleton<IStateStoreClient, DaprStateStoreClient>();
         services.AddTaskExecutor<StateStoreTaskExecutor>();
 
-        // Cache-Aside (read-through) executor: cache get/set is dispatched to the Execution service via
-        // the StateStore invoker; the source task on a miss is orchestrated locally.
+        // In-process state-store invoker (issue #1007): serves the StateStore local path.
+        services.AddLocalTaskInvoker<LocalStateStoreTaskInvoker>();
+
+        // Cache-Aside (read-through) executor: the read-through (state-store get/set, source task
+        // on a miss) is dispatched locally or to the Execution service via ITaskInvocationDispatcher.
         services.AddTaskExecutor<CacheAsideTaskExecutor>();
+
+        // In-process cache-aside invoker (issue #1007): serves the CacheAside local path. On a miss
+        // it dispatches the source task through this same local registry when possible, falling
+        // back to the Execution service otherwise (see LocalCacheAsideTaskInvoker).
+        services.AddLocalTaskInvoker<LocalCacheAsideTaskInvoker>();
 
         // Notification task executor (multi-channel direct Dapr binding dispatch)
         services.TryAddScoped<IStateChannelMessageBuilder, StateChannelMessageBuilder>();
@@ -359,6 +403,17 @@ public static class TaskServiceCollectionExtensions
         Func<IServiceProvider, ITaskExecutor> implementationFactory)
     {
         services.AddScoped(implementationFactory);
+        return services;
+    }
+
+    /// <summary>
+    /// Registers an in-process task invoker (issue #1007). Scoped to match the executors that
+    /// consume it and the named-HttpClient/state-store gateways it composes.
+    /// </summary>
+    public static IServiceCollection AddLocalTaskInvoker<TInvoker>(this IServiceCollection services)
+        where TInvoker : class, ILocalTaskInvoker
+    {
+        services.AddScoped<ILocalTaskInvoker, TInvoker>();
         return services;
     }
 }

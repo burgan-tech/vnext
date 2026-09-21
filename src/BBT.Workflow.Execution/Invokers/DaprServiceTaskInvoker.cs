@@ -1,9 +1,7 @@
-using System.Diagnostics;
-using System.Text;
 using System.Text.Json;
 using BBT.Workflow.Execution.Bindings;
+using BBT.Workflow.Execution.Core.Invocation;
 using BBT.Workflow.Execution.Metrics;
-using BBT.Workflow.Execution.Services;
 using Microsoft.Extensions.Logging;
 
 namespace BBT.Workflow.Execution.Invokers;
@@ -42,7 +40,7 @@ public sealed class DaprServiceTaskInvoker(
     {
         var typedBinding = binding.Deserialize<DaprServiceBinding>()
             ?? throw new InvalidOperationException("Failed to deserialize DaprServiceBinding");
-        
+
         return await ExecuteAsync(taskKey, typedBinding, cancellationToken);
     }
 
@@ -51,136 +49,48 @@ public sealed class DaprServiceTaskInvoker(
         DaprServiceBinding binding,
         CancellationToken cancellationToken)
     {
-        var startTimestamp = Stopwatch.GetTimestamp();
-        var prepareActivity = InvokerActivityHelper.StartPrepareActivity(TaskType, taskKey ?? string.Empty);
+        var result = await DaprServiceInvocation.SendAsync(
+            daprInvocation, binding, TaskType, cancellationToken, trusted: null, taskKey: taskKey);
 
-        try
+        // The shared core never logs or records metrics; this host's classification stays here so
+        // its dashboards are unchanged by the extraction. The core's SendAsync collapsed the three
+        // original call sites (success/failure/cancelled) into one result, so the status string is
+        // reconstructed the same way the original three branches produced it: success from
+        // IsSuccess, cancelled from the "Cancelled" metadata flag the core stamps identically to
+        // HttpTaskInvocation, failure otherwise.
+        var status = result.IsSuccess
+            ? "success"
+            : HttpTaskInvocation.WasCancelled(result) ? "cancelled" : "failure";
+        _metrics.RecordDaprServiceInvocation(binding.AppId, binding.MethodName, status);
+
+        // The shared core never logs; restore the original two-branch split (Warning for a
+        // cancellation, Error for everything else) instead of collapsing both into one Error
+        // line — a cancellation is ordinary traffic (a caller timing out, an instance cancelled
+        // mid-call) and must not trip anything alerting on this invoker's Error rate. Same shape
+        // HttpTaskInvoker already uses for the HTTP path extracted the same way.
+        if (!result.IsSuccess && HttpTaskInvocation.WasCancelled(result))
         {
-            var request = DaprServiceInvocationClient.CreateRequest(
-                new HttpMethod(binding.Method),
-                binding.AppId,
-                binding.MethodName);
-
-            // Add query string
-            if (!string.IsNullOrEmpty(binding.QueryString))
-            {
-                var uriBuilder = new UriBuilder(request.RequestUri!);
-                var queryString = binding.QueryString.TrimStart('?');
-                uriBuilder.Query = string.IsNullOrEmpty(uriBuilder.Query)
-                    ? queryString
-                    : uriBuilder.Query.TrimStart('?') + "&" + queryString;
-                request.RequestUri = uriBuilder.Uri;
-            }
-
-            // Add body for non-GET requests
-            if (request.Method != HttpMethod.Get && !string.IsNullOrEmpty(binding.Body))
-            {
-                request.Content = new StringContent(binding.Body, Encoding.UTF8, "application/json");
-            }
-
-            // Add headers
-            if (!string.IsNullOrEmpty(binding.Headers))
-            {
-                var headers = JsonSerializer.Deserialize<Dictionary<string, string>>(binding.Headers);
-                if (headers != null)
-                {
-                    foreach (var header in headers.Where(h =>
-                                 h.Value != null && !InvokerHelpers.IsReservedTraceHeader(h.Key)))
-                    {
-                        request.Headers.TryAddWithoutValidation(header.Key, header.Value);
-                    }
-                }
-            }
-
-            InvokerHelpers.ApplyTrustedCorrelationHeaders(request);
-
-            // SendAsync performs no status validation: every 2xx/4xx/5xx comes back as a response, so
-            // status codes reach output mapping (parity with the obsolete InvokeMethodWithResponseAsync)
-            prepareActivity?.Dispose();
-            using var response = await daprInvocation.SendAsync(request, cancellationToken);
-
-            var responseHeaders = InvokerHelpers.MergeHeaders(response.Headers, response.Content.Headers);
-
-            var content = await response.Content.ReadAsStringAsync(cancellationToken);
-            var responseData = InvokerHelpers.TryParseJson(content);
-            
-            var metadata = new Dictionary<string, object>
-            {
-                ["AppId"] = binding.AppId,
-                ["MethodName"] = binding.MethodName,
-                ["HttpVerb"] = binding.Method,
-                ["ReasonPhrase"] = response.ReasonPhrase ?? string.Empty
-            };
-
-            var isSuccess = response.IsSuccessStatusCode
-                || AcceptedStatusCodeMatcher.IsAccepted((int)response.StatusCode, binding.AcceptedStatusCodes);
-
-            // Record metrics based on success/failure
-            _metrics.RecordDaprServiceInvocation(
-                binding.AppId, 
-                binding.MethodName, 
-                isSuccess ? "success" : "failure");
-            
-            // Always return result with full response details - let output mapping handle error scenarios
-            // All HTTP responses (2xx, 4xx, 5xx) include headers, body, and parsed data
-            return isSuccess
-                ? TaskInvocationResult.Success(
-                    data: responseData,
-                    body: content,
-                    statusCode: (int)response.StatusCode,
-                    executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
-                    taskType: TaskType,
-                    headers: responseHeaders,
-                    metadata: metadata)
-                : TaskInvocationResult.Failure(
-                    error: $"HTTP {(int)response.StatusCode}: {response.ReasonPhrase}",
-                    statusCode: (int)response.StatusCode,
-                    body: content,
-                    executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
-                    taskType: TaskType,
-                    headers: responseHeaders,
-                    data: responseData,
-                    metadata: metadata);
+            logger.LogWarning("Dapr service invocation was cancelled for task {TaskKey} - AppId: {AppId}",
+                taskKey, binding.AppId);
         }
-        catch (TaskCanceledException ex) when (cancellationToken.IsCancellationRequested)
+        else if (!result.IsSuccess && result.StatusCode is null)
         {
-            prepareActivity?.Dispose();
-            _metrics.RecordDaprServiceInvocation(binding.AppId, binding.MethodName, "cancelled");
-            logger.LogWarning("Dapr service invocation was cancelled: {AppId}/{MethodName}",
-                binding.AppId, binding.MethodName);
-
-            return TaskInvocationResult.Failure(
-                error: "Dapr service invocation was cancelled",
-                executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
-                taskType: TaskType,
-                metadata: new Dictionary<string, object>
-                {
-                    ["AppId"] = binding.AppId,
-                    ["MethodName"] = binding.MethodName,
-                    ["HttpVerb"] = binding.Method,
-                    ["Cancelled"] = true,
-                    ["ExceptionType"] = ex.GetType().Name
-                });
+            logger.LogError("Dapr service invocation failed for {TaskKey} - AppId: {AppId}, Error: {Error}, ExceptionType: {ExceptionType}",
+                taskKey, binding.AppId, result.ErrorMessage, ExceptionTypeOf(result));
         }
-        catch (Exception ex)
-        {
-            prepareActivity?.Dispose();
-            _metrics.RecordDaprServiceInvocation(binding.AppId, binding.MethodName, "failure");
-            logger.LogError(ex, "Unexpected error during Dapr service invocation: {AppId}/{MethodName}",
-                binding.AppId, binding.MethodName);
 
-            return TaskInvocationResult.Failure(
-                error: ex.Message,
-                executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
-                taskType: TaskType,
-                metadata: new Dictionary<string, object>
-                {
-                    ["AppId"] = binding.AppId,
-                    ["MethodName"] = binding.MethodName,
-                    ["HttpVerb"] = binding.Method,
-                    ["ExceptionType"] = ex.GetType().Name,
-                    ["StackTrace"] = ex.StackTrace ?? string.Empty
-                });
-        }
+        return result;
     }
+
+    /// <summary>
+    /// Reads the transport-failure exception type name the shared core stamps into
+    /// <c>Metadata["ExceptionType"]</c> on the unhandled-exception path. The core swallows the
+    /// exception itself by contract (it returns a <see cref="TaskInvocationResult"/>, never
+    /// throws), so this is the only way the wrapper's error log can still name the failure type —
+    /// the same trade already made for <c>HttpTaskInvoker</c> when its core was extracted.
+    /// </summary>
+    private static string ExceptionTypeOf(TaskInvocationResult result) =>
+        result.Metadata?.TryGetValue("ExceptionType", out var value) == true && value is string type
+            ? type
+            : string.Empty;
 }

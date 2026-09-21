@@ -70,9 +70,10 @@ public static class ExecutionServiceCollectionExtensions
         // Dapr Conversation (AI/LLM) client used by the DaprConversation invoker.
         services.AddDaprConversationClient();
 
-        // Shared Dapr state-store gateway used by the StateStore and CacheAside invokers.
-        services.TryAddSingleton<BBT.Workflow.Execution.StateStores.IStateStoreClient,
-            BBT.Workflow.Execution.StateStores.DaprStateStoreClient>();
+        // Shared Dapr state-store gateway used by the StateStore and CacheAside invokers. Also
+        // registered from the Application layer (TryAdd) when both layers live in one process.
+        services.TryAddSingleton<BBT.Workflow.Execution.Core.StateStores.IStateStoreClient,
+            BBT.Workflow.Execution.Core.StateStores.DaprStateStoreClient>();
         
         // The one service-invocation surface every Dapr-facing invoker sends through. Built on
         // DaprClient.CreateInvokeHttpClient() — the SDK's non-obsolete invocation client — since the

@@ -5,9 +5,11 @@ using System.Net.Http;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using BBT.Workflow.Application.Tests.Tasks.Invocation;
 using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.Bindings;
 using BBT.Workflow.Tasks.Executors;
+using BBT.Workflow.Tasks.Invocation.Local;
 using Microsoft.Extensions.Logging.Abstractions;
 using Shouldly;
 using Xunit;
@@ -236,7 +238,7 @@ public sealed class ExternalHttpTaskInvokerTests
     // ── harness ──────────────────────────────────────────────────────────────
 
     private static ExternalHttpTaskInvoker CreateInvoker(IHttpClientFactory factory) =>
-        new(factory, NullLogger<ExternalHttpTaskInvoker>.Instance);
+        new(new LocalHttpTaskInvoker(factory, NullLogger<LocalHttpTaskInvoker>.Instance));
 
     private static HttpResponseMessage Ok() =>
         new(HttpStatusCode.OK) { Content = new StringContent("{}") };
@@ -258,57 +260,4 @@ public sealed class ExternalHttpTaskInvokerTests
             TimeoutSeconds = timeoutSeconds,
             AcceptedStatusCodes = acceptedStatusCodes
         };
-
-    private sealed class CapturingHttpClientFactory(HttpMessageHandler handler) : IHttpClientFactory
-    {
-        public string? LastRequestedName { get; private set; }
-        public HttpClient? LastCreatedClient { get; private set; }
-
-        public HttpClient CreateClient(string name)
-        {
-            LastRequestedName = name;
-            LastCreatedClient = new HttpClient(handler, disposeHandler: false);
-            return LastCreatedClient;
-        }
-    }
-
-    private sealed class StubHttpMessageHandler : HttpMessageHandler
-    {
-        private readonly Func<HttpRequestMessage, HttpResponseMessage> _responder;
-
-        public HttpRequestMessage? LastRequest { get; private set; }
-        public string? LastContentType { get; private set; }
-        public Dictionary<string, string> ResponseHeaders { get; } = [];
-
-        public StubHttpMessageHandler(HttpResponseMessage response)
-            : this(_ => response)
-        {
-        }
-
-        public StubHttpMessageHandler(Exception exception)
-            : this(_ => throw exception)
-        {
-        }
-
-        public StubHttpMessageHandler(Func<HttpRequestMessage, HttpResponseMessage> responder)
-        {
-            _responder = responder;
-        }
-
-        protected override Task<HttpResponseMessage> SendAsync(
-            HttpRequestMessage request,
-            CancellationToken cancellationToken)
-        {
-            LastRequest = request;
-            LastContentType = request.Content?.Headers.ContentType?.MediaType;
-
-            var response = _responder(request);
-            foreach (var header in ResponseHeaders)
-            {
-                response.Headers.TryAddWithoutValidation(header.Key, header.Value);
-            }
-
-            return Task.FromResult(response);
-        }
-    }
 }

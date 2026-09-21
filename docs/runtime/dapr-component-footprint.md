@@ -29,7 +29,7 @@ When this page and the code disagree, the code wins; re-derive with the grep rec
 
 | | orchestration | execution | inbox | outbox | db-migrator |
 |---|---|---|---|---|---|
-| **state** | ✅ platform cache | ✅ *domain tasks only* | ❌ | ❌ | ❌ |
+| **state** | ✅ platform cache + domain tasks (default) | ⚠️ domain tasks, if reconfigured Remote | ❌ | ❌ | ❌ |
 | **lock** | ✅ | ❌ | ❌ | ❌ | ✅ |
 | **pubsub** | ✅ *one publish* | ⚠️ domain-authored only | ✅ | ✅ | ❌ |
 | **pubsub-broadcast** | ⬜ kept, unused | ❌ | ❌ | ❌ | ❌ |
@@ -44,7 +44,13 @@ When this page and the code disagree, the code wins; re-derive with the grep rec
 
 - **orchestration / state** — `CacheSet<T>`, `ComponentCacheStore`, `StateFunctionCache`,
   `DataFunctionCache`, `InstanceSchemaFunctionCache`, `CachingDiscoveryRegistryClient`,
-  `DistributedCacheIdempotencyStore`.
+  `DistributedCacheIdempotencyStore` (platform cache, `IDistributedCacheService`); plus, since
+  the task invocation routing change (issue #1007), `LocalStateStoreTaskInvoker` and
+  `LocalCacheAsideTaskInvoker` (domain task, `IStateStoreClient` — same abstraction and default
+  `DAPR_STATE_STORE_NAME` resolution as the execution-side invokers below), and
+  `StateStoreCacheGateway` for the function-level response cache. These are new consumers of the
+  domain-task entry point on **this** host, not a second component — see
+  [Task Invocation Routing](task-invocation-routing.md) for when they run here vs. on execution.
 - **orchestration / lock** — `InstanceStatusLock` (the Busy mutex), `TransitionLockScopeFactory`,
   `DistributedCacheIdempotencyStore`, `DiscoveryCacheRefresher`, `SchemaMigrationOrchestrator`,
   `DomainDiscoveryInitializationHostedService`, plus `DaprResourceLockService`.

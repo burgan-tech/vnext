@@ -18,6 +18,7 @@
     <Project Path="src/BBT.Workflow.Domain/BBT.Workflow.Domain.csproj" />
     <Project Path="src/BBT.Workflow.Events.Contracts/BBT.Workflow.Events.Contracts.csproj" />
     <Project Path="src/BBT.Workflow.Execution.Abstractions/BBT.Workflow.Execution.Abstractions.csproj" />
+    <Project Path="src/BBT.Workflow.Execution.Core/BBT.Workflow.Execution.Core.csproj" />
     <Project Path="src/BBT.Workflow.Execution/BBT.Workflow.Execution.csproj" />
     <Project Path="src/BBT.Workflow.HttpApi.Shared/BBT.Workflow.HttpApi.Shared.csproj" />
     <Project Path="src/BBT.Workflow.Infrastructure/BBT.Workflow.Infrastructure.csproj" />

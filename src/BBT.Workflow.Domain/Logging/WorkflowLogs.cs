@@ -873,6 +873,103 @@ public static partial class WorkflowLogs
         string url);
 
     /// <summary>
+    /// Logs when a task's prepared binding is invoked in-process by the orchestrator instead of
+    /// being shipped to the Execution service (issue #1007).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10160,
+        Level = LogLevel.Debug,
+        Message = "Task {TaskKey} ({TaskType}) invoked in-process by the orchestrator [reason={Reason}]")]
+    public static partial void TaskInvokedLocally(
+        this ILogger logger, string taskKey, string taskType, string reason);
+
+    /// <summary>
+    /// Logs when an in-process (orchestrator-local) task invocation fails. Generic across local
+    /// task types deliberately: for the HTTP-shaped invokers (HTTP, SOAP, Dapr service invocation)
+    /// this is a connection/DNS/timeout failure with no status code; for a type with no wire status
+    /// code at all (state store) it covers any non-cancelled failure. The message stays agnostic to
+    /// which so it does not mislabel a non-transport failure as one.
+    /// <para>
+    /// <b>There is deliberately no <see cref="Exception"/> parameter, and none is available to
+    /// pass.</b> The shared invocation cores catch their own exceptions by contract — they return a
+    /// failed result and never throw — so by the time a local invoker decides to log, the exception
+    /// object is gone and only what the core preserved remains. What it preserves is the message
+    /// and <c>Metadata["ExceptionType"]</c>, so the type is carried here explicitly rather than
+    /// being dropped: every call site already computes it to decide Error-versus-metered, and
+    /// discarding it left this log strictly poorer than the journal row for the same failure.
+    /// Callers pass <c>null</c> when the core stamped no type, which is itself the signal that the
+    /// failure was a returned validation error rather than a thrown one.
+    /// </para>
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10161,
+        Level = LogLevel.Error,
+        Message = "In-process invocation of task {TaskKey} ({TaskType}) failed: {Error} [exceptionType={ExceptionType}]")]
+    public static partial void LocalTaskInvocationFailed(
+        this ILogger logger, string? taskKey, string taskType, string error, string? exceptionType);
+
+    /// <summary>
+    /// Logs when an in-process (orchestrator-local) task invocation is cancelled — ordinary
+    /// traffic (a caller timing out, an instance cancelled mid-call), carved out of
+    /// <see cref="LocalTaskInvocationFailed"/> so cancellation does not trip anything alerting on
+    /// this invoker's Error rate.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10162,
+        Level = LogLevel.Warning,
+        Message = "In-process invocation of task {TaskKey} ({TaskType}) was cancelled")]
+    public static partial void LocalTaskInvocationCancelled(
+        this ILogger logger, string? taskKey, string taskType);
+
+    /// <summary>
+    /// Logs when an in-process (orchestrator-local) task invocation bypasses SSL certificate
+    /// validation — a security-relevant signal every other invocation path already announces
+    /// (the Execution host's HTTP and SOAP invokers, and the local HTTP path's
+    /// <c>ExternalHttpTaskSslValidationDisabled</c>). Generic across local task types deliberately:
+    /// unlike that HTTP-specific event, this one is meant to be shared by every local invoker that
+    /// has an SSL-validation flag, starting with SOAP.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10163,
+        Level = LogLevel.Debug,
+        Message = "SSL certificate validation is disabled for in-process task {TaskKey} ({TaskType}) - Url: {Url}")]
+    public static partial void LocalTaskInvocationSslValidationDisabled(
+        this ILogger logger, string? taskKey, string taskType, string url);
+
+    /// <summary>
+    /// Logs when the local cache-aside invoker swallows a cache read or write failure under
+    /// <c>bypassOnCacheError=true</c> and continues without the cache (read: falls through to the
+    /// source task; write: returns the source result anyway). <c>bypassOnCacheError</c> defaults to
+    /// <c>true</c>, so without this line a state-store outage silently degrades every cache-aside
+    /// task to its source task with no signal at any level — this is the sole diagnostic for that
+    /// degradation on the Orchestration host, restored via <c>CacheAsideInvocation</c>'s
+    /// notification callback (the shared core still does not log; it reports, and each host owns
+    /// its own message). Mirrors the Execution host's own <c>LogWarning</c> at the same two call
+    /// sites.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10164,
+        Level = LogLevel.Warning,
+        Message = "CacheAside {TaskKey}: cache {Stage} failed; continuing without the cache (bypassOnCacheError=true)")]
+    public static partial void LocalCacheAsideBypassedCacheError(
+        this ILogger logger, Exception exception, string? taskKey, string stage);
+
+    /// <summary>
+    /// Logs when an in-process (orchestrator-local) task invocation is aborted by
+    /// <see cref="BBT.Workflow.Tasks.Invocation.TaskInvocationOptions.LocalInvocationTimeoutSeconds"/> —
+    /// the local-path counterpart of the remote path's own-timer log line
+    /// (<c>RemoteInvokerService</c>, <c>[timeout.layer=remote]</c>). Distinct from
+    /// <see cref="LocalTaskInvocationCancelled"/>: this fires only when OUR linked timer expired,
+    /// never when the caller's own token did.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10165,
+        Level = LogLevel.Error,
+        Message = "In-process invocation of task {TaskKey} ({TaskType}) timed out after {TimeoutSeconds}s [timeout.layer=local]")]
+    public static partial void LocalTaskInvocationTimedOut(
+        this ILogger logger, string? taskKey, string taskType, int timeoutSeconds);
+
+    /// <summary>
     /// Logs when task instance resolution fails (for DirectTrigger, GetInstanceData).
     /// </summary>
     [LoggerMessage(

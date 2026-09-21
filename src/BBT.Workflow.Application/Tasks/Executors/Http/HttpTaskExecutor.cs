@@ -3,6 +3,7 @@ using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Scripting;
+using BBT.Workflow.Tasks.Invocation;
 using BBT.Workflow.Tasks.Mapping;
 using Microsoft.Extensions.Logging;
 
@@ -10,12 +11,15 @@ namespace BBT.Workflow.Tasks.Executors;
 
 /// <summary>
 /// Executor for HTTP tasks.
-/// Handles input mapping locally, then delegates to RemoteInvokerService for execution.
+/// Handles input mapping locally, then dispatches through <see cref="ITaskInvocationDispatcher"/>,
+/// which runs the prepared binding locally or via the Execution service per
+/// <see cref="BBT.Workflow.Tasks.Invocation.ITaskInvocationRouter"/>.
 /// </summary>
 public sealed class HttpTaskExecutor : TaskExecutorBase<HttpTask>
 {
     private readonly IRemoteInvokerService _remoteInvoker;
     private readonly IScriptEngine _scriptEngine;
+    private readonly ITaskInvocationDispatcher _dispatcher;
 
     /// <summary>
     /// Initializes a new instance of HttpTaskExecutor.
@@ -23,11 +27,13 @@ public sealed class HttpTaskExecutor : TaskExecutorBase<HttpTask>
     public HttpTaskExecutor(
         IRemoteInvokerService remoteInvoker,
         IScriptEngine scriptEngine,
+        ITaskInvocationDispatcher dispatcher,
         ILogger<HttpTaskExecutor> logger)
         : base(logger)
     {
         _remoteInvoker = remoteInvoker;
         _scriptEngine = scriptEngine;
+        _dispatcher = dispatcher;
     }
 
     /// <inheritdoc />
@@ -84,14 +90,13 @@ public sealed class HttpTaskExecutor : TaskExecutorBase<HttpTask>
             return Result<TaskInvocationResult>.Fail(envelopeResult.Error);
         }
 
+        // The trace context still comes from the remote invoker service: it is the one place that
+        // knows how to derive correlation, identity and request id from a ScriptContext, and both
+        // dispatch paths need the same object.
         var traceContext = _remoteInvoker.CreateTraceContext(context.ScriptContext);
 
-        var result = await _remoteInvoker.InvokeAsync(
-            Execution.TaskTypes.Http,
-            task.Key,
-            envelopeResult.Value!,
-            traceContext,
-            cancellationToken);
+        var result = await _dispatcher.DispatchAsync(
+            task, Execution.TaskTypes.Http, envelopeResult.Value!, traceContext, cancellationToken);
 
         if (!result.IsSuccess)
         {

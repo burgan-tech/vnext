@@ -16,6 +16,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
 using BBT.Workflow.Authorization.Extensions;
+using BBT.Workflow.Tasks.Invocation;
 
 namespace Microsoft.Extensions.DependencyInjection;
 
@@ -165,14 +166,39 @@ public static class WorkflowInfrastructureModuleServiceCollectionExtensions
 
     /// <summary>
     /// Registers the named HTTP clients the external HTTP task executor
-    /// (<c>BBT.Workflow.Tasks.Executors.ExternalHttpTaskInvoker</c>) sends through. Mirrors the
-    /// Execution host's <c>AddWorkflowHttpClient</c> (same client names, decompression, connection
-    /// cap, cookie policy and SSL-bypass variant) so a task behaves identically whichever host
-    /// performs the call. The 30s base timeout is overridden per request from the task's
-    /// <c>timeoutSeconds</c> by the shared <c>HttpTaskInvocation</c> core.
+    /// (<c>BBT.Workflow.Tasks.Executors.ExternalHttpTaskInvoker</c>) and, since issue #1007, every
+    /// in-process <c>http</c>/<c>soap</c> task invoker send through. Shares client names,
+    /// decompression, cookie policy and SSL-bypass variant with the Execution host's
+    /// <c>AddWorkflowHttpClient</c> so a task behaves identically whichever host performs the
+    /// call — but the connection cap has DIVERGED since #1007: this side reads
+    /// <c>Workflow:TaskInvocation:MaxConnectionsPerServer</c> (default 50, see
+    /// <see cref="TaskInvocationOptions.MaxConnectionsPerServer"/>), while the Execution host's
+    /// clients are still hardcoded at 10. That is deliberate for this task — Execution's own
+    /// traffic on these clients is expected to shrink now that the five locally-routed types stay
+    /// on Orchestration, and raising a second host's egress concurrency is its own operational
+    /// change — not an oversight to "fix" by re-unifying the two without a separate decision. The
+    /// 30s base timeout is overridden per request from the task's <c>timeoutSeconds</c> by the
+    /// shared <c>HttpTaskInvocation</c> core.
     /// </summary>
     private static IServiceCollection AddExternalHttpTaskClients(this IServiceCollection services)
     {
+        // Orchestration is now the default egress host for HTTP and SOAP tasks (issue #1007), so
+        // this cap bounds every outbound task call to a given target, not just the type-22 ones it
+        // was written for. 10 is a throughput cliff for a hot single-target flow; make it an
+        // operator dial with the previous value as the floor-compatible default.
+        //
+        // Resolved from the bound TaskInvocationOptions (not a second raw-configuration read) so
+        // TaskInvocationOptions.MaxConnectionsPerServer is the single place the default and the
+        // [Range] guard live. It has to be resolved lazily, through the handler-factory overload
+        // that takes IServiceProvider, rather than read here directly: AddExternalHttpTaskClients
+        // runs while the service collection is still being assembled (AddApplicationModule runs
+        // before AddInfrastructureModule, but nothing has called BuildServiceProvider yet), so
+        // IOptions<TaskInvocationOptions> cannot be resolved yet — only registered. The handler
+        // factory below runs lazily, the first time IHttpClientFactory actually creates the
+        // handler, by which point the container is built and options binding has happened.
+        static int ResolveMaxConnectionsPerServer(IServiceProvider provider) =>
+            provider.GetRequiredService<IOptions<TaskInvocationOptions>>().Value.MaxConnectionsPerServer;
+
         // Default HTTP client with SSL validation enabled
         services.AddHttpClient(BBT.Workflow.Execution.WorkflowHttpClientNames.Default, client =>
             {
@@ -180,10 +206,10 @@ public static class WorkflowInfrastructureModuleServiceCollectionExtensions
                 client.MaxResponseContentBufferSize = int.MaxValue;
                 client.DefaultRequestHeaders.Add("Accept", "application/json");
             })
-            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+            .ConfigurePrimaryHttpMessageHandler(provider => new HttpClientHandler
             {
                 AutomaticDecompression = System.Net.DecompressionMethods.GZip | System.Net.DecompressionMethods.Deflate,
-                MaxConnectionsPerServer = 10,
+                MaxConnectionsPerServer = ResolveMaxConnectionsPerServer(provider),
                 UseCookies = false
             });
 
@@ -194,10 +220,10 @@ public static class WorkflowInfrastructureModuleServiceCollectionExtensions
                 client.MaxResponseContentBufferSize = int.MaxValue;
                 client.DefaultRequestHeaders.Add("Accept", "application/json");
             })
-            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+            .ConfigurePrimaryHttpMessageHandler(provider => new HttpClientHandler
             {
                 AutomaticDecompression = System.Net.DecompressionMethods.GZip | System.Net.DecompressionMethods.Deflate,
-                MaxConnectionsPerServer = 10,
+                MaxConnectionsPerServer = ResolveMaxConnectionsPerServer(provider),
                 UseCookies = false,
                 ServerCertificateCustomValidationCallback = (_, _, _, _) => true
             });

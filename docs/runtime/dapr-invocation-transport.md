@@ -1,5 +1,14 @@
 # Dapr Invocation Transport: What Uses gRPC, What Stays HTTP, and Why
 
+> **Scope note (issue #1007):** the "Orchestration → Execution task invoke" hop this document
+> analyzes is now only exercised for task types the invocation router resolves **Remote**. Five
+> wire types (`http`, `daprservice`, `soap`, `statestore`, `cacheaside`) run in-process inside
+> Orchestration by shipped default and never reach this hop at all. Everything below still
+> applies exactly as written whenever a call does cross to Execution — by default that means
+> `daprbinding`, `daprhttpendpoint`, `daprpubsub`, `daprconversation`, `python`, the trigger/query
+> types, and any of the five local types reverted to Remote via configuration. See
+> [Task Invocation Routing](task-invocation-routing.md) for the resolution order and the config.
+
 ## TL;DR
 
 | Path | Transport | Why |
