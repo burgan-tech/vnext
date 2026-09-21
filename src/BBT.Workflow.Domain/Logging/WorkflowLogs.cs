@@ -125,7 +125,7 @@ public static partial class WorkflowLogs
     /// scheduler call really left the critical section.
     /// </summary>
     [LoggerMessage(
-        EventId = 10098,
+        EventId = 10160,
         Level = LogLevel.Debug,
         Message = "Transition job {JobId} armed after lock release")]
     public static partial void TransitionJobArmedAfterLock(
@@ -563,7 +563,7 @@ public static partial class WorkflowLogs
     /// Logs when a Dynamic Expresso condition script cannot be decoded.
     /// </summary>
     [LoggerMessage(
-        EventId = 10076,
+        EventId = 10158,
         Level = LogLevel.Warning,
         Message = "Dynamic Expresso condition script has invalid encoding: {Reason}")]
     public static partial void DynamicExpressoConditionInvalidEncoding(
@@ -574,7 +574,7 @@ public static partial class WorkflowLogs
     /// Logs when Dynamic Expresso condition evaluation throws.
     /// </summary>
     [LoggerMessage(
-        EventId = 10077,
+        EventId = 10159,
         Level = LogLevel.Error,
         Message = "Dynamic Expresso condition evaluation failed: {Reason}")]
     public static partial void DynamicExpressoConditionEvaluationFailed(
@@ -1493,7 +1493,7 @@ public static partial class WorkflowLogs
     /// Logs when a SubFlow start operation fails.
     /// </summary>
     [LoggerMessage(
-        EventId = 40080,
+        EventId = 40135,
         Level = LogLevel.Error,
         Message = "SubFlow {SubFlowKey} start failed for parent instance {ParentInstanceId}: {ErrorCode} - {ErrorMessage}")]
     public static partial void SubFlowStartFailed(
@@ -1964,7 +1964,7 @@ public static partial class WorkflowLogs
     /// Logs when timeout mapping script fails and static timer duration is used as fallback.
     /// </summary>
     [LoggerMessage(
-        EventId = 40100,
+        EventId = 40106,
         Level = LogLevel.Warning,
         Message = "Timeout mapping failed for instance {InstanceId}, falling back to static duration {Duration}. Error: {ErrorMessage}")]
     public static partial void TimeoutMappingFallback(
@@ -1977,7 +1977,7 @@ public static partial class WorkflowLogs
     /// Logs when timeout mapping script executes successfully.
     /// </summary>
     [LoggerMessage(
-        EventId = 40101,
+        EventId = 40107,
         Level = LogLevel.Information,
         Message = "Timeout mapping resolved for instance {InstanceId}, schedule type: {ScheduleType}")]
     public static partial void TimeoutMappingResolved(
@@ -2028,7 +2028,7 @@ public static partial class WorkflowLogs
     /// Logs when an InstanceCanceledEvent is silently ignored because it belongs to a different domain.
     /// </summary>
     [LoggerMessage(
-        EventId = 40021,
+        EventId = 40105,
         Level = LogLevel.Debug,
         Message = "InstanceCanceledEvent silently ignored: event domain {EventDomain} does not match current runtime domain {RuntimeDomain}. Instance {InstanceId}, Flow {Flow}")]
     public static partial void InstanceCanceledEventIgnoredDomainMismatch(
@@ -2262,7 +2262,7 @@ public static partial class WorkflowLogs
     /// Logs when a ChildSubflowCancelRequestedEvent is silently ignored because it belongs to a different domain.
     /// </summary>
     [LoggerMessage(
-        EventId = 40030,
+        EventId = 40136,
         Level = LogLevel.Debug,
         Message = "ChildSubflowCancelRequestedEvent silently ignored: event domain {EventDomain} does not match current runtime domain {RuntimeDomain}. Instance {InstanceId}, Flow {Flow}")]
     public static partial void ChildSubflowCancelEventIgnoredDomainMismatch(
@@ -3893,7 +3893,7 @@ public static partial class WorkflowLogs
     /// was never executed. One entry per validation error.
     /// </summary>
     [LoggerMessage(
-        EventId = 20440,
+        EventId = 20460,
         Level = LogLevel.Warning,
         Message = "Instance query rejected. Domain: {Domain}, Workflow: {Workflow}, Parameter: {Parameter}, Code: {ErrorCode}, Reason: {Reason}")]
     public static partial void InstanceQueryParameterRejected(
@@ -3910,7 +3910,7 @@ public static partial class WorkflowLogs
     /// the caller sees an error either way, but the drift is a defect worth investigating.
     /// </summary>
     [LoggerMessage(
-        EventId = 20441,
+        EventId = 20461,
         Level = LogLevel.Error,
         Message = "Instance filter compilation failed after passing validation. Domain: {Domain}, Workflow: {Workflow}")]
     public static partial void InstanceFilterCompilationFailed(
@@ -3925,7 +3925,7 @@ public static partial class WorkflowLogs
     /// loading every instance of the target workflow into instance data.
     /// </summary>
     [LoggerMessage(
-        EventId = 20442,
+        EventId = 20462,
         Level = LogLevel.Warning,
         Message = "Task filter rejected. TaskKey: {TaskKey}, TargetDomain: {TargetDomain}, TargetFlow: {TargetFlow}, Code: {ErrorCode}, Reason: {Reason}")]
     public static partial void InstanceTaskFilterRejected(
@@ -3944,7 +3944,7 @@ public static partial class WorkflowLogs
     /// Logs when a notification channel message is successfully dispatched to a Dapr binding.
     /// </summary>
     [LoggerMessage(
-        EventId = 10090,
+        EventId = 10161,
         Level = LogLevel.Information,
         Message = "Notification channel dispatched. TaskKey={TaskKey}, Channel={Channel}, BindingName={BindingName}, InstanceId={InstanceId}")]
     public static partial void NotificationChannelDispatched(
@@ -3958,7 +3958,7 @@ public static partial class WorkflowLogs
     /// Logs when a notification channel is skipped because the mapping returned null.
     /// </summary>
     [LoggerMessage(
-        EventId = 10091,
+        EventId = 10162,
         Level = LogLevel.Debug,
         Message = "Notification channel skipped (mapping returned null). TaskKey={TaskKey}, Channel={Channel}, InstanceId={InstanceId}")]
     public static partial void NotificationChannelSkipped(
@@ -3971,7 +3971,7 @@ public static partial class WorkflowLogs
     /// Logs when a notification channel dispatch fails (other channels continue).
     /// </summary>
     [LoggerMessage(
-        EventId = 10092,
+        EventId = 10163,
         Level = LogLevel.Warning,
         Message = "Notification channel failed. TaskKey={TaskKey}, Channel={Channel}, InstanceId={InstanceId}, Error={ErrorMessage}")]
     public static partial void NotificationChannelFailed(
@@ -3985,7 +3985,7 @@ public static partial class WorkflowLogs
     /// Logs the summary when multi-channel notification dispatch completes.
     /// </summary>
     [LoggerMessage(
-        EventId = 10093,
+        EventId = 10164,
         Level = LogLevel.Information,
         Message = "Notification multi-channel completed. TaskKey={TaskKey}, InstanceId={InstanceId}, Dispatched={DispatchedCount}, Skipped={SkippedCount}, Failed={FailedCount}")]
     public static partial void NotificationMultiChannelCompleted(
@@ -4000,7 +4000,7 @@ public static partial class WorkflowLogs
     /// Logs when a state-level notification job is scheduled after the pipeline settles.
     /// </summary>
     [LoggerMessage(
-        EventId = 10094,
+        EventId = 10165,
         Level = LogLevel.Information,
         Message = "State notification scheduled. InstanceId={InstanceId}, State={StateKey}")]
     public static partial void StateNotificationScheduled(
@@ -4012,7 +4012,7 @@ public static partial class WorkflowLogs
     /// Logs when a state-level notification is successfully dispatched to the state Dapr binding.
     /// </summary>
     [LoggerMessage(
-        EventId = 10095,
+        EventId = 10166,
         Level = LogLevel.Information,
         Message = "State notification dispatched. InstanceId={InstanceId}, BindingName={BindingName}")]
     public static partial void StateNotificationDispatched(
@@ -4025,7 +4025,7 @@ public static partial class WorkflowLogs
     /// (no state entries on the state, or none matched its rule).
     /// </summary>
     [LoggerMessage(
-        EventId = 10096,
+        EventId = 10167,
         Level = LogLevel.Debug,
         Message = "State notification skipped. InstanceId={InstanceId}, State={StateKey}, Reason={Reason}")]
     public static partial void StateNotificationSkipped(
@@ -4038,7 +4038,7 @@ public static partial class WorkflowLogs
     /// Logs when a state-level notification dispatch fails.
     /// </summary>
     [LoggerMessage(
-        EventId = 10097,
+        EventId = 10168,
         Level = LogLevel.Warning,
         Message = "State notification failed. InstanceId={InstanceId}, Error={ErrorMessage}")]
     public static partial void StateNotificationFailed(
