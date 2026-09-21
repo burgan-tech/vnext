@@ -687,6 +687,193 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         triggerableJson.ShouldNotContain("executeAtUtc");
     }
 
+    // ---------------------------------------------------------------------------------------
+    // timeout block (state body, v10)
+    // ---------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// The workflow-level deadline rides as its own <c>timeout</c> block — not a transitions[]
+    /// entry — carrying the declared key, the state the instance will be pulled to, and the instant
+    /// read from the persisted job row rather than recomputed.
+    /// </summary>
+    [Fact]
+    public async Task GetInstanceStateAsync_ExposesTheArmedWorkflowTimeout()
+    {
+        // Arrange
+        var (instance, workflow) = CreateInstanceWithTimeout("abandoned", "cancelled");
+        SetupCommonMocks(instance, workflow);
+        var executeAt = new DateTimeOffset(2026, 9, 21, 14, 30, 0, TimeSpan.Zero);
+        SetupTimeoutJob(instance, executeAt);
+
+        // Act
+        var result = await _service.GetInstanceStateAsync(
+            CreateInput(instance.Id.ToString()), CancellationToken.None);
+
+        // Assert
+        result.Result.IsSuccess.ShouldBeTrue();
+        var timeout = result.Result.Value!.Timeout;
+        timeout.ShouldNotBeNull();
+        timeout!.Key.ShouldBe("abandoned");
+        timeout.Target.ShouldBe("cancelled");
+        timeout.ExecuteAtUtc.ShouldBe(executeAt.UtcDateTime);
+        timeout.ExecuteAtUtc.Kind.ShouldBe(DateTimeKind.Utc);
+
+        // and it is NOT smuggled into the transitions list
+        result.Result.Value.Transitions.ShouldNotContain(t => t.Name == "abandoned");
+    }
+
+    /// <summary>
+    /// No timeout job armed ⇒ no block, even when the workflow declares a timeout. The block
+    /// describes what is actually scheduled, not what the definition permits.
+    /// </summary>
+    [Fact]
+    public async Task GetInstanceStateAsync_WithoutAnArmedTimeoutJob_OmitsTheBlock()
+    {
+        var (instance, workflow) = CreateInstanceWithTimeout("abandoned", "cancelled");
+        SetupCommonMocks(instance, workflow);
+
+        var result = await _service.GetInstanceStateAsync(
+            CreateInput(instance.Id.ToString()), CancellationToken.None);
+
+        result.Result.Value!.Timeout.ShouldBeNull();
+    }
+
+    /// <summary>
+    /// A job armed, but the workflow carries no timeout and the instance no override ⇒ nothing to
+    /// describe, so no block. Mirrors the fire path, which does nothing in exactly this case.
+    /// </summary>
+    [Fact]
+    public async Task GetInstanceStateAsync_WhenNoTimeoutResolves_OmitsTheBlock()
+    {
+        var (instance, workflow) = CreateSimpleActiveInstance();
+        SetupCommonMocks(instance, workflow);
+        SetupTimeoutJob(instance, DateTimeOffset.UtcNow.AddMinutes(5));
+
+        var result = await _service.GetInstanceStateAsync(
+            CreateInput(instance.Id.ToString()), CancellationToken.None);
+
+        result.Result.Value!.Timeout.ShouldBeNull();
+    }
+
+    /// <summary>
+    /// Rows persisted before the <c>ExecuteAt</c> column existed carry no instant, so they are
+    /// skipped rather than emitted without one — the same rule the scheduled entries follow.
+    /// </summary>
+    [Fact]
+    public async Task GetInstanceStateAsync_WhenTimeoutJobHasNoExecuteAt_OmitsTheBlock()
+    {
+        var (instance, workflow) = CreateInstanceWithTimeout("abandoned", "cancelled");
+        SetupCommonMocks(instance, workflow);
+        _instanceJobRepository
+            .GetListActiveAsync(instance.Id, Arg.Any<CancellationToken>())
+            .Returns([InstanceJob.Create(
+                Guid.NewGuid(), JobName.ForTimeout(instance.Id), Guid.NewGuid(),
+                TestDomain, TestWorkflow, instance.Id)]);
+
+        var result = await _service.GetInstanceStateAsync(
+            CreateInput(instance.Id.ToString()), CancellationToken.None);
+
+        result.Result.Value!.Timeout.ShouldBeNull();
+    }
+
+    /// <summary>
+    /// The terminal guard, and the reason it exists: the job row is closed by an ASYNCHRONOUS
+    /// cleanup chain (outbox → Dapr → Inbox → cancel-cleanup), so a finished instance can still
+    /// carry an active timeout row — indefinitely if that chain is degraded. The block must not
+    /// depend on it. Here the row is deliberately left active and the instance is completed.
+    /// </summary>
+    [Fact]
+    public async Task GetInstanceStateAsync_OnATerminalInstance_OmitsTheBlockEvenWhileTheJobRowIsStillActive()
+    {
+        var (instance, workflow) = CreateInstanceWithTimeout("abandoned", "cancelled");
+        SetupCommonMocks(instance, workflow);
+        SetupTimeoutJob(instance, DateTimeOffset.UtcNow.AddMinutes(5));
+
+        instance.Complete(TestDomain);
+        instance.Status.IsTerminal.ShouldBeTrue();
+
+        var result = await _service.GetInstanceStateAsync(
+            CreateInput(instance.Id.ToString()), CancellationToken.None);
+
+        result.Result.Value!.Timeout.ShouldBeNull();
+    }
+
+    /// <summary>
+    /// The coupling invariant. The block's <c>target</c> is whatever the EFFECTIVE timeout resolves
+    /// to — the same value <c>ApplyTimeoutStateStep</c> will move the instance to — so a
+    /// parent-supplied SubFlow override is reported even when the child's own definition declares no
+    /// timeout at all. Reading the child's own <c>workflow.Timeout</c> here would publish nothing
+    /// for an instance that has a real, armed deadline; publishing the child's own target while the
+    /// runtime fires the override's would be worse.
+    /// </summary>
+    [Fact]
+    public async Task GetInstanceStateAsync_ReportsTheSubFlowOverride_NotTheChildsOwnDefinition()
+    {
+        var (instance, workflow) = CreateSimpleActiveInstance(); // child declares NO timeout
+        instance.SetMetaData(new BBT.Aether.ExtraPropertyDictionary
+        {
+            [DomainConsts.MetaDataKeys.TimeoutOverride] = System.Text.Json.JsonSerializer.Serialize(
+                WorkflowTimeout.Create("child-push-timeout", "child-cancelled", "Minor", "OnEntry", "PT15M"),
+                JsonSerializerConstants.JsonOptions)
+        });
+        SetupCommonMocks(instance, workflow);
+        var executeAt = new DateTimeOffset(2026, 9, 21, 9, 0, 0, TimeSpan.Zero);
+        SetupTimeoutJob(instance, executeAt);
+
+        var result = await _service.GetInstanceStateAsync(
+            CreateInput(instance.Id.ToString()), CancellationToken.None);
+
+        var timeout = result.Result.Value!.Timeout;
+        timeout.ShouldNotBeNull();
+        timeout!.Key.ShouldBe("child-push-timeout");
+        timeout.Target.ShouldBe("child-cancelled");
+        timeout.ExecuteAtUtc.ShouldBe(executeAt.UtcDateTime);
+    }
+
+    /// <summary>
+    /// Wire shape: the block serializes with a <c>Z</c>-designated UTC instant, and is omitted
+    /// entirely — not emitted as <c>null</c> — when there is no deadline, so a client branches on
+    /// the property's presence.
+    /// </summary>
+    [Fact]
+    public void TimeoutBlock_SerializesUtcInstant_AndIsOmittedWhenAbsent()
+    {
+        var withTimeout = new GetInstanceStateOutput
+        {
+            Timeout = new InstanceTimeoutOutput
+            {
+                Key = "abandoned",
+                Target = "cancelled",
+                ExecuteAtUtc = new DateTime(2026, 9, 21, 14, 30, 0, DateTimeKind.Utc)
+            }
+        };
+        var withoutTimeout = new GetInstanceStateOutput();
+
+        var withJson = System.Text.Json.JsonSerializer.Serialize(withTimeout, JsonSerializerConstants.JsonOptions);
+        var withoutJson = System.Text.Json.JsonSerializer.Serialize(withoutTimeout, JsonSerializerConstants.JsonOptions);
+
+        withJson.ShouldContain("\"executeAtUtc\":\"2026-09-21T14:30:00Z\"");
+        withJson.ShouldContain("\"key\":\"abandoned\"");
+        withJson.ShouldContain("\"target\":\"cancelled\"");
+        withoutJson.ShouldNotContain("timeout");
+    }
+
+    private (Instance instance, Definitions.Workflow workflow) CreateInstanceWithTimeout(
+        string timeoutKey, string timeoutTarget)
+    {
+        var (instance, workflow) = CreateSimpleActiveInstance();
+        workflow.SetTimeout(WorkflowTimeout.Create(
+            timeoutKey, timeoutTarget, VersionStrategy.IncreasePatch.Code, "never", "PT15M"));
+        return (instance, workflow);
+    }
+
+    private void SetupTimeoutJob(Instance instance, DateTimeOffset executeAt) =>
+        _instanceJobRepository
+            .GetListActiveAsync(instance.Id, Arg.Any<CancellationToken>())
+            .Returns([InstanceJob.Create(
+                Guid.NewGuid(), JobName.ForTimeout(instance.Id), Guid.NewGuid(),
+                TestDomain, TestWorkflow, instance.Id, executeAt)]);
+
     private InstanceJob CreateScheduledTransitionJob(
         Guid instanceId, string transitionKey, DateTimeOffset executeAt)
     {
@@ -1313,6 +1500,16 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         await _stateFunctionCache.DidNotReceive().GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
         await _instanceRepository.DidNotReceive()
             .FindByIdentifierAsReadOnlyAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+
+        // The read-path budget as a call count rather than a latency threshold — a structural claim,
+        // so it needs no measurement to hold. Exactly ONE fingerprint projection answers the 304,
+        // and the job table is not touched at all: the scheduled entries and the timeout block are
+        // both built from GetListActiveAsync, which lives strictly on the full-build side. Anyone
+        // "optimising" timeout data forward into the 304 projection fails here.
+        await _instanceRepository.Received(1)
+            .GetStateFingerprintAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+        await _instanceJobRepository.DidNotReceive()
+            .GetListActiveAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>());
     }
 
     /// <summary>

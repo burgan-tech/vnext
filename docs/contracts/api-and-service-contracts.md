@@ -173,6 +173,45 @@ render countdowns and upcoming-action information without polling anything else:
   time after triggering such an update should re-fetch without the ETag. See
   [state-function cache and fingerprint ETag](../runtime/state-function-cache-and-etag.md).
 
+### State response: the workflow `timeout` block
+
+A flow may declare a workflow-level `timeout`. When one is armed for the polled instance, the state
+response carries it as its own top-level block so a client can render a countdown — "auto-cancels at
+HH:MM" — without polling anything else:
+
+```jsonc
+"timeout": { "key": "abandoned", "target": "cancelled", "executeAtUtc": "2026-09-21T14:30:00Z" }
+```
+
+- **Not a `transitions[]` entry, deliberately.** A workflow timeout is instance-scoped rather than
+  state-scoped, armed once at start and never re-armed, and is keyed by the virtual `$timeout` — so
+  it has no callable transition key, cannot carry the uniform `href`/`view`/`schema` link objects
+  every `transitions[]` item does, and `TransitionItem` has nowhere to put `target`.
+- `key` and `target` come from the **effective** timeout: the parent-supplied
+  `subFlow.overrides.timeout` when the instance was started with one, otherwise the workflow's own.
+  The same resolver feeds the arm and the fire path, so the deadline a client is shown is the one
+  the runtime will act on.
+- `executeAtUtc` is read from the **persisted job state** — the active `InstanceJob` row of type
+  `Timeout`, carrying the exact instant the scheduler was armed with (mapping script included),
+  never a re-evaluation. Always UTC with the `Z` designator, and it never changes after the arm.
+- **Omitted entirely** (not emitted as `null`) when no timeout resolves, when no timeout job is
+  armed, when the row predates the `ExecuteAt` column, or **as soon as the polled instance's own
+  status is terminal**. That last guard is load-bearing: the job row is closed by an asynchronous
+  cleanup chain (outbox → Dapr → Inbox → `cancel-cleanup`), so a finished instance can still carry
+  an active timeout row — indefinitely if that delivery is degraded.
+- Always describes the **polled instance itself**; never merged from, nor descended into, an active
+  subflow. Poll the subflow instance for its own deadline.
+- May briefly show a **past** `executeAtUtc` while a fired timeout's pipeline is still settling. The
+  instance is Busy in that window and the past instant is the honest answer; filtering on wall clock
+  would make the body a function of time while its ETag is a function of state.
+- **No freshness gap**, unlike the scheduled entries above: the instant is immutable after the arm
+  and the block's presence tracks the instance status, which is already fingerprint material. No
+  `InstanceStateFingerprint` member was needed.
+- Caveat worth passing to clients: `timeout.timer.reset` is **read nowhere** in the runtime, so the
+  deadline always means "not finished within `duration`, counted from instance start" and never
+  "idle for `duration`", whatever the definition declares. See `vnext-meta/known-issues.json`
+  → `workflow-timeout-reset-not-implemented`.
+
 ### Instance metadata: `status` vs `effectiveStatus`
 
 `GET …/instances/{instance}`, every item of the list view and `GetInstanceTask` (type 19) carry both

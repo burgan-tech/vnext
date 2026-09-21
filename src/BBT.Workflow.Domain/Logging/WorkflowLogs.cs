@@ -2083,6 +2083,20 @@ public static partial class WorkflowLogs
         string scheduleType);
 
     /// <summary>
+    /// Logs when an instance carries a SubFlow timeout override stamp that cannot be read, so the
+    /// effective timeout falls back to the workflow's own definition. Warning rather than Error:
+    /// the fallback is a safe answer and neither the start nor the state read may fail on it.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40108,
+        Level = LogLevel.Warning,
+        Message = "Malformed subflow timeout override on instance {InstanceId} (flow {Flow}); falling back to the workflow's own timeout")]
+    public static partial void TimeoutOverrideMalformed(
+        this ILogger logger,
+        Guid instanceId,
+        string flow);
+
+    /// <summary>
     /// Logs when workflow definition is not found.
     /// </summary>
     [LoggerMessage(
