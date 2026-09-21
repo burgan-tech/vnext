@@ -697,6 +697,28 @@ If subflow is in terminal status (`Completed`/`Faulted`/`Passive`) while parent 
   GroupBy + Count/Sum/Avg/Min/Max (list-only, aggregations nest under groupBy). Full guide with operator
   table and migration examples: `docs/runtime/instance-filtering-and-queries.md`.
 
+## DbMigrator (schema migrations)
+
+- Two independent chains: `WorkflowDbContext` (per-schema history `{schema}.__Workflow_Migrations`,
+  system schemas + every flow schema discovered from `sys_flows`) and `MessagingDbContext`
+  (fixed `sys_queues`). Migration files are authored against `public`;
+  `MultiSchemaNpgsqlMigrationsSqlGenerator` rewrites the schema at apply time.
+- No arguments = historical forward migrate, unchanged. `status` reports per-schema heads;
+  `downgrade --target <migration> [--messaging-target …] [--script dir] [--accept-data-loss]`
+  CONVERGES every schema to the target (reverts above it, catches up below it) under the same
+  per-schema `schema-migration:{schema}` lock as the forward path. Args have `DbMigrator:*`
+  config/env fallbacks (deploy templates pass no container args).
+- **A migration's `Down()` exists only in the build that shipped it** — rollback always runs from
+  the NEWER image before the deployment switches to the older one; a schema whose history holds
+  migrations the running build does not ship refuses the whole run. Reverts that drop/rename/re-type
+  anything THIS build's compiled model maps are refused without `--for-runtime-rollback` (the
+  declaration that an older runtime deploys right after) — that is what keeps a same-version
+  downgrade from 42703/42P01-ing the runtime at first touch; index/trigger-only reverts pass.
+  Destructive reverts (DropTable/DropColumn/DropSchema) additionally require `--accept-data-loss`;
+  target `0` is rejected; `--script` dry runs are not blocked by either acknowledgment (warnings
+  instead). Full guide: `docs/runtime/db-migration-and-rollback.md`; pinned by
+  `TargetedSchemaDowngradeTests` + `MigratorCommandTests`.
+
 ## vnext-meta Package
 
 - **Purpose**: Runtime metadata for offline consumption (Forge Studio, CLI, domain packages).

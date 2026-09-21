@@ -1,6 +1,24 @@
 {
   "runtimeVersion": "0.0.92",
   "engine": {
+    "dbMigratorDowngrade": {
+      "since": "0.0.93",
+      "status": "stable",
+      "description": "DbMigrator gains explicit commands beside its unchanged no-argument forward migration. 'status' reports, per schema, the applied migration head, the migrations pending against the running build, and any applied migrations the build does not know. 'downgrade --target <migrationIdOrName>' CONVERGES every workflow schema (system schemas plus every flow schema discovered from sys_flows, or an explicit --schema subset) to the named migration: schemas above it revert (Down() methods run newest-first, one transaction per migration, per-schema history maintained), schemas below it catch up - self-healing for mixed-level fleets. '--messaging-target' does the same for the independent sys_queues messaging chain. Safety gates: the whole run refuses when any schema's history holds migrations the running build does not ship (a Down() exists only in the build that shipped it - rollback must run from the NEWER image before deploying the older one); reverts that drop, rename or re-type a table/column THIS build's compiled EF model maps are refused without --for-runtime-rollback (the operator's declaration that an OLDER runtime deploys right after; without it a same-version runtime would fail 42703/42P01 at first touch of the affected entity - index/constraint/trigger-only reverts are model-neutral and pass); destructive reverts (DropTable/DropColumn/DropSchema) additionally require --accept-data-loss; target '0' (full wipe) is rejected; Runtime:EnableSchemaMigration=false refuses the command. '--script <dir>' is a dry run writing reviewable per-schema SQL (schema-qualified, history bookkeeping included) without applying; the model-break and data-loss findings surface as warnings there instead of blocking. Every argument has a DbMigrator:* configuration/environment fallback (DbMigrator__Command=downgrade etc.) because deployment templates pass no container args. Applies run in parallel per schema under the same schema-migration:{schema} distributed lock as the forward path; exit code contract unchanged (any failed schema => exit 1).",
+      "apiEndpoints": [],
+      "relatedConfig": [
+        "DbMigrator:Command",
+        "DbMigrator:Target",
+        "DbMigrator:MessagingTarget",
+        "DbMigrator:Schemas",
+        "DbMigrator:ScriptDirectory",
+        "DbMigrator:AcceptDataLoss",
+        "DbMigrator:ForRuntimeRollback",
+        "Runtime:EnableSchemaMigration",
+        "SchemaMigration:CommandTimeoutSeconds",
+        "SchemaMigration:LockExpirySeconds"
+      ]
+    },
     "instanceStartType": {
       "since": "0.0.92",
       "status": "stable",

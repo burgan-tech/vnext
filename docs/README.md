@@ -86,6 +86,10 @@ Kept for archaeology; read the canonical page linked from each before relying on
 
 - [Manual attribute index maintenance](runtime/manual-attribute-index-maintenance.md) — offline CLI SQL batches, DBA execution, idempotency, readiness and rollback.
 
+## Database migrations
+
+- [Database migration and rollback](runtime/db-migration-and-rollback.md) — the two migration chains, per-schema history, the DbMigrator `downgrade`/`status` commands, the newer-image-first rollback rule, data-loss gates, dry-run scripts.
+
 ## Local Development
 
 Run first-time setup before building on macOS/Linux:

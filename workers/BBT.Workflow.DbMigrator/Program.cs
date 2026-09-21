@@ -22,6 +22,20 @@ if (builder.Configuration.GetValue<bool>("Vault:Enabled", false))
 
 var configuration = builder.Configuration;
 
+// Parse the command before wiring anything: an invalid invocation must fail fast with usage text,
+// not run a forward migration by accident. No arguments (and no DbMigrator:Command configuration)
+// keeps the historical behavior: migrate everything forward at startup.
+MigratorCommand command;
+try
+{
+    command = MigratorCommand.Parse(args, configuration);
+}
+catch (ArgumentException ex)
+{
+    Console.Error.WriteLine(ex.Message);
+    return 1;
+}
+
 builder.Services
     .AddAetherCore(options =>
     {
@@ -36,7 +50,9 @@ builder.Services
     .AddDbContext(configuration)
     .AddTelemetry(configuration, verifyActivitySources: false)
     .AddDistributedLock(configuration)
+    .AddSingleton(command)
     .AddSingleton<SchemaMigrationRunner>()
+    .AddSingleton<SchemaDowngradeRunner>()
     .AddHostedService<SchemaMigrationHostedService>();
 
 var host = builder.Build();

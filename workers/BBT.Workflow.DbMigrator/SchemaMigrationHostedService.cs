@@ -7,6 +7,8 @@ namespace BBT.Workflow.DbMigrator;
 
 public sealed class SchemaMigrationHostedService(
     SchemaMigrationRunner runner,
+    SchemaDowngradeRunner downgradeRunner,
+    MigratorCommand command,
     DaprClient daprClient,
     IHostApplicationLifetime lifetime,
     IConfiguration configuration,
@@ -14,9 +16,24 @@ public sealed class SchemaMigrationHostedService(
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        var success = false;
         try
         {
-            await runner.RunAsync(stoppingToken);
+            switch (command.Kind)
+            {
+                case MigratorCommandKind.Downgrade:
+                    await downgradeRunner.RunDowngradeAsync(command, stoppingToken);
+                    success = downgradeRunner.Success;
+                    break;
+                case MigratorCommandKind.Status:
+                    await downgradeRunner.RunStatusAsync(command, stoppingToken);
+                    success = downgradeRunner.Success;
+                    break;
+                default:
+                    await runner.RunAsync(stoppingToken);
+                    success = runner.Success;
+                    break;
+            }
         }
         catch (Exception ex)
         {
@@ -24,7 +41,7 @@ public sealed class SchemaMigrationHostedService(
         }
         finally
         {
-            if (!runner.Success)
+            if (!success)
                 Environment.ExitCode = 1;
 
             await FlushAndShutdownAsync();
