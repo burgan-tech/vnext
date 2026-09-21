@@ -54,8 +54,13 @@ public sealed class StateFunctionCache(
     /// <c>{ hasActiveIncident, active: { href }, history: { href } }</c>, <c>active</c> omitted when
     /// no incident is open — which also closed the resolve-A-then-raise-B staleness hole the embedded
     /// summary had: the body now carries only the flag, and the flag is fingerprint material.
+    /// v10 added the <c>timeout</c> block — <c>{ key, target, executeAtUtc }</c>, omitted entirely
+    /// when no workflow deadline is armed or once the instance's own status is terminal. It needs no
+    /// fingerprint member: the instant is fixed when the scheduler is armed and never moves, and the
+    /// block's presence is governed by the instance status, which the fingerprint already covers —
+    /// so unlike the scheduled entries beside it, this block carries no issue-#864 staleness gap.
     /// </remarks>
-    private const string ResponseShapeVersion = "v9";
+    private const string ResponseShapeVersion = "v10";
 
     private const string KeyPrefix = $"state-fn:{ResponseShapeVersion}:";
 

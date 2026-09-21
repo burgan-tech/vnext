@@ -119,6 +119,16 @@
       "title": "The registry's domain-list function serves a single page (500 rows today) and its response carries no truncation signal, so a registry holding more domains than that warms only the first 500.",
       "workaround": "The runtime logs WorkflowLogs 50038 DomainListCeilingReached at Warning when the list comes back at or above ServiceDiscovery:Cache:DomainListExpectedMax, and publishes it anyway - the domains beyond the ceiling are simply not warmed and each pays a live per-domain lookup, which is the behaviour with the cache switched off. Raising the ceiling is a change on the registry side (vnext-domain-discovery, DomainListMapping.csx pageSize).",
       "fixedIn": null
+    },
+    {
+      "id": "workflow-timeout-reset-not-implemented",
+      "affectedVersions": ">=0.0.1",
+      "severity": "warning",
+      "component": "runtime",
+      "path": "workflow.timeout.timer.reset",
+      "title": "timer.reset is required by the schema but is read NOWHERE in the runtime, so a workflow timeout always means 'not finished within duration, counted from instance start' and never 'idle for duration'. Whatever the field says - 'never', 'OnEntry' - the behaviour is identical.",
+      "workaround": "Author the duration as an absolute budget from start and do not rely on activity resetting it; every authored value in the reference corpus today declares OnEntry against a runtime that ignores it. The instant is resolved once when the scheduler is armed (mapping script included) and never re-armed, which is also why the state function's timeout.executeAtUtc is stable for the instance's whole life. Expressing an idle timeout needs a per-state scheduled transition (triggerType 2), which IS cancelled and re-armed on every state entry.",
+      "fixedIn": null
     }
   ]
 }

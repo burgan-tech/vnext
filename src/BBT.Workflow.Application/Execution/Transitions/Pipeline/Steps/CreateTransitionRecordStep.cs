@@ -1,5 +1,6 @@
 using BBT.Aether.Guids;
 using BBT.Workflow.Execution.Transitions.Services;
+using BBT.Workflow.Definitions;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Runtime;
 using System.Text.Json;
@@ -103,6 +104,20 @@ public sealed class CreateTransitionRecordStep(
                !string.IsNullOrEmpty(next)
             ? next
             : context.TransitionKey;
+
+        // $timeout resolves through the EFFECTIVE timeout, not the workflow's own. A SubFlow child
+        // started with a parent-supplied subflow.timeout_override carries no timeout in its own
+        // definition, and Workflow.ResolveWellKnownKey throws TimeoutNotConfiguredForWorkflowException
+        // for it — HERE, at order 20, long before ApplyTimeoutStateStep (38) could resolve the
+        // override. Measured on the bench: the child was left Busy in its waiting state with the
+        // job already marked processed, so the deadline both failed to fire AND stranded the
+        // instance. Same resolver the arm, the fire path and the state function's timeout block use.
+        if (string.Equals(rawKey, WellKnownTransitionKeys.Timeout, StringComparison.OrdinalIgnoreCase))
+        {
+            var effectiveTimeout = context.Instance.ResolveEffectiveTimeout(context.Workflow);
+            if (effectiveTimeout is not null)
+                return effectiveTimeout.Key;
+        }
 
         return context.Workflow.ResolveTransitionKey(rawKey);
     }

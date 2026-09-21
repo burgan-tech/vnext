@@ -92,6 +92,100 @@ public static class InstanceMetadataExtensions
         };
     }
 
+    /// <summary>
+    /// Resolves the timeout actually in force for this instance: the parent-supplied SubFlow
+    /// override stamped at start (<see cref="DomainConsts.MetaDataKeys.TimeoutOverride"/>) when one
+    /// is present, otherwise the workflow's own <see cref="Definitions.Workflow.Timeout"/>. Returns
+    /// <c>null</c> when neither exists — a valid answer meaning "this instance has no timeout".
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>One resolver, four call sites, deliberately.</b> The arm
+    /// (<c>InstanceCommandAppService.ScheduleWorkflowTimeoutIfConfiguredAsync</c>), the fire path
+    /// (<c>FlowTimeoutJobHandler</c> and <c>ApplyTimeoutStateStep</c>) and the state function's
+    /// <c>timeout</c> block all answer the same question, so none of them may answer it alone.
+    /// Before this existed the override was consumed by the arm and read nowhere else: a child whose
+    /// own definition carried no <c>timeout</c> had a job armed from the override's timer and then
+    /// fired into <c>TimeoutConfigMissing</c> — an advertised deadline after which nothing happened,
+    /// reproducible against vnext-example's <c>subflow-orchestration</c> fixture. Publishing a
+    /// deadline and honouring it are now the same fact.
+    /// </para>
+    /// <para>
+    /// Malformed metadata degrades to the workflow's own timeout instead of throwing, and
+    /// <paramref name="overrideMalformed"/> reports it so the caller can log through
+    /// <c>WorkflowLogs</c>. Neither surface may fail on it: the state function would answer 500 on
+    /// its hottest read, and the arm deliberately treats a scheduling failure as non-fatal (the
+    /// start proceeds). <see cref="JsonException"/> covers a broken document;
+    /// <see cref="ArgumentException"/> covers a well-formed one whose values fail the
+    /// <see cref="WorkflowTimeout"/> constructor's own <c>Check</c> guards, which System.Text.Json
+    /// does not wrap.
+    /// </para>
+    /// <para>
+    /// The shared <see cref="JsonSerializerConstants.JsonOptions"/> are mandatory here, matching
+    /// <c>SubFlowTransitionOverrideReader</c>: <see cref="WorkflowTimeout"/>'s properties are
+    /// PascalCase and its constructor guards <c>Key</c> and <c>Target</c> with
+    /// <c>Check.NotNullOrWhiteSpace</c>, so a case-sensitive read would leave them null and throw —
+    /// every override would look malformed. The same options carry
+    /// <c>ScriptCodeJsonConverter</c>, which the <c>Mapping</c> member needs, so the writer
+    /// (<c>SubflowStarter</c>) uses them too; <c>PropertyNameCaseInsensitive</c> keeps stamps
+    /// written by earlier runtimes readable.
+    /// </para>
+    /// </remarks>
+    public static WorkflowTimeout? ResolveEffectiveTimeout(
+        this ExtraPropertyDictionary? metaData,
+        Definitions.Workflow workflow,
+        out bool overrideMalformed)
+    {
+        ArgumentNullException.ThrowIfNull(workflow);
+
+        overrideMalformed = false;
+
+        // Gate before parsing: an instance with no override pays nothing on the read path.
+        if (metaData is null
+            || !metaData.TryGetValue(DomainConsts.MetaDataKeys.TimeoutOverride, out var raw)
+            || raw is null)
+        {
+            return workflow.Timeout;
+        }
+
+        var json = raw.ToString();
+        if (string.IsNullOrWhiteSpace(json))
+            return workflow.Timeout;
+
+        try
+        {
+            return JsonSerializer.Deserialize<WorkflowTimeout>(json, JsonSerializerConstants.JsonOptions)
+                   ?? workflow.Timeout;
+        }
+        catch (Exception ex) when (ex is JsonException or ArgumentException)
+        {
+            overrideMalformed = true;
+            return workflow.Timeout;
+        }
+    }
+
+    /// <inheritdoc cref="ResolveEffectiveTimeout(ExtraPropertyDictionary?, Definitions.Workflow, out bool)"/>
+    public static WorkflowTimeout? ResolveEffectiveTimeout(
+        this ExtraPropertyDictionary? metaData,
+        Definitions.Workflow workflow)
+        => metaData.ResolveEffectiveTimeout(workflow, out _);
+
+    /// <inheritdoc cref="ResolveEffectiveTimeout(ExtraPropertyDictionary?, Definitions.Workflow, out bool)"/>
+    public static WorkflowTimeout? ResolveEffectiveTimeout(
+        this Instance instance,
+        Definitions.Workflow workflow,
+        out bool overrideMalformed)
+    {
+        ArgumentNullException.ThrowIfNull(instance);
+        return instance.ExtraProperties.ResolveEffectiveTimeout(workflow, out overrideMalformed);
+    }
+
+    /// <inheritdoc cref="ResolveEffectiveTimeout(ExtraPropertyDictionary?, Definitions.Workflow, out bool)"/>
+    public static WorkflowTimeout? ResolveEffectiveTimeout(
+        this Instance instance,
+        Definitions.Workflow workflow)
+        => instance.ResolveEffectiveTimeout(workflow, out _);
+
     public static WorkflowType? ToFlowType(this Instance instance)
     {
         var md = instance.ExtraProperties;

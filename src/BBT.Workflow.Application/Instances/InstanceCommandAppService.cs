@@ -472,15 +472,21 @@ public sealed class InstanceCommandAppService(
         ExtraPropertyDictionary extraProperties,
         CancellationToken cancellationToken)
     {
-        // Check for SubFlow timeout override in ExtraProperties
-        WorkflowTimeout? timeoutOverride = null;
-        if (extraProperties.TryGetValue(DomainConsts.MetaDataKeys.TimeoutOverride, out var overrideJson)
-            && !string.IsNullOrWhiteSpace(overrideJson?.ToString()))
-        {
-            timeoutOverride = JsonSerializer.Deserialize<WorkflowTimeout>(overrideJson!.ToString()!);
-        }
+        // The SubFlow override (if any) wins over the workflow's own timeout — resolved through the
+        // SINGLE resolver the fire path and the state function's timeout block also call, so the
+        // instant armed here, the target fired later and the deadline published to clients can
+        // never disagree. See InstanceMetadataExtensions.ResolveEffectiveTimeout.
+        //
+        // The parse used to sit here, OUTSIDE the try below: a malformed
+        // subflow.timeout_override threw straight out of the start request, even though a
+        // scheduling failure a few lines down is deliberately swallowed so that a timeout stays a
+        // backstop and never fails a start. The resolver degrades instead and reports it.
+        var effectiveTimeout = extraProperties.ResolveEffectiveTimeout(workflow, out var overrideMalformed);
 
-        var effectiveTimeout = timeoutOverride ?? workflow.Timeout;
+        if (overrideMalformed)
+        {
+            logger.TimeoutOverrideMalformed(instance.Id, workflow.Key);
+        }
 
         // Check if there is any timeout configuration to schedule
         if (effectiveTimeout == null)

@@ -117,7 +117,9 @@ etag = h(responseShapeVersion | instanceId | effectiveState | status | flowVersi
   hardcoded false — a temporary concession so domain clients that assume every `transitions[]` item
   carries the three links do not break; v8 added the always-present `incident` block with an embedded
   `active` summary; v9 replaced that block's content with links —
-  `{ hasActiveIncident, active: { href }, history: { href } }`), every previously issued ETag must be
+  `{ hasActiveIncident, active: { href }, history: { href } }`; v10 added the top-level `timeout`
+  block, `{ key, target, executeAtUtc }`, omitted entirely when no workflow deadline is armed or once
+  the polled instance's own status is terminal), every previously issued ETag must be
   invalidated: otherwise a client
   long-polling an instance parked in a human state would keep receiving 304 and never observe the new
   shape. The same constant is a segment of the cache key, so bumping it also discards bodies written by
@@ -149,6 +151,12 @@ etag = h(responseShapeVersion | instanceId | effectiveState | status | flowVersi
   `executeAtUtc` until the next fingerprint-visible change. The accepted mitigation is the
   transient Busy flip on the non-reserved paths plus natural state changes; conditional-GET usage
   is currently low and the team wants to observe the gap frequency before revisiting.
+- **The `timeout` block needs no fingerprint member, and adds no gap.** Unlike the scheduled
+  entries, its `executeAtUtc` is resolved once when the scheduler is armed and can never move
+  afterwards — there is no re-arm path — and whether the block appears at all is governed by the
+  instance's own `Status`, which is already hashed. So the two ways the block can change are both
+  covered: a status move invalidates, and nothing else can change it. The `v10` bump was needed for
+  the shape, once, not for the value.
 - **`hasActiveIncident` is in the hash** because the body's `incident` block flips with it and the
   flag can move without a state/status change (Boundary Abort with a transition raises one,
   `FinalizeTransitionStep` resolves it). The flag is the block's *only* varying member: since `v9`

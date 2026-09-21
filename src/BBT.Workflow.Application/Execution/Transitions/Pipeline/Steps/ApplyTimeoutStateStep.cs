@@ -1,4 +1,5 @@
 using BBT.Aether.Results;
+using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
 using Microsoft.Extensions.Logging;
 
@@ -25,7 +26,19 @@ public sealed class ApplyTimeoutStateStep(
             return Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.ContinueNoWork()));
         }
 
-        if (context.Workflow.Timeout is null)
+        // The EFFECTIVE timeout — the parent-supplied SubFlow override when the instance carries
+        // one, otherwise the workflow's own. Same resolver the arm and the state function use, so
+        // the target this step moves to is the one the client was shown. Reading
+        // context.Workflow.Timeout alone ignored the override entirely: a child with no timeout of
+        // its own failed here even though a job had been armed for it.
+        var effectiveTimeout = context.Instance.ResolveEffectiveTimeout(context.Workflow, out var overrideMalformed);
+
+        if (overrideMalformed)
+        {
+            logger.TimeoutOverrideMalformed(context.Instance.Id, context.Workflow.Key);
+        }
+
+        if (effectiveTimeout is null)
         {
             logger.TimeoutConfigMissing(context.Workflow.Key);
             return Task.FromResult(Result<StepOutcome>.Fail(
@@ -34,7 +47,7 @@ public sealed class ApplyTimeoutStateStep(
 
         // Resolve timeout target state through workflow aggregate (handles $self and other well-known keys)
         var stateResult = context.Workflow.GetState(
-            context.Workflow.Timeout.Target,
+            effectiveTimeout.Target,
             context.Instance.GetCurrentState);
 
         if (!stateResult.IsSuccess)

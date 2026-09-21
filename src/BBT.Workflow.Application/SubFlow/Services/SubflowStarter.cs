@@ -149,8 +149,13 @@ public sealed class SubflowStarter(
         // Apply timeout override from SubFlow config if present
         if (timeoutOverride != null)
         {
+            // Shared options on the write side too: the reader
+            // (InstanceMetadataExtensions.ResolveEffectiveTimeout) needs ScriptCodeJsonConverter
+            // for WorkflowTimeout.Mapping, and a stamp written with the defaults would not survive
+            // it. Stamps written by earlier runtimes stay readable — the shared options are
+            // PropertyNameCaseInsensitive.
             createInstanceInput.ExtraProperties[DomainConsts.MetaDataKeys.TimeoutOverride] =
-                JsonSerializer.Serialize(timeoutOverride);
+                JsonSerializer.Serialize(timeoutOverride, JsonSerializerConstants.JsonOptions);
         }
 
         // Serialize parent-defined role overrides (transitions + states) for SubFlow to use during state queries.

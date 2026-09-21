@@ -1642,11 +1642,19 @@ public sealed class InstanceQueryAppService(
         IReadOnlyCollection<InstanceCorrelation> allCorrelations,
         CancellationToken cancellationToken)
     {
-        // Active scheduled-transition jobs feed the kind:"scheduled" entries of the transitions
-        // response list only — deliberately NOT the fingerprint ETag (team decision, issue #864;
-        // known staleness gap, see the ETag doc). Loaded here so the fast 304 path never pays for it.
-        var activeScheduledTransitionJobs = (await instanceJobRepository
-                .GetListActiveAsync(instance.Id, cancellationToken))
+        // ONE read, two projections. GetListActiveAsync filters on InstanceId + IsActive with no
+        // JobType predicate, so every active job — scheduled transitions AND the workflow timeout —
+        // is already selected and materialized here; splitting them below costs a pass over a list
+        // that is a handful of rows per instance, never a second query. Loaded after the fingerprint
+        // 304 path has declined, so the fast path still pays nothing.
+        //
+        // Scheduled-transition jobs feed the kind:"scheduled" entries of the transitions response
+        // list only — deliberately NOT the fingerprint ETag (team decision, issue #864; known
+        // staleness gap, see the ETag doc). The timeout job feeds the `timeout` block, which has no
+        // such gap: its instant is immutable after arm and its presence tracks the instance status.
+        var activeJobs = await instanceJobRepository.GetListActiveAsync(instance.Id, cancellationToken);
+
+        var activeScheduledTransitionJobs = activeJobs
             .Where(j => j.JobType == JobType.ScheduledTransition)
             .ToList();
 
@@ -1944,6 +1952,10 @@ public sealed class InstanceQueryAppService(
         transitionItems.AddRange(BuildScheduledTransitionEntries(
             activeScheduledTransitionJobs, input.Domain, input.Workflow, instance.Id.ToString()));
 
+        // The workflow-level deadline, as its own block rather than a transitions[] entry — it is
+        // not a transition (see InstanceTimeoutOutput).
+        var timeout = BuildTimeoutBlock(instance, currentWorkflow, activeJobs);
+
         return Result<GetInstanceStateOutput>.Ok(new GetInstanceStateOutput
         {
             Data = dataHref,
@@ -1959,7 +1971,8 @@ public sealed class InstanceQueryAppService(
             Transitions = transitionItems,
             Functions = functionsHref,
             Interaction = interaction,
-            Incident = incidentHref
+            Incident = incidentHref,
+            Timeout = timeout
         });
     }
 
@@ -2063,6 +2076,65 @@ public sealed class InstanceQueryAppService(
                     HasSchema = false
                 }
             });
+
+    /// <summary>
+    /// Builds the state body's <c>timeout</c> block, or null when the polled instance has no
+    /// pending workflow deadline. Never reads: the job rows are the ones already fetched for the
+    /// scheduled entries, and the effective timeout comes from the instance and definition in hand.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Three conditions, all required. <b>(1) The instance's own status is not terminal.</b>
+    /// <see cref="InstanceStatus.IsTerminal"/> is the same set the fire path's
+    /// <c>Instance.IsCompleted</c> guard uses, so the block disappears exactly when the deadline
+    /// stops being able to fire — and it does so without waiting for the asynchronous
+    /// <c>cancel-cleanup</c> chain to close the job row, which can lag or, if that delivery is
+    /// degraded, never arrive. The polled instance's OWN status is the right one: the row belongs to
+    /// it, and a parent is Busy for its child's whole lifetime anyway.
+    /// <b>(2) An active timeout job with a resolvable instant exists.</b> Rows written before the
+    /// <c>ExecuteAt</c> column existed are skipped rather than emitted without a time, matching the
+    /// scheduled entries.
+    /// <b>(3) The effective timeout resolves.</b> Same resolver the arm and the fire path call, so
+    /// the published <c>target</c> is the state the runtime will actually move to.
+    /// </para>
+    /// <para>
+    /// A past <c>executeAtUtc</c> is deliberately NOT suppressed: between the timeout firing and its
+    /// pipeline settling the instance is Busy and the past instant is the honest answer. Filtering on
+    /// wall clock would also make the body a function of time while its ETag is a function of state,
+    /// leaving two different bodies under one validator.
+    /// </para>
+    /// </remarks>
+    private InstanceTimeoutOutput? BuildTimeoutBlock(
+        Instance instance,
+        Definitions.Workflow currentWorkflow,
+        IReadOnlyCollection<InstanceJob> activeJobs)
+    {
+        if (instance.Status.IsTerminal)
+            return null;
+
+        var timeoutJob = activeJobs
+            .Where(j => j.JobType == JobType.Timeout && j.ExecuteAt.HasValue)
+            .OrderBy(j => j.ExecuteAt!.Value)
+            .FirstOrDefault();
+
+        if (timeoutJob is null)
+            return null;
+
+        var effectiveTimeout = instance.ResolveEffectiveTimeout(currentWorkflow, out var overrideMalformed);
+
+        if (overrideMalformed)
+            logger.TimeoutOverrideMalformed(instance.Id, instance.Flow);
+
+        if (effectiveTimeout is null)
+            return null;
+
+        return new InstanceTimeoutOutput
+        {
+            Key = effectiveTimeout.Key,
+            Target = effectiveTimeout.Target,
+            ExecuteAtUtc = timeoutJob.ExecuteAt!.Value
+        };
+    }
 
     /// <summary>
     /// Resolves the client-workflow-manager interaction directives for the response, or null when none
