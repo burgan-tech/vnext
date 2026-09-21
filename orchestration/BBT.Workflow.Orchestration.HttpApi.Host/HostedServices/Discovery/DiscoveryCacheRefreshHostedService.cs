@@ -1,4 +1,5 @@
 using BBT.Workflow.Discovery;
+using BBT.Workflow.Logging;
 using Microsoft.Extensions.Options;
 
 namespace BBT.Workflow.HostedServices;
@@ -32,6 +33,19 @@ namespace BBT.Workflow.HostedServices;
 /// another host ever call it, that host would read the shared cache without refreshing it — correct,
 /// because a miss falls back, but worth knowing before it looks mysterious.
 /// </para>
+/// <para>
+/// <b>The DI registration decides whether this runs, not a second copy of its predicate.</b>
+/// <c>IDiscoveryCacheRefresher</c> exists only when <c>AddDomainDiscovery</c> enabled the cache, and
+/// that decision is <c>!isDaprProvider &amp;&amp; Cache:Enabled</c> — the dapr provider derives its
+/// app-id from a convention and never reads the registry, so there is nothing to warm. This service
+/// therefore <b>probes for the refresher and exits</b> when it is absent, exactly as
+/// <c>UtilityController.RefreshDiscoveryCacheAsync</c> answers "disabled" for its nullable one.
+/// Spelling the condition again here (<c>Enabled &amp;&amp; Cache.Enabled</c>, as it once did) made
+/// the two drift: under <c>Provider = "dapr"</c> with the default <c>Cache:Enabled = true</c> the
+/// loop started against a service that was never registered and logged an
+/// <c>InvalidOperationException</c> on <b>every tick, forever</b> — measured at 132 occurrences in one
+/// lab pod. An absent registration is a boot-time fact, so the probe runs once, before the timer.
+/// </para>
 /// </remarks>
 public sealed class DiscoveryCacheRefreshHostedService(
     IServiceScopeFactory scopeFactory,
@@ -57,6 +71,14 @@ public sealed class DiscoveryCacheRefreshHostedService(
         if (!options.Enabled || !Cache.Enabled)
             return;
 
+        // Presence, not configuration: whatever reason the refresher was not registered for, there
+        // is nothing for this loop to drive and no tick will ever change that.
+        if (!IsRefresherRegistered())
+        {
+            logger.DiscoveryCacheRefresherNotRegistered(nameof(IDiscoveryCacheRefresher));
+            return;
+        }
+
         using var timer = new PeriodicTimer(TimeSpan.FromSeconds(Cache.TickIntervalSeconds));
 
         do
@@ -64,6 +86,26 @@ public sealed class DiscoveryCacheRefreshHostedService(
             await TickAsync(stoppingToken);
         }
         while (await SafeWaitAsync(timer, stoppingToken));
+    }
+
+    /// <summary>
+    /// Whether the container holds an <see cref="IDiscoveryCacheRefresher"/> at all.
+    /// </summary>
+    /// <remarks>
+    /// Asks <see cref="IServiceProviderIsService"/> rather than resolving, deliberately: resolving
+    /// would ACTIVATE the singleton, and a constructor that threw here would escape
+    /// <c>ExecuteAsync</c> and — under the default <c>BackgroundServiceExceptionBehavior.StopHost</c>
+    /// — take the pod down, breaking this service's one hard promise that an unwarmed cache never
+    /// aborts startup. A container that does not offer the probe is treated as "present", which
+    /// degrades to the previous behaviour (the loop runs and each tick's own catch handles it)
+    /// instead of silently disabling the refresh.
+    /// </remarks>
+    internal bool IsRefresherRegistered()
+    {
+        using var scope = scopeFactory.CreateScope();
+        var probe = scope.ServiceProvider.GetService<IServiceProviderIsService>();
+
+        return probe is null || probe.IsService(typeof(IDiscoveryCacheRefresher));
     }
 
     /// <summary>

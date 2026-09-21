@@ -24,6 +24,8 @@ using Microsoft.AspNetCore.Mvc.Filters;
 using BBT.Workflow.Authorization;
 using BBT.Workflow.Logging;
 
+using BBT.Workflow.Instances.HumanTask;
+
 namespace BBT.Workflow.Orchestration.Controllers.Instances;
 
 [ApiController]
@@ -46,6 +48,7 @@ public sealed class InstanceController(
     IInstanceCommandGateway instanceCommandGateway,
     IEventAppService eventAppService,
     IRelatedInstanceQueryAppService relatedInstanceQueryAppService,
+    BBT.Workflow.Instances.HumanTask.IHumanTaskLeafResolver humanTaskLeafResolver,
     ICallerRoleResolver callerRoleResolver) : AetherControllerBase
 {
     /// <summary>
@@ -507,6 +510,39 @@ public sealed class InstanceController(
             .ToList();
 
         var result = await relatedInstanceQueryAppService.ReadManyAsync(references, cancellationToken);
+
+        return FromResult(result);
+    }
+
+    /// <summary>
+    /// Resolves a batch of this flow's instances down to the human task actually waiting on each,
+    /// recursing into deeper SubFlow levels locally, and answers whether the named caller may act
+    /// on the leaf plus the leaf's own humanTask text.
+    ///
+    /// Internal-to-internal, same caveats as the related-data endpoints: no caller identity of its
+    /// own, no query-role check, no field filtering. Never expose this route publicly. The caller's
+    /// roles arrive in the body because authorization can only happen where the leaf's workflow
+    /// definition resolves, which is the domain that owns it.
+    /// </summary>
+    /// <response code="200">One result per requested id, including the ones that could not resolve.</response>
+    /// <response code="400">More ids were requested than <see cref="HumanTaskLeafRequest.MaxInstanceIds"/> allows.</response>
+    [ApiExplorerSettings(IgnoreApi = true)]
+    [HttpPost("{domain}/workflows/{workflow}/internal/human-task-leaf/batch")]
+    public async Task<IActionResult> ResolveHumanTaskLeavesAsync(
+        [FromRoute] string domain,
+        [FromRoute] string workflow,
+        [FromBody] HumanTaskLeafRequest input,
+        CancellationToken cancellationToken = default)
+    {
+        // Defence in depth: this endpoint carries no authorization, so it must not trust the
+        // caller's batch size. The real bound is the per-schema limit in the calling runtime.
+        if (input.InstanceIds.Count > HumanTaskLeafRequest.MaxInstanceIds)
+        {
+            return BadRequest(
+                $"At most {HumanTaskLeafRequest.MaxInstanceIds} instance ids may be resolved in one batch.");
+        }
+
+        var result = await humanTaskLeafResolver.ResolveAsync(domain, workflow, input, cancellationToken);
 
         return FromResult(result);
     }

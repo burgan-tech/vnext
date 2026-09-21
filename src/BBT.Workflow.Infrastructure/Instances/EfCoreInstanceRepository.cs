@@ -1,3 +1,5 @@
+using BBT.Workflow.Logging;
+using System.Text;
 using BBT.Workflow.ExceptionHandling;
 using System.Diagnostics;
 using System.Text.Json;
@@ -1596,6 +1598,18 @@ public sealed class EfCoreInstanceRepository(
     }
 
     /// <inheritdoc />
+    public async Task<List<string>> GetActiveFlowKeysAsync(CancellationToken cancellationToken = default)
+    {
+        var context = await GetDbContextAsync();
+        return await context.Instances
+            .Where(i => i.Status == InstanceStatus.Active)
+            .Select(i => i.Key!)
+            .Distinct()
+            .AsNoTracking()
+            .ToListAsync(cancellationToken);
+    }
+
+    /// <inheritdoc />
     public async Task<List<InstanceKeyModel>> GetActiveInstanceKeysAsync(CancellationToken cancellationToken = default)
     {
         var context = await GetDbContextAsync();
@@ -1658,27 +1672,207 @@ public sealed class EfCoreInstanceRepository(
     }
 
     /// <inheritdoc />
-    public async Task<List<Instance>> GetHumanTaskInstancesAsync(
+    public async Task<List<HumanTaskCandidate>> GetHumanTaskCandidatesAcrossFlowsAsync(
+        IReadOnlyList<string> flowKeys,
+        int perFlowLimit,
+        int maxFlowsPerStatement,
         CancellationToken cancellationToken = default)
     {
-        var schema = SanitizeIdentifier(currentSchema.Name ?? string.Empty);
-        var activeCode = InstanceStatus.Active.Code;
-        var busyCode = InstanceStatus.Busy.Code;
-        var subType = (int)StateSubType.Human;
+        // Argument guards, not configuration validation — the configured values are already checked
+        // at startup (HumanTaskFunctionOptions, ValidateOnStart). These exist because this is a
+        // public repository method and the batching loop below advances by maxFlowsPerStatement:
+        // a 0 leaves the offset where it was and spins forever, holding a connection, with nothing
+        // in any log to find. A caller that gets this wrong should learn about it immediately.
+        ArgumentOutOfRangeException.ThrowIfLessThan(perFlowLimit, 1);
+        ArgumentOutOfRangeException.ThrowIfLessThan(maxFlowsPerStatement, 1);
+
+        if (flowKeys.Count == 0)
+            return [];
+
+        // Resolve every flow's physical schema through ICurrentSchema rather than re-deriving the
+        // naming rule here: the mapping is the platform's, and a second spelling of it would drift
+        // the day the rule changes.
+        //
+        // No existence check, deliberately. "This flow is published" and "its schema is migrated"
+        // are the same fact, maintained from both directions:
+        //
+        //   * DefinitionAppService.PublishAsync migrates the new flow's schema BEFORE it writes the
+        //     definition instance, and returns on failure — so a row in sys-flows cannot exist
+        //     without its schema.
+        //   * DbMigrator's SchemaMigrationRunner discovers domain schemas FROM sys-flows and
+        //     migrates every one of them, which is also what brings an existing schema up to a newer
+        //     migration set on deploy.
+        //
+        // Every flow therefore has the same table shape, and flowKeys comes from that very table, so
+        // probing pg_class for an "Instances" relation would spend a round trip per cache miss
+        // re-deriving a guarantee two writers already keep. If the invariant were ever broken by
+        // something outside the runtime (a partial restore, a hand-dropped schema) the statement
+        // fails and the request answers 500 — which is exactly what the per-flow form did too, since
+        // its query was not isolated either.
+        var targets = new List<(string Flow, string Schema)>(flowKeys.Count);
+        foreach (var flowKey in flowKeys)
+        {
+            if (!IsSafeSqlIdentifier(flowKey))
+            {
+                // Cannot be embedded as a literal, and a flow key that is not a plain identifier is
+                // not something this runtime creates. Skipped rather than escaped — the whole point
+                // of this statement is that nothing in it comes from a request — but never
+                // silently: a flow missing from the list looks exactly like a flow with no work.
+                logger.HumanTaskScanSkippedFlowKey(flowKey);
+                continue;
+            }
+
+            using (currentSchema.Change(flowKey))
+            {
+                var schema = currentSchema.Name;
+                if (!string.IsNullOrEmpty(schema) && IsSafeSqlIdentifier(schema))
+                    targets.Add((flowKey, schema));
+            }
+        }
+
+        if (targets.Count == 0)
+            return [];
+
+        // The provider resolves a context as (unit of work, schema) and refuses an unset schema, so
+        // one has to be current even though every statement below names its schemas explicitly.
+        // Any target does: they are all schemas of the SAME database, which is the whole premise of
+        // reading them on one connection.
+        using (currentSchema.Change(targets[0].Flow))
+        {
+            var context = await GetDbContextAsync();
+
+            // ONE connection for the whole scan, held explicitly across the batches below. Without
+            // this each command would take and return a connection of its own, which is the
+            // behaviour this method exists to remove.
+            var openedHere = context.Database.GetDbConnection().State != System.Data.ConnectionState.Open;
+            if (openedHere)
+                await context.Database.OpenConnectionAsync(cancellationToken);
+
+            try
+            {
+                var candidates = new List<HumanTaskCandidate>();
+                for (var offset = 0; offset < targets.Count; offset += maxFlowsPerStatement)
+                {
+                    var batch = targets.GetRange(offset, Math.Min(maxFlowsPerStatement, targets.Count - offset));
+                    candidates.AddRange(await ScanBatchAsync(context, batch, perFlowLimit, cancellationToken));
+                }
+
+                return candidates;
+            }
+            finally
+            {
+                if (openedHere)
+                    await context.Database.CloseConnectionAsync();
+            }
+        }
+    }
+
+    /// <summary>
+    /// One statement, one round trip: a <c>UNION ALL</c> whose arms are the batch's schemas.
+    /// </summary>
+    /// <remarks>
+    /// Each arm is a parenthesised subquery so <c>ORDER BY … LIMIT</c> binds per schema, exactly as
+    /// the per-schema form did. The predicate is the shared <see cref="HumanTaskQuerySql.Predicate"/>
+    /// verbatim in every arm — the partial index is matched by proving implication over the
+    /// predicate's parse tree, and each arm is planned independently, so every arm keeps its
+    /// index-only scan. Verified with EXPLAIN; see docs/runtime/human-task-function.md.
+    /// <para>
+    /// The flow key travels back as a literal column because the caller has to know which schema a
+    /// candidate came from, and after the union the rows are otherwise indistinguishable. Both the
+    /// key and the schema name are validated identifiers (<see cref="IsSafeSqlIdentifier"/>); no
+    /// value in this statement comes from a request.
+    /// </para>
+    /// </remarks>
+    private static async Task<List<HumanTaskCandidate>> ScanBatchAsync(
+        WorkflowDbContext context,
+        List<(string Flow, string Schema)> batch,
+        int perFlowLimit,
+        CancellationToken cancellationToken)
+    {
+        var sql = new StringBuilder(batch.Count * 200);
+        for (var i = 0; i < batch.Count; i++)
+        {
+            if (i > 0)
+                sql.Append(" UNION ALL ");
+
+            sql.Append("(SELECT '").Append(batch[i].Flow).Append("' AS \"Flow\", \"Id\", \"Key\", \"Type\", \"CreatedAt\"")
+               .Append(" FROM \"").Append(batch[i].Schema).Append("\".\"Instances\"")
+               .Append(" WHERE ").Append(HumanTaskQuerySql.Predicate)
+               .Append(" ORDER BY \"CreatedAt\" DESC LIMIT ").Append(perFlowLimit)
+               .Append(')');
+        }
+
+        var rows = await context.Database
+            .SqlQueryRaw<HumanTaskCandidateRaw>(sql.ToString())
+            .ToListAsync(cancellationToken);
+
+        return [.. rows.Select(r => new HumanTaskCandidate(
+            r.Id, r.Key, InstanceType.FromCode(r.Type), r.CreatedAt, r.Flow))];
+    }
+
+    /// <summary>
+    /// Whether an identifier may be embedded in SQL: letters, digits, underscore and hyphen only,
+    /// non-empty, bounded by PostgreSQL's identifier length.
+    /// </summary>
+    /// <remarks>
+    /// An allowlist, not an escape. <see cref="SanitizeIdentifier"/> strips quotes, which is enough
+    /// for one interpolated schema under a caller that already controls it; this statement embeds
+    /// many names AND a string literal, so anything not provably an identifier is dropped instead.
+    /// </remarks>
+    private static bool IsSafeSqlIdentifier(string value)
+    {
+        if (string.IsNullOrEmpty(value) || value.Length > 63)
+            return false;
+
+        foreach (var c in value)
+        {
+            if (!char.IsAsciiLetterOrDigit(c) && c != '_' && c != '-')
+                return false;
+        }
+
+        return true;
+    }
+
+    /// <inheritdoc />
+    public async Task<List<Instance>> GetForHumanTaskDescentAsync(
+        IReadOnlyCollection<Guid> instanceIds,
+        CancellationToken cancellationToken = default)
+    {
+        if (instanceIds.Count == 0)
+            return [];
 
         var dbSet = await GetDbSetAsync();
 
-        return await IncludeListData(dbSet
-                .FromSqlRaw(
-                    "SELECT * FROM \"" + schema + "\".\"Instances\""
-                    + " WHERE \"Status\" IN ({0}, {1})"
-                    + " AND \"EffectiveStateSubType\" = {2}"
-                    + " AND NOT (\"ExtraProperties\"::jsonb ? 'parent.id')"
-                    + " ORDER BY \"CreatedAt\" DESC",
-                    activeCode, busyCode, subType))
-            .Include(i => i.ChildCorrelations)
+        // The LATEST data row only — deliberately not IncludeListData.
+        //
+        // The descent reads exactly three things off these aggregates: the open blocking
+        // correlation (Instance.Subflow), the current state, and LatestData for the humanTask block
+        // and the authorization evaluator. None of them reads history. IncludeListData honours the
+        // global WorkflowExecution:LatestOnlyInstanceLoading switch, which is OFF by default, so it
+        // would pull every version of every candidate — and because the two collection includes are
+        // one query, those rows multiply against the correlations. Measured on a seeded schema with
+        // 20 versions per instance: 4 000 rows returned for a 200-candidate batch instead of 200.
+        // The narrow include also lands on UX_InstancesData_Instance_IsLatest, the unique partial
+        // index that exists for exactly this access.
+        //
+        // No AsSplitQuery: with one data row and at most a couple of open correlations the product
+        // is already ~1, so a second round trip would buy nothing.
+        var instances = await dbSet
+            .Where(i => instanceIds.Contains(i.Id))
+            .Include(i => i.DataList.Where(d => d.IsLatest))
+            .Include(i => i.ChildCorrelations
+                .Where(c => !c.IsCompleted && c.SubFlowType == SubFlowType.SubFlow))
             .AsNoTracking()
             .ToListAsync(cancellationToken);
+
+        // Stamp the partial load so a future history reader fails fast instead of quietly answering
+        // from one row — the same guard IncludeListData's latest-only branch relies on.
+        foreach (var instance in instances)
+        {
+            instance.MarkDataPartiallyLoaded();
+        }
+
+        return instances;
     }
 
     private static string SanitizeIdentifier(string identifier)
@@ -1783,3 +1977,6 @@ public sealed class EfCoreInstanceRepository(
 
 /// <summary>SQL projection record for instance duration aggregation (monitor-only, additive).</summary>
 internal sealed record InstanceDurationRaw(double AvgMs, double MinMs, double MaxMs, long CompletedCount);
+
+/// <summary>Wire shape of the human-task candidate projection; column names must match the SELECT.</summary>
+internal sealed record HumanTaskCandidateRaw(string Flow, Guid Id, string? Key, string Type, DateTime CreatedAt);

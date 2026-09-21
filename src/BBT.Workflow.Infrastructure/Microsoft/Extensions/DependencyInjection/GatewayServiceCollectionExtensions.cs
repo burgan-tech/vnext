@@ -48,6 +48,17 @@ public static class GatewayServiceCollectionExtensions
         services.AddScoped<IInstanceCommandGateway, RoutedInstanceCommandGateway>();
         services.AddScoped<IInstanceRetryGateway, RoutedInstanceRetryGateway>();
         services.AddScoped<IInstanceQueryGateway, RoutedInstanceQueryGateway>();
+
+        // Human-task leaf descent. The local half is registered here — it resolves the resolver
+        // from a fresh scope, which is what breaks the resolver -> gateway -> resolver construction
+        // cycle. The REMOTE half is deliberately absent: unlike its siblings it holds the
+        // IRemoteTransport shell itself rather than delegating to a Remote*AppService, so it comes
+        // from AddVNextApiServices' AddRemoteService registration — same reason and same trap as
+        // RemoteRelatedInstanceReader above. A plain AddScoped here would construct it with no
+        // registered shell, and because the routed gateway takes the concrete type, that failure
+        // would surface on EVERY human-task request, not only cross-domain ones.
+        services.AddScoped<LocalHumanTaskLeafGateway>();
+        services.AddScoped<IHumanTaskLeafGateway, RoutedHumanTaskLeafGateway>();
         services.AddScoped<IAuthorizeGateway, RoutedAuthorizeGateway>();
         services.AddScoped<IRelatedInstanceReader, RoutedRelatedInstanceReader>();
 
