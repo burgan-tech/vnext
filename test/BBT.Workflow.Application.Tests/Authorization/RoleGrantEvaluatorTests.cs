@@ -167,6 +167,124 @@ public sealed class RoleGrantEvaluatorTests
         evaluator.IsAnyRoleAllowed([], grants).ShouldBeTrue();
     }
 
+    // ── The DENY group is an AND, and it is evaluated first ──────────────────────
+    //
+    // This is the rule that moved. It used to be evaluated per caller role inside a loop that
+    // returned on the FIRST role that was allowed, so a deny for role B was never reached once
+    // role A had matched an allow. The composition is now AllowGroup AND DenyGroup: allows OR
+    // among themselves, denies AND among themselves, and one breached deny refuses outright.
+    //
+    // Every cell below is strictly more restrictive than before or unchanged — no caller gains
+    // access anywhere, which is what makes the change safe to ship without a flag.
+
+    [Fact]
+    public async Task ADeniedRoleRefusesEvenWhenAnotherRoleIsAllowed()
+    {
+        var grants = Grants("""[{"role":"approver","grant":"allow"},{"role":"blocked","grant":"deny"}]""");
+        var evaluator = await _sut.CreateEvaluatorAsync(NewInstance(), null, null, grants, CancellationToken.None);
+
+        evaluator.IsAnyRoleAllowed(["approver"], grants).ShouldBeTrue();
+        evaluator.IsAnyRoleAllowed(["blocked"], grants).ShouldBeFalse();
+
+        // The cell that changed: the allowed role no longer buys the denied one back.
+        evaluator.IsAnyRoleAllowed(["approver", "blocked"], grants).ShouldBeFalse();
+        evaluator.IsAnyRoleAllowed(["blocked", "approver"], grants).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task ABlacklistRefusesACallerCarryingTheDeniedRoleAmongOthers()
+    {
+        var grants = Grants("""[{"role":"blocked","grant":"deny"}]""");
+        var evaluator = await _sut.CreateEvaluatorAsync(NewInstance(), null, null, grants, CancellationToken.None);
+
+        evaluator.IsAnyRoleAllowed(["someone-else"], grants).ShouldBeTrue();
+        evaluator.IsAnyRoleAllowed(["someone-else", "blocked"], grants).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task EveryDenyMustHold_NotJustTheFirst()
+    {
+        // AND over the deny group: breaching any one of them is enough to refuse.
+        var grants = Grants("""
+            [{"role":"approver","grant":"allow"},
+             {"role":"blocked-a","grant":"deny"},
+             {"role":"blocked-b","grant":"deny"}]
+            """);
+        var evaluator = await _sut.CreateEvaluatorAsync(NewInstance(), null, null, grants, CancellationToken.None);
+
+        evaluator.IsAnyRoleAllowed(["approver"], grants).ShouldBeTrue();
+        evaluator.IsAnyRoleAllowed(["approver", "blocked-a"], grants).ShouldBeFalse();
+        evaluator.IsAnyRoleAllowed(["approver", "blocked-b"], grants).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task TheAllowGroupStaysAnOr()
+    {
+        var grants = Grants("""
+            [{"role":"maker","grant":"allow"},
+             {"role":"checker","grant":"allow"},
+             {"role":"blocked","grant":"deny"}]
+            """);
+        var evaluator = await _sut.CreateEvaluatorAsync(NewInstance(), null, null, grants, CancellationToken.None);
+
+        evaluator.IsAnyRoleAllowed(["maker"], grants).ShouldBeTrue();
+        evaluator.IsAnyRoleAllowed(["checker"], grants).ShouldBeTrue();
+        evaluator.IsAnyRoleAllowed(["maker", "checker"], grants).ShouldBeTrue();
+        evaluator.IsAnyRoleAllowed(["viewer"], grants).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task APredefinedDenyRefusesARoledCaller()
+    {
+        // A predefined grant matches on the GRANT's side, independent of the role being evaluated,
+        // so it has to veto a caller whose static role is separately allowed.
+        var instance = NewInstance();
+        instance.CreatedBy = "actor-alice";
+        _currentUser.ActorUserName.Returns("actor-alice");
+
+        var grants = Grants($$"""
+            [{"role":"approver","grant":"allow"},
+             {"role":"{{PredefinedInstanceRoles.InstanceStarter}}","grant":"deny"}]
+            """);
+        var evaluator = await _sut.CreateEvaluatorAsync(instance, null, null, grants, CancellationToken.None);
+
+        // The starter is denied even though "approver" is allowed - four-eyes, expressed as a deny.
+        evaluator.IsAnyRoleAllowed(["approver"], grants).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task TheStaticTwinComposesTheSameWay()
+    {
+        // The no-instance path must not answer differently: an authorization result that depended on
+        // whether an instance happened to be loaded is a distinction no caller can see or reason about.
+        var grants = Grants("""[{"role":"approver","grant":"allow"},{"role":"blocked","grant":"deny"}]""");
+
+        TransitionAuthorizationManager.EvaluateRolesStatic(["approver"], grants).ShouldBeTrue();
+        TransitionAuthorizationManager.EvaluateRolesStatic(["blocked"], grants).ShouldBeFalse();
+        TransitionAuthorizationManager.EvaluateRolesStatic(["approver", "blocked"], grants).ShouldBeFalse();
+
+        var blacklist = Grants("""[{"role":"blocked","grant":"deny"}]""");
+        TransitionAuthorizationManager.EvaluateRolesStatic(["other"], blacklist).ShouldBeTrue();
+        TransitionAuthorizationManager.EvaluateRolesStatic(["other", "blocked"], blacklist).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task ARefusalDoesNotBuildTheDynamicAuthorizationContext()
+    {
+        // Deny runs first for a reason beyond correctness: matching an allow is the side that
+        // resolves dynamic grants, and a dynamic grant's context build serializes the instance's
+        // full latest data. A refused caller must not pay for it.
+        var instance = NewInstance();
+        var grants = Grants("""
+            [{"role":"$user.$.context.Headers.owner","grant":"allow"},
+             {"role":"blocked","grant":"deny"}]
+            """);
+        var evaluator = await _sut.CreateEvaluatorAsync(instance, null, null, grants, CancellationToken.None);
+
+        // Refused in phase 1; the allow grant - the only dynamic one - is never reached.
+        evaluator.IsAnyRoleAllowed(["blocked"], grants).ShouldBeFalse();
+    }
+
     // ── Predefined roles resolve against the documented identity field ───────────
 
     [Fact]
@@ -345,7 +463,7 @@ public sealed class RoleGrantEvaluatorTests
             """, JsonOptions)!;
 
         var result = await _sut.FilterAuthorizedTransitionKeysAsync(
-            workflow, state, instance, ["t1", "t2", "t3"], "teller",
+            workflow, state, instance, ["t1", "t2", "t3"], ["teller"],
             cancellationToken: CancellationToken.None);
 
         result.ShouldBeEmpty(); // no previous transition → $PreviousUser never matches

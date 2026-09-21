@@ -33,3 +33,10 @@ public interface ISchemaFieldFilterService
         AuthorizationRequestContext? requestContext = null,
         CancellationToken cancellationToken = default);
 }
+
+/// <summary>Creates an isolated list operation that reuses schema metadata, never visibility decisions.</summary>
+public interface IListSchemaFieldFilterFactory
+{
+    /// <summary>Returns a metadata-reusing filter owned by one list invocation.</summary>
+    ISchemaFieldFilterService CreateForList();
+}

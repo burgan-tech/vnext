@@ -153,6 +153,33 @@ public sealed class ActivationActivityTests : IDisposable
         emitted.GetTagItem(TelemetryConstants.TagNames.ActivationTrigger).ShouldBe(TelemetryConstants.ActivationTriggers.Job);
     }
 
+    /// <summary>
+    /// A settling hop without a transition of its own (a subflow-completion resume) carries an EMPTY
+    /// key, not a null one. The documented name fallback — settling key, else episode key, else
+    /// "resume" — must apply; live traffic produced a bare "Instance.Activation/" before this pin.
+    /// </summary>
+    [Fact]
+    public void Emit_with_an_empty_settling_key_falls_back_to_the_episode_key_then_resume()
+    {
+        Listen(TestSource);
+
+        using (var root = Source.StartActivity("root")!)
+        using (WorkflowTraceLane.UseCurrentActivity())
+        using (WorkflowTraceLane.UseEpisode(TelemetryConstants.ActivationTriggers.Manual, "enter-sub"))
+        {
+            var emitted = ActivationActivity.Emit(
+                Source, TelemetryConstants.ActivationOutcomes.Active, _instanceId,
+                "dom", "flow", lastTransitionKey: "", stateTo: "parent-sub").ShouldNotBeNull();
+            emitted.DisplayName.ShouldBe("Instance.Activation/enter-sub");
+        }
+
+        // No episode either (legacy carrier): the last resort names the span "resume".
+        ActivationActivity.Emit(
+                Source, TelemetryConstants.ActivationOutcomes.Active, _instanceId,
+                "dom", "flow", lastTransitionKey: "", stateTo: "parent-sub")
+            .ShouldNotBeNull().DisplayName.ShouldBe("Instance.Activation/resume");
+    }
+
     [Fact]
     public void Emit_with_a_future_start_clamps_to_zero_and_tags_clock_skew()
     {

@@ -371,10 +371,71 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
     Task LoadActiveIncidentsAsync(Instance instance, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Returns active instances with Human state subtype.
-    /// Includes DataList for JSON data extraction.
+    /// Selects the roots of the given flows that are waiting in a Human state, newest first, as
+    /// a narrow projection — identity, sort key and the flow the row came from.
     /// </summary>
-    Task<List<Instance>> GetHumanTaskInstancesAsync(CancellationToken cancellationToken = default);
+    /// <remarks>
+    /// <para>
+    /// No aggregate, no includes. What the response says about a task comes from the LEAF, and the
+    /// descent loads that separately; hydrating <c>DataList</c> and the correlations here would be
+    /// work thrown away for every candidate. The narrow projection is also what puts
+    /// <c>IX_Instances_HumanTaskV2</c>'s covering columns within the planner's reach — under
+    /// <c>SELECT *</c> they cannot be used at all.
+    /// </para>
+    /// <para>
+    /// <b>All the flows in ONE statement, on ONE connection.</b> Every flow of a domain lives in a
+    /// schema of the SAME database, so the only thing that differs between the per-flow queries is
+    /// the name in the <c>FROM</c> clause — which makes a connection each a cost with nothing to buy
+    /// it. Running them as <c>UNION ALL</c> arms keeps the per-flow <c>LIMIT</c> and the index-only
+    /// scan intact while replacing N round trips over N connections with one round trip over one.
+    /// The previous shape opened one connection per parallel branch and, multiplied by concurrent
+    /// callers, exhausted the server's connection slots — measured at 20 concurrent distinct callers
+    /// against a 45-flow domain (<c>53300: sorry, too many clients already</c>).
+    /// </para>
+    /// <para>
+    /// Parallelism is not lost, it MOVES: the database evaluates the arms itself, and the caller's
+    /// fan-out is left to the descent, which is the phase that actually needs isolation and only
+    /// runs for flows that produced a candidate.
+    /// </para>
+    /// </remarks>
+    /// <param name="flowKeys">
+    /// The flows to scan. A published flow always has its migrated schema — publish creates it
+    /// before writing the definition row, and DbMigrator rediscovers the set from the same table —
+    /// so no existence check is made. Only a key that is not a plain SQL identifier is skipped, and
+    /// that is logged.
+    /// </param>
+    /// <param name="perFlowLimit">
+    /// Maximum rows per flow, enforced in SQL. The response has no paging, so an unbounded query
+    /// here is unbounded end to end.
+    /// </param>
+    /// <param name="maxFlowsPerStatement">
+    /// Arms per statement. Bounds statement size and plan-cache churn on a domain with very many
+    /// flows; the batches still share the one connection.
+    /// </param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<List<HumanTaskCandidate>> GetHumanTaskCandidatesAcrossFlowsAsync(
+        IReadOnlyList<string> flowKeys,
+        int perFlowLimit,
+        int maxFlowsPerStatement,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Loads the given instances of the current schema with what a human-task descent reads: the
+    /// latest data row and the open blocking-SubFlow correlation.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The id list is one LEVEL of the walk, not one instance's several subflows — an instance has
+    /// at most one open blocking correlation. At a given level there are <c>n</c> different parents,
+    /// each contributing at most one child; the children are then grouped by the
+    /// <c>(domain, flow)</c> they live in, and one group is one call. That is what keeps a chain of
+    /// depth <c>d</c> at roughly <c>d</c> queries instead of <c>d</c> times the number of candidates.
+    /// </para>
+    /// <para>Ids that do not resolve are simply absent from the result.</para>
+    /// </remarks>
+    Task<List<Instance>> GetForHumanTaskDescentAsync(
+        IReadOnlyCollection<Guid> instanceIds,
+        CancellationToken cancellationToken = default);
 
 
     /// <summary>
@@ -382,6 +443,18 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
     /// Used by broadcast-receiving pods to discover what to warm from the distributed cache.
     /// </summary>
     Task<List<InstanceKeyModel>> GetActiveInstanceKeysAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns the distinct key of every active definition instance in the current schema.
+    /// </summary>
+    /// <remarks>
+    /// The flow key alone names that flow's PostgreSQL schema, so a caller that only needs to
+    /// enumerate schemas needs no version — which lets this skip the <c>InstancesData</c> join
+    /// <see cref="GetActiveInstanceKeysAsync"/> carries. That join's <c>Version</c> is the
+    /// definition instance's DATA version, not a flow version, and feeding it to a definition
+    /// lookup silently discarded a whole workflow's contribution whenever it failed to resolve.
+    /// </remarks>
+    Task<List<string>> GetActiveFlowKeysAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Returns the total number of instances matching the optional GraphQL filter.

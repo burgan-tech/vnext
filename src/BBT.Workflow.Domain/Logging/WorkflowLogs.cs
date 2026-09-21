@@ -125,7 +125,7 @@ public static partial class WorkflowLogs
     /// scheduler call really left the critical section.
     /// </summary>
     [LoggerMessage(
-        EventId = 10098,
+        EventId = 10160,
         Level = LogLevel.Debug,
         Message = "Transition job {JobId} armed after lock release")]
     public static partial void TransitionJobArmedAfterLock(
@@ -223,6 +223,22 @@ public static partial class WorkflowLogs
         this ILogger logger,
         Exception exception,
         Guid instanceId);
+
+    /// <summary>
+    /// Logs when an accept-time subflow chain reserve is compensated because post-commit work
+    /// failed and the failure policy declined to fault the instance. That path runs neither
+    /// settlement nor fault, so without this compensation every level the reserve marked stays
+    /// Busy permanently — Busy has no recovery API.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10149,
+        Level = LogLevel.Warning,
+        Message = "Releasing subflow chain reserve for instance {InstanceId} after post-commit failure on transition {TransitionKey}: {ErrorCode}")]
+    public static partial void SubflowChainReserveReleasing(
+        this ILogger logger,
+        Guid instanceId,
+        string transitionKey,
+        string errorCode);
 
     /// <summary>
     /// Logs at startup when a declared ActivitySource is missing from this host's MERGED
@@ -547,7 +563,7 @@ public static partial class WorkflowLogs
     /// Logs when a Dynamic Expresso condition script cannot be decoded.
     /// </summary>
     [LoggerMessage(
-        EventId = 10076,
+        EventId = 10158,
         Level = LogLevel.Warning,
         Message = "Dynamic Expresso condition script has invalid encoding: {Reason}")]
     public static partial void DynamicExpressoConditionInvalidEncoding(
@@ -558,7 +574,7 @@ public static partial class WorkflowLogs
     /// Logs when Dynamic Expresso condition evaluation throws.
     /// </summary>
     [LoggerMessage(
-        EventId = 10077,
+        EventId = 10159,
         Level = LogLevel.Error,
         Message = "Dynamic Expresso condition evaluation failed: {Reason}")]
     public static partial void DynamicExpressoConditionEvaluationFailed(
@@ -855,6 +871,103 @@ public static partial class WorkflowLogs
         this ILogger logger,
         string? taskKey,
         string url);
+
+    /// <summary>
+    /// Logs when a task's prepared binding is invoked in-process by the orchestrator instead of
+    /// being shipped to the Execution service (issue #1007).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10160,
+        Level = LogLevel.Debug,
+        Message = "Task {TaskKey} ({TaskType}) invoked in-process by the orchestrator [reason={Reason}]")]
+    public static partial void TaskInvokedLocally(
+        this ILogger logger, string taskKey, string taskType, string reason);
+
+    /// <summary>
+    /// Logs when an in-process (orchestrator-local) task invocation fails. Generic across local
+    /// task types deliberately: for the HTTP-shaped invokers (HTTP, SOAP, Dapr service invocation)
+    /// this is a connection/DNS/timeout failure with no status code; for a type with no wire status
+    /// code at all (state store) it covers any non-cancelled failure. The message stays agnostic to
+    /// which so it does not mislabel a non-transport failure as one.
+    /// <para>
+    /// <b>There is deliberately no <see cref="Exception"/> parameter, and none is available to
+    /// pass.</b> The shared invocation cores catch their own exceptions by contract — they return a
+    /// failed result and never throw — so by the time a local invoker decides to log, the exception
+    /// object is gone and only what the core preserved remains. What it preserves is the message
+    /// and <c>Metadata["ExceptionType"]</c>, so the type is carried here explicitly rather than
+    /// being dropped: every call site already computes it to decide Error-versus-metered, and
+    /// discarding it left this log strictly poorer than the journal row for the same failure.
+    /// Callers pass <c>null</c> when the core stamped no type, which is itself the signal that the
+    /// failure was a returned validation error rather than a thrown one.
+    /// </para>
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10161,
+        Level = LogLevel.Error,
+        Message = "In-process invocation of task {TaskKey} ({TaskType}) failed: {Error} [exceptionType={ExceptionType}]")]
+    public static partial void LocalTaskInvocationFailed(
+        this ILogger logger, string? taskKey, string taskType, string error, string? exceptionType);
+
+    /// <summary>
+    /// Logs when an in-process (orchestrator-local) task invocation is cancelled — ordinary
+    /// traffic (a caller timing out, an instance cancelled mid-call), carved out of
+    /// <see cref="LocalTaskInvocationFailed"/> so cancellation does not trip anything alerting on
+    /// this invoker's Error rate.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10162,
+        Level = LogLevel.Warning,
+        Message = "In-process invocation of task {TaskKey} ({TaskType}) was cancelled")]
+    public static partial void LocalTaskInvocationCancelled(
+        this ILogger logger, string? taskKey, string taskType);
+
+    /// <summary>
+    /// Logs when an in-process (orchestrator-local) task invocation bypasses SSL certificate
+    /// validation — a security-relevant signal every other invocation path already announces
+    /// (the Execution host's HTTP and SOAP invokers, and the local HTTP path's
+    /// <c>ExternalHttpTaskSslValidationDisabled</c>). Generic across local task types deliberately:
+    /// unlike that HTTP-specific event, this one is meant to be shared by every local invoker that
+    /// has an SSL-validation flag, starting with SOAP.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10163,
+        Level = LogLevel.Debug,
+        Message = "SSL certificate validation is disabled for in-process task {TaskKey} ({TaskType}) - Url: {Url}")]
+    public static partial void LocalTaskInvocationSslValidationDisabled(
+        this ILogger logger, string? taskKey, string taskType, string url);
+
+    /// <summary>
+    /// Logs when the local cache-aside invoker swallows a cache read or write failure under
+    /// <c>bypassOnCacheError=true</c> and continues without the cache (read: falls through to the
+    /// source task; write: returns the source result anyway). <c>bypassOnCacheError</c> defaults to
+    /// <c>true</c>, so without this line a state-store outage silently degrades every cache-aside
+    /// task to its source task with no signal at any level — this is the sole diagnostic for that
+    /// degradation on the Orchestration host, restored via <c>CacheAsideInvocation</c>'s
+    /// notification callback (the shared core still does not log; it reports, and each host owns
+    /// its own message). Mirrors the Execution host's own <c>LogWarning</c> at the same two call
+    /// sites.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10164,
+        Level = LogLevel.Warning,
+        Message = "CacheAside {TaskKey}: cache {Stage} failed; continuing without the cache (bypassOnCacheError=true)")]
+    public static partial void LocalCacheAsideBypassedCacheError(
+        this ILogger logger, Exception exception, string? taskKey, string stage);
+
+    /// <summary>
+    /// Logs when an in-process (orchestrator-local) task invocation is aborted by
+    /// <see cref="BBT.Workflow.Tasks.Invocation.TaskInvocationOptions.LocalInvocationTimeoutSeconds"/> —
+    /// the local-path counterpart of the remote path's own-timer log line
+    /// (<c>RemoteInvokerService</c>, <c>[timeout.layer=remote]</c>). Distinct from
+    /// <see cref="LocalTaskInvocationCancelled"/>: this fires only when OUR linked timer expired,
+    /// never when the caller's own token did.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10165,
+        Level = LogLevel.Error,
+        Message = "In-process invocation of task {TaskKey} ({TaskType}) timed out after {TimeoutSeconds}s [timeout.layer=local]")]
+    public static partial void LocalTaskInvocationTimedOut(
+        this ILogger logger, string? taskKey, string taskType, int timeoutSeconds);
 
     /// <summary>
     /// Logs when task instance resolution fails (for DirectTrigger, GetInstanceData).
@@ -1477,7 +1590,7 @@ public static partial class WorkflowLogs
     /// Logs when a SubFlow start operation fails.
     /// </summary>
     [LoggerMessage(
-        EventId = 40080,
+        EventId = 40135,
         Level = LogLevel.Error,
         Message = "SubFlow {SubFlowKey} start failed for parent instance {ParentInstanceId}: {ErrorCode} - {ErrorMessage}")]
     public static partial void SubFlowStartFailed(
@@ -1948,7 +2061,7 @@ public static partial class WorkflowLogs
     /// Logs when timeout mapping script fails and static timer duration is used as fallback.
     /// </summary>
     [LoggerMessage(
-        EventId = 40100,
+        EventId = 40106,
         Level = LogLevel.Warning,
         Message = "Timeout mapping failed for instance {InstanceId}, falling back to static duration {Duration}. Error: {ErrorMessage}")]
     public static partial void TimeoutMappingFallback(
@@ -1961,7 +2074,7 @@ public static partial class WorkflowLogs
     /// Logs when timeout mapping script executes successfully.
     /// </summary>
     [LoggerMessage(
-        EventId = 40101,
+        EventId = 40107,
         Level = LogLevel.Information,
         Message = "Timeout mapping resolved for instance {InstanceId}, schedule type: {ScheduleType}")]
     public static partial void TimeoutMappingResolved(
@@ -2012,7 +2125,7 @@ public static partial class WorkflowLogs
     /// Logs when an InstanceCanceledEvent is silently ignored because it belongs to a different domain.
     /// </summary>
     [LoggerMessage(
-        EventId = 40021,
+        EventId = 40105,
         Level = LogLevel.Debug,
         Message = "InstanceCanceledEvent silently ignored: event domain {EventDomain} does not match current runtime domain {RuntimeDomain}. Instance {InstanceId}, Flow {Flow}")]
     public static partial void InstanceCanceledEventIgnoredDomainMismatch(
@@ -2246,7 +2359,7 @@ public static partial class WorkflowLogs
     /// Logs when a ChildSubflowCancelRequestedEvent is silently ignored because it belongs to a different domain.
     /// </summary>
     [LoggerMessage(
-        EventId = 40030,
+        EventId = 40136,
         Level = LogLevel.Debug,
         Message = "ChildSubflowCancelRequestedEvent silently ignored: event domain {EventDomain} does not match current runtime domain {RuntimeDomain}. Instance {InstanceId}, Flow {Flow}")]
     public static partial void ChildSubflowCancelEventIgnoredDomainMismatch(
@@ -2655,13 +2768,13 @@ public static partial class WorkflowLogs
     public static partial void BulkCacheRefreshFailed(this ILogger logger, string reason);
 
     /// <summary>
-    /// Logs each page requested during a bulk refresh.
+    /// Logs the single registry read a bulk refresh performs.
     /// </summary>
     [LoggerMessage(
         EventId = 50004,
         Level = LogLevel.Debug,
-        Message = "Fetching discovery registration page {Page}")]
-    public static partial void FetchingDomainPage(this ILogger logger, int page);
+        Message = "Fetching the discovery domain list from {Url}")]
+    public static partial void FetchingDomainList(this ILogger logger, string url);
 
     /// <summary>
     /// Logs a lookup that the cache could not serve and had to resolve from the registry.
@@ -2696,41 +2809,48 @@ public static partial class WorkflowLogs
     public static partial void BulkCacheRefreshSkippedNotOwner(this ILogger logger);
 
     /// <summary>
-    /// Logs that the bulk read stopped at its page cap, meaning the result may be incomplete.
+    /// Logs that the domain list came back full, so the registry may be holding more than it served.
     /// </summary>
     /// <remarks>
-    /// Warning, not Debug: the domains beyond the cap are simply absent from the cache, and every
-    /// call for one of them silently pays full registry latency forever.
+    /// Warning, not Debug: the response looks perfectly normal and carries no truncation signal, and
+    /// the domains beyond the ceiling are simply absent from the cache — every call for one of them
+    /// silently pays full registry latency until the ceiling is raised on the registry side.
     /// </remarks>
     [LoggerMessage(
         EventId = 50038,
         Level = LogLevel.Warning,
-        Message = "Discovery bulk read stopped at the {MaxPages}-page cap with {Count} domain(s); the result may be truncated")]
-    public static partial void BulkPageCapReached(this ILogger logger, int maxPages, int count);
+        Message = "Discovery domain list returned {Count} domain(s), at or above the expected maximum of {ExpectedMax}; the list may be truncated")]
+    public static partial void DomainListCeilingReached(this ILogger logger, int count, int expectedMax);
 
     /// <summary>
-    /// Logs that pagination was abandoned because a page repeated the previous page's contents.
+    /// Logs a bulk read that 404'd, which means the registry does not expose the domain-list
+    /// function this runtime warms from.
     /// </summary>
     [LoggerMessage(
         EventId = 50039,
         Level = LogLevel.Warning,
-        Message = "Discovery bulk read stopped at page {Page}: the registry returned the same domains as the previous page")]
-    public static partial void BulkPaginationStalled(this ILogger logger, int page);
-
-    /// <summary>
-    /// Logs that the registry rejected the server-side status filter, so the bulk read continues
-    /// unfiltered and relies on the client-side status check.
-    /// </summary>
-    [LoggerMessage(
-        EventId = 50040,
-        Level = LogLevel.Debug,
-        Message = "Discovery registry rejected the bulk status filter; retrying unfiltered")]
-    public static partial void BulkFilterRejectedRetryingUnfiltered(this ILogger logger);
+        Message = "Discovery domain-list endpoint {Url} answered 404; the registry deployment may predate the domain-list function. The cache stays cold and every lookup resolves live")]
+    public static partial void DomainListEndpointMissing(this ILogger logger, string url);
 
     /// <summary>
     /// Logs a discovery cache operation that failed. Never rethrown: a cache that cannot be read or
     /// written is a miss, not an error.
     /// </summary>
+    /// <summary>
+    /// The refresh loop found no <c>IDiscoveryCacheRefresher</c> and exited without ticking.
+    /// </summary>
+    /// <remarks>
+    /// Information, not a warning: this is the expected shape under
+    /// <c>ServiceDiscovery:Provider = "dapr"</c> or with the cache disabled. It is logged at all
+    /// because a silently absent refresher and a running-but-idle one look identical from outside.
+    /// </remarks>
+    [LoggerMessage(
+        EventId = 50042,
+        Level = LogLevel.Information,
+        Message = "Discovery cache refresh is not running: no {Service} is registered, which is the expected shape under ServiceDiscovery:Provider = \"dapr\" or with the cache disabled")]
+    public static partial void DiscoveryCacheRefresherNotRegistered(
+        this ILogger logger, string service);
+
     [LoggerMessage(
         EventId = 50041,
         Level = LogLevel.Warning,
@@ -3267,6 +3387,22 @@ public static partial class WorkflowLogs
         Guid instanceId,
         string reason);
 
+    /// <summary>
+    /// Logs when an <c>interaction.longPoll.rule</c> evaluation fails. The caller is denied
+    /// (fail-closed) on the surface named by {Surface}: "state" (signal not emitted) or
+    /// "ack" (acknowledge rejected).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20304,
+        Level = LogLevel.Warning,
+        Message = "Long-poll interaction rule evaluation failed on {Surface} for instance {InstanceId} at state {State}; caller denied: {Reason}")]
+    public static partial void LongPollInteractionRuleEvaluationFailed(
+        this ILogger logger,
+        string surface,
+        Guid instanceId,
+        string state,
+        string reason);
+
     #endregion
 
     #region State Function Cache
@@ -3707,6 +3843,146 @@ public static partial class WorkflowLogs
 
     #endregion
 
+    #region Human Task Function
+
+    /// <summary>
+    /// Logs when a whole workflow's contribution to the human-task list is discarded because its
+    /// definition would not resolve. Every instance waiting in that workflow disappears from the
+    /// list, so this is the widest silent drop on the path.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20459,
+        Level = LogLevel.Warning,
+        Message = "Human task {InstanceId} dropped: state {State} of flow {Flow} in domain {Domain} "
+                  + "declares no queryRoles, and neither does its workflow root. The task list fails "
+                  + "closed rather than publishing it to every caller — author queryRoles on the state "
+                  + "or the workflow to make it visible")]
+    public static partial void HumanTaskQueryRolesUndeclared(
+        this ILogger logger,
+        Guid instanceId,
+        string flow,
+        string state,
+        string domain);
+
+    [LoggerMessage(
+        EventId = 20458,
+        Level = LogLevel.Warning,
+        Message = "Human-task scan skipped flow {Flow}: its key is not a plain SQL identifier, so it "
+                  + "cannot be embedded in the cross-schema scan statement")]
+    public static partial void HumanTaskScanSkippedFlowKey(
+        this ILogger logger,
+        string flow);
+
+    [LoggerMessage(
+        EventId = 20450,
+        Level = LogLevel.Warning,
+        Message = "Human-task list dropped workflow {Flow} in domain {Domain}: its definition did not resolve")]
+    public static partial void HumanTaskWorkflowDropped(
+        this ILogger logger,
+        string flow,
+        string domain);
+
+    /// <summary>
+    /// Logs when an instance leaves the human-task list because its own current state is absent
+    /// from the resolved workflow definition.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20451,
+        Level = LogLevel.Warning,
+        Message = "Human-task list dropped instance {InstanceId}: state {StateKey} is not in workflow {Flow}")]
+    public static partial void HumanTaskStateUnresolved(
+        this ILogger logger,
+        Guid instanceId,
+        string stateKey,
+        string flow);
+
+    /// <summary>
+    /// Logs when an instance leaves the human-task list because its active subflow's definition or
+    /// state could not be resolved — the case a cross-domain child used to hit silently.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20452,
+        Level = LogLevel.Warning,
+        Message = "Human-task list dropped instance {InstanceId}: subflow {SubFlow} (domain {SubFlowDomain}, version {SubFlowVersion}) did not resolve")]
+    public static partial void HumanTaskSubflowUnresolved(
+        this ILogger logger,
+        Guid instanceId,
+        string subFlow,
+        string subFlowDomain,
+        string? subFlowVersion);
+
+    /// <summary>
+    /// Logs when an instance's resolved state offers no user transition at all, so there is nothing
+    /// for any caller to act on. Expected for some states — Debug, not Warning.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20453,
+        Level = LogLevel.Debug,
+        Message = "Human-task list skipped instance {InstanceId}: state {StateKey} offers no user transition")]
+    public static partial void HumanTaskNoUserTransitions(
+        this ILogger logger,
+        Guid instanceId,
+        string stateKey);
+
+    /// <summary>
+    /// Logs when the human-task list was cut by a per-schema limit or by the merged result cap.
+    /// The response carries a truncation header; this records which bound bit and by how much.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20454,
+        Level = LogLevel.Warning,
+        Message = "Human-task list truncated in domain {Domain}: {Bound} bound hit, {Returned} of {Selected} rows returned")]
+    public static partial void HumanTaskResultTruncated(
+        this ILogger logger,
+        string domain,
+        string bound,
+        int returned,
+        int selected);
+
+    /// <summary>
+    /// Logs when a human-task descent hit its depth bound. The instances are reported unresolved
+    /// rather than as "nothing to do", because the two are not the same answer.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20455,
+        Level = LogLevel.Warning,
+        Message = "Human-task descent stopped at the depth bound in domain {Domain}, flow {Flow}: {Count} instance(s) left unresolved")]
+    public static partial void HumanTaskDescentDepthExceeded(
+        this ILogger logger,
+        string domain,
+        string flow,
+        int count);
+
+    /// <summary>
+    /// Logs when one hop of a human-task descent failed — typically an unreachable partner domain.
+    /// Only that hop's instances are lost; the rest of the list still answers.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20456,
+        Level = LogLevel.Warning,
+        Message = "Human-task descent hop to domain {Domain}, flow {Flow} failed: {Reason}")]
+    public static partial void HumanTaskDescentHopFailed(
+        this ILogger logger,
+        string domain,
+        string flow,
+        string reason);
+
+    /// <summary>
+    /// Logs a human-task response-cache failure. Always a miss, never a failed request — a broken
+    /// cache must degrade to the work it was avoiding, not to an error.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20457,
+        Level = LogLevel.Warning,
+        Message = "Human task function cache {Operation} failed for key {CacheKey}; treating as miss")]
+    public static partial void HumanTaskFunctionCacheError(
+        this ILogger logger,
+        Exception exception,
+        string operation,
+        string cacheKey);
+
+    #endregion
+
     #region Instance Query Filtering
 
     /// <summary>
@@ -3714,7 +3990,7 @@ public static partial class WorkflowLogs
     /// was never executed. One entry per validation error.
     /// </summary>
     [LoggerMessage(
-        EventId = 20440,
+        EventId = 20460,
         Level = LogLevel.Warning,
         Message = "Instance query rejected. Domain: {Domain}, Workflow: {Workflow}, Parameter: {Parameter}, Code: {ErrorCode}, Reason: {Reason}")]
     public static partial void InstanceQueryParameterRejected(
@@ -3731,7 +4007,7 @@ public static partial class WorkflowLogs
     /// the caller sees an error either way, but the drift is a defect worth investigating.
     /// </summary>
     [LoggerMessage(
-        EventId = 20441,
+        EventId = 20461,
         Level = LogLevel.Error,
         Message = "Instance filter compilation failed after passing validation. Domain: {Domain}, Workflow: {Workflow}")]
     public static partial void InstanceFilterCompilationFailed(
@@ -3746,7 +4022,7 @@ public static partial class WorkflowLogs
     /// loading every instance of the target workflow into instance data.
     /// </summary>
     [LoggerMessage(
-        EventId = 20442,
+        EventId = 20462,
         Level = LogLevel.Warning,
         Message = "Task filter rejected. TaskKey: {TaskKey}, TargetDomain: {TargetDomain}, TargetFlow: {TargetFlow}, Code: {ErrorCode}, Reason: {Reason}")]
     public static partial void InstanceTaskFilterRejected(
@@ -3765,7 +4041,7 @@ public static partial class WorkflowLogs
     /// Logs when a notification channel message is successfully dispatched to a Dapr binding.
     /// </summary>
     [LoggerMessage(
-        EventId = 10090,
+        EventId = 10161,
         Level = LogLevel.Information,
         Message = "Notification channel dispatched. TaskKey={TaskKey}, Channel={Channel}, BindingName={BindingName}, InstanceId={InstanceId}")]
     public static partial void NotificationChannelDispatched(
@@ -3779,7 +4055,7 @@ public static partial class WorkflowLogs
     /// Logs when a notification channel is skipped because the mapping returned null.
     /// </summary>
     [LoggerMessage(
-        EventId = 10091,
+        EventId = 10162,
         Level = LogLevel.Debug,
         Message = "Notification channel skipped (mapping returned null). TaskKey={TaskKey}, Channel={Channel}, InstanceId={InstanceId}")]
     public static partial void NotificationChannelSkipped(
@@ -3792,7 +4068,7 @@ public static partial class WorkflowLogs
     /// Logs when a notification channel dispatch fails (other channels continue).
     /// </summary>
     [LoggerMessage(
-        EventId = 10092,
+        EventId = 10163,
         Level = LogLevel.Warning,
         Message = "Notification channel failed. TaskKey={TaskKey}, Channel={Channel}, InstanceId={InstanceId}, Error={ErrorMessage}")]
     public static partial void NotificationChannelFailed(
@@ -3806,7 +4082,7 @@ public static partial class WorkflowLogs
     /// Logs the summary when multi-channel notification dispatch completes.
     /// </summary>
     [LoggerMessage(
-        EventId = 10093,
+        EventId = 10164,
         Level = LogLevel.Information,
         Message = "Notification multi-channel completed. TaskKey={TaskKey}, InstanceId={InstanceId}, Dispatched={DispatchedCount}, Skipped={SkippedCount}, Failed={FailedCount}")]
     public static partial void NotificationMultiChannelCompleted(
@@ -3821,7 +4097,7 @@ public static partial class WorkflowLogs
     /// Logs when a state-level notification job is scheduled after the pipeline settles.
     /// </summary>
     [LoggerMessage(
-        EventId = 10094,
+        EventId = 10165,
         Level = LogLevel.Information,
         Message = "State notification scheduled. InstanceId={InstanceId}, State={StateKey}")]
     public static partial void StateNotificationScheduled(
@@ -3833,7 +4109,7 @@ public static partial class WorkflowLogs
     /// Logs when a state-level notification is successfully dispatched to the state Dapr binding.
     /// </summary>
     [LoggerMessage(
-        EventId = 10095,
+        EventId = 10166,
         Level = LogLevel.Information,
         Message = "State notification dispatched. InstanceId={InstanceId}, BindingName={BindingName}")]
     public static partial void StateNotificationDispatched(
@@ -3846,7 +4122,7 @@ public static partial class WorkflowLogs
     /// (no state entries on the state, or none matched its rule).
     /// </summary>
     [LoggerMessage(
-        EventId = 10096,
+        EventId = 10167,
         Level = LogLevel.Debug,
         Message = "State notification skipped. InstanceId={InstanceId}, State={StateKey}, Reason={Reason}")]
     public static partial void StateNotificationSkipped(
@@ -3859,7 +4135,7 @@ public static partial class WorkflowLogs
     /// Logs when a state-level notification dispatch fails.
     /// </summary>
     [LoggerMessage(
-        EventId = 10097,
+        EventId = 10168,
         Level = LogLevel.Warning,
         Message = "State notification failed. InstanceId={InstanceId}, Error={ErrorMessage}")]
     public static partial void StateNotificationFailed(
@@ -4154,6 +4430,18 @@ public static partial class WorkflowLogs
         Exception exception,
         string operation,
         string cacheKey);
+
+    /// <summary>
+    /// Logs an optional attribute-index catalog failure before using JSON query expressions.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 70021,
+        Level = LogLevel.Warning,
+        Message = "Attribute-index catalog lookup failed for schema {Schema}; using JSON query expressions")]
+    public static partial void AttributeIndexCatalogFallback(
+        this ILogger logger,
+        Exception exception,
+        string schema);
 
     #endregion
 }

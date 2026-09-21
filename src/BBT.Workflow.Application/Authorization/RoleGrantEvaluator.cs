@@ -55,41 +55,7 @@ internal sealed class RoleGrantEvaluator : IRoleGrantEvaluator
         string? callerRole,
         IReadOnlyCollection<RoleGrant> grants,
         Transition? transition = null)
-    {
-        if (grants.Count == 0)
-            return true; // No roles defined → allow
-
-        if (_instance == null)
-            return TransitionAuthorizationManager.EvaluateRolesStatic(callerRole, grants);
-
-        var normalizedRole = callerRole?.Trim() ?? string.Empty;
-
-        // Single pass: DENY wins wherever it appears, so a matching DENY short-circuits regardless of
-        // position. An ALLOW match is only decisive once the whole set has been scanned for denials.
-        var hasAllowGrant = false;
-        var hasAllowMatch = false;
-
-        foreach (var grant in grants)
-        {
-            if (grant.IsDeny)
-            {
-                if (IsMatch(grant, normalizedRole, transition))
-                    return false;
-            }
-            else if (grant.IsAllow)
-            {
-                hasAllowGrant = true;
-                if (!hasAllowMatch && IsMatch(grant, normalizedRole, transition))
-                    hasAllowMatch = true;
-            }
-        }
-
-        if (hasAllowMatch)
-            return true;
-
-        // Blacklist (deny-only) set: no ALLOW grant defined → allow when not explicitly denied.
-        return !hasAllowGrant;
-    }
+        => IsAnyRoleAllowed(callerRole is null ? null : [callerRole], grants, transition);
 
     /// <inheritdoc />
     public bool IsAnyRoleAllowed(
@@ -100,19 +66,94 @@ internal sealed class RoleGrantEvaluator : IRoleGrantEvaluator
         if (grants.Count == 0)
             return true; // No roles defined → allow
 
-        // No caller roles: still evaluate predefined/dynamic grants once.
-        if (callerRoles is null || callerRoles.Count == 0)
-            return IsRoleAllowed(null, grants, transition);
+        var roles = NormalizeRoles(callerRoles);
 
-        foreach (var role in callerRoles)
+        if (_instance == null)
+            return TransitionAuthorizationManager.EvaluateRolesStatic(roles, grants);
+
+        // ── Phase 1: the DENY group, AND ────────────────────────────────────────────────────────
+        //
+        // Every deny grant must hold, and a grant holds only while NOTHING the caller carries
+        // matches it. One breach refuses outright — the caller's other roles cannot buy it back.
+        //
+        // This is the half that moved. It used to be evaluated per caller role inside a loop that
+        // returned on the first role that was allowed, so a deny for role B was never reached once
+        // role A had matched an allow: a caller holding [approver, blocked] passed. Measured on the
+        // running lab, against the state function which shares this evaluator:
+        //   roles=approver          -> [approve, cancel]
+        //   roles=blocked           -> []
+        //   roles=approver,blocked  -> [approve, cancel]   ← the deny did not veto
+        //
+        // Deny runs FIRST, and not only because a refusal is the cheaper answer: matching an allow
+        // is the side that resolves predefined and dynamic grants, and a dynamic grant's context
+        // build serializes the instance's full latest data. A refusal now skips that entirely.
+        foreach (var grant in grants)
         {
-            if (string.IsNullOrWhiteSpace(role))
+            if (grant.IsDeny && MatchesAnyRole(grant, roles, transition))
+                return false;
+        }
+
+        // ── Phase 2: the ALLOW group, OR ────────────────────────────────────────────────────────
+        //
+        // Any one allow grant matching any one of the caller's roles admits. A set with no allow
+        // grant at all is a blacklist — it has already said everything it had to say in phase 1 —
+        // so it admits here rather than falling through to a refusal.
+        var hasAllowGrant = false;
+        foreach (var grant in grants)
+        {
+            if (!grant.IsAllow)
                 continue;
-            if (IsRoleAllowed(role.Trim(), grants, transition))
+
+            hasAllowGrant = true;
+            if (MatchesAnyRole(grant, roles, transition))
+                return true;
+        }
+
+        return !hasAllowGrant;
+    }
+
+    /// <summary>
+    /// Whether one grant matches anything the caller carries.
+    /// </summary>
+    /// <remarks>
+    /// A predefined (<c>$InstanceStarter</c>) or identity-bound dynamic (<c>$user.</c>) grant matches
+    /// on the GRANT's side and answers the same for every caller role, so the first iteration decides
+    /// it; only static grants and <c>$role.</c> references actually vary. The loop is therefore
+    /// bounded by how many roles a caller has, and short-circuits on the first hit.
+    /// </remarks>
+    private bool MatchesAnyRole(
+        RoleGrant grant,
+        IReadOnlyList<string> roles,
+        Transition? transition)
+    {
+        foreach (var role in roles)
+        {
+            if (IsMatch(grant, role, transition))
                 return true;
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Trims and drops blank roles. A caller with none is represented by a single empty role so
+    /// predefined and dynamic grants are still evaluated exactly once — they resolve against the
+    /// instance and the current user, not against a role name, and dropping the evaluation entirely
+    /// would silently disable every <c>$InstanceStarter</c> grant for an unroled caller.
+    /// </summary>
+    private static IReadOnlyList<string> NormalizeRoles(IReadOnlyCollection<string>? callerRoles)
+    {
+        if (callerRoles is null || callerRoles.Count == 0)
+            return [string.Empty];
+
+        var normalized = new List<string>(callerRoles.Count);
+        foreach (var role in callerRoles)
+        {
+            if (!string.IsNullOrWhiteSpace(role))
+                normalized.Add(role.Trim());
+        }
+
+        return normalized.Count == 0 ? [string.Empty] : normalized;
     }
 
     /// <summary>
@@ -262,6 +303,15 @@ internal sealed class RoleGrantEvaluator : IRoleGrantEvaluator
                 writer.WriteString("Flow", instance.Flow);
                 writer.WriteString("FlowVersion", instance.FlowVersion);
                 writer.WriteString("Status", instance.Status.ToString());
+                // Rendered the same way as Status above, deliberately: a grant that compares the two
+                // must compare like with like, and Status' existing "Active (A)" rendering is a
+                // shipped contract that cannot change under it.
+                writer.WriteString("EffectiveStatus", instance.GetEffectiveStatus.ToString());
+                // The bare CODE, unlike the two above. Status and EffectiveStatus carry a shipped
+                // "Active (A)" rendering that cannot change under existing grants; Type is new, so
+                // it gets the form a grant author actually wants to compare against —
+                // $.context.Instance.Type == "S". Do not "fix" the inconsistency.
+                writer.WriteString("Type", instance.Type.Code);
                 writer.WriteString("CurrentState", instance.CurrentState);
                 writer.WriteString("EffectiveState", instance.EffectiveState);
                 writer.WriteString("EffectiveStateType", instance.EffectiveStateType?.ToString());

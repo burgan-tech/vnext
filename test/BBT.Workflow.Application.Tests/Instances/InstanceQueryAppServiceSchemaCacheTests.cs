@@ -25,6 +25,8 @@ using NSubstitute;
 using Shouldly;
 using Xunit;
 
+using BBT.Workflow.Instances.HumanTask;
+
 namespace BBT.Workflow.Instances;
 
 /// <summary>
@@ -93,6 +95,7 @@ public class InstanceQueryAppServiceSchemaCacheTests : IDisposable
             instanceIncidentRepository: Substitute.For<IInstanceIncidentRepository>(),
             instanceTaskRepository: Substitute.For<IInstanceTaskRepository>(),
             instanceActionRepository: Substitute.For<IInstanceActionRepository>(),
+            longPollInteractionGate: NSubstitute.Substitute.For<BBT.Workflow.Execution.LongPoll.ILongPollInteractionGate>(),
             instanceExtensionService: Substitute.For<IInstanceExtensionService>(),
             scriptContextFactory: Substitute.For<IScriptContextFactory>(),
             instanceQueryGateway: Substitute.For<IInstanceQueryGateway>(),
@@ -106,9 +109,15 @@ public class InstanceQueryAppServiceSchemaCacheTests : IDisposable
             callerRoleResolver: new DefaultCallerRoleResolver(Substitute.For<ICurrentUser>()),
             paginationLinkGenerator: Substitute.For<BBT.Aether.Application.Pagination.IPaginationLinkGenerator>(),
             instanceFilteringOptions: Options.Create(new InstanceFilteringOptions()),
+            humanTaskOptions: Options.Create(new HumanTaskFunctionOptions()),
+            attributeIndexCatalog: Substitute.For<IAttributeIndexCatalog>(),
             stateFunctionCache: Substitute.For<Caching.IStateFunctionCache>(),
             dataFunctionCache: Substitute.For<Caching.IDataFunctionCache>(),
             instanceSchemaFunctionCache: _instanceSchemaFunctionCache,
+
+            humanTaskFunctionCache: Substitute.For<Caching.IHumanTaskFunctionCache>(),
+            descentLimiter: new HumanTask.HumanTaskDescentLimiter(
+                Microsoft.Extensions.Options.Options.Create(new HumanTask.HumanTaskFunctionOptions())),
             logger: Substitute.For<ILogger<InstanceQueryAppService>>());
     }
 

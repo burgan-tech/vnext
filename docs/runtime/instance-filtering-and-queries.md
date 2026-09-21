@@ -19,9 +19,31 @@ consumes, so no endpoint or engine changes are involved; when no spec is used, n
 
 Two kinds of fields, distinguished by the name you pass:
 
-- **Instance columns** — bare names, whitelisted: `id`, `key`, `flow`, `status`, `state` /
-  `currentState`, `effectiveState`, `effectiveStateType`, `effectiveStateSubType`, `stage`,
-  `createdAt`, `modifiedAt`, `completedAt`. Unknown column names throw at build/SQL time.
+- **Instance columns** — bare names, whitelisted: `id`, `key`, `flow`, `status`, `effectiveStatus`,
+  `instanceType`, `state` / `currentState`, `effectiveState`, `effectiveStateType`,
+  `effectiveStateSubType`, `stage`, `createdAt`, `modifiedAt`, `completedAt`. Unknown column names
+  throw at build/SQL time. `status`, `effectiveStatus` and `instanceType` accept names or codes
+  (`Active` / `A`, `SubFlow` / `S`) — on the list, GraphQL and `.Build()` spec terminals. The
+  `.First()` / `.Last()` selector terminal has no name resolution for any of the three: it compares
+  the literal text against the stored code, so pass codes there.
+
+> **`effectiveStatus` filters the stored column, not the served field.** A filter runs in SQL; the
+> served `metadata.effectiveStatus` goes through a read-time clamp for the SubFlow completion window
+> (see `docs/runtime/state-function-cache-and-etag.md`). So `effectiveStatus eq Completed` can match
+> a parent whose served `effectiveStatus` reads `Busy` — for "is this flow done?", filter on `status`.
+
+> **`instanceType` records how the instance was STARTED, not a live relationship.** `Root` / `R`,
+> `SubFlow` / `S`, `SubProcess` / `P`, stamped once at creation and never updated — so it stays
+> answerable after the instance finishes, but it says a child *was created by* a parent, not that
+> the correlation is still open. The `parent.*` ExtraProperties remain the source of truth for the
+> relationship itself. Only `eq` / `ne` / `in` / `nin` are accepted, as for the status columns.
+>
+> It is deliberately **not** exposed as the bare name `type`. Instance columns and data attributes
+> share one namespace on the legacy and GraphQL filter surfaces and are told apart purely by name —
+> and the legacy surface strips the `attributes=` prefix *before* that check — so claiming `type`
+> would silently retarget the existing filters of every domain whose schema has a business field
+> called `type`, with no escape hatch. `type` keeps meaning your own attribute; the column is
+> `instanceType`.
 - **Instance-data attributes** — prefixed with `attributes.`, dotted for nesting:
   `attributes.amount`, `attributes.address.city`, `attributes.employment.department.name`.
 
@@ -238,6 +260,13 @@ and `GetAbsenceEntryFilterSpecMapping.csx` / `GetRezervationsFilterSpecMapping.c
 - Event `Selector` filters are automatically scoped to the target workflow (`flow` condition added
   by the runtime).
 - Column names are whitelisted; a typo throws instead of silently matching nothing.
+- Filter scalar values are limited to 1000 characters (`string.Length` after JSON decoding).
+  The limit applies to attributes and instance columns in GraphQL and legacy filters, including
+  nested/logical conditions and aggregation envelopes. `in`, `nin`, and `between` check each
+  operand separately, so a list can exceed 1000 characters overall. Oversized operands return
+  HTTP 400 with a field-specific validation message before query execution; values are never
+  truncated. The separate 5000-character total-filter limit still applies. Structured `includes`
+  payloads retain their own size, depth, and property-count limits in `ValidateIncludesObject`.
 
 ## References
 

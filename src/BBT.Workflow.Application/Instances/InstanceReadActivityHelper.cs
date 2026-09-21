@@ -48,6 +48,14 @@ public static class InstanceReadActivityHelper
     /// </summary>
     public static readonly ActivitySource ActivitySource = new(SourceName);
 
+    /// <summary>Starts a bounded list-read phase; callers never include raw filters or attribute values.</summary>
+    public static Activity? StartListPhase(string phase)
+    {
+        var activity = ActivitySource.StartActivity($"Instances.List.{phase}", ActivityKind.Internal);
+        activity?.SetTag(TelemetryConstants.TagNames.SpanCategory, TelemetryConstants.SpanCategories.Business);
+        return activity;
+    }
+
     /// <summary>The read was answered 304 from the fingerprint projection alone.</summary>
     public const string FastPathNotModified = "notModified";
 
@@ -87,6 +95,76 @@ public static class InstanceReadActivityHelper
 
         transaction.SetTag(TelemetryConstants.TagNames.FunctionKey, kind);
         transaction.SetTag(TelemetryConstants.TagNames.ReadFastPath, outcome);
+    }
+
+    /// <summary>Operation name for the human-task candidate scan of one workflow schema.</summary>
+    public const string OperationHumanTaskScan = "HumanTask.Scan";
+
+    /// <summary>Operation name for one workflow schema's whole leaf descent.</summary>
+    public const string OperationHumanTaskDescend = "HumanTask.Descend";
+
+    /// <summary>Operation name for leaf-side authorization at one level of a descent.</summary>
+    public const string OperationHumanTaskAuthorize = "HumanTask.Authorize";
+
+    /// <summary>
+    /// Starts the span covering one workflow schema's candidate scan — the query that answers
+    /// "which roots of this flow are waiting", and nothing else.
+    /// <para>
+    /// The fan-out opens one of these per schema, in parallel, so the database work of a branch is
+    /// attributable to that branch: without it every schema's <c>Db.*</c> child hangs directly off
+    /// the read envelope and a slow schema is indistinguishable from a slow endpoint. The selection
+    /// and the descent are separately timed on purpose — they answer different questions and have
+    /// completely different cost shapes.
+    /// </para>
+    /// </summary>
+    public static Activity? StartHumanTaskScan(string flow)
+    {
+        var activity = ActivitySource.StartActivity($"{OperationHumanTaskScan}/{flow}", ActivityKind.Internal);
+        if (activity is null) return null;
+
+        activity.SetTag(TelemetryConstants.TagNames.SpanCategory, TelemetryConstants.SpanCategories.Business);
+        activity.SetTag(TelemetryConstants.TagNames.Flow, flow);
+        return activity;
+    }
+
+    /// <summary>
+    /// Starts the span covering one workflow schema's entire leaf descent: every level, local and
+    /// remote, for every candidate of that flow.
+    /// <para>
+    /// The per-hop <c>Subflow.Descend</c> spans nest under it, so the ladder stays readable while
+    /// this one carries the branch's total. A domain boundary is one hop for a whole branch, which
+    /// makes the difference between this span and the sum of its children the local work.
+    /// </para>
+    /// </summary>
+    public static Activity? StartHumanTaskDescend(string flow, int roots)
+    {
+        var activity = ActivitySource.StartActivity($"{OperationHumanTaskDescend}/{flow}", ActivityKind.Internal);
+        if (activity is null) return null;
+
+        activity.SetTag(TelemetryConstants.TagNames.SpanCategory, TelemetryConstants.SpanCategories.Business);
+        activity.SetTag(TelemetryConstants.TagNames.Flow, flow);
+        activity.SetTag(TelemetryConstants.TagNames.HumanTaskRoots, roots);
+        return activity;
+    }
+
+    /// <summary>
+    /// Starts the span covering leaf-side authorization at ONE level of a descent — evaluator
+    /// construction and grant evaluation for every leaf found at that level.
+    /// <para>
+    /// One span for the level, not one per leaf: a branch can carry hundreds of candidates, and the
+    /// cardinality would swamp the trace for the same information a count already gives. Same rule
+    /// <c>View.Resolve</c> follows for its rule walk. Building an evaluator can serialize the
+    /// instance's full latest data, so this is where that cost becomes visible.
+    /// </para>
+    /// </summary>
+    public static Activity? StartHumanTaskAuthorize(string flow)
+    {
+        var activity = ActivitySource.StartActivity($"{OperationHumanTaskAuthorize}/{flow}", ActivityKind.Internal);
+        if (activity is null) return null;
+
+        activity.SetTag(TelemetryConstants.TagNames.SpanCategory, TelemetryConstants.SpanCategories.Business);
+        activity.SetTag(TelemetryConstants.TagNames.Flow, flow);
+        return activity;
     }
 
     /// <summary>Operation name for view-rule resolution.</summary>

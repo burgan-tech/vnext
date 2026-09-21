@@ -1,9 +1,13 @@
 using System;
 using System.Collections.Generic;
+using System.Threading;
+using System.Threading.Tasks;
 using BBT.Workflow.Discovery;
+using BBT.Workflow.HostedServices;
 using BBT.Workflow.Runtime;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using NSubstitute;
 using Shouldly;
@@ -98,8 +102,10 @@ public sealed class DiscoveryCacheRegistrationTests
         // Twice the window: survive one missed refresh, expire after roughly two.
         options.L2TtlSeconds.ShouldBe(options.RefreshIntervalSeconds * 2);
 
-        // Short despite the long window — it is the residual staleness after a forced refresh.
-        options.L1TtlSeconds.ShouldBe(60);
+        // Ten minutes: short relative to the window, because it is the residual staleness after a
+        // forced refresh — the shared layer is corrected at once, each pod's own copy is not.
+        options.L1TtlSeconds.ShouldBe(600);
+        options.L1TtlSeconds.ShouldBeLessThan(options.RefreshIntervalSeconds);
 
         // Also short: a tick inside a served window costs one cache read, and what it buys is
         // retrying a FAILED window within a minute rather than at the end of the hour.
@@ -163,17 +169,18 @@ public sealed class DiscoveryCacheRegistrationTests
     }
 
     [Fact]
-    public void An_empty_accepted_status_set_is_rejected()
+    public void An_empty_domain_list_endpoint_template_is_rejected()
     {
         var result = Validate(new DiscoveryCacheOptions
         {
             Enabled = true,
-            AcceptedStatuses = []
+            DomainListEndpointTemplate = string.Empty
         });
 
-        // Would warm nothing at all while looking perfectly healthy.
+        // The bulk read is the only thing that fills the cache; with nowhere to read from it warms
+        // nothing at all while looking perfectly healthy.
         result.Failed.ShouldBeTrue();
-        result.FailureMessage.ShouldContain("AcceptedStatuses");
+        result.FailureMessage.ShouldContain("DomainListEndpointTemplate");
     }
 
     [Fact]
@@ -190,6 +197,50 @@ public sealed class DiscoveryCacheRegistrationTests
 
         result.Failed.ShouldBeFalse();
     }
+
+    // ────────────────────────────────────────────────────────────────────
+    // The refresh loop must agree with the registration above
+    // ────────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void The_refresh_loop_does_not_start_when_no_refresher_was_registered()
+    {
+        // Cache:Enabled = true, provider = dapr: the registration deliberately skips the refresher
+        // (the test above pins that), so there is nothing for the loop to drive.
+        var provider = Build(cacheEnabled: true, discoveryProvider: "dapr");
+
+        provider.GetService<IDiscoveryCacheRefresher>().ShouldBeNull();
+        BuildRefreshService(provider).IsRefresherRegistered().ShouldBeFalse();
+    }
+
+    [Fact]
+    public void The_refresh_loop_starts_when_a_refresher_was_registered()
+    {
+        var provider = Build(cacheEnabled: true, discoveryProvider: "http");
+
+        BuildRefreshService(provider).IsRefresherRegistered().ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task A_tick_without_a_refresher_is_survivable_rather_than_fatal()
+    {
+        // Belt and braces for the probe: even if something ever starts the loop against a container
+        // with no refresher, the tick must not escape. It used to escape into the tick's own
+        // catch-all and log an InvalidOperationException EVERY tick, forever — 132 occurrences in one
+        // lab pod under Provider = "dapr" with the default Cache:Enabled = true, because the service
+        // spelled the registration's condition a second time (Enabled && Cache.Enabled) and the two
+        // drifted. The probe is the fix; this pins that the failure mode stays non-fatal regardless.
+        var provider = Build(cacheEnabled: true, discoveryProvider: "dapr");
+
+        await BuildRefreshService(provider).TickAsync(CancellationToken.None);
+    }
+
+    private static DiscoveryCacheRefreshHostedService BuildRefreshService(ServiceProvider provider)
+        => new(
+            provider.GetRequiredService<IServiceScopeFactory>(),
+            provider.GetRequiredService<IOptions<ServiceDiscoveryOptions>>(),
+            TimeProvider.System,
+            provider.GetRequiredService<ILogger<DiscoveryCacheRefreshHostedService>>());
 
     // ────────────────────────────────────────────────────────────────────
     // Harness

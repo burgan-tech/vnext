@@ -1,10 +1,13 @@
 # Instance Query Validation — Breaking Changes
 
-**Target release:** 0.0.80 (unreleased — confirm against `vnext-meta/version-manifest.json` before publishing)
-**Affects:** Orchestration instance list API, Monitoring instance/counter APIs, `GetInstancesTask` in workflow definitions
+**Original validation target:** 0.0.80.
+**Value-limit target (§2.7):** 0.0.90, matching the current `common.props` and `vnext-meta` migration record; confirm the shipping version before release. This is not a release announcement.
+**Affects:** Orchestration instance list API and `GetInstancesTask` in workflow definitions; the original validation changes also affected the former Monitoring instance/counter APIs.
 
-> Historical record — kept as authored. The Monitor API host (`/api/v1/monitor`, port `4203`) has
-> since been removed from this repository; its rows below describe behaviour at the time of the change.
+> The original validation examples include historical endpoints. The Monitor API host
+> (`/api/v1/monitor`, port `4203`) has since been removed; its rows below describe behaviour at the
+> time of that change. The value-limit addition below applies to the current runtime surfaces.
+
 **Severity:** High — running workflow definitions and working client calls can break on deploy, without any code change on the consumer side.
 
 ## Purpose
@@ -18,6 +21,10 @@ authored is rejected up front. That is the correct behavior, but it converts a c
 broken requests into visible errors. Requests that were already wrong now say so — which means
 **they stop working**.
 
+The later per-value limit in §2.7 also rejects previously valid, correctly executed filters. It
+enforces a new input budget, so upgrading can break a query even when its syntax and results were
+already correct.
+
 Read this page before upgrading. Everything below describes a request or definition that used to
 return 200 and now does not.
 
@@ -30,9 +37,10 @@ return 200 and now does not.
 | `GET /monitor/.../instances` | Same as above | HTTP 400 | Monitoring dashboard list screens |
 | `GET /monitor/.../stats/instances` | Filter ignored → counters counted everything | HTTP 400 | Monitoring counters |
 | `GetInstancesTask` (`sort` / `filter`) | Invalid value ignored, task ran unfiltered | Task returns `Result.Fail` | **Error boundary fires; instance can end up `Faulted`** |
+| Scalar filter operand longer than 1000 characters (§2.7) | Could execute and match normally within existing filter limits | HTTP 400, or `GetInstancesTask` validation failure | Correct client queries and running workflows can break |
 
-The last row is the dangerous one. The others break a request. That one breaks a *running workflow*,
-with no code change, purely by deploying the runtime.
+Both task-validation cases can break a *running workflow*, with no definition change, purely by
+deploying the runtime.
 
 ---
 
@@ -106,9 +114,9 @@ A field that lives in instance data needs the `attributes.` prefix:
 `sort={"field":"attributes.musteriNo"}`.
 
 Valid instance columns (case-insensitive): `id`, `key`, `flow`, `currentState`, `state`, `status`,
-`createdAt`, `modifiedAt`, `completedAt`, `isTransient`, `effectiveState`, `currentStateType`,
-`currentStateSubType`, `effectiveStateType`, `effectiveStateSubType`, `stage`, `createdBy`,
-`createdByBehalfOf`, `modifiedBy`, `modifiedByBehalfOf`.
+`effectiveStatus`, `createdAt`, `modifiedAt`, `completedAt`, `isTransient`, `effectiveState`,
+`currentStateType`, `currentStateSubType`, `effectiveStateType`, `effectiveStateSubType`, `stage`,
+`createdBy`, `createdByBehalfOf`, `modifiedBy`, `modifiedByBehalfOf`.
 
 ### 1.5 Unsafe `attributes.` path
 
@@ -207,6 +215,55 @@ GraphQL-style JSON when grouping or aggregating.
 `FilterFormatDetector.ConvertLegacyToGraphQL` used to swallow an unknown operator and return a
 condition with nothing in it. It now throws, and the boundary validator rejects the request.
 
+### 2.7 Scalar filter values longer than 1000 characters
+
+**Breaking change — migration ID:** `instance-filter-value-length-enforced` in
+[`vnext-meta/migrations.json`](../../vnext-meta/migrations.json).
+
+`InputValidator.MaxValueLength` was already 1000, but the instance-filter paths did not call
+`ValidateValue`. PostgreSQL did not impose this restriction: a 1001-character operand could return
+HTTP 200 and match the intended record. The runtime now validates operands before SQL compilation.
+An otherwise valid request with an oversized operand returns **HTTP 400**, with top-level
+`Validation:900011` and validation reason `filter.valueTooLong` identifying the offending path.
+
+The limit is inclusive and measures the decoded value using **.NET `string.Length` (UTF-16 code
+units)**. It is not a UTF-8 byte count or a count of serialized JSON escape characters; for example,
+an emoji represented by a surrogate pair consumes two units. Other query validation rules still
+apply to values within the limit.
+
+| Input | Length rule |
+| --- | --- |
+| GraphQL JSON and legacy scalar operands on instance columns or `attributes.*` | At most 1000 UTF-16 code units per value |
+| Nested fields, `and` / `or` / `not`, filters inside grouping/aggregation envelopes | The same rule applies to every contained operand |
+| `in` / `nin` elements and `between` endpoints, including legacy comma-separated values | Each element is checked independently; the combined list may exceed 1000 |
+| Structured `includes` payload | Keeps its dedicated object size/depth/property limits; this scalar limit does not replace them |
+
+For example, construct a filter without hand-concatenating JSON:
+
+```javascript
+const filter = JSON.stringify({ attributes: { reference: { eq: "a".repeat(1001) } } });
+// Before: could return 200 and match a stored 1001-character reference.
+// Now: HTTP 400, Validation:900011 / filter.valueTooLong.
+// With repeat(1000): accepted by the value-length check, subject to other validation.
+```
+
+The existing **5000-character limit per filter string still applies**, including serialized JSON
+syntax and escapes. Stored instance values are unchanged: they are neither truncated nor restricted
+by this query-input rule. A stored value longer than 1000 can therefore still exist while an exact
+match using that entire value is rejected. No configuration switch relaxes the scalar limit.
+
+`GetInstancesTask` performs this validation before both local and remote dispatch. A failure returns
+`Result.Fail` and enters the configured error-boundary chain; the instance can become `Faulted`
+depending on boundary handling. This includes operands built by mappings or by the fluent
+`InstanceQuery` / `SetFilterSpec(...)` API: valid JSON construction does not bypass the value budget.
+
+**Migration:** audit actual decoded operands in client requests, authored task filters and mapping
+outputs before upgrading. Where longer values are required, introduce an appropriate short lookup
+key or revise the query contract, then deploy the consumer/workflow changes. Do not blindly truncate
+operands or replace exact matching with a broader operator, since that changes which records match.
+Verify boundary handling and retry behavior for rejected task filters; retrying an unchanged
+oversized operand will fail again.
+
 ---
 
 ## 3. `GetInstancesTask` in workflow definitions
@@ -248,8 +305,9 @@ upgrade.
 | `"sort": "CreatedAt"` | `"sort": "{\"field\":\"createdAt\",\"direction\":\"asc\"}"` |
 | `"sort": "-Status,CreatedAt"` | `"sort": "{\"fields\":[{\"field\":\"status\",\"direction\":\"desc\"},{\"field\":\"createdAt\",\"direction\":\"asc\"}]}"` |
 
-Definitions built with the fluent `InstanceQuery` API and `SetFilterSpec(...)` are unaffected — the
-spec serializes to the JSON wire form already.
+Definitions built with the fluent `InstanceQuery` API and `SetFilterSpec(...)` avoid these sort
+syntax changes because the spec serializes to the JSON wire form. They are still subject to the
+per-value limit in §2.7.
 
 ---
 
@@ -257,7 +315,7 @@ spec serializes to the JSON wire form already.
 
 | Code | Constant | Raised for |
 | --- | --- | --- |
-| `Validation:900011` | `WorkflowErrorCodes.InstanceFilterInvalid` | Filter grammar, unknown operator, unrecognized format |
+| `Validation:900011` | `WorkflowErrorCodes.InstanceFilterInvalid` | Filter grammar, unknown operator, unrecognized format, oversized scalar operand (`filter.valueTooLong`) |
 | `Validation:900012` | `WorkflowErrorCodes.InstanceSortInvalid` | Sort/orderBy |
 | `Validation:900013` | `WorkflowErrorCodes.InstanceGroupByInvalid` | GroupBy |
 | `Validation:900014` | `WorkflowErrorCodes.InstanceAggregationInvalid` | Aggregations |
@@ -317,6 +375,9 @@ Any value not starting with `{` (URL-encoded `%7B`) will return 400 after the up
 - [ ] Migrate every `GetInstancesTask.sort` hit to the JSON form and redeploy the domain package **before** the runtime upgrade.
 - [ ] Fix client `sort`/`orderBy` values found in access logs.
 - [ ] Audit filters using `gte`/`lte`/`neq`/`contains` — note that these were returning **over-broad** result sets, so any report or screen built on them may have been showing wrong numbers.
+- [ ] Audit decoded scalar operands in client filters, authored `GetInstancesTask` filters and mapping-generated filters for the §2.7 limit; JSON serialization alone does not validate their length.
+- [ ] Verify 1000-unit acceptance and 1001-unit rejection, per-element membership/range limits and the existing `includes` budget against representative consumer requests.
+- [ ] Deploy replacements for oversized lookup operands before the runtime upgrade and verify task error-boundary behavior for `filter.valueTooLong`.
 - [ ] Add an alert on log EventId 20441.
 - [ ] Add `deprecations.json` / `migrations.json` entries in `vnext-meta` for the `-field` sort shorthand.
 

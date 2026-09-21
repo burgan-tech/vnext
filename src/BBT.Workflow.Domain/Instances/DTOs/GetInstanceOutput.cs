@@ -77,6 +77,8 @@ public sealed class InstanceMetadataDto
         CurrentState = instance.CurrentState;
         EffectiveState = instance.EffectiveState;
         Status = instance.Status;
+        EffectiveStatus = instance.GetEffectiveStatus;
+        Type = instance.Type;
         EffectiveStateType = instance.EffectiveStateType;
         EffectiveStateSubType = instance.EffectiveStateSubType;
         CurrentStateType = instance.CurrentStateType;
@@ -103,6 +105,33 @@ public sealed class InstanceMetadataDto
 
     /// <summary>Instance status (Active, Completed, Faulted, etc.).</summary>
     public InstanceStatus? Status { get; set; }
+
+    /// <summary>
+    /// The status a client observes for this instance: the deepest active SubFlow's status when one
+    /// is running, otherwise this instance's own <see cref="Status"/>. The status counterpart of
+    /// <see cref="EffectiveState"/>, and the same value the state function reports as its
+    /// <c>status</c> — so a client can branch on either surface and get one answer.
+    /// </summary>
+    /// <remarks>
+    /// Differs from <see cref="Status"/> exactly while a SubFlow is running: the parent is <c>Busy</c>
+    /// for the child's whole lifetime by design, so <see cref="Status"/> says "something is in
+    /// flight" and this says what that something is currently doing (for example <c>Active</c> while
+    /// the child waits on a human task). Null only on a cross-domain response from a runtime that
+    /// predates the field.
+    /// </remarks>
+    public InstanceStatus? EffectiveStatus { get; set; }
+
+    /// <summary>
+    /// How this instance was STARTED: <c>R</c> root, <c>S</c> SubFlow child, <c>P</c> SubProcess
+    /// child. Immutable — stamped at creation and never updated, so it stays answerable long after
+    /// the instance has finished.
+    /// </summary>
+    /// <remarks>
+    /// This records the start origin, not a live relationship: it says a child was created by a
+    /// parent's SubFlow state or SubProcess task, not that the link is still open. Null only on a
+    /// cross-domain response from a runtime that predates the field.
+    /// </remarks>
+    public InstanceType? Type { get; set; }
 
     /// <summary>Type of the effective state (Initial, Intermediate, Finish, SubFlow, Wizard).</summary>
     public StateType? EffectiveStateType { get; set; }
@@ -523,12 +552,67 @@ public sealed class GetInstanceDataOutput
 }
 
 /// <summary>
+/// A human-task candidate row, as selected from one workflow schema.
+/// </summary>
+/// <remarks>
+/// Deliberately not an <c>Instance</c>. The candidate scan answers only "which roots are waiting,
+/// and in what order" — the identity and the ordering key. Everything the response actually says
+/// about the task comes from the LEAF, which the descent loads once, by id. Selecting whole
+/// aggregates here hydrated <c>DataList</c> and the correlations for every candidate and then threw
+/// them away, and a <c>SELECT *</c> also puts the covering columns of
+/// <c>IX_Instances_HumanTaskV2</c> out of the planner's reach.
+/// </remarks>
+/// <param name="Id">The instance's own identifier — unique, and how the descent addresses it.</param>
+/// <param name="Key">
+/// The business key. Its OWN only for a root: <c>SubflowStarter</c> gives every child
+/// <c>Key = parentInstance.Key</c>, so a SubProcess carries a key that belongs to the case it was
+/// spawned from, not to itself.
+/// </param>
+/// <param name="Type">
+/// <c>R</c> or <c>P</c> — which of the two the row is. A SubProcess is fire-and-forget: nothing
+/// waits for it and nothing projects its state upward, so it is an independent unit of work that
+/// must be addressed by its own identity rather than by the key it inherited.
+/// </param>
+/// <param name="CreatedAt">Creation time; the list's sort key.</param>
+/// <param name="Flow">
+/// The flow the row was selected from. Carried on the row because the scan reads every flow of the
+/// domain in ONE statement: after the union the rows are otherwise indistinguishable, and the
+/// descent has to re-enter each candidate's own flow to resolve its leaf.
+/// </param>
+public sealed record HumanTaskCandidate(
+    Guid Id, string? Key, InstanceType Type, DateTime CreatedAt, string Flow)
+{
+    /// <summary>
+    /// What a client can actually address this row by: the business key when the instance owns one,
+    /// and the instance's own id when it does not.
+    /// </summary>
+    /// <remarks>
+    /// Emitting the inherited key for a SubProcess is not merely ambiguous, it is wrong twice over:
+    /// two rows of one case collide on it, and following it leads to the PARENT instance, not to
+    /// the SubProcess holding the task.
+    /// </remarks>
+    public string AddressableId =>
+        Type.Equals(InstanceType.SubProcess) || string.IsNullOrEmpty(Key)
+            ? Id.ToString()
+            : Key;
+}
+
+/// <summary>
 /// Output for the human-task function: represents an active instance pending human action.
 /// </summary>
 public sealed class HumanTaskItemOutput
 {
-    /// <summary>Workflow instance identifier.</summary>
+    /// <summary>
+    /// Workflow instance identifier — the business key, which is what a client addresses.
+    /// Not unique on its own: a SubProcess child inherits its parent's key, so two rows of one
+    /// case can carry the same value. Use <see cref="Id"/> to tell them apart.
+    /// </summary>
     public string? InstanceId { get; set; }
+
+    /// <summary>
+    /// The instance's own identifier. Always unique, unlike <see cref="InstanceId"/>.
+    /// </summary>
+    public Guid Id { get; set; }
 
     /// <summary>Workflow key (schema) this instance belongs to.</summary>
     public string? Workflow { get; set; }

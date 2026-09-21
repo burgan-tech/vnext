@@ -31,7 +31,7 @@ knowing, because each is something this design has to avoid rather than rediscov
 |---|---|---|
 | HTTP call on every hit | no latency saving at all | a hit performs no I/O beyond the cache read |
 | Whole blob rewritten with a fresh TTL on any miss | TTL extended indefinitely under traffic; "5 minutes" was optimistic | per-domain entries, each stamped with its own fetch time |
-| Followed `links.next` | those links carry the *remote's* gateway base path, so page 2 404'd and was swallowed — one page cached forever, silently | explicit `page++`, loud at the cap |
+| Followed `links.next` | those links carry the *remote's* gateway base path, so page 2 404'd and was swallowed — one page cached forever, silently | no pagination at all: the registry's `domain-list` function answers for the whole registry in one call |
 | Cached `DiscoveryEndpoint` under a domain-only key | `Kind` depends on the caller's `preferredKind`, so a Dapr-preferring caller and a URL caller overwrote each other | caches `DomainRegistration`, which is caller-independent |
 
 ---
@@ -63,7 +63,7 @@ per domain is the fourth defect above. Keeping the cache below the provider also
 
 ```
 W_worst = RefreshIntervalSeconds + fetch + L1TtlSeconds
-        = 3600 + ~1 + 60  ≈  61 min   (defaults)
+        = 3600 + ~1 + 600  ≈  70 min   (defaults)
 ```
 
 **Why an hour is the right size here, when five minutes was judged too long before.** The window is
@@ -86,8 +86,8 @@ nicety. Anyone changing a domain's `baseUrl` should call it as part of that chan
 
 The refresher **overwrites** L2 rather than waiting for entries to expire, so L1/L2 TTL skew across
 pods does not add to `W`. It only means two pods can disagree for up to `L1TtlSeconds` — which is why
-that value stays small even though the window is long, and why it is validated to stay below the
-refresh interval. It is also the residual staleness after a *forced* refresh: the endpoint corrects
+that value stays well under the window, and why it is validated to stay below the refresh interval:
+at parity a pod could serve a stale endpoint for twice as long as the cluster takes to correct it. It is also the residual staleness after a *forced* refresh: the endpoint corrects
 the shared layer immediately, but each pod's own copy clears on its own schedule, so full propagation
 is `L1TtlSeconds`, not instant. A pod that never wins the refresh lock contributes nothing: L2 is
 shared, and the lock only decides who *writes*.
@@ -102,7 +102,9 @@ only L1 can serve stale, for at most `L1TtlSeconds`.
 `POST utilities/discovery/refresh` re-reads the registry **synchronously** and republishes every
 entry, bypassing the window. It is the operational answer to the objection that killed the first
 attempt: when a domain's `baseUrl` moves, nobody waits the window out. Only each pod's in-process
-layer remains, for at most `L1TtlSeconds`.
+layer remains — so the fleet-wide effect of one click is **not instant, it is `L1TtlSeconds`** (ten
+minutes by default; the pod that served the request is corrected immediately). That is the number to
+weigh when changing `L1TtlSeconds`, and the reason it is not simply set to the refresh interval.
 
 ### The age is stamped on the entry, not delegated to the store
 
@@ -135,7 +137,7 @@ Each tick, on every pod (`IDiscoveryCacheRefresher.RefreshAsync`):
 2. `TryAcquireLockAsync`, single attempt, no wait, no retry. `null` ⇒ return.
 3. **Re-check the marker under the lock**, closing the gap between 1 and 2.
 4. Bulk read, bounded by a linked CTS at `lease − 5 s`.
-5. Publish and claim the window — **only** if every page succeeded and the result is non-empty.
+5. Publish and claim the window — **only** if the read succeeded and the result is non-empty.
 6. `finally` ⇒ release the lease. Always.
 
 **Both guards are needed, and they do different jobs.** The marker defines the window and is what
@@ -169,31 +171,48 @@ an optimisation into an availability risk. **Do not merge the two services.**
 
 ## Bulk read
 
-`GET {BaseUrl}/{Domain}/workflows/domain/instances?page={n}&pageSize=100`, on its **own** named
-`HttpClient` (`ServiceDiscoveryBulk`).
+`GET {BaseUrl}/{Domain}/functions/domain-list`, on its **own** named `HttpClient`
+(`ServiceDiscoveryBulk`).
 
 The separate client is not tidiness: the registration client's Polly circuit breaker also guards the
 per-domain lookup — the path a cache miss falls back to. A bulk refresh failing on every tick would
 trip that breaker and take the fallback down with it, so the refresh would break the very thing it
 degrades into.
 
-- **Pages by incrementing `page`, never by following `links.next`.** Those links are generated with
-  the remote's API-gateway `BasePath`, which by design bears no relation to `ServiceDiscovery:BaseUrl`;
-  a rooted `/ebanking/…` resolves against the authority alone and drops the configured `/api/v1`.
-- Stops on a short page, an empty page, or a page repeating the previous one's domains (a registry
-  ignoring `page`). Caps at `MaxPages`, logged at **Warning** — silent truncation is how the first
-  implementation ended up holding one page forever.
-- **All-or-nothing.** Any page failure fails the whole read; a partial list is indistinguishable from
-  a registry that genuinely lost domains, and publishing one would evict good entries for nothing.
-- Filters `metadata.status` **client-side** against `AcceptedStatuses`. The server-side `filter`
-  query is an optimisation only, retried unfiltered on a 4xx (older runtimes parse the status through
-  `Enum.Parse`, and `InstanceStatus` is a sealed class, not an enum).
+`domain-list` is a **Domain-scope function on the registry** (`vnext-domain-discovery`,
+`discovery/Functions/domain-list.json`) that answers for the whole registry in one request:
 
-> ⚠️ `metadata.status` is the status of the registration **workflow instance**, not a health signal.
-> A registration flow that runs through to a Finish state leaves its instances `C`, and those domains
-> would then be skipped by the warm-up — still correct, since a miss falls back to a live lookup, but
-> the warm-up would achieve nothing. That is why `AcceptedStatuses` is configurable rather than
-> hard-coded to `A`. Check what your registry actually holds before assuming the default fits.
+```json
+{ "items": [ { "domainName": "credit", "baseUrl": "http://…:5000", "appId": "vnext-credit-app", "healthUrl": "http://…:5000/health" } ] }
+```
+
+- **The registry owns the projection.** It filters to active registrations, orders them, takes the
+  domain name from the instance key and drops anything without a `baseUrl`. None of that is
+  re-derived here — this client only maps the four fields and normalises blanks to `null`.
+- **There is no pagination.** The function is not a page of a list, it *is* the list, so a full
+  response is never a reason to ask for another one.
+- **It is cached on the registry side too**, for 24 h under the static key
+  `discovery:domains:active`, with write-through eviction wired into the `domain` workflow's
+  `start-domain` and `update` transitions. A refresh window therefore usually costs the registry a
+  cache read, not an instance query — and a domain that registers or moves evicts that entry
+  immediately, so the server-side TTL does not add to the staleness budget below.
+- **All-or-nothing.** A failed read returns an error rather than a partial list; a partial list is
+  indistinguishable from a registry that genuinely lost domains, and publishing one would evict good
+  entries for nothing. An **empty** `items` is a valid 200 and reaches `DiscoveryCacheRefresher`
+  as an empty success, which that service then treats as a failed window.
+
+> ⚠️ **The registry must carry the `domain-list` function.** There is no fallback read: a discovery
+> deployment whose package predates it answers 404, every window fails with
+> `DomainListEndpointMissing` (EventId 50039), and the cache simply stays cold — lookups fall back to
+> the live per-domain path, which is the behaviour with the cache switched off. Check this first when
+> a cluster shows no cache hits at all after an upgrade.
+
+> ⚠️ **The function serves a single page**, sized by its own ceiling (500 today), and its response
+> carries no truncation signal. Reaching `DomainListExpectedMax` items is logged at **Warning**
+> (`DomainListCeilingReached`, EventId 50038) and the list is published anyway: the domains it holds
+> are still served from cache, and the ones beyond the ceiling merely pay a live lookup — where
+> refusing to publish would make *every* domain pay it. Raising the ceiling is a change on the
+> registry side.
 
 ---
 
@@ -225,16 +244,13 @@ degrades into.
 |---|---|---|
 | `Enabled` | **`false`** in code, `true` in the orchestration host's `appsettings.json` | the single rollback switch |
 | `L1Enabled` | `true` | |
-| `L1TtlSeconds` | `60` | must be `< RefreshIntervalSeconds`; also the residual staleness after a forced refresh |
+| `L1TtlSeconds` | `600` | must be `< RefreshIntervalSeconds`; **this is how long a forced refresh takes to reach the other pods** |
 | `TickIntervalSeconds` | `60` | how fast a *failed* window is retried — **not** the refresh rate |
 | `RefreshIntervalSeconds` | `3600` | 1 hour; enforced cluster-wide by the marker, not per pod |
 | `L2TtlSeconds` | `7200` | the dead-man's switch; 2× the refresh interval |
 | `WarmupLockLeaseSeconds` | `30` | must be `< RefreshIntervalSeconds` |
-| `BulkPageSize` | `100` | also the API maximum |
-| `MaxPages` | `20` | runaway guard |
-| `BulkEndpointTemplate` | `/{0}/workflows/domain/instances?page={1}&pageSize={2}` | |
-| `BulkFilter` | `{"status":{"eq":"A"}}` | optimisation only |
-| `AcceptedStatuses` | `["A"]` | authoritative; see the warning above |
+| `DomainListEndpointTemplate` | `/{0}/functions/domain-list` | `{0}` = the registry domain; configurable for a gateway path variation |
+| `DomainListExpectedMax` | `500` | the registry function's own page size — reaching it warns that the list may be truncated |
 
 ### Why the code default is off
 
@@ -248,7 +264,7 @@ same reasoning already governs `ServiceDiscovery:Enabled`, `Provider`'s fallback
 
 `ServiceDiscoveryOptionsValidator` rejects `L1Ttl >= RefreshInterval`, `RefreshInterval >= L2Ttl`,
 `WarmupLockLease >= RefreshInterval`, `L2Ttl < RefreshInterval + lease`, and an empty
-`AcceptedStatuses`. Every one of those degrades the cache **silently** when broken — it either stops
+`DomainListEndpointTemplate`. Every one of those degrades the cache **silently** when broken — it either stops
 serving or widens its window, with no exception and no error log. Startup is the only place they are
 visible, which is why they are a contract rather than a comment.
 
@@ -269,9 +285,9 @@ avoid ever having to answer, and the one that decides whether this feature survi
 incident.
 
 Logs (`WorkflowLogs`, EventIds 50001–50005 reused from the removed implementation so historical
-queries keep working, plus 50036–50041): refresh started / refreshed / failed, page fetch, cache
-miss, skipped-fresh, skipped-not-owner, page-cap reached, pagination stalled, filter rejected, cache
-operation failed.
+queries keep working, plus 50036–50041): refresh started / refreshed / failed, domain-list fetch,
+cache miss, skipped-fresh, skipped-not-owner, list-ceiling reached, domain-list endpoint missing,
+cache operation failed.
 
 `QueryingSingleDomain` (50006) stays at `Information`: it fires once per cache miss, so a steady
 stream of it now means the cache is not working.

@@ -16,8 +16,13 @@
     {
       "id": "query-filter-value-length",
       "scope": "query",
-      "enforcedSince": "0.0.1",
-      "description": "Filter values passed to InputValidator.ValidateValue may not exceed InputValidator.MaxValueLength characters."
+      "enforcedSince": "0.0.90",
+      "description": "InstanceQueryValidator and SQL condition builders enforce InputValidator.MaxValueLength before SQL compilation. Each decoded scalar operand may contain at most 1000 UTF-16 code units (.NET string.Length), including every array element and each legacy comma-separated in/nin/between operand. Applies to instance columns and JSON attributes, including nested fields, logical groups and filter envelopes. HTTP queries reject violations with 400 and validation code filter.valueTooLong; GetInstancesTask returns a validation failure before local/remote dispatch, which can invoke the workflow error boundary. Includes objects retain their dedicated size/depth/property limits. Stored instance data is unaffected. The constant existed before this release, but the filter paths did not enforce it.",
+      "maxLength": 1000,
+      "lengthUnit": "utf16-code-units",
+      "errorCode": "filter.valueTooLong",
+      "httpStatus": 400,
+      "migrationId": "instance-filter-value-length-enforced"
     },
     {
       "id": "query-includes-json-limits",

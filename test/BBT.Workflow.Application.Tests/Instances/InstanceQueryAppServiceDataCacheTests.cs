@@ -10,6 +10,7 @@ using BBT.Aether.Uow;
 using BBT.Workflow.Authorization;
 using BBT.Workflow.Caching;
 using BBT.Workflow.Definitions;
+using BBT.Workflow.Definitions.Schemas;
 using BBT.Workflow.Gateway;
 using BBT.Workflow.RepresentationEtag;
 using BBT.Workflow.Runtime;
@@ -22,6 +23,8 @@ using Microsoft.Extensions.Options;
 using NSubstitute;
 using Shouldly;
 using Xunit;
+
+using BBT.Workflow.Instances.HumanTask;
 
 namespace BBT.Workflow.Instances;
 
@@ -116,6 +119,7 @@ public class InstanceQueryAppServiceDataCacheTests : IDisposable
             instanceIncidentRepository: Substitute.For<IInstanceIncidentRepository>(),
             instanceTaskRepository: Substitute.For<IInstanceTaskRepository>(),
             instanceActionRepository: Substitute.For<IInstanceActionRepository>(),
+            longPollInteractionGate: NSubstitute.Substitute.For<BBT.Workflow.Execution.LongPoll.ILongPollInteractionGate>(),
             instanceExtensionService: _instanceExtensionService,
             scriptContextFactory: _scriptContextFactory,
             instanceQueryGateway: Substitute.For<IInstanceQueryGateway>(),
@@ -129,9 +133,15 @@ public class InstanceQueryAppServiceDataCacheTests : IDisposable
             callerRoleResolver: new DefaultCallerRoleResolver(Substitute.For<ICurrentUser>()),
             paginationLinkGenerator: Substitute.For<BBT.Aether.Application.Pagination.IPaginationLinkGenerator>(),
             instanceFilteringOptions: Options.Create(new InstanceFilteringOptions()),
+            humanTaskOptions: Options.Create(new HumanTaskFunctionOptions()),
+            attributeIndexCatalog: Substitute.For<IAttributeIndexCatalog>(),
             stateFunctionCache: Substitute.For<Caching.IStateFunctionCache>(),
             dataFunctionCache: _dataFunctionCache,
             instanceSchemaFunctionCache: Substitute.For<Caching.IInstanceSchemaFunctionCache>(),
+
+            humanTaskFunctionCache: Substitute.For<Caching.IHumanTaskFunctionCache>(),
+            descentLimiter: new HumanTask.HumanTaskDescentLimiter(
+                Microsoft.Extensions.Options.Options.Create(new HumanTask.HumanTaskFunctionOptions())),
             logger: Substitute.For<ILogger<InstanceQueryAppService>>());
     }
 

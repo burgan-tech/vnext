@@ -1,3 +1,6 @@
+using BBT.Workflow.Logging;
+using System.Text;
+using BBT.Workflow.ExceptionHandling;
 using System.Diagnostics;
 using System.Text.Json;
 using BBT.Aether;
@@ -30,20 +33,12 @@ public sealed class EfCoreInstanceRepository(
      ICurrentSchema currentSchema,
     ISchemaValidator schemaValidator,
     IOptions<WorkflowExecutionOptions> executionOptions,
-    ILogger<EfCoreInstanceRepository> logger)
+    ILogger<EfCoreInstanceRepository> logger,
+    IOptionsMonitor<InstanceQueryOptions>? queryOptions = null)
     : EfCoreRepository<WorkflowDbContext, Instance, Guid>(dbContext, serviceProvider),
         IInstanceRepository
 {
     private const string DefaultSchemaName = "public";
-
-    // Cached and reused: JsonSerializerOptions caches serialization metadata internally, so a fresh
-    // instance per call would rebuild that metadata every time (CA1869). All wire-filter
-    // serialization in this repository uses the same camelCase + compact shape.
-    private static readonly JsonSerializerOptions CamelCaseCompactJson = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        WriteIndented = false
-    };
 
     public override async Task<IQueryable<Instance>> WithDetailsAsync()
     {
@@ -344,6 +339,17 @@ public sealed class EfCoreInstanceRepository(
             {
                 originalStatus = (InstanceStatus)statusProperty.OriginalValue!;
             }
+
+            // Type is write-once: the aggregate stamps it at creation and nothing may rewrite it.
+            // Pinning the property clean keeps the column out of every UPDATE statement.
+            // SetAfterSaveBehavior(Throw) would be the declarative form and is NOT usable here —
+            // on the detached retry/fault scopes Aether's base UpdateAsync calls Set.Update(root),
+            // whose graph walk marks every scalar Modified, so Throw would fail those saves. That
+            // detached branch is safe without a pin anyway: the value it re-sends comes from the
+            // aggregate it loaded, so it round-trips unchanged.
+            var typeProperty = entry.Property(nameof(Instance.Type));
+            typeProperty.OriginalValue = entity.Type;
+            typeProperty.IsModified = false;
         }
 
         // Incidents recorded in this unit of work must always be inserted. When the aggregate is
@@ -1256,101 +1262,9 @@ public sealed class EfCoreInstanceRepository(
         CancellationToken cancellationToken = default,
         SchemaFilterContext? schemaContext = null)
     {
-        // If groupBy or aggregations are provided, use ApplyFilterWithAggregationsAsync
-        if (!string.IsNullOrWhiteSpace(groupBy) || !string.IsNullOrWhiteSpace(aggregations))
-        {
-            var context = await GetDbContextAsync();
-            var dbSet = await GetDbSetAsync();
-
-            string? combinedFilter = null;
-            if (!string.IsNullOrWhiteSpace(filter))
-            {
-                if (FilterFormatDetector.DetectFormat(filter) == FilterFormat.GraphQL)
-                {
-                    if (GraphQLFilterParser.TryParseRequest(filter, out var parsedRequest) && parsedRequest?.Filter != null)
-                    {
-                        combinedFilter = JsonSerializer.Serialize(parsedRequest.Filter, CamelCaseCompactJson);
-                    }
-                    else
-                    {
-                        var combinedNode = FilterFormatDetector.CombineFilters(filter);
-                        if (combinedNode != null)
-                        {
-                            combinedFilter = JsonSerializer.Serialize(combinedNode, CamelCaseCompactJson);
-                        }
-                    }
-                }
-                else
-                {
-                    var legacyNode = FilterFormatDetector.ConvertLegacyToGraphQL(filter);
-                    if (legacyNode != null)
-                    {
-                        combinedFilter = JsonSerializer.Serialize(legacyNode, CamelCaseCompactJson);
-                    }
-                }
-            }
-
-            var response = await UnifiedFilterService.ApplyFilterWithAggregationsAsync(
-                context,
-                dbSet,
-                combinedFilter,
-                groupBy,
-                aggregations,
-                "Data",
-                currentSchema.Name ?? DefaultSchemaName,
-                query => IncludeListData(query).AsSplitQuery(),
-                schemaValidator,
-                cancellationToken,
-                schemaContext);
-
-            // If response has groups or aggregations, return empty paged list
-            // (groups and aggregations are handled separately in the response)
-            if (response.Groups != null || response.Aggregations != null)
-            {
-                return new HateoasPagedList<Instance>(
-                    new List<Instance>(),
-                    page,
-                    pageSize,
-                    false);
-            }
-
-            // If response has data, convert to HateoasPagedList
-            if (response.Data != null)
-            {
-                var totalCount = response.Data.Count;
-                var skip = (page - 1) * pageSize;
-                var pagedData = response.Data.Skip(skip).Take(pageSize).ToList();
-                var hasNext = skip + pageSize < totalCount;
-
-                return new HateoasPagedList<Instance>(MarkListIfPartiallyLoaded(pagedData), page, pageSize, hasNext);
-            }
-
-            // Fallback to empty list
-            return new HateoasPagedList<Instance>(
-                new List<Instance>(),
-                page,
-                pageSize,
-                false);
-        }
-
-        // Normal flow without groupBy/aggregations
-        // GetFilteredQueryAsync already includes DataList, no need to include again
-        var query = await GetFilteredQueryAsync(filter, null, cancellationToken);
-
-        // Manually materialize to ensure DataList is loaded
-        var skipCount = (page - 1) * pageSize;
-        var items = await query
-            .Skip(skipCount)
-            .Take(pageSize + 1) // Take one extra to check if there's a next page
-            .ToListAsync(cancellationToken);
-
-        var hasNextPage = items.Count > pageSize;
-        if (hasNextPage)
-        {
-            items = items.Take(pageSize).ToList();
-        }
-
-        return new HateoasPagedList<Instance>(MarkListIfPartiallyLoaded(items), page, pageSize, hasNextPage);
+        var result = await GetPagedResultsWithGroupsAsync(page, pageSize, filter, groupBy,
+            aggregations, null, schemaContext, cancellationToken);
+        return result.PagedList;
     }
 
     public async Task<(HateoasPagedList<Instance> PagedList, List<GroupSummary>? Groups)> GetPagedResultsWithGroupsAsync(
@@ -1363,269 +1277,21 @@ public sealed class EfCoreInstanceRepository(
         SchemaFilterContext? schemaContext = null,
         CancellationToken cancellationToken = default)
     {
-        // If groupBy is provided, use ApplyFilterWithAggregationsAsync
-        if (!string.IsNullOrWhiteSpace(groupBy))
+        var request = GraphQLFilterParser.ParseRequest(null, groupBy, aggregations);
+        if (!string.IsNullOrWhiteSpace(filter))
         {
-            var context = await GetDbContextAsync();
-            var dbSet = await GetDbSetAsync();
-
-            string? combinedFilter = null;
-            if (!string.IsNullOrWhiteSpace(filter))
+            InputValidator.ValidateFilters(filter);
+            request.Filter = FilterFormatDetector.DetectFormat(filter) switch
             {
-                if (FilterFormatDetector.DetectFormat(filter) == FilterFormat.GraphQL)
-                {
-                    if (GraphQLFilterParser.TryParseRequest(filter, out var parsedRequest) && parsedRequest?.Filter != null)
-                    {
-                        combinedFilter = JsonSerializer.Serialize(parsedRequest.Filter, CamelCaseCompactJson);
-                    }
-                    else
-                    {
-                        var combinedNode = FilterFormatDetector.CombineFilters(filter);
-                        if (combinedNode != null)
-                        {
-                            combinedFilter = JsonSerializer.Serialize(combinedNode, CamelCaseCompactJson);
-                        }
-                    }
-                }
-                else
-                {
-                    var legacyNode = FilterFormatDetector.ConvertLegacyToGraphQL(filter);
-                    if (legacyNode != null)
-                    {
-                        combinedFilter = JsonSerializer.Serialize(legacyNode, CamelCaseCompactJson);
-                    }
-                }
-            }
-
-            var response = await UnifiedFilterService.ApplyFilterWithAggregationsAsync(
-                context,
-                dbSet,
-                combinedFilter,
-                groupBy,
-                aggregations,
-                "Data",
-                currentSchema.Name ?? DefaultSchemaName,
-                query => IncludeListData(query).AsSplitQuery(),
-                schemaValidator,
-                cancellationToken,
-                schemaContext);
-
-            // Convert GroupByResponse to GroupSummary
-            List<GroupSummary>? groups = null;
-            if (response.Groups is { Count: > 0 })
-            {
-                groups = new List<GroupSummary>();
-                var groupByRequest = GraphQLFilterParser.ParseGroupBy(groupBy);
-                var groupByFields = groupByRequest?.GetFields() ?? new List<string>();
-
-                foreach (var group in response.Groups)
-                {
-                    var summary = new GroupSummary();
-
-                    // Concatenate all groupBy field values for the name
-                    // This preserves all grouping keys (e.g., "USD_pending" for currency and status)
-                    if (groupByFields.Count > 0 && group.Keys.Count > 0)
-                    {
-                        var keyValues = new List<string>();
-                        foreach (var field in groupByFields)
-                        {
-                            if (group.Keys.TryGetValue(field, out var keyValue) && keyValue != null)
-                            {
-                                keyValues.Add(keyValue.ToString() ?? string.Empty);
-                            }
-                        }
-                        summary.Name = string.Join("_", keyValues);
-                    }
-                    if (group.Keys.Count > 0)
-                        summary.Keys = new Dictionary<string, object?>(group.Keys);
-                    // Map aggregations
-                    if (group.Aggregations != null)
-                    {
-                        summary.Count = group.Aggregations.Count;
-                        summary.Sum = group.Aggregations.Sum;
-                        summary.Avg = group.Aggregations.Avg;
-                        summary.Min = group.Aggregations.Min;
-                        summary.Max = group.Aggregations.Max;
-                    }
-
-                    groups.Add(summary);
-                }
-            }
-
-            // Return empty paged list with groups
-            return (new HateoasPagedList<Instance>(
-                new List<Instance>(),
-                page,
-                pageSize,
-                false), groups);
+                FilterFormat.Legacy => FilterFormatDetector.ConvertLegacyToGraphQL(filter),
+                FilterFormat.GraphQL => GraphQLFilterParser.TryParseRequest(filter, out var parsed) && parsed != null
+                    ? parsed.Filter : GraphQLFilterParser.ParseFilter(filter),
+                _ => throw new FilterCompilationException("Filter format is not recognized.")
+            };
         }
-
-        // If only aggregations (no groupBy), return empty groups
-        if (!string.IsNullOrWhiteSpace(aggregations))
-        {
-            var context = await GetDbContextAsync();
-            var dbSet = await GetDbSetAsync();
-
-            string? combinedFilter = null;
-            if (!string.IsNullOrWhiteSpace(filter))
-            {
-                if (FilterFormatDetector.DetectFormat(filter) == FilterFormat.GraphQL)
-                {
-                    var combinedNode = FilterFormatDetector.CombineFilters(filter);
-                    if (combinedNode != null)
-                    {
-                        combinedFilter = JsonSerializer.Serialize(combinedNode, CamelCaseCompactJson);
-                    }
-                }
-                else
-                {
-                    combinedFilter = filter;
-                }
-            }
-
-            var response = await UnifiedFilterService.ApplyFilterWithAggregationsAsync(
-                context,
-                dbSet,
-                combinedFilter,
-                null, // no groupBy
-                aggregations,
-                "Data",
-                currentSchema.Name ?? DefaultSchemaName,
-                query => IncludeListData(query).AsSplitQuery(),
-                schemaValidator,
-                cancellationToken,
-                schemaContext);
-
-            // Aggregations without groupBy - return empty groups
-            HateoasPagedList<Instance> pagedList;
-            if (response.Data != null)
-            {
-                var totalCount = response.Data.Count;
-                var skip = (page - 1) * pageSize;
-                var pagedData = response.Data.Skip(skip).Take(pageSize).ToList();
-                var hasNext = skip + pageSize < totalCount;
-
-                pagedList = new HateoasPagedList<Instance>(MarkListIfPartiallyLoaded(pagedData), page, pageSize, hasNext);
-            }
-            else
-            {
-                pagedList = new HateoasPagedList<Instance>(
-                    new List<Instance>(),
-                    page,
-                    pageSize,
-                    false);
-            }
-
-            return (pagedList, null);
-        }
-
-        // Normal flow without groupBy/aggregations
-        var orderBy = GraphQLFilterParser.ParseOrderBy(sort);
-        var hasAttributesOrderBy = orderBy != null && orderBy.GetEntries().Any(e => e.Field.Trim().StartsWith("attributes.", StringComparison.OrdinalIgnoreCase));
-        var schema = currentSchema.Name ?? DefaultSchemaName;
-
-        var skipCount = (page - 1) * pageSize;
-        List<Instance> items;
-        bool hasNextPage;
-
-        if (string.IsNullOrWhiteSpace(filter) && hasAttributesOrderBy)
-        {
-            var orderByClause = GraphQLJsonFilterService.BuildOrderByClause(orderBy, schema, schemaContext: schemaContext);
-            if (!string.IsNullOrEmpty(orderByClause))
-            {
-                var dbSet = await GetDbSetAsync();
-                var rawSql = $"SELECT s.* FROM \"{schema}\".\"Instances\" s ORDER BY {orderByClause} OFFSET {skipCount} LIMIT {pageSize + 1}";
-                var orderedInstances = await dbSet
-                    .FromSqlRaw(rawSql)
-                    .AsNoTracking()
-                    .ToListAsync(cancellationToken);
-
-                hasNextPage = orderedInstances.Count > pageSize;
-                if (hasNextPage)
-                    orderedInstances = orderedInstances.Take(pageSize).ToList();
-
-                items = await LoadDataListAndPreserveOrderAsync(orderedInstances, cancellationToken);
-            }
-            else
-            {
-                var query = await GetFilteredQueryAsync(filter, schemaContext, cancellationToken);
-                if (orderBy != null)
-                    query = InstanceOrderByApplicator.Apply(query, orderBy);
-                items = await query
-                    .Skip(skipCount)
-                    .Take(pageSize + 1)
-                    .ToListAsync(cancellationToken);
-                hasNextPage = items.Count > pageSize;
-                if (hasNextPage)
-                    items = items.Take(pageSize).ToList();
-            }
-        }
-        else if (!string.IsNullOrWhiteSpace(filter) && hasAttributesOrderBy)
-        {
-            var combinedFilter = BuildCombinedFilterJson(filter);
-            var orderByClause = GraphQLJsonFilterService.BuildOrderByClause(orderBy, schema, schemaContext: schemaContext);
-            if (!string.IsNullOrEmpty(combinedFilter) && !string.IsNullOrEmpty(orderByClause))
-            {
-                var dbSet = await GetDbSetAsync();
-                var filterNode = GraphQLFilterParser.ParseFilter(combinedFilter);
-                if (filterNode != null && filterNode.NodeType != FilterNodeType.Empty)
-                {
-                    var query = dbSet.ApplyGraphQLFilter(filterNode, "Data", "InstancesData", schema, schemaValidator, null, orderByClause, schemaContext: schemaContext);
-                    var orderedInstances = await query
-                        .Skip(skipCount)
-                        .Take(pageSize + 1)
-                        .ToListAsync(cancellationToken);
-
-                    hasNextPage = orderedInstances.Count > pageSize;
-                    if (hasNextPage)
-                        orderedInstances = orderedInstances.Take(pageSize).ToList();
-
-                    items = await LoadDataListAndPreserveOrderAsync(orderedInstances, cancellationToken);
-                }
-                else
-                {
-                    var query = await GetFilteredQueryAsync(filter, schemaContext, cancellationToken);
-                    if (orderBy != null)
-                        query = InstanceOrderByApplicator.Apply(query, orderBy);
-                    items = await query
-                        .Skip(skipCount)
-                        .Take(pageSize + 1)
-                        .ToListAsync(cancellationToken);
-                    hasNextPage = items.Count > pageSize;
-                    if (hasNextPage)
-                        items = items.Take(pageSize).ToList();
-                }
-            }
-            else
-            {
-                var query = await GetFilteredQueryAsync(filter, schemaContext, cancellationToken);
-                if (orderBy != null)
-                    query = InstanceOrderByApplicator.Apply(query, orderBy);
-                items = await query
-                    .Skip(skipCount)
-                    .Take(pageSize + 1)
-                    .ToListAsync(cancellationToken);
-                hasNextPage = items.Count > pageSize;
-                if (hasNextPage)
-                    items = items.Take(pageSize).ToList();
-            }
-        }
-        else
-        {
-            var query = await GetFilteredQueryAsync(filter, schemaContext, cancellationToken);
-            if (orderBy != null)
-                query = InstanceOrderByApplicator.Apply(query, orderBy);
-            items = await query
-                .Skip(skipCount)
-                .Take(pageSize + 1)
-                .ToListAsync(cancellationToken);
-            hasNextPage = items.Count > pageSize;
-            if (hasNextPage)
-                items = items.Take(pageSize).ToList();
-        }
-
-        var normalPagedList = new HateoasPagedList<Instance>(MarkListIfPartiallyLoaded(items), page, pageSize, hasNextPage);
-        return (normalPagedList, null);
+        request.OrderBy = GraphQLFilterParser.ParseOrderBy(sort);
+        request.SchemaContext = schemaContext;
+        return await GetPagedResultsWithGroupsAsync(page, pageSize, request, cancellationToken);
     }
 
     /// <summary>
@@ -1641,30 +1307,42 @@ public sealed class EfCoreInstanceRepository(
         var dbSet = await GetDbSetAsync();
 
         var schema = currentSchema.Name ?? DefaultSchemaName;
+
+        request ??= new Definitions.GraphQL.GraphQLFilterRequest();
+        var readOptions = queryOptions?.CurrentValue ?? new InstanceQueryOptions();
+        if (readOptions.IdentityPaging && !readOptions.DisabledSchemas.Contains(schema, StringComparer.Ordinal) &&
+            request.GroupBy?.GetFields().Count is not > 0 && request.Aggregations?.HasAggregations != true)
+        {
+            var selected = await UnifiedFilterService.ExecutePageIdsAsync(
+                context, request, schema, page, pageSize, schemaValidator, cancellationToken, readOptions.LatestJoin);
+            var hydrated = await LoadDataListAndPreserveOrderAsync(selected.Ids, cancellationToken);
+            return (new HateoasPagedList<Instance>(
+                MarkListIfPartiallyLoaded(hydrated), page, pageSize, selected.HasNext), null);
+        }
         var response = await UnifiedFilterService.ExecuteRequestAsync(
             context,
             dbSet,
             request ?? new Definitions.GraphQL.GraphQLFilterRequest(),
             "Data",
             schema,
-            query => IncludeListData(query).AsSplitQuery(),
+            includeFunc: null,
             applyOrderBy: (q, orderBy) => InstanceOrderByApplicator.Apply((IQueryable<Instance>)q, orderBy),
             applyOrderByRaw: (ctx, sch, orderBy) =>
             {
                 if (orderBy == null) return ((WorkflowDbContext)ctx).Instances.AsQueryable();
-                var clause = GraphQLJsonFilterService.BuildOrderByClause(orderBy, sch);
+                var clause = GraphQLJsonFilterService.BuildOrderByClause(orderBy, sch, schemaContext: request?.SchemaContext);
                 if (string.IsNullOrEmpty(clause)) return ((WorkflowDbContext)ctx).Instances.AsQueryable();
                 return ((WorkflowDbContext)ctx).Instances
                     .FromSqlRaw($"SELECT s.* FROM \"{sch}\".\"Instances\" s ORDER BY {clause}")
                     .AsNoTracking();
             },
             schemaValidator,
-            cancellationToken);
+            cancellationToken, page, pageSize);
 
         // Handle GroupBy response
         if (response.Groups is { Count: > 0 })
         {
-            var groups = new List<GroupSummary>();
+            var groups = new List<GroupSummary>(response.Groups.Count);
             var groupByFields = request?.GroupBy?.GetFields() ?? new List<string>();
 
             foreach (var group in response.Groups)
@@ -1706,52 +1384,9 @@ public sealed class EfCoreInstanceRepository(
                 false), groups);
         }
 
-        // Handle aggregations without groupBy
-        if (response.Aggregations != null)
-        {
-            HateoasPagedList<Instance> pagedList;
-            if (response.Data != null)
-            {
-                var totalCount = response.Data.Count;
-                var skip = (page - 1) * pageSize;
-                var pagedData = response.Data.Skip(skip).Take(pageSize).ToList();
-                var hasNext = skip + pageSize < totalCount;
-
-                pagedList = new HateoasPagedList<Instance>(MarkListIfPartiallyLoaded(pagedData), page, pageSize, hasNext);
-            }
-            else
-            {
-                pagedList = new HateoasPagedList<Instance>(
-                    new List<Instance>(),
-                    page,
-                    pageSize,
-                    false);
-            }
-
-            return (pagedList, null);
-        }
-
-        // Handle regular filter (no aggregations)
-        HateoasPagedList<Instance> resultPagedList;
-        if (response.Data != null)
-        {
-            var totalCount = response.Data.Count;
-            var skip = (page - 1) * pageSize;
-            var pagedData = response.Data.Skip(skip).Take(pageSize).ToList();
-            var hasNext = skip + pageSize < totalCount;
-
-            resultPagedList = new HateoasPagedList<Instance>(MarkListIfPartiallyLoaded(pagedData), page, pageSize, hasNext);
-        }
-        else
-        {
-            resultPagedList = new HateoasPagedList<Instance>(
-                new List<Instance>(),
-                page,
-                pageSize,
-                false);
-        }
-
-        return (resultPagedList, null);
+        var items = await LoadDataListAndPreserveOrderAsync(response.Data?.Select(i => i.Id).ToList() ?? [], cancellationToken);
+        return (new HateoasPagedList<Instance>(
+            MarkListIfPartiallyLoaded(items), page, pageSize, response.HasNextPage), null);
     }
 
 
@@ -1963,6 +1598,18 @@ public sealed class EfCoreInstanceRepository(
     }
 
     /// <inheritdoc />
+    public async Task<List<string>> GetActiveFlowKeysAsync(CancellationToken cancellationToken = default)
+    {
+        var context = await GetDbContextAsync();
+        return await context.Instances
+            .Where(i => i.Status == InstanceStatus.Active)
+            .Select(i => i.Key!)
+            .Distinct()
+            .AsNoTracking()
+            .ToListAsync(cancellationToken);
+    }
+
+    /// <inheritdoc />
     public async Task<List<InstanceKeyModel>> GetActiveInstanceKeysAsync(CancellationToken cancellationToken = default)
     {
         var context = await GetDbContextAsync();
@@ -1981,49 +1628,21 @@ public sealed class EfCoreInstanceRepository(
     /// <summary>
     /// Loads DataList for instances (ordered by id list) and returns list in the same order. Used when ORDER BY must be preserved (EF Include breaks order).
     /// </summary>
-    private async Task<List<Instance>> LoadDataListAndPreserveOrderAsync(List<Instance> orderedInstances, CancellationToken cancellationToken)
+    private async Task<List<Instance>> LoadDataListAndPreserveOrderAsync(List<Guid> ids, CancellationToken cancellationToken)
     {
-        if (orderedInstances.Count == 0)
+        if (ids.Count == 0)
             return [];
-        var ids = orderedInstances.Select(i => i.Id).ToList();
         var dbSet = await GetDbSetAsync();
         var instancesWithData = await IncludeListData(
                 dbSet.Where(i => ids.Contains(i.Id)))
             .AsNoTracking()
             .ToListAsync(cancellationToken);
         var byId = instancesWithData.ToDictionary(i => i.Id);
-        return ids.Select(id => byId[id]).ToList();
+        // READ COMMITTED permits deletion between identity selection and hydration. Preserve the
+        // selected order for surviving rows instead of turning that race into KeyNotFoundException.
+        return ids.Where(byId.ContainsKey).Select(id => byId[id]).ToList();
     }
 
-    /// <summary>
-    /// Builds a single GraphQL filter JSON from the filter string (same logic as groupBy/aggregations path).
-    /// </summary>
-    private static string? BuildCombinedFilterJson(string? filter)
-    {
-        if (string.IsNullOrWhiteSpace(filter))
-            return null;
-        if (FilterFormatDetector.DetectFormat(filter) == FilterFormat.GraphQL)
-        {
-            if (GraphQLFilterParser.TryParseRequest(filter, out var parsedRequest) && parsedRequest?.Filter != null)
-            {
-                return JsonSerializer.Serialize(parsedRequest.Filter, CamelCaseCompactJson);
-            }
-            var combinedNode = FilterFormatDetector.CombineFilters(filter);
-            if (combinedNode != null)
-            {
-                return JsonSerializer.Serialize(combinedNode, CamelCaseCompactJson);
-            }
-        }
-        else
-        {
-            var legacyNode = FilterFormatDetector.ConvertLegacyToGraphQL(filter);
-            if (legacyNode != null)
-            {
-                return JsonSerializer.Serialize(legacyNode, CamelCaseCompactJson);
-            }
-        }
-        return null;
-    }
 
     /// <summary>
     /// Handles metrics recording for instance status changes
@@ -2053,27 +1672,207 @@ public sealed class EfCoreInstanceRepository(
     }
 
     /// <inheritdoc />
-    public async Task<List<Instance>> GetHumanTaskInstancesAsync(
+    public async Task<List<HumanTaskCandidate>> GetHumanTaskCandidatesAcrossFlowsAsync(
+        IReadOnlyList<string> flowKeys,
+        int perFlowLimit,
+        int maxFlowsPerStatement,
         CancellationToken cancellationToken = default)
     {
-        var schema = SanitizeIdentifier(currentSchema.Name ?? string.Empty);
-        var activeCode = InstanceStatus.Active.Code;
-        var busyCode = InstanceStatus.Busy.Code;
-        var subType = (int)StateSubType.Human;
+        // Argument guards, not configuration validation — the configured values are already checked
+        // at startup (HumanTaskFunctionOptions, ValidateOnStart). These exist because this is a
+        // public repository method and the batching loop below advances by maxFlowsPerStatement:
+        // a 0 leaves the offset where it was and spins forever, holding a connection, with nothing
+        // in any log to find. A caller that gets this wrong should learn about it immediately.
+        ArgumentOutOfRangeException.ThrowIfLessThan(perFlowLimit, 1);
+        ArgumentOutOfRangeException.ThrowIfLessThan(maxFlowsPerStatement, 1);
+
+        if (flowKeys.Count == 0)
+            return [];
+
+        // Resolve every flow's physical schema through ICurrentSchema rather than re-deriving the
+        // naming rule here: the mapping is the platform's, and a second spelling of it would drift
+        // the day the rule changes.
+        //
+        // No existence check, deliberately. "This flow is published" and "its schema is migrated"
+        // are the same fact, maintained from both directions:
+        //
+        //   * DefinitionAppService.PublishAsync migrates the new flow's schema BEFORE it writes the
+        //     definition instance, and returns on failure — so a row in sys-flows cannot exist
+        //     without its schema.
+        //   * DbMigrator's SchemaMigrationRunner discovers domain schemas FROM sys-flows and
+        //     migrates every one of them, which is also what brings an existing schema up to a newer
+        //     migration set on deploy.
+        //
+        // Every flow therefore has the same table shape, and flowKeys comes from that very table, so
+        // probing pg_class for an "Instances" relation would spend a round trip per cache miss
+        // re-deriving a guarantee two writers already keep. If the invariant were ever broken by
+        // something outside the runtime (a partial restore, a hand-dropped schema) the statement
+        // fails and the request answers 500 — which is exactly what the per-flow form did too, since
+        // its query was not isolated either.
+        var targets = new List<(string Flow, string Schema)>(flowKeys.Count);
+        foreach (var flowKey in flowKeys)
+        {
+            if (!IsSafeSqlIdentifier(flowKey))
+            {
+                // Cannot be embedded as a literal, and a flow key that is not a plain identifier is
+                // not something this runtime creates. Skipped rather than escaped — the whole point
+                // of this statement is that nothing in it comes from a request — but never
+                // silently: a flow missing from the list looks exactly like a flow with no work.
+                logger.HumanTaskScanSkippedFlowKey(flowKey);
+                continue;
+            }
+
+            using (currentSchema.Change(flowKey))
+            {
+                var schema = currentSchema.Name;
+                if (!string.IsNullOrEmpty(schema) && IsSafeSqlIdentifier(schema))
+                    targets.Add((flowKey, schema));
+            }
+        }
+
+        if (targets.Count == 0)
+            return [];
+
+        // The provider resolves a context as (unit of work, schema) and refuses an unset schema, so
+        // one has to be current even though every statement below names its schemas explicitly.
+        // Any target does: they are all schemas of the SAME database, which is the whole premise of
+        // reading them on one connection.
+        using (currentSchema.Change(targets[0].Flow))
+        {
+            var context = await GetDbContextAsync();
+
+            // ONE connection for the whole scan, held explicitly across the batches below. Without
+            // this each command would take and return a connection of its own, which is the
+            // behaviour this method exists to remove.
+            var openedHere = context.Database.GetDbConnection().State != System.Data.ConnectionState.Open;
+            if (openedHere)
+                await context.Database.OpenConnectionAsync(cancellationToken);
+
+            try
+            {
+                var candidates = new List<HumanTaskCandidate>();
+                for (var offset = 0; offset < targets.Count; offset += maxFlowsPerStatement)
+                {
+                    var batch = targets.GetRange(offset, Math.Min(maxFlowsPerStatement, targets.Count - offset));
+                    candidates.AddRange(await ScanBatchAsync(context, batch, perFlowLimit, cancellationToken));
+                }
+
+                return candidates;
+            }
+            finally
+            {
+                if (openedHere)
+                    await context.Database.CloseConnectionAsync();
+            }
+        }
+    }
+
+    /// <summary>
+    /// One statement, one round trip: a <c>UNION ALL</c> whose arms are the batch's schemas.
+    /// </summary>
+    /// <remarks>
+    /// Each arm is a parenthesised subquery so <c>ORDER BY … LIMIT</c> binds per schema, exactly as
+    /// the per-schema form did. The predicate is the shared <see cref="HumanTaskQuerySql.Predicate"/>
+    /// verbatim in every arm — the partial index is matched by proving implication over the
+    /// predicate's parse tree, and each arm is planned independently, so every arm keeps its
+    /// index-only scan. Verified with EXPLAIN; see docs/runtime/human-task-function.md.
+    /// <para>
+    /// The flow key travels back as a literal column because the caller has to know which schema a
+    /// candidate came from, and after the union the rows are otherwise indistinguishable. Both the
+    /// key and the schema name are validated identifiers (<see cref="IsSafeSqlIdentifier"/>); no
+    /// value in this statement comes from a request.
+    /// </para>
+    /// </remarks>
+    private static async Task<List<HumanTaskCandidate>> ScanBatchAsync(
+        WorkflowDbContext context,
+        List<(string Flow, string Schema)> batch,
+        int perFlowLimit,
+        CancellationToken cancellationToken)
+    {
+        var sql = new StringBuilder(batch.Count * 200);
+        for (var i = 0; i < batch.Count; i++)
+        {
+            if (i > 0)
+                sql.Append(" UNION ALL ");
+
+            sql.Append("(SELECT '").Append(batch[i].Flow).Append("' AS \"Flow\", \"Id\", \"Key\", \"Type\", \"CreatedAt\"")
+               .Append(" FROM \"").Append(batch[i].Schema).Append("\".\"Instances\"")
+               .Append(" WHERE ").Append(HumanTaskQuerySql.Predicate)
+               .Append(" ORDER BY \"CreatedAt\" DESC LIMIT ").Append(perFlowLimit)
+               .Append(')');
+        }
+
+        var rows = await context.Database
+            .SqlQueryRaw<HumanTaskCandidateRaw>(sql.ToString())
+            .ToListAsync(cancellationToken);
+
+        return [.. rows.Select(r => new HumanTaskCandidate(
+            r.Id, r.Key, InstanceType.FromCode(r.Type), r.CreatedAt, r.Flow))];
+    }
+
+    /// <summary>
+    /// Whether an identifier may be embedded in SQL: letters, digits, underscore and hyphen only,
+    /// non-empty, bounded by PostgreSQL's identifier length.
+    /// </summary>
+    /// <remarks>
+    /// An allowlist, not an escape. <see cref="SanitizeIdentifier"/> strips quotes, which is enough
+    /// for one interpolated schema under a caller that already controls it; this statement embeds
+    /// many names AND a string literal, so anything not provably an identifier is dropped instead.
+    /// </remarks>
+    private static bool IsSafeSqlIdentifier(string value)
+    {
+        if (string.IsNullOrEmpty(value) || value.Length > 63)
+            return false;
+
+        foreach (var c in value)
+        {
+            if (!char.IsAsciiLetterOrDigit(c) && c != '_' && c != '-')
+                return false;
+        }
+
+        return true;
+    }
+
+    /// <inheritdoc />
+    public async Task<List<Instance>> GetForHumanTaskDescentAsync(
+        IReadOnlyCollection<Guid> instanceIds,
+        CancellationToken cancellationToken = default)
+    {
+        if (instanceIds.Count == 0)
+            return [];
 
         var dbSet = await GetDbSetAsync();
 
-        return await IncludeListData(dbSet
-                .FromSqlRaw(
-                    "SELECT * FROM \"" + schema + "\".\"Instances\""
-                    + " WHERE \"Status\" IN ({0}, {1})"
-                    + " AND \"EffectiveStateSubType\" = {2}"
-                    + " AND NOT (\"ExtraProperties\"::jsonb ? 'parent.id')"
-                    + " ORDER BY \"CreatedAt\" DESC",
-                    activeCode, busyCode, subType))
-            .Include(i => i.ChildCorrelations)
+        // The LATEST data row only — deliberately not IncludeListData.
+        //
+        // The descent reads exactly three things off these aggregates: the open blocking
+        // correlation (Instance.Subflow), the current state, and LatestData for the humanTask block
+        // and the authorization evaluator. None of them reads history. IncludeListData honours the
+        // global WorkflowExecution:LatestOnlyInstanceLoading switch, which is OFF by default, so it
+        // would pull every version of every candidate — and because the two collection includes are
+        // one query, those rows multiply against the correlations. Measured on a seeded schema with
+        // 20 versions per instance: 4 000 rows returned for a 200-candidate batch instead of 200.
+        // The narrow include also lands on UX_InstancesData_Instance_IsLatest, the unique partial
+        // index that exists for exactly this access.
+        //
+        // No AsSplitQuery: with one data row and at most a couple of open correlations the product
+        // is already ~1, so a second round trip would buy nothing.
+        var instances = await dbSet
+            .Where(i => instanceIds.Contains(i.Id))
+            .Include(i => i.DataList.Where(d => d.IsLatest))
+            .Include(i => i.ChildCorrelations
+                .Where(c => !c.IsCompleted && c.SubFlowType == SubFlowType.SubFlow))
             .AsNoTracking()
             .ToListAsync(cancellationToken);
+
+        // Stamp the partial load so a future history reader fails fast instead of quietly answering
+        // from one row — the same guard IncludeListData's latest-only branch relies on.
+        foreach (var instance in instances)
+        {
+            instance.MarkDataPartiallyLoaded();
+        }
+
+        return instances;
     }
 
     private static string SanitizeIdentifier(string identifier)
@@ -2178,3 +1977,6 @@ public sealed class EfCoreInstanceRepository(
 
 /// <summary>SQL projection record for instance duration aggregation (monitor-only, additive).</summary>
 internal sealed record InstanceDurationRaw(double AvgMs, double MinMs, double MaxMs, long CompletedCount);
+
+/// <summary>Wire shape of the human-task candidate projection; column names must match the SELECT.</summary>
+internal sealed record HumanTaskCandidateRaw(string Flow, Guid Id, string? Key, string Type, DateTime CreatedAt);

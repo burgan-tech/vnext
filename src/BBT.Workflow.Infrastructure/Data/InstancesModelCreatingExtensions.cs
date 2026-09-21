@@ -67,12 +67,24 @@ public static class InstancesModelCreatingExtensions
                 .HasConversion(new InstanceStatusConverter());
 
             // Client-visible status (deepest active SubFlow's status, else own). Fingerprint
-            // material for the state function only — never served, see Instance.EffectiveStatus.
+            // material, a filter/sort column, and served through the Instance.GetEffectiveStatus
+            // clamp — see Instance.EffectiveStatus.
             b.Property(p => p.EffectiveStatus)
                 .IsRequired()
                 .HasMaxLength(InstanceConstants.MaxStatusLength)
                 .HasConversion(new InstanceStatusConverter())
                 .HasDefaultValue(InstanceStatus.Active);
+
+            // How the instance was STARTED: R root, S SubFlow child, P SubProcess child. Written
+            // once by the aggregate at creation and never again — EfCoreInstanceRepository.UpdateAsync
+            // pins the column clean so no save can rewrite it. No ValueGeneratedNever() here: it
+            // contradicts HasDefaultValue, which is what keeps the model snapshot in step with the
+            // migration's defaultValue and stops the next scaffold emitting a spurious AlterColumn.
+            b.Property(p => p.Type)
+                .IsRequired()
+                .HasMaxLength(InstanceConstants.MaxTypeLength)
+                .HasConversion(new InstanceTypeConverter())
+                .HasDefaultValue(InstanceType.Root);
 
             // Long-poll acknowledge marker (declarative long-poll termination on state entry).
             b.Property(p => p.LongPollAckToken);
@@ -154,22 +166,30 @@ public static class InstancesModelCreatingExtensions
                 .HasFilter("\"Status\" = 'A'")
                 .HasDatabaseName("IX_Instances_Active_LastTouched_Id");
 
-            // Partial covering index for GetHumanTaskInstancesAsync.
-            // Filters: Status IN ('A','B'), EffectiveStateSubType = Human,
-            // ExtraProperties does NOT contain 'parent.id'.
-            // CreatedAt DESC is the leading column to serve ORDER BY without a sort.
-            b.HasIndex(new[] { "CreatedAt" }, "IX_Instances_HumanTask")
-                .IsDescending(true)
-                .HasFilter("\"Status\" IN ('A','B') AND \"EffectiveStateSubType\" = 6 AND NOT (\"ExtraProperties\"::jsonb ? 'parent.id')")
-                .IncludeProperties(p => new
-                {
-                    p.Key,
-                    p.Flow,
-                    p.FlowVersion,
-                    p.CurrentState,
-                    p.EffectiveState,
-                    p.Status
-                });
+            b.HasIndex(new[] { "CreatedAt", "Id" }, "IX_Instances_CreatedAt_Id")
+                .IsDescending(true, false);
+
+            // Partial index serving the human-task list on the instance's OWN columns, replacing
+            // the ::jsonb existence probe below. Type IN ('R','P') keeps roots and SubProcess
+            // children — a SubProcess is fire-and-forget, so it is its own unit of work — while
+            // excluding 'S' children, whose state is already projected onto their root.
+            //
+            // The filter text comes from the same constant the query emits — see HumanTaskQuerySql
+            // for why a re-spelling silently costs the index.
+            //
+            // Covering: the candidate scan selects exactly Id, Key, Type, CreatedAt. Id and
+            // CreatedAt are the index key, so Key and Type go in INCLUDE and the scan never touches
+            // the heap. Type has to be INCLUDEd even though it also appears in the filter below —
+            // a partial index's predicate columns are not retrievable from the index, so selecting
+            // Type without including it silently turns an index-only scan into heap fetches. Its
+            // predecessor IX_Instances_HumanTask carried six INCLUDE columns that could never be
+            // reached, because its query was SELECT * — a covering payload only pays off when the
+            // projection is narrower than the row. That index is dropped by
+            // 20260917210000_DropLegacyHumanTaskIndex.
+            b.HasIndex(new[] { "CreatedAt", "Id" }, "IX_Instances_HumanTaskV2")
+                .IsDescending(true, false)
+                .HasFilter(HumanTaskQuerySql.Predicate)
+                .IncludeProperties(p => new { p.Key, p.Type });
         });
 
         builder.Entity<InstanceIncident>(b =>
@@ -334,7 +354,7 @@ public static class InstancesModelCreatingExtensions
                     .HasColumnName(nameof(InstanceData.Data));
 
                 // Partial GIN index serving the attribute (JSONB containment) filters. The equals
-                // path already emits "Data" @> {param} (GraphQLJsonFilterService.BuildEqualsCondition),
+                // path already emits "Data" @> {param} (AttributeConditionBuilder),
                 // which without this index is a sequential scan over InstancesData. jsonb_path_ops
                 // only supports @> — smaller and faster than the default opclass, and the ->> text
                 // accessors used by like/comparison operators cannot use a GIN index either way.

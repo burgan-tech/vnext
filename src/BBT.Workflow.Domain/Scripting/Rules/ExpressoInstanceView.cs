@@ -29,6 +29,20 @@ public sealed class ExpressoInstanceView
     /// <summary>Effective state subtype name.</summary>
     public string? EffectiveStateSubType { get; init; }
 
+    /// <summary>
+    /// The status code a client observes for this instance ("A", "B", "C", "F", "P") — the deepest
+    /// active SubFlow's status when one is running, otherwise the instance's own. The status
+    /// counterpart of <see cref="EffectiveState"/>; same value as <c>metadata.effectiveStatus</c>.
+    /// </summary>
+    public string? EffectiveStatus { get; init; }
+
+    /// <summary>
+    /// How this instance was STARTED: <c>"R"</c> root, <c>"S"</c> SubFlow child, <c>"P"</c>
+    /// SubProcess child. Immutable, so a rule can branch on the origin without re-deriving it —
+    /// <c>instance.Type == "S"</c>.
+    /// </summary>
+    public string? Type { get; init; }
+
     /// <summary>Latest instance data payload (JSON object/array root).</summary>
     public RuleJsonDynamic Data { get; init; } = RuleJsonDynamic.Empty;
 }

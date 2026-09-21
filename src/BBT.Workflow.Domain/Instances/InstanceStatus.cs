@@ -24,6 +24,14 @@ public sealed class InstanceStatus : IEquatable<InstanceStatus>
         Description = description ?? throw new ArgumentNullException(nameof(description));
     }
 
+    /// <summary>
+    /// True for the statuses an instance cannot leave on its own: <see cref="Completed"/>,
+    /// <see cref="Faulted"/> and <see cref="Passive"/>. The single definition of "terminal" —
+    /// the state function's subflow-terminal guard and
+    /// <see cref="Instance.GetEffectiveStatus"/>'s clamp both read it, and they must not drift apart.
+    /// </summary>
+    public bool IsTerminal => Equals(Completed) || Equals(Faulted) || Equals(Passive);
+
     public static InstanceStatus FromCode(string code)
     {
         return code switch

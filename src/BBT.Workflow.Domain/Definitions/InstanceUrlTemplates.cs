@@ -188,6 +188,13 @@ public static class InstanceUrlTemplates
     public const string RelatedDataBatchTemplate = "/{0}/workflows/{1}/internal/related-data/batch";
 
     /// <summary>
+    /// Internal-only: resolves a batch of this flow's instances down to the human task actually
+    /// waiting, recursing locally on the far side. Never expose publicly — it carries no
+    /// authorization of its own and accepts the caller's roles in the body.
+    /// </summary>
+    public const string HumanTaskLeafBatchTemplate = "/{0}/workflows/{1}/internal/human-task-leaf/batch";
+
+    /// <summary>
     /// URL template for retry instance endpoints.
     /// Format: /{domain}/workflows/{workflow}/instances/{instance}/retry
     /// </summary>
@@ -494,6 +501,10 @@ public static class InstanceUrlTemplates
     /// </summary>
     public static string RelatedDataBatch(string domain, string workflow, string? apiVersionPrefix = null)
         => BuildUrl(RelatedDataBatchTemplate, apiVersionPrefix, domain, workflow);
+
+    /// <summary>Generates the URL for the internal human-task leaf-resolution batch endpoint.</summary>
+    public static string HumanTaskLeafBatch(string domain, string workflow, string? apiVersionPrefix = null)
+        => BuildUrl(HumanTaskLeafBatchTemplate, apiVersionPrefix, domain, workflow);
 
     /// <summary>
     /// Generates URL for SubFlow Busy propagation endpoint.

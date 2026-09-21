@@ -177,9 +177,75 @@ A sixth profile is **composed on top of** the base, never selected instead of it
 - ETag source: `LatestData?.ETag` for entity, `IRepresentationEtagService.Generate(output)` for representation.
 - **Role filtering**: `ITransitionAuthorizationManager` filters available transitions per role. Supports `$InstanceStarter`, `$PreviousUser` pseudo-roles.
 - No server-side hold — 304 drives client-side polling.
+- **Every built-in instance function descends an active subflow — except `data`.** The client holds
+  the ROOT and never the leaf, so `state`, `authorize`, `view`, `schema`, `master` and `extensions`
+  all walk into the active correlation. `data` does not, and the state body's own `data.href`
+  addresses the polled instance, so a client following the link it was given reads the root's
+  attributes while looking at the leaf's state. Measured, and pinned by
+  `TheStateFunctionDescendsButTheDataFunctionDoesNot`; whether a client wants the case's data or the
+  leaf's working copy is a product decision, not a settled one.
+- **The parent's subflow overrides resolve in ONE place per kind, and they REPLACE.** Override wins
+  outright; absent an override the object's own definition applies. There is no merge — OR-ing the
+  child's own grants back in hands the narrowing straight back to the roles it was taken from.
+  `states`/`queryRoles` → `IsQueryAllowedAsync`; `transitions`/`roles` →
+  `TransitionAuthorizationManager.EffectiveTransitionGrants`; `views` →
+  `GetSubFlowViewWithOverrideAsync`. The first two read the map **stamped on the child**
+  (`SubFlowTransitionOverrideReader` / `SubFlowStateOverrideReader`), which is the only form that
+  works at a directly-addressed leaf; `views` is deliberately parent-side only and is not stamped.
+  Resolving per surface is how they diverged: at such a leaf `authorize` read the PARENT's definition,
+  found nothing, and gave the OPPOSITE verdict to the state function for both roles.
+- **`authorize` answers two different questions and the parameter picks which.**
+  `?transitionKey=` is actionability, `?queryRoles=true` is visibility — the state function's
+  `transitions` and its 403 answer the same two. They must agree question-for-question, and the
+  verdict is in the BODY on both statuses: a refusal is `403` with `{"allowed":false}`, so reading
+  only the 200 turns every refusal into "no answer".
+- **`queryRoles` resolution is one method, and it honours the parent's stamped override.**
+  `TransitionAuthorizationManager.IsQueryAllowedAsync` resolves, highest first: the parent's stamped
+  `subflow.state_role_overrides` entry for the instance's effective state → that state's own
+  `queryRoles` → the workflow root's. It **replaces**, never merges — a parent that narrowed a child's
+  visibility meant to narrow it. Every read gate goes through it: state, data, view, schema and
+  incident functions, `authorize`'s query branch, and the human-task list. Reading the stamp there
+  rather than per surface is what makes the narrowing apply wherever the child is reached from; the
+  parent-side reader (`AuthorizeAppService`, `subFlowConfig.Overrides.States`) cannot serve it,
+  because it needs an active SubFlow correlation that the child being asked about does not have.
+  `SubflowStarter` had always written that map and nothing read it.
+- **`effectiveStatus` is served, and it is CLAMPED.** `Instance.GetEffectiveStatus` — not the
+  raw `EffectiveStatus` column — feeds `metadata.effectiveStatus` on the instance GET, the list view,
+  `GetInstanceTask` and sync `start`/`transition` responses. Rule:
+  `Status.IsTerminal || EffectiveStatus.IsTerminal ? Status : EffectiveStatus` — the projection is
+  served only while NEITHER side is terminal. Both arms match what the state function already answers:
+  a terminal projection on a running level is the SubFlow completion window (`subFlowIsTerminal` drops
+  the subflow view and says `Busy`), and a terminal own status with a stale non-terminal projection is
+  a cancel/fault cascade the write side cannot repair (it completes the level while the correlation is
+  still open, so `ResyncEffectiveStatus` no-ops, and cleanup closes the correlation afterwards) — that
+  arm was found by running it: cancelled parents served `effectiveStatus: A` against the state
+  function's `C`. `InstanceStatus.IsTerminal` is the single definition; do not re-spell the terminal
+  set anywhere.
+  **Never rewrite the clamp as `HasActiveSubFlow ? EffectiveStatus : Status`.** The list query does not
+  include child correlations (`EfCoreInstanceRepository.IncludeListData` loads `DataList` only), so that
+  predicate is false for every list item and every parent inside a subflow would report its own `Busy`.
+  The raw column stays the fingerprint member and the filter/sort target; `WorkflowLogs.EffectiveStatusDrift`
+  (20445) is now a regression sentinel for a served value, not a measurement.
+- **`Instance.Type` is write-once, and it is NOT the relationship check.** `R`/`S`/`P` records how
+  the instance was *started*, derived once in `SetInfoMetadata` from `parent.id` + `parent.flowtype`
+  and never updated (latched on `IsTransient`; the EF property is pinned clean in
+  `EfCoreInstanceRepository.UpdateAsync`). **`parent.flowtype` alone is not a discriminator** —
+  `SetInfoMetadata` `TryAdd`s the instance's OWN workflow type code there when the key is absent, so
+  a workflow whose definition declares `type: "S"` and is started directly through the API carries
+  `parent.flowtype: "S"` with no parent at all, and `IsSubFlow` answers true for it. Several
+  vnext-example workflows are in exactly that shape. `IsSubFlow`/`IsSubItem` and every `parent.*`
+  reader are deliberately UNTOUCHED — do not "unify" them with `Type`; that is a behaviour change
+  (it would restore output mapping for those roots and stop their empty-parent subflow-terminal
+  events) and needs its own council row and measured evidence. Served as `metadata.type` on the
+  instance GET, the list view and `GetInstanceTask`; filterable/sortable as **`instanceType`**, never
+  the bare `type`, which would collide with a same-named business attribute. Not in the state body,
+  so `ResponseShapeVersion` is unaffected. Adding a column to the aggregate? Add it to
+  `CreateSnapshot` too — `EffectiveStatus` was forgotten there once and every script read the
+  constructor default.
 - **Response-shape version**: `StateFunctionCache.ResponseShapeVersion` (currently `v9`) is folded into both the ETag material and the cache key. Bump it in the same commit as any change to what the state body carries — otherwise a client polling a parked instance keeps getting 304 and never sees the new shape.
 - **`incident` block**: always present, and it carries **links, not content** — `{ hasActiveIncident, active: { href } (only while the flag is true), history: { href } }`. Identical on the state body and on `metadata.incident` (single GET and list). `active.href` → `GET …/instances/{instance}/incidents/active` (newest unresolved, **404 `Instance:100037`** when none is open — a normal answer, since a retry can resolve between the poll and the follow-up); `history.href` → the paged history. Same `queryRoles` gate as the state function on both, and no stack trace anywhere. When lifted from an active subflow, `active.href` addresses the **leaf that owns the incident** while `history.href` stays on the polled instance. `HasActiveIncident` is a fingerprint member so raise/resolve without a state change moves the ETag. **Do not put incident fields back in the body**: the embedded summary is what made the state function read the incident table on its hottest path and what created the resolve-A-then-raise-B stale-`active` hole, both of which the link form removes.
 - **Scheduled entries in `transitions`**: the state body lists the runtime's armed scheduled transitions inside the existing `transitions` array as `{ name, kind: "scheduled", executeAtUtc, href, view, schema }` entries, appended after the available transitions and built from active `InstanceJob` rows (`JobType.ScheduledTransition`) whose `ExecuteAt` is stamped at scheduling time from the same instant the Dapr job is armed with. The href/view/schema links use the same url shapes as triggerable entries but with `hasView`/`loadData`/`hasSchema` hardcoded false — a TEMPORARY uniformity concession for domain clients (they will adapt); scheduled transitions remain System-actor-gated at execution, so the href is not callable. Not role-filtered; not merged from subflows. Job-set changes deliberately do NOT participate in the fingerprint ETag (team decision, issue #864) — same-state re-arms can leave the scheduled entries stale behind a 304; documented as a known gap in `docs/runtime/state-function-cache-and-etag.md`.
+- **`interaction.longPoll` authorization has two mutually exclusive arms** (issue #936): `roles` grants OR one condition `rule` (`IConditionMapping`, same slot shape as view/notification rules; validator rejects both, schema enforces exactly-one). Both surfaces — the state function's signal emit and the acknowledge endpoint — admit through the single `ILongPollInteractionGate`, which owns the arm selection (rule, else roles, else allow) and resolves caller roles lazily via a surface-supplied factory; the rule reads instance data via `context.Instance.Data` (lazy) — `context.Body` is deliberately NOT populated on this surface, unlike view-rule contexts; a rule returning false, throwing, or failing to compile denies (fail-closed; the fallback-timeout job still resumes the pipeline, so a broken rule cannot strand the instance). A rule-gated interaction body is NEVER stored in the shared state body cache (`CallerScopeHash` does not cover the headers/query/data a rule reads; bubbled subflow interactions skip caching conservatively). The fingerprint 304 path is untouched — rule-input changes behind an unchanged fingerprint are an accepted #864-class staleness gap; enforcement is never stale because the ack evaluates fresh. Full guide: `docs/domain/long-poll-termination.md`.
 
 ## Task / Action History (system functions)
 
@@ -269,12 +335,33 @@ A sixth profile is **composed on top of** the base, never selected instead of it
   (`ITransitionAuthorizationManager.CreateEvaluatorAsync`). The manager's other methods are thin
   wrappers. Never add a second matcher — three diverged inside the manager once and the surfaces
   disagreed about the same transition. `RoleGrantEvaluatorTests` pins the equivalence.
-- Canonical rule over the **whole** grant set: DENY wins → matching ALLOW allows → a set with no ALLOW
-  grant is a blacklist (allow unless denied) → empty set allows. Multi-role: any allowed role wins.
+- Canonical rule over the **whole** grant set, in two phases:
+  **`authorized = DenyGroupOk AND AllowGroupOk`**.
+  `DenyGroupOk` = **no** deny grant matches **any** of the caller's roles (an AND over the denies —
+  one breach refuses). `AllowGroupOk` = there are no allow grants at all (blacklist), **or** at least
+  one allow grant matches at least one role (an OR over the allows). Empty grant set → allow.
+  **Deny is evaluated first and short-circuits**: matching an allow is the side that resolves
+  predefined and dynamic grants, and a dynamic grant's context build serializes the instance's full
+  latest data, so a refusal must not pay for it.
+- **A denied role is not bought back by an allowed one.** This is the half that changed: the rule used
+  to be applied per caller role inside a loop that returned on the first role that was allowed, so a
+  deny for role B was never reached once role A matched an allow — `[approver, blocked]` passed. The
+  new composition is monotonically restrictive; no caller gains access anywhere it did not have it.
   A caller with **no** roles is still evaluated once so predefined/dynamic grants apply.
 - **`CreatedBy` pairs with the actor (`ActorUserName`); `BehalfOf` pairs with `UserName`.** Predefined
   and dynamic grants match on the *grant* side, independent of the caller role being evaluated — that
   is what makes `[deny: $InstanceStarter]` bind regardless of the caller's other roles.
+- **Every decision point takes the caller's WHOLE role set, never one of them.** `IsAnyRoleAllowed`,
+  `IsRoleAllowedForGrantsAsync`, `IsTransitionAllowedForRoleAsync`, `IsTransitionAllowedInStateAsync`
+  and `FilterAuthorizedTransitionKeysAsync` all take `IReadOnlyCollection<string>?`. Feeding one role
+  — `ICallerRoleResolver.SingleRoleOf`, which is `roles[0]` — made the answer depend on header ORDER:
+  measured on the lab, `x-roles: other,ht-c-approver` was offered nothing while
+  `x-roles: ht-c-approver,other` was offered the transition, same caller, same grants. It also put
+  the deny group out of reach, since an AND across roles needs the roles. `SingleRoleOf` survives for
+  cache scoping (`CallerScopeHash`) and state aliasing display, never for a decision.
+- **Never loop the caller's roles and return on the first allowed one.** That is the canonical rule's
+  composition rebuilt a layer up, and it rebuilds the wrong one — it is how `AuthorizeAppService`
+  re-introduced the defect twice after the evaluator was fixed. One call, whole set.
 - **Batch, don't loop.** Create one evaluator per instance/schema and query it. `grantsForPrefetchHint`
   must cover every grant you will evaluate: a `$PreviousUser` / `$PreviousBehalfOfUser` grant missing
   from the hint can never match. The auth context is built lazily and memoized per transition key —

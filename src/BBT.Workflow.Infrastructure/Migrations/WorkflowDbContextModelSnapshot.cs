@@ -272,6 +272,13 @@ namespace BBT.Workflow.Migrations
                         .IsRequired()
                         .HasColumnType("text[]");
 
+                    b.Property<string>("Type")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(3)
+                        .HasColumnType("character varying(3)")
+                        .HasDefaultValue("R");
+
                     b.HasKey("Id");
 
                     b.HasIndex("EffectiveState")
@@ -295,11 +302,14 @@ namespace BBT.Workflow.Migrations
                     b.HasIndex(new[] { "Key" }, "IX_Instances_Active_Key")
                         .HasFilter("\"Status\" = 'A'");
 
-                    b.HasIndex(new[] { "CreatedAt" }, "IX_Instances_HumanTask")
-                        .IsDescending()
-                        .HasFilter("\"Status\" IN ('A','B') AND \"EffectiveStateSubType\" = 6 AND NOT (\"ExtraProperties\"::jsonb ? 'parent.id')");
+                    b.HasIndex(new[] { "CreatedAt", "Id" }, "IX_Instances_CreatedAt_Id")
+                        .IsDescending(true, false);
 
-                    NpgsqlIndexBuilderExtensions.IncludeProperties(b.HasIndex(new[] { "CreatedAt" }, "IX_Instances_HumanTask"), new[] { "Key", "Flow", "FlowVersion", "CurrentState", "EffectiveState", "Status" });
+                    b.HasIndex(new[] { "CreatedAt", "Id" }, "IX_Instances_HumanTaskV2")
+                        .IsDescending(true, false)
+                        .HasFilter("\"Type\" IN ('R', 'P') AND \"Status\" IN ('A', 'B') AND \"EffectiveStatus\" = 'A' AND \"EffectiveStateSubType\" = 6");
+
+                    NpgsqlIndexBuilderExtensions.IncludeProperties(b.HasIndex(new[] { "CreatedAt", "Id" }, "IX_Instances_HumanTaskV2"), new[] { "Key", "Type" });
 
                     b.HasIndex(new[] { "Key" }, "IX_Instances_Key");
 

@@ -1395,5 +1395,119 @@ public class WorkflowValidatorTests : DomainTestBase<DomainEntryPoint>
     }
 
     #endregion
+
+    #region Long-Poll Interaction Validation Tests
+
+    [Fact]
+    public void Validate_ShouldFail_WhenLongPollDeclaresBothRolesAndRule()
+    {
+        var workflow = DeserializeWorkflow(BuildWorkflowWithLongPoll("""
+            {
+                "terminate": true,
+                "roles": [ { "role": "backoffice.operator", "grant": "allow" } ],
+                "rule": { "location": "./gate.csx", "code": "cmV0dXJuIHRydWU7" }
+            }
+            """));
+
+        var result = _validator.Validate(workflow);
+
+        result.IsValid.ShouldBeFalse();
+        result.ValidationErrors.ShouldContain(e =>
+            e.ErrorMessage!.Contains("Role-based and rule-based interaction authorization are alternatives"));
+    }
+
+    [Fact]
+    public void Validate_ShouldPass_WhenLongPollDeclaresRuleOnly()
+    {
+        var workflow = DeserializeWorkflow(BuildWorkflowWithLongPoll("""
+            {
+                "terminate": true,
+                "rule": { "location": "./gate.csx", "code": "cmV0dXJuIHRydWU7" }
+            }
+            """));
+
+        var result = _validator.Validate(workflow);
+
+        result.ValidationErrors
+            .Where(e => e.MemberNames.Any(m => m.Contains("LongPoll")))
+            .ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void Validate_ShouldFail_WhenLongPollRuleHasNoBody()
+    {
+        // A location-only rule is never executed — the shared script-slot rule catches it.
+        var workflow = DeserializeWorkflow(BuildWorkflowWithLongPoll("""
+            {
+                "terminate": true,
+                "rule": { "location": "./gate.csx" }
+            }
+            """));
+
+        var result = _validator.Validate(workflow);
+
+        result.IsValid.ShouldBeFalse();
+        result.ValidationErrors.ShouldContain(e =>
+            e.MemberNames.Any(m => m.Contains("Interaction.LongPoll.Rule")));
+    }
+
+    [Fact]
+    public void Validate_ShouldFail_WhenLongPollRoleGrantIsMalformedDynamic()
+    {
+        // longPoll.roles now runs through the same dynamic-grant syntax check as every grant set.
+        var workflow = DeserializeWorkflow(BuildWorkflowWithLongPoll("""
+            {
+                "terminate": true,
+                "roles": [ { "role": "$user.customer", "grant": "allow" } ]
+            }
+            """));
+
+        var result = _validator.Validate(workflow);
+
+        result.IsValid.ShouldBeFalse();
+        result.ValidationErrors.ShouldContain(e =>
+            e.MemberNames.Any(m => m.Contains("Interaction.LongPoll.Roles")));
+    }
+
+    private static string BuildWorkflowWithLongPoll(string longPollJson)
+    {
+        return $$"""
+        {
+            "type": "F",
+            "labels": [{"label": "Test", "language": "en"}],
+            "states": [
+                {
+                    "key": "review",
+                    "stateType": "intermediate",
+                    "labels": [{"label": "Review", "language": "en"}],
+                    "interaction": { "longPoll": {{longPollJson}} },
+                    "transitions": [
+                        {
+                            "key": "finish",
+                            "target": "done",
+                            "triggerType": "manual",
+                            "labels": [{"label": "Finish", "language": "en"}]
+                        }
+                    ]
+                },
+                {
+                    "key": "done",
+                    "stateType": "finish",
+                    "labels": [{"label": "Done", "language": "en"}],
+                    "transitions": []
+                }
+            ],
+            "sharedTransitions": [],
+            "startTransition": {
+                "key": "start",
+                "target": "review",
+                "triggerType": "manual",
+                "labels": [{"label": "Start", "language": "en"}]
+            }
+        }
+        """;
+    }
+
+    #endregion
 }
 

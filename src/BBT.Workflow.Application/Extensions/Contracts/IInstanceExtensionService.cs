@@ -27,3 +27,10 @@ public interface IInstanceExtensionService
         ExtensionScope currentScope,
         CancellationToken cancellationToken = default);
 }
+
+/// <summary>Creates an isolated list operation that reuses extension definitions, never execution results.</summary>
+public interface IListExtensionServiceFactory
+{
+    /// <summary>Returns an extension processor owned by one sequential list invocation.</summary>
+    IInstanceExtensionService CreateForList();
+}

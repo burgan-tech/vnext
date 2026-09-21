@@ -30,6 +30,7 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
         Key = Check.Length(key, nameof(Key), InstanceConstants.MaxKeyLength);
         Status = InstanceStatus.Active;
         EffectiveStatus = InstanceStatus.Active;
+        Type = InstanceType.Root;
 
         Tags = [];
 
@@ -139,14 +140,79 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
     /// <see cref="InstanceStateFingerprint"/>.
     /// </para>
     /// <para>
-    /// AUTHORITY: fingerprint material only. It is NOT served in any response and NOT read by any
-    /// runtime decision — the served status still comes from the live subflow descent. That is what
-    /// keeps a missed propagation fail-stale (a cached body survives a moment too long) instead of
-    /// fail-wrong (the runtime reports a status nobody holds). Promoting it to a served value is a
-    /// separate decision that needs drift evidence first.
+    /// AUTHORITY: this is the raw column — the <em>propagated</em> value, not the answer. It is
+    /// <see cref="InstanceStateFingerprint"/> material, and it is what instance queries filter and
+    /// sort on. Nothing serves it directly: every response goes through
+    /// <see cref="GetEffectiveStatus"/>, which clamps the one window where the raw column is known
+    /// to disagree with what the runtime actually reports. The state function still answers from the
+    /// live subflow descent, and <c>WorkflowLogs.EffectiveStatusDrift</c> compares the two on every
+    /// full build — it is now a regression sentinel for the served value, not a measurement.
     /// </para>
     /// </remarks>
     public InstanceStatus EffectiveStatus { get; private set; }
+
+    /// <summary>
+    /// How this instance was STARTED: <c>R</c> root, <c>S</c> SubFlow child, <c>P</c> SubProcess
+    /// child. Write-once — derived in <see cref="SetInfoMetadata"/> from the parent block the
+    /// starter supplied, and never updated for the rest of the instance's life.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This is NOT the parent/child relationship check and must not be conflated with one.
+    /// <see cref="IsSubFlow"/> / <see cref="IsSubItem"/> read <c>parent.flowtype</c> and are
+    /// deliberately left untouched; the <c>parent.*</c> metadata contracts remain the source of
+    /// truth for the relationship itself. <c>Type</c> answers only "how did this row come into
+    /// existence", which is the question a report can still ask once the instance has finished.
+    /// </para>
+    /// <para>
+    /// Stored as a column rather than computed over <see cref="ExtraProperties"/> on purpose:
+    /// <see cref="SetMetaData"/> replaces that dictionary wholesale, so a computed answer could
+    /// change after the fact. A column cannot.
+    /// </para>
+    /// </remarks>
+    public InstanceType Type { get; private set; } = InstanceType.Root;
+
+    /// <summary>
+    /// The status a client observes for THIS instance — the served counterpart of
+    /// <see cref="GetEffectiveState"/>, and the value every instance projection carries as
+    /// <c>metadata.effectiveStatus</c>. Equal to the state function's own <c>status</c> in every
+    /// regime.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The rule: <b>the propagated projection is served only while NEITHER side is terminal;
+    /// otherwise this level's own <see cref="Status"/> is the answer.</b> A terminal status on
+    /// either side means the projection can no longer be trusted, and in both directions the state
+    /// function already answers with the own status — this is that behaviour expressed on columns.
+    /// </para>
+    /// <para>
+    /// Terminal <em>projection</em>, running level: the SubFlow completion window. The child has come
+    /// to rest and stamped its <c>C</c>/<c>F</c> upward, but this level's correlation is still open
+    /// and this level is still resuming. Serving the raw <c>C</c> tells a client the flow finished
+    /// mid-resume; <c>BuildInstanceStateOutputAsync</c>'s <c>subFlowIsTerminal</c> guard drops the
+    /// subflow view and answers <c>Busy</c> there.
+    /// </para>
+    /// <para>
+    /// Terminal <em>own status</em>, non-terminal projection: a cancelled or faulted level whose
+    /// child was still Active. <see cref="ResyncEffectiveStatus"/> cannot fix this at write time —
+    /// the cascade completes this level while the child's correlation is still open, so the guard
+    /// no-ops, and the correlation is closed afterwards by cleanup with nothing left to restamp the
+    /// column. The state function reports the own status (its descent finds no active correlation);
+    /// without this arm a cancelled parent served <c>effectiveStatus: "A"</c> against the state
+    /// function's <c>"C"</c> — measured on 15 pre-existing rows. The stale
+    /// <see cref="EffectiveState"/> on the same rows is the same gap, one column over.
+    /// </para>
+    /// <para>
+    /// Deliberately does NOT read <see cref="HasActiveSubFlow"/>, even though "active subflow ?
+    /// propagated : own" reads like the more direct rule. The list query does not include child
+    /// correlations (<c>EfCoreInstanceRepository.IncludeListData</c> loads <c>DataList</c> only), so
+    /// that predicate is false for every list item and every parent sitting inside a subflow would
+    /// report its own <c>Busy</c>. A columns-only rule answers identically on the single GET, the
+    /// list and <c>GetInstanceTask</c>.
+    /// </para>
+    /// </remarks>
+    public InstanceStatus GetEffectiveStatus =>
+        Status.IsTerminal || EffectiveStatus.IsTerminal ? Status : EffectiveStatus;
 
     /// <summary>
     /// Strictly increasing notification number for this instance's <c>sub:state-changed</c> events,
@@ -367,6 +433,16 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
         metadata.TryAdd(DomainConsts.MetaDataKeys.FlowType, flowType);
 
         SetMetaData(metadata);
+
+        // Write-once, and latched on IsTransient: that flag is set by the creating constructor and
+        // is Ignore()d in the EF model, so it is true only on an aggregate that has never been
+        // persisted. A stray SetInfoMetadata on a rehydrated aggregate therefore cannot reclassify
+        // a stored row. Derived here rather than in Create() because the parent block only lands in
+        // `metadata`, and only the three TryAdds above have finished populating it by this point.
+        if (IsTransient)
+        {
+            Type = InstanceType.FromStartMetadata(metadata);
+        }
     }
 
     private readonly List<InstanceData> _dataList = new();
@@ -445,6 +521,14 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
             FlowVersion = FlowVersion,
             Key = Key,
             Status = Status,
+            // The projection travels with the snapshot: the script context's instance IS a snapshot
+            // (ScriptContextBuilder), so omitting it left every script reading the constructor's
+            // Active default instead of the client-visible status.
+            EffectiveStatus = EffectiveStatus,
+            // Same reason: the script context reads Type off the snapshot, so leaving it out would
+            // make every .csx see the constructor's Root default regardless of how the instance
+            // was actually started.
+            Type = Type,
             CompletedAt = CompletedAt,
             CurrentState = CurrentState,
             CurrentStateType = CurrentStateType,
@@ -502,7 +586,7 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
         Status = InstanceStatus.Completed;
         CompletedAt = DateTime.UtcNow;
         Duration = CompletedAt - CreatedAt;
-        SyncEffectiveStatusFromOwn();
+        ForceEffectiveFromOwnTerminalState();
 
         // Publish cleanup event to cancel all scheduled jobs
         var rootId = this.GetRootInstanceId();
@@ -556,7 +640,7 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
         Status = InstanceStatus.Faulted;
         CompletedAt = DateTime.UtcNow;
         Duration = CompletedAt - CreatedAt;
-        SyncEffectiveStatusFromOwn();
+        ResyncEffectiveStatus();
 
         var rootId = this.GetRootInstanceId();
         AddDistributedEvent(new InstanceFaultedCleanupEvent
@@ -650,7 +734,7 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
         Status = InstanceStatus.Active;
         CompletedAt = null;
         Duration = null;
-        SyncEffectiveStatusFromOwn();
+        ResyncEffectiveStatus();
         ResolveOpenIncidents();
         return true;
     }
@@ -742,7 +826,7 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
         Status = InstanceStatus.Completed;
         CompletedAt = DateTime.UtcNow;
         Duration = CompletedAt - CreatedAt;
-        SyncEffectiveStatusFromOwn();
+        ForceEffectiveFromOwnTerminalState();
 
         // Publish cancellation event - event handler will handle cleanup (jobs, correlations)
         var rootId = this.GetRootInstanceId();
@@ -972,12 +1056,76 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
     /// mutators). A status flip on a lean, correlation-less load must go through the repository's
     /// set-based CAS instead.
     /// </summary>
-    private void SyncEffectiveStatusFromOwn()
+    /// <remarks>
+    /// Public because the SubFlow terminal paths need it too: they reset <see cref="EffectiveState"/>
+    /// back to this instance's own state when a child terminates, and the status projection has to
+    /// come back with it — otherwise the column keeps the child's <c>C</c>/<c>F</c> until this
+    /// level's next settle, which is fingerprint material describing a chain that has already
+    /// closed. A second still-open SubFlow correlation makes it a no-op, so the surviving child
+    /// keeps owning the projection.
+    /// </remarks>
+    public void ResyncEffectiveStatus()
     {
         if (!HasActiveSubFlow)
         {
             EffectiveStatus = Status;
         }
+    }
+
+    /// <summary>
+    /// Re-derives the whole effective projection — state, state type and state sub type — from this
+    /// instance's OWN current state. The state twin of <see cref="ResyncEffectiveStatus"/>, and it
+    /// carries the same <see cref="HasActiveSubFlow"/> guard for the same reason: a second
+    /// still-open SubFlow correlation must keep owning the projection.
+    /// </summary>
+    /// <remarks>
+    /// The SubFlow terminal paths call this instead of <see cref="SetEffectiveState"/>, which writes
+    /// only the state key. Leaving the type/sub-type pair behind made a parent carry a finished
+    /// child's <c>StateSubType.Human</c> forever: the sub type has no other reset writer, and the
+    /// resume re-enters the pipeline at <c>ClearBusyOnResumeStep</c> (order 79), past
+    /// <c>ChangeStateStep</c> (50) — so the resume hop itself never rewrites it, and a parent whose
+    /// SubFlow state waits for a human or an event never reaches another <see cref="ChangeState"/>
+    /// at all. The stale pair is served as <c>metadata.effectiveState*</c>, feeds the script rule
+    /// context, and made the <c>human-task</c> list offer tasks that had already been completed.
+    ///
+    /// <see cref="CurrentStateType"/> and <see cref="CurrentStateSubType"/> are written
+    /// unconditionally by <see cref="ChangeState"/>, so they always describe this instance's own
+    /// state and no workflow definition needs to be resolved here.
+    /// </remarks>
+    public void ResyncEffectiveStateFromCurrent()
+    {
+        if (HasActiveSubFlow)
+            return;
+
+        SetEffectiveState(GetCurrentState);
+        EffectiveStateType = CurrentStateType;
+        EffectiveStateSubType = CurrentStateSubType;
+    }
+
+    /// <summary>
+    /// Writes the whole effective projection — status, state, state type and state sub type — from
+    /// this instance's own values, WITHOUT the <see cref="HasActiveSubFlow"/> guard the two resync
+    /// methods carry. Only the terminal transitions that can never be resumed may call it.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="ResyncEffectiveStatus"/> is a no-op while a SubFlow correlation is open, and the
+    /// cancel/fault cascade closes those correlations AFTER the level completes — so a parent
+    /// cancelled mid-subflow kept a live child's <c>A</c> in the raw column forever.
+    /// <see cref="GetEffectiveStatus"/> already clamps that away for readers, so this changes no
+    /// served value; what it repairs is the raw column, which is the filter and sort target
+    /// (<c>effectiveStatus</c> in instance queries) and fingerprint material.
+    ///
+    /// Deliberately NOT called from <see cref="Fault"/>: <see cref="Unfault"/> brings a faulted
+    /// instance back to Active while its child may still be running, and nothing could restore the
+    /// child's projection afterwards — the correlation carries a state key and a terminal outcome,
+    /// never a live status. Faulted instances keep relying on the clamp.
+    /// </remarks>
+    private void ForceEffectiveFromOwnTerminalState()
+    {
+        EffectiveStatus = Status;
+        SetEffectiveState(GetCurrentState);
+        EffectiveStateType = CurrentStateType;
+        EffectiveStateSubType = CurrentStateSubType;
     }
 
     /// <summary>
@@ -1124,7 +1272,7 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
         if (state.SubType == StateSubType.Busy && !IsCompleted)
         {
             Status = InstanceStatus.Busy;
-            SyncEffectiveStatusFromOwn();
+            ResyncEffectiveStatus();
         }
 
         // Domain Logic: Arm the SubFlow state notification — do NOT publish it here.

@@ -128,10 +128,10 @@ public static class FilterFormatDetector
         switch (op.ToLowerInvariant())
         {
             case "eq":
-                condition.Eq = ParseValue(value);
+                condition.Eq = value;
                 break;
             case "ne":
-                condition.Ne = ParseValue(value);
+                condition.Ne = value;
                 break;
             case "gt":
                 condition.Gt = ParseValue(value);
@@ -146,7 +146,7 @@ public static class FilterFormatDetector
                 condition.Le = ParseValue(value);
                 break;
             case "between":
-                var parts = value.Split(',').Select(v => ParseValue(v.Trim())).ToArray();
+                var parts = value.Split(',').Select(v => (object)v.Trim()).ToArray();
                 condition.Between = parts;
                 break;
             case "like":
@@ -162,10 +162,10 @@ public static class FilterFormatDetector
                 condition.EndsWith = value;
                 break;
             case "in":
-                condition.In = value.Split(',').Select(v => ParseValue(v.Trim())).ToArray();
+                condition.In = value.Split(',').Select(v => (object)v.Trim()).ToArray();
                 break;
             case "nin":
-                condition.NotIn = value.Split(',').Select(v => ParseValue(v.Trim())).ToArray();
+                condition.NotIn = value.Split(',').Select(v => (object)v.Trim()).ToArray();
                 break;
             default:
                 // Ignoring an unknown operator here left the condition empty, which compiled to no

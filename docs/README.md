@@ -13,6 +13,7 @@ describe the stable mental model, boundaries, failure modes, and change-safety r
 | --- | --- |
 | [Agent onboarding](agent-onboarding.md) | Source-of-truth order, where-is-X, pitfalls for a new coding session. |
 | [Agent Council](agent-council/README.md) | Plan-only decision workflow, roles, session artifacts, evidence gates, and Chair approval. Decision history: [sessions/README.md](agent-council/sessions/README.md). |
+| [Code Review](code-review/README.md) | What a review of this repository checks: the four reviewer checklists, severity and verdict vocabularies, and the noise rules. Single source for the `pr-review` and `workflow-code-review` skills. |
 | [Architecture](architecture/system-overview.md) | Runtime shape, service boundaries, dependency direction, routing. |
 | [Domain](domain/instance-data-merge-concept.md) | Instance lifecycle, data versioning, cache context, function-handler behavior. |
 | [Runtime](runtime/task-executors-and-invokers.md) | Task execution, invokers, scripting, remote runtime integration. |
@@ -60,6 +61,8 @@ describe the stable mental model, boundaries, failure modes, and change-safety r
 35. Read [Discovery Endpoint Cache](runtime/discovery-endpoint-cache.md) before changing how a domain name is resolved to an endpoint under `ServiceDiscovery:Provider=http`. Covers the staleness budget and the startup-enforced TTL invariants, the lock + marker refresh protocol (and why the registration hosted service's never-released lease is the wrong shape here), why the page number is incremented rather than `links.next` followed, why the entry carries its own fetch time instead of trusting the state store's TTL, and what the 2026-08-28 removal of the previous cache actually proved.
 36. Read [Dapr Component Footprint](runtime/dapr-component-footprint.md) before adding, removing or scoping a Dapr component, or before wiring a new building block into a host. Gives the evidence-backed host × building-block matrix (which host actually consumes state, lock, pubsub, bindings, jobs and why), the components deliberately kept though unused, and the mirrored work list for `vnext-helm-charts` (component `scopes:`, per-app `DAPR_*` env, actors/placement off, dead `Redis__*` wiring).
 37. Read [Instance Task History and Action History](runtime/instance-task-and-action-history.md) before changing the `tasks` / `actions` system functions or exposing anything new from the task journal. Covers the metadata-only rule (journaled payloads carry mapping-built auth headers and are served by no API — the SQL projection keeps them in the database), the `queryRoles` gate, and the InstanceActions no-writer gap.
+38. Read [Task Invocation Routing](runtime/task-invocation-routing.md) before assuming a task always ships to the Execution service, or before adding a local invoker for a new task type. Covers the router's resolution order (task override hook → per-type config → default → capability gate), the shipped configuration for the five locally-routed types (`http`, `daprservice`, `soap`, `statestore`, `cacheaside`), what the local path trades away versus the Dapr hop to Execution, the timeout-layering difference, the `vnext.task.invocation.mode` span tag, and the one-line config change that reverts a type to Remote.
+39. Read [Human Task Function](runtime/human-task-function.md) before changing the `human-task` domain function — the selection predicate and the single constant the query, the EF index filter and its migration all share, the `Effective*` invariant it depends on, the batched leaf descent and its internal cross-domain endpoint, the response cache's key (and why it covers every authorization input), and the three-release index replacement sequence.
 
 ### Historical records (not current contracts)
 
@@ -78,6 +81,10 @@ Kept for archaeology; read the canonical page linked from each before relying on
 - Reference source files for implementation detail instead of duplicating code.
 - If code and docs conflict, fix the docs or document the divergence.
 - `/ai-docs` is gitignored local scratch. Do not treat it as committed documentation.
+
+## Instance data indexing
+
+- [Manual attribute index maintenance](runtime/manual-attribute-index-maintenance.md) — offline CLI SQL batches, DBA execution, idempotency, readiness and rollback.
 
 ## Local Development
 

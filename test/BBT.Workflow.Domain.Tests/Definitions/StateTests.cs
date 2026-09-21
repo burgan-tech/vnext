@@ -609,6 +609,37 @@ public class StateTests
     }
 
     [Fact]
+    public void Deserialize_ShouldPopulateInteractionLongPollRule()
+    {
+        // Arrange
+        const string json = """
+        {
+            "key": "review",
+            "stateType": "Intermediate",
+            "subType": "None",
+            "versionStrategy": "Patch",
+            "interaction": {
+                "longPoll": {
+                    "terminate": true,
+                    "rule": { "location": "./gate.csx", "code": "cmV0dXJuIHRydWU7" }
+                }
+            }
+        }
+        """;
+
+        // Act
+        var state = System.Text.Json.JsonSerializer.Deserialize<State>(json, EnumNamingSerializerOptions);
+
+        // Assert
+        Assert.NotNull(state);
+        Assert.True(state!.TerminatesLongPollOnEntry);
+        Assert.NotNull(state.LongPollRule);
+        Assert.Equal("./gate.csx", state.LongPollRule!.Location);
+        Assert.NotNull(state.LongPollAckRoles);
+        Assert.Empty(state.LongPollAckRoles!);
+    }
+
+    [Fact]
     public void Deserialize_ShouldDefaultLongPoll_WhenTerminateOnlySpecified()
     {
         // Arrange

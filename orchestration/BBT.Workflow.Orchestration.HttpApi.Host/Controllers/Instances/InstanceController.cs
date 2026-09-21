@@ -24,6 +24,8 @@ using Microsoft.AspNetCore.Mvc.Filters;
 using BBT.Workflow.Authorization;
 using BBT.Workflow.Logging;
 
+using BBT.Workflow.Instances.HumanTask;
+
 namespace BBT.Workflow.Orchestration.Controllers.Instances;
 
 [ApiController]
@@ -46,6 +48,7 @@ public sealed class InstanceController(
     IInstanceCommandGateway instanceCommandGateway,
     IEventAppService eventAppService,
     IRelatedInstanceQueryAppService relatedInstanceQueryAppService,
+    BBT.Workflow.Instances.HumanTask.IHumanTaskLeafResolver humanTaskLeafResolver,
     ICallerRoleResolver callerRoleResolver) : AetherControllerBase
 {
     /// <summary>
@@ -512,6 +515,39 @@ public sealed class InstanceController(
     }
 
     /// <summary>
+    /// Resolves a batch of this flow's instances down to the human task actually waiting on each,
+    /// recursing into deeper SubFlow levels locally, and answers whether the named caller may act
+    /// on the leaf plus the leaf's own humanTask text.
+    ///
+    /// Internal-to-internal, same caveats as the related-data endpoints: no caller identity of its
+    /// own, no query-role check, no field filtering. Never expose this route publicly. The caller's
+    /// roles arrive in the body because authorization can only happen where the leaf's workflow
+    /// definition resolves, which is the domain that owns it.
+    /// </summary>
+    /// <response code="200">One result per requested id, including the ones that could not resolve.</response>
+    /// <response code="400">More ids were requested than <see cref="HumanTaskLeafRequest.MaxInstanceIds"/> allows.</response>
+    [ApiExplorerSettings(IgnoreApi = true)]
+    [HttpPost("{domain}/workflows/{workflow}/internal/human-task-leaf/batch")]
+    public async Task<IActionResult> ResolveHumanTaskLeavesAsync(
+        [FromRoute] string domain,
+        [FromRoute] string workflow,
+        [FromBody] HumanTaskLeafRequest input,
+        CancellationToken cancellationToken = default)
+    {
+        // Defence in depth: this endpoint carries no authorization, so it must not trust the
+        // caller's batch size. The real bound is the per-schema limit in the calling runtime.
+        if (input.InstanceIds.Count > HumanTaskLeafRequest.MaxInstanceIds)
+        {
+            return BadRequest(
+                $"At most {HumanTaskLeafRequest.MaxInstanceIds} instance ids may be resolved in one batch.");
+        }
+
+        var result = await humanTaskLeafResolver.ResolveAsync(domain, workflow, input, cancellationToken);
+
+        return FromResult(result);
+    }
+
+    /// <summary>
     /// Enqueues a (chained) transition as a background job. Internal endpoint the Inbox forwards
     /// <c>TransitionContinuationRequested</c> events to when outbox continuations are enabled, so
     /// the Dapr job is enqueued in the Orchestration process (never in the Inbox). Preserves the
@@ -560,7 +596,11 @@ public sealed class InstanceController(
             EpisodeTrigger = continuation.EpisodeTrigger,
             EpisodeTransitionKey = continuation.EpisodeTransitionKey,
             EpisodeTraceRoot = continuation.EpisodeTraceRoot,
-            CorrelationId = continuation.CorrelationId
+            CorrelationId = continuation.CorrelationId,
+            // The accept-time chain-reserve claim must survive this relay: the accept already
+            // flipped the whole active SubFlow chain Busy, so a payload without the claim makes
+            // the leaf reject its own forward as Busy (Instance:100031).
+            SubflowChainReserved = continuation.SubflowChainReserved
         };
 
         await transitionJobEnqueuer.EnqueueAsync(payload, continuation.JobId, cancellationToken);

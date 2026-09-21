@@ -17,12 +17,30 @@ in `AGENTS.md`). Invoke via the `Skill` tool when the trigger phrase matches:
 - **vnext-docs-generator** — "döküman oluştur" / "create docs"
 - **vnext-meta-validator** — "validate meta" / "meta kontrol" (also after any `vnext-meta/` edit)
 - **vnext-meta-matrix** — "meta matrix" / "meta rapor"
-- **workflow-code-review** — "code review" / "review et" / "incele"
+- **pr-review** — "pr review" / "PR incele" / "PR kontrol" / "review PR #N"; orchestrated review of an
+  open pull request (classifies the diff, runs the four `pr-reviewer-*` agents in parallel, merges
+  the findings, optionally upserts one sticky PR comment). Checklists:
+  [docs/code-review/](docs/code-review/README.md)
+- **workflow-code-review** — "code review" / "review et" / "incele"; the same checklists run against a
+  local diff, single session, no PR
+- **domain-performance-audit** — "domain performans" / "performans incele" / "bu domaini incele";
+  performance audit of a **domain package** (vnext-onboarding, vnext-onboarding-ekyc, …) against the
+  current runtime — static scan + a short prioritised report. Not a diff review of this repo
 - **create-github-issue** — "issue aç" / "open issue" / "projeyi tara"
 - **create-github-pr** — "PR oluştur" / "open PR" / "pull request"
 - **git-commit-message** — "commit mesajı" / "git commit"
 - **cross-domain-lab** — "cross-domain test" / "çapraz domain" / "partner domain" (lokal 3-domain Dapr lab'ı; lab vnext-example `labs/cross-domain/` altında)
 - **runtime-integration-test** — "integration test" / "entegrasyon testi" / "vnext-example'da test et" / "e2e doğrula"; also fires without a phrase on a core-process change that needs end-to-end proof (runs vnext-example tests against the locally built runtime; contract [docs/testing/integration-testing.md](docs/testing/integration-testing.md))
+
+## Project subagents (`.claude/agents/`)
+
+Claude Code-only; other agents ignore the folder. The definitions are thin shells — the content they
+review is the single source under [`docs/code-review/`](docs/code-review/README.md).
+
+- **pr-review-lead** — runs a whole review out of the main conversation's context; never writes to
+  GitHub. The interactive path is the `pr-review` skill.
+- **pr-reviewer-pipeline / -platform / -contract / -evidence** — read-only specialists, one checklist
+  each, started in parallel by `pr-review`.
 
 ## Project MCP servers (`.mcp.json`)
 

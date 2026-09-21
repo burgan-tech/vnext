@@ -81,4 +81,40 @@ public class SubflowStarterTests
         captured!.Sync.ShouldBeTrue();
         captured.SuppressResponseEnrichment.ShouldBeTrue();
     }
+
+    /// <summary>
+    /// The link between the starter and <see cref="InstanceType"/>: the parent block this starter
+    /// builds is the only input the child's classification has, so the two must agree. Asserted here
+    /// rather than in a domain test because only this side proves the block is actually produced —
+    /// and that its flow type comes from the SubFlow definition, not from the child's own.
+    /// </summary>
+    [Theory]
+    [InlineData("S")]
+    [InlineData("P")]
+    public async Task StartAsync_BuildsAParentBlockThatClassifiesTheChild(string type)
+    {
+        var gateway = Substitute.For<IInstanceCommandGateway>();
+        var starter = new SubflowStarter(gateway, new ConfigurationBuilder().Build(),
+            Substitute.For<IScriptEngine>(), Substitute.For<ILogger<SubflowStarter>>());
+        var workflow = WorkflowFactory.CreateDefault();
+        var parent = Instance.Create(Guid.NewGuid(), workflow.Key, workflow.Version, "parent");
+        var state = StateFactory.CreateDefault("child", StateType.SubFlow);
+        state.SetSubFlow(type, new Reference("child-flow", "remote", "sys-flows", "1.0.0"), null!, null);
+        var childId = Guid.NewGuid();
+        var correlation = InstanceCorrelation.Create(Guid.NewGuid(), parent.Id, state.Key,
+            childId, type, "remote", "child-flow", "1.0.0");
+        StartInstanceInput? captured = null;
+        gateway.StartSubAsync(Arg.Do<StartInstanceInput>(input => captured = input), Arg.Any<CancellationToken>())
+            .Returns(Result<StartInstanceOutput>.Ok(new StartInstanceOutput { Id = childId, Status = InstanceStatus.Active }));
+
+        var result = await starter.StartAsync(workflow, parent, state,
+            TransitionFactory.CreateDefault(), correlation, null!, ExecMode.Sync);
+
+        result.IsSuccess.ShouldBeTrue();
+        captured.ShouldNotBeNull();
+        captured!.Instance.ExtraProperties[DomainConsts.MetaDataKeys.Id].ShouldBe(parent.Id);
+        captured.Instance.ExtraProperties[DomainConsts.MetaDataKeys.FlowType].ShouldBe(type);
+        InstanceType.FromStartMetadata(captured.Instance.ExtraProperties)
+            .ShouldBe(InstanceType.FromCode(type));
+    }
 }

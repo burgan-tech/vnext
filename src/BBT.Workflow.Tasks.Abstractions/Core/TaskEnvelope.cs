@@ -1,3 +1,4 @@
+using System;
 using System.Text.Json;
 
 namespace BBT.Workflow.Tasks;
@@ -29,15 +30,21 @@ public sealed class TaskEnvelope
     /// The actual type depends on TaskType.
     /// </summary>
     public required JsonElement Binding { get; init; }
-    
+
     /// <summary>
     /// Creates a TaskInvocationContext from this envelope.
     /// </summary>
     /// <param name="traceContext">Optional trace context.</param>
     /// <returns>A context for remote invocation.</returns>
+    [Obsolete("Superseded by the ITaskInvocationRouter / ITaskInvocationDispatcher seam (see " +
+              "docs/runtime/task-invocation-routing.md). Kept only so the published package stays " +
+              "source- and binary-compatible; it will be removed in a later release — see " +
+              "vnext-meta/deprecations.json.")]
+#pragma warning disable CS0618 // the obsolete return type is the point of this obsolete member
     public TaskInvocationContext ToContext(TaskTraceContext? traceContext = null)
     {
         return TaskInvocationContext.ForRemote(TaskType, TaskKey, Binding, traceContext);
     }
+#pragma warning restore CS0618
 }
 

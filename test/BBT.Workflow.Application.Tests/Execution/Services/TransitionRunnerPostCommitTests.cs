@@ -352,6 +352,82 @@ public sealed class TransitionRunnerPostCommitTests
     }
 
     [Fact]
+    public async Task RunAsync_PostCommitErrorWithoutFaultRequest_ReleasesTheChainReserveTheAcceptLeftBehind()
+    {
+        // E31. The accept marked the whole subflow chain Busy down to the leaf, the post-commit
+        // forward then failed with a client error, and the failure policy declined to fault. That
+        // path runs neither Settle nor Fault, so nothing undid the reservation and every level
+        // stayed Busy forever — Busy has no recovery API, retry requires Faulted.
+        var error = Error.Conflict("Instance:100031", "leaf instance is busy");
+        var harness = new RunnerHarness(new StagePlan(
+            "pipeline",
+            PostCommitBehavior: PostCommitContinuationBehavior.HandoffToChild,
+            SubflowChainReserved: true))
+        {
+            PostCommitResult = PostCommitResult.Fail(error)
+        };
+
+        var result = await harness.Runner.RunAsync(harness.CreateInput("first"));
+
+        // The caller still sees the real error; only the reservation is undone.
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.ShouldBe(error);
+        await harness.AdmissionService.Received(1).ReleaseSubflowChainAsync(
+            harness.InstanceId,
+            $"vnext:test-domain:test-workflow:{harness.InstanceId}",
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunAsync_PostCommitErrorWithoutChainReserve_DoesNotRelease()
+    {
+        // Releasing a reservation this accept never took would settle an instance that is
+        // legitimately Busy for some other reason.
+        var error = Error.Validation("PostCommit:Rejected", "child rejected the request");
+        var harness = new RunnerHarness(new StagePlan(
+            "pipeline",
+            PostCommitBehavior: PostCommitContinuationBehavior.HandoffToChild))
+        {
+            PostCommitResult = PostCommitResult.Fail(error)
+        };
+
+        var result = await harness.Runner.RunAsync(harness.CreateInput("first"));
+
+        result.Error.ShouldBe(error);
+        await harness.AdmissionService.DidNotReceiveWithAnyArgs()
+            .ReleaseSubflowChainAsync(default, default!, default);
+    }
+
+    [Fact]
+    public async Task RunAsync_PostCommitFaultRequest_DoesNotReleaseTheChain()
+    {
+        // The fault path already cascades downward: Instance.Fault raises
+        // ChildSubflowFaultRequestedEvent for every active SubFlow correlation, so the children
+        // fault rather than strand. Releasing here would race that cascade back to Active.
+        var harness = new RunnerHarness(new StagePlan(
+            "pipeline",
+            PostCommitBehavior: PostCommitContinuationBehavior.HandoffToChild,
+            SubflowChainReserved: true))
+        {
+            PostCommitResult = PostCommitResult.Fail(
+                Error.Failure("PostCommit:Boom", "dependency failed"),
+                new PostCommitFaultRequest("PostCommit:Boom", "dependency failed"))
+        };
+        harness.ParentMutationService
+            .FaultAsync(Arg.Any<PostCommitParentSnapshot>(), Arg.Any<PostCommitFaultRequest>(), Arg.Any<CancellationToken>())
+            .Returns(Result<TransitionOutput>.Ok(new TransitionOutput
+            {
+                Id = harness.InstanceId,
+                Status = InstanceStatus.Faulted
+            }));
+
+        await harness.Runner.RunAsync(harness.CreateInput("first"));
+
+        await harness.AdmissionService.DidNotReceiveWithAnyArgs()
+            .ReleaseSubflowChainAsync(default, default!, default);
+    }
+
+    [Fact]
     public async Task RunAsync_AllowsDepthFiftyStageAndRejectsOnlyDepthFiftyOneContinuation()
     {
         var plans = Enumerable.Range(0, 51)
@@ -400,6 +476,7 @@ public sealed class TransitionRunnerPostCommitTests
             _plans = plans;
             _workflow = CreateWorkflow();
             ParentMutationService = Substitute.For<IPostCommitParentMutationService>();
+            AdmissionService = Substitute.For<ITransitionAdmissionService>();
 
             var services = new ServiceCollection();
             ConfigureWorkflowScope(services);
@@ -415,6 +492,7 @@ public sealed class TransitionRunnerPostCommitTests
         public Guid InstanceId { get; } = Guid.NewGuid();
         public TransitionRunner Runner { get; }
         public IPostCommitParentMutationService ParentMutationService { get; }
+        public ITransitionAdmissionService AdmissionService { get; }
         public IComponentCacheStore CacheStore { get; private set; } = null!;
         public List<string> BusinessCalls { get; } = [];
         public List<StageScopeProbe> StageScopes { get; } = [];
@@ -555,6 +633,7 @@ public sealed class TransitionRunnerPostCommitTests
             services.AddScoped<IPostCommitTransitionCoordinator, PostCommitTransitionCoordinator>();
             services.AddSingleton<IPostCommitExecutor>(new RecordingPostCommitExecutor(this));
             services.AddSingleton(ParentMutationService);
+            services.AddSingleton(AdmissionService);
         }
 
         private IDistributedEventBus CreateEventBus()
@@ -628,7 +707,8 @@ public sealed class TransitionRunnerPostCommitTests
                     CorrelationId = Guid.NewGuid().ToString("N"),
                     ExecutionChainId = Guid.NewGuid().ToString("N"),
                     ChainDepth = context.Execution?.ChainDepth ?? 0,
-                    TraceId = Guid.NewGuid().ToString("N")
+                    TraceId = Guid.NewGuid().ToString("N"),
+                    SubflowChainReserved = plan.SubflowChainReserved
                 };
 
                 await using (var transitionLock = await lockScopeFactory.AcquireAsync(
@@ -724,7 +804,8 @@ public sealed class TransitionRunnerPostCommitTests
         bool HasDeferredEvent = false,
         PostCommitContinuationBehavior? PostCommitBehavior = null,
         string? NextTransition = null,
-        bool FailCommit = false);
+        bool FailCommit = false,
+        bool SubflowChainReserved = false);
 
     private sealed record TestJob(PostCommitContinuationBehavior ContinuationBehavior)
         : IPostCommitContinuationJob;

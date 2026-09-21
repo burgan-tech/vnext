@@ -1,3 +1,4 @@
+using System;
 using System.Text.Json;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Scripting;
@@ -9,6 +10,7 @@ namespace BBT.Workflow.Tasks;
 /// Contains all information needed by any invoker (local, remote, or custom).
 /// Uses optional properties to support different execution modes.
 /// </summary>
+[Obsolete("Superseded by the ITaskInvocationRouter / ITaskInvocationDispatcher seam (see docs/runtime/task-invocation-routing.md). This type was never implemented or consumed and is kept only so the published package stays source- and binary-compatible; it will be removed in a later release — see vnext-meta/deprecations.json.")]
 public sealed record TaskInvocationContext
 {
     /// <summary>

@@ -198,7 +198,12 @@ public sealed class SubflowFaultService(
                         return;
                     }
 
-                    parentInstance.SetEffectiveState(parentInstance.GetCurrentState);
+                    // The whole effective trio, not just the state key — see
+                    // Instance.ResyncEffectiveStateFromCurrent. Both calls carry the same
+                    // !HasActiveSubFlow guard, so a surviving SubFlow correlation keeps owning
+                    // state and status together.
+                    parentInstance.ResyncEffectiveStateFromCurrent();
+                    parentInstance.ResyncEffectiveStatus();
 
                     var parentWorkflowResult = await componentCacheStore.GetFlowAsync(
                         input.Domain,

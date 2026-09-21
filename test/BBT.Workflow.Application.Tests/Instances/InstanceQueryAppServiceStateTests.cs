@@ -15,6 +15,7 @@ using BBT.Aether.Uow;
 using BBT.Workflow.Authorization;
 using BBT.Workflow.Caching;
 using BBT.Workflow.Definitions;
+using BBT.Workflow.Definitions.Schemas;
 using BBT.Workflow.Gateway;
 using BBT.Workflow.Instances.DTOs;
 using BBT.Workflow.RepresentationEtag;
@@ -29,6 +30,8 @@ using Microsoft.Extensions.Options;
 using NSubstitute;
 using Shouldly;
 using Xunit;
+
+using BBT.Workflow.Instances.HumanTask;
 
 namespace BBT.Workflow.Instances;
 
@@ -53,6 +56,8 @@ public class InstanceQueryAppServiceStateTests : IDisposable
     private readonly IInstanceCorrelationRepository _instanceCorrelationRepository;
     private readonly IInstanceJobRepository _instanceJobRepository;
     private readonly Caching.IStateFunctionCache _stateFunctionCache;
+    private readonly Execution.LongPoll.ILongPollInteractionGate _longPollInteractionGate =
+        Substitute.For<Execution.LongPoll.ILongPollInteractionGate>();
     private readonly InstanceQueryAppService _service;
     private readonly IServiceProvider _ambientServiceProvider;
     private readonly IServiceProvider? _previousAmbientServiceProvider;
@@ -82,6 +87,9 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         // cache-specific tests opt in explicitly.
         _stateFunctionCache = Substitute.For<Caching.IStateFunctionCache>();
 
+        // Default: the unified gate admits; deny tests override with a later, matching stub.
+        SetupRuleGate(admitted: true);
+
         // Set up AmbientServiceProvider.Current needed by PostSharp UnitOfWorkAttribute
         var mockUoW = Substitute.For<IUnitOfWork>();
         var mockUoWManager = Substitute.For<IUnitOfWorkManager>();
@@ -107,6 +115,7 @@ public class InstanceQueryAppServiceStateTests : IDisposable
             instanceIncidentRepository: _instanceIncidentRepository,
             instanceTaskRepository: Substitute.For<IInstanceTaskRepository>(),
             instanceActionRepository: Substitute.For<IInstanceActionRepository>(),
+            longPollInteractionGate: _longPollInteractionGate,
             instanceExtensionService: Substitute.For<IInstanceExtensionService>(),
             scriptContextFactory: Substitute.For<IScriptContextFactory>(),
             instanceQueryGateway: _instanceQueryGateway,
@@ -120,9 +129,15 @@ public class InstanceQueryAppServiceStateTests : IDisposable
             callerRoleResolver: new DefaultCallerRoleResolver(Substitute.For<ICurrentUser>()),
             paginationLinkGenerator: Substitute.For<BBT.Aether.Application.Pagination.IPaginationLinkGenerator>(),
             instanceFilteringOptions: Options.Create(new InstanceFilteringOptions()),
+            humanTaskOptions: Options.Create(new HumanTaskFunctionOptions()),
+            attributeIndexCatalog: Substitute.For<IAttributeIndexCatalog>(),
             stateFunctionCache: _stateFunctionCache,
             dataFunctionCache: Substitute.For<Caching.IDataFunctionCache>(),
             instanceSchemaFunctionCache: Substitute.For<Caching.IInstanceSchemaFunctionCache>(),
+
+            humanTaskFunctionCache: Substitute.For<Caching.IHumanTaskFunctionCache>(),
+            descentLimiter: new HumanTask.HumanTaskDescentLimiter(
+                Microsoft.Extensions.Options.Options.Create(new HumanTask.HumanTaskFunctionOptions())),
             logger: Substitute.For<ILogger<InstanceQueryAppService>>());
     }
 
@@ -445,15 +460,17 @@ public class InstanceQueryAppServiceStateTests : IDisposable
     }
 
     /// <summary>
-    /// When the state declares interaction.longPoll.roles and the caller's role is not granted,
-    /// no interaction block is emitted (role filtering preserved).
+    /// When the state declares interaction.longPoll.roles and the gate denies the caller, no
+    /// interaction block is emitted. The roles-arm evaluation itself lives in
+    /// <see cref="Execution.LongPoll.ILongPollInteractionGate"/> and is pinned by its own tests.
     /// </summary>
     [Fact]
     public async Task GetInstanceStateAsync_WhenLongPollRolesDenyCaller_NoInteraction()
     {
-        // Arrange — role grants present; IsAnyRoleAllowedForGrantsAsync defaults to false (caller not allowed)
+        // Arrange — role grants present; the gate answers deny for this caller.
         var (instance, workflow) = CreateInstanceWithLongPollState(terminate: true, fallbackSeconds: 30, withRoles: true);
         SetupCommonMocks(instance, workflow);
+        SetupRuleGate(admitted: false);
 
         var input = CreateInput(instance.Id.ToString());
 
@@ -872,7 +889,7 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         var workflow = BuildWorkflow(state);
         SetupCommonMocks(instance, workflow);
         _transitionAuthorizationManager
-            .IsRoleAllowedForGrantsAsync(Arg.Any<string?>(), Arg.Any<IReadOnlyCollection<RoleGrant>>(),
+            .IsRoleAllowedForGrantsAsync(Arg.Any<IReadOnlyCollection<string>?>(), Arg.Any<IReadOnlyCollection<RoleGrant>>(),
                 Arg.Any<Instance?>(), Arg.Any<AuthorizationRequestContext?>(), Arg.Any<CancellationToken>())
             .Returns(true);
 
@@ -900,7 +917,7 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         var workflow = BuildWorkflow(state);
         SetupCommonMocks(instance, workflow);
         _transitionAuthorizationManager
-            .IsRoleAllowedForGrantsAsync(Arg.Any<string?>(), Arg.Any<IReadOnlyCollection<RoleGrant>>(),
+            .IsRoleAllowedForGrantsAsync(Arg.Any<IReadOnlyCollection<string>?>(), Arg.Any<IReadOnlyCollection<RoleGrant>>(),
                 Arg.Any<Instance?>(), Arg.Any<AuthorizationRequestContext?>(), Arg.Any<CancellationToken>())
             .Returns(false);
 
@@ -935,7 +952,7 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         result.Result.IsSuccess.ShouldBeTrue();
         result.Result.Value!.State.ShouldBe(TestState);
         await _transitionAuthorizationManager.DidNotReceive()
-            .IsRoleAllowedForGrantsAsync(Arg.Any<string?>(), Arg.Any<IReadOnlyCollection<RoleGrant>>(),
+            .IsRoleAllowedForGrantsAsync(Arg.Any<IReadOnlyCollection<string>?>(), Arg.Any<IReadOnlyCollection<RoleGrant>>(),
                 Arg.Any<Instance?>(), Arg.Any<AuthorizationRequestContext?>(), Arg.Any<CancellationToken>());
     }
 
@@ -953,7 +970,7 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         var workflow = BuildWorkflow(state);
         SetupCommonMocks(instance, workflow);
         _transitionAuthorizationManager
-            .IsRoleAllowedForGrantsAsync(Arg.Any<string?>(), Arg.Any<IReadOnlyCollection<RoleGrant>>(),
+            .IsRoleAllowedForGrantsAsync(Arg.Any<IReadOnlyCollection<string>?>(), Arg.Any<IReadOnlyCollection<RoleGrant>>(),
                 Arg.Any<Instance?>(), Arg.Any<AuthorizationRequestContext?>(), Arg.Any<CancellationToken>())
             .Returns(false, true);
 
@@ -989,7 +1006,7 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         var workflow = BuildWorkflow(state);
         SetupCommonMocks(instance, workflow);
         _transitionAuthorizationManager
-            .IsRoleAllowedForGrantsAsync(Arg.Any<string?>(), Arg.Any<IReadOnlyCollection<RoleGrant>>(),
+            .IsRoleAllowedForGrantsAsync(Arg.Any<IReadOnlyCollection<string>?>(), Arg.Any<IReadOnlyCollection<RoleGrant>>(),
                 Arg.Any<Instance?>(), Arg.Any<AuthorizationRequestContext?>(), Arg.Any<CancellationToken>())
             .Returns(true);
 
@@ -1026,7 +1043,7 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         var workflow = BuildWorkflow(state);
         SetupCommonMocks(instance, workflow);
         _transitionAuthorizationManager
-            .IsRoleAllowedForGrantsAsync(Arg.Any<string?>(), Arg.Any<IReadOnlyCollection<RoleGrant>>(),
+            .IsRoleAllowedForGrantsAsync(Arg.Any<IReadOnlyCollection<string>?>(), Arg.Any<IReadOnlyCollection<RoleGrant>>(),
                 Arg.Any<Instance?>(), Arg.Any<AuthorizationRequestContext?>(), Arg.Any<CancellationToken>())
             .Returns(true);
 
@@ -1054,7 +1071,7 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         var workflow = BuildWorkflow(state);
         SetupCommonMocks(instance, workflow);
         _transitionAuthorizationManager
-            .IsRoleAllowedForGrantsAsync(Arg.Any<string?>(), Arg.Any<IReadOnlyCollection<RoleGrant>>(),
+            .IsRoleAllowedForGrantsAsync(Arg.Any<IReadOnlyCollection<string>?>(), Arg.Any<IReadOnlyCollection<RoleGrant>>(),
                 Arg.Any<Instance?>(), Arg.Any<AuthorizationRequestContext?>(), Arg.Any<CancellationToken>())
             .Returns(true);
 
@@ -1749,7 +1766,7 @@ public class InstanceQueryAppServiceStateTests : IDisposable
                 Arg.Any<State>(),
                 Arg.Any<Instance?>(),
                 Arg.Any<IReadOnlyList<string>>(),
-                Arg.Any<string?>(),
+                Arg.Any<IReadOnlyCollection<string>?>(),
                 Arg.Any<AuthorizationRequestContext?>(),
                 Arg.Any<CancellationToken>())
             .Returns(callInfo => Task.FromResult(callInfo.ArgAt<IReadOnlyList<string>>(3)));
@@ -1930,7 +1947,7 @@ public class InstanceQueryAppServiceStateTests : IDisposable
                 Arg.Any<State>(),
                 Arg.Any<Instance?>(),
                 Arg.Any<IReadOnlyList<string>>(),
-                Arg.Any<string?>(),
+                Arg.Any<IReadOnlyCollection<string>?>(),
                 Arg.Any<AuthorizationRequestContext?>(),
                 Arg.Any<CancellationToken>())
             .Returns(callInfo => Task.FromResult<IReadOnlyList<string>>(
@@ -2143,4 +2160,109 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         Headers = new Dictionary<string, string?>(),
         QueryParams = new Dictionary<string, string?>()
     };
+
+    // ── Rule-gated long-poll interaction ─────────────────────────────────────
+
+    /// <summary>
+    /// Builds an active instance whose current state declares <c>interaction.longPoll</c> with a
+    /// condition RULE (no roles) — the rule-based authorization arm of issue #936.
+    /// </summary>
+    private (Instance instance, Definitions.Workflow workflow) CreateInteractionRuleInstance()
+    {
+        var state = System.Text.Json.JsonSerializer.Deserialize<State>("""
+        {
+            "key": "review",
+            "stateType": "intermediate",
+            "subType": "none",
+            "versionStrategy": "Minor",
+            "interaction": {
+                "longPoll": {
+                    "terminate": true,
+                    "fallbackTimeoutSeconds": 45,
+                    "rule": { "location": "./gate.csx", "code": "cmV0dXJuIHRydWU7" }
+                }
+            }
+        }
+        """, JsonSerializerConstants.JsonOptions)!;
+
+        var instance = Instance.Create(Guid.NewGuid(), TestWorkflow, TestVersion, "test-key");
+        instance.ChangeState(state);
+        return (instance, BuildWorkflow(state));
+    }
+
+    private void SetupRuleGate(bool admitted) =>
+        _longPollInteractionGate.IsAdmittedAsync(
+                Arg.Any<Instance>(),
+                Arg.Any<Definitions.Workflow>(),
+                Arg.Any<State?>(),
+                Arg.Any<Dictionary<string, string?>?>(),
+                Arg.Any<Dictionary<string, string?>?>(),
+                Arg.Any<Func<CancellationToken, Task<Result<IReadOnlyCollection<string>>>>>(),
+                "state",
+                Arg.Any<CancellationToken>())
+            .Returns(Result<bool>.Ok(admitted));
+
+    [Fact]
+    public async Task GetInstanceStateAsync_WhenInteractionRuleAdmits_EmitsInteraction()
+    {
+        // Arrange
+        var (instance, workflow) = CreateInteractionRuleInstance();
+        SetupCommonMocks(instance, workflow);
+        SetupRuleGate(admitted: true);
+
+        // Act
+        var result = await _service.GetInstanceStateAsync(CreateInput(instance.Id.ToString()), CancellationToken.None);
+
+        // Assert — the gate admitted the caller, so the block is emitted intact. (Rule-over-roles
+        // arm selection is the gate's own contract, pinned in LongPollInteractionGateTests.)
+        result.Result.IsSuccess.ShouldBeTrue();
+        var interaction = result.Result.Value!.Interaction;
+        interaction.ShouldNotBeNull();
+        interaction!.TerminateLongPoll.ShouldBeTrue();
+        interaction.FallbackTimeoutSeconds.ShouldBe(45);
+        interaction.Ack.ShouldNotBeNull();
+    }
+
+    [Fact]
+    public async Task GetInstanceStateAsync_WhenInteractionRuleDenies_OmitsInteraction()
+    {
+        // Arrange
+        var (instance, workflow) = CreateInteractionRuleInstance();
+        SetupCommonMocks(instance, workflow);
+        SetupRuleGate(admitted: false);
+
+        // Act
+        var result = await _service.GetInstanceStateAsync(CreateInput(instance.Id.ToString()), CancellationToken.None);
+
+        // Assert — fail-closed: no interaction block for this caller, response otherwise intact.
+        result.Result.IsSuccess.ShouldBeTrue();
+        result.Result.Value!.Interaction.ShouldBeNull();
+    }
+
+    /// <summary>
+    /// A rule-gated interaction verdict varies on inputs CallerScopeHash does not cover (headers,
+    /// query parameters, instance data), so the built body must never be stored in the shared cache.
+    /// </summary>
+    [Fact]
+    public async Task GetInstanceStateAsync_WhenInteractionRuleGated_SkipsBodyCacheStore()
+    {
+        // Arrange
+        var (instance, workflow) = CreateInteractionRuleInstance();
+        SetupCommonMocks(instance, workflow);
+        SetupRuleGate(admitted: true);
+        EnableCache();
+        SetupFingerprint(instance.Id);
+
+        // Act
+        var result = await _service.GetInstanceStateAsync(CreateInput(instance.Id.ToString()), CancellationToken.None);
+
+        // Assert — built and served, but not cached (contrast: WhenCacheMiss_BuildsAndWarmsCache).
+        result.Result.IsSuccess.ShouldBeTrue();
+        result.Result.Value!.Interaction.ShouldNotBeNull();
+        await _stateFunctionCache.DidNotReceive().SetAsync(
+            Arg.Any<string>(), Arg.Any<Caching.StateFunctionCacheEntry>(), Arg.Any<CancellationToken>());
+        await _stateFunctionCache.DidNotReceive().SetAsync(
+            Arg.Any<string>(), Arg.Any<Caching.StateFunctionCacheEntry>(), Arg.Any<TimeSpan>(),
+            Arg.Any<CancellationToken>());
+    }
 }

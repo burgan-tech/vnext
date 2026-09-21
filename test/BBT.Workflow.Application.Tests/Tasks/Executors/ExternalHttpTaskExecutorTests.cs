@@ -8,6 +8,7 @@ using BBT.Workflow.Definitions;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks.Executors;
+using BBT.Workflow.Tasks.Invocation.Local;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using Shouldly;
@@ -117,8 +118,7 @@ public sealed class ExternalHttpTaskExecutorTests
     private static ExternalHttpTaskExecutor CreateExecutor(HttpMessageHandler handler)
     {
         var invoker = new ExternalHttpTaskInvoker(
-            new SingleClientFactory(handler),
-            NullLogger<ExternalHttpTaskInvoker>.Instance);
+            new LocalHttpTaskInvoker(new SingleClientFactory(handler), NullLogger<LocalHttpTaskInvoker>.Instance));
 
         // No mapping code is attached in these tests, so the script engine is never invoked.
         var remoteInvoker = Substitute.For<IRemoteInvokerService>();

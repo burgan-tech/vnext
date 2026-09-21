@@ -213,7 +213,7 @@ public sealed class TransitionAuthorizationManagerDynamicRoleTests : IDisposable
         var result = await _sut.IsTransitionAllowedForRoleAsync(
             BuildWorkflow(),
             BuildTransition("$role.$.context.Instance.Data.permissions.requiredRole"),
-            instance, "maker", cancellationToken: CancellationToken.None);
+            instance, ["maker"], cancellationToken: CancellationToken.None);
 
         result.ShouldBeTrue();
     }
@@ -226,7 +226,7 @@ public sealed class TransitionAuthorizationManagerDynamicRoleTests : IDisposable
         var result = await _sut.IsTransitionAllowedForRoleAsync(
             BuildWorkflow(),
             BuildTransition("$role.$.context.Instance.Data.permissions.requiredRole"),
-            instance, "maker", cancellationToken: CancellationToken.None);
+            instance, ["maker"], cancellationToken: CancellationToken.None);
 
         result.ShouldBeTrue();
     }
@@ -239,7 +239,7 @@ public sealed class TransitionAuthorizationManagerDynamicRoleTests : IDisposable
         var result = await _sut.IsTransitionAllowedForRoleAsync(
             BuildWorkflow(),
             BuildTransition("$role.$.context.Instance.Data.approvers[*].role"),
-            instance, "approver", cancellationToken: CancellationToken.None);
+            instance, ["approver"], cancellationToken: CancellationToken.None);
 
         result.ShouldBeTrue();
     }
@@ -252,7 +252,7 @@ public sealed class TransitionAuthorizationManagerDynamicRoleTests : IDisposable
         var result = await _sut.IsTransitionAllowedForRoleAsync(
             BuildWorkflow(),
             BuildTransition("$role.$.context.Instance.Data.approvers[*].role"),
-            instance, "maker", cancellationToken: CancellationToken.None);
+            instance, ["maker"], cancellationToken: CancellationToken.None);
 
         result.ShouldBeFalse();
     }
@@ -270,7 +270,7 @@ public sealed class TransitionAuthorizationManagerDynamicRoleTests : IDisposable
         var result = await _sut.IsTransitionAllowedForRoleAsync(
             BuildWorkflow(),
             BuildTransition("$user.$.context.Instance.Data.blockedUser", grant: "deny"),
-            instance, "alice", cancellationToken: CancellationToken.None);
+            instance, ["alice"], cancellationToken: CancellationToken.None);
 
         result.ShouldBeFalse();
     }
@@ -298,7 +298,7 @@ public sealed class TransitionAuthorizationManagerDynamicRoleTests : IDisposable
         var transition = JsonSerializer.Deserialize<Transition>(json, JsonOptions)!;
 
         var result = await _sut.IsTransitionAllowedForRoleAsync(
-            BuildWorkflow(), transition, instance, "approve", cancellationToken: CancellationToken.None);
+            BuildWorkflow(), transition, instance, ["approve"], cancellationToken: CancellationToken.None);
 
         result.ShouldBeTrue();
     }
@@ -315,7 +315,7 @@ public sealed class TransitionAuthorizationManagerDynamicRoleTests : IDisposable
         _currentUser.ActorUserName.Returns("alice");
 
         var result = await _sut.IsTransitionAllowedForRoleAsync(
-            BuildWorkflow(), transition, null, "alice", cancellationToken: CancellationToken.None);
+            BuildWorkflow(), transition, null, ["alice"], cancellationToken: CancellationToken.None);
 
         result.ShouldBeFalse();
     }

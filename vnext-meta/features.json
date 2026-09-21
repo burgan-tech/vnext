@@ -1,6 +1,26 @@
 {
-  "runtimeVersion": "0.0.90",
+  "runtimeVersion": "0.0.92",
   "engine": {
+    "instanceStartType": {
+      "since": "0.0.92",
+      "status": "stable",
+      "description": "metadata.type on the instance projection - how the instance was STARTED: R root, S SubFlow child, P SubProcess child. Stamped once at creation and never updated, so the origin stays answerable long after the instance has finished, which is what makes it usable for reporting. Derivation, applied once inside the aggregate in Instance.SetInfoMetadata: a non-empty parent.id in the start metadata means the instance was started as a child and parent.flowtype says which kind; anything else is R. parent.flowtype ALONE is deliberately not consulted, because SetInfoMetadata TryAdds the instance's OWN workflow type code into that key when it is absent - so a workflow whose definition declares type \"S\" and is started directly through the API carries parent.flowtype \"S\" with no parent at all, and is correctly reported as R. PURELY ADDITIVE: the parent.* ExtraProperties contracts are untouched and remain the source of truth for the parent/child relationship itself, and Instance.IsSubFlow / IsSubItem keep their existing behaviour including that mislabel; type records the start origin, not a live relationship. Served as metadata.type on GET .../instances/{instance}, on every item of the list view and on the GetInstanceTask (type 19) projection - one constructor feeds all three. NOT carried on sync start/transition responses and NOT in the state function body, so StateFunctionCache.ResponseShapeVersion stays v9 and the state fingerprint is unchanged (an immutable column can never invalidate a cached response). The rule script context (instance.Type) and the role-grant context ($.context.Instance.Type) carry the bare code. Filterable and sortable as instanceType - accepting names or codes (Root/R, SubFlow/S, SubProcess/P) with eq/ne/in/nin only - and deliberately NOT under the bare name type: instance columns and data attributes share one namespace on the legacy and GraphQL filter surfaces and are told apart purely by name, so claiming type would silently retarget the existing filters of every domain whose schema has a business field called type. The .First()/.Last() selector terminal has no name resolution for any short-code column and takes codes only. Existing rows are backfilled by the AddInstanceType migration from the parent block.",
+      "apiEndpoints": [
+        "GET {domain}/workflows/{workflow}/instances/{instance}",
+        "GET {domain}/workflows/{workflow}/instances"
+      ]
+    },
+    "instanceEffectiveStatus": {
+      "since": "0.0.92",
+      "status": "stable",
+      "description": "metadata.effectiveStatus on the instance projection - the status counterpart of metadata.effectiveState, and the value a client should branch on. Instance.EffectiveStatus has existed as a column since the EffectiveStatus migration but was state-function ETag fingerprint material only and was never served; it is now exposed as metadata.effectiveStatus on GET .../instances/{instance}, on every item of the list view, on the GetInstanceTask (type 19) projection, and as effectiveStatus on sync start/transition responses (an async 202 does not carry it - it answers from the admission decision with no instance projection in hand). Semantics: the deepest active SubFlow's status while one is running, otherwise the instance's own status. metadata.status is unchanged and still reports the instance's own row status, which is Busy for a parent's entire child lifetime by design and therefore cannot distinguish a child waiting on a human task from real work. Responses read Instance.GetEffectiveStatus, not the raw column: the propagated projection is served only while NEITHER side is terminal, otherwise the instance's own status answers. Both arms match the state function, so metadata.effectiveStatus and the state function's own status give ONE answer in every regime. A terminal projection on a running level is the SubFlow completion window (the child stamped its C/F upward at its rest point while this level's correlation is still open and this level is still resuming) - the columns-only form of the state function's subFlowIsTerminal guard. A terminal own status with a stale non-terminal projection is a cancel or fault cascade, which the write side cannot repair: it completes the level while the child's correlation is still open so the resync no-ops, and cleanup closes the correlation afterwards with nothing left to restamp the column. The clamp deliberately does not test HasActiveSubFlow: the list query does not include child correlations, so that predicate would be false for every list item. Instance queries may also filter and sort on effectiveStatus (names or codes, Active/A like status), but a filter runs in SQL against the STORED column and therefore does not see the clamp - effectiveStatus eq Completed can match a parent whose served effectiveStatus reads Busy; filter on status for 'is this flow done?'. The rule/role-grant script context carries it too (ExpressoInstanceView.EffectiveStatus as a code, $.context.Instance.EffectiveStatus rendered like Status). Purely additive: no field changed or was removed, the state function body is untouched and ResponseShapeVersion stays v9.",
+      "apiEndpoints": [
+        "GET {domain}/workflows/{workflow}/instances/{instance}",
+        "GET {domain}/workflows/{workflow}/instances",
+        "POST {domain}/workflows/{workflow}/instances/start",
+        "PATCH {domain}/workflows/{workflow}/instances/{instance}/transitions/{transition}"
+      ]
+    },
     "pythonTask": {
       "since": "0.0.80",
       "status": "experimental",
@@ -34,6 +54,16 @@
         "Scripting:Sandbox:BannedNamespaces",
         "Scripting:Sandbox:PluginDirectory",
         "Scripting:Sandbox:AllowUnsafe"
+      ]
+    },
+    "longPollInteractionRule": {
+      "since": "0.0.92",
+      "status": "stable",
+      "description": "Rule-based authorization arm for interaction.longPoll (issue #936): instead of roles, a state may declare interaction.longPoll.rule - ONE condition script (scriptCode slot, IConditionMapping contract, same shape as view/notification rules) compiled and cached by the shared script engine. The two arms are mutually exclusive: WorkflowValidator rejects a longPoll declaring both roles (non-empty) and rule, validates the rule's script body like every compilable slot, and (new) validates longPoll.roles dynamic-grant syntax; the vnext-schema longPoll contract enforces exactly one of roles|rule at authoring time. Both enforcement surfaces admit through one gate (ILongPollInteractionGate, which owns the arm selection: rule, else roles, else allow): the State function emits the interaction object only when the rule returns true, and the acknowledge endpoint (POST .../longpoll/ack) rejects with 403 when it does not - so which clients see and may acknowledge a Human Task interaction can be driven by request headers, query parameters or instance data (e.g. admit when header x-channel=mobile). Instance data is read via context.Instance.Data (lazy); context.Body is deliberately NOT populated on this surface, unlike view-rule contexts. Fail-closed: a rule returning false, throwing or failing to compile denies on both surfaces; the fallbackTimeoutSeconds job still auto-resumes the paused pipeline, so a broken rule cannot strand an instance. Caching posture: a state body whose interaction is rule-gated is never stored in the shared state body cache (CallerScopeHash does not cover rule inputs; bubbled subflow interactions skip caching conservatively); the fingerprint 304 fast path is unchanged, leaving an accepted #864-class gap where rule-input changes behind an unchanged fingerprint keep answering 304 with the previous verdict until the next state/status change - the acknowledge always evaluates fresh. No state-body shape change (ResponseShapeVersion untouched).",
+      "schemaPath": "state.interaction.longPoll.rule",
+      "apiEndpoints": [
+        "GET {domain}/workflows/{workflow}/instances/{instance}/functions/state",
+        "POST {domain}/workflows/{workflow}/instances/{instance}/longpoll/ack"
       ]
     },
     "longPollTermination": {
@@ -194,6 +224,56 @@
         "GET {domain}/workflows/{workflow}/instances/{instance}/functions/tasks",
         "GET {domain}/workflows/{workflow}/instances/{instance}/functions/actions?taskId={taskId}"
       ]
+    },
+    "instanceQueryPaging": {
+      "since": "0.0.90",
+      "status": "stable",
+      "description": "Instance lists apply sorting and pagination in PostgreSQL. Non-grouped, non-aggregate requests select pageSize + 1 identities to determine hasNext, hydrate only the requested page and preserve the selected order. An instance Id tie-breaker makes equal sort values deterministic; this is offset pagination, not a snapshot across concurrent writes. InstanceQueries:IdentityPaging and InstanceQueries:LatestJoin default to true. DisabledSchemas contains physical schema names that use the entity-list route instead. Grouped/aggregate requests keep their separate SQL path. These routing switches do not change filter authorization or remove physical indexes.",
+      "relatedConfig": [
+        "InstanceQueries:IdentityPaging",
+        "InstanceQueries:LatestJoin",
+        "InstanceQueries:DisabledSchemas"
+      ],
+      "apiEndpoints": [
+        "GET {domain}/workflows/{workflow}/instances"
+      ],
+      "documentation": "docs/runtime/instance-filtering-and-queries.md"
+    },
+    "masterAttributeIndexes": {
+      "since": "0.0.90",
+      "status": "stable",
+      "configFlag": "AttributeIndexes:Enabled",
+      "description": "Boolean x-indexed metadata opts Master schema scalar fields into manually prepared PostgreSQL projections. Any occurrence of x-indexed, including false, requires the exact component attributes.type value master; other schema type strings remain valid without this metadata. True supports explicit string, number, integer and boolean properties, including nested object properties and string format date-time; array, object, reference, conditional and ambiguous indexed paths are rejected. x-filterOperators and x-sortable still control filter/sort permissions independently. The sibling vnext-workflow-cli command wf indexes generate produces offline SQL for DBA review and execution in a maintenance window; publishing schemas, reading instances and starting hosts never prepare indexes or schedule preparation jobs. Routing is disabled by default. When enabled, ready projections are discovered through a distributed catalog cache scoped by database, database role and flow schema, with a distributed refresh lock and a default 30-second absolute TTL. Missing/unready projections, a missing catalog table or refresh-lock contention without a snapshot use JSON expressions. Catalog connection/read, cache and refresh-lock failures also fall back to JSON expressions and emit a warning without caching a failure as an empty snapshot. Caller cancellation and invalid schema names still propagate. This fallback does not repair database failures that also prevent the underlying instance query. Disable routing globally or by flow to return to JSON expressions; retirement of physical projections is a separate DBA operation requiring drained readers/writers and expiry of the shared catalog cache.",
+      "schemaPath": "schema.attributes.schema.properties[].x-indexed",
+      "relatedConfig": [
+        "AttributeIndexes:Enabled",
+        "AttributeIndexes:DisabledFlows",
+        "AttributeIndexes:CatalogCacheSeconds"
+      ],
+      "documentation": "docs/runtime/manual-attribute-index-maintenance.md"
+    },
+    "discoveryDomainListWarmup": {
+      "since": "0.0.92",
+      "status": "stable",
+      "description": "The discovery endpoint cache's bulk warm-up reads the registry's domain-list function - GET {ServiceDiscovery:BaseUrl}/{ServiceDiscovery:Domain}/functions/domain-list - once per refresh window, instead of paging the raw domain instance list. The function is Domain-scope, answers { items: [ { domainName, baseUrl, appId, healthUrl } ] } for the whole registry in one call, and is itself cached on the registry side for 24h under discovery:domains:active with write-through eviction on domain create/update. Nothing else about the cache's mechanics changed: the hour-long window, the distributed lock, the refresh marker, the L2 dead-man switch and the fail-open behaviour are unchanged, and an unreadable registry still leaves every lookup resolving live. The in-process L1 TTL default did move in the same release, from 60s to 600s - see the deprecations entry service-discovery-cache-l1-ttl-default. Requires a discovery registry that exposes domain-list; there is no fallback to the previous paged read.",
+      "configuration": {
+        "ServiceDiscovery:Cache:DomainListEndpointTemplate": "/{0}/functions/domain-list",
+        "ServiceDiscovery:Cache:DomainListExpectedMax": 500,
+        "ServiceDiscovery:Cache:L1TtlSeconds": 600
+      }
+    },
+    "taskInvocationRouting": {
+      "since": "0.0.92",
+      "status": "stable",
+      "description": "Task invocation is now mode-driven instead of hardcoded to the Execution service (issue #1007). ITaskInvocationRouter resolves, per call, first match wins: a per-task-definition override hook (config.executionMode - reserved for a future vnext-schema release, always null today, never actually decides yet), the per-type entry in Workflow:TaskInvocation:Modes (matched case-insensitively against the wire task type), the configured Workflow:TaskInvocation:DefaultMode, and finally an unconditional capability gate - Local only resolves if an ILocalTaskInvoker is registered for that wire type, otherwise the decision degrades to Remote so a misconfiguration never fails a task. The shipped appsettings.json sets DefaultMode=Remote and routes exactly five wire types Local: http (TaskType 6), daprservice (TaskType 3), soap (TaskType 16), statestore (TaskType 17) and cacheaside (TaskType 18); every other wire type (daprbinding, daprhttpendpoint, daprpubsub, daprconversation, python, the trigger/query types) has no local invoker and always resolves Remote regardless of configuration. A Local task runs in-process inside Orchestration through the same shared send/invocation cores the Execution-side invokers use (HttpTaskInvocation, StateStoreInvocation), so output shapes are identical to the Remote path by construction; a CacheAside miss re-enters the same router for its source task rather than being forced onto one host. Running locally trades away the sidecar's circuit breaker and the ExecutionApi:InvocationTimeoutSeconds (60s) layer, which has no second hop left to bound. The middle timeout layer is not lost, it is replaced: TaskInvocationDispatcher wraps every in-process call in Workflow:TaskInvocation:LocalInvocationTimeoutSeconds (default 60s) regardless of task type, so the local layering is the task's own timeoutSeconds (http/soap only, default 30) inside LocalInvocationTimeoutSeconds inside the job budget. That bound matters most for daprservice/statestore/cacheaside, whose bindings carry no timeout field at all and would otherwise wait unbounded. A local timeout surfaces as a failed result with status 408 that the error boundary can match on, never as an exception; caller cancellation still propagates. WorkflowExecutionOptionsValidator, which enforces the options-level budget hierarchy, is deliberately unchanged by this feature; a locally-run task whose timeoutSeconds meets or exceeds the job budget is not rejected at publish time, it is simply inert because the job budget fires first. ExecutionMode.Custom is rejected at options-validation time (ValidateOnStart) for both DefaultMode and every Modes entry. The resolved mode is tagged on the ambient task span as vnext.task.invocation.mode (Local|Remote) so the path a given invocation took is answerable from a trace. Reverting a type to Remote is a one-line appsettings.json change under Workflow:TaskInvocation:Modes, no code change or Execution redeploy required. The HTTP/SOAP named-client connection cap (previously hardcoded MaxConnectionsPerServer=10, written only for the type-22 External HTTP task) is now Workflow:TaskInvocation:MaxConnectionsPerServer, default 50, since it now bounds every HTTP/SOAP egress call the orchestrator performs, not just type 22's.",
+      "relatedConfig": [
+        "Workflow:TaskInvocation:DefaultMode",
+        "Workflow:TaskInvocation:Modes",
+        "Workflow:TaskInvocation:LocalInvocationTimeoutSeconds",
+        "Workflow:TaskInvocation:MaxConnectionsPerServer"
+      ],
+      "schemaPath": "task.type=3|6|16|17|18",
+      "documentation": "docs/runtime/task-invocation-routing.md"
     }
   }
 }

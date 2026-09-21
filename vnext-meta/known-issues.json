@@ -79,6 +79,46 @@
       "title": "Instance data appends reformat every number through int/double, so integers above 2^53 (including values that no longer fit int64) and decimals beyond ~15 significant digits are persisted with reduced precision — and the rewrite touches numbers the append never referenced.",
       "workaround": "Set WorkflowExecution:InstanceDataWrite:PreserveNumericPrecision=true to canonicalize numbers losslessly (int64 exact, decimal in plain notation; values beyond decimal's 28-29 significant digits are still rounded). Enabling it changes the content hash once per affected instance — for values that lost precision, for values currently written in exponent notation (0.00001 becomes 0.00001 instead of 1E-05) and for a negative zero with a fraction (-0.0 becomes 0) — costing one extra version row and one phantom diff there, with no data loss. Alternatively carry exact monetary values as strings in the schema.",
       "fixedIn": null
+    },
+    {
+      "id": "enqueue-relay-drops-subflow-chain-reserve-claim",
+      "affectedVersions": ">=0.0.80 <=0.0.92",
+      "severity": "error",
+      "component": "execution",
+      "path": "POST .../transitions/{key}/enqueue (TransitionContinuationRequested relay)",
+      "title": "The internal enqueue relay's event-to-payload copy omitted SubflowChainReserved, so with WorkflowExecution:DirectEnqueueContinuations=false (or when the direct Dapr enqueue falls back to the outbox) an async transition on a parent with an active SubFlow reached the leaf without the chain-reserve claim its own accept had taken, and the leaf rejected the forward as Busy (Instance:100031).",
+      "workaround": "Keep DirectEnqueueContinuations=true (the default); the drop then only bites when the direct Dapr enqueue fails and the outbox fallback carries a subflow-forward transition. Retrying the transition after the fallback window is the only recovery on affected versions.",
+      "fixedIn": null
+    },
+    {
+      "id": "arming-poller-not-hosted-orphans-arm-failures",
+      "affectedVersions": "<=0.0.92",
+      "severity": "error",
+      "component": "background-jobs",
+      "path": "BackgroundJob:WithHostedService (orchestration appsettings + vnext-runtime templates)",
+      "title": "The Aether arming poller is registered only by the Orchestration host and switched off there (WithHostedService=false, also in the vnext-runtime deployment templates), so no process arms recovery. When the immediate Dapr scheduler arm fails (scheduler restart/outage at accept, timer arm, ack-timeout arm), Aether rolls the job row back to Pending 'for the arming poller' - and nothing ever arms it. The async accept has already answered 202 and reserved the instance, so the instance stays Busy forever; retries are rejected by the Busy check and the duplicate-active-job guard. Verified live (issue #935 chaos test): a Pending row sat unarmed for 15 minutes with the scheduler healthy again; enabling the poller recovered it within seconds.",
+      "workaround": "Set BackgroundJob:WithHostedService=true on exactly one host (orchestration) so the arming poller and reapers run. A stuck instance can be recovered manually by setting its sys_queues.BackgroundJobs row Status back to 5 (Pending) with the poller enabled.",
+      "fixedIn": null
+    },
+    {
+      "id": "past-due-oneshot-arm-race-orphans-scheduled-row",
+      "affectedVersions": "<=0.0.92",
+      "severity": "error",
+      "component": "background-jobs",
+      "path": "Aether JobDispatcher / BackgroundJobArmingProcessor (upstream: aether)",
+      "title": "Arming a past-due one-shot races the Dapr scheduler's immediate fire: the job callback can arrive before the armer commits Pending->Scheduled, JobDispatcher answers 'not found in an active state; skipping' with HTTP 200, Dapr deletes the consumed one-shot, and the armer then commits Scheduled - leaving a Scheduled row with no scheduler entry, permanently. The VisibilityTimeout reaper covers Running rows only, so nothing recovers it. Observed live (issue #935 chaos test, outbox mode + poller on): dispatcher skip at 12:17:38Z, row Scheduled for 11+ minutes, instance Busy. Aether-level defect; the same orphan also results from a failed rollback after a direct-arm timeout whose server-side registration succeeded.",
+      "workaround": "Manual: set the orphaned sys_queues.BackgroundJobs row Status back to 5 (Pending) so the poller re-arms it (Dapr one-shot arming is overwrite-idempotent). No configuration prevents the race.",
+      "fixedIn": null
+    },
+    {
+      "id": "discovery-domain-list-single-page-ceiling",
+      "affectedVersions": ">=0.0.92",
+      "severity": "warning",
+      "component": "runtime",
+      "path": "ServiceDiscovery:Cache (bulk warm-up)",
+      "title": "The registry's domain-list function serves a single page (500 rows today) and its response carries no truncation signal, so a registry holding more domains than that warms only the first 500.",
+      "workaround": "The runtime logs WorkflowLogs 50038 DomainListCeilingReached at Warning when the list comes back at or above ServiceDiscovery:Cache:DomainListExpectedMax, and publishes it anyway - the domains beyond the ceiling are simply not warmed and each pays a live per-domain lookup, which is the behaviour with the cache switched off. Raising the ceiling is a change on the registry side (vnext-domain-discovery, DomainListMapping.csx pageSize).",
+      "fixedIn": null
     }
   ]
 }

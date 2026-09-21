@@ -83,6 +83,12 @@ public static class ActivationActivity
         bool casFlipped = false,
         ActivityContext settlingCommit = default)
     {
+        // A settling hop without a transition of its own (a subflow-completion resume) carries an
+        // EMPTY key, not a null one — normalize it so the documented name fallback (settling key,
+        // else episode key, else "resume") applies instead of emitting "Instance.Activation/".
+        if (string.IsNullOrEmpty(lastTransitionKey))
+            lastTransitionKey = null;
+
         var episode = WorkflowTraceLane.Episode;
         var ambient = Activity.Current;
         var now = DateTimeOffset.UtcNow;

@@ -35,6 +35,7 @@
       acceptance checks.
     -->
     <ItemGroup>
+        <Compile Include="../Shared/LegacyAttributeIndexFixture.cs" Link="Fixtures/LegacyAttributeIndexFixture.cs"/>
         <Compile Include="..\..\workers\BBT.Workflow.Workers.Inbox\Tracing\EventTraceMode.cs" Link="Tracing\EventTraceMode.cs"/>
         <Compile Include="..\..\workers\BBT.Workflow.Workers.Inbox\Tracing\EventTraceParenting.cs" Link="Tracing\EventTraceParenting.cs"/>
         <Compile Include="..\..\workers\BBT.Workflow.Workers.Inbox\Tracing\EventTraceScope.cs" Link="Tracing\EventTraceScope.cs"/>

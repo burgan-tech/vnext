@@ -1,3 +1,4 @@
+using System;
 using BBT.Aether.Results;
 
 namespace BBT.Workflow.Tasks;
@@ -11,6 +12,7 @@ namespace BBT.Workflow.Tasks;
 /// - Remote invokers (HTTP, Dapr tasks in Execution service)
 /// - Custom invokers (user-defined execution strategies)
 /// </summary>
+[Obsolete("Superseded by the ITaskInvocationRouter / ITaskInvocationDispatcher seam (see docs/runtime/task-invocation-routing.md). This type was never implemented or consumed and is kept only so the published package stays source- and binary-compatible; it will be removed in a later release — see vnext-meta/deprecations.json.")]
 public interface ITaskInvoker
 {
     /// <summary>

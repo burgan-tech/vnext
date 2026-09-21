@@ -25,6 +25,10 @@ public sealed class SchemaFilterContext
         ["includes"] = "includes",
     };
 
+    public bool EnforceFiltering { get; init; } = true;
+    public IReadOnlyDictionary<string, SchemaFieldMetadata> Fields => _fields;
+    public IReadOnlySet<string> ReadyIndexes { get; init; } = new HashSet<string>();
+
     private readonly IReadOnlyDictionary<string, SchemaFieldMetadata> _fields;
 
     public SchemaFilterContext(IReadOnlyDictionary<string, SchemaFieldMetadata> fields)
@@ -48,7 +52,7 @@ public sealed class SchemaFilterContext
     public bool IsFieldFilterable(string fieldPath)
     {
         var metadata = GetFieldMetadata(fieldPath);
-        return metadata is not null && metadata.IsFilterable;
+        return !EnforceFiltering || (metadata is not null && metadata.IsFilterable);
     }
 
     /// <summary>
@@ -57,6 +61,7 @@ public sealed class SchemaFilterContext
     /// </summary>
     public bool IsOperatorAllowed(string fieldPath, string internalOperator)
     {
+        if (!EnforceFiltering) return true;
         var metadata = GetFieldMetadata(fieldPath);
         if (metadata is null || !metadata.IsFilterable)
             return false;
@@ -71,7 +76,7 @@ public sealed class SchemaFilterContext
     public bool IsFieldSortable(string fieldPath)
     {
         var metadata = GetFieldMetadata(fieldPath);
-        return metadata is not null && metadata.Sortable;
+        return !EnforceFiltering || (metadata is not null && metadata.Sortable);
     }
 
     /// <summary>

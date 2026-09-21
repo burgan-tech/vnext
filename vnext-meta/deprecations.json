@@ -54,6 +54,50 @@
       "replacement": "GET .../instances/{instance}/functions/data?extensions=<key>",
       "severity": "warning",
       "message": "The `extensions` query parameter is gone from the start and transition endpoints, together with the extension pass on the sync response. It is no longer bound, so a caller that still sends it is not rejected — the parameter is simply ignored and the response's `extensions` key is always an empty object. Request extension values from a read surface instead: the data function, the instance GET, the instance list, or the extensions endpoint. Extension components themselves are unchanged."
+    },
+    {
+      "id": "service-discovery-cache-bulk-pagination-options",
+      "type": "field",
+      "component": "runtime",
+      "path": "ServiceDiscovery:Cache.BulkEndpointTemplate",
+      "deprecatedSince": "0.0.92",
+      "removedAt": "0.0.92",
+      "replacement": "ServiceDiscovery:Cache.DomainListEndpointTemplate (default /{0}/functions/domain-list) and ServiceDiscovery:Cache.DomainListExpectedMax",
+      "severity": "warning",
+      "message": "The discovery cache warm-up no longer pages the registry's raw instance-list endpoint; it reads the registry's Domain-scope domain-list function once per refresh window, and that function owns the projection (active-only filtering, ordering, domain name from the instance key). BulkEndpointTemplate, BulkPageSize, MaxPages, BulkFilter and AcceptedStatuses are gone; leaving them in appsettings.json is harmless (unbound keys are ignored) but they no longer do anything. The registry deployment must expose GET /{domain}/functions/domain-list - one that predates it answers 404, every refresh window fails with WorkflowLogs 50039 DomainListEndpointMissing, and the cache stays cold while lookups keep resolving live."
+    },
+    {
+      "id": "service-discovery-cache-l1-ttl-default",
+      "type": "behavior",
+      "component": "runtime",
+      "path": "ServiceDiscovery:Cache.L1TtlSeconds",
+      "deprecatedSince": "0.0.92",
+      "removedAt": null,
+      "replacement": null,
+      "severity": "info",
+      "message": "The in-process (L1) discovery cache TTL default changed from 60 to 600 seconds. L1 is the one layer the bulk refresher cannot overwrite on other pods, so this value is how long a forced POST utilities/discovery/refresh takes to reach the whole fleet: that recovery is now up to ten minutes instead of one, and two pods can disagree about a domain's address for that long. Worst-case staleness after a domain moves goes from about 61 to about 70 minutes (RefreshIntervalSeconds + fetch + L1TtlSeconds). Deployments that need the previous behaviour set ServiceDiscovery:Cache:L1TtlSeconds back to 60; it must stay below RefreshIntervalSeconds, which the options validator enforces at startup."
+    },
+    {
+      "id": "external-http-task",
+      "type": "component",
+      "component": "task",
+      "path": "task.type=22",
+      "deprecatedSince": "0.0.92",
+      "removedAt": null,
+      "replacement": "task.type=6 (HttpTask) with the default Workflow:TaskInvocation routing",
+      "severity": "warning",
+      "message": "ExternalHttpTask (type 22) was introduced so a user-defined URL call could run directly inside the Orchestrator instead of being shipped to the Execution service. As of issue #1007, task.type=6 (the ordinary HTTP task) also runs in-process inside Orchestration by default under Workflow:TaskInvocation:Modes.http=Local, through the same shared HttpTaskInvocation send core - so type 22 is now functionally redundant with type 6 under the shipped configuration. Type 22 is deprecated, not removed: existing definitions keep working unchanged (ExternalHttpTaskInvoker still runs unconditionally in-process, independent of the TaskInvocation router). New task definitions should use type 6 instead, which additionally gets a per-type Remote fallback switch (Workflow:TaskInvocation:Modes.http) that type 22 never had. See docs/runtime/task-invocation-routing.md and docs/runtime/task-executors-and-invokers.md § External HTTP tasks."
+    },
+    {
+      "id": "task-invoker-unified-seam",
+      "type": "api",
+      "component": "package",
+      "path": "BBT.Workflow.Tasks.Abstractions: ITaskInvoker, ITaskInvokerRegistry, TaskInvocationContext, TaskEnvelope.ToContext",
+      "deprecatedSince": "0.0.92",
+      "removedAt": null,
+      "replacement": "ITaskInvocationRouter + ITaskInvocationDispatcher + ILocalTaskInvoker (BBT.Workflow.Application, namespace BBT.Workflow.Tasks.Invocation)",
+      "severity": "warning",
+      "message": "ITaskInvoker, ITaskInvokerRegistry and TaskInvocationContext (plus TaskEnvelope.ToContext, whose return type they are) were an aspirational unified invoker seam in the published BBT.Workflow.Tasks.Abstractions package. Nothing in the platform ever implemented or consumed them, and issue #1007 replaced the idea with a seam that is actually wired: ITaskInvocationRouter decides Local vs Remote per task type, ITaskInvocationDispatcher acts on that decision, and ILocalTaskInvoker is what an in-process invoker implements. The old types are marked [Obsolete] rather than removed, because the package ships to nuget.org and deleting public types from it would break consumers at compile and load time even though this repository has no reference left. They will be removed in a later release. A consumer that implemented ITaskInvoker should move to ILocalTaskInvoker; one that built a TaskInvocationContext should call ITaskInvocationDispatcher.DispatchAsync with a TaskEnvelope instead. See docs/runtime/task-invocation-routing.md."
     }
   ]
 }

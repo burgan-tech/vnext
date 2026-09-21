@@ -221,6 +221,9 @@ name is also readable as `BackgroundJob.Arm/{type}/{key}`, but the full unique n
 | `Auth.Decide` | `BBT.Workflow.Authorization` | `vnext.auth.decision` (the verdict), `vnext.auth.roles.count`, `span.category=business` | The authorization decision itself, in `AuthorizeAppService`. Role resolution had a span and the subflow forward had a span, while the verdict they exist to produce had neither — so a denial could be seen arriving and never explained. **Carries no grant expression, role name or caller identity** beyond the `sub`/`act.sub` the platform already propagates: a span is exported to a system with a different access boundary than the workflow's. |
 | `Auth.FilterTransitions` | `BBT.Workflow.Authorization` | `vnext.auth.keys.evaluated`, `vnext.auth.keys.allowed`, `vnext.auth.evaluator.creations`, `span.category=business` | One transition role-filtering pass in the state function. **One span for the pass, never one per key**: the parent-override branch filters key by key and builds a fresh evaluator each time, and a span per key would turn an O(N) latency problem into an O(N) telemetry problem inside the very trace meant to reveal it. Building an evaluator serializes the instance's full latest data, so `evaluator.creations` is the number to read — one is healthy, a count tracking the key count is the defect. Opened only when there are keys to filter. |
 | `Auth.PreviousUserLookup` | `BBT.Workflow.Authorization` | `span.category=business` | The conditional previous-manual-transition read, the one database round trip an authorization evaluation can add. Opened **inside** the branch that performs it, so its presence means the query ran — a span outside the guard would report a lookup that never happened and "no `PreviousUserLookup` in this trace" would stop meaning "no extra query was needed". |
+| `HumanTask.Scan/{flow}` | `BBT.Workflow.Instances.Read` | `vnext.flow.key`, `vnext.humantask.candidates`, `span.category=business` | One workflow schema's candidate query in the `human-task` fan-out — the selection, and nothing else. One per schema, opened in parallel branches, so a branch's `Db.*` children are attributable to it: without it every schema's database work hangs directly off the read envelope and a slow schema cannot be told from a slow endpoint. Selection and descent are timed separately on purpose; their cost shapes are unrelated. |
+| `HumanTask.Descend/{flow}` | `BBT.Workflow.Instances.Read` | `vnext.flow.key`, `vnext.humantask.roots`, `vnext.humantask.resolved`, `vnext.humantask.authorized`, `span.category=business` | One workflow schema's entire leaf descent: every level, local and remote, for all of that flow's candidates. The per-hop `Subflow.Descend/{targetFlow}` spans nest under it, so the ladder stays readable while this carries the branch total — a domain boundary is one hop for a whole branch, so the gap between this span and the sum of its children is the local work. `roots` minus `resolved` is the branch's silent-drop count (the same figure `WorkflowLogs` 20450-20456 explain). |
+| `HumanTask.Authorize/{flow}` | `BBT.Workflow.Instances.Read` | `vnext.flow.key`, `vnext.humantask.leaves`, `vnext.humantask.authorized`, `span.category=business` | Leaf-side authorization at ONE level of a descent: evaluator construction plus grant evaluation for every leaf found there. One span for the level, not one per leaf — a branch can carry hundreds of candidates and the cardinality would swamp the trace for what the counts already say, the same rule `View.Resolve` follows for its rule walk. Opened lazily: a level that only descends authorizes nothing and leaves no span. This is where evaluator construction becomes visible, which can serialize an instance's full latest data. |
 | `View.Resolve` | `BBT.Workflow.Instances.Read` | `vnext.view.rules.evaluated`, `vnext.view.selected`, `span.category=business` | The ordered walk through a state's or transition's `views` array until a rule matches. Each rule is a compiled C# script and is invisible on the warm path — `Script.Compile` appears only on a cold compile, so a request that evaluated four rules and one that evaluated none look identical. One span for the walk with the count and the winner as tags, not one span per rule. |
 | `Schema.Validate` (function path) | `BBT.Workflow.Pipeline` | `span.category=business` | JSON-schema evaluation of a function request body. The transition path has carried this span since the trace-tree work while the function path did the same work unmeasured, so the two surfaces disagreed about whether schema evaluation is visible. Wraps evaluation only — the schema cache read before it is already a `Cache.Get`. |
 | `Remote.Send/{clientType}` | `BBT.Workflow.Gateway` | `vnext.remote.transport` (`dapr` \| `http`), `vnext.remote.host`, `vnext.dapr.app_id` (Dapr only), error status on throw | The one outbound cross-domain call every `Remote*` service makes, at `RemoteTransportRouter.SendAsync`. Kind `Client`. **One span per logical call, never per attempt** — per-attempt spans multiply export volume during the very outage they describe, and the client instrumentation already draws each attempt; this span therefore covers retries, circuit-breaker waits and the sidecar's `ERR_DIRECT_INVOKE` normalization, which were invisible before. The relative path is neither named nor tagged: it carries instance ids. The router's public method stays synchronous (its two contract throws are synchronous) and awaits inside a private core — a `using` span in the old non-async body would have been disposed before the first attempt ran. |
@@ -580,7 +583,10 @@ All nine acceptance checks passed:
    `ChildSubflowCancelRequested.Handle`: post-cutover it has a parent and shares its trace with
    the producing app's spans. Recorded here honestly: this check passed via the substitute
    command, not via the originally-named `TransitionContinuationRequested` path, which this run
-   had no traffic to exercise.
+   had no traffic to exercise. **Closed on 2026-09-15** — see
+   [Follow-up verification](#follow-up-verification-2026-09-15-issue-935-outbox-continuation-mode)
+   below: the path was exercised directly with `WorkflowExecution:DirectEnqueueContinuations=false`
+   and the check passed on the real event, with two defects found and fixed on the way.
 5. **Relay same-tree** — 3 sampled relay traces each contain `PostCommit.EventRelay` ×2,
    `SubFlow.Completion` ×2, `SubFlow.Resume` ×2, and zero `*.Handle` spans: the flow's own
    settlement work stayed inside the flow trace while the duplicate backup delivery moved out.
@@ -633,6 +639,44 @@ are **nanoseconds** while `duration` is **microseconds** — mixing the two unit
 nonsense containment results. This run hit that trap mid-measurement and corrected it; the
 corrected containment math (check 8 above) was validated against `end_time`, not the `duration`
 field.
+
+## Follow-up verification (2026-09-15, issue #935, outbox continuation mode)
+
+The 2026-08-30 run left three recorded caveats (issue #935): the `vnext.activation.partial` /
+`vnext.activation.clock_skew` degradation tags, the cosmetic `PostCommit.*` overlap, and — the open
+one — zero traffic through `TransitionContinuationRequested`. Closed as follows, against a scratch
+side stack (domain `lab935`, branch binaries, isolated DB, shared infra) running with
+`WorkflowExecution:DirectEnqueueContinuations=false` so **every** async continuation took the
+outbox → Inbox → `transitions/{key}/enqueue` relay path. Numbers measured in OpenObserve (the
+renderer caveat above applies to containment claims only; these are presence/tag/trace-id claims).
+
+- **The path carries the episode.** 7+ `TransitionContinuationRequested.Handle` spans; a sampled
+  transition trace contains the full chain in ONE trace id — accept transaction,
+  `Transition.Enqueue`, outbox `EventBus.Publish`, `Uow.Commit`, the Inbox handler +
+  `Inbox.Forward`, the `/enqueue` relay endpoint, `ScheduleJobAlpha1`, `TransitionJob.Execute/{key}`
+  and the covering `Instance.Activation/{key}`. **Zero** `vnext.activation.partial` and **zero**
+  `vnext.activation.clock_skew` across all 8 activation spans of the run: every settling hop
+  received the carried start through the event.
+- **The tags work as designed.** One instance's continuation event sat unconsumed while the Inbox
+  sidecar was down; on recovery its activation span honestly reported 235 s trigger→rest — the
+  backdated span measuring an outage, exactly its contract. The flags stayed absent because the
+  start was carried; they remain reachable only by rolling-deploy carriers and cross-replica clock
+  skew, which is what they are for. The `PostCommit.*` overlap caveat had already been closed by the
+  un-flatten shipped with #986 (`PostCommit.*` is a real child again — see
+  [Trace Lanes § Async timing shape](trace-lanes.md#async-timing-shape)).
+- **Defect found: the relay dropped the chain-reserve claim.** The `/enqueue` endpoint's
+  event→payload copy omitted `SubflowChainReserved`, so in outbox mode (or the direct-enqueue
+  fallback) a forwarded transition on a parent with an active SubFlow reached the leaf without the
+  claim its own accept had taken — rejected as Busy (`Instance:100031`). Fixed; the field-by-field
+  relay copy (episode fields included) is now pinned by `InstanceControllerEnqueueRelayTests`,
+  whose reflection guard fails for the NEXT field added to both carriers but not to the copy.
+  Live-proven: parent → active child → async `approve-child` on the parent through the outbox path;
+  child completed, parent resumed, zero `Instance:100031`.
+- **Defect found: a bare `Instance.Activation/` span.** A subflow-completion resume settles with an
+  EMPTY (not null) transition key, which defeated the documented name fallback (settling key, else
+  episode key, else `resume`). `ActivationActivity` now normalizes the empty key; the resume settle
+  emits `Instance.Activation/{episode key}` (observed live), pinned by
+  `ActivationActivityTests.Emit_with_an_empty_settling_key_falls_back_to_the_episode_key_then_resume`.
 
 ## Open items on this page's catalogue
 

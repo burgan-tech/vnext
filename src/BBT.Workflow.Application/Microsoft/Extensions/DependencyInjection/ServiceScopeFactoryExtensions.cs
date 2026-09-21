@@ -14,6 +14,61 @@ namespace Microsoft.Extensions.DependencyInjection;
 /// </summary>
 public static class ServiceScopeFactoryExtensions
 {
+    #region ExecuteInIsolatedUnitOfWorkAsync
+
+    /// <summary>
+    /// Runs read-only work in a fresh DI scope AND a fresh unit of work, so it cannot share a
+    /// <c>DbContext</c> with anything running in parallel beside it.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>A DbContext is bound to the unit of work, not to the DI scope.</b>
+    /// <c>AetherDbContextProvider</c> resolves it as <c>(IUnitOfWorkManager.Current, schema)</c>, and
+    /// the ambient unit of work is an <c>AsyncLocal</c> that flows into every branch of a
+    /// <c>Parallel.ForEachAsync</c>. Opening a new scope therefore isolates the SERVICES but not the
+    /// context: parallel branches under one request keep sharing it per schema, and the second
+    /// concurrent query on it fails with "A second operation was started on this context instance".
+    /// </para>
+    /// <para>
+    /// Parallel work has survived this only by accident of addressing — the human-task fan-out gave
+    /// each branch a different flow schema, and the provider's schema key then handed each one its
+    /// own context. That invariant is invisible at the call site and breaks the moment any branch
+    /// touches a schema another branch might also touch, which is exactly what a recursive walk
+    /// across flows does. Use this helper instead of relying on it.
+    /// </para>
+    /// <para>
+    /// The unit of work is non-transactional and is never committed: this is for READS. Nested work
+    /// inside the callback may open further DI scopes and will inherit this unit of work — which is
+    /// correct and deliberate, because sequential reads on one context are safe and it keeps the
+    /// open connection count bounded by the caller's degree of parallelism rather than by
+    /// parallelism × recursion depth.
+    /// </para>
+    /// </remarks>
+    /// <typeparam name="T">The raw return type of the action.</typeparam>
+    /// <param name="scopeFactory">The service scope factory.</param>
+    /// <param name="action">The read-only operation to run.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    public static Task<T> ExecuteInIsolatedUnitOfWorkAsync<T>(
+        this IServiceScopeFactory scopeFactory,
+        Func<IServiceProvider, CancellationToken, Task<T>> action,
+        CancellationToken cancellationToken = default)
+    {
+        return scopeFactory.ExecuteInScopeRawAsync(async (sp, ct) =>
+        {
+            var unitOfWorkManager = sp.GetRequiredService<BBT.Aether.Uow.IUnitOfWorkManager>();
+
+            await using var unitOfWork = unitOfWorkManager.Begin(new BBT.Aether.Uow.UnitOfWorkOptions
+            {
+                Scope = BBT.Aether.Uow.UnitOfWorkScopeOption.RequiresNew,
+                IsTransactional = false
+            });
+
+            return await action(sp, ct);
+        }, cancellationToken);
+    }
+
+    #endregion
+
     #region ExecuteInScopeAsync
 
     /// <summary>

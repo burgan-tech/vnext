@@ -115,7 +115,19 @@ that makes the outbox path near-instant: `docs/runtime/event-publish-modes.md`.
   1. Add `[LoggerMessage]` partials in `WorkflowLogs.cs` with EventId + message template.
   2. Use structured parameters (`{InstanceId}`, `{Flow}`, `{TransitionKey}`).
   3. Pick the right level: `Debug` (traces), `Information` (state changes), `Warning` (recoverable), `Error` (failures).
-  4. Use unique EventIds following existing patterns (10xxx transitions, 40xxx events, 20xxx instances).
+  4. Use unique EventIds following existing patterns (10xxx transitions, 40xxx events, 20xxx instances, 50xxx discovery).
+
+**The EventId must be unique, and nothing but a test enforces it.** The source generator accepts a
+duplicate, Debug and Release both build clean, and the collision only surfaces in a log pipeline —
+where a dashboard or alert keyed to that number silently matches two unrelated events and the person
+reading it cannot tell which one fired. Eighteen such collisions had accumulated before
+`WorkflowLogEventIdUniquenessTests` was added; it now fails the build instead. Two **overloads of the
+same event** may share an id (today only `JobFailed`, which takes either an exception or a
+Result-pattern error string); that allowance is an explicit list in the test, so widening it is a
+decision someone makes on purpose.
+
+When adding a message, take the next free id **above your region's own block** rather than filling a
+gap — a gap may be a retired id that a saved query still references.
 
 ```csharp
 // BAD

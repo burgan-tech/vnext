@@ -1,3 +1,4 @@
+using System;
 using BBT.Aether.Results;
 
 namespace BBT.Workflow.Tasks;
@@ -10,6 +11,7 @@ namespace BBT.Workflow.Tasks;
 /// - ILocalTaskInvokerRegistry (Domain layer)
 /// - ITaskInvokerRegistry (Execution layer)
 /// </summary>
+[Obsolete("Superseded by the ITaskInvocationRouter / ITaskInvocationDispatcher seam (see docs/runtime/task-invocation-routing.md). This type was never implemented or consumed and is kept only so the published package stays source- and binary-compatible; it will be removed in a later release — see vnext-meta/deprecations.json.")]
 public interface ITaskInvokerRegistry
 {
     /// <summary>

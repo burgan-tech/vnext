@@ -11,6 +11,7 @@ using System.Threading.Tasks;
 using BBT.Workflow.Tasks.Executors;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution;
+using BBT.Workflow.Execution.ErrorHandling;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Scripting;
@@ -209,6 +210,94 @@ public class RemoteInvokerServiceTests
         _stub.Requests.ShouldHaveSingleItem().RequestUri!.AbsoluteUri.ShouldBe(
             $"{Sidecar}/v1.0/invoke/test-execution/method/api/v1/execution/invoke/HttpTask/call-api");
         _stub.Requests[0].Method.ShouldBe(HttpMethod.Post);
+    }
+
+    /// <summary>
+    /// Pins the wire-casing invariant found via <c>InstanceIncidents</c> evidence on a live
+    /// runtime (2026-09-19): an HTTP-shaped remote task result whose <c>Metadata</c> arrives
+    /// camel-cased over the wire — exactly how <c>System.Text.Json</c> with
+    /// <c>JsonSerializerDefaults.Web</c> serializes it on the Execution host and deserializes it
+    /// here — must still let <see cref="ErrorNormalizer"/> resolve a non-null
+    /// <see cref="NormalizedError.ExceptionType"/> and <see cref="NormalizedError.OriginalCode"/>,
+    /// exactly as it does on the in-process path where the same <c>Dictionary&lt;string,object&gt;</c>
+    /// instance is never JSON round-tripped and keeps its original PascalCase keys
+    /// (<c>"ExceptionType"</c>, built by <c>HttpTaskInvocation.SendAsync</c>). Before the fix,
+    /// <see cref="RemoteInvokerService"/> passed the deserialized dictionary through unchanged, so
+    /// <see cref="ErrorNormalizer"/>'s ordinal <c>TryGetValue("ExceptionType", ...)</c> missed the
+    /// camelCased <c>"exceptionType"</c> key and every <c>errorTypes</c> error-boundary rule
+    /// silently stopped matching the moment a task's invocation mode was Remote instead of Local.
+    /// </summary>
+    [Fact]
+    public async Task InvokeAsync_WhenMetadataArrivesCamelCasedOverTheWire_ErrorNormalizerStillResolvesExceptionTypeAndOriginalCode()
+    {
+        // Hand-written JSON body: mirrors exactly what the Execution host's ASP.NET Core
+        // controller (System.Text.Json, Web/camelCase defaults) puts on the wire for a
+        // TaskCanceledException from a timed-out HTTP task — never a POCO round-tripped back
+        // through the same options, which would hide the casing change this test exists to catch.
+        const string wireJson = """
+            {
+              "success": true,
+              "result": {
+                "isSuccess": false,
+                "statusCode": null,
+                "body": null,
+                "data": null,
+                "errorMessage": "The operation was canceled.",
+                "headers": null,
+                "taskType": "http",
+                "metadata": {
+                  "url": "http://mocklab/slow",
+                  "method": "POST",
+                  "exceptionType": "TaskCanceledException",
+                  "errorCode": "Task:Http:til-http-slow:408"
+                },
+                "executionDurationMs": 42
+              },
+              "errorMessage": null,
+              "executionDurationMs": 42
+            }
+            """;
+
+        _stub.Respond = (_, _) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(wireJson, System.Text.Encoding.UTF8, "application/json")
+        });
+
+        var result = await CreateService().InvokeAsync(
+            "http", "til-http-slow", CreateEnvelope(), CreateTraceContext(), CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        var invocationResult = result.Value!;
+        invocationResult.IsSuccess.ShouldBeFalse();
+
+        // The dictionary itself must resolve a PascalCase lookup despite camelCase wire keys —
+        // exactly the shape ErrorNormalizer queries.
+        // Values are boxed System.Text.Json.JsonElement instances (Dictionary<string,object>
+        // deserialization with no custom converter) — .ToString() is exactly what
+        // ErrorNormalizer's own extraction does, so the comparison mirrors production.
+        invocationResult.Metadata.ShouldNotBeNull();
+        invocationResult.Metadata!.TryGetValue("ExceptionType", out var exceptionType).ShouldBeTrue();
+        exceptionType!.ToString().ShouldBe("TaskCanceledException");
+        invocationResult.Metadata!.TryGetValue("ErrorCode", out var originalCode).ShouldBeTrue();
+        originalCode!.ToString().ShouldBe("Task:Http:til-http-slow:408");
+
+        // And the consumer that actually drives error-boundary matching must resolve it too.
+        // TaskExecutorBase builds StandardTaskResponse.Metadata straight from
+        // TaskInvocationResult.Metadata (no re-copy, no re-casing) before handing it to
+        // ErrorNormalizer.NormalizeTaskResponse — reproduced here rather than going through
+        // ErrorNormalizer.NormalizeTaskResult, which binds (via this file's own namespace
+        // resolution rules) to the unrelated, unused BBT.Workflow.Execution.TaskInvocationResult
+        // overload and is not the type this dictionary flows through in production.
+        var response = new StandardTaskResponse
+        {
+            IsSuccess = invocationResult.IsSuccess,
+            StatusCode = invocationResult.StatusCode,
+            ErrorMessage = invocationResult.ErrorMessage,
+            Metadata = invocationResult.Metadata
+        };
+        var normalized = new ErrorNormalizer().NormalizeTaskResponse(response, "til-http-slow", "http");
+        normalized.ExceptionType.ShouldBe("TaskCanceledException");
+        normalized.OriginalCode.ShouldBe("Task:Http:til-http-slow:408");
     }
 
     [Fact]

@@ -1,4 +1,55 @@
 {
   "profiles": [
+    {
+      "id": "instance-query-routing",
+      "since": "0.0.90",
+      "scope": "query",
+      "description": "Reversible query routing defaults; not a latency guarantee. LatestJoin applies to identity selection. DisabledSchemas matches physical schema names.",
+      "configuration": {
+        "InstanceQueries:IdentityPaging": {
+          "default": true
+        },
+        "InstanceQueries:LatestJoin": {
+          "default": true
+        },
+        "InstanceQueries:DisabledSchemas": {
+          "default": []
+        }
+      },
+      "source": "src/BBT.Workflow.Infrastructure/Instances/InstanceQueryOptions.cs"
+    },
+    {
+      "id": "attribute-index-catalog",
+      "since": "0.0.90",
+      "scope": "query",
+      "description": "Read-only ready-index routing. DisabledFlows is matched after schema-name normalization. CatalogCacheSeconds is an absolute shared-cache TTL, clamped to at least one second; zero does not disable caching. No setting enables DDL.",
+      "configuration": {
+        "AttributeIndexes:Enabled": {
+          "default": false
+        },
+        "AttributeIndexes:DisabledFlows": {
+          "default": []
+        },
+        "AttributeIndexes:CatalogCacheSeconds": {
+          "default": 30,
+          "unit": "seconds",
+          "minimumEffectiveValue": 1
+        }
+      },
+      "source": "src/BBT.Workflow.Infrastructure/Schemas/AttributeIndexOptions.cs"
+    },
+    {
+      "id": "instance-filter-value-length",
+      "since": "0.0.90",
+      "scope": "query",
+      "description": "Each decoded scalar operand is limited independently, including elements of in/nin and endpoints of between. Length uses .NET string.Length (UTF-16 code units), not UTF-8 bytes or serialized JSON escape length. Includes object payloads keep their own budget. The existing 5000-character filter-string limit still applies. Stored instance values are not truncated or limited by this query-input rule.",
+      "limits": {
+        "maxValueLength": 1000
+      },
+      "unit": "utf16-code-units",
+      "configurable": false,
+      "policyId": "query-filter-value-length",
+      "source": "src/BBT.Workflow.Domain/Security/InputValidator.cs"
+    }
   ]
 }

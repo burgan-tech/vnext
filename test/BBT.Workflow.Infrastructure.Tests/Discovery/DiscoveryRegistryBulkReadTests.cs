@@ -7,7 +7,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using BBT.Workflow.Discovery;
-using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using NSubstitute;
 using Shouldly;
@@ -19,21 +19,21 @@ namespace BBT.Workflow.Infrastructure.Tests.Discovery;
 /// Pins <c>DiscoveryRegistryClient.ListAllAsync</c>, the bulk read that fills the discovery cache.
 /// </summary>
 /// <remarks>
-/// The removed bulk cache (<c>79da3b6f</c>) failed here in a way nothing caught: it followed the
-/// response's <c>links.next</c>, which the remote generates with its own API-gateway base path, and
-/// swallowed the resulting 404 — so it cached the first page and only the first page, forever, with
-/// nothing in the logs. <see cref="Pagination_ignores_links_next_and_increments_the_page_number"/>
-/// and <see cref="Page_cap_bounds_a_registry_that_ignores_the_page_parameter"/> are the guards
-/// against re-introducing that class of silent truncation.
+/// The read is one call to the registry's Domain-scope <c>domain-list</c> function, which owns the
+/// whole projection: it filters to active registrations, orders them, resolves the domain name from
+/// the instance key and drops anything unroutable. The client re-derives none of that — the tests
+/// below exist to keep it that way, and to pin the two things the runtime is still responsible for:
+/// refusing to publish a partial list as a success, and saying so loudly when the single page the
+/// function serves comes back full.
 /// </remarks>
 public sealed class DiscoveryRegistryBulkReadTests
 {
     private const string BaseUrl = "https://discovery.test/api/v1";
 
     [Fact]
-    public async Task Parses_the_registry_list_envelope()
+    public async Task Parses_the_domain_list_envelope()
     {
-        var sut = CreateSut(out _, _ => Page(RealWorldPayloadItems()));
+        var sut = CreateSut(out _, out _, _ => DomainList(RealWorldPayloadItems()));
 
         var result = await sut.ListAllAsync(CancellationToken.None);
 
@@ -51,183 +51,146 @@ public sealed class DiscoveryRegistryBulkReadTests
     }
 
     [Fact]
-    public async Task Registration_without_a_domain_name_attribute_falls_back_to_the_instance_key()
+    public async Task Reads_the_whole_registry_in_one_call_with_no_pagination()
     {
-        var sut = CreateSut(out _, _ => Page([
-            """{"key":"legacy","metadata":{"status":"A"},"attributes":{"baseUrl":"https://legacy.test"}}"""
-        ]));
+        var sut = CreateSut(out var handler, out _,
+            _ => DomainList(Enumerable.Range(0, 100).Select(i => Item($"d{i}"))));
 
         var result = await sut.ListAllAsync(CancellationToken.None);
 
-        // The registry sets the instance key to the domain name, so it is a sound fallback for a
-        // registration written before the attribute existed.
-        result.Value!.Single().DomainName.ShouldBe("legacy");
+        result.Value!.Count.ShouldBe(100);
+
+        // A full response is not a page. The function is Domain-scope and answers for the whole
+        // registry, so asking for a second one would re-read the same list, not continue it.
+        handler.Requests.Count.ShouldBe(1);
+
+        var url = handler.Requests.Single().RequestUri!.ToString();
+        url.ShouldBe($"{BaseUrl}/discovery/functions/domain-list");
+        url.ShouldNotContain("page=");
+        url.ShouldNotContain("filter=");
     }
 
     [Fact]
-    public async Task Inactive_registrations_are_excluded_client_side()
+    public async Task Endpoint_template_is_configurable()
     {
-        var sut = CreateSut(out _, _ => Page([
-            Item("live", "A"),
-            Item("retired", "P"),
-            Item("finished", "C")
+        var sut = CreateSut(out var handler, out _, _ => DomainList([Item("live")]),
+            configureCache: c => c.DomainListEndpointTemplate = "/gw/{0}/functions/domain-list");
+
+        await sut.ListAllAsync(CancellationToken.None);
+
+        // An API gateway can sit in front of the registry with a different path; that must stay a
+        // config change rather than a code change.
+        handler.Requests.Single().RequestUri!.ToString()
+            .ShouldBe($"{BaseUrl}/gw/discovery/functions/domain-list");
+    }
+
+    [Fact]
+    public async Task An_empty_registry_is_a_success_not_a_failure()
+    {
+        var sut = CreateSut(out _, out _, _ => DomainList([]));
+
+        var result = await sut.ListAllAsync(CancellationToken.None);
+
+        // The function answers 200 with an empty array for an empty registry, and this client passes
+        // it through as an empty success. Deciding that an empty registry is not worth publishing is
+        // DiscoveryCacheRefresher's call, not the reader's.
+        result.IsSuccess.ShouldBeTrue();
+        result.Value!.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_listed_domain_without_a_name_is_skipped()
+    {
+        var sut = CreateSut(out _, out _, _ => DomainList([
+            """{"domainName":"","baseUrl":"https://nameless.test"}""",
+            Item("live")
         ]));
 
         var result = await sut.ListAllAsync(CancellationToken.None);
 
-        // The server-side filter is an optimisation that may have been dropped mid-run, so the
-        // client-side check has to be the authoritative one.
+        // Nameless is unreachable by definition: the name IS the cache key every lookup resolves by.
         result.Value!.Select(r => r.DomainName).ShouldBe(["live"]);
     }
 
     [Fact]
-    public async Task Accepted_statuses_are_configurable()
+    public async Task Blank_base_url_and_app_id_are_normalised_to_null()
     {
-        var sut = CreateSut(
-            out _,
-            _ => Page([Item("live", "A"), Item("finished", "C")]),
-            configureCache: c => c.AcceptedStatuses = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "A", "C" });
+        var sut = CreateSut(out _, out _, _ => DomainList([
+            """{"domainName":"sparse","baseUrl":"","appId":"","healthUrl":""}"""
+        ]));
 
         var result = await sut.ListAllAsync(CancellationToken.None);
 
-        // metadata.status is the registration WORKFLOW's status, not a health signal. A deployment
-        // whose registration flow runs to a Finish state leaves every instance at C, and hard-coding
-        // "A" would skip every one of its domains.
-        result.Value!.Select(r => r.DomainName).OrderBy(d => d).ShouldBe(["finished", "live"]);
+        // Requiring a baseUrl is the HTTP provider's rule and is enforced there; a registration
+        // carrying only a name and an app-id is entirely valid under Dapr.
+        var sparse = result.Value!.Single();
+        sparse.BaseUrl.ShouldBeNull();
+        sparse.AppId.ShouldBeNull();
     }
 
     [Fact]
-    public async Task Pagination_ignores_links_next_and_increments_the_page_number()
+    public async Task A_full_page_is_published_but_warns_that_the_list_may_be_truncated()
     {
-        var sut = CreateSut(out var handler, request =>
-        {
-            var page = PageNumber(request);
-
-            // The shape the real registry returns: a gateway-rooted path that does NOT carry the
-            // configured /api/v1 prefix. Following it is how the previous implementation broke.
-            return page == 1
-                ? Page(Enumerable.Range(0, 100).Select(i => Item($"d{i}", "A")),
-                       next: "/ebanking/discovery/workflows/domain/instances?page=2&pageSize=100")
-                : Page([Item("last", "A")]);
-        }, configureCache: c => c.BulkPageSize = 100);
+        var sut = CreateSut(out _, out var logger,
+            _ => DomainList(Enumerable.Range(0, 10).Select(i => Item($"d{i}"))),
+            configureCache: c => c.DomainListExpectedMax = 10);
 
         var result = await sut.ListAllAsync(CancellationToken.None);
 
+        // The response carries no truncation signal, so a full page is the only evidence available —
+        // and the list is still published, because the domains it does hold are served from cache
+        // while the ones it misses merely pay a live lookup. Refusing to publish would make every
+        // domain pay it.
         result.IsSuccess.ShouldBeTrue();
-        result.Value!.Count.ShouldBe(101);
-
-        var urls = handler.Requests.Select(r => r.RequestUri!.ToString()).ToList();
-        urls.Count.ShouldBe(2);
-        urls.ShouldAllBe(u => u.StartsWith(BaseUrl, StringComparison.Ordinal));
-        urls.ShouldAllBe(u => !u.Contains("/ebanking/", StringComparison.Ordinal));
-        urls[0].ShouldContain("page=1");
-        urls[1].ShouldContain("page=2");
+        result.Value!.Count.ShouldBe(10);
+        logger.Warnings.ShouldContain(w => w.Contains("may be truncated", StringComparison.Ordinal));
     }
 
     [Fact]
-    public async Task A_short_page_ends_pagination()
+    public async Task A_list_below_the_expected_maximum_does_not_warn()
     {
-        var sut = CreateSut(out var handler, _ => Page([Item("only", "A")]),
-            configureCache: c => c.BulkPageSize = 100);
+        var sut = CreateSut(out _, out var logger,
+            _ => DomainList(Enumerable.Range(0, 9).Select(i => Item($"d{i}"))),
+            configureCache: c => c.DomainListExpectedMax = 10);
 
         await sut.ListAllAsync(CancellationToken.None);
 
-        handler.Requests.Count.ShouldBe(1);
+        logger.Warnings.ShouldBeEmpty();
     }
 
     [Fact]
-    public async Task An_empty_page_ends_pagination()
+    public async Task A_failed_read_fails_rather_than_returning_an_empty_list()
     {
-        var sut = CreateSut(out var handler, request =>
-            PageNumber(request) == 1
-                ? Page(Enumerable.Range(0, 2).Select(i => Item($"d{i}", "A")))
-                : Page([]),
-            configureCache: c => c.BulkPageSize = 2);
+        var sut = CreateSut(out _, out _, _ => new HttpResponseMessage(HttpStatusCode.InternalServerError)
+        {
+            Content = new StringContent("boom")
+        });
 
         var result = await sut.ListAllAsync(CancellationToken.None);
 
-        result.Value!.Count.ShouldBe(2);
-        handler.Requests.Count.ShouldBe(2);
-    }
-
-    [Fact]
-    public async Task Pagination_stops_when_the_registry_repeats_a_page()
-    {
-        var sut = CreateSut(out var handler,
-            _ => Page(Enumerable.Range(0, 2).Select(i => Item($"d{i}", "A"))),
-            configureCache: c =>
-            {
-                c.BulkPageSize = 2;
-                c.MaxPages = 20;
-            });
-
-        var result = await sut.ListAllAsync(CancellationToken.None);
-
-        // A registry that ignores `page` would otherwise loop to MaxPages, re-adding the same domains
-        // each time and burning the whole refresh lease to achieve nothing.
-        handler.Requests.Count.ShouldBe(2);
-        result.Value!.Count.ShouldBe(2);
-    }
-
-    [Fact]
-    public async Task Page_cap_bounds_a_registry_that_ignores_the_page_parameter()
-    {
-        var counter = 0;
-        var sut = CreateSut(out var handler,
-            _ => Page(Enumerable.Range(0, 2).Select(_ => Item($"d{counter++}", "A"))),
-            configureCache: c =>
-            {
-                c.BulkPageSize = 2;
-                c.MaxPages = 3;
-            });
-
-        var result = await sut.ListAllAsync(CancellationToken.None);
-
-        result.IsSuccess.ShouldBeTrue();
-        handler.Requests.Count.ShouldBe(3);
-    }
-
-    [Fact]
-    public async Task A_failed_page_fails_the_whole_read_rather_than_returning_a_partial_list()
-    {
-        var sut = CreateSut(out _, request =>
-                PageNumber(request) == 1
-                    ? Page(Enumerable.Range(0, 2).Select(i => Item($"d{i}", "A")))
-                    : new HttpResponseMessage(HttpStatusCode.InternalServerError)
-                    {
-                        Content = new StringContent("boom")
-                    },
-            configureCache: c => c.BulkPageSize = 2);
-
-        var result = await sut.ListAllAsync(CancellationToken.None);
-
-        // A partial list is indistinguishable from a registry that genuinely lost domains, and
-        // publishing one would evict good entries in favour of nothing.
+        // An empty list and a failed read must not look alike: publishing the former would evict
+        // every good entry in favour of nothing.
         result.IsSuccess.ShouldBeFalse();
     }
 
     [Fact]
-    public async Task A_rejected_status_filter_is_retried_unfiltered()
+    public async Task A_registry_without_the_domain_list_function_fails_loudly()
     {
-        var sut = CreateSut(out var handler, request =>
-            request.RequestUri!.Query.Contains("filter=", StringComparison.Ordinal)
-                ? new HttpResponseMessage(HttpStatusCode.BadRequest) { Content = new StringContent("bad filter") }
-                : Page([Item("live", "A")]));
+        var sut = CreateSut(out _, out var logger, _ => new HttpResponseMessage(HttpStatusCode.NotFound));
 
         var result = await sut.ListAllAsync(CancellationToken.None);
 
-        // Older runtimes 400 on this filter shape because their legacy path parses the status through
-        // Enum.Parse and InstanceStatus is a sealed class, not an enum. The filter is only ever an
-        // optimisation, so a rejection must not fail the refresh.
-        result.IsSuccess.ShouldBeTrue();
-        result.Value!.Single().DomainName.ShouldBe("live");
-        handler.Requests.Count.ShouldBe(2);
+        // The one failure with a configuration cause: a discovery deployment whose package predates
+        // domain-list. There is no fallback read any more, so this log line is the only guidance —
+        // the cache stays cold and every lookup resolves live, which is the cache-off behaviour.
+        result.IsSuccess.ShouldBeFalse();
+        logger.Warnings.ShouldContain(w => w.Contains("404", StringComparison.Ordinal));
     }
 
     [Fact]
     public async Task Missing_base_url_fails_without_any_http_call()
     {
-        var sut = CreateSut(out var handler, _ => Page([]), baseUrl: string.Empty);
+        var sut = CreateSut(out var handler, out _, _ => DomainList([]), baseUrl: string.Empty);
 
         var result = await sut.ListAllAsync(CancellationToken.None);
 
@@ -241,11 +204,13 @@ public sealed class DiscoveryRegistryBulkReadTests
 
     private static DiscoveryRegistryClient CreateSut(
         out DomainDiscoveryResolverTests.RoutingHandler handler,
+        out CapturingLogger logger,
         Func<HttpRequestMessage, HttpResponseMessage> respond,
         Action<DiscoveryCacheOptions>? configureCache = null,
         string? baseUrl = null)
     {
         handler = new DomainDiscoveryResolverTests.RoutingHandler(respond);
+        logger = new CapturingLogger();
 
         var httpClientFactory = Substitute.For<IHttpClientFactory>();
         httpClientFactory.CreateClient(Arg.Any<string>()).Returns(new HttpClient(handler));
@@ -261,30 +226,16 @@ public sealed class DiscoveryRegistryBulkReadTests
             Cache = cache
         });
 
-        return new DiscoveryRegistryClient(httpClientFactory, options, NullLogger<DiscoveryRegistryClient>.Instance);
+        return new DiscoveryRegistryClient(httpClientFactory, options, logger);
     }
 
-    private static int PageNumber(HttpRequestMessage request)
+    private static string Item(string domain) =>
+        "{\"domainName\":\"" + domain + "\",\"baseUrl\":\"https://" + domain + ".test\"," +
+        "\"appId\":\"vnext-" + domain + "-app\",\"healthUrl\":\"https://" + domain + ".test/health\"}";
+
+    private static HttpResponseMessage DomainList(IEnumerable<string> items)
     {
-        var query = request.RequestUri!.Query;
-        var marker = query.IndexOf("page=", StringComparison.Ordinal);
-        if (marker < 0)
-            return 1;
-
-        var digits = new string(query[(marker + 5)..].TakeWhile(char.IsDigit).ToArray());
-        return int.TryParse(digits, out var page) ? page : 1;
-    }
-
-    private static string Item(string domain, string status) =>
-        "{\"key\":\"" + domain + "\",\"metadata\":{\"status\":\"" + status + "\"},\"attributes\":{" +
-        "\"domainName\":\"" + domain + "\",\"baseUrl\":\"https://" + domain + ".test\"," +
-        "\"appId\":\"vnext-" + domain + "-app\",\"healthUrl\":\"https://" + domain + ".test/health\"}}";
-
-    private static HttpResponseMessage Page(IEnumerable<string> items, string next = "")
-    {
-        var body = $$"""
-                     {"links":{"self":"/ebanking/discovery/workflows/domain/instances?page=1&pageSize=100","next":"{{next}}"},"items":[{{string.Join(",", items)}}]}
-                     """;
+        var body = $$"""{"items":[{{string.Join(",", items)}}]}""";
 
         return new HttpResponseMessage(HttpStatusCode.OK)
         {
@@ -293,13 +244,38 @@ public sealed class DiscoveryRegistryBulkReadTests
     }
 
     /// <summary>
-    /// A trimmed copy of a real registry response, kept verbatim in shape so a change to the
-    /// envelope is caught here rather than in production.
+    /// A trimmed copy of a real <c>domain-list</c> response, kept verbatim in shape so a change to
+    /// the envelope is caught here rather than in production.
     /// </summary>
     private static IEnumerable<string> RealWorldPayloadItems() =>
     [
-        """{"id":"060b70cc","key":"credit","flow":"domain","domain":"discovery","metadata":{"currentState":"domain-registered","status":"A"},"attributes":{"appId":"vnext-credit-app","baseUrl":"http://vnext-credit-orchestrator.intprod-vnext-credit.svc.cluster.local:5000","healthUrl":"http://vnext-credit-orchestrator.intprod-vnext-credit.svc.cluster.local:5000/health","domainName":"credit","cacheInvalidated":true},"extensions":{}}""",
-        """{"id":"06a7c134","key":"onboarding","flow":"domain","domain":"discovery","metadata":{"currentState":"domain-registered","status":"A"},"attributes":{"appId":"vnext-onboarding-app","baseUrl":"http://vnext-onboarding-orchestrator.intprod-vnext-onboarding.svc.cluster.local:5000","healthUrl":"http://vnext-onboarding-orchestrator.intprod-vnext-onboarding.svc.cluster.local:5000/health","domainName":"onboarding"},"extensions":{}}""",
-        """{"id":"101de37f","key":"morph-idm","flow":"domain","domain":"discovery","metadata":{"currentState":"domain-registered","status":"A"},"attributes":{"appId":"vnext-morph-idm-app","baseUrl":"http://vnext-morph-idm-orchestrator.intprod-vnext-morph-idm.svc.cluster.local:5000","healthUrl":"http://vnext-morph-idm-orchestrator.intprod-vnext-morph-idm.svc.cluster.local:5000/health","domainName":"morph-idm"},"extensions":{}}"""
+        """{"domainName":"credit","baseUrl":"http://vnext-credit-orchestrator.intprod-vnext-credit.svc.cluster.local:5000","appId":"vnext-credit-app","healthUrl":"http://vnext-credit-orchestrator.intprod-vnext-credit.svc.cluster.local:5000/health"}""",
+        """{"domainName":"onboarding","baseUrl":"http://vnext-onboarding-orchestrator.intprod-vnext-onboarding.svc.cluster.local:5000","appId":"vnext-onboarding-app","healthUrl":"http://vnext-onboarding-orchestrator.intprod-vnext-onboarding.svc.cluster.local:5000/health"}""",
+        """{"domainName":"morph-idm","baseUrl":"http://vnext-morph-idm-orchestrator.intprod-vnext-morph-idm.svc.cluster.local:5000","appId":"vnext-morph-idm-app","healthUrl":"http://vnext-morph-idm-orchestrator.intprod-vnext-morph-idm.svc.cluster.local:5000/health"}"""
     ];
+
+    /// <summary>
+    /// Collects Warning-level messages. The truncation and missing-endpoint cases are observable
+    /// ONLY as log lines — both return an otherwise ordinary result — so a null logger would leave
+    /// them untested.
+    /// </summary>
+    internal sealed class CapturingLogger : ILogger<DiscoveryRegistryClient>
+    {
+        public List<string> Warnings { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            if (logLevel >= LogLevel.Warning)
+                Warnings.Add(formatter(state, exception));
+        }
+    }
 }

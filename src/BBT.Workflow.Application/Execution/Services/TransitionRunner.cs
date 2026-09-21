@@ -61,7 +61,21 @@ public sealed class TransitionRunner(
                 coreOutput.ExecutionContext,
                 cancellationToken);
             if (!coordinationResult.IsSuccess)
+            {
+                // E31. This is the one exit that runs neither Settle nor Fault: the post-commit
+                // work failed and the policy classified the error as the client's, so nothing
+                // downstream touches the status. When the accept marked the whole subflow chain
+                // Busy down to the leaf, that reservation is left behind — and Busy has no
+                // recovery API (retry requires Faulted), so every level stays stranded until a
+                // human intervenes. Undo exactly what the accept flipped, then surface the
+                // original error unchanged.
+                await ReleaseChainReserveAsync(
+                    parentSnapshot,
+                    coreOutput.ExecutionContext.SubflowChainReserved,
+                    coordinationResult.Error,
+                    cancellationToken);
                 return Result<TransitionOutput>.Fail(coordinationResult.Error);
+            }
 
             var decision = coordinationResult.Value!;
             if (decision.FaultRequest is not null)
@@ -127,6 +141,51 @@ public sealed class TransitionRunner(
             activity?.SetStatus(ActivityStatusCode.Error, result.Error.Message);
 
         return result;
+    }
+
+    /// <summary>
+    /// Compensates an accept-time subflow chain reserve after post-commit work failed without a
+    /// fault request.
+    /// <para>
+    /// Deliberately NOT run on the fault path: <c>Instance.Fault</c> already cascades downward,
+    /// raising <c>ChildSubflowFaultRequestedEvent</c> for every active SubFlow correlation, so the
+    /// children fault instead of stranding. Releasing there would race that cascade and could put
+    /// a level back to Active while its fault is still in flight.
+    /// </para>
+    /// <para>
+    /// Identity only crosses the post-commit barrier: the stage scope that built the execution
+    /// context is already disposed, so the release takes the instance id and lock key from the
+    /// snapshot rather than the stale context. The release acquires the status lock itself and
+    /// swallows its own failures — compensation must never mask the error being returned.
+    /// </para>
+    /// </summary>
+    private async Task ReleaseChainReserveAsync(
+        PostCommitParentSnapshot snapshot,
+        bool subflowChainReserved,
+        Error error,
+        CancellationToken cancellationToken)
+    {
+        if (!subflowChainReserved)
+            return;
+
+        using var activity = PipelineStepActivityHelper.StartTransitionActivity(
+            "PostCommit.ReleaseChainReserve", snapshot.TransitionKey);
+        activity?.SetTag(TelemetryConstants.TagNames.InstanceId, snapshot.InstanceId.ToString());
+
+        logger.SubflowChainReserveReleasing(snapshot.InstanceId, snapshot.TransitionKey, error.Code);
+
+        await scopeFactory.ExecuteWithWorkflowAsync(
+            snapshot.Domain,
+            snapshot.WorkflowKey,
+            snapshot.WorkflowVersion,
+            async (sp, ct) =>
+            {
+                var admission = sp.GetRequiredService<ITransitionAdmissionService>();
+                await admission.ReleaseSubflowChainAsync(snapshot.InstanceId, snapshot.LockKey, ct);
+                return Result<bool>.Ok(true);
+            },
+            cancellationToken,
+            resolvedWorkflow: snapshot.Workflow);
     }
 
     /// <summary>

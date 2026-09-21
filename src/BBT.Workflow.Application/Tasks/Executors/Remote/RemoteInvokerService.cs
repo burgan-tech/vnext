@@ -8,6 +8,7 @@ using BBT.Workflow.Execution.Grpc;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks;
+using BBT.Workflow.Tasks.Invocation;
 using Grpc.Core;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
@@ -185,9 +186,9 @@ public sealed class RemoteInvokerService : IRemoteInvokerService
                 Body = response.Result.Body,
                 Data = response.Result.Data,
                 ErrorMessage = response.Result.ErrorMessage,
-                Headers = response.Result.Headers,
+                Headers = InvocationKeyNormalizer.Normalize(response.Result.Headers),
                 TaskType = response.Result.TaskType,
-                Metadata = response.Result.Metadata,
+                Metadata = InvocationKeyNormalizer.Normalize(response.Result.Metadata),
                 ExecutionDurationMs = (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds
             };
 
@@ -328,9 +329,9 @@ public sealed class RemoteInvokerService : IRemoteInvokerService
                 Body = response.Result.Body,
                 Data = response.Result.Data,
                 ErrorMessage = response.Result.ErrorMessage,
-                Headers = response.Result.Headers,
+                Headers = InvocationKeyNormalizer.Normalize(response.Result.Headers),
                 TaskType = response.Result.TaskType,
-                Metadata = response.Result.Metadata,
+                Metadata = InvocationKeyNormalizer.Normalize(response.Result.Metadata),
                 ExecutionDurationMs = (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds
             };
 

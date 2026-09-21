@@ -68,7 +68,7 @@ public interface ITransitionAuthorizationManager
         WorkflowDefinition workflow,
         Transition transition,
         Instance? instance,
-        string? role,
+        IReadOnlyCollection<string>? callerRoles,
         AuthorizationRequestContext? requestContext = null,
         CancellationToken cancellationToken = default);
 
@@ -99,7 +99,7 @@ public interface ITransitionAuthorizationManager
         Transition transition,
         string? currentStateKey,
         Instance? instance,
-        string? role,
+        IReadOnlyCollection<string>? callerRoles,
         AuthorizationRequestContext? requestContext = null,
         CancellationToken cancellationToken = default);
 
@@ -126,7 +126,7 @@ public interface ITransitionAuthorizationManager
         State currentState,
         Instance? instance,
         IReadOnlyList<string> transitionKeys,
-        string? role,
+        IReadOnlyCollection<string>? callerRoles,
         AuthorizationRequestContext? requestContext = null,
         CancellationToken cancellationToken = default);
 
@@ -137,7 +137,7 @@ public interface ITransitionAuthorizationManager
     /// DENY always wins; if no DENY match, any ALLOW match yields true.
     /// </summary>
     Task<bool> IsRoleAllowedForGrantsAsync(
-        string? role,
+        IReadOnlyCollection<string>? callerRoles,
         IReadOnlyCollection<RoleGrant> roleGrants,
         Instance? instance,
         AuthorizationRequestContext? requestContext = null,

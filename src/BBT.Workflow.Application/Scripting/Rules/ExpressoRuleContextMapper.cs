@@ -107,6 +107,8 @@ public static class ExpressoRuleContextMapper
             EffectiveState = instance.EffectiveState,
             EffectiveStateType = instance.EffectiveStateType?.ToString(),
             EffectiveStateSubType = instance.EffectiveStateSubType?.ToString(),
+            EffectiveStatus = instance.GetEffectiveStatus.Code,
+            Type = instance.Type.Code,
             Data = RuleJsonDynamic.FromJsonElement(dataElement)
         };
     }

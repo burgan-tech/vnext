@@ -1,6 +1,6 @@
 using System.Text.Json;
 
-namespace BBT.Workflow.Execution.StateStores;
+namespace BBT.Workflow.Execution.Core.StateStores;
 
 /// <summary>
 /// Shared gateway to a Dapr state store, used by both the State Store and Cache-Aside invokers.

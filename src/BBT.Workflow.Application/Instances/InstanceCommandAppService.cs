@@ -59,6 +59,7 @@ public sealed class InstanceCommandAppService(
     ITransitionAuthorizationManager transitionAuthorizationManager,
     IInstanceCancellationService cancellationService,
     ILongPollAckResumeService longPollAckResumeService,
+    ILongPollInteractionGate longPollInteractionGate,
     IInstanceCommandGateway instanceCommandGateway,
     IWorkflowOutputMappingService workflowOutputMappingService,
     ICallerRoleResolver callerRoleResolver,
@@ -228,21 +229,20 @@ public sealed class InstanceCommandAppService(
 
         var workflow = workflowResult.Value!;
 
-        // Role check against the entered state's interaction.longPoll.roles (default-allow when none).
+        // Authorization against the entered state's interaction.longPoll — the gate owns the arm
+        // selection (rule, else roles, else allow), the same gate the State function's signal emit
+        // uses. Role resolution stays this surface's own (additive explicit role, see
+        // BuildCallerRolesAsync) and runs only when the roles arm applies; a resolution failure
+        // propagates as its own error rather than an access denial.
         var state = workflow.FindState(instance.GetCurrentState);
-        var ackRoles = state?.LongPollAckRoles;
-        if (ackRoles is { Count: > 0 })
-        {
-            var callerRolesResult = await BuildCallerRolesAsync(input.Role, input.Headers, cancellationToken);
-            if (!callerRolesResult.IsSuccess)
-                return Result.Fail(callerRolesResult.Error);
-
-            var allowed = await transitionAuthorizationManager.IsAnyRoleAllowedForGrantsAsync(
-                callerRolesResult.Value, ackRoles, instance,
-                new AuthorizationRequestContext(input.Headers), cancellationToken);
-            if (!allowed)
-                return Result.Fail(WorkflowErrors.LongPollAckAccessDenied(instance.Id));
-        }
+        var admitted = await longPollInteractionGate.IsAdmittedAsync(
+            instance, workflow, state, input.Headers, queryParameters: null,
+            ct => BuildCallerRolesAsync(input.Role, input.Headers, ct),
+            surface: "ack", cancellationToken);
+        if (!admitted.IsSuccess)
+            return Result.Fail(admitted.Error);
+        if (!admitted.Value)
+            return Result.Fail(WorkflowErrors.LongPollAckAccessDenied(instance.Id));
 
         // Best-effort cancel the fallback timeout job; the token guard in the resume path keeps the
         // operation safe even if cancellation is missed.
@@ -835,13 +835,19 @@ public sealed class InstanceCommandAppService(
         if (instance is null)
             return Result<TOutput>.Ok(output);
 
-        // The pipeline reported Busy but the chain has settled to a terminal status meanwhile
-        // (subflow resume finalized the parent in another scope) — surface the settled status.
-        if (output is InstanceOutputBase outputBase
-            && outputBase.Status?.Equals(InstanceStatus.Busy) == true
-            && instance.IsCompleted)
+        if (output is InstanceOutputBase outputBase)
         {
-            outputBase.Status = instance.Status;
+            // The pipeline reported Busy but the chain has settled to a terminal status meanwhile
+            // (subflow resume finalized the parent in another scope) — surface the settled status.
+            if (outputBase.Status?.Equals(InstanceStatus.Busy) == true && instance.IsCompleted)
+            {
+                outputBase.Status = instance.Status;
+            }
+
+            // Sync only, by construction: this method runs on the sync path. An async accept answers
+            // {id, status} from the admission decision with no instance in hand, and its caller polls
+            // the state function anyway.
+            outputBase.EffectiveStatus = instance.GetEffectiveStatus;
         }
 
         var latestData = instance.LatestData;

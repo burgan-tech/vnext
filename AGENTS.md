@@ -301,7 +301,8 @@ Content lives in exactly one place; each tool has a thin entry point that points
 | `.claude/rules/*.md` | Always-on rules — **single source**. Claude Code loads them natively | yes |
 | `.cursor/rules/*.mdc` | Three 8-line pointers; each `@`-includes one file from `.claude/rules/` so Cursor reads the same text | only when a rule file is added/renamed |
 | `.claude/skills/*/SKILL.md` | On-demand skills — **single source**. Cursor loads `.claude/skills/` directly for compatibility; there is no `.cursor/skills/` | yes |
-| `docs/` | Implementation docs, indexed from `docs/README.md`; `docs/testing/` holds the integration-test contract that the `runtime-integration-test` skill executes | yes |
+| `.claude/agents/*.md` | Claude Code subagents — **thin shells only**. Each one points at the file that holds its content (today: `docs/code-review/reviewers/*.md`); other agents ignore the folder | yes |
+| `docs/` | Implementation docs, indexed from `docs/README.md`; `docs/testing/` holds the integration-test contract that the `runtime-integration-test` skill executes, `docs/code-review/` the reviewer checklists that `pr-review` and `workflow-code-review` both run | yes |
 | `ai-docs/superpowers/{specs,plans,reports}/`, `ai-docs/agent-council/sessions/` | Dated decision records — the *why*, not the current contract. Git-ignored local scratch since 2026-09-07; only the council log row in `docs/agent-council/sessions/README.md` is committed | local |
 | `CLAUDE.local.md`, `ai-docs/` | Machine-local, git-ignored. Optional per-machine notes only (repo paths, ports) — policy never lives here | personal |
 
