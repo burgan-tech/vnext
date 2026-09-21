@@ -19,5 +19,11 @@
   </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="BBT.Workflow.Application.Tests" />
+    <!--
+      DiscoveryCacheRefreshHostedService is pinned against the registration that decides whether it
+      may run at all (AddDomainDiscovery), and that registration's tests live in Infrastructure.Tests.
+      Testing the two apart is what let them drift in the first place.
+    -->
+    <InternalsVisibleTo Include="BBT.Workflow.Infrastructure.Tests" />
   </ItemGroup>
 </Project>

@@ -177,6 +177,38 @@ A sixth profile is **composed on top of** the base, never selected instead of it
 - ETag source: `LatestData?.ETag` for entity, `IRepresentationEtagService.Generate(output)` for representation.
 - **Role filtering**: `ITransitionAuthorizationManager` filters available transitions per role. Supports `$InstanceStarter`, `$PreviousUser` pseudo-roles.
 - No server-side hold — 304 drives client-side polling.
+- **Every built-in instance function descends an active subflow — except `data`.** The client holds
+  the ROOT and never the leaf, so `state`, `authorize`, `view`, `schema`, `master` and `extensions`
+  all walk into the active correlation. `data` does not, and the state body's own `data.href`
+  addresses the polled instance, so a client following the link it was given reads the root's
+  attributes while looking at the leaf's state. Measured, and pinned by
+  `TheStateFunctionDescendsButTheDataFunctionDoesNot`; whether a client wants the case's data or the
+  leaf's working copy is a product decision, not a settled one.
+- **The parent's subflow overrides resolve in ONE place per kind, and they REPLACE.** Override wins
+  outright; absent an override the object's own definition applies. There is no merge — OR-ing the
+  child's own grants back in hands the narrowing straight back to the roles it was taken from.
+  `states`/`queryRoles` → `IsQueryAllowedAsync`; `transitions`/`roles` →
+  `TransitionAuthorizationManager.EffectiveTransitionGrants`; `views` →
+  `GetSubFlowViewWithOverrideAsync`. The first two read the map **stamped on the child**
+  (`SubFlowTransitionOverrideReader` / `SubFlowStateOverrideReader`), which is the only form that
+  works at a directly-addressed leaf; `views` is deliberately parent-side only and is not stamped.
+  Resolving per surface is how they diverged: at such a leaf `authorize` read the PARENT's definition,
+  found nothing, and gave the OPPOSITE verdict to the state function for both roles.
+- **`authorize` answers two different questions and the parameter picks which.**
+  `?transitionKey=` is actionability, `?queryRoles=true` is visibility — the state function's
+  `transitions` and its 403 answer the same two. They must agree question-for-question, and the
+  verdict is in the BODY on both statuses: a refusal is `403` with `{"allowed":false}`, so reading
+  only the 200 turns every refusal into "no answer".
+- **`queryRoles` resolution is one method, and it honours the parent's stamped override.**
+  `TransitionAuthorizationManager.IsQueryAllowedAsync` resolves, highest first: the parent's stamped
+  `subflow.state_role_overrides` entry for the instance's effective state → that state's own
+  `queryRoles` → the workflow root's. It **replaces**, never merges — a parent that narrowed a child's
+  visibility meant to narrow it. Every read gate goes through it: state, data, view, schema and
+  incident functions, `authorize`'s query branch, and the human-task list. Reading the stamp there
+  rather than per surface is what makes the narrowing apply wherever the child is reached from; the
+  parent-side reader (`AuthorizeAppService`, `subFlowConfig.Overrides.States`) cannot serve it,
+  because it needs an active SubFlow correlation that the child being asked about does not have.
+  `SubflowStarter` had always written that map and nothing read it.
 - **`effectiveStatus` is served, and it is CLAMPED.** `Instance.GetEffectiveStatus` — not the
   raw `EffectiveStatus` column — feeds `metadata.effectiveStatus` on the instance GET, the list view,
   `GetInstanceTask` and sync `start`/`transition` responses. Rule:
@@ -303,12 +335,33 @@ A sixth profile is **composed on top of** the base, never selected instead of it
   (`ITransitionAuthorizationManager.CreateEvaluatorAsync`). The manager's other methods are thin
   wrappers. Never add a second matcher — three diverged inside the manager once and the surfaces
   disagreed about the same transition. `RoleGrantEvaluatorTests` pins the equivalence.
-- Canonical rule over the **whole** grant set: DENY wins → matching ALLOW allows → a set with no ALLOW
-  grant is a blacklist (allow unless denied) → empty set allows. Multi-role: any allowed role wins.
+- Canonical rule over the **whole** grant set, in two phases:
+  **`authorized = DenyGroupOk AND AllowGroupOk`**.
+  `DenyGroupOk` = **no** deny grant matches **any** of the caller's roles (an AND over the denies —
+  one breach refuses). `AllowGroupOk` = there are no allow grants at all (blacklist), **or** at least
+  one allow grant matches at least one role (an OR over the allows). Empty grant set → allow.
+  **Deny is evaluated first and short-circuits**: matching an allow is the side that resolves
+  predefined and dynamic grants, and a dynamic grant's context build serializes the instance's full
+  latest data, so a refusal must not pay for it.
+- **A denied role is not bought back by an allowed one.** This is the half that changed: the rule used
+  to be applied per caller role inside a loop that returned on the first role that was allowed, so a
+  deny for role B was never reached once role A matched an allow — `[approver, blocked]` passed. The
+  new composition is monotonically restrictive; no caller gains access anywhere it did not have it.
   A caller with **no** roles is still evaluated once so predefined/dynamic grants apply.
 - **`CreatedBy` pairs with the actor (`ActorUserName`); `BehalfOf` pairs with `UserName`.** Predefined
   and dynamic grants match on the *grant* side, independent of the caller role being evaluated — that
   is what makes `[deny: $InstanceStarter]` bind regardless of the caller's other roles.
+- **Every decision point takes the caller's WHOLE role set, never one of them.** `IsAnyRoleAllowed`,
+  `IsRoleAllowedForGrantsAsync`, `IsTransitionAllowedForRoleAsync`, `IsTransitionAllowedInStateAsync`
+  and `FilterAuthorizedTransitionKeysAsync` all take `IReadOnlyCollection<string>?`. Feeding one role
+  — `ICallerRoleResolver.SingleRoleOf`, which is `roles[0]` — made the answer depend on header ORDER:
+  measured on the lab, `x-roles: other,ht-c-approver` was offered nothing while
+  `x-roles: ht-c-approver,other` was offered the transition, same caller, same grants. It also put
+  the deny group out of reach, since an AND across roles needs the roles. `SingleRoleOf` survives for
+  cache scoping (`CallerScopeHash`) and state aliasing display, never for a decision.
+- **Never loop the caller's roles and return on the first allowed one.** That is the canonical rule's
+  composition rebuilt a layer up, and it rebuilds the wrong one — it is how `AuthorizeAppService`
+  re-introduced the defect twice after the evaluator was fixed. One call, whole set.
 - **Batch, don't loop.** Create one evaluator per instance/schema and query it. `grantsForPrefetchHint`
   must cover every grant you will evaluate: a `$PreviousUser` / `$PreviousBehalfOfUser` grant missing
   from the hint can never match. The auth context is built lazily and memoized per transition key —

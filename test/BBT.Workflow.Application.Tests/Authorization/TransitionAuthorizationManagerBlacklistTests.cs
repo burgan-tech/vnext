@@ -90,21 +90,21 @@ public sealed class TransitionAuthorizationManagerBlacklistTests
     public async Task Instance_DenyOnly_AllowsCallerNotDenied()
     {
         var grants = Grants("""[{"role":"blocked","grant":"deny"}]""");
-        (await _sut.IsRoleAllowedForGrantsAsync("someone-else", grants, NewInstance())).ShouldBeTrue();
+        (await _sut.IsRoleAllowedForGrantsAsync(["someone-else"], grants, NewInstance())).ShouldBeTrue();
     }
 
     [Fact]
     public async Task Instance_DenyOnly_DeniesMatchingCaller()
     {
         var grants = Grants("""[{"role":"blocked","grant":"deny"}]""");
-        (await _sut.IsRoleAllowedForGrantsAsync("blocked", grants, NewInstance())).ShouldBeFalse();
+        (await _sut.IsRoleAllowedForGrantsAsync(["blocked"], grants, NewInstance())).ShouldBeFalse();
     }
 
     [Fact]
     public async Task Instance_Allowlist_DeniesNonMatchingCaller()
     {
         var grants = Grants("""[{"role":"maker","grant":"allow"}]""");
-        (await _sut.IsRoleAllowedForGrantsAsync("someone-else", grants, NewInstance())).ShouldBeFalse();
+        (await _sut.IsRoleAllowedForGrantsAsync(["someone-else"], grants, NewInstance())).ShouldBeFalse();
     }
 
     // ── Predefined-only grant sets (blacklist semantics via the shared evaluator) ─
@@ -115,7 +115,7 @@ public sealed class TransitionAuthorizationManagerBlacklistTests
         _currentUser.ActorUserName.Returns("actor");
         var instance = NewInstance(); // CreatedBy is not "actor" → $InstanceStarter deny does not match
         var grants = Grants($$"""[{"role":"{{PredefinedInstanceRoles.InstanceStarter}}","grant":"deny"}]""");
-        (await _sut.IsRoleAllowedForGrantsAsync("teller", grants, instance)).ShouldBeTrue();
+        (await _sut.IsRoleAllowedForGrantsAsync(["teller"], grants, instance)).ShouldBeTrue();
     }
 
     [Fact]
@@ -125,6 +125,6 @@ public sealed class TransitionAuthorizationManagerBlacklistTests
         instance.CreatedBy = "actor";
         _currentUser.ActorUserName.Returns("actor");
         var grants = Grants($$"""[{"role":"{{PredefinedInstanceRoles.InstanceStarter}}","grant":"deny"}]""");
-        (await _sut.IsRoleAllowedForGrantsAsync("teller", grants, instance)).ShouldBeFalse();
+        (await _sut.IsRoleAllowedForGrantsAsync(["teller"], grants, instance)).ShouldBeFalse();
     }
 }

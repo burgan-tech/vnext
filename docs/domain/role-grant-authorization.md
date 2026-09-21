@@ -41,15 +41,73 @@ Consequences to design around:
 
 ## The canonical rule
 
-Evaluated over the whole grant set, in this order:
+Evaluated over the whole grant set **and the caller's whole role set**, as two groups:
 
-1. **DENY wins.** Any matching DENY grant denies, wherever it appears in the set.
-2. **ALLOW match grants.** With no matching DENY, any matching ALLOW grant allows.
+```
+authorized = DenyGroupOk AND AllowGroupOk
+
+DenyGroupOk  = no deny grant matches ANY of the caller's roles     (AND over the denies)
+AllowGroupOk = there are no allow grants at all                    (blacklist)
+               OR at least one allow grant matches at least one role  (OR over the allows)
+empty grant set → allowed
+```
+
+1. **The DENY group is an AND, and it is evaluated first.** Every deny must hold, and a deny holds
+   only while nothing the caller carries matches it. One breach refuses outright.
+2. **The ALLOW group is an OR.** Any one allow grant matching any one role admits.
 3. **A set with no ALLOW grant is a blacklist** — allowed unless explicitly denied.
 4. **An empty set is allowed.** No grants means no restriction.
 
-Multi-role callers are evaluated with *any allowed role grants access*. A caller with no roles is still
-evaluated once, so predefined and dynamic grants apply to them.
+A caller with no roles is still evaluated once, so predefined and dynamic grants apply to them.
+
+### A denied role is not bought back by an allowed one
+
+This is the half people get wrong, and it is the half that changed. The rule used to be applied per
+caller role inside a loop that returned on the **first** role that was allowed, so a deny for role B
+was never reached once role A had matched an allow — a caller holding `[approver, blocked]` passed.
+It no longer does.
+
+| Grant set | Caller roles | Result |
+|---|---|---|
+| `allow: approver`, `deny: blocked` | `[approver]` | allowed |
+| `allow: approver`, `deny: blocked` | `[blocked]` | refused |
+| `allow: approver`, `deny: blocked` | `[approver, blocked]` | **refused** |
+| `deny: blocked` only | `[other]` | allowed |
+| `deny: blocked` only | `[other, blocked]` | **refused** |
+| `allow: approver` only | `[other]` | refused |
+| `{}` | anything | allowed |
+
+A deny grant is therefore a real block: `deny: $InstanceStarter` expresses four-eyes even for a
+caller whose operator role is separately allowed.
+
+### Every surface evaluates the caller's whole role set
+
+Not one of them. `IsAnyRoleAllowed`, `IsRoleAllowedForGrantsAsync`, `IsTransitionAllowedForRoleAsync`,
+`IsTransitionAllowedInStateAsync` and `FilterAuthorizedTransitionKeysAsync` all take the set.
+
+Four surfaces used to be fed `ICallerRoleResolver.SingleRoleOf(roles)` — literally `roles[0]` —
+namely transition listing, `availableIn` narrowing, the parent's transition override and state
+aliasing. Two consequences, both measured on the running lab against a state granting
+`ht-approver` and `ht-c-approver`:
+
+```
+x-roles: other,ht-c-approver   →  []                              ← the grant was never evaluated
+x-roles: ht-c-approver,other   →  [ht-c-approve, cancel-ht-c]
+```
+
+The answer depended on the **order** the caller happened to list its roles, and the deny group — an
+AND across every role — could not apply at all. `SingleRoleOf` remains only where one role really is
+the input: cache scoping (`CallerScopeHash`) and picking a state alias to display.
+
+**Never loop the caller's roles and return on the first allowed one.** That reconstructs the
+composition a layer up, and it reconstructs the wrong one. `AuthorizeAppService` had it twice — once
+per authorize evaluation and once per grant set — and both had to be collapsed into a single call.
+
+### Why deny runs first
+
+Not only because a refusal is the cheaper answer. Matching an **allow** is the side that resolves
+predefined and dynamic grants, and a dynamic grant's context build serializes the instance's full
+latest data. Evaluating the deny group first means a refused caller never pays for it.
 
 ## Grant forms
 

@@ -132,8 +132,18 @@ public interface IInstanceQueryAppService : IApplicationService
     /// for dynamic role grants.
     /// </param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    Task<Result<List<HumanTaskItemOutput>>> GetHumanTaskInstancesAsync(
+    /// <returns>
+    /// The rows plus a truncation flag. The flag never reaches the JSON body — that stays a bare
+    /// array for the consumer — so the HTTP layer surfaces it as a response header instead.
+    /// </returns>
+    /// <param name="cacheOverride">
+    /// True to skip the cache READ for this request. The result is still written back behind the
+    /// same single-flight gate — skipping the write too would let an unauthenticated caller make
+    /// this endpoint more expensive than it is with no cache at all.
+    /// </param>
+    Task<Result<HumanTask.HumanTaskListOutput>> GetHumanTaskInstancesAsync(
         string domain,
         IReadOnlyDictionary<string, string?>? headers = null,
+        bool cacheOverride = false,
         CancellationToken cancellationToken = default);
 }

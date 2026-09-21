@@ -109,7 +109,7 @@ public sealed class TransitionAuthorizationManagerAvailableInTests
 
     private async Task<IReadOnlyList<string>> FilterAsync(WorkflowDefinition workflow, string stateKey, string? role) =>
         await _sut.FilterAuthorizedTransitionKeysAsync(
-            workflow, NewState(stateKey), NewInstance(), ["escalate"], role,
+            workflow, NewState(stateKey), NewInstance(), ["escalate"], role is null ? null : [role],
             cancellationToken: CancellationToken.None);
 
     // ── AND semantics ───────────────────────────────────────────────────────────
@@ -205,7 +205,7 @@ public sealed class TransitionAuthorizationManagerAvailableInTests
         var (workflow, transition) = BuildWorkflow(transitionRolesJson: null, approvalStateRolesJson: null);
 
         var allowed = await _sut.IsTransitionAllowedInStateAsync(
-            workflow, transition, "some-other-state", NewInstance(), "maker");
+            workflow, transition, "some-other-state", NewInstance(), ["maker"]);
 
         allowed.ShouldBeFalse();
     }
@@ -225,7 +225,7 @@ public sealed class TransitionAuthorizationManagerAvailableInTests
         {
             var discovery = (await FilterAsync(workflow, state, role)).Any();
             var authorize = await _sut.IsTransitionAllowedInStateAsync(
-                workflow, transition, state, NewInstance(), role);
+                workflow, transition, state, NewInstance(), role is null ? null : [role]);
 
             authorize.ShouldBe(discovery, $"state '{state}', role '{role}'");
         }
@@ -239,9 +239,9 @@ public sealed class TransitionAuthorizationManagerAvailableInTests
             """[{"role":"maker","grant":"allow"}]""",
             """[{"role":"supervisor","grant":"allow"}]""");
 
-        (await _sut.IsTransitionAllowedInStateAsync(workflow, transition, null, instance: null, "maker"))
+        (await _sut.IsTransitionAllowedInStateAsync(workflow, transition, null, instance: null, ["maker"]))
             .ShouldBeTrue();
-        (await _sut.IsTransitionAllowedInStateAsync(workflow, transition, null, instance: null, "nobody"))
+        (await _sut.IsTransitionAllowedInStateAsync(workflow, transition, null, instance: null, ["nobody"]))
             .ShouldBeFalse();
     }
 }

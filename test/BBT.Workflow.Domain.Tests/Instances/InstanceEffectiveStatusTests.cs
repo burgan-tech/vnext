@@ -113,13 +113,25 @@ public class InstanceEffectiveStatusTests : DomainTestBase<DomainEntryPoint>
     }
 
     /// <summary>
-    /// The mirror of the completion window, and the one the write side cannot fix: a cancel or fault
-    /// cascade completes this level while the child's correlation is still open, so
-    /// <see cref="Instance.ResyncEffectiveStatus"/> no-ops, and cleanup closes the correlation
-    /// afterwards with nothing left to restamp the column. It stays on the child's last non-terminal
-    /// status forever. The state function reports this level's own status there (its descent finds no
-    /// active correlation), so the clamp must too — measured against 15 pre-existing cancelled rows
-    /// that served effectiveStatus "A" while the state function said "C".
+    /// The mirror of the completion window: a cancel cascade completes this level while the child's
+    /// correlation is still open, so <see cref="Instance.ResyncEffectiveStatus"/> would no-op, and
+    /// cleanup closes the correlation afterwards with nothing left to restamp the column. The state
+    /// function reports this level's own status there (its descent finds no active correlation), so
+    /// the clamp must too — measured against 15 pre-existing cancelled rows that served
+    /// effectiveStatus "A" while the state function said "C".
+    /// <para>
+    /// <b>The raw column is now repaired at the source.</b> This case was long described as one the
+    /// write side could not fix, and the assertion below used to pin the stale code. It is fixable:
+    /// a terminal level can never legitimately project a live child, because the cascade terminates
+    /// that child, so <c>Cancel</c> and <c>Complete</c> write their own values straight through. The
+    /// column is the filter and sort target for <c>effectiveStatus</c>, and leaving it stale made
+    /// cancelled rows filterable as live ones. <c>Fault</c> is deliberately excluded — see
+    /// <see cref="InstanceEffectiveProjectionTests"/>.
+    /// </para>
+    /// <para>
+    /// The clamp assertion stays load-bearing regardless: rows written before the repair keep the
+    /// old shape, and faulted levels still rely on it.
+    /// </para>
     /// </summary>
     [Theory]
     [InlineData("A")]
@@ -132,8 +144,27 @@ public class InstanceEffectiveStatusTests : DomainTestBase<DomainEntryPoint>
         instance.Cancel("core");
 
         instance.Status.ShouldBe(InstanceStatus.Completed);
-        instance.EffectiveStatus.Code.ShouldBe(staleCode);
+        instance.EffectiveStatus.ShouldBe(InstanceStatus.Completed);
         instance.GetEffectiveStatus.ShouldBe(InstanceStatus.Completed);
+    }
+
+    /// <summary>
+    /// The clamp's remaining job, stated on the one terminal transition that does NOT repair the
+    /// column: a faulted level keeps the child's projection so a retry can resume against it, and
+    /// only the clamp keeps a reader from seeing the live child's status on a faulted instance.
+    /// </summary>
+    [Theory]
+    [InlineData("A")]
+    [InlineData("B")]
+    public void OnAFaultedLevel_TheClampIsStillTheOnlyThingHoldingTheLine(string staleCode)
+    {
+        var instance = WithActiveSubFlow(InstanceFactory.CreateDefault(), out _);
+        instance.SetEffectiveStatus(InstanceStatus.FromCode(staleCode));
+
+        instance.Fault("core");
+
+        instance.EffectiveStatus.Code.ShouldBe(staleCode);
+        instance.GetEffectiveStatus.ShouldBe(InstanceStatus.Faulted);
     }
 
     /// <summary>

@@ -56,10 +56,13 @@ public sealed class InstanceQueryAppService(
     ICallerRoleResolver callerRoleResolver,
     IPaginationLinkGenerator paginationLinkGenerator,
     IOptions<InstanceFilteringOptions> instanceFilteringOptions,
+    IOptions<HumanTask.HumanTaskFunctionOptions> humanTaskOptions,
     IAttributeIndexCatalog attributeIndexCatalog,
     Caching.IStateFunctionCache stateFunctionCache,
     Caching.IDataFunctionCache dataFunctionCache,
     Caching.IInstanceSchemaFunctionCache instanceSchemaFunctionCache,
+    Caching.IHumanTaskFunctionCache humanTaskFunctionCache,
+    HumanTask.HumanTaskDescentLimiter descentLimiter,
     ILogger<InstanceQueryAppService> logger)
     : ApplicationService(serviceProvider), IInstanceQueryAppService
 {
@@ -1573,7 +1576,7 @@ public sealed class InstanceQueryAppService(
                     // Non-blocking attempt first, purely to learn whether anyone else held the gate.
                     // Without it the span's duration cannot be read: an uncontended acquisition and a
                     // wait that happened to be short are the same number.
-                    var contended = !gate.Semaphore.Wait(0, CancellationToken.None);
+                    var contended = !await gate.Semaphore.WaitAsync(0, CancellationToken.None);
                     if (contended)
                         await gate.Semaphore.WaitAsync(cancellationToken);
 
@@ -1715,44 +1718,13 @@ public sealed class InstanceQueryAppService(
                 : null;
             var evaluatorCreations = 0;
 
-            var parentTransitionOverrides = TryGetParentTransitionRoleOverrides(instance);
-            if (parentTransitionOverrides is { Count: > 0 })
-            {
-                var filteredKeys = new List<string>();
-                foreach (var key in keysForTransitions)
-                {
-                    if (parentTransitionOverrides.TryGetValue(key, out var tOverride) &&
-                        tOverride.Roles is { Count: > 0 })
-                    {
-                        // Parent override (replace mode): use parent-defined grants verbatim.
-                        // No availableIn narrowing here — these overrides key off the SUBFLOW's
-                        // transitions, so the parent's availableIn states would not apply to them.
-                        evaluatorCreations++;
-                        var allowed = await transitionAuthorizationManager
-                            .IsRoleAllowedForGrantsAsync(input.Role, tOverride.Roles!, instance, authRequestContext, cancellationToken);
-                        if (allowed) filteredKeys.Add(key);
-                    }
-                    else
-                    {
-                        // No parent override: if the transition belongs to this workflow, apply own role filtering.
-                        // If not found (e.g. it came from a deeper SubFlow like C), pass through — already filtered by C.
-                        var ownTransition = currentWorkflow.FindTransitionInContext(key);
-                        if (ownTransition != null)
-                        {
-                            evaluatorCreations++;
-                            var result = await transitionAuthorizationManager.FilterAuthorizedTransitionKeysAsync(
-                                currentWorkflow, currentStateValue, instance, [key], input.Role, authRequestContext, cancellationToken);
-                            filteredKeys.AddRange(result);
-                        }
-                        else
-                        {
-                            filteredKeys.Add(key);
-                        }
-                    }
-                }
-                keysForTransitions = filteredKeys;
-            }
-            else if (activeSubFlowCorrelation != null)
+            // The parent's stamped transition overrides are NOT resolved here any more. They are
+            // resolved inside TransitionAuthorizationManager, together with the transition's own
+            // grants and the availableIn narrowing, so the state function, `authorize` and the
+            // authorization matrix cannot answer differently about the same transition. Doing it
+            // here was how they diverged: this surface honoured a parent's narrowing at a leaf while
+            // `authorize`, resolving overrides from the parent's definition, did not.
+            if (activeSubFlowCorrelation != null)
             {
                 // Parent context with active SubFlow:
                 // SubFlow transitions are already correctly role-filtered by the SubFlow itself.
@@ -1765,7 +1737,7 @@ public sealed class InstanceQueryAppService(
                 evaluatorCreations += parentSharedKeys.Count > 0 ? 1 : 0;
                 var filteredParentSharedKeys = parentSharedKeys.Count > 0
                     ? (await transitionAuthorizationManager.FilterAuthorizedTransitionKeysAsync(
-                            currentWorkflow, currentStateValue, instance, parentSharedKeys, input.Role, authRequestContext, cancellationToken))
+                            currentWorkflow, currentStateValue, instance, parentSharedKeys, input.Roles, authRequestContext, cancellationToken))
                       .ToList()
                     : parentSharedKeys;
                 keysForTransitions = keysForTransitions
@@ -1777,7 +1749,7 @@ public sealed class InstanceQueryAppService(
             {
                 evaluatorCreations++;
                 keysForTransitions = (await transitionAuthorizationManager.FilterAuthorizedTransitionKeysAsync(
-                        currentWorkflow, currentStateValue, instance, keysForTransitions, input.Role, authRequestContext, cancellationToken))
+                        currentWorkflow, currentStateValue, instance, keysForTransitions, input.Roles, authRequestContext, cancellationToken))
                     .ToList();
             }
 
@@ -1921,7 +1893,7 @@ public sealed class InstanceQueryAppService(
             var requestContext = new AuthorizationRequestContext(input.Headers, input.QueryParams);
             var culture = LanguageResolver.ResolveCulture(input.Headers);
             var aliasDisplay = await ResolveStateAliasDisplayAsync(
-                currentStateValue, instance, input.Role, culture, requestContext, cancellationToken);
+                currentStateValue, instance, input.Roles, culture, requestContext, cancellationToken);
             if (!string.IsNullOrEmpty(aliasDisplay))
                 displayedState = aliasDisplay;
         }
@@ -2176,7 +2148,7 @@ public sealed class InstanceQueryAppService(
     private async Task<string?> ResolveStateAliasDisplayAsync(
         State state,
         Instance instance,
-        string? role,
+        IReadOnlyCollection<string>? callerRoles,
         string culture,
         AuthorizationRequestContext requestContext,
         CancellationToken cancellationToken)
@@ -2184,7 +2156,7 @@ public sealed class InstanceQueryAppService(
         foreach (var alias in state.Aliases)
         {
             var allowed = await transitionAuthorizationManager.IsRoleAllowedForGrantsAsync(
-                role, alias.Roles, instance, requestContext, cancellationToken);
+                callerRoles, alias.Roles, instance, requestContext, cancellationToken);
             if (allowed)
                 return alias.Labels.ResolveLabel(culture) ?? alias.Name;
         }
@@ -3035,232 +3007,275 @@ public sealed class InstanceQueryAppService(
     }
 
     /// <inheritdoc />
-    public async Task<Result<List<HumanTaskItemOutput>>> GetHumanTaskInstancesAsync(
+    public async Task<Result<HumanTask.HumanTaskListOutput>> GetHumanTaskInstancesAsync(
         string domain,
         IReadOnlyDictionary<string, string?>? headers = null,
+        bool cacheOverride = false,
         CancellationToken cancellationToken = default)
     {
         runtimeInfoProvider.Check(domain);
 
+        var transaction = Activity.Current;
         using var read = InstanceReadActivityHelper.StartRead(
             InstanceReadKinds.HumanTasks, domain);
 
-        List<InstanceKeyModel> workflowSchemas;
-        using (currentSchema.Change(RuntimeSysSchemaInfo.Flows))
-        {
-            workflowSchemas = await instanceRepository.GetActiveInstanceKeysAsync(cancellationToken);
-        }
+        var bounds = humanTaskOptions.Value;
 
-        if (workflowSchemas.Count == 0)
-            return Result<List<HumanTaskItemOutput>>.Ok([]);
-
-        const int humanTaskFanoutParallelism = 10;
-
-        var scopeFactory = serviceProvider.GetRequiredService<IServiceScopeFactory>();
-        // Resolved once, before the fan-out: the parallel bodies open their own DI scopes, so a resolver
-        // read inside them would be a fresh memo — and, under a remote provider, one call per workflow.
+        // Roles first, because they are cache-key material — and resolved once, because the fan-out
+        // bodies open their own DI scopes, so a resolver read inside them would be a fresh memo and,
+        // under a remote provider, one call per workflow.
         var callerRolesResult = await callerRoleResolver.ResolveRolesAsync(headers, cancellationToken);
         if (!callerRolesResult.IsSuccess)
-            return Result<List<HumanTaskItemOutput>>.Fail(callerRolesResult.Error);
+            return Result<HumanTask.HumanTaskListOutput>.Fail(callerRolesResult.Error);
         var userRoles = callerRolesResult.Value ?? [];
-        var requestContext = new AuthorizationRequestContext(headers);
+
+        // Keyed on the caller scope, so the cache sits BEHIND the authorization filter and an entry
+        // is only ever served back to the scope that produced it — which is what lets it hold
+        // humanTask text at all. An override skips the READ and still takes the build gate and
+        // writes the result: a full bypass would be a free way to make this endpoint more expensive
+        // than it is with no cache, on a route with no rate limiter.
+        var cacheEnabled = humanTaskFunctionCache.Enabled;
+        var bypass = cacheOverride && humanTaskFunctionCache.AllowClientOverride;
+        var cacheKey = cacheEnabled ? humanTaskFunctionCache.BuildKey(domain, userRoles, headers) : null;
+
+        if (cacheEnabled && !bypass)
+        {
+            var cached = await humanTaskFunctionCache.GetAsync(cacheKey!, cancellationToken);
+            if (cached is not null)
+            {
+                InstanceReadActivityHelper.SetReadOutcome(
+                    transaction, InstanceReadKinds.HumanTasks, InstanceReadActivityHelper.FastPathCacheHit);
+                return Result<HumanTask.HumanTaskListOutput>.Ok(new HumanTask.HumanTaskListOutput
+                {
+                    Items = cached.Items,
+                    Truncated = cached.Truncated
+                });
+            }
+        }
+
+        InstanceReadActivityHelper.SetReadOutcome(
+            transaction,
+            InstanceReadKinds.HumanTasks,
+            !cacheEnabled ? InstanceReadActivityHelper.FastPathDisabled
+            : bypass ? HumanTaskBypassOutcome
+            : InstanceReadActivityHelper.FastPathBuild);
+
+        // Single-flight. A fixed TTL synchronises expiry, so without this every caller whose entry
+        // expires in the same second starts its own full fan-out over every workflow schema.
+        // Namespaced because the gate dictionary is a process-wide static shared with the
+        // active-subflow gates.
+        using var buildGate = cacheEnabled
+            ? await AcquireBuildGateAsync($"human-task:{cacheKey}", cancellationToken)
+            : null;
+
+        if (cacheEnabled && !bypass && buildGate is { Contended: true })
+        {
+            // Someone else built it while this request waited at the gate.
+            var cached = await humanTaskFunctionCache.GetAsync(cacheKey!, cancellationToken);
+            if (cached is not null)
+            {
+                return Result<HumanTask.HumanTaskListOutput>.Ok(new HumanTask.HumanTaskListOutput
+                {
+                    Items = cached.Items,
+                    Truncated = cached.Truncated
+                });
+            }
+        }
+
+        // Only now, on a real miss, is any database touched.
+        List<string> workflowSchemas;
+        using (currentSchema.Change(RuntimeSysSchemaInfo.Flows))
+        {
+            workflowSchemas = await instanceRepository.GetActiveFlowKeysAsync(cancellationToken);
+        }
+
+        read?.SetTag(TelemetryConstants.TagNames.HumanTaskSchemasScanned, workflowSchemas.Count);
+
+        if (workflowSchemas.Count == 0)
+            return Result<HumanTask.HumanTaskListOutput>.Ok(new HumanTask.HumanTaskListOutput());
+
+
+        var scopeFactory = serviceProvider.GetRequiredService<IServiceScopeFactory>();
         var allItems = new System.Collections.Concurrent.ConcurrentBag<HumanTaskItemOutput>();
+
+        // Counted rather than merely logged: a drop is invisible in the response by construction —
+        // the list is simply shorter — so these are the only signal that an answer was incomplete.
+        var candidateCount = 0;
+        var droppedInstances = 0;
+        var droppedWorkflows = 0;
+        var schemaLimitHit = 0;
+
+        // ── Phase A: ONE statement, ONE connection, every flow of the domain ──────────────────
+        //
+        // Every flow lives in a schema of the SAME database, so the per-flow scans differed only in
+        // the name in the FROM clause. Running them as parallel branches bought a connection each
+        // for nothing: the branch's whole body was one sub-millisecond index-only scan, and the
+        // width of the fan-out became this endpoint's ceiling on connections taken from the pool.
+        // Multiplied by concurrent callers — and every caller has their own cache key, so there is
+        // no single-flight to collapse them — it exhausted the server's connection slots outright
+        // (measured: 20 concurrent distinct callers over a 45-flow domain, 13 of them answered
+        // 53300 "sorry, too many clients already").
+        //
+        // The work is not serialised by this, it MOVES: the database evaluates the UNION ALL arms
+        // itself and answers in one round trip instead of N, so the scan is strictly faster than the
+        // parallel form while holding one connection instead of FanoutParallelism of them.
+        List<HumanTaskCandidate> allCandidates;
+        using (var scan = InstanceReadActivityHelper.StartHumanTaskScan(domain))
+        {
+            allCandidates = await scopeFactory.ExecuteInIsolatedUnitOfWorkAsync(async (sp, innerCt) =>
+            {
+                var scopedRepo = sp.GetRequiredService<IInstanceRepository>();
+                return await scopedRepo.GetHumanTaskCandidatesAcrossFlowsAsync(
+                    workflowSchemas, bounds.PerSchemaLimit, bounds.FlowsPerScanStatement, innerCt);
+            }, cancellationToken);
+
+            scan?.SetTag(TelemetryConstants.TagNames.HumanTaskCandidates, allCandidates.Count);
+        }
+
+        if (allCandidates.Count == 0)
+            return Result<HumanTask.HumanTaskListOutput>.Ok(new HumanTask.HumanTaskListOutput());
+
+        // ── Phase B: descend, in parallel, over the flows that actually produced a candidate ──────
+        //
+        // This is the phase that genuinely needs the fan-out AND the isolation: a descent walks into
+        // OTHER flows and other domains, loads aggregates with includes, and two branches can land
+        // on the same flow — which is what a per-schema DbContext key cannot keep apart. It is also
+        // far narrower than the scan was: a domain publishes many flows and only a few of them hold
+        // human tasks at any moment, so the branch count is now the number of flows with work rather
+        // than the number of flows that exist.
+        var byFlow = allCandidates
+            .GroupBy(c => c.Flow, StringComparer.Ordinal)
+            .Select(g => (Flow: g.Key, Candidates: g.ToList()))
+            .ToList();
 
         var parallelOptions = new ParallelOptions
         {
-            MaxDegreeOfParallelism = humanTaskFanoutParallelism,
+            MaxDegreeOfParallelism = bounds.FanoutParallelism,
             CancellationToken = cancellationToken
         };
 
-        await Parallel.ForEachAsync(workflowSchemas, parallelOptions, async (schema, ct) =>
+        // The candidate row is the ROOT: that is the identity the client holds and the only one it
+        // can address. The work may be several SubFlow levels down and in another domain, so the
+        // authorization decision and the humanTask text come from the LEAF. The walk is batched by
+        // (domain, flow), so a domain boundary costs one call for that whole branch rather than one
+        // per instance per level; its nested hops open their own scopes but inherit this unit of
+        // work, which is correct because they run sequentially within the branch and it keeps open
+        // connections bounded by the fan-out width instead of width × depth.
+        await Parallel.ForEachAsync(byFlow, parallelOptions, async (group, ct) =>
         {
-            var flowResult = await scopeFactory.ExecuteInScopeRawAsync(async (sp, innerCt) =>
+            var flowKey = group.Flow;
+            var candidates = group.Candidates;
+
+            Interlocked.Add(ref candidateCount, candidates.Count);
+            if (candidates.Count >= bounds.PerSchemaLimit)
+                Interlocked.Increment(ref schemaLimitHit);
+
+            using var descend = InstanceReadActivityHelper.StartHumanTaskDescend(flowKey, candidates.Count);
+
+            // Acquired BEFORE the unit of work, so a branch waiting for a slot is not waiting while
+            // holding a connection. This is the only ceiling that spans requests; without it the
+            // per-request width multiplies by however many callers happen to coincide.
+            using var slot = await descentLimiter.AcquireAsync(ct);
+
+            var descent = await scopeFactory.ExecuteInIsolatedUnitOfWorkAsync(async (sp, innerCt) =>
             {
-                var cacheStore = sp.GetRequiredService<IComponentCacheStore>();
-                return await cacheStore.GetFlowAsync(domain, schema.Key, schema.Version, innerCt);
+                var resolver = sp.GetRequiredService<HumanTask.IHumanTaskLeafResolver>();
+                return await resolver.ResolveAsync(
+                    domain,
+                    flowKey,
+                    new HumanTask.HumanTaskLeafRequest
+                    {
+                        InstanceIds = [.. candidates.Select(c => c.Id)],
+                        CallerRoles = userRoles,
+                        Headers = headers is null
+                            ? []
+                            : new Dictionary<string, string?>(headers, StringComparer.OrdinalIgnoreCase),
+                        RemainingDepth = bounds.MaxDescentDepth
+                    },
+                    innerCt);
             }, ct);
 
-            if (!flowResult.IsSuccess || flowResult.Value == null)
-                return;
-
-            var currentWorkflow = flowResult.Value;
-
-            var instances = await scopeFactory.ExecuteInScopeRawAsync(async (sp, innerCt) =>
+            if (!descent.IsSuccess || descent.Value is null)
             {
-                var scopedSchema = sp.GetRequiredService<ICurrentSchema>();
-                var scopedRepo = sp.GetRequiredService<IInstanceRepository>();
-
-                using (scopedSchema.Change(schema.Key))
-                {
-                    return await scopedRepo.GetHumanTaskInstancesAsync(innerCt);
-                }
-            }, ct);
-
-            if (instances.Count == 0)
+                Interlocked.Add(ref droppedInstances, candidates.Count);
+                logger.HumanTaskDescentHopFailed(domain, flowKey, descent.Error.Message);
                 return;
+            }
 
-            var filtered = await FilterAuthorizedInstancesAsync(
-                instances, currentWorkflow, domain, userRoles, requestContext, ct);
+            var leafByRoot = descent.Value.ToDictionary(r => r.InstanceId);
 
-            foreach (var instance in filtered)
+            descend?.SetTag(
+                TelemetryConstants.TagNames.HumanTaskResolved, descent.Value.Count(r => r.Resolved));
+            descend?.SetTag(
+                TelemetryConstants.TagNames.HumanTaskAuthorized, descent.Value.Count(r => r.Authorized));
+
+            foreach (var candidate in candidates)
             {
-                var title = string.Empty;
-                var description = string.Empty;
-
-                var latestData = instance.LatestData;
-                if (latestData?.Data != null
-                    && latestData.Data.JsonElement.ValueKind == JsonValueKind.Object
-                    && latestData.Data.JsonElement.TryGetProperty("humanTask", out var humanTaskElement)
-                    && humanTaskElement.ValueKind == JsonValueKind.Object)
+                if (!leafByRoot.TryGetValue(candidate.Id, out var leaf) || !leaf.Resolved)
                 {
-                    if (humanTaskElement.TryGetProperty("title", out var titleProp))
-                        title = titleProp.GetString() ?? string.Empty;
-                    if (humanTaskElement.TryGetProperty("description", out var descProp))
-                        description = descProp.GetString() ?? string.Empty;
+                    // Already logged with its reason by the resolver. Counted because a dropped row
+                    // and a row the caller may not act on look identical in the response.
+                    Interlocked.Increment(ref droppedInstances);
+                    continue;
                 }
+
+                if (!leaf.Authorized)
+                    continue;
 
                 allItems.Add(new HumanTaskItemOutput
                 {
-                    InstanceId = instance.Key ?? instance.Id.ToString(),
-                    Workflow = schema.Key,
-                    Title = title,
-                    Description = description,
-                    CreatedAt = instance.CreatedAt,
+                    InstanceId = candidate.AddressableId,
+                    Id = candidate.Id,
+                    Workflow = flowKey,
+                    Title = leaf.Title ?? string.Empty,
+                    Description = leaf.Description ?? string.Empty,
+                    CreatedAt = candidate.CreatedAt,
                     VNext = true
                 });
             }
         });
 
         var ordered = allItems.OrderByDescending(x => x.CreatedAt).ToList();
-        return Result<List<HumanTaskItemOutput>>.Ok(ordered);
-    }
 
-    /// <summary>
-    /// Resolves the workflow and state for transition authorization.
-    /// If the instance has an active SubFlow correlation, loads the sub-workflow
-    /// and resolves the state from SubFlowCurrentState. Otherwise uses the parent workflow.
-    /// </summary>
-    private async Task<(Definitions.Workflow? Workflow, State? State)> ResolveInstanceWorkflowAndStateAsync(
-        Instance instance,
-        Definitions.Workflow parentWorkflow,
-        string domain,
-        CancellationToken cancellationToken)
-    {
-        var activeSubFlow = instance.Subflow;
-
-        if (activeSubFlow == null)
+        var capHit = ordered.Count > bounds.ResultCap;
+        if (capHit)
         {
-            var stateResult = parentWorkflow.GetState(instance.GetCurrentState);
-            if (!stateResult.IsSuccess || stateResult.Value == null)
-                return (null, null);
-
-            return (parentWorkflow, stateResult.Value);
+            logger.HumanTaskResultTruncated(domain, "result-cap", bounds.ResultCap, ordered.Count);
+            ordered = ordered.Take(bounds.ResultCap).ToList();
+        }
+        else if (schemaLimitHit > 0)
+        {
+            logger.HumanTaskResultTruncated(domain, "per-schema", ordered.Count, candidateCount);
         }
 
-        var subFlowResult = await componentCacheStore.GetFlowAsync(
-            domain, activeSubFlow.SubFlowName, null, cancellationToken);
+        read?.SetTag(TelemetryConstants.TagNames.HumanTaskCandidates, candidateCount);
+        read?.SetTag(TelemetryConstants.TagNames.HumanTaskReturned, ordered.Count);
+        read?.SetTag(TelemetryConstants.TagNames.HumanTaskDropped, droppedInstances);
+        read?.SetTag(TelemetryConstants.TagNames.HumanTaskWorkflowsDropped, droppedWorkflows);
+        read?.SetTag(TelemetryConstants.TagNames.HumanTaskTruncated, capHit || schemaLimitHit > 0);
 
-        if (!subFlowResult.IsSuccess || subFlowResult.Value == null)
-            return (null, null);
+        var truncated = capHit || schemaLimitHit > 0;
 
-        var subFlowState = activeSubFlow.SubFlowCurrentState;
-        if (string.IsNullOrEmpty(subFlowState))
-            return (null, null);
-
-        var stateInSubFlow = subFlowResult.Value.GetState(subFlowState);
-        if (!stateInSubFlow.IsSuccess || stateInSubFlow.Value == null)
-            return (null, null);
-
-        return (subFlowResult.Value, stateInSubFlow.Value);
-    }
-
-    /// <summary>
-    /// Filters instances by checking whether the current user is authorized to trigger
-    /// at least one transition. For each instance, resolves the correct workflow and state
-    /// (main flow or active SubFlow via correlation), then evaluates that transition's grants through the
-    /// shared role evaluator — the same decision the transition-execution path makes, so a task appears in
-    /// the list exactly when its transition is executable.
-    /// When a SubFlow transition is overridden by the parent, the parent's role grants are used instead.
-    /// </summary>
-    private async Task<List<Instance>> FilterAuthorizedInstancesAsync(
-        List<Instance> instances,
-        Definitions.Workflow parentWorkflow,
-        string domain,
-        string[] userRoles,
-        AuthorizationRequestContext? requestContext,
-        CancellationToken cancellationToken)
-    {
-        var result = new List<Instance>(instances.Count);
-
-        foreach (var instance in instances)
+        if (cacheEnabled)
         {
-            var (workflow, state) = await ResolveInstanceWorkflowAndStateAsync(
-                instance, parentWorkflow, domain, cancellationToken);
-
-            if (workflow == null || state == null)
-                continue;
-
-            var transitions = workflow.GetAvailableUserTransitionKeys(state);
-            if (transitions.Count == 0)
-                continue;
-
-            var parentOverrides = GetParentTransitionOverrides(instance, parentWorkflow);
-
-            // Resolve every candidate first so the evaluator's prefetch hint covers the whole instance:
-            // one previous-transition fetch serves all of this instance's transitions and caller roles.
-            var candidates = new List<(Transition Transition, IReadOnlyCollection<RoleGrant> Grants)>(transitions.Count);
-            foreach (var transitionKey in transitions)
-            {
-                var transition = workflow.FindTransitionInContext(transitionKey);
-                if (transition == null)
-                    continue;
-
-                var grants = parentOverrides != null
-                             && parentOverrides.TryGetValue(transitionKey, out var tOverride)
-                             && tOverride.Roles is { Count: > 0 }
-                    ? tOverride.Roles!
-                    : transition.Roles;
-
-                candidates.Add((transition, grants));
-            }
-
-            if (candidates.Count == 0)
-                continue;
-
-            var evaluator = await transitionAuthorizationManager.CreateEvaluatorAsync(
-                instance,
-                workflow,
-                requestContext,
-                candidates.SelectMany(c => c.Grants),
+            await humanTaskFunctionCache.SetAsync(
+                cacheKey!,
+                new Caching.HumanTaskFunctionCacheEntry { Items = ordered, Truncated = truncated },
                 cancellationToken);
-
-            var isAuthorized = candidates.Any(c =>
-                evaluator.IsAnyRoleAllowed(userRoles, c.Grants, c.Transition));
-
-            if (isAuthorized)
-                result.Add(instance);
         }
 
-        return result;
+        return Result<HumanTask.HumanTaskListOutput>.Ok(new HumanTask.HumanTaskListOutput
+        {
+            Items = ordered,
+            Truncated = truncated
+        });
     }
 
     /// <summary>
-    /// Gets parent-defined transition role overrides for instances in a SubFlow state.
-    /// Returns null if the instance is not in a SubFlow or no overrides are defined.
+    /// Read outcome for a request that skipped the cache read on the caller's request. Distinct from
+    /// a miss so the two can be told apart when the override's cost is measured.
     /// </summary>
-    private static Dictionary<string, SubFlowTransitionOverride>? GetParentTransitionOverrides(
-        Instance instance,
-        Definitions.Workflow parentWorkflow)
-    {
-        if (instance.Subflow == null)
-            return null;
-
-        var parentStateResult = parentWorkflow.GetState(instance.GetCurrentState);
-        if (!parentStateResult.IsSuccess || parentStateResult.Value?.SubFlow?.Overrides?.Transitions == null)
-            return null;
-
-        return parentStateResult.Value.SubFlow.Overrides.Transitions;
-    }
+    private const string HumanTaskBypassOutcome = "bypass";
 
     private async Task<List<InstanceHierarchyNode>> BuildHierarchyTreeAsync(
         Guid parentInstanceId,
@@ -3347,14 +3362,4 @@ public sealed class InstanceQueryAppService(
         InstanceInteractionOutput? Interaction = null,
         IncidentHref? Incident = null);
 
-    private static Dictionary<string, SubFlowTransitionOverride>? TryGetParentTransitionRoleOverrides(Instance instance)
-    {
-        if (!instance.ExtraProperties.TryGetValue(DomainConsts.MetaDataKeys.TransitionRoleOverrides, out var raw) ||
-            raw is null)
-            return null;
-        var json = raw.ToString();
-        if (string.IsNullOrWhiteSpace(json))
-            return null;
-        return JsonSerializer.Deserialize<Dictionary<string, SubFlowTransitionOverride>>(json);
-    }
 }

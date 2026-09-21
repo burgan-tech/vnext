@@ -1,9 +1,13 @@
 using System;
 using System.Collections.Generic;
+using System.Threading;
+using System.Threading.Tasks;
 using BBT.Workflow.Discovery;
+using BBT.Workflow.HostedServices;
 using BBT.Workflow.Runtime;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using NSubstitute;
 using Shouldly;
@@ -193,6 +197,50 @@ public sealed class DiscoveryCacheRegistrationTests
 
         result.Failed.ShouldBeFalse();
     }
+
+    // ────────────────────────────────────────────────────────────────────
+    // The refresh loop must agree with the registration above
+    // ────────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void The_refresh_loop_does_not_start_when_no_refresher_was_registered()
+    {
+        // Cache:Enabled = true, provider = dapr: the registration deliberately skips the refresher
+        // (the test above pins that), so there is nothing for the loop to drive.
+        var provider = Build(cacheEnabled: true, discoveryProvider: "dapr");
+
+        provider.GetService<IDiscoveryCacheRefresher>().ShouldBeNull();
+        BuildRefreshService(provider).IsRefresherRegistered().ShouldBeFalse();
+    }
+
+    [Fact]
+    public void The_refresh_loop_starts_when_a_refresher_was_registered()
+    {
+        var provider = Build(cacheEnabled: true, discoveryProvider: "http");
+
+        BuildRefreshService(provider).IsRefresherRegistered().ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task A_tick_without_a_refresher_is_survivable_rather_than_fatal()
+    {
+        // Belt and braces for the probe: even if something ever starts the loop against a container
+        // with no refresher, the tick must not escape. It used to escape into the tick's own
+        // catch-all and log an InvalidOperationException EVERY tick, forever — 132 occurrences in one
+        // lab pod under Provider = "dapr" with the default Cache:Enabled = true, because the service
+        // spelled the registration's condition a second time (Enabled && Cache.Enabled) and the two
+        // drifted. The probe is the fix; this pins that the failure mode stays non-fatal regardless.
+        var provider = Build(cacheEnabled: true, discoveryProvider: "dapr");
+
+        await BuildRefreshService(provider).TickAsync(CancellationToken.None);
+    }
+
+    private static DiscoveryCacheRefreshHostedService BuildRefreshService(ServiceProvider provider)
+        => new(
+            provider.GetRequiredService<IServiceScopeFactory>(),
+            provider.GetRequiredService<IOptions<ServiceDiscoveryOptions>>(),
+            TimeProvider.System,
+            provider.GetRequiredService<ILogger<DiscoveryCacheRefreshHostedService>>());
 
     // ────────────────────────────────────────────────────────────────────
     // Harness

@@ -586,7 +586,7 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
         Status = InstanceStatus.Completed;
         CompletedAt = DateTime.UtcNow;
         Duration = CompletedAt - CreatedAt;
-        ResyncEffectiveStatus();
+        ForceEffectiveFromOwnTerminalState();
 
         // Publish cleanup event to cancel all scheduled jobs
         var rootId = this.GetRootInstanceId();
@@ -826,7 +826,7 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
         Status = InstanceStatus.Completed;
         CompletedAt = DateTime.UtcNow;
         Duration = CompletedAt - CreatedAt;
-        ResyncEffectiveStatus();
+        ForceEffectiveFromOwnTerminalState();
 
         // Publish cancellation event - event handler will handle cleanup (jobs, correlations)
         var rootId = this.GetRootInstanceId();
@@ -1070,6 +1070,62 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
         {
             EffectiveStatus = Status;
         }
+    }
+
+    /// <summary>
+    /// Re-derives the whole effective projection — state, state type and state sub type — from this
+    /// instance's OWN current state. The state twin of <see cref="ResyncEffectiveStatus"/>, and it
+    /// carries the same <see cref="HasActiveSubFlow"/> guard for the same reason: a second
+    /// still-open SubFlow correlation must keep owning the projection.
+    /// </summary>
+    /// <remarks>
+    /// The SubFlow terminal paths call this instead of <see cref="SetEffectiveState"/>, which writes
+    /// only the state key. Leaving the type/sub-type pair behind made a parent carry a finished
+    /// child's <c>StateSubType.Human</c> forever: the sub type has no other reset writer, and the
+    /// resume re-enters the pipeline at <c>ClearBusyOnResumeStep</c> (order 79), past
+    /// <c>ChangeStateStep</c> (50) — so the resume hop itself never rewrites it, and a parent whose
+    /// SubFlow state waits for a human or an event never reaches another <see cref="ChangeState"/>
+    /// at all. The stale pair is served as <c>metadata.effectiveState*</c>, feeds the script rule
+    /// context, and made the <c>human-task</c> list offer tasks that had already been completed.
+    ///
+    /// <see cref="CurrentStateType"/> and <see cref="CurrentStateSubType"/> are written
+    /// unconditionally by <see cref="ChangeState"/>, so they always describe this instance's own
+    /// state and no workflow definition needs to be resolved here.
+    /// </remarks>
+    public void ResyncEffectiveStateFromCurrent()
+    {
+        if (HasActiveSubFlow)
+            return;
+
+        SetEffectiveState(GetCurrentState);
+        EffectiveStateType = CurrentStateType;
+        EffectiveStateSubType = CurrentStateSubType;
+    }
+
+    /// <summary>
+    /// Writes the whole effective projection — status, state, state type and state sub type — from
+    /// this instance's own values, WITHOUT the <see cref="HasActiveSubFlow"/> guard the two resync
+    /// methods carry. Only the terminal transitions that can never be resumed may call it.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="ResyncEffectiveStatus"/> is a no-op while a SubFlow correlation is open, and the
+    /// cancel/fault cascade closes those correlations AFTER the level completes — so a parent
+    /// cancelled mid-subflow kept a live child's <c>A</c> in the raw column forever.
+    /// <see cref="GetEffectiveStatus"/> already clamps that away for readers, so this changes no
+    /// served value; what it repairs is the raw column, which is the filter and sort target
+    /// (<c>effectiveStatus</c> in instance queries) and fingerprint material.
+    ///
+    /// Deliberately NOT called from <see cref="Fault"/>: <see cref="Unfault"/> brings a faulted
+    /// instance back to Active while its child may still be running, and nothing could restore the
+    /// child's projection afterwards — the correlation carries a state key and a terminal outcome,
+    /// never a live status. Faulted instances keep relying on the clamp.
+    /// </remarks>
+    private void ForceEffectiveFromOwnTerminalState()
+    {
+        EffectiveStatus = Status;
+        SetEffectiveState(GetCurrentState);
+        EffectiveStateType = CurrentStateType;
+        EffectiveStateSubType = CurrentStateSubType;
     }
 
     /// <summary>
