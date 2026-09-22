@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Linq;
 using BBT.Aether.Events;
 using BBT.Aether.Results;
 using BBT.Aether.Uow;
@@ -153,7 +152,6 @@ public sealed class TransitionRunner(
 
     /// <summary>
     /// Compensates a failed post-commit coordination according to the job kind that failed.
-    /// A non-owning run compensates nothing: the Busy belongs to someone else.
     /// </summary>
     private async Task CompensateFailedCoordinationAsync(
         PostCommitParentSnapshot snapshot,
@@ -161,17 +159,19 @@ public sealed class TransitionRunner(
         Error error,
         CancellationToken cancellationToken)
     {
-        if (!coreOutput.ExecutionContext.OwnsStatus)
-            return;
-
         // ContinuationSet is a non-consuming projection, so the jobs are still readable here even
         // though the coordinator consumed the directives.
         var startedSubflow = coreOutput.Continuations.PostCommitJobs.OfType<StartSubflowJob>().Any();
 
         if (startedSubflow)
         {
+            // A lost CAS on the start hop yields no verdict: the level that actually flipped Busy
+            // is the one responsible for compensating it, not this one.
+            if (!coreOutput.ExecutionContext.OwnsStatus)
+                return;
+
             logger.SubflowStartCoordinationFaulted(snapshot.InstanceId, snapshot.TransitionKey, error.Code);
-            await MutateParentAsync(
+            var faultResult = await MutateParentAsync(
                 "PostCommit.Fault",
                 snapshot,
                 (service, ct) => service.FaultAsync(
@@ -179,18 +179,23 @@ public sealed class TransitionRunner(
                     new PostCommitFaultRequest(error.Code, error.Message ?? "Post-commit coordination failed"),
                     ct),
                 cancellationToken);
+            if (!faultResult.IsSuccess)
+                logger.PostCommitJobFailed(snapshot.InstanceId, "PostCommit.Fault", faultResult.Error.Message ?? faultResult.Error.Code);
             return;
         }
 
-        await ReleaseChainReserveAsync(snapshot, error, cancellationToken);
+        // ForwardToSubflowJob: order 10 skips to Finalize on failure, so the parent changed no
+        // state. Undo exactly what the accept flipped, i.e. only when the accept marked the whole
+        // chain Busy down to the leaf — a sync-origin forward never sets that flag (see
+        // TransitionPipeline's IsSubflowForward branch), and there is no other Busy of this run's
+        // own to release on this path.
+        await ReleaseChainReserveAsync(
+            snapshot, coreOutput.ExecutionContext.SubflowChainReserved, error, cancellationToken);
     }
 
     /// <summary>
     /// Compensates an accept-time subflow chain reserve after post-commit work failed without a
-    /// fault request. Called for a failed <see cref="ForwardToSubflowJob"/>: order 10 skips to
-    /// Finalize on failure, so the parent changed no state and the Busy this run took is simply
-    /// released — whether or not the accept reserved the whole chain down to the leaf (a sync
-    /// origin never sets that flag, so gating the release on it left the sync path stranded).
+    /// fault request.
     /// <para>
     /// Deliberately NOT run on the fault path: <c>Instance.Fault</c> already cascades downward,
     /// raising <c>ChildSubflowFaultRequestedEvent</c> for every active SubFlow correlation, so the
@@ -206,9 +211,13 @@ public sealed class TransitionRunner(
     /// </summary>
     private async Task ReleaseChainReserveAsync(
         PostCommitParentSnapshot snapshot,
+        bool subflowChainReserved,
         Error error,
         CancellationToken cancellationToken)
     {
+        if (!subflowChainReserved)
+            return;
+
         using var activity = PipelineStepActivityHelper.StartTransitionActivity(
             "PostCommit.ReleaseChainReserve", snapshot.TransitionKey);
         activity?.SetTag(TelemetryConstants.TagNames.InstanceId, snapshot.InstanceId.ToString());

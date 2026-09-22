@@ -379,15 +379,10 @@ public sealed class TransitionRunnerPostCommitTests
     }
 
     [Fact]
-    public async Task RunAsync_PostCommitErrorWithoutChainReserve_StillReleasesTheRunsOwnBusy()
+    public async Task RunAsync_PostCommitErrorWithoutChainReserve_DoesNotRelease()
     {
-        // Superseded reasoning, kept as a regression pin: "releasing a reservation this accept
-        // never took would settle an instance that is legitimately Busy for some other reason" is
-        // what this test used to assert. It was wrong for a non-Start job — SubflowChainReserved
-        // only gates the ADDITIONAL propagation an accept-time full-chain reserve performs, never
-        // the Busy THIS run's own SetBusyStep took. Gating the release on it left a sync-origin
-        // forward (which never sets the flag) stranded forever — the sync-path half of E31 that
-        // #993 did not close.
+        // Releasing a reservation this accept never took would settle an instance that is
+        // legitimately Busy for some other reason.
         var error = Error.Validation("PostCommit:Rejected", "child rejected the request");
         var harness = new RunnerHarness(new StagePlan(
             "pipeline",
@@ -399,10 +394,8 @@ public sealed class TransitionRunnerPostCommitTests
         var result = await harness.Runner.RunAsync(harness.CreateInput("first"));
 
         result.Error.ShouldBe(error);
-        await harness.AdmissionService.Received(1).ReleaseSubflowChainAsync(
-            harness.InstanceId,
-            $"vnext:test-domain:test-workflow:{harness.InstanceId}",
-            Arg.Any<CancellationToken>());
+        await harness.AdmissionService.DidNotReceiveWithAnyArgs()
+            .ReleaseSubflowChainAsync(default, default!, default);
     }
 
     [Fact]
@@ -427,31 +420,6 @@ public sealed class TransitionRunnerPostCommitTests
             Arg.Any<PostCommitParentSnapshot>(), Arg.Any<PostCommitFaultRequest>(), Arg.Any<CancellationToken>());
         await harness.AdmissionService.DidNotReceive().ReleaseSubflowChainAsync(
             Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
-    }
-
-    [Fact]
-    public async Task RunAsync_WhenForwardCoordinationFails_ShouldReleaseEvenWithoutAChainReserve()
-    {
-        // A failed FORWARD changed no parent state (order 10 skips to Finalize), so the Busy this
-        // run reserved is simply released — and it is released whether or not the accept reserved
-        // the whole chain, which is the half of E31 that #993 left open on the sync path.
-        var harness = new RunnerHarness(new StagePlan(
-            "stage-0",
-            PostCommitBehavior: PostCommitContinuationBehavior.HandoffToChild,
-            SubflowChainReserved: false,
-            PostCommitJob: PostCommitJobKind.ForwardToSubflow))
-        {
-            PostCommitResult = PostCommitResult.Fail(Error.Conflict("Instance:100031", "leaf busy"))
-        };
-
-        var result = await harness.Runner.RunAsync(harness.CreateInput("go"));
-
-        result.IsSuccess.ShouldBeFalse();
-        result.Error.Code.ShouldBe("Instance:100031");
-        await harness.AdmissionService.Received(1).ReleaseSubflowChainAsync(
-            Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
-        await harness.ParentMutationService.DidNotReceive().FaultAsync(
-            Arg.Any<PostCommitParentSnapshot>(), Arg.Any<PostCommitFaultRequest>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
