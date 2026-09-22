@@ -48,6 +48,9 @@ anything.
 
 - **`status`** — read-only: per schema, the applied head, how many migrations are pending against
   this build, and any applied migrations this build does not know. Use it to find the target id.
+  Strictly read-only end to end: the startup side effects of the forward run (dev database creation,
+  the messaging-chain forward migration) execute in forward mode only — `status` and `downgrade`
+  never trigger them.
 - **`downgrade`** — converges every targeted schema to the named migration. EF semantics, on
   purpose: a schema **above** the target reverts (its `Down()` methods run newest-first, one
   transaction per migration, the history row deleted with each), a schema **below** it catches up.

@@ -57,8 +57,14 @@ builder.Services
 
 var host = builder.Build();
 
-host.EnsureDatabaseCreatedInDevelopment();
-host.Services.MigrateMessagingDbContext();
+// Forward-migration side effects belong to the forward command only. 'status' is a read-only
+// promise, and 'downgrade' must not push the messaging chain forward right before (or instead of)
+// converging it to its own target — the downgrade runner handles sys_queues itself when asked.
+if (command.Kind is MigratorCommandKind.Migrate)
+{
+    host.EnsureDatabaseCreatedInDevelopment();
+    host.Services.MigrateMessagingDbContext();
+}
 
 await host.RunAsync();
 
