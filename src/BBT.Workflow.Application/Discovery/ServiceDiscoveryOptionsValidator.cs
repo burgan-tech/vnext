@@ -11,6 +11,14 @@ namespace BBT.Workflow.Discovery;
 /// error log, just a cache that quietly stops paying for itself or a staleness window nobody
 /// intended. Failing at startup is the only place these are visible.
 /// <para>
+/// <b>Most of the rules only apply in periodic mode.</b> The default configuration has no periodic
+/// refresh and no expiry (<c>RefreshIntervalSeconds = 0</c>, <c>L2TtlSeconds = 0</c>), and the old
+/// invariants were all relationships between those two numbers and the others — applied to zeros
+/// they would reject the shipped defaults. They are kept, exactly as they were, for the deployment
+/// that turns periodic refreshing back on, because everything that made them load-bearing there is
+/// still true.
+/// </para>
+/// <para>
 /// Lives on the parent options type because <c>Cache</c> is a nested property: the options system
 /// validates the type it binds, and it binds <see cref="ServiceDiscoveryOptions"/>.
 /// </para>
@@ -27,52 +35,75 @@ public sealed class ServiceDiscoveryOptionsValidator : IValidateOptions<ServiceD
 
         var failures = new List<string>();
 
-        // L1 is the layer the refresher cannot reach. Longer than a refresh window and a pod keeps
-        // serving an address the cluster has already corrected.
-        if (cache.L1TtlSeconds >= cache.RefreshIntervalSeconds)
+        var periodic = cache.RefreshIntervalSeconds > 0;
+        var expires = cache.L2TtlSeconds > 0;
+
+        // An expiry with nothing to renew it is the one combination that is broken in BOTH modes:
+        // every entry dies on its own schedule and the next caller pays a live lookup, forever, with
+        // the cache still reporting hits in between. Event-driven invalidation does not renew
+        // anything on a timer, so it cannot cover for a TTL.
+        if (expires && !periodic)
         {
             failures.Add(
-                $"ServiceDiscovery:Cache:L1TtlSeconds ({cache.L1TtlSeconds}) must be less than " +
-                $"RefreshIntervalSeconds ({cache.RefreshIntervalSeconds}); otherwise a pod can serve a " +
-                "stale endpoint for longer than the cluster takes to correct it.");
+                $"ServiceDiscovery:Cache:L2TtlSeconds ({cache.L2TtlSeconds}) sets an expiry, but " +
+                "RefreshIntervalSeconds is 0, so nothing refreshes entries before they expire. Either set " +
+                "L2TtlSeconds to 0 (event-driven invalidation, the default) or set a positive " +
+                "RefreshIntervalSeconds below it.");
         }
 
-        // A tick slower than the refresh window means a failed refresh is not retried within it.
-        if (cache.TickIntervalSeconds > cache.RefreshIntervalSeconds)
+        if (periodic)
         {
-            failures.Add(
-                $"ServiceDiscovery:Cache:TickIntervalSeconds ({cache.TickIntervalSeconds}) must not exceed " +
-                $"RefreshIntervalSeconds ({cache.RefreshIntervalSeconds}); a failed refresh would not be " +
-                "retried inside the window it failed in.");
-        }
+            // L1 is the layer a refresh cannot reach. Longer than a refresh window and a pod keeps
+            // serving an address the cluster has already corrected.
+            if (cache.L1TtlSeconds >= cache.RefreshIntervalSeconds)
+            {
+                failures.Add(
+                    $"ServiceDiscovery:Cache:L1TtlSeconds ({cache.L1TtlSeconds}) must be less than " +
+                    $"RefreshIntervalSeconds ({cache.RefreshIntervalSeconds}); otherwise a pod can serve a " +
+                    "stale endpoint for longer than the cluster takes to correct it.");
+            }
 
-        // The one that makes the cache useless without saying so: entries expire between refreshes,
-        // so every domain's first caller after each expiry pays full registry latency.
-        if (cache.RefreshIntervalSeconds >= cache.L2TtlSeconds)
-        {
-            failures.Add(
-                $"ServiceDiscovery:Cache:RefreshIntervalSeconds ({cache.RefreshIntervalSeconds}) must be less " +
-                $"than L2TtlSeconds ({cache.L2TtlSeconds}); otherwise entries expire between refreshes and the " +
-                "cache silently stops serving.");
-        }
+            // A tick slower than the refresh window means a failed refresh is not retried within it.
+            if (cache.TickIntervalSeconds > cache.RefreshIntervalSeconds)
+            {
+                failures.Add(
+                    $"ServiceDiscovery:Cache:TickIntervalSeconds ({cache.TickIntervalSeconds}) must not exceed " +
+                    $"RefreshIntervalSeconds ({cache.RefreshIntervalSeconds}); a failed refresh would not be " +
+                    "retried inside the window it failed in.");
+            }
 
-        // The lease must fit inside a window, or one refresh can still hold the lock when the next
-        // is due.
-        if (cache.WarmupLockLeaseSeconds >= cache.RefreshIntervalSeconds)
-        {
-            failures.Add(
-                $"ServiceDiscovery:Cache:WarmupLockLeaseSeconds ({cache.WarmupLockLeaseSeconds}) must be less " +
-                $"than RefreshIntervalSeconds ({cache.RefreshIntervalSeconds}).");
-        }
+            // The lease must fit inside a window, or one refresh can still hold the lock when the
+            // next is due.
+            if (cache.WarmupLockLeaseSeconds >= cache.RefreshIntervalSeconds)
+            {
+                failures.Add(
+                    $"ServiceDiscovery:Cache:WarmupLockLeaseSeconds ({cache.WarmupLockLeaseSeconds}) must be less " +
+                    $"than RefreshIntervalSeconds ({cache.RefreshIntervalSeconds}).");
+            }
 
-        // Survive one lost window without falling back to live lookups for everything.
-        var minimumL2Ttl = cache.RefreshIntervalSeconds + cache.WarmupLockLeaseSeconds;
-        if (cache.L2TtlSeconds < minimumL2Ttl)
-        {
-            failures.Add(
-                $"ServiceDiscovery:Cache:L2TtlSeconds ({cache.L2TtlSeconds}) must be at least " +
-                $"RefreshIntervalSeconds + WarmupLockLeaseSeconds ({minimumL2Ttl}) so a single missed refresh " +
-                "window does not expire the whole cache.");
+            if (expires)
+            {
+                // The one that makes the cache useless without saying so: entries expire between
+                // refreshes, so every domain's first caller after each expiry pays full registry
+                // latency.
+                if (cache.RefreshIntervalSeconds >= cache.L2TtlSeconds)
+                {
+                    failures.Add(
+                        $"ServiceDiscovery:Cache:RefreshIntervalSeconds ({cache.RefreshIntervalSeconds}) must be less " +
+                        $"than L2TtlSeconds ({cache.L2TtlSeconds}); otherwise entries expire between refreshes and the " +
+                        "cache silently stops serving.");
+                }
+
+                // Survive one lost window without falling back to live lookups for everything.
+                var minimumL2Ttl = cache.RefreshIntervalSeconds + cache.WarmupLockLeaseSeconds;
+                if (cache.L2TtlSeconds < minimumL2Ttl)
+                {
+                    failures.Add(
+                        $"ServiceDiscovery:Cache:L2TtlSeconds ({cache.L2TtlSeconds}) must be at least " +
+                        $"RefreshIntervalSeconds + WarmupLockLeaseSeconds ({minimumL2Ttl}) so a single missed refresh " +
+                        "window does not expire the whole cache.");
+                }
+            }
         }
 
         if (string.IsNullOrWhiteSpace(cache.DomainListEndpointTemplate))

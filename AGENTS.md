@@ -67,6 +67,11 @@ Commands run without a terminal, so the script never prompts — pass everything
    wf check && wf sync                      # sync = add missing; update = changed; reset = force
    ```
    Never run `wf sync` without the `use` step: it publishes to whatever domain was active last time.
+   Each of `sync` / `update` / `reset` ends with one `POST definitions/publish/completed` — the
+   runtime's post-deployment hook, and the **only automatic** invalidation of the discovery endpoint
+   cache (which no longer has a TTL). An older `wf` still calls the removed `definitions/re-initialize`
+   and swallows the 404 silently, so cross-domain endpoints stay as they were at startup. See
+   [Publish-completed hook](docs/runtime/publish-completed-hook.md).
    System flows (`@burgan-tech/vnext-core-runtime`) go through **that domain's** init container
    (`init` for core on :3005, `init-X` on :3005+offset, already aimed at X's orchestration):
    `curl -X POST localhost:<3005+offset>/api/package/runtime/publish -H 'content-type: application/json' -d '{"appDomain":"X"}'`

@@ -354,6 +354,151 @@ public sealed class CachingDiscoveryRegistryClientTests
     // Harness
     // ────────────────────────────────────────────────────────────────────
 
+    // ────────────────────────────────────────────────────────────────────
+    // Expiry-free mode — the default, and the reason eviction below exists
+    // ────────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task With_no_ttl_configured_an_entry_never_ages_out()
+    {
+        // The shipped default: L2TtlSeconds = 0. Invalidation comes from an event
+        // (publish-completed, a forced refresh, a transport failure), never from a clock.
+        var sut = CreateSut(out var handler, out _, out var clock);
+
+        await sut.LookupAsync(Domain, CancellationToken.None);
+        handler.Requests.Count.ShouldBe(1);
+
+        clock.Advance(TimeSpan.FromDays(30));
+
+        var later = await sut.LookupAsync(Domain, CancellationToken.None);
+
+        later.IsSuccess.ShouldBeTrue();
+        handler.Requests.Count.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task With_no_ttl_configured_no_expiration_is_written_to_the_store()
+    {
+        var sut = CreateSut(out _, out var store, out _);
+
+        await sut.LookupAsync(Domain, CancellationToken.None);
+
+        var key = store.WriteOptions.Keys.Single(
+            k => k.StartsWith("discovery:domain:v1:", StringComparison.Ordinal));
+
+        // Writing an expiration the read path no longer honours would leave the Dapr state store
+        // quietly deciding how long an entry lives — the exact coupling the age stamp removed.
+        store.WriteOptions[key]!.AbsoluteExpiration.ShouldBeNull();
+    }
+
+    // ────────────────────────────────────────────────────────────────────
+    // Failure-driven eviction
+    // ────────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task Transport_failure_evicts_the_entry_so_the_next_lookup_is_live()
+    {
+        var currentBaseUrl = "https://old.lending.test";
+        var sut = CreateSut(out var handler, out var store, out _, baseUrlProvider: () => currentBaseUrl);
+
+        (await sut.LookupAsync(Domain, CancellationToken.None)).Value!.BaseUrl
+            .ShouldBe("https://old.lending.test");
+        handler.Requests.Count.ShouldBe(1);
+
+        currentBaseUrl = "https://new.lending.test";
+
+        // With no TTL and no periodic refresher, this is the ONLY thing that corrects a moved domain
+        // for a runtime that is not being deployed.
+        await sut.ReportUnreachableAsync(Domain, "ConnectionRefused", CancellationToken.None);
+
+        store.Entries.Keys.ShouldNotContain(
+            k => k.StartsWith("discovery:domain:v1:", StringComparison.Ordinal));
+
+        (await sut.LookupAsync(Domain, CancellationToken.None)).Value!.BaseUrl
+            .ShouldBe("https://new.lending.test");
+        handler.Requests.Count.ShouldBe(2);
+    }
+
+    [Fact]
+    public async Task Eviction_is_throttled_per_domain_by_the_cooldown()
+    {
+        const int cooldownSeconds = 30;
+
+        var sut = CreateSut(out var handler, out _, out var clock,
+            configureCache: c => c.UnreachableEvictionCooldownSeconds = cooldownSeconds);
+
+        await sut.LookupAsync(Domain, CancellationToken.None);
+        handler.Requests.Count.ShouldBe(1);
+
+        await sut.ReportUnreachableAsync(Domain, "ConnectionRefused", CancellationToken.None);
+        await sut.LookupAsync(Domain, CancellationToken.None);
+        handler.Requests.Count.ShouldBe(2);
+
+        // A domain that is merely DOWN fails every call. Without the cooldown each of those failures
+        // would evict and send the next caller to the registry, turning its outage into our load.
+        await sut.ReportUnreachableAsync(Domain, "ConnectionRefused", CancellationToken.None);
+        await sut.LookupAsync(Domain, CancellationToken.None);
+        handler.Requests.Count.ShouldBe(2);
+
+        clock.Advance(TimeSpan.FromSeconds(cooldownSeconds + 1));
+
+        await sut.ReportUnreachableAsync(Domain, "ConnectionRefused", CancellationToken.None);
+        await sut.LookupAsync(Domain, CancellationToken.None);
+        handler.Requests.Count.ShouldBe(3);
+    }
+
+    [Fact]
+    public async Task Concurrent_transport_failures_for_one_domain_evict_once()
+    {
+        var sut = CreateSut(out var handler, out _, out _);
+
+        await sut.LookupAsync(Domain, CancellationToken.None);
+        handler.Requests.Count.ShouldBe(1);
+
+        // The normal shape: a moved domain fails every in-flight call at the same instant. A plain
+        // read-then-write cooldown check would let all of them through.
+        await Task.WhenAll(Enumerable.Range(0, 8)
+            .Select(_ => sut.ReportUnreachableAsync(Domain, "ConnectionRefused", CancellationToken.None)));
+
+        await sut.LookupAsync(Domain, CancellationToken.None);
+
+        handler.Requests.Count.ShouldBe(2);
+    }
+
+    [Fact]
+    public async Task A_cooldown_of_zero_switches_failure_driven_eviction_off()
+    {
+        var sut = CreateSut(out var handler, out var store, out _,
+            configureCache: c => c.UnreachableEvictionCooldownSeconds = 0);
+
+        await sut.LookupAsync(Domain, CancellationToken.None);
+
+        await sut.ReportUnreachableAsync(Domain, "ConnectionRefused", CancellationToken.None);
+
+        store.Entries.Keys.ShouldContain(
+            k => k.StartsWith("discovery:domain:v1:", StringComparison.Ordinal));
+        handler.Requests.Count.ShouldBe(1);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task A_report_with_no_domain_is_ignored(string? domain)
+    {
+        // An endpoint built without its domain cannot be mapped back to a key; dropping nothing is
+        // the only correct answer, and it must not throw inside a caller's catch block.
+        var sut = CreateSut(out var handler, out var store, out _);
+
+        await sut.LookupAsync(Domain, CancellationToken.None);
+
+        await sut.ReportUnreachableAsync(domain, "ConnectionRefused", CancellationToken.None);
+
+        store.Entries.Keys.ShouldContain(
+            k => k.StartsWith("discovery:domain:v1:", StringComparison.Ordinal));
+        handler.Requests.Count.ShouldBe(1);
+    }
+
     private static CachingDiscoveryRegistryClient CreateSut(
         out DomainDiscoveryResolverTests.RoutingHandler handler,
         out FakeDistributedCache store,
@@ -429,6 +574,10 @@ public sealed class CachingDiscoveryRegistryClientTests
     internal sealed class FakeDistributedCache : IDistributedCacheService
     {
         public ConcurrentDictionary<string, object> Entries { get; } = new();
+
+        /// <summary>The options each key was last written with, so a missing expiry is assertable.</summary>
+        public ConcurrentDictionary<string, DistributedCacheEntryOptions?> WriteOptions { get; } = new();
+
         public bool FailReads { get; set; }
         public bool FailWrites { get; set; }
 
@@ -450,6 +599,7 @@ public sealed class CachingDiscoveryRegistryClientTests
                 throw new InvalidOperationException("cache unavailable");
 
             Entries[key] = value;
+            WriteOptions[key] = options;
             return Task.CompletedTask;
         }
 

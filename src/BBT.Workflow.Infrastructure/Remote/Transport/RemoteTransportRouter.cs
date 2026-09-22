@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Net.Sockets;
 using BBT.Workflow.Discovery;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -28,6 +29,7 @@ namespace BBT.Workflow.Remote;
 /// </remarks>
 public sealed class RemoteTransportRouter<TClient>(
     HttpRemoteTransport<TClient> http,
+    IDiscoveryEndpointFeedback endpointFeedback,
     IServiceProvider serviceProvider) : IRemoteTransport<TClient>
     where TClient : class
 {
@@ -73,7 +75,7 @@ public sealed class RemoteTransportRouter<TClient>(
     /// round trip.
     /// </para>
     /// </summary>
-    private static async Task<HttpResponseMessage> SendCoreAsync(
+    private async Task<HttpResponseMessage> SendCoreAsync(
         IRemoteTransport<TClient> transport,
         string transportName,
         DiscoveryEndpoint endpoint,
@@ -94,7 +96,74 @@ public sealed class RemoteTransportRouter<TClient>(
             // A breaker opening, a pessimistic timeout and a sidecar ERR_DIRECT_INVOKE all surface
             // here and nowhere else in the trace.
             activity?.SetStatus(ActivityStatusCode.Error, exception.Message);
+
+            // This is the ONE place the runtime learns that a resolved endpoint does not answer, and
+            // with an expiry-free discovery cache it is the only automatic way a moved domain is
+            // corrected. Every Remote* client funnels through here, so the report lives here rather
+            // than at the ~35 sites that resolve an endpoint.
+            //
+            // NOT the caller's token. A connect timeout is one of the failures reported here, and it
+            // often arrives with the caller already cancelled — passing that token through would
+            // cancel the eviction itself, leaving the bad entry in the shared layer for a whole
+            // cooldown window while the cooldown claim had already been spent. Same reasoning as the
+            // refresher's `handle.ReleaseAsync(CancellationToken.None)`: this is cleanup that has to
+            // finish.
+            if (DescribeUnreachable(exception) is { } reason)
+            {
+                await endpointFeedback.ReportUnreachableAsync(
+                    endpoint.Domain, reason, CancellationToken.None);
+            }
+
             throw;
         }
+    }
+
+    /// <summary>
+    /// Describes <paramref name="exception"/> when it means "nothing is listening at this address",
+    /// or returns <c>null</c> when it means anything else.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The list is deliberately narrow. An HTTP error response never reaches this catch — the
+    /// transport returns it — so the shapes here are genuinely about reachability, and the ones left
+    /// out are left out on purpose:
+    /// </para>
+    /// <list type="bullet">
+    ///   <item><description>
+    ///     <b>A TLS failure</b> is far more often a certificate problem at the right address than a
+    ///     stranger answering on a moved one, and evicting on it would send the registry a lookup
+    ///     per failed handshake while fixing nothing.
+    ///   </description></item>
+    ///   <item><description>
+    ///     <b>A broken circuit</b> is a verdict about past failures, not a fresh observation; the
+    ///     failures that opened it were already reported individually.
+    ///   </description></item>
+    ///   <item><description>
+    ///     <b>A cancelled request</b> is the caller giving up, and a response-read timeout says
+    ///     nothing about the address — something answered.
+    ///   </description></item>
+    /// </list>
+    /// </remarks>
+    private static string? DescribeUnreachable(Exception exception)
+    {
+        if (exception is not HttpRequestException httpException)
+            return null;
+
+        // The typed error is the modern signal and covers a DNS failure with no inner SocketException.
+        if (httpException.HttpRequestError is HttpRequestError.ConnectionError
+            or HttpRequestError.NameResolutionError)
+        {
+            return httpException.HttpRequestError.ToString();
+        }
+
+        // Older shapes, and the Dapr shell's normalization, still arrive as an inner SocketException.
+        return httpException.InnerException is SocketException socketException
+               && socketException.SocketErrorCode is SocketError.ConnectionRefused
+                   or SocketError.HostNotFound
+                   or SocketError.HostUnreachable
+                   or SocketError.NetworkUnreachable
+                   or SocketError.TimedOut
+            ? socketException.SocketErrorCode.ToString()
+            : null;
     }
 }

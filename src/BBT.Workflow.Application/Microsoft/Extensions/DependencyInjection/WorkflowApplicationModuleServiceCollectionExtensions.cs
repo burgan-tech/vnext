@@ -102,6 +102,7 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
         services.AddScoped<IInstanceSchemaFunctionCache, InstanceSchemaFunctionCache>();
         // Application Services
         services.AddScoped<IDefinitionAppService, DefinitionAppService>();
+        services.AddScoped<IPublishCompletedAppService, PublishCompletedAppService>();
         services.AddScoped<IInstanceCommandAppService, InstanceCommandAppService>();
         services.AddScoped<IInstanceQueryAppService, InstanceQueryAppService>();
         services.AddScoped<IRelatedInstanceQueryAppService, RelatedInstanceQueryAppService>();

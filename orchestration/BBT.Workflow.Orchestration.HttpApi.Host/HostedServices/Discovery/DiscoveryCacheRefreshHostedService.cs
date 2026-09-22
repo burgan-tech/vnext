@@ -15,10 +15,17 @@ namespace BBT.Workflow.HostedServices;
 /// quietly and succeeds on the next.
 /// </para>
 /// <para>
-/// <b>Ticking far more often than the refresh window is intentional and nearly free.</b> A tick whose
-/// window is already served costs one cache read and stops there. What the short tick buys is prompt
-/// recovery: a failed window — sidecar not ready at boot, a registry blip, a replica that died holding
-/// the lease — is retried within a tick rather than at the end of an hour-long window.
+/// <b>By default the loop runs until the cluster is filled, then exits.</b> With
+/// <c>Cache:RefreshIntervalSeconds = 0</c> there is no periodic window: invalidation arrives as an
+/// event (<c>definitions/publish/completed</c>, a forced refresh, a transport failure), so once a
+/// refresh has succeeded — or another replica has already served the window — there is nothing for a
+/// timer to discover. The short tick is therefore purely a RETRY cadence: a first attempt that fails
+/// because the sidecar or the registry was not ready at boot is retried within a tick instead of
+/// leaving the pod cold.
+/// </para>
+/// <para>
+/// With a non-zero refresh interval the loop keeps ticking and the shared marker decides which ticks
+/// read the registry, as before; a tick whose window is already served costs one cache read.
 /// </para>
 /// <para>
 /// <b>A failure here never aborts startup.</b> That is the deliberate difference from
@@ -79,14 +86,41 @@ public sealed class DiscoveryCacheRefreshHostedService(
             return;
         }
 
+        // Expiry-free mode (RefreshIntervalSeconds = 0): the loop's only job is to get the cluster
+        // filled ONCE. Afterwards invalidation arrives as an event — publish-completed, a forced
+        // refresh, a transport failure — so a pod that kept ticking would spend a marker read a
+        // minute, forever, to be told nothing changed.
+        var warmUpOnly = Cache.RefreshIntervalSeconds <= 0;
+
         using var timer = new PeriodicTimer(TimeSpan.FromSeconds(Cache.TickIntervalSeconds));
 
         do
         {
-            await TickAsync(stoppingToken);
+            var outcome = await TickAsync(stoppingToken);
+
+            if (warmUpOnly && IsClusterFilled(outcome))
+            {
+                logger.DiscoveryCacheWarmUpCompleted(outcome!.Value.ToString());
+                return;
+            }
         }
         while (await SafeWaitAsync(timer, stoppingToken));
     }
+
+    /// <summary>
+    /// Whether the cluster's cache is now filled, so a warm-up-only loop has nothing left to do.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="DiscoveryCacheRefreshOutcome.SkippedNotOwner"/> is deliberately NOT included:
+    /// another replica holding the lock has not finished yet, and if its read fails nobody writes
+    /// the marker. Ticking once more costs one cache read and turns into
+    /// <see cref="DiscoveryCacheRefreshOutcome.SkippedWindowFresh"/> the moment that replica
+    /// succeeds — whereas exiting here would leave this pod resolving live for the rest of its life
+    /// if the other one failed.
+    /// </remarks>
+    private static bool IsClusterFilled(DiscoveryCacheRefreshOutcome? outcome)
+        => outcome is DiscoveryCacheRefreshOutcome.Refreshed
+            or DiscoveryCacheRefreshOutcome.SkippedWindowFresh;
 
     /// <summary>
     /// Whether the container holds an <see cref="IDiscoveryCacheRefresher"/> at all.
@@ -111,24 +145,30 @@ public sealed class DiscoveryCacheRefreshHostedService(
     /// <summary>
     /// One scheduled refresh attempt. Never throws.
     /// </summary>
-    internal async Task TickAsync(CancellationToken stoppingToken)
+    /// <returns>
+    /// What the attempt did, or <c>null</c> when it could not run at all (shutdown, or a failure
+    /// building the scope). A null is never treated as "filled".
+    /// </returns>
+    internal async Task<DiscoveryCacheRefreshOutcome?> TickAsync(CancellationToken stoppingToken)
     {
         try
         {
             await using var scope = scopeFactory.CreateAsyncScope();
             var refresher = scope.ServiceProvider.GetRequiredService<IDiscoveryCacheRefresher>();
 
-            await refresher.RefreshAsync(force: false, stoppingToken);
+            return await refresher.RefreshAsync(force: false, stoppingToken);
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
         {
             // Shutdown.
+            return null;
         }
         catch (Exception ex)
         {
             // The refresher already swallows its own failures; this catches anything that goes wrong
             // building the scope, so the timer loop survives it.
             logger.LogWarning(ex, "Discovery cache refresh tick failed");
+            return null;
         }
     }
 

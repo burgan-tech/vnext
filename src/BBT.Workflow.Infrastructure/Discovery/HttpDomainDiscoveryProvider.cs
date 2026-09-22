@@ -81,6 +81,6 @@ public sealed class HttpDomainDiscoveryProvider(
             ? EndpointKind.Dapr
             : EndpointKind.Url;
 
-        return Result.Ok(new DiscoveryEndpoint(kind, new Uri(baseUrl), registration.AppId));
+        return Result.Ok(new DiscoveryEndpoint(kind, new Uri(baseUrl), registration.AppId, domain));
     }
 }

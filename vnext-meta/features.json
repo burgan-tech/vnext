@@ -283,6 +283,25 @@
       ],
       "schemaPath": "task.type=3|6|16|17|18",
       "documentation": "docs/runtime/task-invocation-routing.md"
+    },
+    "discoveryEventDrivenInvalidation": {
+      "since": "0.0.92",
+      "status": "stable",
+      "description": "The discovery endpoint cache is invalidated by EVENTS instead of by a timer (issue #1001). Both timing defaults are now 0: ServiceDiscovery:Cache:L2TtlSeconds=0 means entries never expire, and RefreshIntervalSeconds=0 means there is no periodic bulk refresh - the warm-up loop fills the cluster's cache once at startup (it stops on the first Refreshed or SkippedWindowFresh tick, and keeps retrying on Failed or SkippedNotOwner) and then exits. Three things invalidate an entry afterwards: POST definitions/publish/completed, which a domain's CD pipeline calls once at the end of a package publish and which forces a full registry re-read; POST utilities/discovery/refresh, the operator path, unchanged; and a transport failure against a cached endpoint, which drops that one domain's entry. The reasoning is that the cached datum - where a domain answers - changes when that domain is deployed, so a timer either fires when nothing changed or fires too late; the previous defaults carried a ~70 minute window (3600 + fetch + 600) during which calls to a moved domain went to an address it no longer answered on. Failure-driven eviction replaces the dead-man TTL: only transport-level failures evict (HttpRequestError ConnectionError or NameResolutionError, or an inner SocketException with ConnectionRefused, HostNotFound, HostUnreachable, NetworkUnreachable or TimedOut), never an HTTP 4xx/5xx response, never a TLS failure, never a broken circuit or a cancellation. It is throttled per domain by UnreachableEvictionCooldownSeconds (default 30) so a peer domain's outage does not turn every failed call into a registry lookup, and it is reported from one place - the remote transport router every Remote* client funnels through - which is why DiscoveryEndpoint now carries its Domain. KNOWN GAP: the trigger-task executors resolve an endpoint and hand the baseUrl to the Execution host, which performs the call, so a transport failure there is not observed by the cache that produced the entry; recovery on that path is the operator endpoint. The in-process L1 TTL default moved from 600s to 60s in the same release, because it is now purely the fleet propagation delay of an invalidation with no refresh window to stay under. Setting RefreshIntervalSeconds and L2TtlSeconds to positive values restores the previous periodic behaviour in full; the startup validator rejects an expiry with no periodic refresh behind it, and applies the window invariants only in periodic mode.",
+      "configuration": {
+        "ServiceDiscovery:Cache:RefreshIntervalSeconds": 0,
+        "ServiceDiscovery:Cache:L2TtlSeconds": 0,
+        "ServiceDiscovery:Cache:L1TtlSeconds": 60,
+        "ServiceDiscovery:Cache:UnreachableEvictionCooldownSeconds": 30
+      },
+      "documentation": "docs/runtime/discovery-endpoint-cache.md"
+    },
+    "publishCompletedHook": {
+      "since": "0.0.92",
+      "status": "stable",
+      "description": "POST /api/v1/definitions/publish/completed is the runtime's post-deployment hook: a domain's CD pipeline calls it ONCE after it has published every component of a package. It runs every registered IPublishCompletedHook, ordered by Order with Name breaking ties, and every hook runs even after an earlier one fails - one hook failing must not let an unrelated registration's order decide whether the rest of a deployment's post-work happens. A hook that throws is recorded as the same failure and nothing escapes, because the components are already published by the time this runs and a 500 would be read as a failed deployment. The status code is therefore always 200 and the caller gates on the body: { success, hooks: [ { name, outcome, message } ] }, where outcome is Failed or a named success the hook chose. The optional body fields packageName and version are identification for logs and traces; domain, when supplied, is validated against the runtime's own domain so a pipeline pointed at the wrong runtime fails loudly. Hooks must be idempotent - a retried CD step or an operator repeating the call is expected and nothing upstream deduplicates. One hook ships today, discovery-cache, which forces a discovery registry re-read and is that cache's only automatic invalidation now that entries carry no TTL; its outcomes are Refreshed, SkippedNotOwner (a success - another replica is reading the registry and its result applies cluster-wide), Disabled (Provider=dapr or Cache:Enabled=false) and Failed (retry; nothing else will). This endpoint REPLACES definitions/re-initialize - see the deprecations entry definitions-re-initialize-removed.",
+      "relatedConfig": [],
+      "documentation": "docs/runtime/publish-completed-hook.md"
     }
   }
 }

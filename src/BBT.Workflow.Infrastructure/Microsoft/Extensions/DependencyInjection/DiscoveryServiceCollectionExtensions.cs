@@ -7,6 +7,7 @@ using Microsoft.Extensions.Options;
 using Polly;
 using Polly.Extensions.Http;
 using Polly.Timeout;
+using BBT.Workflow.Definitions;
 
 namespace Microsoft.Extensions.DependencyInjection;
 
@@ -94,12 +95,37 @@ public static class DiscoveryServiceCollectionExtensions
             services.AddSingleton<IDiscoveryCacheWriter>(
                 sp => sp.GetRequiredService<CachingDiscoveryRegistryClient>());
             services.AddSingleton<IDiscoveryCacheRefresher, DiscoveryCacheRefresher>();
+
+            // Failure-driven eviction: the cache itself receives the report, because it is the only
+            // thing that knows the key layout. With no TTL on the entries this is the automatic
+            // recovery path for a domain that moved without a deployment here.
+            // Replace, not Add: AddRemoteService registers a no-op default for hosts that wire the
+            // remote stack without discovery, and a second registration would leave both in the
+            // collection with the winner decided by module order.
+            services.RemoveAll<IDiscoveryEndpointFeedback>();
+            services.AddSingleton<IDiscoveryEndpointFeedback>(
+                sp => sp.GetRequiredService<CachingDiscoveryRegistryClient>());
         }
         else
         {
             services.AddSingleton<IDiscoveryRegistryClient>(
                 sp => sp.GetRequiredService<DiscoveryRegistryClient>());
+
+            // No cache, nothing to evict. TryAdd because AddRemoteService registers the same no-op
+            // for discovery-less hosts; either way the report site stays one unconditional call
+            // instead of a null check in every remote transport's error path.
+            services.TryAddSingleton<IDiscoveryEndpointFeedback, NullDiscoveryEndpointFeedback>();
         }
+
+        // The post-deployment hook is registered WHATEVER the cache decision above was, and it
+        // takes the refresher through GetService so it can be null. Registering it only in the
+        // cacheEnabled branch would make "no discovery cache here" and "the endpoint forgot to run
+        // the hook" look identical in the endpoint's answer - and that answer is what a CD pipeline
+        // gates on.
+        services.AddScoped<IPublishCompletedHook>(sp =>
+            new DiscoveryCacheRefreshHook(
+                sp.GetRequiredService<IOptions<ServiceDiscoveryOptions>>(),
+                sp.GetService<IDiscoveryCacheRefresher>()));
 
         if (isDaprProvider)
         {
