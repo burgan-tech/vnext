@@ -1,11 +1,23 @@
 using System;
 using System.Collections.Generic;
-using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using BBT.Aether.DependencyInjection;
 using BBT.Aether.Results;
+using BBT.Aether.Uow;
+using BBT.Workflow;
+using BBT.Workflow.Authorization;
+using BBT.Workflow.Caching;
 using BBT.Workflow.Definitions;
+using BBT.Workflow.Execution;
+using BBT.Workflow.Execution.PostCommit;
+using BBT.Workflow.Execution.Pipeline;
+using BBT.Workflow.Execution.Services;
 using BBT.Workflow.Gateway;
+using BBT.Workflow.Logging;
+using BBT.Workflow.Runtime;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using NSubstitute;
 using Shouldly;
 using Xunit;
@@ -328,4 +340,287 @@ public class InstanceRetryAppServiceRestartLogicTests
             CreatedAt: startedAt,
             CreatedBy: null,
             CreatedByBehalfOf: null);
+}
+
+/// <summary>
+/// Drives <see cref="InstanceRetryAppService"/> end-to-end (through its real <c>ApplicationService</c>
+/// / <see cref="IUnitOfWorkManager"/> plumbing, with every collaborator mocked) to pin the ONE
+/// invariant the subflow-restart branch must never violate: once the parent has been re-armed Busy
+/// for the restart, every exit either succeeds (the child now exists) or re-faults the parent —
+/// including a THROWN exception, not just a returned <see cref="Result"/> failure. Each test below
+/// corresponds to one row of that per-exit table.
+/// <para>
+/// The "child is missing" probe result and the fresh-scope handler/context-factory/mutation-service
+/// are all mocked; <c>SubflowStartFailureLabTests</c> in the vnext-example integration suite is what
+/// proves the real <c>StartSubflowJobHandler</c>/<c>TransitionContextFactory</c> behave the same way
+/// against a running runtime.
+/// </para>
+/// </summary>
+public sealed class InstanceRetryAppServiceRestartBranchTests : IDisposable
+{
+    private const string Domain = "test-domain";
+    private const string Flow = "subflow-start-failure-parent";
+    private const string FlowVersion = "1.0.0";
+    private const string ParentState = "parent-subflow-state";
+
+    private readonly IInstanceRepository _instanceRepository = Substitute.For<IInstanceRepository>();
+    private readonly IInstanceIncidentRepository _instanceIncidentRepository = Substitute.For<IInstanceIncidentRepository>();
+    private readonly IInstanceTransitionRepository _instanceTransitionRepository = Substitute.For<IInstanceTransitionRepository>();
+    private readonly IInstanceQueryGateway _instanceQueryGateway = Substitute.For<IInstanceQueryGateway>();
+    private readonly ICallerRoleResolver _callerRoleResolver = Substitute.For<ICallerRoleResolver>();
+    private readonly IComponentCacheStore _componentCacheStore = Substitute.For<IComponentCacheStore>();
+    private readonly IInstanceStatusLock _instanceStatusLock = Substitute.For<IInstanceStatusLock>();
+    private readonly ITransitionLockScope _lockScope = Substitute.For<ITransitionLockScope>();
+
+    // The "fresh DI scope" collaborators — resolved by RestartMissingSubflowChildAsync via
+    // IServiceScopeFactory.ExecuteWithWorkflowAsync, never via this app service's own constructor
+    // injection (that is the whole point of the fresh-scope fix).
+    private readonly ITransitionContextFactory _freshContextFactory = Substitute.For<ITransitionContextFactory>();
+    private readonly IPostCommitHandler<StartSubflowJob> _freshStartSubflowJobHandler = Substitute.For<IPostCommitHandler<StartSubflowJob>>();
+    private readonly IPostCommitParentMutationService _freshMutationService = Substitute.For<IPostCommitParentMutationService>();
+
+    private readonly IServiceProvider _ambient;
+    private readonly IServiceProvider? _previousAmbient;
+    private readonly InstanceRetryAppService _service;
+    private readonly InstanceCorrelation _correlation;
+    private readonly Instance _instance;
+    private readonly Guid _childInstanceId = Guid.NewGuid();
+    private readonly Definitions.Workflow _workflow = WorkflowFactory.CreateDefault(Flow, Domain, FlowVersion);
+
+    public InstanceRetryAppServiceRestartBranchTests()
+    {
+        // Ambient scope: only what ApplicationService.UnitOfWorkManager needs to resolve, for the
+        // unfault/Busy CAS block, which runs in THIS app service's own ambient unit of work (a
+        // set-based CAS, never a tracked load — see RestartMissingSubflowChildAsync's own remarks on
+        // why that part is safe as-is).
+        var mockUow = Substitute.For<IUnitOfWork>();
+        var mockUoWManager = Substitute.For<IUnitOfWorkManager>();
+        mockUoWManager.Begin(Arg.Any<UnitOfWorkOptions>()).Returns(mockUow);
+
+        var ambientServices = new ServiceCollection();
+        ambientServices.AddSingleton(mockUoWManager);
+        ambientServices.AddSingleton<ILazyServiceProvider>(sp => new LazyServiceProvider(sp));
+        _ambient = ambientServices.BuildServiceProvider();
+        _previousAmbient = AmbientServiceProvider.Current;
+        AmbientServiceProvider.Current = _ambient;
+
+        // Fresh scope: what RunSubflowRestartAsync / FaultParentAfterFailedRestartAsync resolve
+        // from IServiceScopeFactory.ExecuteWithWorkflowAsync, entirely separate from the ambient one.
+        var freshServices = new ServiceCollection();
+        var currentSchema = Substitute.For<BBT.Aether.MultiSchema.ICurrentSchema>();
+        currentSchema.Change(Arg.Any<string>()).Returns(Substitute.For<IDisposable>());
+        freshServices.AddSingleton(currentSchema);
+        freshServices.AddSingleton(_componentCacheStore);
+        freshServices.AddSingleton(_freshContextFactory);
+        freshServices.AddSingleton(_freshStartSubflowJobHandler);
+        freshServices.AddSingleton(_freshMutationService);
+        var freshProvider = freshServices.BuildServiceProvider();
+
+        var scopeFactory = Substitute.For<IServiceScopeFactory>();
+        scopeFactory.CreateScope().Returns(_ => new FakeServiceScope(freshProvider));
+
+        _instanceStatusLock.AcquireAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(_lockScope));
+        _lockScope.IsAcquired.Returns(true);
+
+        _componentCacheStore.GetFlowAsync(Domain, Flow, Arg.Any<string?>(), Arg.Any<CancellationToken>())
+            .Returns(Result<Definitions.Workflow>.Ok(_workflow));
+
+        _callerRoleResolver.ResolveRolesAsync(Arg.Any<Dictionary<string, string?>>(), Arg.Any<CancellationToken>())
+            .Returns(Result<string[]?>.Ok(null));
+
+        // The probe finds the child genuinely missing — the ONLY way RestartMissingSubflowChildAsync
+        // is reached at all.
+        _instanceQueryGateway.GetFunctionWithStateAsync(Arg.Any<GetFunctionWithInstanceInput>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(ConditionalResult<GetInstanceStateOutput>.Fail(
+                WorkflowErrors.InstanceNotFound(_childInstanceId.ToString()))));
+
+        _instance = Instance.Create(Guid.NewGuid(), Flow, FlowVersion, "parent-key");
+        _instance.ChangeState(State.Create(ParentState, StateType.SubFlow, StateSubType.None, "Minor"));
+        _correlation = InstanceCorrelation.Create(
+            Guid.NewGuid(), _instance.Id, ParentState, _childInstanceId, "S", Domain, "child-flow", "1.0.0");
+        _instance.AddCorrelation(_correlation);
+        _instance.Fault(Domain);
+
+        _instanceRepository.GetResultAsReadOnlyAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Result<Instance>.Ok(_instance));
+        _instanceRepository.TryUnfaultAsync(Arg.Any<Instance>(), Arg.Any<CancellationToken>()).Returns(true);
+        _instanceRepository.TryMarkBusyAsync(Arg.Any<Instance>(), Arg.Any<CancellationToken>()).Returns(true);
+        _instanceIncidentRepository.ResolveAllAsync(Arg.Any<Guid>(), Arg.Any<DateTime>(), Arg.Any<CancellationToken>())
+            .Returns(1);
+
+        var originatingTransition = new InstanceTransitionSlim(
+            Guid.NewGuid(), _instance.Id, "auto-to-subflow", "parent-initial", ParentState,
+            DateTime.UtcNow.AddMinutes(-1), DateTime.UtcNow.AddMinutes(-1).AddSeconds(1), null,
+            TriggerType.Automatic, DateTime.UtcNow.AddMinutes(-1), null, null);
+        _instanceTransitionRepository.GetByInstanceIdAsReadOnlyAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>())
+            .Returns(new List<InstanceTransitionSlim> { originatingTransition });
+
+        _service = new InstanceRetryAppService(
+            serviceProvider: _ambient,
+            runtimeInfoProvider: Substitute.For<IRuntimeInfoProvider>(),
+            instanceRepository: _instanceRepository,
+            instanceIncidentRepository: _instanceIncidentRepository,
+            instanceTransitionRepository: _instanceTransitionRepository,
+            instanceQueryGateway: _instanceQueryGateway,
+            instanceRetryGateway: Substitute.For<IInstanceRetryGateway>(),
+            componentCacheStore: _componentCacheStore,
+            workflowExecutionService: Substitute.For<IWorkflowExecutionService>(),
+            callerRoleResolver: _callerRoleResolver,
+            scopeFactory: scopeFactory,
+            instanceStatusLock: _instanceStatusLock,
+            logger: Substitute.For<ILogger<InstanceRetryAppService>>());
+    }
+
+    public void Dispose() => AmbientServiceProvider.Current = _previousAmbient;
+
+    private RetryInstanceInput CreateInput() => new()
+    {
+        Domain = Domain,
+        Workflow = Flow,
+        Instance = _instance.Id.ToString(),
+        Sync = true,
+        Headers = new Dictionary<string, string?>(),
+        RouteValues = new Dictionary<string, string?>()
+    };
+
+    private TransitionExecutionContext CreateFreshTransitionContext(Instance freshInstance) => new()
+    {
+        Domain = Domain,
+        InstanceId = freshInstance.Id,
+        WorkflowKey = Flow,
+        TransitionKey = "auto-to-subflow",
+        CorrelationId = Guid.NewGuid().ToString("N"),
+        ExecutionChainId = Guid.NewGuid().ToString("N"),
+        Workflow = _workflow,
+        Current = State.Create(ParentState, StateType.SubFlow, StateSubType.None, "Minor"),
+        Transition = TransitionFactory.CreateDefault(),
+        Instance = freshInstance
+    };
+
+    /// <summary>Exit 1 of the table: the restart succeeds. Busy is re-armed, no fault, no exception.</summary>
+    [Fact]
+    public async Task RestartSucceeds_ReArmsBusy_ReturnsSuccess_AndNeverFaultsTheParent()
+    {
+        var freshInstance = Instance.Create(_instance.Id, Flow, FlowVersion, "parent-key");
+        freshInstance.ChangeState(State.Create(ParentState, StateType.SubFlow, StateSubType.None, "Minor"));
+        // Busy is what a freshly reloaded, still-waiting-on-a-live-child parent looks like.
+        typeof(Instance).GetMethod("Busy")!.Invoke(freshInstance, null);
+
+        _freshContextFactory
+            .CreateAsync(Arg.Any<WorkflowExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(Result<TransitionExecutionContext>.Ok(CreateFreshTransitionContext(freshInstance)));
+        _freshStartSubflowJobHandler
+            .HandleAsync(Arg.Any<StartSubflowJob>(), Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(Result.Ok());
+
+        var result = await _service.RetryAsync(CreateInput());
+
+        result.IsSuccess.ShouldBeTrue();
+        result.Value!.Status.ShouldBe(InstanceStatus.Busy);
+
+        await _instanceRepository.Received(1).TryMarkBusyAsync(Arg.Any<Instance>(), Arg.Any<CancellationToken>());
+        await _freshMutationService.DidNotReceive().FaultAsync(
+            Arg.Any<PostCommitParentSnapshot>(), Arg.Any<PostCommitFaultRequest>(), Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// Exit 2: the handler returns Result.Fail (e.g. the child's schema validation failed again).
+    /// The parent must be re-faulted with THIS error, and this error — not the fault call's own — is
+    /// what the caller sees.
+    /// </summary>
+    [Fact]
+    public async Task RestartFails_FaultsTheParent_AndReturnsTheOriginalError()
+    {
+        var restartError = Error.Validation("Task:400011", "child schema validation failed again");
+
+        _freshContextFactory
+            .CreateAsync(Arg.Any<WorkflowExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(Result<TransitionExecutionContext>.Ok(CreateFreshTransitionContext(_instance)));
+        _freshStartSubflowJobHandler
+            .HandleAsync(Arg.Any<StartSubflowJob>(), Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(Result.Fail(restartError));
+        _freshMutationService
+            .FaultAsync(Arg.Any<PostCommitParentSnapshot>(), Arg.Any<PostCommitFaultRequest>(), Arg.Any<CancellationToken>())
+            .Returns(Result<TransitionOutput>.Ok(new TransitionOutput { Id = _instance.Id, Status = InstanceStatus.Faulted }));
+
+        var result = await _service.RetryAsync(CreateInput());
+
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Code.ShouldBe(restartError.Code);
+
+        await _freshMutationService.Received(1).FaultAsync(
+            Arg.Any<PostCommitParentSnapshot>(),
+            Arg.Is<PostCommitFaultRequest>(r => r.ErrorCode == restartError.Code),
+            Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// Exit 3 — the Critical #1 fix: the handler THROWS instead of returning Result.Fail. Before this
+    /// fix, that exception escaped RestartMissingSubflowChildAsync entirely, past the Busy re-arm,
+    /// leaving the parent Busy with no incident and (per RetryAsync's own routing) no way back into
+    /// this branch. It must instead be caught, converted, and treated exactly like a returned failure.
+    /// </summary>
+    [Fact]
+    public async Task RestartThrows_IsCaughtNotEscaped_AndFaultsTheParent()
+    {
+        _freshContextFactory
+            .CreateAsync(Arg.Any<WorkflowExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(Result<TransitionExecutionContext>.Ok(CreateFreshTransitionContext(_instance)));
+        _freshStartSubflowJobHandler
+            .HandleAsync(Arg.Any<StartSubflowJob>(), Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns<Task<Result>>(_ => throw new InvalidOperationException("boom — mapping blew up"));
+        _freshMutationService
+            .FaultAsync(Arg.Any<PostCommitParentSnapshot>(), Arg.Any<PostCommitFaultRequest>(), Arg.Any<CancellationToken>())
+            .Returns(Result<TransitionOutput>.Ok(new TransitionOutput { Id = _instance.Id, Status = InstanceStatus.Faulted }));
+
+        // The defining assertion: this must complete as a Result, never propagate the exception.
+        var result = await _service.RetryAsync(CreateInput());
+
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Message.ShouldContain("boom");
+
+        await _freshMutationService.Received(1).FaultAsync(
+            Arg.Any<PostCommitParentSnapshot>(), Arg.Any<PostCommitFaultRequest>(), Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// Exit 4 — the Critical #2 residual case: the restart fails AND every bounded attempt to
+    /// re-fault the parent also fails (e.g. the status lock stays contended). This is the one shape
+    /// the fix cannot fully guarantee end-to-end against a live runtime (forcing a real, persistent
+    /// lock conflict is impractical), so it is pinned here instead: the ORIGINAL restart error is
+    /// still what the caller sees (never masked by the compensation failure), the compensation is
+    /// retried up to the bound and not once more, and nothing throws.
+    /// </summary>
+    [Fact]
+    public async Task RestartFails_AndCompensationAlsoExhausts_StillReturnsOriginalError_WithoutThrowing()
+    {
+        var restartError = Error.Failure("Task:400011", "child start failed");
+
+        _freshContextFactory
+            .CreateAsync(Arg.Any<WorkflowExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(Result<TransitionExecutionContext>.Ok(CreateFreshTransitionContext(_instance)));
+        _freshStartSubflowJobHandler
+            .HandleAsync(Arg.Any<StartSubflowJob>(), Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(Result.Fail(restartError));
+        _freshMutationService
+            .FaultAsync(Arg.Any<PostCommitParentSnapshot>(), Arg.Any<PostCommitFaultRequest>(), Arg.Any<CancellationToken>())
+            .Returns(Result<TransitionOutput>.Fail(Error.Conflict("App:900001", "lock conflict")));
+
+        var result = await _service.RetryAsync(CreateInput());
+
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Code.ShouldBe(restartError.Code);
+
+        // Bounded — exactly the configured number of attempts, not unbounded and not just one.
+        await _freshMutationService.Received(3).FaultAsync(
+            Arg.Any<PostCommitParentSnapshot>(), Arg.Any<PostCommitFaultRequest>(), Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>A trivial <see cref="IServiceScope"/> wrapping an already-built provider.</summary>
+    private sealed class FakeServiceScope(IServiceProvider serviceProvider) : IServiceScope
+    {
+        public IServiceProvider ServiceProvider { get; } = serviceProvider;
+        public void Dispose() { }
+    }
 }

@@ -2816,6 +2816,23 @@ public static partial class WorkflowLogs
         Guid instanceId,
         string parentState);
 
+    /// <summary>
+    /// Logs when EVERY bounded attempt to re-fault the parent after a failed subflow restart has
+    /// failed. The parent is left Busy with neither an active incident nor a live child — the exact
+    /// strand this retry path exists to prevent, now unavoidable without a human. Distinct EventId
+    /// and Critical level on purpose: this is meant to be alerted on directly, not merely noted.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20058,
+        Level = LogLevel.Critical,
+        Message = "Instance {InstanceId} left Busy with no active incident after {Attempts} failed attempts to re-fault it following correlation {CorrelationId}'s failed subflow restart: {ErrorCode}. Manual intervention required.")]
+    public static partial void SubFlowRestartCompensationExhausted(
+        this ILogger logger,
+        Guid instanceId,
+        Guid correlationId,
+        int attempts,
+        string errorCode);
+
     #endregion
 
     #region Service Discovery
