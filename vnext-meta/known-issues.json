@@ -129,6 +129,16 @@
       "title": "timer.reset is required by the schema but is read NOWHERE in the runtime, so a workflow timeout always means 'not finished within duration, counted from instance start' and never 'idle for duration'. Whatever the field says - 'never', 'OnEntry' - the behaviour is identical.",
       "workaround": "Author the duration as an absolute budget from start and do not rely on activity resetting it; every authored value in the reference corpus today declares OnEntry against a runtime that ignores it. The instant is resolved once when the scheduler is armed (mapping script included) and never re-armed, which is also why the state function's timeout.executeAtUtc is stable for the instance's whole life. Expressing an idle timeout needs a per-state scheduled transition (triggerType 2), which IS cancelled and re-armed on every state entry.",
       "fixedIn": null
+    },
+    {
+      "id": "function-multi-task-taskresponse-slot-collision",
+      "affectedVersions": ">=0.0.26 <0.0.94",
+      "severity": "error",
+      "component": "function",
+      "path": "attributes.onExecutionTasks[]",
+      "title": "In a function with multiple onExecutionTasks, every ScriptContext.TaskResponse slot carried the LAST executed task's payload: SetStandardResponse aliased each response tree into the shared Body, and the in-place expando merge of the next task's response rewrote the earlier slots. Output scripts reading TaskResponse composed the wrong response; OutputResponse slots (re-serialized snapshots) were unaffected.",
+      "workaround": "Read task results from ScriptContext.OutputResponse[variableName] instead of TaskResponse, or publish the function with a single task; fixed versions isolate each TaskResponse slot and reject duplicate normalized task keys at publish.",
+      "fixedIn": "0.0.94"
     }
   ]
 }

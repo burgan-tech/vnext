@@ -226,6 +226,42 @@ version, which the fingerprint already covers, so it cannot change while an inst
 `v4` `ResponseShapeVersion` bump is what made existing clients observe the new shape. See
 [Instance Function Cache and Fingerprint ETag](../runtime/state-function-cache-and-etag.md).
 
+## Multi-Task Functions and Response Slots
+
+A custom function executes either its single legacy `task` or its `onExecutionTasks[]` list
+(`Function.GetExecuteTasks`; the list takes precedence when populated). Entries are grouped by
+`order` and groups run ascending; a group of one runs inline on the shared `ScriptContext`, a
+group of several runs in parallel on copy-on-write branch contexts that are merged back
+deterministically (`TaskCoordinator`).
+
+Every completed task files its result in the shared context under the **variable name** of its
+task key (`ToVariableName`: `validate-account-policies` → `validateAccountPolicies`):
+
+| Slot | Content | Written by |
+| --- | --- | --- |
+| `TaskResponse[varName]` | The full `StandardTaskResponse` (`data`, `statusCode`, `headers`, …). | Every task type (`UpdateScriptContextWithResponse`). |
+| `OutputResponse[varName]` | The task mapping's `OutputHandler` `Data` (the invocation `Data` when the task has no mapping). | Function/extension executions only — they run with `TaskTrigger.Extension` (`TaskExecutorBase.ExecuteAsync`). |
+| `Body` | Accumulating merge of every response; later fields overwrite earlier same-named ones. | `SetStandardResponse` → `MergeToBody`. |
+
+The function's `output` script (mandatory for multi-task functions) composes the response from
+these slots; without `onExecutionTasks` the legacy single-task extraction reads
+`OutputResponse[varName]` directly.
+
+Two guarantees hold here, both pinned by tests:
+
+- **Slot isolation** (`TaskResponseSlotIsolationTests`): each `TaskResponse` entry is an isolated
+  copy — a later task's `Body` merge cannot mutate it, and a script mutating a slot cannot write
+  through into `Body`. Before 0.0.94 the entry aliased the tree merged into `Body`, and because
+  `ExpandoObjectMergeStrategy` mutates its merge target in place, **every slot ended up carrying
+  the last task's payload** (vnext-client-sdk-core#6) — the only working escape hatch was
+  `OutputResponse`, whose values were always re-serialized snapshots.
+- **Distinct keys at publish** (`FunctionComponentValidatorTests`): component validation rejects
+  two `onExecutionTasks` entries whose task keys resolve to the same variable name. Raw keys can
+  collide after normalization — `user-info` and `user_info` are both `userInfo` — so the check
+  compares normalized names. (Transition hooks are different: a duplicate key there is legal,
+  warned at execution via `DuplicateTaskKeyAtSameOrder`, and journal-disambiguated — see
+  `TaskCoordinator.ResolveGroupEngineOptions`.)
+
 ## State Alias (Role-Based State Visibility)
 
 A state may declare an `alias` array so the same internal state is presented under
