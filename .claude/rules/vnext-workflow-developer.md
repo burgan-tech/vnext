@@ -552,8 +552,12 @@ A sixth profile is **composed on top of** the base, never selected instead of it
 ### A state starts a SubFlow. Only a SubFlow. (Platform rule, 2026-09-22)
 
 **`state.subFlow.type` must be `S`.** A state-level SubFlow relationship is the blocking kind and
-nothing else — a `P` (SubProcess) may **not** be started from a state, and a SubProcess may not start
-another SubProcess.
+nothing else — a `P` (SubProcess) may **not** be started from a state. The platform convention also
+says a SubProcess may not start another SubProcess, but **only the state-level shape is enforced**:
+`ValidateStateSubFlowType` inspects `state.SubFlow` on the workflow being validated, not what runs
+inside a workflow that some other definition uses as a `P` child — that would need cross-workflow
+analysis a single-workflow validator cannot do. Treat the nested-SubProcess rule as author discipline,
+not something the runtime currently checks.
 
 **A SubProcess is started by its own task**: `SubProcessTask` (`TaskType.SubProcess = 14`). That
 executor starts the child and creates the correlation itself —

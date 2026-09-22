@@ -9,8 +9,9 @@ instance and an `InstanceCorrelation`; their parent-continuation behavior differ
 **The two are started from different places, and that is a platform rule, not a preference.** A
 **state** starts a SubFlow and only a SubFlow: `state.subFlow.type` must be `S`. A **SubProcess** is
 started by its own task, `SubProcessTask` (`TaskType.SubProcess = 14`), which starts the child and
-creates the correlation itself. A SubProcess may not start another SubProcess. Everything below about
-state-level subflow machinery therefore describes `S`; see *Authoring rule* under
+creates the correlation itself. The convention is that a SubProcess may not start another SubProcess,
+though — as noted under *Authoring rule* below — nothing currently enforces that half. Everything below
+about state-level subflow machinery therefore describes `S`; see *Authoring rule* under
 [`S` and `P` Semantics](#s-and-p-semantics).
 
 All runtime-generated child start, active-child forward, and child retry calls currently use
@@ -42,8 +43,12 @@ key, tags, headers and route values; framework-owned parent/root headers replace
 
 ### Authoring rule
 
-`state.subFlow.type` must be `S`. A `P` relationship is authored as a **task**, never as a state, and a
-SubProcess may not start another SubProcess.
+`state.subFlow.type` must be `S`. A `P` relationship is authored as a **task**, never as a state. The
+platform convention is also that a SubProcess may not start another SubProcess — but that half is not
+enforced anywhere today: `WorkflowValidator.ValidateStateSubFlowType` inspects only `state.SubFlow` on
+the workflow being validated, and detecting a `SubProcessTask` inside a workflow that some other
+definition uses as a `P` child would need cross-workflow analysis a single-workflow validator cannot
+do. Treat it as a convention authors must follow themselves, not a guarantee the runtime gives you.
 
 This rule explains why the runtime reads `S` wherever a *state-level* relationship is meant, and those
 readers are correct rather than narrow — do not widen them to include `P`:

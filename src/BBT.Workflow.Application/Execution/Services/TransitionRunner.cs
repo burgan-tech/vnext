@@ -161,6 +161,10 @@ public sealed class TransitionRunner(
     {
         // ContinuationSet is a non-consuming projection, so the jobs are still readable here even
         // though the coordinator consumed the directives.
+        // Testing for ANY StartSubflowJob (rather than the one that actually failed) is safe only
+        // because the two post-commit job kinds are disjoint within one hop: ForwardToSubflowJob is
+        // queued at order 10 (ForwardToActiveSubflowStep), which sets SkipToOrder = Finalize, so the
+        // order-70 StartSubflowJob (HandleSubFlowStep) can never also be queued in the same run.
         var startedSubflow = coreOutput.Continuations.PostCommitJobs.OfType<StartSubflowJob>().Any();
 
         if (startedSubflow)

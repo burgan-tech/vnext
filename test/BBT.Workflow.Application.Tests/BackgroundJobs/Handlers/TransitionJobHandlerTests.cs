@@ -371,7 +371,7 @@ public class TransitionJobHandlerTests
     /// reserved for timeout/cancellation paths.
     /// </summary>
     [Fact]
-    public async Task HandleAsync_WhenPipelineReturnsFailure_DoesNotCallRecovery()
+    public async Task HandleAsync_WhenPipelineReturnsFailure_DoesNotCallBareRecoveryOverload()
     {
         var payload = CreatePayload();
         var handler = CreateHandler();

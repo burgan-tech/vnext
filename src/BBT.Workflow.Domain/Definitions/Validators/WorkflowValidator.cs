@@ -354,16 +354,19 @@ public class WorkflowValidator
     }
 
     /// <summary>
-    /// Validates that wizard states have at most one transition.
-    /// </summary>
-    /// <summary>
     /// Validates that a state-level subflow relationship is the blocking kind.
     /// </summary>
     /// <remarks>
     /// A state starts a SubFlow and only a SubFlow: <c>state.subFlow.type</c> must be <c>S</c>. A
     /// SubProcess (<c>P</c>) is started by its own task — <c>SubProcessTask</c>
     /// (<c>TaskType.SubProcess</c>), whose executor starts the child and creates the
-    /// <c>InstanceCorrelation</c> itself — and a SubProcess may not start another SubProcess.
+    /// <c>InstanceCorrelation</c> itself. The platform convention is that a SubProcess may not
+    /// start another SubProcess, but <b>this validator does not check that half</b>: it inspects
+    /// only <c>state.SubFlow</c> on the workflow being validated, and detecting a
+    /// <c>SubProcessTask</c> inside a workflow that is used elsewhere as a <c>P</c> child would
+    /// need cross-workflow analysis a single-workflow validator cannot do. Only the state-level
+    /// shape below is enforced at publish time; the "no nested SubProcess" rule remains a
+    /// convention authors must follow themselves.
     /// <para>
     /// This is why the runtime reads <c>S</c> wherever a state-level relationship is meant
     /// (<c>Instance.HasActiveSubFlow</c>, <c>Instance.Subflow</c>, <c>Instance.AddCorrelation</c>
@@ -391,6 +394,9 @@ public class WorkflowValidator
         }
     }
 
+    /// <summary>
+    /// Validates that wizard states have at most one transition.
+    /// </summary>
     private void ValidateWizardStateTransitions(Workflow workflow, WorkflowValidationResult result)
     {
         foreach (var state in workflow.States.Where(s => s.StateType == StateType.Wizard))
