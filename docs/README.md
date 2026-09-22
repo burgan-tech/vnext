@@ -88,7 +88,7 @@ Kept for archaeology; read the canonical page linked from each before relying on
 
 ## Database migrations
 
-- [Database migration and rollback](runtime/db-migration-and-rollback.md) — the two migration chains, per-schema history, the DbMigrator `downgrade`/`status` commands, the newer-image-first rollback rule, data-loss gates, dry-run scripts.
+- [Database migration and rollback](runtime/db-migration-and-rollback.md) — the two migration chains, per-schema history, the DbMigrator `downgrade`/`status` commands, the newer-image-first rollback rule, data-loss gates, dry-run scripts, and the domain-team guide (recipes + every outcome/error and what to do).
 
 ## Local Development
 

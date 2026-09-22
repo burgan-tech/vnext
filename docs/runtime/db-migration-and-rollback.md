@@ -166,6 +166,78 @@ from the release commits — verify against the tag when in doubt):
 its level; a machine-readable version→migration map in vnext-meta is a candidate follow-up once the
 release process wants to own it.
 
+## Guide for domain teams
+
+Everything below was executed end to end against a real stack (E2E record 2026-09-22: fresh
+database, 59-migration chain, a live orchestration runtime serving traffic during the downgrades).
+The outputs quoted are the real ones.
+
+### Recipe 1 — roll back to a previous runtime version (the main case)
+
+You are on runtime N, something is wrong, you want runtime N-1 back — database included.
+
+1. Find the target: run `status` (any image ≥ your current one) and take the last migration of the
+   version you are going back to from the table above, or ask the platform team.
+2. Stop (scale down) the runtime hosts.
+3. Run the migrator — **the CURRENT (newer) image, not the old one**:
+   ```
+   downgrade --target <migration> [--messaging-target <migration>]
+             --for-runtime-rollback --accept-data-loss
+   ```
+   `--for-runtime-rollback` declares an older runtime deploys right after this command.
+   `--accept-data-loss` acknowledges the reverts that drop tables/columns (the refusal lists each
+   one before you pass it, e.g. `DROP COLUMN "Instances"."Type"` — that data does not come back).
+4. Deploy runtime N-1. Its own migrator run finds nothing to do and no-ops.
+
+Expected success output: one `Downgrade completed for schema <X>` per schema, then
+`Downgrade completed successfully for every targeted schema.`, exit 0.
+
+### Recipe 2 — revert harmless migrations while staying on your version
+
+Only index-, constraint- and trigger-only migrations qualify (e.g. a new index from the release is
+hurting one of your workloads). The command decides for you: if the revert range is model-neutral it
+runs **without any flag**; if it is not, it refuses and names why.
+
+```
+downgrade --target <migration>
+```
+
+Verified live: with the runtime serving traffic, an index-only 3-migration revert applied cleanly
+and the runtime kept answering reads and writes throughout. This state is temporary — the next
+deploy's migrator run, or a flow publish, re-applies the reverted migrations. To remove a migration
+permanently while staying on the version, ask for a fix-forward (a new migration that reverts it).
+
+### Recipe 3 — review first (dry run)
+
+```
+downgrade --target <migration> --script /path/to/dir
+```
+
+Writes one reviewable `.sql` file per schema (history bookkeeping included), applies **nothing**,
+and prints the model-break / data-loss findings as warnings. The supported apply path is still the
+direct command — hand-running the SQL across many schemas risks inconsistent history.
+
+### Every outcome you can see, and what it means
+
+| You see | Meaning | What to do |
+| --- | --- | --- |
+| `Downgrade completed successfully for every targeted schema.`, exit 0 | Converge done; every targeted schema is exactly at the target. | Nothing. |
+| `Schema X: already at <target>; nothing to do` | No-op — that schema was already there. | Nothing. |
+| Usage text, exit 1 | Invalid invocation (unknown option, `downgrade` without a target, a downgrade-only option on another command). Nothing ran. | Fix the command line. |
+| `Target migration '…' does not exist in this build's migrations assembly` | Typo — or you are running an image older than the target. | Check the spelling; use the newer image. |
+| `Target '0' (revert every migration) … is not supported` | EF's full-wipe sentinel is rejected by design. | Name a real migration. |
+| `Schema X has applied migrations this build does not contain: … Run the downgrade from the newer runtime image` | The schema was migrated by a newer build; this binary has no `Down()` code for those migrations. The whole run refused, nothing changed. | Re-run from the newer image. |
+| `The requested downgrade was refused: N operation(s) remove or reshape tables/columns that THIS build's runtime model maps …` | The revert would break a runtime that stays on the current version (verified live: forcing it produced HTTP 500, `42703: column i.Type does not exist`, on the first read). Nothing changed. | Only if an older runtime deploys right after: add `--for-runtime-rollback`. Otherwise fix forward. |
+| `The requested downgrade contains N destructive operation(s) and was refused … <list of drops>` | The revert destroys data permanently; the list names every drop. Nothing changed. | Add `--accept-data-loss` only after reading the list. |
+| `Schema migration is disabled (Runtime:EnableSchemaMigration=false); refusing to run` | This deployment's migrator is read-only by configuration. | Run where migration is enabled, or flip the flag deliberately. |
+| `Failed to enumerate domain schemas from sys_flows; refusing to run against an unknown schema set …` (with the exception) | Discovery failed — unreachable DB or a database with no sys_flows yet. A rollback that silently misses schemas is worse than one that refuses. | Fix connectivity, or name the schemas explicitly with `--schema`. |
+| `Schema X is already being migrated by another instance` | Another migrator holds that schema's lock right now. | Re-run after it finishes. |
+| Dapr lock errors + `Downgrade failed for schema X … the run will exit with failure`, exit 1 | The lock service (the migrator's sidecar) was unavailable. Verified live: the failed schemas received **no partial writes**; other schemas still processed. | Restore the sidecar/lock store and re-run — converge makes re-runs safe. |
+| After forcing a same-version downgrade: runtime answers 500, logs `42703`/`42P01` | You are running a binary whose model needs columns the schema no longer has. | Run the plain forward migrate; the runtime heals **in place, no restart** (verified live). |
+
+Any failed schema ⇒ exit code 1; the remaining schemas are still processed, and because the command
+converges, simply re-running it finishes the job.
+
 ## Key source
 
 - Commands and parsing — `workers/BBT.Workflow.DbMigrator/MigratorCommandLine.cs`
