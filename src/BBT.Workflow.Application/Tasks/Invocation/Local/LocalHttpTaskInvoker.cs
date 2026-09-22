@@ -57,7 +57,7 @@ public sealed class LocalHttpTaskInvoker(
     /// that path is live and must not move. Every other label — starting with type-6's plain
     /// <c>"http"</c> — uses the generic 1016x events every other local invoker (SOAP, Dapr service
     /// invocation, state store) already uses, so a type-6 HTTP task's SSL/cancellation/failure
-    /// signal is not silently missing from an operator's 10161/10162/10163 alerts, and the line it
+    /// signal is not silently missing from an operator's 10170/10171/10172 alerts, and the line it
     /// does get does not falsely name it "external HTTP" (the type-22 task type).
     /// </remarks>
     public async Task<TaskInvocationResult> InvokeAsync(

@@ -69,8 +69,8 @@ public sealed class LocalHttpTaskInvokerTests
     public async Task InvokeAsync_Type6Failure_LogsTheGenericLocalEventNotTheExternalHttpOne()
     {
         // F3: a plain type-6 HTTP task must log under the generic 1016x local-invocation events
-        // (10161/10162/10163), not the deprecated type-22 ExternalHttp events (10098/10099/10108) —
-        // an operator alerting on 10161 must see this failure, and the message must not call a
+        // (10170/10171/10172), not the deprecated type-22 ExternalHttp events (10098/10099/10108) —
+        // an operator alerting on 10170 must see this failure, and the message must not call a
         // type-6 task "external HTTP".
         var handler = new ThrowingHttpMessageHandler(new HttpRequestException("connection refused"));
         var logger = new CapturingLogger();
@@ -79,7 +79,7 @@ public sealed class LocalHttpTaskInvokerTests
         var result = await invoker.InvokeAsync("order-call", Binding(), traceContext: null);
 
         result.IsSuccess.ShouldBeFalse();
-        logger.EventIds.ShouldContain(10161); // LocalTaskInvocationFailed
+        logger.EventIds.ShouldContain(10170); // LocalTaskInvocationFailed
         logger.EventIds.ShouldNotContain(10098); // ExternalHttpTaskRequestFailed
         logger.EventIds.ShouldNotContain(10099); // ExternalHttpTaskRequestCancelled
         logger.EventIds.ShouldNotContain(10108); // ExternalHttpTaskSslValidationDisabled
@@ -99,7 +99,7 @@ public sealed class LocalHttpTaskInvokerTests
 
         result.IsSuccess.ShouldBeFalse();
         logger.EventIds.ShouldContain(10098); // ExternalHttpTaskRequestFailed
-        logger.EventIds.ShouldNotContain(10161); // LocalTaskInvocationFailed
+        logger.EventIds.ShouldNotContain(10170); // LocalTaskInvocationFailed
     }
 
     private static JsonElement Binding() => JsonSerializer.SerializeToElement(new HttpTaskBinding

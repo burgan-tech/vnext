@@ -74,7 +74,7 @@ public sealed class LocalStateStoreTaskInvokerTests
         var result = await invoker.InvokeAsync("cfg-read", GetBinding("cfg:1"), traceContext: null);
 
         result.IsSuccess.ShouldBeFalse();
-        logger.Entries.Count(e => e.EventId.Id == 10161 && e.Level == LogLevel.Error).ShouldBe(1);
+        logger.Entries.Count(e => e.EventId.Id == 10170 && e.Level == LogLevel.Error).ShouldBe(1);
     }
 
     private static JsonElement GetBinding(string key) =>

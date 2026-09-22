@@ -877,7 +877,7 @@ public static partial class WorkflowLogs
     /// being shipped to the Execution service (issue #1007).
     /// </summary>
     [LoggerMessage(
-        EventId = 10160,
+        EventId = 10169,
         Level = LogLevel.Debug,
         Message = "Task {TaskKey} ({TaskType}) invoked in-process by the orchestrator [reason={Reason}]")]
     public static partial void TaskInvokedLocally(
@@ -902,7 +902,7 @@ public static partial class WorkflowLogs
     /// </para>
     /// </summary>
     [LoggerMessage(
-        EventId = 10161,
+        EventId = 10170,
         Level = LogLevel.Error,
         Message = "In-process invocation of task {TaskKey} ({TaskType}) failed: {Error} [exceptionType={ExceptionType}]")]
     public static partial void LocalTaskInvocationFailed(
@@ -915,7 +915,7 @@ public static partial class WorkflowLogs
     /// this invoker's Error rate.
     /// </summary>
     [LoggerMessage(
-        EventId = 10162,
+        EventId = 10171,
         Level = LogLevel.Warning,
         Message = "In-process invocation of task {TaskKey} ({TaskType}) was cancelled")]
     public static partial void LocalTaskInvocationCancelled(
@@ -930,7 +930,7 @@ public static partial class WorkflowLogs
     /// has an SSL-validation flag, starting with SOAP.
     /// </summary>
     [LoggerMessage(
-        EventId = 10163,
+        EventId = 10172,
         Level = LogLevel.Debug,
         Message = "SSL certificate validation is disabled for in-process task {TaskKey} ({TaskType}) - Url: {Url}")]
     public static partial void LocalTaskInvocationSslValidationDisabled(
@@ -948,7 +948,7 @@ public static partial class WorkflowLogs
     /// sites.
     /// </summary>
     [LoggerMessage(
-        EventId = 10164,
+        EventId = 10173,
         Level = LogLevel.Warning,
         Message = "CacheAside {TaskKey}: cache {Stage} failed; continuing without the cache (bypassOnCacheError=true)")]
     public static partial void LocalCacheAsideBypassedCacheError(
@@ -963,7 +963,7 @@ public static partial class WorkflowLogs
     /// never when the caller's own token did.
     /// </summary>
     [LoggerMessage(
-        EventId = 10165,
+        EventId = 10174,
         Level = LogLevel.Error,
         Message = "In-process invocation of task {TaskKey} ({TaskType}) timed out after {TimeoutSeconds}s [timeout.layer=local]")]
     public static partial void LocalTaskInvocationTimedOut(
