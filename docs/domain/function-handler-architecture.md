@@ -251,7 +251,8 @@ Two guarantees hold here, both pinned by tests:
 
 - **Slot isolation** (`TaskResponseSlotIsolationTests`): each `TaskResponse` entry is an isolated
   copy — a later task's `Body` merge cannot mutate it, and a script mutating a slot cannot write
-  through into `Body`. Before 0.0.94 the entry aliased the tree merged into `Body`, and because
+  through into `Body`. Before this fix (known-issues id `function-multi-task-taskresponse-slot-collision`)
+  the entry aliased the tree merged into `Body`, and because
   `ExpandoObjectMergeStrategy` mutates its merge target in place, **every slot ended up carrying
   the last task's payload** (vnext-client-sdk-core#6) — the only working escape hatch was
   `OutputResponse`, whose values were always re-serialized snapshots.

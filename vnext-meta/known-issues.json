@@ -132,13 +132,13 @@
     },
     {
       "id": "function-multi-task-taskresponse-slot-collision",
-      "affectedVersions": ">=0.0.26 <0.0.94",
+      "affectedVersions": ">=0.0.26",
       "severity": "error",
       "component": "function",
       "path": "attributes.onExecutionTasks[]",
       "title": "In a function with multiple onExecutionTasks, every ScriptContext.TaskResponse slot carried the LAST executed task's payload: SetStandardResponse aliased each response tree into the shared Body, and the in-place expando merge of the next task's response rewrote the earlier slots. Output scripts reading TaskResponse composed the wrong response; OutputResponse slots (re-serialized snapshots) were unaffected.",
-      "workaround": "Read task results from ScriptContext.OutputResponse[variableName] instead of TaskResponse, or publish the function with a single task; fixed versions isolate each TaskResponse slot and reject duplicate normalized task keys at publish.",
-      "fixedIn": "0.0.94"
+      "workaround": "Read task results from ScriptContext.OutputResponse[variableName] instead of TaskResponse, or publish the function with a single task. Fixed on master 2026-09-22 (TaskResponse slots isolated per task; duplicate normalized task keys rejected at publish) — fixedIn and the affectedVersions upper bound are stamped when the release containing the fix is cut.",
+      "fixedIn": null
     }
   ]
 }
