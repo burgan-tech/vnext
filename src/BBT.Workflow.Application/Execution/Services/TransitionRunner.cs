@@ -171,6 +171,13 @@ public sealed class TransitionRunner(
         {
             // A lost CAS on the start hop yields no verdict: the level that actually flipped Busy
             // is the one responsible for compensating it, not this one.
+            // Defensive: not known to be reachable today. OwnsStatus is false only for updateData
+            // (HandleSubFlowStep short-circuits before order 70 for it) and for the
+            // IsSubflowForward branch (ForwardToActiveSubflowStep skips to Finalize before order 70,
+            // or — for a parent shared transition — SharedTransitionTargetSelfWhenInSubFlowSpecification
+            // forces target=$self and HandleSubFlowStep's same-state idempotent check takes the
+            // no-new-job path), so a StartSubflowJob and OwnsStatus == false cannot coincide today;
+            // pinned by RunAsync_WhenStartSubflowCoordinationFails_AndContextDoesNotOwnStatus_CompensatesNothing.
             if (!coreOutput.ExecutionContext.OwnsStatus)
                 return;
 
