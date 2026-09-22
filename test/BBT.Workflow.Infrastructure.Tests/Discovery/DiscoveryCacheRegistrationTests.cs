@@ -89,28 +89,28 @@ public sealed class DiscoveryCacheRegistrationTests
     // ────────────────────────────────────────────────────────────────────
 
     [Fact]
-    public void The_default_window_is_one_hour_with_a_two_hour_dead_mans_switch()
+    public void The_defaults_are_expiry_free_and_event_driven()
     {
         var options = new DiscoveryCacheOptions();
 
-        // Sized to how often the data actually changes: a domain's registered address moves when that
-        // domain is deployed to a new address — rare and planned, not continuous drift. Recorded as a
-        // test so the intent survives someone later "tightening" it back to minutes without knowing
-        // that the forced-refresh endpoint, not a short window, is what covers the moving case.
-        options.RefreshIntervalSeconds.ShouldBe(3600);
+        // No periodic refresh and no expiry. The cached datum — where a domain answers — changes when
+        // that domain is deployed, so a timer can only fire when nothing changed or fire too late;
+        // what it used to cost was a ~70 minute window routing to a moved domain's old address.
+        // Recorded as a test so a later "let's just put an hour back" has to argue with the reasoning
+        // rather than with a number.
+        options.RefreshIntervalSeconds.ShouldBe(0);
+        options.L2TtlSeconds.ShouldBe(0);
 
-        // Twice the window: survive one missed refresh, expire after roughly two.
-        options.L2TtlSeconds.ShouldBe(options.RefreshIntervalSeconds * 2);
+        // What replaces the dead-man TTL: the entry is dropped when something fails to reach it.
+        options.UnreachableEvictionCooldownSeconds.ShouldBe(30);
 
-        // Ten minutes: short relative to the window, because it is the residual staleness after a
-        // forced refresh — the shared layer is corrected at once, each pod's own copy is not.
-        options.L1TtlSeconds.ShouldBe(600);
-        options.L1TtlSeconds.ShouldBeLessThan(options.RefreshIntervalSeconds);
+        // One minute, down from the ten it carried while it had to stay under an hour-long window.
+        // This is how long an invalidation takes to reach the pods that did not perform it, and with
+        // no window to fit inside, the only thing a longer value buys is one saved cache read.
+        options.L1TtlSeconds.ShouldBe(60);
 
-        // Also short: a tick inside a served window costs one cache read, and what it buys is
-        // retrying a FAILED window within a minute rather than at the end of the hour.
+        // Purely a retry cadence now: the loop stops once the cluster's cache is filled.
         options.TickIntervalSeconds.ShouldBe(60);
-        options.TickIntervalSeconds.ShouldBeLessThan(options.RefreshIntervalSeconds);
     }
 
     [Fact]
@@ -233,6 +233,122 @@ public sealed class DiscoveryCacheRegistrationTests
         var provider = Build(cacheEnabled: true, discoveryProvider: "dapr");
 
         await BuildRefreshService(provider).TickAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public void An_expiry_with_no_periodic_refresh_is_rejected()
+    {
+        // The one combination that is broken in both modes: entries die on their own schedule and
+        // nothing renews them, so every domain's next caller pays a live lookup — forever, with the
+        // cache still reporting hits in between. Event-driven invalidation cannot cover for a TTL
+        // because it does not renew anything on a timer.
+        var result = Validate(new DiscoveryCacheOptions
+        {
+            Enabled = true,
+            RefreshIntervalSeconds = 0,
+            L2TtlSeconds = 7200
+        });
+
+        result.Failed.ShouldBeTrue();
+        result.FailureMessage.ShouldContain("L2TtlSeconds");
+    }
+
+    [Fact]
+    public void The_window_invariants_do_not_apply_when_there_is_no_window()
+    {
+        // In event-driven mode L1TtlSeconds, the tick and the lease have no window to be smaller
+        // than. Applying the old relationships to a zero would reject the shipped defaults.
+        var result = Validate(new DiscoveryCacheOptions
+        {
+            Enabled = true,
+            RefreshIntervalSeconds = 0,
+            L2TtlSeconds = 0,
+            L1TtlSeconds = 600,
+            WarmupLockLeaseSeconds = 30,
+            TickIntervalSeconds = 60
+        });
+
+        result.Failed.ShouldBeFalse(result.FailureMessage);
+    }
+
+    // ────────────────────────────────────────────────────────────────────
+    // Warm-up-only loop
+    // ────────────────────────────────────────────────────────────────────
+
+    [Theory]
+    [InlineData(DiscoveryCacheRefreshOutcome.Refreshed)]
+    [InlineData(DiscoveryCacheRefreshOutcome.SkippedWindowFresh)]
+    public async Task With_no_refresh_interval_the_loop_stops_once_the_cluster_is_filled(
+        DiscoveryCacheRefreshOutcome outcome)
+    {
+        var refresher = Substitute.For<IDiscoveryCacheRefresher>();
+        refresher.RefreshAsync(false, Arg.Any<CancellationToken>()).Returns(outcome);
+
+        var service = BuildLoopService(refresher, refreshIntervalSeconds: 0);
+
+        await service.StartAsync(CancellationToken.None);
+        await service.ExecuteTask!;
+
+        // A pod that kept ticking would spend one marker read a minute, forever, to be told nothing
+        // changed — and nothing can change on a timer once invalidation is event-driven.
+        await refresher.Received(1).RefreshAsync(false, Arg.Any<CancellationToken>());
+
+        await service.StopAsync(CancellationToken.None);
+    }
+
+    [Theory]
+    [InlineData(DiscoveryCacheRefreshOutcome.Failed)]
+    [InlineData(DiscoveryCacheRefreshOutcome.SkippedNotOwner)]
+    public async Task With_no_refresh_interval_the_loop_keeps_retrying_until_the_cluster_is_filled(
+        DiscoveryCacheRefreshOutcome outcome)
+    {
+        var refresher = Substitute.For<IDiscoveryCacheRefresher>();
+        var firstCall = new TaskCompletionSource();
+        refresher.RefreshAsync(false, Arg.Any<CancellationToken>()).Returns(_ =>
+        {
+            firstCall.TrySetResult();
+            return outcome;
+        });
+
+        var service = BuildLoopService(refresher, refreshIntervalSeconds: 0);
+
+        await service.StartAsync(CancellationToken.None);
+        await firstCall.Task;
+
+        // Neither outcome means the cache is filled: a failed read leaves it cold, and a replica that
+        // merely holds the lock may still fail — exiting here would leave this pod resolving live for
+        // the rest of its life.
+        service.ExecuteTask!.IsCompleted.ShouldBeFalse();
+
+        await service.StopAsync(CancellationToken.None);
+    }
+
+    private static DiscoveryCacheRefreshHostedService BuildLoopService(
+        IDiscoveryCacheRefresher refresher,
+        int refreshIntervalSeconds)
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddSingleton(refresher);
+        var provider = services.BuildServiceProvider();
+
+        var options = Options.Create(new ServiceDiscoveryOptions
+        {
+            Enabled = true,
+            Cache = new DiscoveryCacheOptions
+            {
+                Enabled = true,
+                RefreshIntervalSeconds = refreshIntervalSeconds,
+                TickIntervalSeconds = 60,
+                L2TtlSeconds = refreshIntervalSeconds > 0 ? refreshIntervalSeconds * 2 : 0
+            }
+        });
+
+        return new DiscoveryCacheRefreshHostedService(
+            provider.GetRequiredService<IServiceScopeFactory>(),
+            options,
+            TimeProvider.System,
+            provider.GetRequiredService<ILogger<DiscoveryCacheRefreshHostedService>>());
     }
 
     private static DiscoveryCacheRefreshHostedService BuildRefreshService(ServiceProvider provider)

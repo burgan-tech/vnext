@@ -2851,6 +2851,52 @@ public static partial class WorkflowLogs
     public static partial void DiscoveryCacheRefresherNotRegistered(
         this ILogger logger, string service);
 
+    /// <summary>
+    /// The warm-up loop reached a filled cache and stopped ticking.
+    /// </summary>
+    /// <remarks>
+    /// Information: this line is the difference between "the loop finished its job" and "the loop
+    /// died", which look identical afterwards — nothing else is logged by a service that has
+    /// returned. It fires once per pod in the default, expiry-free mode and never in periodic mode.
+    /// </remarks>
+    [LoggerMessage(
+        EventId = 50043,
+        Level = LogLevel.Information,
+        Message = "Discovery cache warm-up completed with outcome {Outcome}; the refresh loop has stopped. Invalidation is now event-driven (publish-completed, forced refresh, transport failure)")]
+    public static partial void DiscoveryCacheWarmUpCompleted(this ILogger logger, string outcome);
+
+    /// <summary>
+    /// A cached endpoint was dropped because something could not reach it.
+    /// </summary>
+    /// <remarks>
+    /// Warning, and it is the line to look for first when cross-domain calls start failing: it names
+    /// the domain whose cached address stopped answering. With no TTL behind the cache this eviction
+    /// is the automatic recovery path, so its absence during a misrouting incident is itself the
+    /// finding — it means nothing observed a transport failure (a trigger task, for instance,
+    /// executes in the Execution host and cannot report one).
+    /// </remarks>
+    [LoggerMessage(
+        EventId = 50044,
+        Level = LogLevel.Warning,
+        Message = "Evicted the cached discovery endpoint for domain '{Domain}' after a transport failure ({Reason}); the next resolution reads the registry")]
+    public static partial void DiscoveryEndpointEvicted(this ILogger logger, string domain, string reason);
+
+    /// <summary>
+    /// A transport failure did not evict because the previous eviction for that domain is still
+    /// inside the cooldown.
+    /// </summary>
+    /// <remarks>
+    /// Debug, and the expected shape while a peer domain is down: every call to it fails, and only
+    /// the first one per window evicts. A steady stream of this alongside no
+    /// <c>DiscoveryEndpointEvicted</c> means the domain is unreachable rather than moved.
+    /// </remarks>
+    [LoggerMessage(
+        EventId = 50045,
+        Level = LogLevel.Debug,
+        Message = "Skipped evicting the cached discovery endpoint for domain '{Domain}': within the {CooldownSeconds}s eviction cooldown")]
+    public static partial void DiscoveryEndpointEvictionThrottled(
+        this ILogger logger, string domain, int cooldownSeconds);
+
     [LoggerMessage(
         EventId = 50041,
         Level = LogLevel.Warning,
@@ -4442,6 +4488,77 @@ public static partial class WorkflowLogs
         this ILogger logger,
         Exception exception,
         string schema);
+
+    #endregion
+
+    #region Deployment Lifecycle (90xxx)
+
+    /// <summary>
+    /// Logs the arrival of a deployment's single post-publish call.
+    /// </summary>
+    /// <remarks>
+    /// Information, not Debug: this is the one line that proves a domain's CD pipeline actually made
+    /// the call. Its ABSENCE after a deployment is the failure mode this whole path has — an
+    /// unpublished invalidation looks exactly like a healthy one from the outside — so the line has
+    /// to be visible at the level operators run.
+    /// </remarks>
+    [LoggerMessage(
+        EventId = 90001,
+        Level = LogLevel.Information,
+        Message = "Publish-completed received for package '{PackageName}' version '{Version}'; running {HookCount} hook(s)")]
+    public static partial void PublishCompletedReceived(
+        this ILogger logger,
+        string packageName,
+        string version,
+        int hookCount);
+
+    /// <summary>
+    /// Logs one hook's named success.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 90002,
+        Level = LogLevel.Information,
+        Message = "Publish-completed hook '{Hook}' finished with outcome {Outcome}")]
+    public static partial void PublishCompletedHookSucceeded(
+        this ILogger logger,
+        string hook,
+        string outcome);
+
+    /// <summary>
+    /// Logs a hook that returned a failure. The remaining hooks still run.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 90003,
+        Level = LogLevel.Warning,
+        Message = "Publish-completed hook '{Hook}' failed: {Reason}. The remaining hooks still ran")]
+    public static partial void PublishCompletedHookFailed(
+        this ILogger logger,
+        string hook,
+        string reason);
+
+    /// <summary>
+    /// Logs a hook that threw. Recorded as a failure; the remaining hooks still run.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 90004,
+        Level = LogLevel.Error,
+        Message = "Publish-completed hook '{Hook}' threw. The remaining hooks still ran")]
+    public static partial void PublishCompletedHookFaulted(
+        this ILogger logger,
+        Exception exception,
+        string hook);
+
+    /// <summary>
+    /// Logs the end of a publish-completed run.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 90005,
+        Level = LogLevel.Information,
+        Message = "Publish-completed finished: {HookCount} hook(s) ran, {FailedCount} failed")]
+    public static partial void PublishCompletedFinished(
+        this ILogger logger,
+        int hookCount,
+        int failedCount);
 
     #endregion
 }

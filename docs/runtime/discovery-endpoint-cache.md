@@ -1,7 +1,8 @@
 # Discovery Endpoint Cache
 
 How a domain name becomes a callable endpoint without paying a registry round trip on every
-cross-domain hop — and what bounds the staleness that buys.
+cross-domain hop, and what invalidates that answer — a deployment finishing, an operator, or a
+failure to reach the cached address. Not a clock.
 
 > **Scope:** the default (`http`) provider only. Under `ServiceDiscovery:Provider=dapr` nothing on
 > this page applies; see [Dapr Invocation Transport](dapr-invocation-transport.md).
@@ -48,8 +49,9 @@ GetEndpointAsync
                  └─ DiscoveryRegistryClient     the live registry call
 ```
 
-Fill comes from two directions: lazily, when a lookup misses, and in bulk from
-`DiscoveryCacheRefreshHostedService`, which reads every registration once per refresh window.
+Fill comes from three directions: lazily, when a lookup misses; in bulk at startup, from
+`DiscoveryCacheRefreshHostedService`, which stops as soon as the cluster's cache is filled; and in
+bulk again whenever a deployment or an operator forces a refresh.
 
 **Why the decorator and not the provider.** The cacheable unit is `DomainRegistration` — the same
 record the bulk endpoint yields, and the only one independent of the caller. `DiscoveryEndpoint`,
@@ -59,64 +61,92 @@ per domain is the fourth defect above. Keeping the cache below the provider also
 
 ---
 
-## Staleness budget
+## Invalidation is an event, not a clock
 
 ```
-W_worst = RefreshIntervalSeconds + fetch + L1TtlSeconds
-        = 3600 + ~1 + 600  ≈  70 min   (defaults)
+L2TtlSeconds            = 0     (no expiry)
+RefreshIntervalSeconds  = 0     (no periodic refresh)
 ```
 
-**Why an hour is the right size here, when five minutes was judged too long before.** The window is
-sized to how often the data actually changes, not to how quickly it could: a domain's registered
-address moves when that domain is deployed to a new address — a rare, planned event, not a
-continuous drift. What made five minutes indefensible in the removed implementation was that it
-bought nothing (every hit still made the HTTP call) and that there was **no way to shorten it on
-demand**. Both are now false: a hit makes no network call, and `POST utilities/discovery/refresh`
-re-reads the registry synchronously, so the single event that invalidates an entry early has an
-operator-triggered answer that does not wait for the window.
+An entry is filled once and lives until something says otherwise. Three things say otherwise:
 
-A window this long also turns the cache into a **resilience** feature rather than only a latency one:
-with entries valid for two hours, cross-domain traffic survives a discovery-registry outage instead
-of failing with it.
+| Trigger | Who calls it | Effect |
+|---|---|---|
+| `POST definitions/publish/completed` | the domain's CD pipeline, once per deployment | forced full re-read of the registry |
+| `POST utilities/discovery/refresh` | an operator | the same, by hand |
+| a transport failure against a cached endpoint | the runtime itself | that one domain's entry is dropped |
 
-**The trade this accepts:** if a domain moves and nobody forces a refresh, cross-domain calls to it
-fail — the old address is gone — for up to the window. That is a real outage, not degraded latency,
-and it is why the refresh endpoint is documented under *Operations* below rather than treated as a
-nicety. Anyone changing a domain's `baseUrl` should call it as part of that change.
+Measured on a two-domain local run (core + the discovery registry, `Provider=http`), on
+`Discovery.Resolve/partner`:
 
-The refresher **overwrites** L2 rather than waiting for entries to expire, so L1/L2 TTL skew across
-pods does not add to `W`. It only means two pods can disagree for up to `L1TtlSeconds` — which is why
-that value stays well under the window, and why it is validated to stay below the refresh interval:
-at parity a pod could serve a stale endpoint for twice as long as the cluster takes to correct it. It is also the residual staleness after a *forced* refresh: the endpoint corrects
-the shared layer immediately, but each pod's own copy clears on its own schedule, so full propagation
-is `L1TtlSeconds`, not instant. A pod that never wins the refresh lock contributes nothing: L2 is
-shared, and the lock only decides who *writes*.
+| | `vnext.discovery.resolution` | duration |
+|---|---|---|
+| cached hit | `cache` (`age_seconds` 49) | **1.1 ms** |
+| live re-resolution after an eviction | `registry` | **39.9 ms** |
 
-**The cache fails open.** If the refresher stops entirely — registry down, lock store down, pod
-wedged — entries age past `L2TtlSeconds` and every lookup falls back to a live registry call, i.e.
-the pre-cache behaviour, within 2 hours. `L2TtlSeconds` is twice `RefreshIntervalSeconds` by design:
-survive one missed window, expire after roughly two. It never fails into a stale answer. A distributed-cache read
-failure is likewise treated as a miss, so resolutions stay correct (just slow); during such an outage
-only L1 can serve stale, for at most `L1TtlSeconds`.
+**Why the clock went away.** The cached datum is *where a domain answers*, and that changes when the
+domain is deployed to a new address — a rare, planned event. A timer sized to that either fires when
+nothing changed (the common case, 24 registry reads a day to learn nothing) or fires too late. What
+it actually cost was the window itself: `3600 + fetch + 600` ≈ **70 minutes** during which calls to a
+moved domain went to an address it no longer answered on, with `utilities/discovery/refresh` as the
+only way to shorten it. Replacing the timer with the deployment that causes the change removes the
+window instead of shrinking it.
 
-`POST utilities/discovery/refresh` re-reads the registry **synchronously** and republishes every
-entry, bypassing the window. It is the operational answer to the objection that killed the first
-attempt: when a domain's `baseUrl` moves, nobody waits the window out. Only each pod's in-process
-layer remains — so the fleet-wide effect of one click is **not instant, it is `L1TtlSeconds`** (ten
-minutes by default; the pod that served the request is corrected immediately). That is the number to
-weigh when changing `L1TtlSeconds`, and the reason it is not simply set to the refresh interval.
+**Why removing the dead-man TTL is not the old mistake.** The first cache was deleted
+(`79da3b6f`) for unbounded-ish staleness that bought nothing; a TTL was the answer then because
+nothing else could notice a bad entry. Something can now: a stale entry only does damage while
+something tries to *use* it, and that attempt is observable. See
+[Failure-driven eviction](#failure-driven-eviction). A TTL, by contrast, can only convert "wrong
+address" into "wrong address for a while" — and it charges every correctly cached domain a live
+lookup per expiry to do it.
 
-### The age is stamped on the entry, not delegated to the store
+**The residual staleness is `L1TtlSeconds` (60 s).** Every invalidation writes the shared layer;
+each pod keeps its own in-process copy until it expires. That is the one number to look at: a
+publish-completed call, a forced refresh and an eviction all reach the rest of the fleet within it.
+It is 60 s rather than the 600 it carried while it had to stay under an hour-long window — with no
+window, a longer L1 buys one saved cache read per domain per expiry and costs propagation delay.
 
-`CachedDomainRegistration` carries `FetchedAtUtc`, and every read checks it against the injected
-`TimeProvider`. This is load-bearing rather than defensive: `IDistributedCacheService` is bound to
-the **Dapr** provider, which turns an absolute expiration into the state store's `ttlInSeconds`
-metadata — and a component that does not implement TTL ignores it **silently**. Entries would then
-never expire, reproducing precisely the unbounded staleness that got the first cache deleted, with
-nothing in code review or the logs to reveal it. With the stamp, the store's TTL degrades to garbage
-collection and correctness stops depending on which component is configured.
+**What this design still does not cover.** A **peer** domain moving while *this* domain has no
+deployment of its own, and whose traffic goes through a path that cannot observe a transport failure
+— the trigger-task executors resolve an endpoint and hand the `baseUrl` to the **Execution** host,
+which does the call, so a failure there is not seen by the cache that produced it. Recovery on that
+path is `POST utilities/discovery/refresh`. This is accepted, deliberately, and it is the reason the
+`cache.age_seconds` tag matters more here than it did with a TTL.
 
----
+**Resilience, as a side effect.** Entries that never expire mean cross-domain traffic survives a
+discovery-registry outage of any length instead of degrading with it.
+
+### Failure-driven eviction
+
+`IDiscoveryEndpointFeedback.ReportUnreachableAsync` drops a domain's entry (this pod's L1 and the
+shared L2) and lets the next resolution go live. It is called from **one place** —
+`RemoteTransportRouter.SendCoreAsync`, which every `Remote*` client funnels through — rather than
+from the ~35 sites that resolve an endpoint. `DiscoveryEndpoint` carries its `Domain` for exactly
+this reason: a socket error names a host, and a host cannot be mapped back to a cache key.
+
+| Reported | Not reported |
+|---|---|
+| `HttpRequestError.ConnectionError`, `NameResolutionError` | any HTTP status — an error *response* means a domain at the right address |
+| inner `SocketException`: `ConnectionRefused`, `HostNotFound`, `HostUnreachable`, `NetworkUnreachable`, `TimedOut` | a TLS failure — usually a certificate at the right address |
+| | a broken circuit — a verdict about past failures, each already reported |
+| | a cancelled request, and a response-read timeout — something answered |
+
+- **Evicting is not a conclusion that the entry was wrong.** A correctly cached endpoint for a domain
+  that is merely *down* is evicted too, and the next resolution re-caches the same address. That is
+  intended: telling "moved" from "down" apart from a socket error is not decidable here, and the cost
+  is one registry read per cooldown window.
+- **`UnreachableEvictionCooldownSeconds` (30 s, per domain) is the load guard**, not a tuning knob.
+  Without it a peer's outage becomes ours: every failed call evicts, and every eviction sends the next
+  caller to the registry. Set it to `0` to switch failure-driven eviction off entirely.
+- The cooldown claim is a check-and-set loop, because a moved domain fails every in-flight call at
+  once and a plain read-then-write would let all of them evict.
+
+### Running it on a timer instead
+
+Set `RefreshIntervalSeconds` to a positive value and the periodic behaviour returns — marker window,
+staleness budget and all. It is a rollback lever, for a deployment whose CD pipeline cannot be relied
+on to call publish-completed. Set `L2TtlSeconds` alongside it: the validator **rejects** an expiry
+with no periodic refresh behind it, because nothing would renew entries before they died.
 
 ## Refresh protocol
 
@@ -124,11 +154,30 @@ Warm-up is simply tick #1; there is no separate startup path, so startup and ste
 drift apart. A pod that starts while the Dapr sidecar is still coming up fails tick one quietly and
 succeeds on tick two.
 
+**In the default mode the loop then stops.** `RefreshIntervalSeconds = 0` means there is no window to
+re-check, so once a tick returns `Refreshed` or `SkippedWindowFresh` — the cluster's cache is filled —
+`DiscoveryCacheRefreshHostedService` logs `DiscoveryCacheWarmUpCompleted` (50043) and returns. What
+the short tick buys is purely retry: a first attempt that failed because the sidecar or the registry
+was not ready is retried within a minute. `Failed` and `SkippedNotOwner` are deliberately **not**
+treated as filled — a replica that merely holds the lock may still fail, and exiting on it would
+leave this pod resolving live for the rest of its life.
+
+A pod that starts later does not need a warm-up at all: L2 is shared, so it reads what the first pod
+published and its own tick #1 answers `SkippedWindowFresh` (observed: `DiscoveryCacheWarmUpCompleted`
+with that outcome, on a pod whose predecessor had already claimed the marker).
+
+**The marker outlives the entries it speaks for.** With no expiry it records "this cluster was filled
+once" forever, so if the domain entries were lost while it survived — a flushed cache, an eviction
+policy reclaiming keys — no pod would bulk-refill them. The degradation is graceful rather than
+silent: every lookup misses, resolves live and re-caches itself, which is the pre-cache behaviour one
+domain at a time. To force a bulk refill, call `utilities/discovery/refresh`, which ignores the
+marker.
+
 | Key | Kind | Lifetime | Job |
 |---|---|---|---|
 | `discovery:bulk:v1:lock` | distributed lock | `WarmupLockLeaseSeconds` (30 s) | serializes the racers inside one window |
-| `discovery:bulk:v1:refreshed-at` | cache entry | `RefreshIntervalSeconds` (1 h) | defines the window |
-| `discovery:domain:v1:{domain}` | cache entry | `L2TtlSeconds` (2 h) | the payload |
+| `discovery:bulk:v1:refreshed-at` | cache entry | `RefreshIntervalSeconds`; **no expiry when that is 0** | records that the cluster has been filled (or, in periodic mode, defines the window) |
+| `discovery:domain:v1:{domain}` | cache entry | `L2TtlSeconds`; **no expiry when that is 0** | the payload |
 
 Each tick, on every pod (`IDiscoveryCacheRefresher.RefreshAsync`):
 
@@ -147,9 +196,8 @@ able to re-acquire — and a released lock with no marker lets every replica acq
 do a full bulk read. The lock only serializes racers within a window.
 
 A replica that dies holding the lease stalls nothing permanently: the lease expires, no marker was
-written, and the next tick retries. The bound is `lease + tick interval` ≈ 90 s — **not** the refresh
-window, which is why the tick stays at a minute while the window is an hour. A tick whose window is
-already served costs one cache read and stops.
+written, and the next tick retries. The bound is `lease + tick interval` ≈ 90 s. A tick whose window
+is already served costs one cache read and stops.
 
 **Step 4 is not optional.** The distributed lock does not auto-renew (pinned by
 `DistributedLockRegistrationTests`). A fetch slower than its lease would keep writing after another
@@ -195,7 +243,7 @@ degrades into.
   `discovery:domains:active`, with write-through eviction wired into the `domain` workflow's
   `start-domain` and `update` transitions. A refresh window therefore usually costs the registry a
   cache read, not an instance query — and a domain that registers or moves evicts that entry
-  immediately, so the server-side TTL does not add to the staleness budget below.
+  immediately, so the server-side TTL adds nothing to what a forced refresh sees.
 - **All-or-nothing.** A failed read returns an error rather than a partial list; a partial list is
   indistinguishable from a registry that genuinely lost domains, and publishing one would evict good
   entries for nothing. An **empty** `items` is a valid 200 and reaches `DiscoveryCacheRefresher`
@@ -244,11 +292,12 @@ degrades into.
 |---|---|---|
 | `Enabled` | **`false`** in code, `true` in the orchestration host's `appsettings.json` | the single rollback switch |
 | `L1Enabled` | `true` | |
-| `L1TtlSeconds` | `600` | must be `< RefreshIntervalSeconds`; **this is how long a forced refresh takes to reach the other pods** |
-| `TickIntervalSeconds` | `60` | how fast a *failed* window is retried — **not** the refresh rate |
-| `RefreshIntervalSeconds` | `3600` | 1 hour; enforced cluster-wide by the marker, not per pod |
-| `L2TtlSeconds` | `7200` | the dead-man's switch; 2× the refresh interval |
-| `WarmupLockLeaseSeconds` | `30` | must be `< RefreshIntervalSeconds` |
+| `L1TtlSeconds` | `60` | **how long any invalidation takes to reach the other pods.** Must be `> 0`, and `< RefreshIntervalSeconds` in periodic mode |
+| `TickIntervalSeconds` | `60` | how fast a *failed* warm-up is retried — **not** a refresh rate |
+| `RefreshIntervalSeconds` | **`0`** | `0` = no periodic refresh; invalidation is event-driven. A positive value restores the window |
+| `L2TtlSeconds` | **`0`** | `0` = entries never expire. A positive value restores the dead-man switch and **requires** a positive `RefreshIntervalSeconds` |
+| `UnreachableEvictionCooldownSeconds` | `30` | per domain; `0` switches failure-driven eviction off |
+| `WarmupLockLeaseSeconds` | `30` | must be `< RefreshIntervalSeconds` in periodic mode |
 | `DomainListEndpointTemplate` | `/{0}/functions/domain-list` | `{0}` = the registry domain; configurable for a gateway path variation |
 | `DomainListExpectedMax` | `500` | the registry function's own page size — reaching it warns that the list may be truncated |
 
@@ -262,11 +311,22 @@ same reasoning already governs `ServiceDiscovery:Enabled`, `Provider`'s fallback
 
 ### The invariants are enforced at startup
 
-`ServiceDiscoveryOptionsValidator` rejects `L1Ttl >= RefreshInterval`, `RefreshInterval >= L2Ttl`,
-`WarmupLockLease >= RefreshInterval`, `L2Ttl < RefreshInterval + lease`, and an empty
-`DomainListEndpointTemplate`. Every one of those degrades the cache **silently** when broken — it either stops
-serving or widens its window, with no exception and no error log. Startup is the only place they are
-visible, which is why they are a contract rather than a comment.
+`ServiceDiscoveryOptionsValidator` rejects, in **every** mode:
+
+- an expiry with no periodic refresh (`L2Ttl > 0` while `RefreshInterval = 0`) — entries would die on
+  their own schedule with nothing renewing them, so every domain's next caller pays a live lookup,
+  forever, while the cache still reports hits in between. Event-driven invalidation cannot cover for
+  a TTL, because it renews nothing on a timer;
+- an empty `DomainListEndpointTemplate`.
+
+And in **periodic mode only** (`RefreshInterval > 0`), the original window relationships:
+`L1Ttl >= RefreshInterval`, `TickInterval > RefreshInterval`, `WarmupLockLease >= RefreshInterval`,
+and — when an expiry is also set — `RefreshInterval >= L2Ttl` and `L2Ttl < RefreshInterval + lease`.
+They are scoped to that mode because applied to a zero they would reject the shipped defaults.
+
+Every one of these degrades the cache **silently** when broken — it either stops serving or widens
+its window, with no exception and no error log. Startup is the only place they are visible, which is
+why they are a contract rather than a comment.
 
 ---
 
@@ -279,15 +339,23 @@ On `Discovery.Resolve/{domain}`:
 | `vnext.discovery.resolution` | `cache` on a hit; `registry` / `convention` otherwise |
 | `vnext.discovery.cache.age_seconds` | age of the entry that answered |
 
-The age tag is the one that matters. Without it there is no way to answer *"was this routed by a
-stale entry?"* during an incident — which is precisely the question the removal commit was written to
-avoid ever having to answer, and the one that decides whether this feature survives its first
-incident.
+The age tag is the one that matters, and it matters **more** without a TTL: nothing else can reveal a
+three-week-old entry, and it is the only way to answer *"was this routed by a stale entry?"* during an
+incident — precisely the question the removal commit was written to avoid ever having to answer.
 
-Logs (`WorkflowLogs`, EventIds 50001–50005 reused from the removed implementation so historical
-queries keep working, plus 50036–50041): refresh started / refreshed / failed, domain-list fetch,
+Logs (`WorkflowLogs`, EventIds 50001–50006 reused from the removed implementation so historical
+queries keep working, plus 50036–50045): refresh started / refreshed / failed, domain-list fetch,
 cache miss, skipped-fresh, skipped-not-owner, list-ceiling reached, domain-list endpoint missing,
-cache operation failed.
+cache operation failed, refresher-not-registered, and:
+
+| EventId | Level | Meaning |
+|---|---|---|
+| `50043` `DiscoveryCacheWarmUpCompleted` | Information | the warm-up loop reached a filled cache and stopped ticking. Fires once per pod; its absence means the loop is still retrying or died |
+| `50044` `DiscoveryEndpointEvicted` | **Warning** | a cached endpoint was dropped after a transport failure. **Look for this first** when cross-domain calls start failing; with no TTL it is the automatic recovery path, and its absence during a misrouting incident is itself the finding |
+| `50045` `DiscoveryEndpointEvictionThrottled` | Debug | a failure inside the cooldown. A steady stream of this with no `50044` means the domain is *down*, not moved |
+
+The deployment hook logs under 90001–90005 (`PublishCompleted*`); see
+[Publish-completed hook](publish-completed-hook.md).
 
 `QueryingSingleDomain` (50006) stays at `Information`: it fires once per cache miss, so a steady
 stream of it now means the cache is not working.
@@ -296,9 +364,15 @@ stream of it now means the cache is not working.
 
 ## Operations
 
-**Force a refresh — do this whenever a domain's `baseUrl` changes.** With an hour-long window this is
-not optional housekeeping: until it runs, every other domain keeps calling the address the moved
-domain no longer answers on. Make it a step in whatever procedure changes a domain's address.
+**Normally you do not need this.** A domain's own deployment calls
+`definitions/publish/completed`, and an address that stopped answering is evicted on the first failed
+call. Reach for the endpoint below when neither applies:
+
+- a domain was registered with the **wrong** `baseUrl` — it may be answering, so nothing fails and
+  nothing evicts;
+- the failing traffic goes through a trigger task, whose call happens in the Execution host and
+  therefore cannot report the failure;
+- a domain moved and the callers are runtimes that are not being deployed.
 
 ```bash
 curl -X POST localhost:4201/api/v1/utilities/discovery/refresh
@@ -308,10 +382,13 @@ Reads the registry and republishes every entry synchronously, then answers with 
 
 | `outcome` | Meaning |
 |---|---|
-| `Refreshed` | done; pods' in-process copies clear within `L1TtlSeconds` |
+| `Refreshed` | done; pods' in-process copies clear within `L1TtlSeconds` (60 s) |
 | `SkippedNotOwner` | another replica is refreshing right now — its result applies cluster-wide |
-| `Failed` | the registry could not be read; existing entries were left untouched |
-| `disabled` | the cache is off; every resolution already queries the registry |
+| `Failed` | the registry could not be read; existing entries were left untouched — and with no TTL they stay until something else invalidates them, so this outcome needs a retry |
+| `disabled` | there is nothing to refresh — `ServiceDiscovery:Enabled=false`, `Provider=dapr`, or `Cache:Enabled=false` |
+
+**Roll back to a timer:** set `RefreshIntervalSeconds` to `3600` and `L2TtlSeconds` to `7200`. The
+periodic window returns exactly as it was, and the event-driven triggers keep working on top of it.
 
 **Roll back completely:** set `ServiceDiscovery:Cache:Enabled=false` and restart. The plain registry
 client is then registered and the refresher never starts, so not even an entry written before the
@@ -325,5 +402,7 @@ flip remains readable — the pre-cache behaviour is restored literally, not app
   the `ServiceDiscovery:Provider` switch this sits under.
 - [Dapr Invocation Transport](dapr-invocation-transport.md) — the provider this cache deliberately
   does not touch.
+- [Publish-completed hook](publish-completed-hook.md) — the deployment-time trigger that invalidates
+  this cache, and the contract a domain's CD pipeline has to honour.
 - [Trace Lanes](trace-lanes.md) / [Trace Span Tree](trace-span-tree.md) — where
   `Discovery.Resolve/{domain}` sits.

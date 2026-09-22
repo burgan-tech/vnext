@@ -24,6 +24,11 @@ const exec = promisify(require('child_process').exec);
 const PORT = process.env.PACKAGE_API_PORT || 3000;
 const VNEXT_APP_URL = process.env.VNEXT_APP_URL || 'http://host.docker.internal:4201';
 const API_ENDPOINT = `${VNEXT_APP_URL}/api/v1/definitions/publish`;
+// Called ONCE, after every component of the package has been published. It is the runtime's
+// post-deployment hook: today it re-reads the domain discovery registry (whose cache has no TTL and
+// is therefore invalidated by this call and nothing else), and it is where further deployment-time
+// work gets added. Replaces the former definitions/re-initialize, which had become a no-op.
+const PUBLISH_COMPLETED_ENDPOINT = `${VNEXT_APP_URL}/api/v1/definitions/publish/completed`;
 const DEFAULT_REGISTRY = process.env.NPM_REGISTRY || 'https://registry.npmjs.org/';
 
 /**
@@ -1021,8 +1026,7 @@ async function handleRuntimePublish(req, res) {
             npmUsername,
             npmPassword,
             npmEmail,
-            appDomain,
-            reInitialize = false
+            appDomain
         } = body;
         
         if (!appDomain || appDomain.trim() === '') {
@@ -1040,7 +1044,7 @@ async function handleRuntimePublish(req, res) {
         log.info(`Package: ${VNEXT_CORE_RUNTIME_PACKAGE}@${version}`);
         log.info(`App Domain: ${appDomain} (REQUIRED)`);
         log.info(`Domain Replacement: ALL domains will be replaced`);
-        log.info(`Re-initialize after publish: ${reInitialize === true ? 'ENABLED' : 'DISABLED'}`);
+        log.info(`Publish-completed hooks run once when the package has finished publishing`);
 
         res.writeHead(202, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
@@ -1056,7 +1060,6 @@ async function handleRuntimePublish(req, res) {
             authOptions: { token: npmToken, username: npmUsername, password: npmPassword, email: npmEmail },
             appDomain,
             isRuntimePackage: true,
-            reInitialize: reInitialize === true,
         });
         
     } catch (error) {
@@ -1097,8 +1100,7 @@ async function handlePackagePublish(req, res) {
             npmPassword,
             npmEmail,
             appDomain,
-            replaceDomain = false,
-            reInitialize = false
+            replaceDomain = false
         } = body;
 
         if (!packageName) {
@@ -1117,7 +1119,7 @@ async function handlePackagePublish(req, res) {
         log.section(`API Request: Package Publish [job=${job.id}]`);
         log.info(`Package: ${packageName}@${version}`);
         log.info(`Domain Replacement: ${effectiveAppDomain ? `ENABLED → ${effectiveAppDomain}` : 'DISABLED'}`);
-        log.info(`Re-initialize after publish: ${reInitialize === true ? 'ENABLED' : 'DISABLED'}`);
+        log.info(`Publish-completed hooks run once when the package has finished publishing`);
 
         res.writeHead(202, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
@@ -1133,7 +1135,6 @@ async function handlePackagePublish(req, res) {
             authOptions: { token: npmToken, username: npmUsername, password: npmPassword, email: npmEmail },
             appDomain: effectiveAppDomain,
             isRuntimePackage: false,
-            reInitialize: reInitialize === true,
         });
 
     } catch (error) {
@@ -1157,7 +1158,7 @@ async function handlePackagePublish(req, res) {
  * @param {Object} opts
  */
 async function runPackagePublishJob(job, opts) {
-    const { packageName, version, npmRegistry, authOptions, appDomain, isRuntimePackage, reInitialize = false } = opts;
+    const { packageName, version, npmRegistry, authOptions, appDomain, isRuntimePackage } = opts;
     let results = null;
     try {
         updateJob(job, {
@@ -1185,15 +1186,15 @@ async function runPackagePublishJob(job, opts) {
         results = await processPackage(packagePath, packageName, appDomain, isRuntimePackage, job);
         throwIfCancelled(job);
 
-        if (reInitialize) {
-            updateJob(job, {
-                progress: { ...job.progress, phase: 're-initializing' },
-            });
+        // Unconditional. This used to be opt-in (reInitialize=false by default) back when the call
+        // it made was a no-op; it is now the runtime's post-deployment hook and the discovery
+        // cache's only automatic invalidation, so a deployment that skipped it would leave the
+        // runtime routing cross-domain calls by whatever it resolved at startup.
+        updateJob(job, {
+            progress: { ...job.progress, phase: 'publish-completed' },
+        });
 
-            await reInitializeDefinitions();
-        } else {
-            log.info('Re-initialize step skipped (reInitialize=false)');
-        }
+        const publishCompletedResult = await publishCompleted(packageName, version, appDomain);
 
         let success = true;
         let message = 'Package processed and published successfully';
@@ -1206,6 +1207,14 @@ async function runPackagePublishJob(job, opts) {
             message = `Package partially processed. ${results.success.length} loaded, ${results.failed.length} failed.`;
         }
 
+        // Surfaced in the job result, and in the message when everything else went fine: a silently
+        // swallowed warning here is indistinguishable from a healthy deployment, which is exactly
+        // how a domain ends up serving stale cross-domain endpoints with nobody looking.
+        if (!publishCompletedResult.success) {
+            success = false;
+            message = `${message} Post-deployment hooks did not complete: ${publishCompletedResult.error}.`;
+        }
+
         updateJob(job, {
             status: 'completed',
             results: {
@@ -1216,6 +1225,7 @@ async function runPackagePublishJob(job, opts) {
                 successful: results.success,
                 failed: results.failed,
                 skipped: results.skipped,
+                publishCompleted: publishCompletedResult,
             },
             progress: { ...job.progress, phase: 'done' },
         });
@@ -1283,25 +1293,69 @@ async function verifyPackageStructure(packagePath) {
 }
 
 /**
- * Trigger re-initialization of definitions to clear cache
+ * Signal the runtime that this deployment has finished publishing every component, and report what
+ * its post-deployment hooks did.
+ *
+ * Called once per job, never per component: the hooks are idempotent and their effect is identical
+ * each time, so N calls would buy nothing and cost N registry reads.
+ *
+ * The result is RETURNED rather than logged away. This call is the discovery cache's only automatic
+ * invalidation, so "it was skipped" and "it ran" must not look the same afterwards — the caller puts
+ * the outcome in the job result.
+ *
+ * @param {string} packageName
+ * @param {string} version
+ * @param {string|null} appDomain
+ * @returns {Promise<{success: boolean, hooks: Array<Object>, error: string|null}>}
  */
-async function reInitializeDefinitions() {
-    const url = `${VNEXT_APP_URL}/api/v1/definitions/re-initialize`;
-    log.detail(`Triggering re-initialization at ${url}...`);
-    
+async function publishCompleted(packageName, version, appDomain) {
+    log.detail(`Signalling publish-completed at ${PUBLISH_COMPLETED_ENDPOINT}...`);
+
+    const payload = { packageName, version };
+    if (appDomain) payload.domain = appDomain;
+
     try {
-        const response = await httpRequest(url, { method: 'GET' });
-        
-        if (response.statusCode === 200 || response.statusCode === 204) {
-            log.success('Cache re-initialization triggered successfully');
-            return true;
-        } else {
-            log.warn(`Failed to trigger re-initialization (HTTP ${response.statusCode})`);
-            return false;
+        const response = await httpRequest(PUBLISH_COMPLETED_ENDPOINT, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+
+        if (response.statusCode !== 200 && response.statusCode !== 204) {
+            const reason = `HTTP ${response.statusCode}`;
+            log.warn(`Publish-completed failed (${reason})`);
+            return { success: false, hooks: [], error: reason };
         }
+
+        let body = null;
+        try {
+            body = response.body ? JSON.parse(response.body) : null;
+        } catch {
+            // A 200 with an unparseable body still means the hooks ran; report it as a success with
+            // no detail rather than inventing a failure.
+            log.warn('Publish-completed answered 200 with an unreadable body');
+            return { success: true, hooks: [], error: null };
+        }
+
+        const hooks = Array.isArray(body?.hooks) ? body.hooks : [];
+        const success = body?.success !== false;
+
+        for (const hook of hooks) {
+            const line = `${hook.name}: ${hook.outcome}${hook.message ? ` — ${hook.message}` : ''}`;
+            if (hook.outcome === 'Failed') log.warn(`  Hook ${line}`);
+            else log.detail(`  Hook ${line}`);
+        }
+
+        if (success) {
+            log.success(`Publish-completed ran ${hooks.length} hook(s)`);
+        } else {
+            log.warn('Publish-completed reported a failed hook');
+        }
+
+        return { success, hooks, error: success ? null : 'one or more hooks failed' };
     } catch (e) {
-        log.warn(`Error triggering re-initialization: ${e.message}`);
-        return false;
+        log.warn(`Error signalling publish-completed: ${e.message}`);
+        return { success: false, hooks: [], error: e.message };
     }
 }
 
@@ -1341,7 +1395,7 @@ async function handleJobStatus(req, res) {
  * Sets a cooperative cancel flag on the job. The background worker checks this
  * flag at well-defined checkpoints (between files, between stages) and stops
  * gracefully. The currently in-flight upload (if any) is allowed to finish;
- * partial uploads are NOT rolled back and reInitializeDefinitions() is skipped.
+ * partial uploads are NOT rolled back and the publish-completed hooks are skipped.
  */
 async function handleJobCancel(req, res) {
     const jobId = req.url.replace('/api/package/publish/cancel/', '');
@@ -1493,7 +1547,7 @@ function startServer() {
         log.detail(`  - Poll for job progress after publish`);
         log.info(`Cancel Job: POST http://localhost:${PORT}/api/package/publish/cancel/:jobId`);
         log.detail(`  - Cooperative cancel; job stops at next checkpoint`);
-        log.detail(`  - Partial uploads are NOT rolled back; reInitialize is skipped`);
+        log.detail(`  - Partial uploads are NOT rolled back; publish-completed is skipped`);
         log.info(`VNext App URL: ${VNEXT_APP_URL}`);
         log.subsection('Timeout Configuration');
         log.info(`Server Timeout: ${SERVER_TIMEOUT_MS}ms (${SERVER_TIMEOUT_MS / 60000} min)`);

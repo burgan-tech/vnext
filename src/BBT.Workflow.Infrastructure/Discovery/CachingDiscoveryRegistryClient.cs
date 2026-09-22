@@ -23,14 +23,18 @@ public interface IDiscoveryCacheWriter
     /// <summary>Publishes a full set of registrations.</summary>
     Task SetAsync(IReadOnlyList<DomainRegistration> registrations, CancellationToken cancellationToken);
 
-    /// <summary>Reads the shared refresh marker, or <c>null</c> when this window is unclaimed.</summary>
+    /// <summary>Reads the shared refresh marker, or <c>null</c> when nothing has claimed it.</summary>
     Task<string?> GetRefreshMarkerAsync(CancellationToken cancellationToken);
 
-    /// <summary>Claims the current refresh window.</summary>
+    /// <summary>
+    /// Claims the refresh. Written with <c>RefreshIntervalSeconds</c> as its lifetime, which means
+    /// two different things: in periodic mode it expires with the window it defines; with that value
+    /// at <c>0</c> — the default — it is written without an expiry and records that the cluster's
+    /// cache has been filled, which is what lets each pod's warm-up loop stop after one success.
+    /// A forced refresh does not consult it.
+    /// </summary>
     Task SetRefreshMarkerAsync(CancellationToken cancellationToken);
 
-    /// <summary>Drops the refresh marker so the next tick refreshes immediately.</summary>
-    Task ClearRefreshMarkerAsync(CancellationToken cancellationToken);
 }
 
 /// <summary>
@@ -65,7 +69,7 @@ public sealed class CachingDiscoveryRegistryClient(
     IDiscoveryL1Cache l1Cache,
     IOptions<ServiceDiscoveryOptions> serviceDiscoveryOptions,
     TimeProvider timeProvider,
-    ILogger<CachingDiscoveryRegistryClient> logger) : IDiscoveryRegistryClient, IDiscoveryCacheWriter
+    ILogger<CachingDiscoveryRegistryClient> logger) : IDiscoveryRegistryClient, IDiscoveryCacheWriter, IDiscoveryEndpointFeedback
 {
     /// <summary>
     /// Key prefix. The <c>v1</c> segment is a shape generation: bump it whenever
@@ -89,6 +93,12 @@ public sealed class CachingDiscoveryRegistryClient(
     /// traffic after a rollout misses on every call at once.
     /// </summary>
     private readonly ConcurrentDictionary<string, Lazy<Task<Result<DomainRegistration>>>> _inFlight = new();
+
+    /// <summary>
+    /// When each domain was last evicted because something could not reach it. Bounded by the domain
+    /// count, like the cache itself.
+    /// </summary>
+    private readonly ConcurrentDictionary<string, DateTimeOffset> _lastUnreachableEviction = new();
 
     private DiscoveryCacheOptions Cache => serviceDiscoveryOptions.Value.Cache;
 
@@ -161,22 +171,104 @@ public sealed class CachingDiscoveryRegistryClient(
             Cache.RefreshIntervalSeconds,
             cancellationToken);
 
+    // ────────────────────────────────────────────────────────────────────
+    // IDiscoveryEndpointFeedback
+    // ────────────────────────────────────────────────────────────────────
+
     /// <inheritdoc />
-    public async Task ClearRefreshMarkerAsync(CancellationToken cancellationToken)
+    /// <remarks>
+    /// <para>
+    /// <b>Evicting is not the same as concluding the entry was wrong.</b> A correctly cached endpoint
+    /// for a domain that is merely DOWN is evicted too, and the next resolution reads the registry and
+    /// caches the same address again. That is the intended outcome: the cost is one registry read per
+    /// cooldown window, and the alternative — trying to tell "moved" from "down" from a socket error —
+    /// is not decidable here.
+    /// </para>
+    /// <para>
+    /// The cooldown is the load guard that makes the above affordable. Without it a peer domain's
+    /// outage becomes ours: every failed call evicts, and every eviction sends the next caller to the
+    /// registry.
+    /// </para>
+    /// <para>
+    /// Only the shared layer and THIS pod's in-process layer are cleared. Other pods keep their own
+    /// copy for up to <c>Cache:L1TtlSeconds</c>, so recovery is per-pod-immediate and fleet-wide
+    /// within that window — the same propagation rule every other invalidation here follows.
+    /// </para>
+    /// </remarks>
+    public async Task ReportUnreachableAsync(
+        string? domain,
+        string reason,
+        CancellationToken cancellationToken)
     {
+        if (string.IsNullOrWhiteSpace(domain))
+            return;
+
+        var cooldownSeconds = Cache.UnreachableEvictionCooldownSeconds;
+
+        // 0 switches failure-driven eviction off entirely; the entry then lives until an event
+        // replaces it.
+        if (cooldownSeconds <= 0)
+            return;
+
+        var cacheKey = BuildKey(domain);
+
+        if (!TryClaimEviction(cacheKey, TimeSpan.FromSeconds(cooldownSeconds)))
+        {
+            logger.DiscoveryEndpointEvictionThrottled(domain, cooldownSeconds);
+            return;
+        }
+
+        l1Cache.Remove(cacheKey);
+
         try
         {
-            await distributedCache.RemoveAsync(RefreshMarkerKey, cancellationToken);
+            await distributedCache.RemoveAsync(cacheKey, cancellationToken);
         }
         catch (Exception ex)
         {
-            logger.DiscoveryCacheOperationFailed(ex, OperationRemove, RefreshMarkerKey);
+            // Swallowed like every other cache operation: this method is called from a catch block
+            // that is about to rethrow the caller's real failure, and must not replace it.
+            logger.DiscoveryCacheOperationFailed(ex, OperationRemove, cacheKey);
         }
+
+        logger.DiscoveryEndpointEvicted(domain, reason);
     }
 
     // ────────────────────────────────────────────────────────────────────
     // Private
     // ────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Claims the right to evict <paramref name="cacheKey"/> now, or refuses because the previous
+    /// eviction is still inside the cooldown.
+    /// </summary>
+    /// <remarks>
+    /// The loop is the check-and-set: concurrent failures for one domain — the normal shape, since a
+    /// moved domain fails every in-flight call at once — must produce exactly one eviction, and a
+    /// plain read-then-write would let all of them through.
+    /// </remarks>
+    private bool TryClaimEviction(string cacheKey, TimeSpan cooldown)
+    {
+        var now = timeProvider.GetUtcNow();
+
+        while (true)
+        {
+            if (_lastUnreachableEviction.TryGetValue(cacheKey, out var last))
+            {
+                if (now - last < cooldown)
+                    return false;
+
+                if (_lastUnreachableEviction.TryUpdate(cacheKey, now, last))
+                    return true;
+
+                // Another thread moved the stamp between the read and the update; re-read it.
+                continue;
+            }
+
+            if (_lastUnreachableEviction.TryAdd(cacheKey, now))
+                return true;
+        }
+    }
 
     /// <summary>
     /// Lowercased so the write and read paths cannot disagree.
@@ -190,8 +282,15 @@ public sealed class CachingDiscoveryRegistryClient(
     private static string BuildKey(string domain) => KeyPrefix + domain.ToLowerInvariant();
 
     /// <summary>
-    /// Returns the entry only while it is inside the configured age; otherwise <c>null</c>.
+    /// Returns the entry unless an age ceiling is configured and the entry is past it.
     /// </summary>
+    /// <remarks>
+    /// <c>L2TtlSeconds = 0</c> — the default — means no ceiling: invalidation is an event
+    /// (<c>definitions/publish/completed</c>, a forced refresh, a transport failure), not a clock.
+    /// The negative-age guard survives that change because it is about a different failure: a clock
+    /// that moved backwards produces an entry from the future, and reading it as "infinitely fresh"
+    /// would be wrong under either policy.
+    /// </remarks>
     private CachedDomainRegistration? TryReadFresh(CachedDomainRegistration? entry)
     {
         if (entry is null)
@@ -199,9 +298,12 @@ public sealed class CachingDiscoveryRegistryClient(
 
         var age = timeProvider.GetUtcNow() - entry.FetchedAtUtc;
 
-        // Negative age means a clock moved backwards; treat it as unusable rather than as infinitely
-        // fresh.
-        return age >= TimeSpan.Zero && age <= TimeSpan.FromSeconds(Cache.L2TtlSeconds)
+        if (age < TimeSpan.Zero)
+            return null;
+
+        var ttlSeconds = Cache.L2TtlSeconds;
+
+        return ttlSeconds <= 0 || age <= TimeSpan.FromSeconds(ttlSeconds)
             ? entry
             : null;
     }
@@ -318,13 +420,17 @@ public sealed class CachingDiscoveryRegistryClient(
     {
         try
         {
+            // ttl <= 0 writes no expiry at all: the entry is invalidated by an event, and a store
+            // that quietly ignores TTL metadata (which the Dapr layer allows) then changes nothing.
+            var entryOptions = new DistributedCacheEntryOptions();
+
+            if (ttlSeconds > 0)
+                entryOptions.AbsoluteExpiration = timeProvider.GetUtcNow().AddSeconds(ttlSeconds);
+
             await distributedCache.SetAsync(
                 cacheKey,
                 value,
-                new DistributedCacheEntryOptions
-                {
-                    AbsoluteExpiration = timeProvider.GetUtcNow().AddSeconds(ttlSeconds)
-                },
+                entryOptions,
                 cancellationToken);
         }
         catch (Exception ex)

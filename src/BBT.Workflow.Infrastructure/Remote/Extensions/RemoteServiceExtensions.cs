@@ -1,5 +1,6 @@
 using System.Net;
 using BBT.Workflow.Authorization.Remote;
+using BBT.Workflow.Discovery;
 using BBT.Workflow.Gateway;
 using BBT.Workflow.Infrastructure.Instances.Remote;
 using BBT.Workflow.Instances.Remote;
@@ -150,6 +151,12 @@ public static class RemoteServiceExtensions
             new DaprRemoteTransport<TClient>(
                 Dapr.Client.DaprClient.CreateInvokeHttpClient(),
                 RemotePolicyFactory.Compose(options, profile)));
+        // The router reports an unreachable endpoint so the discovery cache can drop it. A default is
+        // registered HERE rather than left to AddDomainDiscovery because the router is registered
+        // here: a host that wires the remote stack without discovery — DbMigrator, and every test
+        // that builds one client — would otherwise fail to construct it. TryAdd keeps the real
+        // implementation winning whichever order the two modules run in.
+        services.TryAddSingleton<IDiscoveryEndpointFeedback, NullDiscoveryEndpointFeedback>();
         services.TryAddSingleton<IRemoteTransport<TClient>, RemoteTransportRouter<TClient>>();
 
         // Factory, not AddTransient<TClient, TImplementation>(): the implementation depends on

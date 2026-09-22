@@ -79,7 +79,7 @@ public sealed class DaprDomainDiscoveryProvider(
         if (dapr.CacheSeconds > 0 && cache.TryGetValue(cacheKey, out string? cachedAppId) &&
             !string.IsNullOrEmpty(cachedAppId))
         {
-            return Success(activity, cachedAppId, TelemetryConstants.DiscoveryResolutions.Cache);
+            return Success(activity, domain, cachedAppId, TelemetryConstants.DiscoveryResolutions.Cache);
         }
 
         var appId = conventionAppId;
@@ -133,7 +133,7 @@ public sealed class DaprDomainDiscoveryProvider(
         }
 
         activity?.SetTag(TelemetryConstants.TagNames.DaprNamespace, targetNamespace);
-        return Success(activity, qualifiedAppId, resolution);
+        return Success(activity, domain, qualifiedAppId, resolution);
     }
 
     /// <summary>
@@ -159,7 +159,11 @@ public sealed class DaprDomainDiscoveryProvider(
     /// <see cref="EndpointKind.Dapr"/>, read by <c>RemoteTransportRouter</c>; the Dapr shell then
     /// uses <see cref="DiscoveryEndpoint.DaprAppId"/> and never touches this URI.
     /// </remarks>
-    private static Result<DiscoveryEndpoint> Success(Activity? activity, string appId, string resolution)
+    private static Result<DiscoveryEndpoint> Success(
+        Activity? activity,
+        string domain,
+        string appId,
+        string resolution)
     {
         activity?.SetTag(TelemetryConstants.TagNames.DiscoveryResolution, resolution);
         activity?.SetTag(TelemetryConstants.TagNames.DaprAppId, appId);
@@ -167,7 +171,8 @@ public sealed class DaprDomainDiscoveryProvider(
         return Result.Ok(new DiscoveryEndpoint(
             EndpointKind.Dapr,
             new Uri($"dapr://{appId}/"),
-            appId));
+            appId,
+            domain));
     }
 
     /// <summary>
@@ -196,6 +201,6 @@ public sealed class DaprDomainDiscoveryProvider(
         var baseUrl = lookup.Value!.BaseUrl!.TrimEnd('/') + "/";
         Logger.DomainResolvedFromRegistry(domain, baseUrl);
 
-        return Result.Ok(new DiscoveryEndpoint(EndpointKind.Url, new Uri(baseUrl), lookup.Value!.AppId));
+        return Result.Ok(new DiscoveryEndpoint(EndpointKind.Url, new Uri(baseUrl), lookup.Value!.AppId, domain));
     }
 }
