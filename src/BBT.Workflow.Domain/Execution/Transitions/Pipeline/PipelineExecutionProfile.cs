@@ -139,7 +139,7 @@ public sealed class PipelineExecutionProfile
 
     /// <summary>
     /// Creates the profile for error-boundary transitions: excludes preflight, active-subflow
-    /// forwarding and resource locking; subflow handling is disabled. The Auto step remains active.
+    /// forwarding and resource locking. The Auto step and subflow handling remain active.
     /// </summary>
     public static PipelineExecutionProfile ForErrorBoundary() => ErrorBoundaryInstance;
 
