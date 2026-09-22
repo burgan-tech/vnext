@@ -45,7 +45,7 @@ Flow: apply `MutateDirectives` → Stop → break; SkipTo → replan; else conti
 | AutoChain | Automatic (1) | Preflight, ForwardSubflow, SetBusy, ApplyTimeoutState (ResourceLock runs) |
 | Scheduled | Scheduled (2) | Preflight, ForwardSubflow |
 | Event | Event (3) | Preflight, ForwardSubflow |
-| ErrorBoundary | Error boundary | Preflight, ForwardSubflow, ResourceLock; `AllowSubFlow=false` (Auto is not excluded in current code) |
+| ErrorBoundary | Error boundary | Preflight, ForwardSubflow, ResourceLock (Auto and SubFlow are **not** excluded in current code) |
 
 Resolution: `IPipelineProfileResolver.Resolve(workflowContext, transitionContext)` — if
 `IsErrorBoundaryTransition` → ErrorBoundary; else by the **workflow context's** `TriggerType` (not
@@ -540,8 +540,12 @@ A sixth profile is **composed on top of** the base, never selected instead of it
   - Transition set → `RequestNextTransition(key, ErrorBoundary)` + `SkipToFinalize()`
   - Abort without transition → Fail → instance fault
 - Error-boundary transitions set `IsErrorBoundaryTransition = true`.
-- Error-boundary profile disables subflow handling and skips ResourceLock. Its current exclusion set
-  does not remove the Auto step.
+- Error-boundary profile skips Preflight, ForwardToActiveSubflow and ResourceLock. It does **not**
+  disable subflow handling and does not remove the Auto step: the plan is built from
+  `ExcludedStepOrders` alone (`TransitionExecutor.BuildExecutionPlan`), and `LifecycleOrder.SubFlow`
+  (70) is in no exclusion set. A profile-level "allow subflow" flag used to exist and was never read;
+  it was deleted rather than given teeth, because enforcing it would have been an unrequested
+  behaviour change.
 
 ## SubFlow Lifecycle
 
