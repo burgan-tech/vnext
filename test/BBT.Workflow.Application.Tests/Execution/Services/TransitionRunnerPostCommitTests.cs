@@ -379,10 +379,15 @@ public sealed class TransitionRunnerPostCommitTests
     }
 
     [Fact]
-    public async Task RunAsync_PostCommitErrorWithoutChainReserve_DoesNotRelease()
+    public async Task RunAsync_PostCommitErrorWithoutChainReserve_StillReleasesTheRunsOwnBusy()
     {
-        // Releasing a reservation this accept never took would settle an instance that is
-        // legitimately Busy for some other reason.
+        // Superseded reasoning, kept as a regression pin: "releasing a reservation this accept
+        // never took would settle an instance that is legitimately Busy for some other reason" is
+        // what this test used to assert. It was wrong for a non-Start job — SubflowChainReserved
+        // only gates the ADDITIONAL propagation an accept-time full-chain reserve performs, never
+        // the Busy THIS run's own SetBusyStep took. Gating the release on it left a sync-origin
+        // forward (which never sets the flag) stranded forever — the sync-path half of E31 that
+        // #993 did not close.
         var error = Error.Validation("PostCommit:Rejected", "child rejected the request");
         var harness = new RunnerHarness(new StagePlan(
             "pipeline",
@@ -394,8 +399,59 @@ public sealed class TransitionRunnerPostCommitTests
         var result = await harness.Runner.RunAsync(harness.CreateInput("first"));
 
         result.Error.ShouldBe(error);
-        await harness.AdmissionService.DidNotReceiveWithAnyArgs()
-            .ReleaseSubflowChainAsync(default, default!, default);
+        await harness.AdmissionService.Received(1).ReleaseSubflowChainAsync(
+            harness.InstanceId,
+            $"vnext:test-domain:test-workflow:{harness.InstanceId}",
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenStartSubflowCoordinationFails_ShouldFaultTheParent()
+    {
+        // A failed subflow START left the parent past ChangeState with a Busy nobody owns.
+        // Faulting makes it visible and retryable; releasing would advertise a healthy instance
+        // that never started its child.
+        var harness = new RunnerHarness(new StagePlan(
+            "stage-0",
+            PostCommitBehavior: PostCommitContinuationBehavior.HandoffToChild,
+            PostCommitJob: PostCommitJobKind.StartSubflow))
+        {
+            PostCommitResult = PostCommitResult.Fail(Error.NotFound("Instance:100404", "sub flow not found"))
+        };
+
+        var result = await harness.Runner.RunAsync(harness.CreateInput("go"));
+
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Code.ShouldBe("Instance:100404", "the original error must surface unchanged");
+        await harness.ParentMutationService.Received(1).FaultAsync(
+            Arg.Any<PostCommitParentSnapshot>(), Arg.Any<PostCommitFaultRequest>(), Arg.Any<CancellationToken>());
+        await harness.AdmissionService.DidNotReceive().ReleaseSubflowChainAsync(
+            Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenForwardCoordinationFails_ShouldReleaseEvenWithoutAChainReserve()
+    {
+        // A failed FORWARD changed no parent state (order 10 skips to Finalize), so the Busy this
+        // run reserved is simply released — and it is released whether or not the accept reserved
+        // the whole chain, which is the half of E31 that #993 left open on the sync path.
+        var harness = new RunnerHarness(new StagePlan(
+            "stage-0",
+            PostCommitBehavior: PostCommitContinuationBehavior.HandoffToChild,
+            SubflowChainReserved: false,
+            PostCommitJob: PostCommitJobKind.ForwardToSubflow))
+        {
+            PostCommitResult = PostCommitResult.Fail(Error.Conflict("Instance:100031", "leaf busy"))
+        };
+
+        var result = await harness.Runner.RunAsync(harness.CreateInput("go"));
+
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Code.ShouldBe("Instance:100031");
+        await harness.AdmissionService.Received(1).ReleaseSubflowChainAsync(
+            Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+        await harness.ParentMutationService.DidNotReceive().FaultAsync(
+            Arg.Any<PostCommitParentSnapshot>(), Arg.Any<PostCommitFaultRequest>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -708,7 +764,11 @@ public sealed class TransitionRunnerPostCommitTests
                     ExecutionChainId = Guid.NewGuid().ToString("N"),
                     ChainDepth = context.Execution?.ChainDepth ?? 0,
                     TraceId = Guid.NewGuid().ToString("N"),
-                    SubflowChainReserved = plan.SubflowChainReserved
+                    SubflowChainReserved = plan.SubflowChainReserved,
+                    // Every stage this harness runs is a normal, successful CAS owner — the shape
+                    // every test in this file exercises. A lost-CAS / non-owning run is not covered
+                    // here; it has no test because it is untouched by this task's change.
+                    OwnsStatus = true
                 };
 
                 await using (var transitionLock = await lockScopeFactory.AcquireAsync(
@@ -719,7 +779,29 @@ public sealed class TransitionRunnerPostCommitTests
                 }
 
                 if (plan.PostCommitBehavior is { } behavior)
-                    executionContext.Directives.EnqueuePostCommit(new TestJob(behavior));
+                {
+                    IPostCommitJob job = plan.PostCommitJob switch
+                    {
+                        // Placeholder identity values are fine — the runner only reads the type.
+                        PostCommitJobKind.StartSubflow => new StartSubflowJob(
+                            Guid.NewGuid(), "state", behavior),
+                        PostCommitJobKind.ForwardToSubflow => new ForwardToSubflowJob(
+                            Guid.NewGuid(),
+                            owner.InstanceId,
+                            context.TransitionKey,
+                            Domain,
+                            WorkflowKey,
+                            WorkflowVersion,
+                            "instance-key",
+                            null,
+                            null,
+                            null,
+                            new Dictionary<string, string?>(),
+                            new Dictionary<string, string?>()),
+                        _ => new TestJob(behavior)
+                    };
+                    executionContext.Directives.EnqueuePostCommit(job);
+                }
                 if (plan.NextTransition is { } next)
                     executionContext.Directives.RequestNextTransition(new NextTransitionRequest(next, "automatic"));
 
@@ -805,7 +887,10 @@ public sealed class TransitionRunnerPostCommitTests
         PostCommitContinuationBehavior? PostCommitBehavior = null,
         string? NextTransition = null,
         bool FailCommit = false,
-        bool SubflowChainReserved = false);
+        bool SubflowChainReserved = false,
+        PostCommitJobKind PostCommitJob = PostCommitJobKind.Test);
+
+    private enum PostCommitJobKind { Test, StartSubflow, ForwardToSubflow }
 
     private sealed record TestJob(PostCommitContinuationBehavior ContinuationBehavior)
         : IPostCommitContinuationJob;

@@ -241,6 +241,17 @@ public static partial class WorkflowLogs
         string errorCode);
 
     /// <summary>
+    /// A post-commit subflow START failed after the parent had already changed state, so the parent
+    /// is faulted rather than released: it has a Busy nobody owns and no child to show for it.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10175,
+        Level = LogLevel.Warning,
+        Message = "Subflow start coordination failed for instance {InstanceId} on transition {TransitionKey} ({ErrorCode}); faulting the parent")]
+    public static partial void SubflowStartCoordinationFaulted(
+        this ILogger logger, Guid instanceId, string transitionKey, string errorCode);
+
+    /// <summary>
     /// Logs at startup when a declared ActivitySource is missing from this host's MERGED
     /// configuration.
     /// <para>

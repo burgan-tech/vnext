@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Linq;
 using BBT.Aether.Events;
 using BBT.Aether.Results;
 using BBT.Aether.Uow;
@@ -62,16 +63,23 @@ public sealed class TransitionRunner(
                 cancellationToken);
             if (!coordinationResult.IsSuccess)
             {
-                // E31. This is the one exit that runs neither Settle nor Fault: the post-commit
-                // work failed and the policy classified the error as the client's, so nothing
-                // downstream touches the status. When the accept marked the whole subflow chain
-                // Busy down to the leaf, that reservation is left behind — and Busy has no
-                // recovery API (retry requires Faulted), so every level stays stranded until a
-                // human intervenes. Undo exactly what the accept flipped, then surface the
-                // original error unchanged.
-                await ReleaseChainReserveAsync(
+                // E31. The post-commit work failed and the policy classified the error as the
+                // client's, so nothing downstream touches the status — this is the one exit that
+                // runs neither Settle nor Fault. What the parent needs depends on WHICH job failed,
+                // and the two producers partition the case exactly:
+                //
+                //   ForwardToSubflowJob  — queued at order 10, which skips to Finalize, so the
+                //                          parent changed no state. Release the Busy this run took.
+                //   StartSubflowJob      — queued at order 70, downstream of ChangeState, so the
+                //                          parent already moved with no child to show for it.
+                //                          Fault, which is visible and retryable; releasing would
+                //                          advertise a healthy instance that never started a child.
+                //
+                // Busy has no recovery API (retry requires Faulted), so doing nothing strands every
+                // level until a human intervenes. The original error surfaces unchanged either way.
+                await CompensateFailedCoordinationAsync(
                     parentSnapshot,
-                    coreOutput.ExecutionContext.SubflowChainReserved,
+                    coreOutput,
                     coordinationResult.Error,
                     cancellationToken);
                 return Result<TransitionOutput>.Fail(coordinationResult.Error);
@@ -144,8 +152,45 @@ public sealed class TransitionRunner(
     }
 
     /// <summary>
+    /// Compensates a failed post-commit coordination according to the job kind that failed.
+    /// A non-owning run compensates nothing: the Busy belongs to someone else.
+    /// </summary>
+    private async Task CompensateFailedCoordinationAsync(
+        PostCommitParentSnapshot snapshot,
+        TransitionCoreOutput coreOutput,
+        Error error,
+        CancellationToken cancellationToken)
+    {
+        if (!coreOutput.ExecutionContext.OwnsStatus)
+            return;
+
+        // ContinuationSet is a non-consuming projection, so the jobs are still readable here even
+        // though the coordinator consumed the directives.
+        var startedSubflow = coreOutput.Continuations.PostCommitJobs.OfType<StartSubflowJob>().Any();
+
+        if (startedSubflow)
+        {
+            logger.SubflowStartCoordinationFaulted(snapshot.InstanceId, snapshot.TransitionKey, error.Code);
+            await MutateParentAsync(
+                "PostCommit.Fault",
+                snapshot,
+                (service, ct) => service.FaultAsync(
+                    snapshot,
+                    new PostCommitFaultRequest(error.Code, error.Message ?? "Post-commit coordination failed"),
+                    ct),
+                cancellationToken);
+            return;
+        }
+
+        await ReleaseChainReserveAsync(snapshot, error, cancellationToken);
+    }
+
+    /// <summary>
     /// Compensates an accept-time subflow chain reserve after post-commit work failed without a
-    /// fault request.
+    /// fault request. Called for a failed <see cref="ForwardToSubflowJob"/>: order 10 skips to
+    /// Finalize on failure, so the parent changed no state and the Busy this run took is simply
+    /// released — whether or not the accept reserved the whole chain down to the leaf (a sync
+    /// origin never sets that flag, so gating the release on it left the sync path stranded).
     /// <para>
     /// Deliberately NOT run on the fault path: <c>Instance.Fault</c> already cascades downward,
     /// raising <c>ChildSubflowFaultRequestedEvent</c> for every active SubFlow correlation, so the
@@ -161,13 +206,9 @@ public sealed class TransitionRunner(
     /// </summary>
     private async Task ReleaseChainReserveAsync(
         PostCommitParentSnapshot snapshot,
-        bool subflowChainReserved,
         Error error,
         CancellationToken cancellationToken)
     {
-        if (!subflowChainReserved)
-            return;
-
         using var activity = PipelineStepActivityHelper.StartTransitionActivity(
             "PostCommit.ReleaseChainReserve", snapshot.TransitionKey);
         activity?.SetTag(TelemetryConstants.TagNames.InstanceId, snapshot.InstanceId.ToString());
