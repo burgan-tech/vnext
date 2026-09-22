@@ -154,15 +154,6 @@ public sealed class TransitionJobHandler(
                         activity?.SetStatus(ActivityStatusCode.Error, result.Error.Message);
                         logger.JobFailed(args.JobName, args.InstanceId, result.Error.Message ?? "Unknown error");
 
-                        // The accept flipped Busy before answering 202 and this re-entry owns it.
-                        // Whatever went wrong, returning here would leave that Busy with no owner:
-                        // the pipeline's MarkInstanceFaultedAsync only covers failures inside the
-                        // step loop, retry requires Faulted, and the job row is marked processed in
-                        // the finally block below. FaultInstanceAsync is a no-op when the instance is
-                        // no longer Busy, so routing every non-success result here is safe even for a
-                        // run that failed after settling.
-                        needsRecovery = true;
-
                         if (IsLockConflict(result.Error))
                         {
                             // Retries exhausted: do NOT leave the instance silently stranded in Busy —
@@ -170,15 +161,10 @@ public sealed class TransitionJobHandler(
                             var maxAttempts = executionOptions.Value.LockConflictRetry.MaxAttempts;
                             logger.TransitionJobLockConflictRetriesExhausted(
                                 args.JobName, maxAttempts, args.InstanceId, args.TransitionKey);
+                            needsRecovery = true;
                             recoveryReason = (
                                 $"Transition job could not acquire the instance lock after {maxAttempts} attempts",
                                 "JOB_LOCK_CONFLICT");
-                        }
-                        else
-                        {
-                            recoveryReason = (
-                                $"Transition job failed: {result.Error.Code} {result.Error.Message}",
-                                "JOB_EXECUTION_FAILED");
                         }
                     }
                     else

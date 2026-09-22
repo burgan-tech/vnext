@@ -366,12 +366,10 @@ public class TransitionJobHandlerTests
     }
 
     /// <summary>
-    /// Pipeline returns a failure Result (e.g. validation error) → routed to the reasoned 4-arg
-    /// recovery overload (see the non-conflict-failure tests below), never the bare 2-arg overload
-    /// reserved for timeout/cancellation paths.
+    /// Pipeline returns a failure Result (e.g. validation error) → no recovery; handled inline.
     /// </summary>
     [Fact]
-    public async Task HandleAsync_WhenPipelineReturnsFailure_DoesNotCallBareRecoveryOverload()
+    public async Task HandleAsync_WhenPipelineReturnsFailure_DoesNotCallRecovery()
     {
         var payload = CreatePayload();
         var handler = CreateHandler();
@@ -487,10 +485,7 @@ public class TransitionJobHandlerTests
     }
 
     /// <summary>
-    /// Non-conflict business failures must not be retried (single execution). The accept already
-    /// flipped Busy before the 202 answered, so this re-entry owns it: a policy-validation failure
-    /// here (a realistic case, since policy is re-evaluated per hop against a state that may have
-    /// moved) must still route to recovery instead of stranding the instance Busy forever.
+    /// Non-conflict business failures must not be retried (single execution, no recovery).
     /// </summary>
     [Fact]
     public async Task HandleAsync_WhenNonConflictFailure_DoesNotRetry()
@@ -510,61 +505,6 @@ public class TransitionJobHandlerTests
             s => s.ExecuteTransitionAsync(
                 It.IsAny<WorkflowExecutionContext>(), It.IsAny<CancellationToken>()),
             Times.Once);
-        _recoveryService.Verify(
-            r => r.FaultInstanceAsync(
-                payload,
-                It.Is<string>(m => m.Contains("Transition:NotFound")),
-                "JOB_EXECUTION_FAILED",
-                CancellationToken.None),
-            Times.Once);
-    }
-
-    /// <summary>
-    /// An async accept flips Busy before answering 202, so a job re-entry that fails for any reason
-    /// other than a lock conflict leaves that Busy owned by nobody: the pipeline's own fault path
-    /// never ran (the failure is before the step loop), and retry requires Faulted. Route it to
-    /// recovery so the instance becomes visible and retryable instead of silently stranded.
-    /// </summary>
-    [Fact]
-    public async Task HandleAsync_ShouldFaultInstance_WhenPreReservedRunFailsWithNonLockConflictError()
-    {
-        var payload = CreatePayload();
-        var handler = CreateHandler();
-
-        _executionService
-            .Setup(s => s.ExecuteTransitionAsync(
-                It.IsAny<WorkflowExecutionContext>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result<TransitionOutput>.Fail(
-                Error.Validation("Transition:100002", "Transition is not allowed from the current state.")));
-
-        await handler.HandleAsync(payload, CancellationToken.None);
-
-        _recoveryService.Verify(
-            r => r.FaultInstanceAsync(
-                payload,
-                It.Is<string>(m => m.Contains("Transition:100002")),
-                "JOB_EXECUTION_FAILED",
-                CancellationToken.None),
-            Times.Once);
-    }
-
-    /// <summary>
-    /// The mirror: a successful run must not route to recovery. Without this pin, "always fault"
-    /// would pass the test above and fault every healthy job.
-    /// </summary>
-    [Fact]
-    public async Task HandleAsync_ShouldNotFaultInstance_WhenRunSucceeds()
-    {
-        var payload = CreatePayload();
-        var handler = CreateHandler();
-
-        _executionService
-            .Setup(s => s.ExecuteTransitionAsync(
-                It.IsAny<WorkflowExecutionContext>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result<TransitionOutput>.Ok(new TransitionOutput()));
-
-        await handler.HandleAsync(payload, CancellationToken.None);
-
         _recoveryService.Verify(
             r => r.FaultInstanceAsync(
                 It.IsAny<TransitionJobPayload>(), It.IsAny<string>(), It.IsAny<string>(),
