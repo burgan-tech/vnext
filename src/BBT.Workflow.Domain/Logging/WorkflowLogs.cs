@@ -2756,7 +2756,66 @@ public static partial class WorkflowLogs
         this ILogger logger,
         Guid instanceId,
         string reason);
- 
+
+    /// <summary>
+    /// Logs when a retry on a Faulted instance finds an open SubFlow correlation whose child was
+    /// never created (the post-commit <c>StartSubflowJob</c> that would have created it failed
+    /// before ever running). The retry restarts the subflow start for this same correlation instead
+    /// of delegating to a child that does not exist.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20054,
+        Level = LogLevel.Information,
+        Message = "Retry for instance {InstanceId} found correlation {CorrelationId} pointing at never-created child {SubFlowInstanceId}; restarting the subflow start")]
+    public static partial void SubFlowChildMissingOnRetry(
+        this ILogger logger,
+        Guid instanceId,
+        Guid correlationId,
+        Guid subFlowInstanceId);
+
+    /// <summary>
+    /// Logs when a retry-driven subflow restart (see <see cref="SubFlowChildMissingOnRetry"/>)
+    /// succeeds: the child now exists and the parent resumed waiting on it.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20055,
+        Level = LogLevel.Information,
+        Message = "Subflow restart succeeded for instance {InstanceId}, correlation {CorrelationId}, child {SubFlowInstanceId}")]
+    public static partial void SubFlowRestartSucceeded(
+        this ILogger logger,
+        Guid instanceId,
+        Guid correlationId,
+        Guid subFlowInstanceId);
+
+    /// <summary>
+    /// Logs when a retry-driven subflow restart fails. The parent is re-faulted with this error so
+    /// it remains visible and retryable rather than left Active with an open correlation and no
+    /// child.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20056,
+        Level = LogLevel.Warning,
+        Message = "Subflow restart failed for instance {InstanceId}, correlation {CorrelationId}: {Reason}")]
+    public static partial void SubFlowRestartFailed(
+        this ILogger logger,
+        Guid instanceId,
+        Guid correlationId,
+        string reason);
+
+    /// <summary>
+    /// Logs when the retry-driven subflow restart cannot find the transition that originally moved
+    /// the instance into the SubFlow state (needed to rebuild a valid transition context). No mutation
+    /// is attempted in this case.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20057,
+        Level = LogLevel.Warning,
+        Message = "Could not resolve the transition that moved instance {InstanceId} into state '{ParentState}'; cannot restart the missing subflow child")]
+    public static partial void SubFlowRestartTransitionNotResolved(
+        this ILogger logger,
+        Guid instanceId,
+        string parentState);
+
     #endregion
 
     #region Service Discovery

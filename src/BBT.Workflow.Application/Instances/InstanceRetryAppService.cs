@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using BBT.Aether.Application.Services;
 using BBT.Aether.Results;
 using BBT.Aether.Uow;
@@ -6,6 +7,8 @@ using BBT.Workflow.Caching;
 using BBT.Workflow.CurrentUser;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution;
+using BBT.Workflow.Execution.PostCommit;
+using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Execution.Services;
 using BBT.Workflow.Gateway;
 using BBT.Workflow.Logging;
@@ -33,6 +36,10 @@ public sealed class InstanceRetryAppService(
     IComponentCacheStore componentCacheStore,
     IWorkflowExecutionService workflowExecutionService,
     ICallerRoleResolver callerRoleResolver,
+    ITransitionContextFactory transitionContextFactory,
+    IPostCommitHandler<StartSubflowJob> startSubflowJobHandler,
+    IPostCommitParentMutationService postCommitParentMutationService,
+    IInstanceStatusLock instanceStatusLock,
     ILogger<InstanceRetryAppService> logger)
     : ApplicationService(serviceProvider), IInstanceRetryAppService
 {
@@ -95,7 +102,35 @@ public sealed class InstanceRetryAppService(
         if (!callerRoles.IsSuccess)
             return Result<RetryInstanceOutput>.Fail(callerRoles.Error);
 
-        // Query SubFlow state via gateway (supports cross-domain)
+        var probeResult = await ProbeSubflowStateAsync(subflowCorrelation, input, callerRoles.Value, cancellationToken);
+        if (!probeResult.IsSuccess)
+            return Result<RetryInstanceOutput>.Fail(probeResult.Error);
+
+        // SubFlow not Faulted → Error (both instance and subflow are not faulted)
+        if (probeResult.Value!.Status == null || !probeResult.Value.Status.Equals(InstanceStatus.Faulted))
+        {
+            return Result<RetryInstanceOutput>.Fail(Error.Validation(
+                WorkflowErrorCodes.InstanceNotFaulted,
+                $"Instance {input.Instance} is not in faulted state. Current status: {parentInstance.Status.Code}",
+                input.Instance));
+        }
+
+        return await DelegateSubflowRetryToGatewayAsync(subflowCorrelation, input, cancellationToken);
+    }
+
+    /// <summary>
+    /// Queries the SubFlow child's current state through <see cref="IInstanceQueryGateway"/>
+    /// (supports cross-domain SubFlow queries). Shared by <see cref="RetrySubFlowAsync"/> (parent
+    /// itself is not Faulted, subflow independently faulted) and the Faulted-parent path in
+    /// <see cref="RetryFaultedInstanceAsync"/>, which must know whether the child exists at all
+    /// BEFORE unfaulting the parent — see the class remarks on why order matters there.
+    /// </summary>
+    private async Task<Result<GetInstanceStateOutput>> ProbeSubflowStateAsync(
+        InstanceCorrelation subflowCorrelation,
+        RetryInstanceInput input,
+        string[]? callerRoles,
+        CancellationToken cancellationToken)
+    {
         var subflowStateInput = new GetFunctionWithInstanceInput
         {
             Domain = subflowCorrelation.SubFlowDomain,
@@ -104,8 +139,8 @@ public sealed class InstanceRetryAppService(
             Instance = subflowCorrelation.SubFlowInstanceId.ToString(),
             Headers = input.Headers,
             QueryParams = input.RouteValues,
-            Role = ICallerRoleResolver.SingleRoleOf(callerRoles.Value),
-            Roles = callerRoles.Value
+            Role = ICallerRoleResolver.SingleRoleOf(callerRoles),
+            Roles = callerRoles
         };
 
         // Retry descends rarely, but leaving one descent unspanned would cost more than it saves:
@@ -123,23 +158,18 @@ public sealed class InstanceRetryAppService(
             subflowStateInput,
             cancellationToken);
 
-        if (!subflowStateResult.Result.IsSuccess)
-        {
-            return Result<RetryInstanceOutput>.Fail(subflowStateResult.Result.Error);
-        }
+        return subflowStateResult.Result;
+    }
 
-        var subflowState = subflowStateResult.Result.Value!;
-
-        // SubFlow not Faulted → Error (both instance and subflow are not faulted)
-        if (subflowState.Status == null || !subflowState.Status.Equals(InstanceStatus.Faulted))
-        {
-            return Result<RetryInstanceOutput>.Fail(Error.Validation(
-                WorkflowErrorCodes.InstanceNotFaulted,
-                $"Instance {input.Instance} is not in faulted state. Current status: {parentInstance.Status.Code}",
-                input.Instance));
-        }
-
-        // Create retry input for SubFlow
+    /// <summary>
+    /// Delegates the actual retry of an already-verified-Faulted SubFlow child to
+    /// <see cref="IInstanceRetryGateway"/> (routes local or remote based on domain).
+    /// </summary>
+    private async Task<Result<RetryInstanceOutput>> DelegateSubflowRetryToGatewayAsync(
+        InstanceCorrelation subflowCorrelation,
+        RetryInstanceInput input,
+        CancellationToken cancellationToken)
+    {
         var subflowInput = new RetryInstanceInput
         {
             Domain = subflowCorrelation.SubFlowDomain,
@@ -153,9 +183,34 @@ public sealed class InstanceRetryAppService(
 
         logger.InstanceRetryRequested(subflowCorrelation.SubFlowInstanceId.ToString(), subflowCorrelation.SubFlowName);
 
-        // Use gateway for retry - routes to local or remote based on domain
         return await instanceRetryGateway.RetryAsync(subflowInput, cancellationToken);
     }
+
+    /// <summary>
+    /// True when <paramref name="error"/> is the "instance not found" answer
+    /// (<see cref="WorkflowErrors.InstanceNotFound"/>) a SubFlow-state probe returns for a
+    /// correlation whose child was never created — as opposed to any other probe failure (network,
+    /// cross-domain unavailability, ...) which must NOT be treated as "restart the child".
+    /// Internal (not private), via <c>InternalsVisibleTo</c>, so a focused unit test can pin the
+    /// classification directly instead of driving the whole app service through its heavy
+    /// <c>ApplicationService</c>/unit-of-work infrastructure.
+    /// </summary>
+    internal static bool IsChildInstanceMissing(Error error) =>
+        error.Prefix == ErrorCodes.Prefixes.NotFound &&
+        error.Code == WorkflowErrorCodes.NotFoundInstanceData;
+
+    /// <summary>
+    /// Finds the transition that most recently moved the instance into <paramref name="parentState"/>
+    /// — i.e. the transition <c>HandleSubFlowStep</c> ran under when it committed the correlation.
+    /// <see cref="InstanceTransition.ToState"/> is populated only for a transition that actually
+    /// completed (null for failed/incomplete ones), so filtering on it alone is enough; the caller
+    /// passes transitions ordered ascending by <c>StartedAt</c> and this takes the LAST match in
+    /// case the same state was re-entered more than once (e.g. an idempotent re-entry).
+    /// </summary>
+    internal static InstanceTransitionSlim? FindOriginatingTransition(
+        IReadOnlyList<InstanceTransitionSlim> transitions,
+        string parentState) =>
+        transitions.LastOrDefault(t => t.ToState == parentState);
 
     /// <summary>
     /// Retries a faulted instance by re-executing its incomplete transition.
@@ -170,20 +225,180 @@ public sealed class InstanceRetryAppService(
         // Check if the fault originated from a SubFlow (correlation stays open on fault)
         if (instance.HasActiveSubFlow)
         {
-            var subflowCorrelation = instance.Subflow!;
+            return await RetryFaultedInstanceWithActiveSubFlowAsync(instance, instance.Subflow!, input, cancellationToken);
+        }
 
-            // Unfault parent first. Must be COMMITTED before the child retry runs: the pipeline
-            // rejects an instance whose status is still terminal, and Faulted is terminal.
+        // Standard path: Load workflow -> Find incomplete transition -> Unfault -> Execute
+        return await LoadWorkflowAsync(input, instance, cancellationToken)
+            .BindAsync(data => FindIncompleteTransitionAsync(data.Instance, data.Workflow, cancellationToken))
+            .BindAsync(data => UnfaultAndPersistAsync(data, cancellationToken))
+            .BindAsync(data => ExecuteRetryAsync(data, input, cancellationToken));
+    }
+
+    /// <summary>
+    /// Retries a Faulted instance that carries an open SubFlow correlation.
+    /// <para>
+    /// The correlation is committed by <c>HandleSubFlowStep</c> in its own unit of work strictly
+    /// BEFORE the post-commit <c>StartSubflowJob</c> that would actually create the child ever
+    /// runs. So a correlation whose child was never created (the post-commit start failed before
+    /// creating it) is indistinguishable, from the correlation alone, from a live one — the only
+    /// way to tell them apart is to ask the child whether it exists.
+    /// </para>
+    /// <para>
+    /// The child is therefore probed BEFORE the parent is unfaulted. Unfaulting first (the previous
+    /// behaviour) left the parent unfaulted, with its incident resolved, the moment the probe came
+    /// back 404 — worse than before the retry call: no longer Faulted (so a second retry is refused
+    /// as "not faulted"), yet parked in the SubFlow state with nothing to show for it, its fault
+    /// history erased. Probing first means a missing child never causes that side effect: the
+    /// parent is touched only on a path that can actually proceed.
+    /// </para>
+    /// </summary>
+    private async Task<Result<RetryInstanceOutput>> RetryFaultedInstanceWithActiveSubFlowAsync(
+        Instance instance,
+        InstanceCorrelation subflowCorrelation,
+        RetryInstanceInput input,
+        CancellationToken cancellationToken)
+    {
+        var callerRoles = await callerRoleResolver.ResolveRolesAsync(input.Headers, cancellationToken);
+        if (!callerRoles.IsSuccess)
+            return Result<RetryInstanceOutput>.Fail(callerRoles.Error);
+
+        var probeResult = await ProbeSubflowStateAsync(subflowCorrelation, input, callerRoles.Value, cancellationToken);
+
+        if (!probeResult.IsSuccess)
+        {
+            if (!IsChildInstanceMissing(probeResult.Error))
+            {
+                // Some other probe failure (network hiccup, cross-domain unavailability, ...): we
+                // learned nothing that licenses touching the parent, so leave it exactly as found.
+                return Result<RetryInstanceOutput>.Fail(probeResult.Error);
+            }
+
+            logger.SubFlowChildMissingOnRetry(instance.Id, subflowCorrelation.Id, subflowCorrelation.SubFlowInstanceId);
+            return await RestartMissingSubflowChildAsync(instance, subflowCorrelation, input, cancellationToken);
+        }
+
+        // Child exists. SubFlow not Faulted → Error (neither the parent nor the subflow is faulted).
+        if (probeResult.Value!.Status == null || !probeResult.Value.Status.Equals(InstanceStatus.Faulted))
+        {
+            return Result<RetryInstanceOutput>.Fail(Error.Validation(
+                WorkflowErrorCodes.InstanceNotFaulted,
+                $"Instance {input.Instance} is not in faulted state. Current status: {instance.Status.Code}",
+                input.Instance));
+        }
+
+        // Child exists and is Faulted: unfault the parent — committed before the child retry runs,
+        // exactly as before — then delegate exactly as the always-had-a-child path does.
+        var unfaultResult = await UnfaultParentAndResolveIncidentsAsync(instance, cancellationToken);
+        if (!unfaultResult.IsSuccess)
+            return Result<RetryInstanceOutput>.Fail(unfaultResult.Error);
+
+        return await DelegateSubflowRetryToGatewayAsync(subflowCorrelation, input, cancellationToken);
+    }
+
+    /// <summary>
+    /// Unfaults the parent and resolves its incidents in one committed unit of work. Must be
+    /// committed before anything that reloads the instance independently (the child retry gateway
+    /// call, or the subflow-restart post-commit handler): the pipeline and <c>GetActiveAsync</c>
+    /// both reject an instance whose status is still terminal, and Faulted is terminal.
+    /// </summary>
+    private async Task<Result> UnfaultParentAndResolveIncidentsAsync(Instance instance, CancellationToken cancellationToken)
+    {
+        await using var uow = UnitOfWorkManager.Begin(
+            new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew, IsTransactional = true });
+
+        // Incidents live in their own table and no load path includes them; the CAS below resolves
+        // what is materialized here.
+        await instanceRepository.LoadActiveIncidentsAsync(instance, cancellationToken);
+        if (!await instanceRepository.TryUnfaultAsync(instance, cancellationToken))
+        {
+            return Result.Fail(Error.Validation(
+                WorkflowErrorCodes.InstanceNotFaulted,
+                $"Instance {instance.Id} is no longer in faulted state",
+                instance.Id.ToString()));
+        }
+
+        var resolvedCount = await instanceIncidentRepository.ResolveAllAsync(
+            instance.Id, DateTime.UtcNow, cancellationToken);
+        await uow.CommitAsync(cancellationToken);
+
+        logger.InstanceUnfaulted(instance.Id);
+        if (resolvedCount > 0)
+            logger.IncidentsResolved(instance.Id, resolvedCount);
+
+        return Result.Ok();
+    }
+
+    /// <summary>
+    /// Restarts the missing subflow start for an EXISTING correlation. The correlation already
+    /// carries the pre-generated <c>SubFlowInstanceId</c> that <c>ISubflowStarter</c> passes
+    /// with <c>StrictIdempotency</c>, so re-running the start for this same correlation creates the
+    /// child the correlation always pointed at — it does not create a second correlation, and it
+    /// does not re-run the parent's own transition (its tasks already ran once; re-running them
+    /// would duplicate their side effects).
+    /// </summary>
+    private async Task<Result<RetryInstanceOutput>> RestartMissingSubflowChildAsync(
+        Instance instance,
+        InstanceCorrelation subflowCorrelation,
+        RetryInstanceInput input,
+        CancellationToken cancellationToken)
+    {
+        // Need the workflow definition both to build the restart's execution context (carried, so
+        // CreateAsync does not re-resolve it) and, if the restart itself fails, to fault the parent
+        // through the same PostCommitParentSnapshot-based path the runtime already uses for a
+        // failed post-commit StartSubflowJob.
+        var workflowResult = await componentCacheStore.GetFlowAsync(
+            input.Domain, instance.Flow, instance.FlowVersion, cancellationToken);
+        if (!workflowResult.IsSuccess)
+            return Result<RetryInstanceOutput>.Fail(workflowResult.Error);
+
+        var workflow = workflowResult.Value!;
+
+        // The transition that originally moved the instance into the SubFlow state is the one
+        // HandleSubFlowStep ran under; there is no "reopen" for it (FinishedAt is already set, and
+        // genuinely so — the transition itself completed, only its post-commit continuation did
+        // not), so this is a lookup, never a mutation.
+        var transitions = await instanceTransitionRepository.GetByInstanceIdAsReadOnlyAsync(instance.Id, cancellationToken);
+        var originatingTransition = FindOriginatingTransition(transitions, subflowCorrelation.ParentState);
+        if (originatingTransition is null)
+        {
+            logger.SubFlowRestartTransitionNotResolved(instance.Id, subflowCorrelation.ParentState);
+            return Result<RetryInstanceOutput>.Fail(Error.Failure(
+                WorkflowErrorCodes.ExecutionStepFailed,
+                $"Could not resolve the transition that moved instance {instance.Id} into state " +
+                $"'{subflowCorrelation.ParentState}'; cannot restart the missing subflow child"));
+        }
+
+        // Unfault + re-arm Busy under the same short status lock every other status flip uses ("one
+        // lock, at the status change" — see .claude/rules/vnext-workflow-developer.md). A live
+        // blocking SubFlow's parent is Busy for the child's entire lifetime by design
+        // (Instance.AddCorrelation already set that on this still-open correlation, the first time
+        // around); leaving it merely Active here would misrepresent an instance that is, once
+        // again, waiting on a child, and would let a concurrent request race the restart.
+        var lockKey = $"vnext:{input.Domain}:{instance.Flow}:{instance.Id}";
+        var lockScope = await instanceStatusLock.AcquireAsync(lockKey, cancellationToken);
+        await using (lockScope)
+        {
+            if (!lockScope.IsAcquired)
+                return Result<RetryInstanceOutput>.Fail(WorkflowErrors.InstanceLockConflict(instance.Id));
+
             await using var uow = UnitOfWorkManager.Begin(
                 new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew, IsTransactional = true });
-            // Incidents live in their own table and no load path includes them; the CAS below
-            // resolves what is materialized here.
+
             await instanceRepository.LoadActiveIncidentsAsync(instance, cancellationToken);
             if (!await instanceRepository.TryUnfaultAsync(instance, cancellationToken))
             {
                 return Result<RetryInstanceOutput>.Fail(Error.Validation(
                     WorkflowErrorCodes.InstanceNotFaulted,
                     $"Instance {instance.Id} is no longer in faulted state",
+                    instance.Id.ToString()));
+            }
+
+            if (!await instanceRepository.TryMarkBusyAsync(instance, cancellationToken))
+            {
+                return Result<RetryInstanceOutput>.Fail(Error.Validation(
+                    WorkflowErrorCodes.InstanceBusy,
+                    $"Instance {instance.Id} could not be re-armed Busy for the subflow restart",
                     instance.Id.ToString()));
             }
 
@@ -194,16 +409,122 @@ public sealed class InstanceRetryAppService(
             logger.InstanceUnfaulted(instance.Id);
             if (resolvedCount > 0)
                 logger.IncidentsResolved(instance.Id, resolvedCount);
+        }
+        // Lock released here — post-commit work (the actual subflow start, including any remote
+        // call) runs lock-free, same discipline as every other post-commit handler.
 
-            // Delegate retry to the SubFlow via existing gateway path
-            return await RetrySubFlowAsync(instance, subflowCorrelation, input, cancellationToken);
+        var restartExecutionContext = new WorkflowExecutionContext
+        {
+            Domain = input.Domain,
+            InstanceId = instance.Id.ToString(),
+            WorkflowKey = instance.Flow,
+            WorkflowVersion = instance.FlowVersion,
+            ResolvedWorkflow = workflow,
+            TransitionKey = originatingTransition.TransitionId,
+            TriggerType = TriggerType.Manual, // Retry is always manual
+            Mode = ExecMode.Sync,
+            CallerMode = ExecMode.Sync,
+            Actor = Shared.ExecutionActor.User,
+            CorrelationId = Guid.NewGuid().ToString("N"),
+            RequestedAt = DateTimeOffset.UtcNow,
+            Headers = input.Headers,
+            RouteValues = input.RouteValues,
+            IsReentry = true,
+            // A caller can supply corrected data on retry (the same capability the standard retry
+            // path already has via ExecuteRetryAsync) — e.g. a field the original mapping omitted.
+            // It flows to ScriptContext.Body for the subflow's input mapping, exactly as it would
+            // for any other transition's OnExecute tasks.
+            Data = input.Data != null
+                ? new TransitionDataInfo(input.Data.Key, input.Data.Attributes) { Tags = input.Data.Tags }
+                : null,
+            Execution = new ExecutionInfo
+            {
+                ExecutionChainId = Guid.NewGuid().ToString("N"),
+                ChainDepth = 0
+            }
+        };
+
+        using var episode = WorkflowTraceLane.UseEpisode(
+            TelemetryConstants.ActivationTriggers.Retry, originatingTransition.TransitionId);
+
+        var contextResult = await transitionContextFactory.CreateAsync(restartExecutionContext, cancellationToken);
+        if (!contextResult.IsSuccess)
+        {
+            return await FailRestartAndFaultParentAsync(
+                instance, workflow, originatingTransition, input, subflowCorrelation, contextResult.Error, cancellationToken);
         }
 
-        // Standard path: Load workflow -> Find incomplete transition -> Unfault -> Execute
-        return await LoadWorkflowAsync(input, instance, cancellationToken)
-            .BindAsync(data => FindIncompleteTransitionAsync(data.Instance, data.Workflow, cancellationToken))
-            .BindAsync(data => UnfaultAndPersistAsync(data, cancellationToken))
-            .BindAsync(data => ExecuteRetryAsync(data, input, cancellationToken));
+        var transitionContext = contextResult.Value!;
+        var startJob = new StartSubflowJob(
+            subflowCorrelation.Id, subflowCorrelation.ParentState, PostCommitContinuationBehavior.HandoffToChild);
+
+        var handleResult = await startSubflowJobHandler.HandleAsync(startJob, transitionContext, cancellationToken);
+        if (!handleResult.IsSuccess)
+        {
+            return await FailRestartAndFaultParentAsync(
+                instance, workflow, originatingTransition, input, subflowCorrelation, handleResult.Error, cancellationToken);
+        }
+
+        logger.SubFlowRestartSucceeded(instance.Id, subflowCorrelation.Id, subflowCorrelation.SubFlowInstanceId);
+
+        var refreshedInstance = await instanceRepository.FindByIdentifierAsReadOnlyAsync(
+            instance.Id.ToString(), cancellationToken);
+
+        return Result<RetryInstanceOutput>.Ok(new RetryInstanceOutput
+        {
+            Id = instance.Id,
+            Status = refreshedInstance?.Status ?? instance.Status,
+            RetriedTransitionId = originatingTransition.Id
+        });
+    }
+
+    /// <summary>
+    /// The restart itself failed. Leaving the parent silently Active (re-armed Busy above, but with
+    /// no work now running to eventually clear it) would strand it exactly the way the original
+    /// CRITICAL described — worse here, because nothing else will ever touch it again. Re-fault it
+    /// through the SAME <see cref="IPostCommitParentMutationService"/> path
+    /// <c>TransitionRunner.CompensateFailedCoordinationAsync</c> already uses for a failed
+    /// post-commit <c>StartSubflowJob</c>, so the parent again carries a fresh incident and is,
+    /// once more, visible and retryable — a second retry attempt re-enters this exact method.
+    /// </summary>
+    private async Task<Result<RetryInstanceOutput>> FailRestartAndFaultParentAsync(
+        Instance instance,
+        WorkflowDefinition workflow,
+        InstanceTransitionSlim originatingTransition,
+        RetryInstanceInput input,
+        InstanceCorrelation subflowCorrelation,
+        Error error,
+        CancellationToken cancellationToken)
+    {
+        logger.SubFlowRestartFailed(instance.Id, subflowCorrelation.Id, error.Message ?? error.Code);
+
+        var snapshot = new PostCommitParentSnapshot(
+            input.Domain,
+            instance.Flow,
+            workflow.Version,
+            instance.Id,
+            originatingTransition.TransitionId,
+            ExecMode.Sync,
+            Activity.Current?.TraceId.ToString() ?? Guid.NewGuid().ToString("N"),
+            input.Headers,
+            input.RouteValues,
+            input.Data?.Attributes,
+            workflow);
+
+        var faultResult = await postCommitParentMutationService.FaultAsync(
+            snapshot,
+            new PostCommitFaultRequest(error.Code, error.Message ?? "Subflow restart failed"),
+            cancellationToken);
+
+        if (!faultResult.IsSuccess)
+        {
+            // The ORIGINAL restart error is still what the caller needs to see; a failure to
+            // re-fault is a second, independent problem that must not be swallowed silently.
+            logger.PostCommitJobFailed(
+                instance.Id, "Retry.FaultAfterFailedSubflowRestart", faultResult.Error.Message ?? faultResult.Error.Code);
+        }
+
+        return Result<RetryInstanceOutput>.Fail(error);
     }
 
     /// <summary>
