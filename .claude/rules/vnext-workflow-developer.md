@@ -545,6 +545,41 @@ A sixth profile is **composed on top of** the base, never selected instead of it
 
 ## SubFlow Lifecycle
 
+### A state starts a SubFlow. Only a SubFlow. (Platform rule, 2026-09-22)
+
+**`state.subFlow.type` must be `S`.** A state-level SubFlow relationship is the blocking kind and
+nothing else — a `P` (SubProcess) may **not** be started from a state, and a SubProcess may not start
+another SubProcess.
+
+**A SubProcess is started by its own task**: `SubProcessTask` (`TaskType.SubProcess = 14`). That
+executor starts the child and creates the correlation itself —
+`SubProcessTaskExecutor.CreateCorrelationAsync` builds an `InstanceCorrelation` stamped
+`SubFlowType.SubProcess` and calls `AddCorrelation` on the tracked parent. That is the only sanctioned
+path to a `P` relationship.
+
+This is an authoring constraint, and it is the reason the runtime reads `S` everywhere a state-level
+relationship is meant: `Instance.HasActiveSubFlow` and `Instance.Subflow` filter `SubFlowType.SubFlow`,
+`Instance.AddCorrelation` takes Busy only for `S`, and `HandleSubFlowStep`'s idempotency guard
+(`HasActiveCorrelationForSameState`) reads `Instance.Subflow`. **All four are correct, not narrow** —
+do not "fix" them to include `P`. A parent is Busy for a *blocking* child's lifetime; a SubProcess is
+fire-and-forget and its parent keeps running, which is why its correlation neither marks Busy nor
+appears in these readers.
+
+**Enforced at definition time since 2026-09-22**: `WorkflowValidator.ValidateStateSubFlowType` rejects
+any state whose `subFlow.type` is not `S`. Before that rule existed such a definition was authorable
+and then behaved differently by caller mode — the async path admitted the parent continuation it
+produces, because a job re-entry carries `IsPreReserved`, while a sync request did not and collided
+with the Busy its own earlier stage had set (`409 Instance:100031`, parent left Busy-not-Faulted, no
+automatic recovery). That divergence was a **symptom of the invalid definition**, not a runtime defect
+to patch in admission; the council session `2026-09-22-sync-subprocess-continuation-admission` closed
+`VOID` on this rule.
+
+Consequence worth knowing: `HandleSubFlowStep` still branches on `SubFlowType.SubProcess` at state
+level and `PostCommitContinuationBehavior.ContinueParent` has no other producer, so **that whole
+cross-stage continuation path is now unreachable from a valid definition**. It is deliberately left in
+place rather than deleted — removing it is a separate change, and it is the landing site if a second
+`ContinueParent` producer is ever proposed.
+
 - **SubFlow (S)**: completion → output mapping → `ResumePipelineAsync` (`ExecMode.Resume`, `ResumeFrom = ClearBusyOnResumeStep`, `IsSubFlowResume = true`). Parent resumes from step 79.
 - **SubProcess (P)**: completion → correlation complete + persist → no parent resume (fire-and-forget).
 - On resume failure, correlation reverted in a new UoW.
