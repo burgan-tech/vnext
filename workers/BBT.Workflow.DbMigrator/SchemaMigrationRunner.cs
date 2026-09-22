@@ -100,11 +100,11 @@ public sealed class SchemaMigrationRunner(
 
         try
         {
-            var schemasToMigrate = await SchemaDiscovery.TryDiscoverDomainSchemasAsync(
+            var (schemasToMigrate, discoveryError) = await SchemaDiscovery.TryDiscoverDomainSchemasAsync(
                 scope.ServiceProvider, cancellationToken);
             if (schemasToMigrate is null)
             {
-                logger.LogWarning("Failed to query domain schemas from sys_flows. Schema may not exist yet");
+                logger.LogWarning(discoveryError, "Failed to query domain schemas from sys_flows. Schema may not exist yet");
                 return;
             }
 

@@ -22,11 +22,13 @@ public static class SchemaDiscovery
             .Value.Schemas.Values.Select(s => s.Schema).ToList();
 
     /// <summary>
-    /// Domain schemas discovered from sys_flows, system schemas excluded. Returns null when the
-    /// discovery query fails (e.g. sys_flows does not exist yet) — the caller decides whether that
-    /// is a skip (forward migration of a fresh database) or a hard failure (downgrade).
+    /// Domain schemas discovered from sys_flows, system schemas excluded. On a discovery failure
+    /// (e.g. sys_flows does not exist yet, or the database is unreachable) the schema list is null
+    /// and <c>Error</c> carries the cause — the caller decides whether that is a skip (forward
+    /// migration of a fresh database) or a hard failure (downgrade), and logs the exception so a
+    /// real connectivity/permission problem is distinguishable from the benign fresh-database case.
     /// </summary>
-    public static async Task<List<string>?> TryDiscoverDomainSchemasAsync(
+    public static async Task<(List<string>? Schemas, Exception? Error)> TryDiscoverDomainSchemasAsync(
         IServiceProvider scopedServices, CancellationToken cancellationToken)
     {
         var currentSchema = scopedServices.GetRequiredService<ICurrentSchema>();
@@ -44,18 +46,18 @@ public static class SchemaDiscovery
                     .Distinct()
                     .ToListAsync(cancellationToken);
             }
-            catch (Exception)
+            catch (Exception ex)
             {
-                return null;
+                return (null, ex);
             }
 
             var systemSchemaNames = runtimeOptions.Value.Schemas.Values
                 .Select(s => s.Name)
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-            return domainSchemas
+            return (domainSchemas
                 .Where(key => !systemSchemaNames.Contains(key))
-                .ToList();
+                .ToList(), null);
         }
     }
 }

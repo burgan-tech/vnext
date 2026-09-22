@@ -32,6 +32,8 @@ try
 }
 catch (ArgumentException ex)
 {
+    // Deliberate stderr write, not a debug leftover: this runs before builder.Build(), so no
+    // ILogger exists yet — usage + exit 1 is the whole contract for an invalid invocation.
     Console.Error.WriteLine(ex.Message);
     return 1;
 }

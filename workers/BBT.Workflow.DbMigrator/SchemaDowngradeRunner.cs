@@ -286,11 +286,12 @@ public sealed class SchemaDowngradeRunner(
         if (command.Schemas.Count > 0)
             return command.Schemas.ToList();
 
-        var domainSchemas = await SchemaDiscovery.TryDiscoverDomainSchemasAsync(
+        var (domainSchemas, discoveryError) = await SchemaDiscovery.TryDiscoverDomainSchemasAsync(
             scope.ServiceProvider, cancellationToken);
         if (domainSchemas is null)
         {
             logger.LogError(
+                discoveryError,
                 "Failed to enumerate domain schemas from sys_flows; refusing to run against an unknown schema set. " +
                 "Name the schemas explicitly with --schema to override");
             return null;

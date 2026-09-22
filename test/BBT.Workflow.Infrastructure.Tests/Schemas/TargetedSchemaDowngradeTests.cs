@@ -6,6 +6,7 @@ using BBT.Aether.MultiSchema;
 using BBT.Workflow.Data;
 using BBT.Workflow.Schemas;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -158,6 +159,49 @@ public sealed class TargetedSchemaDowngradeTests : IAsyncLifetime
 
         await ExecuteAsync(
             $"DELETE FROM {Schema}.\"__Workflow_Migrations\" WHERE \"MigrationId\" = '{futureMigration}'");
+    }
+
+    /// <summary>
+    /// The messaging chain (fixed sys_queues schema, its own migration ids) goes through the same
+    /// primitives the downgrade runner uses for <c>--messaging-target</c>: plan (destructive +
+    /// model-breaking detection against the MessagingDbContext model), converge down, converge up.
+    /// </summary>
+    [Fact]
+    public async Task MessagingChain_PlansAndConvergesToTarget_BothDirections()
+    {
+        const string messagingTarget = "20260627085107_BackgroundJob_ArmingToken";
+        const string distributedLocksMigration = "20260711180608_AddDistributedLocksToMessagingContext";
+
+        await using (var ctx = CreateMessagingContext())
+        {
+            await ctx.Database.MigrateAsync();
+
+            var plan = await MigrationChainInspector.PlanAsync(ctx, "sys_queues", messagingTarget, default);
+            plan.MigrationsToRevert.ShouldContain(distributedLocksMigration);
+            plan.DestructiveOperations.ShouldContain(op => op.Contains("DistributedLocks"));
+            plan.ModelBreakingOperations.ShouldContain(op => op.Contains("DistributedLocks"));
+
+            await ctx.GetService<Microsoft.EntityFrameworkCore.Migrations.IMigrator>()
+                .MigrateAsync(messagingTarget);
+            var (applied, pending, unknown) = await MigrationChainInspector.GetChainStateAsync(ctx, default);
+            applied[^1].ShouldBe(messagingTarget);
+            pending.ShouldContain(distributedLocksMigration);
+            unknown.ShouldBeEmpty();
+
+            await ctx.Database.MigrateAsync();
+            (applied, pending, _) = await MigrationChainInspector.GetChainStateAsync(ctx, default);
+            applied[^1].ShouldBe(distributedLocksMigration);
+            pending.ShouldBeEmpty();
+        }
+    }
+
+    private MessagingDbContext CreateMessagingContext()
+    {
+        var options = new DbContextOptionsBuilder<MessagingDbContext>()
+            .UseNpgsql(_postgres.GetConnectionString(),
+                npgsql => npgsql.MigrationsHistoryTable("__Workflow_Migrations", "sys_queues"))
+            .Options;
+        return new MessagingDbContext(options);
     }
 
     private async Task<bool> TableExistsAsync(string table)
