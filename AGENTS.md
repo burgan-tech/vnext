@@ -239,7 +239,7 @@ Backend-Driven View approach: UI changes deploy via backend only, minimizing mob
 - **Levels**: Task → State → Global (resolved by `CompiledBoundaryChain`). Rules sorted by `EffectivePriority` ASC → specificity DESC → definition order.
 - **Actions**: `Abort`, `Retry`, `Rollback`, `Ignore`, `Notify`, `Log`.
 - **Pipeline mapping** (`BoundaryOutcomeHandler`): `Log`/`Ignore` → `Continue()`; transition set → `RequestNextTransition` + `SkipToFinalize()`; abort without transition → Fail → instance fault.
-- Error-boundary profile disables subflow handling and skips ResourceLock; its current code does not exclude the Auto step.
+- Error-boundary profile skips Preflight, ForwardToActiveSubflow and ResourceLock. It does **not** disable subflow handling and does not remove the Auto step: the plan is built from `ExcludedStepOrders` alone, and `LifecycleOrder.SubFlow` (70) is in no exclusion set.
 
 ### SubFlow Lifecycle
 
