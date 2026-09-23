@@ -62,16 +62,23 @@ public sealed class TransitionRunner(
                 cancellationToken);
             if (!coordinationResult.IsSuccess)
             {
-                // E31. This is the one exit that runs neither Settle nor Fault: the post-commit
-                // work failed and the policy classified the error as the client's, so nothing
-                // downstream touches the status. When the accept marked the whole subflow chain
-                // Busy down to the leaf, that reservation is left behind — and Busy has no
-                // recovery API (retry requires Faulted), so every level stays stranded until a
-                // human intervenes. Undo exactly what the accept flipped, then surface the
-                // original error unchanged.
-                await ReleaseChainReserveAsync(
+                // E31. The post-commit work failed and the policy classified the error as the
+                // client's, so nothing downstream touches the status — this is the one exit that
+                // runs neither Settle nor Fault. What the parent needs depends on WHICH job failed,
+                // and the two producers partition the case exactly:
+                //
+                //   ForwardToSubflowJob  — queued at order 10, which skips to Finalize, so the
+                //                          parent changed no state. Release the Busy this run took.
+                //   StartSubflowJob      — queued at order 70, downstream of ChangeState, so the
+                //                          parent already moved with no child to show for it.
+                //                          Fault, which is visible and retryable; releasing would
+                //                          advertise a healthy instance that never started a child.
+                //
+                // Busy has no recovery API (retry requires Faulted), so doing nothing strands every
+                // level until a human intervenes. The original error surfaces unchanged either way.
+                await CompensateFailedCoordinationAsync(
                     parentSnapshot,
-                    coreOutput.ExecutionContext.SubflowChainReserved,
+                    coreOutput,
                     coordinationResult.Error,
                     cancellationToken);
                 return Result<TransitionOutput>.Fail(coordinationResult.Error);
@@ -141,6 +148,60 @@ public sealed class TransitionRunner(
             activity?.SetStatus(ActivityStatusCode.Error, result.Error.Message);
 
         return result;
+    }
+
+    /// <summary>
+    /// Compensates a failed post-commit coordination according to the job kind that failed.
+    /// </summary>
+    private async Task CompensateFailedCoordinationAsync(
+        PostCommitParentSnapshot snapshot,
+        TransitionCoreOutput coreOutput,
+        Error error,
+        CancellationToken cancellationToken)
+    {
+        // ContinuationSet is a non-consuming projection, so the jobs are still readable here even
+        // though the coordinator consumed the directives.
+        // Testing for ANY StartSubflowJob (rather than the one that actually failed) is safe only
+        // because the two post-commit job kinds are disjoint within one hop: ForwardToSubflowJob is
+        // queued at order 10 (ForwardToActiveSubflowStep), which sets SkipToOrder = Finalize, so the
+        // order-70 StartSubflowJob (HandleSubFlowStep) can never also be queued in the same run.
+        var startedSubflow = coreOutput.Continuations.PostCommitJobs.OfType<StartSubflowJob>().Any();
+
+        if (startedSubflow)
+        {
+            // A lost CAS on the start hop yields no verdict: the level that actually flipped Busy
+            // is the one responsible for compensating it, not this one.
+            // Defensive: not known to be reachable today. OwnsStatus is false only for updateData
+            // (HandleSubFlowStep short-circuits before order 70 for it) and for the
+            // IsSubflowForward branch (ForwardToActiveSubflowStep skips to Finalize before order 70,
+            // or — for a parent shared transition — SharedTransitionTargetSelfWhenInSubFlowSpecification
+            // forces target=$self and HandleSubFlowStep's same-state idempotent check takes the
+            // no-new-job path), so a StartSubflowJob and OwnsStatus == false cannot coincide today;
+            // pinned by RunAsync_WhenStartSubflowCoordinationFails_AndContextDoesNotOwnStatus_CompensatesNothing.
+            if (!coreOutput.ExecutionContext.OwnsStatus)
+                return;
+
+            logger.SubflowStartCoordinationFaulted(snapshot.InstanceId, snapshot.TransitionKey, error.Code);
+            var faultResult = await MutateParentAsync(
+                "PostCommit.Fault",
+                snapshot,
+                (service, ct) => service.FaultAsync(
+                    snapshot,
+                    new PostCommitFaultRequest(error.Code, error.Message ?? "Post-commit coordination failed"),
+                    ct),
+                cancellationToken);
+            if (!faultResult.IsSuccess)
+                logger.PostCommitJobFailed(snapshot.InstanceId, "PostCommit.Fault", faultResult.Error.Message ?? faultResult.Error.Code);
+            return;
+        }
+
+        // ForwardToSubflowJob: order 10 skips to Finalize on failure, so the parent changed no
+        // state. Undo exactly what the accept flipped, i.e. only when the accept marked the whole
+        // chain Busy down to the leaf — a sync-origin forward never sets that flag (see
+        // TransitionPipeline's IsSubflowForward branch), and there is no other Busy of this run's
+        // own to release on this path.
+        await ReleaseChainReserveAsync(
+            snapshot, coreOutput.ExecutionContext.SubflowChainReserved, error, cancellationToken);
     }
 
     /// <summary>

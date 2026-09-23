@@ -1,5 +1,6 @@
 using System;
 using System.Linq;
+using System.Text.Json;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Definitions.Validators;
 using Shouldly;
@@ -19,6 +20,84 @@ public class WorkflowValidatorTests : DomainTestBase<DomainEntryPoint>
     {
         _validator = new WorkflowValidator();
     }
+
+    #region State SubFlow Type Validation Tests
+
+    /// <summary>
+    /// A state starts a SubFlow and only a SubFlow. A SubProcess is started by its own task, so a
+    /// state-level "P" is an authoring error — it used to slip past definition time and then behave
+    /// differently by caller mode (admitted async, 409 Instance:100031 on sync with the parent left
+    /// Busy and not Faulted).
+    /// </summary>
+    [Fact]
+    public void Validate_ShouldFail_WhenStateSubFlowTypeIsSubProcess()
+    {
+        var workflow = CreateWorkflowWithStateSubFlowType("P");
+
+        var result = _validator.Validate(workflow);
+
+        result.IsValid.ShouldBeFalse();
+        var error = result.ValidationErrors
+            .Where(e => e.ErrorMessage!.Contains("can only start a SubFlow"))
+            .ToList()
+            .ShouldHaveSingleItem();
+        error.MemberNames.ShouldContain("Workflow.States[waiting].SubFlow.Type");
+    }
+
+    [Fact]
+    public void Validate_ShouldPass_WhenStateSubFlowTypeIsSubFlow()
+    {
+        var workflow = CreateWorkflowWithStateSubFlowType("S");
+
+        var result = _validator.Validate(workflow);
+
+        result.ValidationErrors
+            .ShouldNotContain(e => e.ErrorMessage!.Contains("can only start a SubFlow"));
+    }
+
+    private static WorkflowDefinition CreateWorkflowWithStateSubFlowType(string subFlowType)
+    {
+        var json = $$"""
+        {
+            "type": "F",
+            "labels": [{"label": "Test", "language": "en"}],
+            "startTransition": {
+                "key": "start",
+                "target": "start",
+                "triggerType": "manual",
+                "versionStrategy": "Minor",
+                "labels": [{"label": "Start", "language": "en"}],
+                "onExecutionTasks": []
+            },
+            "states": [
+                {
+                    "key": "start",
+                    "stateType": "initial",
+                    "labels": [{"label": "Start", "language": "en"}]
+                },
+                {
+                    "key": "waiting",
+                    "stateType": "subflow",
+                    "labels": [{"label": "Waiting", "language": "en"}],
+                    "subFlow": {
+                        "type": "{{subFlowType}}",
+                        "process": {"key": "sub", "domain": "d", "flow": "sys-flows", "version": "1.0.0"},
+                        "mapping": { "location": "./src/X.csx", "code": "cmV0dXJuIHRydWU7" }
+                    }
+                },
+                {
+                    "key": "done",
+                    "stateType": "finish",
+                    "labels": [{"label": "Done", "language": "en"}]
+                }
+            ]
+        }
+        """;
+
+        return JsonSerializer.Deserialize<WorkflowDefinition>(json, JsonSerializerConstants.JsonOptions)!;
+    }
+
+    #endregion
 
     #region DefaultAutoTransition Validation Tests
 

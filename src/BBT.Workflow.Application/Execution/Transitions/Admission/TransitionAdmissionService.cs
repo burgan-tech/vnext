@@ -338,8 +338,10 @@ public sealed class TransitionAdmissionService(
         }
         catch (Exception exception)
         {
-            // Compensation must never mask the original failure; a stranded Busy is
-            // recovered by job-timeout recovery.
+            // Compensation must never mask the original failure. A Busy left behind here is
+            // recovered only on the async path, where TransitionJobHandler routes a lock-conflict
+            // failure to IJobTimeoutRecoveryService; any other failure has no automatic recovery
+            // at all (WorkflowLogs: "Busy has no recovery API"). Manual cancel/exit is the only remedy.
             logger.ReservationReleaseFailed(exception, instanceId);
         }
     }
@@ -364,8 +366,10 @@ public sealed class TransitionAdmissionService(
         }
         catch (Exception exception)
         {
-            // Compensation must never mask the original failure; a stranded Busy is
-            // recovered by job-timeout recovery.
+            // Compensation must never mask the original failure. A Busy left behind here is
+            // recovered only on the async path, where TransitionJobHandler routes a lock-conflict
+            // failure to IJobTimeoutRecoveryService; any other failure has no automatic recovery
+            // at all (WorkflowLogs: "Busy has no recovery API"). Manual cancel/exit is the only remedy.
             logger.ReservationReleaseFailed(exception, context.InstanceId);
         }
     }

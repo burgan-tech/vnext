@@ -399,6 +399,65 @@ public sealed class TransitionRunnerPostCommitTests
     }
 
     [Fact]
+    public async Task RunAsync_WhenStartSubflowCoordinationFails_ShouldFaultTheParent()
+    {
+        // A failed subflow START left the parent past ChangeState with a Busy nobody owns.
+        // Faulting makes it visible and retryable; releasing would advertise a healthy instance
+        // that never started its child.
+        var harness = new RunnerHarness(new StagePlan(
+            "stage-0",
+            PostCommitBehavior: PostCommitContinuationBehavior.HandoffToChild,
+            PostCommitJob: PostCommitJobKind.StartSubflow))
+        {
+            PostCommitResult = PostCommitResult.Fail(Error.NotFound("Instance:100404", "sub flow not found"))
+        };
+
+        var result = await harness.Runner.RunAsync(harness.CreateInput("go"));
+
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Code.ShouldBe("Instance:100404", "the original error must surface unchanged");
+        await harness.ParentMutationService.Received(1).FaultAsync(
+            Arg.Any<PostCommitParentSnapshot>(), Arg.Any<PostCommitFaultRequest>(), Arg.Any<CancellationToken>());
+        await harness.AdmissionService.DidNotReceive().ReleaseSubflowChainAsync(
+            Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenStartSubflowCoordinationFails_AndContextDoesNotOwnStatus_CompensatesNothing()
+    {
+        // Defensive guard, not a reachable production path. A lost CAS on the start hop
+        // (OwnsStatus == false) can never coincide with a queued StartSubflowJob: StartSubflowJob
+        // is enqueued only by HandleSubFlowStep at order 70, and OwnsStatus is false only for
+        // AdmissionKind.Unconditional (updateData — HandleSubFlowStep short-circuits to
+        // ContinueNoWork for it before it can enqueue anything) and for the IsSubflowForward
+        // branch in TransitionPipeline.RunAsync's Normal case (either ForwardToActiveSubflowStep
+        // skips straight to Finalize before order 70, or, for a parent shared transition, the
+        // SharedTransitionTargetSelfWhenInSubFlowSpecification validator forces the target to
+        // $self and HandleSubFlowStep's HasActiveCorrelationForSameState idempotent check then
+        // takes the early no-new-job return). No integration test can exercise this branch because
+        // no reachable admission/pipeline combination produces it; this unit test pins the guard's
+        // behaviour directly instead, so it is not deleted as dead code and nobody re-attempts to
+        // reproduce it end to end.
+        var harness = new RunnerHarness(new StagePlan(
+            "stage-0",
+            PostCommitBehavior: PostCommitContinuationBehavior.HandoffToChild,
+            PostCommitJob: PostCommitJobKind.StartSubflow,
+            OwnsStatus: false))
+        {
+            PostCommitResult = PostCommitResult.Fail(Error.NotFound("Instance:100404", "sub flow not found"))
+        };
+
+        var result = await harness.Runner.RunAsync(harness.CreateInput("go"));
+
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Code.ShouldBe("Instance:100404", "the original error must surface unchanged");
+        await harness.ParentMutationService.DidNotReceiveWithAnyArgs()
+            .FaultAsync(default!, default!, default);
+        await harness.AdmissionService.DidNotReceive().ReleaseSubflowChainAsync(
+            Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public async Task RunAsync_PostCommitFaultRequest_DoesNotReleaseTheChain()
     {
         // The fault path already cascades downward: Instance.Fault raises
@@ -708,7 +767,12 @@ public sealed class TransitionRunnerPostCommitTests
                     ExecutionChainId = Guid.NewGuid().ToString("N"),
                     ChainDepth = context.Execution?.ChainDepth ?? 0,
                     TraceId = Guid.NewGuid().ToString("N"),
-                    SubflowChainReserved = plan.SubflowChainReserved
+                    SubflowChainReserved = plan.SubflowChainReserved,
+                    // Defaults to a normal, successful CAS owner — the shape every test but the
+                    // dedicated non-owning-guard test in this file exercises. A plan sets this to
+                    // false only to pin CompensateFailedCoordinationAsync's defensive
+                    // !OwnsStatus guard for the StartSubflow job kind.
+                    OwnsStatus = plan.OwnsStatus
                 };
 
                 await using (var transitionLock = await lockScopeFactory.AcquireAsync(
@@ -719,7 +783,29 @@ public sealed class TransitionRunnerPostCommitTests
                 }
 
                 if (plan.PostCommitBehavior is { } behavior)
-                    executionContext.Directives.EnqueuePostCommit(new TestJob(behavior));
+                {
+                    IPostCommitJob job = plan.PostCommitJob switch
+                    {
+                        // Placeholder identity values are fine — the runner only reads the type.
+                        PostCommitJobKind.StartSubflow => new StartSubflowJob(
+                            Guid.NewGuid(), "state", behavior),
+                        PostCommitJobKind.ForwardToSubflow => new ForwardToSubflowJob(
+                            Guid.NewGuid(),
+                            owner.InstanceId,
+                            context.TransitionKey,
+                            Domain,
+                            WorkflowKey,
+                            WorkflowVersion,
+                            "instance-key",
+                            null,
+                            null,
+                            null,
+                            new Dictionary<string, string?>(),
+                            new Dictionary<string, string?>()),
+                        _ => new TestJob(behavior)
+                    };
+                    executionContext.Directives.EnqueuePostCommit(job);
+                }
                 if (plan.NextTransition is { } next)
                     executionContext.Directives.RequestNextTransition(new NextTransitionRequest(next, "automatic"));
 
@@ -805,7 +891,11 @@ public sealed class TransitionRunnerPostCommitTests
         PostCommitContinuationBehavior? PostCommitBehavior = null,
         string? NextTransition = null,
         bool FailCommit = false,
-        bool SubflowChainReserved = false);
+        bool SubflowChainReserved = false,
+        PostCommitJobKind PostCommitJob = PostCommitJobKind.Test,
+        bool OwnsStatus = true);
+
+    private enum PostCommitJobKind { Test, StartSubflow, ForwardToSubflow }
 
     private sealed record TestJob(PostCommitContinuationBehavior ContinuationBehavior)
         : IPostCommitContinuationJob;

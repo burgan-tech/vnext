@@ -43,7 +43,12 @@ and argue why the precedent should change. It is not re-litigated silently.
 ### Architectural decisions already taken (do not reopen without new evidence)
 
 - **`transition.roles` is not enforced at `POST .../transitions/{key}`.** Roles describe what a client
-  should offer; real boundaries live in `queryRoles`, function `roles` or task logic.
+  should offer; real boundaries live in `queryRoles` or task logic. *Amended 2026-09-22 by
+  `DECISION-2026-09-22-remove-execution-authorization`:* function `roles` dropped from that list (it
+  has not been enforced at execution since `a0e2f658`), and `queryRoles` is **no longer enforced by
+  this runtime at all** — it is evaluated by `GET .../functions/authorize?queryRoles=true`, which the
+  Internal Gateway consults before forwarding. A definition can no longer assume the runtime itself
+  refuses; the boundary is the gateway, and `queryRoles` is the answer it admits on.
 - **Only `updateData` skips the state lifecycle on a `$self` target.** Every other `$self` transition runs
   the full OnExit/OnEntry/Schedule lifecycle. No literal-target-equals-current-state comparison.
 - **The Busy flag is the mutex; one millisecond-scale status lock per hop.** No whole-chain lock, no

@@ -79,10 +79,23 @@ public sealed class TransitionAuthorizationManagerQueryRolesTests : IDisposable
             }
             """, JsonOptions)!;
 
+    /// <summary>
+    /// An instance whose OWN current state is <c>review</c> — which is what the gate reads.
+    /// </summary>
+    /// <remarks>
+    /// This fixture used to set only <c>EffectiveState</c>, because the gate used to read that. It is
+    /// the deepest ACTIVE SUBFLOW's state key, so on any instance that has one it names a state of a
+    /// different workflow — one this <c>workflow</c> cannot resolve. The gate then found no state,
+    /// fell through to the workflow root's grants, and a state's own <c>queryRoles</c> (and a parent's
+    /// stamped narrowing) silently stopped applying for as long as the child had a subflow of its own.
+    /// <see cref="EffectiveStateElsewhere_DoesNotChangeTheAnswer"/> pins the distinction that the old
+    /// fixture could not express.
+    /// </remarks>
     private static Instance InReviewState()
     {
         var instance = Instance.Create(Guid.NewGuid(), "flow", "1.0.0", "key");
-        instance.SetEffectiveState("review");
+        instance.ChangeState(State.Create("review", StateType.Intermediate, StateSubType.None,
+            VersionStrategy.IncreaseMinor.Code));
         return instance;
     }
 
@@ -120,6 +133,24 @@ public sealed class TransitionAuthorizationManagerQueryRolesTests : IDisposable
         // Workflow root would allow "customer", but the state's own grants (override) only allow "backoffice".
         var wf = BuildWorkflow("""[{"role":"backoffice","grant":"allow"}]""", """[{"role":"customer","grant":"allow"}]""");
         (await _sut.IsQueryAllowedAsync(wf, InReviewState(), new[] { "customer" })).ShouldBeFalse();
+    }
+
+    /// <summary>
+    /// The gate answers for the instance it was asked about, not for whatever is running beneath it.
+    /// A mid-level instance parked in <c>review</c> while its own child sits in some other state must
+    /// still be governed by <c>review</c>'s grants.
+    /// </summary>
+    [Fact]
+    public async Task EffectiveStateElsewhere_DoesNotChangeTheAnswer()
+    {
+        var wf = BuildWorkflow("""[{"role":"backoffice","grant":"allow"}]""", """[{"role":"customer","grant":"allow"}]""");
+        var instance = InReviewState();
+        instance.SetEffectiveState("leaf-waiting");
+
+        (await _sut.IsQueryAllowedAsync(wf, instance, new[] { "customer" })).ShouldBeFalse(
+            "the root's grants must not take over just because a descendant is active");
+        (await _sut.IsQueryAllowedAsync(wf, instance, new[] { "backoffice" })).ShouldBeTrue(
+            "review's own grants still govern the instance sitting in review");
     }
 
     [Fact]
