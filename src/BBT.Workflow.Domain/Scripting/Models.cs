@@ -644,7 +644,13 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
         var value = MergeToBody(response, JsonScriptBodyOptions);
         if (!string.IsNullOrWhiteSpace(taskKey) && value != null)
         {
-            TaskResponse[taskKey!] = value;
+            // The merge above aliases this tree into Body (a null Body IS it; a non-null Body
+            // absorbs its subtrees by reference), and ExpandoObjectMergeStrategy mutates its merge
+            // target in place — so a slot sharing that structure is rewritten by the NEXT task's
+            // merge, and every slot ends up carrying the last task's payload (the two-tasks-in-one-
+            // function collision). The slot must own an isolated copy, in both directions: later
+            // Body merges cannot reach it, and a script mutating it cannot write through into Body.
+            TaskResponse[taskKey!] = DynamicCloner.DeepClone(value);
         }
     }
 

@@ -65,7 +65,10 @@ public sealed class Function : IDomainEntity, IFunctionReference, IReferenceSett
 
     /// <summary>
     /// Optional list of tasks to execute sequentially. When populated, takes precedence over <see cref="Task"/>.
-    /// Each task's output is available in <c>ScriptContext</c> for subsequent tasks.
+    /// Each task's output is available in <c>ScriptContext</c> for subsequent tasks and for the
+    /// <see cref="Output"/> script: the raw response under <c>TaskResponse[ToVariableName(task.key)]</c>,
+    /// the mapping's OutputHandler data under <c>OutputResponse[...]</c> (same key). Slots are isolated
+    /// per task; keys must normalize to distinct variable names (rejected at publish otherwise).
     /// </summary>
     [JsonIgnore]
     public IReadOnlyCollection<OnExecuteTask> OnExecutionTasks => onExecutionTasks.AsReadOnly();

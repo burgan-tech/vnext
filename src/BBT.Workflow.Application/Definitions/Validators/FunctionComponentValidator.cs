@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using System.Text;
 using System.Text.Json;
 using BBT.Workflow.Runtime;
 
@@ -39,6 +40,8 @@ public sealed class FunctionComponentValidator : IComponentValidator
                 {
                     result.AddError("Function output is required.", $"{nameof(Function)}.{nameof(Function.Output)}");
                 }
+
+                ValidateTaskKeysDistinct(function, result);
             }
 
             // Validate scope
@@ -57,6 +60,43 @@ public sealed class FunctionComponentValidator : IComponentValidator
         {
             result.AddError($"Invalid JSON format for function: {ex.Message}", nameof(Function));
             return result;
+        }
+    }
+
+    /// <summary>
+    /// Rejects task keys that collide across <c>onExecutionTasks</c>. Each task files its response
+    /// under <c>ToVariableName(task.key)</c> in <c>ScriptContext.TaskResponse</c>/<c>OutputResponse</c>,
+    /// so two entries resolving to the same variable name overwrite each other's slot and the output
+    /// script reads one task's payload where it expects the other's. Distinct raw keys can still
+    /// collide after normalization ("user-info" and "user_info" both become "userInfo"), so the
+    /// comparison is on the normalized name.
+    /// </summary>
+    private static void ValidateTaskKeysDistinct(Function function, ComponentValidationResult result)
+    {
+        // normalized variable name -> the raw key that claimed it first
+        var claimed = new Dictionary<string, string>(StringComparer.Ordinal);
+
+        foreach (var (task, index) in function.OnExecutionTasks.Select((t, i) => (t, i)))
+        {
+            var rawKey = task.Task?.Key;
+            if (string.IsNullOrWhiteSpace(rawKey))
+            {
+                continue;
+            }
+
+            var variableName = rawKey.ToVariableName();
+            if (claimed.TryGetValue(variableName, out var firstRawKey))
+            {
+                result.AddError(
+                    $"Function onExecutionTasks[{index}] task key '{rawKey}' collides with '{firstRawKey}': " +
+                    $"both resolve to the response variable '{variableName}', so the later task's output would " +
+                    "overwrite the earlier one's in ScriptContext.TaskResponse/OutputResponse. Give each task " +
+                    "a key that normalizes to a distinct variable name.",
+                    $"{nameof(Function)}.{nameof(Function.OnExecutionTasks)}[{index}]");
+                continue;
+            }
+
+            claimed[variableName] = rawKey;
         }
     }
 
