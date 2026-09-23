@@ -4726,5 +4726,18 @@ public static partial class WorkflowLogs
         int hookCount,
         int failedCount);
 
+    /// <summary>
+    /// A component passed validation with a non-blocking finding (e.g. an override that widens access).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 90006,
+        Level = LogLevel.Warning,
+        Message = "Component validation warning for {ComponentType} at {Member}: {Message}")]
+    public static partial void ComponentValidationWarning(
+        this ILogger logger,
+        string componentType,
+        string member,
+        string message);
+
     #endregion
 }
