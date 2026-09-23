@@ -67,3 +67,27 @@ public sealed record InstanceTaskHistoryRow(
 /// actions function needs to admit a taskId and echo the owning task.
 /// </summary>
 public sealed record InstanceTaskRef(Guid Id, string TaskKey);
+
+/// <summary>
+/// Column projection behind the transition/state <c>metrics</c> endpoints
+/// (vnext-client-sdk-core#60, item B). One task journal row reduced to exactly the metadata the
+/// attempts model exposes, selected in SQL so the jsonb payloads never leave the database — the same
+/// discipline as <see cref="InstanceTaskHistoryRow"/>. Keyed by <see cref="TransitionId"/> (the
+/// owning <see cref="InstanceTransition"/> row's id) so the caller groups tasks under their attempt;
+/// no transition context is carried because the metrics reader already holds the transition rows.
+/// <see cref="FaultedResponseJson"/> is the one payload column, fetched only for Faulted rows (its
+/// content is then the small <c>{"error": ...}</c> object), null otherwise.
+/// </summary>
+public sealed record InstanceTaskMetricsRow(
+    Guid Id,
+    Guid TransitionId,
+    string TaskKey,
+    Definitions.TaskTrigger? Hook,
+    int? Order,
+    Definitions.TaskStatus Status,
+    Definitions.BusinessStatus BusinessStatus,
+    DateTime StartedAt,
+    DateTime? FinishedAt,
+    TimeSpan? Duration,
+    Guid? FaultedTaskId,
+    string? FaultedResponseJson);

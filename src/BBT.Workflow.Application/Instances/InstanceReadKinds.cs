@@ -51,4 +51,16 @@ public static class InstanceReadKinds
 
     /// <summary>The human-task inbox across workflows — fans out in parallel per workflow.</summary>
     public const string HumanTasks = "humanTasks";
+
+    /// <summary>The task journal of one instance — the <c>tasks</c> function.</summary>
+    public const string TaskHistory = "tasks";
+
+    /// <summary>The recorded sub-steps of one task journal row — the <c>actions</c> function.</summary>
+    public const string ActionHistory = "actions";
+
+    /// <summary>The attempts model of one transition key — the transition <c>metrics</c> endpoint.</summary>
+    public const string TransitionMetrics = "transitionMetrics";
+
+    /// <summary>The attempts model of one state (its visits) — the state <c>metrics</c> endpoint.</summary>
+    public const string StateMetrics = "stateMetrics";
 }

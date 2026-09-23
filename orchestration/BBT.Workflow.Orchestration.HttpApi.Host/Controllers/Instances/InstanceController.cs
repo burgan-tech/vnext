@@ -968,6 +968,74 @@ public sealed class InstanceController(
     }
 
     /// <summary>
+    /// Click-to-fetch execution metrics for one transition of an instance: every firing of that
+    /// transition as an attempt, each carrying the tasks that ran under it (duration, status, hook).
+    /// Read-only over the already-journaled transition/task rows (vnext-client-sdk-core#60).
+    /// </summary>
+    /// <param name="domain">Domain key</param>
+    /// <param name="workflow">Workflow key</param>
+    /// <param name="instance">Instance id or business key</param>
+    /// <param name="transitionKey">Transition definition key to group firings by</param>
+    /// <param name="cancellationToken">Cancellation token</param>
+    [HttpGet("{domain}/workflows/{workflow}/instances/{instance}/transitions/{transitionKey}/metrics")]
+    public async Task<IActionResult> GetTransitionMetricsAsync(
+        [FromRoute] string domain,
+        [FromRoute] string workflow,
+        [FromRoute] string instance,
+        [FromRoute] string transitionKey,
+        CancellationToken cancellationToken = default)
+    {
+        var requestContext = HttpContext.GetRequestBindingContext();
+
+        var input = new GetTransitionMetricsInput
+        {
+            Domain = domain,
+            Workflow = workflow,
+            Instance = instance,
+            TransitionKey = transitionKey,
+            Headers = requestContext.Headers,
+            QueryParameters = requestContext.QueryParameters
+        };
+
+        var response = await queryAppService.GetTransitionMetricsAsync(input, cancellationToken);
+        return response.ToActionResult(HttpContext);
+    }
+
+    /// <summary>
+    /// Click-to-fetch execution metrics for one state of an instance: every visit (entry→exit) as an
+    /// attempt, each carrying the state's onEntry and onExit tasks. Read-only over the already-journaled
+    /// transition/task rows (vnext-client-sdk-core#60).
+    /// </summary>
+    /// <param name="domain">Domain key</param>
+    /// <param name="workflow">Workflow key</param>
+    /// <param name="instance">Instance id or business key</param>
+    /// <param name="stateKey">State key whose visits to return</param>
+    /// <param name="cancellationToken">Cancellation token</param>
+    [HttpGet("{domain}/workflows/{workflow}/instances/{instance}/states/{stateKey}/metrics")]
+    public async Task<IActionResult> GetStateMetricsAsync(
+        [FromRoute] string domain,
+        [FromRoute] string workflow,
+        [FromRoute] string instance,
+        [FromRoute] string stateKey,
+        CancellationToken cancellationToken = default)
+    {
+        var requestContext = HttpContext.GetRequestBindingContext();
+
+        var input = new GetStateMetricsInput
+        {
+            Domain = domain,
+            Workflow = workflow,
+            Instance = instance,
+            StateKey = stateKey,
+            Headers = requestContext.Headers,
+            QueryParameters = requestContext.QueryParameters
+        };
+
+        var response = await queryAppService.GetStateMetricsAsync(input, cancellationToken);
+        return response.ToActionResult(HttpContext);
+    }
+
+    /// <summary>
     /// Pages the error-boundary incident history of an instance, newest first. This is the target of
     /// the state function's <c>incident.history.href</c>. Gated by the same <c>queryRoles</c> check as
     /// the state function; stack traces are never returned here (operators use the Monitor API).

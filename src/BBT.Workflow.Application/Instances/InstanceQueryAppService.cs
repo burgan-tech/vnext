@@ -480,6 +480,9 @@ public sealed class InstanceQueryAppService(
     {
         runtimeInfoProvider.Check(input.Domain);
 
+        using var read = InstanceReadActivityHelper.StartRead(
+            InstanceReadKinds.TaskHistory, input.Domain, input.Workflow);
+
         return await GetInstanceByIdOrKeyAsync(input.Instance, cancellationToken)
             .BindAsync(instance =>
                 componentCacheStore.GetFlowAsync(input.Domain, input.Workflow, instance.FlowVersion, cancellationToken)
@@ -511,6 +514,9 @@ public sealed class InstanceQueryAppService(
     {
         runtimeInfoProvider.Check(input.Domain);
 
+        using var read = InstanceReadActivityHelper.StartRead(
+            InstanceReadKinds.ActionHistory, input.Domain, input.Workflow);
+
         return await GetInstanceByIdOrKeyAsync(input.Instance, cancellationToken)
             .BindAsync(instance =>
                 componentCacheStore.GetFlowAsync(input.Domain, input.Workflow, instance.FlowVersion, cancellationToken)
@@ -535,6 +541,200 @@ public sealed class InstanceQueryAppService(
                     Items = actions.Select(InstanceTaskActionDto.FromAction).ToList()
                 });
             });
+    }
+
+    public async Task<Result<GetInstanceMetricsOutput>> GetTransitionMetricsAsync(
+        GetTransitionMetricsInput input,
+        CancellationToken cancellationToken = default)
+    {
+        runtimeInfoProvider.Check(input.Domain);
+
+        using var read = InstanceReadActivityHelper.StartRead(
+            InstanceReadKinds.TransitionMetrics, input.Domain, input.Workflow);
+
+        return await GetInstanceByIdOrKeyAsync(input.Instance, cancellationToken)
+            .BindAsync(async instance =>
+            {
+                using var instanceScope = BeginInstanceScope(instance);
+
+                // Slim rows only (no Body/Header jsonb). Every row whose transition key matches is one
+                // firing — one attempt — and history firings are already 1:1 with these rows.
+                var records = await instanceTransitionRepository
+                    .GetByInstanceIdAsReadOnlyAsync(instance.Id, cancellationToken);
+
+                var firings = records
+                    .Where(r => r.TransitionId == input.TransitionKey)
+                    .OrderBy(r => r.StartedAt)
+                    .ToList();
+
+                var tasksByRecord = await LoadMetricsTasksAsync(
+                    firings.Select(r => r.Id), cancellationToken);
+
+                var attempts = firings
+                    .Select((record, index) => new MetricsAttemptDto
+                    {
+                        Seq = index + 1,
+                        StartedAt = record.StartedAt,
+                        FinishedAt = record.FinishedAt,
+                        DurationMs = record.Duration?.TotalMilliseconds,
+                        TriggerType = record.TriggerType,
+                        TriggeredBy = record.CreatedBy,
+                        // Every task journaled under this firing, any hook — the transition's own
+                        // onExecute plus the adjacent states' onExit/onEntry that ran in the same
+                        // record. Hook tells them apart; the client groups by it.
+                        Tasks = OrderMetricsTasks(tasksByRecord[record.Id])
+                    })
+                    .ToList();
+
+                return Result<GetInstanceMetricsOutput>.Ok(new GetInstanceMetricsOutput
+                {
+                    Element = new MetricsElementDto { Kind = "transition", Key = input.TransitionKey },
+                    Count = attempts.Count,
+                    Attempts = attempts
+                });
+            });
+    }
+
+    public async Task<Result<GetInstanceMetricsOutput>> GetStateMetricsAsync(
+        GetStateMetricsInput input,
+        CancellationToken cancellationToken = default)
+    {
+        runtimeInfoProvider.Check(input.Domain);
+
+        using var read = InstanceReadActivityHelper.StartRead(
+            InstanceReadKinds.StateMetrics, input.Domain, input.Workflow);
+
+        return await GetInstanceByIdOrKeyAsync(input.Instance, cancellationToken)
+            .BindAsync(async instance =>
+            {
+                using var instanceScope = BeginInstanceScope(instance);
+
+                var records = await instanceTransitionRepository
+                    .GetByInstanceIdAsReadOnlyAsync(instance.Id, cancellationToken);
+
+                // Pair the timeline into visits: the transition that ENTERED the state (ToState==key)
+                // carries the onEntry tasks; the next transition that LEFT it (FromState==key) carries
+                // the onExit tasks. A visit still open (entered, not yet left) has no leaving record.
+                var visits = PairStateVisits(records, input.StateKey);
+
+                var relevantRecordIds = visits
+                    .SelectMany(v => v.Leaving is null
+                        ? new[] { v.Entering.Id }
+                        : new[] { v.Entering.Id, v.Leaving.Id });
+
+                var tasksByRecord = await LoadMetricsTasksAsync(relevantRecordIds, cancellationToken);
+
+                var attempts = visits
+                    .Select((visit, index) =>
+                    {
+                        // onEntry from the entering record; onExit from the leaving record. Filtering by
+                        // hook is what separates them from the other tasks those same records also ran
+                        // (the transition's onExecute, the other state's lifecycle). Legacy rows with a
+                        // null hook cannot be classified into a phase and are omitted here.
+                        var entryTasks = tasksByRecord[visit.Entering.Id]
+                            .Where(t => t.Hook == Definitions.TaskTrigger.OnEntry);
+                        var exitTasks = visit.Leaving is null
+                            ? Enumerable.Empty<InstanceTaskMetricsRow>()
+                            : tasksByRecord[visit.Leaving.Id]
+                                .Where(t => t.Hook == Definitions.TaskTrigger.OnExit);
+
+                        // Entry into the state is when the entering transition finished (onEntry ran as
+                        // part of it); leaving is when the leaving transition started.
+                        var enteredAt = visit.Entering.FinishedAt ?? visit.Entering.StartedAt;
+                        var leftAt = visit.Leaving?.StartedAt;
+
+                        return new MetricsAttemptDto
+                        {
+                            Seq = index + 1,
+                            StartedAt = enteredAt,
+                            FinishedAt = leftAt,
+                            DurationMs = leftAt is { } left ? (left - enteredAt).TotalMilliseconds : null,
+                            TriggerType = visit.Entering.TriggerType,
+                            TriggeredBy = visit.Entering.CreatedBy,
+                            Tasks = OrderMetricsTasks(entryTasks.Concat(exitTasks))
+                        };
+                    })
+                    .ToList();
+
+                return Result<GetInstanceMetricsOutput>.Ok(new GetInstanceMetricsOutput
+                {
+                    Element = new MetricsElementDto { Kind = "state", Key = input.StateKey },
+                    Count = attempts.Count,
+                    Attempts = attempts
+                });
+            });
+    }
+
+    /// <summary>
+    /// Loads the metrics task rows for a set of transition records and groups them by owning record.
+    /// A column projection — the jsonb payloads never leave the database. The lookup answers empty for
+    /// a record with no tasks, so callers can index it without a guard.
+    /// </summary>
+    private async Task<ILookup<Guid, InstanceTaskMetricsRow>> LoadMetricsTasksAsync(
+        IEnumerable<Guid> recordIds,
+        CancellationToken cancellationToken)
+    {
+        var ids = recordIds.Distinct().ToList();
+        if (ids.Count == 0)
+        {
+            // No attempts ⇒ no tasks; skip the query entirely.
+            return Enumerable.Empty<InstanceTaskMetricsRow>().ToLookup(t => t.TransitionId);
+        }
+
+        var rows = await instanceTaskRepository.GetMetricsRowsByTransitionIdsAsync(ids, cancellationToken);
+        return rows.ToLookup(t => t.TransitionId);
+    }
+
+    /// <summary>Execution order within an attempt: start time, then declared order, then a stable id tiebreak.</summary>
+    private static List<MetricsTaskDto> OrderMetricsTasks(IEnumerable<InstanceTaskMetricsRow> tasks) =>
+        tasks
+            .OrderBy(t => t.StartedAt)
+            .ThenBy(t => t.Order)
+            .ThenBy(t => t.Id)
+            .Select(MetricsTaskDto.FromRow)
+            .ToList();
+
+    /// <summary>
+    /// Walks the instance's transition records (already ordered by StartedAt) and pairs them into
+    /// visits of one state: a record with <c>ToState == stateKey</c> opens a visit (its onEntry tasks),
+    /// the next record with <c>FromState == stateKey</c> closes it (its onExit tasks). A self-loop
+    /// (<c>FromState == ToState == stateKey</c>) closes the open visit and opens a new one in the same
+    /// record. A visit left open at the end (entered, not yet left) has a null leaving record.
+    /// </summary>
+    private static List<(InstanceTransitionSlim Entering, InstanceTransitionSlim? Leaving)> PairStateVisits(
+        IReadOnlyList<InstanceTransitionSlim> records,
+        string stateKey)
+    {
+        var visits = new List<(InstanceTransitionSlim Entering, InstanceTransitionSlim? Leaving)>();
+        InstanceTransitionSlim? open = null;
+
+        foreach (var record in records)
+        {
+            if (open is not null && record.FromState == stateKey)
+            {
+                visits.Add((open, record));
+                open = null;
+            }
+
+            if (record.ToState == stateKey)
+            {
+                // Re-entry without an intervening exit shouldn't happen for a well-formed history, but
+                // if it does the earlier visit is closed half-open rather than silently dropped.
+                if (open is not null)
+                {
+                    visits.Add((open, null));
+                }
+
+                open = record;
+            }
+        }
+
+        if (open is not null)
+        {
+            visits.Add((open, null));
+        }
+
+        return visits;
     }
 
     public async Task<Result<GetInstanceIncidentsOutput>> GetInstanceIncidentsAsync(

@@ -4,6 +4,10 @@ Two built-in system functions over the task journal (issue #939). They complete 
 history family — transitions (`…/transitions`), incidents (`…/incidents`) — with what ran inside
 those transitions.
 
+> **Grouped view.** This function is a flat, execution-ordered list. For the per-firing / per-visit
+> **attempts** model — one attempt per transition firing or state visit, tasks phase-grouped by hook —
+> see [Transition and State Metrics](transition-and-state-metrics.md), which builds on the same journal.
+
 ## Functions
 
 | Function | Returns |

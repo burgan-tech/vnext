@@ -447,9 +447,10 @@ public sealed class InstanceTaskDto
     /// <summary>
     /// A faulted journal row stores its reason as <c>{"error": "..."}</c> in Response
     /// (<see cref="InstanceTask.Faulted"/>); the projection carries that column for faulted rows
-    /// only, and nothing else from the payload is surfaced here.
+    /// only, and nothing else from the payload is surfaced here. Shared with the metrics DTOs, which
+    /// read the same faulted-Response column.
     /// </summary>
-    private static string? ExtractFaultReason(string? faultedResponseJson)
+    internal static string? ExtractFaultReason(string? faultedResponseJson)
     {
         if (string.IsNullOrWhiteSpace(faultedResponseJson))
             return null;
@@ -519,6 +520,144 @@ public sealed class GetInstanceTaskActionsOutput
 
     /// <summary>All recorded actions of the task, oldest first.</summary>
     public List<InstanceTaskActionDto> Items { get; set; } = [];
+}
+
+/// <summary>
+/// Identifies what a metrics response is grouped over — a transition definition or a state.
+/// </summary>
+/// <remarks>
+/// One grammar for both endpoints: <see cref="Kind"/> is <c>"transition"</c> or <c>"state"</c> and
+/// <see cref="Key"/> echoes the key from the route, so a client that fetched by state and one that
+/// fetched by transition parse the same shape.
+/// </remarks>
+public sealed class MetricsElementDto
+{
+    /// <summary>Either <c>"transition"</c> or <c>"state"</c>.</summary>
+    public string Kind { get; set; } = string.Empty;
+
+    /// <summary>The transition or state key this response is about (echoes the route).</summary>
+    public string Key { get; set; } = string.Empty;
+}
+
+/// <summary>
+/// One task that ran within an attempt — the journaled metadata only. Payloads
+/// (<c>Request</c>/<c>Response</c>/<c>InvocationResult</c>) are deliberately never surfaced (auth
+/// material), exactly as on the tasks function; <see cref="Error"/> is the one payload-derived field,
+/// the fault reason of a faulted row.
+/// </summary>
+public sealed class MetricsTaskDto
+{
+    /// <summary>Journal row identifier (the <c>taskId</c> the actions function takes).</summary>
+    public Guid Id { get; set; }
+
+    /// <summary>Task definition key that was executed.</summary>
+    public string TaskKey { get; set; } = string.Empty;
+
+    /// <summary>
+    /// The hook (phase) this task ran under — <c>OnExecute</c> / <c>OnEntry</c> / <c>OnExit</c>. This
+    /// is what a client groups by (vnext-client-sdk-core#60). Null on rows journaled before this
+    /// became a column — reported as unknown rather than fabricated.
+    /// </summary>
+    public Definitions.TaskTrigger? Hook { get; set; }
+
+    /// <summary>The task's declared order within its hook group (equal order ⇒ parallel group). Null for legacy rows.</summary>
+    public int? Order { get; set; }
+
+    /// <summary>Platform execution status (Waiting, Busy, Completed, Faulted). A parallel sibling of a failed task can stay <c>Waiting</c> — surfaced, not hidden.</summary>
+    public Definitions.TaskStatus Status { get; set; }
+
+    /// <summary>Business outcome (Unknown, Success, Failed) — separate from platform status.</summary>
+    public BusinessStatus BusinessStatus { get; set; }
+
+    /// <summary>UTC timestamp when the task started.</summary>
+    public DateTime StartedAt { get; set; }
+
+    /// <summary>Task duration in milliseconds. Null while still executing (e.g. a half <c>Waiting</c> row).</summary>
+    public double? DurationMs { get; set; }
+
+    /// <summary>
+    /// Reference to the task whose failure faulted this one (<c>FaultedTaskId</c>). Always null today —
+    /// the runtime has never had a writer for it — but carried so the shape is stable when one lands.
+    /// </summary>
+    public Guid? FaultedTaskRef { get; set; }
+
+    /// <summary>Fault reason of a Faulted task. Null otherwise; never a stack trace.</summary>
+    public string? Error { get; set; }
+
+    public static MetricsTaskDto FromRow(InstanceTaskMetricsRow row) => new()
+    {
+        Id = row.Id,
+        TaskKey = row.TaskKey,
+        Hook = row.Hook,
+        Order = row.Order,
+        Status = row.Status,
+        BusinessStatus = row.BusinessStatus,
+        StartedAt = row.StartedAt,
+        DurationMs = row.Duration?.TotalMilliseconds,
+        FaultedTaskRef = row.FaultedTaskId,
+        Error = InstanceTaskDto.ExtractFaultReason(row.FaultedResponseJson)
+    };
+}
+
+/// <summary>
+/// One firing (transition) or one visit (state) — an "attempt" — with the tasks that ran under it.
+/// </summary>
+/// <remarks>
+/// The same shape serves both endpoints, but two fields read differently by kind and the difference
+/// is deliberate:
+/// <list type="bullet">
+/// <item><b>transition</b>: an attempt is one <c>InstanceTransitions</c> row for the key.
+/// <see cref="DurationMs"/> is that row's execution duration (not state dwell); <see cref="TriggerType"/>
+/// / <see cref="TriggeredBy"/> describe that firing; <see cref="Tasks"/> are every task journaled
+/// under it (onExecute of the transition plus the adjacent states' onExit/onEntry — the
+/// <see cref="MetricsTaskDto.Hook"/> tells them apart).</item>
+/// <item><b>state</b>: an attempt is one visit (entry→exit). <see cref="StartedAt"/> is when the state
+/// was entered and <see cref="FinishedAt"/> when it was left (null while still in the state);
+/// <see cref="DurationMs"/> is therefore the <i>dwell</i>; <see cref="TriggerType"/> /
+/// <see cref="TriggeredBy"/> describe the transition that entered the state; <see cref="Tasks"/> are
+/// the state's onEntry tasks (from the entering transition) followed by its onExit tasks (from the
+/// leaving transition).</item>
+/// </list>
+/// </remarks>
+public sealed class MetricsAttemptDto
+{
+    /// <summary>1-based sequence of this attempt in time order (oldest first).</summary>
+    public int Seq { get; set; }
+
+    /// <summary>When the firing started (transition) / when the state was entered (state visit).</summary>
+    public DateTime StartedAt { get; set; }
+
+    /// <summary>When the firing finished (transition) / when the state was left (state visit). Null while in progress or still in the state.</summary>
+    public DateTime? FinishedAt { get; set; }
+
+    /// <summary>Execution duration in ms (transition) / dwell in ms (state visit). Null while in progress or still in the state.</summary>
+    public double? DurationMs { get; set; }
+
+    /// <summary>Trigger type of the firing (transition) / of the transition that entered the state (state visit).</summary>
+    public TriggerType TriggerType { get; set; }
+
+    /// <summary>User that triggered the firing / entered the state (the transition's <c>CreatedBy</c>).</summary>
+    public string? TriggeredBy { get; set; }
+
+    /// <summary>Tasks that ran under this attempt, in execution order.</summary>
+    public List<MetricsTaskDto> Tasks { get; set; } = [];
+}
+
+/// <summary>
+/// The attempts model for one transition key or one state — the target of a click-to-fetch metrics
+/// call (vnext-client-sdk-core#60, item B). Read-only over the already-journaled
+/// <c>InstanceTransitions</c> / <c>InstanceTasks</c> rows; no new write path.
+/// </summary>
+public sealed class GetInstanceMetricsOutput
+{
+    /// <summary>What this response is grouped over (transition or state, and its key).</summary>
+    public MetricsElementDto Element { get; set; } = new();
+
+    /// <summary>Number of attempts (== <see cref="Attempts"/> count; a convenience for the client).</summary>
+    public int Count { get; set; }
+
+    /// <summary>Every attempt, oldest first. All firings/visits are returned; filtering is the client's choice.</summary>
+    public List<MetricsAttemptDto> Attempts { get; set; } = [];
 }
 
 /// <summary>

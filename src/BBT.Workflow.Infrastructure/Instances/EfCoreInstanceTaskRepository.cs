@@ -305,4 +305,41 @@ public class EfCoreInstanceTaskRepository(
             select new InstanceTaskRef(task.Id, task.TaskId)
         ).FirstOrDefaultAsync(cancellationToken);
     }
+
+    /// <inheritdoc />
+    public async Task<List<InstanceTaskMetricsRow>> GetMetricsRowsByTransitionIdsAsync(
+        IReadOnlyCollection<Guid> transitionIds,
+        CancellationToken cancellationToken = default)
+    {
+        if (transitionIds.Count == 0)
+        {
+            return [];
+        }
+
+        var dbSet = await GetDbSetAsync();
+
+        // Column projection on purpose (same as GetHistoryByInstanceIdAsync): the constructor
+        // arguments become the SELECT list, so the jsonb payload columns are never read off disk.
+        // The Faulted-row Response is the one exception, fetched through a CASE so only the small
+        // {"error": ...} objects of faulted rows travel.
+        return await dbSet
+            .AsNoTracking()
+            .Where(t => transitionIds.Contains(t.TransitionId))
+            .OrderBy(t => t.StartedAt)
+            .ThenBy(t => t.Id)
+            .Select(t => new InstanceTaskMetricsRow(
+                t.Id,
+                t.TransitionId,
+                t.TaskId,
+                t.TaskTrigger,
+                t.Order,
+                t.Status,
+                t.BusinessStatus,
+                t.StartedAt,
+                t.FinishedAt,
+                t.Duration,
+                t.FaultedTaskId,
+                t.Status == WorkflowTaskStatus.Faulted ? t.Response.Json : null))
+            .ToListAsync(cancellationToken);
+    }
 }
