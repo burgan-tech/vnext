@@ -26,6 +26,7 @@ public sealed class AuthorizeAppService(
     ITransitionAuthorizationManager transitionAuthorizationManager,
     IAuthorizeGateway authorizeGateway,
     ICallerRoleResolver callerRoleResolver,
+    Execution.LongPoll.ILongPollInteractionGate longPollInteractionGate,
     ILogger<AuthorizeAppService> logger) : ApplicationService(serviceProvider), IAuthorizeAppService
 {
     /// <inheritdoc />
@@ -38,10 +39,11 @@ public sealed class AuthorizeAppService(
         string? functionKey,
         string? version = null,
         bool checkQueryRoles = false,
+        bool checkAck = false,
         AuthorizationRequestContext? requestContext = null,
         CancellationToken cancellationToken = default)
     {
-        var validation = ValidateAuthorizeTargetInstance(transitionKey, functionKey, checkQueryRoles);
+        var validation = ValidateAuthorizeTargetInstance(transitionKey, functionKey, checkQueryRoles, checkAck);
         if (validation.HasValue)
             return validation.Value;
 
@@ -58,61 +60,75 @@ public sealed class AuthorizeAppService(
 
         var wf = workflowResult.Value!;
 
-        // When instance has active subflow, distinguish parent-owned vs SubFlow-owned requests
+        // An instance with an active SubFlow answers in one of two ways: a transition the parent
+        // RETAINS is answered here, everything else descends the active-correlation chain.
         if (instance?.Subflow != null)
         {
             var subflow = instance.Subflow;
-            var parentState = wf.FindState(instance.CurrentState!);
-            var subFlowConfig = parentState?.SubFlow;
 
-            // transitionKey: parent-owned (shared/cancel/updateData/exit) → evaluate locally against parent workflow
-            if (!string.IsNullOrWhiteSpace(transitionKey))
+            // Parent-retained transitions execute on the parent, so authorize must answer against the
+            // parent's definition for exactly those and must not descend. The set matches execution:
+            // HandleCancelPreflightStep (order 5) skips to CreateTransition (20), over the forward at
+            // order 10, for cancel and exit; ForwardToActiveSubflowStep excludes updateData and a
+            // shared transition available in the current state. A shared transition NOT available here
+            // is not forwarded either — it is rejected — and EvaluateAuthorizeAsync denies it on the
+            // same availableIn check, so the two surfaces agree without sharing code.
+            if (!string.IsNullOrWhiteSpace(transitionKey) && IsParentOwnedTransition(wf, transitionKey))
             {
-                if (IsParentOwnedTransition(wf, transitionKey))
-                {
-                    var parentCallerRoles = await GetCallerRolesAsync(role, requestContext, cancellationToken);
-                    if (!parentCallerRoles.IsSuccess)
-                        return Result<AuthorizeOutput>.Fail(parentCallerRoles.Error);
-                    var parentAllowed = await EvaluateAuthorizeAsync(wf, parentCallerRoles.Value, transitionKey, null, instance, false, domain, workflowVersion, requestContext, cancellationToken);
-                    logger.AuthorizeRequest(domain, workflow, Describe(parentCallerRoles.Value), parentAllowed);
-                    return Result<AuthorizeOutput>.Ok(new AuthorizeOutput { Allowed = parentAllowed });
-                }
-
-                // SubFlow-owned transition: check override first, then forward
-                if (subFlowConfig?.HasTransitionRoleOverrides == true &&
-                    subFlowConfig.Overrides!.Transitions!.TryGetValue(transitionKey, out var transitionOverride) &&
-                    transitionOverride.Roles is { Count: > 0 })
-                {
-                    var overrideCallerRoles = await GetCallerRolesAsync(role, requestContext, cancellationToken);
-                    if (!overrideCallerRoles.IsSuccess)
-                        return Result<AuthorizeOutput>.Fail(overrideCallerRoles.Error);
-                    var overrideAllowed = await EvaluateWithGrantsAsync(overrideCallerRoles.Value, transitionOverride.Roles!, instance, requestContext, cancellationToken);
-                    logger.AuthorizeRequest(domain, workflow, Describe(overrideCallerRoles.Value), overrideAllowed);
-                    return Result<AuthorizeOutput>.Ok(new AuthorizeOutput { Allowed = overrideAllowed });
-                }
-            }
-            // checkQueryRoles: check state override first, then forward
-            else if (checkQueryRoles)
-            {
-                var subFlowCurrentState = subflow.SubFlowCurrentState;
-                if (subFlowConfig?.HasQueryRoleOverrides == true &&
-                    !string.IsNullOrWhiteSpace(subFlowCurrentState) &&
-                    subFlowConfig.Overrides!.States!.TryGetValue(subFlowCurrentState, out var stateOverride) &&
-                    stateOverride.QueryRoles is { Count: > 0 })
-                {
-                    var overrideCallerRoles = await GetCallerRolesAsync(role, requestContext, cancellationToken);
-                    if (!overrideCallerRoles.IsSuccess)
-                        return Result<AuthorizeOutput>.Fail(overrideCallerRoles.Error);
-                    var overrideAllowed = await EvaluateWithGrantsAsync(overrideCallerRoles.Value, stateOverride.QueryRoles!, instance, requestContext, cancellationToken);
-                    logger.AuthorizeRequest(domain, workflow, Describe(overrideCallerRoles.Value), overrideAllowed);
-                    return Result<AuthorizeOutput>.Ok(new AuthorizeOutput { Allowed = overrideAllowed });
-                }
+                var parentCallerRoles = await GetCallerRolesAsync(role, requestContext, cancellationToken);
+                if (!parentCallerRoles.IsSuccess)
+                    return Result<AuthorizeOutput>.Fail(parentCallerRoles.Error);
+                var parentAllowed = await EvaluateAuthorizeAsync(wf, parentCallerRoles.Value, transitionKey, null, instance, false, false, domain, workflowVersion, requestContext, cancellationToken);
+                logger.AuthorizeRequest(domain, workflow, instanceId, DescribeTarget(transitionKey, null, false, false), Describe(parentCallerRoles.Value), parentAllowed);
+                return Result<AuthorizeOutput>.Ok(new AuthorizeOutput { Allowed = parentAllowed });
             }
 
-            // Forward to SubFlow (functionKey, no-override transition, no-override queryRoles)
+            // Forward to SubFlow (functionKey, subflow-owned transition, queryRoles)
             var resolvedForForward = await GetCallerRolesAsync(role, requestContext, cancellationToken);
             if (!resolvedForForward.IsSuccess)
                 return Result<AuthorizeOutput>.Fail(resolvedForForward.Error);
+
+            // ack mirrors the acknowledge endpoint's OWN descent rule, which is not "has a subflow"
+            // but "is this the instance that paused": InstanceCommandAppService descends only while
+            // !IsAwaitingLongPollAck. When this instance is the awaiting one, the gate is evaluated
+            // here and the chain below it is irrelevant — a deeper child is not what the ack resumes.
+            if (checkAck && instance.IsAwaitingLongPollAck)
+            {
+                var ackCallerRoles = await GetAckCallerRolesAsync(role, requestContext, cancellationToken);
+                if (!ackCallerRoles.IsSuccess)
+                    return Result<AuthorizeOutput>.Fail(ackCallerRoles.Error);
+                var ackAllowed = await EvaluateAckAsync(wf, ackCallerRoles.Value, instance, requestContext, cancellationToken);
+                logger.AuthorizeRequest(domain, workflow, instanceId, DescribeTarget(null, null, false, true), Describe(ackCallerRoles.Value), ackAllowed);
+                return Result<AuthorizeOutput>.Ok(new AuthorizeOutput { Allowed = ackAllowed });
+            }
+
+            // queryRoles is a CONJUNCTION down the chain, because that is what the read surfaces
+            // enforce: the state function gates the polled instance (InstanceQueryAppService) and THEN
+            // descends, where the leaf gates again — two conjunctive gates. Answering from the leaf
+            // alone made `authorize` strictly weaker than the gate it exists to describe, so a gateway
+            // trusting it would admit callers the runtime itself refuses. The root's own verdict is
+            // taken here; the forward below re-enters this method at the child, which repeats it for
+            // its own level, so the whole chain down to the deepest active leaf is ANDed.
+            if (checkQueryRoles)
+            {
+                var rootAllowed = await transitionAuthorizationManager.IsQueryAllowedAsync(
+                    wf, instance, resolvedForForward.Value, requestContext, cancellationToken);
+                if (!rootAllowed)
+                {
+                    logger.AuthorizeRequest(domain, workflow, instanceId, DescribeTarget(null, null, true, false), Describe(resolvedForForward.Value), false);
+                    return Result<AuthorizeOutput>.Ok(new AuthorizeOutput { Allowed = false });
+                }
+            }
+
+            // Parent-declared overrides are deliberately NOT read here. They are stamped onto the child
+            // when it starts (SubflowStarter) and resolved at the level they govern by the single
+            // resolver (TransitionAuthorizationManager, via SubFlowStateOverrideReader /
+            // SubFlowTransitionOverrideReader). Reading them from the parent's definition here did two
+            // things wrong: it RETURNED at depth 1, so a grandchild's own gate never ran; and it could
+            // not work at all for a directly addressed leaf, where no parent is in scope — which is how
+            // `authorize` and the state function came to give opposite verdicts for the same leaf.
+            // Per-hop stamping also gives the authored semantics for free: a parent's override of its
+            // child never reaches the grandchild, because only the direct parent's map is stamped.
             var roleForForward = resolvedForForward.Value is { Count: > 0 } forwardRoles
                 ? string.Join(",", forwardRoles)
                 : role;
@@ -138,6 +154,7 @@ public sealed class AuthorizeAppService(
                 functionKey,
                 version,
                 checkQueryRoles,
+                checkAck,
                 requestContext,
                 cancellationToken);
         }
@@ -149,16 +166,17 @@ public sealed class AuthorizeAppService(
         // subflow forward, the instance load — while the answer they exist to produce was not, so a
         // denial could be seen arriving and never explained.
         using var decision = AuthorizationActivityHelper.StartDecide();
-        var allowed = await EvaluateAuthorizeAsync(wf, callerRolesResult.Value, transitionKey, functionKey, instance, checkQueryRoles, domain, workflowVersion, requestContext, cancellationToken);
+        var allowed = await EvaluateAuthorizeAsync(wf, callerRolesResult.Value, transitionKey, functionKey, instance, checkQueryRoles, checkAck, domain, workflowVersion, requestContext, cancellationToken);
         AuthorizationActivityHelper.SetDecision(decision, allowed, callerRolesResult.Value?.Count ?? 0);
 
-        logger.AuthorizeRequest(domain, workflow, Describe(callerRolesResult.Value), allowed);
+        logger.AuthorizeRequest(domain, workflow, instanceId, DescribeTarget(transitionKey, functionKey, checkQueryRoles, checkAck), Describe(callerRolesResult.Value), allowed);
         return Result<AuthorizeOutput>.Ok(new AuthorizeOutput { Allowed = allowed });
     }
 
     /// <summary>
     /// Resolves the caller's role set through the configured provider, falling back to the explicit
-    /// <c>role</c> request parameter only when the provider reports no roles at all.
+    /// <c>role</c> request parameter only when the provider reports no roles at all <b>and</b> the
+    /// provider permits that fallback (<see cref="ICallerRoleResolver.AllowsRoleParameterFallback"/>).
     /// <para>
     /// The provider is asked first so that this surface and the discovery surfaces agree: an
     /// <c>authorize</c> answer that contradicts <c>availableTransitions</c> is worse than no answer.
@@ -175,6 +193,20 @@ public sealed class AuthorizeAppService(
     private static string Describe(IReadOnlyList<string>? roles) =>
         roles is { Count: > 0 } ? string.Join(",", roles) : string.Empty;
 
+    /// <summary>
+    /// Names which of the four questions was asked, for the audit line. Without it the log records the
+    /// same domain/workflow/roles tuple for every authorize call a caller makes against a flow, so a
+    /// refusal cannot be told from any other refusal.
+    /// </summary>
+    private static string DescribeTarget(string? transitionKey, string? functionKey, bool checkQueryRoles, bool checkAck)
+    {
+        if (!string.IsNullOrWhiteSpace(transitionKey)) return $"transition:{transitionKey}";
+        if (!string.IsNullOrWhiteSpace(functionKey)) return $"function:{functionKey}";
+        if (checkAck) return "ack";
+        if (checkQueryRoles) return "queryRoles";
+        return "none";
+    }
+
     private async Task<Result<IReadOnlyList<string>?>> GetCallerRolesAsync(
         string? roleParameter,
         AuthorizationRequestContext? requestContext,
@@ -186,6 +218,12 @@ public sealed class AuthorizeAppService(
 
         if (resolved.Value is { Length: > 0 } roles)
             return Result<IReadOnlyList<string>?>.Ok(roles);
+
+        // The provider answered, and it answered "none". Whether that leaves room for the caller's own
+        // `role` parameter is the provider's call, not this method's — see
+        // ICallerRoleResolver.AllowsRoleParameterFallback.
+        if (!callerRoleResolver.AllowsRoleParameterFallback)
+            return Result<IReadOnlyList<string>?>.Ok(null);
 
         return Result<IReadOnlyList<string>?>.Ok(
             string.IsNullOrWhiteSpace(roleParameter) ? null : [roleParameter.Trim()]);
@@ -394,13 +432,13 @@ public sealed class AuthorizeAppService(
         string.IsNullOrWhiteSpace(version) ? null : version.Trim();
 
     /// <summary>
-    /// Validates instance-level authorize: exactly one of transitionKey, functionKey, or checkQueryRoles.
+    /// Validates instance-level authorize: exactly one of transitionKey, functionKey, checkQueryRoles or checkAck.
     /// </summary>
-    private static Result<AuthorizeOutput>? ValidateAuthorizeTargetInstance(string? transitionKey, string? functionKey, bool checkQueryRoles)
+    private static Result<AuthorizeOutput>? ValidateAuthorizeTargetInstance(string? transitionKey, string? functionKey, bool checkQueryRoles, bool checkAck)
     {
         var hasTransition = !string.IsNullOrWhiteSpace(transitionKey);
         var hasFunction = !string.IsNullOrWhiteSpace(functionKey);
-        var count = (hasTransition ? 1 : 0) + (hasFunction ? 1 : 0) + (checkQueryRoles ? 1 : 0);
+        var count = (hasTransition ? 1 : 0) + (hasFunction ? 1 : 0) + (checkQueryRoles ? 1 : 0) + (checkAck ? 1 : 0);
         if (count != 1)
             return Result<AuthorizeOutput>.Fail(WorkflowErrors.AuthorizeRequiresExactlyOneTarget());
         return null;
@@ -418,6 +456,7 @@ public sealed class AuthorizeAppService(
         string? functionKey,
         Instance? instance,
         bool checkQueryRoles,
+        bool checkAck,
         string domain,
         string? workflowVersion,
         AuthorizationRequestContext? requestContext,
@@ -428,7 +467,7 @@ public sealed class AuthorizeAppService(
         // asking role by role lets an allowed role answer before a denied one is ever considered.
         => EvaluateAuthorizeCoreAsync(
             workflow, callerRoles, transitionKey, functionKey, instance,
-            checkQueryRoles, domain, workflowVersion, requestContext, cancellationToken);
+            checkQueryRoles, checkAck, domain, workflowVersion, requestContext, cancellationToken);
 
     private async Task<bool> EvaluateAuthorizeCoreAsync(
         Definitions.Workflow workflow,
@@ -437,6 +476,7 @@ public sealed class AuthorizeAppService(
         string? functionKey,
         Instance? instance,
         bool checkQueryRoles,
+        bool checkAck,
         string domain,
         string? workflowVersion,
         AuthorizationRequestContext? requestContext,
@@ -444,6 +484,9 @@ public sealed class AuthorizeAppService(
     {
         if (checkQueryRoles)
             return await EvaluateQueryRolesAsync(workflow, callerRoles, instance, requestContext, cancellationToken);
+
+        if (checkAck)
+            return await EvaluateAckAsync(workflow, callerRoles, instance, requestContext, cancellationToken);
 
         if (!string.IsNullOrWhiteSpace(transitionKey))
         {
@@ -483,23 +526,10 @@ public sealed class AuthorizeAppService(
         return false;
     }
 
-    /// <summary>
-    /// Evaluates a list of role grants against the caller roles (multi-role: any allowed → allow).
-    /// Used to apply SubFlow override grants locally without forwarding to the SubFlow.
-    /// </summary>
-    private Task<bool> EvaluateWithGrantsAsync(
-        IReadOnlyList<string>? callerRoles,
-        IReadOnlyCollection<RoleGrant> grants,
-        Instance instance,
-        AuthorizationRequestContext? requestContext,
-        CancellationToken cancellationToken)
-        // ONE call with the whole role set, not a loop that returns on the first role that is
-        // allowed. That loop was the canonical rule's composition rebuilt a layer up, and it
-        // rebuilt the wrong one: with the deny group now an AND evaluated across every role the
-        // caller carries, asking role by role would let an allowed role answer before a denied one
-        // was ever considered — the exact defect the evaluator was changed to remove.
-        => transitionAuthorizationManager.IsRoleAllowedForGrantsAsync(
-            callerRoles, grants, instance, requestContext, cancellationToken);
+    // EvaluateWithGrantsAsync was removed with the parent-side override branches it served. Applying
+    // "SubFlow override grants locally without forwarding to the SubFlow" is precisely what could not
+    // work: it returned at depth 1 and had nothing to read at a directly addressed leaf. The overrides
+    // are now resolved at the level they govern, from the child's stamp, by TransitionAuthorizationManager.
 
     /// <summary>
     /// Evaluates state-based query roles: instance effective state → state queryRoles or workflow root queryRoles.
@@ -516,5 +546,90 @@ public sealed class AuthorizeAppService(
             return false;
         return await transitionAuthorizationManager.IsQueryAllowedAsync(
             workflow, instance, callerRoles, requestContext, cancellationToken);
+    }
+
+    /// <summary>
+    /// Evaluates the long-poll acknowledge gate — the pre-flight for
+    /// <c>POST .../instances/{instance}/longpoll/ack</c>.
+    /// <para>
+    /// Answered through <see cref="Execution.LongPoll.ILongPollInteractionGate"/>, the same object the
+    /// acknowledge endpoint and the state function's signal emit admit through, so the arm selection
+    /// (rule, else roles, else allow) cannot diverge between the pre-flight and the call it describes.
+    /// Re-implementing the roles arm here would silently ignore the <c>rule</c> arm, which is a C#
+    /// script no middle tier can evaluate — the one thing that must not be lost in a pre-flight.
+    /// </para>
+    /// <para>
+    /// A caller asking about an instance that is <b>not</b> awaiting an acknowledgement is answered
+    /// <c>true</c>, because that is what the endpoint does: it returns <c>Ok()</c> idempotently when
+    /// nothing in the chain is awaiting. Answering <c>false</c> would have the middle tier refuse a
+    /// call the runtime accepts.
+    /// </para>
+    /// </summary>
+    private async Task<bool> EvaluateAckAsync(
+        Definitions.Workflow workflow,
+        IReadOnlyCollection<string>? callerRoles,
+        Instance? instance,
+        AuthorizationRequestContext? requestContext,
+        CancellationToken cancellationToken)
+    {
+        if (instance is null)
+            return false;
+
+        if (!instance.IsAwaitingLongPollAck)
+            return true;
+
+        var state = workflow.FindState(instance.GetCurrentState);
+
+        var admitted = await longPollInteractionGate.IsAdmittedAsync(
+            instance,
+            workflow,
+            state,
+            requestContext?.Headers is null ? null : new Dictionary<string, string?>(requestContext.Headers),
+            requestContext?.QueryParameters is null ? null : new Dictionary<string, string?>(requestContext.QueryParameters),
+            _ => Task.FromResult(Result<IReadOnlyCollection<string>>.Ok(callerRoles ?? [])),
+            surface: "authorize",
+            cancellationToken);
+
+        // A gate failure is a resolution failure, not a denial; it cannot reach here because the roles
+        // are already resolved and handed in, but the contract is honoured rather than assumed.
+        return admitted.IsSuccess && admitted.Value;
+    }
+
+    /// <summary>
+    /// The caller role set for the <c>ack</c> target: the explicit <c>role</c> parameter is
+    /// <b>additive</b> to the provider's roles rather than a fallback — and, like the fallback, only
+    /// when the provider permits it
+    /// (<see cref="ICallerRoleResolver.AllowsRoleParameterFallback"/>).
+    /// <para>
+    /// This deliberately differs from <see cref="GetCallerRolesAsync"/>, which the other targets use.
+    /// It preserves how the acknowledge endpoint itself used to build the set, back when that endpoint
+    /// still evaluated the gate: the explicit parameter is how a client names WHICH of its roles is
+    /// acknowledging, so dropping it whenever the provider answers anything would silently change the
+    /// question. The endpoint no longer authorizes — this pre-flight is the only evaluation left — so
+    /// there is no second implementation to agree with, and this one is now the definition.
+    /// </para>
+    /// </summary>
+    private async Task<Result<IReadOnlyList<string>?>> GetAckCallerRolesAsync(
+        string? roleParameter,
+        AuthorizationRequestContext? requestContext,
+        CancellationToken cancellationToken)
+    {
+        var resolved = await callerRoleResolver.ResolveRolesAsync(requestContext?.Headers, cancellationToken);
+        if (!resolved.IsSuccess)
+            return Result<IReadOnlyList<string>?>.Fail(resolved.Error);
+
+        var roles = new List<string>();
+
+        // Additive, but only for a provider whose source is the caller's own assertion anyway. Under an
+        // authority provider the parameter adds nothing it is entitled to add: `ack` would otherwise be
+        // the one target where a caller could still name its own role, and the interaction's roles arm
+        // would be evaluated against a set morph-idm never returned.
+        if (callerRoleResolver.AllowsRoleParameterFallback && !string.IsNullOrWhiteSpace(roleParameter))
+            roles.Add(roleParameter.Trim());
+
+        if (resolved.Value is { Length: > 0 } providerRoles)
+            roles.AddRange(providerRoles.Where(r => !roles.Contains(r, StringComparer.OrdinalIgnoreCase)));
+
+        return Result<IReadOnlyList<string>?>.Ok(roles.Count == 0 ? null : roles);
     }
 }

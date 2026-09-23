@@ -134,8 +134,31 @@ public sealed class TransitionAuthorizationManager(
                 workflow, transition, instance, callerRoles, requestContext, cancellationToken);
 
         // State gate first: a transition not offered in this state is denied without evaluating roles.
-        if (!transition.IsAvailableInState(currentStateKey))
+        //
+        // `availableIn` is the gate for SHARED and well-known transitions, and its "empty means every
+        // state" rule is correct for them. It is wrong for a STATE transition, which carries no
+        // availableIn at all and is implicitly scoped to the state that declares it — read through
+        // IsAvailableInState, an empty list made `approve` (declared only on `review`) answer
+        // "allowed" for an instance sitting in `intake`. Measured on role-matrix-lab: the state
+        // function offered [submit-for-review, record-note, cancel-role-matrix] while
+        // authorize?transitionKey=approve answered 200. The execution policy then rejects the call
+        // with Transition:100021, so the oracle was wrong in the PERMISSIVE direction — which is the
+        // direction that matters once a middle tier admits on its answer.
+        //
+        // An earlier fix made this branch state-aware for transitions that HAVE an availableIn; this
+        // closes the other half.
+        if (IsStateScoped(workflow, transition.Key))
+        {
+            var declaredHere = workflow.FindState(currentStateKey)?.Transitions
+                .Any(t => string.Equals(t.Key, transition.Key, StringComparison.Ordinal)) == true;
+
+            if (!declaredHere)
+                return false;
+        }
+        else if (!transition.IsAvailableInState(currentStateKey))
+        {
             return false;
+        }
 
         var stateEntry = transition.FindAvailableIn(currentStateKey);
 
@@ -280,6 +303,14 @@ public sealed class TransitionAuthorizationManager(
         return evaluator.IsAnyRoleAllowed(callerRoles, roleGrants);
     }
 
+    /// <summary>
+    /// True when the key is declared on at least one state, i.e. it is a state transition rather than
+    /// a shared or well-known one. Those two families are the only ones `availableIn` describes.
+    /// </summary>
+    private static bool IsStateScoped(WorkflowDefinition workflow, string transitionKey) =>
+        workflow.States.Any(s => s.Transitions
+            .Any(t => string.Equals(t.Key, transitionKey, StringComparison.Ordinal)));
+
     /// <inheritdoc />
     public async Task<bool> IsQueryAllowedAsync(
         WorkflowDefinition workflow,
@@ -288,7 +319,21 @@ public sealed class TransitionAuthorizationManager(
         AuthorizationRequestContext? requestContext = null,
         CancellationToken cancellationToken = default)
     {
-        var currentStateKey = instance.GetEffectiveState;
+        // The instance's OWN state, never its EffectiveState.
+        //
+        // EffectiveState is the DEEPEST active subflow's state key, which the parent's workflow does
+        // not contain — so `FindState` returned null and the stamped override (keyed by the state the
+        // parent declared for its child) could not match either, and the gate silently fell through to
+        // the workflow root's grants. Measured on the bench: CurrentState=mid-waiting /
+        // EffectiveState=leaf-waiting on a mid, and a caller the parent had narrowed away still read
+        // it 200. That made BOTH a SubFlow state's own queryRoles and a parent's overrides.states
+        // narrowing inert for exactly as long as the child had a subflow of its own — a written
+        // restriction that stopped applying with no error and no log.
+        //
+        // The human-task resolver already resolved its grants from CurrentState
+        // (`HumanTaskLeafResolver.ResolveLeafAsync`), so the two paths disagreed about the same
+        // instance; this is the side that was wrong.
+        var currentStateKey = instance.GetCurrentState;
         var state = string.IsNullOrWhiteSpace(currentStateKey) ? null : workflow.FindState(currentStateKey);
 
         // Precedence: the parent's stamped state override, then the state's own queryRoles, then the

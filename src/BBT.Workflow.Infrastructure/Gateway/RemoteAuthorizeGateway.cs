@@ -33,11 +33,12 @@ public sealed class RemoteAuthorizeGateway : IAuthorizeGateway
         string? functionKey,
         string? version,
         bool checkQueryRoles,
+        bool checkAck,
         AuthorizationRequestContext? requestContext = null,
         CancellationToken cancellationToken = default)
     {
         return _remoteService.GetAuthorizeResultForInstanceAsync(
-            domain, workflow, instanceId, role, transitionKey, functionKey, version, checkQueryRoles, requestContext, cancellationToken);
+            domain, workflow, instanceId, role, transitionKey, functionKey, version, checkQueryRoles, checkAck, requestContext, cancellationToken);
     }
 
     /// <inheritdoc />

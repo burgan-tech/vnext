@@ -14,6 +14,7 @@ using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
 using Microsoft.Extensions.Logging;
 using BBT.Workflow.Shared;
+using BBT.Workflow.Telemetry;
 using System.Text.Json;
 using BBT.Aether.Application.Pagination;
 using BBT.Workflow.Definitions.GraphQL;
@@ -456,8 +457,6 @@ public sealed class InstanceQueryAppService(
             {
                 using var instanceScope = BeginInstanceScope(data.instance);
 
-                if (!await IsInstanceQueryAllowedAsync(data.workflow, data.instance, input.Roles, input.Headers, input.QueryParameters, cancellationToken))
-                    return Result<IncidentDetailDto>.Fail(WorkflowErrors.QueryAccessDenied(data.instance.GetEffectiveState));
 
                 // Trust the row, not the flag: the two are written in one unit of work, but a resolve
                 // that raced this read leaves the flag true for the moment it takes to commit.
@@ -489,9 +488,6 @@ public sealed class InstanceQueryAppService(
             {
                 using var instanceScope = BeginInstanceScope(data.instance);
 
-                // Same gate as the state function: a caller who may poll the state may read what ran.
-                if (!await IsInstanceQueryAllowedAsync(data.workflow, data.instance, input.Roles, input.Headers, input.QueryParameters, cancellationToken))
-                    return Result<GetInstanceTasksOutput>.Fail(WorkflowErrors.QueryAccessDenied(data.instance.GetEffectiveState));
 
                 var rows = await instanceTaskRepository.GetHistoryByInstanceIdAsync(
                     data.instance.Id, cancellationToken);
@@ -523,8 +519,6 @@ public sealed class InstanceQueryAppService(
             {
                 using var instanceScope = BeginInstanceScope(data.instance);
 
-                if (!await IsInstanceQueryAllowedAsync(data.workflow, data.instance, input.Roles, input.Headers, input.QueryParameters, cancellationToken))
-                    return Result<GetInstanceTaskActionsOutput>.Fail(WorkflowErrors.QueryAccessDenied(data.instance.GetEffectiveState));
 
                 var taskRef = await instanceTaskRepository.GetRefForInstanceAsync(
                     data.instance.Id, input.TaskId, cancellationToken);
@@ -563,9 +557,6 @@ public sealed class InstanceQueryAppService(
             {
                 using var instanceScope = BeginInstanceScope(data.instance);
 
-                // Same gate as the state function: a caller who may poll the state may read why it stalled.
-                if (!await IsInstanceQueryAllowedAsync(data.workflow, data.instance, input.Roles, input.Headers, input.QueryParameters, cancellationToken))
-                    return Result<GetInstanceIncidentsOutput>.Fail(WorkflowErrors.QueryAccessDenied(data.instance.GetEffectiveState));
 
                 var paged = await instanceIncidentRepository.GetHistoryPagedAsync(
                     data.instance.Id, page, pageSize, cancellationToken);
@@ -1085,8 +1076,6 @@ public sealed class InstanceQueryAppService(
                     var (flow, instance) = data;
                     using var instanceScope = BeginInstanceScope(instance);
 
-                    if (!await IsInstanceQueryAllowedAsync(flow, instance, input.Roles, input.Headers, input.QueryParameters, cancellationToken))
-                        return ConditionalResult<GetInstanceDataOutput>.Fail(WorkflowErrors.QueryAccessDenied(instance.GetEffectiveState));
 
                     var instanceData = instance.FindData(input.Version);
                     var entityEtag = instanceData?.ETag ?? string.Empty;
@@ -1365,8 +1354,6 @@ public sealed class InstanceQueryAppService(
                 onSuccess: async data =>
                 {
                     using var instanceScope = BeginInstanceScope(data.instance);
-                    if (!await IsInstanceQueryAllowedAsync(data.workflow, data.instance, input.Roles, input.Headers, input.QueryParams, cancellationToken))
-                        return ConditionalResult<GetInstanceStateOutput>.Fail(WorkflowErrors.QueryAccessDenied(data.instance.GetEffectiveState));
 
                     // Full correlation set (active + completed), ordered by creation time. The aggregate's
                     // own ChildCorrelations collection is loaded with an active-only filtered include, so
@@ -2157,6 +2144,22 @@ public sealed class InstanceQueryAppService(
         if (currentStateValue.Interaction?.LongPoll is null)
             return null;
 
+        // The block describes an acknowledgement that is ACTUALLY OUTSTANDING, not one the state
+        // declares it may one day arm. Before this check it was emitted from the DEFINITION alone:
+        // measured on the bench, a leaf reported status A with a full interaction block including
+        // ack.href while `LongPollAckToken` was already cleared — the fallback had resumed the
+        // pipeline — and the acknowledge endpoint answered 200 idempotently. A client could not tell
+        // "there is an ack waiting for you" from "this state can pause", which is the only question
+        // the block exists to answer.
+        //
+        // ETag safety: the token's lifetime is bracketed by status changes on both paths that clear
+        // it — an acknowledge and the fallback job both resume the pipeline — and Status IS a
+        // fingerprint member, so the block's disappearance always rides a fingerprint change. If a
+        // future path ever clears the token WITHOUT a status change, the block would go stale behind
+        // a 304; that path does not exist today and adding one would need a fingerprint member.
+        if (!instance.IsAwaitingLongPollAck)
+            return null;
+
         // Only signal on the main-flow current state view, not a subflow terminal view.
         if (!string.Equals(displayedState, instance.CurrentState, StringComparison.Ordinal)
             && displayedState is not null)
@@ -2189,24 +2192,6 @@ public sealed class InstanceQueryAppService(
                 }
                 : null
         };
-    }
-
-    /// <summary>
-    /// Enforces state/workflow <c>queryRoles</c> visibility for the instance query functions
-    /// (state/data/view/schema). Returns true when access is permitted: no grants defined → allow;
-    /// otherwise the caller's roles must resolve to an allow (DENY wins; predefined/dynamic roles honored).
-    /// </summary>
-    private async Task<bool> IsInstanceQueryAllowedAsync(
-        Definitions.Workflow workflow,
-        Instance instance,
-        IReadOnlyCollection<string>? roles,
-        IReadOnlyDictionary<string, string?>? headers,
-        IReadOnlyDictionary<string, string?>? queryParameters,
-        CancellationToken cancellationToken)
-    {
-        var requestContext = new AuthorizationRequestContext(headers, queryParameters);
-        return await transitionAuthorizationManager.IsQueryAllowedAsync(
-            workflow, instance, roles, requestContext, cancellationToken);
     }
 
     /// <summary>
@@ -2571,8 +2556,6 @@ public sealed class InstanceQueryAppService(
         GetMasterInput input,
         CancellationToken cancellationToken)
     {
-        if (!await IsInstanceQueryAllowedAsync(currentWorkflow, instance, input.Roles, input.Headers, input.QueryParameters, cancellationToken))
-            return Result<GetSchemaOutput>.Fail(WorkflowErrors.QueryAccessDenied(instance.GetEffectiveState));
 
         // Check if there's an active SubFlow - if so, forward the request to SubFlow
         // instance.Subflow returns the first active subflow (Type: S and not completed)
@@ -2731,8 +2714,6 @@ public sealed class InstanceQueryAppService(
         string? transitionKey,
         CancellationToken cancellationToken)
     {
-        if (!await IsInstanceQueryAllowedAsync(currentWorkflow, instance, input.Roles, input.Headers, input.QueryParameters, cancellationToken))
-            return Result<GetSchemaOutput>.Fail(WorkflowErrors.QueryAccessDenied(instance.GetEffectiveState));
 
         if (string.IsNullOrEmpty(transitionKey))
         {
@@ -2831,8 +2812,6 @@ public sealed class InstanceQueryAppService(
         string? transitionKey,
         CancellationToken cancellationToken)
     {
-        if (!await IsInstanceQueryAllowedAsync(currentWorkflow, instance, input.Roles, input.Headers, input.QueryParameters, cancellationToken))
-            return Result<GetViewOutput>.Fail(WorkflowErrors.QueryAccessDenied(instance.GetEffectiveState));
 
         // Get current state using Railway pattern
         var currentStateResult = currentWorkflow.GetState(instance.CurrentState!);

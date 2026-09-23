@@ -11,7 +11,7 @@ public interface IAuthorizeAppService : IApplicationService
 {
     /// <summary>
     /// Returns whether the given role is allowed for the requested transition, function, or state-based query roles for the specified instance.
-    /// Exactly one of transitionKey, functionKey, or checkQueryRoles must be provided.
+    /// Exactly one of transitionKey, functionKey, checkQueryRoles or checkAck must be provided.
     /// </summary>
     Task<Result<AuthorizeOutput>> GetAuthorizeResultForInstanceAsync(
         string domain,
@@ -22,6 +22,7 @@ public interface IAuthorizeAppService : IApplicationService
         string? functionKey,
         string? version = null,
         bool checkQueryRoles = false,
+        bool checkAck = false,
         AuthorizationRequestContext? requestContext = null,
         CancellationToken cancellationToken = default);
 
