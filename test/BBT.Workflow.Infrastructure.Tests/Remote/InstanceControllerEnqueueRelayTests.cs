@@ -55,6 +55,10 @@ public sealed class InstanceControllerEnqueueRelayTests
         payload.ShouldNotBeNull();
         // The job id is threaded as the enqueue argument so BackgroundJobInfo.Id == InstanceJob.JobId.
         capturedJobId.ShouldBe(continuation.JobId);
+        // AB-17: JobId + DataInJobRow must ALSO land on the payload — the handler reads them to
+        // hydrate an offloaded request body; a dropped copy would run the transition bodyless.
+        payload!.JobId.ShouldBe(continuation.JobId);
+        payload.DataInJobRow.ShouldBe(continuation.DataInJobRow);
         payload!.Workflow.ShouldBe(continuation.Flow);
         payload.ExecutionActor.ShouldBe(ExecutionActor.User);
         payload.CallerSync.ShouldBeFalse();
@@ -88,13 +92,14 @@ public sealed class InstanceControllerEnqueueRelayTests
 
         payload.ShouldNotBeNull();
         // Renames, and members that deliberately do NOT land on the payload:
-        //   JobId          → the separate enqueue argument (asserted in the test above)
         //   RootInstanceId → Activity baggage on the Inbox hop (X-Root-Instance-Id), never payload
         //   ExecutionActor → string on the wire, enum on the payload (asserted above + fallback below)
+        // JobId is NO LONGER excluded: since AB-17 it is a real payload field (the handler reads it
+        // to hydrate an offloaded body), so the reflection check below asserts it is relayed — a
+        // future accidental drop of the controller's JobId copy fails here.
         var renames = new Dictionary<string, string> { ["Flow"] = nameof(TransitionJobPayload.Workflow) };
         var notRelayed = new[]
         {
-            nameof(TransitionContinuationRequested.JobId),
             nameof(TransitionContinuationRequested.RootInstanceId),
             nameof(TransitionContinuationRequested.ExecutionActor)
         };
@@ -163,6 +168,7 @@ public sealed class InstanceControllerEnqueueRelayTests
             CorrelationId = "corr-1",
             ChainDepth = 3,
             SubflowChainReserved = true,
+            DataInJobRow = true,
             RootInstanceId = Guid.NewGuid(),
             TraceRoot = "00-11111111111111111111111111111111-3333333333333333-01",
             ParentTraceRoot = "00-11111111111111111111111111111111-4444444444444444-01",

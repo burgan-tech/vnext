@@ -93,6 +93,7 @@ public sealed class EnqueueContinuationStrategy(
             Workflow = current.WorkflowKey,
             Version = current.Workflow.Version,
             Data = null, // chained auto-transitions carry no new request payload
+            JobId = jobId,
             Headers = current.Headers.ToDictionary(kvp => kvp.Key, kvp => kvp.Value),
             RouteValues = current.RouteValues.ToDictionary(kvp => kvp.Key, kvp => kvp.Value),
             ExecutionActor = ExecutionActor.System,

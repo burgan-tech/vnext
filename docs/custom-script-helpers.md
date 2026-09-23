@@ -132,7 +132,7 @@ in Dynamic Expresso terms instead.
     "Enabled": false,
     "AllowUnsafe": false,
     "PluginDirectory": "/app/assemblies",
-    "AllowedAssemblies": [ "System.Private.CoreLib", "System.Runtime", "System.Collections", "System.Linq", "System.Linq.Expressions", "System.Text.RegularExpressions", "Microsoft.CSharp", "netstandard" ],
+    "AllowedAssemblies": [ "System.Private.CoreLib", "System.Runtime", "System.Collections", "System.Linq", "System.Linq.Expressions", "System.Text.RegularExpressions", "Microsoft.CSharp", "System.ObjectModel", "netstandard" ],
     "BannedNamespaces": []
   }
 }
@@ -143,7 +143,10 @@ in Dynamic Expresso terms instead.
 - **`Scripting:Sandbox:Enabled`** — when `true`, **all** mapping compiles use the restricted reference
   set + banned-API analyzer. Default `false` keeps existing behaviour byte-for-byte.
 - **`AllowedAssemblies`** — global baseline of referenceable assemblies. A mapping's
-  `allowedAssemblies` is merged on top of this for that compile only.
+  `allowedAssemblies` is merged on top of this for that compile only. `System.ObjectModel` is in
+  the baseline because enumerating an `ExpandoObject` (a `foreach`, common in mappings) binds
+  `INotifyPropertyChanged`, which lives there; without it the compile fails with CS0012 — do not
+  remove it (finding AB-22).
 - **`BannedNamespaces`** — *adds* to the mandatory platform baseline; it cannot remove an entry.
 
 ### Mandatory banned namespaces (non-overridable)

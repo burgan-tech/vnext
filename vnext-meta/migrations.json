@@ -188,6 +188,17 @@
       "title": "A component deployment must signal publish-completed once at the end",
       "description": "definitions/re-initialize is removed and definitions/publish/completed takes its place. The call is made once, after the last component of a package has been published, and its body reports what each post-deployment hook did. The hook that ships today forces a re-read of the domain discovery registry, which - because the discovery endpoint cache no longer has a TTL - is that cache's only automatic invalidation. A pipeline that never makes the call leaves the runtime resolving cross-domain calls by whatever it learned at startup until the pod restarts, and both old callers swallow the 404 from the removed endpoint without failing, so nothing surfaces the omission.",
       "action": "Upgrade vnext-workflow-cli to a release that calls publish/completed (wf sync / update / reset do it automatically) and release it before or together with the runtime. A pipeline that posts components to definitions/publish directly must add one call to POST /api/v1/definitions/publish/completed at the end and gate on the response body's success field, not on the status code, which is always 200. The init host's package endpoints already do this unconditionally; its former reInitialize request flag is gone and is ignored if sent."
+    },
+    {
+      "id": "async-transition-job-payload-reference-only",
+      "type": "behavior",
+      "component": "transition",
+      "path": null,
+      "since": "0.0.92",
+      "severity": "warning",
+      "title": "Async transition job payloads are reference-only",
+      "description": "An async (sync=false) accept whose request body exceeds WorkflowExecution:AsyncTransitionInlineBodyMaxBytes (1 MiB default) persists the body in the new InstanceJobRequestData table; the Dapr job payload and the TransitionContinuationRequested outbox event carry DataInJobRow + the JobId instead of the body, keeping every message under the scheduler's (etcd) and pub/sub's ceilings. Smaller bodies stay inline unchanged. The job handler hydrates an offloaded body back from the table; in-flight payloads from older builds that carry Data inline keep working. A deferred-arm failure after the accept's commit falls back to the transactional outbox (durable re-arm, instance stays Busy) instead of leaving it stuck.",
+      "action": "No authoring change. Operators: drain async transition jobs before rolling the runtime back past the AddInstanceJobRequestDataTable migration, and prefer draining during a forward rolling deploy too — a pod without this change runs an offloaded (DataInJobRow) job with an empty body. Keep AsyncTransitionInlineBodyMaxBytes high enough that ordinary transitions stay inline and are unaffected by the mixed-version window."
     }
   ]
 }

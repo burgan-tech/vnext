@@ -69,6 +69,24 @@ public sealed class WorkflowExecutionOptions
     public int StatusLockLeaseSeconds { get; set; } = 5;
 
     /// <summary>
+    /// Async transition request bodies at or below this many bytes travel INLINE in the Dapr job
+    /// payload (unchanged behaviour); a larger body is offloaded to <c>InstanceJobRequestData</c>
+    /// and the payload carries a reference instead. Two reasons for the split rather than
+    /// offloading unconditionally (finding AB-17, vnext-client-sdk-core#58):
+    /// <list type="number">
+    /// <item>The scheduler's transport (etcd) refuses a payload over its own ceiling (2 MiB by
+    /// default). The inline cap must stay comfortably below that once the payload envelope
+    /// (headers, trace context) is added — the 1 MiB default leaves ~1 MiB of headroom.</item>
+    /// <item>Rolling-upgrade safety: a not-yet-upgraded pod's job handler has no hydrate-from-row
+    /// branch and would run a row-referenced job with an empty body. Keeping the common case
+    /// (small bodies) inline means only genuinely oversized bodies — which were 100% broken before
+    /// this fix (durable stuck-Busy) — are exposed to that mixed-version window during a deploy.</item>
+    /// </list>
+    /// Set to 0 to offload every non-empty body (useful only for testing the offload path).
+    /// </summary>
+    public int AsyncTransitionInlineBodyMaxBytes { get; set; } = 1_048_576;
+
+    /// <summary>
     /// PostgreSQL timeouts for the InstanceData write funnel: every SaveChanges that inserts
     /// InstanceData rows takes a per-instance <c>FOR UPDATE</c> row lock and runs with these
     /// transaction-scoped (<c>SET LOCAL</c>) limits.

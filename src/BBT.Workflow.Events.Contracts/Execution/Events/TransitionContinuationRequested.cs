@@ -46,8 +46,20 @@ public sealed class TransitionContinuationRequested : IDistributedEvent, ILaneAw
     /// </summary>
     public required Guid JobId { get; init; }
 
-    /// <summary>The transition payload data (JSON), if any.</summary>
+    /// <summary>
+    /// The transition payload data (JSON), if any. Reference-only since the AB-17 fix: an async
+    /// accept persists the body in the <c>InstanceJobs.RequestData</c> row and sets
+    /// <see cref="DataInJobRow"/> instead, so this event stays under the pub/sub and scheduler
+    /// message ceilings. Non-null only on events from builds that predate the fix.
+    /// </summary>
     public JsonElement? Data { get; init; }
+
+    /// <summary>
+    /// True when the accept persisted the request body in the job row's <c>RequestData</c> column
+    /// instead of <see cref="Data"/>. Copied verbatim onto the rebuilt job payload by the internal
+    /// <c>transitions/{key}/enqueue</c> relay endpoint.
+    /// </summary>
+    public bool DataInJobRow { get; init; }
 
     /// <summary>Optional instance key.</summary>
     public string? InstanceKey { get; init; }

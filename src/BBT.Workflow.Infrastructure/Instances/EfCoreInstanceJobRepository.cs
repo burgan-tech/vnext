@@ -59,6 +59,27 @@ public sealed class EfCoreInstanceJobRepository(
             .FirstOrDefaultAsync(p => p.JobId == jobId, cancellationToken);
     }
 
+    public async Task InsertRequestDataAsync(Guid jobId, JsonData data,
+        CancellationToken cancellationToken = default)
+    {
+        // Adds to the caller's ambient UoW (the accept's transactional RequiresNew scope) without
+        // saving — the caller's CommitAsync flushes the body row together with the InstanceJob row
+        // and the outbox write in one transaction. Atomic only because that UoW is IsTransactional.
+        var context = await GetDbContextAsync();
+        await context.Set<InstanceJobRequestData>()
+            .AddAsync(InstanceJobRequestData.Create(jobId, data), cancellationToken);
+    }
+
+    public async Task<JsonData?> FindRequestDataAsync(Guid jobId,
+        CancellationToken cancellationToken = default)
+    {
+        var context = await GetDbContextAsync();
+        var row = await context.Set<InstanceJobRequestData>()
+            .AsNoTracking()
+            .FirstOrDefaultAsync(p => p.Id == jobId, cancellationToken);
+        return row?.Data;
+    }
+
     public async Task<bool> AnyActiveTransitionJobAsync(
         Guid instanceId,
         JobType jobType,

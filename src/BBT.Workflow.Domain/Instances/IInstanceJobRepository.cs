@@ -17,6 +17,19 @@ public interface IInstanceJobRepository : IRepository<InstanceJob, Guid>
     Task<InstanceJob?> FindByJobIdAsReadOnlyAsync(Guid jobId, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Persists an offloaded async-transition request body (its own table, keyed by
+    /// <paramref name="jobId"/>) in the CURRENT ambient unit of work — the caller inserts it in the
+    /// same UoW as the <see cref="InstanceJob"/> row so both commit atomically.
+    /// </summary>
+    Task InsertRequestDataAsync(Guid jobId, JsonData data, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Reads back an offloaded request body by its job id, or <c>null</c> when no row exists
+    /// (a job that carried its body inline, or a missing row). No tracking.
+    /// </summary>
+    Task<JsonData?> FindRequestDataAsync(Guid jobId, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Whether an active job of the given kind already targets this transition on this instance.
     /// This is the LOGICAL identity of a transition job — matched on the structured columns, never
     /// on <see cref="InstanceJob.JobName"/>, which is unique per enqueue (see <see cref="JobName"/>)

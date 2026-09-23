@@ -106,12 +106,40 @@ public sealed class TransitionJobHandler(
                     BackgroundJobActivityHelper.EnrichActivity(activity, args);
                     BackgroundJobActivityHelper.EnrichActivityWithTransition(activity, args.TransitionKey);
 
+                    // Reference-only payloads (AB-17): an oversized request body was offloaded to its
+                    // own InstanceJobRequestData row at accept, so the scheduler transport never
+                    // carries it. Hydrate it back by the row's key (== JobId). A small body still
+                    // travels inline in args.Data (DataInJobRow false) and is used as-is — that also
+                    // covers an in-flight payload from a build that predates the fix.
+                    var data = args.Data;
+                    if (data is null && args.DataInJobRow)
+                    {
+                        var rowBody = args.JobId == Guid.Empty
+                            ? null
+                            : await jobRepository.FindRequestDataAsync(args.JobId, linkedCts.Token);
+                        if (rowBody is null)
+                        {
+                            // The transition must not silently run bodyless: a schema-validated body
+                            // was accepted, and executing without it would corrupt instance data.
+                            logger.TransitionJobRequestDataRowMissing(args.JobName, args.JobId, args.InstanceId);
+                            activity?.SetStatus(ActivityStatusCode.Error, "Job request data row missing");
+                            needsRecovery = true;
+                            recoveryReason = (
+                                $"Transition job '{args.JobName}' declares its request body in a job-data row, " +
+                                $"but no InstanceJobRequestData row with id {args.JobId} carries it",
+                                "JOB_REQUEST_DATA_MISSING");
+                            return;
+                        }
+
+                        data = rowBody.JsonElement;
+                    }
+
                     // For async processing, instance should already be pre-reserved and in Busy status
                     // Reconstruct the original TransitionInput with Sync=true
                     var transitionInput = new TransitionInput(
                             args.Domain,
                             args.Workflow,
-                            new TransitionDataInput(args.Data)
+                            new TransitionDataInput(data)
                             {
                                 Key = args.InstanceKey,
                                 Tags = args.Tags,

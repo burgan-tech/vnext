@@ -44,8 +44,30 @@ public sealed class TransitionJobPayload : ITraceableJobPayload
     
     /// <summary>
     /// Gets or sets the transition data as JSON.
+    /// <para>
+    /// Reference-only since the AB-17 fix: an async accept persists the request body in the
+    /// <c>InstanceJobs.RequestData</c> column and sets <see cref="DataInJobRow"/> instead of
+    /// filling this — the Dapr scheduler's transport (etcd) refuses messages over its ceiling
+    /// (2 MiB default) at arm time, after the Busy flip and job row have committed. Non-null only
+    /// on payloads from builds that predate the fix; the handler still honors it for those.
+    /// </para>
     /// </summary>
     public JsonElement? Data { get; set; }
+
+    /// <summary>
+    /// The durable job row's <see cref="BBT.Workflow.Instances.InstanceJob.JobId"/>, carried so the
+    /// handler can read the row (unique index, independent of the row's IsActive lifecycle) when
+    /// <see cref="DataInJobRow"/> is set. <see cref="Guid.Empty"/> on payloads from older builds.
+    /// </summary>
+    public Guid JobId { get; set; }
+
+    /// <summary>
+    /// True when the accept persisted the request body in the job row's <c>RequestData</c> column
+    /// instead of <see cref="Data"/>. The handler then hydrates the body from the row by
+    /// <see cref="JobId"/>; a missing row is a hard error (the transition must not silently run
+    /// bodyless), routed through recovery so the instance faults visibly.
+    /// </summary>
+    public bool DataInJobRow { get; set; }
 
     /// <summary>
     /// Gets or sets the original, unmodified request body (as a literal string) captured at accept time.

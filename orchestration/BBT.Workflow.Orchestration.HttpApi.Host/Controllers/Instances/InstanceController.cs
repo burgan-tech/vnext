@@ -576,6 +576,11 @@ public sealed class InstanceController(
             Workflow = continuation.Flow,
             Version = continuation.Version,
             Data = continuation.Data,
+            // Reference-only relay (AB-17): the accept stored the body in the job row; the flag and
+            // the row's JobId must survive this rebuild or the handler would run the transition
+            // bodyless.
+            JobId = continuation.JobId,
+            DataInJobRow = continuation.DataInJobRow,
             InstanceKey = continuation.InstanceKey,
             Tags = continuation.Tags,
             Stage = continuation.Stage,

@@ -621,5 +621,25 @@ public static class InstancesModelCreatingExtensions
                 .HasFilter("\"IsActive\" = true")
                 .HasDatabaseName("IX_InstanceJobs_Active_Domain_CreatedAt");
         });
+
+        // The async accept's request body, in its OWN table so it is never transferred by a
+        // metadata read of InstanceJob (the state function's scheduled-transition listing, the
+        // updateData continuation handoff, cancellation — all read InstanceJob metadata-only).
+        // Keyed by the job's JobId; rows exist only for bodies large enough to be offloaded.
+        builder.Entity<InstanceJobRequestData>(b =>
+        {
+            b.ToTable("InstanceJobRequestData", schema);
+            b.ConfigureByConvention();
+
+            b.OwnsOne(p => p.Data, d =>
+            {
+                d.Ignore(g => g.JsonElement);
+                d.Property(g => g.Json)
+                    .IsRequired()
+                    .HasColumnType("jsonb")
+                    .HasColumnName("Data");
+            });
+            b.Navigation(p => p.Data).IsRequired();
+        });
     }
 }

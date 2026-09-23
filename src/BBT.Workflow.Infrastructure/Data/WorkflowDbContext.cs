@@ -78,6 +78,12 @@ public class WorkflowDbContext : AetherDbContext<WorkflowDbContext>, IHasEfCoreB
     public virtual DbSet<InstanceJob> InstanceJobs { get; set; }
 
     /// <summary>
+    /// Gets or sets the offloaded async-transition request bodies (one row per oversized async
+    /// accept, in its own table so InstanceJob metadata reads never transfer the body).
+    /// </summary>
+    public virtual DbSet<InstanceJobRequestData> InstanceJobRequestData { get; set; }
+
+    /// <summary>
     /// Gets or sets the error boundary incidents recorded on instances (one row per incident).
     /// </summary>
     public virtual DbSet<InstanceIncident> InstanceIncidents { get; set; }

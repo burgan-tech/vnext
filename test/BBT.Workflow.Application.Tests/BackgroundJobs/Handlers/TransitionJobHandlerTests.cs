@@ -586,4 +586,93 @@ public class TransitionJobHandlerTests
             r => r.FaultInstanceAsync(It.IsAny<TransitionJobPayload>(), It.IsAny<CancellationToken>()),
             Times.Never);
     }
+
+    /// <summary>
+    /// Reference-only payloads (AB-17): the accept offloaded the body to the InstanceJobRequestData
+    /// table; the handler must hydrate it back by the job id and hand the pipeline the SAME body the
+    /// caller sent.
+    /// </summary>
+    [Fact]
+    public async Task HandleAsync_WhenDataInJobRow_HydratesTheBodyFromTheRow()
+    {
+        var payload = CreatePayload();
+        payload.JobId = Guid.NewGuid();
+        payload.DataInJobRow = true;
+        var body = System.Text.Json.JsonSerializer.SerializeToElement(new { amount = 42 });
+        _jobRepo
+            .Setup(r => r.FindRequestDataAsync(payload.JobId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(JsonData.FromElement(body));
+        WorkflowExecutionContext? executed = null;
+        _executionService
+            .Setup(s => s.ExecuteTransitionAsync(It.IsAny<WorkflowExecutionContext>(), It.IsAny<CancellationToken>()))
+            .Callback<WorkflowExecutionContext, CancellationToken>((ctx, _) => executed = ctx)
+            .ReturnsAsync(Result<TransitionOutput>.Ok(new TransitionOutput()));
+        var handler = CreateHandler();
+
+        await handler.HandleAsync(payload, CancellationToken.None);
+
+        Assert.NotNull(executed);
+        Assert.NotNull(executed!.Data?.Attributes);
+        Assert.Equal(42, executed.Data!.Attributes!.Value.GetProperty("amount").GetInt32());
+        _recoveryService.Verify(
+            r => r.FaultInstanceAsync(
+                It.IsAny<TransitionJobPayload>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    /// <summary>
+    /// A payload that declares its body in the job row but whose row is gone must NOT run the
+    /// transition bodyless — a schema-validated body was accepted, and executing without it would
+    /// corrupt instance data. The handler routes the instance through recovery instead.
+    /// </summary>
+    [Fact]
+    public async Task HandleAsync_WhenTheRequestDataRowIsMissing_FaultsInsteadOfRunningBodyless()
+    {
+        var payload = CreatePayload();
+        payload.JobId = Guid.NewGuid();
+        payload.DataInJobRow = true;
+        _jobRepo
+            .Setup(r => r.FindRequestDataAsync(payload.JobId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((JsonData?)null);
+        var handler = CreateHandler();
+
+        await handler.HandleAsync(payload, CancellationToken.None);
+
+        _executionService.Verify(
+            s => s.ExecuteTransitionAsync(It.IsAny<WorkflowExecutionContext>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+        _recoveryService.Verify(
+            r => r.FaultInstanceAsync(
+                It.IsAny<TransitionJobPayload>(), It.IsAny<string>(), "JOB_REQUEST_DATA_MISSING",
+                CancellationToken.None),
+            Times.Once);
+        _jobRepo.Verify(
+            r => r.MarkAsProcessedAsync(payload.InstanceId, payload.JobName, CancellationToken.None),
+            Times.Once);
+    }
+
+    /// <summary>
+    /// An in-flight payload from a build that predates the fix still carries its body inline; the
+    /// handler must honor it without touching the job row (rolling-upgrade compatibility).
+    /// </summary>
+    [Fact]
+    public async Task HandleAsync_WithLegacyInlineData_ExecutesWithoutReadingTheRow()
+    {
+        var payload = CreatePayload();
+        payload.Data = System.Text.Json.JsonSerializer.SerializeToElement(new { legacy = true });
+        WorkflowExecutionContext? executed = null;
+        _executionService
+            .Setup(s => s.ExecuteTransitionAsync(It.IsAny<WorkflowExecutionContext>(), It.IsAny<CancellationToken>()))
+            .Callback<WorkflowExecutionContext, CancellationToken>((ctx, _) => executed = ctx)
+            .ReturnsAsync(Result<TransitionOutput>.Ok(new TransitionOutput()));
+        var handler = CreateHandler();
+
+        await handler.HandleAsync(payload, CancellationToken.None);
+
+        Assert.NotNull(executed?.Data?.Attributes);
+        Assert.True(executed!.Data!.Attributes!.Value.GetProperty("legacy").GetBoolean());
+        _jobRepo.Verify(
+            r => r.FindRequestDataAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
 }

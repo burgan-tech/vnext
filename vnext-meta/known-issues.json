@@ -129,6 +129,26 @@
       "title": "timer.reset is required by the schema but is read NOWHERE in the runtime, so a workflow timeout always means 'not finished within duration, counted from instance start' and never 'idle for duration'. Whatever the field says - 'never', 'OnEntry' - the behaviour is identical.",
       "workaround": "Author the duration as an absolute budget from start and do not rely on activity resetting it; every authored value in the reference corpus today declares OnEntry against a runtime that ignores it. The instant is resolved once when the scheduler is armed (mapping script included) and never re-armed, which is also why the state function's timeout.executeAtUtc is stable for the instance's whole life. Expressing an idle timeout needs a per-state scheduled transition (triggerType 2), which IS cancelled and re-armed on every state entry.",
       "fixedIn": null
+    },
+    {
+      "id": "async-transition-oversized-body-stuck-busy",
+      "affectedVersions": ">=0.0.26",
+      "severity": "error",
+      "component": "transition",
+      "path": null,
+      "title": "An async (sync=false) transition whose request body exceeds the Dapr scheduler's message ceiling (etcd, 2 MiB default) was accepted with 202 but refused at arm time — after the Busy flip and the job row had committed — leaving the instance durably Busy with no transition record, no incident and no recovery path; the oversized job could also stop the dapr-scheduler for every domain until a restart, losing armed jobs.",
+      "workaround": "Keep async transition bodies well under 2 MiB (upload files to a document store and pass references). Fixed on master 2026-09-23: an oversized body is offloaded to the InstanceJobRequestData table and the Dapr job payload / outbox event carry a reference (DataInJobRow + JobId), so the scheduler transport never sees an oversized message; a deferred-arm failure now falls back to the transactional outbox for durable re-arm instead of stranding the instance Busy. fixedIn and the affectedVersions upper bound are stamped when the release containing the fix is cut.",
+      "fixedIn": null
+    },
+    {
+      "id": "sandbox-baseline-missing-system-objectmodel",
+      "affectedVersions": ">=0.0.26",
+      "severity": "error",
+      "component": "runtime",
+      "path": "Scripting:Sandbox:AllowedAssemblies",
+      "title": "With the script sandbox enabled, the shipped AllowedAssemblies baseline lacked System.ObjectModel, so a mapping that enumerates an ExpandoObject (foreach — ordinary mapping code) failed to compile with CS0012 (ExpandoObject implements INotifyPropertyChanged, which lives in System.ObjectModel; the netstandard facade's type-forward does not satisfy the binder). Direct System.ObjectModel types (ObservableCollection) failed with CS1069. Plain is/cast/dynamic access compiled — the failure was construct-dependent.",
+      "workaround": "Add \"System.ObjectModel\" to Scripting:Sandbox:AllowedAssemblies in the environment's configuration, grant it per mapping via scripts.allowedAssemblies, or read the expando through the 'as IDictionary<string,object>' spelling without enumerating the expando itself. Fixed on master 2026-09-23 by adding the entry to both hosts' shipped baselines; fixedIn is stamped when the release containing the fix is cut.",
+      "fixedIn": null
     }
   ]
 }

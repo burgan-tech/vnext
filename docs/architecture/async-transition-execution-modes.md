@@ -95,12 +95,55 @@ siblings, not nested spans, in one trace, and
 | Crash point | Behavior |
 | --- | --- |
 | Direct enqueue call itself fails | `TransitionEnqueueGateway` falls back to the outbox event in the same call — no orphaned intent, no lost continuation. |
+| Deferred arm (`ArmAsync`, after the accept's commit, outside the status lock) fails | The accept **falls back to the transactional outbox**: it publishes the same continuation event (`PublishOutboxFallbackAsync`) so the Inbox relay re-arms the identical job (idempotent by job name), the instance stays Busy until it does, and the request still returns 202. The flip is **not** released — an arm failure is ambiguous (the scheduler may have registered the job before the client saw the error), and releasing while the job is live server-side would break single-owner-Busy (a re-delivered job runs `IsPreReserved` with no re-check). This is finding AB-17's own remedy (c). With reference-only payloads the arm message is always small, so this path is reached only by genuine scheduler/infra failures, never by an oversized body. `TransitionJobArmFailedFellBackToOutbox` (10175) is the signal; `TransitionJobArmOutboxFallbackFailed` (10177) means the outbox publish also failed (scheduler AND DB down) and the instance stays Busy for manual recovery — no double-owner, because nothing was released. |
+| Process crashes between the accept's commit and the arm | The residual window neither the fallback nor a release can cover: the committed row has no armed job and no code left to run. Same manual-intervention posture as the row below. |
 | Commit succeeds, before/during Dapr enqueue | The durable `InstanceJob` intent is already committed; nothing re-arms a lost job automatically (there is no reaper) — this is the same manual-intervention posture `EnableChainReaper=false` had before, now the only posture. |
 | Job killed mid-chain | The Dapr job retry re-runs the job from its start; the active-job guard (keyed by job name) and the transition record's duplicate-key guard keep re-delivery idempotent. There is no per-hop checkpoint to resume from — a killed job re-executes whatever hops had not yet committed. |
 | Instance already Busy, new request arrives | Rejected by the plain Busy gate; cancel/exit/timeout/updateData are exempt by design (see the Locking section referenced above), not by any chain-ownership token. |
 
 At-least-once delivery means the transition job and its downstream handlers must stay
 idempotent regardless of which enqueue path was taken.
+
+## Reference-Only Job Payloads (Large Bodies)
+
+A **small** async transition body (at or below
+`WorkflowExecution:AsyncTransitionInlineBodyMaxBytes`, 1 MiB by default) travels inline in
+the Dapr job payload, exactly as before. A **larger** body is offloaded: it is persisted in
+its own table `InstanceJobRequestData` (jsonb, keyed by the job id) at accept, and the Dapr
+payload and the outbox continuation event carry `DataInJobRow: true` + the `JobId` instead of
+the body. `TransitionJobHandler` hydrates it back from the table before rebuilding the
+`TransitionInput`. Scheduled-transition timer payloads always had this reference-only shape.
+
+Why offload only large bodies, and to a separate table:
+
+- **The scheduler transport has a hard ceiling.** Dapr stores one-shot jobs in etcd, which
+  refuses messages over ~2 MiB — while Kestrel accepts request bodies up to 10 MB. A body in
+  the payload was refused **at arm time**, after the Busy flip and job row had committed,
+  leaving the instance durably Busy with no incident; on the observed Dapr build the oversized
+  job also stopped the scheduler for every domain until a restart (finding AB-17,
+  [vnext-client-sdk-core#58](https://github.com/burgan-tech/vnext-client-sdk-core/issues/58)).
+- **A separate table keeps hot reads blob-free.** `InstanceJob` is read metadata-only on hot
+  paths — the state function's scheduled-transition listing, the updateData continuation
+  handoff, cancellation. A body column on `InstanceJob` would be transferred by all of them; a
+  separate table with no navigation from `InstanceJob` is loaded only by the handler's
+  by-id point read.
+- **Keeping small bodies inline preserves rolling-upgrade safety.** During a multi-replica
+  deploy, a not-yet-upgraded pod's handler has no hydrate branch and would run a
+  `DataInJobRow` job with an empty body. Because only bodies above the inline cap are
+  offloaded, the overwhelming majority of transitions (small bodies) stay inline and are
+  unaffected; the mixed-version window touches only genuinely oversized bodies, which were
+  **100% broken** before this fix anyway (durable stuck-Busy).
+
+Compatibility: an in-flight payload from a build that predates the fix carries `Data` inline
+and the handler honors it. The reverse — a new offloaded (`DataInJobRow`) payload consumed by
+an old build — runs the transition **bodyless**; drain async transition jobs before rolling
+the runtime back past the `AddInstanceJobRequestDataTable` migration, and prefer draining
+during a forward rolling deploy too (keep the inline cap high so ordinary transitions are
+never affected). A payload that declares `DataInJobRow` whose row is missing is a hard error:
+the handler routes the instance through recovery (`JOB_REQUEST_DATA_MISSING`) rather than
+silently running a schema-validated request without its body. Pinned by
+`AsyncTransitionStrategyTests` (inline vs offload, arm-failure outbox fallback) and
+`TransitionJobHandlerTests` (hydration, missing row, legacy inline payloads).
 
 ## Observability
 

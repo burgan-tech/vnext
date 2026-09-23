@@ -60,6 +60,46 @@ public class SandboxedScriptingTests
         ex.Message.ShouldContain("System.IO");
     }
 
+    /// <summary>
+    /// AB-22 (vnext-client-sdk-core#58): <c>ExpandoObject</c> implements <c>INotifyPropertyChanged</c>,
+    /// which lives in <c>System.ObjectModel</c>, and enumerating an expando (<c>foreach</c> — the
+    /// bread and butter of mapping scripts) makes the compiler bind the type's full interface list,
+    /// so the compile dies with CS0012 pointing at <c>System.ObjectModel</c>; the <c>netstandard</c>
+    /// facade's type-forward does not satisfy the binder alone. Measured against the exact shipped
+    /// baseline: plain <c>is</c>/cast/<c>dynamic</c> member access DO compile without it — the field
+    /// report's own repro construct was imprecise — but enumeration and any direct
+    /// <c>System.ObjectModel</c> type (e.g. <c>ObservableCollection</c>, CS1069) fail. Pins the
+    /// failure mode so nobody "cleans up" the <c>System.ObjectModel</c> entry both hosts'
+    /// appsettings now carry.
+    /// </summary>
+    [Fact]
+    public async Task Sandbox_ExpandoEnumeration_NeedsSystemObjectModel_InTheBaseline()
+    {
+        const string code =
+            "public class C : ISandboxTestCalc { public int Calc() { var e = new System.Dynamic.ExpandoObject(); " +
+            "var d = (System.Collections.Generic.IDictionary<string, object>)e; d[\"a\"] = 1; " +
+            "int n = 0; foreach (var kv in e) n++; return n; } }";
+
+        // The shipped baseline before the fix: System.Linq.Expressions (ExpandoObject's home) is
+        // present, System.ObjectModel is not — the enumeration dies with CS0012 pointing at it.
+        var without = EnabledSandbox();
+        without.AllowedAssemblies.Add("System.Linq.Expressions");
+        without.AllowedAssemblies.Add("Microsoft.CSharp");
+        var ex = await Should.ThrowAsync<ScriptCompilationException>(async () =>
+            await new CSharpEvaluator(without).CompileToInstanceAsync<ISandboxTestCalc>(
+                code, extraReferences: [ContractRef], usingDirectives: ["BBT.Workflow.Scripting"]));
+        ex.Message.ShouldContain("System.ObjectModel");
+
+        // With it — the one-line baseline addition — the same script compiles and runs.
+        var with = EnabledSandbox();
+        with.AllowedAssemblies.Add("System.Linq.Expressions");
+        with.AllowedAssemblies.Add("Microsoft.CSharp");
+        with.AllowedAssemblies.Add("System.ObjectModel");
+        var compilation = await new CSharpEvaluator(with).CompileToInstanceAsync<ISandboxTestCalc>(
+            code, extraReferences: [ContractRef], usingDirectives: ["BBT.Workflow.Scripting"]);
+        compilation.Instance.Calc().ShouldBe(1);
+    }
+
     [Fact]
     public async Task MandatoryBan_Cannot_Be_Removed_By_Config()
     {

@@ -38,6 +38,43 @@ Versioning convention:
 - Minor: additive schema/data expansion.
 - Major: breaking data shape change.
 
+## Merge Semantics — the Sharp Edges (client-facing)
+
+Every transition body is merged into instance data **deeply and unconditionally** — there
+is no replace mode, no per-transition opt-out, no schema-level flag
+(`CreateTransitionRecordStep` applies it to every body; the merge is
+`JsonCanonicalizer.MergeAndCanonicalize`, legacy twin `JsonData.Merge` →
+`ObjectMerger.MergeValues`). Two consequences every client team must design for
+(finding AB-18, [vnext-client-sdk-core#58](https://github.com/burgan-tech/vnext-client-sdk-core/issues/58)):
+
+- **Objects merge per key, recursively.** A field you did not send survives; a field you
+  send overwrites. Sending an *untouched photograph* of a record therefore overwrites every
+  field in it with the possibly-stale values you read — send deltas, not snapshots, on
+  schema-less transitions.
+- **Arrays are replaced wholesale, never merged element-wise**
+  (`CollectionMergeStrategy` — this is also what allows *removing* items from a list). A
+  stale `documents` array in any body silently deletes items a concurrent writer added.
+  If two writers touch the same array, serialize them at the workflow level or model the
+  collection as a keyed object.
+
+A per-transition `bodyMode: merge | input-only` opt-out has been asked for and is an open
+design question — `input-only` interacts with the full-merge invariant above (every version
+carries the complete state), so it needs its own decision before any implementation.
+
+### Where One Payload Gets Persisted (storage multiplication)
+
+A transition body — a base64 file included — is stored, verbatim or merged, in each of
+(finding AB-21): the transition record (`InstanceTransitions.Body`), the task journal per
+task (`InstanceTasks.Request`, potentially `Response`/`InvocationResult`), the merged
+snapshot (`InstancesData.Data`, once per version row), and — for an async accept — the
+offloaded-body table (`InstanceJobRequestData`, only when the body exceeds the inline cap;
+since the AB-17 fix the Dapr job payload and outbox event carry a reference instead of a fifth
+and sixth in-flight copy). All of these
+are `jsonb`, and base64 TOAST-compresses poorly: a 1 MiB file costs several MiB of storage
+per transition that carries it. Prefer uploading bytes to a document store and passing a
+reference through the workflow; a platform-level document-offload story (store once,
+reference everywhere) is an open ask on the same finding.
+
 ## Failure Modes
 
 - Invalid JSON schema input fails before unsafe data is persisted.
