@@ -101,6 +101,15 @@
       ],
       "schemaPath": "timeout"
     },
+    "stateAnnotations": {
+      "since": "0.0.94",
+      "status": "stable",
+      "description": "Every entry the State (long-poll) function lists carries its definition's `annotations` (pure passthrough key-value metadata for client UI context) when one is declared, and omits the field otherwise. Caller-triggerable entries - stateTransition, sharedTransition, cancel, updateData and exit - already resolved it from the transition definition. Two surfaces were missing it and now carry it: kind:'scheduled' entries, resolved from the transition definition via the job's source state (scheduled transitions are only armed from a state's own scheduledTransitions; null when that state or transition no longer resolves, never a failure), and the top-level `timeout` block, from the new workflow-definition field `timeout.annotations`. The timeout's annotations follow the effective timeout: a parent's subFlow.overrides.timeout replaces the child's timeout as a whole, annotations included - no merge, the same rule every SubFlow override follows - and the override stamp written by SubflowStarter carries them to the child; stamps written by earlier runtimes stay readable and simply have none. Annotations are a property of the flow version, which the fingerprint already covers, so no fingerprint member was added; shipping the shape bumped StateFunctionCache.ResponseShapeVersion v11 -> v12. Requires a vnext-schema release that defines workflowTimeout.annotations for authoring validation; before it, the field was accepted by the open workflowTimeout object and silently dropped by the runtime.",
+      "apiEndpoints": [
+        "GET {domain}/workflows/{workflow}/instances/{instance}/functions/state"
+      ],
+      "schemaPath": "transitions[].annotations, timeout.annotations"
+    },
     "stateNotification": {
       "since": "0.0.63",
       "status": "stable",

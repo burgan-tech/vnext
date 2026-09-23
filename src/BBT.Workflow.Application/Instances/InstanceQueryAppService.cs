@@ -1937,7 +1937,7 @@ public sealed class InstanceQueryAppService(
         // Scheduled entries ride in the same transitions list, appended after the caller-triggerable
         // ones; clients discriminate on kind ("scheduled" ⇒ executeAtUtc present).
         transitionItems.AddRange(BuildScheduledTransitionEntries(
-            activeScheduledTransitionJobs, input.Domain, input.Workflow, instance.Id.ToString()));
+            activeScheduledTransitionJobs, currentWorkflow, input.Domain, input.Workflow, instance.Id.ToString()));
 
         // The workflow-level deadline, as its own block rather than a transitions[] entry — it is
         // not a transition (see InstanceTimeoutOutput).
@@ -2036,9 +2036,16 @@ public sealed class InstanceQueryAppService(
     /// System-actor-gated at execution (<c>ActorAuthorizationSpecification</c>), so a client PATCHing
     /// it is rejected exactly as before.
     /// </para>
+    /// <para>
+    /// <c>annotations</c> are the transition definition's, resolved from the job's
+    /// <see cref="InstanceJob.SourceState"/> — scheduled transitions are only ever armed from a state's
+    /// own <c>ScheduledTransitions</c>, never from shared transitions. Unlike the three link flags this
+    /// is real content, not a placeholder; null when the state or transition no longer resolves.
+    /// </para>
     /// </summary>
     private IEnumerable<TransitionItem> BuildScheduledTransitionEntries(
         IReadOnlyCollection<InstanceJob> activeScheduledTransitionJobs,
+        Definitions.Workflow currentWorkflow,
         string domain,
         string workflow,
         string instanceId) =>
@@ -2061,8 +2068,22 @@ public sealed class InstanceQueryAppService(
                 {
                     Href = urlTemplateBuilder.BuildSchemaUrl(domain, workflow, instanceId, j.TransitionKey!),
                     HasSchema = false
-                }
+                },
+                Annotations = ResolveScheduledTransitionAnnotations(currentWorkflow, j)
             });
+
+    private static Dictionary<string, string>? ResolveScheduledTransitionAnnotations(
+        Definitions.Workflow workflow,
+        InstanceJob job)
+    {
+        if (string.IsNullOrEmpty(job.SourceState))
+            return null;
+
+        var stateResult = workflow.GetState(job.SourceState);
+        return stateResult.IsSuccess
+            ? stateResult.Value?.FindTransition(job.TransitionKey!)?.Annotations
+            : null;
+    }
 
     /// <summary>
     /// Builds the state body's <c>timeout</c> block, or null when the polled instance has no
@@ -2119,7 +2140,8 @@ public sealed class InstanceQueryAppService(
         {
             Key = effectiveTimeout.Key,
             Target = effectiveTimeout.Target,
-            ExecuteAtUtc = timeoutJob.ExecuteAt!.Value
+            ExecuteAtUtc = timeoutJob.ExecuteAt!.Value,
+            Annotations = effectiveTimeout.Annotations
         };
     }
 
