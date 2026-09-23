@@ -96,6 +96,60 @@ public sealed class InstanceTaskHistoryPersistenceTests : IAsyncLifetime
         rows[2].FaultedResponseJson.ShouldContain("connection refused");
     }
 
+    /// <summary>
+    /// vnext-client-sdk-core#60: the same task key can run under two hooks of one transition
+    /// (a state's OnEntry vs the transition's OnExecute). Before the hook/order columns the two
+    /// journal rows were indistinguishable in the projection; now Hook + Order tell them apart.
+    /// </summary>
+    [Fact]
+    public async Task GetHistoryByInstanceIdAsync_DistinguishesTasksByHook()
+    {
+        var transition = await SeedInstanceWithTransitionAsync("hook-projection");
+        await using (var ctx = CreateContext())
+        {
+            // Same task key, two different hooks — the collision the client could not resolve.
+            ctx.InstanceTasks.Add(new InstanceTask(Guid.NewGuid(), transition.Id, "shared-task", TaskTrigger.OnEntry, 0));
+            ctx.InstanceTasks.Add(new InstanceTask(Guid.NewGuid(), transition.Id, "shared-task", TaskTrigger.OnExecute, 2));
+            await ctx.SaveChangesAsync();
+        }
+
+        await using var readCtx = CreateContext();
+        var rows = await CreateTaskRepository(readCtx).GetHistoryByInstanceIdAsync(transition.InstanceId);
+
+        var byHook = rows.Where(r => r.TaskKey == "shared-task").ToList();
+        byHook.Count.ShouldBe(2);
+        byHook.ShouldContain(r => r.Hook == TaskTrigger.OnEntry && r.Order == 0);
+        byHook.ShouldContain(r => r.Hook == TaskTrigger.OnExecute && r.Order == 2);
+    }
+
+    /// <summary>
+    /// A row written before the columns existed carries null hook/order — the API reports unknown
+    /// rather than fabricating (the value cannot be recovered from the one-way ExecutionKey hash).
+    /// Simulated by clearing the columns directly, the shape a pre-migration row has on disk.
+    /// </summary>
+    [Fact]
+    public async Task GetHistoryByInstanceIdAsync_LegacyRowsReportNullHookAndOrder()
+    {
+        var transition = await SeedInstanceWithTransitionAsync("hook-legacy");
+        var task = new InstanceTask(Guid.NewGuid(), transition.Id, "legacy-task", TaskTrigger.OnExecute, 1);
+        await using (var ctx = CreateContext())
+        {
+            ctx.InstanceTasks.Add(task);
+            await ctx.SaveChangesAsync();
+            // Emulate a pre-migration row: the columns are null on disk.
+            await ctx.Database.ExecuteSqlRawAsync(
+                "UPDATE public.\"InstanceTasks\" SET \"TaskTrigger\" = NULL, \"Order\" = NULL WHERE \"Id\" = {0}",
+                task.Id);
+        }
+
+        await using var readCtx = CreateContext();
+        var rows = await CreateTaskRepository(readCtx).GetHistoryByInstanceIdAsync(transition.InstanceId);
+
+        var row = rows.Single(r => r.TaskKey == "legacy-task");
+        row.Hook.ShouldBeNull();
+        row.Order.ShouldBeNull();
+    }
+
     [Fact]
     public async Task GetRefForInstanceAsync_ResolvesOnlyThroughOwningInstance()
     {

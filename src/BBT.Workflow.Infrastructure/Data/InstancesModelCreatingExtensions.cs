@@ -486,6 +486,12 @@ public static class InstancesModelCreatingExtensions
                 .IsRequired()
                 .HasMaxLength(TaskConstants.MaxKeyLength);
 
+            // The task's hook + order, promoted out of the ExecutionKey hash so the tasks function
+            // can report which phase a row ran under (vnext-client-sdk-core#60). Nullable — legacy
+            // rows predate the columns and stay null ("unknown").
+            b.Property(p => p.TaskTrigger)
+                .HasConversion<int?>();
+
             b.OwnsOne(p => p.Request, d =>
             {
                 d.Ignore(g => g.JsonElement);

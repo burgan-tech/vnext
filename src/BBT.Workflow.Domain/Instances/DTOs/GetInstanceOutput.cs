@@ -394,8 +394,19 @@ public sealed class InstanceTaskDto
     /// <summary>State the owning transition moved to. Null while that transition is in progress.</summary>
     public string? ToState { get; set; }
 
-    /// <summary>Trigger type of the owning transition.</summary>
+    /// <summary>Trigger type of the owning transition (NOT the task's hook — see <see cref="Hook"/>).</summary>
     public TriggerType TriggerType { get; set; }
+
+    /// <summary>
+    /// The hook (phase) this task ran under — <c>OnExecute</c> / <c>OnEntry</c> / <c>OnExit</c> etc.
+    /// This is what distinguishes a state's OnEntry tasks from the triggering transition's OnExecute
+    /// tasks (vnext-client-sdk-core#60). Null on rows journaled before this became a column — the API
+    /// reports unknown rather than fabricating.
+    /// </summary>
+    public Definitions.TaskTrigger? Hook { get; set; }
+
+    /// <summary>The task's declared order within its hook group (equal order ⇒ parallel group). Null for legacy rows.</summary>
+    public int? Order { get; set; }
 
     /// <summary>Platform execution status (Waiting, Busy, Completed, Faulted).</summary>
     public Definitions.TaskStatus Status { get; set; }
@@ -428,7 +439,9 @@ public sealed class InstanceTaskDto
         StartedAt = row.StartedAt,
         FinishedAt = row.FinishedAt,
         DurationMs = row.Duration?.TotalMilliseconds,
-        Error = ExtractFaultReason(row.FaultedResponseJson)
+        Error = ExtractFaultReason(row.FaultedResponseJson),
+        Hook = row.Hook,
+        Order = row.Order
     };
 
     /// <summary>

@@ -284,7 +284,9 @@ public class EfCoreInstanceTaskRepository(
                 task.StartedAt,
                 task.FinishedAt,
                 task.Duration,
-                task.Status == WorkflowTaskStatus.Faulted ? task.Response.Json : null)
+                task.Status == WorkflowTaskStatus.Faulted ? task.Response.Json : null,
+                task.TaskTrigger,
+                task.Order)
         ).ToListAsync(cancellationToken);
     }
 

@@ -55,7 +55,11 @@ public sealed record InstanceTaskHistoryRow(
     DateTime StartedAt,
     DateTime? FinishedAt,
     TimeSpan? Duration,
-    string? FaultedResponseJson
+    string? FaultedResponseJson,
+    // The task's own hook (phase) and order — distinct from TriggerType, which is the TRANSITION's
+    // trigger. Null on rows written before these became columns (vnext-client-sdk-core#60).
+    Definitions.TaskTrigger? Hook = null,
+    int? Order = null
 );
 
 /// <summary>
