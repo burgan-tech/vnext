@@ -33,6 +33,7 @@ public sealed class LocalAuthorizeGateway : IAuthorizeGateway
         string? functionKey,
         string? version,
         bool checkQueryRoles,
+        bool checkAck,
         AuthorizationRequestContext? requestContext = null,
         CancellationToken cancellationToken = default)
     {
@@ -40,7 +41,7 @@ public sealed class LocalAuthorizeGateway : IAuthorizeGateway
         {
             var authorizeAppService = sp.GetRequiredService<IAuthorizeAppService>();
             return await authorizeAppService.GetAuthorizeResultForInstanceAsync(
-                domain, workflow, instanceId, role, transitionKey, functionKey, version, checkQueryRoles,
+                domain, workflow, instanceId, role, transitionKey, functionKey, version, checkQueryRoles, checkAck,
                 requestContext, ct);
         }, cancellationToken);
     }

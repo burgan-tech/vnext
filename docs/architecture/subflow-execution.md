@@ -6,6 +6,14 @@ Subflows let one workflow instance start and coordinate another instance. The ru
 blocking SubFlow (`S`) and non-blocking SubProcess (`P`) relationships. Both create a distinct child
 instance and an `InstanceCorrelation`; their parent-continuation behavior differs.
 
+**The two are started from different places, and that is a platform rule, not a preference.** A
+**state** starts a SubFlow and only a SubFlow: `state.subFlow.type` must be `S`. A **SubProcess** is
+started by its own task, `SubProcessTask` (`TaskType.SubProcess = 14`), which starts the child and
+creates the correlation itself. The convention is that a SubProcess may not start another SubProcess,
+though — as noted under *Authoring rule* below — nothing currently enforces that half. Everything below
+about state-level subflow machinery therefore describes `S`; see *Authoring rule* under
+[`S` and `P` Semantics](#s-and-p-semantics).
+
 All runtime-generated child start, active-child forward, and child retry calls currently use
 `sync=true`, regardless of the parent request mode or the authored `S`/`P` type. Here, synchronous
 means the command awaits the child's current pipeline activation until it reaches a rest point; it
@@ -28,10 +36,45 @@ key, tags, headers and route values; framework-owned parent/root headers replace
 
 ## `S` and `P` Semantics
 
-| Type | Parent behavior | Child terminal behavior |
-| --- | --- | --- |
-| SubFlow (`S`) | Parent remains Busy with an open correlation and hands continuation ownership to the child. | Completion applies output mapping, closes correlation, then resumes the parent from `ClearBusyOnResumeStep` (order 79). Fault/cancellation propagate through their terminal services. |
-| SubProcess (`P`) | Parent may continue after the synchronous start call reaches the child's current rest point. | Correlation is completed and persisted; normal completion does not resume the parent pipeline. |
+| Type | Started by | Parent behavior | Child terminal behavior |
+| --- | --- | --- | --- |
+| SubFlow (`S`) | A state (`state.subFlow`), via `HandleSubFlowStep` → `StartSubflowJob` | Parent remains Busy with an open correlation and hands continuation ownership to the child. | Completion applies output mapping, closes correlation, then resumes the parent from `ClearBusyOnResumeStep` (order 79). Fault/cancellation propagate through their terminal services. |
+| SubProcess (`P`) | `SubProcessTask` (`TaskType.SubProcess = 14`), which creates the correlation itself | Parent continues; the relationship never marks the parent Busy. | Correlation is completed and persisted; normal completion does not resume the parent pipeline. |
+
+### Authoring rule
+
+`state.subFlow.type` must be `S`. A `P` relationship is authored as a **task**, never as a state. The
+platform convention is also that a SubProcess may not start another SubProcess — but that half is not
+enforced anywhere today: `WorkflowValidator.ValidateStateSubFlowType` inspects only `state.SubFlow` on
+the workflow being validated, and detecting a `SubProcessTask` inside a workflow that some other
+definition uses as a `P` child would need cross-workflow analysis a single-workflow validator cannot
+do. Treat it as a convention authors must follow themselves, not a guarantee the runtime gives you.
+
+This rule explains why the runtime reads `S` wherever a *state-level* relationship is meant, and those
+readers are correct rather than narrow — do not widen them to include `P`:
+
+| Reader | Filter |
+| --- | --- |
+| `Instance.HasActiveSubFlow` | open correlations with `SubFlowType.SubFlow` |
+| `Instance.Subflow` | first open correlation with `SubFlowType.SubFlow` |
+| `Instance.AddCorrelation` | marks the parent Busy only for `S` |
+| `HandleSubFlowStep.HasActiveCorrelationForSameState` | reads `Instance.Subflow` |
+
+A SubProcess correlation is deliberately invisible to all four: the parent is not blocked on it, so it
+must neither hold the parent Busy nor be mistaken for the state's own child.
+
+**Enforced at definition time.** `WorkflowValidator.ValidateStateSubFlowType` rejects any state whose
+`subFlow.type` is not `S`, so the shape fails validation at publish rather than at runtime. Before that
+rule, such a definition was authorable and behaved inconsistently by caller mode — the parent
+continuation it produces is admitted on the async path, where a job re-entry carries `IsPreReserved`,
+and rejected on the sync path with `409 Instance:100031`, leaving the parent Busy and not Faulted with
+no automatic recovery. The supported fix for an existing definition is to model the SubProcess as a
+task.
+
+`HandleSubFlowStep` still branches on `SubFlowType.SubProcess` (queuing `StartSubflowJob` with
+`PostCommitContinuationBehavior.ContinueParent`), which has no other producer — so that cross-stage
+continuation path is now unreachable from a valid definition. It is left in place deliberately;
+deleting it is a separate change.
 
 ## Forwarding to an Active Child
 

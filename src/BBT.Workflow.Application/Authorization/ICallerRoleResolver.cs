@@ -40,6 +40,29 @@ public interface ICallerRoleResolver
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Whether a caller-supplied <c>role</c> request parameter may stand in for this provider's answer
+    /// when the provider reports no roles.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>True only when the provider's own source is already the caller's own assertion.</b> The
+    /// default provider reads <c>ICurrentUser.Roles</c> with the <c>role</c> header behind it, so the
+    /// parameter is the same claim arriving through a different door and adds no authority.</para>
+    /// <para><b>False for any provider that is an authority.</b> Under morph-idm the resolved set is
+    /// the caller's operation set as the identity service reports it, and that service answering
+    /// "none" (<c>204</c>) is a decision, not a gap to fill. Letting the parameter through there would
+    /// let a caller name its own role — measured on the bench before this existed:
+    /// <c>?queryRoles=true</c> answered <c>403</c> while <c>?queryRoles=true&amp;role=chain.admin</c>
+    /// answered <c>200</c> for the same caller and instance. It is the same hole the "never forward
+    /// the <c>role</c> header" rule closes, reached through the query string instead, and it matters
+    /// more now that <c>authorize</c> is the only place these questions are answered: a gateway that
+    /// passes the client's query string through would be admitting on the client's own claim.</para>
+    /// <para>The flag lives on the resolver rather than being read from configuration so the
+    /// Application layer asks the abstraction it already depends on, and so a new provider has to
+    /// state its own answer instead of inheriting one.</para>
+    /// </remarks>
+    bool AllowsRoleParameterFallback => true;
+
+    /// <summary>
     /// The single caller role used where a surface routes on one role (state aliasing, cache scoping).
     /// Always the first of the resolved set, so it can never disagree with it.
     /// </summary>

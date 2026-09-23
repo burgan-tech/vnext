@@ -50,6 +50,8 @@ public class InstanceCommandAppServiceLongPollAckTests : IDisposable
     private readonly ILongPollAckResumeService _resumeService = Substitute.For<ILongPollAckResumeService>();
     private readonly ILongPollInteractionGate _longPollInteractionGate = Substitute.For<ILongPollInteractionGate>();
     private readonly IInstanceCommandGateway _gateway = Substitute.For<IInstanceCommandGateway>();
+    /// <summary>Held by reference so a test can flip the enforcement posture — see the state tests.</summary>
+
     private readonly InstanceCommandAppService _service;
     private readonly IServiceProvider _ambient;
     private readonly IServiceProvider? _previousAmbient;
@@ -96,10 +98,8 @@ public class InstanceCommandAppServiceLongPollAckTests : IDisposable
             transitionAuthorizationManager: _authManager,
             cancellationService: _cancellationService,
             longPollAckResumeService: _resumeService,
-            longPollInteractionGate: _longPollInteractionGate,
             instanceCommandGateway: _gateway,
             workflowOutputMappingService: Substitute.For<IWorkflowOutputMappingService>(),
-            callerRoleResolver: new DefaultCallerRoleResolver(Substitute.For<ICurrentUser>()),
             logger: Substitute.For<ILogger<InstanceCommandAppService>>());
     }
 
@@ -156,26 +156,23 @@ public class InstanceCommandAppServiceLongPollAckTests : IDisposable
         await _resumeService.DidNotReceiveWithAnyArgs().ResumeAsync(default!, default!, default, default, default);
     }
 
+    /// <summary>
+    /// The acknowledge endpoint no longer authorizes: a state whose <c>interaction.longPoll</c> is
+    /// rule-gated, and whose rule would DENY, is acknowledged and resumes — and the gate is never
+    /// consulted.
+    /// </summary>
+    /// <remarks>
+    /// <para>The <c>DidNotReceive</c> matters more here than on any read surface. The rule arm is a C#
+    /// script, so "the Internal Gateway has already asked" is only true because
+    /// <c>GET .../functions/authorize?ack=true</c> admits through that very same
+    /// <c>ILongPollInteractionGate</c> — no gateway can evaluate the script itself. The gate is
+    /// therefore still fully in service; what moved is WHO calls it and when.</para>
+    /// <para>And if this call were still consulting it and merely ignoring the verdict, the runtime
+    /// would be compiling and running that script on every acknowledge in order to discard the
+    /// answer.</para>
+    /// </remarks>
     [Fact]
-    public async Task AcknowledgeLongPollAsync_WhenInteractionRuleAdmits_Resumes()
-    {
-        var instance = CreateInstance(awaiting: true, withSubflow: false);
-        _instanceRepository.GetActiveAsync(instance.Id.ToString(), Arg.Any<CancellationToken>())
-            .Returns(Result<Instance>.Ok(instance));
-        _componentCacheStore.GetFlowAsync(Domain, Workflow, Arg.Any<string?>(), Arg.Any<CancellationToken>())
-            .Returns(Result<Definitions.Workflow>.Ok(BuildWorkflowWithRuleInteraction()));
-        SetupRuleGate(admitted: true);
-
-        var result = await _service.AcknowledgeLongPollAsync(Input(instance.Id.ToString()), CancellationToken.None);
-
-        // The gate admitted the acknowledge, so the paused pipeline resumes. (Rule-over-roles arm
-        // selection and roles-arm laziness are the gate's contract, pinned in LongPollInteractionGateTests.)
-        result.IsSuccess.ShouldBeTrue();
-        await _resumeService.Received(1).ResumeAsync(Domain, Workflow, Version, instance.Id, Arg.Any<CancellationToken>());
-    }
-
-    [Fact]
-    public async Task AcknowledgeLongPollAsync_WhenInteractionRuleDenies_ReturnsAccessDenied()
+    public async Task AcknowledgeLongPollAsync_DoesNotAuthorize_AndResumes()
     {
         var instance = CreateInstance(awaiting: true, withSubflow: false);
         _instanceRepository.GetActiveAsync(instance.Id.ToString(), Arg.Any<CancellationToken>())
@@ -186,10 +183,10 @@ public class InstanceCommandAppServiceLongPollAckTests : IDisposable
 
         var result = await _service.AcknowledgeLongPollAsync(Input(instance.Id.ToString()), CancellationToken.None);
 
-        // Fail-closed: the acknowledge is rejected and the pipeline stays paused (fallback resumes).
-        result.IsSuccess.ShouldBeFalse();
-        result.Error.Code.ShouldBe(WorkflowErrorCodes.AuthorizationRoleDenied);
-        await _resumeService.DidNotReceiveWithAnyArgs().ResumeAsync(default!, default!, default, default, default);
+        result.IsSuccess.ShouldBeTrue("enforcement belongs to the Internal Gateway, via authorize?ack=true");
+        await _resumeService.Received(1).ResumeAsync(Domain, Workflow, Version, instance.Id, Arg.Any<CancellationToken>());
+        await _longPollInteractionGate.DidNotReceiveWithAnyArgs().IsAdmittedAsync(
+            default!, default!, default, default, default, default!, default!, default);
     }
 
     private void SetupRuleGate(bool admitted) =>

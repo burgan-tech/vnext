@@ -133,18 +133,23 @@ public class InstanceQueryAppServiceTaskHistoryTests : IDisposable
             Arg.Any<Guid>(), Arg.Any<CancellationToken>());
     }
 
+    /// <summary>
+    /// The journal is no longer gated here. A denying <c>queryRoles</c> set does not refuse the read
+    /// and is not even consulted — the Internal Gateway asks `authorize?queryRoles=true` instead.
+    /// </summary>
     [Fact]
-    public async Task GetInstanceTasksAsync_WhenQueryRolesDeny_ReturnsForbiddenWithoutReading()
+    public async Task GetInstanceTasksAsync_DoesNotGateOnQueryRoles()
     {
         var instance = SetupInstance(queryAllowed: false);
-        var input = TasksInput(instance.Id.ToString());
+        _instanceTaskRepository
+            .GetHistoryByInstanceIdAsync(instance.Id, Arg.Any<CancellationToken>())
+            .Returns([]);
 
-        var result = await _service.GetInstanceTasksAsync(input, CancellationToken.None);
+        var result = await _service.GetInstanceTasksAsync(TasksInput(instance.Id.ToString()), CancellationToken.None);
 
-        result.IsSuccess.ShouldBeFalse();
-        result.Error.Code.ShouldBe(WorkflowErrorCodes.AuthorizationRoleDenied);
-        await _instanceTaskRepository.DidNotReceive().GetHistoryByInstanceIdAsync(
-            Arg.Any<Guid>(), Arg.Any<CancellationToken>());
+        result.IsSuccess.ShouldBeTrue();
+        await _transitionAuthorizationManager.DidNotReceiveWithAnyArgs().IsQueryAllowedAsync(
+            default!, default!, default, default, default);
     }
 
     [Fact]
@@ -211,17 +216,20 @@ public class InstanceQueryAppServiceTaskHistoryTests : IDisposable
             Arg.Any<Guid>(), Arg.Any<CancellationToken>());
     }
 
+    /// <summary>
+    /// Nor is the actions function. It now reaches its own not-found answer instead of a 403.
+    /// </summary>
     [Fact]
-    public async Task GetInstanceTaskActionsAsync_WhenQueryRolesDeny_ReturnsForbidden()
+    public async Task GetInstanceTaskActionsAsync_DoesNotGateOnQueryRoles()
     {
         var instance = SetupInstance(queryAllowed: false);
 
         var result = await _service.GetInstanceTaskActionsAsync(
             ActionsInput(instance.Id.ToString(), Guid.NewGuid()), CancellationToken.None);
 
-        result.IsSuccess.ShouldBeFalse();
-        result.Error.Code.ShouldBe(WorkflowErrorCodes.AuthorizationRoleDenied);
-        await _instanceTaskRepository.DidNotReceive().GetRefForInstanceAsync(
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.InstanceTaskNotFound,
+            "the read gets past the removed gate and fails on the task id instead");
+        await _instanceTaskRepository.Received(1).GetRefForInstanceAsync(
             Arg.Any<Guid>(), Arg.Any<Guid>(), Arg.Any<CancellationToken>());
     }
 

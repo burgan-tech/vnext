@@ -241,6 +241,17 @@ public static partial class WorkflowLogs
         string errorCode);
 
     /// <summary>
+    /// A post-commit subflow START failed after the parent had already changed state, so the parent
+    /// is faulted rather than released: it has a Busy nobody owns and no child to show for it.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10175,
+        Level = LogLevel.Warning,
+        Message = "Subflow start coordination failed for instance {InstanceId} on transition {TransitionKey} ({ErrorCode}); faulting the parent")]
+    public static partial void SubflowStartCoordinationFaulted(
+        this ILogger logger, Guid instanceId, string transitionKey, string errorCode);
+
+    /// <summary>
     /// Logs at startup when a declared ActivitySource is missing from this host's MERGED
     /// configuration.
     /// <para>
@@ -2745,7 +2756,83 @@ public static partial class WorkflowLogs
         this ILogger logger,
         Guid instanceId,
         string reason);
- 
+
+    /// <summary>
+    /// Logs when a retry on a Faulted instance finds an open SubFlow correlation whose child was
+    /// never created (the post-commit <c>StartSubflowJob</c> that would have created it failed
+    /// before ever running). The retry restarts the subflow start for this same correlation instead
+    /// of delegating to a child that does not exist.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20054,
+        Level = LogLevel.Information,
+        Message = "Retry for instance {InstanceId} found correlation {CorrelationId} pointing at never-created child {SubFlowInstanceId}; restarting the subflow start")]
+    public static partial void SubFlowChildMissingOnRetry(
+        this ILogger logger,
+        Guid instanceId,
+        Guid correlationId,
+        Guid subFlowInstanceId);
+
+    /// <summary>
+    /// Logs when a retry-driven subflow restart (see <see cref="SubFlowChildMissingOnRetry"/>)
+    /// succeeds: the child now exists and the parent resumed waiting on it.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20055,
+        Level = LogLevel.Information,
+        Message = "Subflow restart succeeded for instance {InstanceId}, correlation {CorrelationId}, child {SubFlowInstanceId}")]
+    public static partial void SubFlowRestartSucceeded(
+        this ILogger logger,
+        Guid instanceId,
+        Guid correlationId,
+        Guid subFlowInstanceId);
+
+    /// <summary>
+    /// Logs when a retry-driven subflow restart fails. The parent is re-faulted with this error so
+    /// it remains visible and retryable rather than left Active with an open correlation and no
+    /// child.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20056,
+        Level = LogLevel.Warning,
+        Message = "Subflow restart failed for instance {InstanceId}, correlation {CorrelationId}: {Reason}")]
+    public static partial void SubFlowRestartFailed(
+        this ILogger logger,
+        Guid instanceId,
+        Guid correlationId,
+        string reason);
+
+    /// <summary>
+    /// Logs when the retry-driven subflow restart cannot find the transition that originally moved
+    /// the instance into the SubFlow state (needed to rebuild a valid transition context). No mutation
+    /// is attempted in this case.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20057,
+        Level = LogLevel.Warning,
+        Message = "Could not resolve the transition that moved instance {InstanceId} into state '{ParentState}'; cannot restart the missing subflow child")]
+    public static partial void SubFlowRestartTransitionNotResolved(
+        this ILogger logger,
+        Guid instanceId,
+        string parentState);
+
+    /// <summary>
+    /// Logs when EVERY bounded attempt to re-fault the parent after a failed subflow restart has
+    /// failed. The parent is left Busy with neither an active incident nor a live child — the exact
+    /// strand this retry path exists to prevent, now unavoidable without a human. Distinct EventId
+    /// and Critical level on purpose: this is meant to be alerted on directly, not merely noted.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20058,
+        Level = LogLevel.Critical,
+        Message = "Instance {InstanceId} left Busy with no active incident after {Attempts} failed attempts to re-fault it following correlation {CorrelationId}'s failed subflow restart: {ErrorCode}. Manual intervention required.")]
+    public static partial void SubFlowRestartCompensationExhausted(
+        this ILogger logger,
+        Guid instanceId,
+        Guid correlationId,
+        int attempts,
+        string errorCode);
+
     #endregion
 
     #region Service Discovery
@@ -3230,14 +3317,24 @@ public static partial class WorkflowLogs
     /// <summary>
     /// Logs when authorize system function is invoked.
     /// </summary>
+    /// <remarks>
+    /// Carries the instance and the target because without them the line cannot answer the only
+    /// question anyone asks of it — <i>which</i> question was refused, for <i>which</i> instance. It
+    /// used to record the domain, the workflow and a comma-joined role string, which is identical for
+    /// every authorize call a caller makes against a flow regardless of what was being asked.
+    /// <paramref name="target"/> is <c>transition:{key}</c>, <c>function:{key}</c>, <c>queryRoles</c>
+    /// or <c>ack</c>.
+    /// </remarks>
     [LoggerMessage(
         EventId = 50030,
         Level = LogLevel.Information,
-        Message = "Authorize request. Domain: {Domain}, Workflow: {Workflow}, Role: {Role}, Allowed: {Allowed}")]
+        Message = "Authorize request. Domain: {Domain}, Workflow: {Workflow}, Instance: {InstanceId}, Target: {Target}, Role: {Role}, Allowed: {Allowed}")]
     public static partial void AuthorizeRequest(
         this ILogger logger,
         string domain,
         string workflow,
+        string instanceId,
+        string target,
         string role,
         bool allowed);
 

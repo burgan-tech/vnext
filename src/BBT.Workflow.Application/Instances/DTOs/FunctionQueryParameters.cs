@@ -22,7 +22,17 @@ public class FunctionQueryParameters
     [JsonPropertyName("functionKey")]
     public string? FunctionKey { get; set; } = null;
 
-    /// <summary>When true, authorize evaluates state-based query roles (instance only). Mutually exclusive with transitionKey and functionKey.</summary>
+    /// <summary>When true, authorize evaluates state-based query roles (instance only). Mutually exclusive with transitionKey, functionKey and ack.</summary>
     [JsonPropertyName("queryRoles")]
     public bool? QueryRoles { get; set; } = null;
+
+    /// <summary>
+    /// When true, authorize evaluates the long-poll acknowledge gate for the instance
+    /// (<c>state.interaction.longPoll</c>, both the roles and the rule arm). Mutually exclusive with
+    /// transitionKey, functionKey and queryRoles. This is the pre-flight for
+    /// <c>POST .../instances/{instance}/longpoll/ack</c>, which is the one state-changing surface the
+    /// middle tier has no other way to ask about.
+    /// </summary>
+    [JsonPropertyName("ack")]
+    public bool? Ack { get; set; } = null;
 }

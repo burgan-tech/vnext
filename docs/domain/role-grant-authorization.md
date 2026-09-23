@@ -5,13 +5,50 @@ the **caller's roles**. The grant sets differ by surface, the rule does not.
 
 | Surface | Grant set | Enforced at |
 |---|---|---|
-| Custom function call | `function.roles` | `FunctionAppService.ExecuteFunctionAsync` → 403 `FunctionAccessDenied` |
-| Built-in `state` / `view` / `data` / `schema` | state `queryRoles`, else workflow `queryRoles` | `InstanceQueryAppService.IsInstanceQueryAllowedAsync` → 403 `QueryAccessDenied` |
+| Custom function call | `function.roles` | **Not enforced.** `FunctionAccessPolicy` checks scope only; `function.roles` is evaluated by `authorize` alone |
+| Built-in `state` / `view` / `data` / `schema` / `master` / `tasks` / `actions` / `incidents` | state `queryRoles`, else workflow `queryRoles` | `InstanceQueryAppService.IsInstanceQueryAllowedAsync` → 403 `QueryAccessDenied` — **behind the in-process enforcement switch** |
 | `availableTransitions` discovery | `transition.roles` | `FilterAuthorizedTransitionKeysAsync` (filtered out, not rejected) |
 | `functions/authorize` | any of the above, by target | `AuthorizeAppService` → 403 |
-| Human-task list | `transition.roles` (+ parent overrides) | `FilterAuthorizedInstancesAsync` (filtered out) |
+| Human-task list | leaf state `queryRoles` (stamped parent override first) | `HumanTaskLeafResolver` (dropped from the list; **fail-closed** — an undeclared `queryRoles` drops the leaf) |
 | Schema field visibility | schema `x-roles` per property path | `SchemaFieldFilterService` (field pruned from the body) |
-| Long-poll acknowledge | `state.interaction.longPoll.roles` | `InstanceCommandAppService` → 403 `LongPollAckAccessDenied` |
+| Long-poll acknowledge | `state.interaction.longPoll` — `roles` **or** one `rule` | `InstanceCommandAppService` → 403 `LongPollAckAccessDenied` — **behind the in-process enforcement switch** |
+
+Two rows above were wrong for several releases and are corrected here: custom-function calls stopped
+being role-gated when `FunctionAccessPolicy` was reduced to scope enforcement (`WorkflowErrors.FunctionAccessDenied`
+has had no production caller since), and the human-task list reads `queryRoles`, not `transition.roles`.
+
+## `queryRoles` is enforced at the gateway, not in this runtime
+
+`queryRoles` is fully alive as a **definition** and as an **answer**: it is still evaluated, in full
+and per hop down the active-correlation chain, by `GET .../functions/authorize?queryRoles=true`. What
+this runtime no longer does is evaluate it a *second* time on its own read path.
+
+The deployment target is an Internal Gateway that introspects the caller and consults that `authorize`
+function before forwarding. Enforcing again in process is a second decision point on the same
+question, and two decision points drift — this repository has already paid for that twice, once when
+`authorize` and the state function gave opposite verdicts about the same leaf, and once when a
+parent's narrowing silently stopped applying. One question, one answer, one place.
+
+Concretely, the following no longer refuse in process and no longer consult the gate:
+
+| Surface | Who decides now |
+|---|---|
+| `state`, `data`, `view`, `schema`, `master` | Internal Gateway → `authorize?queryRoles=true` |
+| `tasks`, `actions`, `incidents`, `incidents/active` | same |
+| `POST .../longpoll/ack` | Internal Gateway → `authorize?ack=true` |
+
+`authorize?ack=true` is what makes the acknowledge case work at all: the interaction's `rule` arm is a
+C# script that no gateway can evaluate itself, and that target admits through the very same
+`ILongPollInteractionGate` the endpoint used to call. The gate is still in service; only its caller
+changed.
+
+**Role RESOLUTION is untouched, and that distinction is the whole point.** `availableTransitions`
+filtering, state aliases, `x-roles` field filtering, the human-task list and `CallerScopeHash` cache
+keying all still resolve and evaluate the caller's roles. Visibility stayed; enforcement left.
+
+**Consequence a definition author must know:** a runtime deployed without that gateway in front of it
+does not refuse these reads. `queryRoles` describes what a caller should be shown and is the answer a
+gateway admits on — it is no longer, by itself, a boundary this process defends.
 
 ## Transition execution is deliberately not role-gated
 
@@ -102,6 +139,43 @@ the input: cache scoping (`CallerScopeHash`) and picking a state alias to displa
 **Never loop the caller's roles and return on the first allowed one.** That reconstructs the
 composition a layer up, and it reconstructs the wrong one. `AuthorizeAppService` had it twice — once
 per authorize evaluation and once per grant set — and both had to be collapsed into a single call.
+
+### The gate resolves from the instance's own state
+
+`TransitionAuthorizationManager.IsQueryAllowedAsync` keys its lookup on `Instance.CurrentState`.
+
+It used to key on `EffectiveState`, which is the deepest **active subflow's** state key. On a level
+that has a subflow of its own, that names a state belonging to a different workflow: `FindState`
+returns null, the override stamped on the child (keyed by the state its parent declared) cannot
+match either, and the gate quietly falls through to the workflow root's `queryRoles`. Measured on
+the bench — `CurrentState=mid-waiting`, `EffectiveState=leaf-waiting` — a role the root had narrowed
+away still read that mid `200`.
+
+The consequence was not a wrong answer in some corner: it was a **written restriction that stopped
+applying**, silently, for exactly as long as the child had a subflow of its own, covering both a
+SubFlow state's own `queryRoles` and a parent's `overrides.states` narrowing. The human-task
+resolver (`HumanTaskLeafResolver`) already resolved its grants from `CurrentState`, so the two paths
+had been giving different answers about the same instance; this was the side that was wrong.
+
+Descent is a separate mechanism and is unaffected: a caller is gated at the polled instance and then
+gated again at each level beneath it. Reading a descendant's state key at the top was never how the
+descent worked — it just made the top's own gate unresolvable.
+
+### `availableIn` is not the state gate for a state transition
+
+A **state** transition carries no `availableIn`; it is scoped to the state that declares it.
+`IsAvailableInState`'s "empty means every state" rule is correct for shared and well-known
+transitions — the two families `availableIn` exists to describe — and wrong for this one. Read
+through it, `approve` (declared only on `review`) answered *allowed* for an instance sitting in
+`intake`.
+
+`IsTransitionAllowedInStateAsync` therefore asks whether the key is state-scoped at all
+(`IsStateScoped`) and, when it is, requires the current state to declare it. The failure this closes
+was permissive: the state function offered `[submit-for-review, record-note, cancel-role-matrix]`
+while `authorize?transitionKey=approve` answered 200 for the same caller and instance, and execution
+rejected the call with `Transition:100021`. A discovery surface that is too generous is a cosmetic
+bug; an **oracle** that is too generous becomes an access-control bug the moment a middle tier
+admits on its answer.
 
 ### Why deny runs first
 
@@ -200,6 +274,41 @@ pruned. The one legitimate direct read is inside a resolution helper that then f
 Caller roles also feed `CallerScopeHash`, which keys the data- and schema-function caches. The role set
 used for the authorization decision, for field filtering, and for the cache key must be the *same* set
 — otherwise one cache entry gets filled with differently-filtered bodies.
+
+### The `morph-idm` provider replaces that resolution entirely
+
+`CallerRoleProvider:Provider` selects where caller roles come from, once at startup, process-wide.
+With `default`, the above applies. With `morph-idm`, the roles are the operation set the identity
+service answers for the caller, and **the `role` header decides nothing**.
+
+Three rules, each one a place the provider would otherwise quietly stop being the authority:
+
+- **The `role` header is never forwarded.** The endpoint has two modes: asked *without* a role it
+  returns the caller's whole operation set, asked *with* one it degenerates into a yes/no check for
+  that single role. The runtime needs the set — grants, `availableIn` narrowing, `queryRoles` and
+  `x-roles` are all evaluated against it — so forwarding the header would silently reduce every
+  answer to one role, with no error and no log.
+- **The answer is never merged with the header.** Only the service's roles are valid. A merge would
+  let a gateway-asserted header widen what the identity service governs.
+- **And the `role` request parameter is ignored too.** `authorize` accepts a `role` query parameter
+  for probing a single role; under this provider it buys nothing
+  (`ICallerRoleResolver.AllowsRoleParameterFallback` is false). Without that rule the header hole
+  simply reappeared on the query string: a `204` answer was overridden by the caller naming its own
+  role. Pinned by `AuthorizeRoleParameterFallbackTests` and, end to end, by the chain lab.
+- **`204` is an empty set, not an absence.** It is the shape that invites the mistake: a successful
+  response carrying no roles. Read as "nothing to say, use what you have", it restores the header as
+  a fallback and a caller can name its own roles. A transport failure or a 5xx is the opposite case —
+  a resolution **failure** (403 `Authorization:CallerRoleResolutionFailed`), never an empty set:
+  empty and unknown look identical one line later and mean opposite things, and an unreachable
+  identity service read as "no roles" turns every blacklist grant set into a silent blanket *allow*.
+
+Identity travels on `AetherClaimTypes` headers — `sub`, `act_sub`, `position`, `client_id` — resolved
+from `ICurrentUser` first and from the forwarded header dictionary second (background scopes have no
+ambient HTTP request). Pinned by `MorphIdmCallerRoleResolverContractTests` and, end to end, by
+vnext-example's `AuthorizationChainLab/MorphIdmProviderTests`.
+
+An unrecognized provider name degrades to `default` rather than failing startup: a typo costs a
+role-resolution strategy, not a boundary.
 
 ### Deliberate system-identity reads
 

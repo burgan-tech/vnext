@@ -48,6 +48,7 @@ public class InstanceQueryAppServiceStateTests : IDisposable
     private readonly IComponentCacheStore _componentCacheStore;
     private readonly IInstanceRepository _instanceRepository;
     private readonly IInstanceIncidentRepository _instanceIncidentRepository;
+    private readonly IInstanceTaskRepository _instanceTaskRepository = Substitute.For<IInstanceTaskRepository>();
     private readonly IInstanceQueryGateway _instanceQueryGateway;
     private readonly IRepresentationEtagService _representationEtagService;
     private readonly IUrlTemplateBuilder _urlTemplateBuilder;
@@ -113,7 +114,7 @@ public class InstanceQueryAppServiceStateTests : IDisposable
             instanceCorrelationRepository: _instanceCorrelationRepository,
             instanceJobRepository: _instanceJobRepository,
             instanceIncidentRepository: _instanceIncidentRepository,
-            instanceTaskRepository: Substitute.For<IInstanceTaskRepository>(),
+            instanceTaskRepository: _instanceTaskRepository,
             instanceActionRepository: Substitute.For<IInstanceActionRepository>(),
             longPollInteractionGate: _longPollInteractionGate,
             instanceExtensionService: Substitute.For<IInstanceExtensionService>(),
@@ -436,6 +437,34 @@ public class InstanceQueryAppServiceStateTests : IDisposable
     /// <summary>
     /// When the current state does not declare interaction.longPoll, no interaction block is emitted.
     /// </summary>
+    /// <summary>
+    /// The declaration is not the signal. A state may declare <c>interaction.longPoll</c> and the
+    /// instance still not be parked on it — the pipeline only arms the marker when it actually pauses
+    /// at <c>HandleLongPollTerminationStep</c>, and the fallback timeout or a delivered acknowledge
+    /// clears it again.
+    /// </summary>
+    /// <remarks>
+    /// Emitting the block regardless told the client to acknowledge something no longer pending. The
+    /// endpoint answers <c>Ok()</c> idempotently there, so nothing broke loudly: the client simply
+    /// posted an ack for every poll of that state and read a success back, and the one surface that
+    /// would have revealed it — <c>authorize?ack=true</c> — answers allowed when nothing is awaiting,
+    /// for the same idempotency reason. Presence now follows <c>IsAwaitingLongPollAck</c>, which is
+    /// also why the state body's shape version was bumped: a client parked behind a 304 must not keep
+    /// reading the old presence rule.
+    /// </remarks>
+    [Fact]
+    public async Task GetInstanceStateAsync_WhenNothingIsAwaitingTheAck_OmitsInteraction()
+    {
+        var (instance, workflow) = CreateInstanceWithLongPollState(terminate: true, fallbackSeconds: 45);
+        instance.ClearLongPollAck();
+        SetupCommonMocks(instance, workflow);
+
+        var result = await _service.GetInstanceStateAsync(CreateInput(instance.Id.ToString()), CancellationToken.None);
+
+        result.Result.Value!.Interaction.ShouldBeNull(
+            "the state declares the interaction, but the pipeline is not parked on it");
+    }
+
     [Fact]
     public async Task GetInstanceStateAsync_WhenStateHasNoLongPollDeclaration_NoInteraction()
     {
@@ -1273,10 +1302,21 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         result.Result.Value!.State.ShouldBe("Değerlendirme Aşamasında");
     }
 
+    /// <summary>
+    /// The read surfaces no longer refuse on <c>queryRoles</c>, and they no longer ASK: a denying
+    /// grant set does not even reach the authorization manager from here.
+    /// </summary>
+    /// <remarks>
+    /// The <c>DidNotReceive</c> is the load-bearing half. Asserting only "it returns 200" would pass
+    /// just as well if the gate had been left in place and its verdict ignored — and those are very
+    /// different things to have shipped. The decision now belongs to the Internal Gateway, which asks
+    /// <c>GET .../functions/authorize?queryRoles=true</c> the same question before the request ever
+    /// arrives here; `queryRoles` remains fully evaluated THERE, and this service stops holding a
+    /// second, independently drifting copy of that answer.
+    /// </remarks>
     [Fact]
-    public async Task GetInstanceStateAsync_WhenQueryRolesDeny_Returns403()
+    public async Task GetInstanceStateAsync_DoesNotGateOnQueryRoles()
     {
-        // Arrange
         var instance = Instance.Create(Guid.NewGuid(), TestWorkflow, TestVersion, "test-key");
         var state = State.Create(TestState, StateType.Intermediate, StateSubType.None,
             VersionStrategy.IncreaseMinor.Code);
@@ -1286,19 +1326,44 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         SetupCommonMocks(instance, workflow);
         DenyQueryRoles();
 
-        var input = CreateInput(instance.Id.ToString());
+        var result = await _service.GetInstanceStateAsync(CreateInput(instance.Id.ToString()), CancellationToken.None);
 
-        // Act
-        var result = await _service.GetInstanceStateAsync(input, CancellationToken.None);
+        result.Result.IsSuccess.ShouldBeTrue(
+            "enforcement belongs to the Internal Gateway, which has already asked `authorize`");
 
-        // Assert
-        result.IsNotModified.ShouldBeFalse();
-        result.Result.IsSuccess.ShouldBeFalse();
-        result.Result.Error.Code.ShouldBe(WorkflowErrorCodes.AuthorizationRoleDenied);
+        await _transitionAuthorizationManager.DidNotReceive().IsQueryAllowedAsync(
+            Arg.Any<Definitions.Workflow>(),
+            Arg.Any<Instance>(),
+            Arg.Any<IReadOnlyCollection<string>?>(),
+            Arg.Any<AuthorizationRequestContext?>(),
+            Arg.Any<CancellationToken>());
     }
 
+    /// <summary>
+    /// The regression this change is most likely to cause: removing role RESOLUTION along with
+    /// enforcement. Discovery filtering, state aliasing, <c>x-roles</c> pruning and the caller-scoped
+    /// cache keys all still need the caller's roles — only the 403 moved.
+    /// </summary>
     [Fact]
-    public async Task GetViewAsync_WhenQueryRolesDeny_Returns403()
+    public async Task TransitionFilteringStillDependsOnTheCallersRoles()
+    {
+        var instance = Instance.Create(Guid.NewGuid(), TestWorkflow, TestVersion, "test-key");
+        var state = State.Create(TestState, StateType.Intermediate, StateSubType.None,
+            VersionStrategy.IncreaseMinor.Code);
+        instance.ChangeState(state);
+
+        var workflow = BuildWorkflow(state);
+        SetupCommonMocks(instance, workflow);
+
+        await _service.GetInstanceStateAsync(CreateInput(instance.Id.ToString()), CancellationToken.None);
+
+        await _transitionAuthorizationManager.ReceivedWithAnyArgs().FilterAuthorizedTransitionKeysAsync(
+            default!, default!, default!, default!, default!, default!, default);
+    }
+
+    /// <summary>The view function no longer refuses on <c>queryRoles</c> either.</summary>
+    [Fact]
+    public async Task GetViewAsync_DoesNotGateOnQueryRoles()
     {
         // Arrange
         var instance = Instance.Create(Guid.NewGuid(), TestWorkflow, TestVersion, "test-key");
@@ -1321,12 +1386,12 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         }, transitionKey: null, CancellationToken.None);
 
         // Assert
-        result.IsSuccess.ShouldBeFalse();
-        result.Error.Code.ShouldBe(WorkflowErrorCodes.AuthorizationRoleDenied);
+        ErrorOf(result).ShouldNotBe(WorkflowErrorCodes.AuthorizationRoleDenied);
     }
 
+    /// <summary>Nor does the schema function.</summary>
     [Fact]
-    public async Task GetSchemaAsync_WhenQueryRolesDeny_Returns403()
+    public async Task GetSchemaAsync_DoesNotGateOnQueryRoles()
     {
         // Arrange
         var instance = Instance.Create(Guid.NewGuid(), TestWorkflow, TestVersion, "test-key");
@@ -1347,9 +1412,129 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         }, transitionKey: "approve", CancellationToken.None);
 
         // Assert
-        result.Result.IsSuccess.ShouldBeFalse();
-        result.Result.Error.Code.ShouldBe(WorkflowErrorCodes.AuthorizationRoleDenied);
+        ErrorOf(result.Result).ShouldNotBe(WorkflowErrorCodes.AuthorizationRoleDenied);
     }
+
+    /// <summary>
+    /// The removal, over EVERY surface that used to be gated: none of them refuses on
+    /// <c>queryRoles</c> any more, and none of them asks.
+    /// </summary>
+    /// <remarks>
+    /// <para>Written as a table because the risk this change carries is not "the gate is gone" — one
+    /// can see that in the diff — but "one call site was missed", and a per-surface test written by
+    /// hand is exactly what gets forgotten for the ninth one. The <c>GateConsulted</c> half is what
+    /// separates a real removal from a gate whose verdict is merely ignored.</para>
+    /// <para>`queryRoles` itself is untouched: it is still evaluated, in full and per hop down the
+    /// active-correlation chain, by <c>GET .../functions/authorize?queryRoles=true</c> — which is what
+    /// the Internal Gateway asks before the request reaches this service. What was removed is the
+    /// runtime's SECOND copy of that decision, not the decision.</para>
+    /// <para>The acknowledge endpoint was the tenth surface and is a command, not a read; it is pinned
+    /// in <c>InstanceCommandAppServiceLongPollAckTests</c>.</para>
+    /// </remarks>
+    [Theory]
+    [InlineData("state")]
+    [InlineData("view")]
+    [InlineData("schema")]
+    [InlineData("master")]
+    [InlineData("data")]
+    [InlineData("tasks")]
+    [InlineData("actions")]
+    [InlineData("incidents")]
+    [InlineData("incidents.active")]
+    public async Task NoReadSurfaceGatesOnQueryRoles(string surface)
+    {
+        var (error, consulted) = await InvokeSurfaceAsync(surface);
+
+        error.ShouldNotBe(WorkflowErrorCodes.AuthorizationRoleDenied,
+            $"the `{surface}` surface must not refuse a caller on queryRoles any more");
+        consulted.ShouldBeFalse(
+            $"the `{surface}` surface must skip the question, not ask it and discard the answer");
+    }
+
+    /// <summary>
+    /// Runs one surface against a freshly arranged fixture whose <c>queryRoles</c> would have denied,
+    /// and reports the error code it produced (if any) together with whether the authorization
+    /// manager was consulted.
+    /// </summary>
+    /// <remarks>
+    /// Only the error CODE is compared, never success. What happens past the removed gate is not this
+    /// test's subject: a surface that finds no rows returns its own not-found code, which is not
+    /// <c>AuthorizationRoleDenied</c> and therefore answers exactly what is being asked here.
+    /// </remarks>
+    private async Task<(string? ErrorCode, bool GateConsulted)> InvokeSurfaceAsync(string surface)
+    {
+        var instance = Instance.Create(Guid.NewGuid(), TestWorkflow, TestVersion, "test-key");
+        var state = State.Create(TestState, StateType.Intermediate, StateSubType.None,
+            VersionStrategy.IncreaseMinor.Code);
+        instance.ChangeState(state);
+
+        SetupCommonMocks(instance, BuildWorkflow(state));
+        // Enough for the surfaces that read a repository to return an empty answer rather than throw.
+        // Their content is not this test's subject; reaching them is.
+        _instanceTaskRepository.GetHistoryByInstanceIdAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>())
+            .Returns([]);
+        _instanceIncidentRepository.GetHistoryPagedAsync(
+                Arg.Any<Guid>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(new BBT.Aether.HateoasPagedList<InstanceIncident>([], 1, 20, false));
+        DenyQueryRoles();
+        _transitionAuthorizationManager.ClearReceivedCalls();
+
+        var id = instance.Id.ToString();
+        var headers = new Dictionary<string, string?>();
+        var query = new Dictionary<string, string?>();
+
+        string? code = surface switch
+        {
+            "state" => ErrorOf((await _service.GetInstanceStateAsync(CreateInput(id), CancellationToken.None)).Result),
+            "view" => ErrorOf(await _service.GetViewAsync(new GetViewInput
+            {
+                Domain = TestDomain, Workflow = TestWorkflow, Instance = id,
+                Headers = headers, QueryParameters = query
+            }, transitionKey: null, CancellationToken.None)),
+            "schema" => ErrorOf((await _service.GetSchemaAsync(new GetSchemaInput
+            {
+                Domain = TestDomain, Workflow = TestWorkflow, Instance = id
+            }, transitionKey: "approve", CancellationToken.None)).Result),
+            "master" => ErrorOf((await _service.GetMasterAsync(new GetMasterInput
+            {
+                Domain = TestDomain, Workflow = TestWorkflow, Instance = id,
+                Headers = headers, QueryParameters = query
+            }, CancellationToken.None)).Result),
+            "data" => ErrorOf((await _service.GetInstanceDataAsync(new GetInstanceDataInput
+            {
+                Domain = TestDomain, Workflow = TestWorkflow, Instance = id,
+                Headers = headers, QueryParameters = query
+            }, CancellationToken.None)).Result),
+            "tasks" => ErrorOf(await _service.GetInstanceTasksAsync(new GetInstanceTasksInput
+            {
+                Domain = TestDomain, Workflow = TestWorkflow, Instance = id,
+                Headers = headers, QueryParameters = query
+            }, CancellationToken.None)),
+            "actions" => ErrorOf(await _service.GetInstanceTaskActionsAsync(new GetInstanceTaskActionsInput
+            {
+                Domain = TestDomain, Workflow = TestWorkflow, Instance = id, TaskId = Guid.NewGuid(),
+                Headers = headers, QueryParameters = query
+            }, CancellationToken.None)),
+            "incidents" => ErrorOf(await _service.GetInstanceIncidentsAsync(new GetInstanceIncidentsInput
+            {
+                Domain = TestDomain, Workflow = TestWorkflow, Instance = id,
+                Headers = headers, QueryParameters = query
+            }, CancellationToken.None)),
+            "incidents.active" => ErrorOf(await _service.GetActiveInstanceIncidentAsync(new GetActiveInstanceIncidentInput
+            {
+                Domain = TestDomain, Workflow = TestWorkflow, Instance = id,
+                Headers = headers, QueryParameters = query
+            }, CancellationToken.None)),
+            _ => throw new ArgumentOutOfRangeException(nameof(surface), surface, "unknown surface")
+        };
+
+        var consulted = _transitionAuthorizationManager.ReceivedCalls().Any(
+            c => c.GetMethodInfo().Name == nameof(ITransitionAuthorizationManager.IsQueryAllowedAsync));
+
+        return (code, consulted);
+    }
+
+    private static string? ErrorOf<T>(Result<T> result) => result.IsSuccess ? null : result.Error.Code;
 
     [Fact]
     public async Task GetInstanceStateAsync_AlwaysIncludesMasterHref()
@@ -2094,6 +2279,10 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         var instance = Instance.Create(Guid.NewGuid(), TestWorkflow, TestVersion, "test-key");
         var reviewState = workflow.States.First(s => s.Key == "review");
         instance.ChangeState(reviewState);
+        // The declaration alone is not the signal — the interaction is emitted only while the pipeline
+        // is actually parked waiting for the acknowledge. See
+        // GetInstanceStateAsync_WhenNothingIsAwaitingTheAck_OmitsInteraction for the other half.
+        instance.ArmLongPollAck(Guid.NewGuid());
         return (instance, workflow);
     }
 
@@ -2384,6 +2573,7 @@ public class InstanceQueryAppServiceStateTests : IDisposable
 
         var instance = Instance.Create(Guid.NewGuid(), TestWorkflow, TestVersion, "test-key");
         instance.ChangeState(state);
+        instance.ArmLongPollAck(Guid.NewGuid());
         return (instance, BuildWorkflow(state));
     }
 

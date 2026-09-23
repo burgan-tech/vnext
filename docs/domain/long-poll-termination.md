@@ -120,6 +120,16 @@ change. Enforcement is never stale — the acknowledge evaluates the rule fresh 
 
    The `ack` href follows the same `{ "href": "…" }` shape as `data`/`view`. The `interaction` object
    is omitted entirely when no directive applies.
+
+   **Presence follows `Instance.IsAwaitingLongPollAck`, not the state declaration.** A state may
+   declare `interaction.longPoll` and the instance still not be parked on it — the token is armed
+   only when the pipeline actually pauses at step 75, and the acknowledge or the fallback timeout
+   clears it again. Emitting the block from the declaration alone told the client to acknowledge
+   something no longer pending; nothing broke loudly, because the endpoint answers `Ok()`
+   idempotently there and `authorize?ack=true` answers *allowed* for the same reason, so the client
+   simply posted an ack on every poll of that state and read success back. `ResponseShapeVersion` was
+   bumped (v10 → v11) in the same change: a client parked behind a 304 must not keep being served the
+   old presence rule.
 3. **Acknowledge.** The client stops polling, renders the screen, and `POST`s to
    `…/instances/{instance}/longpoll/ack`. The endpoint runs the same authorization arm as the signal
    (role grants or rule), best-effort cancels the fallback job, and resumes the pipeline.

@@ -40,6 +40,7 @@ public sealed class RemoteAuthorizeAppService(
         string? functionKey,
         string? version,
         bool checkQueryRoles,
+        bool checkAck,
         AuthorizationRequestContext? requestContext = null,
         CancellationToken cancellationToken = default)
     {
@@ -63,6 +64,8 @@ public sealed class RemoteAuthorizeAppService(
                 queryParams.Add($"version={Uri.EscapeDataString(version)}");
             if (checkQueryRoles)
                 queryParams.Add("queryRoles=true");
+            if (checkAck)
+                queryParams.Add("ack=true");
 
             if (queryParams.Count > 0)
                 relativePath += "?" + string.Join("&", queryParams);
