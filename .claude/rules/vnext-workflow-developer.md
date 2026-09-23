@@ -659,6 +659,22 @@ place rather than deleted — removing it is a separate change, and it is the la
   `Status`, and the client's attributes/extensions come from the **parent's** own
   `EnrichOutputCoreAsync`. Do not read attributes off a sub-start or forward response.
 
+### Parent overrides are resolved child-side, on the child's own state
+
+- `overrides.states` / `overrides.transitions` travel to the child in the two stamps
+  (`subflow.state_role_overrides`, `subflow.transition_role_overrides`) — whole maps, despite the
+  names. `SubFlowOverrideStamp` is their one parser.
+- Long-poll: only `fallbackTimeoutSeconds` and `roles`, field-level. Every reader calls
+  `Instance.ResolveEffectiveLongPoll(state)`; never read `State.LongPoll*` at a decision point —
+  the job's window and the body's window would diverge. No override adds a long-poll; a `rule` arm
+  ignores a `roles` override.
+- Views: `(childState, viewKey)` / `(childTransition, viewKey)` via `Instance.ResolveViewOverride`,
+  applied in `ResolveViewAsync` after the child's own rules picked. Keyed by `CurrentState`, never
+  `EffectiveState`. Rules are never overridden.
+- Legacy `overrides.views` / `viewOverrides` stays parent-side and deprecated; mixing it with the
+  scoped view overrides on one subFlow is a validation error.
+- Full guide: `docs/domain/subflow-overrides.md`.
+
 ### `sub:state-changed` is coalesced to one event per activation episode
 
 - **`Instance.ChangeState` does not publish. It arms.** The event is published at the episode's

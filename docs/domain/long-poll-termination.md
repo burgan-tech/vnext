@@ -187,3 +187,11 @@ error-boundary and auto-chained transitions must never pause.
   preserve the shared lock-key, validation-bypass, and busy-confirmation behavior.
 - The instance stays Busy during the ack window; do not re-mark Busy on long-poll resume (a redundant
   resume must not strand an already-advanced instance).
+
+## Parent override
+
+When the instance is a SubFlow child, its parent may override `fallbackTimeoutSeconds` and `roles`
+per child state (`overrides.states.<state>.interaction.longPoll`, field-level). Every reader goes
+through `Instance.ResolveEffectiveLongPoll` — never `State.LongPollFallbackTimeoutSeconds` /
+`LongPollAckRoles` directly. `terminate` and `rule` are not overridable. Details:
+[SubFlow Overrides](subflow-overrides.md).
