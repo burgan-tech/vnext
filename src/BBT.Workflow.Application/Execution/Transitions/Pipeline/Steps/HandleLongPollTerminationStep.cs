@@ -152,8 +152,11 @@ public sealed class HandleLongPollTerminationStep(
             TraceState = activity?.TraceStateString
         };
 
+        // One instant feeds both the Dapr job and the persisted ExecuteAt, so the tracked row states
+        // exactly when the fallback will fire rather than a second clock read.
+        var executeAt = DateTimeOffset.UtcNow.AddSeconds(fallbackSeconds);
         var schedule = DaprJobSchedule
-            .FromDateTime(DateTime.UtcNow.AddSeconds(fallbackSeconds))
+            .FromDateTime(executeAt.UtcDateTime)
             .ExpressionValue;
 
         var metadata = new Dictionary<string, object>
@@ -179,7 +182,8 @@ public sealed class HandleLongPollTerminationStep(
                 jobId,
                 context.Domain,
                 context.WorkflowKey,
-                context.InstanceId),
+                context.InstanceId,
+                executeAt),
             true,
             cancellationToken);
     }

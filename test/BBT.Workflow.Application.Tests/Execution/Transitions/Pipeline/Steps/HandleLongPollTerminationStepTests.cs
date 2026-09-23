@@ -176,6 +176,39 @@ public class HandleLongPollTerminationStepTests
         (fireAt - before).TotalSeconds.ShouldBeInRange(175, 185);
     }
 
+    /// <summary>
+    /// The tracked job row carries the same instant the Dapr job was armed with, so the deadline is
+    /// visible in the database — including a parent's window override.
+    /// </summary>
+    [Fact]
+    public async Task ExecuteAsync_PersistsTheFallbackDeadlineOnTheJobRow()
+    {
+        var workflow = CreateWorkflow(terminate: true); // child declares 30s
+        var context = CreateContext(workflow, workflow.GetState("review").Value!);
+        context.Instance.ExtraProperties[DomainConsts.MetaDataKeys.StateRoleOverrides] =
+            """{"review":{"interaction":{"longPoll":{"fallbackTimeoutSeconds":180}}}}""";
+        string? schedule = null;
+        InstanceJob? inserted = null;
+        _jobService.EnqueueAsync(
+                Arg.Any<string>(), Arg.Any<string>(), Arg.Any<LongPollAckTimeoutPayload>(),
+                Arg.Do<string>(s => schedule = s), Arg.Any<Dictionary<string, object>>(),
+                Arg.Any<JobScheduleFailurePolicy?>(), Arg.Any<bool>(),
+                Arg.Any<Guid?>(), Arg.Any<JobKind?>(), Arg.Any<CancellationToken>())
+            .Returns(Guid.NewGuid());
+        _jobRepository
+            .InsertAsync(Arg.Do<InstanceJob>(j => inserted = j), Arg.Any<bool>(), Arg.Any<CancellationToken>())
+            .Returns(ci => ci.ArgAt<InstanceJob>(0));
+        var before = DateTime.UtcNow;
+
+        await _step.ExecuteAsync(context, CancellationToken.None);
+
+        inserted.ShouldNotBeNull();
+        inserted!.ExecuteAt.ShouldNotBeNull();
+        (inserted.ExecuteAt!.Value - before).TotalSeconds.ShouldBeInRange(175, 185);
+        var armedAt = DateTimeOffset.Parse(schedule!, System.Globalization.CultureInfo.InvariantCulture);
+        (armedAt.UtcDateTime - inserted.ExecuteAt.Value).Duration().TotalSeconds.ShouldBeLessThan(1);
+    }
+
     [Fact]
     public async Task ExecuteAsync_WithParentRolesOverride_EvaluatesTheParentsGrants()
     {
