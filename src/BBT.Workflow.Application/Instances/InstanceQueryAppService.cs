@@ -2179,12 +2179,14 @@ public sealed class InstanceQueryAppService(
         if (admitted is not { IsSuccess: true, Value: true })
             return null;
 
-        var terminate = currentStateValue.TerminatesLongPollOnEntry;
+        // Same resolver the pipeline armed the fallback job with, so the window the client is told
+        // is the window that will actually fire. Terminate is never overridable.
+        var effective = instance.ResolveEffectiveLongPoll(currentStateValue).LongPoll!;
         return new InstanceInteractionOutput
         {
-            TerminateLongPoll = terminate,
-            FallbackTimeoutSeconds = currentStateValue.LongPollFallbackTimeoutSeconds,
-            Ack = terminate
+            TerminateLongPoll = effective.Terminate,
+            FallbackTimeoutSeconds = effective.FallbackTimeoutSeconds,
+            Ack = effective.Terminate
                 ? new AckHref
                 {
                     Href = urlTemplateBuilder.BuildLongPollAckUrl(

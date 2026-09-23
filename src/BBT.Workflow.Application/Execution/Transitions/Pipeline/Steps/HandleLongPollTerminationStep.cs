@@ -38,7 +38,10 @@ public sealed class HandleLongPollTerminationStep(
     public async Task<Result<StepOutcome>> ExecuteAsync(TransitionExecutionContext context,
         CancellationToken cancellationToken)
     {
-        if (!IsApplicable(context))
+        var resolution = context.Instance.ResolveEffectiveLongPoll(context.Target);
+        LogOverrideDiagnostics(context, resolution);
+
+        if (!IsApplicable(context, resolution.LongPoll))
         {
             return Result<StepOutcome>.Ok(StepOutcome.ContinueNoWork());
         }
@@ -48,7 +51,7 @@ public sealed class HandleLongPollTerminationStep(
         // triggering caller is not one of them, do NOT pause — that role is not an owner of the stop, so
         // the pipeline proceeds normally (epilogue runs). The same grant is used by the State function
         // signal and the acknowledge check, so arm → signal → ack all agree on the owning role.
-        if (!await OwnsLongPollAsync(context, cancellationToken))
+        if (!await OwnsLongPollAsync(context, resolution.LongPoll!, cancellationToken))
         {
             return Result<StepOutcome>.Ok(StepOutcome.ContinueNoWork());
         }
@@ -61,12 +64,12 @@ public sealed class HandleLongPollTerminationStep(
         context.Instance.ArmLongPollAck(token);
         await instanceRepository.ArmLongPollAckAsync(context.InstanceId, token, cancellationToken);
 
-        await ScheduleFallbackAsync(context, token, cancellationToken);
+        await ScheduleFallbackAsync(context, token, resolution.LongPoll!.FallbackTimeoutSeconds, cancellationToken);
 
         logger.LongPollTerminationArmed(
             context.InstanceId,
             context.Target!.Key,
-            context.Target.LongPollFallbackTimeoutSeconds);
+            resolution.LongPoll!.FallbackTimeoutSeconds);
 
         // Pause: skip the epilogue (Schedule/Auto) and go straight to Finalize so the transition
         // record completes. The instance stays Busy; resume happens on acknowledge or fallback.
@@ -82,11 +85,12 @@ public sealed class HandleLongPollTerminationStep(
     }
 
     /// <summary>
-    /// Applicable when the entered state terminates long polling and the pipeline is not itself a
-    /// long-poll resume, and the instance is not already awaiting an acknowledge (idempotent re-entry).
+    /// Applicable when the entered state's effective long-poll (state declaration plus any parent
+    /// override) terminates long polling and the pipeline is not itself a long-poll resume, and the
+    /// instance is not already awaiting an acknowledge (idempotent re-entry).
     /// </summary>
-    private static bool IsApplicable(TransitionExecutionContext context)
-        => context.Target?.TerminatesLongPollOnEntry == true
+    private static bool IsApplicable(TransitionExecutionContext context, EffectiveLongPoll? longPoll)
+        => longPoll is { Terminate: true }
            && !context.Directives.IsLongPollAckResume
            && !context.Instance.IsAwaitingLongPollAck;
 
@@ -103,9 +107,10 @@ public sealed class HandleLongPollTerminationStep(
     /// </summary>
     private async Task<bool> OwnsLongPollAsync(
         TransitionExecutionContext context,
+        EffectiveLongPoll longPoll,
         CancellationToken cancellationToken)
     {
-        var roles = context.Target!.LongPollAckRoles;
+        var roles = longPoll.Roles;
         if (roles is not { Count: > 0 })
             return true;
 
@@ -129,6 +134,7 @@ public sealed class HandleLongPollTerminationStep(
     private async Task ScheduleFallbackAsync(
         TransitionExecutionContext context,
         Guid token,
+        int fallbackSeconds,
         CancellationToken cancellationToken)
     {
         var jobName = JobName.ForLongPollAck(context.InstanceId);
@@ -147,7 +153,7 @@ public sealed class HandleLongPollTerminationStep(
         };
 
         var schedule = DaprJobSchedule
-            .FromDateTime(DateTime.UtcNow.AddSeconds(context.Target!.LongPollFallbackTimeoutSeconds))
+            .FromDateTime(DateTime.UtcNow.AddSeconds(fallbackSeconds))
             .ExpressionValue;
 
         var metadata = new Dictionary<string, object>
@@ -176,5 +182,20 @@ public sealed class HandleLongPollTerminationStep(
                 context.InstanceId),
             true,
             cancellationToken);
+    }
+
+    /// <summary>
+    /// Logs, once per state entry, why a parent's long-poll override was not (fully) applied. This is
+    /// the arm point, so it is logged here rather than on every poll.
+    /// </summary>
+    private void LogOverrideDiagnostics(TransitionExecutionContext context, EffectiveLongPollResolution resolution)
+    {
+        var state = context.Target?.Key ?? string.Empty;
+        if (resolution.StampMalformed)
+            logger.SubFlowOverrideStampMalformed(context.InstanceId, state);
+        if (resolution.OverrideIgnoredNoLongPoll)
+            logger.LongPollOverrideIgnoredNoLongPoll(context.InstanceId, state);
+        if (resolution.RolesOverrideIgnoredRuleArm)
+            logger.LongPollRolesOverrideIgnoredRuleArm(context.InstanceId, state);
     }
 }

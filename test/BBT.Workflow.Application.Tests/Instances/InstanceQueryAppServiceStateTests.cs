@@ -465,6 +465,23 @@ public class InstanceQueryAppServiceStateTests : IDisposable
             "the state declares the interaction, but the pipeline is not parked on it");
     }
 
+    /// <summary>
+    /// A parent's window override is what the client is told — the same value the fallback job was
+    /// armed with, because both read Instance.ResolveEffectiveLongPoll.
+    /// </summary>
+    [Fact]
+    public async Task GetInstanceStateAsync_WithParentDurationOverride_ReportsTheParentsWindow()
+    {
+        var (instance, workflow) = CreateInstanceWithLongPollState(terminate: true, fallbackSeconds: 45);
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.StateRoleOverrides] =
+            """{"review":{"interaction":{"longPoll":{"fallbackTimeoutSeconds":180}}}}""";
+        SetupCommonMocks(instance, workflow);
+
+        var result = await _service.GetInstanceStateAsync(CreateInput(instance.Id.ToString()), CancellationToken.None);
+
+        result.Result.Value!.Interaction!.FallbackTimeoutSeconds.ShouldBe(180);
+    }
+
     [Fact]
     public async Task GetInstanceStateAsync_WhenStateHasNoLongPollDeclaration_NoInteraction()
     {

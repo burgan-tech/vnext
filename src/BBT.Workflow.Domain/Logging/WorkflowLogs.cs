@@ -3560,6 +3560,45 @@ public static partial class WorkflowLogs
         string state,
         string reason);
 
+    /// <summary>
+    /// A parent supplied a long-poll override for a child state that declares no long-poll. An
+    /// override tunes a long-poll; it never creates one, so nothing was applied.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20305,
+        Level = LogLevel.Warning,
+        Message = "Long-poll override ignored on instance {InstanceId} at state {State}: the state declares no interaction.longPoll")]
+    public static partial void LongPollOverrideIgnoredNoLongPoll(
+        this ILogger logger,
+        Guid instanceId,
+        string state);
+
+    /// <summary>
+    /// A parent supplied a long-poll roles override for a child state authorized by a rule. Rules are
+    /// not overridable, so the roles override was dropped; a window override still applies.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20306,
+        Level = LogLevel.Warning,
+        Message = "Long-poll roles override ignored on instance {InstanceId} at state {State}: the state authorizes the interaction with a rule")]
+    public static partial void LongPollRolesOverrideIgnoredRuleArm(
+        this ILogger logger,
+        Guid instanceId,
+        string state);
+
+    /// <summary>
+    /// The parent-supplied state override stamp on a child could not be read; the child's own
+    /// configuration was used.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20307,
+        Level = LogLevel.Warning,
+        Message = "SubFlow state override stamp is malformed on instance {InstanceId} (state {State}); the child's own configuration is used")]
+    public static partial void SubFlowOverrideStampMalformed(
+        this ILogger logger,
+        Guid instanceId,
+        string state);
+
     #endregion
 
     #region State Function Cache

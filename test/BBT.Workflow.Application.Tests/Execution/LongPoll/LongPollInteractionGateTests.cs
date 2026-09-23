@@ -174,6 +174,65 @@ public class LongPollInteractionGateTests
         rolesResolved.ShouldBeFalse();
     }
 
+    [Fact]
+    public async Task IsAdmittedAsync_RolesArm_EvaluatesTheParentsRolesOverride()
+    {
+        _authorizationManager
+            .IsAnyRoleAllowedForGrantsAsync(
+                Arg.Any<IReadOnlyCollection<string>?>(), Arg.Any<IReadOnlyCollection<RoleGrant>>(),
+                Arg.Any<Instance?>(), Arg.Any<AuthorizationRequestContext?>(), Arg.Any<CancellationToken>())
+            .Returns(true);
+        var instance = CreateInstance();
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.StateRoleOverrides] =
+            """{"review":{"interaction":{"longPoll":{"roles":[{"role":"corp.teller","grant":"allow"}]}}}}""";
+
+        var admitted = await _gate.IsAdmittedAsync(
+            instance, BuildWorkflow(), CreateRolesState(),
+            headers: null, queryParameters: null,
+            _ => CallerRoles("corp.teller"), surface: "state", CancellationToken.None);
+
+        admitted.Value.ShouldBeTrue();
+        await _authorizationManager.Received(1).IsAnyRoleAllowedForGrantsAsync(
+            Arg.Any<IReadOnlyCollection<string>?>(),
+            Arg.Is<IReadOnlyCollection<RoleGrant>>(g => g.Count == 1 && g.First().Role == "corp.teller"),
+            Arg.Any<Instance?>(), Arg.Any<AuthorizationRequestContext?>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task IsAdmittedAsync_ExplicitEmptyRolesOverride_AllowsWithoutEvaluatingGrants()
+    {
+        var instance = CreateInstance();
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.StateRoleOverrides] =
+            """{"review":{"interaction":{"longPoll":{"roles":[]}}}}""";
+
+        var admitted = await _gate.IsAdmittedAsync(
+            instance, BuildWorkflow(), CreateRolesState(),
+            headers: null, queryParameters: null,
+            _ => CallerRoles("anyone"), surface: "state", CancellationToken.None);
+
+        admitted.Value.ShouldBeTrue();
+        await _authorizationManager.DidNotReceiveWithAnyArgs().IsAnyRoleAllowedForGrantsAsync(
+            default, default!, default, default, default);
+    }
+
+    [Fact]
+    public async Task IsAdmittedAsync_RuleArm_IgnoresARolesOverride()
+    {
+        _taskConditionService
+            .ExecuteConditionAsync(Arg.Any<ScriptCode>(), Arg.Any<ScriptContext>(), Arg.Any<CancellationToken>())
+            .Returns(Result<bool>.Ok(false));
+        var instance = CreateInstance();
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.StateRoleOverrides] =
+            """{"review":{"interaction":{"longPoll":{"roles":[]}}}}""";
+
+        var admitted = await _gate.IsAdmittedAsync(
+            instance, BuildWorkflow(), CreateRuleState(),
+            headers: null, queryParameters: null,
+            _ => CallerRoles("anyone"), surface: "state", CancellationToken.None);
+
+        admitted.Value.ShouldBeFalse(); // the rule still decides; the empty roles override does not open it
+    }
+
     private static Task<Result<IReadOnlyCollection<string>>> CallerRoles(params string[] roles) =>
         Task.FromResult(Result<IReadOnlyCollection<string>>.Ok(roles));
 
