@@ -23,11 +23,6 @@ public sealed class PipelineExecutionProfile
     /// </summary>
     public required bool AllowAutoChain { get; init; }
 
-    /// <summary>
-    /// Gets a value indicating whether subflow-related pipeline steps should run where applicable.
-    /// </summary>
-    public required bool AllowSubFlow { get; init; }
-
     // NOTE: ResourceLock is intentionally NOT excluded here. It is per-transition business logic
     // (acquire/release a shared-resource lock keyed by the transition's script), not chain-head
     // request setup like SetBusy. Excluding it made a schema-valid `resourceLock` on an auto-chained
@@ -78,7 +73,6 @@ public sealed class PipelineExecutionProfile
         Name = "Manual",
         ExcludedStepOrders = ImmutableHashSet<int>.Empty,
         AllowAutoChain = true,
-        AllowSubFlow = true,
     };
 
     private static readonly PipelineExecutionProfile AutoChainInstance = new()
@@ -86,7 +80,6 @@ public sealed class PipelineExecutionProfile
         Name = "AutoChain",
         ExcludedStepOrders = AutoChainExcluded,
         AllowAutoChain = true,
-        AllowSubFlow = false,
     };
 
     private static readonly PipelineExecutionProfile ScheduledInstance = new()
@@ -94,7 +87,6 @@ public sealed class PipelineExecutionProfile
         Name = "Scheduled",
         ExcludedStepOrders = ScheduledExcluded,
         AllowAutoChain = true,
-        AllowSubFlow = false,
     };
 
     private static readonly PipelineExecutionProfile EventInstance = new()
@@ -102,7 +94,6 @@ public sealed class PipelineExecutionProfile
         Name = "Event",
         ExcludedStepOrders = EventExcluded,
         AllowAutoChain = true,
-        AllowSubFlow = true,
     };
 
     private static readonly PipelineExecutionProfile ErrorBoundaryInstance = new()
@@ -110,7 +101,6 @@ public sealed class PipelineExecutionProfile
         Name = "ErrorBoundary",
         ExcludedStepOrders = ErrorBoundaryExcluded,
         AllowAutoChain = true,
-        AllowSubFlow = false,
     };
 
     // Pre-composed self-target variants of every base profile, keyed by the base profile's name.
@@ -149,13 +139,13 @@ public sealed class PipelineExecutionProfile
 
     /// <summary>
     /// Creates the profile for error-boundary transitions: excludes preflight, active-subflow
-    /// forwarding and resource locking; subflow handling is disabled. The Auto step remains active.
+    /// forwarding and resource locking. The Auto step and subflow handling remain active.
     /// </summary>
     public static PipelineExecutionProfile ForErrorBoundary() => ErrorBoundaryInstance;
 
     /// <summary>
     /// Composes <paramref name="baseProfile"/> with the state-lifecycle exclusions. The base
-    /// profile's own exclusions and its <see cref="AllowAutoChain"/> / <see cref="AllowSubFlow"/>
+    /// profile's own exclusions and its <see cref="AllowAutoChain"/>
     /// settings are preserved; only the state-lifecycle steps are additionally skipped.
     /// <para>
     /// This is the MECHANISM. The policy of who receives it is the caller's:
@@ -179,6 +169,5 @@ public sealed class PipelineExecutionProfile
         Name = $"{baseProfile.Name}+Self",
         ExcludedStepOrders = SelfTargetExcluded.Union(baseProfile.ExcludedStepOrders),
         AllowAutoChain = baseProfile.AllowAutoChain,
-        AllowSubFlow = baseProfile.AllowSubFlow,
     };
 }

@@ -39,6 +39,7 @@ public class WorkflowValidator
         ValidateStateLabels(workflow, result);
         ValidateStateAliases(workflow, result);
         ValidateStateNotifications(workflow, result);
+        ValidateStateSubFlowType(workflow, result);
         ValidateWizardStateTransitions(workflow, result);
         ValidateDefaultAutoTransitions(workflow, result);
         ValidateLongPollInteractions(workflow, result);
@@ -349,6 +350,47 @@ public class WorkflowValidator
             }
 
             ValidateRoleGrants(longPoll.Roles, $"{longPollPath}.{nameof(LongPollInteraction.Roles)}", result);
+        }
+    }
+
+    /// <summary>
+    /// Validates that a state-level subflow relationship is the blocking kind.
+    /// </summary>
+    /// <remarks>
+    /// A state starts a SubFlow and only a SubFlow: <c>state.subFlow.type</c> must be <c>S</c>. A
+    /// SubProcess (<c>P</c>) is started by its own task — <c>SubProcessTask</c>
+    /// (<c>TaskType.SubProcess</c>), whose executor starts the child and creates the
+    /// <c>InstanceCorrelation</c> itself. The platform convention is that a SubProcess may not
+    /// start another SubProcess, but <b>this validator does not check that half</b>: it inspects
+    /// only <c>state.SubFlow</c> on the workflow being validated, and detecting a
+    /// <c>SubProcessTask</c> inside a workflow that is used elsewhere as a <c>P</c> child would
+    /// need cross-workflow analysis a single-workflow validator cannot do. Only the state-level
+    /// shape below is enforced at publish time; the "no nested SubProcess" rule remains a
+    /// convention authors must follow themselves.
+    /// <para>
+    /// This is why the runtime reads <c>S</c> wherever a state-level relationship is meant
+    /// (<c>Instance.HasActiveSubFlow</c>, <c>Instance.Subflow</c>, <c>Instance.AddCorrelation</c>
+    /// taking Busy only for <c>S</c>, and <c>HandleSubFlowStep</c>'s idempotency guard): those
+    /// readers are correct, not narrow. A state-level <c>P</c> slipped past definition time until
+    /// now and then behaved differently by caller mode — the parent continuation it produces is
+    /// admitted on the async path, where a job re-entry carries <c>IsPreReserved</c>, and rejected
+    /// on the sync path with <c>Instance:100031</c>, leaving the parent Busy and not Faulted, with
+    /// no automatic recovery. Rejecting it here turns that into an authoring error, which is where
+    /// it belongs.
+    /// </para>
+    /// </remarks>
+    private void ValidateStateSubFlowType(Workflow workflow, WorkflowValidationResult result)
+    {
+        foreach (var state in workflow.States)
+        {
+            if (state.SubFlow is null || state.SubFlow.Type.Equals(SubFlowType.SubFlow))
+                continue;
+
+            result.AddError(new ValidationResult(
+                $"State '{state.Key}' declares subFlow.type '{state.SubFlow.Type.Code}'. A state can only "
+                + $"start a SubFlow ('{SubFlowType.SubFlow.Code}'). Start a "
+                + $"{SubFlowType.SubProcess.Description} with a SubProcess task instead.",
+                [$"{nameof(Workflow)}.{nameof(Workflow.States)}[{state.Key}].{nameof(State.SubFlow)}.{nameof(SubFlow.Type)}"]));
         }
     }
 
