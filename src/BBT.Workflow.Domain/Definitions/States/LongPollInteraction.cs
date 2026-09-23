@@ -13,6 +13,11 @@ namespace BBT.Workflow.Definitions;
 /// </summary>
 public sealed class LongPollInteraction
 {
+    /// <summary>
+    /// Acknowledge window applied when neither the state nor a parent override declares one.
+    /// </summary>
+    public const int DefaultFallbackTimeoutSeconds = 60;
+
     private LongPollInteraction()
     {
     }
@@ -37,7 +42,8 @@ public sealed class LongPollInteraction
 
     /// <summary>
     /// Acknowledge fallback window in seconds. If the client does not acknowledge within
-    /// this window, a scheduled job resumes the pipeline. Defaults to 60 when null.
+    /// this window, a scheduled job resumes the pipeline. Defaults to
+    /// <see cref="DefaultFallbackTimeoutSeconds"/> when null.
     /// </summary>
     public int? FallbackTimeoutSeconds { get; private set; }
 
