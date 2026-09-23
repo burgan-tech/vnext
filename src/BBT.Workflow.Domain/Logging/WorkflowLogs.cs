@@ -3368,6 +3368,22 @@ public static partial class WorkflowLogs
         string viewKey,
         string requestDomain);
 
+    /// <summary>
+    /// A parent-supplied state/transition view override could not be resolved; the view the child's
+    /// own rules selected is served instead.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20101,
+        Level = LogLevel.Warning,
+        Message = "SubFlow view override unresolved on instance {InstanceId} at state {State}: {ViewKey} -> {OverrideViewKey}; serving the child's own view. {Reason}")]
+    public static partial void SubFlowViewOverrideUnresolved(
+        this ILogger logger,
+        Guid instanceId,
+        string state,
+        string viewKey,
+        string overrideViewKey,
+        string reason);
+
     #endregion
 
     #region Extensions

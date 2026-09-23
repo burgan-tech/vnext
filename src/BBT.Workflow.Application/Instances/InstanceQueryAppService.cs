@@ -2922,6 +2922,26 @@ public sealed class InstanceQueryAppService(
                     $"No matching view found for state {instance.CurrentState} in workflow {currentWorkflow.Key}"));
         }
 
+        // Parent-supplied swap, resolved HERE because this is the level whose rules just selected the
+        // view: keyed by this instance's own CurrentState (never EffectiveState) or by the transition,
+        // and by the view key the rules picked. Rules are never overridden — only the reference.
+        var overrideRef = instance.ResolveViewOverride(
+            instance.CurrentState, transitionKey, selectedViewEntry.View.Key);
+        if (overrideRef is not null)
+        {
+            var overrideResult = await viewContentResolutionService.ResolveViewContentAsync(
+                overrideRef, input.Domain, input.Headers, input.QueryParameters, cancellationToken);
+            if (overrideResult.IsSuccess)
+                return overrideResult;
+
+            logger.SubFlowViewOverrideUnresolved(
+                instance.Id,
+                instance.CurrentState ?? string.Empty,
+                selectedViewEntry.View.Key,
+                overrideRef.Key,
+                overrideResult.Error.Message ?? overrideResult.Error.Code);
+        }
+
         return await viewContentResolutionService.ResolveViewContentAsync(
             selectedViewEntry.View,
             input.Domain,

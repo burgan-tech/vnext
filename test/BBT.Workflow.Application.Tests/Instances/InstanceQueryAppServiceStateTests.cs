@@ -2669,4 +2669,114 @@ public class InstanceQueryAppServiceStateTests : IDisposable
             Arg.Any<string>(), Arg.Any<Caching.StateFunctionCacheEntry>(), Arg.Any<TimeSpan>(),
             Arg.Any<CancellationToken>());
     }
+
+    #region View override (child-side, state/transition scoped)
+
+    private static (Instance instance, Definitions.Workflow workflow) CreateInstanceWithStateView()
+    {
+        var json = """
+                   {
+                       "type": "F", "timeout": null, "labels": [], "functions": [], "features": [],
+                       "states": [
+                           { "key": "review", "stateType": "Intermediate",
+                             "transitions": [
+                               { "key": "confirm", "target": "review", "triggerType": "Manual", "versionStrategy": "Patch", "labels": [],
+                                 "view": { "views": [ { "view": { "key": "confirm-modal", "domain": "test-domain", "flow": "sys-views", "version": "1.0.0" } } ] } }
+                             ],
+                             "view": { "views": [ { "view": { "key": "review-view", "domain": "test-domain", "flow": "sys-views", "version": "1.0.0" } } ] } }
+                       ],
+                       "sharedTransitions": [], "extensions": [],
+                       "startTransition": {"key": "start", "from": null, "target": "review", "triggerType": "Manual", "versionStrategy": "Patch", "labels": [], "onExecutionTasks": [], "view": null}
+                   }
+                   """;
+        var options = new System.Text.Json.JsonSerializerOptions
+        {
+            PropertyNameCaseInsensitive = true,
+            Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() }
+        };
+        var workflow = System.Text.Json.JsonSerializer.Deserialize<Definitions.Workflow>(json, options)!;
+        workflow.SetReference(new Reference(TestWorkflow, TestDomain, "sys-flows", TestVersion));
+        var instance = Instance.Create(Guid.NewGuid(), TestWorkflow, TestVersion, "test-key");
+        instance.ChangeState(workflow.States.First(s => s.Key == "review"));
+        return (instance, workflow);
+    }
+
+    private GetViewInput CreateViewInput(Instance instance) => new()
+    {
+        Domain = TestDomain, Workflow = TestWorkflow, Version = TestVersion, Instance = instance.Id.ToString()
+    };
+
+    private void ReturnViewFor(string viewKey) =>
+        _viewContentResolutionService
+            .ResolveViewContentAsync(
+                Arg.Is<Reference>(r => r.Key == viewKey), Arg.Any<string>(),
+                Arg.Any<Dictionary<string, string?>?>(), Arg.Any<Dictionary<string, string?>?>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Result<GetViewOutput>.Ok(new GetViewOutput { Key = viewKey, Type = "json", Display = "full-page", Label = viewKey }));
+
+    [Fact]
+    public async Task GetViewAsync_WithStateScopedOverride_ServesTheParentsView()
+    {
+        var (instance, workflow) = CreateInstanceWithStateView();
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.StateRoleOverrides] =
+            """{"review":{"views":{"review-view":{"key":"corp-review-view","domain":"test-domain","flow":"sys-views","version":"1.0.0"}}}}""";
+        SetupCommonMocks(instance, workflow);
+        ReturnViewFor("review-view");
+        ReturnViewFor("corp-review-view");
+
+        var result = await _service.GetViewAsync(CreateViewInput(instance), transitionKey: null, CancellationToken.None);
+
+        result.Value!.Key.ShouldBe("corp-review-view");
+    }
+
+    [Fact]
+    public async Task GetViewAsync_StateOverrideDoesNotLeakIntoTransitionViews()
+    {
+        var (instance, workflow) = CreateInstanceWithStateView();
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.StateRoleOverrides] =
+            """{"review":{"views":{"confirm-modal":{"key":"wrong","domain":"test-domain","flow":"sys-views","version":"1.0.0"}}}}""";
+        SetupCommonMocks(instance, workflow);
+        ReturnViewFor("confirm-modal");
+
+        var result = await _service.GetViewAsync(CreateViewInput(instance), transitionKey: "confirm", CancellationToken.None);
+
+        result.Value!.Key.ShouldBe("confirm-modal");
+    }
+
+    [Fact]
+    public async Task GetViewAsync_WithTransitionScopedOverride_ServesTheParentsView()
+    {
+        var (instance, workflow) = CreateInstanceWithStateView();
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.TransitionRoleOverrides] =
+            """{"confirm":{"views":{"confirm-modal":{"key":"corp-confirm-modal","domain":"test-domain","flow":"sys-views","version":"1.0.0"}}}}""";
+        SetupCommonMocks(instance, workflow);
+        ReturnViewFor("confirm-modal");
+        ReturnViewFor("corp-confirm-modal");
+
+        var result = await _service.GetViewAsync(CreateViewInput(instance), transitionKey: "confirm", CancellationToken.None);
+
+        result.Value!.Key.ShouldBe("corp-confirm-modal");
+    }
+
+    [Fact]
+    public async Task GetViewAsync_WhenOverrideCannotBeResolved_FallsBackToTheChildsView()
+    {
+        var (instance, workflow) = CreateInstanceWithStateView();
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.StateRoleOverrides] =
+            """{"review":{"views":{"review-view":{"key":"missing-view","domain":"test-domain","flow":"sys-views","version":"9.9.9"}}}}""";
+        SetupCommonMocks(instance, workflow);
+        ReturnViewFor("review-view");
+        _viewContentResolutionService
+            .ResolveViewContentAsync(
+                Arg.Is<Reference>(r => r.Key == "missing-view"), Arg.Any<string>(),
+                Arg.Any<Dictionary<string, string?>?>(), Arg.Any<Dictionary<string, string?>?>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Result<GetViewOutput>.Fail(Error.NotFound("notfound", "missing")));
+
+        var result = await _service.GetViewAsync(CreateViewInput(instance), transitionKey: null, CancellationToken.None);
+
+        result.Value!.Key.ShouldBe("review-view");
+    }
+
+    #endregion
 }
