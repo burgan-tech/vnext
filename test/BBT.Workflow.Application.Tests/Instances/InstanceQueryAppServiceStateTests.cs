@@ -2758,6 +2758,53 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         result.Value!.Key.ShouldBe("corp-confirm-modal");
     }
 
+    private static (Instance instance, Definitions.Workflow workflow) CreateInstanceWithUpdateDataView()
+    {
+        var json = """
+                   {
+                       "type": "F", "timeout": null, "labels": [], "functions": [], "features": [],
+                       "states": [
+                           { "key": "review", "stateType": "Intermediate", "transitions": [],
+                             "view": { "views": [ { "view": { "key": "review-view", "domain": "test-domain", "flow": "sys-views", "version": "1.0.0" } } ] } }
+                       ],
+                       "sharedTransitions": [], "extensions": [],
+                       "startTransition": {"key": "start", "from": null, "target": "review", "triggerType": "Manual", "versionStrategy": "Patch", "labels": [], "onExecutionTasks": [], "view": null},
+                       "updateData": { "key": "sync-data", "target": "$self", "triggerType": "Manual", "versionStrategy": "Patch", "labels": [],
+                         "view": { "views": [ { "view": { "key": "update-view", "domain": "test-domain", "flow": "sys-views", "version": "1.0.0" } } ] } }
+                   }
+                   """;
+        var options = new System.Text.Json.JsonSerializerOptions
+        {
+            PropertyNameCaseInsensitive = true,
+            Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() }
+        };
+        var workflow = System.Text.Json.JsonSerializer.Deserialize<Definitions.Workflow>(json, options)!;
+        workflow.SetReference(new Reference(TestWorkflow, TestDomain, "sys-flows", TestVersion));
+        var instance = Instance.Create(Guid.NewGuid(), TestWorkflow, TestVersion, "test-key");
+        instance.ChangeState(workflow.States.First(s => s.Key == "review"));
+        return (instance, workflow);
+    }
+
+    [Fact]
+    public async Task GetViewAsync_WithTransitionScopedOverride_ResolvesTheAliasToTheConfiguredKey()
+    {
+        // The override map is keyed by the well-known transition's CONFIGURED key ("sync-data"), not
+        // the reserved alias ("update-parent-data") a client is allowed to request it by. Without
+        // normalising the lookup key through the same ResolveTransition call GetViewDefinition uses,
+        // this request would miss the override and silently serve the child's own view.
+        var (instance, workflow) = CreateInstanceWithUpdateDataView();
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.TransitionRoleOverrides] =
+            """{"sync-data":{"views":{"update-view":{"key":"corp-update-view","domain":"test-domain","flow":"sys-views","version":"1.0.0"}}}}""";
+        SetupCommonMocks(instance, workflow);
+        ReturnViewFor("update-view");
+        ReturnViewFor("corp-update-view");
+
+        var result = await _service.GetViewAsync(
+            CreateViewInput(instance), transitionKey: WellKnownTransitionKeys.UpdateData, CancellationToken.None);
+
+        result.Value!.Key.ShouldBe("corp-update-view");
+    }
+
     [Fact]
     public async Task GetViewAsync_WhenOverrideCannotBeResolved_FallsBackToTheChildsView()
     {

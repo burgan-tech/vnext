@@ -52,3 +52,6 @@ is one hop: in P → C → G, P's overrides apply to C's states only; G reads C'
 - The validator cannot see the child definition: an override naming a state the child lacks is
   silently inert; a long-poll override on a state without a long-poll is logged at resolution (20305).
 - Do not mix the scoped view overrides with the legacy view map on one subFlow — the validator rejects it.
+- A stamp that cannot be read (corrupt/incompatible JSON on the child's `parent.*` metadata) logs
+  `SubFlowOverrideStampMalformed` (EventId 20307) and falls back to the child's own configuration —
+  no override is applied.
