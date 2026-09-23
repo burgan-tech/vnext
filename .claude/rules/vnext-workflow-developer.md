@@ -328,6 +328,17 @@ A sixth profile is **composed on top of** the base, never selected instead of it
 - Never read `AvailableIn` directly. Use `Transition.IsAvailableInState(stateKey)` (state-only gate,
   empty ⇒ every state) and `FindAvailableIn(stateKey)` (for role narrowing). Ordinal comparison;
   duplicate states ⇒ first match wins, validator errors.
+- **`availableIn` describes SHARED and well-known transitions only. It is not the state gate for a
+  STATE transition**, which carries no `availableIn` at all and is implicitly scoped to the state
+  that declares it. The "empty ⇒ every state" rule is right for the first family and wrong for the
+  second: read through `IsAvailableInState`, an empty list made `approve` — declared only on
+  `review` — answer *allowed* for an instance sitting in `intake`. `TransitionAuthorizationManager`
+  therefore asks `IsStateScoped(workflow, key)` first and, for a state transition, requires the key
+  to be declared on the CURRENT state. Measured on role-matrix-lab: the state function offered
+  `[submit-for-review, record-note, cancel-role-matrix]` while `authorize?transitionKey=approve`
+  answered 200; execution then rejected the call with `Transition:100021`. The oracle was wrong in
+  the **permissive** direction, which is the direction that matters once a middle tier admits on its
+  answer.
 - **Roles compose as AND**: `transition.roles` is the global gate, `availableIn[state].roles` narrows
   it for that state; both must allow. Empty set allows, so legacy definitions are unaffected.
 - Three surfaces, and they must not diverge: state function **state+roles**, `authorize`
@@ -398,11 +409,57 @@ A sixth profile is **composed on top of** the base, never selected instead of it
   it does not fail closed, it makes `$.context.Headers/QueryParameters/RouteValues` **empty**, so the
   grant silently cannot match — the transition vanishes from `availableTransitions` while the `authorize`
   function, which does pass the context, still answers *allowed* for it.
+- **`queryRoles` is NOT enforced by this runtime. It is ANSWERED by it.** The read surfaces
+  (`state`, `data`, `view`, `schema`, `master`, `tasks`, `actions`, `incidents`, `incidents/active`)
+  and `POST .../longpoll/ack` carry no gate: the Internal Gateway asks
+  `GET .../functions/authorize?queryRoles=true` (or `?ack=true`) and admits on that answer.
+  `queryRoles` itself is untouched — still evaluated in full, per hop down the active-correlation
+  chain, by that endpoint — and so is role RESOLUTION everywhere (`availableTransitions` filtering,
+  state aliases, `x-roles` pruning, human-task list, `CallerScopeHash`). Enforcement left; visibility
+  stayed. **Do not add the gate back on a read path**: two decision points on one question drift, and
+  this repo has twice paid for exactly that. `authorize?ack=true` is what makes the acknowledge case
+  possible at all — the `rule` arm is a C# script no gateway can evaluate, and that target admits
+  through the same `ILongPollInteractionGate` the endpoint used to call.
+- **`authorize` answers the CONJUNCTION down the active-correlation chain.** `?queryRoles=true`
+  evaluates the polled instance's own grants **and** every level beneath it to the deepest active leaf
+  — the same shape the state function enforces (gate at the polled instance, then descend and gate
+  again). It used to answer from the leaf alone, which made it strictly weaker than the gate it
+  describes. Overrides resolve **per hop from the child's stamp**, never from the parent's definition:
+  that is what makes a directly addressed leaf give the same verdict as the same leaf reached through
+  its parent, and what keeps a parent's override of its child from reaching the grandchild.
+- **The `role` request parameter is gated on the provider, both as a fallback and additively.**
+  `ICallerRoleResolver.AllowsRoleParameterFallback` — true only when the provider's own source is
+  already the caller's own assertion (`default`), false for an authority provider (`morph-idm`).
+  Without it, a provider answering "no roles" was overridden by the caller naming one in the query
+  string: measured, `?queryRoles=true` → 403 while `?queryRoles=true&role=chain.admin` → 200 for the
+  same caller. The same hole as forwarding the `role` HEADER to morph-idm, on the other channel —
+  and it matters more now that `authorize` is the only place these questions are answered. Put the
+  flag on the resolver, never a provider-name check inside a surface.
+- **`authorize` has a fourth target, `ack`.** `?ack=true` is the pre-flight for
+  `POST .../longpoll/ack`, admitted through the same `ILongPollInteractionGate` — so the `rule` arm, a
+  C# script no gateway can evaluate, is covered. It mirrors the endpoint's own descent rule
+  (`IsAwaitingLongPollAck`, not "has a subflow") and answers **allowed** when nothing is awaiting,
+  because the endpoint answers `Ok()` idempotently there.
+- **`cancel` and `exit` are parent-retained, in `authorize` as at execution.**
+  `HandleCancelPreflightStep` (order 5) skips to `CreateTransition` (20), over the forward at order 10,
+  so they never reach the subflow; `IsSubflowForward` also excludes them (`BypassBusyCheck`). Together
+  with `updateData` and an in-state shared transition, those are the only keys `authorize` answers
+  against the parent while a SubFlow is active.
 - **`transition.roles` is not enforced at execution, by design.** `POST .../transitions/{key}` runs
   schema validation + `TransitionExecutionPolicy`, and no specification there reads `Roles`;
   `IsTransitionAllowedForRoleAsync`'s only production caller is `AuthorizeAppService`. Roles describe
   what a client should *offer*, not a capability boundary — put real boundaries in `queryRoles`, a
   function's `roles`, or the transition's task logic. Do not "fix" this; it is a deliberate decision.
+- **The `queryRoles` gate reads the instance's OWN `CurrentState`, never `EffectiveState`.**
+  `EffectiveState` is the deepest ACTIVE SUBFLOW's state key, so on a level that has a subflow of its
+  own it names a state of a different workflow: `FindState` returns null, the parent's stamped
+  override (keyed by the state the parent declared for that child) cannot match either, and the gate
+  silently falls through to the workflow root's grants. Measured on the bench:
+  `CurrentState=mid-waiting` / `EffectiveState=leaf-waiting` on a mid, and a role the root had
+  narrowed away read that mid **200**. Both a SubFlow state's own `queryRoles` and a parent's
+  `overrides.states` narrowing stopped applying — with no error and no log — for exactly as long as
+  the child had a subflow of its own. `HumanTaskLeafResolver` already resolved from `CurrentState`,
+  so the two paths disagreed about the same instance; this was the side that was wrong.
 - **Never read `currentUser.Roles` directly at a decision point.** Use
   `currentUser.ResolveCallerRoles(headers)`: `ChangeFromHeaders` is *not* in the HTTP pipeline (only
   `TransitionRunner`), so a legacy-`role`-header caller would be treated as role-less — 403 from an

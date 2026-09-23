@@ -37,6 +37,14 @@ public sealed class AuthorizeFunctionHandler(
                 "true",
                 StringComparison.OrdinalIgnoreCase);
 
+        // Read the same way as queryRoles, including the raw query dictionary: model binding is not the
+        // only path in — the cross-domain forward rebuilds the query string by hand.
+        var checkAck = request.Parameters.Ack == true
+            || string.Equals(
+                qp.GetValueOrDefault("ack", null),
+                "true",
+                StringComparison.OrdinalIgnoreCase);
+
         var routeValues = request.HttpContext.GetRouteData()?.Values
             .ToDictionary(kv => kv.Key, kv => kv.Value?.ToString());
         var requestContext = new AuthorizationRequestContext(
@@ -53,6 +61,7 @@ public sealed class AuthorizeFunctionHandler(
             request.Parameters.FunctionKey,
             version,
             checkQueryRoles,
+            checkAck,
             requestContext,
             cancellationToken);
 

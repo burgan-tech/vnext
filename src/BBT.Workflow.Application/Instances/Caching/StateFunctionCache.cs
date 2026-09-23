@@ -59,8 +59,15 @@ public sealed class StateFunctionCache(
     /// fingerprint member: the instant is fixed when the scheduler is armed and never moves, and the
     /// block's presence is governed by the instance status, which the fingerprint already covers —
     /// so unlike the scheduled entries beside it, this block carries no issue-#864 staleness gap.
+    /// v11 narrowed when the <c>interaction</c> block appears: it is now emitted only while an
+    /// acknowledgement is actually outstanding (<c>Instance.IsAwaitingLongPollAck</c>), not whenever
+    /// the state's definition declares a long poll. The fields are unchanged — what changed is the
+    /// presence condition, which is still a change to what the body carries for a given instance, so
+    /// it takes a version. It needs no new fingerprint member: both paths that clear the token (an
+    /// acknowledge and the fallback job) resume the pipeline and therefore move <c>Status</c>, which
+    /// the fingerprint already covers.
     /// </remarks>
-    private const string ResponseShapeVersion = "v10";
+    private const string ResponseShapeVersion = "v11";
 
     private const string KeyPrefix = $"state-fn:{ResponseShapeVersion}:";
 

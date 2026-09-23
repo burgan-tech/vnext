@@ -119,7 +119,10 @@ etag = h(responseShapeVersion | instanceId | effectiveState | status | flowVersi
   `active` summary; v9 replaced that block's content with links —
   `{ hasActiveIncident, active: { href }, history: { href } }`; v10 added the top-level `timeout`
   block, `{ key, target, executeAtUtc }`, omitted entirely when no workflow deadline is armed or once
-  the polled instance's own status is terminal), every previously issued ETag must be
+  the polled instance's own status is terminal; v11 changed the **presence condition** of the
+  `interaction` block from "the state declares one" to "an acknowledge is actually pending"
+  (`Instance.IsAwaitingLongPollAck`) — a shape change with no new field, and exactly the kind a
+  parked client would otherwise never see), every previously issued ETag must be
   invalidated: otherwise a client
   long-polling an instance parked in a human state would keep receiving 304 and never observe the new
   shape. The same constant is a segment of the cache key, so bumping it also discards bodies written by
@@ -157,6 +160,10 @@ etag = h(responseShapeVersion | instanceId | effectiveState | status | flowVersi
   instance's own `Status`, which is already hashed. So the two ways the block can change are both
   covered: a status move invalidates, and nothing else can change it. The `v10` bump was needed for
   the shape, once, not for the value.
+- **The `interaction` block needs no fingerprint member either.** The token is armed inside the
+  pipeline's own unit of work, and the pause it accompanies is a Busy rest — so the status the
+  fingerprint already hashes moves with it, in the same commit. The `v11` bump was for the presence
+  rule, once; there is no value here that can drift behind a 304 without a status move.
 - **`hasActiveIncident` is in the hash** because the body's `incident` block flips with it and the
   flag can move without a state/status change (Boundary Abort with a transition raises one,
   `FinalizeTransitionStep` resolves it). The flag is the block's *only* varying member: since `v9`

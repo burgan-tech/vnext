@@ -3317,14 +3317,24 @@ public static partial class WorkflowLogs
     /// <summary>
     /// Logs when authorize system function is invoked.
     /// </summary>
+    /// <remarks>
+    /// Carries the instance and the target because without them the line cannot answer the only
+    /// question anyone asks of it — <i>which</i> question was refused, for <i>which</i> instance. It
+    /// used to record the domain, the workflow and a comma-joined role string, which is identical for
+    /// every authorize call a caller makes against a flow regardless of what was being asked.
+    /// <paramref name="target"/> is <c>transition:{key}</c>, <c>function:{key}</c>, <c>queryRoles</c>
+    /// or <c>ack</c>.
+    /// </remarks>
     [LoggerMessage(
         EventId = 50030,
         Level = LogLevel.Information,
-        Message = "Authorize request. Domain: {Domain}, Workflow: {Workflow}, Role: {Role}, Allowed: {Allowed}")]
+        Message = "Authorize request. Domain: {Domain}, Workflow: {Workflow}, Instance: {InstanceId}, Target: {Target}, Role: {Role}, Allowed: {Allowed}")]
     public static partial void AuthorizeRequest(
         this ILogger logger,
         string domain,
         string workflow,
+        string instanceId,
+        string target,
         string role,
         bool allowed);
 

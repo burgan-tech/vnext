@@ -67,6 +67,14 @@ public sealed class MorphIdmCallerRoleResolver : ICallerRoleResolver
             LazyThreadSafetyMode.ExecutionAndPublication);
     }
 
+    /// <summary>
+    /// No. Under this provider the resolved set is the caller's operation set as morph-idm reports it,
+    /// and a <c>204</c> ("no operations") is that service's decision — not a gap for the caller to fill
+    /// with a <c>role</c> request parameter. Same rule as never forwarding the <c>role</c> header, on
+    /// the other channel.
+    /// </summary>
+    public bool AllowsRoleParameterFallback => false;
+
     /// <inheritdoc />
     public Task<Result<string[]?>> ResolveRolesAsync(
         IReadOnlyDictionary<string, string?>? headers,

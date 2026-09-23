@@ -102,7 +102,40 @@ cannot be resolved is omitted rather than failing the catalog.
 ### Function discovery (`/info`)
 
 `/info` and the four content routes are `GET`-only and carry no ETag/304. All six run the same scope
-and role gates as execution, so a caller denied on execution gets `403` rather than a description.
+gates as execution, so a caller denied on execution gets `403` rather than a description. Note that
+`function.roles` is **not** among those gates on either surface — custom-function execution enforces
+scope only, and `function.roles` is evaluated by `authorize` alone.
+
+### `authorize` targets
+
+Full reference — what each selector evaluates, the subflow conjunction, parent-retained transitions,
+role resolution and the audit line: [The `authorize` Function](../domain/authorize-function.md). The
+summary below is the API-surface view.
+
+Since 0.0.94 this function is not merely a description of the runtime's gates — **it is the
+enforcement point**, consulted by the Internal Gateway. The read surfaces and
+`POST .../longpoll/ack` no longer evaluate `queryRoles` or the interaction gate themselves.
+
+`GET .../instances/{instance}/functions/authorize` takes **exactly one** of four query-string
+selectors (zero or two is a request error, not a silent default):
+
+| Selector | Question | Descends into an active SubFlow? |
+|---|---|---|
+| `?transitionKey=` | may this transition be triggered (state **and** roles) | only when the parent does not retain it — `cancel`, `exit`, `updateData` and an in-state shared transition are answered against the parent, matching execution |
+| `?functionKey=` | may this **custom** function be invoked | yes |
+| `?queryRoles=true` | may this instance be read (the whole built-in read family) | yes — and the answer is the **conjunction** of the polled instance and every level down to the deepest active leaf |
+| `?ack=true` | may `POST .../longpoll/ack` be called | follows the endpoint's own rule: descends while this instance is not the one awaiting; **allowed** when nothing in the chain is awaiting, because the endpoint answers `Ok()` idempotently there |
+
+There is no per-built-in-function selector: `state`, `data`, `view`, `schema`, `master`, `tasks`,
+`actions` and the incident routes share one `queryRoles` verdict. A caller who may not read `state`
+may not read `data` either.
+
+`data` is the one asymmetry worth stating explicitly: its **content** does not descend (it serves the
+polled instance's attributes) while its **authorization** does. Authorization follows where the
+instance actually is; content follows what the client holds.
+
+A refusal is `403` with a body of `{"allowed": false}`. A consumer that reads only the `200` turns
+every refusal into "no answer".
 Built-in system functions (`state`, `view`, `data`, `schema`, `authorize`, `permissions`,
 `hierarchy`, `human-task`, `master`, `catalog`) have no `sys-functions` component and return `404`
 from `/info`.
