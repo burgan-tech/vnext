@@ -153,7 +153,7 @@ The `role` request parameter composes differently per target, and the difference
 | Target | `role` parameter | Why |
 |---|---|---|
 | `transitionKey`, `functionKey`, `queryRoles` | **fallback** — used only when the provider reports no roles at all | a convenience for probing one role; the provider is the authority |
-| `ack` | **additive** — merged with the provider's roles | it is how a client names *which* of its roles is acknowledging |
+| `ack` | **additive** — merged with the provider's roles, on every path (the awaiting instance with or without an active SubFlow) | it is how a client names *which* of its roles is acknowledging; until 2026-09-25 the no-SubFlow path used the fallback instead, so the same caller got a different role set depending on the instance's shape |
 
 **Both forms are gated on the provider** (`ICallerRoleResolver.AllowsRoleParameterFallback`). The
 parameter is honoured only when the provider's own source is already the caller's own assertion —

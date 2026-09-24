@@ -31,6 +31,7 @@ namespace BBT.Workflow.Infrastructure.Tests.Authorization;
 /// the service returns are valid. Merging would let a gateway-asserted header widen what the identity
 /// service governs, and it would quietly undo the <c>204</c> contract below.</para>
 /// </remarks>
+[Collection(MorphIdmCallerRoleResolverTests.SpanCollection)]
 public sealed class MorphIdmCallerRoleResolverContractTests
 {
     private const string Subject = "u-1";
@@ -142,18 +143,25 @@ public sealed class MorphIdmCallerRoleResolverContractTests
     }
 
     /// <summary>
-    /// A provider that cannot answer is a resolution FAILURE, not an empty role set — the caller's
-    /// authority is unknown, and the only safe reading of unknown is denial (403
-    /// <c>CallerRoleResolutionFailed</c>), never "no roles, carry on".
+    /// A provider that cannot answer resolves to an EMPTY set — the request is not broken — and
+    /// still never falls back to the header. Settled 2026-09-24: an outage must narrow, not widen,
+    /// what the caller gets; the empty set does that, because allowlist grants cannot match it and a
+    /// role-bound deny refuses a role-less caller. Reading the header here instead would let the
+    /// caller name its own roles precisely when the authority is unavailable.
     /// </summary>
     [Fact]
-    public async Task AServerErrorIsAFailureNotAnEmptySet()
+    public async Task AServerErrorIsAnEmptySet_NeverAHeaderFallback()
     {
         var (resolver, _) = Build(HttpStatusCode.InternalServerError, "boom");
 
-        var resolved = await resolver.ResolveRolesAsync(null);
+        var resolved = await resolver.ResolveRolesAsync(new Dictionary<string, string?>
+        {
+            [AetherClaimTypes.Role] = "header.role"
+        });
 
-        resolved.IsSuccess.ShouldBeFalse();
+        resolved.IsSuccess.ShouldBeTrue();
+        resolved.Value.ShouldNotBeNull();
+        resolved.Value!.ShouldBeEmpty();
     }
 
     /// <summary>All three response shapes the parser accepts, so a provider change cannot go unnoticed.</summary>

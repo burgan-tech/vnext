@@ -159,7 +159,12 @@ public sealed class AuthorizeAppService(
                 cancellationToken);
         }
 
-        var callerRolesResult = await GetCallerRolesAsync(role, requestContext, cancellationToken);
+        // `ack` composes the role parameter ADDITIVELY on every path, like the awaiting-parent branch
+        // above; every other target keeps it as a fallback. Resolving ack through the fallback here
+        // gave the same caller a different role set depending on whether the instance had a SubFlow.
+        var callerRolesResult = checkAck
+            ? await GetAckCallerRolesAsync(role, requestContext, cancellationToken)
+            : await GetCallerRolesAsync(role, requestContext, cancellationToken);
         if (!callerRolesResult.IsSuccess)
             return Result<AuthorizeOutput>.Fail(callerRolesResult.Error);
         // The decision itself. Everything around it was already traceable — role resolution, the
@@ -600,6 +605,13 @@ public sealed class AuthorizeAppService(
     /// <b>additive</b> to the provider's roles rather than a fallback — and, like the fallback, only
     /// when the provider permits it
     /// (<see cref="ICallerRoleResolver.AllowsRoleParameterFallback"/>).
+    /// <para>
+    /// <b>Every <c>ack</c> path uses it</b> — the awaiting instance with an active SubFlow and the one
+    /// without (the common path). Until 2026-09-25 the second went through
+    /// <see cref="GetCallerRolesAsync"/>, where a provider that answered with roles discarded the
+    /// parameter, so the same caller got a different role set depending on whether the instance had a
+    /// SubFlow. Pinned by <c>AuthorizeRoleParameterFallbackTests</c>.
+    /// </para>
     /// <para>
     /// This deliberately differs from <see cref="GetCallerRolesAsync"/>, which the other targets use.
     /// It preserves how the acknowledge endpoint itself used to build the set, back when that endpoint

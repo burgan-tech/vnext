@@ -96,7 +96,11 @@ public static class AuthorizationActivityHelper
     /// True when the request-scope memo answered and no provider call was made. This is the tag the
     /// span exists for.
     /// </param>
-    public static void SetResolved(Activity? activity, int roleCount, bool memoHit)
+    /// <param name="emptyReason">
+    /// For an empty answer, which shape it took (<see cref="TelemetryConstants.AuthEmptyReasons"/>). Ignored when roles
+    /// came back.
+    /// </param>
+    public static void SetResolved(Activity? activity, int roleCount, bool memoHit, string? emptyReason = null)
     {
         if (activity is null) return;
 
@@ -110,19 +114,36 @@ public static class AuthorizationActivityHelper
         activity.SetTag(
             TelemetryConstants.TagNames.AuthOutcome,
             roleCount == 0 ? TelemetryConstants.AuthOutcomes.Empty : TelemetryConstants.AuthOutcomes.Resolved);
+        if (roleCount == 0 && emptyReason is not null)
+            activity.SetTag(TelemetryConstants.TagNames.AuthEmptyReason, emptyReason);
     }
 
     /// <summary>
-    /// Records a failed resolution. Fail-closed means every surface in this request is about to
-    /// answer 403, so the span carries Error status — this is the one place the cause is visible in
-    /// the trace rather than only in the log.
+    /// Records that no provider call was made because the caller carried no identity to ask about.
+    /// Not an error: anonymous and device tokens are ordinary traffic.
     /// </summary>
-    public static void SetFailed(Activity? activity, string reason, int? statusCode = null)
+    public static void SetSkipped(Activity? activity, bool memoHit)
+    {
+        if (activity is null) return;
+
+        activity.SetTag(TelemetryConstants.TagNames.AuthOutcome, TelemetryConstants.AuthOutcomes.Skipped);
+        activity.SetTag(TelemetryConstants.TagNames.AuthMemoHit, memoHit);
+        activity.SetTag(TelemetryConstants.TagNames.AuthRoleCount, 0);
+    }
+
+    /// <summary>
+    /// Records a failed resolution. The request continues on an empty role set, so the span carries
+    /// Error status and the failure kind — without them a provider outage reads, in the trace, exactly
+    /// like a caller who genuinely holds nothing.
+    /// </summary>
+    public static void SetFailed(Activity? activity, string reason, string failureKind, int? statusCode = null)
     {
         if (activity is null) return;
 
         activity.SetTag(TelemetryConstants.TagNames.AuthOutcome, TelemetryConstants.AuthOutcomes.Failed);
+        activity.SetTag(TelemetryConstants.TagNames.AuthFailureKind, failureKind);
         activity.SetTag(TelemetryConstants.TagNames.AuthMemoHit, false);
+        activity.SetTag(TelemetryConstants.TagNames.AuthRoleCount, 0);
         if (statusCode.HasValue)
             activity.SetTag(TelemetryConstants.TagNames.AuthProviderStatusCode, statusCode.Value);
 
@@ -130,17 +151,21 @@ public static class AuthorizationActivityHelper
     }
 
     /// <summary>
-    /// Records a memo hit whose underlying resolution FAILED. Without this the span would be
-    /// unterminated: the outcome is a denial, but nothing failed here — the failure happened on the
-    /// first surface's call and is memoized like any other answer.
+    /// Records a memo hit whose underlying resolution FAILED. The failure happened on the first
+    /// surface's call and is memoized like any other answer; every later surface carries the same
+    /// kind and Error status, or only the first span would show the cause.
     /// </summary>
-    public static void SetFailedFromMemo(Activity? activity)
+    public static void SetFailedFromMemo(Activity? activity, string failureKind, int? statusCode = null)
     {
         if (activity is null) return;
 
         activity.SetTag(TelemetryConstants.TagNames.AuthOutcome, TelemetryConstants.AuthOutcomes.Failed);
+        activity.SetTag(TelemetryConstants.TagNames.AuthFailureKind, failureKind);
         activity.SetTag(TelemetryConstants.TagNames.AuthMemoHit, true);
-        activity.SetStatus(ActivityStatusCode.Error, "caller roles unresolved (memoized failure)");
+        activity.SetTag(TelemetryConstants.TagNames.AuthRoleCount, 0);
+        if (statusCode.HasValue)
+            activity.SetTag(TelemetryConstants.TagNames.AuthProviderStatusCode, statusCode.Value);
+        activity.SetStatus(ActivityStatusCode.Error, "caller roles unresolved (memoized failure); evaluated as empty");
     }
 
     /// <summary>Operation name for the authorization decision itself.</summary>

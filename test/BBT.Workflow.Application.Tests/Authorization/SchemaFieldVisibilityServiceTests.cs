@@ -127,13 +127,18 @@ public sealed class SchemaFieldVisibilityServiceTests
     }
 
     [Fact]
-    public async Task IsPathVisibleForCaller_WhenNoCallerRolesAndDenyOnlySet_IsVisible()
+    public async Task IsPathVisibleForCaller_WhenNoCallerRolesAndDenyOnlySet_IsHidden()
     {
-        // Canonical blacklist rule: a deny-only set allows anyone it does not name, including a
-        // role-less caller. Previously the role-less caller was rejected before the rule applied.
+        // A deny-only set allows anyone it does not name — but a role-less caller cannot be shown
+        // not to be the named one, so a role-bound deny hides the field from it. Otherwise a
+        // role-less token (or a caller whose provider could not answer) reads every field a
+        // blacklist guards.
         var grants = new List<RoleGrant> { Grant("blocked", "deny") };
         SchemaFieldVisibilityService
             .IsPathVisibleForCaller(grants, null, await StaticEvaluator())
+            .ShouldBeFalse();
+        SchemaFieldVisibilityService
+            .IsPathVisibleForCaller(grants, ["someone-else"], await StaticEvaluator())
             .ShouldBeTrue();
     }
 

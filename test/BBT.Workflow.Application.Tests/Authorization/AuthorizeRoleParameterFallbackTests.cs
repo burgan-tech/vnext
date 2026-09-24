@@ -247,6 +247,60 @@ public sealed class AuthorizeRoleParameterFallbackTests : IDisposable
         roles.ShouldContain(ClaimedRole);
     }
 
+    /// <summary>
+    /// ADDITIVE, not a fallback, even when the provider DID answer with roles — on an awaiting
+    /// instance with no active SubFlow. This path used to go through the common role resolution,
+    /// where a non-empty provider set discards the parameter, while the awaiting-parent-with-SubFlow
+    /// path added it: the same caller and request got <c>[provider.role]</c> on one and
+    /// <c>[provider.role, claimed]</c> on the other. Settled 2026-09-25: additive everywhere.
+    /// </summary>
+    [Fact]
+    public async Task Ack_UnderTheDefaultProvider_AddsTheClaimedRoleToANonEmptyProviderSet()
+    {
+        GivenProviderAllowsFallback();
+        _roleResolver.ResolveRolesAsync(Arg.Any<IReadOnlyDictionary<string, string?>>(), Arg.Any<CancellationToken>())
+            .Returns(Result<string[]?>.Ok(["provider.role"]));
+        var instance = GivenInstance();
+        instance.ArmLongPollAck(Guid.NewGuid());
+
+        Func<CancellationToken, Task<Result<IReadOnlyCollection<string>>>>? factory = null;
+        _longPollGate.IsAdmittedAsync(
+                Arg.Any<Instance>(), Arg.Any<WorkflowDefinition>(), Arg.Any<State?>(),
+                Arg.Any<Dictionary<string, string?>?>(), Arg.Any<Dictionary<string, string?>?>(),
+                Arg.Do<Func<CancellationToken, Task<Result<IReadOnlyCollection<string>>>>>(f => factory = f),
+                Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Result<bool>.Ok(true));
+
+        await _sut.GetAuthorizeResultForInstanceAsync(
+            Domain, Flow, Guid.NewGuid().ToString(), role: ClaimedRole,
+            transitionKey: null, functionKey: null, version: null,
+            checkQueryRoles: false, checkAck: true,
+            requestContext: Context());
+
+        factory.ShouldNotBeNull();
+        var roles = (await factory!(CancellationToken.None)).Value;
+        roles.ShouldBe(["provider.role", ClaimedRole], ignoreOrder: true);
+    }
+
+    /// <summary>The other targets keep the fallback: a provider that answered wins over the parameter.</summary>
+    [Fact]
+    public async Task QueryRoles_UnderTheDefaultProvider_IgnoresTheParameterWhenTheProviderAnswered()
+    {
+        GivenProviderAllowsFallback();
+        _roleResolver.ResolveRolesAsync(Arg.Any<IReadOnlyDictionary<string, string?>>(), Arg.Any<CancellationToken>())
+            .Returns(Result<string[]?>.Ok(["provider.role"]));
+        GivenInstance();
+
+        await AuthorizeQueryRolesAsync(ClaimedRole);
+
+        await _authManager.Received(1).IsQueryAllowedAsync(
+            Arg.Any<WorkflowDefinition>(),
+            Arg.Any<Instance>(),
+            Arg.Is<IReadOnlyCollection<string>?>(r => r != null && r.Count == 1 && r.Contains("provider.role")),
+            Arg.Any<AuthorizationRequestContext?>(),
+            Arg.Any<CancellationToken>());
+    }
+
     // ── fixtures ────────────────────────────────────────────────────────────────────────────
 
     private void GivenProviderIsAuthority() =>

@@ -127,4 +127,78 @@ public sealed class TransitionAuthorizationManagerBlacklistTests
         var grants = Grants($$"""[{"role":"{{PredefinedInstanceRoles.InstanceStarter}}","grant":"deny"}]""");
         (await _sut.IsRoleAllowedForGrantsAsync(["teller"], grants, instance)).ShouldBeFalse();
     }
+
+    // ── A caller with NO roles cannot pass a role-bound deny ─────────────────────
+    //
+    // A role-bound deny (static role, `$role.`) is a statement about the caller's roles. With no
+    // roles to compare, "nothing matched" is not evidence the caller is not the denied one — a token
+    // minted by a role-less process, or a provider that could not answer, would otherwise walk
+    // straight through every blacklist. So the deny refuses. Identity-bound denies (predefined,
+    // `$user.`, `$userBehalfOf.`) do not read the role set and keep their normal evaluation.
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void Static_DenyOnly_RefusesCallerWithNoRoles(string? role)
+    {
+        var grants = Grants("""[{"role":"blocked","grant":"deny"}]""");
+        TransitionAuthorizationManager.EvaluateRolesStatic(role, grants).ShouldBeFalse();
+        TransitionAuthorizationManager.EvaluateRolesStatic(Array.Empty<string>(), grants).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task Instance_DenyOnly_RefusesCallerWithNoRoles()
+    {
+        var grants = Grants("""[{"role":"blocked","grant":"deny"}]""");
+        (await _sut.IsRoleAllowedForGrantsAsync(null, grants, NewInstance())).ShouldBeFalse();
+        (await _sut.IsRoleAllowedForGrantsAsync([], grants, NewInstance())).ShouldBeFalse();
+        (await _sut.IsRoleAllowedForGrantsAsync([" "], grants, NewInstance())).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task Instance_DynamicRoleDeny_RefusesCallerWithNoRoles()
+    {
+        var grants = Grants("""[{"role":"$role.$.context.Headers.x-blocked","grant":"deny"}]""");
+        (await _sut.IsRoleAllowedForGrantsAsync([], grants, NewInstance())).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task Instance_RoleBoundDeny_OverridesAMatchingPredefinedAllow_ForACallerWithNoRoles()
+    {
+        // The starter matches the allow on identity alone, but the set also denies a role the
+        // caller may or may not hold — with no roles to check, the deny must not be assumed clear.
+        var instance = NewInstance();
+        instance.CreatedBy = "actor";
+        _currentUser.ActorUserName.Returns("actor");
+        var grants = Grants($$"""
+            [{"role":"{{PredefinedInstanceRoles.InstanceStarter}}","grant":"allow"},
+             {"role":"blocked","grant":"deny"}]
+            """);
+        (await _sut.IsRoleAllowedForGrantsAsync([], grants, instance)).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task Instance_PredefinedDenyOnly_StillEvaluatesIdentity_ForACallerWithNoRoles()
+    {
+        _currentUser.ActorUserName.Returns("actor");
+        var grants = Grants($$"""[{"role":"{{PredefinedInstanceRoles.InstanceStarter}}","grant":"deny"}]""");
+
+        (await _sut.IsRoleAllowedForGrantsAsync([], grants, NewInstance())).ShouldBeTrue();
+
+        var started = NewInstance();
+        started.CreatedBy = "actor";
+        (await _sut.IsRoleAllowedForGrantsAsync([], grants, started)).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task Instance_UserDynamicDenyOnly_StillEvaluatesIdentity_ForACallerWithNoRoles()
+    {
+        _currentUser.ActorUserName.Returns("alice");
+        var grants = Grants("""[{"role":"$user.$.context.Headers.x-blocked-user","grant":"deny"}]""");
+        var requestContext = new AuthorizationRequestContext(
+            Headers: new Dictionary<string, string?> { ["x-blocked-user"] = "bob" });
+
+        (await _sut.IsRoleAllowedForGrantsAsync([], grants, NewInstance(), requestContext)).ShouldBeTrue();
+    }
 }
