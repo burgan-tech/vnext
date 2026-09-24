@@ -100,9 +100,11 @@ public sealed class HandleLongPollTerminationStep(
     /// must satisfy <c>interaction.longPoll.roles</c> (same grant used by the State function signal
     /// and the acknowledge check; DENY-wins / allowlist semantics, predefined + dynamic roles honored).
     /// <para>
-    /// When the role provider cannot answer, this returns false rather than failing the step. Arming
-    /// the pause is the privileged outcome here — not arming it is the closed direction, and it keeps
-    /// a provider outage from faulting in-flight instances, which propagating the failure would do.
+    /// A morph-idm outage arrives here as an EMPTY role set, not a failure, and is evaluated like any
+    /// role-less caller: an allowlist cannot match it and a role-bound deny refuses it, so the pause is
+    /// not armed. The failure branch below is for a provider that cannot resolve its own failures; it
+    /// too returns false rather than failing the step — arming the pause is the privileged outcome, and
+    /// propagating the failure would fault in-flight instances.
     /// </para>
     /// </summary>
     private async Task<bool> OwnsLongPollAsync(

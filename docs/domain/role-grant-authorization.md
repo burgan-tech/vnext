@@ -94,8 +94,29 @@ empty grant set → allowed
 2. **The ALLOW group is an OR.** Any one allow grant matching any one role admits.
 3. **A set with no ALLOW grant is a blacklist** — allowed unless explicitly denied.
 4. **An empty set is allowed.** No grants means no restriction.
+5. **A caller with no roles cannot clear a role-bound deny.** A static role (`blocked`) or a
+   `$role.$.context…` reference is a statement about the caller's *roles*; with none to compare,
+   "nothing matched" is not evidence that the caller is not the denied one, so the deny refuses.
+   Identity-bound denies — the four predefined roles and `$user.` / `$userBehalfOf.` — match on the
+   caller's identity, not its roles, and keep their normal evaluation.
 
 A caller with no roles is still evaluated once, so predefined and dynamic grants apply to them.
+
+Rule 5 exists because a role-less caller is not rare: an anonymous or device token, a token minted by
+a process that carries no roles, and — under `morph-idm` — any caller whose operation set could not be
+fetched (see below) all arrive with an empty set. Read as a pass, every blacklist became a blanket
+allow for all of them: the grant author wrote a refusal and the runtime waived it. The rule applies
+to every provider and every surface, because it lives in the one evaluator
+(`TransitionAuthorizationManager.IsUnprovableRoleBoundDeny`, used by both `RoleGrantEvaluator` and
+`EvaluateRolesStatic`).
+
+| Grant set | Caller roles | Result |
+|---|---|---|
+| `[deny: blocked]` | `[teller]` | allowed (blacklist) |
+| `[deny: blocked]` | none | **refused** (rule 5) |
+| `[deny: $InstanceStarter]` | none, caller is not the starter | allowed (identity-bound) |
+| `[allow: $InstanceStarter, deny: blocked]` | none, caller is the starter | **refused** (rule 5) |
+| `[allow: teller]` | none | refused (allowlist, nothing matched) |
 
 ### A denied role is not bought back by an allowed one
 
@@ -297,10 +318,28 @@ Three rules, each one a place the provider would otherwise quietly stop being th
   role. Pinned by `AuthorizeRoleParameterFallbackTests` and, end to end, by the chain lab.
 - **`204` is an empty set, not an absence.** It is the shape that invites the mistake: a successful
   response carrying no roles. Read as "nothing to say, use what you have", it restores the header as
-  a fallback and a caller can name its own roles. A transport failure or a 5xx is the opposite case —
-  a resolution **failure** (403 `Authorization:CallerRoleResolutionFailed`), never an empty set:
-  empty and unknown look identical one line later and mean opposite things, and an unreachable
-  identity service read as "no roles" turns every blacklist grant set into a silent blanket *allow*.
+  a fallback and a caller can name its own roles.
+- **Every other failure is an empty set too — and never breaks the request.** The resolver does not
+  fail. Each case resolves to `[]` and the request is evaluated on it:
+
+  | Case | Log | `vnext.auth.outcome` | Tag that tells it apart |
+  |---|---|---|---|
+  | neither `act_sub` nor `client_id` (anonymous / device token) — **no call is made** | Debug 20464 | `skipped` | — |
+  | `204`, blank body, `roles: []` | Warning 20441 | `empty` | `vnext.auth.empty_reason` = `no_content` / `empty_body` / `empty_array` |
+  | non-success status | Error 20442 | `failed` (span Error) | `vnext.auth.failure_kind` = `http_status` + `vnext.auth.provider.status_code` |
+  | HttpClient timeout | Error 20442 | `failed` (span Error) | `failure_kind` = `timeout` |
+  | connection / DNS / TLS | Error 20442 | `failed` (span Error) | `failure_kind` = `transport` |
+  | success status, no recognizable roles array | Error 20463 | `failed` (span Error) | `failure_kind` = `parse` |
+
+  This used to be a 403 (`Authorization:CallerRoleResolutionFailed`) on every surface, on the reading
+  that an unknown role set must deny. It was changed (2026-09-24) because an empty set already
+  denies what matters: an allowlist grant cannot match it, and **rule 5** makes every role-bound deny
+  refuse it. So an outage narrows what a caller sees — fewer transitions, pruned `x-roles` fields, a
+  refusal from `authorize` — without breaking reads outright, and it can never widen access. Without
+  rule 5 this change would have turned every blacklist into a blanket allow during an outage; the
+  two ship together and must not be separated. The outcome is memoized for the scope like any other,
+  and every memo-hit span repeats its tags. `Authorization:110004` is no longer produced by either
+  built-in provider; the code is kept for a future provider that needs the failure channel.
 
 Identity travels on `AetherClaimTypes` headers — `sub`, `act_sub`, `position`, `client_id` — resolved
 from `ICurrentUser` first and from the forwarded header dictionary second (background scopes have no
@@ -322,6 +361,16 @@ entirely:
 Copying a field read this way into instance data makes it visible to callers the grants would otherwise
 have filtered it from. Document it where you copy it.
 
+## Behavior changes in 0.0.94
+
+1. **A role-less caller no longer passes a role-bound deny** (canonical rule 5), on every surface and
+   for every provider: `availableTransitions`, `authorize`, `x-roles`, the human-task list, function
+   `roles`. This reverses item 2 of the 0.0.79 list below for role-bound denies. *More restrictive.*
+2. **`morph-idm` no longer answers 403 when it cannot resolve the caller's roles.** A failure,
+   a timeout, an unparseable body and a caller with no `act_sub`/`client_id` all resolve to an empty
+   role set and the request is evaluated on it; see the provider section above. *Reads no longer
+   fail during an outage; what they return is narrowed by rule 5 and the allowlists.*
+
 ## Behavior changes in 0.0.79
 
 Three long-standing divergences were closed. Domains using the affected features should re-check their
@@ -332,6 +381,7 @@ expectations:
    role — the blacklist fallback re-opened the field. The field is now hidden. *More restrictive.*
 2. **`x-roles`: a role-less caller now sees deny-only fields.** The role-less caller used to be
    rejected before the blacklist rule applied. Canonical rule 3 now applies. *More permissive.*
+   **Reversed in 0.0.94 for role-bound denies** (rule 5).
 3. **`x-roles` honors predefined and dynamic grants at runtime.** Predefined roles previously worked
    only via a caller-side synthesis trick; dynamic grants were silently inert. Both now resolve
    normally.

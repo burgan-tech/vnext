@@ -386,6 +386,13 @@ A sixth profile is **composed on top of** the base, never selected instead of it
   **Deny is evaluated first and short-circuits**: matching an allow is the side that resolves
   predefined and dynamic grants, and a dynamic grant's context build serializes the instance's full
   latest data, so a refusal must not pay for it.
+- **A caller with NO roles cannot clear a role-bound deny.** A static role or `$role.` deny refuses a
+  role-less caller (`TransitionAuthorizationManager.IsUnprovableRoleBoundDeny`, shared by both
+  evaluator twins); identity-bound denies (predefined, `$user.`, `$userBehalfOf.`) evaluate normally.
+  This is what makes it safe for `morph-idm` to resolve every failure — error status, timeout,
+  transport, unparseable body, no `act_sub`/`client_id` — to an EMPTY set instead of a 403: an empty
+  set can only narrow access. The two ship together; removing the rule would turn every blacklist
+  into a blanket allow during a provider outage. Both built-in resolvers now always succeed.
 - **A denied role is not bought back by an allowed one.** This is the half that changed: the rule used
   to be applied per caller role inside a loop that returned on the first role that was allowed, so a
   deny for role B was never reached once role A matched an allow — `[approver, blocked]` passed. The

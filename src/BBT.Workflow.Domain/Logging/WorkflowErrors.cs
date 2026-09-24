@@ -591,9 +591,13 @@ public static class WorkflowErrors
 
     /// <summary>
     /// The configured caller-role provider could not answer, so the caller's role set is unknown.
-    /// Maps to HTTP 403 rather than a gateway error on purpose: the outcome is that we cannot establish
-    /// what the caller may do, and the only safe reading of that is denial. Returning success with an
-    /// empty role set would silently widen access wherever a grant set is deny-only.
+    /// Maps to HTTP 403 rather than a gateway error: the only safe reading of an unknown set is denial.
+    /// <para>
+    /// No built-in provider produces it since 0.0.94: morph-idm resolves its failures to an empty set,
+    /// which is safe because a role-less caller cannot pass a role-bound deny
+    /// (<c>TransitionAuthorizationManager.IsUnprovableRoleBoundDeny</c>). Kept for a future provider
+    /// that cannot make the same guarantee, and because consumers may still match on the code.
+    /// </para>
     /// </summary>
     public static Error CallerRoleResolutionFailed(string provider, string reason)
         => Error.Forbidden(

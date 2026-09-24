@@ -10,8 +10,9 @@ namespace BBT.Workflow.Functions;
 /// view and schema contracts that description links to.
 /// </summary>
 /// <remarks>
-/// Every method enforces the same scope and role gates as execution (<see cref="IFunctionAccessPolicy"/>),
-/// so a caller who cannot invoke the function cannot learn its shape either.
+/// Every method enforces the same scope gate as execution (<see cref="IFunctionAccessPolicy"/>), so a
+/// caller who cannot invoke the function cannot learn its shape either. There is no role gate on either
+/// side: a function's <c>roles</c> are answered by <c>authorize?functionKey=</c>, not enforced here.
 /// Only custom (<c>sys-functions</c>) functions are describable; built-in system functions such as
 /// <c>state</c> or <c>view</c> have no component definition and resolve to not-found.
 /// </remarks>

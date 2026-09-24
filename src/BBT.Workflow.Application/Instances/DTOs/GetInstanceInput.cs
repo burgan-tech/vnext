@@ -172,8 +172,9 @@ public sealed class GetInstanceIncidentsInput : IHasDomain
     public Dictionary<string, string?>? QueryParameters { get; set; }
 
     /// <summary>
-    /// Caller roles, used to enforce state/workflow queryRoles visibility — the same gate the state
-    /// function applies, so a caller who can poll the state can read the incident history.
+    /// Caller roles as the configured provider resolved them. Not read for a decision: this read has no
+    /// role gate (queryRoles is answered by <c>authorize?queryRoles=true</c>); carried for parity with
+    /// the other instance reads.
     /// </summary>
     public IReadOnlyCollection<string>? Roles { get; set; }
 
@@ -204,8 +205,9 @@ public sealed class GetInstanceTasksInput : IHasDomain
     public Dictionary<string, string?>? QueryParameters { get; set; }
 
     /// <summary>
-    /// Caller roles, used to enforce state/workflow queryRoles visibility — the same gate the state
-    /// function applies, so a caller who can poll the state can read the task history.
+    /// Caller roles as the configured provider resolved them. Not read for a decision: this read has no
+    /// role gate (queryRoles is answered by <c>authorize?queryRoles=true</c>); carried for parity with
+    /// the other instance reads.
     /// </summary>
     public IReadOnlyCollection<string>? Roles { get; set; }
 }
@@ -238,8 +240,9 @@ public sealed class GetInstanceTaskActionsInput : IHasDomain
     public Dictionary<string, string?>? QueryParameters { get; set; }
 
     /// <summary>
-    /// Caller roles, used to enforce the same <c>queryRoles</c> gate as the state function and the
-    /// tasks function.
+    /// Caller roles as the configured provider resolved them. Not read for a decision: this read has no
+    /// role gate (queryRoles is answered by <c>authorize?queryRoles=true</c>); carried for parity with
+    /// the other instance reads.
     /// </summary>
     public IReadOnlyCollection<string>? Roles { get; set; }
 }
@@ -268,8 +271,9 @@ public sealed class GetActiveInstanceIncidentInput : IHasDomain
     public Dictionary<string, string?>? QueryParameters { get; set; }
 
     /// <summary>
-    /// Caller roles, used to enforce the same <c>queryRoles</c> gate as the state function and the
-    /// incident history endpoint.
+    /// Caller roles as the configured provider resolved them. Not read for a decision: this read has no
+    /// role gate (queryRoles is answered by <c>authorize?queryRoles=true</c>); carried for parity with
+    /// the other instance reads.
     /// </summary>
     public IReadOnlyCollection<string>? Roles { get; set; }
 }
@@ -317,7 +321,8 @@ public sealed class GetInstanceDataInput : IHasDomain
     public Dictionary<string, string?>? QueryParameters { get; set; }
 
     /// <summary>
-    /// Caller roles, used to enforce state/workflow queryRoles visibility (multi-role: any allowed → allow).
+    /// Caller roles (the whole set). Decide which <c>x-roles</c>-guarded fields are served and scope the
+    /// data-function cache; there is no queryRoles gate on this read.
     /// </summary>
     public IReadOnlyList<string>? Roles { get; set; }
 }
