@@ -87,7 +87,6 @@ public class InstanceCommandAppServiceBusyFastFailTests : IDisposable
             transitionAuthorizationManager: Substitute.For<ITransitionAuthorizationManager>(),
             cancellationService: Substitute.For<IInstanceCancellationService>(),
             longPollAckResumeService: Substitute.For<ILongPollAckResumeService>(),
-            longPollInteractionGate: NSubstitute.Substitute.For<BBT.Workflow.Execution.LongPoll.ILongPollInteractionGate>(),
             instanceCommandGateway: Substitute.For<IInstanceCommandGateway>(),
             workflowOutputMappingService: Substitute.For<IWorkflowOutputMappingService>(),
             logger: Substitute.For<ILogger<InstanceCommandAppService>>());
