@@ -15,8 +15,16 @@ namespace BBT.Workflow.Authorization;
 /// </para>
 /// <para>
 /// Implementations that perform I/O must memoize for the lifetime of the DI scope: one request means
-/// at most one provider call, no matter how many surfaces ask. Failures are memoized too, so a scope
-/// that could not establish the caller's roles stays failed rather than retrying per surface.
+/// at most one provider call, no matter how many surfaces ask — whatever the outcome.
+/// </para>
+/// <para>
+/// <b>Neither built-in provider fails.</b> The default one is in-process; morph-idm resolves every
+/// failure (error status, timeout, transport, unparseable body, no caller identity) to an EMPTY set,
+/// logged and span-tagged by kind. That is safe only because the grant engine refuses a role-less
+/// caller at every role-bound deny (<c>TransitionAuthorizationManager.IsUnprovableRoleBoundDeny</c>)
+/// and no allowlist grant can match an empty set — so an empty set narrows access and never widens
+/// it. The failure channel and the call sites' <c>!IsSuccess</c> branches are kept for a future
+/// provider that cannot uphold that; such a provider's failure is a denial.
 /// </para>
 /// </summary>
 public interface ICallerRoleResolver
@@ -32,8 +40,8 @@ public interface ICallerRoleResolver
     /// </param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>
-    /// The caller's roles, or a failure when the provider could not answer. Callers MUST propagate the
-    /// failure: an unresolvable role set is a denial, never an empty set.
+    /// The caller's roles. A failure is reserved for a provider that cannot resolve its own failures to
+    /// an empty set; callers MUST propagate it as a denial. Both built-in providers always succeed.
     /// </returns>
     Task<Result<string[]?>> ResolveRolesAsync(
         IReadOnlyDictionary<string, string?>? headers,

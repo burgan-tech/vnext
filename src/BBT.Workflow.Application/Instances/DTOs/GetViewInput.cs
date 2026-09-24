@@ -38,7 +38,8 @@ public sealed class GetViewInput : IHasDomain
     public string? Role { get; set; }
 
     /// <summary>
-    /// Caller roles, used to enforce state/workflow queryRoles visibility.
+    /// Caller roles. Forwarded on a subflow descent only — view selection is rule-based; there is no
+    /// queryRoles gate on this read.
     /// </summary>
     public IReadOnlyList<string>? Roles { get; set; }
 }

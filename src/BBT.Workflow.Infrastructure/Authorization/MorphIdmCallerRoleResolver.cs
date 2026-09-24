@@ -20,9 +20,17 @@ namespace BBT.Workflow.Authorization;
 /// <c>availableIn</c> narrowing, <c>queryRoles</c> and schema <c>x-roles</c> exactly as it always has.
 /// </para>
 /// <para>
-/// The result — success or failure — is memoized for the scope. No distributed cache is layered on
-/// top: the endpoint caches itself, and a second cache here would only add a second place for a stale
-/// operation set to hide.
+/// <b>It never fails.</b> A caller with neither <c>act_sub</c> nor <c>client_id</c> is not asked about
+/// at all; a non-success status, a timeout, a transport error and an unparseable body are each logged
+/// at Error and tagged by kind; <c>204</c>, a blank body and an empty roles array are logged at
+/// Warning — and every one of them resolves to an EMPTY role set. The request continues and the
+/// grant engine decides on that set: an allowlist grant cannot match, and a role-bound deny refuses a
+/// role-less caller (<c>TransitionAuthorizationManager.IsUnprovableRoleBoundDeny</c>). An outage
+/// therefore narrows what a caller sees and never widens it, without turning every read into a 403.
+/// </para>
+/// <para>
+/// The outcome is memoized for the scope. No distributed cache is layered on top: the endpoint caches
+/// itself, and a second cache here would only add a second place for a stale operation set to hide.
 /// </para>
 /// </summary>
 public sealed class MorphIdmCallerRoleResolver : ICallerRoleResolver
@@ -38,7 +46,7 @@ public sealed class MorphIdmCallerRoleResolver : ICallerRoleResolver
     /// human-task and subflow reads both fan out), and a flag would let two of them race into two
     /// provider calls.
     /// </summary>
-    private readonly Lazy<Task<Result<string[]?>>> _resolution;
+    private readonly Lazy<Task<Resolution>> _resolution;
 
     /// <summary>
     /// Headers captured from the first caller, used only as a fallback source of <c>position</c> in
@@ -62,7 +70,7 @@ public sealed class MorphIdmCallerRoleResolver : ICallerRoleResolver
         // CancellationToken.None on purpose: the memoized task is shared by every surface in the scope,
         // so honouring the first caller's token would let one abandoned read cancel the role set out
         // from under the others. The HttpClient timeout is what bounds this call.
-        _resolution = new Lazy<Task<Result<string[]?>>>(
+        _resolution = new Lazy<Task<Resolution>>(
             () => FetchAsync(_fallbackHeaders, CancellationToken.None),
             LazyThreadSafetyMode.ExecutionAndPublication);
     }
@@ -76,7 +84,7 @@ public sealed class MorphIdmCallerRoleResolver : ICallerRoleResolver
     public bool AllowsRoleParameterFallback => false;
 
     /// <inheritdoc />
-    public Task<Result<string[]?>> ResolveRolesAsync(
+    public async Task<Result<string[]?>> ResolveRolesAsync(
         IReadOnlyDictionary<string, string?>? headers,
         CancellationToken cancellationToken = default)
     {
@@ -86,38 +94,42 @@ public sealed class MorphIdmCallerRoleResolver : ICallerRoleResolver
             if (memoized.IsCompletedSuccessfully)
             {
                 _logger.CallerRolesServedFromRequestScopeMemo(
-                    CallerRoleProviderOptions.MorphIdmProvider, memoized.Result.Value?.Length ?? 0);
+                    CallerRoleProviderOptions.MorphIdmProvider, memoized.Result.Roles.Length);
             }
 
-            return RecordMemoHitAsync(memoized);
+            return Result<string[]?>.Ok((await RecordMemoHitAsync(memoized)).Roles);
         }
 
         _fallbackHeaders = headers;
-        return _resolution.Value;
+        return Result<string[]?>.Ok((await _resolution.Value).Roles);
     }
 
     /// <summary>
     /// Emits the span for a surface that was served the memo. The span is short by construction —
     /// it measures nothing but the memo read — and that is the point: its presence, and its
     /// <c>memo.hit=true</c> tag, are what make the shared call visible. Without it a request where
-    /// six surfaces asked once looks exactly like one where a single surface asked.
+    /// six surfaces asked once looks exactly like one where a single surface asked. It repeats the
+    /// original outcome's tags, so a memoized failure stays an Error on every surface.
     /// </summary>
-    private static async Task<Result<string[]?>> RecordMemoHitAsync(Task<Result<string[]?>> memoized)
+    private static async Task<Resolution> RecordMemoHitAsync(Task<Resolution> memoized)
     {
         using var activity = AuthorizationActivityHelper.StartResolveRoles(
             CallerRoleProviderOptions.MorphIdmProvider);
 
-        var result = await memoized;
+        var resolution = await memoized;
 
-        if (result.IsSuccess)
-            AuthorizationActivityHelper.SetResolved(activity, result.Value?.Length ?? 0, memoHit: true);
+        if (resolution.FailureKind is not null)
+            AuthorizationActivityHelper.SetFailedFromMemo(activity, resolution.FailureKind, resolution.StatusCode);
+        else if (resolution.Skipped)
+            AuthorizationActivityHelper.SetSkipped(activity, memoHit: true);
         else
-            AuthorizationActivityHelper.SetFailedFromMemo(activity);
+            AuthorizationActivityHelper.SetResolved(
+                activity, resolution.Roles.Length, memoHit: true, resolution.EmptyReason);
 
-        return result;
+        return resolution;
     }
 
-    private async Task<Result<string[]?>> FetchAsync(
+    private async Task<Resolution> FetchAsync(
         IReadOnlyDictionary<string, string?>? headers,
         CancellationToken cancellationToken)
     {
@@ -129,11 +141,19 @@ public sealed class MorphIdmCallerRoleResolver : ICallerRoleResolver
         // ambient HTTP request — a background transition job resolving roles carries the caller's
         // headers as a dictionary, and nothing has populated ICurrentUser there.
         var position = _currentUser.Position ?? HeaderValue(headers, AetherClaimTypes.Position);
-       
 
         using var activity = AuthorizationActivityHelper.StartResolveRoles(
             CallerRoleProviderOptions.MorphIdmProvider);
         AuthorizationActivityHelper.SetCaller(activity, subject, actor, position);
+
+        // Nobody to ask about: an anonymous or device token carries neither the acting user nor the
+        // client. Calling would only spend a round trip on an answer that cannot be about anyone.
+        if (string.IsNullOrWhiteSpace(actor) && string.IsNullOrWhiteSpace(clientId))
+        {
+            _logger.CallerRoleProviderCallSkippedNoIdentity(CallerRoleProviderOptions.MorphIdmProvider, subject);
+            AuthorizationActivityHelper.SetSkipped(activity, memoHit: false);
+            return Resolution.Skip;
+        }
 
         var stopwatch = Stopwatch.GetTimestamp();
         try
@@ -145,68 +165,91 @@ public sealed class MorphIdmCallerRoleResolver : ICallerRoleResolver
             AddHeader(request, AetherClaimTypes.ClientId, clientId);
 
             using var response = await _httpClient.SendAsync(request, cancellationToken);
+            var statusCode = (int)response.StatusCode;
 
-            // A known "this caller has no operation set" answer. Empty, not null: falling back to any
-            // other source here would silently re-grant what the provider just declined to grant.
+            // A known "this caller has no operation set" answer. Empty, and never a fall-through to
+            // any other source: that would silently re-grant what the provider just declined to grant.
             if (response.StatusCode == HttpStatusCode.NoContent)
-            {
-                _logger.CallerRoleProviderReturnedNoContent(
-                    CallerRoleProviderOptions.MorphIdmProvider, subject, actor, position);
-                AuthorizationActivityHelper.SetResolved(activity, 0, memoHit: false);
-                return Result<string[]?>.Ok([]);
-            }
+                return Empty(activity, TelemetryConstants.AuthEmptyReasons.NoContent, subject, actor, position);
 
             if (!response.IsSuccessStatusCode)
             {
-                _logger.CallerRoleProviderCallFailed(
-                    null,
-                    CallerRoleProviderOptions.MorphIdmProvider,
-                    (int)response.StatusCode,
-                    response.ReasonPhrase ?? "non-success status");
-                AuthorizationActivityHelper.SetFailed(
-                    activity, response.ReasonPhrase ?? "non-success status", (int)response.StatusCode);
-                return Fail($"HTTP {(int)response.StatusCode}");
+                var reason = response.ReasonPhrase ?? "non-success status";
+                return Failed(activity, null, TelemetryConstants.AuthFailureKinds.HttpStatus, statusCode, reason);
             }
 
             var body = await response.Content.ReadAsStringAsync(cancellationToken);
             if (string.IsNullOrWhiteSpace(body))
-            {
-                _logger.CallerRoleProviderReturnedNoContent(
-                    CallerRoleProviderOptions.MorphIdmProvider, subject, actor, position);
-                AuthorizationActivityHelper.SetResolved(activity, 0, memoHit: false);
-                return Result<string[]?>.Ok([]);
-            }
+                return Empty(activity, TelemetryConstants.AuthEmptyReasons.EmptyBody, subject, actor, position);
 
             var roles = ParseRoles(body);
             if (roles is null)
             {
-                _logger.CallerRoleProviderCallFailed(
-                    null, CallerRoleProviderOptions.MorphIdmProvider, (int)response.StatusCode,
-                    "response carried no recognizable roles array");
-                AuthorizationActivityHelper.SetFailed(
-                    activity, "unrecognized response shape", (int)response.StatusCode);
-                return Fail("unrecognized response shape");
+                const string reason = "response carried no recognizable roles array";
+                _logger.CallerRoleProviderResponseUnparseable(
+                    CallerRoleProviderOptions.MorphIdmProvider, statusCode, reason);
+                AuthorizationActivityHelper.SetFailed(activity, reason, TelemetryConstants.AuthFailureKinds.Parse, statusCode);
+                return Resolution.Failure(TelemetryConstants.AuthFailureKinds.Parse, statusCode);
             }
+
+            if (roles.Length == 0)
+                return Empty(activity, TelemetryConstants.AuthEmptyReasons.EmptyArray, subject, actor, position);
 
             _logger.CallerRolesResolvedFromProvider(
                 CallerRoleProviderOptions.MorphIdmProvider, roles.Length, Stopwatch.GetElapsedTime(stopwatch).TotalMilliseconds);
             AuthorizationActivityHelper.SetResolved(activity, roles.Length, memoHit: false);
-            return Result<string[]?>.Ok(roles);
+            return Resolution.Of(roles);
+        }
+        catch (TaskCanceledException ex)
+        {
+            // CancellationToken.None is passed in, so a cancellation here is the HttpClient timeout.
+            return Failed(activity, ex, TelemetryConstants.AuthFailureKinds.Timeout, null, ex.Message);
         }
         catch (Exception ex)
         {
-            _logger.CallerRoleProviderCallFailed(
-                ex, CallerRoleProviderOptions.MorphIdmProvider, null, ex.Message);
-            AuthorizationActivityHelper.SetFailed(activity, ex.Message);
-            return Fail(ex.Message);
+            return Failed(activity, ex, TelemetryConstants.AuthFailureKinds.Transport, null, ex.Message);
         }
+    }
+
+    private Resolution Empty(Activity? activity, string emptyReason, string? subject, string? actor, string? position)
+    {
+        _logger.CallerRoleProviderReturnedNoContent(
+            CallerRoleProviderOptions.MorphIdmProvider, emptyReason, subject, actor, position);
+        AuthorizationActivityHelper.SetResolved(activity, 0, memoHit: false, emptyReason);
+        return Resolution.EmptyAnswer(emptyReason);
+    }
+
+    private Resolution Failed(Activity? activity, Exception? exception, string failureKind, int? statusCode, string reason)
+    {
+        _logger.CallerRoleProviderCallFailed(
+            exception, CallerRoleProviderOptions.MorphIdmProvider, failureKind, statusCode, reason);
+        AuthorizationActivityHelper.SetFailed(activity, reason, failureKind, statusCode);
+        return Resolution.Failure(failureKind, statusCode);
+    }
+
+    /// <summary>
+    /// The memoized outcome of the scope's one resolution. The roles are what every surface receives;
+    /// the rest exists only so a memo-hit span can repeat the original outcome's tags.
+    /// </summary>
+    private sealed record Resolution(
+        string[] Roles,
+        bool Skipped = false,
+        string? EmptyReason = null,
+        string? FailureKind = null,
+        int? StatusCode = null)
+    {
+        public static readonly Resolution Skip = new([], Skipped: true);
+        public static Resolution Of(string[] roles) => new(roles);
+        public static Resolution EmptyAnswer(string reason) => new([], EmptyReason: reason);
+        public static Resolution Failure(string kind, int? statusCode) => new([], FailureKind: kind, StatusCode: statusCode);
     }
 
     /// <summary>
     /// Reads the roles array from any of the shapes the endpoint is known to answer with:
     /// <c>roles</c>, <c>data.roles</c>, or <c>getRoles.data.roles</c>. Returns null when none is present,
-    /// which is treated as a failure rather than as an empty set — an unparseable answer tells us
-    /// nothing about the caller, while <c>204</c> and an empty body tell us the set is genuinely empty.
+    /// which is logged as a parse failure rather than as an empty answer — an unparseable body is a
+    /// provider defect worth an Error, while <c>204</c> and an empty array are a caller holding nothing.
+    /// Both resolve to an empty role set.
     /// </summary>
     private static string[]? ParseRoles(string body)
     {
@@ -247,10 +290,6 @@ public sealed class MorphIdmCallerRoleResolver : ICallerRoleResolver
             .Select(r => r.Trim())
             .ToArray();
     }
-
-    private static Result<string[]?> Fail(string reason) =>
-        Result<string[]?>.Fail(
-            WorkflowErrors.CallerRoleResolutionFailed(CallerRoleProviderOptions.MorphIdmProvider, reason));
 
     private static void AddHeader(HttpRequestMessage request, string name, string? value)
     {
