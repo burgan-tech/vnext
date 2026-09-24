@@ -37,7 +37,8 @@ public sealed class FunctionAppService(
     IStateStoreCacheGateway cacheGateway,
     IRemoteInvokerService remoteInvoker,
     IFunctionAccessPolicy functionAccessPolicy,
-    IFunctionRequestValidationService functionRequestValidationService)
+    IFunctionRequestValidationService functionRequestValidationService,
+    IFunctionExecutionJournal functionExecutionJournal)
     : ApplicationService(serviceProvider), IFunctionAppService
 {
     /// <inheritdoc />
@@ -142,6 +143,55 @@ public sealed class FunctionAppService(
         string? httpMethod,
         CancellationToken cancellationToken)
     {
+        // Journal one execution row per invocation of a domain-registered function
+        // (vnext-client-sdk-core#60, item C1). Only functions that reach ExecuteFunctionAsync are
+        // recorded — the built-in instance reads (state/data/view/…) are served by their own handlers
+        // and never come through here, so the journal is scoped to sys-catalog Functions automatically.
+        // try/finally so EVERY outcome is recorded exactly once: success, a Result.Fail, and a thrown
+        // exception (which still counts as an erroring execution). Journaling is best-effort and never
+        // throws, so the finally cannot mask an in-flight exception.
+        var invokedAt = DateTime.UtcNow;
+        var stopwatch = Stopwatch.StartNew();
+        var fromCache = false;
+        var succeeded = false;
+        int? statusCode = null;
+        string? errorCode = null;
+
+        try
+        {
+            var result = await RunAsync();
+            succeeded = result.IsSuccess;
+            statusCode = result.IsSuccess ? result.Value?.StatusCode : null;
+            errorCode = result.IsSuccess ? null : result.Error.Code;
+            return result;
+        }
+        catch (Exception ex)
+        {
+            errorCode = ex.GetType().Name;
+            throw;
+        }
+        finally
+        {
+            stopwatch.Stop();
+            await functionExecutionJournal.RecordAsync(
+                new FunctionExecutionRecord(
+                    function.Domain,
+                    function.Key,
+                    function.Version,
+                    function.Scope,
+                    workflow?.Key,
+                    instance?.Id,
+                    invokedAt,
+                    stopwatch.Elapsed.TotalMilliseconds,
+                    succeeded,
+                    statusCode,
+                    errorCode,
+                    fromCache),
+                cancellationToken);
+        }
+
+        async Task<Result<FunctionResponseOutput>> RunAsync()
+        {
         using var functionActivity = FunctionActivityHelper.StartExecute(function.Key);
         Activity.Current?.SetTag(TelemetryConstants.TagNames.Domain, function.Domain);
 
@@ -272,7 +322,10 @@ public sealed class FunctionAppService(
                     {
                         var cached = read.Value.Deserialize<FunctionResponseOutput>(JsonSerializerConstants.JsonOptions);
                         if (cached is not null)
+                        {
+                            fromCache = true;
                             return Result<FunctionResponseOutput>.Ok(cached);
+                        }
                     }
                 }
             }
@@ -350,6 +403,7 @@ public sealed class FunctionAppService(
         }
 
         return responseResult;
+        }
     }
 
     /// <summary>

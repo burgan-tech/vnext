@@ -557,15 +557,12 @@ public sealed class InstanceQueryAppService(
             {
                 using var instanceScope = BeginInstanceScope(instance);
 
-                // Slim rows only (no Body/Header jsonb). Every row whose transition key matches is one
-                // firing — one attempt — and history firings are already 1:1 with these rows.
-                var records = await instanceTransitionRepository
-                    .GetByInstanceIdAsReadOnlyAsync(instance.Id, cancellationToken);
-
-                var firings = records
-                    .Where(r => r.TransitionId == input.TransitionKey)
-                    .OrderBy(r => r.StartedAt)
-                    .ToList();
+                // Slim rows only (no Body/Header jsonb), filtered to this transition key in SQL so a
+                // single-key read does not materialize the instance's whole transition history. Every
+                // matching row is one firing — one attempt — 1:1 with the history firings.
+                var firings = await instanceTransitionRepository
+                    .GetByInstanceAndTransitionKeyAsReadOnlyAsync(
+                        instance.Id, input.TransitionKey, cancellationToken);
 
                 var tasksByRecord = await LoadMetricsTasksAsync(
                     firings.Select(r => r.Id), cancellationToken);
@@ -609,6 +606,10 @@ public sealed class InstanceQueryAppService(
             {
                 using var instanceScope = BeginInstanceScope(instance);
 
+                // Unlike transition-metrics, this cannot filter by a single key in SQL: a visit is
+                // bounded by the transition that ENTERED the state and the (differently-keyed) one that
+                // LEFT it, so the whole timeline is needed to pair them. Slim rows only (no jsonb), and
+                // an instance's transition count bounds the read.
                 var records = await instanceTransitionRepository
                     .GetByInstanceIdAsReadOnlyAsync(instance.Id, cancellationToken);
 

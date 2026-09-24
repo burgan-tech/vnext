@@ -138,18 +138,17 @@ public class InstanceQueryAppServiceMetricsTests : IDisposable
         var instance = SetupInstance();
         var t0 = DateTime.UtcNow.AddMinutes(-10);
 
-        // Two firings of "to-review" plus one unrelated "approve" firing that must be ignored.
+        // Two firings of "to-review" (the repo filters by key in SQL); an unrelated task row proves the
+        // grouping never attaches a foreign transition's tasks to an attempt.
         var firing1 = Guid.NewGuid();
         var firing2 = Guid.NewGuid();
         var unrelated = Guid.NewGuid();
         _instanceTransitionRepository
-            .GetByInstanceIdAsReadOnlyAsync(instance.Id, Arg.Any<CancellationToken>())
+            .GetByInstanceAndTransitionKeyAsReadOnlyAsync(instance.Id, "to-review", Arg.Any<CancellationToken>())
             .Returns(new List<InstanceTransitionSlim>
             {
                 Slim(firing1, instance.Id, "to-review", "step-4", "precheck", t0,
                     duration: TimeSpan.FromMilliseconds(1104), createdBy: "alice"),
-                Slim(unrelated, instance.Id, "approve", "precheck", "done", t0.AddSeconds(5),
-                    duration: TimeSpan.FromMilliseconds(10), createdBy: "bob"),
                 Slim(firing2, instance.Id, "to-review", "step-4", "precheck", t0.AddSeconds(10),
                     duration: TimeSpan.FromMilliseconds(1098), createdBy: "carol")
             });
@@ -202,7 +201,7 @@ public class InstanceQueryAppServiceMetricsTests : IDisposable
     {
         var instance = SetupInstance();
         _instanceTransitionRepository
-            .GetByInstanceIdAsReadOnlyAsync(instance.Id, Arg.Any<CancellationToken>())
+            .GetByInstanceAndTransitionKeyAsReadOnlyAsync(instance.Id, "never-fired", Arg.Any<CancellationToken>())
             .Returns(new List<InstanceTransitionSlim>());
 
         var result = await _service.GetTransitionMetricsAsync(
@@ -219,7 +218,7 @@ public class InstanceQueryAppServiceMetricsTests : IDisposable
         var instance = SetupInstance();
         var firing = Guid.NewGuid();
         _instanceTransitionRepository
-            .GetByInstanceIdAsReadOnlyAsync(instance.Id, Arg.Any<CancellationToken>())
+            .GetByInstanceAndTransitionKeyAsReadOnlyAsync(instance.Id, "approve", Arg.Any<CancellationToken>())
             .Returns(new List<InstanceTransitionSlim>
             {
                 Slim(firing, instance.Id, "approve", "draft", "approved", DateTime.UtcNow.AddMinutes(-1))
@@ -360,6 +359,50 @@ public class InstanceQueryAppServiceMetricsTests : IDisposable
 
         result.Value!.Count.ShouldBe(2);
         result.Value!.Attempts.Select(a => a.Seq).ShouldBe(new[] { 1, 2 });
+    }
+
+    [Fact]
+    public async Task GetStateMetricsAsync_SelfLoop_ClosesOneVisitAndOpensTheNextInOneRecord()
+    {
+        var instance = SetupInstance();
+        var t0 = DateTime.UtcNow.AddMinutes(-20);
+        var enter = Guid.NewGuid();
+        var selfLoop = Guid.NewGuid();
+        var leave = Guid.NewGuid();
+
+        _instanceTransitionRepository
+            .GetByInstanceIdAsReadOnlyAsync(instance.Id, Arg.Any<CancellationToken>())
+            .Returns(new List<InstanceTransitionSlim>
+            {
+                Slim(enter, instance.Id, "to-review", "step-4", "precheck", t0, finishedAt: t0.AddMilliseconds(10)),
+                // self-loop: leaves precheck AND re-enters it in one record
+                Slim(selfLoop, instance.Id, "recheck", "precheck", "precheck", t0.AddSeconds(5), finishedAt: t0.AddSeconds(5).AddMilliseconds(10)),
+                Slim(leave, instance.Id, "approve", "precheck", "done", t0.AddSeconds(10))
+            });
+        _instanceTaskRepository
+            .GetMetricsRowsByTransitionIdsAsync(Arg.Any<IReadOnlyCollection<Guid>>(), Arg.Any<CancellationToken>())
+            .Returns(new List<InstanceTaskMetricsRow>
+            {
+                // the self-loop record carries BOTH precheck's onExit (belongs to visit 1, which it closes)
+                // and its onEntry (belongs to visit 2, which it opens)
+                TaskRow(selfLoop, "audit-on-exit", TaskTrigger.OnExit, 1, t0.AddSeconds(5).AddMilliseconds(1), 5),
+                TaskRow(selfLoop, "notify-on-entry", TaskTrigger.OnEntry, 1, t0.AddSeconds(5).AddMilliseconds(6), 5)
+            });
+
+        var result = await _service.GetStateMetricsAsync(
+            StateInput(instance.Id.ToString(), "precheck"), CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        result.Value!.Count.ShouldBe(2);
+
+        var visit1 = result.Value!.Attempts[0];
+        visit1.FinishedAt.ShouldBe(t0.AddSeconds(5)); // closed by the self-loop record's StartedAt
+        visit1.Tasks.ShouldHaveSingleItem().TaskKey.ShouldBe("audit-on-exit");
+
+        var visit2 = result.Value!.Attempts[1];
+        visit2.StartedAt.ShouldBe(t0.AddSeconds(5).AddMilliseconds(10)); // opened by the same record's FinishedAt
+        visit2.FinishedAt.ShouldBe(t0.AddSeconds(10)); // left by 'approve'
+        visit2.Tasks.ShouldHaveSingleItem().TaskKey.ShouldBe("notify-on-entry");
     }
 
     [Fact]

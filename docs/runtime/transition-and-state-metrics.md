@@ -112,7 +112,10 @@ not guessed — the hook is not recoverable from the one-way `ExecutionKey` hash
 - Application: `InstanceQueryAppService.GetTransitionMetricsAsync` / `GetStateMetricsAsync` — resolve
   instance → read slim transition rows → group/pair → project tasks. Visit pairing is
   `PairStateVisits`.
-- Repository reads: `EfCoreInstanceTransitionRepository.GetByInstanceIdAsReadOnlyAsync` (slim rows,
-  no Body/Header jsonb) and `EfCoreInstanceTaskRepository.GetMetricsRowsByTransitionIdsAsync` (column
-  projection into `InstanceTaskMetricsRow`, faulted Response via `CASE`).
+- Repository reads (slim rows, no Body/Header jsonb): transition-metrics uses
+  `EfCoreInstanceTransitionRepository.GetByInstanceAndTransitionKeyAsReadOnlyAsync` (key filter pushed
+  to SQL, so a single-key read does not materialize the whole history); state-metrics uses
+  `GetByInstanceIdAsReadOnlyAsync` because pairing a visit spans two differently-keyed transitions and
+  needs the full timeline. Tasks come from `EfCoreInstanceTaskRepository.GetMetricsRowsByTransitionIdsAsync`
+  (column projection into `InstanceTaskMetricsRow`, faulted Response via `CASE`).
 - No state-function involvement: no `ResponseShapeVersion` or fingerprint change.

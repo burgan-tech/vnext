@@ -43,6 +43,7 @@ var host = builder.Build();
 
 host.EnsureDatabaseCreatedInDevelopment();
 host.Services.MigrateMessagingDbContext();
+host.Services.MigrateMetricsDbContext();
 
 await host.RunAsync();
 

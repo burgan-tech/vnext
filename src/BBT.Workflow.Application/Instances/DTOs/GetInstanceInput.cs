@@ -264,12 +264,6 @@ public sealed class GetTransitionMetricsInput : IHasDomain
     /// <summary>The transition definition key to group firings by.</summary>
     [Required]
     public string TransitionKey { get; set; } = string.Empty;
-
-    /// <summary>HTTP headers from the request (dynamic role grants read them).</summary>
-    public Dictionary<string, string?>? Headers { get; set; }
-
-    /// <summary>Query parameters from the request (dynamic role grants read them).</summary>
-    public Dictionary<string, string?>? QueryParameters { get; set; }
 }
 
 /// <summary>
@@ -292,12 +286,6 @@ public sealed class GetStateMetricsInput : IHasDomain
     /// <summary>The state key whose visits to group.</summary>
     [Required]
     public string StateKey { get; set; } = string.Empty;
-
-    /// <summary>HTTP headers from the request (dynamic role grants read them).</summary>
-    public Dictionary<string, string?>? Headers { get; set; }
-
-    /// <summary>Query parameters from the request (dynamic role grants read them).</summary>
-    public Dictionary<string, string?>? QueryParameters { get; set; }
 }
 
 /// <summary>

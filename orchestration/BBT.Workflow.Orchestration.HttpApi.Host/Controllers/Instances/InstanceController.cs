@@ -985,16 +985,12 @@ public sealed class InstanceController(
         [FromRoute] string transitionKey,
         CancellationToken cancellationToken = default)
     {
-        var requestContext = HttpContext.GetRequestBindingContext();
-
         var input = new GetTransitionMetricsInput
         {
             Domain = domain,
             Workflow = workflow,
             Instance = instance,
-            TransitionKey = transitionKey,
-            Headers = requestContext.Headers,
-            QueryParameters = requestContext.QueryParameters
+            TransitionKey = transitionKey
         };
 
         var response = await queryAppService.GetTransitionMetricsAsync(input, cancellationToken);
@@ -1019,16 +1015,12 @@ public sealed class InstanceController(
         [FromRoute] string stateKey,
         CancellationToken cancellationToken = default)
     {
-        var requestContext = HttpContext.GetRequestBindingContext();
-
         var input = new GetStateMetricsInput
         {
             Domain = domain,
             Workflow = workflow,
             Instance = instance,
-            StateKey = stateKey,
-            Headers = requestContext.Headers,
-            QueryParameters = requestContext.QueryParameters
+            StateKey = stateKey
         };
 
         var response = await queryAppService.GetStateMetricsAsync(input, cancellationToken);

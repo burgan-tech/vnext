@@ -111,6 +111,7 @@ public static class WorkflowInfrastructureModuleServiceCollectionExtensions
         services.AddScoped<IInstanceJobRepository, EfCoreInstanceJobRepository>();
         services.AddScoped<IInstanceActionRepository, EfCoreInstanceActionRepository>();
         services.AddScoped<IInstanceIncidentRepository, EfCoreInstanceIncidentRepository>();
+        services.AddScoped<BBT.Workflow.Metrics.IFunctionExecutionRepository, BBT.Workflow.Metrics.EfCoreFunctionExecutionRepository>();
 
         // Named HTTP clients for the external HTTP task executor (issue #399) — concrete
         // transport, so it lives here rather than in the Application layer that consumes it.

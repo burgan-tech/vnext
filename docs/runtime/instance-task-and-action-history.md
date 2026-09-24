@@ -58,7 +58,9 @@ Each item projects one `InstanceTask` journal row joined with its owning transit
 }
 ```
 
-**`hook` vs `triggerType`.** `triggerType` is how the owning *transition* was triggered (manual,
+#### `hook` vs `triggerType`
+
+`triggerType` is how the owning *transition* was triggered (manual,
 automatic, …); `hook` is the *task's* phase within that transition — a state's `onEntry` tasks vs
 the transition's `onExecute` tasks, which without this field were indistinguishable (a reader could
 not tell them apart, and the same task key under two hooks produced identical rows;

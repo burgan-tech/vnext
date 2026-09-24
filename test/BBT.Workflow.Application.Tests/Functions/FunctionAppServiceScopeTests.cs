@@ -23,6 +23,7 @@ using BBT.Workflow.Tasks.Executors;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
+using NSubstitute.ExceptionExtensions;
 using Shouldly;
 using Xunit;
 
@@ -50,6 +51,7 @@ public sealed class FunctionAppServiceScopeTests : IDisposable
     private readonly IStateStoreCacheGateway _cacheGateway;
     private readonly IDynamicExpressoValueEvaluator _keyEvaluator;
     private readonly IFunctionRequestValidationService _functionRequestValidationService;
+    private readonly IFunctionExecutionJournal _functionExecutionJournal;
     private readonly FunctionAppService _service;
 
     private readonly IServiceProvider _ambientServiceProvider;
@@ -63,6 +65,7 @@ public sealed class FunctionAppServiceScopeTests : IDisposable
         _cacheGateway = Substitute.For<IStateStoreCacheGateway>();
         _keyEvaluator = Substitute.For<IDynamicExpressoValueEvaluator>();
         _functionRequestValidationService = Substitute.For<IFunctionRequestValidationService>();
+        _functionExecutionJournal = Substitute.For<IFunctionExecutionJournal>();
         _functionRequestValidationService
             .ValidateRequestAsync(
                 Arg.Any<Function>(),
@@ -127,7 +130,8 @@ public sealed class FunctionAppServiceScopeTests : IDisposable
             // The real policy, so these tests keep covering the scope gate end to end
             // after it moved out of FunctionAppService.
             functionAccessPolicy: new FunctionAccessPolicy(),
-            functionRequestValidationService: _functionRequestValidationService);
+            functionRequestValidationService: _functionRequestValidationService,
+            functionExecutionJournal: _functionExecutionJournal);
     }
 
     public void Dispose()
@@ -157,6 +161,62 @@ public sealed class FunctionAppServiceScopeTests : IDisposable
 
         result.IsSuccess.ShouldBeFalse();
         result.Error.Code.ShouldBe(WorkflowErrorCodes.FunctionScopeNotSatisfied);
+    }
+
+    // ─── Execution journaling (vnext-client-sdk-core#60, item C1) ─────────────────
+
+    [Fact]
+    public async Task ByKey_DomainScope_JournalsSucceededExecution()
+    {
+        SetupFunction(TaskScope.Domain);
+
+        await _service.GetFunctionByKeyAsync(FunctionKey, TestDomain);
+
+        await _functionExecutionJournal.Received(1).RecordAsync(
+            Arg.Is<FunctionExecutionRecord>(r =>
+                r.Domain == TestDomain &&
+                r.FunctionKey == FunctionKey &&
+                r.Scope == TaskScope.Domain &&
+                r.Workflow == null &&
+                r.InstanceId == null &&
+                r.Succeeded &&
+                !r.FromCache),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ByKey_ScopeRejected_StillJournalsTheAttemptAsFailed()
+    {
+        SetupFunction(TaskScope.Instance);
+
+        await _service.GetFunctionByKeyAsync(FunctionKey, TestDomain);
+
+        await _functionExecutionJournal.Received(1).RecordAsync(
+            Arg.Is<FunctionExecutionRecord>(r => !r.Succeeded && r.FunctionKey == FunctionKey),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ByKey_WhenAPhaseThrows_JournalsFaultedAndRethrows()
+    {
+        SetupFunction(TaskScope.Domain);
+        _functionRequestValidationService
+            .ValidateRequestAsync(
+                Arg.Any<Function>(),
+                Arg.Any<JsonElement?>(),
+                Arg.Any<LazyScriptContext>(),
+                Arg.Any<IReadOnlyDictionary<string, string?>?>(),
+                Arg.Any<CancellationToken>())
+            .ThrowsAsync(new InvalidOperationException("boom"));
+
+        // The exception still propagates to the caller …
+        await Should.ThrowAsync<InvalidOperationException>(() =>
+            _service.GetFunctionByKeyAsync(FunctionKey, TestDomain, httpMethod: "POST"));
+
+        // … and the erroring execution is still journaled (failure-rate must count thrown failures).
+        await _functionExecutionJournal.Received(1).RecordAsync(
+            Arg.Is<FunctionExecutionRecord>(r => !r.Succeeded && r.FunctionKey == FunctionKey),
+            Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -344,6 +404,10 @@ public sealed class FunctionAppServiceScopeTests : IDisposable
         await _cacheGateway.DidNotReceive().SetAsync(
             Arg.Any<string>(), Arg.Any<object?>(), Arg.Any<int?>(), Arg.Any<string?>(),
             Arg.Any<string?>(), Arg.Any<TaskTraceContext>(), Arg.Any<CancellationToken>());
+        // A cache-served call is journaled with FromCache = true.
+        await _functionExecutionJournal.Received(1).RecordAsync(
+            Arg.Is<FunctionExecutionRecord>(r => r.FromCache && r.Succeeded),
+            Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -367,6 +431,10 @@ public sealed class FunctionAppServiceScopeTests : IDisposable
         await _cacheGateway.Received(1).SetAsync(
             "fn:test", Arg.Any<object?>(), Arg.Any<int?>(), Arg.Any<string?>(),
             Arg.Any<string?>(), Arg.Any<TaskTraceContext>(), Arg.Any<CancellationToken>());
+        // A computed (miss) call is journaled with FromCache = false.
+        await _functionExecutionJournal.Received(1).RecordAsync(
+            Arg.Is<FunctionExecutionRecord>(r => !r.FromCache && r.Succeeded),
+            Arg.Any<CancellationToken>());
     }
 
     [Fact]

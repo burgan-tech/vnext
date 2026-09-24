@@ -4463,6 +4463,20 @@ public static partial class WorkflowLogs
         string functionKey,
         string errorMessage);
 
+    /// <summary>
+    /// Logs when the best-effort function-execution journal write fails (vnext-client-sdk-core#60,
+    /// item C1). The metrics row is dropped; the function's own response is unaffected.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 80006,
+        Level = LogLevel.Error,
+        Message = "Failed to journal execution of function {FunctionKey} (domain {Domain}); the metrics row was dropped.")]
+    public static partial void FunctionExecutionJournalWriteFailed(
+        this ILogger logger,
+        Exception exception,
+        string functionKey,
+        string domain);
+
     #endregion
 
     #region Component Cache
