@@ -6,11 +6,11 @@ using Microsoft.EntityFrameworkCore.Migrations;
 namespace BBT.Workflow.Migrations.MetricsDb
 {
     /// <summary>
-    /// Creates the domain-wide function-execution journal (vnext-client-sdk-core#60, item C1) in the
+    /// Creates the domain-wide function-execution journal (vnext-client-sdk-core#60, items C1/D) in the
     /// fixed <c>sys_metrics</c> schema: one row per domain-function invocation, with a composite
     /// <c>(FunctionKey, InvokedAt)</c> index serving the per-function paged metrics query. Not a
     /// per-flow table — a function can run domain-scoped with no flow, so <c>Workflow</c>/<c>InstanceId</c>
-    /// are nullable. Runs from the MetricsDbContext's own migrate call at deploy time.
+    /// are nullable; <c>TraceId</c> links a row to its APM/ELK trace. The single migration for the issue.
     /// </summary>
     public partial class AddFunctionExecutionsJournal : Migration
     {
@@ -38,6 +38,7 @@ namespace BBT.Workflow.Migrations.MetricsDb
                     StatusCode = table.Column<int>(type: "integer", nullable: true),
                     ErrorCode = table.Column<string>(type: "character varying(512)", maxLength: 512, nullable: true),
                     FromCache = table.Column<bool>(type: "boolean", nullable: false),
+                    TraceId = table.Column<string>(type: "character varying(64)", maxLength: 64, nullable: true),
                     CreatedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
                     CreatedBy = table.Column<string>(type: "character varying(256)", maxLength: 256, nullable: true),
                     CreatedByBehalfOf = table.Column<string>(type: "character varying(256)", maxLength: 256, nullable: true)

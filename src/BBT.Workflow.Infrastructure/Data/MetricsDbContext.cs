@@ -34,6 +34,7 @@ public class MetricsDbContext(
             b.Property(e => e.Scope).HasMaxLength(1).IsRequired();
             b.Property(e => e.Workflow).HasMaxLength(256);
             b.Property(e => e.ErrorCode).HasMaxLength(512);
+            b.Property(e => e.TraceId).HasMaxLength(64);
             b.Property(e => e.CreatedBy).HasMaxLength(256);
             b.Property(e => e.CreatedByBehalfOf).HasMaxLength(256);
 

@@ -152,6 +152,9 @@ public sealed class FunctionAppService(
         // throws, so the finally cannot mask an in-flight exception.
         var invokedAt = DateTime.UtcNow;
         var stopwatch = Stopwatch.StartNew();
+        // Trace id is constant across the request's span tree, so capturing it here (before the
+        // Function.Execute span opens inside RunAsync) links the journal row to its APM/ELK trace.
+        var traceId = Activity.Current?.TraceId.ToString();
         var fromCache = false;
         var succeeded = false;
         int? statusCode = null;
@@ -186,7 +189,8 @@ public sealed class FunctionAppService(
                     succeeded,
                     statusCode,
                     errorCode,
-                    fromCache),
+                    fromCache,
+                    traceId),
                 cancellationToken);
         }
 

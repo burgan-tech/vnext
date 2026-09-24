@@ -54,7 +54,7 @@ public class FunctionMetricsAppServiceTests
             [
                 FunctionExecution.Record(execId, Domain, FunctionKey, "1.0.0", TaskScope.Domain,
                     null, null, DateTime.UtcNow, 123.4, succeeded: false, statusCode: null,
-                    errorCode: "Task:Http:503", fromCache: false)
+                    errorCode: "Task:Http:503", fromCache: false, traceId: "trace-abc")
             ], HasNext: true));
         _repository.SummarizeAsync(Arg.Any<FunctionExecutionQuery>(), Arg.Any<CancellationToken>())
             .Returns(new FunctionExecutionSummary(7, 100.0, 480.0, 0.25));
@@ -67,8 +67,10 @@ public class FunctionMetricsAppServiceTests
         item.ExecutionId.ShouldBe(execId);
         item.Scope.ShouldBe("D");
         item.Succeeded.ShouldBeFalse();
+        item.Status.ShouldBe("faulted");        // derived string mirroring the task-metrics vocabulary
         item.Error.ShouldBe("Task:Http:503");
         item.DurationMs.ShouldBe(123.4);
+        item.TraceId.ShouldBe("trace-abc");     // links the row to its APM/ELK trace
 
         output.Summary.ShouldNotBeNull();
         output.Summary!.Count.ShouldBe(7);

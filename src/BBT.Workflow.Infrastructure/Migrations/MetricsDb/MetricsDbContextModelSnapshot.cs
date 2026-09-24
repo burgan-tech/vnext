@@ -84,6 +84,10 @@ namespace BBT.Workflow.Migrations.MetricsDb
                     b.Property<bool>("Succeeded")
                         .HasColumnType("boolean");
 
+                    b.Property<string>("TraceId")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
                     b.Property<string>("Workflow")
                         .HasMaxLength(256)
                         .HasColumnType("character varying(256)");

@@ -33,9 +33,10 @@ messaging tables in `sys_queues`. A function can run domain-scoped with no flow,
 `scope` D/F/I is a column, not a note.
 
 Columns: `Id`, `Domain`, `FunctionKey`, `FunctionVersion`, `Scope` (D/F/I), `Workflow?`,
-`InstanceId?`, `InvokedAt`, `DurationMs`, `Succeeded`, `StatusCode?`, `ErrorCode?`, `FromCache`, plus
-the audited `CreatedBy`/`CreatedByBehalfOf` (the caller — audit-stamped from the request
-`ICurrentUser`, so they are the `invokedBy`/`invokedByBehalfOf`). One index, `(FunctionKey,
+`InstanceId?`, `InvokedAt`, `DurationMs`, `Succeeded`, `StatusCode?`, `ErrorCode?`, `FromCache`,
+`TraceId?` (the OTel trace id captured from `Activity.Current`, so a row links to its full trace in
+APM/ELK), plus the audited `CreatedBy`/`CreatedByBehalfOf` (the caller — audit-stamped from the
+request `ICurrentUser`, so they are the `invokedBy`/`invokedByBehalfOf`). One index, `(FunctionKey,
 InvokedAt)`, serves the only access pattern: one function's runs, newest first, bounded by a window.
 
 **Retention:** rows are kept — there is no cleanup or TTL job in this phase (a deliberate first-cut
@@ -55,8 +56,10 @@ exception (still an erroring execution — `Succeeded = false`, `ErrorCode` = th
 rethrown to the caller). So the failure-rate counts thrown failures too, not only `Result.Fail`.
 
 `Succeeded` + `StatusCode` + `ErrorCode` are the outcome. A function has **no** task-style
-`businessStatus`, so — unlike the issue's draft item shape — the journal carries none; the D item
-exposes `succeeded`, `statusCode` and `error` instead.
+`businessStatus`, so — unlike the issue's draft item shape — the journal carries none. The D item
+exposes `succeeded` (bool), `statusCode` and `error`, plus a derived `status` string
+(`"completed"`/`"faulted"`) that mirrors the task-metrics `status` vocabulary so a client reads one
+grammar across both surfaces; only the second `businessStatus` axis is deliberately absent.
 
 **Why the write is synchronous.** The journal insert is awaited inline (not fire-and-forget) because
 the writer runs in the request DI scope — a detached background write would race the scope's disposal
@@ -72,8 +75,9 @@ hatch is a batched/async writer behind the same `IFunctionExecutionJournal` seam
 GET /{domain}/functions/{functionKey}/metrics?page&pageSize&from&to&succeeded
 GET /{domain}/workflows/{workflow}/functions/{functionKey}/metrics   // flow-scoped sibling
   → { links:{self,first,next,prev},
-      items:[ { executionId, invokedAt, durationMs, scope, workflow?, instanceId?,
-                succeeded, statusCode?, error?, fromCache, invokedBy?, invokedByBehalfOf? } ],
+      items:[ { executionId, functionVersion, invokedAt, durationMs, scope, workflow?, instanceId?,
+                succeeded, status, statusCode?, error?, fromCache, traceId?,
+                invokedBy?, invokedByBehalfOf? } ],
       summary: { count, p50Ms, p95Ms, failureRate } }
 ```
 

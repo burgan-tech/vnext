@@ -23,7 +23,8 @@ public sealed record FunctionExecutionRecord(
     bool Succeeded,
     int? StatusCode,
     string? ErrorCode,
-    bool FromCache);
+    bool FromCache,
+    string? TraceId = null);
 
 /// <summary>
 /// Best-effort writer for the function-execution journal (vnext-client-sdk-core#60, item C1). Records
@@ -61,7 +62,8 @@ public sealed class FunctionExecutionJournal(
                 record.Succeeded,
                 record.StatusCode,
                 record.ErrorCode,
-                record.FromCache);
+                record.FromCache,
+                record.TraceId);
 
             // Independent, non-transactional UoW: a function is a read and may carry no committing
             // ambient scope, so the journal row commits on its own (mirrors the InstanceTask journal

@@ -67,6 +67,7 @@ public sealed class FunctionExecutionPersistenceTests : IAsyncLifetime
         all.Items.Count.ShouldBe(3);
         all.Items.ShouldNotContain(e => e.FunctionKey == "other-fn");
         all.Items.Select(e => e.Scope).ShouldBe(new[] { "I", "F", "D" }); // newest first (t0+3,+2,+1)
+        all.Items[0].TraceId.ShouldBe("tr-I"); // TraceId round-trips through the fixed-schema column
 
         // workflow narrows to flow/instance rows
         var flow = await repo.QueryAsync(new FunctionExecutionQuery(FunctionKey, Workflow: "north-star"), CancellationToken.None);
@@ -146,7 +147,8 @@ public sealed class FunctionExecutionPersistenceTests : IAsyncLifetime
         DateTime invokedAt, double durationMs, bool succeeded) =>
         FunctionExecution.Record(
             Guid.NewGuid(), Domain, key, "1.0.0", TaskScope.FromCode(scope), workflow, instanceId,
-            invokedAt, durationMs, succeeded, succeeded ? 200 : null, succeeded ? null : "Task:Http:500", fromCache: false);
+            invokedAt, durationMs, succeeded, succeeded ? 200 : null, succeeded ? null : "Task:Http:500",
+            fromCache: false, traceId: $"tr-{scope}");
 
     private async Task SeedAsync(params FunctionExecution[] rows)
     {

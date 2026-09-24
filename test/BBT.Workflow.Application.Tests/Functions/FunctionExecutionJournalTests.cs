@@ -59,7 +59,8 @@ public class FunctionExecutionJournalTests
             Succeeded: false,
             StatusCode: null,
             ErrorCode: "Task:Http:500",
-            FromCache: true));
+            FromCache: true,
+            TraceId: "0af7651916cd43dd8448eb211c80319c"));
 
         await _repository.Received(1).InsertAsync(Arg.Any<FunctionExecution>(), Arg.Any<CancellationToken>());
         captured.ShouldNotBeNull();
@@ -76,6 +77,7 @@ public class FunctionExecutionJournalTests
         captured.StatusCode.ShouldBeNull();
         captured.ErrorCode.ShouldBe("Task:Http:500");
         captured.FromCache.ShouldBeTrue();
+        captured.TraceId.ShouldBe("0af7651916cd43dd8448eb211c80319c");
     }
 
     [Fact]

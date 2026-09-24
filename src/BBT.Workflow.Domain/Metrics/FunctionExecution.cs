@@ -46,7 +46,8 @@ public sealed class FunctionExecution : Entity<Guid>, ICreationAuditedObject
         bool succeeded,
         int? statusCode,
         string? errorCode,
-        bool fromCache) : base(id)
+        bool fromCache,
+        string? traceId) : base(id)
     {
         Domain = domain;
         FunctionKey = functionKey;
@@ -60,6 +61,7 @@ public sealed class FunctionExecution : Entity<Guid>, ICreationAuditedObject
         StatusCode = statusCode;
         ErrorCode = errorCode;
         FromCache = fromCache;
+        TraceId = traceId;
         CreatedAt = invokedAt;
     }
 
@@ -81,9 +83,10 @@ public sealed class FunctionExecution : Entity<Guid>, ICreationAuditedObject
         bool succeeded,
         int? statusCode,
         string? errorCode,
-        bool fromCache) =>
+        bool fromCache,
+        string? traceId = null) =>
         new(id, domain, functionKey, functionVersion, scope.Code, workflow, instanceId,
-            invokedAt, durationMs, succeeded, statusCode, errorCode, fromCache);
+            invokedAt, durationMs, succeeded, statusCode, errorCode, fromCache, traceId);
 
     /// <summary>Owning domain.</summary>
     public string Domain { get; private set; } = string.Empty;
@@ -120,6 +123,12 @@ public sealed class FunctionExecution : Entity<Guid>, ICreationAuditedObject
 
     /// <summary>Whether the response was served from the function's read-through cache (its tasks were skipped).</summary>
     public bool FromCache { get; private set; }
+
+    /// <summary>
+    /// OTel trace id of the invocation (from <c>Activity.Current</c> at write time), for correlating a
+    /// row with its full trace in APM/ELK. Null when no ambient activity was recording.
+    /// </summary>
+    public string? TraceId { get; private set; }
 
     // ICreationAuditedObject — CreatedBy / CreatedByBehalfOf are stamped from the request ICurrentUser
     // by Aether's audit interceptor on save, so they are the invokedBy / invokedByBehalfOf of the call.

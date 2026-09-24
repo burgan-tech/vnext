@@ -51,6 +51,9 @@ public sealed class FunctionExecutionItemDto
     /// <summary>Unique execution identifier.</summary>
     public Guid ExecutionId { get; set; }
 
+    /// <summary>The resolved function version that ran — lets a reader compare latency across versions of one key.</summary>
+    public string FunctionVersion { get; set; } = string.Empty;
+
     /// <summary>When the invocation started (UTC).</summary>
     public DateTime InvokedAt { get; set; }
 
@@ -68,9 +71,17 @@ public sealed class FunctionExecutionItemDto
 
     /// <summary>
     /// Whether the invocation succeeded. A function has no task-style <c>businessStatus</c>; the outcome
-    /// is this flag plus <see cref="StatusCode"/> and (on failure) <see cref="Error"/>.
+    /// is this flag plus <see cref="Status"/>, <see cref="StatusCode"/> and (on failure) <see cref="Error"/>.
     /// </summary>
     public bool Succeeded { get; set; }
+
+    /// <summary>
+    /// Platform outcome as a string — <c>completed</c> or <c>faulted</c> — derived from
+    /// <see cref="Succeeded"/>, mirroring the task journal's <c>status</c> vocabulary so a client that
+    /// consumed the transition/task metrics shape reads one grammar. (A function has no separate
+    /// <c>businessStatus</c> axis — that is deliberately absent.)
+    /// </summary>
+    public string Status => Succeeded ? "completed" : "faulted";
 
     /// <summary>The function's response status code on success; null when it failed before producing one.</summary>
     public int? StatusCode { get; set; }
@@ -81,6 +92,9 @@ public sealed class FunctionExecutionItemDto
     /// <summary>Whether the response was served from the function's read-through cache (its tasks were skipped).</summary>
     public bool FromCache { get; set; }
 
+    /// <summary>OTel trace id of the invocation, to open its full trace in APM/ELK. Null when nothing was recording.</summary>
+    public string? TraceId { get; set; }
+
     /// <summary>The caller that invoked the function.</summary>
     public string? InvokedBy { get; set; }
 
@@ -90,6 +104,7 @@ public sealed class FunctionExecutionItemDto
     public static FunctionExecutionItemDto FromEntity(FunctionExecution e) => new()
     {
         ExecutionId = e.Id,
+        FunctionVersion = e.FunctionVersion,
         InvokedAt = e.InvokedAt,
         DurationMs = e.DurationMs,
         Scope = e.Scope,
@@ -99,6 +114,7 @@ public sealed class FunctionExecutionItemDto
         StatusCode = e.StatusCode,
         Error = e.ErrorCode,
         FromCache = e.FromCache,
+        TraceId = e.TraceId,
         InvokedBy = e.CreatedBy,
         InvokedByBehalfOf = e.CreatedByBehalfOf
     };

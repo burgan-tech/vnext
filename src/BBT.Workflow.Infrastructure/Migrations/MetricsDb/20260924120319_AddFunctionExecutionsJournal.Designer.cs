@@ -12,7 +12,7 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace BBT.Workflow.Migrations.MetricsDb
 {
     [DbContext(typeof(MetricsDbContext))]
-    [Migration("20260924094827_AddFunctionExecutionsJournal")]
+    [Migration("20260924120319_AddFunctionExecutionsJournal")]
     partial class AddFunctionExecutionsJournal
     {
         /// <inheritdoc />
@@ -86,6 +86,10 @@ namespace BBT.Workflow.Migrations.MetricsDb
 
                     b.Property<bool>("Succeeded")
                         .HasColumnType("boolean");
+
+                    b.Property<string>("TraceId")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
 
                     b.Property<string>("Workflow")
                         .HasMaxLength(256)
