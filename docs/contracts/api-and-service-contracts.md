@@ -176,13 +176,21 @@ render countdowns and upcoming-action information without polling anything else:
 ```jsonc
 "transitions": [
   { "name": "pay", "kind": "stateTransition", "href": "...", "view": { ... }, "schema": { ... } },
-  { "name": "payment-timeout", "kind": "scheduled", "executeAtUtc": "2026-08-03T14:30:00Z" }
+  { "name": "payment-timeout", "kind": "scheduled", "executeAtUtc": "2026-08-03T14:30:00Z",
+    "href": "...", "view": { "hasView": false, ... }, "schema": { "hasSchema": false, ... },
+    "annotations": { "ui/countdown": "visible" } }
 ]
 ```
 
-- `kind: "scheduled"` ⇒ the entry carries `executeAtUtc` and **no `href`/`view`/`schema`** —
-  callers cannot trigger a scheduled transition (the actor gate rejects it). Every other kind
-  carries an `href` and never an `executeAtUtc`.
+- `kind: "scheduled"` ⇒ the entry carries `executeAtUtc`. It also carries the uniform
+  `href`/`view`/`schema` link objects with `hasView`/`loadData`/`hasSchema` hardcoded `false` — a
+  temporary concession for domain clients that expect all three on every item. The href is **not**
+  callable: scheduled transitions stay System-actor-gated at execution. Every other kind never
+  carries an `executeAtUtc`.
+- `annotations` — on scheduled entries as on every other kind — is the transition definition's,
+  omitted when none is declared. For a scheduled entry it is resolved through the job's source state
+  (scheduled transitions are only armed from a state's own `scheduledTransitions`); if that state or
+  transition no longer resolves, the entry is still listed, without annotations.
 - Built from the **persisted job state**: active `InstanceJob` rows of type `ScheduledTransition`
   whose `ExecuteAt` was captured at scheduling time — the exact instant the scheduler was armed
   with, never a re-evaluation of the transition's timer script. Scheduled entries are appended
@@ -213,7 +221,10 @@ response carries it as its own top-level block so a client can render a countdow
 HH:MM" — without polling anything else:
 
 ```jsonc
-"timeout": { "key": "abandoned", "target": "cancelled", "executeAtUtc": "2026-09-21T14:30:00Z" }
+"timeout": {
+  "key": "abandoned", "target": "cancelled", "executeAtUtc": "2026-09-21T14:30:00Z",
+  "annotations": { "ui/countdown": "visible" }
+}
 ```
 
 - **Not a `transitions[]` entry, deliberately.** A workflow timeout is instance-scoped rather than
@@ -224,6 +235,9 @@ HH:MM" — without polling anything else:
   `subFlow.overrides.timeout` when the instance was started with one, otherwise the workflow's own.
   The same resolver feeds the arm and the fire path, so the deadline a client is shown is the one
   the runtime will act on.
+- `annotations` is the effective timeout's `timeout.annotations`, omitted when none is declared. An
+  override **replaces** the child's timeout as a whole, annotations included — they are never merged
+  with the child's own.
 - `executeAtUtc` is read from the **persisted job state** — the active `InstanceJob` row of type
   `Timeout`, carrying the exact instant the scheduler was armed with (mapping script included),
   never a re-evaluation. Always UTC with the `Z` designator, and it never changes after the arm.
