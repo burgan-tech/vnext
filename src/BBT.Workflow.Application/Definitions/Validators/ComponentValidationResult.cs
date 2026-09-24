@@ -39,6 +39,11 @@ public class ComponentValidationResult : IHasValidationErrors
     }
 
     /// <summary>
+    /// Non-blocking findings. Never affects <see cref="IsValid"/>.
+    /// </summary>
+    public IList<ValidationResult> Warnings { get; } = new List<ValidationResult>();
+
+    /// <summary>
     /// Creates a successful validation result with no errors.
     /// </summary>
     /// <returns>A new <see cref="ComponentValidationResult"/> with no errors.</returns>
@@ -55,6 +60,10 @@ public class ComponentValidationResult : IHasValidationErrors
         foreach (var error in workflowResult.ValidationErrors)
         {
             result.AddError(error);
+        }
+        foreach (var warning in workflowResult.Warnings)
+        {
+            result.Warnings.Add(warning);
         }
         return result;
     }

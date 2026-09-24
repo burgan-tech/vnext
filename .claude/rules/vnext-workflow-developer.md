@@ -191,8 +191,11 @@ A sixth profile is **composed on top of** the base, never selected instead of it
   `TransitionAuthorizationManager.EffectiveTransitionGrants`; `views` →
   `GetSubFlowViewWithOverrideAsync`. The first two read the map **stamped on the child**
   (`SubFlowTransitionOverrideReader` / `SubFlowStateOverrideReader`), which is the only form that
-  works at a directly-addressed leaf; `views` is deliberately parent-side only and is not stamped.
-  Resolving per surface is how they diverged: at such a leaf `authorize` read the PARENT's definition,
+  works at a directly-addressed leaf; the legacy `views` map (`overrides.views` / `viewOverrides`,
+  resolved through `GetSubFlowViewWithOverrideAsync`) is deliberately parent-side only and is not
+  stamped — but the scoped `overrides.states.*.views` / `overrides.transitions.*.views` ARE stamped
+  and resolved child-side; see *Parent overrides are resolved child-side, on the child's own state*
+  below. Resolving per surface is how they diverged: at such a leaf `authorize` read the PARENT's definition,
   found nothing, and gave the OPPOSITE verdict to the state function for both roles.
 - **`authorize` answers two different questions and the parameter picks which.**
   `?transitionKey=` is actionability, `?queryRoles=true` is visibility — the state function's
@@ -242,7 +245,7 @@ A sixth profile is **composed on top of** the base, never selected instead of it
   so `ResponseShapeVersion` is unaffected. Adding a column to the aggregate? Add it to
   `CreateSnapshot` too — `EffectiveStatus` was forgotten there once and every script read the
   constructor default.
-- **Response-shape version**: `StateFunctionCache.ResponseShapeVersion` (currently `v10`) is folded into both the ETag material and the cache key. Bump it in the same commit as any change to what the state body carries — otherwise a client polling a parked instance keeps getting 304 and never sees the new shape.
+- **Response-shape version**: `StateFunctionCache.ResponseShapeVersion` (currently `v11`) is folded into both the ETag material and the cache key. Bump it in the same commit as any change to what the state body carries — otherwise a client polling a parked instance keeps getting 304 and never sees the new shape.
 - **`timeout` block**: `{ key, target, executeAtUtc }`, the workflow-level deadline armed for the
   polled instance. **Not** a `transitions[]` entry — a workflow timeout is instance-scoped, armed
   once at start, never re-armed, and keyed by the virtual `$timeout`, so it has no callable key and
@@ -658,6 +661,22 @@ place rather than deleted — removing it is a separate change, and it is the la
   answers identity-only (`Id`, `Key`, `Status`): the starter reads `IsSuccess`, the relay reads
   `Status`, and the client's attributes/extensions come from the **parent's** own
   `EnrichOutputCoreAsync`. Do not read attributes off a sub-start or forward response.
+
+### Parent overrides are resolved child-side, on the child's own state
+
+- `overrides.states` / `overrides.transitions` travel to the child in the two stamps
+  (`subflow.state_role_overrides`, `subflow.transition_role_overrides`) — whole maps, despite the
+  names. `SubFlowOverrideStamp` is their one parser.
+- Long-poll: only `fallbackTimeoutSeconds` and `roles`, field-level. Every reader calls
+  `Instance.ResolveEffectiveLongPoll(state)`; never read `State.LongPoll*` at a decision point —
+  the job's window and the body's window would diverge. No override adds a long-poll; a `rule` arm
+  ignores a `roles` override.
+- Views: `(childState, viewKey)` / `(childTransition, viewKey)` via `Instance.ResolveViewOverride`,
+  applied in `ResolveViewAsync` after the child's own rules picked. Keyed by `CurrentState`, never
+  `EffectiveState`. Rules are never overridden.
+- Legacy `overrides.views` / `viewOverrides` stays parent-side and deprecated; mixing it with the
+  scoped view overrides on one subFlow is a validation error.
+- Full guide: `docs/domain/subflow-overrides.md`.
 
 ### `sub:state-changed` is coalesced to one event per activation episode
 

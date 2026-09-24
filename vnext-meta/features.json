@@ -101,6 +101,17 @@
       ],
       "schemaPath": "timeout"
     },
+    "subFlowOverrides": {
+      "since": "0.0.95",
+      "status": "stable",
+      "description": "Parent-side tuning of a SubFlow child through state.subFlow.overrides. New in this release: overrides.states.<childState>.interaction.longPoll (fallbackTimeoutSeconds and roles only, field-level replace; terminate and rule are not overridable; never adds a long-poll; a rule arm ignores a roles override) and state/transition-scoped view swaps (overrides.states.<childState>.views.<viewKey>, overrides.transitions.<childTransition>.views.<viewKey>) applied child-side on the child's own CurrentState after its own rules selected a view. Both travel in the existing subflow.state_role_overrides / subflow.transition_role_overrides stamps and also apply when the child is addressed directly. Start-time snapshot. No state-body shape change (ResponseShapeVersion untouched).",
+      "schemaPath": "state.subFlow.overrides",
+      "apiEndpoints": [
+        "GET {domain}/workflows/{workflow}/instances/{instance}/functions/state",
+        "GET {domain}/workflows/{workflow}/instances/{instance}/functions/view",
+        "GET {domain}/workflows/{workflow}/instances/{instance}/functions/authorize"
+      ]
+    },
     "stateNotification": {
       "since": "0.0.63",
       "status": "stable",

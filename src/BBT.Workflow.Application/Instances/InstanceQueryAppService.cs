@@ -2129,9 +2129,12 @@ public sealed class InstanceQueryAppService(
     /// state declares <c>interaction.longPoll</c> and the caller is admitted by its authorization arm —
     /// either the <c>roles</c> grants (default-allow when no roles configured) or the <c>rule</c>
     /// condition script; the two are alternatives, the validator rejects both. A failed rule evaluation
-    /// denies (fail-closed), same as notification rules. The <c>terminate</c> flag and
-    /// <c>fallbackTimeoutSeconds</c> are surfaced as configured; the ack href is included only when
-    /// <c>terminate</c> is true (the pipeline pauses awaiting acknowledge in that case).
+    /// denies (fail-closed), same as notification rules. <c>terminate</c> is served as declared on the
+    /// state; <c>fallbackTimeoutSeconds</c> is the EFFECTIVE value from
+    /// <see cref="InstanceSubFlowOverrideExtensions.ResolveEffectiveLongPoll"/> — the state's own value,
+    /// or the parent's override when one is stamped — so it always matches the window the pipeline
+    /// actually armed the fallback job with. The ack href is included only when <c>terminate</c> is true
+    /// (the pipeline pauses awaiting acknowledge in that case).
     /// </summary>
     private async Task<InstanceInteractionOutput?> ResolveInteractionAsync(
         GetInstanceStateInput input,
@@ -2179,12 +2182,14 @@ public sealed class InstanceQueryAppService(
         if (admitted is not { IsSuccess: true, Value: true })
             return null;
 
-        var terminate = currentStateValue.TerminatesLongPollOnEntry;
+        // Same resolver the pipeline armed the fallback job with, so the window the client is told
+        // is the window that will actually fire. Terminate is never overridable.
+        var effective = instance.ResolveEffectiveLongPoll(currentStateValue).LongPoll!;
         return new InstanceInteractionOutput
         {
-            TerminateLongPoll = terminate,
-            FallbackTimeoutSeconds = currentStateValue.LongPollFallbackTimeoutSeconds,
-            Ack = terminate
+            TerminateLongPoll = effective.Terminate,
+            FallbackTimeoutSeconds = effective.FallbackTimeoutSeconds,
+            Ack = effective.Terminate
                 ? new AckHref
                 {
                     Href = urlTemplateBuilder.BuildLongPollAckUrl(
@@ -2918,6 +2923,32 @@ public sealed class InstanceQueryAppService(
             return Result<GetViewOutput>.Fail(
                 Error.NotFound("notfound",
                     $"No matching view found for state {instance.CurrentState} in workflow {currentWorkflow.Key}"));
+        }
+
+        // Parent-supplied swap, resolved HERE because this is the level whose rules just selected the
+        // view: keyed by this instance's own CurrentState (never EffectiveState) or by the transition,
+        // and by the view key the rules picked. Rules are never overridden — only the reference.
+        // The override map is keyed by the transition's CONFIGURED key, never a well-known alias
+        // (e.g. "update-parent-data"), so a request naming the alias is normalised through the same
+        // ResolveTransition call GetViewDefinition already uses above — no second resolution mechanism.
+        var normalizedTransitionKey = transitionKey.IsNullOrWhiteSpace()
+            ? transitionKey
+            : currentWorkflow.ResolveTransition(transitionKey, currentState)?.Key ?? transitionKey;
+        var overrideRef = instance.ResolveViewOverride(
+            instance.CurrentState, normalizedTransitionKey, selectedViewEntry.View.Key);
+        if (overrideRef is not null)
+        {
+            var overrideResult = await viewContentResolutionService.ResolveViewContentAsync(
+                overrideRef, input.Domain, input.Headers, input.QueryParameters, cancellationToken);
+            if (overrideResult.IsSuccess)
+                return overrideResult;
+
+            logger.SubFlowViewOverrideUnresolved(
+                instance.Id,
+                instance.CurrentState ?? string.Empty,
+                selectedViewEntry.View.Key,
+                overrideRef.Key,
+                overrideResult.Error.Message ?? overrideResult.Error.Code);
         }
 
         return await viewContentResolutionService.ResolveViewContentAsync(
