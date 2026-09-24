@@ -547,12 +547,12 @@ public static class WorkflowErrors
     #region Authorization Errors
 
     /// <summary>
-    /// Authorize requires exactly one of transitionKey, functionKey, or queryRoles (instance only).
+    /// Authorize requires exactly one of transitionKey, functionKey, queryRoles or ack (instance only).
     /// </summary>
     public static Error AuthorizeRequiresExactlyOneTarget()
         => Error.Validation(
             WorkflowErrorCodes.AuthorizeRequiresExactlyOneTarget,
-            "Authorize requires exactly one of transitionKey, functionKey, or queryRoles (instance only)",
+            "Authorize requires exactly one of transitionKey, functionKey, queryRoles or ack (instance only)",
             target: "authorize");
 
     /// <summary>

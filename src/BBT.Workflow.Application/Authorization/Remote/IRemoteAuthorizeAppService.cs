@@ -21,6 +21,7 @@ public interface IRemoteAuthorizeAppService
     /// <param name="functionKey">Optional function key.</param>
     /// <param name="version">Optional component version.</param>
     /// <param name="checkQueryRoles">When true, evaluates state-based query roles.</param>
+    /// <param name="checkAck">When true, evaluates the long-poll acknowledge gate.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>Result containing the authorize output or an error.</returns>
     Task<Result<AuthorizeOutput>> GetAuthorizeResultForInstanceAsync(
@@ -32,6 +33,7 @@ public interface IRemoteAuthorizeAppService
         string? functionKey,
         string? version,
         bool checkQueryRoles,
+        bool checkAck,
         AuthorizationRequestContext? requestContext = null,
         CancellationToken cancellationToken = default);
 

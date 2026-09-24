@@ -81,6 +81,14 @@ public sealed class DefinitionAppService(
     {
         var validationResult = componentValidatorProcessor.Validate(input.Flow, input.Attributes);
 
+        foreach (var warning in validationResult.Warnings)
+        {
+            Logger.ComponentValidationWarning(
+                input.Flow,
+                warning.MemberNames.FirstOrDefault() ?? "unknown",
+                warning.ErrorMessage ?? string.Empty);
+        }
+
         if (!validationResult.IsValid)
         {
             foreach (var error in validationResult.ValidationErrors)
@@ -257,6 +265,14 @@ public sealed class DefinitionAppService(
             return Result.Ok();
         }
 
+        foreach (var warning in validationResult.Warnings)
+        {
+            Logger.ComponentValidationWarning(
+                componentType,
+                warning.MemberNames.FirstOrDefault() ?? "unknown",
+                warning.ErrorMessage ?? string.Empty);
+        }
+
         if (!validationResult.IsValid)
         {
             foreach (var error in validationResult.ValidationErrors)
@@ -317,14 +333,5 @@ public sealed class DefinitionAppService(
 
             return Result.Ok();
         }
-    }
-
-    /// <inheritdoc />
-    public Task<Result> ReInitializeAsync(bool fullLoad = false, CancellationToken cancellationToken = default)
-    {
-        // With the lazy Redis-only cache strategy, there is no in-memory state to reinitialize.
-        // Cache is populated on-demand and invalidated on publish via shared Redis.
-        // This method is retained for API compatibility but is now a no-op.
-        return Task.FromResult(Result.Ok());
     }
 }

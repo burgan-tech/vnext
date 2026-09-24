@@ -54,8 +54,25 @@ public sealed class StateFunctionCache(
     /// <c>{ hasActiveIncident, active: { href }, history: { href } }</c>, <c>active</c> omitted when
     /// no incident is open — which also closed the resolve-A-then-raise-B staleness hole the embedded
     /// summary had: the body now carries only the flag, and the flag is fingerprint material.
+    /// v10 added the <c>timeout</c> block — <c>{ key, target, executeAtUtc }</c>, omitted entirely
+    /// when no workflow deadline is armed or once the instance's own status is terminal. It needs no
+    /// fingerprint member: the instant is fixed when the scheduler is armed and never moves, and the
+    /// block's presence is governed by the instance status, which the fingerprint already covers —
+    /// so unlike the scheduled entries beside it, this block carries no issue-#864 staleness gap.
+    /// v11 narrowed when the <c>interaction</c> block appears: it is now emitted only while an
+    /// acknowledgement is actually outstanding (<c>Instance.IsAwaitingLongPollAck</c>), not whenever
+    /// the state's definition declares a long poll. The fields are unchanged — what changed is the
+    /// presence condition, which is still a change to what the body carries for a given instance, so
+    /// it takes a version. It needs no new fingerprint member: both paths that clear the token (an
+    /// acknowledge and the fallback job) resume the pipeline and therefore move <c>Status</c>, which
+    /// the fingerprint already covers.
+    /// v12 started carrying <c>annotations</c> on the <c>kind: "scheduled"</c> entries (from the
+    /// transition definition, resolved via the job's source state) and on the <c>timeout</c> block
+    /// (from the effective timeout, parent override included). Both are properties of the flow
+    /// version, which <see cref="InstanceStateFingerprint.FlowVersion"/> already covers, so — like
+    /// <c>hasFunctions</c> — only the shape change needed invalidating, not the value.
     /// </remarks>
-    private const string ResponseShapeVersion = "v9";
+    private const string ResponseShapeVersion = "v12";
 
     private const string KeyPrefix = $"state-fn:{ResponseShapeVersion}:";
 

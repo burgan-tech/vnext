@@ -45,7 +45,7 @@ Flow: apply `MutateDirectives` → Stop → break; SkipTo → replan; else conti
 | AutoChain | Automatic (1) | Preflight, ForwardSubflow, SetBusy, ApplyTimeoutState (ResourceLock runs) |
 | Scheduled | Scheduled (2) | Preflight, ForwardSubflow |
 | Event | Event (3) | Preflight, ForwardSubflow |
-| ErrorBoundary | Error boundary | Preflight, ForwardSubflow, ResourceLock; `AllowSubFlow=false` (Auto is not excluded in current code) |
+| ErrorBoundary | Error boundary | Preflight, ForwardSubflow, ResourceLock (Auto and SubFlow are **not** excluded in current code) |
 
 Resolution: `IPipelineProfileResolver.Resolve(workflowContext, transitionContext)` — if
 `IsErrorBoundaryTransition` → ErrorBoundary; else by the **workflow context's** `TriggerType` (not
@@ -191,8 +191,11 @@ A sixth profile is **composed on top of** the base, never selected instead of it
   `TransitionAuthorizationManager.EffectiveTransitionGrants`; `views` →
   `GetSubFlowViewWithOverrideAsync`. The first two read the map **stamped on the child**
   (`SubFlowTransitionOverrideReader` / `SubFlowStateOverrideReader`), which is the only form that
-  works at a directly-addressed leaf; `views` is deliberately parent-side only and is not stamped.
-  Resolving per surface is how they diverged: at such a leaf `authorize` read the PARENT's definition,
+  works at a directly-addressed leaf; the legacy `views` map (`overrides.views` / `viewOverrides`,
+  resolved through `GetSubFlowViewWithOverrideAsync`) is deliberately parent-side only and is not
+  stamped — but the scoped `overrides.states.*.views` / `overrides.transitions.*.views` ARE stamped
+  and resolved child-side; see *Parent overrides are resolved child-side, on the child's own state*
+  below. Resolving per surface is how they diverged: at such a leaf `authorize` read the PARENT's definition,
   found nothing, and gave the OPPOSITE verdict to the state function for both roles.
 - **`authorize` answers two different questions and the parameter picks which.**
   `?transitionKey=` is actionability, `?queryRoles=true` is visibility — the state function's
@@ -242,9 +245,38 @@ A sixth profile is **composed on top of** the base, never selected instead of it
   so `ResponseShapeVersion` is unaffected. Adding a column to the aggregate? Add it to
   `CreateSnapshot` too — `EffectiveStatus` was forgotten there once and every script read the
   constructor default.
-- **Response-shape version**: `StateFunctionCache.ResponseShapeVersion` (currently `v9`) is folded into both the ETag material and the cache key. Bump it in the same commit as any change to what the state body carries — otherwise a client polling a parked instance keeps getting 304 and never sees the new shape.
+- **Response-shape version**: `StateFunctionCache.ResponseShapeVersion` (currently `v12`) is folded into both the ETag material and the cache key. Bump it in the same commit as any change to what the state body carries — otherwise a client polling a parked instance keeps getting 304 and never sees the new shape.
+- **`timeout` block**: `{ key, target, executeAtUtc, annotations }`, the workflow-level deadline armed for the
+  polled instance. `annotations` is the effective timeout's (`timeout.annotations`); an override
+  replaces it with the rest of the timeout, never merges. **Not** a `transitions[]` entry — a workflow timeout is instance-scoped, armed
+  once at start, never re-armed, and keyed by the virtual `$timeout`, so it has no callable key and
+  `TransitionItem` has no `target`. `key`/`target` come from the **effective** timeout, resolved by
+  `InstanceMetadataExtensions.ResolveEffectiveTimeout` — the parent's `subFlow.overrides.timeout`
+  when the instance carries one, else `workflow.Timeout`. **That one resolver is also what the arm
+  (`InstanceCommandAppService`) and the fire path (`FlowTimeoutJobHandler`, `ApplyTimeoutStateStep`)
+  call; do not reintroduce a second reading.** Before it existed the override was consumed only by
+  the arm, so a child declaring `"timeout": null` had a job armed from the parent's timer that fired
+  into `TimeoutConfigMissing` and did nothing. `executeAtUtc` is the persisted `InstanceJob.ExecuteAt`
+  of the active `Timeout` row. Omitted when nothing resolves, when no job is armed, when `ExecuteAt`
+  is null, or once the polled instance's **own** `Status.IsTerminal` — the cleanup that closes the
+  job row is asynchronous, so the guard must not wait for it. Polled instance only, no subflow
+  descent. Needs no fingerprint member (immutable instant + status-governed presence).
+- **`$timeout` is resolved to a key at order 20, not 38.** `CreateTransitionRecordStep` turns the
+  virtual key into the audit record's transition key, and it must do so through the **effective**
+  timeout for the same reason the target does. `Workflow.ResolveWellKnownKey` *throws*
+  `TimeoutNotConfiguredForWorkflowException` when the workflow has no timeout of its own — so before
+  this was fixed, an override-driven child died at step 20, three steps before `ApplyTimeoutStateStep`
+  could have resolved anything. Worse than not firing: `SetBusy` (19) had already committed, so the
+  child sat **Busy in its waiting state forever** with its job row marked processed. Measured on the
+  bench, twice, by `timeout-lab`. `ResolveWellKnownKey` itself is deliberately untouched — it is a
+  definition-level method with no instance in scope and is right about what it can see; the
+  instance-aware answer belongs at the call sites that hold `context.Instance`.
+- **`timer.reset` is read nowhere.** A workflow timeout always means "not finished within `duration`,
+  from instance start", never "idle for `duration`", whatever the definition declares. An idle
+  timeout needs a per-state scheduled transition (`triggerType: 2`), which IS cancelled and re-armed
+  on state entry.
 - **`incident` block**: always present, and it carries **links, not content** — `{ hasActiveIncident, active: { href } (only while the flag is true), history: { href } }`. Identical on the state body and on `metadata.incident` (single GET and list). `active.href` → `GET …/instances/{instance}/incidents/active` (newest unresolved, **404 `Instance:100037`** when none is open — a normal answer, since a retry can resolve between the poll and the follow-up); `history.href` → the paged history. Same `queryRoles` gate as the state function on both, and no stack trace anywhere. When lifted from an active subflow, `active.href` addresses the **leaf that owns the incident** while `history.href` stays on the polled instance. `HasActiveIncident` is a fingerprint member so raise/resolve without a state change moves the ETag. **Do not put incident fields back in the body**: the embedded summary is what made the state function read the incident table on its hottest path and what created the resolve-A-then-raise-B stale-`active` hole, both of which the link form removes.
-- **Scheduled entries in `transitions`**: the state body lists the runtime's armed scheduled transitions inside the existing `transitions` array as `{ name, kind: "scheduled", executeAtUtc, href, view, schema }` entries, appended after the available transitions and built from active `InstanceJob` rows (`JobType.ScheduledTransition`) whose `ExecuteAt` is stamped at scheduling time from the same instant the Dapr job is armed with. The href/view/schema links use the same url shapes as triggerable entries but with `hasView`/`loadData`/`hasSchema` hardcoded false — a TEMPORARY uniformity concession for domain clients (they will adapt); scheduled transitions remain System-actor-gated at execution, so the href is not callable. Not role-filtered; not merged from subflows. Job-set changes deliberately do NOT participate in the fingerprint ETag (team decision, issue #864) — same-state re-arms can leave the scheduled entries stale behind a 304; documented as a known gap in `docs/runtime/state-function-cache-and-etag.md`.
+- **Scheduled entries in `transitions`**: the state body lists the runtime's armed scheduled transitions inside the existing `transitions` array as `{ name, kind: "scheduled", executeAtUtc, href, view, schema }` entries, appended after the available transitions and built from active `InstanceJob` rows (`JobType.ScheduledTransition`) whose `ExecuteAt` is stamped at scheduling time from the same instant the Dapr job is armed with. Each carries the transition definition's `annotations`, resolved via the job's `SourceState` (null, not a failure, when it no longer resolves) — every `transitions[]` kind carries annotations. The href/view/schema links use the same url shapes as triggerable entries but with `hasView`/`loadData`/`hasSchema` hardcoded false — a TEMPORARY uniformity concession for domain clients (they will adapt); scheduled transitions remain System-actor-gated at execution, so the href is not callable. Not role-filtered; not merged from subflows. Job-set changes deliberately do NOT participate in the fingerprint ETag (team decision, issue #864) — same-state re-arms can leave the scheduled entries stale behind a 304; documented as a known gap in `docs/runtime/state-function-cache-and-etag.md`.
 - **`interaction.longPoll` authorization has two mutually exclusive arms** (issue #936): `roles` grants OR one condition `rule` (`IConditionMapping`, same slot shape as view/notification rules; validator rejects both, schema enforces exactly-one). Both surfaces — the state function's signal emit and the acknowledge endpoint — admit through the single `ILongPollInteractionGate`, which owns the arm selection (rule, else roles, else allow) and resolves caller roles lazily via a surface-supplied factory; the rule reads instance data via `context.Instance.Data` (lazy) — `context.Body` is deliberately NOT populated on this surface, unlike view-rule contexts; a rule returning false, throwing, or failing to compile denies (fail-closed; the fallback-timeout job still resumes the pipeline, so a broken rule cannot strand the instance). A rule-gated interaction body is NEVER stored in the shared state body cache (`CallerScopeHash` does not cover the headers/query/data a rule reads; bubbled subflow interactions skip caching conservatively). The fingerprint 304 path is untouched — rule-input changes behind an unchanged fingerprint are an accepted #864-class staleness gap; enforcement is never stale because the ack evaluates fresh. Full guide: `docs/domain/long-poll-termination.md`.
 
 ## Task / Action History (system functions)
@@ -300,6 +332,17 @@ A sixth profile is **composed on top of** the base, never selected instead of it
 - Never read `AvailableIn` directly. Use `Transition.IsAvailableInState(stateKey)` (state-only gate,
   empty ⇒ every state) and `FindAvailableIn(stateKey)` (for role narrowing). Ordinal comparison;
   duplicate states ⇒ first match wins, validator errors.
+- **`availableIn` describes SHARED and well-known transitions only. It is not the state gate for a
+  STATE transition**, which carries no `availableIn` at all and is implicitly scoped to the state
+  that declares it. The "empty ⇒ every state" rule is right for the first family and wrong for the
+  second: read through `IsAvailableInState`, an empty list made `approve` — declared only on
+  `review` — answer *allowed* for an instance sitting in `intake`. `TransitionAuthorizationManager`
+  therefore asks `IsStateScoped(workflow, key)` first and, for a state transition, requires the key
+  to be declared on the CURRENT state. Measured on role-matrix-lab: the state function offered
+  `[submit-for-review, record-note, cancel-role-matrix]` while `authorize?transitionKey=approve`
+  answered 200; execution then rejected the call with `Transition:100021`. The oracle was wrong in
+  the **permissive** direction, which is the direction that matters once a middle tier admits on its
+  answer.
 - **Roles compose as AND**: `transition.roles` is the global gate, `availableIn[state].roles` narrows
   it for that state; both must allow. Empty set allows, so legacy definitions are unaffected.
 - Three surfaces, and they must not diverge: state function **state+roles**, `authorize`
@@ -370,11 +413,57 @@ A sixth profile is **composed on top of** the base, never selected instead of it
   it does not fail closed, it makes `$.context.Headers/QueryParameters/RouteValues` **empty**, so the
   grant silently cannot match — the transition vanishes from `availableTransitions` while the `authorize`
   function, which does pass the context, still answers *allowed* for it.
+- **`queryRoles` is NOT enforced by this runtime. It is ANSWERED by it.** The read surfaces
+  (`state`, `data`, `view`, `schema`, `master`, `tasks`, `actions`, `incidents`, `incidents/active`)
+  and `POST .../longpoll/ack` carry no gate: the Internal Gateway asks
+  `GET .../functions/authorize?queryRoles=true` (or `?ack=true`) and admits on that answer.
+  `queryRoles` itself is untouched — still evaluated in full, per hop down the active-correlation
+  chain, by that endpoint — and so is role RESOLUTION everywhere (`availableTransitions` filtering,
+  state aliases, `x-roles` pruning, human-task list, `CallerScopeHash`). Enforcement left; visibility
+  stayed. **Do not add the gate back on a read path**: two decision points on one question drift, and
+  this repo has twice paid for exactly that. `authorize?ack=true` is what makes the acknowledge case
+  possible at all — the `rule` arm is a C# script no gateway can evaluate, and that target admits
+  through the same `ILongPollInteractionGate` the endpoint used to call.
+- **`authorize` answers the CONJUNCTION down the active-correlation chain.** `?queryRoles=true`
+  evaluates the polled instance's own grants **and** every level beneath it to the deepest active leaf
+  — the same shape the state function enforces (gate at the polled instance, then descend and gate
+  again). It used to answer from the leaf alone, which made it strictly weaker than the gate it
+  describes. Overrides resolve **per hop from the child's stamp**, never from the parent's definition:
+  that is what makes a directly addressed leaf give the same verdict as the same leaf reached through
+  its parent, and what keeps a parent's override of its child from reaching the grandchild.
+- **The `role` request parameter is gated on the provider, both as a fallback and additively.**
+  `ICallerRoleResolver.AllowsRoleParameterFallback` — true only when the provider's own source is
+  already the caller's own assertion (`default`), false for an authority provider (`morph-idm`).
+  Without it, a provider answering "no roles" was overridden by the caller naming one in the query
+  string: measured, `?queryRoles=true` → 403 while `?queryRoles=true&role=chain.admin` → 200 for the
+  same caller. The same hole as forwarding the `role` HEADER to morph-idm, on the other channel —
+  and it matters more now that `authorize` is the only place these questions are answered. Put the
+  flag on the resolver, never a provider-name check inside a surface.
+- **`authorize` has a fourth target, `ack`.** `?ack=true` is the pre-flight for
+  `POST .../longpoll/ack`, admitted through the same `ILongPollInteractionGate` — so the `rule` arm, a
+  C# script no gateway can evaluate, is covered. It mirrors the endpoint's own descent rule
+  (`IsAwaitingLongPollAck`, not "has a subflow") and answers **allowed** when nothing is awaiting,
+  because the endpoint answers `Ok()` idempotently there.
+- **`cancel` and `exit` are parent-retained, in `authorize` as at execution.**
+  `HandleCancelPreflightStep` (order 5) skips to `CreateTransition` (20), over the forward at order 10,
+  so they never reach the subflow; `IsSubflowForward` also excludes them (`BypassBusyCheck`). Together
+  with `updateData` and an in-state shared transition, those are the only keys `authorize` answers
+  against the parent while a SubFlow is active.
 - **`transition.roles` is not enforced at execution, by design.** `POST .../transitions/{key}` runs
   schema validation + `TransitionExecutionPolicy`, and no specification there reads `Roles`;
   `IsTransitionAllowedForRoleAsync`'s only production caller is `AuthorizeAppService`. Roles describe
   what a client should *offer*, not a capability boundary — put real boundaries in `queryRoles`, a
   function's `roles`, or the transition's task logic. Do not "fix" this; it is a deliberate decision.
+- **The `queryRoles` gate reads the instance's OWN `CurrentState`, never `EffectiveState`.**
+  `EffectiveState` is the deepest ACTIVE SUBFLOW's state key, so on a level that has a subflow of its
+  own it names a state of a different workflow: `FindState` returns null, the parent's stamped
+  override (keyed by the state the parent declared for that child) cannot match either, and the gate
+  silently falls through to the workflow root's grants. Measured on the bench:
+  `CurrentState=mid-waiting` / `EffectiveState=leaf-waiting` on a mid, and a role the root had
+  narrowed away read that mid **200**. Both a SubFlow state's own `queryRoles` and a parent's
+  `overrides.states` narrowing stopped applying — with no error and no log — for exactly as long as
+  the child had a subflow of its own. `HumanTaskLeafResolver` already resolved from `CurrentState`,
+  so the two paths disagreed about the same instance; this was the side that was wrong.
 - **Never read `currentUser.Roles` directly at a decision point.** Use
   `currentUser.ResolveCallerRoles(headers)`: `ChangeFromHeaders` is *not* in the HTTP pipeline (only
   `TransitionRunner`), so a legacy-`role`-header caller would be treated as role-less — 403 from an
@@ -512,10 +601,53 @@ A sixth profile is **composed on top of** the base, never selected instead of it
   - Transition set → `RequestNextTransition(key, ErrorBoundary)` + `SkipToFinalize()`
   - Abort without transition → Fail → instance fault
 - Error-boundary transitions set `IsErrorBoundaryTransition = true`.
-- Error-boundary profile disables subflow handling and skips ResourceLock. Its current exclusion set
-  does not remove the Auto step.
+- Error-boundary profile skips Preflight, ForwardToActiveSubflow and ResourceLock. It does **not**
+  disable subflow handling and does not remove the Auto step: the plan is built from
+  `ExcludedStepOrders` alone (`TransitionExecutor.BuildExecutionPlan`), and `LifecycleOrder.SubFlow`
+  (70) is in no exclusion set. A profile-level "allow subflow" flag used to exist and was never read;
+  it was deleted rather than given teeth, because enforcing it would have been an unrequested
+  behaviour change.
 
 ## SubFlow Lifecycle
+
+### A state starts a SubFlow. Only a SubFlow. (Platform rule, 2026-09-22)
+
+**`state.subFlow.type` must be `S`.** A state-level SubFlow relationship is the blocking kind and
+nothing else — a `P` (SubProcess) may **not** be started from a state. The platform convention also
+says a SubProcess may not start another SubProcess, but **only the state-level shape is enforced**:
+`ValidateStateSubFlowType` inspects `state.SubFlow` on the workflow being validated, not what runs
+inside a workflow that some other definition uses as a `P` child — that would need cross-workflow
+analysis a single-workflow validator cannot do. Treat the nested-SubProcess rule as author discipline,
+not something the runtime currently checks.
+
+**A SubProcess is started by its own task**: `SubProcessTask` (`TaskType.SubProcess = 14`). That
+executor starts the child and creates the correlation itself —
+`SubProcessTaskExecutor.CreateCorrelationAsync` builds an `InstanceCorrelation` stamped
+`SubFlowType.SubProcess` and calls `AddCorrelation` on the tracked parent. That is the only sanctioned
+path to a `P` relationship.
+
+This is an authoring constraint, and it is the reason the runtime reads `S` everywhere a state-level
+relationship is meant: `Instance.HasActiveSubFlow` and `Instance.Subflow` filter `SubFlowType.SubFlow`,
+`Instance.AddCorrelation` takes Busy only for `S`, and `HandleSubFlowStep`'s idempotency guard
+(`HasActiveCorrelationForSameState`) reads `Instance.Subflow`. **All four are correct, not narrow** —
+do not "fix" them to include `P`. A parent is Busy for a *blocking* child's lifetime; a SubProcess is
+fire-and-forget and its parent keeps running, which is why its correlation neither marks Busy nor
+appears in these readers.
+
+**Enforced at definition time since 2026-09-22**: `WorkflowValidator.ValidateStateSubFlowType` rejects
+any state whose `subFlow.type` is not `S`. Before that rule existed such a definition was authorable
+and then behaved differently by caller mode — the async path admitted the parent continuation it
+produces, because a job re-entry carries `IsPreReserved`, while a sync request did not and collided
+with the Busy its own earlier stage had set (`409 Instance:100031`, parent left Busy-not-Faulted, no
+automatic recovery). That divergence was a **symptom of the invalid definition**, not a runtime defect
+to patch in admission; the council session `2026-09-22-sync-subprocess-continuation-admission` closed
+`VOID` on this rule.
+
+Consequence worth knowing: `HandleSubFlowStep` still branches on `SubFlowType.SubProcess` at state
+level and `PostCommitContinuationBehavior.ContinueParent` has no other producer, so **that whole
+cross-stage continuation path is now unreachable from a valid definition**. It is deliberately left in
+place rather than deleted — removing it is a separate change, and it is the landing site if a second
+`ContinueParent` producer is ever proposed.
 
 - **SubFlow (S)**: completion → output mapping → `ResumePipelineAsync` (`ExecMode.Resume`, `ResumeFrom = ClearBusyOnResumeStep`, `IsSubFlowResume = true`). Parent resumes from step 79.
 - **SubProcess (P)**: completion → correlation complete + persist → no parent resume (fire-and-forget).
@@ -530,6 +662,22 @@ A sixth profile is **composed on top of** the base, never selected instead of it
   answers identity-only (`Id`, `Key`, `Status`): the starter reads `IsSuccess`, the relay reads
   `Status`, and the client's attributes/extensions come from the **parent's** own
   `EnrichOutputCoreAsync`. Do not read attributes off a sub-start or forward response.
+
+### Parent overrides are resolved child-side, on the child's own state
+
+- `overrides.states` / `overrides.transitions` travel to the child in the two stamps
+  (`subflow.state_role_overrides`, `subflow.transition_role_overrides`) — whole maps, despite the
+  names. `SubFlowOverrideStamp` is their one parser.
+- Long-poll: only `fallbackTimeoutSeconds` and `roles`, field-level. Every reader calls
+  `Instance.ResolveEffectiveLongPoll(state)`; never read `State.LongPoll*` at a decision point —
+  the job's window and the body's window would diverge. No override adds a long-poll; a `rule` arm
+  ignores a `roles` override.
+- Views: `(childState, viewKey)` / `(childTransition, viewKey)` via `Instance.ResolveViewOverride`,
+  applied in `ResolveViewAsync` after the child's own rules picked. Keyed by `CurrentState`, never
+  `EffectiveState`. Rules are never overridden.
+- Legacy `overrides.views` / `viewOverrides` stays parent-side and deprecated; mixing it with the
+  scoped view overrides on one subFlow is a validation error.
+- Full guide: `docs/domain/subflow-overrides.md`.
 
 ### `sub:state-changed` is coalesced to one event per activation episode
 

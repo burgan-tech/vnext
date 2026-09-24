@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using BBT.Aether.BackgroundJob;
@@ -151,6 +152,95 @@ public class HandleLongPollTerminationStepTests
         context.Instance.IsAwaitingLongPollAck.ShouldBeFalse();
         await _jobService.DidNotReceiveWithAnyArgs().EnqueueAsync<LongPollAckTimeoutPayload>(
             default!, default!, default!, default!, default, default, default, default, default, default);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WithParentDurationOverride_SchedulesTheFallbackWithTheParentsWindow()
+    {
+        var workflow = CreateWorkflow(terminate: true); // child declares 30s
+        var context = CreateContext(workflow, workflow.GetState("review").Value!);
+        context.Instance.ExtraProperties[DomainConsts.MetaDataKeys.StateRoleOverrides] =
+            """{"review":{"interaction":{"longPoll":{"fallbackTimeoutSeconds":180}}}}""";
+        string? schedule = null;
+        _jobService.EnqueueAsync(
+                Arg.Any<string>(), Arg.Any<string>(), Arg.Any<LongPollAckTimeoutPayload>(),
+                Arg.Do<string>(s => schedule = s), Arg.Any<Dictionary<string, object>>(),
+                Arg.Any<JobScheduleFailurePolicy?>(), Arg.Any<bool>(),
+                Arg.Any<Guid?>(), Arg.Any<JobKind?>(), Arg.Any<CancellationToken>())
+            .Returns(Guid.NewGuid());
+        var before = DateTimeOffset.UtcNow;
+
+        await _step.ExecuteAsync(context, CancellationToken.None);
+
+        var fireAt = DateTimeOffset.Parse(schedule!, System.Globalization.CultureInfo.InvariantCulture);
+        (fireAt - before).TotalSeconds.ShouldBeInRange(175, 185);
+    }
+
+    /// <summary>
+    /// The tracked job row carries the same instant the Dapr job was armed with, so the deadline is
+    /// visible in the database — including a parent's window override.
+    /// </summary>
+    [Fact]
+    public async Task ExecuteAsync_PersistsTheFallbackDeadlineOnTheJobRow()
+    {
+        var workflow = CreateWorkflow(terminate: true); // child declares 30s
+        var context = CreateContext(workflow, workflow.GetState("review").Value!);
+        context.Instance.ExtraProperties[DomainConsts.MetaDataKeys.StateRoleOverrides] =
+            """{"review":{"interaction":{"longPoll":{"fallbackTimeoutSeconds":180}}}}""";
+        string? schedule = null;
+        InstanceJob? inserted = null;
+        _jobService.EnqueueAsync(
+                Arg.Any<string>(), Arg.Any<string>(), Arg.Any<LongPollAckTimeoutPayload>(),
+                Arg.Do<string>(s => schedule = s), Arg.Any<Dictionary<string, object>>(),
+                Arg.Any<JobScheduleFailurePolicy?>(), Arg.Any<bool>(),
+                Arg.Any<Guid?>(), Arg.Any<JobKind?>(), Arg.Any<CancellationToken>())
+            .Returns(Guid.NewGuid());
+        _jobRepository
+            .InsertAsync(Arg.Do<InstanceJob>(j => inserted = j), Arg.Any<bool>(), Arg.Any<CancellationToken>())
+            .Returns(ci => ci.ArgAt<InstanceJob>(0));
+        var before = DateTime.UtcNow;
+
+        await _step.ExecuteAsync(context, CancellationToken.None);
+
+        inserted.ShouldNotBeNull();
+        inserted!.ExecuteAt.ShouldNotBeNull();
+        (inserted.ExecuteAt!.Value - before).TotalSeconds.ShouldBeInRange(175, 185);
+        var armedAt = DateTimeOffset.Parse(schedule!, System.Globalization.CultureInfo.InvariantCulture);
+        (armedAt.UtcDateTime - inserted.ExecuteAt.Value).Duration().TotalSeconds.ShouldBeLessThan(1);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WithParentRolesOverride_EvaluatesTheParentsGrants()
+    {
+        var workflow = CreateWorkflow(terminate: true, withRoles: true); // child grants morph-idm.core
+        var context = CreateContext(workflow, workflow.GetState("review").Value!);
+        context.Instance.ExtraProperties[DomainConsts.MetaDataKeys.StateRoleOverrides] =
+            """{"review":{"interaction":{"longPoll":{"roles":[{"role":"corp.teller","grant":"allow"}]}}}}""";
+        _authManager.IsAnyRoleAllowedForGrantsAsync(
+                Arg.Any<IReadOnlyCollection<string>?>(), Arg.Any<IReadOnlyCollection<RoleGrant>>(),
+                Arg.Any<Instance?>(), Arg.Any<AuthorizationRequestContext?>(), Arg.Any<CancellationToken>())
+            .Returns(true);
+
+        await _step.ExecuteAsync(context, CancellationToken.None);
+
+        await _authManager.Received(1).IsAnyRoleAllowedForGrantsAsync(
+            Arg.Any<IReadOnlyCollection<string>?>(),
+            Arg.Is<IReadOnlyCollection<RoleGrant>>(g => g.Count == 1 && g.First().Role == "corp.teller"),
+            Arg.Any<Instance?>(), Arg.Any<AuthorizationRequestContext?>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_OverrideOnAStateWithoutLongPoll_DoesNotPause()
+    {
+        var workflow = CreateWorkflow(terminate: false); // no interaction at all
+        var context = CreateContext(workflow, workflow.GetState("review").Value!);
+        context.Instance.ExtraProperties[DomainConsts.MetaDataKeys.StateRoleOverrides] =
+            """{"review":{"interaction":{"longPoll":{"fallbackTimeoutSeconds":180}}}}""";
+
+        var result = await _step.ExecuteAsync(context, CancellationToken.None);
+
+        result.Value!.SkipToOrder.ShouldBeNull();
+        context.Instance.IsAwaitingLongPollAck.ShouldBeFalse();
     }
 
     private TransitionExecutionContext CreateContext(Definitions.Workflow workflow, State target)

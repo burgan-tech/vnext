@@ -22,7 +22,8 @@ namespace BBT.Workflow.Execution.LongPoll;
 /// Deny-on-failure is deliberate and mirrors <c>StateNotifyJobHandler</c> — an interaction a broken
 /// rule cannot vouch for is not offered. The roles arm delegates to the one role evaluator
 /// (<see cref="ITransitionAuthorizationManager"/>), resolving the caller's roles lazily through the
-/// surface-supplied factory.
+/// surface-supplied factory. Arm selection reads <c>Instance.ResolveEffectiveLongPoll</c>, so a
+/// parent's roles override applies on every surface that admits through this gate.
 /// </summary>
 public sealed class LongPollInteractionGate(
     IScriptContextFactory scriptContextFactory,
@@ -43,7 +44,9 @@ public sealed class LongPollInteractionGate(
         string surface,
         CancellationToken cancellationToken = default)
     {
-        var longPoll = state?.Interaction?.LongPoll;
+        // The effective long-poll: the state's own declaration with the parent's field-level override
+        // (roles, window) applied. Rule arm stays the child author's — an override never replaces it.
+        var longPoll = instance.ResolveEffectiveLongPoll(state).LongPoll;
 
         if (longPoll?.Rule is { } rule)
         {

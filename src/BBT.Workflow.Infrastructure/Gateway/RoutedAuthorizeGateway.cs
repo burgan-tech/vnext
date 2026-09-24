@@ -42,12 +42,13 @@ public sealed class RoutedAuthorizeGateway : IAuthorizeGateway
         string? functionKey,
         string? version,
         bool checkQueryRoles,
+        bool checkAck,
         AuthorizationRequestContext? requestContext = null,
         CancellationToken cancellationToken = default)
     {
         return _runtimeInfoProvider.IsDomainMatch(domain)
-            ? _local.GetAuthorizeResultForInstanceAsync(domain, workflow, instanceId, role, transitionKey, functionKey, version, checkQueryRoles, requestContext, cancellationToken)
-            : _remote.GetAuthorizeResultForInstanceAsync(domain, workflow, instanceId, role, transitionKey, functionKey, version, checkQueryRoles, requestContext, cancellationToken);
+            ? _local.GetAuthorizeResultForInstanceAsync(domain, workflow, instanceId, role, transitionKey, functionKey, version, checkQueryRoles, checkAck, requestContext, cancellationToken)
+            : _remote.GetAuthorizeResultForInstanceAsync(domain, workflow, instanceId, role, transitionKey, functionKey, version, checkQueryRoles, checkAck, requestContext, cancellationToken);
     }
 
     /// <inheritdoc />

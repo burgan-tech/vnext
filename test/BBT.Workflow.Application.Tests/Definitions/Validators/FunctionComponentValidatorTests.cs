@@ -421,4 +421,98 @@ public class FunctionComponentValidatorTests
         result.IsValid.ShouldBeFalse();
         result.ValidationErrors.ShouldContain(e => e.MemberNames.Contains("Function.InputSchema"));
     }
+
+    [Fact]
+    public void Validate_ShouldReturnError_WhenTwoTasksShareTheSameKey()
+    {
+        // Arrange - each task files its output under ToVariableName(task.key) in
+        // ScriptContext.TaskResponse/OutputResponse; a duplicate key means the second task's
+        // output overwrites the first's slot and the output script reads the wrong payload.
+        var functionJson = """
+        {
+            "scope": "F",
+            "onExecutionTasks": [
+                {
+                    "order": 1,
+                    "task": {"key": "fetch-data", "domain": "d", "flow": "sys-tasks", "version": "1.0.0"}
+                },
+                {
+                    "order": 2,
+                    "task": {"key": "fetch-data", "domain": "d", "flow": "sys-tasks", "version": "1.0.0"}
+                }
+            ],
+            "output": { "location": "./src/Output.csx", "code": "Ly8gb2s=" }
+        }
+        """;
+        var attributes = JsonDocument.Parse(functionJson).RootElement;
+
+        // Act
+        var result = _validator.Validate(attributes);
+
+        // Assert
+        result.IsValid.ShouldBeFalse();
+        result.ValidationErrors.ShouldContain(e => e.MemberNames.Contains("Function.OnExecutionTasks[1]"));
+    }
+
+    [Fact]
+    public void Validate_ShouldReturnError_WhenTwoTaskKeysNormalizeToTheSameVariableName()
+    {
+        // Arrange - distinct raw keys can still collide after ToVariableName normalization:
+        // "user-info" and "user_info" both become the response variable "userInfo".
+        var functionJson = """
+        {
+            "scope": "F",
+            "onExecutionTasks": [
+                {
+                    "order": 1,
+                    "task": {"key": "user-info", "domain": "d", "flow": "sys-tasks", "version": "1.0.0"}
+                },
+                {
+                    "order": 2,
+                    "task": {"key": "user_info", "domain": "d", "flow": "sys-tasks", "version": "1.0.0"}
+                }
+            ],
+            "output": { "location": "./src/Output.csx", "code": "Ly8gb2s=" }
+        }
+        """;
+        var attributes = JsonDocument.Parse(functionJson).RootElement;
+
+        // Act
+        var result = _validator.Validate(attributes);
+
+        // Assert
+        result.IsValid.ShouldBeFalse();
+        result.ValidationErrors.ShouldContain(e =>
+            e.MemberNames.Contains("Function.OnExecutionTasks[1]") &&
+            e.ErrorMessage!.Contains("userInfo"));
+    }
+
+    [Fact]
+    public void Validate_ShouldReturnSuccess_ForMultiTaskFunctionWithDistinctKeys()
+    {
+        // Arrange
+        var functionJson = """
+        {
+            "scope": "F",
+            "onExecutionTasks": [
+                {
+                    "order": 1,
+                    "task": {"key": "validate-account", "domain": "d", "flow": "sys-tasks", "version": "1.0.0"}
+                },
+                {
+                    "order": 2,
+                    "task": {"key": "fetch-balance", "domain": "d", "flow": "sys-tasks", "version": "1.0.0"}
+                }
+            ],
+            "output": { "location": "./src/Output.csx", "code": "Ly8gb2s=" }
+        }
+        """;
+        var attributes = JsonDocument.Parse(functionJson).RootElement;
+
+        // Act
+        var result = _validator.Validate(attributes);
+
+        // Assert
+        result.IsValid.ShouldBeTrue();
+    }
 }

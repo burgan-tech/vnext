@@ -19,29 +19,35 @@ namespace BBT.Workflow.Discovery;
 /// domain cache's staleness risk … is not worth its latency saving"). That verdict was correct for
 /// that implementation, which revalidated over HTTP on every cache hit and therefore paid the full
 /// registry latency anyway while carrying the staleness of a cache. The design these options
-/// configure makes no network call on a hit, and pays for the staleness with the bounded window
-/// below. Do not widen that window casually — it is the entire reason this is allowed to exist.
+/// configure makes no network call on a hit, and answers that objection the other way round: not
+/// with a window short enough to be defensible, but by removing the window and invalidating on the
+/// event that actually changes the data.
 /// </para>
 /// <para>
-/// <b>Staleness budget.</b> A domain whose <c>baseUrl</c> moves is routed to the old address for at
-/// most <c>RefreshIntervalSeconds + fetch + L1TtlSeconds</c> — about seventy minutes with these
-/// defaults,
-/// which is a deliberate choice: a domain's registered address changes on the order of deployments,
-/// not minutes, so the window is sized to how often the data actually moves rather than to how
-/// quickly it could. The hour is safe only because it is not the only mitigation —
-/// <c>POST utilities/discovery/refresh</c> re-reads the registry synchronously, so the one event
-/// that invalidates an entry early (a domain moving) has an operator-triggered answer that does not
-/// wait for the window.
+/// <b>Invalidation is an EVENT, not a clock.</b> With the defaults below there is no expiry at all:
+/// a pod fills the cache once at startup and the entries stay until something says otherwise. The
+/// something is <c>POST definitions/publish/completed</c>, which a domain's CD pipeline calls once
+/// after it has published every component of a package, and which forces a full re-read of the
+/// registry. The reasoning is that the cached datum — where a domain answers — changes when that
+/// domain is deployed, not continuously, so a timer can only either fire when nothing changed or
+/// fire too late. What it cost before was a ~70 minute window during which a moved domain was
+/// routed to an address it no longer answered on.
 /// </para>
 /// <para>
-/// If the refresher stops entirely, entries age out at <see cref="L2TtlSeconds"/> and every lookup
-/// falls back to a live registry call — the cache fails <i>open</i>, into the pre-cache behaviour,
-/// never into a stale answer.
+/// <b>What replaces the dead-man TTL is negative feedback, not a shorter timer.</b> A stale entry
+/// does damage only while something tries to USE it, and that moment is observable: a transport
+/// failure against a cached endpoint evicts it (see <see cref="UnreachableEvictionCooldownSeconds"/>)
+/// and the next resolution goes live. That covers the one case the event cannot — a peer domain
+/// moving while this domain has no deployment of its own — without reintroducing periodic work.
 /// </para>
 /// <para>
-/// A window this long also makes the cache a <i>resilience</i> feature and not only a latency one:
-/// with entries valid for two hours, cross-domain traffic survives a discovery-registry outage
-/// instead of failing with it.
+/// <b>The operator escape hatch stays.</b> <c>POST utilities/discovery/refresh</c> re-reads the
+/// registry synchronously and is the answer to a wrongly registered domain; with no TTL behind it,
+/// it is a real mechanism rather than a way to shave minutes off a window.
+/// </para>
+/// <para>
+/// A cache that never expires is also a <i>resilience</i> feature: cross-domain traffic survives a
+/// discovery-registry outage of any length instead of degrading with it.
 /// </para>
 /// </remarks>
 public sealed class DiscoveryCacheOptions
@@ -74,67 +80,99 @@ public sealed class DiscoveryCacheOptions
     public bool L1Enabled { get; set; } = true;
 
     /// <summary>
-    /// How long an entry may be served from the in-process layer, in seconds. Default 600.
+    /// How long an entry may be served from the in-process layer, in seconds. Default 60.
     /// </summary>
     /// <remarks>
-    /// L1 is the only layer the refresher cannot overwrite, so it is the one that lets two pods
-    /// disagree about where a domain lives — and this value is exactly how long that disagreement can
-    /// last. It is also, and more importantly, <b>the residual staleness after a forced refresh</b>:
-    /// <c>POST utilities/discovery/refresh</c> corrects the shared layer immediately, but every pod
-    /// except the one that ran it keeps serving its own copy until this expires. That is the number
-    /// to look at when sizing this, not the L2 read it saves — the saving is one cache read per
-    /// domain per expiry, which is negligible at any value in this range.
+    /// L1 is the only layer a refresh cannot overwrite, so this value is exactly two things: how
+    /// long two pods can disagree about where a domain lives, and <b>how long a refresh takes to
+    /// reach the pods that did not perform it</b>. The refresher and the publish-completed hook both
+    /// write the shared layer; every other pod keeps its own copy until this expires.
     /// <para>
-    /// Ten minutes is a deliberate trade against the 60 s this shipped with: a domain's address moves
-    /// on the order of deployments, so a ten-minute disagreement is acceptable, but it does mean the
-    /// forced-refresh endpoint now takes up to ten minutes to take effect fleet-wide rather than one.
-    /// Keep it well under <see cref="RefreshIntervalSeconds"/> (the validator enforces it): at parity
-    /// a pod could serve a stale endpoint for twice the window the cluster takes to correct it.
+    /// Sixty seconds, not the ten minutes this carried while there was an hour-long refresh window
+    /// to stay under. With invalidation driven by a deployment rather than a timer, the only thing
+    /// a longer L1 buys is one saved distributed-cache read per domain per expiry — negligible —
+    /// while the thing it costs is the propagation delay of every invalidation. That trade only
+    /// pointed one way once the window was gone.
+    /// </para>
+    /// <para>
+    /// Must stay above zero: L1 is what keeps a hot cross-domain path off the distributed cache
+    /// entirely, and disabling it belongs in <see cref="L1Enabled"/>, where it is visible.
     /// </para>
     /// </remarks>
     [Range(1, 3600)]
-    public int L1TtlSeconds { get; set; } = 600;
+    public int L1TtlSeconds { get; set; } = 60;
 
     /// <summary>
-    /// How often each pod wakes up to consider refreshing, in seconds. Default 60.
+    /// How often a pod wakes up to consider refreshing, in seconds. Default 60.
     /// </summary>
     /// <remarks>
-    /// Not the refresh rate — <see cref="RefreshIntervalSeconds"/> is, and the shared marker enforces
-    /// it. A tick whose window is already served costs one cache read and stops, which is why this
-    /// stays short even though the window is an hour: what it buys is prompt recovery. A failed
-    /// window — sidecar not ready at boot, a registry blip, a replica that died holding the lease —
-    /// is retried within a tick instead of at the end of the hour.
+    /// Not the refresh rate. In the default, expiry-free mode the loop exists only to get the cache
+    /// filled ONCE — it stops as soon as a refresh has succeeded or another replica has claimed the
+    /// window — so this value is how quickly a failed first attempt is retried, nothing more. That
+    /// retry is the reason it stays short: a pod whose Dapr sidecar or registry was not ready at boot
+    /// must not wait out a long interval with a cold cache.
+    /// <para>
+    /// When <see cref="RefreshIntervalSeconds"/> is non-zero the loop keeps ticking and this is again
+    /// the retry cadence inside that window, not the window itself.
+    /// </para>
     /// </remarks>
     [Range(1, 3600)]
     public int TickIntervalSeconds { get; set; } = 60;
 
     /// <summary>
-    /// Minimum interval between two cluster-wide bulk refreshes, in seconds. Default 3600 (1 hour).
+    /// Interval between two cluster-wide periodic bulk refreshes, in seconds.
+    /// <b><c>0</c> (the default) disables periodic refreshing entirely.</b>
     /// </summary>
     /// <remarks>
-    /// The dominant term in the staleness budget, and sized to the data: a domain's registered
-    /// address changes when that domain is deployed to a new address, which is a rare, planned event.
-    /// Enforced by a shared marker rather than by each pod's timer, so N replicas produce one bulk
-    /// read per window, not N.
+    /// At <c>0</c> the cache is filled once per cluster — warm-up — and afterwards only by an event:
+    /// <c>definitions/publish/completed</c> at the end of a deployment, the operator's
+    /// <c>utilities/discovery/refresh</c>, or a miss. The refresh marker is then written without an
+    /// expiry, because it no longer names a window; it records that the cluster has been filled.
+    /// <para>
+    /// Setting it back to a positive value restores the periodic behaviour, marker window and all.
+    /// It is a rollback lever, not a tuning knob: the reason to reach for it is a deployment whose
+    /// CD pipeline cannot be relied on to call publish-completed, and in that case
+    /// <see cref="L2TtlSeconds"/> should be set alongside it — a periodic refresh with no expiry
+    /// behind it still cannot notice that a domain has disappeared.
+    /// </para>
+    /// <para>
+    /// Enforced cluster-wide by the shared marker rather than by each pod's timer, so N replicas
+    /// produce one bulk read per window, not N.
+    /// </para>
     /// </remarks>
-    [Range(5, 86400)]
-    public int RefreshIntervalSeconds { get; set; } = 3600;
+    [Range(0, 86400)]
+    public int RefreshIntervalSeconds { get; set; } = 0;
 
     /// <summary>
     /// Maximum age of a cached registration before it is treated as absent, in seconds.
-    /// Default 7200 (2 hours).
+    /// <b><c>0</c> (the default) means entries never expire.</b>
     /// </summary>
     /// <remarks>
-    /// This is the dead-man's switch, not a performance knob: it is what bounds staleness when the
-    /// refresher is not running at all. Twice <see cref="RefreshIntervalSeconds"/> by default, which
-    /// is the principled setting — survive one missed window, expire after roughly two — and it is
-    /// what makes the cache degrade to the pre-cache behaviour rather than to a stale answer.
-    /// Validated on read against the recorded fetch time rather than being left to the distributed
-    /// store's own expiry — see <c>CachingDiscoveryRegistryClient</c> for why that distinction is
-    /// load-bearing.
+    /// <para>
+    /// At <c>0</c> no expiry is written to the distributed store and no age ceiling is applied on
+    /// read: an entry lives until an event replaces or evicts it. That is the deliberate trade of
+    /// this design — a dead-man switch can only convert "wrong address" into "wrong address for a
+    /// while", and the case it was guarding (a peer domain moving with no deployment here) is now
+    /// handled at the moment it actually hurts, by
+    /// <see cref="UnreachableEvictionCooldownSeconds"/>'s transport-failure eviction.
+    /// </para>
+    /// <para>
+    /// The age of the entry that answered is still recorded on every resolution
+    /// (<c>vnext.discovery.cache.age_seconds</c>), and with no TTL that tag carries MORE weight, not
+    /// less: it is the only way to notice a three-week-old entry, and the only way to answer "was
+    /// this routed by a stale entry?" during an incident.
+    /// </para>
+    /// <para>
+    /// A positive value restores the previous dead-man behaviour: entries older than this are
+    /// treated as a miss and resolved live. Validated on read against the recorded fetch time rather
+    /// than left to the distributed store's own expiry — see <c>CachingDiscoveryRegistryClient</c>
+    /// for why that distinction is load-bearing. Pair it with a non-zero
+    /// <see cref="RefreshIntervalSeconds"/>, or every entry starts paying a live lookup once per
+    /// expiry.
+    /// </para>
     /// </remarks>
-    [Range(5, 604800)]
-    public int L2TtlSeconds { get; set; } = 7200;
+    [Range(0, 604800)]
+    public int L2TtlSeconds { get; set; } = 0;
 
     /// <summary>
     /// Lease length for the bulk-refresh lock, in seconds. Default 30.
@@ -178,4 +216,26 @@ public sealed class DiscoveryCacheOptions
     /// </remarks>
     [Range(1, 100000)]
     public int DomainListExpectedMax { get; set; } = 500;
+
+    /// <summary>
+    /// Minimum interval between two evictions of the SAME domain triggered by a transport failure,
+    /// in seconds. Default 30. <c>0</c> disables failure-driven eviction.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Failure-driven eviction is what makes an expiry-free cache safe: a cached endpoint that no
+    /// longer answers is dropped the first time something fails to reach it, and the next resolution
+    /// goes live. Without the cooldown, though, it would turn a peer domain's OUTAGE into a load
+    /// problem of our own — a correctly addressed but down domain fails every call, and every
+    /// failure would evict and force a fresh registry lookup. The cooldown makes that one lookup per
+    /// interval instead of one per failed call.
+    /// </para>
+    /// <para>
+    /// Only transport-level failures evict — connection refused, DNS failure, unreachable host. An
+    /// HTTP 4xx or 5xx never does: a domain answering with an error is a domain at the right
+    /// address, and evicting on it would make every downstream bug look like a discovery problem.
+    /// </para>
+    /// </remarks>
+    [Range(0, 3600)]
+    public int UnreachableEvictionCooldownSeconds { get; set; } = 30;
 }

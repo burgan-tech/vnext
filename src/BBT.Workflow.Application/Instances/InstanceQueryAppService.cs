@@ -14,6 +14,7 @@ using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
 using Microsoft.Extensions.Logging;
 using BBT.Workflow.Shared;
+using BBT.Workflow.Telemetry;
 using System.Text.Json;
 using BBT.Aether.Application.Pagination;
 using BBT.Workflow.Definitions.GraphQL;
@@ -456,8 +457,6 @@ public sealed class InstanceQueryAppService(
             {
                 using var instanceScope = BeginInstanceScope(data.instance);
 
-                if (!await IsInstanceQueryAllowedAsync(data.workflow, data.instance, input.Roles, input.Headers, input.QueryParameters, cancellationToken))
-                    return Result<IncidentDetailDto>.Fail(WorkflowErrors.QueryAccessDenied(data.instance.GetEffectiveState));
 
                 // Trust the row, not the flag: the two are written in one unit of work, but a resolve
                 // that raced this read leaves the flag true for the moment it takes to commit.
@@ -489,9 +488,6 @@ public sealed class InstanceQueryAppService(
             {
                 using var instanceScope = BeginInstanceScope(data.instance);
 
-                // Same gate as the state function: a caller who may poll the state may read what ran.
-                if (!await IsInstanceQueryAllowedAsync(data.workflow, data.instance, input.Roles, input.Headers, input.QueryParameters, cancellationToken))
-                    return Result<GetInstanceTasksOutput>.Fail(WorkflowErrors.QueryAccessDenied(data.instance.GetEffectiveState));
 
                 var rows = await instanceTaskRepository.GetHistoryByInstanceIdAsync(
                     data.instance.Id, cancellationToken);
@@ -523,8 +519,6 @@ public sealed class InstanceQueryAppService(
             {
                 using var instanceScope = BeginInstanceScope(data.instance);
 
-                if (!await IsInstanceQueryAllowedAsync(data.workflow, data.instance, input.Roles, input.Headers, input.QueryParameters, cancellationToken))
-                    return Result<GetInstanceTaskActionsOutput>.Fail(WorkflowErrors.QueryAccessDenied(data.instance.GetEffectiveState));
 
                 var taskRef = await instanceTaskRepository.GetRefForInstanceAsync(
                     data.instance.Id, input.TaskId, cancellationToken);
@@ -563,9 +557,6 @@ public sealed class InstanceQueryAppService(
             {
                 using var instanceScope = BeginInstanceScope(data.instance);
 
-                // Same gate as the state function: a caller who may poll the state may read why it stalled.
-                if (!await IsInstanceQueryAllowedAsync(data.workflow, data.instance, input.Roles, input.Headers, input.QueryParameters, cancellationToken))
-                    return Result<GetInstanceIncidentsOutput>.Fail(WorkflowErrors.QueryAccessDenied(data.instance.GetEffectiveState));
 
                 var paged = await instanceIncidentRepository.GetHistoryPagedAsync(
                     data.instance.Id, page, pageSize, cancellationToken);
@@ -1085,8 +1076,6 @@ public sealed class InstanceQueryAppService(
                     var (flow, instance) = data;
                     using var instanceScope = BeginInstanceScope(instance);
 
-                    if (!await IsInstanceQueryAllowedAsync(flow, instance, input.Roles, input.Headers, input.QueryParameters, cancellationToken))
-                        return ConditionalResult<GetInstanceDataOutput>.Fail(WorkflowErrors.QueryAccessDenied(instance.GetEffectiveState));
 
                     var instanceData = instance.FindData(input.Version);
                     var entityEtag = instanceData?.ETag ?? string.Empty;
@@ -1365,8 +1354,6 @@ public sealed class InstanceQueryAppService(
                 onSuccess: async data =>
                 {
                     using var instanceScope = BeginInstanceScope(data.instance);
-                    if (!await IsInstanceQueryAllowedAsync(data.workflow, data.instance, input.Roles, input.Headers, input.QueryParams, cancellationToken))
-                        return ConditionalResult<GetInstanceStateOutput>.Fail(WorkflowErrors.QueryAccessDenied(data.instance.GetEffectiveState));
 
                     // Full correlation set (active + completed), ordered by creation time. The aggregate's
                     // own ChildCorrelations collection is loaded with an active-only filtered include, so
@@ -1642,11 +1629,19 @@ public sealed class InstanceQueryAppService(
         IReadOnlyCollection<InstanceCorrelation> allCorrelations,
         CancellationToken cancellationToken)
     {
-        // Active scheduled-transition jobs feed the kind:"scheduled" entries of the transitions
-        // response list only — deliberately NOT the fingerprint ETag (team decision, issue #864;
-        // known staleness gap, see the ETag doc). Loaded here so the fast 304 path never pays for it.
-        var activeScheduledTransitionJobs = (await instanceJobRepository
-                .GetListActiveAsync(instance.Id, cancellationToken))
+        // ONE read, two projections. GetListActiveAsync filters on InstanceId + IsActive with no
+        // JobType predicate, so every active job — scheduled transitions AND the workflow timeout —
+        // is already selected and materialized here; splitting them below costs a pass over a list
+        // that is a handful of rows per instance, never a second query. Loaded after the fingerprint
+        // 304 path has declined, so the fast path still pays nothing.
+        //
+        // Scheduled-transition jobs feed the kind:"scheduled" entries of the transitions response
+        // list only — deliberately NOT the fingerprint ETag (team decision, issue #864; known
+        // staleness gap, see the ETag doc). The timeout job feeds the `timeout` block, which has no
+        // such gap: its instant is immutable after arm and its presence tracks the instance status.
+        var activeJobs = await instanceJobRepository.GetListActiveAsync(instance.Id, cancellationToken);
+
+        var activeScheduledTransitionJobs = activeJobs
             .Where(j => j.JobType == JobType.ScheduledTransition)
             .ToList();
 
@@ -1942,7 +1937,11 @@ public sealed class InstanceQueryAppService(
         // Scheduled entries ride in the same transitions list, appended after the caller-triggerable
         // ones; clients discriminate on kind ("scheduled" ⇒ executeAtUtc present).
         transitionItems.AddRange(BuildScheduledTransitionEntries(
-            activeScheduledTransitionJobs, input.Domain, input.Workflow, instance.Id.ToString()));
+            activeScheduledTransitionJobs, currentWorkflow, input.Domain, input.Workflow, instance.Id.ToString()));
+
+        // The workflow-level deadline, as its own block rather than a transitions[] entry — it is
+        // not a transition (see InstanceTimeoutOutput).
+        var timeout = BuildTimeoutBlock(instance, currentWorkflow, activeJobs);
 
         return Result<GetInstanceStateOutput>.Ok(new GetInstanceStateOutput
         {
@@ -1959,7 +1958,8 @@ public sealed class InstanceQueryAppService(
             Transitions = transitionItems,
             Functions = functionsHref,
             Interaction = interaction,
-            Incident = incidentHref
+            Incident = incidentHref,
+            Timeout = timeout
         });
     }
 
@@ -2036,9 +2036,16 @@ public sealed class InstanceQueryAppService(
     /// System-actor-gated at execution (<c>ActorAuthorizationSpecification</c>), so a client PATCHing
     /// it is rejected exactly as before.
     /// </para>
+    /// <para>
+    /// <c>annotations</c> are the transition definition's, resolved from the job's
+    /// <see cref="InstanceJob.SourceState"/> — scheduled transitions are only ever armed from a state's
+    /// own <c>ScheduledTransitions</c>, never from shared transitions. Unlike the three link flags this
+    /// is real content, not a placeholder; null when the state or transition no longer resolves.
+    /// </para>
     /// </summary>
     private IEnumerable<TransitionItem> BuildScheduledTransitionEntries(
         IReadOnlyCollection<InstanceJob> activeScheduledTransitionJobs,
+        Definitions.Workflow currentWorkflow,
         string domain,
         string workflow,
         string instanceId) =>
@@ -2061,8 +2068,82 @@ public sealed class InstanceQueryAppService(
                 {
                     Href = urlTemplateBuilder.BuildSchemaUrl(domain, workflow, instanceId, j.TransitionKey!),
                     HasSchema = false
-                }
+                },
+                Annotations = ResolveScheduledTransitionAnnotations(currentWorkflow, j)
             });
+
+    private static Dictionary<string, string>? ResolveScheduledTransitionAnnotations(
+        Definitions.Workflow workflow,
+        InstanceJob job)
+    {
+        if (string.IsNullOrEmpty(job.SourceState))
+            return null;
+
+        var stateResult = workflow.GetState(job.SourceState);
+        return stateResult.IsSuccess
+            ? stateResult.Value?.FindTransition(job.TransitionKey!)?.Annotations
+            : null;
+    }
+
+    /// <summary>
+    /// Builds the state body's <c>timeout</c> block, or null when the polled instance has no
+    /// pending workflow deadline. Never reads: the job rows are the ones already fetched for the
+    /// scheduled entries, and the effective timeout comes from the instance and definition in hand.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Three conditions, all required. <b>(1) The instance's own status is not terminal.</b>
+    /// <see cref="InstanceStatus.IsTerminal"/> is the same set the fire path's
+    /// <c>Instance.IsCompleted</c> guard uses, so the block disappears exactly when the deadline
+    /// stops being able to fire — and it does so without waiting for the asynchronous
+    /// <c>cancel-cleanup</c> chain to close the job row, which can lag or, if that delivery is
+    /// degraded, never arrive. The polled instance's OWN status is the right one: the row belongs to
+    /// it, and a parent is Busy for its child's whole lifetime anyway.
+    /// <b>(2) An active timeout job with a resolvable instant exists.</b> Rows written before the
+    /// <c>ExecuteAt</c> column existed are skipped rather than emitted without a time, matching the
+    /// scheduled entries.
+    /// <b>(3) The effective timeout resolves.</b> Same resolver the arm and the fire path call, so
+    /// the published <c>target</c> is the state the runtime will actually move to.
+    /// </para>
+    /// <para>
+    /// A past <c>executeAtUtc</c> is deliberately NOT suppressed: between the timeout firing and its
+    /// pipeline settling the instance is Busy and the past instant is the honest answer. Filtering on
+    /// wall clock would also make the body a function of time while its ETag is a function of state,
+    /// leaving two different bodies under one validator.
+    /// </para>
+    /// </remarks>
+    private InstanceTimeoutOutput? BuildTimeoutBlock(
+        Instance instance,
+        Definitions.Workflow currentWorkflow,
+        IReadOnlyCollection<InstanceJob> activeJobs)
+    {
+        if (instance.Status.IsTerminal)
+            return null;
+
+        var timeoutJob = activeJobs
+            .Where(j => j.JobType == JobType.Timeout && j.ExecuteAt.HasValue)
+            .OrderBy(j => j.ExecuteAt!.Value)
+            .FirstOrDefault();
+
+        if (timeoutJob is null)
+            return null;
+
+        var effectiveTimeout = instance.ResolveEffectiveTimeout(currentWorkflow, out var overrideMalformed);
+
+        if (overrideMalformed)
+            logger.TimeoutOverrideMalformed(instance.Id, instance.Flow);
+
+        if (effectiveTimeout is null)
+            return null;
+
+        return new InstanceTimeoutOutput
+        {
+            Key = effectiveTimeout.Key,
+            Target = effectiveTimeout.Target,
+            ExecuteAtUtc = timeoutJob.ExecuteAt!.Value,
+            Annotations = effectiveTimeout.Annotations
+        };
+    }
 
     /// <summary>
     /// Resolves the client-workflow-manager interaction directives for the response, or null when none
@@ -2070,9 +2151,12 @@ public sealed class InstanceQueryAppService(
     /// state declares <c>interaction.longPoll</c> and the caller is admitted by its authorization arm —
     /// either the <c>roles</c> grants (default-allow when no roles configured) or the <c>rule</c>
     /// condition script; the two are alternatives, the validator rejects both. A failed rule evaluation
-    /// denies (fail-closed), same as notification rules. The <c>terminate</c> flag and
-    /// <c>fallbackTimeoutSeconds</c> are surfaced as configured; the ack href is included only when
-    /// <c>terminate</c> is true (the pipeline pauses awaiting acknowledge in that case).
+    /// denies (fail-closed), same as notification rules. <c>terminate</c> is served as declared on the
+    /// state; <c>fallbackTimeoutSeconds</c> is the EFFECTIVE value from
+    /// <see cref="InstanceSubFlowOverrideExtensions.ResolveEffectiveLongPoll"/> — the state's own value,
+    /// or the parent's override when one is stamped — so it always matches the window the pipeline
+    /// actually armed the fallback job with. The ack href is included only when <c>terminate</c> is true
+    /// (the pipeline pauses awaiting acknowledge in that case).
     /// </summary>
     private async Task<InstanceInteractionOutput?> ResolveInteractionAsync(
         GetInstanceStateInput input,
@@ -2083,6 +2167,22 @@ public sealed class InstanceQueryAppService(
         CancellationToken cancellationToken)
     {
         if (currentStateValue.Interaction?.LongPoll is null)
+            return null;
+
+        // The block describes an acknowledgement that is ACTUALLY OUTSTANDING, not one the state
+        // declares it may one day arm. Before this check it was emitted from the DEFINITION alone:
+        // measured on the bench, a leaf reported status A with a full interaction block including
+        // ack.href while `LongPollAckToken` was already cleared — the fallback had resumed the
+        // pipeline — and the acknowledge endpoint answered 200 idempotently. A client could not tell
+        // "there is an ack waiting for you" from "this state can pause", which is the only question
+        // the block exists to answer.
+        //
+        // ETag safety: the token's lifetime is bracketed by status changes on both paths that clear
+        // it — an acknowledge and the fallback job both resume the pipeline — and Status IS a
+        // fingerprint member, so the block's disappearance always rides a fingerprint change. If a
+        // future path ever clears the token WITHOUT a status change, the block would go stale behind
+        // a 304; that path does not exist today and adding one would need a fingerprint member.
+        if (!instance.IsAwaitingLongPollAck)
             return null;
 
         // Only signal on the main-flow current state view, not a subflow terminal view.
@@ -2104,12 +2204,14 @@ public sealed class InstanceQueryAppService(
         if (admitted is not { IsSuccess: true, Value: true })
             return null;
 
-        var terminate = currentStateValue.TerminatesLongPollOnEntry;
+        // Same resolver the pipeline armed the fallback job with, so the window the client is told
+        // is the window that will actually fire. Terminate is never overridable.
+        var effective = instance.ResolveEffectiveLongPoll(currentStateValue).LongPoll!;
         return new InstanceInteractionOutput
         {
-            TerminateLongPoll = terminate,
-            FallbackTimeoutSeconds = currentStateValue.LongPollFallbackTimeoutSeconds,
-            Ack = terminate
+            TerminateLongPoll = effective.Terminate,
+            FallbackTimeoutSeconds = effective.FallbackTimeoutSeconds,
+            Ack = effective.Terminate
                 ? new AckHref
                 {
                     Href = urlTemplateBuilder.BuildLongPollAckUrl(
@@ -2117,24 +2219,6 @@ public sealed class InstanceQueryAppService(
                 }
                 : null
         };
-    }
-
-    /// <summary>
-    /// Enforces state/workflow <c>queryRoles</c> visibility for the instance query functions
-    /// (state/data/view/schema). Returns true when access is permitted: no grants defined → allow;
-    /// otherwise the caller's roles must resolve to an allow (DENY wins; predefined/dynamic roles honored).
-    /// </summary>
-    private async Task<bool> IsInstanceQueryAllowedAsync(
-        Definitions.Workflow workflow,
-        Instance instance,
-        IReadOnlyCollection<string>? roles,
-        IReadOnlyDictionary<string, string?>? headers,
-        IReadOnlyDictionary<string, string?>? queryParameters,
-        CancellationToken cancellationToken)
-    {
-        var requestContext = new AuthorizationRequestContext(headers, queryParameters);
-        return await transitionAuthorizationManager.IsQueryAllowedAsync(
-            workflow, instance, roles, requestContext, cancellationToken);
     }
 
     /// <summary>
@@ -2499,8 +2583,6 @@ public sealed class InstanceQueryAppService(
         GetMasterInput input,
         CancellationToken cancellationToken)
     {
-        if (!await IsInstanceQueryAllowedAsync(currentWorkflow, instance, input.Roles, input.Headers, input.QueryParameters, cancellationToken))
-            return Result<GetSchemaOutput>.Fail(WorkflowErrors.QueryAccessDenied(instance.GetEffectiveState));
 
         // Check if there's an active SubFlow - if so, forward the request to SubFlow
         // instance.Subflow returns the first active subflow (Type: S and not completed)
@@ -2659,8 +2741,6 @@ public sealed class InstanceQueryAppService(
         string? transitionKey,
         CancellationToken cancellationToken)
     {
-        if (!await IsInstanceQueryAllowedAsync(currentWorkflow, instance, input.Roles, input.Headers, input.QueryParameters, cancellationToken))
-            return Result<GetSchemaOutput>.Fail(WorkflowErrors.QueryAccessDenied(instance.GetEffectiveState));
 
         if (string.IsNullOrEmpty(transitionKey))
         {
@@ -2759,8 +2839,6 @@ public sealed class InstanceQueryAppService(
         string? transitionKey,
         CancellationToken cancellationToken)
     {
-        if (!await IsInstanceQueryAllowedAsync(currentWorkflow, instance, input.Roles, input.Headers, input.QueryParameters, cancellationToken))
-            return Result<GetViewOutput>.Fail(WorkflowErrors.QueryAccessDenied(instance.GetEffectiveState));
 
         // Get current state using Railway pattern
         var currentStateResult = currentWorkflow.GetState(instance.CurrentState!);
@@ -2867,6 +2945,32 @@ public sealed class InstanceQueryAppService(
             return Result<GetViewOutput>.Fail(
                 Error.NotFound("notfound",
                     $"No matching view found for state {instance.CurrentState} in workflow {currentWorkflow.Key}"));
+        }
+
+        // Parent-supplied swap, resolved HERE because this is the level whose rules just selected the
+        // view: keyed by this instance's own CurrentState (never EffectiveState) or by the transition,
+        // and by the view key the rules picked. Rules are never overridden — only the reference.
+        // The override map is keyed by the transition's CONFIGURED key, never a well-known alias
+        // (e.g. "update-parent-data"), so a request naming the alias is normalised through the same
+        // ResolveTransition call GetViewDefinition already uses above — no second resolution mechanism.
+        var normalizedTransitionKey = transitionKey.IsNullOrWhiteSpace()
+            ? transitionKey
+            : currentWorkflow.ResolveTransition(transitionKey, currentState)?.Key ?? transitionKey;
+        var overrideRef = instance.ResolveViewOverride(
+            instance.CurrentState, normalizedTransitionKey, selectedViewEntry.View.Key);
+        if (overrideRef is not null)
+        {
+            var overrideResult = await viewContentResolutionService.ResolveViewContentAsync(
+                overrideRef, input.Domain, input.Headers, input.QueryParameters, cancellationToken);
+            if (overrideResult.IsSuccess)
+                return overrideResult;
+
+            logger.SubFlowViewOverrideUnresolved(
+                instance.Id,
+                instance.CurrentState ?? string.Empty,
+                selectedViewEntry.View.Key,
+                overrideRef.Key,
+                overrideResult.Error.Message ?? overrideResult.Error.Code);
         }
 
         return await viewContentResolutionService.ResolveViewContentAsync(

@@ -102,7 +102,40 @@ cannot be resolved is omitted rather than failing the catalog.
 ### Function discovery (`/info`)
 
 `/info` and the four content routes are `GET`-only and carry no ETag/304. All six run the same scope
-and role gates as execution, so a caller denied on execution gets `403` rather than a description.
+gates as execution, so a caller denied on execution gets `403` rather than a description. Note that
+`function.roles` is **not** among those gates on either surface — custom-function execution enforces
+scope only, and `function.roles` is evaluated by `authorize` alone.
+
+### `authorize` targets
+
+Full reference — what each selector evaluates, the subflow conjunction, parent-retained transitions,
+role resolution and the audit line: [The `authorize` Function](../domain/authorize-function.md). The
+summary below is the API-surface view.
+
+Since 0.0.94 this function is not merely a description of the runtime's gates — **it is the
+enforcement point**, consulted by the Internal Gateway. The read surfaces and
+`POST .../longpoll/ack` no longer evaluate `queryRoles` or the interaction gate themselves.
+
+`GET .../instances/{instance}/functions/authorize` takes **exactly one** of four query-string
+selectors (zero or two is a request error, not a silent default):
+
+| Selector | Question | Descends into an active SubFlow? |
+|---|---|---|
+| `?transitionKey=` | may this transition be triggered (state **and** roles) | only when the parent does not retain it — `cancel`, `exit`, `updateData` and an in-state shared transition are answered against the parent, matching execution |
+| `?functionKey=` | may this **custom** function be invoked | yes |
+| `?queryRoles=true` | may this instance be read (the whole built-in read family) | yes — and the answer is the **conjunction** of the polled instance and every level down to the deepest active leaf |
+| `?ack=true` | may `POST .../longpoll/ack` be called | follows the endpoint's own rule: descends while this instance is not the one awaiting; **allowed** when nothing in the chain is awaiting, because the endpoint answers `Ok()` idempotently there |
+
+There is no per-built-in-function selector: `state`, `data`, `view`, `schema`, `master`, `tasks`,
+`actions` and the incident routes share one `queryRoles` verdict. A caller who may not read `state`
+may not read `data` either.
+
+`data` is the one asymmetry worth stating explicitly: its **content** does not descend (it serves the
+polled instance's attributes) while its **authorization** does. Authorization follows where the
+instance actually is; content follows what the client holds.
+
+A refusal is `403` with a body of `{"allowed": false}`. A consumer that reads only the `200` turns
+every refusal into "no answer".
 Built-in system functions (`state`, `view`, `data`, `schema`, `authorize`, `permissions`,
 `hierarchy`, `human-task`, `master`, `catalog`) have no `sys-functions` component and return `404`
 from `/info`.
@@ -143,13 +176,21 @@ render countdowns and upcoming-action information without polling anything else:
 ```jsonc
 "transitions": [
   { "name": "pay", "kind": "stateTransition", "href": "...", "view": { ... }, "schema": { ... } },
-  { "name": "payment-timeout", "kind": "scheduled", "executeAtUtc": "2026-08-03T14:30:00Z" }
+  { "name": "payment-timeout", "kind": "scheduled", "executeAtUtc": "2026-08-03T14:30:00Z",
+    "href": "...", "view": { "hasView": false, ... }, "schema": { "hasSchema": false, ... },
+    "annotations": { "ui/countdown": "visible" } }
 ]
 ```
 
-- `kind: "scheduled"` ⇒ the entry carries `executeAtUtc` and **no `href`/`view`/`schema`** —
-  callers cannot trigger a scheduled transition (the actor gate rejects it). Every other kind
-  carries an `href` and never an `executeAtUtc`.
+- `kind: "scheduled"` ⇒ the entry carries `executeAtUtc`. It also carries the uniform
+  `href`/`view`/`schema` link objects with `hasView`/`loadData`/`hasSchema` hardcoded `false` — a
+  temporary concession for domain clients that expect all three on every item. The href is **not**
+  callable: scheduled transitions stay System-actor-gated at execution. Every other kind never
+  carries an `executeAtUtc`.
+- `annotations` — on scheduled entries as on every other kind — is the transition definition's,
+  omitted when none is declared. For a scheduled entry it is resolved through the job's source state
+  (scheduled transitions are only armed from a state's own `scheduledTransitions`); if that state or
+  transition no longer resolves, the entry is still listed, without annotations.
 - Built from the **persisted job state**: active `InstanceJob` rows of type `ScheduledTransition`
   whose `ExecuteAt` was captured at scheduling time — the exact instant the scheduler was armed
   with, never a re-evaluation of the transition's timer script. Scheduled entries are appended
@@ -172,6 +213,51 @@ render countdowns and upcoming-action information without polling anything else:
   a stale `executeAtUtc` until the next fingerprint-visible change. Clients that need the fresh
   time after triggering such an update should re-fetch without the ETag. See
   [state-function cache and fingerprint ETag](../runtime/state-function-cache-and-etag.md).
+
+### State response: the workflow `timeout` block
+
+A flow may declare a workflow-level `timeout`. When one is armed for the polled instance, the state
+response carries it as its own top-level block so a client can render a countdown — "auto-cancels at
+HH:MM" — without polling anything else:
+
+```jsonc
+"timeout": {
+  "key": "abandoned", "target": "cancelled", "executeAtUtc": "2026-09-21T14:30:00Z",
+  "annotations": { "ui/countdown": "visible" }
+}
+```
+
+- **Not a `transitions[]` entry, deliberately.** A workflow timeout is instance-scoped rather than
+  state-scoped, armed once at start and never re-armed, and is keyed by the virtual `$timeout` — so
+  it has no callable transition key, cannot carry the uniform `href`/`view`/`schema` link objects
+  every `transitions[]` item does, and `TransitionItem` has nowhere to put `target`.
+- `key` and `target` come from the **effective** timeout: the parent-supplied
+  `subFlow.overrides.timeout` when the instance was started with one, otherwise the workflow's own.
+  The same resolver feeds the arm and the fire path, so the deadline a client is shown is the one
+  the runtime will act on.
+- `annotations` is the effective timeout's `timeout.annotations`, omitted when none is declared. An
+  override **replaces** the child's timeout as a whole, annotations included — they are never merged
+  with the child's own.
+- `executeAtUtc` is read from the **persisted job state** — the active `InstanceJob` row of type
+  `Timeout`, carrying the exact instant the scheduler was armed with (mapping script included),
+  never a re-evaluation. Always UTC with the `Z` designator, and it never changes after the arm.
+- **Omitted entirely** (not emitted as `null`) when no timeout resolves, when no timeout job is
+  armed, when the row predates the `ExecuteAt` column, or **as soon as the polled instance's own
+  status is terminal**. That last guard is load-bearing: the job row is closed by an asynchronous
+  cleanup chain (outbox → Dapr → Inbox → `cancel-cleanup`), so a finished instance can still carry
+  an active timeout row — indefinitely if that delivery is degraded.
+- Always describes the **polled instance itself**; never merged from, nor descended into, an active
+  subflow. Poll the subflow instance for its own deadline.
+- May briefly show a **past** `executeAtUtc` while a fired timeout's pipeline is still settling. The
+  instance is Busy in that window and the past instant is the honest answer; filtering on wall clock
+  would make the body a function of time while its ETag is a function of state.
+- **No freshness gap**, unlike the scheduled entries above: the instant is immutable after the arm
+  and the block's presence tracks the instance status, which is already fingerprint material. No
+  `InstanceStateFingerprint` member was needed.
+- Caveat worth passing to clients: `timeout.timer.reset` is **read nowhere** in the runtime, so the
+  deadline always means "not finished within `duration`, counted from instance start" and never
+  "idle for `duration`", whatever the definition declares. See `vnext-meta/known-issues.json`
+  → `workflow-timeout-reset-not-implemented`.
 
 ### Instance metadata: `status` vs `effectiveStatus`
 

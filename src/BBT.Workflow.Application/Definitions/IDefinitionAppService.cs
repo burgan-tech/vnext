@@ -33,20 +33,4 @@ public interface IDefinitionAppService : IApplicationService
     /// Returns Result.Fail when schema is invalid or entity is not found.
     /// </remarks>
     Task<Result> InvalidateCacheAsync(InvalidateCacheInput input, CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Re-initializes the workflow system by reloading all system components.
-    /// </summary>
-    /// <param name="cancellationToken">Cancellation token to cancel the operation</param>
-    /// <returns>Result indicating success or failure of re-initialization</returns>
-    /// <remarks>
-    /// Reloads all system components including workflows, tasks, functions, 
-    /// views, schemas, and extensions from the runtime system schema.
-    /// </remarks>
-    /// <param name="fullLoad">
-    /// When <c>true</c>, all records are reloaded (full cache rebuild).
-    /// When <c>false</c> (default), only records modified since the last initialization are fetched
-    /// and merged into the existing cache.
-    /// </param>
-    Task<Result> ReInitializeAsync(bool fullLoad = false, CancellationToken cancellationToken = default);
 }

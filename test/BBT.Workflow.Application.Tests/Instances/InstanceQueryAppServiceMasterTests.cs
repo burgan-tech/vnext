@@ -166,8 +166,12 @@ public class InstanceQueryAppServiceMasterTests : IDisposable
             .GetSchemaAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>());
     }
 
+    /// <summary>
+    /// The master schema is no longer gated here: a denying <c>queryRoles</c> set neither refuses the
+    /// read nor gets consulted. The Internal Gateway asks `authorize?queryRoles=true` beforehand.
+    /// </summary>
     [Fact]
-    public async Task GetMasterAsync_WhenQueryRolesDeny_Returns403()
+    public async Task GetMasterAsync_DoesNotGateOnQueryRoles()
     {
         // Arrange
         var instance = CreateInstance();
@@ -184,8 +188,9 @@ public class InstanceQueryAppServiceMasterTests : IDisposable
         var result = await _service.GetMasterAsync(CreateInput(instance.Id.ToString()), CancellationToken.None);
 
         // Assert
-        result.Result.IsSuccess.ShouldBeFalse();
-        result.Result.Error.Code.ShouldBe(WorkflowErrorCodes.AuthorizationRoleDenied);
+        result.Result.IsSuccess.ShouldBeTrue();
+        await _transitionAuthorizationManager.DidNotReceiveWithAnyArgs().IsQueryAllowedAsync(
+            default!, default!, default, default, default);
     }
 
     [Fact]

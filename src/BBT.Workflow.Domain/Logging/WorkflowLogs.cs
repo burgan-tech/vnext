@@ -241,6 +241,17 @@ public static partial class WorkflowLogs
         string errorCode);
 
     /// <summary>
+    /// A post-commit subflow START failed after the parent had already changed state, so the parent
+    /// is faulted rather than released: it has a Busy nobody owns and no child to show for it.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10175,
+        Level = LogLevel.Warning,
+        Message = "Subflow start coordination failed for instance {InstanceId} on transition {TransitionKey} ({ErrorCode}); faulting the parent")]
+    public static partial void SubflowStartCoordinationFaulted(
+        this ILogger logger, Guid instanceId, string transitionKey, string errorCode);
+
+    /// <summary>
     /// Logs at startup when a declared ActivitySource is missing from this host's MERGED
     /// configuration.
     /// <para>
@@ -877,7 +888,7 @@ public static partial class WorkflowLogs
     /// being shipped to the Execution service (issue #1007).
     /// </summary>
     [LoggerMessage(
-        EventId = 10160,
+        EventId = 10169,
         Level = LogLevel.Debug,
         Message = "Task {TaskKey} ({TaskType}) invoked in-process by the orchestrator [reason={Reason}]")]
     public static partial void TaskInvokedLocally(
@@ -902,7 +913,7 @@ public static partial class WorkflowLogs
     /// </para>
     /// </summary>
     [LoggerMessage(
-        EventId = 10161,
+        EventId = 10170,
         Level = LogLevel.Error,
         Message = "In-process invocation of task {TaskKey} ({TaskType}) failed: {Error} [exceptionType={ExceptionType}]")]
     public static partial void LocalTaskInvocationFailed(
@@ -915,7 +926,7 @@ public static partial class WorkflowLogs
     /// this invoker's Error rate.
     /// </summary>
     [LoggerMessage(
-        EventId = 10162,
+        EventId = 10171,
         Level = LogLevel.Warning,
         Message = "In-process invocation of task {TaskKey} ({TaskType}) was cancelled")]
     public static partial void LocalTaskInvocationCancelled(
@@ -930,7 +941,7 @@ public static partial class WorkflowLogs
     /// has an SSL-validation flag, starting with SOAP.
     /// </summary>
     [LoggerMessage(
-        EventId = 10163,
+        EventId = 10172,
         Level = LogLevel.Debug,
         Message = "SSL certificate validation is disabled for in-process task {TaskKey} ({TaskType}) - Url: {Url}")]
     public static partial void LocalTaskInvocationSslValidationDisabled(
@@ -948,7 +959,7 @@ public static partial class WorkflowLogs
     /// sites.
     /// </summary>
     [LoggerMessage(
-        EventId = 10164,
+        EventId = 10173,
         Level = LogLevel.Warning,
         Message = "CacheAside {TaskKey}: cache {Stage} failed; continuing without the cache (bypassOnCacheError=true)")]
     public static partial void LocalCacheAsideBypassedCacheError(
@@ -963,7 +974,7 @@ public static partial class WorkflowLogs
     /// never when the caller's own token did.
     /// </summary>
     [LoggerMessage(
-        EventId = 10165,
+        EventId = 10174,
         Level = LogLevel.Error,
         Message = "In-process invocation of task {TaskKey} ({TaskType}) timed out after {TimeoutSeconds}s [timeout.layer=local]")]
     public static partial void LocalTaskInvocationTimedOut(
@@ -2083,6 +2094,20 @@ public static partial class WorkflowLogs
         string scheduleType);
 
     /// <summary>
+    /// Logs when an instance carries a SubFlow timeout override stamp that cannot be read, so the
+    /// effective timeout falls back to the workflow's own definition. Warning rather than Error:
+    /// the fallback is a safe answer and neither the start nor the state read may fail on it.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40108,
+        Level = LogLevel.Warning,
+        Message = "Malformed subflow timeout override on instance {InstanceId} (flow {Flow}); falling back to the workflow's own timeout")]
+    public static partial void TimeoutOverrideMalformed(
+        this ILogger logger,
+        Guid instanceId,
+        string flow);
+
+    /// <summary>
     /// Logs when workflow definition is not found.
     /// </summary>
     [LoggerMessage(
@@ -2731,7 +2756,83 @@ public static partial class WorkflowLogs
         this ILogger logger,
         Guid instanceId,
         string reason);
- 
+
+    /// <summary>
+    /// Logs when a retry on a Faulted instance finds an open SubFlow correlation whose child was
+    /// never created (the post-commit <c>StartSubflowJob</c> that would have created it failed
+    /// before ever running). The retry restarts the subflow start for this same correlation instead
+    /// of delegating to a child that does not exist.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20054,
+        Level = LogLevel.Information,
+        Message = "Retry for instance {InstanceId} found correlation {CorrelationId} pointing at never-created child {SubFlowInstanceId}; restarting the subflow start")]
+    public static partial void SubFlowChildMissingOnRetry(
+        this ILogger logger,
+        Guid instanceId,
+        Guid correlationId,
+        Guid subFlowInstanceId);
+
+    /// <summary>
+    /// Logs when a retry-driven subflow restart (see <see cref="SubFlowChildMissingOnRetry"/>)
+    /// succeeds: the child now exists and the parent resumed waiting on it.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20055,
+        Level = LogLevel.Information,
+        Message = "Subflow restart succeeded for instance {InstanceId}, correlation {CorrelationId}, child {SubFlowInstanceId}")]
+    public static partial void SubFlowRestartSucceeded(
+        this ILogger logger,
+        Guid instanceId,
+        Guid correlationId,
+        Guid subFlowInstanceId);
+
+    /// <summary>
+    /// Logs when a retry-driven subflow restart fails. The parent is re-faulted with this error so
+    /// it remains visible and retryable rather than left Active with an open correlation and no
+    /// child.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20056,
+        Level = LogLevel.Warning,
+        Message = "Subflow restart failed for instance {InstanceId}, correlation {CorrelationId}: {Reason}")]
+    public static partial void SubFlowRestartFailed(
+        this ILogger logger,
+        Guid instanceId,
+        Guid correlationId,
+        string reason);
+
+    /// <summary>
+    /// Logs when the retry-driven subflow restart cannot find the transition that originally moved
+    /// the instance into the SubFlow state (needed to rebuild a valid transition context). No mutation
+    /// is attempted in this case.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20057,
+        Level = LogLevel.Warning,
+        Message = "Could not resolve the transition that moved instance {InstanceId} into state '{ParentState}'; cannot restart the missing subflow child")]
+    public static partial void SubFlowRestartTransitionNotResolved(
+        this ILogger logger,
+        Guid instanceId,
+        string parentState);
+
+    /// <summary>
+    /// Logs when EVERY bounded attempt to re-fault the parent after a failed subflow restart has
+    /// failed. The parent is left Busy with neither an active incident nor a live child — the exact
+    /// strand this retry path exists to prevent, now unavoidable without a human. Distinct EventId
+    /// and Critical level on purpose: this is meant to be alerted on directly, not merely noted.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20058,
+        Level = LogLevel.Critical,
+        Message = "Instance {InstanceId} left Busy with no active incident after {Attempts} failed attempts to re-fault it following correlation {CorrelationId}'s failed subflow restart: {ErrorCode}. Manual intervention required.")]
+    public static partial void SubFlowRestartCompensationExhausted(
+        this ILogger logger,
+        Guid instanceId,
+        Guid correlationId,
+        int attempts,
+        string errorCode);
+
     #endregion
 
     #region Service Discovery
@@ -2850,6 +2951,52 @@ public static partial class WorkflowLogs
         Message = "Discovery cache refresh is not running: no {Service} is registered, which is the expected shape under ServiceDiscovery:Provider = \"dapr\" or with the cache disabled")]
     public static partial void DiscoveryCacheRefresherNotRegistered(
         this ILogger logger, string service);
+
+    /// <summary>
+    /// The warm-up loop reached a filled cache and stopped ticking.
+    /// </summary>
+    /// <remarks>
+    /// Information: this line is the difference between "the loop finished its job" and "the loop
+    /// died", which look identical afterwards — nothing else is logged by a service that has
+    /// returned. It fires once per pod in the default, expiry-free mode and never in periodic mode.
+    /// </remarks>
+    [LoggerMessage(
+        EventId = 50043,
+        Level = LogLevel.Information,
+        Message = "Discovery cache warm-up completed with outcome {Outcome}; the refresh loop has stopped. Invalidation is now event-driven (publish-completed, forced refresh, transport failure)")]
+    public static partial void DiscoveryCacheWarmUpCompleted(this ILogger logger, string outcome);
+
+    /// <summary>
+    /// A cached endpoint was dropped because something could not reach it.
+    /// </summary>
+    /// <remarks>
+    /// Warning, and it is the line to look for first when cross-domain calls start failing: it names
+    /// the domain whose cached address stopped answering. With no TTL behind the cache this eviction
+    /// is the automatic recovery path, so its absence during a misrouting incident is itself the
+    /// finding — it means nothing observed a transport failure (a trigger task, for instance,
+    /// executes in the Execution host and cannot report one).
+    /// </remarks>
+    [LoggerMessage(
+        EventId = 50044,
+        Level = LogLevel.Warning,
+        Message = "Evicted the cached discovery endpoint for domain '{Domain}' after a transport failure ({Reason}); the next resolution reads the registry")]
+    public static partial void DiscoveryEndpointEvicted(this ILogger logger, string domain, string reason);
+
+    /// <summary>
+    /// A transport failure did not evict because the previous eviction for that domain is still
+    /// inside the cooldown.
+    /// </summary>
+    /// <remarks>
+    /// Debug, and the expected shape while a peer domain is down: every call to it fails, and only
+    /// the first one per window evicts. A steady stream of this alongside no
+    /// <c>DiscoveryEndpointEvicted</c> means the domain is unreachable rather than moved.
+    /// </remarks>
+    [LoggerMessage(
+        EventId = 50045,
+        Level = LogLevel.Debug,
+        Message = "Skipped evicting the cached discovery endpoint for domain '{Domain}': within the {CooldownSeconds}s eviction cooldown")]
+    public static partial void DiscoveryEndpointEvictionThrottled(
+        this ILogger logger, string domain, int cooldownSeconds);
 
     [LoggerMessage(
         EventId = 50041,
@@ -3170,14 +3317,24 @@ public static partial class WorkflowLogs
     /// <summary>
     /// Logs when authorize system function is invoked.
     /// </summary>
+    /// <remarks>
+    /// Carries the instance and the target because without them the line cannot answer the only
+    /// question anyone asks of it — <i>which</i> question was refused, for <i>which</i> instance. It
+    /// used to record the domain, the workflow and a comma-joined role string, which is identical for
+    /// every authorize call a caller makes against a flow regardless of what was being asked.
+    /// <paramref name="target"/> is <c>transition:{key}</c>, <c>function:{key}</c>, <c>queryRoles</c>
+    /// or <c>ack</c>.
+    /// </remarks>
     [LoggerMessage(
         EventId = 50030,
         Level = LogLevel.Information,
-        Message = "Authorize request. Domain: {Domain}, Workflow: {Workflow}, Role: {Role}, Allowed: {Allowed}")]
+        Message = "Authorize request. Domain: {Domain}, Workflow: {Workflow}, Instance: {InstanceId}, Target: {Target}, Role: {Role}, Allowed: {Allowed}")]
     public static partial void AuthorizeRequest(
         this ILogger logger,
         string domain,
         string workflow,
+        string instanceId,
+        string target,
         string role,
         bool allowed);
 
@@ -3210,6 +3367,22 @@ public static partial class WorkflowLogs
         string viewFlow,
         string viewKey,
         string requestDomain);
+
+    /// <summary>
+    /// A parent-supplied state/transition view override could not be resolved; the view the child's
+    /// own rules selected is served instead.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20101,
+        Level = LogLevel.Warning,
+        Message = "SubFlow view override unresolved on instance {InstanceId} at state {State}: {ViewKey} -> {OverrideViewKey}; serving the child's own view. {Reason}")]
+    public static partial void SubFlowViewOverrideUnresolved(
+        this ILogger logger,
+        Guid instanceId,
+        string state,
+        string viewKey,
+        string overrideViewKey,
+        string reason);
 
     #endregion
 
@@ -3402,6 +3575,45 @@ public static partial class WorkflowLogs
         Guid instanceId,
         string state,
         string reason);
+
+    /// <summary>
+    /// A parent supplied a long-poll override for a child state that declares no long-poll. An
+    /// override tunes a long-poll; it never creates one, so nothing was applied.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20305,
+        Level = LogLevel.Warning,
+        Message = "Long-poll override ignored on instance {InstanceId} at state {State}: the state declares no interaction.longPoll")]
+    public static partial void LongPollOverrideIgnoredNoLongPoll(
+        this ILogger logger,
+        Guid instanceId,
+        string state);
+
+    /// <summary>
+    /// A parent supplied a long-poll roles override for a child state authorized by a rule. Rules are
+    /// not overridable, so the roles override was dropped; a window override still applies.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20306,
+        Level = LogLevel.Warning,
+        Message = "Long-poll roles override ignored on instance {InstanceId} at state {State}: the state authorizes the interaction with a rule")]
+    public static partial void LongPollRolesOverrideIgnoredRuleArm(
+        this ILogger logger,
+        Guid instanceId,
+        string state);
+
+    /// <summary>
+    /// The parent-supplied state override stamp on a child could not be read; the child's own
+    /// configuration was used.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20307,
+        Level = LogLevel.Warning,
+        Message = "SubFlow state override stamp is malformed on instance {InstanceId} (state {State}); the child's own configuration is used")]
+    public static partial void SubFlowOverrideStampMalformed(
+        this ILogger logger,
+        Guid instanceId,
+        string state);
 
     #endregion
 
@@ -4442,6 +4654,90 @@ public static partial class WorkflowLogs
         this ILogger logger,
         Exception exception,
         string schema);
+
+    #endregion
+
+    #region Deployment Lifecycle (90xxx)
+
+    /// <summary>
+    /// Logs the arrival of a deployment's single post-publish call.
+    /// </summary>
+    /// <remarks>
+    /// Information, not Debug: this is the one line that proves a domain's CD pipeline actually made
+    /// the call. Its ABSENCE after a deployment is the failure mode this whole path has — an
+    /// unpublished invalidation looks exactly like a healthy one from the outside — so the line has
+    /// to be visible at the level operators run.
+    /// </remarks>
+    [LoggerMessage(
+        EventId = 90001,
+        Level = LogLevel.Information,
+        Message = "Publish-completed received for package '{PackageName}' version '{Version}'; running {HookCount} hook(s)")]
+    public static partial void PublishCompletedReceived(
+        this ILogger logger,
+        string packageName,
+        string version,
+        int hookCount);
+
+    /// <summary>
+    /// Logs one hook's named success.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 90002,
+        Level = LogLevel.Information,
+        Message = "Publish-completed hook '{Hook}' finished with outcome {Outcome}")]
+    public static partial void PublishCompletedHookSucceeded(
+        this ILogger logger,
+        string hook,
+        string outcome);
+
+    /// <summary>
+    /// Logs a hook that returned a failure. The remaining hooks still run.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 90003,
+        Level = LogLevel.Warning,
+        Message = "Publish-completed hook '{Hook}' failed: {Reason}. The remaining hooks still ran")]
+    public static partial void PublishCompletedHookFailed(
+        this ILogger logger,
+        string hook,
+        string reason);
+
+    /// <summary>
+    /// Logs a hook that threw. Recorded as a failure; the remaining hooks still run.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 90004,
+        Level = LogLevel.Error,
+        Message = "Publish-completed hook '{Hook}' threw. The remaining hooks still ran")]
+    public static partial void PublishCompletedHookFaulted(
+        this ILogger logger,
+        Exception exception,
+        string hook);
+
+    /// <summary>
+    /// Logs the end of a publish-completed run.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 90005,
+        Level = LogLevel.Information,
+        Message = "Publish-completed finished: {HookCount} hook(s) ran, {FailedCount} failed")]
+    public static partial void PublishCompletedFinished(
+        this ILogger logger,
+        int hookCount,
+        int failedCount);
+
+    /// <summary>
+    /// A component passed validation with a non-blocking finding (e.g. an override that widens access).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 90006,
+        Level = LogLevel.Warning,
+        Message = "Component validation warning for {ComponentType} at {Member}: {Message}")]
+    public static partial void ComponentValidationWarning(
+        this ILogger logger,
+        string componentType,
+        string member,
+        string message);
 
     #endregion
 }

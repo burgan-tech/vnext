@@ -20,6 +20,7 @@ using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Execution.Services;
 using BBT.Workflow.Logging;
+using BBT.Workflow.Telemetry;
 using BBT.Workflow.Execution.Transitions.Services;
 using BBT.Workflow.Execution.Validation;
 using BBT.Workflow.Extentions;
@@ -59,10 +60,8 @@ public sealed class InstanceCommandAppService(
     ITransitionAuthorizationManager transitionAuthorizationManager,
     IInstanceCancellationService cancellationService,
     ILongPollAckResumeService longPollAckResumeService,
-    ILongPollInteractionGate longPollInteractionGate,
     IInstanceCommandGateway instanceCommandGateway,
     IWorkflowOutputMappingService workflowOutputMappingService,
-    ICallerRoleResolver callerRoleResolver,
     ILogger<InstanceCommandAppService> logger)
     : ApplicationService(serviceProvider), IInstanceCommandAppService
 {
@@ -229,20 +228,11 @@ public sealed class InstanceCommandAppService(
 
         var workflow = workflowResult.Value!;
 
-        // Authorization against the entered state's interaction.longPoll — the gate owns the arm
-        // selection (rule, else roles, else allow), the same gate the State function's signal emit
-        // uses. Role resolution stays this surface's own (additive explicit role, see
-        // BuildCallerRolesAsync) and runs only when the roles arm applies; a resolution failure
-        // propagates as its own error rather than an access denial.
-        var state = workflow.FindState(instance.GetCurrentState);
-        var admitted = await longPollInteractionGate.IsAdmittedAsync(
-            instance, workflow, state, input.Headers, queryParameters: null,
-            ct => BuildCallerRolesAsync(input.Role, input.Headers, ct),
-            surface: "ack", cancellationToken);
-        if (!admitted.IsSuccess)
-            return Result.Fail(admitted.Error);
-        if (!admitted.Value)
-            return Result.Fail(WorkflowErrors.LongPollAckAccessDenied(instance.Id));
+        // The long-poll acknowledge is NOT authorized here. Enforcement of the interaction's
+        // roles/rule arm belongs to the Internal Gateway, which asks `GET .../functions/authorize?ack=true`
+        // — that target admits through the very same ILongPollInteractionGate, so the `rule` arm (a C#
+        // script no gateway can evaluate itself) is still covered, by a question rather than by a guard.
+        // What remains here is the endpoint's own idempotency: descend to the awaiting leaf, or answer Ok.
 
         // Best-effort cancel the fallback timeout job; the token guard in the resume path keeps the
         // operation safe even if cancellation is missed.
@@ -251,29 +241,6 @@ public sealed class InstanceCommandAppService(
 
         return await longPollAckResumeService.ResumeAsync(
             workflow.Domain, workflow.Key, workflow.Version, instance.Id, cancellationToken);
-    }
-
-    /// <summary>
-    /// Builds the caller role set for the long-poll acknowledge check: the explicit <c>role</c> parameter
-    /// plus the roles reported by the configured caller-role provider. The explicit parameter is additive
-    /// here (unlike <c>authorize</c>, where it is a fallback) because acknowledge is a narrow, single-grant
-    /// check and the parameter is how a client names which of its roles is acknowledging.
-    /// </summary>
-    private async Task<Result<IReadOnlyCollection<string>>> BuildCallerRolesAsync(
-        string? explicitRole,
-        IReadOnlyDictionary<string, string?>? headers,
-        CancellationToken cancellationToken)
-    {
-        var resolved = await callerRoleResolver.ResolveRolesAsync(headers, cancellationToken);
-        if (!resolved.IsSuccess)
-            return Result<IReadOnlyCollection<string>>.Fail(resolved.Error);
-
-        var roles = new List<string>();
-        if (!string.IsNullOrWhiteSpace(explicitRole))
-            roles.Add(explicitRole.Trim());
-        if (resolved.Value is { Length: > 0 } callerRoles)
-            roles.AddRange(callerRoles);
-        return Result<IReadOnlyCollection<string>>.Ok(roles);
     }
 
     /// <summary>
@@ -472,15 +439,21 @@ public sealed class InstanceCommandAppService(
         ExtraPropertyDictionary extraProperties,
         CancellationToken cancellationToken)
     {
-        // Check for SubFlow timeout override in ExtraProperties
-        WorkflowTimeout? timeoutOverride = null;
-        if (extraProperties.TryGetValue(DomainConsts.MetaDataKeys.TimeoutOverride, out var overrideJson)
-            && !string.IsNullOrWhiteSpace(overrideJson?.ToString()))
-        {
-            timeoutOverride = JsonSerializer.Deserialize<WorkflowTimeout>(overrideJson!.ToString()!);
-        }
+        // The SubFlow override (if any) wins over the workflow's own timeout — resolved through the
+        // SINGLE resolver the fire path and the state function's timeout block also call, so the
+        // instant armed here, the target fired later and the deadline published to clients can
+        // never disagree. See InstanceMetadataExtensions.ResolveEffectiveTimeout.
+        //
+        // The parse used to sit here, OUTSIDE the try below: a malformed
+        // subflow.timeout_override threw straight out of the start request, even though a
+        // scheduling failure a few lines down is deliberately swallowed so that a timeout stays a
+        // backstop and never fails a start. The resolver degrades instead and reports it.
+        var effectiveTimeout = extraProperties.ResolveEffectiveTimeout(workflow, out var overrideMalformed);
 
-        var effectiveTimeout = timeoutOverride ?? workflow.Timeout;
+        if (overrideMalformed)
+        {
+            logger.TimeoutOverrideMalformed(instance.Id, workflow.Key);
+        }
 
         // Check if there is any timeout configuration to schedule
         if (effectiveTimeout == null)

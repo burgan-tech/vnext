@@ -24,6 +24,7 @@ public interface IAuthorizeGateway
     /// <param name="functionKey">Optional function key (mutually exclusive with transitionKey and checkQueryRoles).</param>
     /// <param name="version">Optional component version. Empty/null = latest.</param>
     /// <param name="checkQueryRoles">When true, evaluates state-based query roles (instance only).</param>
+    /// <param name="checkAck">When true, evaluates the long-poll acknowledge gate (instance only).</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>Result containing the authorize output or an error.</returns>
     Task<Result<AuthorizeOutput>> GetAuthorizeResultForInstanceAsync(
@@ -35,6 +36,7 @@ public interface IAuthorizeGateway
         string? functionKey,
         string? version,
         bool checkQueryRoles,
+        bool checkAck,
         AuthorizationRequestContext? requestContext = null,
         CancellationToken cancellationToken = default);
 

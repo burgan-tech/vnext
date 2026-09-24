@@ -93,7 +93,20 @@ public sealed class FlowTimeoutJobHandler(
                         activity?.SetBaggage(TelemetryConstants.TagNames.RootInstanceId, rootId.ToString());
                     }
 
-                    if (workflow.Timeout is null)
+                    // The effective timeout, not the workflow's own: a SubFlow child started with
+                    // a parent-supplied subflow.timeout_override may carry no timeout in its OWN
+                    // definition, and reading workflow.Timeout alone made this bail — the job was
+                    // armed from the override's timer, fired on schedule and then did nothing,
+                    // which is exactly the deadline the state function now publishes. The instance
+                    // is already loaded above, so the override costs no read.
+                    var effectiveTimeout = instance.ResolveEffectiveTimeout(workflow, out var overrideMalformed);
+
+                    if (overrideMalformed)
+                    {
+                        logger.TimeoutOverrideMalformed(instance.Id, instance.Flow);
+                    }
+
+                    if (effectiveTimeout is null)
                     {
                         logger.TimeoutConfigMissing(instance.Flow);
                         activity?.SetStatus(ActivityStatusCode.Error, "Timeout config missing");

@@ -120,6 +120,16 @@ change. Enforcement is never stale — the acknowledge evaluates the rule fresh 
 
    The `ack` href follows the same `{ "href": "…" }` shape as `data`/`view`. The `interaction` object
    is omitted entirely when no directive applies.
+
+   **Presence follows `Instance.IsAwaitingLongPollAck`, not the state declaration.** A state may
+   declare `interaction.longPoll` and the instance still not be parked on it — the token is armed
+   only when the pipeline actually pauses at step 75, and the acknowledge or the fallback timeout
+   clears it again. Emitting the block from the declaration alone told the client to acknowledge
+   something no longer pending; nothing broke loudly, because the endpoint answers `Ok()`
+   idempotently there and `authorize?ack=true` answers *allowed* for the same reason, so the client
+   simply posted an ack on every poll of that state and read success back. `ResponseShapeVersion` was
+   bumped (v10 → v11) in the same change: a client parked behind a 304 must not keep being served the
+   old presence rule.
 3. **Acknowledge.** The client stops polling, renders the screen, and `POST`s to
    `…/instances/{instance}/longpoll/ack`. The endpoint runs the same authorization arm as the signal
    (role grants or rule), best-effort cancels the fallback job, and resumes the pipeline.
@@ -177,3 +187,26 @@ error-boundary and auto-chained transitions must never pause.
   preserve the shared lock-key, validation-bypass, and busy-confirmation behavior.
 - The instance stays Busy during the ack window; do not re-mark Busy on long-poll resume (a redundant
   resume must not strand an already-advanced instance).
+
+## Parent override
+
+When the instance is a SubFlow child, its parent may override `fallbackTimeoutSeconds` and `roles`
+per child state (`overrides.states.<state>.interaction.longPoll`, field-level). Every reader goes
+through `Instance.ResolveEffectiveLongPoll` — never `State.LongPollFallbackTimeoutSeconds` /
+`LongPollAckRoles` directly. `terminate` and `rule` are not overridable. Details:
+[SubFlow Overrides](subflow-overrides.md).
+
+**Roles on a runtime-started child are the consumer's responsibility.** The arm step decides
+ownership from the headers of the request that entered the state. A SubFlow child started by the
+runtime receives only the headers its parent's input mapping supplies, so a child state with
+`interaction.longPoll.roles` pauses only if that mapping forwards the caller's role headers. This is
+deliberate: which caller owns a child's pause is a business decision of the consuming parent, and
+the runtime does not carry or infer caller roles across the subflow start on its own.
+
+## Fallback deadline on the job row
+
+The tracked `InstanceJobs` row of the acknowledge fallback (`JobType.LongPollAck`) carries
+`ExecuteAt` — the same instant the Dapr job is armed with, computed from the effective window
+(state's own or the parent's override). It is persisted for operations and diagnostics only: the
+state body's scheduled entries read `ScheduledTransition` rows and the `timeout` block reads the
+`Timeout` row, so this row never appears on a read surface.

@@ -170,6 +170,50 @@ This endpoint is for publishing any npm package with optional domain replacement
 
 ---
 
+## Post-publish: `definitions/publish/completed`
+
+Both endpoints call the runtime **once**, after the last component has been published:
+
+```
+POST {VNEXT_APP_URL}/api/v1/definitions/publish/completed
+{ "packageName": "...", "version": "...", "domain": "<appDomain, when known>" }
+```
+
+That call runs the runtime's post-deployment hooks. Today there is one — it re-reads the domain
+discovery registry — and it matters more than it looks: the discovery endpoint cache carries **no
+TTL**, so this call is its only automatic invalidation. A deployment that does not make it leaves the
+runtime resolving cross-domain calls by whatever it learned at startup, until the pod restarts.
+
+It is **unconditional**. It used to be opt-in (`reInitialize`, default `false`) and pointed at
+`definitions/re-initialize`, which had been reduced to a no-op — so the flag switched nothing on or
+off. The flag is gone; passing it is simply ignored.
+
+The outcome is reported in the job result rather than only logged:
+
+```json
+"results": {
+  "successful": ["..."],
+  "failed": [],
+  "skipped": [],
+  "publishCompleted": {
+    "success": true,
+    "hooks": [ { "name": "discovery-cache", "outcome": "Refreshed" } ],
+    "error": null
+  }
+}
+```
+
+A failed hook sets the job's own `success` to `false` and appends the reason to `message`: a
+swallowed warning here is indistinguishable from a healthy deployment, which is how a domain ends up
+serving stale cross-domain endpoints with nobody looking. Hook outcomes other than `Failed` are
+successes — `Disabled` means this runtime has no discovery cache to refresh, and `SkippedNotOwner`
+means another replica is reading the registry right now and its result applies cluster-wide.
+
+A **cancelled** job skips this call along with everything else, and partial uploads are not rolled
+back.
+
+---
+
 ## Endpoint Comparison
 
 | Feature | `/api/package/runtime/publish` | `/api/package/publish` |

@@ -139,7 +139,7 @@ public sealed class LocalCacheAsideTaskInvokerTests
 
         result.IsSuccess.ShouldBeTrue();
         store.Contains("cfg:1").ShouldBeTrue();
-        logger.Entries.Count(e => e.EventId.Id == 10164 && e.Level == LogLevel.Warning).ShouldBe(1);
+        logger.Entries.Count(e => e.EventId.Id == 10173 && e.Level == LogLevel.Warning).ShouldBe(1);
     }
 
     /// <summary>

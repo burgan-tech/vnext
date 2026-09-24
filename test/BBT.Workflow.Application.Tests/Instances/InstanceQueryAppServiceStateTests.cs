@@ -48,6 +48,7 @@ public class InstanceQueryAppServiceStateTests : IDisposable
     private readonly IComponentCacheStore _componentCacheStore;
     private readonly IInstanceRepository _instanceRepository;
     private readonly IInstanceIncidentRepository _instanceIncidentRepository;
+    private readonly IInstanceTaskRepository _instanceTaskRepository = Substitute.For<IInstanceTaskRepository>();
     private readonly IInstanceQueryGateway _instanceQueryGateway;
     private readonly IRepresentationEtagService _representationEtagService;
     private readonly IUrlTemplateBuilder _urlTemplateBuilder;
@@ -113,7 +114,7 @@ public class InstanceQueryAppServiceStateTests : IDisposable
             instanceCorrelationRepository: _instanceCorrelationRepository,
             instanceJobRepository: _instanceJobRepository,
             instanceIncidentRepository: _instanceIncidentRepository,
-            instanceTaskRepository: Substitute.For<IInstanceTaskRepository>(),
+            instanceTaskRepository: _instanceTaskRepository,
             instanceActionRepository: Substitute.For<IInstanceActionRepository>(),
             longPollInteractionGate: _longPollInteractionGate,
             instanceExtensionService: Substitute.For<IInstanceExtensionService>(),
@@ -436,6 +437,51 @@ public class InstanceQueryAppServiceStateTests : IDisposable
     /// <summary>
     /// When the current state does not declare interaction.longPoll, no interaction block is emitted.
     /// </summary>
+    /// <summary>
+    /// The declaration is not the signal. A state may declare <c>interaction.longPoll</c> and the
+    /// instance still not be parked on it — the pipeline only arms the marker when it actually pauses
+    /// at <c>HandleLongPollTerminationStep</c>, and the fallback timeout or a delivered acknowledge
+    /// clears it again.
+    /// </summary>
+    /// <remarks>
+    /// Emitting the block regardless told the client to acknowledge something no longer pending. The
+    /// endpoint answers <c>Ok()</c> idempotently there, so nothing broke loudly: the client simply
+    /// posted an ack for every poll of that state and read a success back, and the one surface that
+    /// would have revealed it — <c>authorize?ack=true</c> — answers allowed when nothing is awaiting,
+    /// for the same idempotency reason. Presence now follows <c>IsAwaitingLongPollAck</c>, which is
+    /// also why the state body's shape version was bumped: a client parked behind a 304 must not keep
+    /// reading the old presence rule.
+    /// </remarks>
+    [Fact]
+    public async Task GetInstanceStateAsync_WhenNothingIsAwaitingTheAck_OmitsInteraction()
+    {
+        var (instance, workflow) = CreateInstanceWithLongPollState(terminate: true, fallbackSeconds: 45);
+        instance.ClearLongPollAck();
+        SetupCommonMocks(instance, workflow);
+
+        var result = await _service.GetInstanceStateAsync(CreateInput(instance.Id.ToString()), CancellationToken.None);
+
+        result.Result.Value!.Interaction.ShouldBeNull(
+            "the state declares the interaction, but the pipeline is not parked on it");
+    }
+
+    /// <summary>
+    /// A parent's window override is what the client is told — the same value the fallback job was
+    /// armed with, because both read Instance.ResolveEffectiveLongPoll.
+    /// </summary>
+    [Fact]
+    public async Task GetInstanceStateAsync_WithParentDurationOverride_ReportsTheParentsWindow()
+    {
+        var (instance, workflow) = CreateInstanceWithLongPollState(terminate: true, fallbackSeconds: 45);
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.StateRoleOverrides] =
+            """{"review":{"interaction":{"longPoll":{"fallbackTimeoutSeconds":180}}}}""";
+        SetupCommonMocks(instance, workflow);
+
+        var result = await _service.GetInstanceStateAsync(CreateInput(instance.Id.ToString()), CancellationToken.None);
+
+        result.Result.Value!.Interaction!.FallbackTimeoutSeconds.ShouldBe(180);
+    }
+
     [Fact]
     public async Task GetInstanceStateAsync_WhenStateHasNoLongPollDeclaration_NoInteraction()
     {
@@ -686,6 +732,393 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         triggerableJson.ShouldContain("\"href\"");
         triggerableJson.ShouldNotContain("executeAtUtc");
     }
+
+    // ---------------------------------------------------------------------------------------
+    // timeout block (state body, v10)
+    // ---------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// The workflow-level deadline rides as its own <c>timeout</c> block — not a transitions[]
+    /// entry — carrying the declared key, the state the instance will be pulled to, and the instant
+    /// read from the persisted job row rather than recomputed.
+    /// </summary>
+    [Fact]
+    public async Task GetInstanceStateAsync_ExposesTheArmedWorkflowTimeout()
+    {
+        // Arrange
+        var (instance, workflow) = CreateInstanceWithTimeout("abandoned", "cancelled");
+        SetupCommonMocks(instance, workflow);
+        var executeAt = new DateTimeOffset(2026, 9, 21, 14, 30, 0, TimeSpan.Zero);
+        SetupTimeoutJob(instance, executeAt);
+
+        // Act
+        var result = await _service.GetInstanceStateAsync(
+            CreateInput(instance.Id.ToString()), CancellationToken.None);
+
+        // Assert
+        result.Result.IsSuccess.ShouldBeTrue();
+        var timeout = result.Result.Value!.Timeout;
+        timeout.ShouldNotBeNull();
+        timeout!.Key.ShouldBe("abandoned");
+        timeout.Target.ShouldBe("cancelled");
+        timeout.ExecuteAtUtc.ShouldBe(executeAt.UtcDateTime);
+        timeout.ExecuteAtUtc.Kind.ShouldBe(DateTimeKind.Utc);
+
+        // and it is NOT smuggled into the transitions list
+        result.Result.Value.Transitions.ShouldNotContain(t => t.Name == "abandoned");
+    }
+
+    /// <summary>
+    /// No timeout job armed ⇒ no block, even when the workflow declares a timeout. The block
+    /// describes what is actually scheduled, not what the definition permits.
+    /// </summary>
+    [Fact]
+    public async Task GetInstanceStateAsync_WithoutAnArmedTimeoutJob_OmitsTheBlock()
+    {
+        var (instance, workflow) = CreateInstanceWithTimeout("abandoned", "cancelled");
+        SetupCommonMocks(instance, workflow);
+
+        var result = await _service.GetInstanceStateAsync(
+            CreateInput(instance.Id.ToString()), CancellationToken.None);
+
+        result.Result.Value!.Timeout.ShouldBeNull();
+    }
+
+    /// <summary>
+    /// A job armed, but the workflow carries no timeout and the instance no override ⇒ nothing to
+    /// describe, so no block. Mirrors the fire path, which does nothing in exactly this case.
+    /// </summary>
+    [Fact]
+    public async Task GetInstanceStateAsync_WhenNoTimeoutResolves_OmitsTheBlock()
+    {
+        var (instance, workflow) = CreateSimpleActiveInstance();
+        SetupCommonMocks(instance, workflow);
+        SetupTimeoutJob(instance, DateTimeOffset.UtcNow.AddMinutes(5));
+
+        var result = await _service.GetInstanceStateAsync(
+            CreateInput(instance.Id.ToString()), CancellationToken.None);
+
+        result.Result.Value!.Timeout.ShouldBeNull();
+    }
+
+    /// <summary>
+    /// Rows persisted before the <c>ExecuteAt</c> column existed carry no instant, so they are
+    /// skipped rather than emitted without one — the same rule the scheduled entries follow.
+    /// </summary>
+    [Fact]
+    public async Task GetInstanceStateAsync_WhenTimeoutJobHasNoExecuteAt_OmitsTheBlock()
+    {
+        var (instance, workflow) = CreateInstanceWithTimeout("abandoned", "cancelled");
+        SetupCommonMocks(instance, workflow);
+        _instanceJobRepository
+            .GetListActiveAsync(instance.Id, Arg.Any<CancellationToken>())
+            .Returns([InstanceJob.Create(
+                Guid.NewGuid(), JobName.ForTimeout(instance.Id), Guid.NewGuid(),
+                TestDomain, TestWorkflow, instance.Id)]);
+
+        var result = await _service.GetInstanceStateAsync(
+            CreateInput(instance.Id.ToString()), CancellationToken.None);
+
+        result.Result.Value!.Timeout.ShouldBeNull();
+    }
+
+    /// <summary>
+    /// The terminal guard, and the reason it exists: the job row is closed by an ASYNCHRONOUS
+    /// cleanup chain (outbox → Dapr → Inbox → cancel-cleanup), so a finished instance can still
+    /// carry an active timeout row — indefinitely if that chain is degraded. The block must not
+    /// depend on it. Here the row is deliberately left active and the instance is completed.
+    /// </summary>
+    [Fact]
+    public async Task GetInstanceStateAsync_OnATerminalInstance_OmitsTheBlockEvenWhileTheJobRowIsStillActive()
+    {
+        var (instance, workflow) = CreateInstanceWithTimeout("abandoned", "cancelled");
+        SetupCommonMocks(instance, workflow);
+        SetupTimeoutJob(instance, DateTimeOffset.UtcNow.AddMinutes(5));
+
+        instance.Complete(TestDomain);
+        instance.Status.IsTerminal.ShouldBeTrue();
+
+        var result = await _service.GetInstanceStateAsync(
+            CreateInput(instance.Id.ToString()), CancellationToken.None);
+
+        result.Result.Value!.Timeout.ShouldBeNull();
+    }
+
+    /// <summary>
+    /// The coupling invariant. The block's <c>target</c> is whatever the EFFECTIVE timeout resolves
+    /// to — the same value <c>ApplyTimeoutStateStep</c> will move the instance to — so a
+    /// parent-supplied SubFlow override is reported even when the child's own definition declares no
+    /// timeout at all. Reading the child's own <c>workflow.Timeout</c> here would publish nothing
+    /// for an instance that has a real, armed deadline; publishing the child's own target while the
+    /// runtime fires the override's would be worse.
+    /// </summary>
+    [Fact]
+    public async Task GetInstanceStateAsync_ReportsTheSubFlowOverride_NotTheChildsOwnDefinition()
+    {
+        var (instance, workflow) = CreateSimpleActiveInstance(); // child declares NO timeout
+        instance.SetMetaData(new BBT.Aether.ExtraPropertyDictionary
+        {
+            [DomainConsts.MetaDataKeys.TimeoutOverride] = System.Text.Json.JsonSerializer.Serialize(
+                WorkflowTimeout.Create("child-push-timeout", "child-cancelled", "Minor", "OnEntry", "PT15M"),
+                JsonSerializerConstants.JsonOptions)
+        });
+        SetupCommonMocks(instance, workflow);
+        var executeAt = new DateTimeOffset(2026, 9, 21, 9, 0, 0, TimeSpan.Zero);
+        SetupTimeoutJob(instance, executeAt);
+
+        var result = await _service.GetInstanceStateAsync(
+            CreateInput(instance.Id.ToString()), CancellationToken.None);
+
+        var timeout = result.Result.Value!.Timeout;
+        timeout.ShouldNotBeNull();
+        timeout!.Key.ShouldBe("child-push-timeout");
+        timeout.Target.ShouldBe("child-cancelled");
+        timeout.ExecuteAtUtc.ShouldBe(executeAt.UtcDateTime);
+    }
+
+    /// <summary>
+    /// Wire shape: the block serializes with a <c>Z</c>-designated UTC instant, and is omitted
+    /// entirely — not emitted as <c>null</c> — when there is no deadline, so a client branches on
+    /// the property's presence.
+    /// </summary>
+    [Fact]
+    public void TimeoutBlock_SerializesUtcInstant_AndIsOmittedWhenAbsent()
+    {
+        var withTimeout = new GetInstanceStateOutput
+        {
+            Timeout = new InstanceTimeoutOutput
+            {
+                Key = "abandoned",
+                Target = "cancelled",
+                ExecuteAtUtc = new DateTime(2026, 9, 21, 14, 30, 0, DateTimeKind.Utc)
+            }
+        };
+        var withoutTimeout = new GetInstanceStateOutput();
+
+        var withJson = System.Text.Json.JsonSerializer.Serialize(withTimeout, JsonSerializerConstants.JsonOptions);
+        var withoutJson = System.Text.Json.JsonSerializer.Serialize(withoutTimeout, JsonSerializerConstants.JsonOptions);
+
+        withJson.ShouldContain("\"executeAtUtc\":\"2026-09-21T14:30:00Z\"");
+        withJson.ShouldContain("\"key\":\"abandoned\"");
+        withJson.ShouldContain("\"target\":\"cancelled\"");
+        withoutJson.ShouldNotContain("timeout");
+    }
+
+    /// <summary>
+    /// Every caller-triggerable kind the state body lists — state, shared, and the three well-known
+    /// workflow-level transitions — carries its definition's <c>annotations</c>. The well-known three
+    /// are ordinary <see cref="Transition"/> objects resolved through <c>Workflow.FindTransition</c>,
+    /// so they need no path of their own; this pins that they keep getting one.
+    /// </summary>
+    [Fact]
+    public async Task GetInstanceStateAsync_EveryTriggerableKind_CarriesItsDefinitionsAnnotations()
+    {
+        var instance = Instance.Create(Guid.NewGuid(), TestWorkflow, TestVersion, "test-key");
+        var state = State.Create(TestState, StateType.Intermediate, StateSubType.None,
+            VersionStrategy.IncreaseMinor.Code);
+        state.AddTransition(AnnotatedTransition("approve", TestState, "approved", "manual", "state"));
+        state.AddTransition(Transition.Create("reject", TestState, "rejected", TriggerType.Manual,
+            VersionStrategy.IncreasePatch.Code));
+        instance.ChangeState(state);
+
+        var workflow = BuildWorkflow(state);
+        workflow.AddSharedTransition(AnnotatedTransition("add-note", null, "$self", "manual", "shared"));
+        workflow.SetCancel(AnnotatedTransition("cancel-request", null, "cancelled", "manual", "cancel"));
+        workflow.SetUpdateData(AnnotatedTransition("update-request", null, "$self", "manual", "updateData"));
+        workflow.SetExit(AnnotatedTransition("exit-request", null, "exited", "manual", "exit"));
+        SetupCommonMocks(instance, workflow);
+
+        var result = await _service.GetInstanceStateAsync(
+            CreateInput(instance.Id.ToString()), CancellationToken.None);
+
+        result.Result.IsSuccess.ShouldBeTrue();
+        var transitions = result.Result.Value!.Transitions.ToDictionary(t => t.Name);
+        transitions["approve"].Annotations!["ui/source"].ShouldBe("state");
+        transitions["add-note"].Annotations!["ui/source"].ShouldBe("shared");
+        transitions["cancel-request"].Annotations!["ui/source"].ShouldBe("cancel");
+        transitions["update-request"].Annotations!["ui/source"].ShouldBe("updateData");
+        transitions["exit-request"].Annotations!["ui/source"].ShouldBe("exit");
+        transitions["reject"].Annotations.ShouldBeNull();
+    }
+
+    /// <summary>
+    /// Regression: <c>kind: "scheduled"</c> entries were built from the job row alone and never
+    /// carried the transition's <c>annotations</c>. They are now resolved from the definition via
+    /// the job's source state; a transition that declares none still serializes without the field.
+    /// </summary>
+    [Fact]
+    public async Task GetInstanceStateAsync_ScheduledEntries_CarryTheTransitionsAnnotations()
+    {
+        var instance = Instance.Create(Guid.NewGuid(), TestWorkflow, TestVersion, "test-key");
+        var state = State.Create(TestState, StateType.Intermediate, StateSubType.None,
+            VersionStrategy.IncreaseMinor.Code);
+        state.AddTransition(AnnotatedTransition("send-reminder", TestState, "$self", "scheduled", "scheduled"));
+        state.AddTransition(Transition.Create("payment-timeout", TestState, "expired", TriggerType.Scheduled,
+            VersionStrategy.IncreasePatch.Code));
+        instance.ChangeState(state);
+        var workflow = BuildWorkflow(state);
+        SetupCommonMocks(instance, workflow);
+
+        var soonerAt = new DateTimeOffset(2026, 8, 3, 12, 0, 0, TimeSpan.Zero);
+        var laterAt = soonerAt.AddHours(2);
+        _instanceJobRepository
+            .GetListActiveAsync(instance.Id, Arg.Any<CancellationToken>())
+            .Returns(
+            [
+                CreateScheduledTransitionJob(instance.Id, "send-reminder", soonerAt),
+                CreateScheduledTransitionJob(instance.Id, "payment-timeout", laterAt)
+            ]);
+
+        var result = await _service.GetInstanceStateAsync(
+            CreateInput(instance.Id.ToString()), CancellationToken.None);
+
+        result.Result.IsSuccess.ShouldBeTrue();
+        var scheduled = result.Result.Value!.Transitions.Where(t => t.Kind == "scheduled").ToList();
+        scheduled.Select(t => t.Name).ShouldBe(["send-reminder", "payment-timeout"]);
+        scheduled[0].Annotations.ShouldNotBeNull();
+        scheduled[0].Annotations!["ui/source"].ShouldBe("scheduled");
+        scheduled[1].Annotations.ShouldBeNull();
+    }
+
+    /// <summary>
+    /// A scheduled job whose source state no longer resolves (definition changed under an armed
+    /// job) still lists — with no annotations rather than a failure.
+    /// </summary>
+    [Fact]
+    public async Task GetInstanceStateAsync_ScheduledEntryWithUnresolvableSourceState_ListsWithoutAnnotations()
+    {
+        var (instance, workflow) = CreateSimpleActiveInstance();
+        SetupCommonMocks(instance, workflow);
+        var jobId = Guid.NewGuid();
+        _instanceJobRepository
+            .GetListActiveAsync(instance.Id, Arg.Any<CancellationToken>())
+            .Returns([InstanceJob.Create(
+                jobId,
+                JobName.ForScheduledTransition(instance.Id, "retired-state", "send-reminder", jobId),
+                jobId, TestDomain, TestWorkflow, instance.Id,
+                new DateTimeOffset(2026, 8, 3, 12, 0, 0, TimeSpan.Zero))]);
+
+        var result = await _service.GetInstanceStateAsync(
+            CreateInput(instance.Id.ToString()), CancellationToken.None);
+
+        result.Result.IsSuccess.ShouldBeTrue();
+        var entry = result.Result.Value!.Transitions.Single(t => t.Kind == "scheduled");
+        entry.Name.ShouldBe("send-reminder");
+        entry.Annotations.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task GetInstanceStateAsync_TimeoutBlock_CarriesTheDefinitionsAnnotations()
+    {
+        var (instance, workflow) = CreateSimpleActiveInstance();
+        workflow.SetTimeout(WorkflowTimeout.Create(
+            "abandoned", "cancelled", VersionStrategy.IncreasePatch.Code, "never", "PT15M",
+            annotations: new Dictionary<string, string> { ["ui/countdown"] = "visible" }));
+        SetupCommonMocks(instance, workflow);
+        SetupTimeoutJob(instance, new DateTimeOffset(2026, 9, 21, 14, 30, 0, TimeSpan.Zero));
+
+        var result = await _service.GetInstanceStateAsync(
+            CreateInput(instance.Id.ToString()), CancellationToken.None);
+
+        var timeout = result.Result.Value!.Timeout;
+        timeout.ShouldNotBeNull();
+        timeout!.Annotations.ShouldNotBeNull();
+        timeout.Annotations!["ui/countdown"].ShouldBe("visible");
+    }
+
+    /// <summary>
+    /// With a parent-supplied override the block reports the OVERRIDE's annotations, and only
+    /// those — the override replaces the child's timeout as a whole, the same rule every SubFlow
+    /// override follows.
+    /// </summary>
+    [Fact]
+    public async Task GetInstanceStateAsync_TimeoutBlock_ReportsTheOverridesAnnotations_NotTheChilds()
+    {
+        var (instance, workflow) = CreateSimpleActiveInstance();
+        workflow.SetTimeout(WorkflowTimeout.Create(
+            "own", "cancelled", VersionStrategy.IncreasePatch.Code, "never", "PT1H",
+            annotations: new Dictionary<string, string> { ["ui/own-only"] = "child" }));
+        instance.SetMetaData(new BBT.Aether.ExtraPropertyDictionary
+        {
+            [DomainConsts.MetaDataKeys.TimeoutOverride] = System.Text.Json.JsonSerializer.Serialize(
+                WorkflowTimeout.Create("child-push-timeout", "child-cancelled", "Minor", "OnEntry", "PT15M",
+                    annotations: new Dictionary<string, string> { ["ui/countdown"] = "parent" }),
+                JsonSerializerConstants.JsonOptions)
+        });
+        SetupCommonMocks(instance, workflow);
+        SetupTimeoutJob(instance, new DateTimeOffset(2026, 9, 21, 9, 0, 0, TimeSpan.Zero));
+
+        var result = await _service.GetInstanceStateAsync(
+            CreateInput(instance.Id.ToString()), CancellationToken.None);
+
+        var timeout = result.Result.Value!.Timeout;
+        timeout!.Key.ShouldBe("child-push-timeout");
+        timeout.Annotations.ShouldNotBeNull();
+        timeout.Annotations!.ShouldContainKeyAndValue("ui/countdown", "parent");
+        timeout.Annotations.ShouldNotContainKey("ui/own-only");
+    }
+
+    /// <summary>
+    /// Wire shape: the timeout block serializes <c>annotations</c> when present and omits the field
+    /// entirely when the timeout declares none.
+    /// </summary>
+    [Fact]
+    public void TimeoutBlock_SerializesAnnotations_AndOmitsThemWhenAbsent()
+    {
+        var withAnnotations = new InstanceTimeoutOutput
+        {
+            Key = "abandoned",
+            Target = "cancelled",
+            ExecuteAtUtc = new DateTime(2026, 9, 21, 14, 30, 0, DateTimeKind.Utc),
+            Annotations = new Dictionary<string, string> { ["ui/countdown"] = "visible" }
+        };
+        var withoutAnnotations = new InstanceTimeoutOutput
+        {
+            Key = "abandoned",
+            Target = "cancelled",
+            ExecuteAtUtc = new DateTime(2026, 9, 21, 14, 30, 0, DateTimeKind.Utc)
+        };
+
+        System.Text.Json.JsonSerializer.Serialize(withAnnotations, JsonSerializerConstants.JsonOptions)
+            .ShouldContain("\"annotations\":{\"ui/countdown\":\"visible\"}");
+        System.Text.Json.JsonSerializer.Serialize(withoutAnnotations, JsonSerializerConstants.JsonOptions)
+            .ShouldNotContain("annotations");
+    }
+
+    private static Transition AnnotatedTransition(
+        string key, string? from, string target, string triggerType, string source)
+    {
+        var fromJson = from is null ? "null" : $"\"{from}\"";
+        var json = $$"""
+            {
+                "key": "{{key}}",
+                "from": {{fromJson}},
+                "target": "{{target}}",
+                "triggerType": "{{triggerType}}",
+                "versionStrategy": "Patch",
+                "labels": [],
+                "onExecutionTasks": [],
+                "annotations": { "ui/source": "{{source}}" }
+            }
+            """;
+        return System.Text.Json.JsonSerializer.Deserialize<Transition>(json, JsonSerializerConstants.JsonOptions)!;
+    }
+
+    private (Instance instance, Definitions.Workflow workflow) CreateInstanceWithTimeout(
+        string timeoutKey, string timeoutTarget)
+    {
+        var (instance, workflow) = CreateSimpleActiveInstance();
+        workflow.SetTimeout(WorkflowTimeout.Create(
+            timeoutKey, timeoutTarget, VersionStrategy.IncreasePatch.Code, "never", "PT15M"));
+        return (instance, workflow);
+    }
+
+    private void SetupTimeoutJob(Instance instance, DateTimeOffset executeAt) =>
+        _instanceJobRepository
+            .GetListActiveAsync(instance.Id, Arg.Any<CancellationToken>())
+            .Returns([InstanceJob.Create(
+                Guid.NewGuid(), JobName.ForTimeout(instance.Id), Guid.NewGuid(),
+                TestDomain, TestWorkflow, instance.Id, executeAt)]);
 
     private InstanceJob CreateScheduledTransitionJob(
         Guid instanceId, string transitionKey, DateTimeOffset executeAt)
@@ -1086,10 +1519,21 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         result.Result.Value!.State.ShouldBe("Değerlendirme Aşamasında");
     }
 
+    /// <summary>
+    /// The read surfaces no longer refuse on <c>queryRoles</c>, and they no longer ASK: a denying
+    /// grant set does not even reach the authorization manager from here.
+    /// </summary>
+    /// <remarks>
+    /// The <c>DidNotReceive</c> is the load-bearing half. Asserting only "it returns 200" would pass
+    /// just as well if the gate had been left in place and its verdict ignored — and those are very
+    /// different things to have shipped. The decision now belongs to the Internal Gateway, which asks
+    /// <c>GET .../functions/authorize?queryRoles=true</c> the same question before the request ever
+    /// arrives here; `queryRoles` remains fully evaluated THERE, and this service stops holding a
+    /// second, independently drifting copy of that answer.
+    /// </remarks>
     [Fact]
-    public async Task GetInstanceStateAsync_WhenQueryRolesDeny_Returns403()
+    public async Task GetInstanceStateAsync_DoesNotGateOnQueryRoles()
     {
-        // Arrange
         var instance = Instance.Create(Guid.NewGuid(), TestWorkflow, TestVersion, "test-key");
         var state = State.Create(TestState, StateType.Intermediate, StateSubType.None,
             VersionStrategy.IncreaseMinor.Code);
@@ -1099,19 +1543,44 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         SetupCommonMocks(instance, workflow);
         DenyQueryRoles();
 
-        var input = CreateInput(instance.Id.ToString());
+        var result = await _service.GetInstanceStateAsync(CreateInput(instance.Id.ToString()), CancellationToken.None);
 
-        // Act
-        var result = await _service.GetInstanceStateAsync(input, CancellationToken.None);
+        result.Result.IsSuccess.ShouldBeTrue(
+            "enforcement belongs to the Internal Gateway, which has already asked `authorize`");
 
-        // Assert
-        result.IsNotModified.ShouldBeFalse();
-        result.Result.IsSuccess.ShouldBeFalse();
-        result.Result.Error.Code.ShouldBe(WorkflowErrorCodes.AuthorizationRoleDenied);
+        await _transitionAuthorizationManager.DidNotReceive().IsQueryAllowedAsync(
+            Arg.Any<Definitions.Workflow>(),
+            Arg.Any<Instance>(),
+            Arg.Any<IReadOnlyCollection<string>?>(),
+            Arg.Any<AuthorizationRequestContext?>(),
+            Arg.Any<CancellationToken>());
     }
 
+    /// <summary>
+    /// The regression this change is most likely to cause: removing role RESOLUTION along with
+    /// enforcement. Discovery filtering, state aliasing, <c>x-roles</c> pruning and the caller-scoped
+    /// cache keys all still need the caller's roles — only the 403 moved.
+    /// </summary>
     [Fact]
-    public async Task GetViewAsync_WhenQueryRolesDeny_Returns403()
+    public async Task TransitionFilteringStillDependsOnTheCallersRoles()
+    {
+        var instance = Instance.Create(Guid.NewGuid(), TestWorkflow, TestVersion, "test-key");
+        var state = State.Create(TestState, StateType.Intermediate, StateSubType.None,
+            VersionStrategy.IncreaseMinor.Code);
+        instance.ChangeState(state);
+
+        var workflow = BuildWorkflow(state);
+        SetupCommonMocks(instance, workflow);
+
+        await _service.GetInstanceStateAsync(CreateInput(instance.Id.ToString()), CancellationToken.None);
+
+        await _transitionAuthorizationManager.ReceivedWithAnyArgs().FilterAuthorizedTransitionKeysAsync(
+            default!, default!, default!, default!, default!, default!, default);
+    }
+
+    /// <summary>The view function no longer refuses on <c>queryRoles</c> either.</summary>
+    [Fact]
+    public async Task GetViewAsync_DoesNotGateOnQueryRoles()
     {
         // Arrange
         var instance = Instance.Create(Guid.NewGuid(), TestWorkflow, TestVersion, "test-key");
@@ -1134,12 +1603,12 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         }, transitionKey: null, CancellationToken.None);
 
         // Assert
-        result.IsSuccess.ShouldBeFalse();
-        result.Error.Code.ShouldBe(WorkflowErrorCodes.AuthorizationRoleDenied);
+        ErrorOf(result).ShouldNotBe(WorkflowErrorCodes.AuthorizationRoleDenied);
     }
 
+    /// <summary>Nor does the schema function.</summary>
     [Fact]
-    public async Task GetSchemaAsync_WhenQueryRolesDeny_Returns403()
+    public async Task GetSchemaAsync_DoesNotGateOnQueryRoles()
     {
         // Arrange
         var instance = Instance.Create(Guid.NewGuid(), TestWorkflow, TestVersion, "test-key");
@@ -1160,9 +1629,129 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         }, transitionKey: "approve", CancellationToken.None);
 
         // Assert
-        result.Result.IsSuccess.ShouldBeFalse();
-        result.Result.Error.Code.ShouldBe(WorkflowErrorCodes.AuthorizationRoleDenied);
+        ErrorOf(result.Result).ShouldNotBe(WorkflowErrorCodes.AuthorizationRoleDenied);
     }
+
+    /// <summary>
+    /// The removal, over EVERY surface that used to be gated: none of them refuses on
+    /// <c>queryRoles</c> any more, and none of them asks.
+    /// </summary>
+    /// <remarks>
+    /// <para>Written as a table because the risk this change carries is not "the gate is gone" — one
+    /// can see that in the diff — but "one call site was missed", and a per-surface test written by
+    /// hand is exactly what gets forgotten for the ninth one. The <c>GateConsulted</c> half is what
+    /// separates a real removal from a gate whose verdict is merely ignored.</para>
+    /// <para>`queryRoles` itself is untouched: it is still evaluated, in full and per hop down the
+    /// active-correlation chain, by <c>GET .../functions/authorize?queryRoles=true</c> — which is what
+    /// the Internal Gateway asks before the request reaches this service. What was removed is the
+    /// runtime's SECOND copy of that decision, not the decision.</para>
+    /// <para>The acknowledge endpoint was the tenth surface and is a command, not a read; it is pinned
+    /// in <c>InstanceCommandAppServiceLongPollAckTests</c>.</para>
+    /// </remarks>
+    [Theory]
+    [InlineData("state")]
+    [InlineData("view")]
+    [InlineData("schema")]
+    [InlineData("master")]
+    [InlineData("data")]
+    [InlineData("tasks")]
+    [InlineData("actions")]
+    [InlineData("incidents")]
+    [InlineData("incidents.active")]
+    public async Task NoReadSurfaceGatesOnQueryRoles(string surface)
+    {
+        var (error, consulted) = await InvokeSurfaceAsync(surface);
+
+        error.ShouldNotBe(WorkflowErrorCodes.AuthorizationRoleDenied,
+            $"the `{surface}` surface must not refuse a caller on queryRoles any more");
+        consulted.ShouldBeFalse(
+            $"the `{surface}` surface must skip the question, not ask it and discard the answer");
+    }
+
+    /// <summary>
+    /// Runs one surface against a freshly arranged fixture whose <c>queryRoles</c> would have denied,
+    /// and reports the error code it produced (if any) together with whether the authorization
+    /// manager was consulted.
+    /// </summary>
+    /// <remarks>
+    /// Only the error CODE is compared, never success. What happens past the removed gate is not this
+    /// test's subject: a surface that finds no rows returns its own not-found code, which is not
+    /// <c>AuthorizationRoleDenied</c> and therefore answers exactly what is being asked here.
+    /// </remarks>
+    private async Task<(string? ErrorCode, bool GateConsulted)> InvokeSurfaceAsync(string surface)
+    {
+        var instance = Instance.Create(Guid.NewGuid(), TestWorkflow, TestVersion, "test-key");
+        var state = State.Create(TestState, StateType.Intermediate, StateSubType.None,
+            VersionStrategy.IncreaseMinor.Code);
+        instance.ChangeState(state);
+
+        SetupCommonMocks(instance, BuildWorkflow(state));
+        // Enough for the surfaces that read a repository to return an empty answer rather than throw.
+        // Their content is not this test's subject; reaching them is.
+        _instanceTaskRepository.GetHistoryByInstanceIdAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>())
+            .Returns([]);
+        _instanceIncidentRepository.GetHistoryPagedAsync(
+                Arg.Any<Guid>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(new BBT.Aether.HateoasPagedList<InstanceIncident>([], 1, 20, false));
+        DenyQueryRoles();
+        _transitionAuthorizationManager.ClearReceivedCalls();
+
+        var id = instance.Id.ToString();
+        var headers = new Dictionary<string, string?>();
+        var query = new Dictionary<string, string?>();
+
+        string? code = surface switch
+        {
+            "state" => ErrorOf((await _service.GetInstanceStateAsync(CreateInput(id), CancellationToken.None)).Result),
+            "view" => ErrorOf(await _service.GetViewAsync(new GetViewInput
+            {
+                Domain = TestDomain, Workflow = TestWorkflow, Instance = id,
+                Headers = headers, QueryParameters = query
+            }, transitionKey: null, CancellationToken.None)),
+            "schema" => ErrorOf((await _service.GetSchemaAsync(new GetSchemaInput
+            {
+                Domain = TestDomain, Workflow = TestWorkflow, Instance = id
+            }, transitionKey: "approve", CancellationToken.None)).Result),
+            "master" => ErrorOf((await _service.GetMasterAsync(new GetMasterInput
+            {
+                Domain = TestDomain, Workflow = TestWorkflow, Instance = id,
+                Headers = headers, QueryParameters = query
+            }, CancellationToken.None)).Result),
+            "data" => ErrorOf((await _service.GetInstanceDataAsync(new GetInstanceDataInput
+            {
+                Domain = TestDomain, Workflow = TestWorkflow, Instance = id,
+                Headers = headers, QueryParameters = query
+            }, CancellationToken.None)).Result),
+            "tasks" => ErrorOf(await _service.GetInstanceTasksAsync(new GetInstanceTasksInput
+            {
+                Domain = TestDomain, Workflow = TestWorkflow, Instance = id,
+                Headers = headers, QueryParameters = query
+            }, CancellationToken.None)),
+            "actions" => ErrorOf(await _service.GetInstanceTaskActionsAsync(new GetInstanceTaskActionsInput
+            {
+                Domain = TestDomain, Workflow = TestWorkflow, Instance = id, TaskId = Guid.NewGuid(),
+                Headers = headers, QueryParameters = query
+            }, CancellationToken.None)),
+            "incidents" => ErrorOf(await _service.GetInstanceIncidentsAsync(new GetInstanceIncidentsInput
+            {
+                Domain = TestDomain, Workflow = TestWorkflow, Instance = id,
+                Headers = headers, QueryParameters = query
+            }, CancellationToken.None)),
+            "incidents.active" => ErrorOf(await _service.GetActiveInstanceIncidentAsync(new GetActiveInstanceIncidentInput
+            {
+                Domain = TestDomain, Workflow = TestWorkflow, Instance = id,
+                Headers = headers, QueryParameters = query
+            }, CancellationToken.None)),
+            _ => throw new ArgumentOutOfRangeException(nameof(surface), surface, "unknown surface")
+        };
+
+        var consulted = _transitionAuthorizationManager.ReceivedCalls().Any(
+            c => c.GetMethodInfo().Name == nameof(ITransitionAuthorizationManager.IsQueryAllowedAsync));
+
+        return (code, consulted);
+    }
+
+    private static string? ErrorOf<T>(Result<T> result) => result.IsSuccess ? null : result.Error.Code;
 
     [Fact]
     public async Task GetInstanceStateAsync_AlwaysIncludesMasterHref()
@@ -1313,6 +1902,16 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         await _stateFunctionCache.DidNotReceive().GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
         await _instanceRepository.DidNotReceive()
             .FindByIdentifierAsReadOnlyAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+
+        // The read-path budget as a call count rather than a latency threshold — a structural claim,
+        // so it needs no measurement to hold. Exactly ONE fingerprint projection answers the 304,
+        // and the job table is not touched at all: the scheduled entries and the timeout block are
+        // both built from GetListActiveAsync, which lives strictly on the full-build side. Anyone
+        // "optimising" timeout data forward into the 304 projection fails here.
+        await _instanceRepository.Received(1)
+            .GetStateFingerprintAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+        await _instanceJobRepository.DidNotReceive()
+            .GetListActiveAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>());
     }
 
     /// <summary>
@@ -1897,6 +2496,10 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         var instance = Instance.Create(Guid.NewGuid(), TestWorkflow, TestVersion, "test-key");
         var reviewState = workflow.States.First(s => s.Key == "review");
         instance.ChangeState(reviewState);
+        // The declaration alone is not the signal — the interaction is emitted only while the pipeline
+        // is actually parked waiting for the acknowledge. See
+        // GetInstanceStateAsync_WhenNothingIsAwaitingTheAck_OmitsInteraction for the other half.
+        instance.ArmLongPollAck(Guid.NewGuid());
         return (instance, workflow);
     }
 
@@ -2187,6 +2790,7 @@ public class InstanceQueryAppServiceStateTests : IDisposable
 
         var instance = Instance.Create(Guid.NewGuid(), TestWorkflow, TestVersion, "test-key");
         instance.ChangeState(state);
+        instance.ArmLongPollAck(Guid.NewGuid());
         return (instance, BuildWorkflow(state));
     }
 
@@ -2265,4 +2869,161 @@ public class InstanceQueryAppServiceStateTests : IDisposable
             Arg.Any<string>(), Arg.Any<Caching.StateFunctionCacheEntry>(), Arg.Any<TimeSpan>(),
             Arg.Any<CancellationToken>());
     }
+
+    #region View override (child-side, state/transition scoped)
+
+    private static (Instance instance, Definitions.Workflow workflow) CreateInstanceWithStateView()
+    {
+        var json = """
+                   {
+                       "type": "F", "timeout": null, "labels": [], "functions": [], "features": [],
+                       "states": [
+                           { "key": "review", "stateType": "Intermediate",
+                             "transitions": [
+                               { "key": "confirm", "target": "review", "triggerType": "Manual", "versionStrategy": "Patch", "labels": [],
+                                 "view": { "views": [ { "view": { "key": "confirm-modal", "domain": "test-domain", "flow": "sys-views", "version": "1.0.0" } } ] } }
+                             ],
+                             "view": { "views": [ { "view": { "key": "review-view", "domain": "test-domain", "flow": "sys-views", "version": "1.0.0" } } ] } }
+                       ],
+                       "sharedTransitions": [], "extensions": [],
+                       "startTransition": {"key": "start", "from": null, "target": "review", "triggerType": "Manual", "versionStrategy": "Patch", "labels": [], "onExecutionTasks": [], "view": null}
+                   }
+                   """;
+        var options = new System.Text.Json.JsonSerializerOptions
+        {
+            PropertyNameCaseInsensitive = true,
+            Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() }
+        };
+        var workflow = System.Text.Json.JsonSerializer.Deserialize<Definitions.Workflow>(json, options)!;
+        workflow.SetReference(new Reference(TestWorkflow, TestDomain, "sys-flows", TestVersion));
+        var instance = Instance.Create(Guid.NewGuid(), TestWorkflow, TestVersion, "test-key");
+        instance.ChangeState(workflow.States.First(s => s.Key == "review"));
+        return (instance, workflow);
+    }
+
+    private GetViewInput CreateViewInput(Instance instance) => new()
+    {
+        Domain = TestDomain, Workflow = TestWorkflow, Version = TestVersion, Instance = instance.Id.ToString()
+    };
+
+    private void ReturnViewFor(string viewKey) =>
+        _viewContentResolutionService
+            .ResolveViewContentAsync(
+                Arg.Is<Reference>(r => r.Key == viewKey), Arg.Any<string>(),
+                Arg.Any<Dictionary<string, string?>?>(), Arg.Any<Dictionary<string, string?>?>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Result<GetViewOutput>.Ok(new GetViewOutput { Key = viewKey, Type = "json", Display = "full-page", Label = viewKey }));
+
+    [Fact]
+    public async Task GetViewAsync_WithStateScopedOverride_ServesTheParentsView()
+    {
+        var (instance, workflow) = CreateInstanceWithStateView();
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.StateRoleOverrides] =
+            """{"review":{"views":{"review-view":{"key":"corp-review-view","domain":"test-domain","flow":"sys-views","version":"1.0.0"}}}}""";
+        SetupCommonMocks(instance, workflow);
+        ReturnViewFor("review-view");
+        ReturnViewFor("corp-review-view");
+
+        var result = await _service.GetViewAsync(CreateViewInput(instance), transitionKey: null, CancellationToken.None);
+
+        result.Value!.Key.ShouldBe("corp-review-view");
+    }
+
+    [Fact]
+    public async Task GetViewAsync_StateOverrideDoesNotLeakIntoTransitionViews()
+    {
+        var (instance, workflow) = CreateInstanceWithStateView();
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.StateRoleOverrides] =
+            """{"review":{"views":{"confirm-modal":{"key":"wrong","domain":"test-domain","flow":"sys-views","version":"1.0.0"}}}}""";
+        SetupCommonMocks(instance, workflow);
+        ReturnViewFor("confirm-modal");
+
+        var result = await _service.GetViewAsync(CreateViewInput(instance), transitionKey: "confirm", CancellationToken.None);
+
+        result.Value!.Key.ShouldBe("confirm-modal");
+    }
+
+    [Fact]
+    public async Task GetViewAsync_WithTransitionScopedOverride_ServesTheParentsView()
+    {
+        var (instance, workflow) = CreateInstanceWithStateView();
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.TransitionRoleOverrides] =
+            """{"confirm":{"views":{"confirm-modal":{"key":"corp-confirm-modal","domain":"test-domain","flow":"sys-views","version":"1.0.0"}}}}""";
+        SetupCommonMocks(instance, workflow);
+        ReturnViewFor("confirm-modal");
+        ReturnViewFor("corp-confirm-modal");
+
+        var result = await _service.GetViewAsync(CreateViewInput(instance), transitionKey: "confirm", CancellationToken.None);
+
+        result.Value!.Key.ShouldBe("corp-confirm-modal");
+    }
+
+    private static (Instance instance, Definitions.Workflow workflow) CreateInstanceWithUpdateDataView()
+    {
+        var json = """
+                   {
+                       "type": "F", "timeout": null, "labels": [], "functions": [], "features": [],
+                       "states": [
+                           { "key": "review", "stateType": "Intermediate", "transitions": [],
+                             "view": { "views": [ { "view": { "key": "review-view", "domain": "test-domain", "flow": "sys-views", "version": "1.0.0" } } ] } }
+                       ],
+                       "sharedTransitions": [], "extensions": [],
+                       "startTransition": {"key": "start", "from": null, "target": "review", "triggerType": "Manual", "versionStrategy": "Patch", "labels": [], "onExecutionTasks": [], "view": null},
+                       "updateData": { "key": "sync-data", "target": "$self", "triggerType": "Manual", "versionStrategy": "Patch", "labels": [],
+                         "view": { "views": [ { "view": { "key": "update-view", "domain": "test-domain", "flow": "sys-views", "version": "1.0.0" } } ] } }
+                   }
+                   """;
+        var options = new System.Text.Json.JsonSerializerOptions
+        {
+            PropertyNameCaseInsensitive = true,
+            Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() }
+        };
+        var workflow = System.Text.Json.JsonSerializer.Deserialize<Definitions.Workflow>(json, options)!;
+        workflow.SetReference(new Reference(TestWorkflow, TestDomain, "sys-flows", TestVersion));
+        var instance = Instance.Create(Guid.NewGuid(), TestWorkflow, TestVersion, "test-key");
+        instance.ChangeState(workflow.States.First(s => s.Key == "review"));
+        return (instance, workflow);
+    }
+
+    [Fact]
+    public async Task GetViewAsync_WithTransitionScopedOverride_ResolvesTheAliasToTheConfiguredKey()
+    {
+        // The override map is keyed by the well-known transition's CONFIGURED key ("sync-data"), not
+        // the reserved alias ("update-parent-data") a client is allowed to request it by. Without
+        // normalising the lookup key through the same ResolveTransition call GetViewDefinition uses,
+        // this request would miss the override and silently serve the child's own view.
+        var (instance, workflow) = CreateInstanceWithUpdateDataView();
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.TransitionRoleOverrides] =
+            """{"sync-data":{"views":{"update-view":{"key":"corp-update-view","domain":"test-domain","flow":"sys-views","version":"1.0.0"}}}}""";
+        SetupCommonMocks(instance, workflow);
+        ReturnViewFor("update-view");
+        ReturnViewFor("corp-update-view");
+
+        var result = await _service.GetViewAsync(
+            CreateViewInput(instance), transitionKey: WellKnownTransitionKeys.UpdateData, CancellationToken.None);
+
+        result.Value!.Key.ShouldBe("corp-update-view");
+    }
+
+    [Fact]
+    public async Task GetViewAsync_WhenOverrideCannotBeResolved_FallsBackToTheChildsView()
+    {
+        var (instance, workflow) = CreateInstanceWithStateView();
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.StateRoleOverrides] =
+            """{"review":{"views":{"review-view":{"key":"missing-view","domain":"test-domain","flow":"sys-views","version":"9.9.9"}}}}""";
+        SetupCommonMocks(instance, workflow);
+        ReturnViewFor("review-view");
+        _viewContentResolutionService
+            .ResolveViewContentAsync(
+                Arg.Is<Reference>(r => r.Key == "missing-view"), Arg.Any<string>(),
+                Arg.Any<Dictionary<string, string?>?>(), Arg.Any<Dictionary<string, string?>?>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Result<GetViewOutput>.Fail(Error.NotFound("notfound", "missing")));
+
+        var result = await _service.GetViewAsync(CreateViewInput(instance), transitionKey: null, CancellationToken.None);
+
+        result.Value!.Key.ShouldBe("review-view");
+    }
+
+    #endregion
 }

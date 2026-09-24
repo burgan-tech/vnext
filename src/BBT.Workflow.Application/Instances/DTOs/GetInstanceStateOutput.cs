@@ -91,6 +91,22 @@ public sealed class GetInstanceStateOutput
     public IncidentHref Incident { get; set; } = new();
 
     /// <summary>
+    /// The workflow-level deadline armed for this instance — <c>{ key, target, executeAtUtc }</c> —
+    /// so a client can render a countdown. <b>Null, and omitted from the JSON entirely</b>, when the
+    /// instance has no timeout configured, when no timeout job is armed, or as soon as the
+    /// instance's own status is terminal. Always describes the polled instance: never merged from,
+    /// nor descended into, an active subflow.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately its own block rather than a <see cref="Transitions"/> entry — a timeout is
+    /// instance-scoped, armed once and never re-armed, and has no callable transition key. Outside
+    /// the ETag material by construction rather than by exception: the instant cannot change after
+    /// the arm, and the block's presence tracks the instance status, which the fingerprint already
+    /// covers. See <c>StateFunctionCache.ResponseShapeVersion</c>.
+    /// </remarks>
+    public InstanceTimeoutOutput? Timeout { get; set; }
+
+    /// <summary>
     /// Representation ETag (RFC 7232 quoted) for cache validation.
     /// </summary>
     public string? ETag

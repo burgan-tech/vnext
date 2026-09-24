@@ -25,7 +25,6 @@ public class PipelineExecutionProfileTests : DomainTestBase<DomainEntryPoint>
         var profile = PipelineExecutionProfile.ForManual();
         profile.Name.ShouldBe("Manual");
         profile.AllowAutoChain.ShouldBeTrue();
-        profile.AllowSubFlow.ShouldBeTrue();
     }
 
     [Fact]
@@ -51,7 +50,6 @@ public class PipelineExecutionProfileTests : DomainTestBase<DomainEntryPoint>
         var profile = PipelineExecutionProfile.ForAutoChain();
         profile.Name.ShouldBe("AutoChain");
         profile.AllowAutoChain.ShouldBeTrue();
-        profile.AllowSubFlow.ShouldBeFalse();
     }
 
     [Fact]
@@ -73,7 +71,6 @@ public class PipelineExecutionProfileTests : DomainTestBase<DomainEntryPoint>
         var profile = PipelineExecutionProfile.ForScheduled();
         profile.Name.ShouldBe("Scheduled");
         profile.AllowAutoChain.ShouldBeTrue();
-        profile.AllowSubFlow.ShouldBeFalse();
     }
 
     [Fact]
@@ -95,7 +92,6 @@ public class PipelineExecutionProfileTests : DomainTestBase<DomainEntryPoint>
         var profile = PipelineExecutionProfile.ForEvent();
         profile.Name.ShouldBe("Event");
         profile.AllowAutoChain.ShouldBeTrue();
-        profile.AllowSubFlow.ShouldBeTrue();
     }
 
     [Fact]
@@ -107,10 +103,9 @@ public class PipelineExecutionProfileTests : DomainTestBase<DomainEntryPoint>
             LifecycleOrder.Preflight,
             LifecycleOrder.ForwardToActiveSubflow,
             LifecycleOrder.ResourceLock,
-            LifecycleOrder.Schedule,
         };
         profile.ExcludedStepOrders.OrderBy(x => x).ToArray().ShouldBe(expected);
-        profile.ExcludedStepOrders.Count.ShouldBe(4);
+        profile.ExcludedStepOrders.Count.ShouldBe(3);
     }
 
     [Fact]
@@ -119,7 +114,6 @@ public class PipelineExecutionProfileTests : DomainTestBase<DomainEntryPoint>
         var profile = PipelineExecutionProfile.ForErrorBoundary();
         profile.Name.ShouldBe("ErrorBoundary");
         profile.AllowAutoChain.ShouldBeTrue();
-        profile.AllowSubFlow.ShouldBeFalse();
     }
 
     [Fact]
@@ -148,7 +142,6 @@ public class PipelineExecutionProfileTests : DomainTestBase<DomainEntryPoint>
 
         profile.Name.ShouldBe($"{baseProfile.Name}+Self");
         profile.AllowAutoChain.ShouldBe(baseProfile.AllowAutoChain);
-        profile.AllowSubFlow.ShouldBe(baseProfile.AllowSubFlow);
     }
 
     /// <summary>
