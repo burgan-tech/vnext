@@ -3368,6 +3368,22 @@ public static partial class WorkflowLogs
         string viewKey,
         string requestDomain);
 
+    /// <summary>
+    /// A parent-supplied state/transition view override could not be resolved; the view the child's
+    /// own rules selected is served instead.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20101,
+        Level = LogLevel.Warning,
+        Message = "SubFlow view override unresolved on instance {InstanceId} at state {State}: {ViewKey} -> {OverrideViewKey}; serving the child's own view. {Reason}")]
+    public static partial void SubFlowViewOverrideUnresolved(
+        this ILogger logger,
+        Guid instanceId,
+        string state,
+        string viewKey,
+        string overrideViewKey,
+        string reason);
+
     #endregion
 
     #region Extensions
@@ -3559,6 +3575,45 @@ public static partial class WorkflowLogs
         Guid instanceId,
         string state,
         string reason);
+
+    /// <summary>
+    /// A parent supplied a long-poll override for a child state that declares no long-poll. An
+    /// override tunes a long-poll; it never creates one, so nothing was applied.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20305,
+        Level = LogLevel.Warning,
+        Message = "Long-poll override ignored on instance {InstanceId} at state {State}: the state declares no interaction.longPoll")]
+    public static partial void LongPollOverrideIgnoredNoLongPoll(
+        this ILogger logger,
+        Guid instanceId,
+        string state);
+
+    /// <summary>
+    /// A parent supplied a long-poll roles override for a child state authorized by a rule. Rules are
+    /// not overridable, so the roles override was dropped; a window override still applies.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20306,
+        Level = LogLevel.Warning,
+        Message = "Long-poll roles override ignored on instance {InstanceId} at state {State}: the state authorizes the interaction with a rule")]
+    public static partial void LongPollRolesOverrideIgnoredRuleArm(
+        this ILogger logger,
+        Guid instanceId,
+        string state);
+
+    /// <summary>
+    /// The parent-supplied state override stamp on a child could not be read; the child's own
+    /// configuration was used.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20307,
+        Level = LogLevel.Warning,
+        Message = "SubFlow state override stamp is malformed on instance {InstanceId} (state {State}); the child's own configuration is used")]
+    public static partial void SubFlowOverrideStampMalformed(
+        this ILogger logger,
+        Guid instanceId,
+        string state);
 
     #endregion
 
@@ -4684,6 +4739,19 @@ public static partial class WorkflowLogs
         this ILogger logger,
         int hookCount,
         int failedCount);
+
+    /// <summary>
+    /// A component passed validation with a non-blocking finding (e.g. an override that widens access).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 90006,
+        Level = LogLevel.Warning,
+        Message = "Component validation warning for {ComponentType} at {Member}: {Message}")]
+    public static partial void ComponentValidationWarning(
+        this ILogger logger,
+        string componentType,
+        string member,
+        string message);
 
     #endregion
 }

@@ -191,8 +191,11 @@ A sixth profile is **composed on top of** the base, never selected instead of it
   `TransitionAuthorizationManager.EffectiveTransitionGrants`; `views` →
   `GetSubFlowViewWithOverrideAsync`. The first two read the map **stamped on the child**
   (`SubFlowTransitionOverrideReader` / `SubFlowStateOverrideReader`), which is the only form that
-  works at a directly-addressed leaf; `views` is deliberately parent-side only and is not stamped.
-  Resolving per surface is how they diverged: at such a leaf `authorize` read the PARENT's definition,
+  works at a directly-addressed leaf; the legacy `views` map (`overrides.views` / `viewOverrides`,
+  resolved through `GetSubFlowViewWithOverrideAsync`) is deliberately parent-side only and is not
+  stamped — but the scoped `overrides.states.*.views` / `overrides.transitions.*.views` ARE stamped
+  and resolved child-side; see *Parent overrides are resolved child-side, on the child's own state*
+  below. Resolving per surface is how they diverged: at such a leaf `authorize` read the PARENT's definition,
   found nothing, and gave the OPPOSITE verdict to the state function for both roles.
 - **`authorize` answers two different questions and the parameter picks which.**
   `?transitionKey=` is actionability, `?queryRoles=true` is visibility — the state function's
@@ -242,9 +245,10 @@ A sixth profile is **composed on top of** the base, never selected instead of it
   so `ResponseShapeVersion` is unaffected. Adding a column to the aggregate? Add it to
   `CreateSnapshot` too — `EffectiveStatus` was forgotten there once and every script read the
   constructor default.
-- **Response-shape version**: `StateFunctionCache.ResponseShapeVersion` (currently `v10`) is folded into both the ETag material and the cache key. Bump it in the same commit as any change to what the state body carries — otherwise a client polling a parked instance keeps getting 304 and never sees the new shape.
-- **`timeout` block**: `{ key, target, executeAtUtc }`, the workflow-level deadline armed for the
-  polled instance. **Not** a `transitions[]` entry — a workflow timeout is instance-scoped, armed
+- **Response-shape version**: `StateFunctionCache.ResponseShapeVersion` (currently `v12`) is folded into both the ETag material and the cache key. Bump it in the same commit as any change to what the state body carries — otherwise a client polling a parked instance keeps getting 304 and never sees the new shape.
+- **`timeout` block**: `{ key, target, executeAtUtc, annotations }`, the workflow-level deadline armed for the
+  polled instance. `annotations` is the effective timeout's (`timeout.annotations`); an override
+  replaces it with the rest of the timeout, never merges. **Not** a `transitions[]` entry — a workflow timeout is instance-scoped, armed
   once at start, never re-armed, and keyed by the virtual `$timeout`, so it has no callable key and
   `TransitionItem` has no `target`. `key`/`target` come from the **effective** timeout, resolved by
   `InstanceMetadataExtensions.ResolveEffectiveTimeout` — the parent's `subFlow.overrides.timeout`
@@ -272,7 +276,7 @@ A sixth profile is **composed on top of** the base, never selected instead of it
   timeout needs a per-state scheduled transition (`triggerType: 2`), which IS cancelled and re-armed
   on state entry.
 - **`incident` block**: always present, and it carries **links, not content** — `{ hasActiveIncident, active: { href } (only while the flag is true), history: { href } }`. Identical on the state body and on `metadata.incident` (single GET and list). `active.href` → `GET …/instances/{instance}/incidents/active` (newest unresolved, **404 `Instance:100037`** when none is open — a normal answer, since a retry can resolve between the poll and the follow-up); `history.href` → the paged history. Same `queryRoles` gate as the state function on both, and no stack trace anywhere. When lifted from an active subflow, `active.href` addresses the **leaf that owns the incident** while `history.href` stays on the polled instance. `HasActiveIncident` is a fingerprint member so raise/resolve without a state change moves the ETag. **Do not put incident fields back in the body**: the embedded summary is what made the state function read the incident table on its hottest path and what created the resolve-A-then-raise-B stale-`active` hole, both of which the link form removes.
-- **Scheduled entries in `transitions`**: the state body lists the runtime's armed scheduled transitions inside the existing `transitions` array as `{ name, kind: "scheduled", executeAtUtc, href, view, schema }` entries, appended after the available transitions and built from active `InstanceJob` rows (`JobType.ScheduledTransition`) whose `ExecuteAt` is stamped at scheduling time from the same instant the Dapr job is armed with. The href/view/schema links use the same url shapes as triggerable entries but with `hasView`/`loadData`/`hasSchema` hardcoded false — a TEMPORARY uniformity concession for domain clients (they will adapt); scheduled transitions remain System-actor-gated at execution, so the href is not callable. Not role-filtered; not merged from subflows. Job-set changes deliberately do NOT participate in the fingerprint ETag (team decision, issue #864) — same-state re-arms can leave the scheduled entries stale behind a 304; documented as a known gap in `docs/runtime/state-function-cache-and-etag.md`.
+- **Scheduled entries in `transitions`**: the state body lists the runtime's armed scheduled transitions inside the existing `transitions` array as `{ name, kind: "scheduled", executeAtUtc, href, view, schema }` entries, appended after the available transitions and built from active `InstanceJob` rows (`JobType.ScheduledTransition`) whose `ExecuteAt` is stamped at scheduling time from the same instant the Dapr job is armed with. Each carries the transition definition's `annotations`, resolved via the job's `SourceState` (null, not a failure, when it no longer resolves) — every `transitions[]` kind carries annotations. The href/view/schema links use the same url shapes as triggerable entries but with `hasView`/`loadData`/`hasSchema` hardcoded false — a TEMPORARY uniformity concession for domain clients (they will adapt); scheduled transitions remain System-actor-gated at execution, so the href is not callable. Not role-filtered; not merged from subflows. Job-set changes deliberately do NOT participate in the fingerprint ETag (team decision, issue #864) — same-state re-arms can leave the scheduled entries stale behind a 304; documented as a known gap in `docs/runtime/state-function-cache-and-etag.md`.
 - **`interaction.longPoll` authorization has two mutually exclusive arms** (issue #936): `roles` grants OR one condition `rule` (`IConditionMapping`, same slot shape as view/notification rules; validator rejects both, schema enforces exactly-one). Both surfaces — the state function's signal emit and the acknowledge endpoint — admit through the single `ILongPollInteractionGate`, which owns the arm selection (rule, else roles, else allow) and resolves caller roles lazily via a surface-supplied factory; the rule reads instance data via `context.Instance.Data` (lazy) — `context.Body` is deliberately NOT populated on this surface, unlike view-rule contexts; a rule returning false, throwing, or failing to compile denies (fail-closed; the fallback-timeout job still resumes the pipeline, so a broken rule cannot strand the instance). A rule-gated interaction body is NEVER stored in the shared state body cache (`CallerScopeHash` does not cover the headers/query/data a rule reads; bubbled subflow interactions skip caching conservatively). The fingerprint 304 path is untouched — rule-input changes behind an unchanged fingerprint are an accepted #864-class staleness gap; enforcement is never stale because the ack evaluates fresh. Full guide: `docs/domain/long-poll-termination.md`.
 
 ## Task / Action History (system functions)
@@ -658,6 +662,22 @@ place rather than deleted — removing it is a separate change, and it is the la
   answers identity-only (`Id`, `Key`, `Status`): the starter reads `IsSuccess`, the relay reads
   `Status`, and the client's attributes/extensions come from the **parent's** own
   `EnrichOutputCoreAsync`. Do not read attributes off a sub-start or forward response.
+
+### Parent overrides are resolved child-side, on the child's own state
+
+- `overrides.states` / `overrides.transitions` travel to the child in the two stamps
+  (`subflow.state_role_overrides`, `subflow.transition_role_overrides`) — whole maps, despite the
+  names. `SubFlowOverrideStamp` is their one parser.
+- Long-poll: only `fallbackTimeoutSeconds` and `roles`, field-level. Every reader calls
+  `Instance.ResolveEffectiveLongPoll(state)`; never read `State.LongPoll*` at a decision point —
+  the job's window and the body's window would diverge. No override adds a long-poll; a `rule` arm
+  ignores a `roles` override.
+- Views: `(childState, viewKey)` / `(childTransition, viewKey)` via `Instance.ResolveViewOverride`,
+  applied in `ResolveViewAsync` after the child's own rules picked. Keyed by `CurrentState`, never
+  `EffectiveState`. Rules are never overridden.
+- Legacy `overrides.views` / `viewOverrides` stays parent-side and deprecated; mixing it with the
+  scoped view overrides on one subFlow is a validation error.
+- Full guide: `docs/domain/subflow-overrides.md`.
 
 ### `sub:state-changed` is coalesced to one event per activation episode
 
