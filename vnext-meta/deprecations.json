@@ -120,6 +120,28 @@
       "replacement": "event-driven invalidation (definitions/publish/completed, utilities/discovery/refresh, transport-failure eviction)",
       "severity": "warning",
       "message": "Three defaults changed in one release: RefreshIntervalSeconds 3600 -> 0 (no periodic bulk refresh), L2TtlSeconds 7200 -> 0 (entries never expire), L1TtlSeconds 600 -> 60 (the fleet propagation delay of an invalidation, no longer constrained by a refresh window). A deployment that had set these explicitly keeps its own values and its previous behaviour. The startup validator now REJECTS a positive L2TtlSeconds with RefreshIntervalSeconds=0, because nothing would renew entries before they expired; if you keep a TTL, keep a periodic refresh with it. The window invariants (L1Ttl < RefreshInterval, lease < RefreshInterval, RefreshInterval < L2Ttl, L2Ttl >= RefreshInterval + lease) now apply only when RefreshIntervalSeconds is positive."
+    },
+    {
+      "id": "subflow-overrides-views-by-view-key",
+      "type": "field",
+      "component": "workflow",
+      "path": "state.subFlow.overrides.views",
+      "deprecatedSince": "0.0.95",
+      "removedAt": null,
+      "replacement": "state.subFlow.overrides.states.<childState>.views.<viewKey> and state.subFlow.overrides.transitions.<childTransition>.views.<viewKey>",
+      "severity": "warning",
+      "message": "The view-key map swaps a view wherever the child uses it (every state, rule and transition) and is applied parent-side only. It keeps working unchanged; migrate to the state/transition-scoped views, which the child resolves on its own state. The two cannot be mixed on one subFlow."
+    },
+    {
+      "id": "subflow-view-overrides-legacy",
+      "type": "field",
+      "component": "workflow",
+      "path": "state.subFlow.viewOverrides",
+      "deprecatedSince": "0.0.95",
+      "removedAt": null,
+      "replacement": "state.subFlow.overrides.states.<childState>.views.<viewKey>",
+      "severity": "warning",
+      "message": "Legacy predecessor of overrides.views; same semantics and same migration path."
     }
   ]
 }
