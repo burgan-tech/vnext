@@ -106,7 +106,11 @@ public sealed class InstanceController(
         }
 
         var result = await commandAppService.StartAsync(input, cancellationToken);
-        return InstanceResponseActionResultMapper.ToActionResult(result, HttpContext, async: !sync);
+        // Shape 200 vs 202 by the EFFECTIVE mode (#1003): a flow/transition executionType definition may
+        // have overridden the caller's sync query parameter. When the execution path did not determine it
+        // (null — e.g. an idempotent early return that ran no pipeline) or on failure, fall back to the query param.
+        return InstanceResponseActionResultMapper.ToActionResult(
+            result, HttpContext, async: (result.IsSuccess ? result.Value?.ExecutedAsync : null) ?? !sync);
     }
 
     [ApiExplorerSettings(IgnoreApi = true)]
@@ -665,7 +669,11 @@ public sealed class InstanceController(
             input,
             cancellationToken);
 
-        return InstanceResponseActionResultMapper.ToActionResult(result, HttpContext, async: !sync);
+        // Shape 200 vs 202 by the EFFECTIVE mode (#1003): a flow/transition executionType definition may
+        // have overridden the caller's sync query parameter. When the execution path did not determine it
+        // (null) or on failure, fall back to the query param.
+        return InstanceResponseActionResultMapper.ToActionResult(
+            result, HttpContext, async: (result.IsSuccess ? result.Value?.ExecutedAsync : null) ?? !sync);
     }
 
     /// <summary>

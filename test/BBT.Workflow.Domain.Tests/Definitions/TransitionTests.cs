@@ -671,5 +671,60 @@ public class TransitionTests : DomainTestBase<DomainEntryPoint>
         Assert.NotNull(transition);
         Assert.Null(transition.View);
     }
+
+    // ── executionType (vnext#1003) ──────────────────────────────────────────────
+
+    [Fact]
+    public void ExecutionType_Absent_IsNull_NonBreaking()
+    {
+        var json = """
+        {
+            "key": "t", "from": null, "target": "next", "triggerType": "manual",
+            "versionStrategy": "Patch", "labels": [], "onExecutionTasks": []
+        }
+        """;
+
+        var transition = System.Text.Json.JsonSerializer.Deserialize<Transition>(json, JsonSerializerConstants.JsonOptions);
+
+        Assert.NotNull(transition);
+        Assert.Null(transition!.ExecutionType);
+    }
+
+    [Theory]
+    [InlineData("SYNC")]
+    [InlineData("ASYNC")]
+    public void ExecutionType_WhenPresent_IsParsed(string code)
+    {
+        var json = $$"""
+        {
+            "key": "t", "from": null, "target": "next", "triggerType": "manual",
+            "versionStrategy": "Patch", "labels": [], "onExecutionTasks": [],
+            "executionType": "{{code}}"
+        }
+        """;
+
+        var transition = System.Text.Json.JsonSerializer.Deserialize<Transition>(json, JsonSerializerConstants.JsonOptions);
+
+        Assert.NotNull(transition);
+        Assert.Equal(ExecutionType.FromCode(code), transition!.ExecutionType);
+    }
+
+    [Fact]
+    public void ExecutionType_RoundTrips_AsCode()
+    {
+        var json = """
+        {
+            "key": "t", "from": null, "target": "next", "triggerType": "manual",
+            "versionStrategy": "Patch", "labels": [], "onExecutionTasks": [],
+            "executionType": "ASYNC"
+        }
+        """;
+        var transition = System.Text.Json.JsonSerializer.Deserialize<Transition>(json, JsonSerializerConstants.JsonOptions)!;
+
+        var round = System.Text.Json.JsonSerializer.Serialize(transition, JsonSerializerConstants.JsonOptions);
+        using var doc = System.Text.Json.JsonDocument.Parse(round);
+
+        Assert.Equal("ASYNC", doc.RootElement.GetProperty("executionType").GetString());
+    }
 }
 

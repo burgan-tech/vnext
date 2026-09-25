@@ -381,6 +381,26 @@ public static class TelemetryConstants
         /// <summary>On <c>Transition.Enqueue</c>: which delivery path the enqueue gateway took (<c>Direct</c> or <c>Outbox</c>).</summary>
         public const string EnqueuePath = "vnext.enqueue.path";
 
+        /// <summary>
+        /// The execution mode the CALLER requested (from the <c>sync</c> query parameter): <c>SYNC</c>/<c>ASYNC</c>.
+        /// vnext#1003. Compare with <see cref="ExecutionEffective"/> to find requests whose definition
+        /// overrode the caller (query for <c>requested != effective</c>).
+        /// </summary>
+        public const string ExecutionRequested = "vnext.execution.requested";
+
+        /// <summary>
+        /// The EFFECTIVE execution mode after applying the flow/transition <c>executionType</c> definition
+        /// (vnext#1003): <c>SYNC</c>/<c>ASYNC</c>. Equals <see cref="ExecutionRequested"/> unless a
+        /// definition overrode the caller's <c>sync</c> query parameter.
+        /// </summary>
+        public const string ExecutionEffective = "vnext.execution.effective";
+
+        /// <summary>
+        /// <c>true</c> when a flow/transition <c>executionType</c> definition overrode the caller's requested
+        /// mode (vnext#1003) — the flag to filter on to see "definition said X, caller sent Y".
+        /// </summary>
+        public const string ExecutionOverridden = "vnext.execution.overridden";
+
         /// <summary>Number of items in a fan-out batch.</summary>
         public const string FanOutItemCount = "vnext.fanout.item.count";
 
