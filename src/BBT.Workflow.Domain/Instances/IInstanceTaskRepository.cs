@@ -142,4 +142,16 @@ public interface IInstanceTaskRepository : IRepository<InstanceTask, Guid>
         Guid instanceId,
         Guid taskId,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Read-only: the metrics columns of every task belonging to the given SET of transition rows,
+    /// ordered by <c>StartedAt</c> then <c>Id</c>. Backs the transition/state <c>metrics</c>
+    /// endpoints (vnext-client-sdk-core#60). Like <see cref="GetHistoryByInstanceIdAsync"/> it
+    /// projects columns in SQL so the jsonb payloads never leave the database (the Faulted rows'
+    /// Response is the one conditional exception, see <see cref="InstanceTaskMetricsRow"/>). Group
+    /// the result by <see cref="InstanceTaskMetricsRow.TransitionId"/> caller-side.
+    /// </summary>
+    Task<List<InstanceTaskMetricsRow>> GetMetricsRowsByTransitionIdsAsync(
+        IReadOnlyCollection<Guid> transitionIds,
+        CancellationToken cancellationToken = default);
 }

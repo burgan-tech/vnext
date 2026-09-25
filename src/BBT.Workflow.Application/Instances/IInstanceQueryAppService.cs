@@ -49,6 +49,24 @@ public interface IInstanceQueryAppService : IApplicationService
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Returns the attempts model of one transition key on an instance — every firing of that
+    /// transition, each with the tasks that ran under it (vnext-client-sdk-core#60). Read-only over
+    /// the already-journaled transition/task rows.
+    /// </summary>
+    Task<Result<GetInstanceMetricsOutput>> GetTransitionMetricsAsync(
+        GetTransitionMetricsInput input,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns the attempts model of one state on an instance — every visit (entry→exit), each with
+    /// the state's onEntry and onExit tasks (vnext-client-sdk-core#60). Read-only over the
+    /// already-journaled transition/task rows.
+    /// </summary>
+    Task<Result<GetInstanceMetricsOutput>> GetStateMetricsAsync(
+        GetStateMetricsInput input,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Pages the error-boundary incident history of an instance, newest first. Gated by the same
     /// <c>queryRoles</c> check as the state function.
     /// </summary>

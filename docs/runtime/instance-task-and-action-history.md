@@ -4,6 +4,10 @@ Two built-in system functions over the task journal (issue #939). They complete 
 history family — transitions (`…/transitions`), incidents (`…/incidents`) — with what ran inside
 those transitions.
 
+> **Grouped view.** This function is a flat, execution-ordered list. For the per-firing / per-visit
+> **attempts** model — one attempt per transition firing or state visit, tasks phase-grouped by hook —
+> see [Transition and State Metrics](transition-and-state-metrics.md), which builds on the same journal.
+
 ## Functions
 
 | Function | Returns |
@@ -42,7 +46,9 @@ Each item projects one `InstanceTask` journal row joined with its owning transit
       "transitionKey": "approve",    // owning transition + its state context
       "fromState": "draft",
       "toState": "approved",         // null while that transition is in progress
-      "triggerType": "manual",
+      "triggerType": "manual",       // the TRANSITION's trigger — NOT the task's hook (see below)
+      "hook": "onExecute",           // the task's phase: onExecute | onEntry | onExit | …; null on legacy rows
+      "order": 0,                    // task's order within its hook group (equal ⇒ parallel); null on legacy rows
       "status": "completed",         // platform status: waiting | busy | completed | faulted
       "businessStatus": "success",   // business outcome: unknown | success | failed
       "startedAt": "…", "finishedAt": "…", "durationMs": 184.2,
@@ -51,6 +57,16 @@ Each item projects one `InstanceTask` journal row joined with its owning transit
   ]
 }
 ```
+
+#### `hook` vs `triggerType`
+
+`triggerType` is how the owning *transition* was triggered (manual,
+automatic, …); `hook` is the *task's* phase within that transition — a state's `onEntry` tasks vs
+the transition's `onExecute` tasks, which without this field were indistinguishable (a reader could
+not tell them apart, and the same task key under two hooks produced identical rows;
+vnext-client-sdk-core#60). `hook` and `order` are promoted out of the `ExecutionKey` hash into real
+columns on `InstanceTasks`; rows journaled before that migration carry `null` for both — the API
+reports unknown rather than back-deriving from the one-way hash.
 
 **Metadata only — deliberately.** The journal's `Request`, `Response` and `InvocationResult`
 payloads are NOT exposed here: mapping scripts write the headers they build (including auth

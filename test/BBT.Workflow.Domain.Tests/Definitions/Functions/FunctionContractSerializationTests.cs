@@ -166,6 +166,50 @@ public sealed class FunctionContractSerializationTests
         reparsed.InputSchema!.Schemas[0].Schema.Key.ShouldBe("s1");
     }
 
+    // ─── executionLog opt-in (vnext-client-sdk-core#60) ───────────────────────────
+
+    [Fact]
+    public void ExecutionLog_Absent_DefaultsToDisabled_AndDoesNotLog()
+    {
+        // Non-breaking: a definition authored without the field logs nothing.
+        var function = Deserialize(null);
+
+        function.ExecutionLog.ShouldBeNull();
+        function.ExecutionLoggingEnabled.ShouldBeFalse();
+    }
+
+    [Fact]
+    public void ExecutionLog_Enabled_IsParsed_AndEnablesLogging()
+    {
+        var function = Deserialize("\"executionLog\": \"ENABLED\"");
+
+        function.ExecutionLog.ShouldBe(ExecutionLogSetting.Enabled);
+        function.ExecutionLoggingEnabled.ShouldBeTrue();
+    }
+
+    [Fact]
+    public void ExecutionLog_Disabled_IsParsed_AndKeepsLoggingOff()
+    {
+        var function = Deserialize("\"executionLog\": \"DISABLED\"");
+
+        function.ExecutionLog.ShouldBe(ExecutionLogSetting.Disabled);
+        function.ExecutionLoggingEnabled.ShouldBeFalse();
+    }
+
+    [Fact]
+    public void ExecutionLog_RoundTrips_AsItsCode()
+    {
+        var function = Deserialize("\"executionLog\": \"ENABLED\"");
+
+        var json = JsonSerializer.Serialize(function, JsonSerializerConstants.JsonOptions);
+        using var doc = JsonDocument.Parse(json);
+
+        doc.RootElement.GetProperty("executionLog").GetString().ShouldBe("ENABLED");
+
+        var reparsed = JsonSerializer.Deserialize<Function>(json, JsonSerializerConstants.JsonOptions)!;
+        reparsed.ExecutionLoggingEnabled.ShouldBeTrue();
+    }
+
     private static SchemaSelection? SelectSchema(Function function, string slot) =>
         slot == "inputSchema" ? function.InputSchema : function.OutputSchema;
 

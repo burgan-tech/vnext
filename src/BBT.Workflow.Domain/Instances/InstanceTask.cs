@@ -29,6 +29,8 @@ public sealed class InstanceTask : Entity<Guid>, IHasCreatedAt
         TransitionId = transitionId;
         TaskId = taskId;
         ExecutionKey = CreateExecutionKey(transitionId, taskId, taskTrigger, order);
+        TaskTrigger = taskTrigger;
+        Order = order;
         StartedAt = DateTime.UtcNow;
         CreatedAt = DateTime.UtcNow;
         Status = TaskStatus.Waiting;
@@ -71,6 +73,24 @@ public sealed class InstanceTask : Entity<Guid>, IHasCreatedAt
     /// shapes are computed from different source strings and cannot collide, so no 23505 results.
     /// </remarks>
     public string? ExecutionKey { get; private set; }
+
+    /// <summary>
+    /// The hook (phase) this task ran under — <c>OnExecute</c> / <c>OnEntry</c> / <c>OnExit</c> etc.
+    /// Promoted to a first-class column (finding on vnext-client-sdk-core#60) so a reader can tell
+    /// which hook a journal row belongs to: before this it was only folded into the
+    /// <see cref="ExecutionKey"/> SHA-256, so the <c>tasks</c> function could not distinguish, say, a
+    /// state's OnEntry tasks from the triggering transition's OnExecute tasks. Nullable because rows
+    /// written before this column existed cannot be back-derived from the hash — the API reports
+    /// them as unknown rather than fabricating a value.
+    /// </summary>
+    public TaskTrigger? TaskTrigger { get; private set; }
+
+    /// <summary>
+    /// The task's declared order within its hook group (equal order ⇒ parallel group). Promoted to
+    /// a column alongside <see cref="TaskTrigger"/> for the same reason; nullable for the same
+    /// legacy-row reason.
+    /// </summary>
+    public int? Order { get; private set; }
 
     /// <summary>
     /// Computes the occurrence-scoped execution key. The source string format is

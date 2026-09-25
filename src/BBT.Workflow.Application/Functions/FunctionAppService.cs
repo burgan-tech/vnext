@@ -5,6 +5,7 @@ using System.Globalization;
 using BBT.Aether.Application.Services;
 using BBT.Aether.MultiSchema;
 using BBT.Aether.Results;
+using BBT.Aether.Users;
 using BBT.Workflow.Caching;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Functions.Contracts;
@@ -37,7 +38,9 @@ public sealed class FunctionAppService(
     IStateStoreCacheGateway cacheGateway,
     IRemoteInvokerService remoteInvoker,
     IFunctionAccessPolicy functionAccessPolicy,
-    IFunctionRequestValidationService functionRequestValidationService)
+    IFunctionRequestValidationService functionRequestValidationService,
+    IFunctionExecutionJournal functionExecutionJournal,
+    ICurrentUser currentUser)
     : ApplicationService(serviceProvider), IFunctionAppService
 {
     /// <inheritdoc />
@@ -142,6 +145,77 @@ public sealed class FunctionAppService(
         string? httpMethod,
         CancellationToken cancellationToken)
     {
+        // Journal one execution row per invocation of a domain-registered function
+        // (vnext-client-sdk-core#60). Recording is OPT-IN per function (executionLog: ENABLED) and
+        // best-effort: the row is ENQUEUED, never written, on this path — a background writer persists it
+        // — so the function's execution time is unaffected.
+        var fromCache = false;
+
+        // Fast path: journaling off (the default) → run with zero telemetry overhead. This is the common
+        // case; nothing here may cost an un-opted function anything.
+        if (!function.ExecutionLoggingEnabled)
+        {
+            return await RunAsync();
+        }
+
+        // Only functions that reach ExecuteFunctionAsync are recorded — the built-in instance reads
+        // (state/data/view/…) are served by their own handlers and never come through here.
+        // try/finally so EVERY outcome is recorded exactly once: success, a Result.Fail, and a thrown
+        // exception (which still counts as an erroring execution). Enqueueing is non-blocking and never
+        // throws, so the finally cannot mask an in-flight exception nor slow the function.
+        var invokedAt = DateTime.UtcNow;
+        var stopwatch = Stopwatch.StartNew();
+        // Trace id is constant across the request's span tree, so capturing it here (before the
+        // Function.Execute span opens inside RunAsync) links the journal row to its APM/ELK trace.
+        var traceId = Activity.Current?.TraceId.ToString();
+        // Caller identity is captured here, on the request scope, because the row is persisted later off
+        // that scope where ICurrentUser is gone (ActorUserName → CreatedBy, UserName → CreatedByBehalfOf,
+        // matching what Aether's audit interceptor would otherwise have stamped).
+        var invokedBy = currentUser.ActorUserName;
+        var invokedByBehalfOf = currentUser.UserName;
+        var succeeded = false;
+        int? statusCode = null;
+        string? errorCode = null;
+
+        try
+        {
+            var result = await RunAsync();
+            succeeded = result.IsSuccess;
+            statusCode = result.IsSuccess ? result.Value?.StatusCode : null;
+            errorCode = result.IsSuccess ? null : result.Error.Code;
+            return result;
+        }
+        catch (Exception ex)
+        {
+            errorCode = ex.GetType().Name;
+            throw;
+        }
+        finally
+        {
+            stopwatch.Stop();
+            // Non-blocking enqueue (no await): returns false if the bounded queue is full, which the
+            // background writer reports — a dropped telemetry row never surfaces to the caller.
+            functionExecutionJournal.Record(
+                new FunctionExecutionRecord(
+                    function.Domain,
+                    function.Key,
+                    function.Version,
+                    function.Scope,
+                    workflow?.Key,
+                    instance?.Id,
+                    invokedAt,
+                    stopwatch.Elapsed.TotalMilliseconds,
+                    succeeded,
+                    statusCode,
+                    errorCode,
+                    fromCache,
+                    invokedBy,
+                    invokedByBehalfOf,
+                    traceId));
+        }
+
+        async Task<Result<FunctionResponseOutput>> RunAsync()
+        {
         using var functionActivity = FunctionActivityHelper.StartExecute(function.Key);
         Activity.Current?.SetTag(TelemetryConstants.TagNames.Domain, function.Domain);
 
@@ -272,7 +346,10 @@ public sealed class FunctionAppService(
                     {
                         var cached = read.Value.Deserialize<FunctionResponseOutput>(JsonSerializerConstants.JsonOptions);
                         if (cached is not null)
+                        {
+                            fromCache = true;
                             return Result<FunctionResponseOutput>.Ok(cached);
+                        }
                     }
                 }
             }
@@ -350,6 +427,7 @@ public sealed class FunctionAppService(
         }
 
         return responseResult;
+        }
     }
 
     /// <summary>

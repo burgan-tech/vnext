@@ -151,6 +151,21 @@ public static class WorkflowApiBaseServiceCollectionExtensions
                     .ConfigureWarnings(w => w.Ignore(RelationalEventId.PendingModelChangesWarning));
             });
 
+        // Function-execution journal (vnext-client-sdk-core#60, item C1). Domain-wide, fixed
+        // sys_metrics schema — same posture as the messaging context above.
+        services.AddAetherNpgsql<MetricsDbContext>(
+            configuration.GetConnectionString("Default")!,
+            SchemaSwitchingMode.QualifiedNames,
+            (_, options) =>
+            {
+                options.UseNpgsql(configuration.GetConnectionString("Default"),
+                        npgsqlOptions =>
+                        {
+                            npgsqlOptions.MigrationsHistoryTable("__Workflow_Migrations", "sys_metrics");
+                        })
+                    .ConfigureWarnings(w => w.Ignore(RelationalEventId.PendingModelChangesWarning));
+            });
+
         return services;
     }
 
