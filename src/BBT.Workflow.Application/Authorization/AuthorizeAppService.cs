@@ -644,6 +644,13 @@ public sealed class AuthorizeAppService(
     /// SubFlow. Pinned by <c>AuthorizeRoleParameterFallbackTests</c>.
     /// </para>
     /// <para>
+    /// <b>Every <c>ack</c> path uses it</b> — the awaiting instance with an active SubFlow and the one
+    /// without (the common path). Until 2026-09-25 the second went through
+    /// <see cref="GetCallerRolesAsync"/>, where a provider that answered with roles discarded the
+    /// parameter, so the same caller got a different role set depending on whether the instance had a
+    /// SubFlow. Pinned by <c>AuthorizeRoleParameterFallbackTests</c>.
+    /// </para>
+    /// <para>
     /// This deliberately differs from <see cref="GetCallerRolesAsync"/>, which the other targets use.
     /// It preserves how the acknowledge endpoint itself used to build the set, back when that endpoint
     /// still evaluated the gate: the explicit parameter is how a client names WHICH of its roles is
