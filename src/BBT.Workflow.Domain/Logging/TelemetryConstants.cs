@@ -824,6 +824,11 @@ public static class TelemetryConstants
         /// </summary>
         public const string Failed = "failed";
         /// <summary>
+        /// No provider call was made because the request carried a <c>role</c> header: those roles are
+        /// the caller's set (2026-09-25 committee decision). Not an error.
+        /// </summary>
+        public const string Header = "header";
+        /// <summary>
         /// No provider call was made: the caller carried neither <c>act_sub</c> nor <c>client_id</c>
         /// (an anonymous or device token), so there was nobody to ask about. Resolves to empty.
         /// </summary>

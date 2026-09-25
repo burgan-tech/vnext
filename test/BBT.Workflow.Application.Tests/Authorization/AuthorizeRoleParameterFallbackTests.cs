@@ -23,27 +23,20 @@ using WorkflowDefinition = BBT.Workflow.Definitions.Workflow;
 namespace BBT.Workflow.Authorization;
 
 /// <summary>
-/// The <c>role</c> request parameter is a caller's own claim, and under a provider that is an
-/// authority it must buy nothing.
+/// How the <c>role</c> request parameter of <c>authorize</c> composes with the caller's role set, per
+/// provider (<see cref="ICallerRoleResolver.RoleParameterMode"/>).
 /// </summary>
 /// <remarks>
-/// <para><b>The hole this closes.</b> When the provider answers "no roles", <c>authorize</c> used to
-/// fall back to the <c>role</c> query parameter unconditionally. Under the default provider that is
-/// harmless — its own source is the caller's <c>role</c> header, so the parameter is the same claim
-/// through a different door. Under morph-idm it was not: a <c>204</c> means the identity service
-/// decided this caller has no operations, and the parameter overrode that decision. Measured on the
-/// running lab before the fix, same caller and same instance:</para>
-/// <code>
-/// ?queryRoles=true                    -> {"allowed":false}  403
-/// ?queryRoles=true&amp;role=chain.admin   -> {"allowed":true}   200
-/// </code>
-/// <para>It is the same hole the "never forward the <c>role</c> header to morph-idm" rule closes,
-/// reached through the query string instead — and it matters more since <c>authorize</c> became the
-/// only place these questions are answered: a gateway forwarding the client's query string would be
-/// admitting on the client's own claim.</para>
-/// <para><b>Why the flag sits on the resolver.</b> Reading the provider name from configuration here
-/// would put a second definition of "which provider is this" in the Application layer. The resolver
-/// already is that seam; a new provider now has to state its own answer rather than inherit one.</para>
+/// <para><b>Fallback</b> (the default provider): the parameter stands in only when the provider
+/// resolved no roles — its own source is the caller's <c>role</c> header, so the parameter is the
+/// same claim through a different door. <c>ack</c> adds it on every path.</para>
+/// <para><b>AsRoleHeader</b> (morph-idm, 2026-09-25): the parameter is handed to the resolver as the
+/// request's <c>role</c> header when the request carries none, so it behaves exactly like one — it is
+/// the role set and morph-idm is not asked. A real header wins over it. This replaced the 2026-09-23
+/// rule that morph-idm ignored the parameter, once a request's <c>role</c> header was made decisive
+/// under that provider: the same claim must not mean different things on the two channels.</para>
+/// <para><b>Why the mode sits on the resolver.</b> Reading the provider name from configuration here
+/// would put a second definition of "which provider is this" in the Application layer.</para>
 /// </remarks>
 public sealed class AuthorizeRoleParameterFallbackTests : IDisposable
 {
@@ -98,15 +91,34 @@ public sealed class AuthorizeRoleParameterFallbackTests : IDisposable
 
     // ── the three fallback targets ──────────────────────────────────────────────────────────
 
-    /// <summary>
-    /// An authority provider: the parameter must not reach the grant evaluation at all. Asserting on
-    /// the ROLE SET the manager was given, rather than on the verdict, is deliberate — a verdict can
-    /// be right for the wrong reason, and what is under test is which caller was evaluated.
-    /// </summary>
+    // ── morph-idm: the parameter behaves like a `role` header (2026-09-25) ──────────────────
+    //
+    // Under RoleParameterMode.AsRoleHeader the parameter is handed to the resolver AS the request's
+    // `role` header when the request carries none, so the resolver's own header precedence applies:
+    // the parameter IS the role set and the identity service is not asked. A real header wins.
+
     [Fact]
-    public async Task QueryRoles_UnderAnAuthorityProvider_DoesNotEvaluateTheClaimedRole()
+    public async Task QueryRoles_AsRoleHeader_HandsTheParameterToTheResolverAsTheRoleHeader()
     {
-        GivenProviderIsAuthority();
+        GivenProviderTreatsTheParameterAsTheRoleHeader();
+        GivenInstance();
+
+        await AuthorizeQueryRolesAsync(ClaimedRole);
+
+        await _roleResolver.Received().ResolveRolesAsync(
+            Arg.Is<IReadOnlyDictionary<string, string?>?>(h => h != null && h["role"] == ClaimedRole),
+            Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>The resolved set is used as-is — no fallback, no second composition on top.</summary>
+    [Fact]
+    public async Task QueryRoles_AsRoleHeader_EvaluatesExactlyWhatTheResolverReturned()
+    {
+        GivenProviderTreatsTheParameterAsTheRoleHeader();
+        _roleResolver.ResolveRolesAsync(Arg.Any<IReadOnlyDictionary<string, string?>>(), Arg.Any<CancellationToken>())
+            .Returns(ci => Result<string[]?>.Ok(
+                ci.ArgAt<IReadOnlyDictionary<string, string?>?>(0) is { } h && h.TryGetValue("role", out var r) && r != null
+                    ? [r] : []));
         GivenInstance();
 
         await AuthorizeQueryRolesAsync(ClaimedRole);
@@ -114,8 +126,42 @@ public sealed class AuthorizeRoleParameterFallbackTests : IDisposable
         await _authManager.Received(1).IsQueryAllowedAsync(
             Arg.Any<WorkflowDefinition>(),
             Arg.Any<Instance>(),
-            Arg.Is<IReadOnlyCollection<string>?>(r => r == null || !r.Contains(ClaimedRole)),
+            Arg.Is<IReadOnlyCollection<string>?>(r => r != null && r.Count == 1 && r.Contains(ClaimedRole)),
             Arg.Any<AuthorizationRequestContext?>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>A real `role` header wins over the parameter — the same order the default provider uses.</summary>
+    [Fact]
+    public async Task QueryRoles_AsRoleHeader_ARealRoleHeaderWinsOverTheParameter()
+    {
+        GivenProviderTreatsTheParameterAsTheRoleHeader();
+        GivenInstance();
+
+        await _sut.GetAuthorizeResultForInstanceAsync(
+            Domain, Flow, Guid.NewGuid().ToString(), role: ClaimedRole,
+            transitionKey: null, functionKey: null, version: null,
+            checkQueryRoles: true, checkAck: false,
+            requestContext: new AuthorizationRequestContext(new Dictionary<string, string?> { ["role"] = "header.role" }));
+
+        await _roleResolver.Received().ResolveRolesAsync(
+            Arg.Is<IReadOnlyDictionary<string, string?>?>(h => h != null && h["role"] == "header.role"),
+            Arg.Any<CancellationToken>());
+        await _roleResolver.DidNotReceive().ResolveRolesAsync(
+            Arg.Is<IReadOnlyDictionary<string, string?>?>(h => h != null && h["role"] == ClaimedRole),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task QueryRoles_AsRoleHeader_WithoutAParameterPassesTheRequestHeadersUnchanged()
+    {
+        GivenProviderTreatsTheParameterAsTheRoleHeader();
+        GivenInstance();
+
+        await AuthorizeQueryRolesAsync(roleParameter: "");
+
+        await _roleResolver.Received().ResolveRolesAsync(
+            Arg.Is<IReadOnlyDictionary<string, string?>?>(h => h == null || !h.ContainsKey("role")),
             Arg.Any<CancellationToken>());
     }
 
@@ -139,33 +185,11 @@ public sealed class AuthorizeRoleParameterFallbackTests : IDisposable
             Arg.Any<CancellationToken>());
     }
 
-    /// <summary>
-    /// The end-to-end shape of the measured defect: with a grant set that admits only the claimed
-    /// role, an authority provider's "no operations" must stay a refusal.
-    /// </summary>
-    [Fact]
-    public async Task QueryRoles_UnderAnAuthorityProvider_TheClaimedRoleDoesNotBuyAVerdict()
-    {
-        GivenProviderIsAuthority();
-        GivenInstance();
-        // Stand in for the real evaluator: allowed only if the claimed role is in the set.
-        _authManager.IsQueryAllowedAsync(
-                Arg.Any<WorkflowDefinition>(), Arg.Any<Instance>(),
-                Arg.Any<IReadOnlyCollection<string>?>(), Arg.Any<AuthorizationRequestContext?>(),
-                Arg.Any<CancellationToken>())
-            .Returns(ci => ci.ArgAt<IReadOnlyCollection<string>?>(2) is { } roles && roles.Contains(ClaimedRole));
-
-        var result = await AuthorizeQueryRolesAsync(ClaimedRole);
-
-        result.Value!.Allowed.ShouldBeFalse(
-            "morph-idm answered 204 for this caller; naming a role in the query string must not override it");
-    }
-
     /// <summary>The transition target reads the same role set, so it must follow the same rule.</summary>
     [Fact]
-    public async Task TransitionKey_UnderAnAuthorityProvider_DoesNotEvaluateTheClaimedRole()
+    public async Task TransitionKey_AsRoleHeader_HandsTheParameterToTheResolverAsTheRoleHeader()
     {
-        GivenProviderIsAuthority();
+        GivenProviderTreatsTheParameterAsTheRoleHeader();
         GivenInstance();
 
         await _sut.GetAuthorizeResultForInstanceAsync(
@@ -174,37 +198,24 @@ public sealed class AuthorizeRoleParameterFallbackTests : IDisposable
             checkQueryRoles: false, checkAck: false,
             requestContext: Context());
 
-        await _authManager.DidNotReceive().IsTransitionAllowedInStateAsync(
-            Arg.Any<WorkflowDefinition>(),
-            Arg.Any<Transition>(),
-            Arg.Any<string?>(),
-            Arg.Any<Instance?>(),
-            Arg.Is<IReadOnlyCollection<string>?>(r => r != null && r.Contains(ClaimedRole)),
-            Arg.Any<AuthorizationRequestContext?>(),
+        await _roleResolver.Received().ResolveRolesAsync(
+            Arg.Is<IReadOnlyDictionary<string, string?>?>(h => h != null && h["role"] == ClaimedRole),
             Arg.Any<CancellationToken>());
     }
 
-    // ── the additive target ─────────────────────────────────────────────────────────────────
+    // ── ack ─────────────────────────────────────────────────────────────────────────────────
 
-    /// <summary>
-    /// <c>ack</c> composes the parameter ADDITIVELY rather than as a fallback, which would have made
-    /// it the one target where a caller could still name its own role — the interaction's roles arm
-    /// evaluated against a set morph-idm never returned.
-    /// </summary>
+    /// <summary>ack follows the same header rule under morph-idm: the parameter is the role header.</summary>
     [Fact]
-    public async Task Ack_UnderAnAuthorityProvider_DoesNotAddTheClaimedRole()
+    public async Task Ack_AsRoleHeader_HandsTheParameterToTheResolverAsTheRoleHeader()
     {
-        GivenProviderIsAuthority();
+        GivenProviderTreatsTheParameterAsTheRoleHeader();
         var instance = GivenInstance();
         instance.ArmLongPollAck(Guid.NewGuid());
-
-        // The gate receives the role set through a factory; capture it on the arrangement, then run
-        // it and inspect what it yields.
-        Func<CancellationToken, Task<Result<IReadOnlyCollection<string>>>>? factory = null;
         _longPollGate.IsAdmittedAsync(
                 Arg.Any<Instance>(), Arg.Any<WorkflowDefinition>(), Arg.Any<State?>(),
                 Arg.Any<Dictionary<string, string?>?>(), Arg.Any<Dictionary<string, string?>?>(),
-                Arg.Do<Func<CancellationToken, Task<Result<IReadOnlyCollection<string>>>>>(f => factory = f),
+                Arg.Any<Func<CancellationToken, Task<Result<IReadOnlyCollection<string>>>>>(),
                 Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(Result<bool>.Ok(true));
 
@@ -214,10 +225,9 @@ public sealed class AuthorizeRoleParameterFallbackTests : IDisposable
             checkQueryRoles: false, checkAck: true,
             requestContext: Context());
 
-        factory.ShouldNotBeNull();
-        var roles = (await factory!(CancellationToken.None)).Value;
-        (roles ?? []).ShouldNotContain(ClaimedRole,
-            "under an authority provider the ack pre-flight must evaluate the service's set, not the caller's claim");
+        await _roleResolver.Received().ResolveRolesAsync(
+            Arg.Is<IReadOnlyDictionary<string, string?>?>(h => h != null && h["role"] == ClaimedRole),
+            Arg.Any<CancellationToken>());
     }
 
     /// <summary>And the default provider keeps the additive behaviour.</summary>
@@ -303,11 +313,11 @@ public sealed class AuthorizeRoleParameterFallbackTests : IDisposable
 
     // ── fixtures ────────────────────────────────────────────────────────────────────────────
 
-    private void GivenProviderIsAuthority() =>
-        _roleResolver.AllowsRoleParameterFallback.Returns(false);
+    private void GivenProviderTreatsTheParameterAsTheRoleHeader() =>
+        _roleResolver.RoleParameterMode.Returns(RoleParameterMode.AsRoleHeader);
 
     private void GivenProviderAllowsFallback() =>
-        _roleResolver.AllowsRoleParameterFallback.Returns(true);
+        _roleResolver.RoleParameterMode.Returns(RoleParameterMode.Fallback);
 
     private static AuthorizationRequestContext Context() =>
         new(new Dictionary<string, string?>());

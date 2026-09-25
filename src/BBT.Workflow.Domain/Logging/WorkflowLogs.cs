@@ -4027,6 +4027,20 @@ public static partial class WorkflowLogs
         string reason);
 
     /// <summary>
+    /// Logs that no provider call was made because the request carried a <c>role</c> header, whose
+    /// roles are then the caller's set. Debug: it is the normal path for every request that carries
+    /// one.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20465,
+        Level = LogLevel.Debug,
+        Message = "Caller roles taken from the request role header; provider not called. Provider={Provider}, RoleCount={RoleCount}")]
+    public static partial void CallerRolesTakenFromRequestHeader(
+        this ILogger logger,
+        string provider,
+        int roleCount);
+
+    /// <summary>
     /// Logs that no provider call was made because the caller carried neither <c>act_sub</c> nor
     /// <c>client_id</c>. Debug: anonymous and device tokens are ordinary traffic, and a Warning on
     /// every one of their requests would bury the answers that matter.

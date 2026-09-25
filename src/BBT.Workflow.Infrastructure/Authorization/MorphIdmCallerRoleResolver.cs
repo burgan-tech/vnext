@@ -4,6 +4,7 @@ using System.Text.Json;
 using BBT.Aether.Results;
 using BBT.Aether.Users;
 using BBT.Workflow.Authorization.Configuration;
+using BBT.Workflow.CurrentUser;
 using BBT.Workflow.Logging;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -11,9 +12,17 @@ using Microsoft.Extensions.Options;
 namespace BBT.Workflow.Authorization;
 
 /// <summary>
-/// Resolves the caller's operation set from morph-idm.
+/// Resolves the caller's operation set — from the request's <c>role</c> header when it carries one,
+/// otherwise from morph-idm.
 /// <para>
-/// One GET to the <c>get-roles</c> function per DI scope, carrying the caller's <c>act_sub</c>,
+/// <b>A <c>role</c> header takes precedence</b> (2026-09-25 committee decision). When the request
+/// carries one — <c>ICurrentUser.Roles</c>, which the framework parses from it, else the forwarded
+/// header dictionary in a scope with no HTTP request — those roles are the caller's set and morph-idm
+/// is not called. There is no merge: the header replaces the service's answer. A blank header counts
+/// as none.
+/// </para>
+/// <para>
+/// Without a header: one GET to the <c>get-roles</c> function per DI scope, carrying the caller's <c>act_sub</c>,
 /// <c>sub</c> and <c>position</c>. The <c>role</c> header is deliberately never sent: with it the
 /// endpoint switches to its authorize behaviour and answers yes/no for that one role, whereas the
 /// runtime needs the whole set so the existing grant engine can evaluate <c>transition.roles</c>,
@@ -76,12 +85,11 @@ public sealed class MorphIdmCallerRoleResolver : ICallerRoleResolver
     }
 
     /// <summary>
-    /// No. Under this provider the resolved set is the caller's operation set as morph-idm reports it,
-    /// and a <c>204</c> ("no operations") is that service's decision — not a gap for the caller to fill
-    /// with a <c>role</c> request parameter. Same rule as never forwarding the <c>role</c> header, on
-    /// the other channel.
+    /// <see cref="RoleParameterMode.AsRoleHeader"/>: <c>authorize</c>'s <c>role</c> parameter is
+    /// handed to this resolver as the request's <c>role</c> header when the request has none, so it is
+    /// answered by the same header precedence — it is the role set and morph-idm is not asked.
     /// </summary>
-    public bool AllowsRoleParameterFallback => false;
+    public RoleParameterMode RoleParameterMode => RoleParameterMode.AsRoleHeader;
 
     /// <inheritdoc />
     public async Task<Result<string[]?>> ResolveRolesAsync(
@@ -118,7 +126,9 @@ public sealed class MorphIdmCallerRoleResolver : ICallerRoleResolver
 
         var resolution = await memoized;
 
-        if (resolution.FailureKind is not null)
+        if (resolution.FromHeader)
+            AuthorizationActivityHelper.SetFromHeader(activity, resolution.Roles.Length, memoHit: true);
+        else if (resolution.FailureKind is not null)
             AuthorizationActivityHelper.SetFailedFromMemo(activity, resolution.FailureKind, resolution.StatusCode);
         else if (resolution.Skipped)
             AuthorizationActivityHelper.SetSkipped(activity, memoHit: true);
@@ -145,6 +155,18 @@ public sealed class MorphIdmCallerRoleResolver : ICallerRoleResolver
         using var activity = AuthorizationActivityHelper.StartResolveRoles(
             CallerRoleProviderOptions.MorphIdmProvider);
         AuthorizationActivityHelper.SetCaller(activity, subject, actor, position);
+
+        // A request `role` header takes precedence: its roles are the caller's set and the identity
+        // service is not asked (2026-09-25 committee decision). Read exactly as the default provider
+        // reads it — ICurrentUser.Roles, which the framework parses from the header, else the
+        // forwarded dictionary in a scope with no HTTP request. Blank entries do not count as a header.
+        var headerRoles = RolesFromRequestHeader(headers);
+        if (headerRoles.Length > 0)
+        {
+            _logger.CallerRolesTakenFromRequestHeader(CallerRoleProviderOptions.MorphIdmProvider, headerRoles.Length);
+            AuthorizationActivityHelper.SetFromHeader(activity, headerRoles.Length, memoHit: false);
+            return Resolution.Header(headerRoles);
+        }
 
         // Nobody to ask about: an anonymous or device token carries neither the acting user nor the
         // client. Calling would only spend a round trip on an answer that cannot be about anyone.
@@ -231,13 +253,20 @@ public sealed class MorphIdmCallerRoleResolver : ICallerRoleResolver
     /// The memoized outcome of the scope's one resolution. The roles are what every surface receives;
     /// the rest exists only so a memo-hit span can repeat the original outcome's tags.
     /// </summary>
+    private string[] RolesFromRequestHeader(IReadOnlyDictionary<string, string?>? headers) =>
+        _currentUser.ResolveCallerRoles(headers) is { Length: > 0 } roles
+            ? roles.Where(r => !string.IsNullOrWhiteSpace(r)).Select(r => r.Trim()).ToArray()
+            : [];
+
     private sealed record Resolution(
         string[] Roles,
         bool Skipped = false,
         string? EmptyReason = null,
         string? FailureKind = null,
-        int? StatusCode = null)
+        int? StatusCode = null,
+        bool FromHeader = false)
     {
+        public static Resolution Header(string[] roles) => new(roles, FromHeader: true);
         public static readonly Resolution Skip = new([], Skipped: true);
         public static Resolution Of(string[] roles) => new(roles);
         public static Resolution EmptyAnswer(string reason) => new([], EmptyReason: reason);
