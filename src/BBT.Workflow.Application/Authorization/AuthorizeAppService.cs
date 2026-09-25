@@ -1,5 +1,6 @@
 using BBT.Aether.Application.Services;
 using BBT.Aether.Results;
+using BBT.Aether.Users;
 using BBT.Workflow.Caching;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Gateway;
@@ -179,9 +180,10 @@ public sealed class AuthorizeAppService(
     }
 
     /// <summary>
-    /// Resolves the caller's role set through the configured provider, falling back to the explicit
-    /// <c>role</c> request parameter only when the provider reports no roles at all <b>and</b> the
-    /// provider permits that fallback (<see cref="ICallerRoleResolver.AllowsRoleParameterFallback"/>).
+    /// Resolves the caller's role set through the configured provider and composes the explicit
+    /// <c>role</c> request parameter the way the provider states
+    /// (<see cref="ICallerRoleResolver.RoleParameterMode"/>): as a fallback when the provider reports no
+    /// roles, or as the request's <c>role</c> header when the request carries none.
     /// <para>
     /// The provider is asked first so that this surface and the discovery surfaces agree: an
     /// <c>authorize</c> answer that contradicts <c>availableTransitions</c> is worse than no answer.
@@ -217,6 +219,17 @@ public sealed class AuthorizeAppService(
         AuthorizationRequestContext? requestContext,
         CancellationToken cancellationToken)
     {
+        // AsRoleHeader: the parameter is the request's role header when there is none, and the
+        // resolver's own header precedence decides — no fallback on top.
+        if (callerRoleResolver.RoleParameterMode == RoleParameterMode.AsRoleHeader)
+        {
+            var asHeader = await callerRoleResolver.ResolveRolesAsync(
+                WithRoleParameterAsHeader(requestContext?.Headers, roleParameter), cancellationToken);
+            return asHeader.IsSuccess
+                ? Result<IReadOnlyList<string>?>.Ok(asHeader.Value is { Length: > 0 } r ? r : null)
+                : Result<IReadOnlyList<string>?>.Fail(asHeader.Error);
+        }
+
         var resolved = await callerRoleResolver.ResolveRolesAsync(requestContext?.Headers, cancellationToken);
         if (!resolved.IsSuccess)
             return Result<IReadOnlyList<string>?>.Fail(resolved.Error);
@@ -224,16 +237,34 @@ public sealed class AuthorizeAppService(
         if (resolved.Value is { Length: > 0 } roles)
             return Result<IReadOnlyList<string>?>.Ok(roles);
 
-        // The provider answered, and it answered "none". Whether that leaves room for the caller's own
-        // `role` parameter is the provider's call, not this method's — see
-        // ICallerRoleResolver.AllowsRoleParameterFallback.
-        if (!callerRoleResolver.AllowsRoleParameterFallback)
-            return Result<IReadOnlyList<string>?>.Ok(null);
-
+        // Fallback: the provider answered "none", so the parameter stands in.
         return Result<IReadOnlyList<string>?>.Ok(
             string.IsNullOrWhiteSpace(roleParameter) ? null : [roleParameter.Trim()]);
     }
-    
+
+    /// <summary>
+    /// The request headers with the <c>role</c> parameter in the <c>role</c> header's place — only when
+    /// the request carries no non-blank <c>role</c> header of its own, which then wins. Returns the
+    /// original dictionary when there is nothing to add.
+    /// </summary>
+    private static IReadOnlyDictionary<string, string?>? WithRoleParameterAsHeader(
+        IReadOnlyDictionary<string, string?>? headers,
+        string? roleParameter)
+    {
+        if (string.IsNullOrWhiteSpace(roleParameter))
+            return headers;
+        if (headers is not null
+            && headers.TryGetValue(AetherClaimTypes.Role, out var existing)
+            && !string.IsNullOrWhiteSpace(existing))
+            return headers;
+
+        var merged = headers is null
+            ? new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+            : new Dictionary<string, string?>(headers, StringComparer.OrdinalIgnoreCase);
+        merged[AetherClaimTypes.Role] = roleParameter.Trim();
+        return merged;
+    }
+
     private async Task<Result<AuthorizationMatrixOutput>> GetAuthorizationMatrixAsync(
         string domain,
         string workflow,
@@ -601,10 +632,10 @@ public sealed class AuthorizeAppService(
     }
 
     /// <summary>
-    /// The caller role set for the <c>ack</c> target: the explicit <c>role</c> parameter is
-    /// <b>additive</b> to the provider's roles rather than a fallback — and, like the fallback, only
-    /// when the provider permits it
-    /// (<see cref="ICallerRoleResolver.AllowsRoleParameterFallback"/>).
+    /// The caller role set for the <c>ack</c> target. Under a <see cref="RoleParameterMode.Fallback"/>
+    /// provider the explicit <c>role</c> parameter is <b>additive</b> to the provider's roles rather than
+    /// a fallback; under <see cref="RoleParameterMode.AsRoleHeader"/> it is the role header, like every
+    /// other target (<see cref="ICallerRoleResolver.RoleParameterMode"/>).
     /// <para>
     /// <b>Every <c>ack</c> path uses it</b> — the awaiting instance with an active SubFlow and the one
     /// without (the common path). Until 2026-09-25 the second went through
@@ -626,17 +657,18 @@ public sealed class AuthorizeAppService(
         AuthorizationRequestContext? requestContext,
         CancellationToken cancellationToken)
     {
+        // Under AsRoleHeader ack follows the same header rule as every other target.
+        if (callerRoleResolver.RoleParameterMode == RoleParameterMode.AsRoleHeader)
+            return await GetCallerRolesAsync(roleParameter, requestContext, cancellationToken);
+
         var resolved = await callerRoleResolver.ResolveRolesAsync(requestContext?.Headers, cancellationToken);
         if (!resolved.IsSuccess)
             return Result<IReadOnlyList<string>?>.Fail(resolved.Error);
 
         var roles = new List<string>();
 
-        // Additive, but only for a provider whose source is the caller's own assertion anyway. Under an
-        // authority provider the parameter adds nothing it is entitled to add: `ack` would otherwise be
-        // the one target where a caller could still name its own role, and the interaction's roles arm
-        // would be evaluated against a set morph-idm never returned.
-        if (callerRoleResolver.AllowsRoleParameterFallback && !string.IsNullOrWhiteSpace(roleParameter))
+        // Fallback provider: additive on every ack path.
+        if (!string.IsNullOrWhiteSpace(roleParameter))
             roles.Add(roleParameter.Trim());
 
         if (resolved.Value is { Length: > 0 } providerRoles)

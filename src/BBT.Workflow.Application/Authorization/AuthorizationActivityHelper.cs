@@ -119,6 +119,19 @@ public static class AuthorizationActivityHelper
     }
 
     /// <summary>
+    /// Records that no provider call was made because the request's <c>role</c> header supplied the
+    /// caller's roles. Not an error, and distinct from <c>skipped</c>: here the caller HAS roles.
+    /// </summary>
+    public static void SetFromHeader(Activity? activity, int roleCount, bool memoHit)
+    {
+        if (activity is null) return;
+
+        activity.SetTag(TelemetryConstants.TagNames.AuthOutcome, TelemetryConstants.AuthOutcomes.Header);
+        activity.SetTag(TelemetryConstants.TagNames.AuthMemoHit, memoHit);
+        activity.SetTag(TelemetryConstants.TagNames.AuthRoleCount, roleCount);
+    }
+
+    /// <summary>
     /// Records that no provider call was made because the caller carried no identity to ask about.
     /// Not an error: anonymous and device tokens are ordinary traffic.
     /// </summary>
