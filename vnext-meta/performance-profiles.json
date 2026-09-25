@@ -50,6 +50,18 @@
       "configurable": false,
       "policyId": "query-filter-value-length",
       "source": "src/BBT.Workflow.Domain/Security/InputValidator.cs"
+    },
+    {
+      "id": "function-execution-journal-capacity",
+      "since": "0.0.94",
+      "scope": "telemetry",
+      "description": "Bounds on the asynchronous function-execution journal (functions with executionLog: ENABLED — see feature functionExecutionMetrics). A non-blocking producer enqueues on a bounded in-process channel and a single background writer drains it in batches; when the queue is full the NEWEST record is dropped (counted and reported via WorkflowLogs FunctionExecutionJournalRecordsDropped). So journal completeness is best-effort and bounded under sustained load — a domain enabling executionLog cannot assume 100% of invocations are recorded. This is not a latency guarantee and does not affect function execution time (the write is off the request path). Fixed constants, not configurable in this phase.",
+      "limits": {
+        "queueCapacity": 10000,
+        "batchSize": 200
+      },
+      "configurable": false,
+      "source": "src/BBT.Workflow.Application/Functions/IFunctionExecutionJournal.cs, src/BBT.Workflow.Application/Functions/FunctionExecutionJournalWriter.cs"
     }
   ]
 }

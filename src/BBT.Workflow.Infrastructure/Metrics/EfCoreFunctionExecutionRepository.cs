@@ -25,13 +25,26 @@ public class EfCoreFunctionExecutionRepository(
         IFunctionExecutionRepository
 {
     /// <inheritdoc />
-    public async Task InsertAsync(FunctionExecution execution, CancellationToken cancellationToken = default)
+    public async Task InsertBatchAsync(
+        IReadOnlyCollection<FunctionExecution> executions,
+        CancellationToken cancellationToken = default)
     {
+        if (executions.Count == 0)
+        {
+            return;
+        }
+
         using (currentSchema.Change(FunctionExecution.SchemaName))
         {
-            // autoSave (true) so the row commits within the (RequiresNew, non-transactional) unit of work
-            // the journal writer opens — independent of the function request's own ambient scope.
-            await base.InsertAsync(execution, true, cancellationToken);
+            // One AddRange + one SaveChanges for the whole batch — the throughput point of the async
+            // journal. Runs inside the (RequiresNew, non-transactional) unit of work the background
+            // writer opens, which is also what lets GetDbContextAsync resolve the context (Aether binds
+            // the DbContext lifetime to an active UoW). The schema pin binds that context to sys_metrics,
+            // regardless of any ambient schema.
+            var context = await GetDbContextAsync();
+            var dbSet = await GetDbSetAsync();
+            await dbSet.AddRangeAsync(executions, cancellationToken);
+            await context.SaveChangesAsync(cancellationToken);
         }
     }
 

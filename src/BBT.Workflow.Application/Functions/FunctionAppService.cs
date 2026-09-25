@@ -5,6 +5,7 @@ using System.Globalization;
 using BBT.Aether.Application.Services;
 using BBT.Aether.MultiSchema;
 using BBT.Aether.Results;
+using BBT.Aether.Users;
 using BBT.Workflow.Caching;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Functions.Contracts;
@@ -38,7 +39,8 @@ public sealed class FunctionAppService(
     IRemoteInvokerService remoteInvoker,
     IFunctionAccessPolicy functionAccessPolicy,
     IFunctionRequestValidationService functionRequestValidationService,
-    IFunctionExecutionJournal functionExecutionJournal)
+    IFunctionExecutionJournal functionExecutionJournal,
+    ICurrentUser currentUser)
     : ApplicationService(serviceProvider), IFunctionAppService
 {
     /// <inheritdoc />
@@ -144,18 +146,33 @@ public sealed class FunctionAppService(
         CancellationToken cancellationToken)
     {
         // Journal one execution row per invocation of a domain-registered function
-        // (vnext-client-sdk-core#60, item C1). Only functions that reach ExecuteFunctionAsync are
-        // recorded — the built-in instance reads (state/data/view/…) are served by their own handlers
-        // and never come through here, so the journal is scoped to sys-catalog Functions automatically.
+        // (vnext-client-sdk-core#60). Recording is OPT-IN per function (executionLog: ENABLED) and
+        // best-effort: the row is ENQUEUED, never written, on this path — a background writer persists it
+        // — so the function's execution time is unaffected.
+        var fromCache = false;
+
+        // Fast path: journaling off (the default) → run with zero telemetry overhead. This is the common
+        // case; nothing here may cost an un-opted function anything.
+        if (!function.ExecutionLoggingEnabled)
+        {
+            return await RunAsync();
+        }
+
+        // Only functions that reach ExecuteFunctionAsync are recorded — the built-in instance reads
+        // (state/data/view/…) are served by their own handlers and never come through here.
         // try/finally so EVERY outcome is recorded exactly once: success, a Result.Fail, and a thrown
-        // exception (which still counts as an erroring execution). Journaling is best-effort and never
-        // throws, so the finally cannot mask an in-flight exception.
+        // exception (which still counts as an erroring execution). Enqueueing is non-blocking and never
+        // throws, so the finally cannot mask an in-flight exception nor slow the function.
         var invokedAt = DateTime.UtcNow;
         var stopwatch = Stopwatch.StartNew();
         // Trace id is constant across the request's span tree, so capturing it here (before the
         // Function.Execute span opens inside RunAsync) links the journal row to its APM/ELK trace.
         var traceId = Activity.Current?.TraceId.ToString();
-        var fromCache = false;
+        // Caller identity is captured here, on the request scope, because the row is persisted later off
+        // that scope where ICurrentUser is gone (ActorUserName → CreatedBy, UserName → CreatedByBehalfOf,
+        // matching what Aether's audit interceptor would otherwise have stamped).
+        var invokedBy = currentUser.ActorUserName;
+        var invokedByBehalfOf = currentUser.UserName;
         var succeeded = false;
         int? statusCode = null;
         string? errorCode = null;
@@ -176,7 +193,9 @@ public sealed class FunctionAppService(
         finally
         {
             stopwatch.Stop();
-            await functionExecutionJournal.RecordAsync(
+            // Non-blocking enqueue (no await): returns false if the bounded queue is full, which the
+            // background writer reports — a dropped telemetry row never surfaces to the caller.
+            functionExecutionJournal.Record(
                 new FunctionExecutionRecord(
                     function.Domain,
                     function.Key,
@@ -190,8 +209,9 @@ public sealed class FunctionAppService(
                     statusCode,
                     errorCode,
                     fromCache,
-                    traceId),
-                cancellationToken);
+                    invokedBy,
+                    invokedByBehalfOf,
+                    traceId));
         }
 
         async Task<Result<FunctionResponseOutput>> RunAsync()

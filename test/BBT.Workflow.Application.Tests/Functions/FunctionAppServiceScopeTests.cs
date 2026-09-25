@@ -52,6 +52,7 @@ public sealed class FunctionAppServiceScopeTests : IDisposable
     private readonly IDynamicExpressoValueEvaluator _keyEvaluator;
     private readonly IFunctionRequestValidationService _functionRequestValidationService;
     private readonly IFunctionExecutionJournal _functionExecutionJournal;
+    private readonly ICurrentUser _currentUser;
     private readonly FunctionAppService _service;
 
     private readonly IServiceProvider _ambientServiceProvider;
@@ -66,6 +67,10 @@ public sealed class FunctionAppServiceScopeTests : IDisposable
         _keyEvaluator = Substitute.For<IDynamicExpressoValueEvaluator>();
         _functionRequestValidationService = Substitute.For<IFunctionRequestValidationService>();
         _functionExecutionJournal = Substitute.For<IFunctionExecutionJournal>();
+        _functionExecutionJournal.Record(Arg.Any<FunctionExecutionRecord>()).Returns(true);
+        _currentUser = Substitute.For<ICurrentUser>();
+        _currentUser.ActorUserName.Returns("actor-user");
+        _currentUser.UserName.Returns("behalf-user");
         _functionRequestValidationService
             .ValidateRequestAsync(
                 Arg.Any<Function>(),
@@ -131,7 +136,8 @@ public sealed class FunctionAppServiceScopeTests : IDisposable
             // after it moved out of FunctionAppService.
             functionAccessPolicy: new FunctionAccessPolicy(),
             functionRequestValidationService: _functionRequestValidationService,
-            functionExecutionJournal: _functionExecutionJournal);
+            functionExecutionJournal: _functionExecutionJournal,
+            currentUser: _currentUser);
     }
 
     public void Dispose()
@@ -163,16 +169,18 @@ public sealed class FunctionAppServiceScopeTests : IDisposable
         result.Error.Code.ShouldBe(WorkflowErrorCodes.FunctionScopeNotSatisfied);
     }
 
-    // ─── Execution journaling (vnext-client-sdk-core#60, item C1) ─────────────────
+    // ─── Execution journaling (vnext-client-sdk-core#60) ──────────────────────────
 
     [Fact]
-    public async Task ByKey_DomainScope_JournalsSucceededExecution()
+    public async Task ByKey_ExecutionLogEnabled_JournalsSucceededExecutionWithCallerIdentity()
     {
-        SetupFunction(TaskScope.Domain);
+        SetupFunction(TaskScope.Domain, executionLog: true);
 
         await _service.GetFunctionByKeyAsync(FunctionKey, TestDomain);
 
-        await _functionExecutionJournal.Received(1).RecordAsync(
+        // Enqueued (not awaited), and the caller identity is captured on the request scope
+        // (ActorUserName → InvokedBy, UserName → InvokedByBehalfOf).
+        _functionExecutionJournal.Received(1).Record(
             Arg.Is<FunctionExecutionRecord>(r =>
                 r.Domain == TestDomain &&
                 r.FunctionKey == FunctionKey &&
@@ -180,26 +188,49 @@ public sealed class FunctionAppServiceScopeTests : IDisposable
                 r.Workflow == null &&
                 r.InstanceId == null &&
                 r.Succeeded &&
-                !r.FromCache),
-            Arg.Any<CancellationToken>());
+                !r.FromCache &&
+                r.InvokedBy == "actor-user" &&
+                r.InvokedByBehalfOf == "behalf-user"));
+    }
+
+    [Fact]
+    public async Task ByKey_ExecutionLogDisabledByDefault_DoesNotJournal()
+    {
+        // No executionLog on the definition → the default is DISABLED → nothing is recorded, and the
+        // fast path is taken (this is the non-breaking, opt-in behaviour).
+        SetupFunction(TaskScope.Domain);
+
+        var result = await _service.GetFunctionByKeyAsync(FunctionKey, TestDomain);
+
+        result.IsSuccess.ShouldBeTrue();
+        _functionExecutionJournal.DidNotReceive().Record(Arg.Any<FunctionExecutionRecord>());
     }
 
     [Fact]
     public async Task ByKey_ScopeRejected_StillJournalsTheAttemptAsFailed()
     {
+        SetupFunction(TaskScope.Instance, executionLog: true);
+
+        await _service.GetFunctionByKeyAsync(FunctionKey, TestDomain);
+
+        _functionExecutionJournal.Received(1).Record(
+            Arg.Is<FunctionExecutionRecord>(r => !r.Succeeded && r.FunctionKey == FunctionKey));
+    }
+
+    [Fact]
+    public async Task ByKey_ScopeRejected_ExecutionLogDisabled_DoesNotJournal()
+    {
         SetupFunction(TaskScope.Instance);
 
         await _service.GetFunctionByKeyAsync(FunctionKey, TestDomain);
 
-        await _functionExecutionJournal.Received(1).RecordAsync(
-            Arg.Is<FunctionExecutionRecord>(r => !r.Succeeded && r.FunctionKey == FunctionKey),
-            Arg.Any<CancellationToken>());
+        _functionExecutionJournal.DidNotReceive().Record(Arg.Any<FunctionExecutionRecord>());
     }
 
     [Fact]
     public async Task ByKey_WhenAPhaseThrows_JournalsFaultedAndRethrows()
     {
-        SetupFunction(TaskScope.Domain);
+        SetupFunction(TaskScope.Domain, executionLog: true);
         _functionRequestValidationService
             .ValidateRequestAsync(
                 Arg.Any<Function>(),
@@ -214,9 +245,27 @@ public sealed class FunctionAppServiceScopeTests : IDisposable
             _service.GetFunctionByKeyAsync(FunctionKey, TestDomain, httpMethod: "POST"));
 
         // … and the erroring execution is still journaled (failure-rate must count thrown failures).
-        await _functionExecutionJournal.Received(1).RecordAsync(
-            Arg.Is<FunctionExecutionRecord>(r => !r.Succeeded && r.FunctionKey == FunctionKey),
-            Arg.Any<CancellationToken>());
+        _functionExecutionJournal.Received(1).Record(
+            Arg.Is<FunctionExecutionRecord>(r => !r.Succeeded && r.FunctionKey == FunctionKey));
+    }
+
+    [Fact]
+    public async Task ByKey_WhenAPhaseThrows_ExecutionLogDisabled_DoesNotJournalButStillRethrows()
+    {
+        SetupFunction(TaskScope.Domain);
+        _functionRequestValidationService
+            .ValidateRequestAsync(
+                Arg.Any<Function>(),
+                Arg.Any<JsonElement?>(),
+                Arg.Any<LazyScriptContext>(),
+                Arg.Any<IReadOnlyDictionary<string, string?>?>(),
+                Arg.Any<CancellationToken>())
+            .ThrowsAsync(new InvalidOperationException("boom"));
+
+        await Should.ThrowAsync<InvalidOperationException>(() =>
+            _service.GetFunctionByKeyAsync(FunctionKey, TestDomain, httpMethod: "POST"));
+
+        _functionExecutionJournal.DidNotReceive().Record(Arg.Any<FunctionExecutionRecord>());
     }
 
     [Fact]
@@ -405,9 +454,8 @@ public sealed class FunctionAppServiceScopeTests : IDisposable
             Arg.Any<string>(), Arg.Any<object?>(), Arg.Any<int?>(), Arg.Any<string?>(),
             Arg.Any<string?>(), Arg.Any<TaskTraceContext>(), Arg.Any<CancellationToken>());
         // A cache-served call is journaled with FromCache = true.
-        await _functionExecutionJournal.Received(1).RecordAsync(
-            Arg.Is<FunctionExecutionRecord>(r => r.FromCache && r.Succeeded),
-            Arg.Any<CancellationToken>());
+        _functionExecutionJournal.Received(1).Record(
+            Arg.Is<FunctionExecutionRecord>(r => r.FromCache && r.Succeeded));
     }
 
     [Fact]
@@ -432,9 +480,8 @@ public sealed class FunctionAppServiceScopeTests : IDisposable
             "fn:test", Arg.Any<object?>(), Arg.Any<int?>(), Arg.Any<string?>(),
             Arg.Any<string?>(), Arg.Any<TaskTraceContext>(), Arg.Any<CancellationToken>());
         // A computed (miss) call is journaled with FromCache = false.
-        await _functionExecutionJournal.Received(1).RecordAsync(
-            Arg.Is<FunctionExecutionRecord>(r => !r.FromCache && r.Succeeded),
-            Arg.Any<CancellationToken>());
+        _functionExecutionJournal.Received(1).Record(
+            Arg.Is<FunctionExecutionRecord>(r => !r.FromCache && r.Succeeded));
     }
 
     [Fact]
@@ -484,7 +531,8 @@ public sealed class FunctionAppServiceScopeTests : IDisposable
 
     // ─── Helpers ────────────────────────────────────────────────────────────────
 
-    private void SetupCachedFunction(string? generationKey = null, string? keyExpressionCode = null)
+    private void SetupCachedFunction(
+        string? generationKey = null, string? keyExpressionCode = null, bool executionLog = true)
     {
         var task = OnExecuteTask.Create(
             1,
@@ -496,7 +544,8 @@ public sealed class FunctionAppServiceScopeTests : IDisposable
         var function = new Function(
             TaskScope.Domain, task,
             cache: new FunctionCache(
-                key: "fn:test", ttlInSeconds: 300, generationKey: generationKey, keyExpression: keyExpression));
+                key: "fn:test", ttlInSeconds: 300, generationKey: generationKey, keyExpression: keyExpression),
+            executionLog: executionLog ? ExecutionLogSetting.Enabled : null);
         function.SetReference(new Reference(FunctionKey, TestDomain, "sys-functions", TestVersion));
 
         _componentCacheStore
@@ -504,13 +553,15 @@ public sealed class FunctionAppServiceScopeTests : IDisposable
             .Returns(Result<Function>.Ok(function));
     }
 
-    private void SetupFunction(TaskScope scope, List<string>? verbs = null)
+    private void SetupFunction(TaskScope scope, List<string>? verbs = null, bool executionLog = false)
     {
         var task = OnExecuteTask.Create(
             1,
             new Reference("my-task", TestDomain, "sys-tasks", TestVersion),
             ScriptCode.FromNative(string.Empty));
-        var function = new Function(scope, task, verbs: verbs);
+        var function = new Function(
+            scope, task, verbs: verbs,
+            executionLog: executionLog ? ExecutionLogSetting.Enabled : null);
         function.SetReference(new Reference(FunctionKey, TestDomain, "sys-functions", TestVersion));
 
         _componentCacheStore

@@ -1,4 +1,3 @@
-using BBT.Aether.Auditing;
 using BBT.Aether.Domain.Entities;
 using BBT.Workflow.Definitions;
 
@@ -18,7 +17,18 @@ namespace BBT.Workflow.Metrics;
 /// not in a per-flow schema, and <see cref="Workflow"/> / <see cref="InstanceId"/> are nullable —
 /// populated only for flow/instance-scoped calls.
 /// </remarks>
-public sealed class FunctionExecution : Entity<Guid>, ICreationAuditedObject
+/// <remarks>
+/// <para>
+/// This entity deliberately does <b>not</b> implement <c>ICreationAuditedObject</c>. The journal write
+/// is asynchronous (a background writer on its own DI scope), so the request <c>ICurrentUser</c> is no
+/// longer ambient when the row is saved — Aether's audit interceptor would stamp
+/// <see cref="CreatedBy"/>/<see cref="CreatedByBehalfOf"/> as null. Instead the caller (the actor and
+/// the behalf-of user) is captured at invocation time and passed to <see cref="Record"/>, which sets
+/// those columns explicitly — the same values the interceptor would have stamped
+/// (<c>ActorUserName</c> → <see cref="CreatedBy"/>, <c>UserName</c> → <see cref="CreatedByBehalfOf"/>).
+/// </para>
+/// </remarks>
+public sealed class FunctionExecution : Entity<Guid>
 {
     /// <summary>
     /// The fixed physical schema this journal lives in. Domain-wide (not per-flow), so every read and
@@ -47,6 +57,8 @@ public sealed class FunctionExecution : Entity<Guid>, ICreationAuditedObject
         int? statusCode,
         string? errorCode,
         bool fromCache,
+        string? invokedBy,
+        string? invokedByBehalfOf,
         string? traceId) : base(id)
     {
         Domain = domain;
@@ -63,12 +75,16 @@ public sealed class FunctionExecution : Entity<Guid>, ICreationAuditedObject
         FromCache = fromCache;
         TraceId = traceId;
         CreatedAt = invokedAt;
+        CreatedBy = invokedBy;
+        CreatedByBehalfOf = invokedByBehalfOf;
     }
 
     /// <summary>
     /// Builds a completed execution record. <paramref name="scope"/> stores its <see cref="TaskScope.Code"/>
     /// (D/F/I); <paramref name="workflow"/> and <paramref name="instanceId"/> must be null for a
     /// domain-scoped call, and the workflow set (instance optional) for a flow/instance-scoped one.
+    /// <paramref name="invokedBy"/>/<paramref name="invokedByBehalfOf"/> are the caller identity captured
+    /// at invocation time (actor and behalf-of), stored in <see cref="CreatedBy"/>/<see cref="CreatedByBehalfOf"/>.
     /// </summary>
     public static FunctionExecution Record(
         Guid id,
@@ -84,9 +100,12 @@ public sealed class FunctionExecution : Entity<Guid>, ICreationAuditedObject
         int? statusCode,
         string? errorCode,
         bool fromCache,
+        string? invokedBy = null,
+        string? invokedByBehalfOf = null,
         string? traceId = null) =>
         new(id, domain, functionKey, functionVersion, scope.Code, workflow, instanceId,
-            invokedAt, durationMs, succeeded, statusCode, errorCode, fromCache, traceId);
+            invokedAt, durationMs, succeeded, statusCode, errorCode, fromCache,
+            invokedBy, invokedByBehalfOf, traceId);
 
     /// <summary>Owning domain.</summary>
     public string Domain { get; private set; } = string.Empty;
@@ -130,17 +149,17 @@ public sealed class FunctionExecution : Entity<Guid>, ICreationAuditedObject
     /// </summary>
     public string? TraceId { get; private set; }
 
-    // ICreationAuditedObject — CreatedBy / CreatedByBehalfOf are stamped from the request ICurrentUser
-    // by Aether's audit interceptor on save, so they are the invokedBy / invokedByBehalfOf of the call.
-    // CreatedAt is initialized to InvokedAt (the save happens after the call completes, so the audit
-    // stamp would otherwise be the completion instant, not the invocation instant).
+    // CreatedBy / CreatedByBehalfOf are captured at invocation time and set explicitly by Record (see the
+    // class remarks) — NOT audit-stamped, because the write is asynchronous and the request ICurrentUser
+    // is no longer ambient when the row is saved. CreatedAt is initialized to InvokedAt so it reflects the
+    // invocation instant, not the (later) background save instant.
 
-    /// <inheritdoc />
-    public DateTime CreatedAt { get; set; }
+    /// <summary>When the row was created — equal to <see cref="InvokedAt"/> (the invocation instant).</summary>
+    public DateTime CreatedAt { get; private set; }
 
-    /// <summary>The caller that invoked the function (audit-stamped).</summary>
-    public string? CreatedBy { get; set; }
+    /// <summary>The actor that invoked the function (<c>ICurrentUser.ActorUserName</c> at invocation time).</summary>
+    public string? CreatedBy { get; private set; }
 
-    /// <summary>The behalf-of caller, when the invocation was made on someone's behalf (audit-stamped).</summary>
-    public string? CreatedByBehalfOf { get; set; }
+    /// <summary>The behalf-of caller (<c>ICurrentUser.UserName</c>), when the invocation was made on someone's behalf.</summary>
+    public string? CreatedByBehalfOf { get; private set; }
 }

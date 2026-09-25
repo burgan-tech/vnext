@@ -1,96 +1,93 @@
 using System;
-using System.Threading;
-using System.Threading.Tasks;
-using BBT.Aether.Guids;
-using BBT.Aether.Uow;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Functions;
-using BBT.Workflow.Metrics;
-using Microsoft.Extensions.Logging;
-using NSubstitute;
-using NSubstitute.ExceptionExtensions;
 using Shouldly;
 using Xunit;
 
 namespace BBT.Workflow.Application.Tests.Functions;
 
 /// <summary>
-/// Unit tests for <see cref="FunctionExecutionJournal"/> — that it builds the journal entity from the
-/// observed facts and that a write failure is swallowed (journaling must never fail the function).
+/// Unit tests for <see cref="FunctionExecutionJournal"/> — the bounded, non-blocking producer queue
+/// behind <c>IFunctionExecutionJournal</c>. Covers the happy enqueue path and every drop/shutdown
+/// corner: a full queue sheds the newest record (observably), a completed queue rejects, and
+/// <c>Record</c> never blocks nor throws.
 /// </summary>
 public class FunctionExecutionJournalTests
 {
-    private readonly IFunctionExecutionRepository _repository = Substitute.For<IFunctionExecutionRepository>();
-    private readonly IUnitOfWorkManager _uowManager = Substitute.For<IUnitOfWorkManager>();
-    private readonly IGuidGenerator _guidGenerator = Substitute.For<IGuidGenerator>();
-    private readonly FunctionExecutionJournal _journal;
+    private static FunctionExecutionRecord Sample(string key = "get-report") => new(
+        Domain: "sample",
+        FunctionKey: key,
+        FunctionVersion: "1.0.0",
+        Scope: TaskScope.Domain,
+        Workflow: null,
+        InstanceId: null,
+        InvokedAt: DateTime.UtcNow,
+        DurationMs: 10,
+        Succeeded: true,
+        StatusCode: 200,
+        ErrorCode: null,
+        FromCache: false);
 
-    public FunctionExecutionJournalTests()
+    [Fact]
+    public void Record_EnqueuesRecord_AndReaderReadsItBack()
     {
-        var uow = Substitute.For<IUnitOfWork>();
-        uow.CommitAsync(Arg.Any<CancellationToken>()).Returns(Task.CompletedTask);
-        _uowManager.Begin(Arg.Any<UnitOfWorkOptions>()).Returns(uow);
+        var journal = new FunctionExecutionJournal();
+        var record = Sample();
 
-        _journal = new FunctionExecutionJournal(
-            _repository, _uowManager, _guidGenerator,
-            Substitute.For<ILogger<FunctionExecutionJournal>>());
+        var accepted = journal.Record(record);
+
+        accepted.ShouldBeTrue();
+        journal.Reader.TryRead(out var read).ShouldBeTrue();
+        read.ShouldBeSameAs(record);
+        journal.DroppedCount.ShouldBe(0);
     }
 
     [Fact]
-    public async Task RecordAsync_BuildsEntityFromRecordAndInserts()
+    public void Record_WhenQueueFull_DropsNewestReturnsFalse_AndCountsTheDrop()
     {
-        var id = Guid.NewGuid();
-        _guidGenerator.Create().Returns(id);
-        var instanceId = Guid.NewGuid();
-        var invokedAt = DateTime.UtcNow.AddSeconds(-1);
+        // Capacity 1: the first record fills the queue, the second is dropped (Wait mode + TryWrite).
+        var journal = new FunctionExecutionJournal(capacity: 1);
 
-        FunctionExecution? captured = null;
-        await _repository.InsertAsync(Arg.Do<FunctionExecution>(e => captured = e), Arg.Any<CancellationToken>());
+        journal.Record(Sample("first")).ShouldBeTrue();
+        journal.Record(Sample("second")).ShouldBeFalse();
 
-        await _journal.RecordAsync(new FunctionExecutionRecord(
-            Domain: "sample",
-            FunctionKey: "get-report",
-            FunctionVersion: "2.0.0",
-            Scope: TaskScope.Instance,
-            Workflow: "north-star",
-            InstanceId: instanceId,
-            InvokedAt: invokedAt,
-            DurationMs: 42.5,
-            Succeeded: false,
-            StatusCode: null,
-            ErrorCode: "Task:Http:500",
-            FromCache: true,
-            TraceId: "0af7651916cd43dd8448eb211c80319c"));
-
-        await _repository.Received(1).InsertAsync(Arg.Any<FunctionExecution>(), Arg.Any<CancellationToken>());
-        captured.ShouldNotBeNull();
-        captured!.Id.ShouldBe(id);
-        captured.Domain.ShouldBe("sample");
-        captured.FunctionKey.ShouldBe("get-report");
-        captured.FunctionVersion.ShouldBe("2.0.0");
-        captured.Scope.ShouldBe("I");
-        captured.Workflow.ShouldBe("north-star");
-        captured.InstanceId.ShouldBe(instanceId);
-        captured.InvokedAt.ShouldBe(invokedAt);
-        captured.DurationMs.ShouldBe(42.5);
-        captured.Succeeded.ShouldBeFalse();
-        captured.StatusCode.ShouldBeNull();
-        captured.ErrorCode.ShouldBe("Task:Http:500");
-        captured.FromCache.ShouldBeTrue();
-        captured.TraceId.ShouldBe("0af7651916cd43dd8448eb211c80319c");
+        journal.DroppedCount.ShouldBe(1);
+        // The record that stayed is the FIRST — the newest was the one dropped.
+        journal.Reader.TryRead(out var read).ShouldBeTrue();
+        read!.FunctionKey.ShouldBe("first");
     }
 
     [Fact]
-    public async Task RecordAsync_WhenWriteFails_SwallowsSoTheFunctionIsUnaffected()
+    public void DroppedCount_AccumulatesAcrossManyDrops()
     {
-        _guidGenerator.Create().Returns(Guid.NewGuid());
-        _repository
-            .InsertAsync(Arg.Any<FunctionExecution>(), Arg.Any<CancellationToken>())
-            .ThrowsAsync(new InvalidOperationException("db down"));
+        var journal = new FunctionExecutionJournal(capacity: 1);
+        journal.Record(Sample());
 
-        // Must not throw.
-        await Should.NotThrowAsync(() => _journal.RecordAsync(new FunctionExecutionRecord(
-            "sample", "get-report", "1.0.0", TaskScope.Domain, null, null,
-            DateTime.UtcNow, 10, true, 200, null, false)));
+        for (var i = 0; i < 5; i++)
+        {
+            journal.Record(Sample()).ShouldBeFalse();
+        }
+
+        journal.DroppedCount.ShouldBe(5);
+    }
+
+    [Fact]
+    public void Record_AfterComplete_ReturnsFalse_AndDoesNotThrow()
+    {
+        var journal = new FunctionExecutionJournal();
+        journal.Complete();
+
+        var accepted = Should.NotThrow(() => journal.Record(Sample()));
+
+        accepted.ShouldBeFalse();
+    }
+
+    [Fact]
+    public void InvalidCapacity_FallsBackToDefault()
+    {
+        // A non-positive capacity must not throw — it falls back to the default bound.
+        var journal = Should.NotThrow(() => new FunctionExecutionJournal(capacity: 0));
+
+        journal.Record(Sample()).ShouldBeTrue();
     }
 }

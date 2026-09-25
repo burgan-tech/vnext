@@ -113,7 +113,11 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
         services.AddScoped<IFunctionAccessPolicy, FunctionAccessPolicy>();
         services.AddScoped<IFunctionRequestValidationService, FunctionRequestValidationService>();
         services.AddScoped<IFunctionAppService, FunctionAppService>();
-        services.AddScoped<IFunctionExecutionJournal, FunctionExecutionJournal>();
+        // Singleton: the journal is a process-wide bounded queue shared by the producer (the function
+        // path, via IFunctionExecutionJournal) and the background writer (which reads the concrete type's
+        // ChannelReader). Registering the concrete once and forwarding the interface keeps them one instance.
+        services.AddSingleton<FunctionExecutionJournal>();
+        services.AddSingleton<IFunctionExecutionJournal>(sp => sp.GetRequiredService<FunctionExecutionJournal>());
         services.AddScoped<IFunctionMetricsAppService, FunctionMetricsAppService>();
         services.AddScoped<IFunctionInfoAppService, FunctionInfoAppService>();
         services.AddScoped<IEventAppService, EventAppService>();

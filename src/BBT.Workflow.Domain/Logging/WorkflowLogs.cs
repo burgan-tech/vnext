@@ -4532,6 +4532,35 @@ public static partial class WorkflowLogs
         string functionKey,
         string domain);
 
+    /// <summary>
+    /// Logs when the background journal writer fails to persist a batch of execution rows
+    /// (vnext-client-sdk-core#60). The whole batch is dropped; the writer loop keeps running so a
+    /// transient DB fault never stops journaling. Best-effort: the recorded functions are unaffected.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 80007,
+        Level = LogLevel.Error,
+        Message = "Failed to flush a batch of {BatchSize} function-execution rows; the batch was dropped.")]
+    public static partial void FunctionExecutionJournalBatchWriteFailed(
+        this ILogger logger,
+        Exception exception,
+        int batchSize);
+
+    /// <summary>
+    /// Logs when the bounded journal queue was full and execution records were dropped
+    /// (vnext-client-sdk-core#60). Journaling is best-effort by design — under sustained load the
+    /// runtime sheds telemetry rows rather than slowing the functions it records. Reported by the
+    /// writer, off the hot path, as a running total so drops are visible without per-record logging.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 80008,
+        Level = LogLevel.Warning,
+        Message = "Function-execution journal dropped {DroppedDelta} record(s) (queue full); {DroppedTotal} dropped since start.")]
+    public static partial void FunctionExecutionJournalRecordsDropped(
+        this ILogger logger,
+        long droppedDelta,
+        long droppedTotal);
+
     #endregion
 
     #region Component Cache

@@ -142,6 +142,52 @@ public sealed class FunctionExecutionPersistenceTests : IAsyncLifetime
         summary.FailureRate.ShouldBe(0);
     }
 
+    [Fact]
+    public async Task InsertBatchAsync_PersistsWholeBatch_WithCallerIdentityAndInvokedAtAsCreatedAt()
+    {
+        await using var ctx = CreateContext();
+        var repo = new EfCoreFunctionExecutionRepository(new FixedDbContextProvider(ctx), Sp(), Substitute.For<ICurrentSchema>());
+
+        var t0 = DateTime.UtcNow.AddMinutes(-5);
+        var rows = new[]
+        {
+            FunctionExecution.Record(
+                Guid.NewGuid(), Domain, "batch-fn", "1.0.0", TaskScope.Domain, null, null,
+                t0, 15, succeeded: true, 200, null, fromCache: false,
+                invokedBy: "alice", invokedByBehalfOf: "on-behalf", traceId: "tr-batch-1"),
+            FunctionExecution.Record(
+                Guid.NewGuid(), Domain, "batch-fn", "1.0.0", TaskScope.Domain, null, null,
+                t0.AddSeconds(1), 25, succeeded: false, null, "Task:Http:500", fromCache: false,
+                invokedBy: "bob", invokedByBehalfOf: null, traceId: "tr-batch-2"),
+        };
+
+        await repo.InsertBatchAsync(rows, CancellationToken.None);
+
+        await using var verify = CreateContext();
+        var persisted = await verify.FunctionExecutions
+            .Where(e => e.FunctionKey == "batch-fn")
+            .OrderBy(e => e.InvokedAt)
+            .ToListAsync();
+
+        persisted.Count.ShouldBe(2);
+        // Caller identity is persisted explicitly (no audit interceptor stamping on the background scope).
+        persisted[0].CreatedBy.ShouldBe("alice");
+        persisted[0].CreatedByBehalfOf.ShouldBe("on-behalf");
+        // CreatedAt tracks the invocation instant, not the (later) save.
+        persisted[0].CreatedAt.ShouldBe(persisted[0].InvokedAt);
+        persisted[1].CreatedBy.ShouldBe("bob");
+        persisted[1].CreatedByBehalfOf.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task InsertBatchAsync_EmptyBatch_IsNoOp()
+    {
+        await using var ctx = CreateContext();
+        var repo = new EfCoreFunctionExecutionRepository(new FixedDbContextProvider(ctx), Sp(), Substitute.For<ICurrentSchema>());
+
+        await Should.NotThrowAsync(() => repo.InsertBatchAsync(Array.Empty<FunctionExecution>(), CancellationToken.None));
+    }
+
     private static FunctionExecution Row(
         string key, string scope, string? workflow, Guid? instanceId,
         DateTime invokedAt, double durationMs, bool succeeded) =>

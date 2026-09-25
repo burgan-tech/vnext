@@ -38,11 +38,12 @@ public sealed record FunctionExecutionSummary(
 public interface IFunctionExecutionRepository
 {
     /// <summary>
-    /// Appends one execution row and commits it on its own context, independently of any ambient unit
-    /// of work — a function is a read and may carry no committing UoW. Callers treat journaling as
-    /// best-effort and must not let its failure affect the function response.
+    /// Appends a batch of execution rows in a single round-trip. Called by the background journal writer
+    /// on its own DI scope (inside its own unit of work), independently of any function request — the
+    /// producer only enqueues, never writes. Journaling is best-effort: the writer swallows failures so a
+    /// telemetry write can never affect the functions being recorded. A no-op for an empty batch.
     /// </summary>
-    Task InsertAsync(FunctionExecution execution, CancellationToken cancellationToken = default);
+    Task InsertBatchAsync(IReadOnlyCollection<FunctionExecution> executions, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Reads one page of the journal for <see cref="FunctionExecutionQuery.FunctionKey"/>, newest
