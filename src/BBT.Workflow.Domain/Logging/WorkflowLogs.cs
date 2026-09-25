@@ -3977,34 +3977,82 @@ public static partial class WorkflowLogs
         double elapsedMs);
 
     /// <summary>
-    /// Logs when the provider answered that the caller has no operation set at all. This is a valid
-    /// answer, not a failure — but it denies every allowlist grant, so it is worth seeing.
+    /// Logs when the provider answered that the caller holds nothing — <c>204</c>, a blank body, or an
+    /// empty roles array (<paramref name="emptyReason"/>). A valid answer, not a failure, and the
+    /// request continues on an empty role set; Warning because it narrows everything the caller sees.
     /// </summary>
     [LoggerMessage(
         EventId = 20441,
         Level = LogLevel.Warning,
-        Message = "Caller role provider returned no operation set. Provider={Provider}, Subject={Subject}, Actor={Actor}, Position={Position}")]
+        Message = "Caller role provider returned no operation set; evaluating with an empty role set. Provider={Provider}, EmptyReason={EmptyReason}, Subject={Subject}, Actor={Actor}, Position={Position}")]
     public static partial void CallerRoleProviderReturnedNoContent(
         this ILogger logger,
         string provider,
+        string emptyReason,
         string? subject,
         string? actor,
         string? position);
 
     /// <summary>
-    /// Logs a failed provider call. The request is denied (fail-closed) after this is written, so this
-    /// is the only record of why a caller lost access.
+    /// Logs a failed provider call — a non-success status, a timeout or a transport error
+    /// (<paramref name="failureKind"/>). The request is NOT broken: it continues on an empty role set,
+    /// so allowlist grants cannot match and role-bound denies refuse. This is the only record that the
+    /// narrowed answer the caller got was an outage and not their real operation set.
     /// </summary>
     [LoggerMessage(
         EventId = 20442,
         Level = LogLevel.Error,
-        Message = "Caller role provider call failed. Provider={Provider}, StatusCode={StatusCode}, Reason={Reason}")]
+        Message = "Caller role provider call failed; evaluating with an empty role set. Provider={Provider}, FailureKind={FailureKind}, StatusCode={StatusCode}, Reason={Reason}")]
     public static partial void CallerRoleProviderCallFailed(
         this ILogger logger,
         Exception? exception,
         string provider,
+        string failureKind,
         int? statusCode,
         string reason);
+
+    /// <summary>
+    /// Logs a success-status answer whose body carried no recognizable roles array. A provider defect,
+    /// kept apart from <see cref="CallerRoleProviderCallFailed"/> so it is not lost among outages; the
+    /// request continues on an empty role set.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20463,
+        Level = LogLevel.Error,
+        Message = "Caller role provider response could not be parsed; evaluating with an empty role set. Provider={Provider}, StatusCode={StatusCode}, Reason={Reason}")]
+    public static partial void CallerRoleProviderResponseUnparseable(
+        this ILogger logger,
+        string provider,
+        int statusCode,
+        string reason);
+
+    /// <summary>
+    /// Logs that no provider call was made because the request carried a <c>role</c> header, whose
+    /// roles are then the caller's set. Debug: it is the normal path for every request that carries
+    /// one.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20465,
+        Level = LogLevel.Debug,
+        Message = "Caller roles taken from the request role header; provider not called. Provider={Provider}, RoleCount={RoleCount}")]
+    public static partial void CallerRolesTakenFromRequestHeader(
+        this ILogger logger,
+        string provider,
+        int roleCount);
+
+    /// <summary>
+    /// Logs that no provider call was made because the caller carried neither <c>act_sub</c> nor
+    /// <c>client_id</c>. Debug: anonymous and device tokens are ordinary traffic, and a Warning on
+    /// every one of their requests would bury the answers that matter.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20464,
+        Level = LogLevel.Debug,
+        Message = "Caller role provider not called: no act_sub or client_id; evaluating with an empty role set. Provider={Provider}, Subject={Subject}")]
+    public static partial void CallerRoleProviderCallSkippedNoIdentity(
+        this ILogger logger,
+        string provider,
+        string? subject);
 
     /// <summary>
     /// Logs when a surface was served the memoized role set instead of triggering a second provider
@@ -4021,7 +4069,8 @@ public static partial class WorkflowLogs
 
     /// <summary>
     /// Logs when the long-poll ownership gate could not establish the caller's roles and therefore
-    /// declined to arm the pause. The transition continues normally; nothing faults.
+    /// declined to arm the pause. The transition continues normally; nothing faults. Only a provider
+    /// that fails reaches it — morph-idm's failures arrive as an empty set and are logged as 20442/20463.
     /// </summary>
     [LoggerMessage(
         EventId = 20444,

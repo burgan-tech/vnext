@@ -1029,8 +1029,9 @@ public sealed class InstanceController(
 
     /// <summary>
     /// Pages the error-boundary incident history of an instance, newest first. This is the target of
-    /// the state function's <c>incident.history.href</c>. Gated by the same <c>queryRoles</c> check as
-    /// the state function; stack traces are never returned here (operators use the Monitor API).
+    /// the state function's <c>incident.history.href</c>. Not gated here: <c>queryRoles</c> is answered
+    /// by <c>authorize?queryRoles=true</c>, which the gateway consults before forwarding. Stack traces are
+    /// never returned here (operators use the Monitor API).
     /// </summary>
     /// <param name="domain">Domain key</param>
     /// <param name="workflow">Workflow key</param>
@@ -1049,8 +1050,7 @@ public sealed class InstanceController(
     {
         var requestContext = HttpContext.GetRequestBindingContext();
 
-        // Same provider-resolved roles as the state/data functions so the queryRoles gate evaluates
-        // the caller consistently across the surfaces that describe one instance.
+        // Same provider-resolved roles as the state/data functions; the read has no role gate of its own.
         var callerRoles = await callerRoleResolver.ResolveRolesAsync(requestContext.Headers, cancellationToken);
         if (!callerRoles.IsSuccess)
             return FromResult(BBT.Aether.Results.Result.Fail(callerRoles.Error));
@@ -1073,9 +1073,9 @@ public sealed class InstanceController(
 
     /// <summary>
     /// Returns the newest unresolved error-boundary incident of an instance. This is the target of the
-    /// <c>incident.active</c> link carried by the state function and by instance metadata. Gated by the
-    /// same <c>queryRoles</c> check as the state function; stack traces are never returned here
-    /// (operators use the Monitor API).
+    /// <c>incident.active</c> link carried by the state function and by instance metadata. Not gated here:
+    /// <c>queryRoles</c> is answered by <c>authorize?queryRoles=true</c>. Stack traces are never returned
+    /// here (operators use the Monitor API).
     /// </summary>
     /// <remarks>
     /// Answers <c>404</c> when no incident is open, which is a normal outcome rather than a failure:
@@ -1125,8 +1125,8 @@ public sealed class InstanceController(
     {
         var requestContext = HttpContext.GetRequestBindingContext();
 
-        // Resolved through the configured provider so this route and the `data` function handler agree
-        // about the same instance; without it the queryRoles gate would evaluate a role-less caller.
+        // Resolved through the configured provider so this route and the `data` function handler prune
+        // the same x-roles fields and share the same cache scope for the same caller.
         var callerRoles = await callerRoleResolver.ResolveRolesAsync(requestContext.Headers, cancellationToken);
         if (!callerRoles.IsSuccess)
             return FromResult(BBT.Aether.Results.Result.Fail(callerRoles.Error));

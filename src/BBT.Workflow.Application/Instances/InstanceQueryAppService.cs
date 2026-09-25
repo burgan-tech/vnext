@@ -437,8 +437,8 @@ public sealed class InstanceQueryAppService(
     /// <b>404 is a normal answer here, not an error.</b> The link is emitted only while the flag says
     /// an incident is open, but the incident can be resolved between the poll and the follow-up (a
     /// successful retry does exactly that). A client seeing 404 should re-read the state rather than
-    /// treat it as a failure. Gated by the same <c>queryRoles</c> check as the state function and the
-    /// history endpoint, and like them it never returns a stack trace.
+    /// treat it as a failure. Not gated here — <c>queryRoles</c> is answered by
+    /// <c>authorize?queryRoles=true</c> — and, like the history endpoint, it never returns a stack trace.
     /// </remarks>
     public async Task<Result<IncidentDetailDto>> GetActiveInstanceIncidentAsync(
         GetActiveInstanceIncidentInput input,
@@ -940,8 +940,9 @@ public sealed class InstanceQueryAppService(
     {
         try
         {
-            // Unresolvable roles fall through to the main-flow transitions below rather than forwarding
-            // with an unknown role set — the subflow would then filter its transitions against nothing.
+            // Only a provider that cannot resolve its own failures reaches the fallback below: it serves
+            // the main-flow transitions rather than forwarding an unknown role set. Neither built-in
+            // provider fails — morph-idm's failures arrive here as an empty set and are forwarded.
             var callerRoles = await callerRoleResolver.ResolveRolesAsync(headers, cancellationToken);
             if (!callerRoles.IsSuccess)
                 return GetMainFlowTransitions(mainInstance, currentWorkflow);
@@ -3205,7 +3206,7 @@ public sealed class InstanceQueryAppService(
         CancellationToken cancellationToken = default)
     {
         // No failure channel here — the method already signals "no subflow view" with null, which is
-        // also the closed answer when the caller's roles cannot be established.
+        // also the closed answer for a provider that fails. Neither built-in provider does.
         var callerRoles = await callerRoleResolver.ResolveRolesAsync(headers, cancellationToken);
         if (!callerRoles.IsSuccess)
             return null;

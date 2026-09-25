@@ -386,6 +386,13 @@ A sixth profile is **composed on top of** the base, never selected instead of it
   **Deny is evaluated first and short-circuits**: matching an allow is the side that resolves
   predefined and dynamic grants, and a dynamic grant's context build serializes the instance's full
   latest data, so a refusal must not pay for it.
+- **A caller with NO roles cannot clear a role-bound deny.** A static role or `$role.` deny refuses a
+  role-less caller (`TransitionAuthorizationManager.IsUnprovableRoleBoundDeny`, shared by both
+  evaluator twins); identity-bound denies (predefined, `$user.`, `$userBehalfOf.`) evaluate normally.
+  This is what makes it safe for `morph-idm` to resolve every failure — error status, timeout,
+  transport, unparseable body, no `act_sub`/`client_id` — to an EMPTY set instead of a 403: an empty
+  set can only narrow access. The two ship together; removing the rule would turn every blacklist
+  into a blanket allow during a provider outage. Both built-in resolvers now always succeed.
 - **A denied role is not bought back by an allowed one.** This is the half that changed: the rule used
   to be applied per caller role inside a loop that returned on the first role that was allowed, so a
   deny for role B was never reached once role A matched an allow — `[approver, blocked]` passed. The
@@ -431,14 +438,19 @@ A sixth profile is **composed on top of** the base, never selected instead of it
   describes. Overrides resolve **per hop from the child's stamp**, never from the parent's definition:
   that is what makes a directly addressed leaf give the same verdict as the same leaf reached through
   its parent, and what keeps a parent's override of its child from reaching the grandchild.
-- **The `role` request parameter is gated on the provider, both as a fallback and additively.**
-  `ICallerRoleResolver.AllowsRoleParameterFallback` — true only when the provider's own source is
-  already the caller's own assertion (`default`), false for an authority provider (`morph-idm`).
-  Without it, a provider answering "no roles" was overridden by the caller naming one in the query
-  string: measured, `?queryRoles=true` → 403 while `?queryRoles=true&role=chain.admin` → 200 for the
-  same caller. The same hole as forwarding the `role` HEADER to morph-idm, on the other channel —
-  and it matters more now that `authorize` is the only place these questions are answered. Put the
-  flag on the resolver, never a provider-name check inside a surface.
+- **Under `morph-idm` a request `role` header takes precedence, and morph-idm is not called**
+  (committee decision, 2026-09-25). The header — `ICurrentUser.Roles`, else the forwarded header
+  dictionary, i.e. exactly what the default provider reads — REPLACES the service's answer when it
+  is non-blank; only a request without one goes to morph-idm (and then every failure is `[]`). No
+  merge in either direction. Span outcome `header`, Debug log 20465. The header is still never
+  forwarded to morph-idm.
+- **`authorize`'s `role` query parameter composes per `ICallerRoleResolver.RoleParameterMode`.**
+  `Fallback` (`default`): stands in only when nothing was resolved (`ack`: additive). `AsRoleHeader`
+  (`morph-idm`, 2026-09-25): handed to the resolver AS the `role` header when the request has none, so
+  the header precedence above applies — `[X]`, morph-idm not asked; a real header wins; every target
+  incl. `ack`. It was ignored under morph-idm before; once the header became decisive that made the
+  same claim 200 through the header and 403 through the query string. Put the mode on the resolver,
+  never a provider-name check inside a surface.
 - **`authorize` has a fourth target, `ack`.** `?ack=true` is the pre-flight for
   `POST .../longpoll/ack`, admitted through the same `ILongPollInteractionGate` — so the `rule` arm, a
   C# script no gateway can evaluate, is covered. It mirrors the endpoint's own descent rule

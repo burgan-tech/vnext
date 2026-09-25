@@ -61,6 +61,12 @@
       "description": "TransitionAuthorizationManager evaluates transition RoleGrant lists: any matching DENY denies; otherwise any matching ALLOW permits; empty role grants allow all callers."
     },
     {
+      "id": "roleless-caller-cannot-clear-role-bound-deny",
+      "scope": "authorization",
+      "enforcedSince": "0.0.96",
+      "description": "A caller with no roles cannot pass a role-bound DENY grant (a static role or a $role. reference): TransitionAuthorizationManager.IsUnprovableRoleBoundDeny refuses it in both RoleGrantEvaluator and EvaluateRolesStatic, on every surface and for every caller-role provider. Identity-bound denies (predefined roles, $user., $userBehalfOf.) keep their normal evaluation. This is what makes MorphIdmCallerRoleResolver resolving every failure (error status, timeout, transport, unparseable body, no act_sub/client_id) to an empty role set safe: an empty set can only narrow access, never widen it."
+    },
+    {
       "id": "transition-predefined-and-dynamic-role-grants",
       "scope": "transition",
       "enforcedSince": "0.0.1",

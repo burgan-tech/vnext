@@ -87,9 +87,15 @@ internal sealed class RoleGrantEvaluator : IRoleGrantEvaluator
         // Deny runs FIRST, and not only because a refusal is the cheaper answer: matching an allow
         // is the side that resolves predefined and dynamic grants, and a dynamic grant's context
         // build serializes the instance's full latest data. A refusal now skips that entirely.
+        //
+        // A caller with NO roles cannot clear a role-bound deny: "nothing matched" is not evidence
+        // it is not the denied caller. See TransitionAuthorizationManager.IsUnprovableRoleBoundDeny.
+        var roleCount = HasNoRoles(roles) ? 0 : roles.Count;
         foreach (var grant in grants)
         {
-            if (grant.IsDeny && MatchesAnyRole(grant, roles, transition))
+            if (grant.IsDeny &&
+                (TransitionAuthorizationManager.IsUnprovableRoleBoundDeny(grant, roleCount)
+                 || MatchesAnyRole(grant, roles, transition)))
                 return false;
         }
 
@@ -134,6 +140,12 @@ internal sealed class RoleGrantEvaluator : IRoleGrantEvaluator
 
         return false;
     }
+
+    /// <summary>
+    /// Whether <see cref="NormalizeRoles"/> produced its role-less sentinel rather than real roles.
+    /// </summary>
+    private static bool HasNoRoles(IReadOnlyList<string> normalizedRoles)
+        => normalizedRoles is [var only] && only.Length == 0;
 
     /// <summary>
     /// Trims and drops blank roles. A caller with none is represented by a single empty role so
