@@ -39,13 +39,15 @@ public sealed class Transition : IHasKey
         VersionStrategy versionStrategy,
         List<LanguageLabel> labels,
       List<OnExecuteTask> onExecutionTasks,
-        List<RoleGrant>? roles = null
+        List<RoleGrant>? roles = null,
+        ExecutionType? executionType = null
     ) : this(key, from, target, triggerType)
     {
         VersionStrategy = versionStrategy;
         this.labels = labels ?? [];
         this.onExecutionTasks = onExecutionTasks ?? [];
         this.roles = roles ?? [];
+        ExecutionType = executionType;
         // View property will be set by ViewDefinitionJsonConverter via JsonInclude attribute
     }
     /// <summary>
@@ -80,6 +82,16 @@ public sealed class Transition : IHasKey
     /// </summary>
     [JsonInclude]
     public TransitionKind? TriggerKind { get; private set; }
+
+    /// <summary>
+    /// Optional execution mode for this transition (vnext#1003). When set, it is the source of truth and
+    /// overrides the caller's <c>sync</c> query parameter; a transition's setting (inner) wins over the
+    /// flow's (outer). Absent ⇒ the flow's <c>executionType</c>, else the caller's query parameter.
+    /// Not honoured for automatic transitions, which always run inline as part of the chain.
+    /// </summary>
+    [JsonInclude]
+    [JsonPropertyName("executionType")]
+    public ExecutionType? ExecutionType { get; private set; }
 
     [JsonInclude] public ScriptCode? Timer { get; private set; }
     [JsonInclude] public ScriptCode? Rule { get; private set; }

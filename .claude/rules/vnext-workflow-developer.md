@@ -488,6 +488,12 @@ A sixth profile is **composed on top of** the base, never selected instead of it
 
 - `sync=true`: blocks until pipeline completes; full instance returned.
 - `sync=false` (default): immediate `{ id, status }`; client polls via State function.
+- **A flow/transition `executionType` (`SYNC`/`ASYNC`) overrides the `sync` query parameter** (vnext#1003):
+  when set it is the source of truth (transition inner beats flow outer beats the query param); status,
+  enrichment and 200-vs-202 all follow the EFFECTIVE mode (`context.Mode`), and `CallerMode` keeps the
+  requested one. It is resolved ONLY for genuine external requests — `BuildTransitionContext` and the
+  start path skip it when `input.SuppressResponseEnrichment` is set, so runtime-internal subflow
+  start/forward keep their forced `sync=true`. Full guide: `docs/runtime/execution-type.md`.
 - Automatic continuations always execute inline and are awaited. An async request uses one initial
   `flow.transition` job; no Scheduler job is created for each automatic hop.
 - Runtime-generated child start, active-child forward and descended retry calls always set

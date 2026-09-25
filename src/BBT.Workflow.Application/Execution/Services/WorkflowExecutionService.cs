@@ -92,6 +92,10 @@ public sealed class WorkflowExecutionService(
     private static Result<TransitionOutput> BuildTransitionOutput(
         TransitionExecutionContext executionContext)
     {
+        // Effective sync/async outcome (#1003): the context.Mode was resolved from the definition, so the
+        // response shape follows what actually ran rather than the caller's sync query parameter.
+        var executedAsync = executionContext.Mode == ExecMode.Async;
+
         if (executionContext.ClientResponse is not null)
         {
             if (executionContext.ClientResponse.Error is { } responseError)
@@ -100,7 +104,8 @@ public sealed class WorkflowExecutionService(
             return Result<TransitionOutput>.Ok(new TransitionOutput
             {
                 Id = executionContext.InstanceId,
-                Status = executionContext.ClientResponse.Status
+                Status = executionContext.ClientResponse.Status,
+                ExecutedAsync = executedAsync
             });
         }
 
@@ -108,7 +113,8 @@ public sealed class WorkflowExecutionService(
         {
             Id = executionContext.InstanceId,
             Status = executionContext.Instance.Status,
-            PipelineInstance = executionContext.Instance
+            PipelineInstance = executionContext.Instance,
+            ExecutedAsync = executedAsync
         });
     }
 }

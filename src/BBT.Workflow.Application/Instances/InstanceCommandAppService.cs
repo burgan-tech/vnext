@@ -398,6 +398,27 @@ public sealed class InstanceCommandAppService(
     {
         var context = input.ToExecutionContext(data.Instance.Id, data.Workflow.StartTransition.Key);
 
+        // #1003: the definition overrides the caller's sync query parameter for the START, too — the
+        // start transition's executionType (inner) wins over the flow's (outer). ToExecutionContext set
+        // Mode/CallerMode from Sync; keep CallerMode (what the caller asked) and override Mode with the
+        // effective mode so the strategy factory dispatches sync/async per the definition.
+        // EXCEPT runtime-internal calls: subflow start/forward set SuppressResponseEnrichment and force
+        // sync=true so the parent can await the child to a rest point — executionType must NOT flip that
+        // to async (the child would only be enqueued and the parent would proceed on an unfinished child).
+        var callerMode = input.Sync ? ExecMode.Sync : ExecMode.Async;
+        context.CallerMode = callerMode;
+        if (input.SuppressResponseEnrichment)
+        {
+            context.Mode = callerMode;
+        }
+        else
+        {
+            context.Mode = ExecutionModeResolver.Resolve(
+                data.Workflow.StartTransition?.ExecutionType, data.Workflow.ExecutionType, callerMode);
+            TagExecutionMode(callerMode, context.Mode,
+                data.Workflow.StartTransition?.ExecutionType, data.Workflow.ExecutionType);
+        }
+
         // The definition and the payload verdict both travel with the request: the start already
         // resolved this flow, and it already validated the payload against the start transition's
         // schema — necessarily so, because that check has to happen before the instance row is
@@ -420,9 +441,17 @@ public sealed class InstanceCommandAppService(
             {
                 Id = data.Instance.Id,
                 Key = data.Instance.Key,
-                Status = transitionOutput.Status
+                Status = transitionOutput.Status,
+                // Stamp the effective sync/async outcome from context.Mode (the mode we resolved and
+                // dispatched on) so the controller shapes 200 vs 202 by what actually ran, not the caller's
+                // sync query parameter (#1003). Authoritative here — the output may have been built by the
+                // post-commit settle path (subflow start), which does not carry it.
+                ExecutedAsync = context.Mode == ExecMode.Async
             })
-            .ThenAsync(output => input.Sync && !input.SuppressResponseEnrichment
+            // Enrich by the EFFECTIVE mode, not the caller's query parameter (#1003): a definition-forced
+            // sync run returns the full instance, a forced-async accept returns identity only — so the body
+            // matches the 200/202 the controller shapes from ExecutedAsync.
+            .ThenAsync(output => context.Mode == ExecMode.Sync && !input.SuppressResponseEnrichment
                 ? EnrichSyncOutputAsync(output, output.Id, data.Workflow, new AuthorizationRequestContext(input.Headers), cancellationToken)
                 : Task.FromResult(Result<StartInstanceOutput>.Ok(output)));
     }
@@ -684,9 +713,14 @@ public sealed class InstanceCommandAppService(
             .OnSuccess(output => AddTransitionHeader(output, snapshot.Flow!, snapshot.FlowVersion))
             .ThenAsync(output =>
             {
-                // A runtime-internal relay (SuppressResponseEnrichment) awaits the pipeline like any
+                // Stamp the effective sync/async outcome from context.Mode (authoritative — the output may
+                // have come from the post-commit settle path, which does not carry it) so the controller
+                // shapes 200 vs 202 by what actually ran (#1003).
+                output.ExecutedAsync = context.Mode == ExecMode.Async;
+                // Enrich by the EFFECTIVE mode, not the caller's query parameter, so the body matches that
+                // status. A runtime-internal relay (SuppressResponseEnrichment) awaits the pipeline like any
                 // sync caller but takes the identity-only response — see TransitionInput.
-                if (input.Sync && !input.SuppressResponseEnrichment)
+                if (context.Mode == ExecMode.Sync && !input.SuppressResponseEnrichment)
                     return EnrichSyncOutputAsync(output, output.Id, workflowDefinition, new AuthorizationRequestContext(input.Headers), cancellationToken);
                 output.Key = snapshot.Key;
                 return Task.FromResult(Result<TransitionOutput>.Ok(output));
@@ -703,6 +737,26 @@ public sealed class InstanceCommandAppService(
         TransitionInput input,
         Definitions.Workflow workflow)
     {
+        // #1003: the definition is the source of truth for sync/async — a transition's executionType
+        // (inner) wins over the flow's (outer), and either overrides the caller's sync query parameter.
+        // Absent any definition, the caller's mode stands (pre-#1003 behaviour). CallerMode always keeps
+        // what the caller asked for, so the requested-vs-effective divergence is visible on the trace.
+        // EXCEPT runtime-internal calls: the same-domain subflow forward and the cross-domain relay set
+        // SuppressResponseEnrichment and force sync=true so the parent forwards synchronously into the
+        // active child — executionType must NOT flip that to async.
+        var callerMode = input.Sync ? ExecMode.Sync : ExecMode.Async;
+        var effectiveMode = callerMode;
+        if (!input.SuppressResponseEnrichment)
+        {
+            // Alias-aware: a well-known transition (cancel/updateData/exit) invoked by its reserved alias
+            // while the workflow uses a custom key resolves here too, matching the pipeline's own lookup.
+            var transition = workflow.ResolveWellKnownTransition(transitionKey)
+                             ?? workflow.FindTransitionInContext(transitionKey);
+            effectiveMode = ExecutionModeResolver.Resolve(
+                transition?.ExecutionType, workflow.ExecutionType, callerMode);
+            TagExecutionMode(callerMode, effectiveMode, transition?.ExecutionType, workflow.ExecutionType);
+        }
+
         return new WorkflowExecutionContext
         {
             Domain = input.Domain,
@@ -717,8 +771,8 @@ public sealed class InstanceCommandAppService(
             TransitionKey = transitionKey,
             TriggerType = TriggerType.Manual,
             Actor = input.Actor,
-            Mode = input.Sync ? ExecMode.Sync : ExecMode.Async,
-            CallerMode = input.Sync ? ExecMode.Sync : ExecMode.Async,
+            Mode = effectiveMode,
+            CallerMode = callerMode,
             CorrelationId = Guid.NewGuid().ToString("N"),
             RequestedAt = DateTimeOffset.UtcNow,
             Headers = input.Headers,
@@ -738,6 +792,33 @@ public sealed class InstanceCommandAppService(
             SubflowChainReserved = input.ChainReserved
         };
     }
+
+    /// <summary>
+    /// Records the requested vs effective execution mode on the current trace span (vnext#1003), so an
+    /// operator can see when a flow/transition <c>executionType</c> definition overrode the caller's
+    /// <c>sync</c> query parameter. Uses the existing telemetry span; no new persistence.
+    /// </summary>
+    internal static void TagExecutionMode(
+        ExecMode requested,
+        ExecMode effective,
+        Definitions.ExecutionType? transitionExecutionType,
+        Definitions.ExecutionType? flowExecutionType)
+    {
+        var activity = System.Diagnostics.Activity.Current;
+        if (activity is null)
+        {
+            return;
+        }
+
+        activity.SetTag(TelemetryConstants.TagNames.ExecutionRequested, ToModeTag(requested));
+        activity.SetTag(TelemetryConstants.TagNames.ExecutionEffective, ToModeTag(effective));
+        if (ExecutionModeResolver.IsOverriddenByDefinition(transitionExecutionType, flowExecutionType, requested))
+        {
+            activity.SetTag(TelemetryConstants.TagNames.ExecutionOverridden, true);
+        }
+    }
+
+    private static string ToModeTag(ExecMode mode) => mode == ExecMode.Async ? "ASYNC" : "SYNC";
 
     /// <summary>
     /// Adds workflow header to the transition response using instance flow and version.

@@ -1,6 +1,15 @@
 {
   "runtimeVersion": "0.0.92",
   "engine": {
+    "executionType": {
+      "since": "0.0.97",
+      "status": "stable",
+      "description": "executionType (SYNC/ASYNC) is an optional string enum on the flow definition (attributes.executionType) AND on transition definitions (state transition, sharedTransition, startTransition), declaring how a transition executes independently of the caller. PURELY ADDITIVE / NON-BREAKING: a flow or transition without executionType behaves exactly as before, where the caller's sync query parameter chooses the mode (default sync=false => ASYNC, a 202-accepted background job via the scheduler). PRECEDENCE, highest first: the transition's executionType (inner) wins over the flow's (outer), and either overrides the caller's sync query parameter entirely - when a definition is present the query parameter is ignored. Resolution is a single pure function ExecutionModeResolver.Resolve(transition?.executionType, flow?.executionType, callerMode) applied at the two caller-driven intake builders: BuildTransitionContext (manual + event transition requests) and the START context (StartInstanceInput.ToExecutionContext call site, reading workflow.StartTransition.executionType). It sets WorkflowExecutionContext.Mode (the EFFECTIVE mode, which ExecutionStrategyFactory keys on to pick the sync inline pipeline vs the async enqueue) while CallerMode keeps what the caller asked for. SCOPE: all client/event transition REQUESTS except automatic transitions, which always run inline as part of the auto-chain and never go through the strategy factory. Runtime-internal and timer-fired paths (scheduled, timeout, retry, subflow resume/cancel/fault, long-poll ack) keep their existing forced modes - they are not caller requests and their modes are correctness-driven. RESPONSE SHAPE follows the EFFECTIVE mode: an effective-sync transition returns 200 with the full instance, an effective-async one returns 202 Accepted - exactly as if that mode had been requested with no definition (surfaced via the internal InstanceOutputBase.ExecutedAsync flag the controller reads instead of the query parameter). OBSERVABILITY: the requested-vs-effective divergence (e.g. transition=SYNC, flow=ASYNC, caller sent async => runs SYNC) is recorded on the existing request/activation trace span as tags vnext.execution.requested, vnext.execution.effective and vnext.execution.overridden (true only when a definition overrode the caller) - no new persistence, query the trace to see overrides. INVALID values are rejected: only the upper-case codes SYNC and ASYNC are accepted (ExecutionType value object via IEquatableJsonConverter; the schema enum enforces authoring). Schema: vnext-schema workflow-definition.schema.json adds a reusable executionType enum referenced from attributes and the transition variants.",
+      "apiEndpoints": [
+        "POST {domain}/workflows/{workflow}/instances/start",
+        "PATCH {domain}/workflows/{workflow}/instances/{instance}/transitions/{transition}"
+      ]
+    },
     "instanceStartType": {
       "since": "0.0.92",
       "status": "stable",
