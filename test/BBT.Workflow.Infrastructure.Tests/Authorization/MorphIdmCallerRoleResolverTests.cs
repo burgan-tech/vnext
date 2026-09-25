@@ -21,7 +21,8 @@ namespace BBT.Workflow.Infrastructure.Tests.Authorization;
 /// <summary>
 /// Unit tests for the morph-idm caller-role provider. The three properties that matter operationally:
 /// it sends identity but never a <c>role</c> (which would switch the endpoint into its authorize mode),
-/// every failure resolves to an empty role set — logged and tagged by kind, never breaking the
+/// a request that carries a <c>role</c> header is answered from it without calling morph-idm at all,
+/// every provider failure resolves to an empty role set — logged and tagged by kind, never breaking the
 /// request — and it calls the endpoint at most once per scope.
 /// </summary>
 [Collection(SpanCollection)]
@@ -242,14 +243,96 @@ public sealed class MorphIdmCallerRoleResolverTests
     }
 
     /// <summary>
-    /// The provider is an authority: even when its failure resolved to an empty set, a caller-named
-    /// <c>role</c> parameter must not fill the gap.
+    /// <c>authorize</c>'s <c>role</c> parameter is handed to this resolver as the request's
+    /// <c>role</c> header (see <c>AuthorizeRoleParameterFallbackTests</c>), so it is answered by the
+    /// header precedence above rather than ignored.
     /// </summary>
     [Fact]
-    public void NeverAllowsTheRoleParameterFallback()
+    public void TreatsTheRoleParameterAsTheRoleHeader()
     {
         var (resolver, _, _) = BuildWithLogger(Respond(HttpStatusCode.InternalServerError, "{}"));
-        resolver.AllowsRoleParameterFallback.ShouldBeFalse();
+        resolver.RoleParameterMode.ShouldBe(RoleParameterMode.AsRoleHeader);
+    }
+
+    // ── A request `role` header takes precedence (2026-09-25 committee decision) ────────────
+    //
+    // When the request carries a `role` header — ICurrentUser.Roles, which the framework parses from
+    // it, else the forwarded header dictionary in a scope with no HTTP request — those roles ARE the
+    // caller's set and morph-idm is not called at all. Only a request without one is resolved through
+    // the identity service.
+
+    [Fact]
+    public async Task ARoleHeader_IsTheRoleSet_AndMorphIdmIsNotCalled()
+    {
+        using var spans = new SpanCollector();
+        var (resolver, counter, logger) = BuildWithLogger(Respond(HttpStatusCode.OK, """{"roles":["idm.viewer"]}"""));
+
+        var result = await resolver.ResolveRolesAsync(new Dictionary<string, string?> { ["role"] = "header.approver,header.maker" });
+
+        counter.Count.ShouldBe(0);
+        result.IsSuccess.ShouldBeTrue();
+        result.Value.ShouldBe(["header.approver", "header.maker"]);
+        logger.Entries.ShouldNotContain(e => e.Level >= LogLevel.Warning);
+        var span = Assert.Single(spans.Captured);
+        Assert.Equal("header", Tag(span, TelemetryConstants.TagNames.AuthOutcome));
+        Assert.Equal(2, Tag(span, TelemetryConstants.TagNames.AuthRoleCount));
+        span.Status.ShouldBe(ActivityStatusCode.Unset);
+    }
+
+    [Fact]
+    public async Task RolesTheFrameworkParsedFromTheHeader_AreTheRoleSetToo()
+    {
+        var (resolver, counter, _) = BuildWithLogger(
+            Respond(HttpStatusCode.OK, """{"roles":["idm.viewer"]}"""), userRoles: ["token.maker"]);
+
+        var result = await resolver.ResolveRolesAsync(null);
+
+        counter.Count.ShouldBe(0);
+        result.Value.ShouldBe(["token.maker"]);
+    }
+
+    /// <summary>
+    /// The header decides even when morph-idm could not have been asked anyway (no identity), and even
+    /// where it would have failed — the provider is simply not consulted.
+    /// </summary>
+    [Fact]
+    public async Task ARoleHeader_WinsWithoutIdentityToo()
+    {
+        var (resolver, counter, _) = BuildWithLogger(Respond(HttpStatusCode.InternalServerError, "{}"), actor: null);
+
+        var result = await resolver.ResolveRolesAsync(new Dictionary<string, string?> { ["role"] = "header.approver" });
+
+        counter.Count.ShouldBe(0);
+        result.Value.ShouldBe(["header.approver"]);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData(" , ")]
+    public async Task ABlankRoleHeader_IsNoHeader_AndMorphIdmIsAsked(string headerValue)
+    {
+        var (resolver, counter, _) = BuildWithLogger(Respond(HttpStatusCode.OK, """{"roles":["idm.viewer"]}"""));
+
+        var result = await resolver.ResolveRolesAsync(new Dictionary<string, string?> { ["role"] = headerValue });
+
+        counter.Count.ShouldBe(1);
+        result.Value.ShouldBe(["idm.viewer"]);
+    }
+
+    [Fact]
+    public async Task TheHeaderDecision_IsMemoizedForTheScope()
+    {
+        using var spans = new SpanCollector();
+        var (resolver, counter, _) = BuildWithLogger(Respond(HttpStatusCode.OK, """{"roles":["idm.viewer"]}"""));
+
+        await resolver.ResolveRolesAsync(new Dictionary<string, string?> { ["role"] = "header.approver" });
+        var second = await resolver.ResolveRolesAsync(null);
+
+        counter.Count.ShouldBe(0);
+        second.Value.ShouldBe(["header.approver"]);
+        spans.Captured.ShouldAllBe(s => Equals(Tag(s, TelemetryConstants.TagNames.AuthOutcome), "header"));
+        spans.Captured.Count(s => Equals(Tag(s, TelemetryConstants.TagNames.AuthMemoHit), true)).ShouldBe(1);
     }
 
     // ── Request shape ───────────────────────────────────────────────────────────
@@ -521,13 +604,15 @@ public sealed class MorphIdmCallerRoleResolverTests
     private static (MorphIdmCallerRoleResolver Resolver, CallCounter Counter, CapturingLogger Logger) BuildWithLogger(
         Func<HttpRequestMessage, HttpResponseMessage> handler,
         string? position = Position,
-        string? actor = Actor) =>
-        BuildWithLogger(request => Task.FromResult(handler(request)), position, actor);
+        string? actor = Actor,
+        string[]? userRoles = null) =>
+        BuildWithLogger(request => Task.FromResult(handler(request)), position, actor, userRoles);
 
     private static (MorphIdmCallerRoleResolver Resolver, CallCounter Counter, CapturingLogger Logger) BuildWithLogger(
         Func<HttpRequestMessage, Task<HttpResponseMessage>> handler,
         string? position = Position,
-        string? actor = Actor)
+        string? actor = Actor,
+        string[]? userRoles = null)
     {
         var counter = new CallCounter();
         var httpClient = new HttpClient(new StubHandler(handler, counter))
@@ -539,6 +624,7 @@ public sealed class MorphIdmCallerRoleResolverTests
         currentUser.UserName.Returns(Subject);
         currentUser.ActorUserName.Returns(actor);
         currentUser.Position.Returns(position);
+        currentUser.Roles.Returns(userRoles ?? []);
 
         var options = Options.Create(new CallerRoleProviderOptions
         {

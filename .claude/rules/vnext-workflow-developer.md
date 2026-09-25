@@ -438,14 +438,19 @@ A sixth profile is **composed on top of** the base, never selected instead of it
   describes. Overrides resolve **per hop from the child's stamp**, never from the parent's definition:
   that is what makes a directly addressed leaf give the same verdict as the same leaf reached through
   its parent, and what keeps a parent's override of its child from reaching the grandchild.
-- **The `role` request parameter is gated on the provider, both as a fallback and additively.**
-  `ICallerRoleResolver.AllowsRoleParameterFallback` — true only when the provider's own source is
-  already the caller's own assertion (`default`), false for an authority provider (`morph-idm`).
-  Without it, a provider answering "no roles" was overridden by the caller naming one in the query
-  string: measured, `?queryRoles=true` → 403 while `?queryRoles=true&role=chain.admin` → 200 for the
-  same caller. The same hole as forwarding the `role` HEADER to morph-idm, on the other channel —
-  and it matters more now that `authorize` is the only place these questions are answered. Put the
-  flag on the resolver, never a provider-name check inside a surface.
+- **Under `morph-idm` a request `role` header takes precedence, and morph-idm is not called**
+  (committee decision, 2026-09-25). The header — `ICurrentUser.Roles`, else the forwarded header
+  dictionary, i.e. exactly what the default provider reads — REPLACES the service's answer when it
+  is non-blank; only a request without one goes to morph-idm (and then every failure is `[]`). No
+  merge in either direction. Span outcome `header`, Debug log 20465. The header is still never
+  forwarded to morph-idm.
+- **`authorize`'s `role` query parameter composes per `ICallerRoleResolver.RoleParameterMode`.**
+  `Fallback` (`default`): stands in only when nothing was resolved (`ack`: additive). `AsRoleHeader`
+  (`morph-idm`, 2026-09-25): handed to the resolver AS the `role` header when the request has none, so
+  the header precedence above applies — `[X]`, morph-idm not asked; a real header wins; every target
+  incl. `ack`. It was ignored under morph-idm before; once the header became decisive that made the
+  same claim 200 through the header and 403 through the query string. Put the mode on the resolver,
+  never a provider-name check inside a surface.
 - **`authorize` has a fourth target, `ack`.** `?ack=true` is the pre-flight for
   `POST .../longpoll/ack`, admitted through the same `ILongPollInteractionGate` — so the `rule` arm, a
   C# script no gateway can evaluate, is covered. It mirrors the endpoint's own descent rule

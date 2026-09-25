@@ -146,37 +146,34 @@ without sharing code.
 The caller's roles come from the configured `CallerRoleProvider` — **not** from `ICurrentUser.Roles`
 read at the controller. Reading them there would pin the answer to the default provider's source and
 make this function contradict every other surface whenever a different provider is configured
-([provider contract](role-grant-authorization.md#the-morph-idm-provider-replaces-that-resolution-entirely)).
+([provider contract](role-grant-authorization.md#the-morph-idm-provider)).
 
 The `role` request parameter composes differently per target, and the difference is deliberate:
 
-| Target | `role` parameter | Why |
+How the parameter composes is stated by the provider (`ICallerRoleResolver.RoleParameterMode`):
+
+| Provider (mode) | `transitionKey`, `functionKey`, `queryRoles` | `ack` |
 |---|---|---|
-| `transitionKey`, `functionKey`, `queryRoles` | **fallback** — used only when the provider reports no roles at all | a convenience for probing one role; the provider is the authority |
-| `ack` | **additive** — merged with the provider's roles, on every path (the awaiting instance with or without an active SubFlow) | it is how a client names *which* of its roles is acknowledging; until 2026-09-25 the no-SubFlow path used the fallback instead, so the same caller got a different role set depending on the instance's shape |
+| `default` (`Fallback`) | **fallback** — used only when the provider resolved no roles; a `role` header therefore wins | **additive** — merged with the provider's roles, on every path |
+| `morph-idm` (`AsRoleHeader`) | **as the `role` header** — when the request has no header of its own, `?role=X` is handed to the resolver as that header: the role set is `[X]` and morph-idm is not asked; a real header wins | same as the other targets |
 
-**Both forms are gated on the provider** (`ICallerRoleResolver.AllowsRoleParameterFallback`). The
-parameter is honoured only when the provider's own source is already the caller's own assertion —
-i.e. the `default` provider, whose roles come from `ICurrentUser` with the `role` header behind it,
-so the parameter is the same claim through a different door. Under an **authority** provider such as
-`morph-idm` it is ignored outright.
+Measured on `role-matrix-lab` (`submit-for-review` = allow maker, allow approver, deny viewer):
 
-That guard closes a real hole, found by probing after the equivalent header rule was already in place
-and green. `authorize` used to fall back to the parameter whenever the provider returned an empty
-set, without regard for *which* provider returned it — so morph-idm answering `204` ("this caller has
-no operations") was overridden by the caller naming a role in the query string. Measured on the lab,
-same caller and same instance:
+| Request | `default` | `morph-idm` |
+|---|---|---|
+| no header, no parameter | 403 | 403 (morph-idm's answer) |
+| no header, `?role=maker` | 200 | 200 — morph-idm not asked |
+| header `role: maker` | 200 | 200 — morph-idm not asked |
+| header `role: chain.other`, `?role=maker` | 403 — header wins | 403 — header wins |
 
-```
-?queryRoles=true                    ->  {"allowed":false}  403
-?queryRoles=true&role=chain.admin   ->  {"allowed":true}   200     ← before the guard
-```
-
-It is the same hole as forwarding the `role` header to morph-idm, reached through the query string,
-and it matters more since this function became the only place these questions are answered: a gateway
-that passes the client's query string through would be admitting on the client's own claim. The flag
-lives on the resolver rather than on a provider-name check here, so a new provider has to state its
-own answer instead of inheriting one.
+Why the modes differ in name but agree in effect: under `default` the provider's own source *is* the
+caller's `role` header, so "fallback when nothing resolved" and "header wins over the parameter" are
+the same rule. Under `morph-idm` the parameter was ignored until 2026-09-25, because the identity
+service's "no operations" was the only authority. When a request's `role` header was made decisive
+under that provider (committee decision), keeping the parameter ignored made the same claim answer 200
+through the header and 403 through the query string; `AsRoleHeader` removes that split. The mode lives
+on the resolver rather than on a provider-name check here, so a new provider has to state its own
+answer instead of inheriting one.
 
 Evaluation is one call with the **whole** role set, never a loop that returns on the first allowed
 role: the deny group is an AND across every role the caller carries, so asking role by role lets an
