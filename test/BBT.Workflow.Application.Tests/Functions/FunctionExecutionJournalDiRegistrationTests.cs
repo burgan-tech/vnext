@@ -1,4 +1,5 @@
 using BBT.Workflow.Functions;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Shouldly;
 using Xunit;
@@ -23,6 +24,9 @@ public sealed class FunctionExecutionJournalDiRegistrationTests
     public void Journal_InterfaceAndConcrete_ResolveToTheSameSingleton()
     {
         var services = new ServiceCollection();
+        // The journal reads its capacity from IOptions<FunctionExecutionJournalOptions>, whose
+        // BindConfiguration needs an IConfiguration present; an empty one yields the defaults.
+        services.AddSingleton<IConfiguration>(new ConfigurationBuilder().Build());
         services.AddApplicationModule();
 
         using var provider = services.BuildServiceProvider();

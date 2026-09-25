@@ -11,6 +11,7 @@ using BBT.Workflow.Metrics;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using NSubstitute;
 using Shouldly;
 using Xunit;
@@ -31,8 +32,16 @@ public sealed class FunctionExecutionJournalWriterTests
     private readonly IServiceScopeFactory _scopeFactory = Substitute.For<IServiceScopeFactory>();
     private readonly List<FunctionExecution> _inserted = new();
 
+    // The writer reads BatchSize from IOptionsMonitor each drain cycle; these tests pin it to a small
+    // value so batch-chunking assertions stay legible.
+    private const int BatchSize = 200;
+    private readonly IOptionsMonitor<FunctionExecutionJournalOptions> _options =
+        Substitute.For<IOptionsMonitor<FunctionExecutionJournalOptions>>();
+
     public FunctionExecutionJournalWriterTests()
     {
+        _options.CurrentValue.Returns(new FunctionExecutionJournalOptions { BatchSize = BatchSize });
+
         var uow = Substitute.For<IUnitOfWork>();
         uow.CommitAsync(Arg.Any<CancellationToken>()).Returns(Task.CompletedTask);
         _uowManager.Begin(Arg.Any<UnitOfWorkOptions>()).Returns(uow);
@@ -54,7 +63,7 @@ public sealed class FunctionExecutionJournalWriterTests
     }
 
     private FunctionExecutionJournalWriter NewWriter(FunctionExecutionJournal journal) =>
-        new(journal, _scopeFactory, _guidGenerator,
+        new(journal, _scopeFactory, _guidGenerator, _options,
             NullLogger<FunctionExecutionJournalWriter>.Instance);
 
     private static FunctionExecutionRecord Record(string key, string? invokedBy = null) => new(
@@ -120,7 +129,7 @@ public sealed class FunctionExecutionJournalWriterTests
     public async Task MoreThanBatchSize_FlushesInMultipleBatches()
     {
         var journal = new FunctionExecutionJournal();
-        var total = FunctionExecutionJournalWriter.BatchSize + 1;
+        var total = BatchSize + 1;
         for (var i = 0; i < total; i++)
         {
             journal.Record(Record($"fn-{i}"));
@@ -131,7 +140,7 @@ public sealed class FunctionExecutionJournalWriterTests
         // All rows persisted, and no single batch exceeded the cap.
         _inserted.Count.ShouldBe(total);
         await _repository.Received(2).InsertBatchAsync(
-            Arg.Is<IReadOnlyCollection<FunctionExecution>>(b => b.Count <= FunctionExecutionJournalWriter.BatchSize),
+            Arg.Is<IReadOnlyCollection<FunctionExecution>>(b => b.Count <= BatchSize),
             Arg.Any<CancellationToken>());
     }
 
@@ -160,7 +169,7 @@ public sealed class FunctionExecutionJournalWriterTests
 
         var journal = new FunctionExecutionJournal();
         // BatchSize + 1 → two batches: the first throws, the second must still be flushed.
-        var total = FunctionExecutionJournalWriter.BatchSize + 1;
+        var total = BatchSize + 1;
         for (var i = 0; i < total; i++)
         {
             journal.Record(Record($"fn-{i}"));
@@ -177,22 +186,43 @@ public sealed class FunctionExecutionJournalWriterTests
     [Fact]
     public async Task Shutdown_DrainsAllRemaining_EvenAboveBatchSize()
     {
-        // Regression guard: the final drain must flush EVERYTHING queued at shutdown, not just one
-        // BatchSize-capped batch. StopAsync cancels the stopping token, so the drain cannot rely on the
-        // main loop — it must loop until the queue is empty.
-        var journal = new FunctionExecutionJournal();
-        var writer = NewWriter(journal);
+        // Regression guard for the CRITICAL fix: on shutdown the stopping token is cancelled, which makes
+        // WaitToReadAsync throw while items still remain, so the FINAL drain (not the main loop) must LOOP
+        // over whatever is left — not flush a single BatchSize-capped batch. Made deterministic by gating
+        // the first flush: shutdown is cancelled while >1 batch is still queued, forcing exactly that path.
+        // Buggy single-batch drain → 400 persisted; fixed looping drain → all 450.
+        var firstFlushEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseFirstFlush = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var calls = 0;
+        _repository
+            .InsertBatchAsync(Arg.Any<IReadOnlyCollection<FunctionExecution>>(), Arg.Any<CancellationToken>())
+            .Returns(async _ =>
+            {
+                // The fixture's Arg.Do already captures every batch into _inserted; here we only gate.
+                if (Interlocked.Increment(ref calls) == 1)
+                {
+                    firstFlushEntered.TrySetResult();
+                    await releaseFirstFlush.Task;   // hold batch #1 until shutdown has been triggered
+                }
+            });
 
-        await writer.StartAsync(CancellationToken.None);
-        var total = (FunctionExecutionJournalWriter.BatchSize * 2) + 50; // well above one batch
+        var journal = new FunctionExecutionJournal();
+        var total = (BatchSize * 2) + 50; // 450 → three batches (200 + 200 + 50)
         for (var i = 0; i < total; i++)
         {
             journal.Record(Record($"fn-{i}"));
         }
 
-        // StopAsync completes the queue and awaits the full drain — nothing already enqueued is lost.
-        await writer.StopAsync(CancellationToken.None);
+        var writer = NewWriter(journal);
+        await writer.StartAsync(CancellationToken.None);
+        await firstFlushEntered.Task;               // consumer pulled batch #1 (200) and is blocked in it
 
-        _inserted.Count.ShouldBe(total);
+        // StopAsync synchronously completes the queue and cancels the token (both run before its first
+        // await), so >1 batch is now queued behind a cancelled token — exactly the fixed path.
+        var stop = writer.StopAsync(CancellationToken.None);
+        releaseFirstFlush.TrySetResult();
+        await stop;
+
+        _inserted.Count.ShouldBe(total);           // ALL drained despite the mid-flight cancellation
     }
 }

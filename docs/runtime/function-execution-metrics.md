@@ -71,7 +71,7 @@ function's execution time is unaffected, which is the hard requirement.
 
 Journaling is **best-effort by design** — 100% completeness is explicitly not required:
 
-- **Non-blocking producer.** The queue is bounded (default 10 000). `TryWrite` never blocks; when the
+- **Non-blocking producer.** The queue is bounded (default 50 000). `TryWrite` never blocks; when the
   queue is full the newest record is dropped and counted (the writer reports the running total via a
   throttled `WorkflowLogs` warning, off the hot path). Under sustained load the runtime sheds telemetry
   rather than becoming backpressure on function execution. **Using Dapr's scheduler for this was a
@@ -81,6 +81,17 @@ Journaling is **best-effort by design** — 100% completeness is explicitly not 
   survives a transient DB fault; it never surfaces to the function's caller.
 - **Graceful drain on shutdown.** `StopAsync` completes the queue and the writer flushes whatever
   remains before exiting, so an orderly shutdown does not silently lose already-enqueued rows.
+
+### Tuning (`Workflow:FunctionExecutionJournal`)
+
+Two knobs, both in `FunctionExecutionJournalOptions`:
+
+| Setting | Default | Effect | Reloadable? |
+|---|---|---|---|
+| `BatchSize` | 1000 | Rows per `SaveChanges`. The throughput lever — fewer, larger batches mean fewer DB round-trips. Measured locally: batch 200 ≈ 17k rows/s (round-trip bound), batch ≥500 ≈ 28–30k rows/s (DB-bound plateau). | **Yes** — re-read each drain cycle via `IOptionsMonitor`, so a config change applies to the next batch with no restart. |
+| `QueueCapacity` | 50000 | Burst absorption (~10 MB worst case at ~200 B/row). Not throughput — a shock absorber ahead of the drain. | **No** — a bounded channel's bound is fixed at creation, so a change applies only after a process restart. |
+
+"Reloadable" holds only when the deployment delivers config as a **reloadable file** (a mounted appsettings file with `reloadOnChange`, which `WebApplication.CreateBuilder` enables by default). If config is injected as **environment variables**, both settings are process-fixed and a change needs a pod restart — env-var config is never hot-reloaded by .NET. Watch `WorkflowLogs` **event 80008** (records dropped) as the signal that you are at the ceiling and should raise `BatchSize` (then `QueueCapacity` for burstier traffic).
 
 `FromCache` is true when the read-through cache served the response (its tasks were skipped). Every
 outcome is enqueued exactly once via a `try/finally`: a success, a `Result.Fail` (auth/verb rejection,

@@ -64,8 +64,9 @@ public interface IFunctionExecutionJournal
 /// </remarks>
 public sealed class FunctionExecutionJournal : IFunctionExecutionJournal
 {
-    /// <summary>Default bounded capacity of the in-memory queue.</summary>
-    public const int DefaultCapacity = 10_000;
+    /// <summary>Default bounded capacity of the in-memory queue (overridable via
+    /// <see cref="FunctionExecutionJournalOptions.QueueCapacity"/>).</summary>
+    public const int DefaultCapacity = 50_000;
 
     private readonly Channel<FunctionExecutionRecord> _channel;
     private long _droppedCount;

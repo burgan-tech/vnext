@@ -55,13 +55,19 @@
       "id": "function-execution-journal-capacity",
       "since": "0.0.94",
       "scope": "telemetry",
-      "description": "Bounds on the asynchronous function-execution journal (functions with executionLog: ENABLED — see feature functionExecutionMetrics). A non-blocking producer enqueues on a bounded in-process channel and a single background writer drains it in batches; when the queue is full the NEWEST record is dropped (counted and reported via WorkflowLogs FunctionExecutionJournalRecordsDropped). So journal completeness is best-effort and bounded under sustained load — a domain enabling executionLog cannot assume 100% of invocations are recorded. This is not a latency guarantee and does not affect function execution time (the write is off the request path). Fixed constants, not configurable in this phase.",
-      "limits": {
-        "queueCapacity": 10000,
-        "batchSize": 200
+      "description": "Bounds on the asynchronous function-execution journal (functions with executionLog: ENABLED — see feature functionExecutionMetrics). A non-blocking producer enqueues on a bounded in-process channel and a single background writer drains it in batches; when the queue is full the NEWEST record is dropped (counted and reported via WorkflowLogs FunctionExecutionJournalRecordsDropped). So journal completeness is best-effort and bounded under sustained load — a domain enabling executionLog cannot assume 100% of invocations are recorded. This is not a latency guarantee and does not affect function execution time (the write is off the request path). BatchSize is the throughput lever (fewer, larger batches = fewer DB round-trips) and is re-read each drain cycle via IOptionsMonitor, so it is tunable at runtime with no restart where config is delivered as a reloadable file. QueueCapacity is read once when the channel is created (a bounded channel's bound cannot be resized), so a change to it applies only after the process restarts.",
+      "configuration": {
+        "Workflow:FunctionExecutionJournal:QueueCapacity": {
+          "default": 50000,
+          "reloadable": false
+        },
+        "Workflow:FunctionExecutionJournal:BatchSize": {
+          "default": 1000,
+          "reloadable": true
+        }
       },
-      "configurable": false,
-      "source": "src/BBT.Workflow.Application/Functions/IFunctionExecutionJournal.cs, src/BBT.Workflow.Application/Functions/FunctionExecutionJournalWriter.cs"
+      "configurable": true,
+      "source": "src/BBT.Workflow.Application/Functions/FunctionExecutionJournalOptions.cs, src/BBT.Workflow.Application/Functions/FunctionExecutionJournalWriter.cs"
     }
   ]
 }

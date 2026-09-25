@@ -6,6 +6,7 @@ using BBT.Workflow.Metrics;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace BBT.Workflow.Functions;
 
@@ -24,26 +25,29 @@ namespace BBT.Workflow.Functions;
 /// </para>
 /// <para>
 /// Best-effort throughout: a persistence failure is logged and swallowed so the loop keeps running, and
-/// on shutdown the queue is completed and whatever remains is flushed once. Registered by the
-/// Orchestration host — the only host that executes domain functions.
+/// on shutdown the queue is completed and whatever remains is fully drained. Registered by the
+/// Orchestration host — the only host that executes domain functions. Batch size is read from
+/// <see cref="FunctionExecutionJournalOptions"/> each drain cycle via <c>IOptionsMonitor</c>, so it is
+/// tunable at runtime; queue capacity is fixed at channel creation (see the options remarks).
 /// </para>
 /// </remarks>
 public sealed class FunctionExecutionJournalWriter(
     FunctionExecutionJournal journal,
     IServiceScopeFactory scopeFactory,
     IGuidGenerator guidGenerator,
+    IOptionsMonitor<FunctionExecutionJournalOptions> options,
     ILogger<FunctionExecutionJournalWriter> logger) : BackgroundService
 {
-    /// <summary>Maximum rows persisted in one SaveChanges. Bounds each flush's memory and round-trip.</summary>
-    public const int BatchSize = 200;
-
     private long _lastReportedDropped;
+
+    /// <summary>Current batch cap, re-read from config each drain cycle; clamped to at least 1.</summary>
+    private int CurrentBatchSize => Math.Max(1, options.CurrentValue.BatchSize);
 
     /// <inheritdoc />
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         var reader = journal.Reader;
-        var batch = new List<FunctionExecutionRecord>(BatchSize);
+        var batch = new List<FunctionExecutionRecord>();
 
         try
         {
@@ -51,7 +55,7 @@ public sealed class FunctionExecutionJournalWriter(
             while (await reader.WaitToReadAsync(stoppingToken))
             {
                 batch.Clear();
-                DrainInto(reader, batch);
+                DrainInto(reader, batch, CurrentBatchSize);   // re-read the cap each cycle (live-tunable)
                 if (batch.Count > 0)
                 {
                     // CancellationToken.None (not stoppingToken): a batch already pulled off the queue is
@@ -71,13 +75,13 @@ public sealed class FunctionExecutionJournalWriter(
 
         // Final drain: StopAsync completed the queue (or the token cancelled). A cancelled token makes
         // WaitToReadAsync throw even while items remain, so THIS loop — not the main loop — is what
-        // actually guarantees the drain. Flush EVERYTHING left, in BatchSize chunks, so an orderly
+        // actually guarantees the drain. Flush EVERYTHING left, in batch-sized chunks, so an orderly
         // shutdown does not silently lose already-enqueued rows. Finite: the queue is Completed by
         // StopAsync before this runs, so no new items can arrive and the backlog is bounded by capacity.
         while (true)
         {
             batch.Clear();
-            DrainInto(reader, batch);
+            DrainInto(reader, batch, CurrentBatchSize);
             if (batch.Count == 0)
             {
                 break;
@@ -97,10 +101,11 @@ public sealed class FunctionExecutionJournalWriter(
         await base.StopAsync(cancellationToken);
     }
 
-    /// <summary>Pulls up to <see cref="BatchSize"/> records already sitting in the queue, without waiting.</summary>
-    private static void DrainInto(ChannelReader<FunctionExecutionRecord> reader, List<FunctionExecutionRecord> batch)
+    /// <summary>Pulls up to <paramref name="batchSize"/> records already sitting in the queue, without waiting.</summary>
+    private static void DrainInto(
+        ChannelReader<FunctionExecutionRecord> reader, List<FunctionExecutionRecord> batch, int batchSize)
     {
-        while (batch.Count < BatchSize && reader.TryRead(out var record))
+        while (batch.Count < batchSize && reader.TryRead(out var record))
         {
             batch.Add(record);
         }
