@@ -28,8 +28,8 @@ contracts. Remote services call public runtime APIs rather than internal reposit
 | Endpoint family | Behavior |
 | --- | --- |
 | `GET /{domain}/workflows/{workflow}/instances/{instance}/functions/state` | Conditional state response, available transitions, role filtering, ETag, child correlations, workflow function discovery links, incident summary. |
-| `GET /{domain}/workflows/{workflow}/instances/{instance}/incidents` | Paged error-boundary incident history (newest first), same `queryRoles` gate as the state function; never carries stack traces. |
-| `GET /{domain}/workflows/{workflow}/instances/{instance}/functions/tasks` | Full task execution history in execution order (unpaged), same `queryRoles` gate. Execution metadata + fault reason only — journaled payloads are not exposed on any API. |
+| `GET /{domain}/workflows/{workflow}/instances/{instance}/incidents` | Paged error-boundary incident history (newest first); since 0.0.95 no in-process `queryRoles` gate — the gateway decides via `authorize?queryRoles=true`; never carries stack traces. |
+| `GET /{domain}/workflows/{workflow}/instances/{instance}/functions/tasks` | Full task execution history in execution order (unpaged); since 0.0.95 the `queryRoles` decision belongs to the gateway (`authorize?queryRoles=true`). Execution metadata + fault reason only — journaled payloads are not exposed on any API. |
 | `GET /{domain}/workflows/{workflow}/instances/{instance}/functions/actions?taskId={id}` | Action history (execution sub-steps) of one task journal row in execution order (unpaged); `400` (`Instance:100039`) without a valid `taskId`, `404` (`Instance:100038`) when the task is not the instance's own. Same `queryRoles` gate. |
 | `GET /{domain}/workflows/{workflow}/instances/{instance}/functions/data` | Latest data, optional extensions, ETag. |
 | `GET /{domain}/workflows/{workflow}/instances/{instance}/functions/view` | Backend-driven view selection. |
