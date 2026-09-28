@@ -164,6 +164,98 @@ public sealed class TransitionRunnerPostCommitTests
             Arg.Any<CancellationToken>());
     }
 
+    [Theory]
+    [InlineData("A")]
+    [InlineData("B")]
+    public async Task RunAsync_IdentityOnlyForwardRelayToARunningChild_SkipsTheSettlementAndAnswersBusy(string childStatus)
+    {
+        // An intermediate level of a nested forward chain. Its child is still running, so its
+        // blocking correlation is open and TransitionSettlement could not change anything: the
+        // lock, reload and commit the settle would pay are pure cost on every level.
+        var harness = new RunnerHarness(new StagePlan(
+            "pipeline",
+            PostCommitBehavior: PostCommitContinuationBehavior.HandoffToChild,
+            PostCommitJob: PostCommitJobKind.ForwardToSubflow))
+        {
+            ForwardedChildStatus = InstanceStatus.FromCode(childStatus)
+        };
+        var input = harness.CreateInput("leaf-ping");
+        input.IdentityOnlyResponse = true;
+
+        var result = await harness.Runner.RunAsync(input);
+
+        result.IsSuccess.ShouldBeTrue();
+        result.Value!.Id.ShouldBe(harness.InstanceId);
+        result.Value.Status.ShouldBe(InstanceStatus.Busy);
+        await harness.ParentMutationService.DidNotReceiveWithAnyArgs().SettleAsync(default!, default!, default);
+    }
+
+    [Theory]
+    [InlineData("C")]
+    [InlineData("F")]
+    [InlineData("P")]
+    public async Task RunAsync_IdentityOnlyForwardRelayToATerminalChild_StillSettlesFromAFreshReload(string childStatus)
+    {
+        // A terminal child resumed or faulted this parent in another scope; only a reload can say
+        // where that left it.
+        var harness = new RunnerHarness(new StagePlan(
+            "pipeline",
+            PostCommitBehavior: PostCommitContinuationBehavior.HandoffToChild,
+            PostCommitJob: PostCommitJobKind.ForwardToSubflow))
+        {
+            ForwardedChildStatus = InstanceStatus.FromCode(childStatus)
+        };
+        harness.ParentMutationService.SettleAsync(default!, default!, default)
+            .ReturnsForAnyArgs(Result<TransitionOutput>.Ok(new TransitionOutput { Status = InstanceStatus.Active }));
+        var input = harness.CreateInput("leaf-finish");
+        input.IdentityOnlyResponse = true;
+
+        var result = await harness.Runner.RunAsync(input);
+
+        result.Value!.Status.ShouldBe(InstanceStatus.Active);
+        await harness.ParentMutationService.ReceivedWithAnyArgs(1).SettleAsync(default!, default!, default);
+    }
+
+    [Fact]
+    public async Task RunAsync_ClientFacingForwardToARunningChild_StillSettles()
+    {
+        // The client's own request projects the settled aggregate into its response.
+        var harness = new RunnerHarness(new StagePlan(
+            "pipeline",
+            PostCommitBehavior: PostCommitContinuationBehavior.HandoffToChild,
+            PostCommitJob: PostCommitJobKind.ForwardToSubflow))
+        {
+            ForwardedChildStatus = InstanceStatus.Active
+        };
+        harness.ParentMutationService.SettleAsync(default!, default!, default)
+            .ReturnsForAnyArgs(Result<TransitionOutput>.Ok(new TransitionOutput { Status = InstanceStatus.Busy }));
+
+        await harness.Runner.RunAsync(harness.CreateInput("leaf-ping"));
+
+        await harness.ParentMutationService.ReceivedWithAnyArgs(1).SettleAsync(default!, default!, default);
+    }
+
+    [Fact]
+    public async Task RunAsync_IdentityOnlyStartSubflowHop_StillSettles()
+    {
+        // A StartSubflowJob hop moved the parent into the SubFlow state; it is not a relay.
+        var harness = new RunnerHarness(new StagePlan(
+            "pipeline",
+            PostCommitBehavior: PostCommitContinuationBehavior.HandoffToChild,
+            PostCommitJob: PostCommitJobKind.StartSubflow))
+        {
+            ForwardedChildStatus = InstanceStatus.Active
+        };
+        harness.ParentMutationService.SettleAsync(default!, default!, default)
+            .ReturnsForAnyArgs(Result<TransitionOutput>.Ok(new TransitionOutput { Status = InstanceStatus.Busy }));
+        var input = harness.CreateInput("auto-to-subflow");
+        input.IdentityOnlyResponse = true;
+
+        await harness.Runner.RunAsync(input);
+
+        await harness.ParentMutationService.ReceivedWithAnyArgs(1).SettleAsync(default!, default!, default);
+    }
+
     [Fact]
     public async Task RunAsync_PostCommitFaultRequest_UsesFreshFaultMutationAndReturnsItsAuthoritativeOutput()
     {
@@ -570,6 +662,12 @@ public sealed class TransitionRunnerPostCommitTests
         public TaskCompletionSource? PostCommitGate { get; init; }
         public PostCommitResult PostCommitResult { get; init; } = PostCommitResult.Ok();
 
+        /// <summary>
+        /// When set, the post-commit executor answers like <c>ForwardToSubflowJobHandler</c> after a
+        /// successful forward: the child's own status on <see cref="ClientResponse.SubflowStatus"/>.
+        /// </summary>
+        public InstanceStatus? ForwardedChildStatus { get; init; }
+
         public WorkflowExecutionContext CreateInput(string transitionKey) => new()
         {
             Domain = Domain,
@@ -724,6 +822,15 @@ public sealed class TransitionRunnerPostCommitTests
             if (PostCommitGate is not null)
                 await PostCommitGate.Task.WaitAsync(cancellationToken);
             BusinessCalls.Add("post-commit");
+            if (ForwardedChildStatus is { } childStatus)
+            {
+                source.ClientResponse = new ClientResponse
+                {
+                    Id = source.InstanceId,
+                    Status = childStatus,
+                    SubflowStatus = childStatus
+                };
+            }
             return PostCommitResult;
         }
 

@@ -729,6 +729,7 @@ public sealed class InstanceCommandAppService(
                 Tags = input.Data?.Tags,
             },
             IsReentry = false,
+            IdentityOnlyResponse = input.SuppressResponseEnrichment,
 
             // A relayed subflow transition whose chain the accept already reserved re-enters as
             // the owner: admission classifies it OwnerReentry, so it neither 409s on the Busy the
