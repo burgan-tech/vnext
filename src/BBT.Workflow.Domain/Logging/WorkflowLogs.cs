@@ -1487,6 +1487,21 @@ public static partial class WorkflowLogs
         Guid subInstanceId);
 
     /// <summary>
+    /// Logs when a backup (Inbox) delivery of a SubFlow state change is dropped before the lock
+    /// because the committed rows already reflect it — the post-commit relay applied the same
+    /// notification, or a newer one. No lock, no transaction, no write.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40137,
+        Level = LogLevel.Debug,
+        Message = "Backup SubFlow state event for {SubInstanceId} already applied to parent {ParentInstanceId} ({Reason}); skipped without taking the lock")]
+    public static partial void SubFlowStateChangeBackupAlreadyApplied(
+        this ILogger logger,
+        Guid subInstanceId,
+        Guid parentInstanceId,
+        string reason);
+
+    /// <summary>
     /// Logs when a SubFlow state changed event is received by the hook.
     /// </summary>
     [LoggerMessage(

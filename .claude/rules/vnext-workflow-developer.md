@@ -742,6 +742,17 @@ place rather than deleted — removing it is a separate change, and it is the la
 - **Equal `ChangedAt` is ACCEPTED and re-applied**, only strictly-older is rejected. A duplicate
   delivery carries the same stamp; re-applying is idempotent, and rejecting it would close the only
   recovery path a redelivery has.
+- **The Inbox BACKUP checks before it locks** (`SubFlowStateChangedInput.IsBackupDelivery`, set only
+  by `InstanceSubStateChangedEventHandler`). One no-tracking `ProbeSubflowStateAsync` row: stale by
+  the same predicate, or the same notification (seq, else µs stamp) whose values the parent and the
+  open correlation already carry ⇒ dropped with no lock, no transaction, no write; anything else takes
+  the locked path. It is a plain READ COMMITTED select — no row lock, no write — so it does not
+  reintroduce the forbidden correlation-first CAS, and recovery is intact (an uncommitted first apply
+  leaves an older watermark). A backup that loses the lock re-probes before throwing. Relay
+  deliveries never probe.
+- **The state channel has its OWN lock backoff** (`WorkflowExecutionOptions.SubItemStateLockRetry`,
+  10 × 10 ms), not the terminal paths' 120 ms: the wait is `base*attempt + jitter(0..base)`, so at
+  120 ms the first retry alone slept 120–240 ms for a lock held a few ms (measured max 241 ms).
 - The UoW is `RequiresNew, IsTransactional = true` — not for the lock, for atomicity: without a
   transaction Aether stages the outbox rows *after* `UpdateAsync(autoSave)` already committed the
   Instance row, so the upward event and the state write could diverge.

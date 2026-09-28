@@ -107,6 +107,25 @@ public sealed class WorkflowExecutionOptions
         MaxAttempts = 4,
         BaseDelayMilliseconds = 120
     };
+
+    /// <summary>
+    /// Bounded wait applied when <c>SubflowStateService</c> acquires the same per-subInstance lock
+    /// to apply a child's <c>sub:state-changed</c> to its parent.
+    /// <para>
+    /// Separate from <see cref="SubItemTerminalLockRetry"/> because the backoff is linear in the base
+    /// delay (<c>base * attempt + jitter(0..base)</c>): at 120 ms even the FIRST retry slept 120–240 ms,
+    /// however briefly the holder kept the lock. On this channel the holder is almost always the other
+    /// delivery of the same event (post-commit relay vs. its Inbox backup), holding it for a few
+    /// milliseconds, and the relay leg sits on a client's synchronous request. Measured on
+    /// subflow-depth-lab: 23 of 883 acquisitions waited, max 241 ms — one retry at the top of the
+    /// jitter. The total budget stays the same order (~0.6 s here vs ~1 s for the terminal wait).
+    /// </para>
+    /// </summary>
+    public LockConflictRetryOptions SubItemStateLockRetry { get; set; } = new()
+    {
+        MaxAttempts = 10,
+        BaseDelayMilliseconds = 10
+    };
 }
 
 public sealed class TransitionJobFailurePolicyOptions

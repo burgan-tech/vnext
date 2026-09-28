@@ -272,6 +272,45 @@ public sealed class EfCoreInstanceRepository(
     }
 
     /// <inheritdoc />
+    public async Task<SubflowStateProbe?> ProbeSubflowStateAsync(
+        Guid instanceId,
+        Guid subInstanceId,
+        CancellationToken cancellationToken = default)
+    {
+        // One no-tracking row: the parent's projection columns plus the open correlation's watermark
+        // as a correlated sub-select. No includes, no row lock (plain READ COMMITTED), no write.
+        var dbSet = await GetDbSetAsync();
+        var row = await dbSet
+            .AsNoTracking()
+            .Where(i => i.Id == instanceId)
+            .Select(i => new
+            {
+                i.EffectiveState,
+                i.EffectiveStateType,
+                i.EffectiveStateSubType,
+                i.EffectiveStatus,
+                Correlation = i.ChildCorrelations
+                    .Where(c => c.SubFlowInstanceId == subInstanceId && !c.IsCompleted)
+                    .Select(c => new { c.SubFlowCurrentState, c.SubFlowNotificationSeq, c.SubFlowStateChangedAt })
+                    .FirstOrDefault()
+            })
+            .FirstOrDefaultAsync(cancellationToken);
+
+        if (row is null)
+            return null;
+
+        return new SubflowStateProbe(
+            row.EffectiveState,
+            row.EffectiveStateType,
+            row.EffectiveStateSubType,
+            row.EffectiveStatus,
+            row.Correlation is not null,
+            row.Correlation?.SubFlowCurrentState,
+            row.Correlation?.SubFlowNotificationSeq ?? 0,
+            row.Correlation?.SubFlowStateChangedAt);
+    }
+
+    /// <inheritdoc />
     public async Task<Instance?> FindForPostCommitSettlementAsync(
         Guid instanceId,
         bool includeLatestData,

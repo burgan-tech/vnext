@@ -82,6 +82,7 @@ internal sealed class InstanceSubStateChangedEventHandler(
                 ChangedAt = eventData.ChangedAt,
                 NewStatus = eventData.NewStatus,
                 NotificationSeq = eventData.NotificationSeq,
+                IsBackupDelivery = true,
                 TraceRoot = eventData.TraceRoot,
                 ParentTraceRoot = eventData.ParentTraceRoot,
                 EpisodeStartedAt = eventData.EpisodeStartedAt,
