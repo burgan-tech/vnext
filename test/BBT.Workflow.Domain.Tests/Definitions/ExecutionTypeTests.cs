@@ -1,3 +1,4 @@
+using System;
 using System.Text.Json;
 using BBT.Workflow.Definitions;
 using Shouldly;
@@ -72,4 +73,42 @@ public sealed class ExecutionTypeTests
         var json = JsonSerializer.Serialize(ExecutionType.Async);
         JsonSerializer.Deserialize<ExecutionType>(json).ShouldBe(ExecutionType.Async);
     }
+
+    // --- Publish-time rejection of a bad authored value (vnext#1003) ---------------------------------
+    // These pin what a domain team sees when it ships a wrong executionType. The value object is
+    // resolved through FromCode via reflection (IEquatableJsonConverter), which wraps a thrown
+    // ArgumentException in TargetInvocationException. The converter must unwrap it, or the publish
+    // endpoint's ComponentValidatorProcessor (which catches ArgumentException) cannot turn it into a
+    // clean field-scoped validation error and the author gets an opaque HTTP 500.
+
+    [Theory]
+    [InlineData("\"MAYBE\"")]
+    [InlineData("\"SYNCHRONOUS\"")]
+    [InlineData("\"true\"")]
+    [InlineData("\"BACKGROUND\"")]
+    public void Json_DeserializeUnknownValue_ThrowsArgumentException_NotReflectionWrapper(string json)
+    {
+        // Must be ArgumentException (what the publish validator catches), NOT TargetInvocationException.
+        var ex = Should.Throw<ArgumentException>(() => JsonSerializer.Deserialize<ExecutionType>(json));
+        ex.ShouldNotBeOfType<System.Reflection.TargetInvocationException>();
+        ex.Message.ShouldContain("Unknown execution type"); // the message the author actually needs
+    }
+
+    [Theory]
+    [InlineData("\"\"")]
+    [InlineData("\"   \"")]
+    public void Json_DeserializeEmptyOrWhitespace_ThrowsJsonException(string json) =>
+        Should.Throw<JsonException>(() => JsonSerializer.Deserialize<ExecutionType>(json));
+
+    [Theory]
+    [InlineData("123")]
+    [InlineData("true")]
+    public void Json_DeserializeNonString_ThrowsJsonException(string json) =>
+        Should.Throw<JsonException>(() => JsonSerializer.Deserialize<ExecutionType>(json));
+
+    [Fact]
+    public void Json_DeserializeNull_YieldsNull() =>
+        // JSON null is not a bad value — the converter's Read is never invoked; the property is simply
+        // absent, so the flow/transition falls back to the caller's sync query parameter.
+        JsonSerializer.Deserialize<ExecutionType>("null").ShouldBeNull();
 }
