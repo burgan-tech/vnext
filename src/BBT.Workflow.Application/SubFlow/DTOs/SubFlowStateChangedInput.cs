@@ -73,6 +73,15 @@ public record SubFlowStateChangedInput
     public long NotificationSeq { get; init; }
 
     /// <summary>
+    /// True when this delivery is the Inbox worker's durable BACKUP of the post-commit relay. Only
+    /// then does <c>SubflowStateService</c> first read the committed rows without the lock and drop a
+    /// notification they already reflect. Default false, so the relay, a hand-driven call and a
+    /// publisher from before this field all take the locked path unchanged. Setting it can only make
+    /// a delivery skip a write that would have changed nothing.
+    /// </summary>
+    public bool IsBackupDelivery { get; init; }
+
+    /// <summary>
     /// Lane anchor of the child that published the change — see
     /// <c>ILaneAwareDistributedEvent.TraceRoot</c>. Internal-only, never read from a request header:
     /// a caller-supplied anchor would let anyone graft spans onto an unrelated trace.
