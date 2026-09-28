@@ -821,5 +821,17 @@ public class WorkflowTests : DomainTestBase<DomainEntryPoint>
         // Act & Assert
         Assert.Throws<ArgumentException>(() => workflow.SetReference(reference));
     }
+
+    [Fact]
+    public void FindTransition_ShouldReturnNull_NotThrow_WhenStartTransitionIsNull()
+    {
+        // #1003 guard: FindTransition is now called per request during execution-mode resolution, which
+        // exposed that a workflow with no StartTransition would NRE on the previously-unguarded
+        // StartTransition.Key. A fresh workflow has every well-known transition null and no shared ones,
+        // so the lookup must simply return null.
+        var workflow = Workflow.Create();
+
+        Assert.Null(workflow.FindTransition("anything"));
+    }
 }
 

@@ -342,6 +342,11 @@ public sealed class AsyncTransitionStrategy(
             CorrelationId = transContext.CorrelationId,
             ChainDepth = transContext.ChainDepth,
             SubflowChainReserved = subflowChainReserved,
+            // #1003: preserve the caller's real intent across the outbox hop, mirroring BuildDirectPayload.
+            // A definition can force Mode=Async while the caller asked sync (CallerMode=Sync); without
+            // this the rebuilt payload's CallerSync would default false and the terminal signal would
+            // report async for a sync caller.
+            CallerSync = context.CallerMode == ExecMode.Sync,
             RootInstanceId = transContext.Instance?.GetRootInstanceId()
         };
     }

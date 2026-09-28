@@ -586,7 +586,10 @@ public sealed class InstanceController(
             Headers = continuation.Headers,
             RouteValues = continuation.RouteValues,
             ExecutionActor = actor,
-            CallerSync = false,
+            // #1003: relay the caller's sync/async intent from the outbox event rather than hardcoding
+            // false. An event written before this field existed deserializes to false — the pre-#1003
+            // behaviour — so callers with no executionType are unaffected.
+            CallerSync = continuation.CallerSync,
             TraceParent = continuation.TraceParent,
             TraceState = continuation.TraceState,
             // Pure transport hop: relay the lane verbatim, never re-anchor. Re-anchoring here would
