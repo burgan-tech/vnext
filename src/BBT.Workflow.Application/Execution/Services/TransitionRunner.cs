@@ -100,6 +100,16 @@ public sealed class TransitionRunner(
                 continue;
             }
 
+            if (IsSettleFreeForwardRelay(context, coreOutput))
+            {
+                Activity.Current?.SetTag(TelemetryConstants.TagNames.SettleSkipped, true);
+                return Result<TransitionOutput>.Ok(new TransitionOutput
+                {
+                    Id = parentSnapshot.InstanceId,
+                    Status = InstanceStatus.Busy
+                });
+            }
+
             // HandoffToChild (and a ContinueParent job with no remaining continuation) settles
             // from a fresh authoritative reload. The old outer NextTransition is never executed.
             return await MutateParentAsync(
@@ -118,6 +128,40 @@ public sealed class TransitionRunner(
                 MaxRunnerStages + 1,
                 MaxRunnerStages,
                 stageContext.TransitionKey));
+    }
+
+    /// <summary>
+    /// Whether this hop is an intermediate level of a SubFlow forward chain that has nothing to
+    /// settle. Every level of a nested forward re-runs the pipeline and, on the way back up, used to
+    /// take the status lock, reload the parent with its correlations and commit — only for
+    /// <c>TransitionSettlement</c> to find the open SubFlow correlation and change nothing (no flip,
+    /// no verdict, no <c>sub:state-changed</c>, and no notification, because order 10 marks the hop
+    /// terminal so no resolved status exists). Measured on subflow-depth-lab: 4 such settles of
+    /// ~5 ms each in a depth-5 transition of ~85 ms.
+    /// <para>
+    /// All three conditions are required. <b>Identity-only caller</b>: the relay reads only
+    /// <c>Status</c>; a client-facing caller still settles, because its response projects the
+    /// reloaded aggregate. <b>Forward only</b>: a StartSubflowJob hop moved the parent and must
+    /// settle or fault. <b>Child non-terminal</b>: the child's OWN status, as its relay answered it —
+    /// Busy or Active means its blocking correlation is still open, so the parent is Busy by the
+    /// <c>AddCorrelation</c> invariant and that is the status returned. A terminal child
+    /// (Completed/Faulted/Passive) resumed or faulted the parent in another scope, and only a fresh
+    /// reload can say where that left it. A concurrent parent-retained cancel/exit settles the parent
+    /// itself; the relay above reads Busy instead of Completed, which it only uses to decide whether
+    /// to re-read its own parent.
+    /// </para>
+    /// </summary>
+    private static bool IsSettleFreeForwardRelay(WorkflowExecutionContext requestContext, TransitionCoreOutput coreOutput)
+    {
+        if (!requestContext.IdentityOnlyResponse)
+            return false;
+
+        var jobs = coreOutput.Continuations.PostCommitJobs;
+        if (jobs.Count == 0 || !jobs.All(job => job is ForwardToSubflowJob))
+            return false;
+
+        var response = coreOutput.ExecutionContext.ClientResponse;
+        return response is { Error: null, SubflowStatus: { } childStatus } && !childStatus.IsTerminal;
     }
 
     private async Task<Result<PostCommitCoordinationResult>> CoordinatePostCommitAsync(
