@@ -3,9 +3,9 @@ using System.Text.Json.Serialization;
 namespace BBT.Workflow.Definitions;
 
 /// <summary>
-/// Declares how a flow or a transition executes: <c>SYNC</c> (the request blocks until the pipeline
-/// reaches a rest point and returns the full instance) or <c>ASYNC</c> (the request is accepted and the
-/// pipeline runs in the background via the scheduler). vnext#1003.
+/// Declares how a flow or a transition executes: <c>S</c> (synchronous — the request blocks until the
+/// pipeline reaches a rest point and returns the full instance) or <c>A</c> (asynchronous — the request
+/// is accepted and the pipeline runs in the background via the scheduler). vnext#1003.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -15,18 +15,18 @@ namespace BBT.Workflow.Definitions;
 /// ignored. A transition's setting (the inner definition) wins over the flow's (the outer definition).
 /// </para>
 /// <para>
-/// String enum: only <c>SYNC</c> and <c>ASYNC</c> are accepted (case-insensitive on read, though the
-/// schema constrains authoring to the upper-case forms). An unknown value is rejected at deserialization.
+/// String enum: only <c>S</c> and <c>A</c> are accepted (case-insensitive on read, though the schema
+/// constrains authoring to the upper-case forms). An unknown value is rejected at deserialization.
 /// </para>
 /// </remarks>
 [JsonConverter(typeof(IEquatableJsonConverter<ExecutionType>))]
 public sealed class ExecutionType : IEquatable<ExecutionType>
 {
     /// <summary>The request blocks until the pipeline settles and returns the full instance.</summary>
-    public static readonly ExecutionType Sync = new("SYNC", "Synchronous");
+    public static readonly ExecutionType Sync = new("S", "Synchronous");
 
     /// <summary>The request is accepted and the pipeline runs in the background (scheduler).</summary>
-    public static readonly ExecutionType Async = new("ASYNC", "Asynchronous");
+    public static readonly ExecutionType Async = new("A", "Asynchronous");
 
     public string Code { get; }
     public string Description { get; }
@@ -46,8 +46,8 @@ public sealed class ExecutionType : IEquatable<ExecutionType>
     {
         return code?.Trim().ToUpperInvariant() switch
         {
-            "SYNC" => Sync,
-            "ASYNC" => Async,
+            "S" => Sync,
+            "A" => Async,
             _ => throw new ArgumentException($"Unknown execution type: {code}")
         };
     }

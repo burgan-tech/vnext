@@ -141,7 +141,7 @@ public sealed class InstanceCommandAppServiceExecutionTypeTests : IDisposable
     public async Task TransitionAsync_RuntimeInternalCall_IsNotOverriddenByDefinition()
     {
         // A runtime-internal relay (subflow forward) forces sync=true + SuppressResponseEnrichment so the
-        // parent forwards synchronously into the active child. executionType=ASYNC must NOT flip that to
+        // parent forwards synchronously into the active child. executionType=A (async) must NOT flip that to
         // async — otherwise the child is only enqueued and the parent proceeds on an unfinished child.
         SetupInstanceAndWorkflow(WithSharedTransition(ExecutionType.Async));
 

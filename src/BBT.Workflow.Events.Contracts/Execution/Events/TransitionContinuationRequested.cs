@@ -98,7 +98,7 @@ public sealed class TransitionContinuationRequested : IDistributedEvent, ILaneAw
     /// keeps reporting the terminal completion/fault signal the way the caller asked (vnext#1003).
     /// <para>
     /// Before #1003, <see cref="Mode"/> always equalled the caller mode, so the consumer's historical
-    /// hardcoded <c>false</c> was harmless; now a flow/transition <c>executionType=ASYNC</c> can force
+    /// hardcoded <c>false</c> was harmless; now a flow/transition <c>executionType=A</c> (async) can force
     /// an async dispatch for a <c>sync=true</c> caller, and that intent must survive the outbox path
     /// exactly as it already does on the direct-enqueue payload
     /// (<c>AsyncTransitionStrategy.BuildDirectPayload</c>).

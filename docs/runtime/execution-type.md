@@ -1,14 +1,14 @@
-# Execution Type (SYNC / ASYNC)
+# Execution Type (S / A)
 
 `executionType` lets a definition — a flow or an individual transition — declare how a transition
 executes, independently of what the caller asks for. vnext#1003.
 
-- **`SYNC`** — the request blocks until the pipeline reaches a rest point and returns the full instance
-  (HTTP `200`).
-- **`ASYNC`** — the request is accepted and the pipeline runs in the background via the scheduler
-  (HTTP `202 Accepted`, `{ id, status }`); the client polls the state function.
+- **`S`** (synchronous) — the request blocks until the pipeline reaches a rest point and returns the
+  full instance (HTTP `200`).
+- **`A`** (asynchronous) — the request is accepted and the pipeline runs in the background via the
+  scheduler (HTTP `202 Accepted`, `{ id, status }`); the client polls the state function.
 
-It is an optional string enum (`SYNC` / `ASYNC`, upper-case only) on both the **flow** definition
+It is an optional string enum (`S` / `A`, upper-case only) on both the **flow** definition
 (`attributes.executionType`) and **transition** definitions (state, shared, and start transitions).
 
 ## Non-breaking by construction
@@ -30,7 +30,7 @@ effective mode =
     else the caller's sync query parameter               — pre-#1003 behaviour
 ```
 
-So a domain can set the flow to `ASYNC` and still force one specific transition to `SYNC` (or vice
+So a domain can set the flow to `A` and still force one specific transition to `S` (or vice
 versa) — the transition's setting wins. This is one pure function, `ExecutionModeResolver.Resolve`,
 applied at the two caller-driven intake points: the transition context builder
 (`InstanceCommandAppService.BuildTransitionContext`, which also serves event-triggered transitions) and
@@ -40,9 +40,9 @@ pick the sync inline pipeline or the async enqueue — while `CallerMode` keeps 
 
 ### Worked example
 
-Flow `ASYNC`, transition `SYNC`, caller sends `?sync=false` (async):
+Flow `A`, transition `S`, caller sends `?sync=false` (async):
 
-- Effective mode = `SYNC` (the transition, inner, wins). The request **runs synchronously** and returns
+- Effective mode = sync (the transition `S`, inner, wins). The request **runs synchronously** and returns
   `200` with the full instance.
 - The caller *requested* async but got sync — an override. See **Observability** below.
 
@@ -67,8 +67,8 @@ The HTTP response reflects what actually ran, not what the caller asked for:
 
 | Effective mode | Response |
 |---|---|
-| `SYNC` | `200 OK` with the full instance |
-| `ASYNC` | `202 Accepted` with `{ id, status }` |
+| sync (`S`) | `200 OK` with the full instance |
+| async (`A`) | `202 Accepted` with `{ id, status }` |
 
 The effective mode travels back to the controller on the internal `InstanceOutputBase.ExecutedAsync`
 flag (set from `context.Mode` in `WorkflowExecutionService.BuildTransitionOutput`); the controller shapes
@@ -82,8 +82,11 @@ trace span (no new persistence), so an operator can find every override by query
 | Tag | Meaning |
 |---|---|
 | `vnext.execution.requested` | the mode the caller asked for (`SYNC`/`ASYNC`, from the query parameter) |
-| `vnext.execution.effective` | the mode that actually ran after applying the definition |
+| `vnext.execution.effective` | the mode that actually ran after applying the definition (`SYNC`/`ASYNC`) |
 | `vnext.execution.overridden` | `true` only when a definition overrode the caller |
+
+> The trace tags render the execution **mode** name (`SYNC`/`ASYNC`) for operator readability; that is
+> the runtime `ExecMode`, distinct from the authored `executionType` code (`S`/`A`).
 
 This reuses the `Mode` (effective) vs `CallerMode` (requested) split that already existed on the
 execution context — before #1003 the two were always equal; now they diverge exactly when a definition
@@ -91,7 +94,7 @@ overrides the caller, and the tags make that visible.
 
 ## Validation
 
-Only `SYNC` and `ASYNC` are accepted. An unknown value is rejected at deserialization (the
+Only `S` and `A` are accepted. An unknown value is rejected at deserialization (the
 `ExecutionType` value object throws), and the `vnext-schema` `workflow-definition.schema.json` enum
 enforces it at authoring time (a reusable `executionType` `$def` referenced from `attributes` and the
 transition variants).

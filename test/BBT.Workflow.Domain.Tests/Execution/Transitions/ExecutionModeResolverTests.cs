@@ -51,7 +51,7 @@ public sealed class ExecutionModeResolverTests
     [Fact]
     public void TransitionSync_FlowAsync_TransitionWins()
     {
-        // The user's headline case: flow=ASYNC, transition=SYNC, caller asked ASYNC → runs SYNC.
+        // The user's headline case: flow=A, transition=S, caller asked async → runs sync.
         ExecutionModeResolver.Resolve(ExecutionType.Sync, ExecutionType.Async, ExecMode.Async)
             .ShouldBe(ExecMode.Sync);
     }

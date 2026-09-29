@@ -461,7 +461,7 @@ identity/status quickly; clients poll the state function until the instance beco
 Completed, or Faulted.
 
 A flow or transition definition may **override** this per-request choice with an `executionType`
-(`SYNC`/`ASYNC`): when set, the definition is the source of truth and the `sync` query parameter is
+(`S`/`A`): when set, the definition is the source of truth and the `sync` query parameter is
 ignored (a transition's value wins over the flow's), and the response shape (200 vs 202) follows the
 effective mode. Absent, the `sync` query parameter decides, as above. Full contract:
 [Execution Type](../runtime/execution-type.md) (vnext#1003).

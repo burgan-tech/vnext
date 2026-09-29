@@ -691,8 +691,8 @@ public class TransitionTests : DomainTestBase<DomainEntryPoint>
     }
 
     [Theory]
-    [InlineData("SYNC")]
-    [InlineData("ASYNC")]
+    [InlineData("S")]
+    [InlineData("A")]
     public void ExecutionType_WhenPresent_IsParsed(string code)
     {
         var json = $$"""
@@ -716,7 +716,7 @@ public class TransitionTests : DomainTestBase<DomainEntryPoint>
         {
             "key": "t", "from": null, "target": "next", "triggerType": "manual",
             "versionStrategy": "Patch", "labels": [], "onExecutionTasks": [],
-            "executionType": "ASYNC"
+            "executionType": "A"
         }
         """;
         var transition = System.Text.Json.JsonSerializer.Deserialize<Transition>(json, JsonSerializerConstants.JsonOptions)!;
@@ -724,7 +724,7 @@ public class TransitionTests : DomainTestBase<DomainEntryPoint>
         var round = System.Text.Json.JsonSerializer.Serialize(transition, JsonSerializerConstants.JsonOptions);
         using var doc = System.Text.Json.JsonDocument.Parse(round);
 
-        Assert.Equal("ASYNC", doc.RootElement.GetProperty("executionType").GetString());
+        Assert.Equal("A", doc.RootElement.GetProperty("executionType").GetString());
     }
 }
 
