@@ -1,8 +1,6 @@
 using BBT.Aether.MultiSchema;
-using BBT.Workflow.Data;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Schemas;
-using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -74,7 +72,7 @@ public sealed class SchemaMigrationRunner(
             return;
         }
 
-        var systemSchemas = runtimeOptions.Value.Schemas.Values.ToList();
+        var systemSchemas = SchemaDiscovery.GetSystemSchemas(scope.ServiceProvider);
         if (systemSchemas.Count == 0)
         {
             logger.LogWarning("No system schemas found in RuntimeOptions");
@@ -82,9 +80,9 @@ public sealed class SchemaMigrationRunner(
         }
 
         logger.LogInformation("Starting migration of {Count} system schemas", systemSchemas.Count);
-        foreach (var schemaInfo in systemSchemas)
+        foreach (var schema in systemSchemas)
         {
-            await MigrateSingleSchemaAsync(schemaInfo.Schema, cancellationToken).ConfigureAwait(false);
+            await MigrateSingleSchemaAsync(schema, cancellationToken).ConfigureAwait(false);
         }
         logger.LogInformation("Completed migration of system schemas");
     }
@@ -100,55 +98,27 @@ public sealed class SchemaMigrationRunner(
             return;
         }
 
-        var currentSchema = scope.ServiceProvider.GetRequiredService<ICurrentSchema>();
-        var dbContext = scope.ServiceProvider.GetRequiredService<WorkflowDbContext>();
-
         try
         {
-            using (currentSchema.Change(RuntimeSysSchemaInfo.Flows))
+            var (schemasToMigrate, discoveryError) = await SchemaDiscovery.TryDiscoverDomainSchemasAsync(
+                scope.ServiceProvider, cancellationToken);
+            if (schemasToMigrate is null)
             {
-                List<string> domainSchemas;
-                try
-                {
-                    domainSchemas = await dbContext.Instances
-                        .Where(i => i.Key != null)
-                        .Select(i => i.Key!)
-                        .Distinct()
-                        .ToListAsync(cancellationToken);
-                }
-                catch (Exception ex)
-                {
-                    logger.LogWarning(ex, "Failed to query domain schemas from sys_flows. Schema may not exist yet");
-                    return;
-                }
-
-                if (domainSchemas.Count == 0)
-                {
-                    logger.LogInformation("No domain schemas found in sys_flows");
-                    return;
-                }
-
-                var systemSchemaNames = runtimeOptions.Value.Schemas.Values
-                    .Select(s => s.Name)
-                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
-
-                var schemasToMigrate = domainSchemas
-                    .Where(key => !systemSchemaNames.Contains(key))
-                    .ToList();
-
-                if (schemasToMigrate.Count == 0)
-                {
-                    logger.LogInformation("All discovered schemas are system schemas. No domain schemas to migrate");
-                    return;
-                }
-
-                logger.LogInformation(
-                    "Found {TotalCount} schemas in sys_flows, {MigrateCount} domain schemas to migrate",
-                    domainSchemas.Count,
-                    schemasToMigrate.Count);
-
-                await MigrateSchemasInParallelAsync(schemasToMigrate, cancellationToken);
+                logger.LogWarning(discoveryError, "Failed to query domain schemas from sys_flows. Schema may not exist yet");
+                return;
             }
+
+            if (schemasToMigrate.Count == 0)
+            {
+                logger.LogInformation("No domain schemas found in sys_flows");
+                return;
+            }
+
+            logger.LogInformation(
+                "Found {MigrateCount} domain schemas to migrate",
+                schemasToMigrate.Count);
+
+            await MigrateSchemasInParallelAsync(schemasToMigrate, cancellationToken);
         }
         catch (Exception ex)
         {

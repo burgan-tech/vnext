@@ -88,6 +88,10 @@ public static class WorkflowInfrastructureModuleServiceCollectionExtensions
         // DbContext
         services.AddSingleton<SchemaAwareModelCacheKeyFactory>();
         services.AddScoped<IMultiSchemaMigrator<WorkflowDbContext>, MultiSchemaMigrator<WorkflowDbContext>>();
+        // Same instance behind both contracts: forward-to-latest (Aether's interface) and
+        // targeted converge/status/plan/script (the DbMigrator downgrade command).
+        services.AddScoped<ITargetedSchemaMigrator>(sp =>
+            (MultiSchemaMigrator<WorkflowDbContext>)sp.GetRequiredService<IMultiSchemaMigrator<WorkflowDbContext>>());
 
         // Schema migration tunables (command timeout + lock expiry). Defaults apply when the section
         // is absent; configuration binding only when a configuration root is available.
