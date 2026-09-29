@@ -18,10 +18,75 @@ namespace BBT.Workflow.Controllers.Instances;
 public sealed class FunctionController(
     IFunctionAppService functionAppService,
     IFunctionInfoAppService functionInfoAppService,
+    IFunctionMetricsAppService functionMetricsAppService,
     ICurrentUser currentUser,
     IInstanceFunctionHandlerFactory handlerFactory,
     IDomainFunctionHandlerFactory domainHandlerFactory) : AetherControllerBase
 {
+    /// <summary>
+    /// Paged execution metrics for a domain-registered function (vnext-client-sdk-core#60, item D):
+    /// its recent runs (newest first) plus a window summary (count / p50 / p95 / failure-rate). A
+    /// function is not record-based, so this is a paged execution series, not an attempts model.
+    /// </summary>
+    [HttpGet("{domain}/functions/{function}/metrics")]
+    public async Task<IActionResult> GetDomainFunctionMetricsAsync(
+        [FromRoute] string domain,
+        [FromRoute] string function,
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 20,
+        [FromQuery] DateTime? from = null,
+        [FromQuery] DateTime? to = null,
+        [FromQuery] bool? succeeded = null,
+        CancellationToken cancellationToken = default)
+    {
+        var input = new GetFunctionMetricsInput
+        {
+            Domain = domain,
+            Workflow = null,
+            FunctionKey = function,
+            Page = page,
+            PageSize = pageSize,
+            From = from,
+            To = to,
+            Succeeded = succeeded
+        };
+
+        var response = await functionMetricsAppService.GetFunctionMetricsAsync(input, cancellationToken);
+        return FromResult(response);
+    }
+
+    /// <summary>
+    /// The flow-scoped sibling of <see cref="GetDomainFunctionMetricsAsync"/> — the same shape,
+    /// narrowed to executions that ran under the given workflow.
+    /// </summary>
+    [HttpGet("{domain}/workflows/{workflow}/functions/{function}/metrics")]
+    public async Task<IActionResult> GetFlowFunctionMetricsAsync(
+        [FromRoute] string domain,
+        [FromRoute] string workflow,
+        [FromRoute] string function,
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 20,
+        [FromQuery] DateTime? from = null,
+        [FromQuery] DateTime? to = null,
+        [FromQuery] bool? succeeded = null,
+        CancellationToken cancellationToken = default)
+    {
+        var input = new GetFunctionMetricsInput
+        {
+            Domain = domain,
+            Workflow = workflow,
+            FunctionKey = function,
+            Page = page,
+            PageSize = pageSize,
+            From = from,
+            To = to,
+            Succeeded = succeeded
+        };
+
+        var response = await functionMetricsAppService.GetFunctionMetricsAsync(input, cancellationToken);
+        return FromResult(response);
+    }
+
     [HttpGet("{domain}/functions")]
     public async Task<IActionResult> GetDomainFunctionsAsync(
         [FromRoute] string domain,

@@ -21,7 +21,9 @@ public sealed class SubflowStateService(
     ILogger<SubflowStateService> logger)
     : ISubflowStateService
 {
-    private LockAcquireWait TerminalLockWait => executionOptions.Value.SubItemTerminalLockRetry.ToLockAcquireWait();
+    // Its own, short backoff — not the terminal paths' SubItemTerminalLockRetry. See
+    // WorkflowExecutionOptions.SubItemStateLockRetry for the measurement behind it.
+    private LockAcquireWait StateLockWait => executionOptions.Value.SubItemStateLockRetry.ToLockAcquireWait();
 
     /// <inheritdoc />
     public async Task UpdateParentStateAsync(
@@ -96,15 +98,26 @@ public sealed class SubflowStateService(
         // terminal paths', so there is no lock-order inversion between them.
         var lockKey = $"vnext:{input.Domain}:{input.Flow}:{input.ParentInstanceId}:sub:{input.SubInstanceId:N}";
 
+        // The backup delivery of a notification the relay already committed is the usual contender
+        // for this lock, and applying it changes nothing. Recognise that from the committed rows
+        // first, without the lock. Relay deliveries skip this read: they are almost always first.
+        if (input.IsBackupDelivery && await IsAlreadyAppliedAsync(input, activity, cancellationToken))
+            return null;
+
         // Bounded wait rather than fail-fast, for the same reason the terminal paths wait: the
         // critical section is one short transaction, and a duplicate that arrives while the original
         // is still inside it cannot see the pending write — failing immediately would push it into a
         // full broker re-delivery cycle instead.
         await using var lockScope = await transitionLockScopeFactory.AcquireAsync(
-            lockKey, TerminalLockWait, cancellationToken);
+            lockKey, StateLockWait, cancellationToken);
 
         if (!lockScope.IsAcquired)
         {
+            // The holder may have been the other delivery of this very notification. If it has now
+            // committed, there is nothing left to do — answer instead of forcing a redelivery cycle.
+            if (input.IsBackupDelivery && await IsAlreadyAppliedAsync(input, activity, cancellationToken))
+                return null;
+
             logger.SubFlowStateChangeLockNotAcquired(lockKey, input.SubInstanceId);
             activity?.SetTag("vnext.subflow.result", "lock_not_acquired");
             throw new SubflowTerminalLockNotAcquiredException(
@@ -204,6 +217,64 @@ public sealed class SubflowStateService(
             input.NewState);
 
         return upwardEvents;
+    }
+
+    /// <summary>
+    /// Whether the committed rows already reflect this notification, read without the lock. True for
+    /// (a) a stale delivery — the same ordering predicate as the locked path; safe unlocked because
+    /// the watermark only moves forward, under the lock — and (b) an exact duplicate whose values the
+    /// parent and its correlation already carry, which the locked path would re-apply as a no-op.
+    /// Anything else (parent missing, correlation closed, projection different) returns false and
+    /// takes the locked path, which owns every write and every not-found answer.
+    /// </summary>
+    private async Task<bool> IsAlreadyAppliedAsync(
+        SubFlowStateChangedInput input,
+        System.Diagnostics.Activity? activity,
+        CancellationToken cancellationToken)
+    {
+        var probe = await instanceRepository.ProbeSubflowStateAsync(
+            input.ParentInstanceId, input.SubInstanceId, cancellationToken);
+        if (probe is not { HasOpenCorrelation: true })
+            return false;
+
+        var bothSequenced = input.NotificationSeq > 0 && probe.SubFlowNotificationSeq > 0;
+        var eventStamp = TruncateToMicroseconds(input.ChangedAt);
+        var storedStamp = probe.SubFlowStateChangedAt is { } at ? TruncateToMicroseconds(at) : (DateTime?)null;
+
+        var stale = bothSequenced
+            ? input.NotificationSeq < probe.SubFlowNotificationSeq
+            : storedStamp.HasValue && eventStamp < storedStamp.Value;
+
+        string? reason = null;
+        if (stale)
+        {
+            reason = "out_of_order";
+        }
+        else
+        {
+            var sameNotification = bothSequenced
+                ? input.NotificationSeq == probe.SubFlowNotificationSeq
+                : storedStamp == eventStamp;
+
+            // Mirrors what the locked path would write: the correlation's recorded state, and
+            // PropagateEffectiveStateToParent's own "nothing moved" test on the parent.
+            var projected =
+                probe.SubFlowCurrentState == input.NewState &&
+                (string.IsNullOrWhiteSpace(probe.EffectiveState) ? string.Empty : probe.EffectiveState) == input.NewState &&
+                probe.EffectiveStateType == input.NewStateType &&
+                probe.EffectiveStateSubType == input.NewStateSubType &&
+                (InstanceStatus.TryFromCode(input.NewStatus) is not { } status || probe.EffectiveStatus.Equals(status));
+
+            if (sameNotification && projected)
+                reason = "duplicate";
+        }
+
+        if (reason is null)
+            return false;
+
+        logger.SubFlowStateChangeBackupAlreadyApplied(input.SubInstanceId, input.ParentInstanceId, reason);
+        activity?.SetTag("vnext.subflow.result", $"backup_{reason}");
+        return true;
     }
 
     // Truncates a DateTime to microsecond precision (removes sub-microsecond ticks).

@@ -336,6 +336,14 @@ public static class TelemetryConstants
         public const string SettleCas = "vnext.settle.cas";
 
         /// <summary>
+        /// Stamped (<c>true</c>) on the span awaiting the relay (the level above's <c>SubFlow.Forward</c>) when an intermediate level of a
+        /// SubFlow forward chain returned without its post-commit settlement: an identity-only relay
+        /// whose child is still non-terminal, so the parent's blocking correlation is open and the
+        /// settle reload could change nothing. Absent on every other settle.
+        /// </summary>
+        public const string SettleSkipped = "vnext.settle.skipped";
+
+        /// <summary>
         /// How the activation episode ended — see <see cref="ActivationOutcomes"/>. Stamped on
         /// <c>Instance.Activation/{key}</c>.
         /// </summary>

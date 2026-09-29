@@ -442,4 +442,179 @@ public sealed class SubflowStateServiceTests
 
         correlation.SubFlowNotificationSeq.ShouldBe(5);
     }
+
+    // ─── backup (Inbox) delivery: the lock-free already-applied check ─────────
+
+    private static SubFlowStateChangedInput Backup(SubFlowStateChangedInput input) =>
+        input with { IsBackupDelivery = true };
+
+    private void Probes(Guid parentId, Guid subInstanceId, SubflowStateProbe? probe) =>
+        _instanceRepository
+            .Setup(x => x.ProbeSubflowStateAsync(parentId, subInstanceId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(probe);
+
+    /// <summary>What the parent looks like after <paramref name="input"/> was committed.</summary>
+    private static SubflowStateProbe AppliedProbe(SubFlowStateChangedInput input) => new(
+        input.NewState,
+        input.NewStateType,
+        input.NewStateSubType,
+        InstanceStatus.TryFromCode(input.NewStatus) ?? InstanceStatus.Active,
+        HasOpenCorrelation: true,
+        input.NewState,
+        input.NotificationSeq,
+        input.ChangedAt);
+
+    private void VerifyNoLockNoLoadNoWrite()
+    {
+        _lockScopeFactory.Verify(
+            x => x.AcquireAsync(It.IsAny<string>(), It.IsAny<LockAcquireWait>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+        _instanceRepository.Verify(
+            x => x.FindForSubflowStateChangeAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+        _instanceRepository.Verify(
+            x => x.UpdateAsync(It.IsAny<Instance>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+        _relayDispatcher.Verify(
+            x => x.RelayAsync(It.IsAny<IReadOnlyList<DomainEventEnvelope>>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    /// <summary>
+    /// The usual case: the post-commit relay already committed this exact notification, so the
+    /// backup changes nothing — and must not contend for the lock the next relay needs.
+    /// </summary>
+    [Fact]
+    public async Task A_Backup_Of_An_Already_Applied_Notification_Takes_No_Lock_And_Writes_Nothing()
+    {
+        var parentId = Guid.NewGuid();
+        var subInstanceId = Guid.NewGuid();
+        var input = Backup(Input(parentId, subInstanceId, DateTime.UtcNow, newStatus: "A", notificationSeq: 7));
+        Probes(parentId, subInstanceId, AppliedProbe(input));
+
+        await CreateSut().UpdateParentStateAsync(input);
+
+        VerifyNoLockNoLoadNoWrite();
+    }
+
+    /// <summary>Same predicate as the locked path: a lower sequence is stale, lock or no lock.</summary>
+    [Fact]
+    public async Task A_Stale_Backup_Is_Dropped_Without_The_Lock()
+    {
+        var parentId = Guid.NewGuid();
+        var subInstanceId = Guid.NewGuid();
+        var input = Backup(Input(parentId, subInstanceId, DateTime.UtcNow, newStatus: null, notificationSeq: 3));
+        Probes(parentId, subInstanceId, AppliedProbe(input) with { SubFlowNotificationSeq = 5, EffectiveState = "later" });
+
+        await CreateSut().UpdateParentStateAsync(input);
+
+        VerifyNoLockNoLoadNoWrite();
+    }
+
+    /// <summary>
+    /// Same sequence but the parent does not carry the values: the first apply is not what the rows
+    /// show (or something moved them since), so the locked path decides — it owns every write.
+    /// </summary>
+    [Fact]
+    public async Task A_Backup_Whose_Projection_Differs_Takes_The_Locked_Path_And_Applies()
+    {
+        var parent = CreateParent(out var subInstanceId);
+        Loads(parent, subInstanceId);
+        var input = Backup(Input(parent.Id, subInstanceId, DateTime.UtcNow, newStatus: null, notificationSeq: 0));
+        Probes(parent.Id, subInstanceId, AppliedProbe(input) with { EffectiveState = "something-else" });
+
+        await CreateSut().UpdateParentStateAsync(input);
+
+        parent.GetEffectiveState.ShouldBe("child-running");
+        _instanceRepository.Verify(
+            x => x.UpdateAsync(parent, true, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    /// <summary>Not-found answers stay the locked path's: the probe only ever short-circuits a write.</summary>
+    [Fact]
+    public async Task A_Backup_For_A_Closed_Correlation_Falls_Through_To_The_Locked_Path()
+    {
+        var parent = CreateParent(out var subInstanceId);
+        Loads(parent, subInstanceId);
+        var input = Backup(Input(parent.Id, subInstanceId, DateTime.UtcNow));
+        Probes(parent.Id, subInstanceId, AppliedProbe(input) with { HasOpenCorrelation = false });
+
+        await CreateSut().UpdateParentStateAsync(input);
+
+        _instanceRepository.Verify(
+            x => x.FindForSubflowStateChangeAsync(parent.Id, subInstanceId, It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    /// <summary>The relay is almost always first; it must not pay an extra read per level.</summary>
+    [Fact]
+    public async Task A_Relay_Delivery_Never_Probes()
+    {
+        var parent = CreateParent(out var subInstanceId);
+        Loads(parent, subInstanceId);
+
+        await CreateSut().UpdateParentStateAsync(Input(parent.Id, subInstanceId, DateTime.UtcNow));
+
+        _instanceRepository.Verify(
+            x => x.ProbeSubflowStateAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    /// <summary>
+    /// The holder of the lock was the relay applying this very notification: once it committed, the
+    /// backup answers instead of throwing into a broker redelivery cycle.
+    /// </summary>
+    [Fact]
+    public async Task A_Backup_That_Loses_The_Lock_To_The_Same_Notification_Does_Not_Throw()
+    {
+        var parentId = Guid.NewGuid();
+        var subInstanceId = Guid.NewGuid();
+        var input = Backup(Input(parentId, subInstanceId, DateTime.UtcNow, newStatus: null, notificationSeq: 4));
+        _instanceRepository
+            .SetupSequence(x => x.ProbeSubflowStateAsync(parentId, subInstanceId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(AppliedProbe(input) with { SubFlowNotificationSeq = 3, EffectiveState = "before" })
+            .ReturnsAsync(AppliedProbe(input));
+        _lockScope.SetupGet(x => x.IsAcquired).Returns(false);
+
+        await CreateSut().UpdateParentStateAsync(input);
+
+        _instanceRepository.Verify(
+            x => x.FindForSubflowStateChangeAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    /// <summary>A lost lock with the change still unapplied keeps throwing, so the Inbox redelivers.</summary>
+    [Fact]
+    public async Task A_Backup_That_Loses_The_Lock_With_The_Change_Unapplied_Still_Throws()
+    {
+        var parentId = Guid.NewGuid();
+        var subInstanceId = Guid.NewGuid();
+        var input = Backup(Input(parentId, subInstanceId, DateTime.UtcNow, newStatus: null, notificationSeq: 4));
+        Probes(parentId, subInstanceId, AppliedProbe(input) with { SubFlowNotificationSeq = 3, EffectiveState = "before" });
+        _lockScope.SetupGet(x => x.IsAcquired).Returns(false);
+
+        await Should.ThrowAsync<SubflowTerminalLockNotAcquiredException>(
+            () => CreateSut().UpdateParentStateAsync(input));
+    }
+
+    /// <summary>
+    /// The state channel waits on its own short backoff; at the terminal paths' 120 ms base the first
+    /// retry alone slept 120–240 ms however briefly the lock was held.
+    /// </summary>
+    [Fact]
+    public async Task Waits_With_The_State_Lock_Backoff_Not_The_Terminal_One()
+    {
+        var parent = CreateParent(out var subInstanceId);
+        Loads(parent, subInstanceId);
+        var options = new WorkflowExecutionOptions();
+
+        await CreateSut().UpdateParentStateAsync(Input(parent.Id, subInstanceId, DateTime.UtcNow));
+
+        _lockScopeFactory.Verify(x => x.AcquireAsync(
+            It.IsAny<string>(),
+            options.SubItemStateLockRetry.ToLockAcquireWait(),
+            It.IsAny<CancellationToken>()), Times.Once);
+        options.SubItemStateLockRetry.ToLockAcquireWait()
+            .ShouldNotBe(options.SubItemTerminalLockRetry.ToLockAcquireWait());
+    }
 }

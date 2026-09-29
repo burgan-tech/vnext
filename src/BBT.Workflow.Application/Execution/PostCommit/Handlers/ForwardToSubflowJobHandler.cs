@@ -68,7 +68,8 @@ public sealed class ForwardToSubflowJobHandler(
                 context.ClientResponse = new ClientResponse
                 {
                     Id = context.InstanceId,
-                    Status = responseStatus
+                    Status = responseStatus,
+                    SubflowStatus = result.Value.Status
                 };
 
                 logger.SubFlowForwardSucceeded(job.TransitionKey, job.SubflowInstanceId, job.ParentInstanceId);

@@ -96,6 +96,60 @@ public sealed class InstanceTaskHistoryPersistenceTests : IAsyncLifetime
         rows[2].FaultedResponseJson.ShouldContain("connection refused");
     }
 
+    /// <summary>
+    /// vnext-client-sdk-core#60: the same task key can run under two hooks of one transition
+    /// (a state's OnEntry vs the transition's OnExecute). Before the hook/order columns the two
+    /// journal rows were indistinguishable in the projection; now Hook + Order tell them apart.
+    /// </summary>
+    [Fact]
+    public async Task GetHistoryByInstanceIdAsync_DistinguishesTasksByHook()
+    {
+        var transition = await SeedInstanceWithTransitionAsync("hook-projection");
+        await using (var ctx = CreateContext())
+        {
+            // Same task key, two different hooks — the collision the client could not resolve.
+            ctx.InstanceTasks.Add(new InstanceTask(Guid.NewGuid(), transition.Id, "shared-task", TaskTrigger.OnEntry, 0));
+            ctx.InstanceTasks.Add(new InstanceTask(Guid.NewGuid(), transition.Id, "shared-task", TaskTrigger.OnExecute, 2));
+            await ctx.SaveChangesAsync();
+        }
+
+        await using var readCtx = CreateContext();
+        var rows = await CreateTaskRepository(readCtx).GetHistoryByInstanceIdAsync(transition.InstanceId);
+
+        var byHook = rows.Where(r => r.TaskKey == "shared-task").ToList();
+        byHook.Count.ShouldBe(2);
+        byHook.ShouldContain(r => r.Hook == TaskTrigger.OnEntry && r.Order == 0);
+        byHook.ShouldContain(r => r.Hook == TaskTrigger.OnExecute && r.Order == 2);
+    }
+
+    /// <summary>
+    /// A row written before the columns existed carries null hook/order — the API reports unknown
+    /// rather than fabricating (the value cannot be recovered from the one-way ExecutionKey hash).
+    /// Simulated by clearing the columns directly, the shape a pre-migration row has on disk.
+    /// </summary>
+    [Fact]
+    public async Task GetHistoryByInstanceIdAsync_LegacyRowsReportNullHookAndOrder()
+    {
+        var transition = await SeedInstanceWithTransitionAsync("hook-legacy");
+        var task = new InstanceTask(Guid.NewGuid(), transition.Id, "legacy-task", TaskTrigger.OnExecute, 1);
+        await using (var ctx = CreateContext())
+        {
+            ctx.InstanceTasks.Add(task);
+            await ctx.SaveChangesAsync();
+            // Emulate a pre-migration row: the columns are null on disk.
+            await ctx.Database.ExecuteSqlRawAsync(
+                "UPDATE public.\"InstanceTasks\" SET \"TaskTrigger\" = NULL, \"Order\" = NULL WHERE \"Id\" = {0}",
+                task.Id);
+        }
+
+        await using var readCtx = CreateContext();
+        var rows = await CreateTaskRepository(readCtx).GetHistoryByInstanceIdAsync(transition.InstanceId);
+
+        var row = rows.Single(r => r.TaskKey == "legacy-task");
+        row.Hook.ShouldBeNull();
+        row.Order.ShouldBeNull();
+    }
+
     [Fact]
     public async Task GetRefForInstanceAsync_ResolvesOnlyThroughOwningInstance()
     {
@@ -150,6 +204,84 @@ public sealed class InstanceTaskHistoryPersistenceTests : IAsyncLifetime
         rows[0].Detail.Json.ShouldContain("\"n\"");
         empty.ShouldBeEmpty();
     }
+
+    /// <summary>
+    /// vnext-client-sdk-core#60 item B: the metrics projection reads only the metadata columns for a
+    /// SET of transition rows (payloads stay in the database, faulted Response is the one conditional
+    /// exception), groups by owning transition, and carries the hook/order columns that separate a
+    /// state's onEntry/onExit from the transition's onExecute.
+    /// </summary>
+    [Fact]
+    public async Task GetMetricsRowsByTransitionIdsAsync_ProjectsMetricsColumnsGroupedByTransition()
+    {
+        var instance = Instance.Create(Guid.NewGuid(), Flow, "1.0.0", "metrics-projection");
+        var firstFiring = NewTransition(instance.Id, "to-review");
+        var secondFiring = NewTransition(instance.Id, "to-review");
+        var unrelated = NewTransition(instance.Id, "approve");
+
+        InstanceTask entry, faulted, secondTask, unrelatedTask;
+        await using (var ctx = CreateContext())
+        {
+            ctx.Instances.Add(instance);
+            ctx.InstanceTransitions.AddRange(firstFiring, secondFiring, unrelated);
+
+            entry = new InstanceTask(Guid.NewGuid(), firstFiring.Id, "crm-enrich", TaskTrigger.OnEntry, 0);
+            faulted = new InstanceTask(Guid.NewGuid(), firstFiring.Id, "legacy-sync", TaskTrigger.OnExecute, 1);
+            ctx.InstanceTasks.Add(entry);
+            await Task.Delay(5);
+            ctx.InstanceTasks.Add(faulted);
+            secondTask = new InstanceTask(Guid.NewGuid(), secondFiring.Id, "risk-recalc", TaskTrigger.OnExecute, 1);
+            ctx.InstanceTasks.Add(secondTask);
+            unrelatedTask = new InstanceTask(Guid.NewGuid(), unrelated.Id, "noise", TaskTrigger.OnExecute, 1);
+            ctx.InstanceTasks.Add(unrelatedTask);
+
+            entry.Completed(JsonData.CreateFrom("""{"big":"payload"}"""), isBusinessSuccess: true);
+            faulted.Faulted("connection refused");
+            await ctx.SaveChangesAsync();
+        }
+
+        await using var readCtx = CreateContext();
+        var repository = CreateTaskRepository(readCtx);
+
+        var rows = await repository.GetMetricsRowsByTransitionIdsAsync(
+            new[] { firstFiring.Id, secondFiring.Id });
+
+        // Only the two requested firings' tasks — the unrelated firing's task is excluded.
+        rows.Count.ShouldBe(3);
+        rows.ShouldNotContain(r => r.TaskKey == "noise");
+
+        var firstFiringRows = rows.Where(r => r.TransitionId == firstFiring.Id).ToList();
+        firstFiringRows.Count.ShouldBe(2);
+        // Execution order (StartedAt) within the projection.
+        firstFiringRows.Select(r => r.Id).ShouldBe([entry.Id, faulted.Id]);
+
+        var entryRow = firstFiringRows.Single(r => r.TaskKey == "crm-enrich");
+        entryRow.Hook.ShouldBe(TaskTrigger.OnEntry);
+        entryRow.Order.ShouldBe(0);
+        entryRow.Status.ShouldBe(TaskStatus.Completed);
+        // A completed row's payload never leaves the database.
+        entryRow.FaultedResponseJson.ShouldBeNull();
+
+        var faultedRow = firstFiringRows.Single(r => r.TaskKey == "legacy-sync");
+        faultedRow.Status.ShouldBe(TaskStatus.Faulted);
+        faultedRow.FaultedResponseJson.ShouldNotBeNull();
+        faultedRow.FaultedResponseJson.ShouldContain("connection refused");
+
+        rows.Single(r => r.TransitionId == secondFiring.Id).TaskKey.ShouldBe("risk-recalc");
+
+        // Empty input never touches the database.
+        (await repository.GetMetricsRowsByTransitionIdsAsync(Array.Empty<Guid>())).ShouldBeEmpty();
+    }
+
+    private static InstanceTransition NewTransition(Guid instanceId, string key) =>
+        InstanceTransition.Create(
+            Guid.NewGuid(),
+            instanceId,
+            key,
+            "InitialState",
+            TriggerType.Manual,
+            JsonData.CreateFrom("{}"),
+            JsonData.CreateFrom("{}"));
 
     private async Task<InstanceTransition> SeedInstanceWithTransitionAsync(string key)
     {

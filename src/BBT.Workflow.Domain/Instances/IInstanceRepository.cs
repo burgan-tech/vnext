@@ -345,6 +345,17 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Reads, no-tracking and in one row, the parent's effective projection and the watermark of the
+    /// given sub-instance's OPEN correlation — see <see cref="SubflowStateProbe"/>. Null when the
+    /// parent does not exist. Used before the per-sub-item lock to drop a backup delivery the
+    /// committed rows already reflect; it never replaces the locked load for a write.
+    /// </summary>
+    Task<SubflowStateProbe?> ProbeSubflowStateAsync(
+        Guid instanceId,
+        Guid subInstanceId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Loads the parent for post-commit settlement: always its open correlations (the settlement
     /// guard and the fault cascade read them), and its latest data row only when
     /// <paramref name="includeLatestData"/> is set. The returned aggregate is marked partially

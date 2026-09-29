@@ -72,4 +72,26 @@ public static class WorkflowApiBaseApplicationBuilderExtensions
             }
         });
     }
+
+    /// <summary>
+    /// Migrates the domain-wide metrics context (function-execution journal, fixed <c>sys_metrics</c>
+    /// schema). Mirrors <see cref="MigrateMessagingDbContext"/>; called once at deploy time from the
+    /// DbMigrator, since this context is not part of the per-flow schema migration.
+    /// </summary>
+    public static void MigrateMetricsDbContext(this IServiceProvider services)
+    {
+        AsyncHelper.RunSync(async () =>
+        {
+            await using var scope = services.CreateAsyncScope();
+
+            var dbContext = scope.ServiceProvider.GetRequiredService<MetricsDbContext>();
+            if (dbContext.Database.IsRelational())
+            {
+                var migrationOptions = scope.ServiceProvider.GetService<IOptions<SchemaMigrationOptions>>()?.Value
+                                       ?? new SchemaMigrationOptions();
+                dbContext.Database.SetCommandTimeout(migrationOptions.CommandTimeoutSeconds);
+                await dbContext.Database.MigrateAsync();
+            }
+        });
+    }
 }

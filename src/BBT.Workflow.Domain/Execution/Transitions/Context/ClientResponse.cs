@@ -17,4 +17,13 @@ public class ClientResponse
     /// When present, indicates that the transition failed with client-visible error.
     /// </summary>
     public Error? Error { get; set; }
+
+    /// <summary>
+    /// The forwarded SubFlow's OWN status, as its relay answered it — set only by
+    /// <c>ForwardToSubflowJobHandler</c> on a successful forward. Unlike <see cref="Status"/>, which
+    /// the handler swaps for the parent's fresh status once the child completed, this is never
+    /// rewritten. A non-terminal value proves the parent's blocking correlation is still open, which
+    /// is what lets <c>TransitionRunner</c> skip a settlement that could not change anything.
+    /// </summary>
+    public InstanceStatus? SubflowStatus { get; set; }
 }
