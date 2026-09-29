@@ -55,6 +55,15 @@ public interface IInstanceTransitionRepository : IRepository<InstanceTransition,
     /// <returns>Ordered list of transitions; empty if none exist.</returns>
     Task<List<InstanceTransitionSlim>> GetByInstanceIdAsReadOnlyAsync(Guid instanceId, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Returns only the firings of one transition key for the given instance, ordered by
+    /// <see cref="InstanceTransition.StartedAt"/> ascending. The key filter is applied in SQL so a
+    /// single-key read (the transition-metrics endpoint) does not materialize the instance's whole
+    /// transition history. Non-tracking, projected to <see cref="InstanceTransitionSlim"/>.
+    /// </summary>
+    Task<List<InstanceTransitionSlim>> GetByInstanceAndTransitionKeyAsReadOnlyAsync(
+        Guid instanceId, string transitionKey, CancellationToken cancellationToken = default);
+
     /// <summary>Read-only: per-transition execution aggregation across the current schema (additive, monitor-only).</summary>
     Task<List<TransitionExecutionStat>> GetTransitionStatsAsync(CancellationToken cancellationToken = default);
 }

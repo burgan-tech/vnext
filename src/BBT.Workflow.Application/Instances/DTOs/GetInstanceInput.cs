@@ -248,6 +248,50 @@ public sealed class GetInstanceTaskActionsInput : IHasDomain
 }
 
 /// <summary>
+/// Input for the transition metrics endpoint — the attempts model of one transition key on an
+/// instance (vnext-client-sdk-core#60).
+/// </summary>
+public sealed class GetTransitionMetricsInput : IHasDomain
+{
+    [Required]
+    [StringLength(WorkflowConstants.MaxDomainLength)]
+    public string Domain { get; set; } = string.Empty;
+
+    [Required]
+    [StringLength(WorkflowConstants.MaxFlowLength)]
+    public string Workflow { get; set; } = string.Empty;
+
+    [Required]
+    public string Instance { get; set; } = string.Empty;
+
+    /// <summary>The transition definition key to group firings by.</summary>
+    [Required]
+    public string TransitionKey { get; set; } = string.Empty;
+}
+
+/// <summary>
+/// Input for the state metrics endpoint — the attempts model of one state (its visits) on an
+/// instance (vnext-client-sdk-core#60).
+/// </summary>
+public sealed class GetStateMetricsInput : IHasDomain
+{
+    [Required]
+    [StringLength(WorkflowConstants.MaxDomainLength)]
+    public string Domain { get; set; } = string.Empty;
+
+    [Required]
+    [StringLength(WorkflowConstants.MaxFlowLength)]
+    public string Workflow { get; set; } = string.Empty;
+
+    [Required]
+    public string Instance { get; set; } = string.Empty;
+
+    /// <summary>The state key whose visits to group.</summary>
+    [Required]
+    public string StateKey { get; set; } = string.Empty;
+}
+
+/// <summary>
 /// Input for retrieving the newest unresolved incident of an instance — the target of the
 /// <c>incident.active</c> link on the state function and instance metadata.
 /// </summary>
