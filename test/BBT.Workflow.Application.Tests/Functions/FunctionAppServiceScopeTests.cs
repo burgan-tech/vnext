@@ -196,7 +196,7 @@ public sealed class FunctionAppServiceScopeTests : IDisposable
     [Fact]
     public async Task ByKey_ExecutionLogDisabledByDefault_DoesNotJournal()
     {
-        // No executionLog on the definition → the default is DISABLED → nothing is recorded, and the
+        // No executionLog on the definition → the default is D (disabled) → nothing is recorded, and the
         // fast path is taken (this is the non-breaking, opt-in behaviour).
         SetupFunction(TaskScope.Domain);
 

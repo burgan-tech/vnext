@@ -13,19 +13,18 @@ namespace BBT.Workflow.Definitions;
 public sealed class ExecutionLogSettingTests
 {
     [Theory]
-    [InlineData("ENABLED")]
-    [InlineData("enabled")]
-    [InlineData("Enabled")]
-    [InlineData("  ENABLED  ")]
+    [InlineData("E")]
+    [InlineData("e")]
+    [InlineData("  E  ")]
     public void FromCode_ResolvesEnabled_CaseAndWhitespaceInsensitive(string code)
     {
         ExecutionLogSetting.FromCode(code).ShouldBe(ExecutionLogSetting.Enabled);
     }
 
     [Theory]
-    [InlineData("DISABLED")]
-    [InlineData("disabled")]
-    [InlineData(" Disabled ")]
+    [InlineData("D")]
+    [InlineData("d")]
+    [InlineData(" D ")]
     public void FromCode_ResolvesDisabled_CaseAndWhitespaceInsensitive(string code)
     {
         ExecutionLogSetting.FromCode(code).ShouldBe(ExecutionLogSetting.Disabled);
@@ -34,6 +33,8 @@ public sealed class ExecutionLogSettingTests
     [Theory]
     [InlineData("")]
     [InlineData("   ")]
+    [InlineData("ENABLED")]  // the old code is no longer valid
+    [InlineData("DISABLED")] // the old code is no longer valid
     [InlineData("ON")]
     [InlineData("true")]
     [InlineData("ENABLE")]
@@ -45,16 +46,16 @@ public sealed class ExecutionLogSettingTests
     [Fact]
     public void Codes_AreTheCanonicalUpperCaseForms()
     {
-        ExecutionLogSetting.Enabled.Code.ShouldBe("ENABLED");
-        ExecutionLogSetting.Disabled.Code.ShouldBe("DISABLED");
+        ExecutionLogSetting.Enabled.Code.ShouldBe("E");
+        ExecutionLogSetting.Disabled.Code.ShouldBe("D");
     }
 
     [Fact]
     public void Equality_IsByCode()
     {
-        ExecutionLogSetting.FromCode("ENABLED").ShouldBe(ExecutionLogSetting.Enabled);
+        ExecutionLogSetting.FromCode("E").ShouldBe(ExecutionLogSetting.Enabled);
         ExecutionLogSetting.Enabled.ShouldNotBe(ExecutionLogSetting.Disabled);
-        ExecutionLogSetting.Enabled.GetHashCode().ShouldBe(ExecutionLogSetting.FromCode("enabled").GetHashCode());
+        ExecutionLogSetting.Enabled.GetHashCode().ShouldBe(ExecutionLogSetting.FromCode("e").GetHashCode());
     }
 
     [Fact]
@@ -62,13 +63,13 @@ public sealed class ExecutionLogSettingTests
     {
         var json = JsonSerializer.Serialize(ExecutionLogSetting.Enabled);
 
-        json.ShouldBe("\"ENABLED\"");
+        json.ShouldBe("\"E\"");
     }
 
     [Fact]
     public void Json_DeserializesFromCode()
     {
-        var setting = JsonSerializer.Deserialize<ExecutionLogSetting>("\"DISABLED\"");
+        var setting = JsonSerializer.Deserialize<ExecutionLogSetting>("\"D\"");
 
         setting.ShouldBe(ExecutionLogSetting.Disabled);
     }

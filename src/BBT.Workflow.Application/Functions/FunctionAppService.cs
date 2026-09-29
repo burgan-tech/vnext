@@ -146,7 +146,7 @@ public sealed class FunctionAppService(
         CancellationToken cancellationToken)
     {
         // Journal one execution row per invocation of a domain-registered function
-        // (vnext-client-sdk-core#60). Recording is OPT-IN per function (executionLog: ENABLED) and
+        // (vnext-client-sdk-core#60). Recording is OPT-IN per function (executionLog: E) and
         // best-effort: the row is ENQUEUED, never written, on this path — a background writer persists it
         // — so the function's execution time is unaffected.
         var fromCache = false;

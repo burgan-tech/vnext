@@ -32,7 +32,7 @@ public sealed record FunctionExecutionRecord(
 /// execution path never waits for, and is never affected by, the journal write.
 /// </summary>
 /// <remarks>
-/// Journaling is opt-in per function (<c>executionLog: ENABLED</c>) and best-effort: under sustained
+/// Journaling is opt-in per function (<c>executionLog: E</c>) and best-effort: under sustained
 /// load the bounded queue sheds records rather than slowing the functions it records.
 /// </remarks>
 public interface IFunctionExecutionJournal

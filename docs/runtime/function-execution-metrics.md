@@ -11,16 +11,16 @@ and domain-scoped inside no record at all. So its telemetry is not an attempts m
 ## What is recorded — and what is not
 
 **Opt-in per function.** Recording is off by default. A function is journaled only when its definition
-declares `executionLog: ENABLED`; absent or `DISABLED`, nothing is recorded. This is deliberately
+declares `executionLog: E` (enabled); absent or `D` (disabled), nothing is recorded. This is deliberately
 non-breaking — every existing definition, and any authored without the field, keeps the no-logging
 behaviour — and it keeps the table to the functions a domain actually wants to watch rather than every
-GET/POST/PATCH. The field is the value object `ExecutionLogSetting` (`ENABLED`/`DISABLED`), authored on
+GET/POST/PATCH. The field is the value object `ExecutionLogSetting` (`E`/`D`), authored on
 the function definition (`vnext-schema` `function-definition.schema.json`), and gates the journal only —
 OTel/APM tracing (the `Function.Execute` span) is always emitted regardless.
 
 **Recorded: opted-in domain-registered functions only.** Of the invocations that run through
 `FunctionAppService.ExecuteFunctionAsync` — the functions in the `sys-functions` registry — only those
-with `executionLog: ENABLED` are journaled. The gate and the write sit in that one method, so the scope
+with `executionLog: E` are journaled. The gate and the write sit in that one method, so the scope
 is enforced structurally: the runtime's built-in instance read functions (`state`, `data`, `view`,
 `schema`, `tasks`, `actions`, `hierarchy`, …) are served by their own handlers and never reach it, so
 they are never journaled here. Their telemetry lives in APM (the

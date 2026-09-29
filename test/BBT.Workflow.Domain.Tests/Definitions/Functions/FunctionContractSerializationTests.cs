@@ -181,7 +181,7 @@ public sealed class FunctionContractSerializationTests
     [Fact]
     public void ExecutionLog_Enabled_IsParsed_AndEnablesLogging()
     {
-        var function = Deserialize("\"executionLog\": \"ENABLED\"");
+        var function = Deserialize("\"executionLog\": \"E\"");
 
         function.ExecutionLog.ShouldBe(ExecutionLogSetting.Enabled);
         function.ExecutionLoggingEnabled.ShouldBeTrue();
@@ -190,7 +190,7 @@ public sealed class FunctionContractSerializationTests
     [Fact]
     public void ExecutionLog_Disabled_IsParsed_AndKeepsLoggingOff()
     {
-        var function = Deserialize("\"executionLog\": \"DISABLED\"");
+        var function = Deserialize("\"executionLog\": \"D\"");
 
         function.ExecutionLog.ShouldBe(ExecutionLogSetting.Disabled);
         function.ExecutionLoggingEnabled.ShouldBeFalse();
@@ -199,12 +199,12 @@ public sealed class FunctionContractSerializationTests
     [Fact]
     public void ExecutionLog_RoundTrips_AsItsCode()
     {
-        var function = Deserialize("\"executionLog\": \"ENABLED\"");
+        var function = Deserialize("\"executionLog\": \"E\"");
 
         var json = JsonSerializer.Serialize(function, JsonSerializerConstants.JsonOptions);
         using var doc = JsonDocument.Parse(json);
 
-        doc.RootElement.GetProperty("executionLog").GetString().ShouldBe("ENABLED");
+        doc.RootElement.GetProperty("executionLog").GetString().ShouldBe("E");
 
         var reparsed = JsonSerializer.Deserialize<Function>(json, JsonSerializerConstants.JsonOptions)!;
         reparsed.ExecutionLoggingEnabled.ShouldBeTrue();

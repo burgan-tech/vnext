@@ -4,8 +4,8 @@ namespace BBT.Workflow.Definitions;
 
 /// <summary>
 /// Per-function opt-in for the function-execution journal (vnext-client-sdk-core#60). A function whose
-/// <c>executionLog</c> is <c>ENABLED</c> has every invocation recorded in the <c>FunctionExecutions</c>
-/// table (and served by the metrics endpoints); <c>DISABLED</c> — the default when the field is absent —
+/// <c>executionLog</c> is <c>E</c> (enabled) has every invocation recorded in the <c>FunctionExecutions</c>
+/// table (and served by the metrics endpoints); <c>D</c> (disabled) — the default when the field is absent —
 /// records none. So existing functions and any authored without the field keep the no-logging behaviour;
 /// only functions that opt in are logged.
 /// </summary>
@@ -17,10 +17,10 @@ namespace BBT.Workflow.Definitions;
 public sealed class ExecutionLogSetting : IEquatable<ExecutionLogSetting>
 {
     /// <summary>Executions are not journaled. The default when the field is absent.</summary>
-    public static readonly ExecutionLogSetting Disabled = new("DISABLED", "Disabled");
+    public static readonly ExecutionLogSetting Disabled = new("D", "Disabled");
 
     /// <summary>Every invocation is recorded in the function-execution journal.</summary>
-    public static readonly ExecutionLogSetting Enabled = new("ENABLED", "Enabled");
+    public static readonly ExecutionLogSetting Enabled = new("E", "Enabled");
 
     public string Code { get; }
     public string Description { get; }
@@ -36,15 +36,15 @@ public sealed class ExecutionLogSetting : IEquatable<ExecutionLogSetting>
     }
 
     /// <summary>
-    /// Resolves the setting from its authored code. Case-insensitive so <c>enabled</c>/<c>Enabled</c>
-    /// authored variants resolve, though the schema constrains authoring to the upper-case forms.
+    /// Resolves the setting from its authored code. Case-insensitive so <c>e</c>/<c>d</c> authored
+    /// variants resolve, though the schema constrains authoring to the upper-case forms.
     /// </summary>
     public static ExecutionLogSetting FromCode(string code)
     {
         return code?.Trim().ToUpperInvariant() switch
         {
-            "ENABLED" => Enabled,
-            "DISABLED" => Disabled,
+            "E" => Enabled,
+            "D" => Disabled,
             _ => throw new ArgumentException($"Unknown execution log setting: {code}")
         };
     }
