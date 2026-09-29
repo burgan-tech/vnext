@@ -40,7 +40,8 @@ public sealed class Workflow : IDomainEntity, IReference, IReferenceSetter, IHas
         List<Transition> sharedTransitions,
         List<Reference> extensions,
         Transition startTransition,
-        List<RoleGrant>? queryRoles = null
+        List<RoleGrant>? queryRoles = null,
+        ExecutionType? executionType = null
     ) : this()
     {
         Type = type;
@@ -56,6 +57,7 @@ public sealed class Workflow : IDomainEntity, IReference, IReferenceSetter, IHas
         this.sharedTransitions = sharedTransitions ?? [];
         StartTransition = startTransition;
         this.queryRoles = queryRoles ?? [];
+        ExecutionType = executionType;
     }
 
     /// <summary>
@@ -84,6 +86,16 @@ public sealed class Workflow : IDomainEntity, IReference, IReferenceSetter, IHas
     public WorkflowType Type { get; private set; }
 
     public bool IsSub => Type.Equals(WorkflowType.SubFlow) || Type.Equals(WorkflowType.SubProcess);
+
+    /// <summary>
+    /// Optional default execution mode for this flow (vnext#1003). Applies to the flow's transitions
+    /// (start and manual/scheduled/event) unless a transition overrides it with its own
+    /// <c>executionType</c> — the inner definition wins. When set, it overrides the caller's <c>sync</c>
+    /// query parameter; absent ⇒ the caller's query parameter chooses the mode (existing behaviour).
+    /// </summary>
+    [JsonInclude]
+    [JsonPropertyName("executionType")]
+    public ExecutionType? ExecutionType { get; private set; }
 
     /// <summary>
     /// Created at
@@ -410,7 +422,7 @@ public sealed class Workflow : IDomainEntity, IReference, IReferenceSetter, IHas
     public Transition? FindTransition(string key)
     {
         return FindSharedTransition(key)
-               ?? (StartTransition.Key == key ? StartTransition : null)
+               ?? (StartTransition?.Key == key ? StartTransition : null)
                ?? (Cancel?.Key == key ? Cancel : null)
                ?? (UpdateData?.Key == key ? UpdateData : null)
                ?? (Exit?.Key == key ? Exit : null)

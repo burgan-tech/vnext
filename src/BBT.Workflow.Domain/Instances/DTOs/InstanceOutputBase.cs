@@ -63,6 +63,17 @@ public abstract class InstanceOutputBase
     public Dictionary<string, object>? Extensions { get; set; }
 
     /// <summary>
+    /// Whether the transition was executed ASYNCHRONOUSLY (accepted + enqueued) rather than run inline
+    /// (vnext#1003). Reflects the EFFECTIVE mode — after the flow/transition <c>executionType</c> definition
+    /// may have overridden the caller's <c>sync</c> query parameter — so the controller shapes the response
+    /// (200 vs 202) by what actually ran. <c>null</c> means the execution path did not determine it (e.g. an
+    /// idempotent early return that ran no pipeline); the controller then falls back to the caller's
+    /// <c>sync</c> query parameter. Not serialized — internal transport to the controller mapper.
+    /// </summary>
+    [JsonIgnore]
+    public bool? ExecutedAsync { get; set; }
+
+    /// <summary>
     /// Carries the pipeline's committed instance for sync enrichment.
     /// Avoids an additional DB round-trip when building the sync response.
     /// Not serialized — internal transport between pipeline and AppService only.

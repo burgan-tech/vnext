@@ -126,6 +126,32 @@ public class AsyncTransitionStrategyTests
     }
 
     /// <summary>
+    /// #1003: when a flow/transition <c>executionType</c> forces async dispatch for a caller that asked
+    /// sync (Mode=Async while CallerMode=Sync), the caller's real intent must survive BOTH delivery
+    /// shapes — the direct payload AND the outbox event — so the terminal completion/fault signal
+    /// reports the way the caller asked. The outbox event historically carried no <c>CallerSync</c>
+    /// field, so a sync caller's intent was silently dropped on the outbox-fallback path.
+    /// </summary>
+    [Theory]
+    [InlineData(ExecMode.Sync, true)]
+    [InlineData(ExecMode.Async, false)]
+    public async Task ExecuteAsync_CarriesCallerModeOntoPayloadAndOutboxEvent(
+        ExecMode callerMode, bool expectedCallerSync)
+    {
+        var (wfCtx, _) = SetupSuccessfulContext();
+        wfCtx.Mode = ExecMode.Async;    // the async strategy's own dispatch mode
+        wfCtx.CallerMode = callerMode;  // what the caller actually asked — can diverge under #1003
+
+        var (payload, outboxEvent) = CaptureEnqueue();
+
+        var result = await _strategy.ExecuteAsync(wfCtx, CancellationToken.None);
+        result.IsSuccess.ShouldBeTrue();
+
+        payload().ShouldNotBeNull().CallerSync.ShouldBe(expectedCallerSync);
+        outboxEvent().ShouldNotBeNull().CallerSync.ShouldBe(expectedCallerSync);
+    }
+
+    /// <summary>
     /// The accept's durable half (job row + delivery decision + commit) and the Dapr scheduler arm
     /// used to be the unnamed tail of the server span; both are spans now.
     /// </summary>
