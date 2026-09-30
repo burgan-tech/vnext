@@ -21,12 +21,31 @@ public sealed class InstanceData : Entity<Guid>, IHasVersion, IHasEtag
         Guid id,
         Guid instanceId,
         string version,
-        JsonData data, bool isLatest) : base(id)
+        JsonData data, bool isLatest)
+        : this(id, instanceId, version, data, InstanceDataView.Of(data), ComputeDataHash(data), isLatest)
+    {
+    }
+
+    /// <summary>
+    /// A row whose stored form differs from what the engine sees: <paramref name="stored"/> carries
+    /// <c>x-encryption.type: "encrypt"</c> tokens and <paramref name="view"/> the plaintext. Only the write
+    /// funnel builds these; <paramref name="dataHash"/> is keyed there (an unkeyed digest of the plaintext
+    /// would sit next to the ciphertext as an offline guessing oracle).
+    /// </summary>
+    internal InstanceData(
+        Guid id,
+        Guid instanceId,
+        string version,
+        JsonData stored,
+        InstanceDataView view,
+        string dataHash,
+        bool isLatest) : base(id)
     {
         InstanceId = instanceId;
         SetVersion(version);
-        Data = data;
-        DataHash = ComputeDataHash(data);
+        StoredData = stored;
+        _view = view;
+        DataHash = dataHash;
         EnteredAt = DateTime.UtcNow;
         ETag = Ulid.NewUlid().ToString();
         IsLatest = isLatest;
@@ -74,7 +93,72 @@ public sealed class InstanceData : Entity<Guid>, IHasVersion, IHasEtag
     /// <summary>
     /// <see cref="JsonData"/>
     /// </summary>
-    public JsonData Data { get; private set; }
+    /// <summary>
+    /// The row's content as the engine sees it — plaintext, with every <c>x-encryption.type: "encrypt"</c>
+    /// token opened. Not mapped: EF persists <see cref="StoredData"/> only, so no tracking state (Add, fixup,
+    /// change detection, a detached graph <c>Update</c>) can ever write this plaintext back to the column.
+    /// </summary>
+    public JsonData Data => View.Plain;
+
+    /// <summary>
+    /// The row exactly as stored in the <c>"Data"</c> column: tokens at encrypted paths, plaintext elsewhere.
+    /// The only EF-mapped member of the content. Read it only where the stored form is meant (the write
+    /// funnel, the read path's token lookup, SQL-side predicates) — never to feed the engine.
+    /// </summary>
+    public JsonData StoredData { get; private set; } = null!;
+
+    private IInstanceDataProtector? _protector;
+    private string? _schema;
+    private InstanceDataView? _view;
+
+    /// <summary>
+    /// Plaintext view plus the stored tokens. Built on first access: a materialized row opens its tokens
+    /// through the protector the EF interceptor attached; a row without tokens is its own view. A row
+    /// carrying tokens with no protector attached (a host without the keyring) keeps the tokens as opaque
+    /// strings — never plaintext, and the pipeline gate refuses to run on them.
+    /// </summary>
+    internal InstanceDataView View
+    {
+        get
+        {
+            // Reference publish is atomic; two racing first reads compute the same view.
+            var view = _view;
+            if (view is not null)
+                return view;
+
+            view = _protector is not null && EncryptedValueFormat.MayContainToken(StoredData.Json)
+                ? _protector.Unprotect(_schema, InstanceId, StoredData)
+                : InstanceDataView.Of(StoredData);
+            _view = view;
+            return view;
+        }
+    }
+
+    /// <summary>
+    /// Dot paths of this row whose <c>x-encryption</c> token could not be opened (unknown key id, failed
+    /// authentication). Forces the plaintext view. Non-empty means the engine must not run on this row.
+    /// </summary>
+    public IReadOnlySet<string> UndecryptablePaths => View.Undecryptable;
+
+    /// <summary>
+    /// Stored token per decrypted dot path — what a caller outside the <c>x-encryption.roles</c> exemption
+    /// list is served. Empty for a row without tokens.
+    /// </summary>
+    public IReadOnlyDictionary<string, string> StoredTokens => View.Tokens;
+
+    /// <summary>
+    /// Hands the row the protector that opens its tokens and the flow schema it was read from (the schema holds the
+    /// instance's secret). Called by the EF materialization interceptor for every materialized row — the owned content
+    /// is not assigned yet at that point, so decryption is deferred to the first <see cref="Data"/> read. First
+    /// attachment wins.
+    /// </summary>
+    internal void AttachProtector(IInstanceDataProtector protector, string? schema)
+    {
+        if (_protector is not null)
+            return;
+        _protector = protector;
+        _schema = schema;
+    }
 
     /// <summary>
     /// Entered at
@@ -132,7 +216,10 @@ public sealed class InstanceData : Entity<Guid>, IHasVersion, IHasEtag
             IsLatest = IsLatest,
             ETag = ETag,
             DataHash = DataHash,
-            Data = Data,
+            StoredData = StoredData,
+            _protector = _protector,
+            _schema = _schema,
+            _view = _view,
             EnteredAt = EnteredAt
         };
 

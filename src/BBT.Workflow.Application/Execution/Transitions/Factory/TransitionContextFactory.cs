@@ -13,7 +13,8 @@ namespace BBT.Workflow.Execution.Transitions.Factory;
 public sealed class TransitionContextFactory(
     IInstanceRepository instanceRepository,
     IComponentCacheStore componentCacheStore,
-    IRuntimeInfoProvider runtimeInfoProvider) : ITransitionContextFactory
+    IRuntimeInfoProvider runtimeInfoProvider,
+    IInstanceSecretPreloader? secretPreloader = null) : ITransitionContextFactory
 {
     /// <inheritdoc />
     /// <summary>
@@ -105,6 +106,21 @@ public sealed class TransitionContextFactory(
         // pipeline (FinalizeTransitionStep resolve, Fault's upward payload, the script context's
         // Incident block) sees them. No query when the flag is false.
         await instanceRepository.LoadActiveIncidentsAsync(result.Value, cancellationToken);
+
+        // Open the row's x-encryption secret in one query before the gate below opens the row.
+        if (secretPreloader is not null && EncryptedValueFormat.MayContainToken(result.Value.LatestData?.StoredData.Json))
+            await secretPreloader.PreloadAsync([result.Value.Id], cancellationToken);
+
+        // x-encryption "encrypt": opening the latest row here (its first plaintext read) is what makes an
+        // undecryptable value visible BEFORE any task, script or mapping could act on the token string.
+        // Refused as a transient error ahead of admission — nothing is marked Busy, nothing is faulted,
+        // and the instance recovers as soon as the key is back in the keyring.
+        if (result.Value.LatestData is { UndecryptablePaths.Count: > 0 } latest)
+        {
+            var path = latest.UndecryptablePaths.Order(StringComparer.Ordinal).First();
+            activity?.SetStatus(ActivityStatusCode.Error, WorkflowErrorCodes.EncryptionKeyUnavailable);
+            return Result<Instance>.Fail(WorkflowErrors.EncryptionKeyUnavailable(result.Value.Id, path));
+        }
 
         return result;
     }

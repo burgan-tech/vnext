@@ -96,7 +96,8 @@ public sealed class ListSchemaFieldFilterTests
     }
 
     private SchemaFieldFilterService CreateFactory() => new(_cache,
-        new TransitionAuthorizationManager(_user, Substitute.For<IInstanceTransitionRepository>()), _roles);
+        new TransitionAuthorizationManager(_user, Substitute.For<IInstanceTransitionRepository>()), _roles,
+        new FakeFieldMaskingEngine(), Microsoft.Extensions.Options.Options.Create(new SchemaMaskingOptions()));
 
     private Definitions.Workflow ConfigureWorkflow(string domain, string version, string role)
     {

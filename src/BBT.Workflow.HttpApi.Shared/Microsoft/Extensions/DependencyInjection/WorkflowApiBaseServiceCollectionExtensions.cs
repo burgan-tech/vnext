@@ -132,6 +132,11 @@ public static class WorkflowApiBaseServiceCollectionExtensions
                 // a separate compiled model is cached per schema, table names are fully qualified,
                 // no session-level directive is ever sent — PgBouncer transaction-mode safe.
                 options.ReplaceService<IModelCacheKeyFactory, SchemaAwareModelCacheKeyFactory>();
+
+                // x-encryption "encrypt": every materialized InstanceData row gets the protector that opens
+                // its tokens (lazily, on first plaintext read). Absent → tokens stay opaque, never plaintext.
+                if (sp.GetService<BBT.Workflow.Encryption.InstanceDataProtectorInterceptor>() is { } protectorInterceptor)
+                    options.AddInterceptors(protectorInterceptor);
             });
 
         services.AddAetherUnitOfWorkMiddleware();
@@ -410,6 +415,14 @@ public static class WorkflowApiBaseServiceCollectionExtensions
             // conflict; statement cancelled by statement_timeout → transient (retried by relays).
             opt.Map(WorkflowErrorCodes.InstanceDataLockTimeout, HttpStatusCode.Conflict);
             opt.Map(WorkflowErrorCodes.InstanceDataWriteTimeout, HttpStatusCode.ServiceUnavailable);
+            // x-encryption "encrypt": a missing key or unresolvable schema is transient (503, relays
+            // retry); a reserved-prefix value is the caller's error.
+            opt.Map(WorkflowErrorCodes.EncryptionKeyUnavailable, HttpStatusCode.ServiceUnavailable);
+            opt.Map(WorkflowErrorCodes.EncryptionSchemaUnavailable, HttpStatusCode.ServiceUnavailable);
+            opt.Map(WorkflowErrorCodes.EncryptedValueReserved, HttpStatusCode.BadRequest);
+            // A filter/sort/groupBy the master schema refuses (x-filterOperators, x-sortable, and every
+            // x-encryption "encrypt" path) is the caller's error. It surfaced as 500 before.
+            opt.Map(WorkflowErrorCodes.SchemaFilterValidation, HttpStatusCode.BadRequest);
             opt.Map(WorkflowErrorCodes.RuntimeSchemaInvalidState, HttpStatusCode.BadRequest);
             opt.Map(WorkflowErrorCodes.TransitionLocked, HttpStatusCode.Conflict);
             opt.Map(WorkflowErrorCodes.AutoTransitionConditionNotMet, HttpStatusCode.BadRequest);

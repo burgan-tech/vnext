@@ -45,6 +45,19 @@ public sealed class GetInstanceInput : IHasDomain
     /// Query parameters from the request for script context binding
     /// </summary>
     public Dictionary<string, string?>? QueryParameters { get; set; }
+
+    /// <summary>
+    /// SERVER-ONLY, same posture as <see cref="TransitionInput.ChainReserved"/>: set exclusively by the
+    /// runtime's own trigger task executors (GetInstance / GetInstances / GetInstanceData), never by an HTTP
+    /// handler or controller, and this DTO is never model-bound. A system read is served under the engine's
+    /// own identity: no <c>x-roles</c> pruning, no <c>x-masking</c>, and no data-function cache — a task that
+    /// copies a field must copy the stored value, and a raw body must never land under a caller-scoped key.
+    /// <para>
+    /// It does not travel cross-domain: the remote query path serializes to URL + headers, so a task reading
+    /// another domain is an ordinary caller of that domain and gets its exposure rules.
+    /// </para>
+    /// </summary>
+    public bool SystemRead { get; init; }
 }
 
 /// <summary>
@@ -114,6 +127,12 @@ public sealed class GetInstanceListInput : IHasDomain
     /// Gets the aggregations parameter from QueryParameters
     /// </summary>
     public string? Aggregations => QueryParameters?.TryGetValue("aggregations", out var value) == true ? value : null;
+
+    /// <summary>
+    /// SERVER-ONLY, see <see cref="GetInstanceInput.SystemRead"/>: set only by the GetInstances trigger task
+    /// executor. Items are built without <c>x-roles</c> pruning or <c>x-masking</c>.
+    /// </summary>
+    public bool SystemRead { get; init; }
 }
 
 /// <summary>
@@ -325,4 +344,17 @@ public sealed class GetInstanceDataInput : IHasDomain
     /// data-function cache; there is no queryRoles gate on this read.
     /// </summary>
     public IReadOnlyList<string>? Roles { get; set; }
+
+    /// <summary>
+    /// SERVER-ONLY, same posture as <see cref="TransitionInput.ChainReserved"/>: set exclusively by the
+    /// runtime's own trigger task executors (GetInstance / GetInstances / GetInstanceData), never by an HTTP
+    /// handler or controller, and this DTO is never model-bound. A system read is served under the engine's
+    /// own identity: no <c>x-roles</c> pruning, no <c>x-masking</c>, and no data-function cache — a task that
+    /// copies a field must copy the stored value, and a raw body must never land under a caller-scoped key.
+    /// <para>
+    /// It does not travel cross-domain: the remote query path serializes to URL + headers, so a task reading
+    /// another domain is an ordinary caller of that domain and gets its exposure rules.
+    /// </para>
+    /// </summary>
+    public bool SystemRead { get; init; }
 }

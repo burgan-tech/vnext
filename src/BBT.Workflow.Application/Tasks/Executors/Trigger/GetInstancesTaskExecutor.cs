@@ -118,7 +118,9 @@ public sealed class GetInstancesTaskExecutor : TriggerTaskExecutorBase<GetInstan
                 PageSize = task.PageSize,
                 Sort = task.Sort,
                 Filter = task.Filter,
-                Headers = headers ?? new Dictionary<string, string?>()
+                Headers = headers ?? new Dictionary<string, string?>(),
+                // System identity: no x-roles pruning, no x-masking (see GetInstanceListInput.SystemRead).
+                SystemRead = true
             };
 
             var instanceListResult = await _instanceQueryGateway.GetInstanceListAsync(listInput, cancellationToken);

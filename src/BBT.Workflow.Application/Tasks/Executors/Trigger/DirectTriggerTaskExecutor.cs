@@ -230,11 +230,13 @@ public sealed class DirectTriggerTaskExecutor : TriggerTaskExecutorBase<DirectTr
             return Result<Guid>.Ok(instanceId);
         }
 
+        // Only the id is read; a system read also skips the pointless field-exposure pass.
         var queryInput = new GetInstanceInput
         {
             Domain = task.TriggerDomain,
             Workflow = task.TriggerFlow,
-            Instance = instanceIdentifier
+            Instance = instanceIdentifier,
+            SystemRead = true
         };
 
         var instanceResult = await _instanceQueryGateway.GetInstanceAsync(queryInput, cancellationToken);

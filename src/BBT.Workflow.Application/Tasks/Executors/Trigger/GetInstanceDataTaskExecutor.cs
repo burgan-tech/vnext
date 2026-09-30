@@ -109,17 +109,20 @@ public sealed class GetInstanceDataTaskExecutor : TriggerTaskExecutorBase<GetIns
         {
             var headers = ConvertTaskHeadersToDictionary(task.Headers);
 
-            // Roles are deliberately left unset: a task reads under the system identity, not the
-            // triggering caller's, so state/workflow queryRoles and schema x-roles do not apply.
+            // A task reads under the system identity, not the triggering caller's: SystemRead makes the
+            // query skip schema x-roles pruning, x-masking and the data-function cache. Before the flag
+            // existed this comment promised the same, but the read still ran the field filter with whatever
+            // roles were ambient in the job scope (usually none) and warmed the cache under that scope.
             // Same contract as related-instance access — copying a field read here into instance data
-            // makes it visible to callers the grants would otherwise have filtered it from.
+            // makes it visible to callers the grants would otherwise have filtered or masked it from.
             var input = new GetInstanceDataInput
             {
                 Domain = task.TriggerDomain,
                 Workflow = task.TriggerFlow,
                 Instance = instanceIdentifier,
                 Extensions = task.Extensions,
-                Headers = headers
+                Headers = headers,
+                SystemRead = true
             };
 
             var result = await _instanceQueryGateway.GetInstanceDataAsync(input, cancellationToken);

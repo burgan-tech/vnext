@@ -109,13 +109,15 @@ public sealed class GetInstanceTaskExecutor : TriggerTaskExecutorBase<GetInstanc
         {
             var headers = ConvertTaskHeadersToDictionary(task.Headers);
 
+            // System identity: no x-roles pruning, no x-masking (see GetInstanceInput.SystemRead).
             var input = new GetInstanceInput
             {
                 Domain = task.TriggerDomain,
                 Workflow = task.TriggerFlow,
                 Instance = instanceIdentifier,
                 Extensions = task.Extensions,
-                Headers = headers
+                Headers = headers,
+                SystemRead = true
             };
 
             var result = await _instanceQueryGateway.GetInstanceAsync(input, cancellationToken);

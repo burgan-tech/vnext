@@ -26,12 +26,18 @@ public interface ISchemaFieldFilterService
     /// Pass the same context the surrounding read was authorized with.
     /// </param>
     /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="storedTokens">
+    /// <see cref="InstanceData.StoredTokens"/> of the row <paramref name="data"/> was read from. Required for
+    /// <c>x-encryption.type: "encrypt"</c> fields to serve their stored token to non-exempt callers; without it
+    /// those callers get a full mask (never the plaintext).
+    /// </param>
     Task<JsonElement?> ApplyAsync(
         Definitions.Workflow? workflow,
         JsonElement? data,
         Instance? instance = null,
         AuthorizationRequestContext? requestContext = null,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default,
+        IReadOnlyDictionary<string, string>? storedTokens = null);
 }
 
 /// <summary>Creates an isolated list operation that reuses schema metadata, never visibility decisions.</summary>

@@ -183,4 +183,86 @@ public class SchemaComponentValidatorTests
         var example = JsonDocument.Parse("""{"type":"view","schema":{"type":"object","examples":[{"x-indexed":true}]}}""").RootElement;
         _validator.Validate(example).IsValid.ShouldBeTrue();
     }
+
+    private static JsonElement MasterSchema(string properties) => JsonDocument.Parse(
+        "{\"type\":\"master\",\"schema\":{\"type\":\"object\",\"properties\":{" + properties + "}}}").RootElement;
+
+    [Fact]
+    public void Validate_WhenXMaskingIsValid_ShouldPass()
+    {
+        var result = new SchemaComponentValidator(new BBT.Workflow.Authorization.FakeFieldMaskingEngine())
+            .Validate(MasterSchema("\"iban\":{\"type\":\"string\",\"x-masking\":{\"operator\":\"mask\",\"params\":{\"keepLast\":4}}}"));
+
+        result.IsValid.ShouldBeTrue(string.Join(" | ", result.ValidationErrors.Select(e => e.ErrorMessage)));
+    }
+
+    [Fact]
+    public void Validate_WhenXMaskingUsesADenyGrant_ShouldFailUnderSchemaXMasking()
+    {
+        var result = _validator.Validate(MasterSchema(
+            "\"iban\":{\"type\":\"string\",\"x-masking\":{\"operator\":\"mask\",\"roles\":[{\"role\":\"teller\",\"grant\":\"deny\"}]}}"));
+
+        result.IsValid.ShouldBeFalse();
+        result.ValidationErrors.ShouldContain(e => e.MemberNames.Contains("schema.x-masking") && e.ErrorMessage!.Contains("only grant 'allow'"));
+    }
+
+    [Fact]
+    public void Validate_WhenEngineRejectsTheRule_ShouldFailUnderSchemaXMasking()
+    {
+        var engine = NSubstitute.Substitute.For<BBT.Workflow.Authorization.IFieldMaskingEngine>();
+        NSubstitute.SubstituteExtensions.Returns(
+            engine.Validate(NSubstitute.Arg.Any<BBT.Workflow.Definitions.Schemas.FieldMaskRule>()),
+            (System.Collections.Generic.IReadOnlyList<string>)new[] { "engine says no" });
+
+        var result = new SchemaComponentValidator(engine)
+            .Validate(MasterSchema("\"iban\":{\"type\":\"string\",\"x-masking\":{\"operator\":\"mask\"}}"));
+
+        result.ValidationErrors.ShouldContain(e => e.ErrorMessage == "Field 'iban': engine says no");
+    }
+
+    private sealed class EncryptionStatus(bool canEncrypt) : BBT.Workflow.Authorization.IFieldEncryptionStatus
+    {
+        public bool CanEncrypt => canEncrypt;
+    }
+
+    private const string EncryptedEmail = "\"email\":{\"type\":\"string\",\"x-encryption\":{\"type\":\"encrypt\"}}";
+
+    [Fact]
+    public void Validate_WhenEncryptIsDeclaredAndTheHostCanEncrypt_ShouldPass()
+    {
+        var result = new SchemaComponentValidator(new BBT.Workflow.Authorization.FakeFieldMaskingEngine(), new EncryptionStatus(true))
+            .Validate(MasterSchema(EncryptedEmail));
+
+        result.IsValid.ShouldBeTrue(string.Join(" | ", result.ValidationErrors.Select(e => e.ErrorMessage)));
+    }
+
+    /// <summary>
+    /// Without an active key (or with EncryptWrites off) the value would be stored in plaintext; the publish is the
+    /// only point where that is visible, so it is refused there.
+    /// </summary>
+    [Fact]
+    public void Validate_WhenEncryptIsDeclaredAndTheHostCannotEncrypt_ShouldFailUnderSchemaXEncryption()
+    {
+        foreach (var validator in new[]
+                 {
+                     new SchemaComponentValidator(new BBT.Workflow.Authorization.FakeFieldMaskingEngine(), new EncryptionStatus(false)),
+                     new SchemaComponentValidator(new BBT.Workflow.Authorization.FakeFieldMaskingEngine()),
+                 })
+        {
+            var result = validator.Validate(MasterSchema(EncryptedEmail));
+
+            result.IsValid.ShouldBeFalse();
+            result.ValidationErrors.ShouldContain(e =>
+                e.MemberNames.Contains("schema.x-encryption") && e.ErrorMessage!.Contains("stored in plaintext"));
+        }
+    }
+
+    [Fact]
+    public void Validate_WhenARemovedEncryptionTypeIsDeclared_ShouldFailNamingTheReplacement()
+    {
+        var result = _validator.Validate(MasterSchema("\"email\":{\"type\":\"string\",\"x-encryption\":{\"type\":\"persisted\"}}"));
+
+        result.IsValid.ShouldBeFalse();
+        result.ValidationErrors.ShouldContain(e => e.ErrorMessage!.Contains("use 'encrypt'"));
+    }
 }

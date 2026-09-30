@@ -158,6 +158,27 @@ namespace BBT.Workflow.Migrations
                     b.ToTable("BackgroundJobs", "public");
                 });
 
+            modelBuilder.Entity("BBT.Workflow.Encryption.InstanceSecret", b =>
+                {
+                    b.Property<Guid>("InstanceId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<byte[]>("EncryptionKey")
+                        .IsRequired()
+                        .HasColumnType("bytea");
+
+                    b.Property<byte[]>("HashSalt")
+                        .IsRequired()
+                        .HasColumnType("bytea");
+
+                    b.HasKey("InstanceId");
+
+                    b.ToTable("InstanceSecrets", "public");
+                });
+
             modelBuilder.Entity("BBT.Workflow.Instances.Instance", b =>
                 {
                     b.Property<Guid>("Id")
@@ -824,6 +845,15 @@ namespace BBT.Workflow.Migrations
                     b.ToTable("InstanceTransitions", "public");
                 });
 
+            modelBuilder.Entity("BBT.Workflow.Encryption.InstanceSecret", b =>
+                {
+                    b.HasOne("BBT.Workflow.Instances.Instance", null)
+                        .WithMany()
+                        .HasForeignKey("InstanceId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("BBT.Workflow.Instances.InstanceAction", b =>
                 {
                     b.HasOne("BBT.Workflow.Instances.InstanceTask", null)
@@ -875,7 +905,7 @@ namespace BBT.Workflow.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
-                    b.OwnsOne("BBT.Workflow.JsonData", "Data", b1 =>
+                    b.OwnsOne("BBT.Workflow.JsonData", "StoredData", b1 =>
                         {
                             b1.Property<Guid>("InstanceDataId")
                                 .HasColumnType("uuid");
@@ -900,7 +930,7 @@ namespace BBT.Workflow.Migrations
                                 .HasForeignKey("InstanceDataId");
                         });
 
-                    b.Navigation("Data")
+                    b.Navigation("StoredData")
                         .IsRequired();
                 });
 

@@ -83,6 +83,26 @@ public static class WorkflowErrorCodes
     /// </summary>
     public const string InstanceTaskIdRequired = "Instance:100039";
 
+    /// <summary>
+    /// An <c>x-encryption.type: "encrypt"</c> value of the instance cannot be decrypted (its key id is not
+    /// in this host's keyring, or the token failed authentication), so the engine refuses to run on it.
+    /// Transient by design: restoring the key recovers the instance with no repair. Maps to HTTP 503.
+    /// </summary>
+    public const string EncryptionKeyUnavailable = "Instance:100040";
+
+    /// <summary>
+    /// A request introduced a string carrying the reserved <c>ENCRYPTED:AES256:</c> prefix. Only the token
+    /// already stored at the same path may be echoed back. Maps to HTTP 400.
+    /// </summary>
+    public const string EncryptedValueReserved = "Instance:100041";
+
+
+    /// <summary>
+    /// The instance's master schema could not be resolved while field encryption is configured, so the
+    /// write cannot know which paths to encrypt and is refused rather than stored in plaintext. Maps to 503.
+    /// </summary>
+    public const string EncryptionSchemaUnavailable = "Instance:100043";
+
     #endregion
     
     #region Transition Errors (100xxx)

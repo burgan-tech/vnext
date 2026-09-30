@@ -83,6 +83,12 @@ public class WorkflowDbContext : AetherDbContext<WorkflowDbContext>, IHasEfCoreB
     public virtual DbSet<InstanceIncident> InstanceIncidents { get; set; }
 
     /// <summary>
+    /// Gets or sets the per-instance x-encryption secrets (key + hash salt). Read and written only by
+    /// <see cref="BBT.Workflow.Encryption.InstanceSecretStore"/>; never served.
+    /// </summary>
+    public virtual DbSet<BBT.Workflow.Encryption.InstanceSecret> InstanceSecrets { get; set; }
+
+    /// <summary>
     /// Gets or sets the background jobs.
     /// </summary>
     /// <remarks>

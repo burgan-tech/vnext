@@ -142,6 +142,39 @@
       "replacement": "state.subFlow.overrides.states.<childState>.views.<viewKey>",
       "severity": "warning",
       "message": "Legacy predecessor of overrides.views; same semantics and same migration path."
+    },
+    {
+      "id": "x-encryption-type-persisted",
+      "type": "value",
+      "component": "schema",
+      "path": "schema.attributes.schema.properties[].x-encryption.type = 'persisted'",
+      "deprecatedSince": "0.0.98",
+      "removedAt": "0.0.98",
+      "replacement": "x-encryption.type 'encrypt'",
+      "severity": "error",
+      "message": "'persisted' was declared by the vocabulary but never enforced by any runtime; it is removed and a schema carrying it is rejected at publish. Use 'encrypt' (AES-256-GCM of instance data at rest, decrypted for the exemption roles on read)."
+    },
+    {
+      "id": "x-encryption-type-transport",
+      "type": "value",
+      "component": "schema",
+      "path": "schema.attributes.schema.properties[].x-encryption.type = 'transport'",
+      "deprecatedSince": "0.0.98",
+      "removedAt": "0.0.98",
+      "replacement": "x-encryption.type 'encrypt'",
+      "severity": "error",
+      "message": "'transport' was declared by the vocabulary but never enforced by any runtime; it is removed and a schema carrying it is rejected at publish. Use 'encrypt' (AES-256-GCM of instance data at rest, decrypted for the exemption roles on read)."
+    },
+    {
+      "id": "instance-get-list-field-exposure",
+      "type": "behavior",
+      "component": "runtime",
+      "path": "GET {domain}/workflows/{workflow}/instances/{instance} | GET {domain}/workflows/{workflow}/instances",
+      "deprecatedSince": "0.0.98",
+      "removedAt": "0.0.98",
+      "replacement": "GET {domain}/workflows/{workflow}/instances/{instance}/functions/data (x-roles, x-masking and x-encryption are applied there)",
+      "severity": "warning",
+      "message": "Instance GET and list no longer apply x-roles pruning to attributes; they serve instance data exactly as stored (x-masking fields in clear, encrypt fields as tokens, hash fields as digests). Committee decision, revisited in Phase 2. A field hidden by x-roles is visible on these two endpoints until then; clients that rely on x-roles for a field must read it through the data function, and gateways must not expose GET/list to callers who may not see such fields."
     }
   ]
 }

@@ -279,6 +279,36 @@ A sixth profile is **composed on top of** the base, never selected instead of it
 - **Scheduled entries in `transitions`**: the state body lists the runtime's armed scheduled transitions inside the existing `transitions` array as `{ name, kind: "scheduled", executeAtUtc, href, view, schema }` entries, appended after the available transitions and built from active `InstanceJob` rows (`JobType.ScheduledTransition`) whose `ExecuteAt` is stamped at scheduling time from the same instant the Dapr job is armed with. Each carries the transition definition's `annotations`, resolved via the job's `SourceState` (null, not a failure, when it no longer resolves) — every `transitions[]` kind carries annotations. The href/view/schema links use the same url shapes as triggerable entries but with `hasView`/`loadData`/`hasSchema` hardcoded false — a TEMPORARY uniformity concession for domain clients (they will adapt); scheduled transitions remain System-actor-gated at execution, so the href is not callable. Not role-filtered; not merged from subflows. Job-set changes deliberately do NOT participate in the fingerprint ETag (team decision, issue #864) — same-state re-arms can leave the scheduled entries stale behind a 304; documented as a known gap in `docs/runtime/state-function-cache-and-etag.md`.
 - **`interaction.longPoll` authorization has two mutually exclusive arms** (issue #936): `roles` grants OR one condition `rule` (`IConditionMapping`, same slot shape as view/notification rules; validator rejects both, schema enforces exactly-one). Both surfaces — the state function's signal emit and the acknowledge endpoint — admit through the single `ILongPollInteractionGate`, which owns the arm selection (rule, else roles, else allow) and resolves caller roles lazily via a surface-supplied factory; the rule reads instance data via `context.Instance.Data` (lazy) — `context.Body` is deliberately NOT populated on this surface, unlike view-rule contexts; a rule returning false, throwing, or failing to compile denies (fail-closed; the fallback-timeout job still resumes the pipeline, so a broken rule cannot strand the instance). A rule-gated interaction body is NEVER stored in the shared state body cache (`CallerScopeHash` does not cover the headers/query/data a rule reads; bubbled subflow interactions skip caching conservatively). The fingerprint 304 path is untouched — rule-input changes behind an unchanged fingerprint are an accepted #864-class staleness gap; enforcement is never stale because the ack evaluates fresh. Full guide: `docs/domain/long-poll-termination.md`.
 
+## Field masking (`x-masking`) — pointer
+
+- Order `x-roles → x-masking → x-encryption`, decided in ONE pass (`SchemaFieldFilterService` →
+  `InstanceDataRoleFilter.Apply`) with ONE evaluator. Never add a second masking stage or decorator: the
+  data-function cache stores the filtered body and skips the filter on a hit.
+- `x-masking.roles` and `x-encryption.roles` are **allow-only exemption lists** (an allow match sees the raw
+  value, everyone else the transformed one); exemption is `IRoleGrantEvaluator.IsAnyRoleAllowed` over the list,
+  and a role-less caller can never satisfy a role-bound grant (`IsUnprovableRoleBoundGrant` — a `$role.` value
+  resolving to `""` matched the empty role once). `deny` is rejected at publish (`FieldMaskingDefinition`).
+- **Instance GET and list serve data AS STORED** — no `x-roles`, no masking, no decryption (committee
+  decision 2026-09-30, Phase 2 revisits): `Attributes = systemRead ? Data : StoredData`. The exposure pass runs
+  on the data function and the sync start/transition response only. Do not put it back on GET/list piecemeal.
+- `x-encryption.type: "hash"` is applied on **WRITE**: the funnel stores `HASHED:SHA256:<hex>` (HMAC under the
+  instance's own salt), the read path serves the digest; no `roles`, no validation keywords, one transform per field.
+- Per-instance key + salt live in the flow schema's `InstanceSecrets` table, created ONLY by the write funnel
+  under its row lock (`InstanceSecretStore.GetOrCreateAsync`), cached in a private in-process L1 and **never in
+  Redis**. Entry points preload (`IInstanceSecretPreloader`); a lazy open without one falls back to a sync lookup.
+- Trigger-task reads set the SERVER-ONLY `SystemRead` flag (no x-roles, no x-masking, no data cache). Never
+  set it from a handler/controller.
+- Data-function cache generation (`v3` + `-nomask`) is in the key AND the ETag; rows carrying tokens are never cached.
+- `x-encryption.type: "encrypt"` is AES-256-GCM of InstanceData AT REST; the engine sees plaintext.
+  **`InstanceData.StoredData` is the only EF-mapped content member** (tokens); `InstanceData.Data` is the unmapped
+  plaintext view, opened lazily through the protector the materialization interceptor attaches. Never map `Data`
+  back, never project `d.StoredData.Json`/`d.Data.Json` in LINQ (a scalar projection skips the interceptor), and
+  never write `InstancesData."Data"` outside `InstanceDataWriteService`. Decryption is prefix-driven, never
+  schema-driven. `SchemaEncryption:EncryptWrites` is the rollback switch for both hash and encrypt.
+  An undecryptable value refuses the transition before any task (`Instance:100040`). Scope is InstanceData only —
+  transition bodies, task journals and outbox payloads still hold plaintext.
+- Full guide: `docs/domain/field-masking.md`.
+
 ## Task / Action History (system functions)
 
 - `GET …/instances/{instance}/functions/tasks` returns the full `InstanceTasks` journal in

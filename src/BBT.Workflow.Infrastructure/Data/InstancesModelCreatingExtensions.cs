@@ -4,6 +4,7 @@ using BBT.Workflow.Data.ValueConverters;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Instances;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Metadata;
 using Microsoft.EntityFrameworkCore.ChangeTracking;
 
 namespace BBT.Workflow.Data;
@@ -192,6 +193,22 @@ public static class InstancesModelCreatingExtensions
                 .IncludeProperties(p => new { p.Key, p.Type });
         });
 
+        // x-encryption per-instance secrets (key + hash salt), one row per instance in the flow schema, created by
+        // the write funnel on the instance's first protected write, cascade-deleted with it. Plaintext by decision
+        // (committee, 2026-09-30); only the runtime reads it and it is never served.
+        builder.Entity<BBT.Workflow.Encryption.InstanceSecret>(b =>
+        {
+            b.ToTable("InstanceSecrets", schema);
+            b.HasKey(p => p.InstanceId);
+            b.Property(p => p.EncryptionKey).IsRequired().HasColumnType("bytea");
+            b.Property(p => p.HashSalt).IsRequired().HasColumnType("bytea");
+            b.Property(p => p.CreatedAt).IsRequired();
+            b.HasOne<Instance>()
+                .WithMany()
+                .HasForeignKey(p => p.InstanceId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
         builder.Entity<InstanceIncident>(b =>
         {
             b.ToTable("InstanceIncidents", schema);
@@ -341,17 +358,26 @@ public static class InstancesModelCreatingExtensions
                 .IsRequired()
                 .HasMaxLength(WorkflowConstants.MaxETagLength);
             
+            // Rows are immutable once inserted: content and its hash are never rewritten. Ignoring them
+            // after save keeps them out of every UPDATE — a detached aggregate's Set.Update(graph) walk
+            // (retry/fault scopes) marks every reachable row Modified.
             b.Property(p => p.DataHash)
                 .IsRequired()
                 .HasDefaultValue("99914b932bd37a50b983c5e7c90ae93b") // Default Value: {}
-                .HasMaxLength(WorkflowConstants.MaxDataHashLength);
+                .HasMaxLength(WorkflowConstants.MaxDataHashLength)
+                .Metadata.SetAfterSaveBehavior(PropertySaveBehavior.Ignore);
 
-            b.OwnsOne(p => p.Data, d =>
+            // The column holds the STORED form (x-encryption "encrypt" tokens at encrypted paths).
+            // InstanceData.Data is the unmapped plaintext view; mapping only StoredData means no EF
+            // tracking state can ever write plaintext into the column.
+            b.Ignore(p => p.Data);
+            b.OwnsOne(p => p.StoredData, d =>
             {
                 d.Ignore(g => g.JsonElement);
                 d.Property(g => g.Json)
                     .HasColumnType("jsonb")
-                    .HasColumnName(nameof(InstanceData.Data));
+                    .HasColumnName(nameof(InstanceData.Data))
+                    .Metadata.SetAfterSaveBehavior(PropertySaveBehavior.Ignore);
 
                 // Partial GIN index serving the attribute (JSONB containment) filters. The equals
                 // path already emits "Data" @> {param} (AttributeConditionBuilder),

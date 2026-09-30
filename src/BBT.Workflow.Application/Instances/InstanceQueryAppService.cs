@@ -64,7 +64,8 @@ public sealed class InstanceQueryAppService(
     Caching.IInstanceSchemaFunctionCache instanceSchemaFunctionCache,
     Caching.IHumanTaskFunctionCache humanTaskFunctionCache,
     HumanTask.HumanTaskDescentLimiter descentLimiter,
-    ILogger<InstanceQueryAppService> logger)
+    ILogger<InstanceQueryAppService> logger,
+    IInstanceSecretPreloader? secretPreloader = null)
     : ApplicationService(serviceProvider), IInstanceQueryAppService
 {
     private static readonly ConcurrentDictionary<string, BuildGate> ActiveSubflowBuildGates = new();
@@ -145,6 +146,11 @@ public sealed class InstanceQueryAppService(
     {
         runtimeInfoProvider.Check(input.Domain);
 
+        // Captured before the read envelope opens, so the tag lands on the transaction like the data
+        // function's read outcome does.
+        var transaction = System.Diagnostics.Activity.Current;
+        if (input.SystemRead)
+            InstanceReadActivityHelper.MarkSystemRead(transaction);
         using var read = InstanceReadActivityHelper.StartRead(
             InstanceReadKinds.Instance, input.Domain, input.Workflow);
 
@@ -164,7 +170,8 @@ public sealed class InstanceQueryAppService(
                         ExtensionScope.GetInstance,
                         input.Headers,
                         input.QueryParameters,
-                        cancellationToken);
+                        cancellationToken,
+                        systemRead: input.SystemRead);
 
                     // Propagate extension errors - fail-fast behavior
                     if (!result.IsSuccess)
@@ -196,6 +203,11 @@ public sealed class InstanceQueryAppService(
         using var listActivity = InstanceReadActivityHelper.StartListPhase("request");
         runtimeInfoProvider.Check(input.Domain);
 
+        // Captured before the read envelope opens, so the tag lands on the transaction like the data
+        // function's read outcome does.
+        var transaction = System.Diagnostics.Activity.Current;
+        if (input.SystemRead)
+            InstanceReadActivityHelper.MarkSystemRead(transaction);
         using var read = InstanceReadActivityHelper.StartRead(
             InstanceReadKinds.List, input.Domain, input.Workflow);
 
@@ -226,6 +238,7 @@ public sealed class InstanceQueryAppService(
             {
 
                 SchemaFilterContext? schemaContext = null;
+                IReadOnlySet<string> encryptedPaths = new HashSet<string>();
                 using (InstanceReadActivityHelper.StartListPhase("metadata"))
                 {
                     // Resolve schema-driven filter/sort metadata from workflow's master schema
@@ -234,7 +247,10 @@ public sealed class InstanceQueryAppService(
                     {
                         var schemaResult = await componentCacheStore.GetSchemaAsync(flowResult.Value.Schema, ct);
                         if (schemaResult.IsSuccess)
+                        {
                             schemaContext = SchemaFilterMetadataResolver.Resolve(schemaResult.Value!.Schema);
+                            encryptedPaths = SchemaRolesParser.ParseExposure(schemaResult.Value!.Schema).EncryptPaths;
+                        }
                     }
 
                     if (schemaContext != null)
@@ -245,7 +261,8 @@ public sealed class InstanceQueryAppService(
                         schemaContext = new SchemaFilterContext(schemaContext.Fields)
                         {
                             EnforceFiltering = instanceFilteringOptions.Value.EnforceMasterSchemaFiltering,
-                            ReadyIndexes = ready
+                            ReadyIndexes = ready,
+                            EncryptedPaths = encryptedPaths
                         };
                     }
                 }
@@ -367,8 +384,16 @@ public sealed class InstanceQueryAppService(
                 // Normal flow: build instance outputs
                 var list = new List<GetInstanceOutput>();
                 var preparedFlows = new Dictionary<string, Definitions.Workflow>(StringComparer.Ordinal);
-                var listFieldFilter = schemaFieldFilterService is IListSchemaFieldFilterFactory filterFactory
-                    ? filterFactory.CreateForList() : schemaFieldFilterService;
+                // Extensions and system reads work on the engine's (decrypted) view: open the page's secrets in one query.
+                if (secretPreloader is not null)
+                {
+                    var protectedIds = pagedList.Items
+                        .Where(i => EncryptedValueFormat.MayContainToken(i.LatestData?.StoredData.Json))
+                        .Select(i => i.Id)
+                        .ToList();
+                    await secretPreloader.PreloadAsync(protectedIds, ct);
+                }
+
                 var listExtensions = instanceExtensionService is IListExtensionServiceFactory extensionFactory
                     ? extensionFactory.CreateForList() : instanceExtensionService;
                 foreach (var instance in pagedList.Items)
@@ -384,8 +409,8 @@ public sealed class InstanceQueryAppService(
                         input.QueryParameters,
                         ct,
                         preparedFlows,
-                        listFieldFilter,
-                        listExtensions);
+                        preparedExtensions: listExtensions,
+                        systemRead: input.SystemRead);
 
                     // Propagate extension errors - fail-fast behavior
                     if (!instanceOutputResult.IsSuccess)
@@ -952,8 +977,8 @@ public sealed class InstanceQueryAppService(
         Dictionary<string, string?>? queryParameters,
         CancellationToken cancellationToken,
         Dictionary<string, Definitions.Workflow>? preparedFlows = null,
-        ISchemaFieldFilterService? preparedFieldFilter = null,
-        IInstanceExtensionService? preparedExtensions = null)
+        IInstanceExtensionService? preparedExtensions = null,
+        bool systemRead = false)
     {
         Definitions.Workflow? flow = null;
         var version = instance.FlowVersion ?? string.Empty;
@@ -964,6 +989,8 @@ public sealed class InstanceQueryAppService(
             if (flow != null) preparedFlows?.Add(version, flow);
         }
 
+        await PreloadSecretAsync(instance, instanceData, cancellationToken);
+
         var response = new GetInstanceOutput
         {
             Id = instance.Id,
@@ -973,7 +1000,10 @@ public sealed class InstanceQueryAppService(
             Domain = domain,
             Key = instance.Key!,
             Tags = instance.Tags,
-            Attributes = instanceData?.Data.JsonElement,
+            // Instance GET and list serve the data exactly as stored — no x-roles pruning, no masking, no decryption
+            // (committee decision 2026-09-30; exposure on these endpoints is Phase 2): x-encryption values appear as
+            // their stored token/digest. A system read (trigger task) is the engine itself and gets the engine's view.
+            Attributes = systemRead ? instanceData?.Data.JsonElement : instanceData?.StoredData.JsonElement,
             Metadata = new InstanceMetadataDto(instance)
         };
 
@@ -1008,14 +1038,17 @@ public sealed class InstanceQueryAppService(
 
         response.Extensions = extensionsResult.Value!;
 
-        response.Attributes =
-            await (preparedFieldFilter ?? schemaFieldFilterService).ApplyAsync(
-                flow, response.Attributes, instance,
-                new AuthorizationRequestContext(headers, queryParameters), cancellationToken) ??
-            response.Attributes;
-
         return Result<GetInstanceOutput>.Ok(response);
     }
+
+    /// <summary>
+    /// Loads the instance's x-encryption secret into the in-process cache when its row carries tokens, so opening the
+    /// row (extensions, the data function's exposure pass, a system read) needs no synchronous lookup.
+    /// </summary>
+    private Task PreloadSecretAsync(Instance instance, InstanceData? instanceData, CancellationToken cancellationToken) =>
+        secretPreloader is not null && EncryptedValueFormat.MayContainToken(instanceData?.StoredData.Json)
+            ? secretPreloader.PreloadAsync([instance.Id], cancellationToken)
+            : Task.CompletedTask;
 
     public async Task<ConditionalResult<GetInstanceDataOutput>> GetInstanceDataAsync(
         GetInstanceDataInput input,
@@ -1037,7 +1070,15 @@ public sealed class InstanceQueryAppService(
         var isLatestRequest = InstanceDataVersionComparer.IsRequestingLatest(input.Version);
         string? dataCacheKey = null;
         Caching.DataFunctionCacheEntry? validatedEntry = null;
-        if (dataFunctionCache.Enabled && isLatestRequest)
+
+        // A system read never touches the data-function cache: its body is unfiltered, and the cache key
+        // is caller-scoped — storing it would hand the raw body to the next caller with the same (usually
+        // empty) scope, and serving from it would hand the task a filtered/masked body to write back.
+        var useCache = dataFunctionCache.Enabled && isLatestRequest && !input.SystemRead;
+        if (input.SystemRead)
+            InstanceReadActivityHelper.MarkSystemRead(transaction);
+
+        if (useCache)
         {
             var fastPath = await TryServeDataFromFingerprintAsync(input, cancellationToken);
             if (fastPath.NotModified.HasValue)
@@ -1057,11 +1098,13 @@ public sealed class InstanceQueryAppService(
         InstanceReadActivityHelper.SetReadOutcome(
             transaction,
             InstanceReadKinds.Data,
-            validatedEntry is not null
-                ? InstanceReadActivityHelper.FastPathCacheHit
-                : dataFunctionCache.Enabled && isLatestRequest
-                    ? InstanceReadActivityHelper.FastPathBuild
-                    : InstanceReadActivityHelper.FastPathDisabled);
+            input.SystemRead
+                ? InstanceReadActivityHelper.FastPathSystem
+                : validatedEntry is not null
+                    ? InstanceReadActivityHelper.FastPathCacheHit
+                    : useCache
+                        ? InstanceReadActivityHelper.FastPathBuild
+                        : InstanceReadActivityHelper.FastPathDisabled);
 
         using var readEnvelope = InstanceReadActivityHelper.StartRead(
             InstanceReadKinds.Data, input.Domain, input.Workflow);
@@ -1092,12 +1135,17 @@ public sealed class InstanceQueryAppService(
                     }
                     else
                     {
+                        await PreloadSecretAsync(instance, instanceData, cancellationToken);
                         result.Data = instanceData?.Data.JsonElement;
-                        result.Data = await schemaFieldFilterService.ApplyAsync(
-                                          flow, result.Data, instance,
-                                          new AuthorizationRequestContext(input.Headers, input.QueryParameters),
-                                          cancellationToken) ??
-                                      result.Data;
+                        if (!input.SystemRead)
+                        {
+                            result.Data = await schemaFieldFilterService.ApplyAsync(
+                                              flow, result.Data, instance,
+                                              new AuthorizationRequestContext(input.Headers, input.QueryParameters),
+                                              cancellationToken,
+                                              instanceData?.StoredTokens) ??
+                                          result.Data;
+                        }
                     }
 
                     // If there's an active SubFlow and extensions are requested, fetch from SubFlow
@@ -1154,7 +1202,11 @@ public sealed class InstanceQueryAppService(
                     // cacheable; the entry holds ONLY the field-filtered data — extension output
                     // is never cached. No re-write when the data came from a validated entry.
                     // TTL is workflow-author-controlled with a host default.
-                    if (dataCacheKey is not null && instanceData is not null && validatedEntry is null)
+                    // A row carrying x-encryption "encrypt" tokens is never cached: an exempt caller's
+                    // body holds the plaintext (Redis would keep it at rest), and a body built while a
+                    // key was missing holds tokens that must not outlive the key's return.
+                    if (dataCacheKey is not null && instanceData is not null && validatedEntry is null &&
+                        instanceData.StoredTokens.Count == 0 && instanceData.UndecryptablePaths.Count == 0)
                     {
                         await dataFunctionCache.SetAsync(dataCacheKey, new Caching.DataFunctionCacheEntry
                         {

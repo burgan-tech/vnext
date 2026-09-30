@@ -825,7 +825,8 @@ public sealed class InstanceCommandAppService(
 
         var latestData = instance.LatestData;
         var rawAttributes = latestData?.Data.JsonElement;
-        var filteredAttributes = await schemaFieldFilterService.ApplyAsync(workflow, rawAttributes, instance, requestContext, cancellationToken);
+        var filteredAttributes = await schemaFieldFilterService.ApplyAsync(
+            workflow, rawAttributes, instance, requestContext, cancellationToken, latestData?.StoredTokens);
 
         var key = instance.Key;
         var entityEtag = latestData?.ETag;

@@ -13,6 +13,7 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\BBT.Workflow.Application\BBT.Workflow.Application.csproj" />
+    <ProjectReference Include="..\..\src\BBT.Workflow.Infrastructure\BBT.Workflow.Infrastructure.csproj" />
     <ProjectReference Include="..\..\modules\BBT.Workflow.Modules.Scripting\BBT.Workflow.Modules.Scripting.csproj" />
   </ItemGroup>
 </Project>
