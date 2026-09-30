@@ -1561,7 +1561,7 @@ public sealed class InstanceQueryAppService(
                     // own ChildCorrelations collection is loaded with an active-only filtered include, so
                     // the completed rows the response exposes require this dedicated read. Ordering is
                     // applied here rather than in the shared repository method, whose ParentState ordering
-                    // the hierarchy and monitor consumers already depend on.
+                    // the instance-correlation and monitor consumers already depend on.
                     var allCorrelations = (await instanceCorrelationRepository
                             .GetByParentAsync(data.instance.Id, cancellationToken))
                         .OrderBy(c => c.CreatedAt)
@@ -3269,26 +3269,26 @@ public sealed class InstanceQueryAppService(
     }
 
     /// <inheritdoc />
-    public async Task<Result<GetInstanceHierarchyOutput>> GetInstanceHierarchyAsync(
-        GetInstanceHierarchyInput input,
+    public async Task<Result<GetInstanceCorrelationOutput>> GetInstanceCorrelationAsync(
+        GetInstanceCorrelationInput input,
         CancellationToken cancellationToken = default)
     {
         runtimeInfoProvider.Check(input.Domain);
 
         using var read = InstanceReadActivityHelper.StartRead(
-            InstanceReadKinds.Hierarchy, input.Domain, input.Workflow);
+            InstanceReadKinds.InstanceCorrelation, input.Domain, input.Workflow);
 
         var instanceResult = await GetInstanceByIdOrKeyAsync(input.Instance, cancellationToken);
         if (!instanceResult.IsSuccess)
         {
-            return Result<GetInstanceHierarchyOutput>.Fail(instanceResult.Error);
+            return Result<GetInstanceCorrelationOutput>.Fail(instanceResult.Error);
         }
 
         var instance = instanceResult.Value!;
         var flowResult = await componentCacheStore.GetFlowAsync(input.Domain, input.Workflow, instance.FlowVersion, cancellationToken);
         var flowVersion = flowResult.IsSuccess ? flowResult.Value?.Version : null;
 
-        var rootNode = new InstanceHierarchyNode
+        var rootNode = new InstanceCorrelationNode
         {
             Id = instance.Id,
             Key = instance.Key,
@@ -3303,13 +3303,13 @@ public sealed class InstanceQueryAppService(
             ParentState = null
         };
 
-        rootNode.Children = await BuildHierarchyTreeAsync(
+        rootNode.Children = await BuildCorrelationTreeAsync(
             instance.Id,
             input.Workflow,
             input.Domain,
             cancellationToken);
 
-        return Result<GetInstanceHierarchyOutput>.Ok(new GetInstanceHierarchyOutput { Root = rootNode });
+        return Result<GetInstanceCorrelationOutput>.Ok(new GetInstanceCorrelationOutput { Root = rootNode });
     }
 
     /// <inheritdoc />
@@ -3583,7 +3583,7 @@ public sealed class InstanceQueryAppService(
     /// </summary>
     private const string HumanTaskBypassOutcome = "bypass";
 
-    private async Task<List<InstanceHierarchyNode>> BuildHierarchyTreeAsync(
+    private async Task<List<InstanceCorrelationNode>> BuildCorrelationTreeAsync(
         Guid parentInstanceId,
         string parentFlow,
         string domain,
@@ -3600,7 +3600,7 @@ public sealed class InstanceQueryAppService(
             return [];
         }
 
-        var children = new List<InstanceHierarchyNode>();
+        var children = new List<InstanceCorrelationNode>();
         foreach (var correlation in correlations)
         {
             var childFlow = correlation.SubFlowName;
@@ -3614,7 +3614,7 @@ public sealed class InstanceQueryAppService(
                     cancellationToken);
             }
 
-            var node = new InstanceHierarchyNode
+            var node = new InstanceCorrelationNode
             {
                 Id = correlation.SubFlowInstanceId,
                 Key = childInstance?.Key,
@@ -3630,7 +3630,7 @@ public sealed class InstanceQueryAppService(
                 ParentState = correlation.ParentState
             };
 
-            node.Children = await BuildHierarchyTreeAsync(
+            node.Children = await BuildCorrelationTreeAsync(
                 correlation.SubFlowInstanceId,
                 childFlow,
                 childDomain,

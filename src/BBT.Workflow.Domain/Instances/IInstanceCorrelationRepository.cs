@@ -11,7 +11,7 @@ public interface IInstanceCorrelationRepository : IRepository<InstanceCorrelatio
 {
     /// <summary>
     /// Finds all correlations where the specified instance ID is the parent instance.
-    /// Includes both active and completed correlations for building full hierarchy trees.
+    /// Includes both active and completed correlations for building full instance-correlation trees.
     /// </summary>
     /// <param name="parentInstanceId">The unique identifier of the parent workflow instance.</param>
     /// <param name="cancellationToken">Token to monitor for cancellation requests.</param>

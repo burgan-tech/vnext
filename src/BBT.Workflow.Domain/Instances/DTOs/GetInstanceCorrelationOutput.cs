@@ -3,20 +3,21 @@ using BBT.Workflow.Definitions;
 namespace BBT.Workflow.Instances;
 
 /// <summary>
-/// Output for instance hierarchy - recursive tree of instance and child subflow/subprocess instances.
+/// Output for the instance-correlation tree - the instance and, recursively, its correlated child
+/// subflow/subprocess instances, walked parent -> child.
 /// </summary>
-public sealed class GetInstanceHierarchyOutput
+public sealed class GetInstanceCorrelationOutput
 {
     /// <summary>
-    /// Root node of the hierarchy tree (the requested instance).
+    /// Root node of the correlation tree (the requested instance).
     /// </summary>
-    public InstanceHierarchyNode Root { get; set; } = new();
+    public InstanceCorrelationNode Root { get; set; } = new();
 }
 
 /// <summary>
-/// A node in the instance hierarchy tree representing one instance.
+/// A node in the instance-correlation tree representing one instance.
 /// </summary>
-public sealed class InstanceHierarchyNode
+public sealed class InstanceCorrelationNode
 {
     /// <summary>
     /// Instance ID.
@@ -76,5 +77,5 @@ public sealed class InstanceHierarchyNode
     /// <summary>
     /// Child subflow/subprocess instances.
     /// </summary>
-    public List<InstanceHierarchyNode> Children { get; set; } = [];
+    public List<InstanceCorrelationNode> Children { get; set; } = [];
 }

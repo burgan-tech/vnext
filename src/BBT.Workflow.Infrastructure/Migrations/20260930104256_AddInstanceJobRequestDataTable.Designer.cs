@@ -14,7 +14,7 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace BBT.Workflow.Migrations
 {
     [DbContext(typeof(WorkflowDbContext))]
-    [Migration("20260923084437_AddInstanceJobRequestDataTable")]
+    [Migration("20260930104256_AddInstanceJobRequestDataTable")]
     partial class AddInstanceJobRequestDataTable
     {
         /// <inheritdoc />
@@ -717,6 +717,9 @@ namespace BBT.Workflow.Migrations
                     b.Property<DateTime?>("FinishedAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<int?>("Order")
+                        .HasColumnType("integer");
+
                     b.Property<DateTime>("StartedAt")
                         .HasColumnType("timestamp with time zone");
 
@@ -727,6 +730,9 @@ namespace BBT.Workflow.Migrations
                         .IsRequired()
                         .HasMaxLength(100)
                         .HasColumnType("character varying(100)");
+
+                    b.Property<int?>("TaskTrigger")
+                        .HasColumnType("integer");
 
                     b.Property<Guid>("TransitionId")
                         .HasColumnType("uuid");
