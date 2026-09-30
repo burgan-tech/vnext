@@ -173,8 +173,8 @@ public class ComponentValidatorProcessorTests
                 "type": "F",
                 "executionType": "MAYBE",
                 "states": [
-                    { "key": "initial", "stateType": "I" },
-                    { "key": "completed", "stateType": "C" }
+                    { "key": "initial", "stateType": 1 },
+                    { "key": "completed", "stateType": 3 }
                 ],
                 "startTransition": { "key": "start", "target": "initial" }
             }
@@ -184,6 +184,51 @@ public class ComponentValidatorProcessorTests
 
         result.IsValid.ShouldBeFalse();
         result.ValidationErrors.ShouldHaveSingleItem().ErrorMessage.ShouldContain("Unknown execution type");
+    }
+
+    /// <summary>
+    /// Same contract for the per-transition <c>arrayMerge</c> setting (vnext-client-sdk-core#58,
+    /// AB-18): a mistyped value must FAIL THE PUBLISH with a real message. It matters more here than
+    /// for most settings, because the two values are opposite data-retention trade-offs — a value
+    /// that silently fell back to the default would quietly restore the data loss the author was
+    /// trying to prevent, with nothing anywhere saying so.
+    /// </summary>
+    [Theory]
+    [InlineData("merge")]
+    [InlineData("REPLACE")]
+    [InlineData("true")]
+    public void Validate_ShouldReturnValidationError_WhenTransitionArrayMergeValueIsUnknown(string authored)
+    {
+        var mockWorkflowValidator = new Mock<WorkflowValidator>();
+        var processor = new ComponentValidatorProcessor(
+            new[] { (IComponentValidator)new FlowComponentValidator(mockWorkflowValidator.Object) });
+
+        var attributes = JsonDocument.Parse(
+            $$"""
+            {
+                "key": "test-flow",
+                "domain": "test-domain",
+                "version": "1.0.0",
+                "flow": "sys-flows",
+                "type": "F",
+                "states": [
+                    {
+                        "key": "initial",
+                        "stateType": 1,
+                        "transitions": [
+                            { "key": "go", "target": "completed", "arrayMerge": "{{authored}}" }
+                        ]
+                    },
+                    { "key": "completed", "stateType": 3 }
+                ],
+                "startTransition": { "key": "start", "target": "initial" }
+            }
+            """).RootElement;
+
+        var result = processor.Validate(RuntimeSysSchemaInfo.Flows, attributes);
+
+        result.IsValid.ShouldBeFalse();
+        result.ValidationErrors.ShouldHaveSingleItem().ErrorMessage.ShouldContain("Unknown array merge strategy");
     }
 
     /// <summary>

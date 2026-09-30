@@ -40,7 +40,8 @@ public sealed class Transition : IHasKey
         List<LanguageLabel> labels,
       List<OnExecuteTask> onExecutionTasks,
         List<RoleGrant>? roles = null,
-        ExecutionType? executionType = null
+        ExecutionType? executionType = null,
+        ArrayMergeStrategy? arrayMerge = null
     ) : this(key, from, target, triggerType)
     {
         VersionStrategy = versionStrategy;
@@ -48,6 +49,7 @@ public sealed class Transition : IHasKey
         this.onExecutionTasks = onExecutionTasks ?? [];
         this.roles = roles ?? [];
         ExecutionType = executionType;
+        ArrayMerge = arrayMerge;
         // View property will be set by ViewDefinitionJsonConverter via JsonInclude attribute
     }
     /// <summary>
@@ -92,6 +94,18 @@ public sealed class Transition : IHasKey
     [JsonInclude]
     [JsonPropertyName("executionType")]
     public ExecutionType? ExecutionType { get; private set; }
+
+    /// <summary>
+    /// How ARRAYS in this transition's request body combine with the instance data already stored
+    /// (vnext-client-sdk-core#58, AB-18). Objects are unaffected — they always merge key by key.
+    /// <c>R</c> (the default when absent, and the runtime's historical behaviour) lets the incoming
+    /// array win outright, so omitting an item deletes it — and a caller holding a stale copy
+    /// silently erases items another request just added. <c>M</c> folds the two together instead:
+    /// matching items (by <c>id</c>, else by exact value) are replaced in place, new ones appended.
+    /// </summary>
+    [JsonInclude]
+    [JsonPropertyName("arrayMerge")]
+    public ArrayMergeStrategy? ArrayMerge { get; private set; }
 
     [JsonInclude] public ScriptCode? Timer { get; private set; }
     [JsonInclude] public ScriptCode? Rule { get; private set; }
