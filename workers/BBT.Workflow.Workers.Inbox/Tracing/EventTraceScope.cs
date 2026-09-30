@@ -273,6 +273,19 @@ internal sealed class EventTraceScope : IDisposable
         }
     }
 
+    /// <summary>
+    /// Marks the consumer span failed with the exception (status, <c>error.type</c>, stack event).
+    /// Always returns <c>false</c> so it can be used as an exception filter —
+    /// <c>catch (Exception ex) when (scope.RecordFailure(ex))</c> — that observes the exception
+    /// while the span is still open without catching it.
+    /// </summary>
+    public bool RecordFailure(Exception exception)
+    {
+        if (exception is not OperationCanceledException)
+            _activity.SetError(exception);
+        return false;
+    }
+
     public void Dispose()
     {
         _laneScope?.Dispose();

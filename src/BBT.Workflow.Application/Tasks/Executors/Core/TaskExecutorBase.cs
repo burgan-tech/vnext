@@ -53,9 +53,11 @@ public abstract class TaskExecutorBase<TTask>(ILogger logger) : ITaskExecutor
 
         // 2. PrepareInput (virtual - custom per executor)
         Result<ScriptResponse?> inputResult;
-        using (TaskExecutionActivityHelper.StartActivity(TaskExecutionActivityHelper.OperationPrepareInput, taskKey, taskTypeStr))
+        using (var phaseActivity = TaskExecutionActivityHelper.StartActivity(TaskExecutionActivityHelper.OperationPrepareInput, taskKey, taskTypeStr))
         {
             inputResult = await PrepareInputAsync(task, context, cancellationToken);
+            if (!inputResult.IsSuccess)
+                phaseActivity.SetResultError(inputResult.Error.Code, inputResult.Error.Message);
         }
         if (!inputResult.IsSuccess)
         {
@@ -79,9 +81,11 @@ public abstract class TaskExecutorBase<TTask>(ILogger logger) : ITaskExecutor
 
         // 4. Invoke (abstract or virtual)
         Result<TaskInvocationResult> invokeResult;
-        using (TaskExecutionActivityHelper.StartActivity(TaskExecutionActivityHelper.OperationInvoke, taskKey, taskTypeStr))
+        using (var phaseActivity = TaskExecutionActivityHelper.StartActivity(TaskExecutionActivityHelper.OperationInvoke, taskKey, taskTypeStr))
         {
             invokeResult = await InvokeAsync(task, context, cancellationToken);
+            if (!invokeResult.IsSuccess)
+                phaseActivity.SetResultError(invokeResult.Error.Code, invokeResult.Error.Message);
         }
         if (!invokeResult.IsSuccess)
         {
@@ -115,9 +119,11 @@ public abstract class TaskExecutorBase<TTask>(ILogger logger) : ITaskExecutor
 
         // 6. ProcessOutput (virtual - custom per executor)
         Result<object?> outputResult;
-        using (TaskExecutionActivityHelper.StartActivity(TaskExecutionActivityHelper.OperationProcessOutput, taskKey, taskTypeStr))
+        using (var phaseActivity = TaskExecutionActivityHelper.StartActivity(TaskExecutionActivityHelper.OperationProcessOutput, taskKey, taskTypeStr))
         {
             outputResult = await ProcessOutputAsync(task, invokeResult.Value!, context, cancellationToken);
+            if (!outputResult.IsSuccess)
+                phaseActivity.SetResultError(outputResult.Error.Code, outputResult.Error.Message);
         }
         if (!outputResult.IsSuccess)
         {

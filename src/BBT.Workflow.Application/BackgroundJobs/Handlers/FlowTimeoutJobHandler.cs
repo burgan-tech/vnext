@@ -157,14 +157,14 @@ public sealed class FlowTimeoutJobHandler(
                     {
                         logger.LogError("Timeout pipeline failed for instance {InstanceId}: {Error}",
                             args.InstanceId, pipelineResult.Error.Message);
-                        activity?.SetStatus(ActivityStatusCode.Error, pipelineResult.Error.Message);
+                        activity.SetResultError(pipelineResult.Error.Code, pipelineResult.Error.Message);
                         return;
                     }
 
                     // NOTE: the post-pipeline instance re-read that used to live here fed the
                     // removed prometheus timeout metric and nothing else — a full-detail
                     // cartesian load per timeout with no remaining consumer.
-                    activity?.SetStatus(ActivityStatusCode.Ok);
+                    activity.SetOkUnlessError();
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
@@ -173,8 +173,7 @@ public sealed class FlowTimeoutJobHandler(
                 }
                 catch (Exception e)
                 {
-                    activity?.SetStatus(ActivityStatusCode.Error, e.Message);
-                    activity?.AddTag("error.type", e.GetType().Name);
+                    activity.SetError(e);
                     logger.JobFailed(e, args.JobName, args.InstanceId);
                 }
                 finally

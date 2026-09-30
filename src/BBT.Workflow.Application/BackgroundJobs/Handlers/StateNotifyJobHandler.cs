@@ -72,8 +72,7 @@ public sealed class StateNotifyJobHandler(
                 }
                 catch (Exception e)
                 {
-                    activity?.SetStatus(ActivityStatusCode.Error, e.Message);
-                    activity?.AddTag("error.type", e.GetType().Name);
+                    activity.SetError(e);
                     logger.JobFailed(e, args.JobName, args.InstanceId);
                 }
                 finally

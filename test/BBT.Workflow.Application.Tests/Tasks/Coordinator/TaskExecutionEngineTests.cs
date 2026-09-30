@@ -269,10 +269,9 @@ public sealed class TaskExecutionEngineTests : IDisposable
     /// <summary>
     /// Pins the journal persist spans (<c>Task.Journal.Create</c> / <c>Task.Journal.Complete</c>)
     /// added for trace readability around the two persistence calls in
-    /// <c>TaskExecutionEngine.ExecuteCoreAsync</c>, plus the <c>vnext.task.trigger</c> tag stamped
-    /// on the ambient <c>Task.Execute.{key}</c> span in <c>ExecuteAsync</c>. <c>Task.Execute.{key}</c>
-    /// itself comes from Aether's <c>[Trace]</c> aspect, which is outside this listener's source, so
-    /// the trigger tag is asserted on a manually-started ambient activity standing in for it.
+    /// <c>TaskExecutionEngine.ExecuteCoreAsync</c>, plus the <c>vnext.task.trigger</c> tag on the
+    /// <c>Task.Execute.{key}</c> span that <c>ExecuteAsync</c> now owns on <c>BBT.Workflow.Tasks</c>
+    /// (it used to come from Aether's <c>[Trace]</c> aspect).
     /// </summary>
     [Fact]
     public async Task Successful_execution_emits_journal_spans_and_trigger_tag()
@@ -293,7 +292,36 @@ public sealed class TaskExecutionEngineTests : IDisposable
         names.ShouldContain("Task.Journal.Create");
         names.ShouldContain("Task.Journal.Complete");
 
-        ambient.GetTagItem("vnext.task.trigger").ShouldBe("OnExecute");
+        var execute = StartedActivities.Single(a => a.OperationName == "Task.Execute.mock-api");
+        execute.Parent.ShouldBe(ambient);
+        execute.GetTagItem("vnext.task.trigger").ShouldBe("OnExecute");
+        execute.Status.ShouldBe(ActivityStatusCode.Ok);
+    }
+
+    /// <summary>
+    /// The reason <c>Task.Execute.{key}</c> no longer comes from Aether's <c>[Trace]</c> aspect:
+    /// the aspect set <c>Ok</c> on every normal return, and this engine reports failure through
+    /// its Result — so a task that faulted the pipeline showed a green span. Pins that the error
+    /// recorded by the engine is what the span ends with.
+    /// </summary>
+    [Fact]
+    public async Task Failed_execution_leaves_the_task_execute_span_in_error()
+    {
+        var task = WorkflowTaskFactory.CreateHttpTask("mock-api");
+        _taskFactory.CreateExecutionTaskAsync(Arg.Any<IReference>(), Arg.Any<CancellationToken>())
+            .Returns(Result<WorkflowTask>.Ok(task));
+        _executorRegistry.GetExecutor(Arg.Any<TaskType>())
+            .Returns(Result<ITaskExecutor>.Fail(new Error("500", "no executor registered")));
+        UsePersistenceStrategy(new TrackingPersistenceStrategy(completionDelay: TimeSpan.Zero));
+        var onExecute = OnExecuteTask.Create(1, task, ScriptCode.FromNative(string.Empty));
+
+        var result = await CreateEngine().ExecuteAsync(
+            onExecute, Guid.NewGuid(), TaskTrigger.OnExecute, TaskExecutionOrigin.Flow,
+            CreateScriptContext(), CancellationToken.None);
+
+        result.IsSuccess.ShouldBeFalse();
+        var execute = StartedActivities.Single(a => a.OperationName == "Task.Execute.mock-api");
+        execute.Status.ShouldBe(ActivityStatusCode.Error);
     }
 
     /// <summary>

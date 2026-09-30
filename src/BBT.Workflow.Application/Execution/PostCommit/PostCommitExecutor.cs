@@ -114,11 +114,8 @@ public sealed class PostCommitExecutor(
                     // later parent-settlement spans before the work that filled the interval,
                     // creating an apparent gap immediately after Uow.Commit.
                     //
-                    // Source moved off PipelineStepActivityHelper deliberately: that helper gates
-                    // creation on Verbose, so this span was bypassing its own helper's contract and
-                    // surviving only because SpanCategory=Business dodges Aether's Business filter.
-                    // "BBT.Workflow.BackgroundJobs" is already registered in every host that runs
-                    // post-commit work, so no configuration change is needed.
+                    // Lives on "BBT.Workflow.BackgroundJobs" (registered in every host that runs
+                    // post-commit work), not on the Pipeline source.
                     //
                     using var jobActivity = BackgroundJobActivityHelper.ActivitySource.StartActivity(
                         $"PostCommit.{job.GetType().Name}", ActivityKind.Internal);
@@ -140,7 +137,9 @@ public sealed class PostCommitExecutor(
                         continue;
                     }
 
-                    // Handler failed
+                    // Handler failed. The span used to close Unset here, so a failed subflow
+                    // start or forward rendered as a successful span in the trace.
+                    jobActivity.SetResultError(execResult.Error.Code, execResult.Error.Message);
                     logger.PostCommitJobFailed(context.InstanceId, job.GetType().Name,
                         execResult.Error.Message ?? "Unknown error");
 

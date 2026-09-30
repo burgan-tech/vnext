@@ -115,6 +115,42 @@ public class TransitionJobHandlerTests
     }
 
     /// <summary>
+    /// A pipeline that faults the instance still returns success (the "200 + Status=F" contract),
+    /// but marks the enclosing spans Error on its way out. The handler's closing status must not
+    /// overwrite that — before, the job transaction of a faulted transition read as a success.
+    /// </summary>
+    [Fact]
+    public async Task HandleAsync_KeepsTheErrorAFaultedPipelineRecordedOnTheJobSpan()
+    {
+        var payload = CreatePayload();
+        var handler = CreateHandler();
+        var collected = new List<Activity>();
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == "BBT.Workflow.BackgroundJobs",
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStopped = collected.Add
+        };
+        ActivitySource.AddActivityListener(listener);
+
+        _executionService
+            .Setup(s => s.ExecuteTransitionAsync(
+                It.IsAny<WorkflowExecutionContext>(), It.IsAny<CancellationToken>()))
+            .Returns(() =>
+            {
+                // What TransitionPipeline does for a non-client-facing fault.
+                Activity.Current.MarkFaultedOnLocalChain("Task:500", "task failed");
+                return Task.FromResult(Result<TransitionOutput>.Ok(new TransitionOutput()));
+            });
+
+        await handler.HandleAsync(payload, CancellationToken.None);
+
+        var job = Assert.Single(collected, a => a.DisplayName == "TransitionJob.Execute/go");
+        Assert.Equal(ActivityStatusCode.Error, job.Status);
+        Assert.Equal(true, job.GetTagItem(TelemetryConstants.TagNames.InstanceFaulted));
+    }
+
+    /// <summary>
     /// The activation episode carried by the payload must be the ambient episode while the pipeline
     /// runs, so the hop that brings the instance to rest measures from the originating request.
     /// </summary>

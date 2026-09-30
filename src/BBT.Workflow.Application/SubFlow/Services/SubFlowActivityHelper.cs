@@ -59,12 +59,17 @@ public static class SubFlowActivityHelper
     /// <param name="parentInstanceId">The parent instance ID.</param>
     /// <param name="domain">The domain name.</param>
     /// <param name="flow">The workflow name.</param>
+    /// <param name="operation">
+    /// <c>vnext.subflow.operation</c> value. The cancellation and fault services share this
+    /// enrichment and used to be tagged <c>completion</c>, which made them indistinguishable in a query.
+    /// </param>
     public static void EnrichWithCompletion(
         Activity? activity,
         Guid subInstanceId,
         Guid parentInstanceId,
         string domain,
-        string flow)
+        string flow,
+        string operation = "completion")
     {
         if (activity is null) return;
 
@@ -72,7 +77,7 @@ public static class SubFlowActivityHelper
         activity.SetTag(TelemetryConstants.TagNames.Flow, flow);
         activity.SetTag(TelemetryConstants.TagNames.InstanceId, parentInstanceId);
         activity.SetTag(TelemetryConstants.TagNames.SubflowInstanceId, subInstanceId);
-        activity.SetTag("vnext.subflow.operation", "completion");
+        activity.SetTag("vnext.subflow.operation", operation);
     }
 
     /// <summary>
