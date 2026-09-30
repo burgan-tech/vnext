@@ -1,7 +1,5 @@
-using System.Text.Json;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Instances;
-using BBT.Workflow.Shared;
 
 namespace BBT.Workflow.Authorization;
 
@@ -40,35 +38,14 @@ public static class SubFlowStateOverrideReader
     /// </summary>
     public static IReadOnlyCollection<RoleGrant>? TryReadQueryRoles(Instance instance, string stateKey)
     {
-        if (string.IsNullOrEmpty(stateKey)
-            || !instance.ExtraProperties.TryGetValue(DomainConsts.MetaDataKeys.StateRoleOverrides, out var raw)
-            || raw is null)
-        {
-            return null;
-        }
-
-        var json = raw.ToString();
-        if (string.IsNullOrWhiteSpace(json))
+        if (string.IsNullOrEmpty(stateKey))
             return null;
 
-        try
-        {
-            var map = JsonSerializer.Deserialize<Dictionary<string, SubFlowStateOverride>>(
-                json, JsonSerializerConstants.JsonOptions);
-
-            return map is not null
-                   && map.TryGetValue(stateKey, out var stateOverride)
-                   && stateOverride.QueryRoles is { Count: > 0 }
-                ? stateOverride.QueryRoles
-                : null;
-        }
-        catch (JsonException)
-        {
-            // Malformed stamp. On the single-instance state function an exception here costs one
-            // response; in the list it would take a whole flow's fan-out contribution with it, so
-            // this degrades to "no override" — which falls back to the child's own queryRoles rather
-            // than to allowing everything.
-            return null;
-        }
+        var map = SubFlowOverrideStamp.ReadStates(instance.ExtraProperties, out _);
+        return map is not null
+               && map.TryGetValue(stateKey, out var stateOverride)
+               && stateOverride.QueryRoles is { Count: > 0 }
+            ? stateOverride.QueryRoles
+            : null;
     }
 }

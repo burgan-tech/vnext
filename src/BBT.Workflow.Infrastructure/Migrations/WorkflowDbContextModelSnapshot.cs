@@ -714,6 +714,9 @@ namespace BBT.Workflow.Migrations
                     b.Property<DateTime?>("FinishedAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<int?>("Order")
+                        .HasColumnType("integer");
+
                     b.Property<DateTime>("StartedAt")
                         .HasColumnType("timestamp with time zone");
 
@@ -724,6 +727,9 @@ namespace BBT.Workflow.Migrations
                         .IsRequired()
                         .HasMaxLength(100)
                         .HasColumnType("character varying(100)");
+
+                    b.Property<int?>("TaskTrigger")
+                        .HasColumnType("integer");
 
                     b.Property<Guid>("TransitionId")
                         .HasColumnType("uuid");

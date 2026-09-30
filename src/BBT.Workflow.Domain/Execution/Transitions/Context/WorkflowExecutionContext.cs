@@ -124,6 +124,16 @@ public sealed class WorkflowExecutionContext
     public bool SubflowChainReserved { get; set; }
 
     /// <summary>
+    /// Gets or sets whether the caller takes the identity-only response (<c>Id</c>, <c>Key</c>,
+    /// <c>Status</c>) — a runtime-internal relay such as a SubFlow forward, which sets
+    /// <c>SuppressResponseEnrichment</c> on its input. Server-only, never read from a request body.
+    /// Read by <c>TransitionRunner</c>: such a caller projects nothing from the settled aggregate,
+    /// so an intermediate level of a forward chain whose child is still running skips the
+    /// post-commit settlement reload.
+    /// </summary>
+    public bool IdentityOnlyResponse { get; set; }
+
+    /// <summary>
     /// Gets or sets whether this execution owns the instance's Busy lifecycle. Set by the
     /// pipeline admission (reserve/takeover/owner re-entry ⇒ true; subflow forward ⇒ false;
     /// updateData ⇒ opportunistic). Only status owners may resolve/settle the instance status —

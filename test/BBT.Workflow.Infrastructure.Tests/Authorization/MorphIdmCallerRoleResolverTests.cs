@@ -10,7 +10,7 @@ using BBT.Aether.Users;
 using BBT.Workflow.Authorization;
 using BBT.Workflow.Authorization.Configuration;
 using BBT.Workflow.Logging;
-using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using NSubstitute;
 using Shouldly;
@@ -21,10 +21,20 @@ namespace BBT.Workflow.Infrastructure.Tests.Authorization;
 /// <summary>
 /// Unit tests for the morph-idm caller-role provider. The three properties that matter operationally:
 /// it sends identity but never a <c>role</c> (which would switch the endpoint into its authorize mode),
-/// it fails closed, and it calls the endpoint at most once per scope.
+/// a request that carries a <c>role</c> header is answered from it without calling morph-idm at all,
+/// every provider failure resolves to an empty role set — logged and tagged by kind, never breaking the
+/// request — and it calls the endpoint at most once per scope.
 /// </summary>
+[Collection(SpanCollection)]
 public sealed class MorphIdmCallerRoleResolverTests
 {
+    /// <summary>
+    /// Serializes every test class that makes the resolver emit spans. <see cref="SpanCollector"/>
+    /// listens process-wide, so a class running in parallel leaks its spans into another class's
+    /// <c>Assert.Single</c>.
+    /// </summary>
+    public const string SpanCollection = "MorphIdm resolver spans";
+
     private const string Actor = "41809307440";
     private const string Subject = "def-inc";
     private const string Position = "finance-manager";
@@ -46,9 +56,8 @@ public sealed class MorphIdmCallerRoleResolverTests
     }
 
     /// <summary>
-    /// "No operation set" is a real answer, distinct from a failure: the caller is known and holds
-    /// nothing. It must surface as an empty set so allowlist grants deny, never as a failure and never
-    /// as a fall-through to some other role source.
+    /// "No operation set" is a real answer: the caller is known and holds nothing. It must surface as
+    /// an empty set, never as a fall-through to some other role source.
     /// </summary>
     [Fact]
     public async Task NoContent_IsAnEmptySet_NotAFailure()
@@ -61,48 +70,269 @@ public sealed class MorphIdmCallerRoleResolverTests
         result.Value.ShouldBeEmpty();
     }
 
-    // ── Fail-closed ─────────────────────────────────────────────────────────────
+    // ── Every failure resolves to an empty set ──────────────────────────────────
+    //
+    // The provider's failure never breaks the request. It resolves to an empty role set and the
+    // grant engine decides on that: an allowlist grant cannot match, and a role-bound deny refuses a
+    // role-less caller (TransitionAuthorizationManager.IsUnprovableRoleBoundDeny), so an outage
+    // narrows what a caller sees and never widens it. What distinguishes the cases is the log level
+    // and the span tags, which is what these tests pin.
 
     [Theory]
-    [InlineData(HttpStatusCode.InternalServerError)]
-    [InlineData(HttpStatusCode.BadGateway)]
-    [InlineData(HttpStatusCode.Unauthorized)]
-    public async Task NonSuccessStatus_Fails(HttpStatusCode status)
+    [InlineData(HttpStatusCode.InternalServerError, 500)]
+    [InlineData(HttpStatusCode.BadGateway, 502)]
+    [InlineData(HttpStatusCode.Unauthorized, 401)]
+    public async Task NonSuccessStatus_ResolvesEmpty_AndLogsAnError(HttpStatusCode status, int code)
     {
-        var (resolver, _) = Build(Respond(status, "{}"));
+        using var spans = new SpanCollector();
+        var (resolver, _, logger) = BuildWithLogger(Respond(status, "{}"));
 
         var result = await resolver.ResolveRolesAsync(null);
 
-        result.IsSuccess.ShouldBeFalse();
-        result.Error.Code.ShouldBe(WorkflowErrorCodes.CallerRoleResolutionFailed);
+        result.IsSuccess.ShouldBeTrue();
+        result.Value.ShouldBeEmpty();
+        logger.Single(LogLevel.Error).EventId.ShouldBe(20442);
+        var span = Assert.Single(spans.Captured);
+        Assert.Equal("failed", Tag(span, TelemetryConstants.TagNames.AuthOutcome));
+        Assert.Equal("http_status", Tag(span, TelemetryConstants.TagNames.AuthFailureKind));
+        Assert.Equal(code, Tag(span, TelemetryConstants.TagNames.AuthProviderStatusCode));
+        span.Status.ShouldBe(ActivityStatusCode.Error);
     }
 
     [Fact]
-    public async Task TransportException_Fails()
+    public async Task TransportException_ResolvesEmpty_TaggedTransport()
     {
-        var (resolver, _) = Build(
+        using var spans = new SpanCollector();
+        var (resolver, _, logger) = BuildWithLogger(
             (Func<HttpRequestMessage, HttpResponseMessage>)(_ =>
                 throw new HttpRequestException("connection refused")));
 
         var result = await resolver.ResolveRolesAsync(null);
 
-        result.IsSuccess.ShouldBeFalse();
-        result.Error.Code.ShouldBe(WorkflowErrorCodes.CallerRoleResolutionFailed);
+        result.IsSuccess.ShouldBeTrue();
+        result.Value.ShouldBeEmpty();
+        logger.Single(LogLevel.Error).EventId.ShouldBe(20442);
+        Assert.Equal("transport", Tag(Assert.Single(spans.Captured), TelemetryConstants.TagNames.AuthFailureKind));
     }
 
     /// <summary>
-    /// An unparseable body says nothing about the caller, so it cannot be read as "no roles" — that
-    /// would turn a malformed provider response into a silent, permanent denial-shaped success.
+    /// <c>HttpClient.Timeout</c> surfaces as a <see cref="TaskCanceledException"/>; it is the most
+    /// likely failure under load and must be told apart from a refused connection.
     /// </summary>
     [Fact]
-    public async Task UnrecognizedShape_Fails_RatherThanReadingAsEmpty()
+    public async Task Timeout_ResolvesEmpty_TaggedTimeout()
     {
-        var (resolver, _) = Build(Respond(HttpStatusCode.OK, """{"unexpected":true}"""));
+        using var spans = new SpanCollector();
+        var (resolver, _, logger) = BuildWithLogger(
+            (Func<HttpRequestMessage, HttpResponseMessage>)(_ =>
+                throw new TaskCanceledException("The request was canceled due to the configured HttpClient.Timeout")));
 
         var result = await resolver.ResolveRolesAsync(null);
 
-        result.IsSuccess.ShouldBeFalse();
-        result.Error.Code.ShouldBe(WorkflowErrorCodes.CallerRoleResolutionFailed);
+        result.IsSuccess.ShouldBeTrue();
+        result.Value.ShouldBeEmpty();
+        logger.Single(LogLevel.Error).EventId.ShouldBe(20442);
+        Assert.Equal("timeout", Tag(Assert.Single(spans.Captured), TelemetryConstants.TagNames.AuthFailureKind));
+    }
+
+    /// <summary>
+    /// An unparseable body is a provider defect, not an answer about the caller — logged as its own
+    /// error so it is not lost among outages, and still resolved to an empty set.
+    /// </summary>
+    [Theory]
+    [InlineData("""{"unexpected":true}""")]
+    [InlineData("""not json""")]
+    [InlineData("""["a","b"]""")]
+    public async Task UnparseableBody_ResolvesEmpty_WithItsOwnErrorLog(string body)
+    {
+        using var spans = new SpanCollector();
+        var (resolver, _, logger) = BuildWithLogger(Respond(HttpStatusCode.OK, body));
+
+        var result = await resolver.ResolveRolesAsync(null);
+
+        result.IsSuccess.ShouldBeTrue();
+        result.Value.ShouldBeEmpty();
+        var error = logger.Single(LogLevel.Error);
+        error.EventId.ShouldNotBe(20442);
+        error.Message.ShouldContain("empty role set");
+        var span = Assert.Single(spans.Captured);
+        Assert.Equal("failed", Tag(span, TelemetryConstants.TagNames.AuthOutcome));
+        Assert.Equal("parse", Tag(span, TelemetryConstants.TagNames.AuthFailureKind));
+        span.Status.ShouldBe(ActivityStatusCode.Error);
+    }
+
+    /// <summary>
+    /// The three shapes of "this caller holds nothing" are one outcome — a Warning, never an Error,
+    /// and a span without Error status — told apart by the <c>empty_reason</c> tag. The empty array
+    /// used to log only at Debug, which made it invisible next to the 204 it means the same as.
+    /// </summary>
+    [Theory]
+    [InlineData(HttpStatusCode.NoContent, "", "no_content")]
+    [InlineData(HttpStatusCode.OK, "   ", "empty_body")]
+    [InlineData(HttpStatusCode.OK, """{"roles":[]}""", "empty_array")]
+    [InlineData(HttpStatusCode.OK, """{"data":{"roles":[" "]}}""", "empty_array")]
+    public async Task EmptyAnswers_ResolveEmpty_AndLogAWarning(HttpStatusCode status, string body, string reason)
+    {
+        using var spans = new SpanCollector();
+        var (resolver, _, logger) = BuildWithLogger(Respond(status, body));
+
+        var result = await resolver.ResolveRolesAsync(null);
+
+        result.IsSuccess.ShouldBeTrue();
+        result.Value.ShouldBeEmpty();
+        logger.Entries.ShouldNotContain(e => e.Level == LogLevel.Error);
+        logger.Single(LogLevel.Warning).Message.ShouldContain("empty role set");
+        var span = Assert.Single(spans.Captured);
+        Assert.Equal("empty", Tag(span, TelemetryConstants.TagNames.AuthOutcome));
+        Assert.Equal(reason, Tag(span, TelemetryConstants.TagNames.AuthEmptyReason));
+        Assert.Null(Tag(span, TelemetryConstants.TagNames.AuthFailureKind));
+        span.Status.ShouldBe(ActivityStatusCode.Unset);
+    }
+
+    // ── No identity, no call ────────────────────────────────────────────────────
+
+    /// <summary>
+    /// With neither <c>act_sub</c> nor <c>client_id</c> there is nobody for morph-idm to answer about
+    /// (an anonymous or device token). The call is skipped, the set is empty, and — because this is
+    /// ordinary traffic rather than a defect — it logs at Debug only.
+    /// </summary>
+    [Fact]
+    public async Task NoActorAndNoClientId_SkipsTheCall_AndResolvesEmpty()
+    {
+        using var spans = new SpanCollector();
+        var (resolver, counter, logger) = BuildWithLogger(
+            Respond(HttpStatusCode.OK, """{"roles":["a"]}"""), actor: null);
+
+        var result = await resolver.ResolveRolesAsync(new Dictionary<string, string?> { ["sub"] = Subject });
+
+        counter.Count.ShouldBe(0);
+        result.IsSuccess.ShouldBeTrue();
+        result.Value.ShouldBeEmpty();
+        logger.Entries.ShouldNotContain(e => e.Level >= LogLevel.Warning);
+        logger.Entries.ShouldContain(e => e.Level == LogLevel.Debug);
+        var span = Assert.Single(spans.Captured);
+        Assert.Equal("skipped", Tag(span, TelemetryConstants.TagNames.AuthOutcome));
+        span.Status.ShouldBe(ActivityStatusCode.Unset);
+    }
+
+    [Fact]
+    public async Task AClientIdAlone_IsEnoughToCall()
+    {
+        HttpRequestMessage? captured = null;
+        var (resolver, counter, _) = BuildWithLogger(request =>
+        {
+            captured = request;
+            return Respond(HttpStatusCode.OK, """{"roles":["device.reader"]}""")(request);
+        }, actor: null);
+
+        var result = await resolver.ResolveRolesAsync(new Dictionary<string, string?> { ["client_id"] = "mobile-app" });
+
+        counter.Count.ShouldBe(1);
+        result.Value.ShouldBe(["device.reader"]);
+        Header(captured!, "client_id").ShouldBe("mobile-app");
+    }
+
+    [Fact]
+    public async Task AnActorAlone_IsEnoughToCall()
+    {
+        var (resolver, counter, _) = BuildWithLogger(Respond(HttpStatusCode.OK, """{"roles":["a"]}"""));
+
+        await resolver.ResolveRolesAsync(null);
+
+        counter.Count.ShouldBe(1);
+    }
+
+    /// <summary>
+    /// <c>authorize</c>'s <c>role</c> parameter is handed to this resolver as the request's
+    /// <c>role</c> header (see <c>AuthorizeRoleParameterFallbackTests</c>), so it is answered by the
+    /// header precedence above rather than ignored.
+    /// </summary>
+    [Fact]
+    public void TreatsTheRoleParameterAsTheRoleHeader()
+    {
+        var (resolver, _, _) = BuildWithLogger(Respond(HttpStatusCode.InternalServerError, "{}"));
+        resolver.RoleParameterMode.ShouldBe(RoleParameterMode.AsRoleHeader);
+    }
+
+    // ── A request `role` header takes precedence (2026-09-25 committee decision) ────────────
+    //
+    // When the request carries a `role` header — ICurrentUser.Roles, which the framework parses from
+    // it, else the forwarded header dictionary in a scope with no HTTP request — those roles ARE the
+    // caller's set and morph-idm is not called at all. Only a request without one is resolved through
+    // the identity service.
+
+    [Fact]
+    public async Task ARoleHeader_IsTheRoleSet_AndMorphIdmIsNotCalled()
+    {
+        using var spans = new SpanCollector();
+        var (resolver, counter, logger) = BuildWithLogger(Respond(HttpStatusCode.OK, """{"roles":["idm.viewer"]}"""));
+
+        var result = await resolver.ResolveRolesAsync(new Dictionary<string, string?> { ["role"] = "header.approver,header.maker" });
+
+        counter.Count.ShouldBe(0);
+        result.IsSuccess.ShouldBeTrue();
+        result.Value.ShouldBe(["header.approver", "header.maker"]);
+        logger.Entries.ShouldNotContain(e => e.Level >= LogLevel.Warning);
+        var span = Assert.Single(spans.Captured);
+        Assert.Equal("header", Tag(span, TelemetryConstants.TagNames.AuthOutcome));
+        Assert.Equal(2, Tag(span, TelemetryConstants.TagNames.AuthRoleCount));
+        span.Status.ShouldBe(ActivityStatusCode.Unset);
+    }
+
+    [Fact]
+    public async Task RolesTheFrameworkParsedFromTheHeader_AreTheRoleSetToo()
+    {
+        var (resolver, counter, _) = BuildWithLogger(
+            Respond(HttpStatusCode.OK, """{"roles":["idm.viewer"]}"""), userRoles: ["token.maker"]);
+
+        var result = await resolver.ResolveRolesAsync(null);
+
+        counter.Count.ShouldBe(0);
+        result.Value.ShouldBe(["token.maker"]);
+    }
+
+    /// <summary>
+    /// The header decides even when morph-idm could not have been asked anyway (no identity), and even
+    /// where it would have failed — the provider is simply not consulted.
+    /// </summary>
+    [Fact]
+    public async Task ARoleHeader_WinsWithoutIdentityToo()
+    {
+        var (resolver, counter, _) = BuildWithLogger(Respond(HttpStatusCode.InternalServerError, "{}"), actor: null);
+
+        var result = await resolver.ResolveRolesAsync(new Dictionary<string, string?> { ["role"] = "header.approver" });
+
+        counter.Count.ShouldBe(0);
+        result.Value.ShouldBe(["header.approver"]);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData(" , ")]
+    public async Task ABlankRoleHeader_IsNoHeader_AndMorphIdmIsAsked(string headerValue)
+    {
+        var (resolver, counter, _) = BuildWithLogger(Respond(HttpStatusCode.OK, """{"roles":["idm.viewer"]}"""));
+
+        var result = await resolver.ResolveRolesAsync(new Dictionary<string, string?> { ["role"] = headerValue });
+
+        counter.Count.ShouldBe(1);
+        result.Value.ShouldBe(["idm.viewer"]);
+    }
+
+    [Fact]
+    public async Task TheHeaderDecision_IsMemoizedForTheScope()
+    {
+        using var spans = new SpanCollector();
+        var (resolver, counter, _) = BuildWithLogger(Respond(HttpStatusCode.OK, """{"roles":["idm.viewer"]}"""));
+
+        await resolver.ResolveRolesAsync(new Dictionary<string, string?> { ["role"] = "header.approver" });
+        var second = await resolver.ResolveRolesAsync(null);
+
+        counter.Count.ShouldBe(0);
+        second.Value.ShouldBe(["header.approver"]);
+        spans.Captured.ShouldAllBe(s => Equals(Tag(s, TelemetryConstants.TagNames.AuthOutcome), "header"));
+        spans.Captured.Count(s => Equals(Tag(s, TelemetryConstants.TagNames.AuthMemoHit), true)).ShouldBe(1);
     }
 
     // ── Request shape ───────────────────────────────────────────────────────────
@@ -187,7 +417,11 @@ public sealed class MorphIdmCallerRoleResolverTests
         var (resolver, counter) = Build(Respond(HttpStatusCode.InternalServerError, "{}"));
 
         for (var i = 0; i < 4; i++)
-            (await resolver.ResolveRolesAsync(null)).IsSuccess.ShouldBeFalse();
+        {
+            var result = await resolver.ResolveRolesAsync(null);
+            result.IsSuccess.ShouldBeTrue();
+            result.Value.ShouldBeEmpty();
+        }
 
         counter.Count.ShouldBe(1);
     }
@@ -257,8 +491,9 @@ public sealed class MorphIdmCallerRoleResolverTests
     }
 
     /// <summary>
-    /// Fail-closed is invisible in logs alone once a request fans out. The span carries Error status
-    /// and the provider's status code, so the 403s downstream have a traceable cause.
+    /// A failure resolved to an empty set is invisible in logs alone once a request fans out. The span
+    /// carries Error status and the provider's status code, so a narrowed answer downstream has a
+    /// traceable cause.
     /// </summary>
     [Fact]
     public async Task AFailedCall_MarksTheSpanErrorWithTheProviderStatus()
@@ -275,8 +510,9 @@ public sealed class MorphIdmCallerRoleResolverTests
     }
 
     /// <summary>
-    /// A memoized FAILURE still denies, so its spans stay Error — otherwise only the first surface's
-    /// span shows the cause and the rest look like clean resolutions that happened to return nothing.
+    /// A memoized FAILURE keeps its Error status and failure kind on every surface — otherwise only
+    /// the first surface's span shows the cause and the rest look like callers who genuinely hold
+    /// nothing.
     /// </summary>
     [Fact]
     public async Task AMemoizedFailure_KeepsErrorStatusOnEverySurface()
@@ -289,7 +525,21 @@ public sealed class MorphIdmCallerRoleResolverTests
 
         spans.Captured.Count.ShouldBe(2);
         spans.Captured.ShouldAllBe(s => s.Status == ActivityStatusCode.Error);
+        spans.Captured.ShouldAllBe(s => Equals(Tag(s, TelemetryConstants.TagNames.AuthFailureKind), "http_status"));
         spans.Captured.Count(s => Equals(Tag(s, TelemetryConstants.TagNames.AuthMemoHit), true)).ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task AMemoizedEmptyAnswer_KeepsItsReasonOnEverySurface()
+    {
+        using var spans = new SpanCollector();
+        var (resolver, _) = Build(Respond(HttpStatusCode.NoContent, string.Empty));
+
+        await resolver.ResolveRolesAsync(null);
+        await resolver.ResolveRolesAsync(null);
+
+        spans.Captured.ShouldAllBe(s => Equals(Tag(s, TelemetryConstants.TagNames.AuthOutcome), "empty"));
+        spans.Captured.ShouldAllBe(s => Equals(Tag(s, TelemetryConstants.TagNames.AuthEmptyReason), "no_content"));
     }
 
     private static object? Tag(Activity activity, string name) =>
@@ -347,6 +597,23 @@ public sealed class MorphIdmCallerRoleResolverTests
         Func<HttpRequestMessage, Task<HttpResponseMessage>> handler,
         string? position = Position)
     {
+        var (resolver, counter, _) = BuildWithLogger(handler, position);
+        return (resolver, counter);
+    }
+
+    private static (MorphIdmCallerRoleResolver Resolver, CallCounter Counter, CapturingLogger Logger) BuildWithLogger(
+        Func<HttpRequestMessage, HttpResponseMessage> handler,
+        string? position = Position,
+        string? actor = Actor,
+        string[]? userRoles = null) =>
+        BuildWithLogger(request => Task.FromResult(handler(request)), position, actor, userRoles);
+
+    private static (MorphIdmCallerRoleResolver Resolver, CallCounter Counter, CapturingLogger Logger) BuildWithLogger(
+        Func<HttpRequestMessage, Task<HttpResponseMessage>> handler,
+        string? position = Position,
+        string? actor = Actor,
+        string[]? userRoles = null)
+    {
         var counter = new CallCounter();
         var httpClient = new HttpClient(new StubHandler(handler, counter))
         {
@@ -355,19 +622,39 @@ public sealed class MorphIdmCallerRoleResolverTests
 
         var currentUser = Substitute.For<ICurrentUser>();
         currentUser.UserName.Returns(Subject);
-        currentUser.ActorUserName.Returns(Actor);
+        currentUser.ActorUserName.Returns(actor);
         currentUser.Position.Returns(position);
+        currentUser.Roles.Returns(userRoles ?? []);
 
         var options = Options.Create(new CallerRoleProviderOptions
         {
             Provider = CallerRoleProviderOptions.MorphIdmProvider
         });
 
+        var logger = new CapturingLogger();
         return (new MorphIdmCallerRoleResolver(
             httpClient,
             currentUser,
             options,
-            NullLogger<MorphIdmCallerRoleResolver>.Instance), counter);
+            logger), counter, logger);
+    }
+
+    private sealed record LogEntry(LogLevel Level, int EventId, string Message);
+
+    private sealed class CapturingLogger : ILogger<MorphIdmCallerRoleResolver>
+    {
+        public List<LogEntry> Entries { get; } = [];
+
+        public LogEntry Single(LogLevel level) => Entries.Single(e => e.Level == level);
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter) =>
+            Entries.Add(new LogEntry(logLevel, eventId.Id, formatter(state, exception)));
     }
 
     private sealed class CallCounter

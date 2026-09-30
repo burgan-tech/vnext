@@ -57,8 +57,9 @@ public sealed class SchemaFieldFilterService(
 
         var pathsWithRoles = new HashSet<string>(pathRoleGrants.Keys, StringComparer.Ordinal);
 
-        // Unresolvable roles prune every guarded field. This method has no failure channel, and the
-        // alternative — returning the data unfiltered — would leak exactly the fields the schema guards.
+        // A provider that fails (neither built-in one does — morph-idm resolves its failures to an empty
+        // set, evaluated normally below) prunes every guarded field. This method has no failure channel,
+        // and the alternative — returning the data unfiltered — would leak exactly the fields the schema guards.
         if (!callerRolesResult.IsSuccess)
             return InstanceDataRoleFilter.FilterByVisiblePaths(element, pathsWithRoles, new HashSet<string>(0));
 

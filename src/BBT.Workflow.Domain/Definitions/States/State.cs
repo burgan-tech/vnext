@@ -152,6 +152,11 @@ public sealed class State : IHasKey
     /// <summary>
     /// True when entering this state must terminate the client's active long-poll request
     /// (pausing the pipeline until acknowledge or fallback timeout).
+    /// <para>
+    /// The state's OWN declaration only. A parent may override the window and the grants for a child
+    /// it started; runtime decisions must read <c>Instance.ResolveEffectiveLongPoll(state)</c>, never
+    /// this accessor.
+    /// </para>
     /// </summary>
     [JsonIgnore]
     public bool TerminatesLongPollOnEntry => interaction?.LongPoll?.Terminate == true;
@@ -159,6 +164,11 @@ public sealed class State : IHasKey
     /// <summary>
     /// Role grants controlling which callers receive the long-poll termination signal.
     /// Empty/null means default-allow.
+    /// <para>
+    /// The state's OWN declaration only. A parent may override the window and the grants for a child
+    /// it started; runtime decisions must read <c>Instance.ResolveEffectiveLongPoll(state)</c>, never
+    /// this accessor.
+    /// </para>
     /// </summary>
     [JsonIgnore]
     public IReadOnlyCollection<RoleGrant>? LongPollAckRoles => interaction?.LongPoll?.Roles;
@@ -166,15 +176,26 @@ public sealed class State : IHasKey
     /// <summary>
     /// Optional condition rule deciding per caller whether the long-poll interaction applies —
     /// the rule-based alternative to <see cref="LongPollAckRoles"/> (mutually exclusive).
+    /// <para>
+    /// The state's OWN declaration only. A parent may override the window and the grants for a child
+    /// it started; runtime decisions must read <c>Instance.ResolveEffectiveLongPoll(state)</c>, never
+    /// this accessor.
+    /// </para>
     /// </summary>
     [JsonIgnore]
     public ScriptCode? LongPollRule => interaction?.LongPoll?.Rule;
 
     /// <summary>
-    /// Acknowledge fallback window in seconds for long-poll termination (default 60).
+    /// Acknowledge fallback window in seconds for long-poll termination (default
+    /// <see cref="LongPollInteraction.DefaultFallbackTimeoutSeconds"/>).
+    /// <para>
+    /// The state's OWN declaration only. A parent may override the window and the grants for a child
+    /// it started; runtime decisions must read <c>Instance.ResolveEffectiveLongPoll(state)</c>, never
+    /// this accessor.
+    /// </para>
     /// </summary>
     [JsonIgnore]
-    public int LongPollFallbackTimeoutSeconds => interaction?.LongPoll?.FallbackTimeoutSeconds ?? 60;
+    public int LongPollFallbackTimeoutSeconds => interaction?.LongPoll?.FallbackTimeoutSeconds ?? LongPollInteraction.DefaultFallbackTimeoutSeconds;
 
     /// <summary>
     /// Languages

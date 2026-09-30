@@ -21,8 +21,9 @@ public sealed class DataFunctionHandler(
     public async Task<IActionResult> HandleAsync(
         InstanceFunctionRequest request, CancellationToken cancellationToken)
     {
-        // The caller's role set comes from the configured provider, not from ICurrentUser directly:
-        // a provider failure denies the read rather than serving it as if the caller had no roles.
+        // The caller's role set comes from the configured provider, not from ICurrentUser directly.
+        // Neither built-in provider fails (morph-idm resolves its failures to an empty set, which the
+        // grant engine can only narrow on); the branch below is for a provider that cannot.
         var callerRoles = await callerRoleResolver.ResolveRolesAsync(request.Headers, cancellationToken);
         if (!callerRoles.IsSuccess)
             return Result.Fail(callerRoles.Error).ToActionResult(request.HttpContext);

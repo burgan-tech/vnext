@@ -1529,6 +1529,21 @@ public static partial class WorkflowLogs
         Guid subInstanceId);
 
     /// <summary>
+    /// Logs when a backup (Inbox) delivery of a SubFlow state change is dropped before the lock
+    /// because the committed rows already reflect it — the post-commit relay applied the same
+    /// notification, or a newer one. No lock, no transaction, no write.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40137,
+        Level = LogLevel.Debug,
+        Message = "Backup SubFlow state event for {SubInstanceId} already applied to parent {ParentInstanceId} ({Reason}); skipped without taking the lock")]
+    public static partial void SubFlowStateChangeBackupAlreadyApplied(
+        this ILogger logger,
+        Guid subInstanceId,
+        Guid parentInstanceId,
+        string reason);
+
+    /// <summary>
     /// Logs when a SubFlow state changed event is received by the hook.
     /// </summary>
     [LoggerMessage(
@@ -3410,6 +3425,22 @@ public static partial class WorkflowLogs
         string viewKey,
         string requestDomain);
 
+    /// <summary>
+    /// A parent-supplied state/transition view override could not be resolved; the view the child's
+    /// own rules selected is served instead.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20101,
+        Level = LogLevel.Warning,
+        Message = "SubFlow view override unresolved on instance {InstanceId} at state {State}: {ViewKey} -> {OverrideViewKey}; serving the child's own view. {Reason}")]
+    public static partial void SubFlowViewOverrideUnresolved(
+        this ILogger logger,
+        Guid instanceId,
+        string state,
+        string viewKey,
+        string overrideViewKey,
+        string reason);
+
     #endregion
 
     #region Extensions
@@ -3601,6 +3632,45 @@ public static partial class WorkflowLogs
         Guid instanceId,
         string state,
         string reason);
+
+    /// <summary>
+    /// A parent supplied a long-poll override for a child state that declares no long-poll. An
+    /// override tunes a long-poll; it never creates one, so nothing was applied.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20305,
+        Level = LogLevel.Warning,
+        Message = "Long-poll override ignored on instance {InstanceId} at state {State}: the state declares no interaction.longPoll")]
+    public static partial void LongPollOverrideIgnoredNoLongPoll(
+        this ILogger logger,
+        Guid instanceId,
+        string state);
+
+    /// <summary>
+    /// A parent supplied a long-poll roles override for a child state authorized by a rule. Rules are
+    /// not overridable, so the roles override was dropped; a window override still applies.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20306,
+        Level = LogLevel.Warning,
+        Message = "Long-poll roles override ignored on instance {InstanceId} at state {State}: the state authorizes the interaction with a rule")]
+    public static partial void LongPollRolesOverrideIgnoredRuleArm(
+        this ILogger logger,
+        Guid instanceId,
+        string state);
+
+    /// <summary>
+    /// The parent-supplied state override stamp on a child could not be read; the child's own
+    /// configuration was used.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20307,
+        Level = LogLevel.Warning,
+        Message = "SubFlow state override stamp is malformed on instance {InstanceId} (state {State}); the child's own configuration is used")]
+    public static partial void SubFlowOverrideStampMalformed(
+        this ILogger logger,
+        Guid instanceId,
+        string state);
 
     #endregion
 
@@ -3964,34 +4034,82 @@ public static partial class WorkflowLogs
         double elapsedMs);
 
     /// <summary>
-    /// Logs when the provider answered that the caller has no operation set at all. This is a valid
-    /// answer, not a failure — but it denies every allowlist grant, so it is worth seeing.
+    /// Logs when the provider answered that the caller holds nothing — <c>204</c>, a blank body, or an
+    /// empty roles array (<paramref name="emptyReason"/>). A valid answer, not a failure, and the
+    /// request continues on an empty role set; Warning because it narrows everything the caller sees.
     /// </summary>
     [LoggerMessage(
         EventId = 20441,
         Level = LogLevel.Warning,
-        Message = "Caller role provider returned no operation set. Provider={Provider}, Subject={Subject}, Actor={Actor}, Position={Position}")]
+        Message = "Caller role provider returned no operation set; evaluating with an empty role set. Provider={Provider}, EmptyReason={EmptyReason}, Subject={Subject}, Actor={Actor}, Position={Position}")]
     public static partial void CallerRoleProviderReturnedNoContent(
         this ILogger logger,
         string provider,
+        string emptyReason,
         string? subject,
         string? actor,
         string? position);
 
     /// <summary>
-    /// Logs a failed provider call. The request is denied (fail-closed) after this is written, so this
-    /// is the only record of why a caller lost access.
+    /// Logs a failed provider call — a non-success status, a timeout or a transport error
+    /// (<paramref name="failureKind"/>). The request is NOT broken: it continues on an empty role set,
+    /// so allowlist grants cannot match and role-bound denies refuse. This is the only record that the
+    /// narrowed answer the caller got was an outage and not their real operation set.
     /// </summary>
     [LoggerMessage(
         EventId = 20442,
         Level = LogLevel.Error,
-        Message = "Caller role provider call failed. Provider={Provider}, StatusCode={StatusCode}, Reason={Reason}")]
+        Message = "Caller role provider call failed; evaluating with an empty role set. Provider={Provider}, FailureKind={FailureKind}, StatusCode={StatusCode}, Reason={Reason}")]
     public static partial void CallerRoleProviderCallFailed(
         this ILogger logger,
         Exception? exception,
         string provider,
+        string failureKind,
         int? statusCode,
         string reason);
+
+    /// <summary>
+    /// Logs a success-status answer whose body carried no recognizable roles array. A provider defect,
+    /// kept apart from <see cref="CallerRoleProviderCallFailed"/> so it is not lost among outages; the
+    /// request continues on an empty role set.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20463,
+        Level = LogLevel.Error,
+        Message = "Caller role provider response could not be parsed; evaluating with an empty role set. Provider={Provider}, StatusCode={StatusCode}, Reason={Reason}")]
+    public static partial void CallerRoleProviderResponseUnparseable(
+        this ILogger logger,
+        string provider,
+        int statusCode,
+        string reason);
+
+    /// <summary>
+    /// Logs that no provider call was made because the request carried a <c>role</c> header, whose
+    /// roles are then the caller's set. Debug: it is the normal path for every request that carries
+    /// one.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20465,
+        Level = LogLevel.Debug,
+        Message = "Caller roles taken from the request role header; provider not called. Provider={Provider}, RoleCount={RoleCount}")]
+    public static partial void CallerRolesTakenFromRequestHeader(
+        this ILogger logger,
+        string provider,
+        int roleCount);
+
+    /// <summary>
+    /// Logs that no provider call was made because the caller carried neither <c>act_sub</c> nor
+    /// <c>client_id</c>. Debug: anonymous and device tokens are ordinary traffic, and a Warning on
+    /// every one of their requests would bury the answers that matter.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20464,
+        Level = LogLevel.Debug,
+        Message = "Caller role provider not called: no act_sub or client_id; evaluating with an empty role set. Provider={Provider}, Subject={Subject}")]
+    public static partial void CallerRoleProviderCallSkippedNoIdentity(
+        this ILogger logger,
+        string provider,
+        string? subject);
 
     /// <summary>
     /// Logs when a surface was served the memoized role set instead of triggering a second provider
@@ -4008,7 +4126,8 @@ public static partial class WorkflowLogs
 
     /// <summary>
     /// Logs when the long-poll ownership gate could not establish the caller's roles and therefore
-    /// declined to arm the pause. The transition continues normally; nothing faults.
+    /// declined to arm the pause. The transition continues normally; nothing faults. Only a provider
+    /// that fails reaches it — morph-idm's failures arrive as an empty set and are logged as 20442/20463.
     /// </summary>
     [LoggerMessage(
         EventId = 20444,
@@ -4505,6 +4624,49 @@ public static partial class WorkflowLogs
         string functionKey,
         string errorMessage);
 
+    /// <summary>
+    /// Logs when the best-effort function-execution journal write fails (vnext-client-sdk-core#60,
+    /// item C1). The metrics row is dropped; the function's own response is unaffected.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 80006,
+        Level = LogLevel.Error,
+        Message = "Failed to journal execution of function {FunctionKey} (domain {Domain}); the metrics row was dropped.")]
+    public static partial void FunctionExecutionJournalWriteFailed(
+        this ILogger logger,
+        Exception exception,
+        string functionKey,
+        string domain);
+
+    /// <summary>
+    /// Logs when the background journal writer fails to persist a batch of execution rows
+    /// (vnext-client-sdk-core#60). The whole batch is dropped; the writer loop keeps running so a
+    /// transient DB fault never stops journaling. Best-effort: the recorded functions are unaffected.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 80007,
+        Level = LogLevel.Error,
+        Message = "Failed to flush a batch of {BatchSize} function-execution rows; the batch was dropped.")]
+    public static partial void FunctionExecutionJournalBatchWriteFailed(
+        this ILogger logger,
+        Exception exception,
+        int batchSize);
+
+    /// <summary>
+    /// Logs when the bounded journal queue was full and execution records were dropped
+    /// (vnext-client-sdk-core#60). Journaling is best-effort by design — under sustained load the
+    /// runtime sheds telemetry rows rather than slowing the functions it records. Reported by the
+    /// writer, off the hot path, as a running total so drops are visible without per-record logging.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 80008,
+        Level = LogLevel.Warning,
+        Message = "Function-execution journal dropped {DroppedDelta} record(s) (queue full); {DroppedTotal} dropped since start.")]
+    public static partial void FunctionExecutionJournalRecordsDropped(
+        this ILogger logger,
+        long droppedDelta,
+        long droppedTotal);
+
     #endregion
 
     #region Component Cache
@@ -4712,6 +4874,19 @@ public static partial class WorkflowLogs
         this ILogger logger,
         int hookCount,
         int failedCount);
+
+    /// <summary>
+    /// A component passed validation with a non-blocking finding (e.g. an override that widens access).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 90006,
+        Level = LogLevel.Warning,
+        Message = "Component validation warning for {ComponentType} at {Member}: {Message}")]
+    public static partial void ComponentValidationWarning(
+        this ILogger logger,
+        string componentType,
+        string member,
+        string message);
 
     #endregion
 }

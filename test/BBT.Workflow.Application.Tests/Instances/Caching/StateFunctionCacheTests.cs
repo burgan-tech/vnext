@@ -74,10 +74,11 @@ public class StateFunctionCacheTests
         // provider-resolved; v8 added the always-present `incident` block; v9 turned that block's
         // content into links; v10 added the `timeout` block; v11 made the `interaction` block's
         // PRESENCE follow whether an acknowledge is actually pending rather than whether the state
-        // declares one) cannot be served from entries written by an earlier build.
+        // declares one; v12 added `annotations` to scheduled entries and the `timeout` block) cannot
+        // be served from entries written by an earlier build.
         // Bump this literal in the same commit as ResponseShapeVersion — the assertion exists to make
         // a silent shape change impossible.
-        key.ShouldStartWith($"state-fn:v11:{TestDomain}:{TestWorkflow}:{TestInstance}:");
+        key.ShouldStartWith($"state-fn:v12:{TestDomain}:{TestWorkflow}:{TestInstance}:");
     }
 
     [Fact]

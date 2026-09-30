@@ -20,8 +20,8 @@ public sealed class TaskHistoryFunctionHandler(
     public async Task<IActionResult> HandleAsync(
         InstanceFunctionRequest request, CancellationToken cancellationToken)
     {
-        // Same provider-resolved roles as the state function, so the queryRoles gate evaluates the
-        // caller consistently across the surfaces that describe one instance.
+        // Same provider-resolved roles as the state function. This read has no role gate of its own —
+        // queryRoles is answered by authorize?queryRoles=true, not enforced here.
         var callerRoles = await callerRoleResolver.ResolveRolesAsync(request.Headers, cancellationToken);
         if (!callerRoles.IsSuccess)
             return Result.Fail(callerRoles.Error).ToActionResult(request.HttpContext);

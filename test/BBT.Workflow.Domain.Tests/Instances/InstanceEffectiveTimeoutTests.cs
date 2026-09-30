@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Text.Json;
 using BBT.Aether;
 using BBT.Workflow.Definitions;
@@ -161,5 +162,88 @@ public class InstanceEffectiveTimeoutTests : DomainTestBase<DomainEntryPoint>
 
         resolved!.Key.ShouldBe("from-parent");
         resolved.Target.ShouldBe("cancelled");
+    }
+
+    /// <summary>
+    /// <c>timeout.annotations</c> is read from the definition JSON exactly as a transition's is.
+    /// The class binds through a <c>[JsonConstructor]</c> that does not take annotations, so the
+    /// property must be picked up by <c>[JsonInclude]</c> — without it the field would be accepted by
+    /// the schema and silently dropped.
+    /// </summary>
+    [Fact]
+    public void DefinitionJson_CarriesTheTimeoutsAnnotations()
+    {
+        const string json = """
+            {
+                "key": "abandoned",
+                "target": "cancelled",
+                "versionStrategy": "None",
+                "timer": {"reset": "false", "duration": "PT1H"},
+                "annotations": {"ui/countdown": "visible", "ui/severity": "warning"}
+            }
+            """;
+
+        var timeout = JsonSerializer.Deserialize<WorkflowTimeout>(json, JsonSerializerConstants.JsonOptions);
+
+        timeout.ShouldNotBeNull();
+        timeout!.Annotations.ShouldNotBeNull();
+        timeout.Annotations!["ui/countdown"].ShouldBe("visible");
+        timeout.Annotations["ui/severity"].ShouldBe("warning");
+    }
+
+    [Fact]
+    public void DefinitionJson_WithoutAnnotations_LeavesThemNull()
+    {
+        var timeout = JsonSerializer.Deserialize<WorkflowTimeout>(
+            """{"key": "abandoned", "target": "cancelled", "versionStrategy": "None", "timer": {"reset": "false", "duration": "PT1H"}}""",
+            JsonSerializerConstants.JsonOptions);
+
+        timeout!.Annotations.ShouldBeNull();
+    }
+
+    /// <summary>
+    /// The parent's override travels to the child as a serialized <see cref="WorkflowTimeout"/>
+    /// stamp, so its annotations must survive that round trip — and they REPLACE the child's own,
+    /// they are not merged with them.
+    /// </summary>
+    [Fact]
+    public void Override_CarriesItsOwnAnnotations_AndDropsTheChildsEntirely()
+    {
+        var workflow = WorkflowWithTimeout(WorkflowTimeout.Create(
+            "own", "own-finish", "Patch", "never", "PT1H",
+            annotations: new Dictionary<string, string> { ["ui/own-only"] = "child" }));
+        var stamp = JsonSerializer.Serialize(
+            WorkflowTimeout.Create(
+                "child-push-timeout", "child-cancelled", "Minor", "OnEntry", "PT15M",
+                annotations: new Dictionary<string, string> { ["ui/countdown"] = "parent" }),
+            JsonSerializerConstants.JsonOptions);
+
+        var resolved = Stamped(stamp).ResolveEffectiveTimeout(workflow, out var malformed);
+
+        malformed.ShouldBeFalse();
+        resolved!.Annotations.ShouldNotBeNull();
+        resolved.Annotations!.ShouldContainKeyAndValue("ui/countdown", "parent");
+        resolved.Annotations.ShouldNotContainKey("ui/own-only");
+    }
+
+    /// <summary>
+    /// Stamps written by a runtime that predates the field carry no annotations and must stay
+    /// readable — the override then simply has none.
+    /// </summary>
+    [Fact]
+    public void LegacyStamp_WithoutAnnotations_ResolvesWithNullAnnotations()
+    {
+        var workflow = WorkflowWithTimeout(null);
+        var legacyStamp = JsonSerializer.Serialize(
+            WorkflowTimeout.Create("child-push-timeout", "child-cancelled", "Minor", "OnEntry", "PT15M"),
+            JsonSerializerConstants.JsonOptions);
+
+        legacyStamp.ShouldNotContain("annotations");
+
+        var resolved = Stamped(legacyStamp).ResolveEffectiveTimeout(workflow, out var malformed);
+
+        malformed.ShouldBeFalse();
+        resolved!.Key.ShouldBe("child-push-timeout");
+        resolved.Annotations.ShouldBeNull();
     }
 }

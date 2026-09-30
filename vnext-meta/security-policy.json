@@ -16,7 +16,7 @@
     {
       "id": "query-filter-value-length",
       "scope": "query",
-      "enforcedSince": "0.0.90",
+      "enforcedSince": "0.0.94",
       "description": "InstanceQueryValidator and SQL condition builders enforce InputValidator.MaxValueLength before SQL compilation. Each decoded scalar operand may contain at most 1000 UTF-16 code units (.NET string.Length), including every array element and each legacy comma-separated in/nin/between operand. Applies to instance columns and JSON attributes, including nested fields, logical groups and filter envelopes. HTTP queries reject violations with 400 and validation code filter.valueTooLong; GetInstancesTask returns a validation failure before local/remote dispatch, which can invoke the workflow error boundary. Includes objects retain their dedicated size/depth/property limits. Stored instance data is unaffected. The constant existed before this release, but the filter paths did not enforce it.",
       "maxLength": 1000,
       "lengthUnit": "utf16-code-units",
@@ -59,6 +59,12 @@
       "scope": "transition",
       "enforcedSince": "0.0.1",
       "description": "TransitionAuthorizationManager evaluates transition RoleGrant lists: any matching DENY denies; otherwise any matching ALLOW permits; empty role grants allow all callers."
+    },
+    {
+      "id": "roleless-caller-cannot-clear-role-bound-deny",
+      "scope": "authorization",
+      "enforcedSince": "0.0.96",
+      "description": "A caller with no roles cannot pass a role-bound DENY grant (a static role or a $role. reference): TransitionAuthorizationManager.IsUnprovableRoleBoundDeny refuses it in both RoleGrantEvaluator and EvaluateRolesStatic, on every surface and for every caller-role provider. Identity-bound denies (predefined roles, $user., $userBehalfOf.) keep their normal evaluation. This is what makes MorphIdmCallerRoleResolver resolving every failure (error status, timeout, transport, unparseable body, no act_sub/client_id) to an empty role set safe: an empty set can only narrow access, never widen it."
     },
     {
       "id": "transition-predefined-and-dynamic-role-grants",

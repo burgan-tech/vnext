@@ -17,9 +17,8 @@ using Xunit;
 namespace BBT.Workflow.Infrastructure.Tests.Authorization;
 
 /// <summary>
-/// The two rules the requester settled on 2026-09-22 about <c>morph-idm</c> and the <c>role</c> header.
-/// Both are already how the resolver behaves; these tests exist so the behaviour is not "simplified"
-/// back later by someone who sees a header going unused and assumes it was an oversight.
+/// The rules about <c>morph-idm</c> and the <c>role</c> header. Rule 1 was settled on 2026-09-22;
+/// rule 2 replaced the original "never merge" rule on 2026-09-25 by committee decision.
 /// </summary>
 /// <remarks>
 /// <para><b>1. The header is never sent.</b> The endpoint has two modes: asked WITHOUT a role it
@@ -27,10 +26,13 @@ namespace BBT.Workflow.Infrastructure.Tests.Authorization;
 /// single role. The runtime needs the set — the grant engine evaluates <c>transition.roles</c>,
 /// <c>availableIn</c> narrowing, <c>queryRoles</c> and schema <c>x-roles</c> against it — so sending
 /// the header would silently reduce every answer to one role, with no error and no log.</para>
-/// <para><b>2. The response is never merged with the header.</b> Under this provider only the roles
-/// the service returns are valid. Merging would let a gateway-asserted header widen what the identity
-/// service governs, and it would quietly undo the <c>204</c> contract below.</para>
+/// <para><b>2. A <c>role</c> header takes precedence, and then morph-idm is not called.</b> When the
+/// request carries one, those roles are the caller's set; only a request without one is resolved
+/// through the identity service. There is no merge in either direction: the header replaces the
+/// service's answer, and without the header the service's answer — or an empty set when it cannot
+/// give one — stands alone.</para>
 /// </remarks>
+[Collection(MorphIdmCallerRoleResolverTests.SpanCollection)]
 public sealed class MorphIdmCallerRoleResolverContractTests
 {
     private const string Subject = "u-1";
@@ -73,10 +75,11 @@ public sealed class MorphIdmCallerRoleResolverContractTests
     }
 
     /// <summary>
-    /// The check-mode trap. A <c>role</c> header on the caller's request must not travel outbound.
+    /// The check-mode trap. A <c>role</c> header must never travel outbound — and with rule 2 a request
+    /// that carries one makes no outbound call at all.
     /// </summary>
     [Fact]
-    public async Task TheRoleHeaderIsNeverSentToMorphIdm()
+    public async Task ARequestWithARoleHeaderMakesNoCall_SoTheHeaderIsNeverSent()
     {
         var (resolver, handler) = Build(HttpStatusCode.OK, """{"roles":["idm.approver"]}""");
 
@@ -85,10 +88,8 @@ public sealed class MorphIdmCallerRoleResolverContractTests
             [AetherClaimTypes.Role] = "header.role"
         });
 
-        handler.Captured.ShouldNotBeNull();
-        handler.Captured!.Headers.Contains(AetherClaimTypes.Role).ShouldBeFalse(
-            "sending the role header flips the endpoint into check mode and reduces the answer to a " +
-            "yes/no about that one role — a failure with no error and no log");
+        handler.Captured.ShouldBeNull(
+            "a role header is the caller's set; sending it would flip the endpoint into check mode");
     }
 
     /// <summary>What the resolver DOES send: the caller's identity, so morph-idm can answer for them.</summary>
@@ -104,11 +105,11 @@ public sealed class MorphIdmCallerRoleResolverContractTests
     }
 
     /// <summary>
-    /// Only the service's roles are valid. A header role present on the request must not appear in
-    /// the resolved set.
+    /// The header REPLACES the service's answer — no merge. <c>idm.approver</c> is what morph-idm would
+    /// have said; it must not appear, because morph-idm was not asked.
     /// </summary>
     [Fact]
-    public async Task TheResponseIsNotMergedWithTheHeaderRole()
+    public async Task TheHeaderRoleReplacesTheServicesAnswer()
     {
         var (resolver, _) = Build(HttpStatusCode.OK, """{"roles":["idm.approver"]}""");
 
@@ -118,23 +119,18 @@ public sealed class MorphIdmCallerRoleResolverContractTests
         });
 
         resolved.IsSuccess.ShouldBeTrue();
-        resolved.Value.ShouldBe(["idm.approver"]);
-        resolved.Value!.ShouldNotContain("header.role");
+        resolved.Value.ShouldBe(["header.role"]);
     }
 
     /// <summary>
-    /// <c>204</c> means "this caller has no operation set" — an EMPTY set, not a reason to fall back
-    /// to the header. A merge would have quietly undone exactly this.
+    /// Without a header, <c>204</c> ("this caller has no operation set") is an EMPTY set.
     /// </summary>
     [Fact]
-    public async Task NoContentYieldsAnEmptySetRatherThanAHeaderFallback()
+    public async Task WithoutAHeader_NoContentYieldsAnEmptySet()
     {
         var (resolver, _) = Build(HttpStatusCode.NoContent, null);
 
-        var resolved = await resolver.ResolveRolesAsync(new Dictionary<string, string?>
-        {
-            [AetherClaimTypes.Role] = "header.role"
-        });
+        var resolved = await resolver.ResolveRolesAsync(new Dictionary<string, string?>());
 
         resolved.IsSuccess.ShouldBeTrue();
         resolved.Value.ShouldNotBeNull();
@@ -142,18 +138,19 @@ public sealed class MorphIdmCallerRoleResolverContractTests
     }
 
     /// <summary>
-    /// A provider that cannot answer is a resolution FAILURE, not an empty role set — the caller's
-    /// authority is unknown, and the only safe reading of unknown is denial (403
-    /// <c>CallerRoleResolutionFailed</c>), never "no roles, carry on".
+    /// Without a header, a provider that cannot answer resolves to an EMPTY set — the request is not
+    /// broken (settled 2026-09-24): allowlist grants cannot match it and a role-bound deny refuses it.
     /// </summary>
     [Fact]
-    public async Task AServerErrorIsAFailureNotAnEmptySet()
+    public async Task WithoutAHeader_AServerErrorIsAnEmptySet()
     {
         var (resolver, _) = Build(HttpStatusCode.InternalServerError, "boom");
 
-        var resolved = await resolver.ResolveRolesAsync(null);
+        var resolved = await resolver.ResolveRolesAsync(new Dictionary<string, string?>());
 
-        resolved.IsSuccess.ShouldBeFalse();
+        resolved.IsSuccess.ShouldBeTrue();
+        resolved.Value.ShouldNotBeNull();
+        resolved.Value!.ShouldBeEmpty();
     }
 
     /// <summary>All three response shapes the parser accepts, so a provider change cannot go unnoticed.</summary>

@@ -8,8 +8,9 @@ namespace BBT.Workflow.Functions.DTOs;
 /// the client never resolves component references itself, it follows the hrefs handed to it.
 /// </summary>
 /// <remarks>
-/// Only returned to a caller that passed the function's scope and role gates, so its presence is
-/// itself the "you may run this" answer; a denied caller gets 403 instead.
+/// Only returned to a caller that passed the function's scope gate — the same gate execution applies —
+/// so its presence means "this function is invocable here"; an out-of-scope caller gets 403 instead.
+/// Whether the caller's ROLES admit it is answered by <c>authorize?functionKey=</c>, not by this.
 /// </remarks>
 public sealed class FunctionInfoOutput
 {

@@ -82,13 +82,13 @@
     },
     {
       "id": "enqueue-relay-drops-subflow-chain-reserve-claim",
-      "affectedVersions": ">=0.0.80 <=0.0.92",
+      "affectedVersions": ">=0.0.80 <=0.0.93",
       "severity": "error",
       "component": "execution",
       "path": "POST .../transitions/{key}/enqueue (TransitionContinuationRequested relay)",
       "title": "The internal enqueue relay's event-to-payload copy omitted SubflowChainReserved, so with WorkflowExecution:DirectEnqueueContinuations=false (or when the direct Dapr enqueue falls back to the outbox) an async transition on a parent with an active SubFlow reached the leaf without the chain-reserve claim its own accept had taken, and the leaf rejected the forward as Busy (Instance:100031).",
       "workaround": "Keep DirectEnqueueContinuations=true (the default); the drop then only bites when the direct Dapr enqueue fails and the outbox fallback carries a subflow-forward transition. Retrying the transition after the fallback window is the only recovery on affected versions.",
-      "fixedIn": null
+      "fixedIn": "0.0.94"
     },
     {
       "id": "arming-poller-not-hosted-orphans-arm-failures",
@@ -112,7 +112,7 @@
     },
     {
       "id": "discovery-domain-list-single-page-ceiling",
-      "affectedVersions": ">=0.0.92",
+      "affectedVersions": ">=0.0.94",
       "severity": "warning",
       "component": "runtime",
       "path": "ServiceDiscovery:Cache (bulk warm-up)",
@@ -132,7 +132,7 @@
     },
     {
       "id": "state-level-subprocess-rejected-at-publish",
-      "affectedVersions": ">=0.0.93",
+      "affectedVersions": ">=0.0.95",
       "severity": "error",
       "component": "workflow",
       "path": "states[].subFlow.type",
@@ -152,13 +152,13 @@
     },
     {
       "id": "function-multi-task-taskresponse-slot-collision",
-      "affectedVersions": ">=0.0.26",
+      "affectedVersions": ">=0.0.26 <=0.0.94",
       "severity": "error",
       "component": "function",
       "path": "attributes.onExecutionTasks[]",
       "title": "In a function with multiple onExecutionTasks, every ScriptContext.TaskResponse slot carried the LAST executed task's payload: SetStandardResponse aliased each response tree into the shared Body, and the in-place expando merge of the next task's response rewrote the earlier slots. Output scripts reading TaskResponse composed the wrong response; OutputResponse slots (re-serialized snapshots) were unaffected.",
-      "workaround": "Read task results from ScriptContext.OutputResponse[variableName] instead of TaskResponse, or publish the function with a single task. Fixed on master 2026-09-22 (TaskResponse slots isolated per task; duplicate normalized task keys rejected at publish) — fixedIn and the affectedVersions upper bound are stamped when the release containing the fix is cut.",
-      "fixedIn": null
+      "workaround": "Read task results from ScriptContext.OutputResponse[variableName] instead of TaskResponse, or publish the function with a single task. Fixed in 0.0.95 (#1025): TaskResponse slots are isolated per task and duplicate normalized task keys are rejected at publish.",
+      "fixedIn": "0.0.95"
     },
     {
       "id": "async-transition-oversized-body-stuck-busy",

@@ -34,7 +34,8 @@ public sealed class GetSchemaInput: IHasDomain
     public Dictionary<string, string?>? QueryParameters { get; set; }
 
     /// <summary>
-    /// Caller roles, used to enforce state/workflow queryRoles visibility.
+    /// Caller roles. Scope the schema-function cache and are forwarded on a subflow descent; there is no
+    /// queryRoles gate on this read.
     /// </summary>
     public IReadOnlyList<string>? Roles { get; set; }
 

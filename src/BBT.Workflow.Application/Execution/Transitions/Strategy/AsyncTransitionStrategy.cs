@@ -367,7 +367,11 @@ public sealed class AsyncTransitionStrategy(
             Headers = context.Headers,
             RouteValues = context.RouteValues,
             ExecutionActor = context.Actor,
-            CallerSync = false,
+            // Carry the caller's TRUE intent, not a hardcoded false. Before #1003 the async strategy only
+            // ran when Mode==CallerMode, so false was always right; now a definition can force Mode=Async
+            // while the caller asked sync (CallerMode=Sync), and that intent must survive the job boundary
+            // so the child's terminal signal reports the way its original caller asked (TransitionJobPayload).
+            CallerSync = context.CallerMode == ExecMode.Sync,
             TraceParent = activity?.Id,
             TraceState = activity?.TraceStateString,
             // Anchor = the request's lane (the ASP.NET server span), so this hop and every hop the
@@ -433,6 +437,11 @@ public sealed class AsyncTransitionStrategy(
             CorrelationId = transContext.CorrelationId,
             ChainDepth = transContext.ChainDepth,
             SubflowChainReserved = subflowChainReserved,
+            // #1003: preserve the caller's real intent across the outbox hop, mirroring BuildDirectPayload.
+            // A definition can force Mode=Async while the caller asked sync (CallerMode=Sync); without
+            // this the rebuilt payload's CallerSync would default false and the terminal signal would
+            // report async for a sync caller.
+            CallerSync = context.CallerMode == ExecMode.Sync,
             RootInstanceId = transContext.Instance?.GetRootInstanceId()
         };
     }

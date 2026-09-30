@@ -66,8 +66,13 @@ public sealed class StateFunctionCache(
     /// it takes a version. It needs no new fingerprint member: both paths that clear the token (an
     /// acknowledge and the fallback job) resume the pipeline and therefore move <c>Status</c>, which
     /// the fingerprint already covers.
+    /// v12 started carrying <c>annotations</c> on the <c>kind: "scheduled"</c> entries (from the
+    /// transition definition, resolved via the job's source state) and on the <c>timeout</c> block
+    /// (from the effective timeout, parent override included). Both are properties of the flow
+    /// version, which <see cref="InstanceStateFingerprint.FlowVersion"/> already covers, so — like
+    /// <c>hasFunctions</c> — only the shape change needed invalidating, not the value.
     /// </remarks>
-    private const string ResponseShapeVersion = "v11";
+    private const string ResponseShapeVersion = "v12";
 
     private const string KeyPrefix = $"state-fn:{ResponseShapeVersion}:";
 

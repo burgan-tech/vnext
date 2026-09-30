@@ -106,7 +106,11 @@ public sealed class InstanceController(
         }
 
         var result = await commandAppService.StartAsync(input, cancellationToken);
-        return InstanceResponseActionResultMapper.ToActionResult(result, HttpContext, async: !sync);
+        // Shape 200 vs 202 by the EFFECTIVE mode (#1003): a flow/transition executionType definition may
+        // have overridden the caller's sync query parameter. When the execution path did not determine it
+        // (null — e.g. an idempotent early return that ran no pipeline) or on failure, fall back to the query param.
+        return InstanceResponseActionResultMapper.ToActionResult(
+            result, HttpContext, async: (result.IsSuccess ? result.Value?.ExecutedAsync : null) ?? !sync);
     }
 
     [ApiExplorerSettings(IgnoreApi = true)]
@@ -587,7 +591,10 @@ public sealed class InstanceController(
             Headers = continuation.Headers,
             RouteValues = continuation.RouteValues,
             ExecutionActor = actor,
-            CallerSync = false,
+            // #1003: relay the caller's sync/async intent from the outbox event rather than hardcoding
+            // false. An event written before this field existed deserializes to false — the pre-#1003
+            // behaviour — so callers with no executionType are unaffected.
+            CallerSync = continuation.CallerSync,
             TraceParent = continuation.TraceParent,
             TraceState = continuation.TraceState,
             // Pure transport hop: relay the lane verbatim, never re-anchor. Re-anchoring here would
@@ -670,7 +677,11 @@ public sealed class InstanceController(
             input,
             cancellationToken);
 
-        return InstanceResponseActionResultMapper.ToActionResult(result, HttpContext, async: !sync);
+        // Shape 200 vs 202 by the EFFECTIVE mode (#1003): a flow/transition executionType definition may
+        // have overridden the caller's sync query parameter. When the execution path did not determine it
+        // (null) or on failure, fall back to the query param.
+        return InstanceResponseActionResultMapper.ToActionResult(
+            result, HttpContext, async: (result.IsSuccess ? result.Value?.ExecutedAsync : null) ?? !sync);
     }
 
     /// <summary>
@@ -973,9 +984,70 @@ public sealed class InstanceController(
     }
 
     /// <summary>
+    /// Click-to-fetch execution metrics for one transition of an instance: every firing of that
+    /// transition as an attempt, each carrying the tasks that ran under it (duration, status, hook).
+    /// Read-only over the already-journaled transition/task rows (vnext-client-sdk-core#60).
+    /// </summary>
+    /// <param name="domain">Domain key</param>
+    /// <param name="workflow">Workflow key</param>
+    /// <param name="instance">Instance id or business key</param>
+    /// <param name="transitionKey">Transition definition key to group firings by</param>
+    /// <param name="cancellationToken">Cancellation token</param>
+    [HttpGet("{domain}/workflows/{workflow}/instances/{instance}/transitions/{transitionKey}/metrics")]
+    public async Task<IActionResult> GetTransitionMetricsAsync(
+        [FromRoute] string domain,
+        [FromRoute] string workflow,
+        [FromRoute] string instance,
+        [FromRoute] string transitionKey,
+        CancellationToken cancellationToken = default)
+    {
+        var input = new GetTransitionMetricsInput
+        {
+            Domain = domain,
+            Workflow = workflow,
+            Instance = instance,
+            TransitionKey = transitionKey
+        };
+
+        var response = await queryAppService.GetTransitionMetricsAsync(input, cancellationToken);
+        return response.ToActionResult(HttpContext);
+    }
+
+    /// <summary>
+    /// Click-to-fetch execution metrics for one state of an instance: every visit (entry→exit) as an
+    /// attempt, each carrying the state's onEntry and onExit tasks. Read-only over the already-journaled
+    /// transition/task rows (vnext-client-sdk-core#60).
+    /// </summary>
+    /// <param name="domain">Domain key</param>
+    /// <param name="workflow">Workflow key</param>
+    /// <param name="instance">Instance id or business key</param>
+    /// <param name="stateKey">State key whose visits to return</param>
+    /// <param name="cancellationToken">Cancellation token</param>
+    [HttpGet("{domain}/workflows/{workflow}/instances/{instance}/states/{stateKey}/metrics")]
+    public async Task<IActionResult> GetStateMetricsAsync(
+        [FromRoute] string domain,
+        [FromRoute] string workflow,
+        [FromRoute] string instance,
+        [FromRoute] string stateKey,
+        CancellationToken cancellationToken = default)
+    {
+        var input = new GetStateMetricsInput
+        {
+            Domain = domain,
+            Workflow = workflow,
+            Instance = instance,
+            StateKey = stateKey
+        };
+
+        var response = await queryAppService.GetStateMetricsAsync(input, cancellationToken);
+        return response.ToActionResult(HttpContext);
+    }
+
+    /// <summary>
     /// Pages the error-boundary incident history of an instance, newest first. This is the target of
-    /// the state function's <c>incident.history.href</c>. Gated by the same <c>queryRoles</c> check as
-    /// the state function; stack traces are never returned here (operators use the Monitor API).
+    /// the state function's <c>incident.history.href</c>. Not gated here: <c>queryRoles</c> is answered
+    /// by <c>authorize?queryRoles=true</c>, which the gateway consults before forwarding. Stack traces are
+    /// never returned here (operators use the Monitor API).
     /// </summary>
     /// <param name="domain">Domain key</param>
     /// <param name="workflow">Workflow key</param>
@@ -994,8 +1066,7 @@ public sealed class InstanceController(
     {
         var requestContext = HttpContext.GetRequestBindingContext();
 
-        // Same provider-resolved roles as the state/data functions so the queryRoles gate evaluates
-        // the caller consistently across the surfaces that describe one instance.
+        // Same provider-resolved roles as the state/data functions; the read has no role gate of its own.
         var callerRoles = await callerRoleResolver.ResolveRolesAsync(requestContext.Headers, cancellationToken);
         if (!callerRoles.IsSuccess)
             return FromResult(BBT.Aether.Results.Result.Fail(callerRoles.Error));
@@ -1018,9 +1089,9 @@ public sealed class InstanceController(
 
     /// <summary>
     /// Returns the newest unresolved error-boundary incident of an instance. This is the target of the
-    /// <c>incident.active</c> link carried by the state function and by instance metadata. Gated by the
-    /// same <c>queryRoles</c> check as the state function; stack traces are never returned here
-    /// (operators use the Monitor API).
+    /// <c>incident.active</c> link carried by the state function and by instance metadata. Not gated here:
+    /// <c>queryRoles</c> is answered by <c>authorize?queryRoles=true</c>. Stack traces are never returned
+    /// here (operators use the Monitor API).
     /// </summary>
     /// <remarks>
     /// Answers <c>404</c> when no incident is open, which is a normal outcome rather than a failure:
@@ -1070,8 +1141,8 @@ public sealed class InstanceController(
     {
         var requestContext = HttpContext.GetRequestBindingContext();
 
-        // Resolved through the configured provider so this route and the `data` function handler agree
-        // about the same instance; without it the queryRoles gate would evaluate a role-less caller.
+        // Resolved through the configured provider so this route and the `data` function handler prune
+        // the same x-roles fields and share the same cache scope for the same caller.
         var callerRoles = await callerRoleResolver.ResolveRolesAsync(requestContext.Headers, cancellationToken);
         if (!callerRoles.IsSuccess)
             return FromResult(BBT.Aether.Results.Result.Fail(callerRoles.Error));

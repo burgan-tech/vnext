@@ -148,6 +148,45 @@ public class ComponentValidatorProcessorTests
     }
 
     /// <summary>
+    /// A flow shipped with a wrong <c>executionType</c> value (vnext#1003) must publish as a validation
+    /// failure carrying the real "Unknown execution type" message — not an opaque HTTP 500. The value
+    /// object is resolved through <c>FromCode</c> via reflection, so a thrown <see cref="ArgumentException"/>
+    /// arrives wrapped in <c>TargetInvocationException</c>; this pins that the converter unwraps it and the
+    /// processor's <see cref="ArgumentException"/> catch (which produces the clean, field-scoped error)
+    /// therefore fires. Deserialization fails before <see cref="WorkflowValidator"/> runs, so the
+    /// validator is never reached (deserialization throws first).
+    /// </summary>
+    [Fact]
+    public void Validate_ShouldReturnValidationError_WhenFlowExecutionTypeValueIsUnknown()
+    {
+        var mockWorkflowValidator = new Mock<WorkflowValidator>();
+        var processor = new ComponentValidatorProcessor(
+            new[] { (IComponentValidator)new FlowComponentValidator(mockWorkflowValidator.Object) });
+
+        var attributes = JsonDocument.Parse(
+            """
+            {
+                "key": "test-flow",
+                "domain": "test-domain",
+                "version": "1.0.0",
+                "flow": "sys-flows",
+                "type": "F",
+                "executionType": "MAYBE",
+                "states": [
+                    { "key": "initial", "stateType": "I" },
+                    { "key": "completed", "stateType": "C" }
+                ],
+                "startTransition": { "key": "start", "target": "initial" }
+            }
+            """).RootElement;
+
+        var result = processor.Validate(RuntimeSysSchemaInfo.Flows, attributes);
+
+        result.IsValid.ShouldBeFalse();
+        result.ValidationErrors.ShouldHaveSingleItem().ErrorMessage.ShouldContain("Unknown execution type");
+    }
+
+    /// <summary>
     /// The counterpart guard: only authoring errors become validation failures. A genuine fault must
     /// still escape and be reported as a server error — turning real faults into 400s would be worse
     /// than the bug this catch fixes.

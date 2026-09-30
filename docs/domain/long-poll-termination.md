@@ -187,3 +187,26 @@ error-boundary and auto-chained transitions must never pause.
   preserve the shared lock-key, validation-bypass, and busy-confirmation behavior.
 - The instance stays Busy during the ack window; do not re-mark Busy on long-poll resume (a redundant
   resume must not strand an already-advanced instance).
+
+## Parent override
+
+When the instance is a SubFlow child, its parent may override `fallbackTimeoutSeconds` and `roles`
+per child state (`overrides.states.<state>.interaction.longPoll`, field-level). Every reader goes
+through `Instance.ResolveEffectiveLongPoll` — never `State.LongPollFallbackTimeoutSeconds` /
+`LongPollAckRoles` directly. `terminate` and `rule` are not overridable. Details:
+[SubFlow Overrides](subflow-overrides.md).
+
+**Roles on a runtime-started child are the consumer's responsibility.** The arm step decides
+ownership from the headers of the request that entered the state. A SubFlow child started by the
+runtime receives only the headers its parent's input mapping supplies, so a child state with
+`interaction.longPoll.roles` pauses only if that mapping forwards the caller's role headers. This is
+deliberate: which caller owns a child's pause is a business decision of the consuming parent, and
+the runtime does not carry or infer caller roles across the subflow start on its own.
+
+## Fallback deadline on the job row
+
+The tracked `InstanceJobs` row of the acknowledge fallback (`JobType.LongPollAck`) carries
+`ExecuteAt` — the same instant the Dapr job is armed with, computed from the effective window
+(state's own or the parent's override). It is persisted for operations and diagnostics only: the
+state body's scheduled entries read `ScheduledTransition` rows and the `timeout` block reads the
+`Timeout` row, so this row never appears on a read surface.

@@ -134,6 +134,17 @@ public static class TelemetryConstants
         public const string AuthPosition = "vnext.auth.position";
         /// <summary>Provider HTTP status when the call failed with a response rather than an exception.</summary>
         public const string AuthProviderStatusCode = "vnext.auth.provider.status_code";
+        /// <summary>
+        /// Why a <c>failed</c> resolution failed — one of <see cref="AuthFailureKinds"/>. A failure
+        /// resolves to an empty role set, so this is what tells an outage (<c>timeout</c>,
+        /// <c>transport</c>, <c>http_status</c>) apart from a provider defect (<c>parse</c>) in a trace
+        /// where every one of them looks like a caller who holds nothing.
+        /// </summary>
+        public const string AuthFailureKind = "vnext.auth.failure_kind";
+        /// <summary>
+        /// Which shape an <c>empty</c> answer took — one of <see cref="AuthEmptyReasons"/>.
+        /// </summary>
+        public const string AuthEmptyReason = "vnext.auth.empty_reason";
 
         /// <summary>
         /// 1-based level of a built-in function's descent into an active subflow. Depth 1 is the
@@ -325,6 +336,14 @@ public static class TelemetryConstants
         public const string SettleCas = "vnext.settle.cas";
 
         /// <summary>
+        /// Stamped (<c>true</c>) on the span awaiting the relay (the level above's <c>SubFlow.Forward</c>) when an intermediate level of a
+        /// SubFlow forward chain returned without its post-commit settlement: an identity-only relay
+        /// whose child is still non-terminal, so the parent's blocking correlation is open and the
+        /// settle reload could change nothing. Absent on every other settle.
+        /// </summary>
+        public const string SettleSkipped = "vnext.settle.skipped";
+
+        /// <summary>
         /// How the activation episode ended — see <see cref="ActivationOutcomes"/>. Stamped on
         /// <c>Instance.Activation/{key}</c>.
         /// </summary>
@@ -369,6 +388,26 @@ public static class TelemetryConstants
 
         /// <summary>On <c>Transition.Enqueue</c>: which delivery path the enqueue gateway took (<c>Direct</c> or <c>Outbox</c>).</summary>
         public const string EnqueuePath = "vnext.enqueue.path";
+
+        /// <summary>
+        /// The execution mode the CALLER requested (from the <c>sync</c> query parameter): <c>SYNC</c>/<c>ASYNC</c>.
+        /// vnext#1003. Compare with <see cref="ExecutionEffective"/> to find requests whose definition
+        /// overrode the caller (query for <c>requested != effective</c>).
+        /// </summary>
+        public const string ExecutionRequested = "vnext.execution.requested";
+
+        /// <summary>
+        /// The EFFECTIVE execution mode after applying the flow/transition <c>executionType</c> definition
+        /// (vnext#1003): <c>SYNC</c>/<c>ASYNC</c>. Equals <see cref="ExecutionRequested"/> unless a
+        /// definition overrode the caller's <c>sync</c> query parameter.
+        /// </summary>
+        public const string ExecutionEffective = "vnext.execution.effective";
+
+        /// <summary>
+        /// <c>true</c> when a flow/transition <c>executionType</c> definition overrode the caller's requested
+        /// mode (vnext#1003) — the flag to filter on to see "definition said X, caller sent Y".
+        /// </summary>
+        public const string ExecutionOverridden = "vnext.execution.overridden";
 
         /// <summary>Number of items in a fan-out batch.</summary>
         public const string FanOutItemCount = "vnext.fanout.item.count";
@@ -807,8 +846,49 @@ public static class TelemetryConstants
         /// like a 403 caused by a caller whose roles simply did not match.
         /// </summary>
         public const string Empty = "empty";
-        /// <summary>The provider could not be reached or did not answer usably; the request fails closed.</summary>
+        /// <summary>
+        /// The provider could not be reached or did not answer usably. The role set resolves to empty
+        /// and the request continues; <see cref="TagNames.AuthFailureKind"/> says why.
+        /// </summary>
         public const string Failed = "failed";
+        /// <summary>
+        /// No provider call was made because the request carried a <c>role</c> header: those roles are
+        /// the caller's set (2026-09-25 committee decision). Not an error.
+        /// </summary>
+        public const string Header = "header";
+        /// <summary>
+        /// No provider call was made: the caller carried neither <c>act_sub</c> nor <c>client_id</c>
+        /// (an anonymous or device token), so there was nobody to ask about. Resolves to empty.
+        /// </summary>
+        public const string Skipped = "skipped";
+    }
+
+    /// <summary>
+    /// Values for <see cref="TelemetryConstants.TagNames.AuthFailureKind"/>.
+    /// </summary>
+    public static class AuthFailureKinds
+    {
+        /// <summary>The provider answered with a non-success HTTP status.</summary>
+        public const string HttpStatus = "http_status";
+        /// <summary>The call did not complete within the HttpClient timeout.</summary>
+        public const string Timeout = "timeout";
+        /// <summary>The call failed below HTTP — connection refused, DNS, TLS.</summary>
+        public const string Transport = "transport";
+        /// <summary>A success status whose body carried no recognizable roles array.</summary>
+        public const string Parse = "parse";
+    }
+
+    /// <summary>
+    /// Values for <see cref="TelemetryConstants.TagNames.AuthEmptyReason"/>.
+    /// </summary>
+    public static class AuthEmptyReasons
+    {
+        /// <summary><c>204 No Content</c>.</summary>
+        public const string NoContent = "no_content";
+        /// <summary>A success status with a blank body.</summary>
+        public const string EmptyBody = "empty_body";
+        /// <summary>A recognizable roles array with no non-blank entry.</summary>
+        public const string EmptyArray = "empty_array";
     }
 
     /// <summary>

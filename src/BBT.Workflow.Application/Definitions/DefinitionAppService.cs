@@ -81,6 +81,14 @@ public sealed class DefinitionAppService(
     {
         var validationResult = componentValidatorProcessor.Validate(input.Flow, input.Attributes);
 
+        foreach (var warning in validationResult.Warnings)
+        {
+            Logger.ComponentValidationWarning(
+                input.Flow,
+                warning.MemberNames.FirstOrDefault() ?? "unknown",
+                warning.ErrorMessage ?? string.Empty);
+        }
+
         if (!validationResult.IsValid)
         {
             foreach (var error in validationResult.ValidationErrors)
@@ -255,6 +263,14 @@ public sealed class DefinitionAppService(
         if (!componentValidatorProcessor.TryValidate(componentType, dataItem.Attributes, out var validationResult))
         {
             return Result.Ok();
+        }
+
+        foreach (var warning in validationResult.Warnings)
+        {
+            Logger.ComponentValidationWarning(
+                componentType,
+                warning.MemberNames.FirstOrDefault() ?? "unknown",
+                warning.ErrorMessage ?? string.Empty);
         }
 
         if (!validationResult.IsValid)

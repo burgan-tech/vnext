@@ -59,4 +59,11 @@ public sealed class InstanceTimeoutOutput
     /// past for a moment while a fired timeout's pipeline is still settling.
     /// </summary>
     public DateTime ExecuteAtUtc { get; set; }
+
+    /// <summary>
+    /// The effective timeout's <c>annotations</c> (<c>timeout.annotations</c>, or the parent-supplied
+    /// SubFlow override's when the instance was started with one — the override replaces, it does not
+    /// merge). Pure passthrough for client UI context; null — and omitted — when none are declared.
+    /// </summary>
+    public Dictionary<string, string>? Annotations { get; set; }
 }

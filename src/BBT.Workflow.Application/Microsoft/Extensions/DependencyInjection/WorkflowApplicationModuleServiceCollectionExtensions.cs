@@ -18,6 +18,7 @@ using BBT.Workflow.BackgroundJobs;
 using BBT.Workflow.Events;
 using BBT.Workflow.Functions;
 using BBT.Workflow.Functions.Contracts;
+using Microsoft.Extensions.Options;
 using BBT.Workflow.Functions.Validation;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -113,6 +114,18 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
         services.AddScoped<IFunctionAccessPolicy, FunctionAccessPolicy>();
         services.AddScoped<IFunctionRequestValidationService, FunctionRequestValidationService>();
         services.AddScoped<IFunctionAppService, FunctionAppService>();
+        // Journal tunables (Workflow:FunctionExecutionJournal): QueueCapacity + BatchSize.
+        services.AddOptions<FunctionExecutionJournalOptions>()
+            .BindConfiguration(FunctionExecutionJournalOptions.SectionName);
+        // Singleton: the journal is a process-wide bounded queue shared by the producer (the function
+        // path, via IFunctionExecutionJournal) and the background writer (which reads the concrete type's
+        // ChannelReader). Registering the concrete once and forwarding the interface keeps them one instance.
+        // Capacity is read once here — a bounded channel's bound is fixed for the process's life.
+        services.AddSingleton<FunctionExecutionJournal>(sp =>
+            new FunctionExecutionJournal(
+                sp.GetRequiredService<IOptions<FunctionExecutionJournalOptions>>().Value.QueueCapacity));
+        services.AddSingleton<IFunctionExecutionJournal>(sp => sp.GetRequiredService<FunctionExecutionJournal>());
+        services.AddScoped<IFunctionMetricsAppService, FunctionMetricsAppService>();
         services.AddScoped<IFunctionInfoAppService, FunctionInfoAppService>();
         services.AddScoped<IEventAppService, EventAppService>();
         services.AddScoped<IInstanceSelectorResolver, InstanceSelectorResolver>();

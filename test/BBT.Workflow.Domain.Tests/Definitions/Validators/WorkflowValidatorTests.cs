@@ -1588,5 +1588,112 @@ public class WorkflowValidatorTests : DomainTestBase<DomainEntryPoint>
     }
 
     #endregion
+
+    #region SubFlow Override Validation Tests
+
+    private static WorkflowDefinition WorkflowWithOverrides(string overridesJson, string legacyViewOverrides = "")
+    {
+        var json = $$"""
+        {
+            "type": "F",
+            "labels": [{"label": "Test", "language": "en"}],
+            "startTransition": { "key": "start", "target": "start", "triggerType": "manual", "versionStrategy": "Minor",
+                                 "labels": [{"label": "Start", "language": "en"}], "onExecutionTasks": [] },
+            "states": [
+                { "key": "start", "stateType": "initial", "labels": [{"label": "Start", "language": "en"}] },
+                { "key": "waiting", "stateType": "subflow", "labels": [{"label": "Waiting", "language": "en"}],
+                  "subFlow": {
+                    "type": "S",
+                    "process": {"key": "sub", "domain": "d", "flow": "sys-flows", "version": "1.0.0"},
+                    "mapping": { "location": "./src/X.csx", "code": "cmV0dXJuIHRydWU7" }{{legacyViewOverrides}},
+                    "overrides": {{overridesJson}}
+                  } },
+                { "key": "done", "stateType": "finish", "labels": [{"label": "Done", "language": "en"}] }
+            ]
+        }
+        """;
+        return DeserializeWorkflow(json);
+    }
+
+    private const string ViewRef = """{"key":"corp-view","domain":"d","flow":"sys-views","version":"1.0.0"}""";
+
+    [Fact]
+    public void Validate_ShouldFail_WhenLongPollOverrideWindowIsBelowOne()
+    {
+        var result = _validator.Validate(WorkflowWithOverrides(
+            """{"states":{"otp":{"interaction":{"longPoll":{"fallbackTimeoutSeconds":0}}}}}"""));
+
+        result.ValidationErrors.ShouldContain(e =>
+            e.MemberNames.Contains("Workflow.States[waiting].SubFlow.Overrides.States[otp].Interaction.LongPoll.FallbackTimeoutSeconds"));
+    }
+
+    [Fact]
+    public void Validate_ShouldFail_WhenLongPollOverrideRoleIsAMalformedDynamicGrant()
+    {
+        var result = _validator.Validate(WorkflowWithOverrides(
+            """{"states":{"otp":{"interaction":{"longPoll":{"roles":[{"role":"$user.customer","grant":"allow"}]}}}}}"""));
+
+        result.ValidationErrors.ShouldContain(e => e.ErrorMessage!.Contains("$user.customer"));
+    }
+
+    [Fact]
+    public void Validate_ShouldWarnButPass_WhenLongPollOverrideRolesAreEmpty()
+    {
+        var result = _validator.Validate(WorkflowWithOverrides(
+            """{"states":{"otp":{"interaction":{"longPoll":{"roles":[]}}}}}"""));
+
+        result.IsValid.ShouldBeTrue();
+        result.Warnings.ShouldContain(w =>
+            w.MemberNames.Contains("Workflow.States[waiting].SubFlow.Overrides.States[otp].Interaction.LongPoll.Roles"));
+    }
+
+    [Fact]
+    public void Validate_ShouldFail_WhenNewViewOverridesAreMixedWithLegacyOverridesViews()
+    {
+        var overridesJson = """{"views":{"a":""" + ViewRef + """},"states":{"otp":{"views":{"b":""" + ViewRef + """}}}}""";
+
+        var result = _validator.Validate(WorkflowWithOverrides(overridesJson));
+
+        result.ValidationErrors.ShouldContain(e => e.MemberNames.Contains("Workflow.States[waiting].SubFlow.Overrides"));
+    }
+
+    [Fact]
+    public void Validate_ShouldFail_WhenNewTransitionViewOverridesAreMixedWithLegacyViewOverrides()
+    {
+        var overridesJson = """{"transitions":{"confirm":{"views":{"b":""" + ViewRef + """}}}}""";
+        var legacyViewOverrides = """, "viewOverrides": {"a":""" + ViewRef + """}""";
+
+        var result = _validator.Validate(WorkflowWithOverrides(overridesJson, legacyViewOverrides));
+
+        result.ValidationErrors.ShouldContain(e => e.MemberNames.Contains("Workflow.States[waiting].SubFlow.Overrides"));
+    }
+
+    [Fact]
+    public void Validate_ShouldPass_WhenOnlyNewScopedOverridesAreUsed()
+    {
+        var overridesJson =
+            """{"states":{"otp":{"queryRoles":[{"role":"ops","grant":"allow"}],"interaction":{"longPoll":{"fallbackTimeoutSeconds":180}},"views":{"otp-view":"""
+            + ViewRef
+            + """}}},"transitions":{"confirm":{"views":{"confirm-modal":"""
+            + ViewRef
+            + """}}}}""";
+
+        var result = _validator.Validate(WorkflowWithOverrides(overridesJson));
+
+        result.ValidationErrors.ShouldNotContain(e => e.MemberNames.Any(m => m.Contains(".SubFlow.Overrides")));
+        result.Warnings.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void Validate_ShouldPass_WhenOnlyLegacyViewOverridesAreUsed()
+    {
+        var overridesJson = """{"views":{"a":""" + ViewRef + """}}""";
+
+        var result = _validator.Validate(WorkflowWithOverrides(overridesJson));
+
+        result.ValidationErrors.ShouldNotContain(e => e.MemberNames.Any(m => m.Contains(".SubFlow.Overrides")));
+    }
+
+    #endregion
 }
 

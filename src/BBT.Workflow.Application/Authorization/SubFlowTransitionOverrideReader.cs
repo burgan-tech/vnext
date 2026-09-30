@@ -1,8 +1,5 @@
-using System.Text.Json;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Instances;
-using BBT.Workflow.Shared;
-using BBT.Workflow.Shared;
 
 namespace BBT.Workflow.Authorization;
 
@@ -59,33 +56,5 @@ public static class SubFlowTransitionOverrideReader
     /// Returns the stamped override map, or null when the instance carries none or it cannot be read.
     /// </summary>
     public static Dictionary<string, SubFlowTransitionOverride>? TryRead(Instance instance)
-    {
-        if (!instance.ExtraProperties.TryGetValue(DomainConsts.MetaDataKeys.TransitionRoleOverrides, out var raw)
-            || raw is null)
-        {
-            return null;
-        }
-
-        var json = raw.ToString();
-        if (string.IsNullOrWhiteSpace(json))
-            return null;
-
-        try
-        {
-            // The shared options, not the defaults. RoleGrant's [JsonConstructor] takes role/grant and
-            // its properties are PascalCase, so a case-sensitive read leaves Role null and its
-            // Check.NotNullOrWhiteSpace throws — the stamp would look malformed and every override
-            // would silently fall back. Found while giving the state map its reader.
-            return JsonSerializer.Deserialize<Dictionary<string, SubFlowTransitionOverride>>(
-                json, JsonSerializerConstants.JsonOptions);
-        }
-        catch (JsonException)
-        {
-            // Malformed stamp. On the single-instance state function an exception here costs one
-            // response; in the list it would take a whole flow's fan-out contribution with it, so
-            // this degrades to "no overrides" — which falls back to the transition's own grants
-            // rather than to allowing everything.
-            return null;
-        }
-    }
+        => SubFlowOverrideStamp.ReadTransitions(instance.ExtraProperties, out _);
 }

@@ -45,7 +45,8 @@ public sealed class GetInstanceStateInput : IHasDomain
     public string? Role { get; set; }
 
     /// <summary>
-    /// Caller roles, used to enforce state/workflow queryRoles visibility (multi-role: any allowed → allow).
+    /// Caller roles (the whole set). Filter the offered transitions, pick the state alias, gate the
+    /// interaction block and scope the cache; there is no queryRoles gate on this read.
     /// </summary>
     public IReadOnlyList<string>? Roles { get; set; }
 }

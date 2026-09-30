@@ -437,8 +437,8 @@ public sealed class InstanceQueryAppService(
     /// <b>404 is a normal answer here, not an error.</b> The link is emitted only while the flag says
     /// an incident is open, but the incident can be resolved between the poll and the follow-up (a
     /// successful retry does exactly that). A client seeing 404 should re-read the state rather than
-    /// treat it as a failure. Gated by the same <c>queryRoles</c> check as the state function and the
-    /// history endpoint, and like them it never returns a stack trace.
+    /// treat it as a failure. Not gated here — <c>queryRoles</c> is answered by
+    /// <c>authorize?queryRoles=true</c> — and, like the history endpoint, it never returns a stack trace.
     /// </remarks>
     public async Task<Result<IncidentDetailDto>> GetActiveInstanceIncidentAsync(
         GetActiveInstanceIncidentInput input,
@@ -480,6 +480,9 @@ public sealed class InstanceQueryAppService(
     {
         runtimeInfoProvider.Check(input.Domain);
 
+        using var read = InstanceReadActivityHelper.StartRead(
+            InstanceReadKinds.TaskHistory, input.Domain, input.Workflow);
+
         return await GetInstanceByIdOrKeyAsync(input.Instance, cancellationToken)
             .BindAsync(instance =>
                 componentCacheStore.GetFlowAsync(input.Domain, input.Workflow, instance.FlowVersion, cancellationToken)
@@ -511,6 +514,9 @@ public sealed class InstanceQueryAppService(
     {
         runtimeInfoProvider.Check(input.Domain);
 
+        using var read = InstanceReadActivityHelper.StartRead(
+            InstanceReadKinds.ActionHistory, input.Domain, input.Workflow);
+
         return await GetInstanceByIdOrKeyAsync(input.Instance, cancellationToken)
             .BindAsync(instance =>
                 componentCacheStore.GetFlowAsync(input.Domain, input.Workflow, instance.FlowVersion, cancellationToken)
@@ -535,6 +541,201 @@ public sealed class InstanceQueryAppService(
                     Items = actions.Select(InstanceTaskActionDto.FromAction).ToList()
                 });
             });
+    }
+
+    public async Task<Result<GetInstanceMetricsOutput>> GetTransitionMetricsAsync(
+        GetTransitionMetricsInput input,
+        CancellationToken cancellationToken = default)
+    {
+        runtimeInfoProvider.Check(input.Domain);
+
+        using var read = InstanceReadActivityHelper.StartRead(
+            InstanceReadKinds.TransitionMetrics, input.Domain, input.Workflow);
+
+        return await GetInstanceByIdOrKeyAsync(input.Instance, cancellationToken)
+            .BindAsync(async instance =>
+            {
+                using var instanceScope = BeginInstanceScope(instance);
+
+                // Slim rows only (no Body/Header jsonb), filtered to this transition key in SQL so a
+                // single-key read does not materialize the instance's whole transition history. Every
+                // matching row is one firing — one attempt — 1:1 with the history firings.
+                var firings = await instanceTransitionRepository
+                    .GetByInstanceAndTransitionKeyAsReadOnlyAsync(
+                        instance.Id, input.TransitionKey, cancellationToken);
+
+                var tasksByRecord = await LoadMetricsTasksAsync(
+                    firings.Select(r => r.Id), cancellationToken);
+
+                var attempts = firings
+                    .Select((record, index) => new MetricsAttemptDto
+                    {
+                        Seq = index + 1,
+                        StartedAt = record.StartedAt,
+                        FinishedAt = record.FinishedAt,
+                        DurationMs = record.Duration?.TotalMilliseconds,
+                        TriggerType = record.TriggerType,
+                        TriggeredBy = record.CreatedBy,
+                        // Every task journaled under this firing, any hook — the transition's own
+                        // onExecute plus the adjacent states' onExit/onEntry that ran in the same
+                        // record. Hook tells them apart; the client groups by it.
+                        Tasks = OrderMetricsTasks(tasksByRecord[record.Id])
+                    })
+                    .ToList();
+
+                return Result<GetInstanceMetricsOutput>.Ok(new GetInstanceMetricsOutput
+                {
+                    Element = new MetricsElementDto { Kind = "transition", Key = input.TransitionKey },
+                    Count = attempts.Count,
+                    Attempts = attempts
+                });
+            });
+    }
+
+    public async Task<Result<GetInstanceMetricsOutput>> GetStateMetricsAsync(
+        GetStateMetricsInput input,
+        CancellationToken cancellationToken = default)
+    {
+        runtimeInfoProvider.Check(input.Domain);
+
+        using var read = InstanceReadActivityHelper.StartRead(
+            InstanceReadKinds.StateMetrics, input.Domain, input.Workflow);
+
+        return await GetInstanceByIdOrKeyAsync(input.Instance, cancellationToken)
+            .BindAsync(async instance =>
+            {
+                using var instanceScope = BeginInstanceScope(instance);
+
+                // Unlike transition-metrics, this cannot filter by a single key in SQL: a visit is
+                // bounded by the transition that ENTERED the state and the (differently-keyed) one that
+                // LEFT it, so the whole timeline is needed to pair them. Slim rows only (no jsonb), and
+                // an instance's transition count bounds the read.
+                var records = await instanceTransitionRepository
+                    .GetByInstanceIdAsReadOnlyAsync(instance.Id, cancellationToken);
+
+                // Pair the timeline into visits: the transition that ENTERED the state (ToState==key)
+                // carries the onEntry tasks; the next transition that LEFT it (FromState==key) carries
+                // the onExit tasks. A visit still open (entered, not yet left) has no leaving record.
+                var visits = PairStateVisits(records, input.StateKey);
+
+                var relevantRecordIds = visits
+                    .SelectMany(v => v.Leaving is null
+                        ? new[] { v.Entering.Id }
+                        : new[] { v.Entering.Id, v.Leaving.Id });
+
+                var tasksByRecord = await LoadMetricsTasksAsync(relevantRecordIds, cancellationToken);
+
+                var attempts = visits
+                    .Select((visit, index) =>
+                    {
+                        // onEntry from the entering record; onExit from the leaving record. Filtering by
+                        // hook is what separates them from the other tasks those same records also ran
+                        // (the transition's onExecute, the other state's lifecycle). Legacy rows with a
+                        // null hook cannot be classified into a phase and are omitted here.
+                        var entryTasks = tasksByRecord[visit.Entering.Id]
+                            .Where(t => t.Hook == Definitions.TaskTrigger.OnEntry);
+                        var exitTasks = visit.Leaving is null
+                            ? Enumerable.Empty<InstanceTaskMetricsRow>()
+                            : tasksByRecord[visit.Leaving.Id]
+                                .Where(t => t.Hook == Definitions.TaskTrigger.OnExit);
+
+                        // Entry into the state is when the entering transition finished (onEntry ran as
+                        // part of it); leaving is when the leaving transition started.
+                        var enteredAt = visit.Entering.FinishedAt ?? visit.Entering.StartedAt;
+                        var leftAt = visit.Leaving?.StartedAt;
+
+                        return new MetricsAttemptDto
+                        {
+                            Seq = index + 1,
+                            StartedAt = enteredAt,
+                            FinishedAt = leftAt,
+                            DurationMs = leftAt is { } left ? (left - enteredAt).TotalMilliseconds : null,
+                            TriggerType = visit.Entering.TriggerType,
+                            TriggeredBy = visit.Entering.CreatedBy,
+                            Tasks = OrderMetricsTasks(entryTasks.Concat(exitTasks))
+                        };
+                    })
+                    .ToList();
+
+                return Result<GetInstanceMetricsOutput>.Ok(new GetInstanceMetricsOutput
+                {
+                    Element = new MetricsElementDto { Kind = "state", Key = input.StateKey },
+                    Count = attempts.Count,
+                    Attempts = attempts
+                });
+            });
+    }
+
+    /// <summary>
+    /// Loads the metrics task rows for a set of transition records and groups them by owning record.
+    /// A column projection — the jsonb payloads never leave the database. The lookup answers empty for
+    /// a record with no tasks, so callers can index it without a guard.
+    /// </summary>
+    private async Task<ILookup<Guid, InstanceTaskMetricsRow>> LoadMetricsTasksAsync(
+        IEnumerable<Guid> recordIds,
+        CancellationToken cancellationToken)
+    {
+        var ids = recordIds.Distinct().ToList();
+        if (ids.Count == 0)
+        {
+            // No attempts ⇒ no tasks; skip the query entirely.
+            return Enumerable.Empty<InstanceTaskMetricsRow>().ToLookup(t => t.TransitionId);
+        }
+
+        var rows = await instanceTaskRepository.GetMetricsRowsByTransitionIdsAsync(ids, cancellationToken);
+        return rows.ToLookup(t => t.TransitionId);
+    }
+
+    /// <summary>Execution order within an attempt: start time, then declared order, then a stable id tiebreak.</summary>
+    private static List<MetricsTaskDto> OrderMetricsTasks(IEnumerable<InstanceTaskMetricsRow> tasks) =>
+        tasks
+            .OrderBy(t => t.StartedAt)
+            .ThenBy(t => t.Order)
+            .ThenBy(t => t.Id)
+            .Select(MetricsTaskDto.FromRow)
+            .ToList();
+
+    /// <summary>
+    /// Walks the instance's transition records (already ordered by StartedAt) and pairs them into
+    /// visits of one state: a record with <c>ToState == stateKey</c> opens a visit (its onEntry tasks),
+    /// the next record with <c>FromState == stateKey</c> closes it (its onExit tasks). A self-loop
+    /// (<c>FromState == ToState == stateKey</c>) closes the open visit and opens a new one in the same
+    /// record. A visit left open at the end (entered, not yet left) has a null leaving record.
+    /// </summary>
+    private static List<(InstanceTransitionSlim Entering, InstanceTransitionSlim? Leaving)> PairStateVisits(
+        IReadOnlyList<InstanceTransitionSlim> records,
+        string stateKey)
+    {
+        var visits = new List<(InstanceTransitionSlim Entering, InstanceTransitionSlim? Leaving)>();
+        InstanceTransitionSlim? open = null;
+
+        foreach (var record in records)
+        {
+            if (open is not null && record.FromState == stateKey)
+            {
+                visits.Add((open, record));
+                open = null;
+            }
+
+            if (record.ToState == stateKey)
+            {
+                // Re-entry without an intervening exit shouldn't happen for a well-formed history, but
+                // if it does the earlier visit is closed half-open rather than silently dropped.
+                if (open is not null)
+                {
+                    visits.Add((open, null));
+                }
+
+                open = record;
+            }
+        }
+
+        if (open is not null)
+        {
+            visits.Add((open, null));
+        }
+
+        return visits;
     }
 
     public async Task<Result<GetInstanceIncidentsOutput>> GetInstanceIncidentsAsync(
@@ -739,8 +940,9 @@ public sealed class InstanceQueryAppService(
     {
         try
         {
-            // Unresolvable roles fall through to the main-flow transitions below rather than forwarding
-            // with an unknown role set — the subflow would then filter its transitions against nothing.
+            // Only a provider that cannot resolve its own failures reaches the fallback below: it serves
+            // the main-flow transitions rather than forwarding an unknown role set. Neither built-in
+            // provider fails — morph-idm's failures arrive here as an empty set and are forwarded.
             var callerRoles = await callerRoleResolver.ResolveRolesAsync(headers, cancellationToken);
             if (!callerRoles.IsSuccess)
                 return GetMainFlowTransitions(mainInstance, currentWorkflow);
@@ -1937,7 +2139,7 @@ public sealed class InstanceQueryAppService(
         // Scheduled entries ride in the same transitions list, appended after the caller-triggerable
         // ones; clients discriminate on kind ("scheduled" ⇒ executeAtUtc present).
         transitionItems.AddRange(BuildScheduledTransitionEntries(
-            activeScheduledTransitionJobs, input.Domain, input.Workflow, instance.Id.ToString()));
+            activeScheduledTransitionJobs, currentWorkflow, input.Domain, input.Workflow, instance.Id.ToString()));
 
         // The workflow-level deadline, as its own block rather than a transitions[] entry — it is
         // not a transition (see InstanceTimeoutOutput).
@@ -2036,9 +2238,16 @@ public sealed class InstanceQueryAppService(
     /// System-actor-gated at execution (<c>ActorAuthorizationSpecification</c>), so a client PATCHing
     /// it is rejected exactly as before.
     /// </para>
+    /// <para>
+    /// <c>annotations</c> are the transition definition's, resolved from the job's
+    /// <see cref="InstanceJob.SourceState"/> — scheduled transitions are only ever armed from a state's
+    /// own <c>ScheduledTransitions</c>, never from shared transitions. Unlike the three link flags this
+    /// is real content, not a placeholder; null when the state or transition no longer resolves.
+    /// </para>
     /// </summary>
     private IEnumerable<TransitionItem> BuildScheduledTransitionEntries(
         IReadOnlyCollection<InstanceJob> activeScheduledTransitionJobs,
+        Definitions.Workflow currentWorkflow,
         string domain,
         string workflow,
         string instanceId) =>
@@ -2061,8 +2270,22 @@ public sealed class InstanceQueryAppService(
                 {
                     Href = urlTemplateBuilder.BuildSchemaUrl(domain, workflow, instanceId, j.TransitionKey!),
                     HasSchema = false
-                }
+                },
+                Annotations = ResolveScheduledTransitionAnnotations(currentWorkflow, j)
             });
+
+    private static Dictionary<string, string>? ResolveScheduledTransitionAnnotations(
+        Definitions.Workflow workflow,
+        InstanceJob job)
+    {
+        if (string.IsNullOrEmpty(job.SourceState))
+            return null;
+
+        var stateResult = workflow.GetState(job.SourceState);
+        return stateResult.IsSuccess
+            ? stateResult.Value?.FindTransition(job.TransitionKey!)?.Annotations
+            : null;
+    }
 
     /// <summary>
     /// Builds the state body's <c>timeout</c> block, or null when the polled instance has no
@@ -2119,7 +2342,8 @@ public sealed class InstanceQueryAppService(
         {
             Key = effectiveTimeout.Key,
             Target = effectiveTimeout.Target,
-            ExecuteAtUtc = timeoutJob.ExecuteAt!.Value
+            ExecuteAtUtc = timeoutJob.ExecuteAt!.Value,
+            Annotations = effectiveTimeout.Annotations
         };
     }
 
@@ -2129,9 +2353,12 @@ public sealed class InstanceQueryAppService(
     /// state declares <c>interaction.longPoll</c> and the caller is admitted by its authorization arm —
     /// either the <c>roles</c> grants (default-allow when no roles configured) or the <c>rule</c>
     /// condition script; the two are alternatives, the validator rejects both. A failed rule evaluation
-    /// denies (fail-closed), same as notification rules. The <c>terminate</c> flag and
-    /// <c>fallbackTimeoutSeconds</c> are surfaced as configured; the ack href is included only when
-    /// <c>terminate</c> is true (the pipeline pauses awaiting acknowledge in that case).
+    /// denies (fail-closed), same as notification rules. <c>terminate</c> is served as declared on the
+    /// state; <c>fallbackTimeoutSeconds</c> is the EFFECTIVE value from
+    /// <see cref="InstanceSubFlowOverrideExtensions.ResolveEffectiveLongPoll"/> — the state's own value,
+    /// or the parent's override when one is stamped — so it always matches the window the pipeline
+    /// actually armed the fallback job with. The ack href is included only when <c>terminate</c> is true
+    /// (the pipeline pauses awaiting acknowledge in that case).
     /// </summary>
     private async Task<InstanceInteractionOutput?> ResolveInteractionAsync(
         GetInstanceStateInput input,
@@ -2179,12 +2406,14 @@ public sealed class InstanceQueryAppService(
         if (admitted is not { IsSuccess: true, Value: true })
             return null;
 
-        var terminate = currentStateValue.TerminatesLongPollOnEntry;
+        // Same resolver the pipeline armed the fallback job with, so the window the client is told
+        // is the window that will actually fire. Terminate is never overridable.
+        var effective = instance.ResolveEffectiveLongPoll(currentStateValue).LongPoll!;
         return new InstanceInteractionOutput
         {
-            TerminateLongPoll = terminate,
-            FallbackTimeoutSeconds = currentStateValue.LongPollFallbackTimeoutSeconds,
-            Ack = terminate
+            TerminateLongPoll = effective.Terminate,
+            FallbackTimeoutSeconds = effective.FallbackTimeoutSeconds,
+            Ack = effective.Terminate
                 ? new AckHref
                 {
                     Href = urlTemplateBuilder.BuildLongPollAckUrl(
@@ -2920,6 +3149,32 @@ public sealed class InstanceQueryAppService(
                     $"No matching view found for state {instance.CurrentState} in workflow {currentWorkflow.Key}"));
         }
 
+        // Parent-supplied swap, resolved HERE because this is the level whose rules just selected the
+        // view: keyed by this instance's own CurrentState (never EffectiveState) or by the transition,
+        // and by the view key the rules picked. Rules are never overridden — only the reference.
+        // The override map is keyed by the transition's CONFIGURED key, never a well-known alias
+        // (e.g. "update-parent-data"), so a request naming the alias is normalised through the same
+        // ResolveTransition call GetViewDefinition already uses above — no second resolution mechanism.
+        var normalizedTransitionKey = transitionKey.IsNullOrWhiteSpace()
+            ? transitionKey
+            : currentWorkflow.ResolveTransition(transitionKey, currentState)?.Key ?? transitionKey;
+        var overrideRef = instance.ResolveViewOverride(
+            instance.CurrentState, normalizedTransitionKey, selectedViewEntry.View.Key);
+        if (overrideRef is not null)
+        {
+            var overrideResult = await viewContentResolutionService.ResolveViewContentAsync(
+                overrideRef, input.Domain, input.Headers, input.QueryParameters, cancellationToken);
+            if (overrideResult.IsSuccess)
+                return overrideResult;
+
+            logger.SubFlowViewOverrideUnresolved(
+                instance.Id,
+                instance.CurrentState ?? string.Empty,
+                selectedViewEntry.View.Key,
+                overrideRef.Key,
+                overrideResult.Error.Message ?? overrideResult.Error.Code);
+        }
+
         return await viewContentResolutionService.ResolveViewContentAsync(
             selectedViewEntry.View,
             input.Domain,
@@ -2951,7 +3206,7 @@ public sealed class InstanceQueryAppService(
         CancellationToken cancellationToken = default)
     {
         // No failure channel here — the method already signals "no subflow view" with null, which is
-        // also the closed answer when the caller's roles cannot be established.
+        // also the closed answer for a provider that fails. Neither built-in provider does.
         var callerRoles = await callerRoleResolver.ResolveRolesAsync(headers, cancellationToken);
         if (!callerRoles.IsSuccess)
             return null;

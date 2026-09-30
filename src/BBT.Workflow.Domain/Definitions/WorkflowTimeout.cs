@@ -55,13 +55,24 @@ public sealed class WorkflowTimeout : IHasKey
     /// </summary>
     public ScriptCode? Mapping { get; private set; }
 
+    /// <summary>
+    /// Optional key-value metadata for client-side UI context, surfaced on the state function's
+    /// <c>timeout</c> block. Pure passthrough, same contract as <see cref="Transition.Annotations"/>.
+    /// A parent's <c>subFlow.overrides.timeout</c> replaces the whole timeout, annotations included —
+    /// they are not merged with the child's own.
+    /// </summary>
+    [JsonInclude]
+    [JsonPropertyName("annotations")]
+    public Dictionary<string, string>? Annotations { get; private set; }
+
     public static WorkflowTimeout Create(
         string key,
         string target,
         string versionStrategy,
         string reset,
         string duration,
-        ScriptCode? mapping = null
+        ScriptCode? mapping = null,
+        Dictionary<string, string>? annotations = null
     )
     {
         return new WorkflowTimeout(
@@ -70,6 +81,9 @@ public sealed class WorkflowTimeout : IHasKey
             VersionStrategy.FromCode(versionStrategy),
             new TimerConfig(reset, duration),
             mapping
-        );
+        )
+        {
+            Annotations = annotations
+        };
     }
 }

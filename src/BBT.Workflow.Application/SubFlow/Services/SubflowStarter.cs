@@ -158,8 +158,10 @@ public sealed class SubflowStarter(
                 JsonSerializer.Serialize(timeoutOverride, JsonSerializerConstants.JsonOptions);
         }
 
-        // Serialize parent-defined role overrides (transitions + states) for SubFlow to use during state queries.
-        // views are excluded as they are hosted/resolved on the parent side.
+        // Stamp the parent's WHOLE per-transition / per-state override maps onto the child: role grants,
+        // query grants, the long-poll override and the state/transition-scoped view swaps all travel
+        // here and are resolved CHILD-side (SubFlowOverrideStamp). Only the legacy view-key map
+        // (overrides.views / viewOverrides) is not stamped — it is still applied parent-side after descent.
         if (overrides?.Transitions is { Count: > 0 })
         {
             createInstanceInput.ExtraProperties[DomainConsts.MetaDataKeys.TransitionRoleOverrides] =

@@ -109,7 +109,7 @@ public sealed class IncidentHistoryHref : HrefBase
 /// Incident block: whether the polled instance (or the deepest active subflow it delegates to) carries
 /// an unresolved error-boundary incident, plus links to fetch it and to page the history. Always
 /// present so clients can branch on <see cref="HasActiveIncident"/> deterministically. Visible to every
-/// caller who passes the surface's <c>queryRoles</c> gate.
+/// caller the surface is served to (queryRoles is answered by <c>authorize?queryRoles=true</c>).
 /// </summary>
 /// <remarks>
 /// <b>Links, not content.</b> The block deliberately carries no incident fields. Embedding a summary

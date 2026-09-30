@@ -341,9 +341,9 @@ public sealed class TransitionAuthorizationManager(
         //
         // The override goes first and it REPLACES rather than merges — a parent that narrowed a
         // child's visibility meant to narrow it. Reading the stamp here rather than in each surface
-        // is the point: this method is the single queryRoles gate behind the state, data, view,
-        // schema and incident functions, behind `authorize`'s query branch and behind the human-task
-        // list, so the narrowing now applies wherever the child is reached from. The parent-side
+        // is the point: this method is the single queryRoles answer behind `authorize`'s query branch
+        // (which the gateway consults for the state, data, view, schema and incident reads) and
+        // behind the human-task list, so the narrowing applies wherever the child is reached from. The parent-side
         // reader (`AuthorizeAppService`, `subFlowConfig.Overrides.States`) cannot serve that: it
         // needs an active SubFlow correlation, which the child being asked about does not have.
         var overridden = string.IsNullOrWhiteSpace(currentStateKey)
@@ -415,10 +415,12 @@ public sealed class TransitionAuthorizationManager(
                 normalized.Add(role.Trim());
         }
 
-        // Phase 1 - DENY group, AND. One matching deny refuses, whatever else the caller carries.
+        // Phase 1 - DENY group, AND. One matching deny refuses, whatever else the caller carries —
+        // and a role-bound deny refuses a caller with no roles at all (see IsUnprovableRoleBoundDeny).
         foreach (var grant in roleGrants)
         {
-            if (grant.IsDeny && MatchesAnyStatic(grant, normalized))
+            if (grant.IsDeny &&
+                (IsUnprovableRoleBoundDeny(grant, normalized.Count) || MatchesAnyStatic(grant, normalized)))
                 return false;
         }
 
@@ -436,6 +438,44 @@ public sealed class TransitionAuthorizationManager(
 
         // Blacklist (deny-only) set: no ALLOW grant defined → allow when not explicitly denied.
         return defaultAllowWhenNoAllowGrant && !hasAllowGrant;
+    }
+
+    /// <summary>
+    /// Whether a DENY grant must refuse because the caller carries no roles to check it against.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>A role-bound deny cannot be cleared by an empty role set.</b> A static role or a
+    /// <c>$role.</c> reference is a statement about the caller's ROLES; with none to compare,
+    /// "nothing matched" is not evidence that the caller is not the denied one. Read as a pass it
+    /// made every blacklist a blanket allow for a token minted by a role-less process, and — once
+    /// an external provider's failure resolves to an empty set — for any caller whose roles could
+    /// not be fetched. The grant author wrote a refusal; the runtime must not be the one to waive it.</para>
+    /// <para><b>Identity-bound denies keep their normal evaluation.</b> Predefined roles
+    /// (<c>$InstanceStarter</c>, …) and <c>$user.</c> / <c>$userBehalfOf.</c> references match on the
+    /// caller's identity, not on its roles, so the absence of roles hides nothing from them.</para>
+    /// <para>The classification mirrors <see cref="RoleGrantEvaluator"/>'s match order (predefined,
+    /// then dynamic, then static) so a grant is role-bound here exactly when it would be compared
+    /// against a role there — including a malformed dynamic grant, which falls through to the static
+    /// comparison and is therefore role-bound.</para>
+    /// </remarks>
+    /// <param name="grant">The grant under evaluation; only DENY grants are meaningful here.</param>
+    /// <param name="normalizedRoleCount">The caller's role count after blank roles are dropped.</param>
+    internal static bool IsUnprovableRoleBoundDeny(RoleGrant grant, int normalizedRoleCount)
+        => normalizedRoleCount == 0 && grant.IsDeny && IsRoleBound(grant.Role);
+
+    private static bool IsRoleBound(string? grantRole)
+    {
+        if (string.IsNullOrWhiteSpace(grantRole))
+            return true;
+
+        if (grantRole is PredefinedInstanceRoles.InstanceStarter
+            or PredefinedInstanceRoles.PreviousUser
+            or PredefinedInstanceRoles.InstanceBehalfOfStarter
+            or PredefinedInstanceRoles.PreviousBehalfOfUser)
+            return false;
+
+        var dynamicGrant = DynamicRoleGrant.TryParse(grantRole);
+        return dynamicGrant is null || dynamicGrant.Qualifier == DynamicRoleQualifier.Role;
     }
 
     private static bool MatchesAnyStatic(RoleGrant grant, List<string> roles)
