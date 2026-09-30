@@ -174,6 +174,56 @@ public static class ServiceScopeFactoryExtensions
 
     #region ExecuteWithWorkflowAsync
 
+
+    /// <summary>
+    /// Executes an async operation in a new DI scope with the schema switched to
+    /// <paramref name="workflowKey"/>, WITHOUT loading the workflow definition.
+    /// <para>
+    /// For callers that hand the request to a service which resolves the definition itself
+    /// (<c>InstanceCommandAppService.StartAsync</c> / <c>TransitionAsync</c>).
+    /// <see cref="ExecuteWithWorkflowAsync{T}"/> would load it here and throw it away — a second
+    /// generation read + cache lookup on every local start and transition — and on the transition
+    /// path it would even resolve a different version (<c>latest</c>) than the one the instance is
+    /// bound to. The schema scope is still required: a cache miss inside the call reaches the
+    /// schema-bound database.
+    /// </para>
+    /// </summary>
+    public static Task<Result<T>> ExecuteInSchemaScopeAsync<T>(
+        this IServiceScopeFactory scopeFactory,
+        string workflowKey,
+        Func<IServiceProvider, CancellationToken, Task<Result<T>>> action,
+        CancellationToken cancellationToken = default)
+    {
+        return scopeFactory.ExecuteInScopeAsync(
+            async (sp, ct) =>
+            {
+                using (sp.GetRequiredService<ICurrentSchema>().Change(workflowKey))
+                {
+                    return await action(sp, ct);
+                }
+            },
+            cancellationToken);
+    }
+
+    /// <summary>
+    /// Non-generic <see cref="ExecuteInSchemaScopeAsync{T}"/>: schema switched, no definition load.
+    /// </summary>
+    public static Task<Result> ExecuteInSchemaScopeAsync(
+        this IServiceScopeFactory scopeFactory,
+        string workflowKey,
+        Func<IServiceProvider, CancellationToken, Task<Result>> action,
+        CancellationToken cancellationToken = default)
+    {
+        return scopeFactory.ExecuteInScopeAsync(
+            async (sp, ct) =>
+            {
+                using (sp.GetRequiredService<ICurrentSchema>().Change(workflowKey))
+                {
+                    return await action(sp, ct);
+                }
+            },
+            cancellationToken);
+    }
     /// <summary>
     /// Executes an async workflow operation in a new DI scope with automatic workflow loading and context management.
     /// Returns <see cref="Result{T}"/>.

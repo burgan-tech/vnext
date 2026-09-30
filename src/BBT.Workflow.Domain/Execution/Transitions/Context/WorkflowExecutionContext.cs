@@ -65,6 +65,29 @@ public sealed class WorkflowExecutionContext
     [System.Text.Json.Serialization.JsonIgnore]
     public bool PayloadSchemaValidated { get; set; }
 
+    /// <summary>
+    /// Set by the START path when it already mapped the start payload and appended it as the
+    /// instance's initial data version (<c>InstanceCommandAppService.MapAndAppendInstanceDataAsync</c>).
+    /// <c>CreateTransitionRecordStep</c> then skips mapping and appending the same attributes a
+    /// second time: that second pass took the row lock and re-read the head only to dedup to
+    /// nothing — or, with a non-deterministic mapping script, wrote a second data version.
+    /// <para>
+    /// Transport-only, like <see cref="PayloadSchemaValidated"/>: never serialized, never mapped
+    /// into <c>TransitionJobPayload</c>, so the async start's job re-entry, retries and chained
+    /// hops (each a fresh context) keep the normal map-and-append.
+    /// </para>
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool StartPayloadPersisted { get; set; }
+
+    /// <summary>
+    /// The mapped start payload the start path appended, when <see cref="StartPayloadPersisted"/>
+    /// is set. Carried so the transition record's body still receives the mapping result when the
+    /// start transition declares a mapping script. Transport-only.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public object? StartMappedPayload { get; set; }
+
     /// <summary>Gets or sets the transition key to execute.</summary>
     [Enrich(Name = "vnext.transition.key")]
     public string TransitionKey { get; set; } = default!;

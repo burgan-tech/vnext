@@ -153,6 +153,16 @@ public sealed class TransitionExecutionContext
     /// </summary>
     public Guid? RetryOfTransitionRecordId { get; set; }
 
+    /// <summary>
+    /// True when the start path already mapped and appended this start transition's payload (see
+    /// <c>WorkflowExecutionContext.StartPayloadPersisted</c>): <c>CreateTransitionRecordStep</c>
+    /// skips the second map-and-append. Never set on a chained hop, retry or job re-entry.
+    /// </summary>
+    public bool StartPayloadPersisted { get; set; }
+
+    /// <summary>The mapped start payload the start path appended, when <see cref="StartPayloadPersisted"/>.</summary>
+    public object? StartMappedPayload { get; set; }
+
     /// <summary>Gets or sets typed terminal-cascade context for this execution.</summary>
     public TerminationContext? Termination { get; set; }
 

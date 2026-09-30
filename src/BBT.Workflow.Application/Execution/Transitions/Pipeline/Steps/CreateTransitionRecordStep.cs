@@ -62,11 +62,26 @@ public sealed class CreateTransitionRecordStep(
         // through the write service — row identity computed under the per-instance row lock)
         // -> Persist the record. Non-data field changes (tags/stage/key) ride the same
         // SaveChanges the write service (or the record persist) performs.
-        return await MapTransitionDataAsync(context, transition, cancellationToken)
+        //
+        // A start whose payload the start path already mapped and appended as the initial data
+        // version skips both here: mapping again re-ran the script and appending again took the
+        // row lock and re-read the head only to dedup — or, with a non-deterministic mapping,
+        // wrote a second version. The mapped payload it carries still feeds the record body.
+        var startPayloadAlreadyAppended = context.StartPayloadPersisted
+            && !isReusedRecord
+            && transition is not null
+            && string.Equals(transition.Key, context.Workflow.StartTransition?.Key, StringComparison.Ordinal);
+
+        var mapping = startPayloadAlreadyAppended
+            ? Task.FromResult(Result<object?>.Ok(context.StartMappedPayload))
+            : MapTransitionDataAsync(context, transition, cancellationToken);
+
+        return await mapping
             .BindAsync(mappedData => ValidateAndSetInstanceKeyAsync(context, cancellationToken)
                 .MapAsync(_ => mappedData))
             .TapAsync(mappedData => AppendMappedDataAsync(
-                context, mappedData, transition, instanceTransition, cancellationToken))
+                context, mappedData, transition, instanceTransition,
+                appendData: !startPayloadAlreadyAppended, cancellationToken))
             .TapAsync(_ => PersistTransitionRecordAsync(
                 context.Instance, instanceTransition, isReusedRecord, cancellationToken))
             .Tap(_ => UpdateContextItems(context, instanceTransition, isReusedRecord))
@@ -173,6 +188,7 @@ public sealed class CreateTransitionRecordStep(
         object? mappedData,
         Definitions.Transition? transition,
         InstanceTransition instanceTransition,
+        bool appendData,
         CancellationToken cancellationToken)
     {
         if (context.Tags != null)
@@ -187,12 +203,15 @@ public sealed class CreateTransitionRecordStep(
 
         if (mappedData != null)
         {
-            await instanceDataWriteService.AppendAsync(
-                context.Instance,
-                new JsonData(mappedData),
-                transition?.VersionStrategy,
-                cancellationToken,
-                context.Workflow);
+            if (appendData)
+            {
+                await instanceDataWriteService.AppendAsync(
+                    context.Instance,
+                    new JsonData(mappedData),
+                    transition?.VersionStrategy,
+                    cancellationToken,
+                    context.Workflow);
+            }
 
             if (transition?.Mapping is not null)
             {

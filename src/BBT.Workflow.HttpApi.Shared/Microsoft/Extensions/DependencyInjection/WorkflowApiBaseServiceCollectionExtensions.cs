@@ -305,6 +305,17 @@ public static class WorkflowApiBaseServiceCollectionExtensions
                         .AddProcessor(serviceProvider =>
                             new RequestIdSpanProcessor(serviceProvider.GetRequiredService<ICorrelationIdProvider>()));
 
+                    // Diagnostic, off by default: Npgsql's own ActivitySource (what the
+                    // Npgsql.OpenTelemetry package's AddNpgsql() registers). EF Core spans start
+                    // when a command executes, so connection acquisition and the physical open —
+                    // plus the model build / LINQ translation around them — show only as a gap
+                    // before the first Db.* span, which is exactly what a cold start looks like.
+                    // Npgsql adds a physical-open span that names that gap. It also emits a span per
+                    // command, duplicating the EF Core one, which is why it is not always on.
+                    // Enable with Telemetry__Tracing__NpgsqlSpans=true.
+                    if (configuration.GetValue("Telemetry:Tracing:NpgsqlSpans", false))
+                        tracing.AddSource("Npgsql");
+
                     // Worker hosts only: see IdlePollSpanProcessor. Other hosts have no idle poll
                     // loop, so the processor would only add a per-span branch for nothing.
                     if (configuration.GetValue("Telemetry:Tracing:DropRootDbSpans", false))

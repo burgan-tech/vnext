@@ -299,6 +299,29 @@ public sealed class TaskExecutionEngineTests : IDisposable
     }
 
     /// <summary>
+    /// The attempt's journal-probe decision reaches the executor, so an executor that runs nested
+    /// tasks through the engine (FanOut items) can forward it instead of always probing.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ExecuteAsync_HandsTheJournalProbeDecisionToTheExecutorContext(bool skipJournalProbe)
+    {
+        var task = WorkflowTaskFactory.CreateHttpTask("mock-api");
+        var executor = ArrangeSuccessfulExecution(task);
+        var onExecute = OnExecuteTask.Create(1, task, ScriptCode.FromNative(string.Empty));
+
+        await CreateEngine().ExecuteAsync(
+            onExecute, Guid.NewGuid(), TaskTrigger.OnExecute, TaskExecutionOrigin.Flow,
+            CreateScriptContext(), new TaskEngineExecutionOptions { SkipJournalProbe = skipJournalProbe },
+            CancellationToken.None);
+
+        await executor.Received(1).ExecuteAsync(
+            Arg.Is<TaskExecutorContext>(c => c.SkipJournalProbe == skipJournalProbe),
+            Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
     /// The reason <c>Task.Execute.{key}</c> no longer comes from Aether's <c>[Trace]</c> aspect:
     /// the aspect set <c>Ok</c> on every normal return, and this engine reports failure through
     /// its Result — so a task that faulted the pipeline showed a green span. Pins that the error
