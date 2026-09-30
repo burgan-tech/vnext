@@ -3296,11 +3296,15 @@ public sealed class InstanceQueryAppService(
             Domain = input.Domain,
             FlowVersion = flowVersion ?? string.Empty,
             CurrentState = instance.CurrentState,
+            OwnState = instance.CurrentState,
             Status = instance.Status,
             SubFlowType = null,
             IsCompleted = instance.Status == InstanceStatus.Completed,
             CompletedAt = instance.CompletedAt,
-            ParentState = null
+            ParentState = null,
+            // The root is nobody's correlated child, so the link-scoped members (CorrelationId,
+            // CreatedAt, TerminalOutcome, StateChangedAt) stay null by construction.
+            Href = urlTemplateBuilder.BuildInstanceUrl(input.Domain, instance.Flow, instance.Id.ToString())
         };
 
         rootNode.Children = await BuildCorrelationTreeAsync(
@@ -3622,12 +3626,19 @@ public sealed class InstanceQueryAppService(
                 Domain = childDomain,
                 FlowVersion = correlation.SubFlowVersion,
                 CurrentState = correlation.SubFlowCurrentState ?? childInstance?.CurrentState,
+                OwnState = childInstance?.CurrentState,
                 Status = childInstance?.Status ??
                          (correlation.IsCompleted ? InstanceStatus.Completed : InstanceStatus.Active),
                 SubFlowType = correlation.SubFlowType,
                 IsCompleted = correlation.IsCompleted,
                 CompletedAt = correlation.CompletedAt,
-                ParentState = correlation.ParentState
+                ParentState = correlation.ParentState,
+                CorrelationId = correlation.Id,
+                CreatedAt = correlation.CreatedAt,
+                TerminalOutcome = correlation.TerminalOutcome,
+                StateChangedAt = correlation.SubFlowStateChangedAt,
+                Href = urlTemplateBuilder.BuildInstanceUrl(
+                    childDomain, childFlow, correlation.SubFlowInstanceId.ToString())
             };
 
             node.Children = await BuildCorrelationTreeAsync(

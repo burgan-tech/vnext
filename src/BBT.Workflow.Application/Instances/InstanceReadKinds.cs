@@ -47,7 +47,7 @@ public static class InstanceReadKinds
     public const string IncidentHistory = "incidentHistory";
 
     /// <summary>The instance-correlation tree — recursive, so its own duration says how deep it went.</summary>
-    public const string InstanceCorrelation = "instance-correlation";
+    public const string InstanceCorrelation = "instanceCorrelation";
 
     /// <summary>The human-task inbox across workflows — fans out in parallel per workflow.</summary>
     public const string HumanTasks = "humanTasks";

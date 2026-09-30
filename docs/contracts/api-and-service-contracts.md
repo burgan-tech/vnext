@@ -17,7 +17,7 @@ contracts. Remote services call public runtime APIs rather than internal reposit
 | Contract | Direction | Stability notes |
 | --- | --- | --- |
 | Instance start/transition APIs | Client -> Orchestration | Route, response status, sync/async semantics are client contracts. |
-| Function APIs | Client -> Orchestration | `state`, `data`, `view`, `schema`, authorization, `instance-correlation`. |
+| Function APIs | Client -> Orchestration | `state`, `data`, `view`, `schema`, authorization, [`instance-correlation`](../runtime/instance-correlation-tree.md). |
 | Task envelope | Orchestration -> Execution | Strongly typed binding and task type discriminator. |
 | Remote app services | Runtime -> Runtime | Uses public instance/function routes with forwarded headers. |
 | Domain events | Orchestration -> Outbox -> Inbox | Event payloads are distributed contracts. |

@@ -49,6 +49,7 @@ public sealed class InstanceQueryAppServiceCorrelationTreeTests : IDisposable
     private readonly IInstanceRepository _instanceRepository = Substitute.For<IInstanceRepository>();
     private readonly IInstanceCorrelationRepository _correlationRepository =
         Substitute.For<IInstanceCorrelationRepository>();
+    private readonly IUrlTemplateBuilder _urlTemplateBuilder = Substitute.For<IUrlTemplateBuilder>();
     private readonly InstanceQueryAppService _service;
     private readonly IServiceProvider _ambient;
     private readonly IServiceProvider? _previousAmbient;
@@ -64,6 +65,12 @@ public sealed class InstanceQueryAppServiceCorrelationTreeTests : IDisposable
         _ambient = services.BuildServiceProvider();
         _previousAmbient = AmbientServiceProvider.Current;
         AmbientServiceProvider.Current = _ambient;
+
+        // Echo the arguments back, so a swapped domain/flow/instance would produce a different string
+        // and the href assertions below would fail instead of passing on a null substitute return.
+        _urlTemplateBuilder
+            .BuildInstanceUrl(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>())
+            .Returns(ci => $"/{ci.ArgAt<string>(0)}/workflows/{ci.ArgAt<string>(1)}/instances/{ci.ArgAt<string>(2)}");
 
         var componentCacheStore = Substitute.For<IComponentCacheStore>();
         componentCacheStore
@@ -87,7 +94,7 @@ public sealed class InstanceQueryAppServiceCorrelationTreeTests : IDisposable
             instanceQueryGateway: Substitute.For<IInstanceQueryGateway>(),
             viewContentResolutionService: Substitute.For<IViewContentResolutionService>(),
             taskConditionService: Substitute.For<ITaskConditionService>(),
-            urlTemplateBuilder: Substitute.For<IUrlTemplateBuilder>(),
+            urlTemplateBuilder: _urlTemplateBuilder,
             currentSchema: Substitute.For<ICurrentSchema>(),
             transitionAuthorizationManager: Substitute.For<ITransitionAuthorizationManager>(),
             representationEtagService: Substitute.For<IRepresentationEtagService>(),
@@ -242,6 +249,143 @@ public sealed class InstanceQueryAppServiceCorrelationTreeTests : IDisposable
     }
 
     /// <summary>
+    /// The node carries the link-scoped members the state function already returns for the same
+    /// <see cref="InstanceCorrelation"/> row, so the two read surfaces agree: the correlation's own id
+    /// (the handle for addressing the LINK), when the child was spawned, how the link ended, when the
+    /// child's state last moved, and a navigable href. All four link members are null on the root,
+    /// which is nobody's correlated child.
+    /// </summary>
+    [Fact]
+    public async Task GetInstanceCorrelationAsync_CarriesTheLinkScopedMembers()
+    {
+        var rootId = Guid.NewGuid();
+        var childId = Guid.NewGuid();
+        StubInstance(rootId, RootFlow);
+        StubInstance(childId, ChildFlow);
+
+        var correlation = Correlation(rootId, childId, ChildFlow, "s1", SubFlowType.SubFlow.Code);
+        StubChildren(rootId, correlation);
+        StubChildren(childId);
+
+        var result = await _service.GetInstanceCorrelationAsync(Input(rootId), CancellationToken.None);
+
+        var root = result.Value!.Root;
+        // The root is not a correlated child, so every link-scoped member is absent.
+        root.CorrelationId.ShouldBeNull();
+        root.CreatedAt.ShouldBeNull();
+        root.TerminalOutcome.ShouldBeNull();
+        root.StateChangedAt.ShouldBeNull();
+
+        var child = root.Children.ShouldHaveSingleItem();
+        child.CorrelationId.ShouldBe(correlation.Id);   // addresses the LINK, not the instance
+        child.CorrelationId.ShouldNotBe(child.Id);      // …and is distinct from the instance id
+    }
+
+    /// <summary>
+    /// <c>isCompleted</c> only says WHETHER the link ended; <c>terminalOutcome</c> says HOW. A graph
+    /// needs the difference between a child that finished and one that faulted.
+    /// </summary>
+    [Fact]
+    public async Task GetInstanceCorrelationAsync_TerminalOutcome_DistinguishesHowTheLinkEnded()
+    {
+        var rootId = Guid.NewGuid();
+        var childId = Guid.NewGuid();
+        StubInstance(rootId, RootFlow);
+        StubInstance(childId, ChildFlow);
+
+        var completed = Correlation(rootId, childId, ChildFlow, "s1", SubFlowType.SubFlow.Code);
+        completed.Completed();
+        StubChildren(rootId, completed);
+        StubChildren(childId);
+
+        var result = await _service.GetInstanceCorrelationAsync(Input(rootId), CancellationToken.None);
+
+        var child = result.Value!.Root.Children.ShouldHaveSingleItem();
+        child.IsCompleted.ShouldBeTrue();
+        child.TerminalOutcome.ShouldBe(SubItemTerminalOutcome.Completed);
+    }
+
+    /// <summary>
+    /// <c>currentState</c> keeps its existing meaning (the correlation's tracked state, which reports
+    /// the deepest active descendant), while <c>ownState</c> reports where the node itself actually is
+    /// — so a tree/graph can place each node correctly. Here the correlation has bubbled the
+    /// grandchild's state up onto the child; the child's own state must still be its own.
+    /// </summary>
+    [Fact]
+    public async Task GetInstanceCorrelationAsync_OwnState_IsTheNodesOwnStateNotTheDescendants()
+    {
+        var rootId = Guid.NewGuid();
+        var childId = Guid.NewGuid();
+        StubInstance(rootId, RootFlow);
+        // The child's OWN row sits at child-subflow-state…
+        StubInstance(childId, ChildFlow, ownState: "child-subflow-state");
+
+        // …while the correlation has bubbled the grandchild's state up onto it.
+        var correlation = Correlation(rootId, childId, ChildFlow, "root-waiting", SubFlowType.SubFlow.Code);
+        correlation.UpdateSubFlowState("grandchild-initial", DateTime.UtcNow);
+        StubChildren(rootId, correlation);
+        StubChildren(childId);
+
+        var result = await _service.GetInstanceCorrelationAsync(Input(rootId), CancellationToken.None);
+
+        var child = result.Value!.Root.Children.ShouldHaveSingleItem();
+        child.CurrentState.ShouldBe("grandchild-initial");     // unchanged, bubbled-up semantics
+        child.OwnState.ShouldBe("child-subflow-state");        // pinned exactly — null would now fail
+        child.StateChangedAt.ShouldNotBeNull();
+    }
+
+    /// <summary>
+    /// Every node carries a navigable link to its OWN instance resource — built from that node's own
+    /// domain/flow/id, not the parent's. A swapped argument would surface here.
+    /// </summary>
+    [Fact]
+    public async Task GetInstanceCorrelationAsync_HrefAddressesEachNodesOwnInstance()
+    {
+        var rootId = Guid.NewGuid();
+        var childId = Guid.NewGuid();
+        StubInstance(rootId, RootFlow);
+        StubInstance(childId, ChildFlow);
+        StubChildren(rootId, Correlation(rootId, childId, ChildFlow, "s1", SubFlowType.SubFlow.Code));
+        StubChildren(childId);
+
+        var result = await _service.GetInstanceCorrelationAsync(Input(rootId), CancellationToken.None);
+
+        var root = result.Value!.Root;
+        root.Href.ShouldBe($"/{TestDomain}/workflows/{RootFlow}/instances/{rootId}");
+
+        // The child's href uses the CHILD's flow and id — not the root's.
+        var child = root.Children.ShouldHaveSingleItem();
+        child.Href.ShouldBe($"/{TestDomain}/workflows/{ChildFlow}/instances/{childId}");
+    }
+
+    /// <summary>
+    /// The outcome a UI actually branches on. <c>isCompleted</c> is true for all three, so a client
+    /// colouring on it alone would paint a faulted or cancelled child as healthy.
+    /// </summary>
+    [Theory]
+    [InlineData(SubItemTerminalOutcome.Faulted)]
+    [InlineData(SubItemTerminalOutcome.Canceled)]
+    public async Task GetInstanceCorrelationAsync_SurfacesNonSuccessTerminalOutcomes(
+        SubItemTerminalOutcome outcome)
+    {
+        var rootId = Guid.NewGuid();
+        var childId = Guid.NewGuid();
+        StubInstance(rootId, RootFlow);
+        StubInstance(childId, ChildFlow);
+
+        var correlation = Correlation(rootId, childId, ChildFlow, "s1", SubFlowType.SubFlow.Code);
+        correlation.ApplyTerminalOutcome(outcome, DateTime.UtcNow);
+        StubChildren(rootId, correlation);
+        StubChildren(childId);
+
+        var result = await _service.GetInstanceCorrelationAsync(Input(rootId), CancellationToken.None);
+
+        var child = result.Value!.Root.Children.ShouldHaveSingleItem();
+        child.TerminalOutcome.ShouldBe(outcome);
+        child.IsCompleted.ShouldBeTrue();   // ended — but NOT necessarily successfully
+    }
+
+    /// <summary>
     /// The hard-break rename (AB-20): the wire key is <c>instance-correlation</c>, matching the kebab
     /// style of the other system-function keys. The old <c>hierarchy</c> spelling is gone, no alias.
     /// </summary>
@@ -249,7 +393,9 @@ public sealed class InstanceQueryAppServiceCorrelationTreeTests : IDisposable
     public void FunctionKey_IsTheKebabCaseInstanceCorrelation()
     {
         FunctionTypeConst.InstanceCorrelation.ShouldBe("instance-correlation");
-        InstanceReadKinds.InstanceCorrelation.ShouldBe("instance-correlation");
+        // The telemetry read-kind is camelCase like every other multi-word kind in that file
+        // (incidentActive, humanTasks, transitionMetrics); only the URL key is kebab.
+        InstanceReadKinds.InstanceCorrelation.ShouldBe("instanceCorrelation");
         InstanceUrlTemplates.InstanceCorrelationTemplate
             .ShouldEndWith("/functions/instance-correlation");
     }
@@ -261,11 +407,19 @@ public sealed class InstanceQueryAppServiceCorrelationTreeTests : IDisposable
         Instance = instanceId.ToString()
     };
 
-    private void StubInstance(Guid id, string flow)
+    /// <summary>
+    /// Stubs the instance row. <paramref name="ownState"/> is put on the instance itself (via
+    /// <see cref="Instance.ChangeState"/>) because <see cref="Instance.Create"/> leaves
+    /// <c>CurrentState</c> null — without this the OwnState assertions would pass vacuously on null.
+    /// </summary>
+    private Instance StubInstance(Guid id, string flow, string ownState = "its-own-state")
     {
+        var instance = Instance.Create(id, flow, "1.0.0");
+        instance.ChangeState(State.Create(ownState, StateType.Intermediate, StateSubType.None, "Minor"));
         _instanceRepository
             .FindByIdentifierAsReadOnlyAsync(id.ToString(), Arg.Any<CancellationToken>())
-            .Returns(Instance.Create(id, flow, "1.0.0"));
+            .Returns(instance);
+        return instance;
     }
 
     private void StubChildren(Guid parentId, params InstanceCorrelation[] correlations)
