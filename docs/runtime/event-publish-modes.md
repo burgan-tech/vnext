@@ -390,7 +390,7 @@ These were evaluated and accepted by the user during design; they are documented
 Some other parts of the runtime use a `directly:true`-style arming window (fire a request, then
 narrow a race window with a job) — this design has no equivalent, because there are no jobs in
 this path. The crash-between-commit-and-relay window is instead covered end-to-end by the Inbox
-backup delivery (see [Latency](#latency-unvalidated-design-budget---measured-in-verification)
+backup delivery (see [Latency](#latency-unvalidated-design-budget--measured-in-verification)
 above) — there is no separate arming mechanism to reason about.
 
 ## Verification (2026-08-30, local stack)
@@ -422,7 +422,7 @@ probe. Single run, single machine — see the caveat at the end.
   [Accepted risks](#accepted-risks).
 
 These results confirm the design budget in
-[Latency](#latency-unvalidated-design-budget---measured-in-verification) for this local run; that
+[Latency](#latency-unvalidated-design-budget--measured-in-verification) for this local run; that
 table's numbers remain the forward-looking **budget** for environments this run did not exercise —
 production-scale broker delay, multi-replica contention, and cross-region hops.
 
