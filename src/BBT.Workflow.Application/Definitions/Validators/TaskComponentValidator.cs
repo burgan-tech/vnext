@@ -54,7 +54,7 @@ public sealed class TaskComponentValidator : IComponentValidator
 
                 ScriptCodeValidator.Validate(
                     cacheAside.KeyScript,
-                    $"{nameof(CacheAsideTask)}.{nameof(CacheAsideTask.KeyScript)}",
+                    $"{nameof(CacheAsideTask)}.key",
                     result.ValidationErrors);
             }
 

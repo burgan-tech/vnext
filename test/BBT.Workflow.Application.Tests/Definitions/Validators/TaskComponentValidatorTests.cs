@@ -111,7 +111,7 @@ public class TaskComponentValidatorTests
 
     [Theory]
     [InlineData("sourceMapping", "CacheAsideTask.SourceMapping")]
-    [InlineData("key", "CacheAsideTask.KeyScript")]
+    [InlineData("key", "CacheAsideTask.key")]
     public void Validate_ShouldReturnError_WhenCacheAsideScriptSlotDeclaresOnlyLocation(
         string slot,
         string expectedMember)
@@ -155,7 +155,7 @@ public class TaskComponentValidatorTests
         var result = _validator.Validate(attributes);
 
         result.IsValid.ShouldBeFalse();
-        result.ValidationErrors.Count(e => e.MemberNames.Contains("CacheAsideTask.KeyScript")).ShouldBe(1);
+        result.ValidationErrors.Count(e => e.MemberNames.Contains("CacheAsideTask.key")).ShouldBe(1);
     }
 
     [Fact]

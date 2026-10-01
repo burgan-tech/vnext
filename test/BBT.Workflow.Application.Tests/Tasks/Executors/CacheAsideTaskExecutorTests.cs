@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -258,6 +259,92 @@ public sealed class CacheAsideTaskExecutorTests
     }
 
     [Fact]
+    public async Task HitAndMiss_ExposeTheSameBodyJson_ForTheSameData()
+    {
+        var miss = new Harness();
+        var missResult = await miss.ExecuteAsync();
+
+        var hit = new Harness();
+        hit.SetReadResult(new CacheGetResult(true, true, JsonSerializer.SerializeToElement(new { name = "shaped" })));
+        var hitResult = await hit.ExecuteAsync();
+
+        missResult.Value!.IsSuccess.ShouldBeTrue();
+        hitResult.Value!.IsSuccess.ShouldBeTrue();
+
+        // The final StandardTaskResponse carries no Body; the invocation result's Body is what the
+        // task-response slot in the outer script context (context.Body / TaskResponse) exposes.
+        var missBody = BodyOf(miss.OuterScriptContext);
+        var hitBody = BodyOf(hit.OuterScriptContext);
+        missBody.ShouldNotBeNull();
+        missBody.ShouldBe(hitBody);
+        missBody.ShouldBe("""{"name":"shaped"}""");
+    }
+
+    private static string? BodyOf(ScriptContext context)
+    {
+        var slot = JsonSerializer.SerializeToElement((object)context.TaskResponse.Values.Single()!);
+        return slot.TryGetProperty("body", out var body) && body.ValueKind == JsonValueKind.String
+            ? body.GetString()
+            : null;
+    }
+
+    [Fact]
+    public async Task SourceResponse_DoesNotLeakIntoOuterScriptContext()
+    {
+        var harness = new Harness();
+        // The real source executor would write its response into the (branch) context under the source key.
+        harness.SourceExecutor.ExecuteAsync(Arg.Any<TaskExecutorContext>(), Arg.Any<CancellationToken>())
+            .Returns(ci =>
+            {
+                var sourceContext = (TaskExecutorContext)ci[0];
+                sourceContext.ScriptContext.SetStandardResponse(harness.SourceResponse, "sourceLeakProbe");
+                return System.Threading.Tasks.Task.FromResult(Result<StandardTaskResponse>.Ok(harness.SourceResponse));
+            });
+
+        var result = await harness.ExecuteAsync();
+
+        result.Value!.IsSuccess.ShouldBeTrue();
+        harness.OuterScriptContext.TaskResponse.ContainsKey("sourceLeakProbe").ShouldBeFalse();
+        harness.OuterScriptContext.TaskResponse.ContainsKey("src").ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task ReadError_WhileCancelled_Rethrows_AndDoesNotRunSource()
+    {
+        var harness = new Harness(bypassOnCacheError: true);
+        harness.SetReadResult(new CacheGetResult(false, false, default, Error: "cancelled"));
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        await Should.ThrowAsync<OperationCanceledException>(() => harness.ExecuteAsync(cts.Token));
+
+        harness.SourceContexts.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task NullSourceData_ReturnsMetadata_AndIsNotCached()
+    {
+        var harness = new Harness();
+        harness.SourceResponse = new StandardTaskResponse
+        {
+            IsSuccess = true,
+            StatusCode = 200,
+            Data = null,
+            TaskType = "Http",
+            Metadata = new Dictionary<string, object> { ["SourceMeta"] = "kept" }
+        };
+
+        var result = await harness.ExecuteAsync();
+
+        result.Value!.IsSuccess.ShouldBeTrue();
+        ((bool)result.Value.Metadata!["CacheHit"]).ShouldBeFalse();
+        ((bool)result.Value.Metadata!["Refreshed"]).ShouldBeFalse();
+        result.Value.Metadata!["SourceMeta"].ShouldBe("kept");
+        await harness.Gateway.DidNotReceiveWithAnyArgs().SetWithResultAsync(
+            default!, default, default, default, default, default!, default, default);
+    }
+
+    [Fact]
     public async Task EmptyKey_Fails()
     {
         var harness = new Harness(staticKey: string.Empty);
@@ -438,7 +525,7 @@ public sealed class CacheAsideTaskExecutorTests
             return mapping;
         }
 
-        public Task<Result<StandardTaskResponse>> ExecuteAsync()
+        public Task<Result<StandardTaskResponse>> ExecuteAsync(CancellationToken cancellationToken = default)
         {
             var instance = Instance.Create(Guid.NewGuid(), "test-flow", "1.0", "ctx-key");
             OuterScriptContext = new ScriptContext.Builder(NullLogger<ScriptContext>.Instance)
@@ -448,7 +535,7 @@ public sealed class CacheAsideTaskExecutorTests
             var onExecute = OnExecuteTask.Create(1, Task, _outerMapping);
             var context = new TaskExecutorContext(
                 Task, onExecute, OuterScriptContext, null, TaskTrigger.OnExecute, TaskExecutionOrigin.Flow);
-            return Executor.ExecuteAsync(context, CancellationToken.None);
+            return Executor.ExecuteAsync(context, cancellationToken);
         }
     }
 }

@@ -17,6 +17,8 @@ On execution it:
    to the cache with `ttlInSeconds` + `consistency`, and returns it.
 4. In both cases the task-level `onExecutionTasks[].mapping` `OutputHandler` then runs on the result.
 
+Side effects of the source mapping on the script context (Body merges, `SetStage`/mutations, response slots) are discarded, because the source runs on a throwaway context branch; only its returned output is cached and returned.
+
 ```
 key (string | script)
    │

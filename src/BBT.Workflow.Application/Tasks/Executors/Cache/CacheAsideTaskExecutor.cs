@@ -183,6 +183,9 @@ public sealed class CacheAsideTaskExecutor : TaskExecutorBase<CacheAsideTask>
 
             if (!read.CacheOk)
             {
+                // A caller cancellation is not a cache failure: surface it instead of running the source.
+                cancellationToken.ThrowIfCancellationRequested();
+
                 if (!task.BypassOnCacheError)
                 {
                     return Result<TaskInvocationResult>.Ok(TaskInvocationResult.Failure(
@@ -195,9 +198,30 @@ public sealed class CacheAsideTaskExecutor : TaskExecutorBase<CacheAsideTask>
 
         // 2. Miss / forceRefresh: run the source as a task.
         var source = await RunSourceAsTaskAsync(task, sourceTask, context, cancellationToken);
-        if (!source.IsSuccess || source.Data is null)
+        if (!source.IsSuccess)
         {
             return Result<TaskInvocationResult>.Ok(source);
+        }
+
+        if (source.Data is null)
+        {
+            // Nothing to cache, but the result still reports what happened to the cache.
+            var metadata = BuildMetadata(task.CacheKey, null, cacheHit: false, refreshed: false);
+            if (source.Metadata is not null)
+            {
+                foreach (var (name, value) in source.Metadata)
+                {
+                    metadata.TryAdd(name, value);
+                }
+            }
+
+            return Result<TaskInvocationResult>.Ok(TaskInvocationResult.Success(
+                data: null,
+                body: source.Body,
+                statusCode: source.StatusCode ?? 200,
+                executionDurationMs: Elapsed(),
+                taskType: taskType,
+                metadata: metadata));
         }
 
         // 3. Best-effort write of the shaped value.
@@ -207,6 +231,8 @@ public sealed class CacheAsideTaskExecutor : TaskExecutorBase<CacheAsideTask>
 
         if (!write.Written)
         {
+            cancellationToken.ThrowIfCancellationRequested();
+
             if (!task.BypassOnCacheError)
             {
                 return Result<TaskInvocationResult>.Ok(TaskInvocationResult.Failure(
@@ -299,12 +325,14 @@ public sealed class CacheAsideTaskExecutor : TaskExecutorBase<CacheAsideTask>
                 metadata: response.Metadata);
         }
 
-        object? data = response.Data is null
+        JsonElement? data = response.Data is null
             ? null
             : JsonSerializer.SerializeToElement((object)response.Data, JsonSerializerConstants.JsonOptions);
 
+        // Same Body a cache hit exposes: the raw JSON text of the (cached) data.
         return TaskInvocationResult.Success(
             data: data,
+            body: data?.GetRawText(),
             statusCode: response.StatusCode ?? 200,
             taskType: response.TaskType,
             metadata: response.Metadata);
