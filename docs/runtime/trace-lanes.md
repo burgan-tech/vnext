@@ -219,7 +219,9 @@ them, and the client's question there is "fire → Active".
 - **Only status owners emit** (`OwnsStatus`). A non-owning execution beside an in-flight chain — an
   `updateData` on a Busy parent, a forwarded request — leaves the verdict to the owner.
 - **An automatic winner does not close the episode.** `TransitionPipeline` passes
-  `chainSettled:false` while another inline hop is pending. `ContinuationEnqueued` remains a legacy
+  `chainSettled:false` while another inline hop is pending. `ContinuationEnqueued`
+  (`PipelineDirectives.ContinuationEnqueued`, set by `MarkContinuationEnqueued`; read as
+  `chainSettled: !continuations.ContinuationEnqueued` in `PostCommitParentMutationService`) remains a legacy
   field; the current DI graph has no enqueue continuation strategy, so an automatic hop never
   becomes a Scheduler job.
 - **A parent handing off to a live SubFlow never emits.** It is still Busy, so `busy.subflow`

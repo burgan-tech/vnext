@@ -72,5 +72,11 @@ Each of these is a regression the repo has already paid for; treat a reintroduct
 
 ## 8. Activation episode and tracing (`pipeline/episode-*`)
 
-- [ ] `pipeline/episode-carrier` — a new async carrier copies **all three** of `EpisodeStartedAt`, `EpisodeTrigger`, `EpisodeTransitionKey` beside `TraceRoot`. A missing start degrades the consumer to a partial span.
+- [ ] `pipeline/episode-carrier` — a new async carrier copies **all four** of `EpisodeStartedAt`, `EpisodeTrigger`, `EpisodeTransitionKey`, `EpisodeTraceRoot` beside `TraceRoot`. A missing start degrades the consumer to a partial span.
 - [ ] `pipeline/episode-emit-point` — the activation span is emitted **after** the UoW commit, never at `Transition.Settle`, and only by a status owner (`OwnsStatus`) — except `Instance.Fault`, which always emits.
+
+## Reviewer-specific noise
+
+The shared output contract is [Finding format and noise rules](../README.md#finding-format-and-noise-rules).
+On top of it: padding the list with restatements of this checklist is this reviewer's main failure
+mode — a finding needs a changed line that actually violates the item.

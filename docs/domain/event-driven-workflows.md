@@ -287,6 +287,19 @@ dapr publish --publish-app-id vnext-app --pubsub vnext-pubsub \
 Only then point the actual producer at the topic. Declarative subscriptions are read at sidecar
 startup — restart the Dapr sidecar after adding or changing a YAML.
 
+## Quick reference
+
+- **Events**: `event.mapping` on the workflow (`action=start`) or on a `triggerType: 3` transition
+  (`action=transition`). Mapping implements `IEventMapping` → `EventMappingResult { InstanceKey, Body, Selector }`.
+  Delivery is domain-owned Dapr Subscription YAMLs routing topics to
+  `POST /api/v1/{domain}/workflows/{workflow}/instances/events?action=...`.
+  **Response is a Dapr pub/sub protocol body** (`EventDeliveryResponse`), never an instance DTO — Dapr
+  reads the top-level `status` field as its signal, so an `InstanceStatus` code there (`"B"`) causes
+  endless redelivery. Processed or no-active-match ⇒ `200 {"status":"SUCCESS"}`; permanently
+  unprocessable (bad `transitionKey`/action/domain, non-JSON body, missing event definition) ⇒
+  `200 {"status":"DROP","reason":…}` + `EventDeliveryDropped` warning; transient failures keep non-2xx
+  so the broker retries. Full guide: `docs/domain/event-driven-workflows.md`.
+
 ## References
 
 - Endpoint: `orchestration/.../Controllers/Instances/InstanceController.cs` (`HandleEventAsync`)

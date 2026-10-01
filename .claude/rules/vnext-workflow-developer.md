@@ -1,6 +1,23 @@
-# vNext Workflow Developer — Domain Knowledge (Always Apply)
+---
+paths:
+  - "src/**"
+  - "orchestration/**"
+  - "execution/**"
+  - "workers/**"
+  - "modules/**"
+  - "tools/**"
+  - "test/**"
+  - "vnext-meta/**"
+  - "**/*.cs"
+  - "**/*.csproj"
+---
 
-This rule complements the workflow concepts already captured in the root `CLAUDE.md`. Use it as a quick-reference card when implementing or reviewing pipeline / transition / subflow code.
+# vNext Workflow Developer — Domain Knowledge (path-scoped: loads with runtime code)
+
+This rule complements the workflow concepts in `AGENTS.md`. It is a quick-reference card for
+implementing or reviewing pipeline / transition / subflow code: imperative rules, forbidden moves and
+key symbols. The reasons, measurements and incident history behind each rule live in the linked
+`Full guide:` pages — read them before changing the behaviour a bullet pins.
 
 ## Transition Pipeline Order
 
@@ -27,6 +44,9 @@ This rule complements the workflow concepts already captured in the root `CLAUDE
 | 110 | FinalizeTransitionStep | Complete transition record; dispose script cache |
 | 112 | ResolveAvailableStep | Resolve deferred Active status |
 
+**Epilogue order is Auto → Schedule.** When Auto picked a winner (`Directives.NextTransition` set),
+`ScheduleTransitionsStep` arms no timer. Do not reintroduce "arm, then cancel on the next hop".
+
 ### StepOutcome Values
 
 - `Continue()` — advance to next step
@@ -50,905 +70,257 @@ Flow: apply `MutateDirectives` → Stop → break; SkipTo → replan; else conti
 Resolution: `IPipelineProfileResolver.Resolve(workflowContext, transitionContext)` — if
 `IsErrorBoundaryTransition` → ErrorBoundary; else by the **workflow context's** `TriggerType` (not
 the transition definition's — the two can disagree and the inbound trigger is authoritative).
+The plan is built from `ExcludedStepOrders` alone (`TransitionExecutor.BuildExecutionPlan`); the old
+"allow subflow" flag was deleted, not given teeth — do not add it back.
 
 ### Self-target composition — `updateData` ONLY
 
-A sixth profile is **composed on top of** the base, never selected instead of it. When
-`TransitionExecutionContext.SkipsStateLifecycle()` is true,
-`PipelineExecutionProfile.ForSelfTarget(base)` adds `CancelScheduledJobs (39)`, `OnExit (40)`,
-`OnEntry (60)`, `Schedule (90)` to the base's exclusions (`Manual+Self`, …).
-
-- **`SkipsStateLifecycle() = IsSelfTargetTransition() && IsUpdateDataTransition()`.** Two separate
-  claims, deliberately: the first is a fact about the target, the second is the policy. Only
-  `updateData` skips the lifecycle.
-- **Every OTHER `$self` transition runs the FULL lifecycle** — a `$self` **shared transition** above
-  all. Its state's OnExit/OnEntry fire and its scheduled transitions are cancelled and re-armed.
-  `target: $self` means "do not move the instance", *not* "skip the state's hooks". Consequence worth
-  knowing: a frequently invoked `$self` shared transition on a short-timeout state defers that
-  timeout every call.
-- **The `+Self` profile name is about the target, not the policy.** Reading `Manual+Self` as "every
-  `$self` transition gets this" is the wrong conclusion and has cost real work twice — the selection
-  lives in `PipelineProfileResolver`. `ForSelfTarget` is the mechanism; the resolver owns who gets it.
-
-- **Only `$self` counts — never a literal target that happens to equal the current state.** That
-  comparison is a coincidence produced by three unrelated mechanisms and means "no state change" in
-  only one of them: **start** pre-positions the instance into the initial state at creation
-  (`InstanceCommandAppService`, `instance.ChangeState(initialState)`) before dispatching the start
-  transition; a **retry** after `ChangeStateStep` already committed re-runs the transition to redo
-  the step that faulted; and a genuine **self-loop** (`from: A, target: A`). Reading it as self
-  killed the initial state's OnEntry entirely and turned retry into a no-op. Guarding the incidental
-  cases one at a time was tried and is unsound — do not reintroduce the comparison.
-
-- **`updateData` leaves and enters no state, so the state's lifecycle must not fire.** OnEntry would
-  re-run hooks for a state the instance never re-entered; Schedule would re-arm its timers from zero.
-- **`ChangeState (50)` still runs and must keep running** — it is the only step that sets
-  `context.Target`, which `RunAutomaticTransitionsStep (80)` reads. Excluding it makes the auto step
-  return at its first guard and the transition advances nothing.
-- **`OnExecute (30)` still runs** — the transition's own work, not the state's lifecycle.
-- `ChangeStateStep` suppresses its state-change metric/log/span event on this path **only** (it is
-  scoped to `SkipsStateLifecycle`, so a `$self` shared transition — which really does re-enter the
-  state — still reports its state change). `Instance.ChangeState` separately suppresses
-  `sub:state-changed` whenever previous == new, keyed on the states themselves rather than on
-  the transition — and it only ARMS that notification; see the coalescing rule below.
-- A parent with an open SubFlow correlation short-circuits earlier, at
-  `HandleUpdateDataDataOnlyStep (21)` — data only, nothing else.
+- `PipelineExecutionProfile.ForSelfTarget(base)` is composed on top of the base (`Manual+Self`, …)
+  when `TransitionExecutionContext.SkipsStateLifecycle()` is true; it adds `CancelScheduledJobs (39)`,
+  `OnExit (40)`, `OnEntry (60)`, `Schedule (90)` to the exclusions.
+- `SkipsStateLifecycle() = IsSelfTargetTransition() && IsUpdateDataTransition()` — only `updateData`.
+  Every other `$self` transition (a `$self` **shared transition** above all) runs the FULL lifecycle.
+- The `+Self` name is about the target, not the policy; selection lives in `PipelineProfileResolver`.
+- Only the authored `$self` counts. Never compare a literal target to the current state — do not
+  reintroduce the comparison (it killed the initial state's OnEntry and turned retry into a no-op).
+- `ChangeState (50)` must keep running (only step that sets `context.Target`, read by step 80);
+  `OnExecute (30)` still runs. A parent with an open SubFlow stops earlier at step 21.
+- Full guide: `docs/architecture/workflow-execution-pipeline.md`.
 
 ## Instance Repository Include Strategy
 
-- Pipeline steps do NOT call EF `Include` directly. Includes applied at load time.
-- `EfCoreInstanceRepository.WithDetailsAsync()` loads `DataList` (or latest-only when
-  `WorkflowExecution:LatestOnlyInstanceLoading` is on) + `Include(ChildCorrelations.Where(!IsCompleted))`
-  (split queries).
-- `GetActiveAsync` → `GetResultAsync` → `FindByIdentifierAsync` → `WithDetailsAsync()`.
-- `GetResultAsync(includeDetails: false)` is lean (no DataList/correlations).
-- History paths: `AsNoTracking` + explicit filtered includes.
-- Post-commit settlement (`FindForPostCommitSettlementAsync(id, includeLatestData)`): open correlations
-  **always** (settlement guard + fault cascade read `ActiveCorrelations`); the latest data row only when
-  something downstream projects it — sync caller (`TransitionOutput.PipelineInstance` →
-  `EnrichOutputCoreAsync`) or a fault (`Instance.Fault` publishes a SubFlow's data upward). Async settle
-  skips it. The decision matrix lives on `PostCommitParentMutationService.NeedsLatestDataForSettle`;
-  add a new `LatestData` reader there, not by re-widening the include.
-- **Incidents are never included.** `InstanceIncident` rows live in `InstanceIncidents` (unbounded
-  history, cascade with the instance) and `Instance.HasActiveIncident` is a denormalized column the
-  aggregate maintains. Guards read the flag; anything that needs the unresolved incidents (resolve on
-  retry/`FinalizeTransitionStep`, `Fault`'s upward payload, script `context.Incident`, the state body)
-  calls `IInstanceRepository.LoadActiveIncidentsAsync` first — no query when the flag is false.
-  `ResolveOpenIncidents` throws if the flag is set and nothing was loaded. New rows are inserted by
-  `EfCoreInstanceRepository.UpdateAsync` from `GetPendingIncidents()` (marked `Added` before Aether's
-  detached `Set.Update(graph)` would stamp them `Modified`). History/paging/batch reads go through
-  `IInstanceIncidentRepository`, not the aggregate.
-- **Rows read back are NOT put on the EF navigation.** `LoadActiveIncidentsAsync`'s no-tracking branch
-  hands them to `Instance.AcceptLoadedIncidents`, which keeps them in a detached list that EF cannot
-  see; `GetLoadedIncidents()` merges both sources for readers. Attaching them to the navigation made
-  every *other* context tracking that aggregate discover them as new children and re-INSERT them —
-  the retry path loads the instance in the ambient request scope and its incidents inside a
-  `RequiresNew` one, so its commit died with `23505 PK_InstanceIncidents` and a half-written response
-  body. Consequence: resolving a **detached** incident writes nothing by itself
-  (`Instance.IsDetachedIncident` says which), so `InstanceRetryAppService` persists it through
-  `IInstanceIncidentRepository.ResolveAllAsync`, unconditionally — the retry path now loads
-  no-tracking, so there is never a graph to save. Pipeline-created incidents are tracked and still
-  save through the graph. Pinned by `InstanceIncidentPersistenceTests`.
-- **A task step records the incident BEFORE its own save; nothing records one after a save.** The
-  three task steps (`RunOn{Execute,Entry,Exit}TasksStep`) call `BoundaryOutcomeHandler` and *then*
-  `UpdateAsync(instance, autoSave: true)`, so the row and the `HasActiveIncident` flag commit
-  together. Both step UoWs are non-transactional, which is what makes that save immediately visible.
-  It has to be, because an abort returns `Fail` and `TransitionPipeline.MarkInstanceFaultedAsync`
-  reloads the aggregate in its OWN `RequiresNew` UoW; it skips its fallback incident only when the
-  **committed** flag already says one exists. Recording after the save produced two rows for one
-  failure — the boundary's verdict plus a bare `ErrorBoundaryAbort` pipeline row that was the newer
-  of the two, so `incident.active` on a faulted instance carried no boundary verdict at all. The
-  unhandled path deliberately does NOT call `ApplyScriptContextChanges` (its only payload is a
-  script's `Stage` mutation, which a faulting run should not persist) and wraps the save in
-  try/catch so the step still fails with the original task error. The fallback branch stays: it is
-  the only recorder for pipeline errors with no task error (`ResourceLockConflict`,
-  `TransitionChainDepthExceeded`, policy/schema failures), for
-  `ExecutionErrors.UnhandledNonBlockingTaskFailures`, and for the low-probability failed-save path.
-  Pinned by `TaskStepIncidentPersistenceTests`.
-- **`Handle`'s `ShouldContinue` branch is unreachable from the task steps.**
-  `TaskExecutionEngine.ConvertActionResult` returns a continue-style outcome as
-  `TasksExecutionResult.SuccessWithFailedTasks`, which carries **no** boundary action, so the step's
-  `BoundaryAction != null` guard is false and `Handle` is never called for `ignore`/`log`. The
-  measured (and confirmed-correct) behaviour is therefore "no incident, and the rest of the hook is
-  skipped". Left in place so the intended semantics stay expressed.
-- **Resolve is set-based.** `Instance.ResolveOpenIncidents()` closes EVERY unresolved row on the
-  materialized aggregate and recomputes the flag from that same snapshot; there is deliberately no
-  single-row API to pick wrongly. One failure can leave more than one open row (a job-timeout
-  recovery on top of a boundary incident, a boundary transition that faults on its own, a parent
-  taking a subflow fault while it already carries one), and resolving only the newest left a
-  recovered instance reporting a stale active incident — visible to long-pollers because
-  `HasActiveIncident` is fingerprint material. `FinalizeTransitionStep` relies on the pipeline
-  aggregate being tracked and needs no repository call; the retry path is detached and always calls
-  `ResolveAllAsync`.
-- **Retry loads no-tracking and unfaults with a CAS.** `InstanceRetryAppService` reads through
-  `IInstanceRepository.GetResultAsReadOnlyAsync` and flips the status with `TryUnfaultAsync`
-  (one `ExecuteUpdateAsync` guarded on `Status == Faulted`, plus baseline alignment). Never load an
-  aggregate tracked in the ambient request UoW, mutate it, and leave the write to an inner
-  `RequiresNew` scope: the ambient commit at the end of the request wrote its own stale `Active`
-  over the `Faulted` the inner scope had persisted, leaving an instance that looked healthy, had not
-  finished its work, and could never be retried again (`Instance:100027`). The unfault must also
-  **commit before** `ExecuteRetryAsync`, because the pipeline's `GetActiveAsync` rejects a faulted
-  instance. Pinned by
-  `InstanceIncidentPersistenceTests.TryUnfaultAsync_FlipsFaultedToActiveAndLeavesNothingForAnAmbientCommitToOverwrite`.
+- Pipeline steps do NOT call EF `Include` directly — includes are applied at load time:
+  `GetActiveAsync` → `GetResultAsync` → `FindByIdentifierAsync` → `EfCoreInstanceRepository.WithDetailsAsync()`
+  (`DataList` or latest-only under `WorkflowExecution:LatestOnlyInstanceLoading`, plus
+  `Include(ChildCorrelations.Where(!IsCompleted))`, split queries).
+- `GetResultAsync(includeDetails: false)` is lean; history paths use `AsNoTracking` + filtered includes.
+- Post-commit settlement (`FindForPostCommitSettlementAsync(id, includeLatestData)`) always loads open
+  correlations; add a new `LatestData` reader to `PostCommitParentMutationService.NeedsLatestDataForSettle`,
+  never by re-widening the include.
+- **Incidents are never included.** Guards read `Instance.HasActiveIncident`; readers call
+  `IInstanceRepository.LoadActiveIncidentsAsync` first. Never attach read-back rows to the EF navigation
+  (`Instance.AcceptLoadedIncidents` keeps them detached — attaching caused `23505 PK_InstanceIncidents`).
+- A task step records the incident BEFORE its own `UpdateAsync(instance, autoSave: true)`; nothing
+  records one after a save. Resolve is set-based (`Instance.ResolveOpenIncidents()`), never single-row.
+- Retry loads no-tracking (`GetResultAsReadOnlyAsync`) and unfaults with the `TryUnfaultAsync` CAS,
+  committed before `ExecuteRetryAsync`. Never mutate an ambient-tracked aggregate and leave the write
+  to an inner `RequiresNew` scope (`Instance:100027`).
+- Full guide: `docs/runtime/instance-incident-persistence.md`.
 
 ## Long-Polling / State Function
 
-- Function type: `FunctionTypeConst.Longpooling` — conditional GET with ETag.
-- Client cycle: `GET /functions/state` → `200` (changed) | `304` (not modified → wait → retry).
-- ETag source: `LatestData?.ETag` for entity, `IRepresentationEtagService.Generate(output)` for representation.
-- **Role filtering**: `ITransitionAuthorizationManager` filters available transitions per role. Supports `$InstanceStarter`, `$PreviousUser` pseudo-roles.
-- No server-side hold — 304 drives client-side polling.
-- **Every built-in instance function descends an active subflow — except `data`.** The client holds
-  the ROOT and never the leaf, so `state`, `authorize`, `view`, `schema`, `master` and `extensions`
-  all walk into the active correlation. `data` does not, and the state body's own `data.href`
-  addresses the polled instance, so a client following the link it was given reads the root's
-  attributes while looking at the leaf's state. Measured, and pinned by
-  `TheStateFunctionDescendsButTheDataFunctionDoesNot`; whether a client wants the case's data or the
-  leaf's working copy is a product decision, not a settled one.
-- **The parent's subflow overrides resolve in ONE place per kind, and they REPLACE.** Override wins
-  outright; absent an override the object's own definition applies. There is no merge — OR-ing the
-  child's own grants back in hands the narrowing straight back to the roles it was taken from.
-  `states`/`queryRoles` → `IsQueryAllowedAsync`; `transitions`/`roles` →
-  `TransitionAuthorizationManager.EffectiveTransitionGrants`; `views` →
-  `GetSubFlowViewWithOverrideAsync`. The first two read the map **stamped on the child**
-  (`SubFlowTransitionOverrideReader` / `SubFlowStateOverrideReader`), which is the only form that
-  works at a directly-addressed leaf; the legacy `views` map (`overrides.views` / `viewOverrides`,
-  resolved through `GetSubFlowViewWithOverrideAsync`) is deliberately parent-side only and is not
-  stamped — but the scoped `overrides.states.*.views` / `overrides.transitions.*.views` ARE stamped
-  and resolved child-side; see *Parent overrides are resolved child-side, on the child's own state*
-  below. Resolving per surface is how they diverged: at such a leaf `authorize` read the PARENT's definition,
-  found nothing, and gave the OPPOSITE verdict to the state function for both roles.
-- **`authorize` answers two different questions and the parameter picks which.**
-  `?transitionKey=` is actionability, `?queryRoles=true` is visibility — the state function's
-  `transitions` and its 403 answer the same two. They must agree question-for-question, and the
-  verdict is in the BODY on both statuses: a refusal is `403` with `{"allowed":false}`, so reading
-  only the 200 turns every refusal into "no answer".
-- **`queryRoles` resolution is one method, and it honours the parent's stamped override.**
-  `TransitionAuthorizationManager.IsQueryAllowedAsync` resolves, highest first: the parent's stamped
-  `subflow.state_role_overrides` entry for the instance's effective state → that state's own
-  `queryRoles` → the workflow root's. It **replaces**, never merges — a parent that narrowed a child's
-  visibility meant to narrow it. Every read gate goes through it: state, data, view, schema and
-  incident functions, `authorize`'s query branch, and the human-task list. Reading the stamp there
-  rather than per surface is what makes the narrowing apply wherever the child is reached from; the
-  parent-side reader (`AuthorizeAppService`, `subFlowConfig.Overrides.States`) cannot serve it,
-  because it needs an active SubFlow correlation that the child being asked about does not have.
-  `SubflowStarter` had always written that map and nothing read it.
-- **`effectiveStatus` is served, and it is CLAMPED.** `Instance.GetEffectiveStatus` — not the
-  raw `EffectiveStatus` column — feeds `metadata.effectiveStatus` on the instance GET, the list view,
-  `GetInstanceTask` and sync `start`/`transition` responses. Rule:
-  `Status.IsTerminal || EffectiveStatus.IsTerminal ? Status : EffectiveStatus` — the projection is
-  served only while NEITHER side is terminal. Both arms match what the state function already answers:
-  a terminal projection on a running level is the SubFlow completion window (`subFlowIsTerminal` drops
-  the subflow view and says `Busy`), and a terminal own status with a stale non-terminal projection is
-  a cancel/fault cascade the write side cannot repair (it completes the level while the correlation is
-  still open, so `ResyncEffectiveStatus` no-ops, and cleanup closes the correlation afterwards) — that
-  arm was found by running it: cancelled parents served `effectiveStatus: A` against the state
-  function's `C`. `InstanceStatus.IsTerminal` is the single definition; do not re-spell the terminal
-  set anywhere.
-  **Never rewrite the clamp as `HasActiveSubFlow ? EffectiveStatus : Status`.** The list query does not
-  include child correlations (`EfCoreInstanceRepository.IncludeListData` loads `DataList` only), so that
-  predicate is false for every list item and every parent inside a subflow would report its own `Busy`.
-  The raw column stays the fingerprint member and the filter/sort target; `WorkflowLogs.EffectiveStatusDrift`
-  (20445) is now a regression sentinel for a served value, not a measurement.
-- **`Instance.Type` is write-once, and it is NOT the relationship check.** `R`/`S`/`P` records how
-  the instance was *started*, derived once in `SetInfoMetadata` from `parent.id` + `parent.flowtype`
-  and never updated (latched on `IsTransient`; the EF property is pinned clean in
-  `EfCoreInstanceRepository.UpdateAsync`). **`parent.flowtype` alone is not a discriminator** —
-  `SetInfoMetadata` `TryAdd`s the instance's OWN workflow type code there when the key is absent, so
-  a workflow whose definition declares `type: "S"` and is started directly through the API carries
-  `parent.flowtype: "S"` with no parent at all, and `IsSubFlow` answers true for it. Several
-  vnext-example workflows are in exactly that shape. `IsSubFlow`/`IsSubItem` and every `parent.*`
-  reader are deliberately UNTOUCHED — do not "unify" them with `Type`; that is a behaviour change
-  (it would restore output mapping for those roots and stop their empty-parent subflow-terminal
-  events) and needs its own council row and measured evidence. Served as `metadata.type` on the
-  instance GET, the list view and `GetInstanceTask`; filterable/sortable as **`instanceType`**, never
-  the bare `type`, which would collide with a same-named business attribute. Not in the state body,
-  so `ResponseShapeVersion` is unaffected. Adding a column to the aggregate? Add it to
-  `CreateSnapshot` too — `EffectiveStatus` was forgotten there once and every script read the
-  constructor default.
-- **Response-shape version**: `StateFunctionCache.ResponseShapeVersion` (currently `v13`) is folded into both the ETag material and the cache key. Bump it in the same commit as any change to what the state body carries — otherwise a client polling a parked instance keeps getting 304 and never sees the new shape.
-- **`timeout` block**: `{ key, target, executeAtUtc, annotations }`, the workflow-level deadline armed for the
-  polled instance. `annotations` is the effective timeout's (`timeout.annotations`); an override
-  replaces it with the rest of the timeout, never merges. **Not** a `transitions[]` entry — a workflow timeout is instance-scoped, armed
-  once at start, never re-armed, and keyed by the virtual `$timeout`, so it has no callable key and
-  `TransitionItem` has no `target`. `key`/`target` come from the **effective** timeout, resolved by
-  `InstanceMetadataExtensions.ResolveEffectiveTimeout` — the parent's `subFlow.overrides.timeout`
-  when the instance carries one, else `workflow.Timeout`. **That one resolver is also what the arm
-  (`InstanceCommandAppService`) and the fire path (`FlowTimeoutJobHandler`, `ApplyTimeoutStateStep`)
-  call; do not reintroduce a second reading.** Before it existed the override was consumed only by
-  the arm, so a child declaring `"timeout": null` had a job armed from the parent's timer that fired
-  into `TimeoutConfigMissing` and did nothing. `executeAtUtc` is the persisted `InstanceJob.ExecuteAt`
-  of the active `Timeout` row. Omitted when nothing resolves, when no job is armed, when `ExecuteAt`
-  is null, or once the polled instance's **own** `Status.IsTerminal` — the cleanup that closes the
-  job row is asynchronous, so the guard must not wait for it. Polled instance only, no subflow
-  descent. Needs no fingerprint member (immutable instant + status-governed presence).
-- **`$timeout` is resolved to a key at order 20, not 38.** `CreateTransitionRecordStep` turns the
-  virtual key into the audit record's transition key, and it must do so through the **effective**
-  timeout for the same reason the target does. `Workflow.ResolveWellKnownKey` *throws*
-  `TimeoutNotConfiguredForWorkflowException` when the workflow has no timeout of its own — so before
-  this was fixed, an override-driven child died at step 20, three steps before `ApplyTimeoutStateStep`
-  could have resolved anything. Worse than not firing: `SetBusy` (19) had already committed, so the
-  child sat **Busy in its waiting state forever** with its job row marked processed. Measured on the
-  bench, twice, by `timeout-lab`. `ResolveWellKnownKey` itself is deliberately untouched — it is a
-  definition-level method with no instance in scope and is right about what it can see; the
-  instance-aware answer belongs at the call sites that hold `context.Instance`.
-- **`timer.reset` is read nowhere.** A workflow timeout always means "not finished within `duration`,
-  from instance start", never "idle for `duration`", whatever the definition declares. An idle
-  timeout needs a per-state scheduled transition (`triggerType: 2`), which IS cancelled and re-armed
-  on state entry.
-- **`incident` block**: always present, and it carries **links, not content** — `{ hasActiveIncident, active: { href } (only while the flag is true), history: { href } }`. Identical on the state body and on `metadata.incident` (single GET and list). `active.href` → `GET …/instances/{instance}/incidents/active` (newest unresolved, **404 `Instance:100037`** when none is open — a normal answer, since a retry can resolve between the poll and the follow-up); `history.href` → the paged history. Same `queryRoles` gate as the state function on both, and no stack trace anywhere. When lifted from an active subflow, `active.href` addresses the **leaf that owns the incident** while `history.href` stays on the polled instance. `HasActiveIncident` is a fingerprint member so raise/resolve without a state change moves the ETag. **Do not put incident fields back in the body**: the embedded summary is what made the state function read the incident table on its hottest path and what created the resolve-A-then-raise-B stale-`active` hole, both of which the link form removes.
-- **Scheduled entries in `transitions`**: the state body lists the runtime's armed scheduled transitions inside the existing `transitions` array as `{ name, kind: "scheduled", executeAtUtc, href, view, schema }` entries, appended after the available transitions and built from active `InstanceJob` rows (`JobType.ScheduledTransition`) whose `ExecuteAt` is stamped at scheduling time from the same instant the Dapr job is armed with. Each carries the transition definition's `annotations`, resolved via the job's `SourceState` (null, not a failure, when it no longer resolves) — every `transitions[]` kind carries annotations. The href/view/schema links use the same url shapes as triggerable entries but with `hasView`/`loadData`/`hasSchema` hardcoded false — a TEMPORARY uniformity concession for domain clients (they will adapt); scheduled transitions remain System-actor-gated at execution, so the href is not callable. Not role-filtered; not merged from subflows. Job-set changes deliberately do NOT participate in the fingerprint ETag (team decision, issue #864) — same-state re-arms can leave the scheduled entries stale behind a 304; documented as a known gap in `docs/runtime/state-function-cache-and-etag.md`.
-- **`interaction` block presence depends on `terminate`.** Both need the gate (rule or roles) to
-  admit the caller. `terminate: true` → only while `IsAwaitingLongPollAck`, with `ack.href` (the
-  pipeline is paused at 75). `terminate: false` → whenever the instance is in the declaring state,
-  **no** `ack` (the pipeline never pauses, no token, no fallback job); `fallbackTimeoutSeconds` there
-  tells the client how long to keep long polling. Do not gate the non-terminating block on the token —
-  it is never armed, and that is how the block vanished between v11 and v13. Ack endpoint and
-  `authorize?ack=true` only act on an armed token, so they are `terminate: true`-only by construction.
-- **`interaction.longPoll` authorization has two mutually exclusive arms** (issue #936): `roles` grants OR one condition `rule` (`IConditionMapping`, same slot shape as view/notification rules; validator rejects both, schema enforces exactly-one). Both surfaces — the state function's signal emit and the acknowledge endpoint — admit through the single `ILongPollInteractionGate`, which owns the arm selection (rule, else roles, else allow) and resolves caller roles lazily via a surface-supplied factory; the rule reads instance data via `context.Instance.Data` (lazy) — `context.Body` is deliberately NOT populated on this surface, unlike view-rule contexts; a rule returning false, throwing, or failing to compile denies (fail-closed; the fallback-timeout job still resumes the pipeline, so a broken rule cannot strand the instance). A rule-gated interaction body is NEVER stored in the shared state body cache (`CallerScopeHash` does not cover the headers/query/data a rule reads; bubbled subflow interactions skip caching conservatively). The fingerprint 304 path is untouched — rule-input changes behind an unchanged fingerprint are an accepted #864-class staleness gap; enforcement is never stale because the ack evaluates fresh. Full guide: `docs/domain/long-poll-termination.md`.
+- `FunctionTypeConst.Longpooling`: `GET /functions/state` → `200` | `304`; no server-side hold.
+  ETag: `LatestData?.ETag` (entity), `IRepresentationEtagService.Generate(output)` (representation).
+- Bump `StateFunctionCache.ResponseShapeVersion` (currently `v13`) in the same commit as any change to
+  what the state body carries — otherwise parked pollers keep getting 304.
+- Every built-in instance function descends an active subflow — except `data`.
+- Parent overrides resolve in ONE place per kind and REPLACE (never merge): `IsQueryAllowedAsync`,
+  `TransitionAuthorizationManager.EffectiveTransitionGrants`, `GetSubFlowViewWithOverrideAsync`.
+- `effectiveStatus` is served CLAMPED via `Instance.GetEffectiveStatus` (`InstanceStatus.IsTerminal`
+  on either side ⇒ own `Status`). Never rewrite it as `HasActiveSubFlow ? EffectiveStatus : Status`.
+- `Instance.Type` (`R`/`S`/`P`) is write-once and NOT the relationship check; do not unify
+  `IsSubFlow`/`IsSubItem`/`parent.*` readers with it. Filter as `instanceType`, never bare `type`.
+- `incident` block carries **links, not content** — never put incident fields back in the body.
+  Scheduled entries come from `JobType.ScheduledTransition` rows and are outside the fingerprint (#864).
+- `interaction.longPoll` admits through `ILongPollInteractionGate` (`roles` OR one `rule`, fail-closed);
+  a rule-gated body is never cached. Full guide: `docs/domain/long-poll-termination.md`.
+- `interaction` presence: `terminate: true` → only while `IsAwaitingLongPollAck`, with `ack.href`;
+  `terminate: false` → whenever in the declaring state, no `ack`, no token. Never gate the
+  non-terminating block on the token. Full guide: `docs/domain/long-poll-termination.md`.
+- Full guide: `docs/runtime/state-function-cache-and-etag.md`; timeout block, `$timeout` resolution at
+  order 20 and `timer.reset` (read nowhere): `docs/runtime/workflow-timeout.md`.
 
-## Field masking (`x-masking`) — pointer
+## Field masking (`x-masking` / `x-encryption`)
 
-- Order `x-roles → x-masking → x-encryption`, decided in ONE pass (`SchemaFieldFilterService` →
-  `InstanceDataRoleFilter.Apply`) with ONE evaluator. Never add a second masking stage or decorator: the
-  data-function cache stores the filtered body and skips the filter on a hit.
-- `x-masking.roles` and `x-encryption.roles` are **allow-only exemption lists** (an allow match sees the raw
-  value, everyone else the transformed one); exemption is `IRoleGrantEvaluator.IsAnyRoleAllowed` over the list,
-  and a role-less caller can never satisfy a role-bound grant (`IsUnprovableRoleBoundGrant` — a `$role.` value
-  resolving to `""` matched the empty role once). `deny` is rejected at publish (`FieldMaskingDefinition`).
-- **ONE read path**: instance GET, instance list, data function and sync start/transition response read through
-  `IInstanceDataReadService` (the `IInstanceDataWriteService` counterpart); the Get* trigger tasks reach the same
-  surfaces. It preloads secrets and runs the exposure pass; when nothing applies (no schema, unreadable schema, no rules)
-  it serves the row as stored — `ISchemaFieldFilterService.ApplyAsync` returns `null` for "nothing applied" precisely so
-  no caller can fall back to a plaintext. It opens a row (`UnprotectAsync`) only when the row carries tokens, so the
-  filter can serve an allow-listed caller the plaintext. Do not call the filter from a surface directly.
-- `x-encryption.type: "hash"` is applied on **WRITE**: the funnel stores `HASHED:SHA256:<hex>` (HMAC under the
-  instance's own salt), the read path serves the digest; no `roles`, no validation keywords, one transform per field.
-- Per-instance key + salt live in the flow schema's `InstanceSecrets` table, created ONLY by the write funnel
-  under its row lock (`InstanceSecretStore.GetOrCreateAsync`), cached in a private in-process L1 and **never in
-  Redis**. Entry points preload (`IInstanceSecretPreloader`); an open without one loads the secret through EF in an
-  isolated scope + unit of work (`ExecuteInIsolatedUnitOfWorkAsync`) — never Npgsql directly, never the caller's context.
-- **Get* trigger tasks read as the header set they present** — mapping headers + the request's credential
-  (`sub`, `act_sub`, `position`, `client_id`, `role`) for each one the mapping left absent or EMPTY; a non-empty mapping
-  value wins (`HttpTaskInvocation.AppendCallerCredential`, the one rule EVERY outbound task type uses — see
-  `docs/runtime/correlation-and-tracing.md`). The values come from the REQUEST headers, so a morph-idm-resolved role is
-  never carried. One set for both paths: cross-domain it is the remote binding's `Headers`
-  (`SerializeReadCredential`); same-domain the executor reads under `ICurrentUser.Change(...)` from it (`ReadAs`), ALWAYS
-  — `ChangeFromHeaders` is a no-op for an empty set and `ICurrentUser` (AsyncLocal) wins over headers. `SystemRead` is
-  deleted.
-- Data-function cache generation (`v3` + `-nomask`) is in the key AND the ETag; rows carrying tokens are never cached.
-- **`InstanceData.Data` IS the column as stored** — tokens included — on the live aggregate, on a script snapshot and
-  after a reload. There is no plaintext view on the entity and no materialization interceptor; nothing decrypts a row in
-  place. Decryption happens only where it is asked for, through `IInstanceDataProtector.UnprotectAsync` (async only):
-  the write funnel (opens the head to merge/validate, never keeps it), the read guard (allow-listed callers) and
-  `context.Instance.DecryptAsync(path, ct)`. Do not reintroduce a plaintext member on `InstanceData` or a lazy open:
-  the two-faced model (`StoredData` + view) was removed by decision, and with it any way for EF to write plaintext.
-  Never write `InstancesData."Data"` outside `InstanceDataWriteService`. Decryption is prefix-driven, never
-  schema-driven. `SchemaEncryption:EncryptWrites` is the rollback switch for both hash and encrypt.
-- **`DecryptAsync` opens only the instance's OWN path**: `null` for a plain field, an unknown path, a value that cannot be
-  opened, a token passed as a path, or a snapshot without a bound protector (`ScriptContextBuilder` binds it via
-  `Instance.BindDecryption`; `CreateSnapshot`/`CopyDecryptionTo` carry it). Its token is per call (never captured;
-  contexts are cached) and `OperationCanceledException` propagates. Dynamic role grants and the human-task list see the
-  token by decision — a role or a task title should not be `encrypt`; DynamicExpresso sees tokens.
-- **A SubFlow/SubProcess hands its parent PLAINTEXT**: `ISubItemEventDataResolver` opens the child's own tokens with the
-  child's key before `Instance.Complete`/`Fault` raise the sub event (the parent cannot open them, least of all
-  cross-domain). Every Complete/Fault call site of a sub item passes it.
-- There is no context-load gate for an undecryptable value anymore (`Instance:100040` before admission was removed);
-  only a WRITE that would carry an unopenable value forward refuses (`EncryptionKeyUnavailableException`). Scope is
-  InstanceData only — transition bodies, task journals and outbox payloads still hold plaintext.
+- Order `x-roles → x-masking → x-encryption` in ONE pass (`SchemaFieldFilterService` →
+  `InstanceDataRoleFilter.Apply`), one evaluator. Never add a second masking stage — the data-function
+  cache stores the filtered body (generation `v3` + `-nomask` in key AND ETag; token rows never cached).
+- `x-masking.roles` / `x-encryption.roles` are allow-only exemption lists; `deny` is rejected at publish;
+  a role-less caller never satisfies a role-bound grant (`IsUnprovableRoleBoundGrant`).
+- ONE read path: `IInstanceDataReadService` (GET, list, data function, sync response, Get* tasks). Do not
+  call the filter from a surface directly. Get* tasks read as their header set (`AppendCallerCredential`).
+- `InstanceData.Data` is the column as stored (tokens included). Decrypt only via
+  `IInstanceDataProtector.UnprotectAsync` / `context.Instance.DecryptAsync`; never reintroduce a plaintext
+  member; never write `InstancesData."Data"` outside `InstanceDataWriteService`. Prefix-driven, never schema-driven.
+- Per-instance key + salt in `InstanceSecrets`, created only by the write funnel, L1 cache, **never Redis**.
+  A sub item hands its parent PLAINTEXT (`ISubItemEventDataResolver`).
 - Full guide: `docs/domain/field-masking.md`.
 
 ## Task / Action History (system functions)
 
-- `GET …/instances/{instance}/functions/tasks` returns the full `InstanceTasks` journal in
-  execution order (unpaged); `GET …/functions/actions?taskId={id}` returns one row's
-  `InstanceActions` (400 `Instance:100039` without a valid `taskId`, 404 `Instance:100038` when the
-  task isn't the instance's own). Both are `IInstanceFunctionHandler` registrations (keys in
-  `FunctionTypeConst.TaskHistory/ActionHistory`) under the same `queryRoles` gate as the state
-  function. No state-body involvement — no `ResponseShapeVersion` or fingerprint change.
-- **Metadata only, deliberately.** The journal's `Request`/`Response`/`InvocationResult` payloads
-  carry mapping-built headers (auth material included) and are served by NO API since the Monitor
-  host's removal (#982); the one payload-derived public field is the faulted row's `{"error": …}`
-  reason. The repository read projects columns in SQL (`InstanceTaskHistoryRow`) so the jsonb
-  payloads never leave the database — do not switch it back to materializing the entity, and do not
-  add payload fields here.
-- **`InstanceActions` has no writer** (never has, since the initial commit) — the action function
-  returns an empty list until one lands. `InstanceTask.FaultedTaskId` is equally never set.
-  Full guide: `docs/runtime/instance-task-and-action-history.md`.
+- `functions/tasks` returns the `InstanceTasks` journal; `functions/actions?taskId=` one row's
+  `InstanceActions` (`Instance:100039` / `Instance:100038`). Same `queryRoles` gate as state.
+- **Metadata only.** Never serve `Request`/`Response`/`InvocationResult` payloads; keep the SQL
+  projection (`InstanceTaskHistoryRow`), never materialize the entity.
+- `InstanceActions` has no writer. Full guide: `docs/runtime/instance-task-and-action-history.md`.
 
 ## Well-Known Transitions (`cancel` / `updateData` / `exit`)
 
-- All three are workflow-level `Transition` objects (`Workflow.Cancel/UpdateData/Exit`) — full surface
-  including `roles`, `view`, `schema`, `annotations`.
-- **Listed in `availableTransitions`** from every state (subject to `triggerType` Manual/Event and
-  `availableIn`), and merged from the **parent** into a subflow's list — that merge is `updateData`'s
-  primary discovery surface. On a parent with an open SubFlow correlation, `HandleUpdateDataDataOnlyStep`
-  (21) writes data and skips to Finalize; `ForwardToActiveSubflowStep` (10) never forwards `updateData`.
-- The **configured key** is listed, never the alias (`cancel` / `update-parent-data` / `exit`): role
-  filtering resolves via `FindTransitionInContext`, which matches these three on the configured key.
-  Aliases stay accepted on the request side (`ResolveWellKnownKey`).
-- `kind` discriminator mirrors the JSON field names: `cancel` | `updateData` | `exit` — note
-  `updateData`, *not* the `update-parent-data` alias.
-- `roles` are enforced at discovery (state function filtering, `/functions/authorize`,
-  authorization-matrix) — **not** at `POST .../transitions/{key}`, which is true for every transition
-  type, not just these.
-- `WorkflowValidator` runs all three through `ValidateSingleTransition` (role-grant syntax +
-  trigger-type rules); `updateData.target` must be `$self`.
-- Schema (`vnext-schema` `cancelTransition`/`exitTransition`/`updateDataTransition`) accepts both
-  `roles` and `availableIn` — `availableIn` was added in 0.0.79 to match runtime behavior that had
-  always been there but was unauthorable under `additionalProperties: false`.
+- Listed in `availableTransitions` under the **configured key** (never the alias
+  `update-parent-data`), `kind` = `cancel` | `updateData` | `exit`; merged from parent into a subflow.
+- `ForwardToActiveSubflowStep` (10) never forwards `updateData`; `updateData.target` must be `$self`.
+- `roles` are enforced at discovery only, as for every transition type.
+- Execution gate: `WellKnownTransitionSpecification` (`Transition:100024`), keyed by
+  `Workflow.IsWellKnownTransitionKey` (aliases AND configured custom keys).
 - Full guide: `docs/domain/well-known-transitions.md`.
 
 ## `availableIn` (shared + cancel/updateData/exit)
 
-- Two authorable shapes, mixable in one array: bare state key, or `{ state, roles }`
-  (`AvailableInJsonConverter`, modelled on `ViewDisplayJsonConverter`). Role-less entry ⇔ bare string.
-- `Write` derives the shape from `HasRoles`, it does **not** remember how the entry was authored: the
-  string form and the roles-bearing object form round-trip byte-for-byte, while a role-less *object*
-  (`{state}` or `{state, roles: []}`) normalizes to the equivalent string. Lossless and deliberate —
-  same rule as `ViewDisplayJsonConverter` collapsing SDI-only to a bare string. Don't add an
-  "authored shape" flag to defeat it.
-- Never read `AvailableIn` directly. Use `Transition.IsAvailableInState(stateKey)` (state-only gate,
-  empty ⇒ every state) and `FindAvailableIn(stateKey)` (for role narrowing). Ordinal comparison;
-  duplicate states ⇒ first match wins, validator errors.
-- **`availableIn` describes SHARED and well-known transitions only. It is not the state gate for a
-  STATE transition**, which carries no `availableIn` at all and is implicitly scoped to the state
-  that declares it. The "empty ⇒ every state" rule is right for the first family and wrong for the
-  second: read through `IsAvailableInState`, an empty list made `approve` — declared only on
-  `review` — answer *allowed* for an instance sitting in `intake`. `TransitionAuthorizationManager`
-  therefore asks `IsStateScoped(workflow, key)` first and, for a state transition, requires the key
-  to be declared on the CURRENT state. Measured on role-matrix-lab: the state function offered
-  `[submit-for-review, record-note, cancel-role-matrix]` while `authorize?transitionKey=approve`
-  answered 200; execution then rejected the call with `Transition:100021`. The oracle was wrong in
-  the **permissive** direction, which is the direction that matters once a middle tier admits on its
-  answer.
-- **Roles compose as AND**: `transition.roles` is the global gate, `availableIn[state].roles` narrows
-  it for that state; both must allow. Empty set allows, so legacy definitions are unaffected.
-- Three surfaces, and they must not diverge: state function **state+roles**, `authorize`
-  **state+roles**, execution policy **state only** (roles have never been enforced at execution for
-  any transition type). Both role-aware surfaces go through
-  `IsTransitionAllowedInStateAsync` / `FilterAuthorizedTransitionKeysAsync` — do not add a third path.
-- `grantsForPrefetchHint` must include the per-state grants too, or a `$PreviousUser` grant living only
-  on an `availableIn` entry can never match.
-- Execution gate for the well-known three is `WellKnownTransitionSpecification` (error code
-  `Transition:100024`); it claims keys via `Workflow.IsWellKnownTransitionKey`, which matches reserved
-  aliases **and** configured custom keys — matching aliases only leaves a custom-keyed transition
-  ungated by every spec.
+- Shapes: bare state key or `{ state, roles }` (`AvailableInJsonConverter`); a role-less object
+  normalizes to a string — do not add an "authored shape" flag.
+- Never read `AvailableIn` directly: use `Transition.IsAvailableInState(stateKey)` / `FindAvailableIn(stateKey)`.
+- `availableIn` is NOT the gate for a STATE transition: `TransitionAuthorizationManager` asks
+  `IsStateScoped(workflow, key)` and requires the key on the CURRENT state.
+- Roles compose as AND with `transition.roles`. State function + `authorize` check state+roles,
+  execution checks state only — go through `IsTransitionAllowedInStateAsync` /
+  `FilterAuthorizedTransitionKeysAsync`, never a third path. `grantsForPrefetchHint` must include per-state grants.
+- Full guide: `docs/domain/well-known-transitions.md`, `docs/domain/role-grant-authorization.md`.
 
-## Role Grant Validation
+## Role Grants (validation + evaluation)
 
-- Three role forms: **static** (`backoffice.operator`), **predefined** (`$InstanceStarter`,
-  `$PreviousUser`, `$InstanceBehalfOfStarter`, `$PreviousBehalfOfUser`), **dynamic**
-  (`$user.` / `$userBehalfOf.` / `$role.` + `$.context.<path>`). Only dynamic is validated; the
-  other two are free-form.
-- A qualifier prefix ⇒ dynamic *intent*. The remainder must be the literal `$.context.`
-  (**Ordinal — case-sensitive**) plus a non-empty nav path. `$user.customer`,
-  `$user.$.Context.x` and `$role.$.context.` are all errors.
-- Why strict: `DynamicRoleGrant.TryParse` returns null on any deviation, and runtime `IsMatch` then
-  falls through to the **static** comparison — the grant becomes silently inert (an ALLOW that never
-  grants, a DENY that never denies). Definition time is the only place it is visible.
-- Never re-implement the parse rules in a validator. Use `DynamicRoleGrant.Classify`, which shares
-  `TryParse`'s constants and comparisons; the `Classify == WellFormed ⟺ TryParse != null` invariant
-  is pinned by `DynamicRoleGrantTests`.
-
-## Role Grant Evaluation (runtime)
-
-- **One evaluator, no exceptions.** All instance-bound evaluation goes through `IRoleGrantEvaluator`
-  (`ITransitionAuthorizationManager.CreateEvaluatorAsync`). The manager's other methods are thin
-  wrappers. Never add a second matcher — three diverged inside the manager once and the surfaces
-  disagreed about the same transition. `RoleGrantEvaluatorTests` pins the equivalence.
-- Canonical rule over the **whole** grant set, in two phases:
-  **`authorized = DenyGroupOk AND AllowGroupOk`**.
-  `DenyGroupOk` = **no** deny grant matches **any** of the caller's roles (an AND over the denies —
-  one breach refuses). `AllowGroupOk` = there are no allow grants at all (blacklist), **or** at least
-  one allow grant matches at least one role (an OR over the allows). Empty grant set → allow.
-  **Deny is evaluated first and short-circuits**: matching an allow is the side that resolves
-  predefined and dynamic grants, and a dynamic grant's context build serializes the instance's full
-  latest data, so a refusal must not pay for it.
-- **A caller with NO roles cannot clear a role-bound deny.** A static role or `$role.` deny refuses a
-  role-less caller (`TransitionAuthorizationManager.IsUnprovableRoleBoundDeny`, shared by both
-  evaluator twins); identity-bound denies (predefined, `$user.`, `$userBehalfOf.`) evaluate normally.
-  This is what makes it safe for `morph-idm` to resolve every failure — error status, timeout,
-  transport, unparseable body, no `act_sub`/`client_id` — to an EMPTY set instead of a 403: an empty
-  set can only narrow access. The two ship together; removing the rule would turn every blacklist
-  into a blanket allow during a provider outage. Both built-in resolvers now always succeed.
-- **A denied role is not bought back by an allowed one.** This is the half that changed: the rule used
-  to be applied per caller role inside a loop that returned on the first role that was allowed, so a
-  deny for role B was never reached once role A matched an allow — `[approver, blocked]` passed. The
-  new composition is monotonically restrictive; no caller gains access anywhere it did not have it.
-  A caller with **no** roles is still evaluated once so predefined/dynamic grants apply.
-- **`CreatedBy` pairs with the actor (`ActorUserName`); `BehalfOf` pairs with `UserName`.** Predefined
-  and dynamic grants match on the *grant* side, independent of the caller role being evaluated — that
-  is what makes `[deny: $InstanceStarter]` bind regardless of the caller's other roles.
-- **Every decision point takes the caller's WHOLE role set, never one of them.** `IsAnyRoleAllowed`,
-  `IsRoleAllowedForGrantsAsync`, `IsTransitionAllowedForRoleAsync`, `IsTransitionAllowedInStateAsync`
-  and `FilterAuthorizedTransitionKeysAsync` all take `IReadOnlyCollection<string>?`. Feeding one role
-  — `ICallerRoleResolver.SingleRoleOf`, which is `roles[0]` — made the answer depend on header ORDER:
-  measured on the lab, `x-roles: other,ht-c-approver` was offered nothing while
-  `x-roles: ht-c-approver,other` was offered the transition, same caller, same grants. It also put
-  the deny group out of reach, since an AND across roles needs the roles. `SingleRoleOf` survives for
-  cache scoping (`CallerScopeHash`) and state aliasing display, never for a decision.
-- **Never loop the caller's roles and return on the first allowed one.** That is the canonical rule's
-  composition rebuilt a layer up, and it rebuilds the wrong one — it is how `AuthorizeAppService`
-  re-introduced the defect twice after the evaluator was fixed. One call, whole set.
-- **Batch, don't loop.** Create one evaluator per instance/schema and query it. `grantsForPrefetchHint`
-  must cover every grant you will evaluate: a `$PreviousUser` / `$PreviousBehalfOfUser` grant missing
-  from the hint can never match. The auth context is built lazily and memoized per transition key —
-  building it serializes the instance's full latest data.
-- **Every surface evaluating a grant set must be given the same `AuthorizationRequestContext`.** Omitting
-  it does not fail closed, it makes `$.context.Headers/QueryParameters/RouteValues` **empty**, so the
-  grant silently cannot match — the transition vanishes from `availableTransitions` while the `authorize`
-  function, which does pass the context, still answers *allowed* for it.
-- **`queryRoles` is NOT enforced by this runtime. It is ANSWERED by it.** The read surfaces
-  (`state`, `data`, `view`, `schema`, `master`, `tasks`, `actions`, `incidents`, `incidents/active`)
-  and `POST .../longpoll/ack` carry no gate: the Internal Gateway asks
-  `GET .../functions/authorize?queryRoles=true` (or `?ack=true`) and admits on that answer.
-  `queryRoles` itself is untouched — still evaluated in full, per hop down the active-correlation
-  chain, by that endpoint — and so is role RESOLUTION everywhere (`availableTransitions` filtering,
-  state aliases, `x-roles` pruning, human-task list, `CallerScopeHash`). Enforcement left; visibility
-  stayed. **Do not add the gate back on a read path**: two decision points on one question drift, and
-  this repo has twice paid for exactly that. `authorize?ack=true` is what makes the acknowledge case
-  possible at all — the `rule` arm is a C# script no gateway can evaluate, and that target admits
-  through the same `ILongPollInteractionGate` the endpoint used to call.
-- **`authorize` answers the CONJUNCTION down the active-correlation chain.** `?queryRoles=true`
-  evaluates the polled instance's own grants **and** every level beneath it to the deepest active leaf
-  — the same shape the state function enforces (gate at the polled instance, then descend and gate
-  again). It used to answer from the leaf alone, which made it strictly weaker than the gate it
-  describes. Overrides resolve **per hop from the child's stamp**, never from the parent's definition:
-  that is what makes a directly addressed leaf give the same verdict as the same leaf reached through
-  its parent, and what keeps a parent's override of its child from reaching the grandchild.
-- **Under `morph-idm` a request `role` header takes precedence, and morph-idm is not called**
-  (committee decision, 2026-09-25). The header — `ICurrentUser.Roles`, else the forwarded header
-  dictionary, i.e. exactly what the default provider reads — REPLACES the service's answer when it
-  is non-blank; only a request without one goes to morph-idm (and then every failure is `[]`). No
-  merge in either direction. Span outcome `header`, Debug log 20465. The header is still never
-  forwarded to morph-idm.
-- **`authorize`'s `role` query parameter composes per `ICallerRoleResolver.RoleParameterMode`.**
-  `Fallback` (`default`): stands in only when nothing was resolved (`ack`: additive). `AsRoleHeader`
-  (`morph-idm`, 2026-09-25): handed to the resolver AS the `role` header when the request has none, so
-  the header precedence above applies — `[X]`, morph-idm not asked; a real header wins; every target
-  incl. `ack`. It was ignored under morph-idm before; once the header became decisive that made the
-  same claim 200 through the header and 403 through the query string. Put the mode on the resolver,
-  never a provider-name check inside a surface.
-- **`authorize` has a fourth target, `ack`.** `?ack=true` is the pre-flight for
-  `POST .../longpoll/ack`, admitted through the same `ILongPollInteractionGate` — so the `rule` arm, a
-  C# script no gateway can evaluate, is covered. It mirrors the endpoint's own descent rule
-  (`IsAwaitingLongPollAck`, not "has a subflow") and answers **allowed** when nothing is awaiting,
-  because the endpoint answers `Ok()` idempotently there.
-- **`cancel` and `exit` are parent-retained, in `authorize` as at execution.**
-  `HandleCancelPreflightStep` (order 5) skips to `CreateTransition` (20), over the forward at order 10,
-  so they never reach the subflow; `IsSubflowForward` also excludes them (`BypassBusyCheck`). Together
-  with `updateData` and an in-state shared transition, those are the only keys `authorize` answers
-  against the parent while a SubFlow is active.
-- **`transition.roles` is not enforced at execution, by design.** `POST .../transitions/{key}` runs
-  schema validation + `TransitionExecutionPolicy`, and no specification there reads `Roles`;
-  `IsTransitionAllowedForRoleAsync`'s only production caller is `AuthorizeAppService`. Roles describe
-  what a client should *offer*, not a capability boundary — put real boundaries in `queryRoles`, a
-  function's `roles`, or the transition's task logic. Do not "fix" this; it is a deliberate decision.
-- **The `queryRoles` gate reads the instance's OWN `CurrentState`, never `EffectiveState`.**
-  `EffectiveState` is the deepest ACTIVE SUBFLOW's state key, so on a level that has a subflow of its
-  own it names a state of a different workflow: `FindState` returns null, the parent's stamped
-  override (keyed by the state the parent declared for that child) cannot match either, and the gate
-  silently falls through to the workflow root's grants. Measured on the bench:
-  `CurrentState=mid-waiting` / `EffectiveState=leaf-waiting` on a mid, and a role the root had
-  narrowed away read that mid **200**. Both a SubFlow state's own `queryRoles` and a parent's
-  `overrides.states` narrowing stopped applying — with no error and no log — for exactly as long as
-  the child had a subflow of its own. `HumanTaskLeafResolver` already resolved from `CurrentState`,
-  so the two paths disagreed about the same instance; this was the side that was wrong.
-- **Never read `currentUser.Roles` directly at a decision point.** Use
-  `currentUser.ResolveCallerRoles(headers)`: `ChangeFromHeaders` is *not* in the HTTP pipeline (only
-  `TransitionRunner`), so a legacy-`role`-header caller would be treated as role-less — 403 from an
-  allowlist, or every guarded field pruned. Resolution is `ICurrentUser.Roles` first, header as
-  **fallback, not merge**. The same role set must feed the decision, the field filtering, and
-  `CallerScopeHash`.
-- Full guide: `docs/domain/role-grant-authorization.md`.
+- Forms: static, predefined (`$InstanceStarter`, `$PreviousUser`, `$InstanceBehalfOfStarter`,
+  `$PreviousBehalfOfUser`), dynamic (`$user.` / `$userBehalfOf.` / `$role.` + `$.context.<path>`, Ordinal).
+  Never re-implement parse rules — use `DynamicRoleGrant.Classify` (shares `TryParse`).
+- **One evaluator**: `IRoleGrantEvaluator` via `ITransitionAuthorizationManager.CreateEvaluatorAsync`.
+  `authorized = DenyGroupOk AND AllowGroupOk`, deny first; empty set ⇒ allow.
+- A role-less caller cannot clear a role-bound deny (`IsUnprovableRoleBoundDeny`); a denied role is not
+  bought back by an allowed one. Never loop the caller's roles returning on the first allowed one.
+- Every decision point takes the WHOLE role set; `ICallerRoleResolver.SingleRoleOf` is for cache scoping
+  (`CallerScopeHash`) only. Never read `currentUser.Roles` directly — use `currentUser.ResolveCallerRoles(headers)`.
+- Batch: one evaluator per instance/schema; pass every surface the same `AuthorizationRequestContext`.
+- `queryRoles` is ANSWERED (by `authorize?queryRoles=true`), not enforced on read paths — do not add
+  the gate back. `authorize` answers the CONJUNCTION down the chain; `?ack=true` is the long-poll ack pre-flight.
+- The `queryRoles` gate reads the instance's OWN `CurrentState`, never `EffectiveState`.
+- `transition.roles` is not enforced at execution, by design — do not "fix" it. `cancel`/`exit` are
+  parent-retained. Under `morph-idm` a non-blank `role` header replaces the service's answer.
+- Full guide: `docs/domain/role-grant-authorization.md`, `docs/domain/authorize-function.md`.
 
 ## Sync vs Async
 
-- `sync=true`: blocks until pipeline completes; full instance returned.
-- `sync=false` (default): immediate `{ id, status }`; client polls via State function.
-- **A flow/transition `executionType` (`S`/`A`) overrides the `sync` query parameter** (vnext#1003):
-  when set it is the source of truth (transition inner beats flow outer beats the query param); status,
-  enrichment and 200-vs-202 all follow the EFFECTIVE mode (`context.Mode`), and `CallerMode` keeps the
-  requested one. It is resolved ONLY for genuine external requests — `BuildTransitionContext` and the
-  start path skip it when `input.SuppressResponseEnrichment` is set, so runtime-internal subflow
-  start/forward keep their forced `sync=true`. Full guide: `docs/runtime/execution-type.md`.
-- Automatic continuations always execute inline and are awaited. An async request uses one initial
-  `flow.transition` job; no Scheduler job is created for each automatic hop.
-- Runtime-generated child start, active-child forward and descended retry calls always set
-  `sync=true`, independent of original caller mode and SubFlow (`S`) / SubProcess (`P`) type. The
-  call awaits the child's current activation to a rest point, not future human/event completion.
-- **A sync response never evaluates extensions** (0.0.93). `EnrichOutputCoreAsync` projects
-  reload-or-reuse → schema field filter → (only when `workflow.Output` has mapping code and the
-  instance is not a subflow) script context + output mapping. `extensions` stays on the DTO as an
-  always-empty map so the shape does not change, and the `?extensions=` query parameter is gone
-  from start/transition. `IInstanceExtensionService` is no longer a dependency of
-  `InstanceCommandAppService` — that is the kill switch, enforced by the compiler. Extensions run
-  only on read surfaces (`InstanceQueryAppService`: instance GET, instance list, data function,
-  extensions endpoint). Do not reintroduce the pass "just for parity": it cost an extension task
-  round (HTTP calls included) plus a full-instance-data `ScriptContext` build per sync transition
-  for a field no client read.
+- `sync=true` blocks to completion; `sync=false` (default) returns `{ id, status }` for polling.
+- A flow/transition `executionType` (`S`/`A`) overrides `sync` (transition > flow > query); never for
+  runtime-internal calls (`SuppressResponseEnrichment`). Automatic continuations always run inline.
+- Runtime-generated child start, active-child forward and descended retry always use `sync=true`.
+- A sync response never evaluates extensions; `IInstanceExtensionService` stays out of
+  `InstanceCommandAppService` — do not reintroduce the pass.
+- Full guide: `docs/runtime/execution-type.md`.
 
 ### Activation episode (trace)
 
-- **Definition**: trigger → rest point. A trigger is the HTTP start/transition request, a timer or
-  timeout fire, an event delivery, a retry, a long-poll ack, a subflow resume or a child start; the
-  rest point is the Busy→Active CAS flip, Completed/Canceled, Faulted, or a deliberate rest in Busy
-  (`busy.subflow` open SubFlow correlation, `busy.parked` auto-gate not met, `busy.subtype`).
-- **One trace + one backdated `Instance.Activation/{key}` span per episode**, emitted **after** the
-  UoW commit (`TransitionRunner`, `PostCommitParentMutationService.MutateFreshAsync`,
-  `TransitionPipeline.MarkInstanceFaultedAsync`, `JobTimeoutRecoveryService`) — never at
-  `Transition.Settle`, whose flip is not durable yet. Parent = lane anchor, start = episode start,
-  settling span attached as an `ActivityLink`. Kind `Internal` (a `Consumer` would be counted as an
-  APM transaction).
-- **The episode start travels in `WorkflowTraceLane.Episode`** and, across every async boundary, as
-  `EpisodeStartedAt` / `EpisodeTrigger` / `EpisodeTransitionKey` / `EpisodeTraceRoot` beside `TraceRoot` in every lane
-  carrier (`TransitionJobPayload`, `TransitionContinuationRequested`, the three `InstanceSub*`
-  events, `SubflowForwardInput`, `FlowCompletedInput`, `SubFlowFaultedInput`, `SubItemCanceledInput`).
-  **A new carrier must copy all four** — a missing start degrades the consumer to a
-  `vnext.activation.partial=true` span covering only its own hop.
-- **Only status owners emit** (`OwnsStatus`). A lost CAS yields no verdict (whoever flipped emits),
-  and a fresh post-commit parent that is no longer Busy yields none (a sync child callback already
-  closed it). `Instance.Fault` emits `faulted` regardless of ownership. The legacy
-  continuation-enqueued branch is unreachable while only `InlineContinuationStrategy` is registered.
-- **`ActivationActivity` is the one explicit-parent span outside the lane helpers** and must keep its
-  `Activity.Current` save/restore: an explicit parent leaves `Activity.Parent` null, so `Stop()`
-  would null `Activity.Current` for the caller's remaining frame (`Emit_restores_Activity_Current`).
-  Full guide: `docs/runtime/trace-lanes.md` § Activation episode, `docs/runtime/trace-span-tree.md`.
-
-### Activation episode (trace)
-
-- **Definition**: trigger → rest point. A trigger is the HTTP start/transition request, a timer or
-  timeout fire, an event delivery, a retry, a long-poll ack, a subflow resume or a child start; the
-  rest point is the Busy→Active CAS flip, Completed/Canceled, Faulted, or a deliberate rest in Busy
-  (`busy.subflow` open SubFlow correlation, `busy.parked` auto-gate not met, `busy.subtype`).
-- **One trace + one backdated `Instance.Activation/{key}` span per episode**, emitted **after** the
-  UoW commit (`TransitionRunner`, `PostCommitParentMutationService.MutateFreshAsync`,
-  `TransitionPipeline.MarkInstanceFaultedAsync`, `JobTimeoutRecoveryService`) — never at
-  `Transition.Settle`, whose flip is not durable yet. Parent = lane anchor, start = episode start,
-  settling span attached as an `ActivityLink`. Kind `Internal` (a `Consumer` would be counted as an
-  APM transaction).
-- **The episode start travels in `WorkflowTraceLane.Episode`** and, across every async boundary, as
-  `EpisodeStartedAt` / `EpisodeTrigger` / `EpisodeTransitionKey` / `EpisodeTraceRoot` beside `TraceRoot` in every lane
-  carrier (`TransitionJobPayload`, `TransitionContinuationRequested`, the three `InstanceSub*`
-  events, `SubflowForwardInput`, `FlowCompletedInput`, `SubFlowFaultedInput`, `SubItemCanceledInput`).
-  **A new carrier must copy all four** — a missing start degrades the consumer to a
-  `vnext.activation.partial=true` span covering only its own hop.
-- **Only status owners emit** (`OwnsStatus`), and **a hop that enqueued a continuation never emits**
-  (`PipelineDirectives.ContinuationEnqueued` → `chainSettled:false`); a lost CAS yields no verdict
-  (whoever flipped emits), and a fresh post-commit parent that is no longer Busy yields none (a sync
-  child callback already closed it). `Instance.Fault` emits `faulted` regardless of ownership.
-- **`ActivationActivity` is the one explicit-parent span outside the lane helpers** and must keep its
-  `Activity.Current` save/restore: an explicit parent leaves `Activity.Parent` null, so `Stop()`
-  would null `Activity.Current` for the caller's remaining frame (`Emit_restores_Activity_Current`).
-  Full guide: `docs/runtime/trace-lanes.md` § Activation episode, `docs/runtime/trace-span-tree.md`.
+- Episode = trigger → rest point. One trace + one backdated `Instance.Activation/{key}` span, emitted
+  **after** the UoW commit, never at `Transition.Settle`. Kind `Internal`, never `Consumer`.
+- A new lane carrier must copy all four: `EpisodeStartedAt` / `EpisodeTrigger` /
+  `EpisodeTransitionKey` / `EpisodeTraceRoot` (beside `TraceRoot`), else `vnext.activation.partial=true`.
+- Only status owners emit (`OwnsStatus`); a lost CAS yields no verdict; `Instance.Fault` always emits.
+  A hop that enqueued a continuation would not emit (`ContinuationEnqueued` → `chainSettled:false`),
+  but that branch is unreachable while only `InlineContinuationStrategy` is registered.
+- `ActivationActivity` must keep its `Activity.Current` save/restore (`Emit_restores_Activity_Current`).
+- Full guide: `docs/runtime/trace-lanes.md` § Activation episode, `docs/runtime/trace-span-tree.md`.
 
 ## Locking — one lock, at the status change
 
-- **The Busy flag is the mutex.** A distributed lock is taken *only* for the status check-and-set,
-  for the milliseconds it takes. The pipeline body and its auto-chain run with no lease held.
-- **Exactly one lock per request-handling hop, on `ctx.LockKey`** (`vnext:{domain}:{flow}:{id}`):
-  - sync → `TransitionPipeline` admission (`ReserveAsync` / `TakeOverAsync`);
-  - async accept → `ITransitionAdmissionService.AcceptAsync`, which acquires the lock once,
-    performs the kind's flip and runs the duplicate-job guard + durable enqueue under it.
-- Ordering on both paths: **fast-fail Busy check → validation → lock → flip → work → release.**
-  Never hold a lock across context creation or schema/policy validation.
-- The accept's `{LockKey}:enqueue` lock and `IReservedTransitionResolver`'s per-kind lock keys are
-  **gone**. They came from the old whole-chain lock model; with a millisecond-scale status lock a
-  reserved transition no longer needs its own key to get past a Busy main flow.
-- **`AcceptAsync`'s callback runs with the lock HELD** — never call `ReserveAsync`/`TakeOverAsync`/
-  `ReserveSubflowChainAsync`/`Release*` from inside it. `InstanceStatusLock` is a single-attempt,
-  non-reentrant `TryAcquire`; the nested call would simply fail to acquire.
-- The duplicate-active-job guard shares that critical section because its check-then-insert has
-  **no DB constraint** behind it. A partial unique index cannot replace it: a `$self` auto loop and
-  a re-armed scheduled transition both legitimately hold two active rows for the same
-  `(InstanceId, JobType, SourceState, TransitionKey)` tuple.
-- **cancel/exit/timeout flip Busy at the accept**, not in the pipeline. They stay exempt from the
-  Busy 409, but they do change the status, so they take the same lock as everything else. The job
-  re-enters `IsPreReserved` and `TransitionPipeline` skips the second `TakeOverAsync`.
-- **updateData (`Unconditional`) takes NO lock and NO duplicate-job guard — on either path.** It is
-  status-neutral (flip = None, nothing to serialize) and must accept parallel requests: N
-  simultaneous updateData accepts share the same logical job identity yet are all legitimate, each
-  carrying its own payload, so the guard's dedupe would *lose data* for this kind. Job id/name are
-  unique per enqueue, so lock-free insert cannot collide; instance-data writes are serialized
-  downstream by the per-instance write funnel. Before this exemption, N parallel notifiers
-  (subprocess → parent `document-ready-update`) fought over the parent's status lock and every
-  loser burned an error-boundary retry backoff for a lock that protected nothing.
-- There is **no duplicate transition-record guard** downstream. Duplicate *requests* are stopped
-  only by the accept-time active-job guard; duplicate *hops* by the per-hop policy checks.
-- **Epilogue sırası Auto → Schedule'dır.** Auto kazanan seçtiyse (`Directives.NextTransition` dolu)
-  `ScheduleTransitionsStep` hiçbir timer arm etmez — eski "arm et, zincirin bir sonraki hop'unda
-  CancelScheduledJobs ile sil" churn'ü bilinçli olarak kaldırıldı. Kazananla zincirlenen hop fault
-  ederse timer'lar da arm edilmemiştir (faulted instance'ta zaten işe yaramazlardı).
+- **The Busy flag is the mutex.** Exactly one short lock per hop, on `ctx.LockKey`
+  (`vnext:{domain}:{flow}:{id}`): sync admission (`ReserveAsync` / `TakeOverAsync`) or async
+  `ITransitionAdmissionService.AcceptAsync`. Never hold it across the pipeline body.
+- Order: fast-fail Busy check → validation → lock → flip → work → release.
+- Never call `ReserveAsync`/`TakeOverAsync`/`ReserveSubflowChainAsync`/`Release*` inside
+  `AcceptAsync`'s callback — the lock is held and non-reentrant.
+- The duplicate-active-job guard lives in that critical section; no partial unique index can replace it.
+- cancel/exit/timeout flip Busy at the accept; `updateData` (`Unconditional`) takes NO lock and NO
+  duplicate-job guard. Do not bring back `{LockKey}:enqueue` or per-kind lock keys.
+- Full guide: `docs/runtime/status-locking.md`.
 
 ## Status / State / Type Semantics
 
-**Instance Status**: `Busy (B)`, `Active (A)`, `Passive (P)`, `Completed (C)`, `Faulted (F)`.
-**State Types**: `Initial=1`, `Intermediate=2`, `Finish=3`, `SubFlow=4`, `Wizard=5`.
-**State Sub Types**: `None=0`, `Success=1`, `Error=2`, `Terminated=3`, `Suspended=4`, `Busy=5`, `Human=6`, `Cancelled=7`, `Timeout=8`.
-**Trigger Types**: `Manual=0`, `Automatic=1`, `Scheduled=2`, `Event=3`.
+Enum values (Instance Status, State Types, State Sub Types, Trigger Types): `AGENTS.md` § Status / State / Type Semantics.
 
 ## Error Boundary
 
-- Levels: Task → State → Global (resolved by `CompiledBoundaryChain`).
-- Rules sorted: `EffectivePriority` ASC → specificity DESC → definition order.
-- Actions: `Abort`, `Retry`, `Rollback`, `Ignore`, `Notify`, `Log`.
-- `BoundaryOutcomeHandler` mapping:
-  - `Log`/`Ignore` → `Continue()`
-  - Transition set → `RequestNextTransition(key, ErrorBoundary)` + `SkipToFinalize()`
-  - Abort without transition → Fail → instance fault
-- Error-boundary transitions set `IsErrorBoundaryTransition = true`.
-- Error-boundary profile skips Preflight, ForwardToActiveSubflow and ResourceLock. It does **not**
-  disable subflow handling and does not remove the Auto step: the plan is built from
-  `ExcludedStepOrders` alone (`TransitionExecutor.BuildExecutionPlan`), and `LifecycleOrder.SubFlow`
-  (70) is in no exclusion set. A profile-level "allow subflow" flag used to exist and was never read;
-  it was deleted rather than given teeth, because enforcing it would have been an unrequested
-  behaviour change.
+- Levels Task → State → Global (`CompiledBoundaryChain`); sort `EffectivePriority` ASC → specificity
+  DESC → definition order. Actions: `Abort`, `Retry`, `Rollback`, `Ignore`, `Notify`, `Log`.
+- `BoundaryOutcomeHandler`: `Log`/`Ignore` → `Continue()`; transition set →
+  `RequestNextTransition(key, ErrorBoundary)` + `SkipToFinalize()`; abort without transition → Fail → fault.
+- Error-boundary transitions set `IsErrorBoundaryTransition = true`. Profile exclusions: see the table above.
 
 ## SubFlow Lifecycle
 
-### A state starts a SubFlow. Only a SubFlow. (Platform rule, 2026-09-22)
+- **A state starts a SubFlow, only a SubFlow:** `state.subFlow.type` must be `S`
+  (`WorkflowValidator.ValidateStateSubFlowType`). A `P` is started only by `SubProcessTask` (`TaskType.SubProcess = 14`).
+- `Instance.HasActiveSubFlow`, `Instance.Subflow`, `Instance.AddCorrelation` and
+  `HasActiveCorrelationForSameState` read `S` only — correct, not narrow; do not widen them to `P`.
+- `S`: completion → output mapping → `ResumePipelineAsync` from `ClearBusyOnResumeStep` (79).
+  `P`: correlation complete, no parent resume. On resume failure the correlation is reverted in a new UoW.
+- Runtime child calls force `sync=true` and set `SuppressResponseEnrichment` (identity-only answer) —
+  never read attributes off a sub-start or forward response.
+- Completion window: child terminal while parent correlation open ⇒ state function shows parent transitions.
+- Full guide: `docs/architecture/subflow-execution.md`.
 
-**`state.subFlow.type` must be `S`.** A state-level SubFlow relationship is the blocking kind and
-nothing else — a `P` (SubProcess) may **not** be started from a state. The platform convention also
-says a SubProcess may not start another SubProcess, but **only the state-level shape is enforced**:
-`ValidateStateSubFlowType` inspects `state.SubFlow` on the workflow being validated, not what runs
-inside a workflow that some other definition uses as a `P` child — that would need cross-workflow
-analysis a single-workflow validator cannot do. Treat the nested-SubProcess rule as author discipline,
-not something the runtime currently checks.
+### Parent overrides are resolved child-side
 
-**A SubProcess is started by its own task**: `SubProcessTask` (`TaskType.SubProcess = 14`). That
-executor starts the child and creates the correlation itself —
-`SubProcessTaskExecutor.CreateCorrelationAsync` builds an `InstanceCorrelation` stamped
-`SubFlowType.SubProcess` and calls `AddCorrelation` on the tracked parent. That is the only sanctioned
-path to a `P` relationship.
-
-This is an authoring constraint, and it is the reason the runtime reads `S` everywhere a state-level
-relationship is meant: `Instance.HasActiveSubFlow` and `Instance.Subflow` filter `SubFlowType.SubFlow`,
-`Instance.AddCorrelation` takes Busy only for `S`, and `HandleSubFlowStep`'s idempotency guard
-(`HasActiveCorrelationForSameState`) reads `Instance.Subflow`. **All four are correct, not narrow** —
-do not "fix" them to include `P`. A parent is Busy for a *blocking* child's lifetime; a SubProcess is
-fire-and-forget and its parent keeps running, which is why its correlation neither marks Busy nor
-appears in these readers.
-
-**Enforced at definition time since 2026-09-22**: `WorkflowValidator.ValidateStateSubFlowType` rejects
-any state whose `subFlow.type` is not `S`. Before that rule existed such a definition was authorable
-and then behaved differently by caller mode — the async path admitted the parent continuation it
-produces, because a job re-entry carries `IsPreReserved`, while a sync request did not and collided
-with the Busy its own earlier stage had set (`409 Instance:100031`, parent left Busy-not-Faulted, no
-automatic recovery). That divergence was a **symptom of the invalid definition**, not a runtime defect
-to patch in admission; the council session `2026-09-22-sync-subprocess-continuation-admission` closed
-`VOID` on this rule.
-
-Consequence worth knowing: `HandleSubFlowStep` still branches on `SubFlowType.SubProcess` at state
-level and `PostCommitContinuationBehavior.ContinueParent` has no other producer, so **that whole
-cross-stage continuation path is now unreachable from a valid definition**. It is deliberately left in
-place rather than deleted — removing it is a separate change, and it is the landing site if a second
-`ContinueParent` producer is ever proposed.
-
-- **SubFlow (S)**: completion → output mapping → `ResumePipelineAsync` (`ExecMode.Resume`, `ResumeFrom = ClearBusyOnResumeStep`, `IsSubFlowResume = true`). Parent resumes from step 79.
-- **SubProcess (P)**: completion → correlation complete + persist → no parent resume (fire-and-forget).
-- On resume failure, correlation reverted in a new UoW.
-- Start: `CreateInstanceInput` with parent metadata in `ExtraProperties`, `StrictIdempotency: true`.
-- `SubflowStarter`, `ForwardToSubflowJobHandler` and descended subflow retry force `sync=true`.
-  `S` versus `P` controls parent terminal-resume behavior, not the child-call mode.
-- Those runtime-internal child calls also set `SuppressResponseEnrichment` (SERVER-ONLY flag on
-  `StartInstanceInput` / `TransitionInput`, same posture as `ChainReserved`; set locally by the
-  starter/handler and cross-domain by the `sub/instances/start` and `internal/subflow-forward`
-  endpoints themselves — it is not carried in a body). The child still awaits its pipeline but
-  answers identity-only (`Id`, `Key`, `Status`): the starter reads `IsSuccess`, the relay reads
-  `Status`, and the client's attributes/extensions come from the **parent's** own
-  `EnrichOutputCoreAsync`. Do not read attributes off a sub-start or forward response.
-
-### Parent overrides are resolved child-side, on the child's own state
-
-- `overrides.states` / `overrides.transitions` travel to the child in the two stamps
-  (`subflow.state_role_overrides`, `subflow.transition_role_overrides`) — whole maps, despite the
-  names. `SubFlowOverrideStamp` is their one parser.
-- Long-poll: only `fallbackTimeoutSeconds` and `roles`, field-level. Every reader calls
-  `Instance.ResolveEffectiveLongPoll(state)`; never read `State.LongPoll*` at a decision point —
-  the job's window and the body's window would diverge. No override adds a long-poll; a `rule` arm
-  ignores a `roles` override.
-- Views: `(childState, viewKey)` / `(childTransition, viewKey)` via `Instance.ResolveViewOverride`,
-  applied in `ResolveViewAsync` after the child's own rules picked. Keyed by `CurrentState`, never
-  `EffectiveState`. Rules are never overridden.
-- Legacy `overrides.views` / `viewOverrides` stays parent-side and deprecated; mixing it with the
-  scoped view overrides on one subFlow is a validation error.
+- Stamps `subflow.state_role_overrides` / `subflow.transition_role_overrides`, parsed only by `SubFlowOverrideStamp`.
+- Long-poll: always `Instance.ResolveEffectiveLongPoll(state)`, never `State.LongPoll*`. Views:
+  `Instance.ResolveViewOverride`, keyed by `CurrentState`, rules never overridden.
+- Legacy `overrides.views` / `viewOverrides` is parent-side and deprecated; mixing with scoped views is an error.
 - Full guide: `docs/domain/subflow-overrides.md`.
 
-### `sub:state-changed` is coalesced to one event per activation episode
+### `sub:state-changed` and `SubflowStateService`
 
-- **`Instance.ChangeState` does not publish. It arms.** The event is published at the episode's
-  **rest point** by `Instance.PublishPendingSubStateChange()`, called from
-  `TransitionSettlement.ApplyAsync` inside the pipeline's unit of work — so the event and the state
-  it describes commit together.
-- **Why:** an inline auto-chain crossing A→B→C→D is ONE episode with one observable outcome. The
-  parent can act on nothing in between, because the chain has not stopped. Per-hop publishing made
-  this the runtime's highest-volume signal (6 facts per 908 ms chain against a ~1.3 s delivery;
-  7.5 % of 42 803 deliveries wrote nothing at the receiver) and moved the parent's state-function
-  ETag on every hop, waking long-pollers for states they could not use. `EffectiveState` and
-  `LastSubFlowStateChangedAt` are both `InstanceStateFingerprint` members.
-- **The value is unchanged, only the count.** The old burst's LAST event carried the final
-  `CurrentState`; the single coalesced event carries the same one. `PreviousState` is now the state
-  the episode STARTED in (nothing reads it — pinned as unread by the parent-notification council).
-- **Rest point ⊋ Active.** `ShouldPublishSubState` publishes on `chainSettled && OwnsStatus`, with
-  two exclusions. It is deliberately broader than the activation verdict: a lost CAS or an
-  already-Active owner yields no verdict, but the state that hop wrote is real and the parent must
-  hear it. Parked Busy (`BusyParked`, an unmet auto-gate) and `BusySubtype` **do** publish — they are
-  rest points, the instance is sitting there waiting for input.
-- **Two exclusions.** An open SubFlow correlation: the parent is Busy for the child's lifetime and
-  the state the client observes is the child's, so the parent's own move into the SubFlow state is
-  an intermediate superseded by the child's notification travelling up. And `Faulted`:
-  `InstanceSubFaultedEvent` already carries the faulted state upward; this channel reports
-  progression, not failure.
-- **Creation flushes explicitly.** `InstanceCommandAppService` pre-positions a new instance into its
-  initial state and commits in a unit of work with no settlement, so it calls
-  `PublishPendingSubStateChange()` itself. **Load-bearing:** when a child's start transition targets
-  its own initial state (e.g. `subflow-orchestration-grandchild` → `grandchild-initial`) nothing
-  moves afterwards, so the pipeline's rest point has nothing to publish and this is the parent's
-  ONLY notification for that child. Removing it silently strands the parent's `effectiveState`.
-- The coalescing state is two unmapped private fields on the aggregate. Their lifetime is the
-  tracked instance's, which is exactly one episode: the inline auto-chain reuses it
-  (`CreateFromPreloaded`), every post-commit / retry / subflow-callback boundary loads a fresh one.
-- Pinned by `SubStateChangeCoalescingTests`.
+- `Instance.ChangeState` only ARMS the event; `Instance.PublishPendingSubStateChange()` publishes it
+  once per episode at the rest point. Excluded: open SubFlow correlation, `Faulted`.
+- Never remove the explicit flush at creation in `InstanceCommandAppService` — it is the parent's only
+  notification when the start transition targets the initial state.
+- `SubflowStateService` takes the per-sub-item lock; equal `ChangedAt` is re-applied, only older rejected.
+- Never add a correlation-first CAS before the parent load — write order stays P → C (40P01 otherwise).
+- Full guide: `docs/runtime/event-publish-modes.md`.
 
-### Child state → parent `EffectiveState` (`SubflowStateService`)
+### Accept-time chain reserve
 
-- **It takes the SAME per-sub-item lock the three terminal paths take**
-  (`vnext:{domain}:{flow}:{parentId}:sub:{subId:N}`, bounded wait from
-  `WorkflowExecutionOptions.SubItemTerminalLockRetry`). Before that it was the only parent-mutation
-  path with no lock, which made its `SubFlowStateChangedAt` read-check-write a real TOCTOU: two
-  deliveries could both read the same stamp, both pass the check, and the OLDER one land last.
-- **Do not "fix" this with a CAS on the correlation row placed before the parent load.** Every
-  terminal path mutates the correlation and the parent in ONE `SaveChanges` batch, and EF emits
-  `Instances` before `InstancesCorrelations` — the order is always P → C. A correlation-first CAS
-  inverts that to C → P with an aggregate load in between, and deadlocks (40P01) against the
-  terminal paths on the hot path. The lock is the mechanism; the write order stays P → C.
-- **Equal `ChangedAt` is ACCEPTED and re-applied**, only strictly-older is rejected. A duplicate
-  delivery carries the same stamp; re-applying is idempotent, and rejecting it would close the only
-  recovery path a redelivery has.
-- **The Inbox BACKUP checks before it locks** (`SubFlowStateChangedInput.IsBackupDelivery`, set only
-  by `InstanceSubStateChangedEventHandler`). One no-tracking `ProbeSubflowStateAsync` row: stale by
-  the same predicate, or the same notification (seq, else µs stamp) whose values the parent and the
-  open correlation already carry ⇒ dropped with no lock, no transaction, no write; anything else takes
-  the locked path. It is a plain READ COMMITTED select — no row lock, no write — so it does not
-  reintroduce the forbidden correlation-first CAS, and recovery is intact (an uncommitted first apply
-  leaves an older watermark). A backup that loses the lock re-probes before throwing. Relay
-  deliveries never probe.
-- **The state channel has its OWN lock backoff** (`WorkflowExecutionOptions.SubItemStateLockRetry`,
-  10 × 10 ms), not the terminal paths' 120 ms: the wait is `base*attempt + jitter(0..base)`, so at
-  120 ms the first retry alone slept 120–240 ms for a lock held a few ms (measured max 241 ms).
-- The UoW is `RequiresNew, IsTransactional = true` — not for the lock, for atomicity: without a
-  transaction Aether stages the outbox rows *after* `UpdateAsync(autoSave)` already committed the
-  Instance row, so the upward event and the state write could diverge.
-- It loads through `FindForSubflowStateChangeAsync` (tracked parent + only this child's OPEN
-  correlation, **no `DataList`**), not the default detail load.
-- **It is the second post-commit relay call site.** When the parent is itself a subflow the write
-  raises the grandparent's `InstanceSubStateChangedEvent`; the service snapshots the aggregate's
-  events before saving, commits, releases its lock, then hands them to `IPostCommitRelayDispatcher`.
-  That is what makes the fast path walk the whole ancestor chain instead of stopping at depth 1 —
-  the runner never sees an event raised inside this service's own UoW. Capped by
-  `PostCommitRelayDispatcher.MaxRelayDepth`; past it the event still travels the outbox.
-
-### Accept-time chain reserve (async transitions on a parent with an active SubFlow)
-
-- **The client only ever observes the leaf.** The state function walks the active-correlation chain
-  and reports the **deepest** active subflow's status (`InstanceQueryAppService`,
-  `Status = subFlowStateInfo.Status`). A parent holding an open SubFlow correlation is `Busy` for that
-  subflow's entire lifetime by design (`Instance.AddCorrelation` → `Busy()`; `CompleteCorrelation`
-  deliberately does not clear it), so an ancestor's Busy carries **no** information about in-flight work.
-- Therefore `AsyncTransitionStrategy` calls `ITransitionAdmissionService.ReserveSubflowChainAsync`
-  on the `IsSubflowForward` branch — marking the chain down to the leaf **before** the 202 commits.
-  Without it the accept answers while the leaf still reads `Active`, and a client long polling on the
-  parent concludes nothing is in progress and stalls the flow.
-- It uses `MarkBusyWithPropagationAsync`, **not** the `Try…` variant: the latter short-circuits on
-  `AlreadyBusy` (its 409 contract, pinned by tests) and would never reach the leaf. Do not "unify" them.
-- **The relay must then claim that reserve**, or the leaf rejects it with `Instance:100031` for being
-  Busy — the Busy the accept just set. The claim is `TransitionInput.ChainReserved` →
-  `WorkflowExecutionContext.IsPreReserved` → `AdmissionKind.OwnerReentry`, threaded
-  accept → `TransitionJobPayload.SubflowChainReserved` → `ForwardToActiveSubflowStep` →
-  `ForwardToSubflowJob.ChainReserved` → `ForwardToSubflowJobHandler`.
-- **Never claim a reserve that was not taken.** The flag is narrower than `IsPreReserved` (which every
-  job re-entry sets) precisely so a sync-origin or cancel/exit/timeout relay cannot barge past a leaf
-  that is Busy for its own reasons.
-- Cross-domain hops go through the internal-only `POST .../internal/subflow-forward`, whose body
-  carries the claim. Not the public transition endpoint: it copies caller headers unfiltered, so a
-  claim routed through it would be forgeable.
-- **The sync path deliberately does not chain-reserve** (`TransitionPipeline`, `IsSubflowForward`
-  branch): a blocking caller cannot observe a stale `Active`, so it would only widen stranded-Busy.
-- Compensation: `ReleaseSubflowChainAsync` → `ReleaseWithPropagationAsync` (and internal
-  `PUT .../internal/busy-release` cross-domain) releases **only what the reserve flipped** — levels
-  with an open SubFlow correlation are recursed past, not settled, so effectively just the leaf.
-
-### SubFlow Completion Window
-If subflow is in terminal status (`Completed`/`Faulted`/`Passive`) while parent correlation is still open, State function shows **parent** main-flow transitions instead of subflow terminal view.
+- Async `IsSubflowForward` accepts call `ReserveSubflowChainAsync` (`MarkBusyWithPropagationAsync`,
+  not the `Try…` variant) before the 202; the sync path deliberately does not reserve.
+- The relay claims it via `TransitionInput.ChainReserved` → `AdmissionKind.OwnerReentry`; never claim
+  a reserve that was not taken. Cross-domain: internal `POST .../internal/subflow-forward` only.
+- Full guide: `docs/architecture/subflow-chain-reserve.md`.
 
 ## Instance Data
 
 - Immutable, SemVer-versioned: task results → Patch, schema additions → Minor, breaking → Major.
-- Full-merge model: each version = full state + delta.
-- `LatestData` = current; `DataList` = history.
+- Full-merge model: each version = full state + delta. `LatestData` = current; `DataList` = history.
 - Queryable via filters on instance columns and `attributes.*` JSON paths.
 
 ## Related Instance Access (scripts)
 
-- `context.Related` (`IRelatedInstanceAccessor`) — one hop only: `HasParent` (sync), `ParentAsync()` (up,
-  from `parent.*` ExtraProperties), `SubAsync(key)` / `SubsAsync(key?)` / `SubKeysAsync()` (down, from
-  correlations incl. completed).
-- Key = `InstanceCorrelation.SubFlowName` (sub workflow key, no alias field). `SubAsync` = newest by
-  `CreatedAt`; `SubsAsync` returns all, oldest first, batched (never N+1).
-- `IsCompleted` = target instance status `C`; `CorrelationCompleted` = relationship closed (always null
-  for the parent direction). They disagree during the subflow completion window — don't conflate them.
-- Reads are **system-identity and unfiltered**: no query-role check, no `x-roles` filter, no extensions,
-  no data-function cache. Copying a related field into instance data bypasses `x-roles` for that field —
-  document it where you copy it.
-- Runs inside the current transition's DB transaction — sees that transition's own uncommitted writes.
-- Absence → `null`/empty list. Read failure or resolution-cap breach → `RelatedInstanceAccessException`.
-  Reading after `ScriptContext` disposal → `ObjectDisposedException`.
-- Same domain → in-process (`RoutedRelatedInstanceReader`); cross-domain → internal `related-data` /
-  `related-data/batch` endpoints (no in-app authorization — network isolation only; see
-  `docs/contracts/api-and-service-contracts.md` § Internal-Only Endpoints). Memoized per `ScriptContext`;
-  cap `Workflow:Scripting:RelatedAccess:MaxResolutionsPerContext` (default 10). Full guide:
-  `docs/runtime/script-related-instance-access.md`.
+- `context.Related` (`IRelatedInstanceAccessor`) — one hop: `HasParent`, `ParentAsync()`,
+  `SubAsync(key)` / `SubsAsync(key?)` / `SubKeysAsync()`; key = `InstanceCorrelation.SubFlowName`.
+- `IsCompleted` (instance `C`) ≠ `CorrelationCompleted` (relationship closed) — don't conflate.
+- Reads are system-identity and unfiltered (no `x-roles`) — document every copy into instance data.
+- Failure → `RelatedInstanceAccessException`; cap `Workflow:Scripting:RelatedAccess:MaxResolutionsPerContext`.
+- Full guide: `docs/runtime/script-related-instance-access.md`.
 
 ## View Selection
 
-- Views array on states/transitions, evaluated in order, first matching rule wins.
-- Rule: C# script implementing `IConditionMapping` with `ScriptContext` (Headers, QueryParams, Instance.Data, State, Transition).
-- Last entry without a rule serves as fallback.
-- `loadData: true` → instance data loaded with view response.
+- `views[]` on states/transitions, first matching `IConditionMapping` rule wins; last rule-less entry
+  is the fallback. `loadData: true` → instance data loaded with the view.
 
 ## TransitionExecutionContext
 
-- Initial and fresh-stage contexts are built by `TransitionContextFactory`: workflow from
-  `IComponentCacheStore`, instance from `instanceRepository.GetActiveAsync`.
-- Every automatic hop receives a new context. Inside one uninterrupted pipeline/UoW, the next hop
-  uses `CreateFromPreloaded(previous.Workflow, previous.Instance)`; this reuses the tracked aggregate
-  and resolved definition without reusing the previous hop's directives/items/cache.
-- Reuse ends at post-commit/new-scope, subflow callback and retry/recovery boundaries. Never carry a
-  tracked instance across those boundaries. Full guide:
-  `docs/architecture/inline-chain-context-reuse.md`.
-- Request payload overlays `Data` from `input.Data?.Attributes`.
-- `Cache` dict for ephemeral data (e.g. `ScriptContext`) — cleared at Finalize.
-- `Directives` accumulate mutations (next transition, post-commit jobs, epilogue skip).
-- Within one hop, the same context reference flows through all steps — avoid redundant loads.
+- Built by `TransitionContextFactory` (workflow from `IComponentCacheStore`, instance from `GetActiveAsync`).
+- Inline hops reuse via `CreateFromPreloaded(previous.Workflow, previous.Instance)`; never carry a
+  tracked instance across post-commit, subflow callback or retry boundaries.
+- `Cache` is cleared at Finalize; `Directives` accumulate mutations; payload overlays `input.Data?.Attributes`.
+- Full guide: `docs/architecture/inline-chain-context-reuse.md`.
 
 ## Events & Instance Filtering (quick reference)
 
-- **Events**: `event.mapping` on the workflow (`action=start`) or on a `triggerType: 3` transition
-  (`action=transition`). Mapping implements `IEventMapping` → `EventMappingResult { InstanceKey, Body, Selector }`.
-  Delivery is domain-owned Dapr Subscription YAMLs routing topics to
-  `POST /api/v1/{domain}/workflows/{workflow}/instances/events?action=...`.
-  **Response is a Dapr pub/sub protocol body** (`EventDeliveryResponse`), never an instance DTO — Dapr
-  reads the top-level `status` field as its signal, so an `InstanceStatus` code there (`"B"`) causes
-  endless redelivery. Processed or no-active-match ⇒ `200 {"status":"SUCCESS"}`; permanently
-  unprocessable (bad `transitionKey`/action/domain, non-JSON body, missing event definition) ⇒
-  `200 {"status":"DROP","reason":…}` + `EventDeliveryDropped` warning; transient failures keep non-2xx
-  so the broker retries. Full guide: `docs/domain/event-driven-workflows.md`.
-- **Filtering**: author instance queries with fluent `InstanceQuery` (default script import), never
-  hand-concatenated GraphQL JSON. Terminals: `.First()/.Last()` → event `Selector` (single-resolve);
-  `.Build()` → `InstanceQuerySpec` for `GetInstancesTask.SetFilterSpec(...)` (preferred; in-process when
-  same-domain) or `spec.ToFilterJson()/ToSortJson()/ToQueryString()` for raw `DaprServiceTask` calls.
-  Operators: Eq/Ne/Gt/Ge/Lt/Le/Like/StartsWith/EndsWith/In/NotIn/Between/IsNull/Includes + OrGroup/Not;
-  GroupBy + Count/Sum/Avg/Min/Max (list-only, aggregations nest under groupBy). Full guide with operator
-  table and migration examples: `docs/runtime/instance-filtering-and-queries.md`.
+- Event delivery returns a Dapr pub/sub body (`EventDeliveryResponse`), never an instance DTO:
+  `SUCCESS`, or `DROP` + `EventDeliveryDropped` for permanently unprocessable; transient ⇒ non-2xx.
+  Full guide: `docs/domain/event-driven-workflows.md`.
+- Author queries with fluent `InstanceQuery`, never hand-concatenated GraphQL JSON; prefer
+  `GetInstancesTask.SetFilterSpec(...)`. Full guide: `docs/runtime/instance-filtering-and-queries.md`.
 
 ## vnext-meta Package
 
-- **Purpose**: Runtime metadata for offline consumption (Forge Studio, CLI, domain packages).
-- **npm**: `@burgan-tech/vnext-meta`
-- **Location**: `vnext-meta/`
-
-| File | Purpose |
-|------|---------|
-| version-manifest.json | Runtime → schema version map |
-| features.json | Engine capabilities, API endpoints, integration status |
-| deprecations.json | Fields/features past end-of-life |
-| migrations.json | Version migration steps and guides |
-| known-issues.json | Active bugs, workarounds, affected version ranges |
-| component-registry.json | Task/function/extension catalog with availability |
-| performance-profiles.json | Runtime limits and thresholds |
-| security-policy.json | Enforced security rules by scope |
-
-- **Consumers**: Forge Studio (designer validation, feature gating, inline warnings), vnext-template CLI (`npm run validate`), domain packages (CI pre-publish checks).
-- **Principle**: machine-readable, offline, no runtime connection required.
-- **Version alignment**: package version equals runtime `<Version>` in `common.props`; published via `publish-npm` GitHub Actions job.
+- `@burgan-tech/vnext-meta` (`vnext-meta/`): offline, machine-readable runtime metadata —
+  version-manifest, features, deprecations, migrations, known-issues, component-registry,
+  performance-profiles, security-policy.
+- Consumers: Forge Studio, vnext-template CLI (`npm run validate`), domain-package CI.
+- Package version equals runtime `<Version>` in `common.props`; published by the `publish-npm` job.

@@ -375,6 +375,37 @@ reads went out with no credential at all, so one task answered differently by do
 Copying a field read by a task or through `context.Related` into instance data makes it visible to callers the grants would otherwise
 have filtered or masked it from. Document it where you copy it. See [Field Masking](field-masking.md).
 
+## Definition-time validation of dynamic grants
+
+- Three role forms: **static** (`backoffice.operator`), **predefined** (`$InstanceStarter`,
+  `$PreviousUser`, `$InstanceBehalfOfStarter`, `$PreviousBehalfOfUser`), **dynamic**
+  (`$user.` / `$userBehalfOf.` / `$role.` + `$.context.<path>`). Only dynamic is validated; the
+  other two are free-form.
+- A qualifier prefix ⇒ dynamic *intent*. The remainder must be the literal `$.context.`
+  (**Ordinal — case-sensitive**) plus a non-empty nav path. `$user.customer`,
+  `$user.$.Context.x` and `$role.$.context.` are all errors.
+- Why strict: `DynamicRoleGrant.TryParse` returns null on any deviation, and runtime `IsMatch` then
+  falls through to the **static** comparison — the grant becomes silently inert (an ALLOW that never
+  grants, a DENY that never denies). Definition time is the only place it is visible.
+- Never re-implement the parse rules in a validator. Use `DynamicRoleGrant.Classify`, which shares
+  `TryParse`'s constants and comparisons; the `Classify == WellFormed ⟺ TryParse != null` invariant
+  is pinned by `DynamicRoleGrantTests`.
+
+## Evaluator invariants (quick list)
+
+- **Every decision point takes the caller's WHOLE role set, never one of them.** `IsAnyRoleAllowed`,
+  `IsRoleAllowedForGrantsAsync`, `IsTransitionAllowedForRoleAsync`, `IsTransitionAllowedInStateAsync`
+  and `FilterAuthorizedTransitionKeysAsync` all take `IReadOnlyCollection<string>?`. Feeding one role
+  — `ICallerRoleResolver.SingleRoleOf`, which is `roles[0]` — made the answer depend on header ORDER:
+  measured on the lab, `x-roles: other,ht-c-approver` was offered nothing while
+  `x-roles: ht-c-approver,other` was offered the transition, same caller, same grants. It also put
+  the deny group out of reach, since an AND across roles needs the roles. `SingleRoleOf` survives for
+  cache scoping (`CallerScopeHash`) and state aliasing display, never for a decision.
+- **Every surface evaluating a grant set must be given the same `AuthorizationRequestContext`.** Omitting
+  it does not fail closed, it makes `$.context.Headers/QueryParameters/RouteValues` **empty**, so the
+  grant silently cannot match — the transition vanishes from `availableTransitions` while the `authorize`
+  function, which does pass the context, still answers *allowed* for it.
+
 ## Behavior changes in 0.0.97
 
 1. **`morph-idm`: a request `role` header now decides, and morph-idm is not called.** Before, the
