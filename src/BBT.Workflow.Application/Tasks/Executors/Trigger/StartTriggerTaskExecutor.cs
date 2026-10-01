@@ -214,7 +214,7 @@ public sealed class StartTriggerTaskExecutor : TriggerTaskExecutorBase<StartTask
             UseDapr = binding.UseDapr,
             ValidateSSL = binding.ValidateSSL,
             TimeoutSeconds = binding.TimeoutSeconds,
-            Headers = binding.Headers,
+            Headers = Execution.HttpTaskInvocation.WithCallerCredential(binding.Headers, CallerHeadersOf(context.ScriptContext)),
             BaseUrl = endpoint.BaseUrl.ToString(),
             DaprAppId = endpoint.DaprAppId,
             AcceptedStatusCodes = binding.AcceptedStatusCodes
@@ -230,7 +230,7 @@ public sealed class StartTriggerTaskExecutor : TriggerTaskExecutorBase<StartTask
 
     private StartInstanceInput BuildStartInstanceInput(StartTask task, TaskExecutorContext context)
     {
-        var headers = ConvertTaskHeadersToDictionary(task.Headers);
+        var headers = WithCallerCredential(ConvertTaskHeadersToDictionary(task.Headers), context.ScriptContext);
 
         return new StartInstanceInput(
             domain: task.TriggerDomain,
@@ -244,7 +244,7 @@ public sealed class StartTriggerTaskExecutor : TriggerTaskExecutorBase<StartTask
                 Attributes = task.Body,
                 Tags = task.TriggerTags
             },
-            Headers = headers ?? new Dictionary<string, string?>()
+            Headers = headers
         };
     }
 }

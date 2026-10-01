@@ -457,7 +457,8 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
     private InstanceData? _latestRowMemo;
 
     /// <summary>
-    /// Latest data
+    /// Latest data, exactly as stored — an <c>x-encryption.type: "encrypt"</c> field shows its token. A script opens its own
+    /// instance's value with <see cref="DecryptAsync"/>.
     /// </summary>
     public dynamic? Data
     {
@@ -468,6 +469,62 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
                 return LatestRowLocked()?.Attributes;
             }
         }
+    }
+
+    // Bound on the script snapshot by ScriptContextBuilder (and carried by CreateSnapshot): the protector and the flow schema
+    // this instance's secret lives in. Never set on the live aggregate — nothing but a script decrypts on demand.
+    private IInstanceDataProtector? _decryptor;
+    private string? _decryptSchema;
+
+    // One opened view per latest row: a script that decrypts several fields opens the row once.
+    private InstanceData? _openedRow;
+    private InstanceDataView? _openedView;
+
+    /// <summary>Hands this snapshot's decryptor to <paramref name="target"/> (a refreshed snapshot of the same instance).</summary>
+    internal void CopyDecryptionTo(Instance target)
+    {
+        if (target.Id != Id)
+            return;
+        target._decryptor = _decryptor;
+        target._decryptSchema = _decryptSchema;
+    }
+
+    /// <summary>Lets <see cref="DecryptAsync"/> open this instance's own values (script snapshots only).</summary>
+    internal void BindDecryption(IInstanceDataProtector protector, string? schema)
+    {
+        _decryptor = protector;
+        _decryptSchema = schema;
+    }
+
+    /// <summary>
+    /// Opens the <c>x-encryption.type: "encrypt"</c> value stored at <paramref name="path"/> (dot path) in THIS instance's
+    /// latest data. Returns <c>null</c> when that path holds no token in the instance's own row — a plain field, an unknown
+    /// path, or a token string passed as if it were a path — and when the value cannot be opened. A value that reached the
+    /// script from anywhere else (a request body, a task response, another instance) is never decryptable through it.
+    /// <para>
+    /// <paramref name="cancellationToken"/> is used for this call only and never stored. The secret is usually cached (the
+    /// pipeline preloads it); otherwise it is loaded through EF on a context of its own. A cancelled token throws
+    /// <see cref="OperationCanceledException"/> — it is not caught here.
+    /// </para>
+    /// </summary>
+    public async Task<string?> DecryptAsync(string path, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(path) || _decryptor is null)
+            return null;
+
+        var row = LatestData;
+        if (row is null || !EncryptedValueFormat.IsToken(EncryptedValueFormat.StringAt(row.Data.JsonElement, path)))
+            return null;
+
+        var view = ReferenceEquals(row, _openedRow) ? _openedView : null;
+        if (view is null)
+        {
+            view = await _decryptor.UnprotectAsync(_decryptSchema, Id, row.Data, cancellationToken);
+            _openedRow = row;
+            _openedView = view;
+        }
+
+        return view.Undecryptable.Contains(path) ? null : EncryptedValueFormat.StringAt(view.Plain.JsonElement, path);
     }
 
     public InstanceData? LatestData
@@ -572,6 +629,10 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
         // with new children to insert.
         snapshot._detachedIncidents.AddRange(GetLoadedIncidents());
 
+        // A copy of a script snapshot (parallel branch, refresh) keeps the ability to decrypt its own values.
+        snapshot._decryptor = _decryptor;
+        snapshot._decryptSchema = _decryptSchema;
+
         return snapshot;
     }
 
@@ -581,7 +642,11 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
     /// </summary>
     /// <param name="domain">The domain of the instance.</param>
     /// <param name="sync">Whether the completing pipeline chain runs with a synchronous caller (sync=true).</param>
-    public void Complete(string domain, bool sync = false)
+    /// <param name="subItemData">
+    /// The data a SubFlow/SubProcess hands to its parent, already opened by the caller
+    /// (<c>ISubItemEventDataResolver</c>): the parent cannot open this instance's tokens. Null means the row as stored.
+    /// </param>
+    public void Complete(string domain, bool sync = false, System.Text.Json.JsonElement? subItemData = null)
     {
         Status = InstanceStatus.Completed;
         CompletedAt = DateTime.UtcNow;
@@ -615,7 +680,7 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
                     Flow = contractInfo.Flow,
                     Version = contractInfo.Version,
                     CompletedState = GetCurrentState,
-                    InstanceData = latestData?.Data.JsonElement,
+                    InstanceData = subItemData ?? latestData?.Data.JsonElement,
                     CompletedAt = CompletedAt.Value,
                     Duration = Duration,
                     RootInstanceId = rootId != Id ? rootId : (Guid?)null,
@@ -633,7 +698,9 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
     /// <param name="domain">The domain of the instance.</param>
     /// <param name="sync">Whether the faulting pipeline chain runs with a synchronous caller (sync=true).</param>
     /// <param name="termination">Typed context for direct or parent-cascaded termination.</param>
-    public void Fault(string domain, bool sync = false, TerminationContext? termination = null)
+    /// <param name="subItemData">See <see cref="Complete"/>: the data handed to the parent, opened by the caller.</param>
+    public void Fault(string domain, bool sync = false, TerminationContext? termination = null,
+        System.Text.Json.JsonElement? subItemData = null)
     {
         var effectiveTermination = termination ?? TerminationContext.Direct(Id);
         var childTermination = effectiveTermination.AsParentCascade();
@@ -689,7 +756,7 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
                     FaultedState = GetCurrentState,
                     FaultedStateType = CurrentStateType.HasValue ? (int)CurrentStateType.Value : null,
                     FaultedStateSubType = CurrentStateSubType.HasValue ? (int)CurrentStateSubType.Value : null,
-                    InstanceData = latestData?.Data.JsonElement,
+                    InstanceData = latestData is null ? null : subItemData ?? latestData.Data.JsonElement,
                     FaultedAt = CompletedAt.Value,
                     SubFlowName = Flow,
                     IncidentMessage = activeIncident?.Message,

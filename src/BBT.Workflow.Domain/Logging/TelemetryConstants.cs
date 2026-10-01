@@ -623,6 +623,27 @@ public static class TelemetryConstants
         /// <summary>Standard OpenTelemetry error.code attribute.</summary>
         public const string ErrorCode = "error.code";
 
+        /// <summary>
+        /// Set to <c>true</c> on every in-process span above a pipeline failure that faulted the
+        /// instance. The request still answers 200 with <c>Status=F</c>, so without it the
+        /// transaction reads as a success and the fault is visible only on the child
+        /// <c>Instance.Fault</c> span.
+        /// </summary>
+        public const string InstanceFaulted = "vnext.instance.faulted";
+
+        /// <summary>
+        /// Outcome of an admission status flip on an <c>Admission.*</c> span:
+        /// <c>marked</c> | <c>already_busy</c> | <c>skipped</c> | <c>lock_conflict</c>. The sync-path
+        /// 409 <c>Instance:100031</c> is the <c>already_busy</c> case.
+        /// </summary>
+        public const string AdmissionOutcome = "vnext.admission.outcome";
+
+        /// <summary>
+        /// Outcome on a <c>LongPoll.AckResume</c> span: <c>resumed</c> | <c>not_awaiting</c>
+        /// (the other trigger already resumed it) | <c>instance_not_found</c>.
+        /// </summary>
+        public const string LongPollAckResumeOutcome = "vnext.longpoll.ack_resume.outcome";
+
         /// <summary>Standard OpenTelemetry db.system.name attribute (SemConv v1.25+).</summary>
         public const string DbSystemName = "db.system.name";
 

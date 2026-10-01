@@ -1,5 +1,6 @@
 using System.Text.Json;
 using BBT.Aether.Results;
+using BBT.Aether.Users;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Discovery;
 using BBT.Workflow.Execution;
@@ -24,6 +25,7 @@ public sealed class GetInstanceTaskExecutor : TriggerTaskExecutorBase<GetInstanc
 {
     private readonly IInstanceQueryGateway _instanceQueryGateway;
     private readonly IDomainDiscoveryResolver _endpointResolver;
+    private readonly ICurrentUser _currentUser;
 
     /// <summary>
     /// Initializes a new instance of GetInstanceTaskExecutor.
@@ -34,11 +36,13 @@ public sealed class GetInstanceTaskExecutor : TriggerTaskExecutorBase<GetInstanc
         IRemoteInvokerService remoteInvoker,
         IInstanceQueryGateway instanceQueryGateway,
         IDomainDiscoveryResolver endpointResolver,
+        ICurrentUser currentUser,
         ILogger<GetInstanceTaskExecutor> logger)
         : base(scriptEngine, runtimeInfoProvider, remoteInvoker, logger)
     {
         _instanceQueryGateway = instanceQueryGateway;
         _endpointResolver = endpointResolver;
+        _currentUser = currentUser;
     }
 
     /// <inheritdoc />
@@ -107,8 +111,8 @@ public sealed class GetInstanceTaskExecutor : TriggerTaskExecutorBase<GetInstanc
 
         try
         {
-            var headers = ConvertTaskHeadersToDictionary(task.Headers);
-
+            // Read as the task's own credential, exactly as the remote invoker would send it cross-domain.
+            var headers = BuildReadCredential(task.Headers, context.ScriptContext);
             var input = new GetInstanceInput
             {
                 Domain = task.TriggerDomain,
@@ -118,7 +122,9 @@ public sealed class GetInstanceTaskExecutor : TriggerTaskExecutorBase<GetInstanc
                 Headers = headers
             };
 
-            var result = await _instanceQueryGateway.GetInstanceAsync(input, cancellationToken);
+            ConditionalResult<GetInstanceOutput> result;
+            using (ReadAs(_currentUser, headers))
+                result = await _instanceQueryGateway.GetInstanceAsync(input, cancellationToken);
             if (!result.Result.IsSuccess)
             {
                 Logger.TaskLocalExecutionFailed(
@@ -193,6 +199,7 @@ public sealed class GetInstanceTaskExecutor : TriggerTaskExecutorBase<GetInstanc
                 task.TriggerDomain,
                 task.UseDapr,
                 instanceIdentifier,
+                context.ScriptContext,
                 cancellationToken);
 
             if (!enrichResult.IsSuccess)
@@ -245,6 +252,7 @@ public sealed class GetInstanceTaskExecutor : TriggerTaskExecutorBase<GetInstanc
         string targetDomain,
         bool useDapr,
         string instanceIdentifier,
+        ScriptContext? scriptContext,
         CancellationToken cancellationToken)
     {
         // Deserialize binding
@@ -279,7 +287,7 @@ public sealed class GetInstanceTaskExecutor : TriggerTaskExecutorBase<GetInstanc
             UseDapr = binding.UseDapr,
             ValidateSSL = binding.ValidateSSL,
             TimeoutSeconds = binding.TimeoutSeconds,
-            Headers = binding.Headers,
+            Headers = SerializeReadCredential(binding.Headers, scriptContext),
             BaseUrl = endpoint.BaseUrl.ToString(),
             DaprAppId = endpoint.DaprAppId,
             AcceptedStatusCodes = binding.AcceptedStatusCodes

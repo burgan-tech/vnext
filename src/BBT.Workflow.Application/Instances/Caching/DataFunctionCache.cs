@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using BBT.Aether.DistributedCache;
 using BBT.Aether.Users;
+using BBT.Workflow.Authorization;
 using BBT.Workflow.Caching;
 using BBT.Workflow.Logging;
 using Microsoft.Extensions.Logging;
@@ -21,15 +22,43 @@ public sealed class DataFunctionCache(
     IDistributedCacheService cache,
     ICurrentUser currentUser,
     IOptions<InstanceFunctionCacheOptions> options,
-    ILogger<DataFunctionCache> logger) : IDataFunctionCache
+    ILogger<DataFunctionCache> logger,
+    IOptions<SchemaMaskingOptions>? maskingOptions = null,
+    IOptions<SchemaEncryptionOptions>? encryptionOptions = null) : IDataFunctionCache
 {
     private const string ComponentType = "data-fn";
+
     /// <summary>
-    /// The <c>v1</c> segment is a cache generation, not a response-shape version: bump it whenever a
-    /// change alters what a cached body means for a given caller hash. It was introduced to retire
-    /// entries written before caller roles became provider-resolved.
+    /// Cache generation, not a response-shape version: bump it whenever a change alters what a cached
+    /// body means for a given caller hash. <c>v1</c> retired entries written before caller roles became
+    /// provider-resolved; <c>v2</c> retires entries written before <c>x-masking</c>.
+    /// <para>
+    /// The generation is in the KEY and in the ETAG material. A prefix alone would only empty the body
+    /// cache: the fingerprint fast path answers 304 before any cache read, so a client holding a
+    /// pre-masking ETag would keep its unmasked body. Everything else that changes what a body means
+    /// without a data write is part of the generation for the same reason: the <c>x-masking</c> switch. (<c>x-encryption</c>
+    /// has no read-path switch left: <c>hash</c> is applied on write, and rows carrying <c>encrypt</c> tokens are never cached.)
+    /// </para>
     /// </summary>
-    private const string KeyPrefix = "data-fn:v1:";
+    /// <remarks>
+    /// <c>v3</c>: <c>x-encryption.type: "encrypt"</c>. Bodies cached before it served every <c>persisted</c>/<c>transport</c>
+    /// field in clear; under <c>encrypt</c> a non-exempt caller must get the token instead.
+    /// </remarks>
+    private const string GenerationBase = "v3";
+
+    private string Generation
+    {
+        get
+        {
+            var generation = GenerationBase;
+            if (maskingOptions?.Value.Enabled == false)
+                generation += "-nomask";
+
+            return generation;
+        }
+    }
+
+    private string KeyPrefix => $"data-fn:{Generation}:";
 
     /// <summary>
     /// Length of the fingerprint ETag (hex chars of the SHA-256 digest — 128 bits).
@@ -51,6 +80,7 @@ public sealed class DataFunctionCache(
     public string ComputeEtag(GetInstanceDataInput input, InstanceDataFingerprint fingerprint)
     {
         var material = string.Join('|',
+            Generation,
             fingerprint.Id,
             fingerprint.LatestDataEtag ?? string.Empty,
             fingerprint.FlowVersion ?? string.Empty,

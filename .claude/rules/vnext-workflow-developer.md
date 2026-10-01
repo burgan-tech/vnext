@@ -111,7 +111,7 @@ The plan is built from `ExcludedStepOrders` alone (`TransitionExecutor.BuildExec
 
 - `FunctionTypeConst.Longpooling`: `GET /functions/state` → `200` | `304`; no server-side hold.
   ETag: `LatestData?.ETag` (entity), `IRepresentationEtagService.Generate(output)` (representation).
-- Bump `StateFunctionCache.ResponseShapeVersion` (currently `v12`) in the same commit as any change to
+- Bump `StateFunctionCache.ResponseShapeVersion` (currently `v13`) in the same commit as any change to
   what the state body carries — otherwise parked pollers keep getting 304.
 - Every built-in instance function descends an active subflow — except `data`.
 - Parent overrides resolve in ONE place per kind and REPLACE (never merge): `IsQueryAllowedAsync`,
@@ -124,8 +124,27 @@ The plan is built from `ExcludedStepOrders` alone (`TransitionExecutor.BuildExec
   Scheduled entries come from `JobType.ScheduledTransition` rows and are outside the fingerprint (#864).
 - `interaction.longPoll` admits through `ILongPollInteractionGate` (`roles` OR one `rule`, fail-closed);
   a rule-gated body is never cached. Full guide: `docs/domain/long-poll-termination.md`.
+- `interaction` presence: `terminate: true` → only while `IsAwaitingLongPollAck`, with `ack.href`;
+  `terminate: false` → whenever in the declaring state, no `ack`, no token. Never gate the
+  non-terminating block on the token. Full guide: `docs/domain/long-poll-termination.md`.
 - Full guide: `docs/runtime/state-function-cache-and-etag.md`; timeout block, `$timeout` resolution at
   order 20 and `timer.reset` (read nowhere): `docs/runtime/workflow-timeout.md`.
+
+## Field masking (`x-masking` / `x-encryption`)
+
+- Order `x-roles → x-masking → x-encryption` in ONE pass (`SchemaFieldFilterService` →
+  `InstanceDataRoleFilter.Apply`), one evaluator. Never add a second masking stage — the data-function
+  cache stores the filtered body (generation `v3` + `-nomask` in key AND ETag; token rows never cached).
+- `x-masking.roles` / `x-encryption.roles` are allow-only exemption lists; `deny` is rejected at publish;
+  a role-less caller never satisfies a role-bound grant (`IsUnprovableRoleBoundGrant`).
+- ONE read path: `IInstanceDataReadService` (GET, list, data function, sync response, Get* tasks). Do not
+  call the filter from a surface directly. Get* tasks read as their header set (`AppendCallerCredential`).
+- `InstanceData.Data` is the column as stored (tokens included). Decrypt only via
+  `IInstanceDataProtector.UnprotectAsync` / `context.Instance.DecryptAsync`; never reintroduce a plaintext
+  member; never write `InstancesData."Data"` outside `InstanceDataWriteService`. Prefix-driven, never schema-driven.
+- Per-instance key + salt in `InstanceSecrets`, created only by the write funnel, L1 cache, **never Redis**.
+  A sub item hands its parent PLAINTEXT (`ISubItemEventDataResolver`).
+- Full guide: `docs/domain/field-masking.md`.
 
 ## Task / Action History (system functions)
 

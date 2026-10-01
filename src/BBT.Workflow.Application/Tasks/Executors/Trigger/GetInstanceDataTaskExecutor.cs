@@ -1,5 +1,6 @@
 using System.Text.Json;
 using BBT.Aether.Results;
+using BBT.Aether.Users;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Discovery;
 using BBT.Workflow.Execution;
@@ -23,6 +24,7 @@ public sealed class GetInstanceDataTaskExecutor : TriggerTaskExecutorBase<GetIns
 {
     private readonly IInstanceQueryGateway _instanceQueryGateway;
     private readonly IDomainDiscoveryResolver _endpointResolver;
+    private readonly ICurrentUser _currentUser;
 
     /// <summary>
     /// Initializes a new instance of GetInstanceDataTaskExecutor.
@@ -33,11 +35,13 @@ public sealed class GetInstanceDataTaskExecutor : TriggerTaskExecutorBase<GetIns
         IRemoteInvokerService remoteInvoker,
         IInstanceQueryGateway instanceQueryGateway,
         IDomainDiscoveryResolver endpointResolver,
+        ICurrentUser currentUser,
         ILogger<GetInstanceDataTaskExecutor> logger)
         : base(scriptEngine, runtimeInfoProvider, remoteInvoker, logger)
     {
         _instanceQueryGateway = instanceQueryGateway;
         _endpointResolver = endpointResolver;
+        _currentUser = currentUser;
     }
 
     /// <inheritdoc />
@@ -107,12 +111,9 @@ public sealed class GetInstanceDataTaskExecutor : TriggerTaskExecutorBase<GetIns
 
         try
         {
-            var headers = ConvertTaskHeadersToDictionary(task.Headers);
-
-            // Roles are deliberately left unset: a task reads under the system identity, not the
-            // triggering caller's, so state/workflow queryRoles and schema x-roles do not apply.
-            // Same contract as related-instance access — copying a field read here into instance data
-            // makes it visible to callers the grants would otherwise have filtered it from.
+            // Read as the task's own credential, exactly as the remote invoker would send it cross-domain: the
+            // data is exposed (x-roles, x-masking, x-encryption) for that caller, not for the pipeline's.
+            var headers = BuildReadCredential(task.Headers, context.ScriptContext);
             var input = new GetInstanceDataInput
             {
                 Domain = task.TriggerDomain,
@@ -122,7 +123,9 @@ public sealed class GetInstanceDataTaskExecutor : TriggerTaskExecutorBase<GetIns
                 Headers = headers
             };
 
-            var result = await _instanceQueryGateway.GetInstanceDataAsync(input, cancellationToken);
+            ConditionalResult<GetInstanceDataOutput> result;
+            using (ReadAs(_currentUser, headers))
+                result = await _instanceQueryGateway.GetInstanceDataAsync(input, cancellationToken);
             if (!result.Result.IsSuccess)
             {
                 Logger.TaskLocalExecutionFailed(
@@ -269,7 +272,7 @@ public sealed class GetInstanceDataTaskExecutor : TriggerTaskExecutorBase<GetIns
             UseDapr = binding.UseDapr,
             ValidateSSL = binding.ValidateSSL,
             TimeoutSeconds = binding.TimeoutSeconds,
-            Headers = binding.Headers,
+            Headers = SerializeReadCredential(binding.Headers, context.ScriptContext),
             BaseUrl = endpoint.BaseUrl.ToString(),
             DaprAppId = endpoint.DaprAppId,
             AcceptedStatusCodes = binding.AcceptedStatusCodes

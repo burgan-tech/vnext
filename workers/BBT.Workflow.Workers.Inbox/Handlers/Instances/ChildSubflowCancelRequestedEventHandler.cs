@@ -39,34 +39,44 @@ internal sealed class ChildSubflowCancelRequestedEventHandler(
             "ChildSubflowCancelRequested.Handle", eventData, correlationIdProvider,
             EventTraceMode.ContinueTrace, envelope.Id);
 
-        var scopeProps = new Dictionary<string, object>
+        // Exception filter that never catches: records the failure on the consumer span while
+        // it is still open (an isolated delivery is its own trace, so the error Aether records on
+        // Inbox.Process never reaches it) and lets the exception propagate untouched.
+        try
         {
-            [TelemetryConstants.TagNames.Domain] = eventData.Domain,
-            [TelemetryConstants.TagNames.Flow] = eventData.Flow,
-            [TelemetryConstants.TagNames.FlowVersion] = eventData.Version ?? "N/A",
-            [TelemetryConstants.TagNames.InstanceId] = eventData.InstanceId,
-        };
-        if (eventData.RootInstanceId.HasValue)
-        {
-            scopeProps[TelemetryConstants.TagNames.RootInstanceId] = eventData.RootInstanceId.Value;
-            Activity.Current?.SetBaggage(TelemetryConstants.TagNames.RootInstanceId,
-                eventData.RootInstanceId.Value.ToString());
-        }
-        using (logger.BeginScope(scopeProps))
-        {
-            logger.ChildSubflowCancelRequestReceived(
-                eventData.InstanceId,
-                eventData.Domain,
-                eventData.Flow);
-
-            var route = $"api/v1/{eventData.Domain}/workflows/{eventData.Flow}/instances/{eventData.InstanceId}/child-cancel";
-            var body = new
+            var scopeProps = new Dictionary<string, object>
             {
-                eventData.Version,
-                eventData.Termination
+                [TelemetryConstants.TagNames.Domain] = eventData.Domain,
+                [TelemetryConstants.TagNames.Flow] = eventData.Flow,
+                [TelemetryConstants.TagNames.FlowVersion] = eventData.Version ?? "N/A",
+                [TelemetryConstants.TagNames.InstanceId] = eventData.InstanceId,
             };
-            await forwarder.ForwardAsync(HttpMethod.Post, route, body,
-                eventData.Domain, eventData.Flow, eventData.Version, eventData.InstanceId, cancellationToken);
+            if (eventData.RootInstanceId.HasValue)
+            {
+                scopeProps[TelemetryConstants.TagNames.RootInstanceId] = eventData.RootInstanceId.Value;
+                Activity.Current?.SetBaggage(TelemetryConstants.TagNames.RootInstanceId,
+                    eventData.RootInstanceId.Value.ToString());
+            }
+            using (logger.BeginScope(scopeProps))
+            {
+                logger.ChildSubflowCancelRequestReceived(
+                    eventData.InstanceId,
+                    eventData.Domain,
+                    eventData.Flow);
+
+                var route = $"api/v1/{eventData.Domain}/workflows/{eventData.Flow}/instances/{eventData.InstanceId}/child-cancel";
+                var body = new
+                {
+                    eventData.Version,
+                    eventData.Termination
+                };
+                await forwarder.ForwardAsync(HttpMethod.Post, route, body,
+                    eventData.Domain, eventData.Flow, eventData.Version, eventData.InstanceId, cancellationToken);
+            }
+        }
+        catch (Exception ex) when (traceScope.RecordFailure(ex))
+        {
+            throw;
         }
     }
 }

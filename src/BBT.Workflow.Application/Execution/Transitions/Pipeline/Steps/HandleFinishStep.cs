@@ -15,7 +15,8 @@ namespace BBT.Workflow.Execution.Pipeline.Steps;
 /// </summary>
 public sealed class HandleFinishStep(
     IInstanceRepository instanceRepository,
-    ILogger<HandleFinishStep> logger) : ITransitionStep
+    ILogger<HandleFinishStep> logger,
+    ISubItemEventDataResolver? subItemDataResolver = null) : ITransitionStep
 {
     /// <inheritdoc />
     public int Order => LifecycleOrder.Finish;
@@ -31,9 +32,14 @@ public sealed class HandleFinishStep(
             return Result<StepOutcome>.Ok(StepOutcome.ContinueNoWork());
         }
 
+        // A completing sub item hands its data to the parent, opened with its own key (the parent cannot open it).
+        var subItemData = context.IsCancelTransition()
+            ? null
+            : await subItemDataResolver.ResolveOrStoredAsync(context.Instance, cancellationToken);
+
         // Railway chain: Update status -> Extract events -> Persist -> Mark finish
         return await Result.Ok(context)
-            .Tap(UpdateInstanceStatus)
+            .Tap(ctx => UpdateInstanceStatus(ctx, subItemData))
             .Tap(ctx => ctx.ExtractAndDeferInstanceEvents())
             .TapAsync(ctx => instanceRepository.UpdateAsync(ctx.Instance, true, cancellationToken))
             .Tap(ctx => ctx.Items["IsFinishState"] = true)
@@ -67,7 +73,7 @@ public sealed class HandleFinishStep(
     /// <summary>
     /// Updates instance status based on transition type.
     /// </summary>
-    private void UpdateInstanceStatus(TransitionExecutionContext context)
+    private void UpdateInstanceStatus(TransitionExecutionContext context, System.Text.Json.JsonElement? subItemData)
     {
         if (context.IsCancelTransition())
         {
@@ -80,7 +86,7 @@ public sealed class HandleFinishStep(
         else
         {
             logger.InstanceCompleting(context.Instance.Id);
-            context.Instance.Complete(context.Domain, context.CallerMode == ExecMode.Sync);
+            context.Instance.Complete(context.Domain, context.CallerMode == ExecMode.Sync, subItemData);
         }
     }
 }

@@ -62,6 +62,25 @@ public sealed class InstanceRetryAppService(
         RetryInstanceInput input,
         CancellationToken cancellationToken = default)
     {
+        // Envelope for the whole retry (load, unfault CAS, re-run or subflow restart): the path
+        // had only a descent span, and restart-subflow calls its handler directly rather than
+        // through PostCommit.*, so nothing named the operation or recorded that it failed.
+        using var activity = PipelineStepActivityHelper.StartOperationActivity("Instance.Retry");
+        activity?.SetTag(TelemetryConstants.TagNames.InstanceId, input.Instance);
+        activity?.SetTag(TelemetryConstants.TagNames.Flow, input.Workflow);
+        activity?.SetTag(TelemetryConstants.TagNames.Domain, input.Domain);
+
+        var result = await RetryCoreAsync(input, cancellationToken);
+        if (!result.IsSuccess)
+            activity.SetResultError(result.Error.Code, result.Error.Message);
+
+        return result;
+    }
+
+    private async Task<Result<RetryInstanceOutput>> RetryCoreAsync(
+        RetryInstanceInput input,
+        CancellationToken cancellationToken)
+    {
         // Validate domain
         runtimeInfoProvider.Check(input.Domain);
 

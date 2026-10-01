@@ -39,6 +39,27 @@ public class ApplyScriptContextChangesTests
         live.DataList.Count(d => d.IsLatest).ShouldBe(1);
     }
 
+    /// <summary>
+    /// After the sync, <c>Data</c> becomes later scripts' <c>context.Body</c> (and a state-notify job payload): the row as
+    /// stored, so an encrypt field is a token there — exactly as everywhere else; nothing decrypts it in place.
+    /// </summary>
+    [Fact]
+    public void Apply_SyncedProtectedRow_ExposesTheRowAsStored()
+    {
+        const string token = "ENCRYPTED:AES256:i1:AQIDBAUGBwgJCgsMDQ4PEBESExQ";
+        var live = CreateInstanceWithLatest("1.2.1");
+        var scriptContext = CreateScriptContextSnapshot(live);
+        var persisted = new InstanceData(Guid.NewGuid(), live.Id, "1.2.2",
+            new JsonData($$"""{"email":"{{token}}"}"""), "seeded", true) { VersionNo = 2 };
+        scriptContext.Instance!.AcceptPersistedData(persisted);
+
+        var context = CreateContext(live);
+        context.ApplyScriptContextChanges(scriptContext);
+
+        ((string)((dynamic)context.Data!).email).ShouldBe(token);
+        ((string)live.Data!.email).ShouldBe(token);
+    }
+
     [Fact]
     public void Apply_RowAlreadyInLiveAggregate_DoesNotDuplicate()
     {

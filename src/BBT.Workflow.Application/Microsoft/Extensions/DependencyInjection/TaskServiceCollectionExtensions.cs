@@ -1,6 +1,7 @@
 using BBT.Workflow.BackgroundJobs.Options;
 using BBT.Workflow.BackgroundJobs.Recovery;
 using BBT.Workflow.Execution.ErrorHandling;
+using BBT.Workflow.Functions;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Scripting.Evaluators;
 using BBT.Workflow.Scripting.Functions;
@@ -172,14 +173,14 @@ public static class TaskServiceCollectionExtensions
         // In-process state-store invoker (issue #1007): serves the StateStore local path.
         services.AddLocalTaskInvoker<LocalStateStoreTaskInvoker>();
 
-        // Cache-Aside (read-through) executor: the read-through (state-store get/set, source task
-        // on a miss) is dispatched locally or to the Execution service via ITaskInvocationDispatcher.
+        // Cache-Aside (read-through) executor: cache get/set go through IStateStoreCacheGateway
+        // (the 'statestore' invocation path, so they follow its local/remote routing mode), and on
+        // a miss the source task runs through its own executor.
         services.AddTaskExecutor<CacheAsideTaskExecutor>();
-
-        // In-process cache-aside invoker (issue #1007): serves the CacheAside local path. On a miss
-        // it dispatches the source task through this same local registry when possible, falling
-        // back to the Execution service otherwise (see LocalCacheAsideTaskInvoker).
-        services.AddLocalTaskInvoker<LocalCacheAsideTaskInvoker>();
+        // Cache get/set over the 'statestore' invocation path. Shared by the CacheAside executor and
+        // the function response cache (FunctionAppService); registered here because a task executor
+        // depends on it.
+        services.AddScoped<IStateStoreCacheGateway, StateStoreCacheGateway>();
 
         // Notification task executor (multi-channel direct Dapr binding dispatch)
         services.TryAddScoped<IStateChannelMessageBuilder, StateChannelMessageBuilder>();
@@ -215,6 +216,7 @@ public static class TaskServiceCollectionExtensions
 
         // Dynamic Expresso string evaluator (e.g. CacheAside key expressions).
         services.AddScoped<IDynamicExpressoValueEvaluator, DynamicExpressoValueEvaluator>();
+        services.AddScoped<ICacheKeyEvaluator, CacheKeyEvaluator>();
 
         // Unified evaluator registry
         services.AddScoped<ITaskEvaluatorRegistry, TaskEvaluatorRegistry>();

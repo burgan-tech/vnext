@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -93,6 +94,125 @@ public sealed class StateStoreCacheGatewayRoutingTests
         fixture.LocalInvocations.Count.ShouldBe(1);
     }
 
+    [Fact]
+    public async Task GetAsync_FailedRead_ReturnsErrorAndMetadata()
+    {
+        var fixture = new CacheGatewayFixture(ExecutionMode.Local);
+        fixture.Seed(BBT.Workflow.Tasks.TaskInvocationResult.Failure(
+            error: "boom", taskType: TaskTypes.StateStore,
+            metadata: new Dictionary<string, object> { ["StoreName"] = "s" }));
+
+        var result = await fixture.Gateway.GetAsync(
+            "k1", storeName: null, consistency: null, fixture.TraceContext);
+
+        result.CacheOk.ShouldBeFalse();
+        result.Hit.ShouldBeFalse();
+        result.Error.ShouldBe("boom");
+        result.Metadata.ShouldNotBeNull();
+        result.Metadata!["StoreName"].ShouldBe("s");
+    }
+
+    [Fact]
+    public async Task GetAsync_Hit_ReturnsMetadata()
+    {
+        var fixture = new CacheGatewayFixture(ExecutionMode.Local);
+        using var document = JsonDocument.Parse("""{"value":1}""");
+        fixture.Seed(BBT.Workflow.Tasks.TaskInvocationResult.Success(
+            data: document.RootElement.Clone(),
+            metadata: new Dictionary<string, object> { ["Key"] = "custom:k", ["StoreName"] = "s", ["Found"] = true }));
+
+        var result = await fixture.Gateway.GetAsync(
+            "k", storeName: null, consistency: null, fixture.TraceContext, componentType: "cacheaside");
+
+        result.CacheOk.ShouldBeTrue();
+        result.Hit.ShouldBeTrue();
+        result.Error.ShouldBeNull();
+        result.Metadata.ShouldNotBeNull();
+        result.Metadata!["Key"].ShouldBe("custom:k");
+    }
+
+    [Fact]
+    public async Task SetWithResultAsync_Failed_ReturnsError()
+    {
+        var fixture = new CacheGatewayFixture(ExecutionMode.Local);
+        fixture.Seed(BBT.Workflow.Tasks.TaskInvocationResult.Failure(
+            error: "store down", taskType: TaskTypes.StateStore));
+
+        var result = await fixture.Gateway.SetWithResultAsync(
+            "k1", new { value = 1 }, ttlInSeconds: 60, storeName: null,
+            consistency: null, fixture.TraceContext, componentType: "cacheaside");
+
+        result.Written.ShouldBeFalse();
+        result.Error.ShouldBe("store down");
+    }
+
+    [Fact]
+    public async Task SetAsync_StillReturnsBool()
+    {
+        var fixture = new CacheGatewayFixture(ExecutionMode.Local);
+        fixture.Seed(BBT.Workflow.Tasks.TaskInvocationResult.Failure(
+            error: "store down", taskType: TaskTypes.StateStore));
+
+        bool written = await fixture.Gateway.SetAsync(
+            "k1", new { value = 1 }, ttlInSeconds: 60, storeName: null,
+            consistency: null, fixture.TraceContext);
+
+        written.ShouldBeFalse();
+    }
+
+    /// <summary>
+    /// The CacheAside task's cache I/O goes through this gateway, so pinning that the gateway
+    /// dispatches under the <c>statestore</c> wire type — and obeys a Remote decision for it — is
+    /// what proves CacheAside's reads/writes follow the <c>statestore</c> routing mode.
+    /// </summary>
+    [Fact]
+    public async Task Get_UsesStatestoreWireType_AndRouting()
+    {
+        var fixture = new CacheGatewayFixture(ExecutionMode.Remote);
+        fixture.SeedHit("""{"value":1}""");
+
+        await fixture.Gateway.GetAsync(
+            "k1", storeName: null, consistency: null, fixture.TraceContext, componentType: "cacheaside");
+
+        fixture.Router.Received().Resolve(Arg.Any<WorkflowTask>(), TaskTypes.StateStore);
+        fixture.RemoteInvocations.Count.ShouldBe(1);
+        fixture.RemoteInvocations[0].TaskType.ShouldBe(TaskTypes.StateStore);
+        fixture.LocalInvocations.Count.ShouldBe(0);
+    }
+
+    /// <summary>
+    /// A failed read under a SAMPLED Cache.Get span must still come back as CacheOk=false (the
+    /// CacheAside bypass and the function cache's fall-through both depend on it) and mark the span
+    /// Error with the store's message. Tests normally run without a listener, so the span is null and
+    /// a span-only defect stays invisible; this one listens.
+    /// </summary>
+    [Fact]
+    public async Task GetAsync_FailedRead_UnderASampledSpan_MarksTheSpanAndDoesNotThrow()
+    {
+        var stopped = new List<Activity>();
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == BBT.Workflow.Logging.TelemetryConstants.ActivitySources.Cache,
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStopped = activity => { lock (stopped) { stopped.Add(activity); } }
+        };
+        ActivitySource.AddActivityListener(listener);
+
+        var fixture = new CacheGatewayFixture(ExecutionMode.Local);
+        fixture.Seed(BBT.Workflow.Tasks.TaskInvocationResult.Failure(
+            error: "boom-sampled", taskType: TaskTypes.StateStore));
+
+        var result = await fixture.Gateway.GetAsync(
+            "k-sampled", storeName: null, consistency: null, fixture.TraceContext, componentType: "cacheaside");
+
+        result.CacheOk.ShouldBeFalse();
+        result.Error.ShouldBe("boom-sampled");
+        lock (stopped)
+        {
+            stopped.ShouldContain(a => a.Status == ActivityStatusCode.Error && a.StatusDescription == "boom-sampled");
+        }
+    }
+
     /// <summary>
     /// Same skeleton as <c>TaskInvocationDispatcherTests.Harness</c>: a fixed-decision router
     /// substitute, a recording local invoker and a recording remote invoker, wired into a REAL
@@ -103,6 +223,9 @@ public sealed class StateStoreCacheGatewayRoutingTests
         public IStateStoreCacheGateway Gateway { get; }
 
         public BBT.Workflow.Tasks.TaskTraceContext TraceContext { get; } = new();
+
+        /// <summary>The fixed-decision router substitute (lets a test assert the wire type it was asked about).</summary>
+        public ITaskInvocationRouter Router { get; }
 
         /// <summary>Bindings observed by the local state-store invoker.</summary>
         public List<JsonElement> LocalInvocations { get; } = [];
@@ -115,6 +238,7 @@ public sealed class StateStoreCacheGatewayRoutingTests
         public CacheGatewayFixture(ExecutionMode mode)
         {
             var router = Substitute.For<ITaskInvocationRouter>();
+            Router = router;
             router.Resolve(Arg.Any<WorkflowTask>(), TaskTypes.StateStore)
                 .Returns(new TaskInvocationDecision(mode, "test"));
 
@@ -136,6 +260,9 @@ public sealed class StateStoreCacheGatewayRoutingTests
             using var document = JsonDocument.Parse(json);
             _seededResult = BBT.Workflow.Tasks.TaskInvocationResult.Success(data: document.RootElement.Clone());
         }
+
+        /// <summary>Seeds an arbitrary invocation result for the next invocation (local or remote).</summary>
+        public void Seed(BBT.Workflow.Tasks.TaskInvocationResult result) => _seededResult = result;
 
         /// <summary>Seeds a transport failure — the shape a real Dapr error takes on the local path.</summary>
         public void SeedFailure()

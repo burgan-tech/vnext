@@ -358,17 +358,22 @@ vnext-example's `AuthorizationChainLab/MorphIdmProviderTests`.
 An unrecognized provider name degrades to `default` rather than failing startup: a typo costs a
 role-resolution strategy, not a boundary.
 
-### Deliberate system-identity reads
+### Trigger-task reads and system-identity reads
 
-Some reads intentionally run as the system, not the caller, and skip `queryRoles` and `x-roles`
-entirely:
+- The instance-read trigger tasks — `GetInstanceData`, `GetInstance`, `GetInstances` — read as the header set they
+  present: the task's mapping headers plus the pipeline caller's credential — `sub`, `act_sub`, `position`, `client_id`,
+  `role` — wherever the mapping did not set them. `x-roles`, `x-masking` and `x-encryption` apply to that caller, the
+  same way for a same-domain read (under `ICurrentUser.Change`) and a cross-domain one (headers on the request). `role`
+  travels only as the caller sent it: a role morph-idm resolved is never carried — the target resolves it again from the
+  forwarded credential.
+- Related-instance access from scripts (`context.Related`) still runs as the system and skips `queryRoles`,
+  `x-roles` and `x-masking` — see [Related Instance Access](../runtime/script-related-instance-access.md).
 
-- `GetInstanceDataTaskExecutor` — a workflow task reading another instance.
-- Related-instance access from scripts (`context.Related`) — see
-  [Related Instance Access](../runtime/script-related-instance-access.md).
+**History.** From 2026-09-28 a SERVER-ONLY `SystemRead` flag made same-domain task reads unfiltered while cross-domain
+reads went out with no credential at all, so one task answered differently by domain. The flag is deleted.
 
-Copying a field read this way into instance data makes it visible to callers the grants would otherwise
-have filtered it from. Document it where you copy it.
+Copying a field read by a task or through `context.Related` into instance data makes it visible to callers the grants would otherwise
+have filtered or masked it from. Document it where you copy it. See [Field Masking](field-masking.md).
 
 ## Definition-time validation of dynamic grants
 

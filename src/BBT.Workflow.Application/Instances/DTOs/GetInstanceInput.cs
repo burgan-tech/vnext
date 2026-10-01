@@ -45,6 +45,7 @@ public sealed class GetInstanceInput : IHasDomain
     /// Query parameters from the request for script context binding
     /// </summary>
     public Dictionary<string, string?>? QueryParameters { get; set; }
+
 }
 
 /// <summary>
@@ -114,6 +115,7 @@ public sealed class GetInstanceListInput : IHasDomain
     /// Gets the aggregations parameter from QueryParameters
     /// </summary>
     public string? Aggregations => QueryParameters?.TryGetValue("aggregations", out var value) == true ? value : null;
+
 }
 
 /// <summary>
@@ -369,4 +371,5 @@ public sealed class GetInstanceDataInput : IHasDomain
     /// data-function cache; there is no queryRoles gate on this read.
     /// </summary>
     public IReadOnlyList<string>? Roles { get; set; }
+
 }

@@ -41,69 +41,79 @@ internal sealed class InstanceSubCompletedEventHandler(
             "InstanceSubCompleted.Handle", eventData, correlationIdProvider,
             EventTraceMode.IsolatedDelivery, envelope.Id, eventData.RearmAttempt);
 
-        // This delivery is the durable BACKUP of the post-commit terminal relay: in the normal case the
-        // relay already settled the parent and the settlement path answers AlreadySettled via the
-        // pre-lock probe. Dashboards separate primary vs backup deliveries on this tag.
-        Activity.Current?.SetTag(TelemetryConstants.TagNames.DeliveryRole, "backup");
+        // Exception filter that never catches: records the failure on the consumer span while
+        // it is still open (an isolated delivery is its own trace, so the error Aether records on
+        // Inbox.Process never reaches it) and lets the exception propagate untouched.
+        try
+        {
+            // This delivery is the durable BACKUP of the post-commit terminal relay: in the normal case the
+            // relay already settled the parent and the settlement path answers AlreadySettled via the
+            // pre-lock probe. Dashboards separate primary vs backup deliveries on this tag.
+            Activity.Current?.SetTag(TelemetryConstants.TagNames.DeliveryRole, "backup");
 
-        var scopeProps = new Dictionary<string, object>
-        {
-            [TelemetryConstants.TagNames.Domain] = eventData.Domain,
-            [TelemetryConstants.TagNames.Flow] = eventData.Flow,
-            [TelemetryConstants.TagNames.FlowVersion] = eventData.Version ?? "N/A",
-            [TelemetryConstants.TagNames.InstanceId] = eventData.InstanceId,
-            [TelemetryConstants.TagNames.RootInstanceId] = eventData.RootInstanceId?.ToString() ?? "N/A",
-            [TelemetryConstants.TagNames.ParentInstanceId] = eventData.InstanceId,
-            [TelemetryConstants.TagNames.SubflowInstanceId] = eventData.SubInstanceId,
-            [TelemetryConstants.TagNames.SubItemType] = "N/A",
-            [TelemetryConstants.TagNames.SubItemOutcome] = "Completed",
-            [TelemetryConstants.TagNames.TerminationOrigin] = "legacy",
-            [TelemetryConstants.TagNames.TerminationInitiator] = "N/A",
-            [TelemetryConstants.TagNames.TerminationCascadeId] = "N/A"
-        };
-        if (eventData.RootInstanceId.HasValue)
-        {
-            Activity.Current?.SetBaggage(TelemetryConstants.TagNames.RootInstanceId,
-                eventData.RootInstanceId.Value.ToString());
-        }
-        using (logger.BeginScope(scopeProps))
-        {
-            logger.SubFlowEventReceived(
-                eventData.SubInstanceId,
-                eventData.InstanceId,
-                eventData.Domain,
-                eventData.Flow);
-
-            var body = new FlowCompletedInput
+            var scopeProps = new Dictionary<string, object>
             {
-                SubInstanceId = eventData.SubInstanceId,
-                InstanceId = eventData.InstanceId,
-                RootInstanceId = eventData.RootInstanceId,
-                Domain = eventData.Domain,
-                Flow = eventData.Flow,
-                Version = eventData.Version,
-                CompletedState = eventData.CompletedState,
-                InstanceData = eventData.InstanceData,
-                CompletedAt = eventData.CompletedAt,
-                Duration = eventData.Duration,
-                // At-least-once async retry path: the sync caller (if any) was already answered
-                // by the synchronous hook. Force async here so a retried resume never blocks the
-                // worker with an inline sync chain; idempotent guards make duplicates no-ops.
-                Sync = false,
-                // Relay the lane so the parent resume on the receiving side lands at the parent
-                // instance's level rather than nesting under the relay endpoint.
-                TraceRoot = eventData.TraceRoot,
-                ParentTraceRoot = eventData.ParentTraceRoot,
-                EpisodeStartedAt = eventData.EpisodeStartedAt,
-                EpisodeTrigger = eventData.EpisodeTrigger,
-                EpisodeTransitionKey = eventData.EpisodeTransitionKey,
-                EpisodeTraceRoot = eventData.EpisodeTraceRoot,
-                RearmAttempt = eventData.RearmAttempt
+                [TelemetryConstants.TagNames.Domain] = eventData.Domain,
+                [TelemetryConstants.TagNames.Flow] = eventData.Flow,
+                [TelemetryConstants.TagNames.FlowVersion] = eventData.Version ?? "N/A",
+                [TelemetryConstants.TagNames.InstanceId] = eventData.InstanceId,
+                [TelemetryConstants.TagNames.RootInstanceId] = eventData.RootInstanceId?.ToString() ?? "N/A",
+                [TelemetryConstants.TagNames.ParentInstanceId] = eventData.InstanceId,
+                [TelemetryConstants.TagNames.SubflowInstanceId] = eventData.SubInstanceId,
+                [TelemetryConstants.TagNames.SubItemType] = "N/A",
+                [TelemetryConstants.TagNames.SubItemOutcome] = "Completed",
+                [TelemetryConstants.TagNames.TerminationOrigin] = "legacy",
+                [TelemetryConstants.TagNames.TerminationInitiator] = "N/A",
+                [TelemetryConstants.TagNames.TerminationCascadeId] = "N/A"
             };
+            if (eventData.RootInstanceId.HasValue)
+            {
+                Activity.Current?.SetBaggage(TelemetryConstants.TagNames.RootInstanceId,
+                    eventData.RootInstanceId.Value.ToString());
+            }
+            using (logger.BeginScope(scopeProps))
+            {
+                logger.SubFlowEventReceived(
+                    eventData.SubInstanceId,
+                    eventData.InstanceId,
+                    eventData.Domain,
+                    eventData.Flow);
 
-            var route = $"api/v1/{eventData.Domain}/workflows/{eventData.Flow}/instances/{eventData.InstanceId}/complete";
-            await forwarder.ForwardAsync(HttpMethod.Post, route, body,
-                eventData.Domain, eventData.Flow, eventData.Version, eventData.InstanceId, cancellationToken);
+                var body = new FlowCompletedInput
+                {
+                    SubInstanceId = eventData.SubInstanceId,
+                    InstanceId = eventData.InstanceId,
+                    RootInstanceId = eventData.RootInstanceId,
+                    Domain = eventData.Domain,
+                    Flow = eventData.Flow,
+                    Version = eventData.Version,
+                    CompletedState = eventData.CompletedState,
+                    InstanceData = eventData.InstanceData,
+                    CompletedAt = eventData.CompletedAt,
+                    Duration = eventData.Duration,
+                    // At-least-once async retry path: the sync caller (if any) was already answered
+                    // by the synchronous hook. Force async here so a retried resume never blocks the
+                    // worker with an inline sync chain; idempotent guards make duplicates no-ops.
+                    Sync = false,
+                    // Relay the lane so the parent resume on the receiving side lands at the parent
+                    // instance's level rather than nesting under the relay endpoint.
+                    TraceRoot = eventData.TraceRoot,
+                    ParentTraceRoot = eventData.ParentTraceRoot,
+                    EpisodeStartedAt = eventData.EpisodeStartedAt,
+                    EpisodeTrigger = eventData.EpisodeTrigger,
+                    EpisodeTransitionKey = eventData.EpisodeTransitionKey,
+                    EpisodeTraceRoot = eventData.EpisodeTraceRoot,
+                    RearmAttempt = eventData.RearmAttempt
+                };
+
+                var route = $"api/v1/{eventData.Domain}/workflows/{eventData.Flow}/instances/{eventData.InstanceId}/complete";
+                await forwarder.ForwardAsync(HttpMethod.Post, route, body,
+                    eventData.Domain, eventData.Flow, eventData.Version, eventData.InstanceId, cancellationToken);
+            }
+        }
+        catch (Exception ex) when (traceScope.RecordFailure(ex))
+        {
+            throw;
         }
     }
 }

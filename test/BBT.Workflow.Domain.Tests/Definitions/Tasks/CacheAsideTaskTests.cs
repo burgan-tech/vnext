@@ -86,21 +86,44 @@ public sealed class CacheAsideTaskTests
     }
 
     [Fact]
-    public void Configure_ParsesKeyExpression()
+    public void Configure_KeyAsString_IsStaticKey()
     {
-        var config = Json("""
+        var task = CacheAsideTask.Create(Json("""
+        { "key": "customer:42", "sourceTask": { "key": "src", "domain": "core", "version": "1.0.0" } }
+        """));
+
+        task.CacheKey.ShouldBe("customer:42");
+        task.KeyScript.ShouldBeNull();
+    }
+
+    [Fact]
+    public void Configure_KeyAsObject_IsKeyScript()
+    {
+        var task = CacheAsideTask.Create(Json("""
         {
-          "key": "customer:profile",
-          "keyExpression": { "location": "dynamicExpresso", "code": "\"customer:\" + context.Headers.customerId", "encoding": "NAT" },
+          "key": { "location": "dynamicExpresso", "code": "\"customer:\" + context.Instance.Key", "encoding": "NAT" },
           "sourceTask": { "key": "src", "domain": "core", "version": "1.0.0" }
         }
-        """);
+        """));
 
-        var task = CacheAsideTask.Create(config);
+        task.CacheKey.ShouldBe(string.Empty);
+        task.KeyScript.ShouldNotBeNull();
+        task.KeyScript!.Location.ShouldBe("dynamicExpresso");
+        task.KeyScript.HasMappingCode.ShouldBeTrue();
+    }
 
-        task.KeyExpression.ShouldNotBeNull();
-        task.KeyExpression!.Location.ShouldBe("dynamicExpresso");
-        task.KeyExpression.HasMappingCode.ShouldBeTrue();
+    [Fact]
+    public void Configure_KeyAsReferenceObject_KeepsTheReference()
+    {
+        var task = CacheAsideTask.Create(Json("""
+        {
+          "key": { "encoding": "REF", "code": { "key": "k", "domain": "core", "flow": "sys-mappings", "version": "1.0.0" } },
+          "sourceTask": { "key": "src", "domain": "core", "version": "1.0.0" }
+        }
+        """));
+
+        task.KeyScript!.IsReference.ShouldBeTrue();
+        task.KeyScript.CodeReference!.Key.ShouldBe("k");
     }
 
     [Fact]
@@ -108,7 +131,7 @@ public sealed class CacheAsideTaskTests
     {
         var config = Json("""
         {
-          "key": "k1",
+          "key": { "location": "dynamicExpresso", "code": "\"k1\"", "encoding": "NAT" },
           "storeName": "store",
           "ttlInSeconds": 60,
           "consistency": "Strong",
@@ -123,12 +146,21 @@ public sealed class CacheAsideTaskTests
         var clone = original.CloneTyped();
 
         clone.Key.ShouldBe("cache-task");
-        clone.CacheKey.ShouldBe("k1");
+        clone.CacheKey.ShouldBe(string.Empty);
+        clone.KeyScript.ShouldNotBeNull();
+        clone.KeyScript!.Location.ShouldBe("dynamicExpresso");
         clone.StoreName.ShouldBe("store");
         clone.TtlInSeconds.ShouldBe(60);
         clone.Consistency.ShouldBe("Strong");
         clone.SourceTask.Key.ShouldBe("src");
         clone.ForceRefresh.ShouldBeTrue();
+
+        var pooled = CacheAsideTask.CreateEmpty();
+        pooled.CopyFromInternal(original);
+        pooled.KeyScript.ShouldNotBeNull();
+        pooled.KeyScript!.Location.ShouldBe("dynamicExpresso");
+        pooled.Reset();
+        pooled.KeyScript.ShouldBeNull();
     }
 
     [Fact]

@@ -99,6 +99,20 @@ public static class WorkflowInfrastructureModuleServiceCollectionExtensions
         
         // Security - Schema Validation
         services.AddScoped<ISchemaValidator, SchemaValidator>();
+
+        // x-masking engine (TasmanianDevil operator layer). Singleton: stateless and thread-safe; the only
+        // place in the solution that references the SDK.
+        services.TryAddSingleton<BBT.Workflow.Authorization.IFieldMaskingEngine, BBT.Workflow.Masking.TasmanianDevilFieldMaskingEngine>();
+
+        // x-encryption (hash, encrypt): per-instance secrets in the flow schema's InstanceSecrets table, held in a
+        // private in-process cache only (never Redis); the protector that opens values on demand and seals them on write;
+        // the scoped preloader entry points call before opening rows. Rows are never decrypted on load.
+        services.AddOptions<BBT.Workflow.Authorization.SchemaEncryptionOptions>();
+        services.TryAddSingleton<BBT.Workflow.Encryption.InstanceSecretStore>();
+        services.TryAddSingleton<BBT.Workflow.Encryption.InstanceDataProtector>();
+        services.TryAddSingleton<IInstanceDataProtector>(
+            sp => sp.GetRequiredService<BBT.Workflow.Encryption.InstanceDataProtector>());
+        services.TryAddScoped<IInstanceSecretPreloader, BBT.Workflow.Encryption.InstanceSecretPreloader>();
         
         // Explicit InstanceData persist path (per-instance FOR UPDATE lock + versioning).
         services.AddScoped<IInstanceDataWriteService, InstanceDataWriteService>();

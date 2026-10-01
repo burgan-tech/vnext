@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using BBT.Aether.Guids;
+using BBT.Aether.MultiSchema;
 using BBT.Aether.Tracing;
 using BBT.Aether.Uow;
 using BBT.Workflow.Caching;
@@ -24,7 +25,7 @@ namespace BBT.Workflow.Application.Tests.Tasks.Invocation;
 /// Regression coverage for the container-build-time circular dependency (issue #1007 follow-up)
 /// that kept the Orchestration host from starting at all:
 /// <c>HttpTaskExecutor → ITaskInvocationDispatcher → ITaskInvocationRouter →
-/// ILocalTaskInvokerRegistry → IEnumerable&lt;ILocalTaskInvoker&gt; → LocalCacheAsideTaskInvoker
+/// ILocalTaskInvokerRegistry → IEnumerable&lt;ILocalTaskInvoker&gt; → LocalStateStoreTaskInvoker
 /// → ILocalTaskInvokerRegistry</c>. No existing unit test caught this because every unit test
 /// constructs these types by hand and no test built the real container with
 /// <c>ValidateOnBuild</c>.
@@ -86,7 +87,7 @@ public sealed class TaskInvocationDiRegistrationTests
         using var scope = provider.CreateScope();
 
         var registry = scope.ServiceProvider.GetRequiredService<ILocalTaskInvokerRegistry>();
-        registry.Has(TaskTypes.CacheAside).ShouldBeTrue();
+        registry.Has(TaskTypes.StateStore).ShouldBeTrue();
 
         var dispatcher = scope.ServiceProvider.GetRequiredService<ITaskInvocationDispatcher>();
         dispatcher.ShouldNotBeNull();
@@ -117,6 +118,8 @@ public sealed class TaskInvocationDiRegistrationTests
         // against (see the class remarks for exact coverage scope).
         services.AddSingleton(Substitute.For<DaprClient>());
         services.AddSingleton(Substitute.For<ICorrelationIdProvider>());
+        // Provided by Aether in the hosts; the instance-read trigger executors read as the task's own credential.
+        services.AddSingleton(Substitute.For<BBT.Aether.Users.ICurrentUser>());
         services.AddSingleton(Substitute.For<IComponentCacheStore>());
         services.AddScoped(_ => Substitute.For<IInstanceTaskRepository>());
         services.AddScoped(_ => Substitute.For<IInstanceRepository>());
@@ -129,6 +132,8 @@ public sealed class TaskInvocationDiRegistrationTests
         services.AddScoped(_ => Substitute.For<IInstanceQueryGateway>());
         services.AddSingleton(Substitute.For<IGuidGenerator>());
         services.AddScoped(_ => Substitute.For<IDomainDiscoveryResolver>());
+        // Aether multi-schema scope, read by CacheKeyEvaluator (registered by AddTaskHandlers).
+        services.AddScoped(_ => Substitute.For<ICurrentSchema>());
 
         // A real (not faked) registration: self-contained (options + logger only), and it is the
         // Application module's own service (WorkflowApplicationModuleServiceCollectionExtensions),

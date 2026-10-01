@@ -21,12 +21,28 @@ public sealed class InstanceData : Entity<Guid>, IHasVersion, IHasEtag
         Guid id,
         Guid instanceId,
         string version,
-        JsonData data, bool isLatest) : base(id)
+        JsonData data, bool isLatest)
+        : this(id, instanceId, version, data, ComputeDataHash(data), isLatest)
+    {
+    }
+
+    /// <summary>
+    /// A row with a caller-supplied <paramref name="dataHash"/>: the write funnel keys it for rows carrying
+    /// <c>x-encryption</c> values (an unkeyed digest of the plaintext would sit next to the ciphertext as an
+    /// offline guessing oracle). <paramref name="data"/> is the stored form, tokens included.
+    /// </summary>
+    internal InstanceData(
+        Guid id,
+        Guid instanceId,
+        string version,
+        JsonData data,
+        string dataHash,
+        bool isLatest) : base(id)
     {
         InstanceId = instanceId;
         SetVersion(version);
         Data = data;
-        DataHash = ComputeDataHash(data);
+        DataHash = dataHash;
         EnteredAt = DateTime.UtcNow;
         ETag = Ulid.NewUlid().ToString();
         IsLatest = isLatest;
@@ -72,9 +88,12 @@ public sealed class InstanceData : Entity<Guid>, IHasVersion, IHasEtag
     public string DataHash { get; private set; }
 
     /// <summary>
-    /// <see cref="JsonData"/>
+    /// The row exactly as stored in the <c>"Data"</c> column — an <c>x-encryption.type: "encrypt"</c> field holds its
+    /// token, a <c>hash</c> field its digest. Never decrypted in place: a script opens its own instance's value with
+    /// <see cref="Instance.DecryptAsync"/>, the write funnel and the read guard open what they need through
+    /// <see cref="IInstanceDataProtector"/>.
     /// </summary>
-    public JsonData Data { get; private set; }
+    public JsonData Data { get; private set; } = null!;
 
     /// <summary>
     /// Entered at
