@@ -2156,8 +2156,10 @@ public sealed class InstanceQueryAppService(
     /// state; <c>fallbackTimeoutSeconds</c> is the EFFECTIVE value from
     /// <see cref="InstanceSubFlowOverrideExtensions.ResolveEffectiveLongPoll"/> — the state's own value,
     /// or the parent's override when one is stamped — so it always matches the window the pipeline
-    /// actually armed the fallback job with. The ack href is included only when <c>terminate</c> is true
-    /// (the pipeline pauses awaiting acknowledge in that case).
+    /// actually armed the fallback job with (terminating) or the window the client keeps polling for
+    /// (non-terminating). A terminating state's block, ack href included, is emitted only while the
+    /// acknowledge is outstanding (<c>IsAwaitingLongPollAck</c>); a non-terminating state never pauses
+    /// the pipeline, so its block carries no ack href and is emitted whenever the instance is in it.
     /// </summary>
     private async Task<InstanceInteractionOutput?> ResolveInteractionAsync(
         GetInstanceStateInput input,
@@ -2170,20 +2172,26 @@ public sealed class InstanceQueryAppService(
         if (currentStateValue.Interaction?.LongPoll is null)
             return null;
 
-        // The block describes an acknowledgement that is ACTUALLY OUTSTANDING, not one the state
-        // declares it may one day arm. Before this check it was emitted from the DEFINITION alone:
-        // measured on the bench, a leaf reported status A with a full interaction block including
-        // ack.href while `LongPollAckToken` was already cleared — the fallback had resumed the
-        // pipeline — and the acknowledge endpoint answered 200 idempotently. A client could not tell
-        // "there is an ack waiting for you" from "this state can pause", which is the only question
-        // the block exists to answer.
+        // Same resolver the pipeline armed the fallback job with, so the window the client is told
+        // is the window that will actually fire. Terminate is never overridable.
+        var effective = instance.ResolveEffectiveLongPoll(currentStateValue).LongPoll!;
+
+        // terminate=true: the block describes an acknowledgement that is ACTUALLY OUTSTANDING, not one
+        // the state declares it may one day arm. Emitted from the definition alone, a leaf reported
+        // status A with a full interaction block including ack.href while `LongPollAckToken` was
+        // already cleared — the fallback had resumed the pipeline — and the acknowledge endpoint
+        // answered 200 idempotently.
+        //
+        // terminate=false: there is no acknowledgement to wait for — the pipeline never pauses, so the
+        // marker is never armed and gating on it would suppress the block for good. The block is the
+        // directive itself ("keep long polling for fallbackTimeoutSeconds"), served whenever the
+        // instance is in the declaring state and the caller passes the gate.
         //
         // ETag safety: the token's lifetime is bracketed by status changes on both paths that clear
         // it — an acknowledge and the fallback job both resume the pipeline — and Status IS a
-        // fingerprint member, so the block's disappearance always rides a fingerprint change. If a
-        // future path ever clears the token WITHOUT a status change, the block would go stale behind
-        // a 304; that path does not exist today and adding one would need a fingerprint member.
-        if (!instance.IsAwaitingLongPollAck)
+        // fingerprint member, so the block's disappearance always rides a fingerprint change. The
+        // non-terminating block follows CurrentState, also a fingerprint member.
+        if (effective.Terminate && !instance.IsAwaitingLongPollAck)
             return null;
 
         // Only signal on the main-flow current state view, not a subflow terminal view.
@@ -2205,9 +2213,6 @@ public sealed class InstanceQueryAppService(
         if (admitted is not { IsSuccess: true, Value: true })
             return null;
 
-        // Same resolver the pipeline armed the fallback job with, so the window the client is told
-        // is the window that will actually fire. Terminate is never overridable.
-        var effective = instance.ResolveEffectiveLongPoll(currentStateValue).LongPoll!;
         return new InstanceInteractionOutput
         {
             TerminateLongPoll = effective.Terminate,
