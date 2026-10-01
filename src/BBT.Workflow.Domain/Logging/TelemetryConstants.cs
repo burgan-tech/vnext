@@ -179,12 +179,6 @@ public static class TelemetryConstants
         /// </summary>
         public const string ReadFastPath = "vnext.read.fastpath";
         /// <summary>
-        /// <c>true</c> on a read served under the engine's own identity (a trigger task's GetInstance /
-        /// GetInstances / GetInstanceData): no <c>x-roles</c> pruning, no <c>x-masking</c>, no
-        /// data-function cache. Absent on every caller-scoped read.
-        /// </summary>
-        public const string ReadSystem = "vnext.read.system";
-        /// <summary>
         /// How the wait on the per-key build gate ended: <c>build</c> (this request owns the build)
         /// or <c>coalesced</c> (while it waited, the request that held the gate populated the short
         /// active-subflow cache, so this one served that instead of building).

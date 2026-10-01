@@ -138,11 +138,11 @@ public sealed class InstanceDataWriteService(
 
             await ValidateAgainstSchemaAsync(schema, content);
 
-            var (stored, view) = Seal(instance.Id, content, encryption);
+            var stored = Seal(instance.Id, content, encryption);
 
             // A strategy append always sits at or above the head → it takes the latest flag.
             // VersionNo is line-scoped: the next ordinal WITHIN the target Version string.
-            var row = new InstanceData(Guid.NewGuid(), instance.Id, plan.Version, stored, view, dataHash, isLatest: true)
+            var row = new InstanceData(Guid.NewGuid(), instance.Id, plan.Version, stored, dataHash, isLatest: true)
             {
                 // A new semantic-version line always starts at one. Only same-version appends
                 // need MAX(VersionNo), which removes one query from every version increment.
@@ -211,12 +211,12 @@ public sealed class InstanceDataWriteService(
 
             await ValidateAgainstSchemaAsync(schema, content);
 
-            var (stored, view) = Seal(instance.Id, content, encryption);
+            var stored = Seal(instance.Id, content, encryption);
             var dataHash = encryption.KeyedHash
                 ? InstanceDataProtector.KeyedDataHash(content, encryption.Secret!)
                 : InstanceData.ComputeDataHash(content);
 
-            var row = new InstanceData(id, instance.Id, version, stored, view, dataHash, takesLatest)
+            var row = new InstanceData(id, instance.Id, version, stored, dataHash, takesLatest)
             {
                 VersionNo = await ReadLineMaxAsync(context, instance.Id, version, cancellationToken) + 1
             };
@@ -578,7 +578,7 @@ public sealed class InstanceDataWriteService(
         if (head is not null)
         {
             headStored = new JsonData(head.Data);
-            headView = protector.Unprotect(context.CurrentSchemaName, instanceId, headStored);
+            headView = await protector.UnprotectAsync(context.CurrentSchemaName, instanceId, headStored, cancellationToken);
             if (headView.HasTokens)
                 head = new InstanceDataHeadRow { Version = head.Version, DataHash = head.DataHash, Data = headView.Plain.Json };
         }
@@ -590,10 +590,11 @@ public sealed class InstanceDataWriteService(
                 head, delta);
     }
 
-    private (JsonData Stored, InstanceDataView View) Seal(Guid instanceId, JsonData content, EncryptionPlan encryption) =>
+    /// <summary>The row as it is stored: the merged content with its <c>encrypt</c> paths sealed.</summary>
+    private JsonData Seal(Guid instanceId, JsonData content, EncryptionPlan encryption) =>
         encryption.Secret is { } secret
-            ? protector!.Protect(instanceId, content, encryption.Paths.Encrypt, encryption.HeadView, secret)
-            : (content, InstanceDataView.Of(content));
+            ? protector!.Protect(instanceId, content, encryption.Paths.Encrypt, encryption.HeadView, secret).Stored
+            : content;
 
     private static string SanitizeIdentifier(string identifier)
         => identifier.Replace("\"", "", StringComparison.Ordinal);

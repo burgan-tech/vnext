@@ -76,6 +76,35 @@ public sealed class HttpTaskExecutorRoutingTests
             .ShouldBe(remote.CapturedRemoteEnvelope!.Binding.GetRawText());
     }
 
+    /// <summary>
+    /// The caller's credential (sub, act_sub, position, client_id, role) travels in the binding's headers — on both routing
+    /// paths, identically — wherever the task's own mapping does not set it. Nothing else of the caller travels.
+    /// </summary>
+    [Fact]
+    public async Task InvokeAsync_BothModes_CarryTheCallersCredential()
+    {
+        var caller = new Dictionary<string, string>
+        {
+            ["sub"] = "alice", ["act_sub"] = "alice-actor", ["position"] = "HQ", ["client_id"] = "web-client",
+            ["role"] = "morph-idm.maker", ["x-device-id"] = "device-1"
+        };
+        var local = new Harness(ExecutionMode.Local);
+        var remote = new Harness(ExecutionMode.Remote);
+
+        await local.ExecuteAsync(caller);
+        await remote.ExecuteAsync(caller);
+
+        var binding = local.LocalBindings[0];
+        var headers = JsonSerializer.Deserialize<Dictionary<string, string>>(binding.GetProperty("Headers").GetString()!)!;
+        headers["sub"].ShouldBe("alice");
+        headers["act_sub"].ShouldBe("alice-actor");
+        headers["position"].ShouldBe("HQ");
+        headers["client_id"].ShouldBe("web-client");
+        headers["role"].ShouldBe("morph-idm.maker");
+        headers.Keys.ShouldNotContain("x-device-id");
+        binding.GetRawText().ShouldBe(remote.CapturedRemoteEnvelope!.Binding.GetRawText());
+    }
+
     private sealed class Harness
     {
         public IRemoteInvokerService RemoteInvoker { get; } = Substitute.For<IRemoteInvokerService>();
@@ -124,11 +153,12 @@ public sealed class HttpTaskExecutorRoutingTests
                 NullLogger<HttpTaskExecutor>.Instance);
         }
 
-        public Task<Result<StandardTaskResponse>> ExecuteAsync()
+        public Task<Result<StandardTaskResponse>> ExecuteAsync(Dictionary<string, string>? callerHeaders = null)
         {
             var instance = Instance.Create(Guid.NewGuid(), "test-flow", "1.0", "ctx-key");
             var scriptContext = new ScriptContext.Builder(NullLogger<ScriptContext>.Instance)
                 .SetRuntime(Substitute.For<IRuntimeInfoProvider>())
+                .SetHeaders(callerHeaders)
                 .SetInstance(instance)
                 .Build();
             var onExecute = OnExecuteTask.Create(1, _task, ScriptCode.FromNative(string.Empty));

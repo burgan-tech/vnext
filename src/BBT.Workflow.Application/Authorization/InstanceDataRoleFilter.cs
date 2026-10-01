@@ -44,7 +44,7 @@ public static class InstanceDataRoleFilter
     /// <param name="maskingEngine">Required when <paramref name="activeMaskRules"/> is non-empty.</param>
     /// <param name="storedTokens">
     /// Stored <c>x-encryption.type: "encrypt"</c> token per path of the row <paramref name="data"/> was read from
-    /// (<see cref="InstanceData.StoredTokens"/>). An active encrypt rule serves the token; without one — a legacy
+    /// (<see cref="InstanceDataView.Tokens"/> of the row opened by <see cref="IInstanceDataProtector"/>). An active encrypt rule serves the token; without one — a legacy
     /// plaintext value written before the field was encrypted — the value is fully masked, never shown.
     /// </param>
     public static JsonElement Apply(

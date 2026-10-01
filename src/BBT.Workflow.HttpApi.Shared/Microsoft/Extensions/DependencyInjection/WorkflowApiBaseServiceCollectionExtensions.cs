@@ -132,11 +132,6 @@ public static class WorkflowApiBaseServiceCollectionExtensions
                 // a separate compiled model is cached per schema, table names are fully qualified,
                 // no session-level directive is ever sent — PgBouncer transaction-mode safe.
                 options.ReplaceService<IModelCacheKeyFactory, SchemaAwareModelCacheKeyFactory>();
-
-                // x-encryption "encrypt": every materialized InstanceData row gets the protector that opens
-                // its tokens (lazily, on first plaintext read). Absent → tokens stay opaque, never plaintext.
-                if (sp.GetService<BBT.Workflow.Encryption.InstanceDataProtectorInterceptor>() is { } protectorInterceptor)
-                    options.AddInterceptors(protectorInterceptor);
             });
 
         services.AddAetherUnitOfWorkMiddleware();

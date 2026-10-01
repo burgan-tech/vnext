@@ -53,11 +53,13 @@ public sealed class SchemaFieldFilterService(
         CancellationToken cancellationToken = default,
         IReadOnlyDictionary<string, string>? storedTokens = null)
     {
+        // Nothing applied ⇒ null, never the input: the input is the plaintext view, and the caller's fallback is the
+        // stored form (IInstanceDataReadService), so a schema that cannot be read can never serve an encrypt value in clear.
         if (workflow?.Schema is null || !data.HasValue)
-            return data;
+            return null;
         var element = data.GetValueOrDefault();
         if (element.ValueKind != JsonValueKind.Object)
-            return data;
+            return null;
 
         var reference = workflow.Schema;
         var key = (reference.Domain, reference.Flow, reference.Key, reference.Version);
@@ -65,7 +67,7 @@ public sealed class SchemaFieldFilterService(
         if (_listMetadata?.TryGetValue(key, out metadata) != true)
         {
             var schemaResult = await componentCacheStore.GetSchemaAsync(reference, cancellationToken);
-            if (!schemaResult.IsSuccess) return data;
+            if (!schemaResult.IsSuccess) return null;
             metadata = SchemaRolesParser.ParseExposure(schemaResult.Value!.Schema);
             _listMetadata?.Add(key, metadata);
         }
@@ -73,7 +75,7 @@ public sealed class SchemaFieldFilterService(
         var pathRoleGrants = metadata!.PathRoleGrants;
         var maskRules = SelectEnabledRules(metadata.PathMaskRules, maskingOptions.Value.Enabled);
         if (pathRoleGrants.Count == 0 && maskRules.Count == 0)
-            return data;
+            return null;
 
         // The role set must match how the surrounding read was authorized and cache-keyed, otherwise
         // the same cache entry can be filled with differently-filtered bodies — hence the shared resolver

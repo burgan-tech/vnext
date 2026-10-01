@@ -300,8 +300,9 @@ callerHash = h(roles | actor identity | culture | version)   # extensions delibe
   [Field Masking and Encryption](../domain/field-masking.md).
 - **A row carrying `encrypt` tokens is never cached.** An allow-listed caller's body holds the plaintext (Redis
   would keep it at rest), and a body built while a secret was unavailable holds tokens that must not outlive that.
-- **System reads never touch this cache.** A trigger task's read (`SystemRead`) is unfiltered, and the
-  key is caller-scoped: storing it would serve the raw body to the next caller with the same scope.
+- **Trigger-task reads are ordinary callers here.** A `GetInstanceData` task reads as its own credential (its mapping
+  headers + the caller's `sub`/`act_sub`/`position`/`client_id`/`role` where unset), so its body is filtered for that scope and cached under it like
+  any caller's; there is no system-read bypass. See [Field Masking and Encryption](../domain/field-masking.md).
 
 - **Change signal is `InstanceData.ETag`** of the IsLatest row — a fresh ULID on every
   latest-line data write. It is read index-only via `UX_InstancesData_Instance_IsLatest`

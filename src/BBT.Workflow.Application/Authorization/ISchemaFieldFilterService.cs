@@ -11,8 +11,10 @@ public interface ISchemaFieldFilterService
 {
     /// <summary>
     /// Filters the given JSON data by the caller's visible fields according to the workflow's master schema
-    /// <c>x-roles</c> grants. Returns filtered <see cref="JsonElement"/> or the original data if no schema
-    /// or no role grants are defined.
+    /// <c>x-roles</c> grants and transforms it per <c>x-masking</c> / <c>x-encryption</c>. Returns the filtered
+    /// <see cref="JsonElement"/>, or <c>null</c> when nothing was applied (no schema, the schema could not be read, no
+    /// rules, non-object data). Never call it directly from a read surface: <see cref="Instances.IInstanceDataReadService"/>
+    /// owns the fallback, which is the STORED form — falling back to the plaintext input would serve encrypt values in clear.
     /// </summary>
     /// <param name="workflow">The workflow whose master schema carries the field grants.</param>
     /// <param name="data">The instance data to filter.</param>
@@ -27,7 +29,7 @@ public interface ISchemaFieldFilterService
     /// </param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <param name="storedTokens">
-    /// <see cref="InstanceData.StoredTokens"/> of the row <paramref name="data"/> was read from. Required for
+    /// Stored token per opened path of the row <paramref name="data"/> was read from (<see cref="InstanceDataView.Tokens"/>). Required for
     /// <c>x-encryption.type: "encrypt"</c> fields to serve their stored token to non-exempt callers; without it
     /// those callers get a full mask (never the plaintext).
     /// </param>

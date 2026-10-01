@@ -17,7 +17,8 @@ public sealed class JobTimeoutRecoveryService(
     IInstanceRepository instanceRepository,
     IInstanceTransitionRepository transitionRepository,
     IOptions<WorkflowExecutionOptions> options,
-    ILogger<JobTimeoutRecoveryService> logger) : IJobTimeoutRecoveryService
+    ILogger<JobTimeoutRecoveryService> logger,
+    ISubItemEventDataResolver? subItemDataResolver = null) : IJobTimeoutRecoveryService
 {
     public Task FaultInstanceAsync(TransitionJobPayload args, CancellationToken cancellationToken)
         => FaultInstanceAsync(
@@ -64,7 +65,8 @@ public sealed class JobTimeoutRecoveryService(
                 boundaryLevel: "Job");
 
             instance.AddIncident(incident);
-            instance.Fault(args.Domain);
+            instance.Fault(args.Domain,
+                subItemData: await subItemDataResolver.ResolveOrStoredAsync(instance, cancellationToken));
 
             var openTransition = await transitionRepository.GetLatestIncompleteAsync(
                 args.InstanceId, cancellationToken);

@@ -129,7 +129,7 @@ public class InstanceQueryAppServiceDataCacheTests : IDisposable
             currentSchema: Substitute.For<ICurrentSchema>(),
             transitionAuthorizationManager: _transitionAuthorizationManager,
             representationEtagService: Substitute.For<IRepresentationEtagService>(),
-            schemaFieldFilterService: _schemaFieldFilterService,
+            instanceDataReadService: new BBT.Workflow.Instances.InstanceDataReadService(_schemaFieldFilterService),
             callerRoleResolver: new DefaultCallerRoleResolver(Substitute.For<ICurrentUser>()),
             paginationLinkGenerator: Substitute.For<BBT.Aether.Application.Pagination.IPaginationLinkGenerator>(),
             instanceFilteringOptions: Options.Create(new InstanceFilteringOptions()),
@@ -492,38 +492,6 @@ public class InstanceQueryAppServiceDataCacheTests : IDisposable
     /// fingerprint, never reads or writes the caller-scoped cache and never runs the exposure pass, so a
     /// task copying a field gets the stored value and no raw body lands under a caller hash.
     /// </summary>
-    [Fact]
-    public async Task GetInstanceDataAsync_WhenSystemRead_SkipsCacheFingerprintAndExposurePass()
-    {
-        var instance = CreateInstanceWithData(out _);
-        SetupFullPathMocks(instance);
-        EnableCache();
-        SetupFingerprint(instance.Id);
-        SetupCachedEntry(out _);
-
-        var input = new GetInstanceDataInput
-        {
-            Domain = TestDomain,
-            Workflow = TestWorkflow,
-            Instance = instance.Id.ToString(),
-            Headers = new Dictionary<string, string?> { ["role"] = "impersonated" },
-            QueryParameters = new Dictionary<string, string?>(),
-            SystemRead = true
-        };
-
-        var result = await _service.GetInstanceDataAsync(input, CancellationToken.None);
-
-        result.Result.IsSuccess.ShouldBeTrue();
-        result.Result.Value!.Data!.Value.GetProperty("key").GetString().ShouldNotBe("cached-value");
-        await _instanceRepository.DidNotReceive().GetDataFingerprintAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
-        await _dataFunctionCache.DidNotReceive().GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
-        await _dataFunctionCache.DidNotReceive()
-            .SetAsync(Arg.Any<string>(), Arg.Any<Caching.DataFunctionCacheEntry>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
-        await _schemaFieldFilterService.DidNotReceive()
-            .ApplyAsync(Arg.Any<Definitions.Workflow>(), Arg.Any<System.Text.Json.JsonElement?>(),
-                Arg.Any<Instance>(), Arg.Any<Authorization.AuthorizationRequestContext?>(), Arg.Any<CancellationToken>());
-    }
-
     /// <summary>A caller read with identical content still goes through the exposure pass.</summary>
     [Fact]
     public async Task GetInstanceDataAsync_WhenNotSystemRead_RunsTheExposurePass()

@@ -9,10 +9,10 @@ Data-schema property keywords that control how an instance-data field is stored 
 
 | Control | Keyword | Where it acts |
 |---|---|---|
-| Hide a field from some callers | `x-roles` | read (data function, sync response) |
-| Mask a visible field | `x-masking` | read (data function, sync response); stored data never changes |
+| Hide a field from some callers | `x-roles` | read (instance GET, list, data function, sync response, Get* tasks) |
+| Mask a visible field | `x-masking` | read (same surfaces); stored data never changes |
 | Hash a field | `x-encryption` `type: "hash"` | **write** — the stored value is the digest |
-| Encrypt a field | `x-encryption` `type: "encrypt"` | **write** (AES-256-GCM token in instance data) + read (decrypted for the engine and for allow-listed callers) |
+| Encrypt a field | `x-encryption` `type: "encrypt"` | **write** (AES-256-GCM token in instance data) + read (decrypted for allow-listed callers; scripts open their own instance's value with `DecryptAsync`) |
 
 The read order is fixed: **`x-roles` → `x-masking` → `x-encryption`**. A property `x-roles` hides is pruned,
 and nothing else looks at it. A property carries at most one transform: `x-masking` next to an active
@@ -23,20 +23,70 @@ a pruned path is skipped before its value is read.
 
 | Surface | `x-roles` | `x-masking` | `encrypt` | `hash` |
 |---|---|---|---|---|
-| Data function, sync start/transition response | pruned | allow-listed → clear, others masked | allow-listed → plaintext, others the stored token; legacy plaintext → full mask | stored digest; legacy plaintext → full mask |
-| **Instance GET / list** | **not applied** | **not applied** | **stored token** | **stored digest** |
-| Trigger tasks (`GetInstance`, `GetInstances`, `GetInstanceData`, local) | not applied | not applied | plaintext (engine view) | digest |
+| Instance GET, instance list, data function, sync start/transition response | pruned | allow-listed → clear, others masked | allow-listed → plaintext, others the stored token; legacy plaintext → full mask | stored digest; legacy plaintext → full mask |
+| Trigger tasks `GetInstance`, `GetInstances`, `GetInstanceData` (same domain and cross-domain) | same, for the task's credential | same | same | same |
+| Scripts: `context.Instance.Data`, and `context.Body` where the runtime fills it with instance data | not applied | not applied | **the stored token**; open with `context.Instance.DecryptAsync(path)` | digest |
 
-**Instance GET and list serve data exactly as stored** (committee decision 2026-09-30, revisited in Phase 2):
-no `x-roles` pruning, no masking, no decryption. This removes the `x-roles` pruning those two endpoints applied
-before this release — a field hidden by `x-roles` is visible there until Phase 2 (`vnext-meta` deprecations and
-known-issues). Encrypted fields show their token and hashed fields their digest, so neither leaks.
+**One read path.** Every guarded surface reads through `IInstanceDataReadService` (`Instances/`), the read-side
+counterpart of `IInstanceDataWriteService`: it preloads the row's secrets and runs the single exposure pass
+(`SchemaFieldFilterService` → `InstanceDataRoleFilter`). When nothing can be applied — no schema, a schema that cannot be
+read, no rules — it serves the row **as stored**, so an `encrypt` value stays a token. A row carrying tokens is
+opened here, on demand, only so that an allow-listed caller can be served the plaintext.
+The list builds one page reader: schema metadata once per schema version, the page's secrets in one query, visibility
+still decided per instance.
 
-Other surfaces that see the engine's view (plaintext for `encrypt`, digest for `hash`, clear for masked fields):
-extensions, output mapping, `context.Related` and every script context; the human-task list
-(`humanTask.title`/`description`); outbox events and internal endpoints (network isolation is the boundary);
-local trigger-task reads (`SystemRead`). Cross-domain trigger tasks go through the remote instance GET and receive
-the stored form. A value a script copies into another field loses its protection.
+**Trigger-task credential.** A `GetInstance` / `GetInstances` / `GetInstanceData` task is evaluated as the header set it
+presents to its target (`HttpTaskInvocation.BuildOutgoingHeaders`): the task's mapping headers without the reserved
+trace/correlation headers, plus the request's **credential** — `sub`, `act_sub`, `position`, `client_id` and `role` —
+for every one of them the mapping left absent or empty (a non-empty mapping value always wins). Nothing else of the caller
+travels. The same rule applies to every outbound task type (see
+[Correlation and tracing](../runtime/correlation-and-tracing.md)).
+- `role` travels only as the caller **sent** it (its request header). Roles a provider resolved for the caller (morph-idm
+  get-roles) are never carried; the target resolves them itself from the forwarded `sub` / `act_sub` / `client_id` /
+  `position`.
+- Cross-domain, the set is the remote binding's headers, sent to the target domain's endpoint; same domain, the read runs
+  under `ICurrentUser.Change(...)` built from the same set — `ICurrentUser` (AsyncLocal, read before headers by role
+  resolution) cannot carry anything else of the pipeline caller into it.
+- So a task with no headers reads as its caller; set `role` (or the whole credential) in the input mapping to read as
+  someone else, e.g. a service role.
+
+Not covered (the row as stored): transition history, `context.Related`, custom functions, the human-task list
+(`humanTask.title`/`description`), outbox events and internal endpoints (network isolation is the boundary). A value a
+script copies into another field loses its protection; a task mapping that copies an `encrypt` token into another field
+is refused by the write funnel (`EncryptedValueReservedException`).
+
+### Scripts: the token, and `context.Instance.DecryptAsync(path)`
+
+A script sees an `encrypt` field as its **token**, and opens it explicitly:
+
+```csharp
+var raw  = context.Instance.Data.identityNumber;                               // "ENCRYPTED:AES256:i1:…"
+var tckn = await context.Instance.DecryptAsync("identityNumber", cancellationToken);   // plaintext
+```
+
+| Where the script reads | What it sees |
+|---|---|
+| `context.Instance.Data` (every script: mappings, conditions, view rules, extensions, output/timeout mapping, functions) | token |
+| `context.Body` where the runtime puts instance data (extensions, view rules, output and timeout mapping, function info; transition task scripts after a parallel branch wrote data) | token |
+| `context.Body` of a transition's own task scripts | the client's request body, as sent |
+| `context.Body` of a SubFlow's output mapping in the parent | the child's data in clear (the parent cannot open the child's tokens) |
+| `context.Instance.LatestData.Data` / `FindData(version).Data` | token — the row as stored |
+| DynamicExpresso rules and function-cache `varyBy` | token; no await, so no `DecryptAsync` — write a C# condition script instead |
+
+`DecryptAsync` takes a **path** of the instance's own latest data, never a value: it returns `null` for a plain field, an
+unknown path, a value that cannot be opened, or a token string passed as if it were a path — so nothing that reached the
+script from elsewhere (a request body, a task response, `context.Related`, another instance) can be decrypted.
+
+**Cancellation.** The token is used for that call only and is never stored, so a cached script context cannot carry a
+stale one. The row is opened once per script snapshot; its secret usually comes from the in-process cache (the
+transition context load preloads it), otherwise it is loaded through EF in its own scope and unit of work (never the
+caller's DbContext, which a parallel task branch may be using). A cancelled token throws
+`OperationCanceledException`; the runtime does not catch it or treat it as retryable, and nothing is cached by a
+cancelled load.
+
+**Writing back.** The same token at the same path is a no-op; a plaintext value is encrypted again; a token written to
+any other field is refused (`EncryptedValueReservedException`). Copying a decrypted value into another field removes its
+protection — that is the script author's decision.
 
 ## `x-masking`
 
@@ -107,10 +157,10 @@ instance's first protected write and stored in its flow schema's `InstanceSecret
   values on any API, log, span or cache. **Consequence**: someone who can read the database can decrypt every
   value — `encrypt` protects API exposure and single-table dumps, not a database reader.
 - **Crypto-shredding**: deleting an instance deletes its secret; deleting only the secret row makes the instance's
-  encrypted values unrecoverable (reads keep serving the token, transitions answer 503 `Instance:100040`, the instance
-  is neither faulted nor given an incident). **It takes effect per pod once that pod's L1 entry is gone** — sliding
+  encrypted values unrecoverable (every read serves the token, `DecryptAsync` answers `null`, and a write that would
+  carry such a value forward is refused — see *Write rules*). **It takes effect per pod once that pod's L1 entry is gone** — sliding
   expiry (`SecretCacheSlidingMinutes`) or a restart; until then a pod that already held the secret keeps opening the
-  values. Measured on the lab: same pod after the delete → plaintext; after a restart → token + 503.
+  values. Measured on the lab: same pod after the delete → plaintext; after a restart → token.
 - **Creation** happens only in the write funnel, inside its transaction and under its per-instance row lock, in one
   statement (`INSERT … ON CONFLICT DO NOTHING RETURNING` unioned with a read of the existing row), so concurrent first
   writes produce exactly one row. Should that statement return nothing (a row committed by another transaction after its
@@ -118,8 +168,9 @@ instance's first protected write and stored in its flow schema's `InstanceSecret
 - **Cache**: `InstanceSecretStore` keeps secrets in a private, size-bounded in-process `MemoryCache` — the L1 —
   and deliberately **never in Redis** (`SchemaEncryption:SecretCacheEntries`, `SecretCacheSlidingMinutes`).
   Secrets never change, so an entry cannot be stale. Entry points preload them in one query
-  (`IInstanceSecretPreloader`: transition context load, instance GET/list, data function); a row opened without a
-  preload falls back to a synchronous lookup on its own pooled connection (Debug log 20471). A token that fails to
+  (`IInstanceSecretPreloader`: transition context load and `IInstanceDataReadService`); a value opened without a
+  preload loads its secret through EF, in an isolated scope and unit of work on the shared connection pool (Debug log
+  20471) — there is no second connection pool and no Npgsql code in the store. A token that fails to
   authenticate under a cached secret evicts it and is retried once against the database.
 
 ### `hash` — applied on write
@@ -139,7 +190,7 @@ raw value, so `hash` takes no `roles`.
 - **Validation**: every later write re-validates the merged document, which then holds the digest, so a `hash`
   property may not declare `pattern`, `format`, `minLength`, `maxLength`, `enum` or `const` (rejected at publish).
 - **Read**: the stored digest is served as is. A value without the prefix (written before the rule existed) is
-  fully masked on the data function; instance GET/list show it as stored.
+  fully masked on every guarded surface.
 
 ### `encrypt` — AES-256-GCM at rest
 
@@ -151,24 +202,29 @@ raw value, so `hash` takes no `roles`.
 | Where | What is there |
 |---|---|
 | `InstancesData."Data"` column | `ENCRYPTED:AES256:i1:<base64url(0x01 ‖ nonce ‖ ciphertext ‖ tag)>` |
-| Engine (scripts, mappings, conditions, tasks, schema validation, extensions) | plaintext |
-| Data function / sync response, allow-listed caller | plaintext |
-| Data function / sync response, every other caller | the stored token |
-| Data function / sync response, value written before the field became `encrypt` | full mask |
-| Instance GET / list | the stored token |
+| `InstanceData.Data` everywhere in the engine (the aggregate, scripts, runtime-filled `context.Body`, dynamic role grants, human-task text, transition history) | the stored token |
+| Write funnel (merge, dedup, schema validation) | plaintext, opened inside the funnel and never kept |
+| Scripts, on request | `await context.Instance.DecryptAsync(path, ct)` opens the instance's own value |
+| Guarded surfaces (GET, list, data function, sync response, Get* tasks), allow-listed caller | plaintext |
+| Guarded surfaces, every other caller | the stored token |
+| Guarded surfaces, value written before the field became `encrypt` | full mask |
 
 **Construction.** BCL `AesGcm` with the instance key, 12-byte random nonce, 16-byte tag; `i1` names the scheme
 (instance key, version 1). The additional authenticated data is `vnext.idata.v1|i1|<instanceId>|<path>`, so a token
 copied to another field or instance does not open. It is deliberately not bound to the row: an unchanged value
 carries its token forward, and a client can echo a token back.
 
-**Storage model.** `InstanceData.StoredData` is the only EF-mapped content member and always holds the stored
-form; `InstanceData.Data` is the unmapped engine view. No EF tracking state — `Add`, fixup, change detection, the
-detached `Set.Update(graph)` of the retry/fault scopes — can write plaintext into the column. Content and
-`DataHash` are ignored after save, and `EfCoreInstanceRepository.UpdateAsync` attaches a detached aggregate's rows
-`Unchanged`. `InstanceDataProtectorInterceptor` hands each materialized row the protector and its flow schema; the
-row opens its tokens on its first `Data` read. Decryption is driven by the token prefix, never by the current
-schema.
+**Storage model.** `InstanceData.Data` is the `"Data"` column exactly as stored — tokens included — in memory, on a
+script snapshot and after a reload. Nothing decrypts a row in place: there is no plaintext view on the entity and no
+materialization interceptor, so no EF tracking state (`Add`, fixup, change detection, the detached `Set.Update(graph)`
+of the retry/fault scopes) can write plaintext into the column. Content and `DataHash` are still ignored after save,
+and `EfCoreInstanceRepository.UpdateAsync` attaches a detached aggregate's rows `Unchanged`. Decryption happens only
+where it is asked for — `IInstanceDataProtector.UnprotectAsync`, called by the write funnel, the read guard and
+`DecryptAsync` — and is driven by the token prefix, never by the current schema. The model change needed no migration:
+the column, its name and its index are the ones Phase 1 created.
+
+**Dynamic role grants and the human-task list see the token.** By decision: a field used as a role or a task title
+should not be `encrypt`.
 
 ### Write rules (both types)
 
@@ -185,9 +241,11 @@ Funnel order: open the head → sanitize the request → merge → **hash** `has
 - `DataHash` of a row that carries tokens is a keyed HMAC-SHA256 under the instance key (40 hex).
 - The schema cannot be resolved while the instance's head already carries protected values → 503
   `Instance:100043`, never a plaintext write.
-- An undecryptable value (secret row missing or token tampered) refuses the transition before any task runs —
-  503 `Instance:100040`, the instance is neither marked Busy nor faulted. `WorkflowLogs.EncryptedValueUndecryptable`
-  (20468) names instance and path, never the value.
+- A write that would carry an undecryptable value forward unchanged (secret row missing, token tampered) is refused
+  with `EncryptionKeyUnavailableException` (`Instance:100040`): sealing the token string again would store it as the
+  value. There is no earlier gate — loading the transition context no longer opens the row — so the refusal surfaces
+  as the failure of the step whose write hit it. Reads never fail on such a value; they serve the token.
+  `WorkflowLogs.EncryptedValueUndecryptable` (20468) names instance and path, never the value.
 
 ### Queries
 

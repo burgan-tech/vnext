@@ -2,6 +2,7 @@ using System.Text.Json;
 using BBT.Aether;
 using BBT.Workflow;
 using BBT.Aether.Results;
+using BBT.Aether.Users;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Definitions.GraphQL.Validation;
 using BBT.Workflow.Discovery;
@@ -26,6 +27,7 @@ public sealed class GetInstancesTaskExecutor : TriggerTaskExecutorBase<GetInstan
 {
     private readonly IInstanceQueryGateway _instanceQueryGateway;
     private readonly IDomainDiscoveryResolver _endpointResolver;
+    private readonly ICurrentUser _currentUser;
 
     /// <summary>
     /// Initializes a new instance of GetInstancesTaskExecutor.
@@ -36,11 +38,13 @@ public sealed class GetInstancesTaskExecutor : TriggerTaskExecutorBase<GetInstan
         IRemoteInvokerService remoteInvoker,
         IInstanceQueryGateway instanceQueryGateway,
         IDomainDiscoveryResolver endpointResolver,
+        ICurrentUser currentUser,
         ILogger<GetInstancesTaskExecutor> logger)
         : base(scriptEngine, runtimeInfoProvider, remoteInvoker, logger)
     {
         _instanceQueryGateway = instanceQueryGateway;
         _endpointResolver = endpointResolver;
+        _currentUser = currentUser;
     }
 
     /// <inheritdoc />
@@ -107,7 +111,8 @@ public sealed class GetInstancesTaskExecutor : TriggerTaskExecutorBase<GetInstan
 
         try
         {
-            var headers = ConvertTaskHeadersToDictionary(task.Headers);
+            // Read as the task's own credential, exactly as the remote invoker would send it cross-domain.
+            var headers = BuildReadCredential(task.Headers, context.ScriptContext);
 
             // Step 1: Get list of instances
             var listInput = new GetInstanceListInput
@@ -118,12 +123,12 @@ public sealed class GetInstancesTaskExecutor : TriggerTaskExecutorBase<GetInstan
                 PageSize = task.PageSize,
                 Sort = task.Sort,
                 Filter = task.Filter,
-                Headers = headers ?? new Dictionary<string, string?>(),
-                // System identity: no x-roles pruning, no x-masking (see GetInstanceListInput.SystemRead).
-                SystemRead = true
+                Headers = headers
             };
 
-            var instanceListResult = await _instanceQueryGateway.GetInstanceListAsync(listInput, cancellationToken);
+            Result<InstanceListWithGroupsResponse<GetInstanceOutput>> instanceListResult;
+            using (ReadAs(_currentUser, headers))
+                instanceListResult = await _instanceQueryGateway.GetInstanceListAsync(listInput, cancellationToken);
             if (!instanceListResult.IsSuccess)
             {
                 Logger.TaskLocalExecutionFailed(
@@ -277,7 +282,7 @@ public sealed class GetInstancesTaskExecutor : TriggerTaskExecutorBase<GetInstan
             UseDapr = binding.UseDapr,
             ValidateSSL = binding.ValidateSSL,
             TimeoutSeconds = binding.TimeoutSeconds,
-            Headers = binding.Headers,
+            Headers = SerializeReadCredential(binding.Headers, context.ScriptContext),
             BaseUrl = endpoint.BaseUrl.ToString(),
             DaprAppId = endpoint.DaprAppId,
             AcceptedStatusCodes = binding.AcceptedStatusCodes

@@ -80,7 +80,7 @@ public class TransitionValidationService(
         // error is a 400 and never reaches the write funnel inside the pipeline (where it would fault the
         // instance). The funnel keeps its own check for values produced by mappings.
         if (context.DataElement is { } payload && EncryptedValueFormat.MayContainReserved(payload.GetRawText()) &&
-            EncryptedValueFormat.FindIntroducedToken(payload, context.Instance?.LatestData?.StoredData.JsonElement) is { } path)
+            EncryptedValueFormat.FindIntroducedToken(payload, context.Instance?.LatestData?.Data.JsonElement) is { } path)
         {
             return Result.Fail(WorkflowErrors.EncryptedValueReserved(path));
         }

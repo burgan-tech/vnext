@@ -69,17 +69,6 @@ public static class InstanceReadActivityHelper
     public const string FastPathDisabled = "disabled";
 
     /// <summary>
-    /// A system read (trigger task): the response cache is bypassed by design, so the read always
-    /// builds, unfiltered. Kept apart from <see cref="FastPathDisabled"/> so a dashboard can tell the
-    /// engine's own reads from caller reads on a host with the cache switched off.
-    /// </summary>
-    public const string FastPathSystem = "system";
-
-    /// <summary>Marks the transaction as a system read (see <see cref="FastPathSystem"/>).</summary>
-    public static void MarkSystemRead(Activity? transaction)
-        => transaction?.SetTag(TelemetryConstants.TagNames.ReadSystem, true);
-
-    /// <summary>
     /// Records which read ran and how it was answered — on the TRANSACTION, at zero span documents.
     /// <para>
     /// This is the hot path's whole design. The state function is the highest-QPS route in the

@@ -54,7 +54,7 @@ public sealed class InstanceCommandAppService(
     ITransitionValidationService transitionValidationService,
     ITransitionAdmissionService transitionAdmissionService,
     IRepresentationEtagService representationEtagService,
-    ISchemaFieldFilterService schemaFieldFilterService,
+    IInstanceDataReadService instanceDataReadService,
     IScriptContextFactory scriptContextFactory,
     ITimerEvaluator timerEvaluator,
     ITransitionAuthorizationManager transitionAuthorizationManager,
@@ -824,13 +824,11 @@ public sealed class InstanceCommandAppService(
         }
 
         var latestData = instance.LatestData;
-        var rawAttributes = latestData?.Data.JsonElement;
-        var filteredAttributes = await schemaFieldFilterService.ApplyAsync(
-            workflow, rawAttributes, instance, requestContext, cancellationToken, latestData?.StoredTokens);
+        var attributes = await instanceDataReadService.ExposeAsync(
+            workflow, instance, latestData, requestContext, cancellationToken);
 
         var key = instance.Key;
         var entityEtag = latestData?.ETag;
-        var attributes = filteredAttributes ?? rawAttributes;
 
         WorkflowOutputResult? outputResponse = null;
 

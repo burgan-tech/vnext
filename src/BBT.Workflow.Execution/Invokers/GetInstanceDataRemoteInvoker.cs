@@ -244,6 +244,10 @@ public sealed class GetInstanceDataRemoteInvoker : ITaskInvoker<GetInstanceDataB
             request.Headers.TryAddWithoutValidation("If-None-Match", binding.ETag);
         }
 
+        // The task's own credential, the same header set as every other task invoker: the target domain exposes
+        // the data (x-roles, x-masking, x-encryption) for this caller — a same-domain read evaluates the same set.
+        InvokerHelpers.AddBindingHeaders(request, binding.Headers);
+        InvokerHelpers.ApplyTrustedCorrelationHeaders(request);
         return request;
     }
 
@@ -264,6 +268,10 @@ public sealed class GetInstanceDataRemoteInvoker : ITaskInvoker<GetInstanceDataB
             request.Headers.TryAddWithoutValidation("If-None-Match", binding.ETag);
         }
 
+        // The task's own credential, the same header set as every other task invoker: the target domain exposes
+        // the data (x-roles, x-masking, x-encryption) for this caller — a same-domain read evaluates the same set.
+        InvokerHelpers.AddBindingHeaders(request, binding.Headers);
+        InvokerHelpers.ApplyTrustedCorrelationHeaders(request);
         return request;
     }
 

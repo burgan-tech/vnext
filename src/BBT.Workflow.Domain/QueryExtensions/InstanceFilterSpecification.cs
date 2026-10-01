@@ -26,7 +26,7 @@ public class InstanceFilterSpecification : FilterSpecification<Instance>
 
                     var jsonString = match.Groups[2].Value;
                     return x => x.DataList != null &&
-                                x.DataList.Any(dtList => EF.Functions.JsonContains(dtList.StoredData.Json, jsonString));
+                                x.DataList.Any(dtList => EF.Functions.JsonContains(dtList.Data.Json, jsonString));
                 }
                 catch
                 {

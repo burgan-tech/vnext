@@ -11,9 +11,10 @@ namespace BBT.Workflow.Encryption;
 /// <summary>
 /// Opens and seals the <c>x-encryption</c> values of instance data (singleton), with the instance's own secrets.
 /// <list type="bullet">
-/// <item><see cref="Unprotect"/> — load path: decrypts every <c>encrypt</c> token reached through object properties.
+/// <item><see cref="UnprotectAsync"/> — on demand: decrypts every <c>encrypt</c> token reached through object properties.
 /// Driven by the token prefix, never by the current schema. The secret comes from the in-process cache (a preload at the
-/// entry point normally put it there) or, failing that, a synchronous lookup; without one the tokens stay closed.</item>
+/// entry point normally put it there) or, failing that, one EF query on a context of its own; without a secret the tokens
+/// stay closed.</item>
 /// <item><see cref="SanitizeDelta"/> — write path, before the merge: a request may only send back the value already stored
 /// at the same path (an echoed token becomes the head's plaintext, an echoed digest stays); any other value carrying a
 /// reserved prefix is rejected, so nobody can plant a token or a digest or replay one from elsewhere.</item>
@@ -42,20 +43,21 @@ public sealed class InstanceDataProtector(
     public InstanceSecretStore Secrets => secrets;
 
     /// <inheritdoc />
-    public InstanceDataView Unprotect(string? schema, Guid instanceId, JsonData stored)
+    public async Task<InstanceDataView> UnprotectAsync(
+        string? schema, Guid instanceId, JsonData stored, CancellationToken cancellationToken = default)
     {
         if (!EncryptedValueFormat.MayContainToken(stored.Json))
             return InstanceDataView.Of(stored);
 
-        var fromCache = secrets.TryGetCached(schema, instanceId) is not null;
-        var view = Open(instanceId, stored, secrets.TryLoad(schema, instanceId));
+        var cached = secrets.TryGetCached(schema, instanceId);
+        var view = Open(instanceId, stored, cached ?? await secrets.TryLoadAsync(schema, instanceId, cancellationToken));
 
         // A cached secret that fails to authenticate a token can only be one left behind by a first write whose
         // transaction rolled back: drop it and read the row that actually committed.
-        if (fromCache && view.Undecryptable.Count > 0)
+        if (cached is not null && view.Undecryptable.Count > 0)
         {
             secrets.Evict(schema, instanceId);
-            view = Open(instanceId, stored, secrets.TryLoad(schema, instanceId));
+            view = Open(instanceId, stored, await secrets.TryLoadAsync(schema, instanceId, cancellationToken));
         }
 
         return view;

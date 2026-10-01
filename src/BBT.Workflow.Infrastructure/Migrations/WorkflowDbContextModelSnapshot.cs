@@ -905,7 +905,7 @@ namespace BBT.Workflow.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
-                    b.OwnsOne("BBT.Workflow.JsonData", "StoredData", b1 =>
+                    b.OwnsOne("BBT.Workflow.JsonData", "Data", b1 =>
                         {
                             b1.Property<Guid>("InstanceDataId")
                                 .HasColumnType("uuid");
@@ -930,7 +930,7 @@ namespace BBT.Workflow.Migrations
                                 .HasForeignKey("InstanceDataId");
                         });
 
-                    b.Navigation("StoredData")
+                    b.Navigation("Data")
                         .IsRequired();
                 });
 

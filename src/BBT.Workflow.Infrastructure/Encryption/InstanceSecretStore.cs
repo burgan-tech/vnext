@@ -5,12 +5,13 @@ using BBT.Workflow.Data;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
 using Microsoft.EntityFrameworkCore;
+using System.Data.Common;
+using BBT.Aether.MultiSchema;
 using Microsoft.Extensions.Caching.Memory;
-using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
-using Npgsql;
 
 namespace BBT.Workflow.Encryption;
 
@@ -33,20 +34,22 @@ public sealed class InstanceSecretStore : IDisposable
 {
     private readonly MemoryCache _cache;
     private readonly TimeSpan _sliding;
-    private readonly string? _connectionString;
+    private readonly IServiceScopeFactory? _scopeFactory;
     private readonly ILogger _logger;
-    private NpgsqlDataSource? _fallbackSource;
 
-    /// <summary>Creates the store.</summary>
+    /// <summary>
+    /// Creates the store. <paramref name="scopeFactory"/> opens the isolated EF context an on-demand load reads through;
+    /// without it (unit tests) a secret that is not cached simply cannot be loaded.
+    /// </summary>
     public InstanceSecretStore(
         IOptions<SchemaEncryptionOptions> options,
-        IConfiguration? configuration = null,
+        IServiceScopeFactory? scopeFactory = null,
         ILogger<InstanceSecretStore>? logger = null)
     {
         var value = options.Value;
         _cache = new MemoryCache(new MemoryCacheOptions { SizeLimit = Math.Max(1, value.SecretCacheEntries) });
         _sliding = TimeSpan.FromMinutes(Math.Max(1, value.SecretCacheSlidingMinutes));
-        _connectionString = configuration?.GetConnectionString("Default");
+        _scopeFactory = scopeFactory;
         _logger = logger ?? (ILogger)NullLogger.Instance;
     }
 
@@ -72,6 +75,8 @@ public sealed class InstanceSecretStore : IDisposable
     /// method correct without relying on it.
     /// </para>
     /// </summary>
+    /// <exception cref="ArgumentNullException"></exception>
+    /// <exception cref="OperationCanceledException"></exception>
     public async Task<InstanceSecretMaterial> GetOrCreateAsync(
         WorkflowDbContext context, Guid instanceId, CancellationToken cancellationToken)
     {
@@ -136,37 +141,46 @@ public sealed class InstanceSecretStore : IDisposable
     }
 
     /// <summary>
-    /// Synchronous lookup for a row opened without a preload (a reader outside the preloaded entry points). Uses its own
-    /// pooled connection — the calling context may be in the middle of materializing a query. Returns null when there is
-    /// no secret (nothing was ever encrypted for the instance) or the lookup fails; the caller then keeps the tokens.
+    /// Loads one instance's secret on demand — a row opened without a preload (a script's <c>DecryptAsync</c>, a read of a
+    /// single protected row). Reads through EF on an ISOLATED unit of work: a fresh DI scope and a fresh, non-transactional
+    /// context bound to <paramref name="schema"/>, so it never touches the caller's DbContext, which a parallel task branch
+    /// may be using, and its connection comes from the same pool as every other EF read. One indexed primary-key lookup
+    /// of two columns; the cache answers every later call.
+    /// <para>
+    /// <paramref name="cancellationToken"/> belongs to this call only and the cache is written only on success. Cancellation
+    /// is never turned into "no secret": a cancelled token throws <see cref="OperationCanceledException"/>, even when the
+    /// provider reported it as another error. Any other failure leaves the value closed (null) and logs.
+    /// </para>
     /// </summary>
-    public InstanceSecretMaterial? TryLoad(string? schema, Guid instanceId)
+    public async Task<InstanceSecretMaterial?> TryLoadAsync(string? schema, Guid instanceId, CancellationToken cancellationToken)
     {
         if (TryGetCached(schema, instanceId) is { } cached)
             return cached;
-        if (string.IsNullOrWhiteSpace(_connectionString))
+        if (_scopeFactory is null)
             return null;
 
         try
         {
-            _fallbackSource ??= NpgsqlDataSource.Create(_connectionString);
-            using var command = _fallbackSource.CreateCommand(
-                $"SELECT \"EncryptionKey\", \"HashSalt\" FROM {Table(schema)} WHERE \"InstanceId\" = $1");
-            command.Parameters.Add(new NpgsqlParameter { Value = instanceId });
-            using var reader = command.ExecuteReader();
-            if (!reader.Read())
+            var row = await _scopeFactory.ExecuteInIsolatedUnitOfWorkAsync(async (sp, ct) =>
+            {
+                using var _ = sp.GetRequiredService<ICurrentSchema>().Change(schema ?? "public");
+                var context = await sp.GetRequiredService<IAetherDbContextProvider<WorkflowDbContext>>().GetDbContextAsync(ct);
+                return await context.InstanceSecrets
+                    .AsNoTracking()
+                    .Where(s => s.InstanceId == instanceId)
+                    .Select(s => new SecretRow { InstanceId = s.InstanceId, EncryptionKey = s.EncryptionKey, HashSalt = s.HashSalt })
+                    .FirstOrDefaultAsync(ct);
+            }, cancellationToken);
+
+            if (row is null)
                 return null;
 
             _logger.InstanceSecretLoadedWithoutPreload(instanceId, schema ?? "public");
-            return Remember(schema, new SecretRow
-            {
-                InstanceId = instanceId,
-                EncryptionKey = (byte[])reader[0],
-                HashSalt = (byte[])reader[1],
-            });
+            return Remember(schema, row);
         }
-        catch (Exception ex) when (ex is NpgsqlException or InvalidOperationException)
+        catch (Exception ex) when (ex is DbException or InvalidOperationException)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             _logger.InstanceSecretLookupFailed(instanceId, schema ?? "public", ex.GetType().Name);
             return null;
         }
@@ -192,7 +206,6 @@ public sealed class InstanceSecretStore : IDisposable
     public void Dispose()
     {
         _cache.Dispose();
-        _fallbackSource?.Dispose();
     }
 
     /// <summary>Raw projection of an <c>InstanceSecrets</c> row.</summary>
@@ -218,7 +231,7 @@ public sealed class InstanceSecretPreloader(
         if (instanceIds.Count == 0)
             return;
 
-        var context = await dbContextProvider.GetDbContextAsync();
+        var context = await dbContextProvider.GetDbContextAsync(cancellationToken);
         await store.PreloadAsync(context, instanceIds, cancellationToken);
     }
 }

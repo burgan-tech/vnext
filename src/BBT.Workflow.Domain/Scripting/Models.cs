@@ -623,6 +623,8 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
         using var activity = ScriptContextActivity.Start("ScriptContext.RefreshInstance");
         ScriptContextActivity.TagInstanceShape(activity, instance);
         var snapshot = instance.CreateSnapshot();
+        // The live instance carries no decryptor; keep the one the builder bound to the snapshot being replaced.
+        Instance?.CopyDecryptionTo(snapshot);
         Instance = snapshot;
         Incident = new ScriptIncidentInfo
         {

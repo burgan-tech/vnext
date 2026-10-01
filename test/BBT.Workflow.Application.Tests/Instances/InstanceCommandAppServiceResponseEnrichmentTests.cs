@@ -83,7 +83,7 @@ public class InstanceCommandAppServiceResponseEnrichmentTests : IDisposable
             transitionValidationService: Substitute.For<ITransitionValidationService>(),
             transitionAdmissionService: Substitute.For<ITransitionAdmissionService>(),
             representationEtagService: Substitute.For<IRepresentationEtagService>(),
-            schemaFieldFilterService: Substitute.For<ISchemaFieldFilterService>(),
+            instanceDataReadService: new BBT.Workflow.Instances.InstanceDataReadService(Substitute.For<ISchemaFieldFilterService>()),
             scriptContextFactory: _scriptContextFactory,
             timerEvaluator: Substitute.For<ITimerEvaluator>(),
             transitionAuthorizationManager: Substitute.For<ITransitionAuthorizationManager>(),

@@ -21,7 +21,6 @@ using BBT.Workflow.Security;
 using BBT.Workflow.Validation;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -33,11 +32,11 @@ using Xunit;
 namespace BBT.Workflow.Domains.Instances;
 
 /// <summary>
-/// <c>x-encryption.type: "encrypt"</c> against a real PostgreSQL, through the real write funnel and the real EF
-/// materialization interceptor:
+/// <c>x-encryption.type: "encrypt"</c> against a real PostgreSQL, through the real write funnel:
 /// <list type="bullet">
-///   <item>the <c>"Data"</c> column holds the token, the engine's in-memory row the plaintext;</item>
-///   <item>a reload opens the token (every query shape goes through the interceptor);</item>
+///   <item><c>InstanceData.Data</c> is the <c>"Data"</c> column as stored — the token — in memory and after a reload;
+///   nothing decrypts it in place, and the model needs no migration;</item>
+///   <item>the protector opens it on demand, loading a secret it has not cached through EF (a fresh pod);</item>
 ///   <item>the detached retry/fault <c>UpdateAsync</c> never rewrites the column — the hazard that would have
 ///   put the plaintext back on disk;</item>
 ///   <item>dedup still recognizes an unchanged document although every seal uses a fresh nonce;</item>
@@ -74,7 +73,6 @@ public sealed class InstanceDataEncryptionPersistenceTests : IAsyncLifetime
     private PostgreSqlContainer _postgres = null!;
     private string _connectionString = null!;
     private InstanceDataProtector _protector = null!;
-    private InstanceDataProtectorInterceptor _interceptor = null!;
     private IComponentCacheStore _componentCacheStore = null!;
     private Definitions.Workflow _workflow = null!;
 
@@ -88,7 +86,6 @@ public sealed class InstanceDataEncryptionPersistenceTests : IAsyncLifetime
         _connectionString = _postgres.GetConnectionString();
 
         _protector = NewProtector();
-        _interceptor = new InstanceDataProtectorInterceptor(_protector);
 
         var schema = JsonSerializer.Deserialize<SchemaDefinition>(MasterSchemaJson,
             new JsonSerializerOptions { PropertyNameCaseInsensitive = true })!;
@@ -114,21 +111,31 @@ public sealed class InstanceDataEncryptionPersistenceTests : IAsyncLifetime
 
     /// <summary>A protector with its own (empty) in-process cache — what a second pod, or a restarted one, has.</summary>
     private InstanceDataProtector NewProtector() => new(new InstanceSecretStore(
-        Options.Create(new SchemaEncryptionOptions()),
-        new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?> { ["ConnectionStrings:Default"] = _connectionString })
-            .Build()));
+        Options.Create(new SchemaEncryptionOptions()), SecretLookupScopes()));
 
-    private WorkflowDbContext CreateContext(bool withProtector = true, InstanceDataProtectorInterceptor? interceptor = null)
+    /// <summary>
+    /// What the store's EF lookup resolves per call: a fresh scope with its own context, schema and (non-transactional)
+    /// unit of work — never the caller's context.
+    /// </summary>
+    private IServiceScopeFactory SecretLookupScopes()
     {
-        // Every test instance builds its own interceptor (and so its own EF service provider); the >20 guard is noise here.
+        var services = new ServiceCollection();
+        services.AddSingleton(Substitute.For<BBT.Aether.Uow.IUnitOfWorkManager>());
+        services.AddScoped(_ => Substitute.For<ICurrentSchema>());
+        services.AddScoped<IAetherDbContextProvider<WorkflowDbContext>>(_ => new OwnedDbContextProvider(CreateContext()));
+        return services.BuildServiceProvider().GetRequiredService<IServiceScopeFactory>();
+    }
+
+    private WorkflowDbContext CreateContext()
+    {
         var builder = new DbContextOptionsBuilder<WorkflowDbContext>()
             .UseNpgsql(_connectionString)
             .ConfigureWarnings(w => w.Ignore(CoreEventId.ManyServiceProvidersCreatedWarning));
-        if (withProtector)
-            builder.AddInterceptors(interceptor ?? _interceptor);
         return new WorkflowDbContext(builder.Options, new StaticCurrentSchema("public"));
     }
+
+    private Task<InstanceDataView> OpenAsync(InstanceDataProtector protector, InstanceData row, CancellationToken ct = default)
+        => protector.UnprotectAsync("public", row.InstanceId, row.Data, ct);
 
     private InstanceDataWriteService CreateService(WorkflowDbContext context, IComponentCacheStore? store = null)
     {
@@ -156,7 +163,7 @@ public sealed class InstanceDataEncryptionPersistenceTests : IAsyncLifetime
 
     private async Task<string> RawColumnAsync(Guid instanceId)
     {
-        await using var ctx = CreateContext(withProtector: false);
+        await using var ctx = CreateContext();
         return await ctx.Database
             .SqlQueryRaw<string>("SELECT \"Data\"::text AS \"Value\" FROM \"public\".\"InstancesData\" WHERE \"InstanceId\" = {0} AND \"IsLatest\"", instanceId)
             .SingleAsync();
@@ -165,7 +172,7 @@ public sealed class InstanceDataEncryptionPersistenceTests : IAsyncLifetime
     private static string? At(JsonElement root, string path) => InstanceDataProtector.TryGetString(root, path);
 
     [Fact]
-    public async Task TheColumnHoldsTheToken_TheEngineHoldsThePlaintext()
+    public async Task TheColumnAndTheWrittenRow_HoldTheToken_AndTheProtectorOpensIt()
     {
         var instance = await CreateInstanceAsync();
         await using var ctx = CreateContext();
@@ -174,18 +181,32 @@ public sealed class InstanceDataEncryptionPersistenceTests : IAsyncLifetime
             instance, new JsonData($$$"""{"customer":{"email":"{{{Email}}}","name":"Ayşe"}}"""), null, CancellationToken.None, _workflow);
 
         row.ShouldNotBeNull();
-        At(row.Data.JsonElement, "customer.email").ShouldBe(Email);
-        row.StoredTokens.ShouldContainKey("customer.email");
+        At(row.Data.JsonElement, "customer.email").ShouldStartWith("ENCRYPTED:AES256:i1:");
+        var opened = await OpenAsync(_protector, row);
+        At(opened.Plain.JsonElement, "customer.email").ShouldBe(Email);
+        opened.Tokens.ShouldContainKey("customer.email");
 
         var raw = await RawColumnAsync(instance.Id);
         raw.ShouldNotContain(Email);
         raw.ShouldContain("ENCRYPTED:AES256:i1:");
         raw.ShouldContain("Ayşe");
-        row.DataHash.ShouldNotBe(InstanceData.ComputeDataHash(row.Data)); // keyed, not the plaintext SHA-1
+        At(JsonDocument.Parse(raw).RootElement, "customer.email").ShouldBe(At(row.Data.JsonElement, "customer.email"));
+        row.DataHash.ShouldNotBe(InstanceData.ComputeDataHash(opened.Plain)); // keyed, not the plaintext SHA-1
+    }
+
+    /// <summary>
+    /// <c>Data</c> is the mapped column again, under its old name and column, so the model the migrations describe is
+    /// exactly the model in code: no migration is needed for the storage-model change.
+    /// </summary>
+    [Fact]
+    public async Task TheModel_HasNoPendingChanges()
+    {
+        await using var ctx = CreateContext();
+        ctx.Database.HasPendingModelChanges().ShouldBeFalse();
     }
 
     [Fact]
-    public async Task AReload_OpensTheToken_ForTrackedAndNoTrackingQueries()
+    public async Task AReload_ShowsTheToken_ForTrackedAndNoTrackingQueries_AndTheProtectorOpensIt()
     {
         var instance = await CreateInstanceAsync();
         await using (var ctx = CreateContext())
@@ -193,25 +214,44 @@ public sealed class InstanceDataEncryptionPersistenceTests : IAsyncLifetime
 
         await using var read = CreateContext();
         var tracked = await read.Instances.Include(i => i.DataList).SingleAsync(i => i.Id == instance.Id);
-        At(tracked.LatestData!.Data.JsonElement, "customer.email").ShouldBe(Email);
+        At(tracked.LatestData!.Data.JsonElement, "customer.email").ShouldStartWith("ENCRYPTED:AES256:i1:");
+        ((string)tracked.Data!.customer.email).ShouldStartWith("ENCRYPTED:AES256:i1:");
 
         var detached = await read.InstancesData.AsNoTracking().SingleAsync(d => d.InstanceId == instance.Id && d.IsLatest);
-        At(detached.Data.JsonElement, "customer.email").ShouldBe(Email);
-        detached.StoredTokens["customer.email"].ShouldStartWith("ENCRYPTED:AES256:i1:");
-        detached.UndecryptablePaths.ShouldBeEmpty();
+        At(detached.Data.JsonElement, "customer.email").ShouldStartWith("ENCRYPTED:AES256:i1:");
+
+        var opened = await OpenAsync(_protector, detached);
+        At(opened.Plain.JsonElement, "customer.email").ShouldBe(Email);
+        opened.Undecryptable.ShouldBeEmpty();
     }
 
+    /// <summary>
+    /// A script's <c>DecryptAsync</c> on a row a fresh pod has not opened yet: the secret is loaded through EF in its own
+    /// scope (not the read DbContext), a cancelled call throws and caches nothing, and the next call opens the value. The
+    /// script snapshot shows the token meanwhile.
+    /// </summary>
     [Fact]
-    public async Task WithoutAProtector_ALoadedRowShowsTheTokenNeverThePlaintext()
+    public async Task DecryptAsync_OnAFreshPod_LoadsTheSecretAsynchronously_AndACancelledCallCachesNothing()
     {
         var instance = await CreateInstanceAsync();
         await using (var ctx = CreateContext())
             await CreateService(ctx).AppendAsync(instance, new JsonData($$$"""{"customer":{"email":"{{{Email}}}"}}"""), null, CancellationToken.None, _workflow);
 
-        await using var read = CreateContext(withProtector: false);
-        var row = await read.InstancesData.AsNoTracking().SingleAsync(d => d.InstanceId == instance.Id && d.IsLatest);
+        var freshPod = NewProtector();
+        await using var read = CreateContext();
+        var loaded = await read.Instances.AsNoTracking().Include(i => i.DataList).SingleAsync(i => i.Id == instance.Id);
+        var script = loaded.CreateSnapshot();
+        script.BindDecryption(freshPod, "public");
 
-        At(row.Data.JsonElement, "customer.email").ShouldStartWith("ENCRYPTED:AES256:");
+        ((string)script.Data!.customer.email).ShouldStartWith("ENCRYPTED:AES256:i1:");
+
+        using var cancelled = new CancellationTokenSource();
+        await cancelled.CancelAsync();
+        await Should.ThrowAsync<OperationCanceledException>(() => script.DecryptAsync("customer.email", cancelled.Token));
+        freshPod.Secrets.TryGetCached("public", instance.Id).ShouldBeNull();
+
+        (await script.DecryptAsync("customer.email")).ShouldBe(Email);
+        freshPod.Secrets.TryGetCached("public", instance.Id).ShouldNotBeNull();
     }
 
     [Fact]
@@ -227,7 +267,7 @@ public sealed class InstanceDataEncryptionPersistenceTests : IAsyncLifetime
         await using (var loadCtx = CreateContext())
         {
             loaded = await loadCtx.Instances.AsNoTracking().Include(i => i.DataList).SingleAsync(i => i.Id == instance.Id);
-            At(loaded.LatestData!.Data.JsonElement, "customer.email").ShouldBe(Email); // plaintext in memory
+            At(loaded.LatestData!.Data.JsonElement, "customer.email").ShouldStartWith("ENCRYPTED:AES256:i1:");
         }
 
         await using (var updateCtx = CreateContext())
@@ -405,19 +445,20 @@ public sealed class InstanceDataEncryptionPersistenceTests : IAsyncLifetime
             .ShouldNotBe(At(JsonDocument.Parse(await RawColumnAsync(b.Id)).RootElement, "customer.tckn"));
     }
 
-    /// <summary>A pod that never saw the instance opens its tokens through the synchronous fallback (no preload).</summary>
+    /// <summary>A pod that never saw the instance loads the secret through EF (no preload) and caches it.</summary>
     [Fact]
-    public async Task AColdProtector_OpensTokensThroughTheFallbackLookup()
+    public async Task AColdProtector_LoadsTheSecretThroughEf_AndCachesIt()
     {
         var instance = await CreateInstanceAsync();
         await using (var ctx = CreateContext())
             await CreateService(ctx).AppendAsync(instance, new JsonData($$$"""{"customer":{"email":"{{{Email}}}"}}"""), null, CancellationToken.None, _workflow);
 
-        var cold = new InstanceDataProtectorInterceptor(NewProtector());
-        await using var read = CreateContext(interceptor: cold);
+        var cold = NewProtector();
+        await using var read = CreateContext();
         var row = await read.InstancesData.AsNoTracking().SingleAsync(d => d.InstanceId == instance.Id && d.IsLatest);
 
-        At(row.Data.JsonElement, "customer.email").ShouldBe(Email);
+        At((await OpenAsync(cold, row)).Plain.JsonElement, "customer.email").ShouldBe(Email);
+        cold.Secrets.TryGetCached("public", instance.Id).ShouldNotBeNull();
     }
 
     /// <summary>Deleting the instance deletes its secret; deleting only the secret leaves the tokens unopenable.</summary>
@@ -428,15 +469,15 @@ public sealed class InstanceDataEncryptionPersistenceTests : IAsyncLifetime
         await using (var ctx = CreateContext())
             await CreateService(ctx).AppendAsync(instance, new JsonData($$$"""{"customer":{"email":"{{{Email}}}"}}"""), null, CancellationToken.None, _workflow);
 
-        await using (var ctx = CreateContext(withProtector: false))
+        await using (var ctx = CreateContext())
             await ctx.Database.ExecuteSqlRawAsync("DELETE FROM \"public\".\"InstanceSecrets\" WHERE \"InstanceId\" = {0}", instance.Id);
 
-        var cold = new InstanceDataProtectorInterceptor(NewProtector());
-        await using var read = CreateContext(interceptor: cold);
+        await using var read = CreateContext();
         var row = await read.InstancesData.AsNoTracking().SingleAsync(d => d.InstanceId == instance.Id && d.IsLatest);
+        var opened = await OpenAsync(NewProtector(), row);
 
-        row.UndecryptablePaths.ShouldContain("customer.email");
-        row.Data.Json.ShouldNotContain(Email);
+        opened.Undecryptable.ShouldContain("customer.email");
+        opened.Plain.Json.ShouldNotContain(Email);
     }
 
     [Fact]
@@ -446,10 +487,10 @@ public sealed class InstanceDataEncryptionPersistenceTests : IAsyncLifetime
         await using (var ctx = CreateContext())
             await CreateService(ctx).AppendAsync(instance, new JsonData($$$"""{"customer":{"email":"{{{Email}}}"}}"""), null, CancellationToken.None, _workflow);
 
-        await using (var ctx = CreateContext(withProtector: false))
+        await using (var ctx = CreateContext())
             await ctx.Database.ExecuteSqlRawAsync("DELETE FROM \"public\".\"Instances\" WHERE \"Id\" = {0}", instance.Id);
 
-        await using var verify = CreateContext(withProtector: false);
+        await using var verify = CreateContext();
         (await verify.InstanceSecrets.CountAsync(x => x.InstanceId == instance.Id)).ShouldBe(0);
     }
 
@@ -462,6 +503,18 @@ public sealed class InstanceDataEncryptionPersistenceTests : IAsyncLifetime
         Substitute.For<ISchemaValidator>(),
         Options.Create(new WorkflowExecutionOptions()),
         NullLogger<EfCoreInstanceRepository>.Instance);
+
+    /// <summary>A scope's own context, disposed with the scope.</summary>
+    private sealed class OwnedDbContextProvider(WorkflowDbContext context)
+        : IAetherDbContextProvider<WorkflowDbContext>, IDisposable, IAsyncDisposable
+    {
+        public Task<WorkflowDbContext> GetDbContextAsync(CancellationToken cancellationToken = default)
+            => Task.FromResult(context);
+
+        public void Dispose() => context.Dispose();
+
+        public ValueTask DisposeAsync() => context.DisposeAsync();
+    }
 
     private sealed class FixedDbContextProvider(WorkflowDbContext context)
         : IAetherDbContextProvider<WorkflowDbContext>

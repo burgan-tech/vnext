@@ -67,6 +67,7 @@ public sealed class DaprHttpEndpointTaskInvoker(
                 request.Content = new StringContent(binding.Body, Encoding.UTF8, "application/json");
             }
 
+            InvokerHelpers.AddBindingHeaders(request, binding.Headers);
             InvokerHelpers.ApplyTrustedCorrelationHeaders(request);
 
             // SendAsync performs no status validation: every 2xx/4xx/5xx comes back as a response, so

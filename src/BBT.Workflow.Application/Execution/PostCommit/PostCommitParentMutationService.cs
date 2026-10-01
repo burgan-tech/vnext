@@ -19,7 +19,8 @@ public sealed class PostCommitParentMutationService(
     IInstanceRepository instanceRepository,
     IInstanceStatusLock instanceStatusLock,
     IStateNotificationScheduler stateNotificationScheduler,
-    ILogger<PostCommitParentMutationService> logger) : IPostCommitParentMutationService
+    ILogger<PostCommitParentMutationService> logger,
+    ISubItemEventDataResolver? subItemDataResolver = null) : IPostCommitParentMutationService
 {
     public async Task<Result<TransitionOutput>> SettleAsync(
         PostCommitParentSnapshot source,
@@ -84,7 +85,8 @@ public sealed class PostCommitParentMutationService(
                     traceId: source.TraceId));
             }
 
-            instance.Fault(source.Domain, source.CallerMode == ExecMode.Sync);
+            instance.Fault(source.Domain, source.CallerMode == ExecMode.Sync,
+                subItemData: await subItemDataResolver.ResolveOrStoredAsync(instance, cancellationToken));
             await instanceRepository.UpdateAsync(instance, true, ct);
             return new ActivationVerdict(
                 TelemetryConstants.ActivationOutcomes.Faulted, CasFlipped: false, instance.GetCurrentState);

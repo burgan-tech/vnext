@@ -367,11 +367,10 @@ public static class InstancesModelCreatingExtensions
                 .HasMaxLength(WorkflowConstants.MaxDataHashLength)
                 .Metadata.SetAfterSaveBehavior(PropertySaveBehavior.Ignore);
 
-            // The column holds the STORED form (x-encryption "encrypt" tokens at encrypted paths).
-            // InstanceData.Data is the unmapped plaintext view; mapping only StoredData means no EF
-            // tracking state can ever write plaintext into the column.
-            b.Ignore(p => p.Data);
-            b.OwnsOne(p => p.StoredData, d =>
+            // The column holds the row as stored (x-encryption "encrypt" tokens at encrypted paths), and so does
+            // InstanceData.Data — it is never decrypted in place. Content is write-once: after save EF never writes
+            // it again, so no tracking state (a detached graph Update) can rewrite the column.
+            b.OwnsOne(p => p.Data, d =>
             {
                 d.Ignore(g => g.JsonElement);
                 d.Property(g => g.Json)

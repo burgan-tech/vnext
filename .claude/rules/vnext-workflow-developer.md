@@ -288,25 +288,46 @@ A sixth profile is **composed on top of** the base, never selected instead of it
   value, everyone else the transformed one); exemption is `IRoleGrantEvaluator.IsAnyRoleAllowed` over the list,
   and a role-less caller can never satisfy a role-bound grant (`IsUnprovableRoleBoundGrant` — a `$role.` value
   resolving to `""` matched the empty role once). `deny` is rejected at publish (`FieldMaskingDefinition`).
-- **Instance GET and list serve data AS STORED** — no `x-roles`, no masking, no decryption (committee
-  decision 2026-09-30, Phase 2 revisits): `Attributes = systemRead ? Data : StoredData`. The exposure pass runs
-  on the data function and the sync start/transition response only. Do not put it back on GET/list piecemeal.
+- **ONE read path**: instance GET, instance list, data function and sync start/transition response read through
+  `IInstanceDataReadService` (the `IInstanceDataWriteService` counterpart); the Get* trigger tasks reach the same
+  surfaces. It preloads secrets and runs the exposure pass; when nothing applies (no schema, unreadable schema, no rules)
+  it serves the row as stored — `ISchemaFieldFilterService.ApplyAsync` returns `null` for "nothing applied" precisely so
+  no caller can fall back to a plaintext. It opens a row (`UnprotectAsync`) only when the row carries tokens, so the
+  filter can serve an allow-listed caller the plaintext. Do not call the filter from a surface directly.
 - `x-encryption.type: "hash"` is applied on **WRITE**: the funnel stores `HASHED:SHA256:<hex>` (HMAC under the
   instance's own salt), the read path serves the digest; no `roles`, no validation keywords, one transform per field.
 - Per-instance key + salt live in the flow schema's `InstanceSecrets` table, created ONLY by the write funnel
   under its row lock (`InstanceSecretStore.GetOrCreateAsync`), cached in a private in-process L1 and **never in
-  Redis**. Entry points preload (`IInstanceSecretPreloader`); a lazy open without one falls back to a sync lookup.
-- Trigger-task reads set the SERVER-ONLY `SystemRead` flag (no x-roles, no x-masking, no data cache). Never
-  set it from a handler/controller.
+  Redis**. Entry points preload (`IInstanceSecretPreloader`); an open without one loads the secret through EF in an
+  isolated scope + unit of work (`ExecuteInIsolatedUnitOfWorkAsync`) — never Npgsql directly, never the caller's context.
+- **Get* trigger tasks read as the header set they present** — mapping headers + the request's credential
+  (`sub`, `act_sub`, `position`, `client_id`, `role`) for each one the mapping left absent or EMPTY; a non-empty mapping
+  value wins (`HttpTaskInvocation.AppendCallerCredential`, the one rule EVERY outbound task type uses — see
+  `docs/runtime/correlation-and-tracing.md`). The values come from the REQUEST headers, so a morph-idm-resolved role is
+  never carried. One set for both paths: cross-domain it is the remote binding's `Headers`
+  (`SerializeReadCredential`); same-domain the executor reads under `ICurrentUser.Change(...)` from it (`ReadAs`), ALWAYS
+  — `ChangeFromHeaders` is a no-op for an empty set and `ICurrentUser` (AsyncLocal) wins over headers. `SystemRead` is
+  deleted.
 - Data-function cache generation (`v3` + `-nomask`) is in the key AND the ETag; rows carrying tokens are never cached.
-- `x-encryption.type: "encrypt"` is AES-256-GCM of InstanceData AT REST; the engine sees plaintext.
-  **`InstanceData.StoredData` is the only EF-mapped content member** (tokens); `InstanceData.Data` is the unmapped
-  plaintext view, opened lazily through the protector the materialization interceptor attaches. Never map `Data`
-  back, never project `d.StoredData.Json`/`d.Data.Json` in LINQ (a scalar projection skips the interceptor), and
-  never write `InstancesData."Data"` outside `InstanceDataWriteService`. Decryption is prefix-driven, never
+- **`InstanceData.Data` IS the column as stored** — tokens included — on the live aggregate, on a script snapshot and
+  after a reload. There is no plaintext view on the entity and no materialization interceptor; nothing decrypts a row in
+  place. Decryption happens only where it is asked for, through `IInstanceDataProtector.UnprotectAsync` (async only):
+  the write funnel (opens the head to merge/validate, never keeps it), the read guard (allow-listed callers) and
+  `context.Instance.DecryptAsync(path, ct)`. Do not reintroduce a plaintext member on `InstanceData` or a lazy open:
+  the two-faced model (`StoredData` + view) was removed by decision, and with it any way for EF to write plaintext.
+  Never write `InstancesData."Data"` outside `InstanceDataWriteService`. Decryption is prefix-driven, never
   schema-driven. `SchemaEncryption:EncryptWrites` is the rollback switch for both hash and encrypt.
-  An undecryptable value refuses the transition before any task (`Instance:100040`). Scope is InstanceData only —
-  transition bodies, task journals and outbox payloads still hold plaintext.
+- **`DecryptAsync` opens only the instance's OWN path**: `null` for a plain field, an unknown path, a value that cannot be
+  opened, a token passed as a path, or a snapshot without a bound protector (`ScriptContextBuilder` binds it via
+  `Instance.BindDecryption`; `CreateSnapshot`/`CopyDecryptionTo` carry it). Its token is per call (never captured;
+  contexts are cached) and `OperationCanceledException` propagates. Dynamic role grants and the human-task list see the
+  token by decision — a role or a task title should not be `encrypt`; DynamicExpresso sees tokens.
+- **A SubFlow/SubProcess hands its parent PLAINTEXT**: `ISubItemEventDataResolver` opens the child's own tokens with the
+  child's key before `Instance.Complete`/`Fault` raise the sub event (the parent cannot open them, least of all
+  cross-domain). Every Complete/Fault call site of a sub item passes it.
+- There is no context-load gate for an undecryptable value anymore (`Instance:100040` before admission was removed);
+  only a WRITE that would carry an unopenable value forward refuses (`EncryptionKeyUnavailableException`). Scope is
+  InstanceData only — transition bodies, task journals and outbox payloads still hold plaintext.
 - Full guide: `docs/domain/field-masking.md`.
 
 ## Task / Action History (system functions)

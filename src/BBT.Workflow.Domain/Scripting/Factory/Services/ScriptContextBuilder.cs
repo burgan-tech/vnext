@@ -23,7 +23,9 @@ internal sealed class ScriptContextBuilder(
     IRequestRawBodyProvider? rawBodyProvider = null,
     IRelatedInstanceReader? relatedInstanceReader = null,
     IInstanceCorrelationRepository? correlationRepository = null,
-    IOptions<RelatedAccessOptions>? relatedAccessOptions = null) : IScriptContextBuilder
+    IOptions<RelatedAccessOptions>? relatedAccessOptions = null,
+    IInstanceDataProtector? dataProtector = null,
+    BBT.Aether.MultiSchema.ICurrentSchema? currentSchema = null) : IScriptContextBuilder
 {
     private IRuntimeInfoProvider? _runtimeInfoProvider;
     private Definitions.Workflow? _workflow;
@@ -333,11 +335,15 @@ internal sealed class ScriptContextBuilder(
         return null;
     }
 
-    private static Instance CreateInstanceSnapshot(Instance instance)
+    private Instance CreateInstanceSnapshot(Instance instance)
     {
         using var activity = ScriptContextActivity.Start("ScriptContext.SnapshotInstance");
         ScriptContextActivity.TagInstanceShape(activity, instance);
-        return instance.CreateSnapshot();
+        var snapshot = instance.CreateSnapshot();
+        // context.Instance.DecryptAsync opens this instance's own values; the secret lives in the flow schema in scope now.
+        if (dataProtector is not null)
+            snapshot.BindDecryption(dataProtector, currentSchema?.Name);
+        return snapshot;
     }
 
     /// <summary>

@@ -66,7 +66,7 @@ public class FieldEncryptionBenchmarks
 
         _hashedJson = _protector.ApplyHashes(new JsonData(_plainJson), _hashPaths, _secret).Json;
         _storedJson = _protector.Protect(InstanceId, new JsonData(_hashedJson), _encryptPaths, null, _secret).Stored.Json;
-        _head = _protector.Unprotect(Schema, InstanceId, new JsonData(_storedJson));
+        _head = _protector.UnprotectAsync(Schema, InstanceId, new JsonData(_storedJson)).GetAwaiter().GetResult();
         _delta = new JsonData("""{"taskResult":{"status":"ok","note":"plain"}}""");
     }
 
@@ -81,10 +81,10 @@ public class FieldEncryptionBenchmarks
         _protector.Protect(InstanceId, new JsonData(_hashedJson), _encryptPaths, _head, _secret).Stored;
 
     [Benchmark]
-    public JsonData Open() => _protector.Unprotect(Schema, InstanceId, new JsonData(_storedJson)).Plain;
+    public JsonData Open() => _protector.UnprotectAsync(Schema, InstanceId, new JsonData(_storedJson)).GetAwaiter().GetResult().Plain;
 
     [Benchmark(Baseline = true)]
-    public JsonData OpenPlain() => _protector.Unprotect(Schema, InstanceId, new JsonData(_plainJson)).Plain;
+    public JsonData OpenPlain() => _protector.UnprotectAsync(Schema, InstanceId, new JsonData(_plainJson)).GetAwaiter().GetResult().Plain;
 
     [Benchmark]
     public JsonData Hash() => _protector.ApplyHashes(new JsonData(_plainJson), _hashPaths, _secret);

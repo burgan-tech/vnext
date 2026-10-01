@@ -364,4 +364,52 @@ public abstract class TaskExecutorBase<TTask>(ILogger logger) : ITaskExecutor
 
         context.SetStandardResponse(response, variableKey);
     }
+
+    /// <summary>
+    /// The envelope with the caller's credential (<c>sub</c>, <c>act_sub</c>, <c>position</c>, <c>client_id</c>,
+    /// <c>role</c>) added to its binding's <c>Headers</c> wherever the task's own mapping did not set them
+    /// (<see cref="Execution.HttpTaskInvocation.WithCallerCredential"/>). Done here, on the orchestrator side, so the same
+    /// header set travels whether the task runs in-process or in the Execution host — the invoke envelope's trace context
+    /// carries only <c>sub</c> / <c>act_sub</c>. The caller values are its request headers, so a role a provider resolved
+    /// (morph-idm) is never carried.
+    /// </summary>
+    protected static TaskEnvelope WithCallerCredential(TaskEnvelope envelope, ScriptContext? scriptContext)
+    {
+        if (envelope.Binding.ValueKind != JsonValueKind.Object)
+            return envelope;
+
+        var binding = System.Text.Json.Nodes.JsonNode.Parse(envelope.Binding.GetRawText())!.AsObject();
+        var current = binding["Headers"]?.GetValue<string?>();
+        var merged = Execution.HttpTaskInvocation.WithCallerCredential(current, CallerHeadersOf(scriptContext));
+        if (merged == current)
+            return envelope;
+
+        binding["Headers"] = merged;
+        return new TaskEnvelope
+        {
+            TaskType = envelope.TaskType,
+            Version = envelope.Version,
+            TaskKey = envelope.TaskKey,
+            Binding = JsonSerializer.SerializeToElement(binding)
+        };
+    }
+
+    /// <summary>The caller's request headers, the source of the forwarded credential (never provider-resolved roles).</summary>
+    protected static IReadOnlyDictionary<string, string>? CallerHeadersOf(ScriptContext? scriptContext) =>
+        scriptContext?.Headers is null ? null : scriptContext.GetHeadersAsDictionary();
+
+    /// <summary>
+    /// <paramref name="taskHeaders"/> (the task's mapping headers, kept as they are) with the caller's credential added for
+    /// every credential header the mapping left absent or empty — for a task whose target runs in-process from the header
+    /// dictionary (a same-domain Start / SubProcess / DirectTrigger). Same rule as the remote binding headers.
+    /// </summary>
+    protected static Dictionary<string, string?> WithCallerCredential(
+        Dictionary<string, string?>? taskHeaders, ScriptContext? scriptContext)
+    {
+        var headers = taskHeaders is null
+            ? new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+            : new Dictionary<string, string?>(taskHeaders, StringComparer.OrdinalIgnoreCase);
+        Execution.HttpTaskInvocation.AppendCallerCredential(headers, CallerHeadersOf(scriptContext));
+        return headers;
+    }
 }

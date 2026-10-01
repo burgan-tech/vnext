@@ -131,6 +131,8 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
         services.AddScoped<IAuthorizeAppService, AuthorizeAppService>();
         services.AddScoped<IRepresentationEtagService, RepresentationEtagService>();
         services.AddScoped<ISchemaFieldFilterService, SchemaFieldFilterService>();
+        services.AddScoped<BBT.Workflow.Instances.IInstanceDataReadService, BBT.Workflow.Instances.InstanceDataReadService>();
+        services.AddScoped<BBT.Workflow.Instances.ISubItemEventDataResolver, BBT.Workflow.Instances.SubItemEventDataResolver>();
         services.AddScoped<IInstanceExtensionService, InstanceExtensionService>();
         services.AddScoped<IWorkflowOutputMappingService, WorkflowOutputMappingService>();
         services.AddScoped<ISubflowOutputMappingService, SubflowOutputMappingService>();

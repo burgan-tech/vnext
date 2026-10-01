@@ -55,7 +55,7 @@ public sealed class FieldEncryptionTests
         At(stored, "customer.name").ShouldBe("Ayşe");
         view.Tokens["customer.email"].ShouldBe(token);
 
-        var opened = protector.Unprotect(Schema, InstanceA, stored);
+        var opened = protector.UnprotectAsync(Schema, InstanceA, stored).GetAwaiter().GetResult();
         At(opened.Plain, "customer.email").ShouldBe("user@example.com");
         opened.Undecryptable.ShouldBeEmpty();
     }
@@ -69,7 +69,7 @@ public sealed class FieldEncryptionTests
         store.Put(Schema, InstanceB, NewSecret());
         var stored = protector.Protect(InstanceA, Doc("""{"customer":{"email":"x@y.z"}}"""), EmailPath, null, secretA).Stored;
 
-        protector.Unprotect(Schema, InstanceB, stored).Undecryptable.ShouldContain("customer.email");
+        protector.UnprotectAsync(Schema, InstanceB, stored).GetAwaiter().GetResult().Undecryptable.ShouldContain("customer.email");
     }
 
     [Fact]
@@ -80,7 +80,7 @@ public sealed class FieldEncryptionTests
         store.Put(Schema, InstanceA, secret);
         var token = At(protector.Protect(InstanceA, Doc("""{"customer":{"email":"x@y.z"}}"""), EmailPath, null, secret).Stored, "customer.email")!;
 
-        protector.Unprotect(Schema, InstanceA, Doc($$$"""{"customer":{"phone":"{{{token}}}"}}""")).Undecryptable
+        protector.UnprotectAsync(Schema, InstanceA, Doc($$$"""{"customer":{"phone":"{{{token}}}"}}""")).GetAwaiter().GetResult().Undecryptable
             .ShouldContain("customer.phone");
     }
 
@@ -91,7 +91,7 @@ public sealed class FieldEncryptionTests
         var (protector, _) = Create();
         var stored = Create().Protector.Protect(InstanceA, Doc("""{"customer":{"email":"x@y.z"}}"""), EmailPath, null, NewSecret()).Stored;
 
-        var opened = protector.Unprotect(Schema, InstanceA, stored);
+        var opened = protector.UnprotectAsync(Schema, InstanceA, stored).GetAwaiter().GetResult();
 
         opened.Undecryptable.ShouldBe(["customer.email"]);
         At(opened.Plain, "customer.email").ShouldStartWith("ENCRYPTED:AES256:i1:");
@@ -104,7 +104,7 @@ public sealed class FieldEncryptionTests
         var secret = NewSecret();
         store.Put(Schema, InstanceA, secret);
         var headStored = protector.Protect(InstanceA, Doc("""{"customer":{"email":"x@y.z"},"n":1}"""), EmailPath, null, secret).Stored;
-        var head = protector.Unprotect(Schema, InstanceA, headStored);
+        var head = protector.UnprotectAsync(Schema, InstanceA, headStored).GetAwaiter().GetResult();
 
         At(protector.Protect(InstanceA, Doc("""{"customer":{"email":"x@y.z"},"n":2}"""), EmailPath, head, secret).Stored, "customer.email")
             .ShouldBe(At(headStored, "customer.email"));
@@ -117,7 +117,7 @@ public sealed class FieldEncryptionTests
     {
         var (protector, _) = Create();
         var stored = Create().Protector.Protect(InstanceA, Doc("""{"customer":{"email":"x@y.z"}}"""), EmailPath, null, NewSecret()).Stored;
-        var head = protector.Unprotect(Schema, InstanceA, stored);
+        var head = protector.UnprotectAsync(Schema, InstanceA, stored).GetAwaiter().GetResult();
 
         Should.Throw<EncryptionKeyUnavailableException>(() => protector.Protect(InstanceA, head.Plain, EmailPath, head, NewSecret()));
     }
@@ -172,7 +172,7 @@ public sealed class FieldEncryptionTests
         store.Put(Schema, InstanceA, secret);
         var hashed = protector.ApplyHashes(Doc("""{"customer":{"email":"x@y.z","tckn":"123"}}"""), TcknHash, secret);
         var headStored = protector.Protect(InstanceA, hashed, EmailPath, null, secret).Stored;
-        var head = protector.Unprotect(Schema, InstanceA, headStored);
+        var head = protector.UnprotectAsync(Schema, InstanceA, headStored).GetAwaiter().GetResult();
         var token = At(headStored, "customer.email")!;
         var digest = At(headStored, "customer.tckn")!;
 
@@ -200,7 +200,7 @@ public sealed class FieldEncryptionTests
         store.Put(Schema, InstanceA, secret);
         var headStored = protector.Protect(InstanceA,
             protector.ApplyHashes(Doc("""{"customer":{"email":"x@y.z","tckn":"123"}}"""), TcknHash, secret), EmailPath, null, secret).Stored;
-        var head = protector.Unprotect(Schema, InstanceA, headStored);
+        var head = protector.UnprotectAsync(Schema, InstanceA, headStored).GetAwaiter().GetResult();
         var digest = At(headStored, "customer.tckn")!;
         var token = At(headStored, "customer.email")!;
 
