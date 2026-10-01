@@ -75,13 +75,26 @@ owns* and removing an item is a real operation.
 
 **How `M` matches items.** Target order is preserved; an incoming item that matches one already
 stored replaces it **in place**, and anything unmatched is appended in arrival order. Matching is
-by the `id` property when **both** items are objects that carry one (case-insensitive property
-name, compared as text — so `"7"` and `7` are different identities, deliberately: the authored
-data decides and the runtime does not coerce); otherwise by exact value, which is the right rule
-for arrays of scalars. Consequence worth knowing: **an array of objects without an `id` cannot
-express an update** — an edited item does not match its predecessor and arrives as a second
-entry. `ArrayUnion` is the single definition of this rule, shared by the live and legacy
-pipelines so their byte-parity contract holds.
+by the `id` property when **both** items are objects that carry one; otherwise by whole-value
+equality, which is the right rule for arrays of scalars. Consequence worth knowing: **an array of objects
+without an `id` cannot express an update** — an edited item does not match its predecessor and
+arrives as a second entry. `ArrayUnion` is the single definition of this rule, shared by the live
+and legacy pipelines so their byte-parity contract holds.
+
+The `id` rule in full:
+
+- the **property name** is matched case-insensitively, so `id` and `ID` are the same slot;
+- the **value kind is part of the identity** — a string `"7"` and a number `7` are *different*
+  items. Coercing them would silently fold two entries the authored data says are distinct, which
+  is unrecoverable and invisible; keeping them apart can at worst leave a visible duplicate;
+- comparison is **structural**, not textual (`JsonElement.DeepEquals`), so `1` and `1.0` are the
+  same identity, property order does not matter, and — critically — the formatting PostgreSQL
+  `jsonb` applies to the stored side (`{"n": "a"}`, with spaces) does not stop it matching the
+  caller's compact body;
+- an `id` that is itself an object, an array, or `null` is not an identity, and those items fall
+  back to whole-value equality;
+- the matched item is replaced **wholesale**. Items inside an array are never merged key by key,
+  however deeply the object merge applies elsewhere.
 
 **It is body-wide and depth-wide, not per field.** The setting travels down the whole merge, so a
 transition declaring `M` gets `M` for **every array anywhere in its body**, at any nesting depth.

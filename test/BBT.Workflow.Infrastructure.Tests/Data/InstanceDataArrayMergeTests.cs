@@ -206,6 +206,80 @@ public class InstanceDataArrayMergeTests
         plan.Content.Json.ShouldNotContain("\"C\"");
     }
 
+    /// <summary>
+    /// The id's JSON VALUE KIND is part of the identity: a string "7" and a number 7 are different
+    /// items. Found live — an earlier revision read the string through GetString() and the number
+    /// through GetRawText(), so both rendered as 7 and the two silently collapsed into one.
+    /// </summary>
+    [Fact]
+    public void Merge_DoesNotCoerceAStringIdOntoANumericOne()
+    {
+        var head = CreateHeadRow("""{"items":[{"id":7,"v":"number-seven"}]}""");
+
+        var plan = Plan(head, """{"items":[{"id":"7","v":"string-seven"}]}""", mergeArrays: true);
+
+        // Two entries, not one: the authored data says these are different identities.
+        plan.Content.Json.ShouldContain("number-seven");
+        plan.Content.Json.ShouldContain("string-seven");
+    }
+
+    /// <summary>
+    /// <c>1</c> and <c>1.0</c> are the SAME identity. Matching is structural
+    /// (<c>JsonElement.DeepEquals</c>), not textual, so the way an author spells a number does not
+    /// split one item into two.
+    /// </summary>
+    [Fact]
+    public void Merge_TreatsEquivalentNumericSpellingsAsTheSameIdentity()
+    {
+        var head = CreateHeadRow("""{"items":[{"id":1,"v":"int"}]}""");
+
+        var plan = Plan(head, """{"items":[{"id":1.0,"v":"decimal"}]}""", mergeArrays: true);
+
+        plan.Content.Json.ShouldNotContain("int");       // replaced in place
+        plan.Content.Json.ShouldContain("decimal");
+    }
+
+    /// <summary>
+    /// THE REGRESSION THIS FILE EXISTS FOR. The stored side has been through PostgreSQL
+    /// <c>jsonb</c>, which re-emits objects with spaces (<c>{"n": "a"}</c>), while the incoming side
+    /// is the caller's compact body. An earlier revision compared <c>GetRawText()</c>, which is a
+    /// FORMATTING comparison — so an id-less object never matched its stored twin and every retry of
+    /// the same transition appended another copy, growing the array without bound. Found only by
+    /// running it against a real database, because every other test here builds both sides compact.
+    /// </summary>
+    [Fact]
+    public void Merge_MatchesAcrossPostgresJsonbFormatting_SoARetryDoesNotGrowTheArray()
+    {
+        // Exactly how the row comes back out of jsonb: spaces after ':' and ','.
+        var head = CreateHeadRow("""{"docs": [{"n": "a"}, {"id": 1, "n": "b"}]}""");
+
+        var plan = Plan(head, """{"docs":[{"n":"a"},{"id":1,"n":"b"}]}""", mergeArrays: true);
+
+        plan.IsDuplicate.ShouldBeTrue();   // nothing changed, so no new version row at all
+    }
+
+    /// <summary>Property ORDER must not split an item either — same reason, same fix.</summary>
+    [Fact]
+    public void Merge_MatchesRegardlessOfPropertyOrder()
+    {
+        var head = CreateHeadRow("""{"docs":[{"a":1,"b":2}]}""");
+
+        var plan = Plan(head, """{"docs":[{"b":2,"a":1}]}""", mergeArrays: true);
+
+        plan.IsDuplicate.ShouldBeTrue();
+    }
+
+    /// <summary>The same numeric id still matches itself — the kind prefix must not break the normal case.</summary>
+    [Fact]
+    public void Merge_StillMatchesAnIdOfTheSameKindAndValue()
+    {
+        var head = CreateHeadRow("""{"items":[{"id":7,"v":"first"}]}""");
+
+        var plan = Plan(head, """{"items":[{"id":7,"v":"second"}]}""", mergeArrays: true);
+
+        plan.Content.Json.ShouldBe("""{"items":[{"id":7,"v":"second"}]}""");
+    }
+
     private static AppendPlan Plan(
         InstanceDataHeadRow head, string delta, bool mergeArrays) =>
         InstanceDataWriteService.PlanAppend(
