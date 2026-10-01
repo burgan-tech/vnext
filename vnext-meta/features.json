@@ -20,6 +20,15 @@
         "PATCH {domain}/workflows/{workflow}/instances/{instance}/transitions/{transition}"
       ]
     },
+    "instanceCorrelationTree": {
+      "since": "0.0.98",
+      "status": "stable",
+      "description": "The instance-correlation tree read (GET .../instances/{instance}/functions/instance-correlation) walks correlations parent->child and now does it BATCHED, PARALLEL and ACROSS DOMAINS. A hop is a (domain, flow, version) group of one level: one correlation read and one instance read answer for every instance in the hop (IInstanceCorrelationRepository.GetByParentsAsync), replacing a depth-first walk that issued two queries PER NODE. A hop whose domain is not this runtime is routed through IInstanceCorrelationGateway to POST {domain}/workflows/{workflow}/internal/correlations/batch, where the far side re-enters the same resolver and recurses locally - so a six-level subtree in a partner domain costs ONE remote call rather than six, and rather than the nothing it cost before: the previous implementation switched the LOCAL schema to the child's flow name regardless of SubFlowDomain, so a cross-domain child's row was never found and the node silently degraded to correlation-row data with a null key and null ownState. Each hop therefore also reports SELF-DATA (key, ownState, status, flowVersion) for the instances it was asked about, because only the domain owning an instance can read its row; the parent merges that into the node it built from the link. Sibling hops run concurrently, bounded twice: FanoutParallelism (default 8) per request and a process-wide MaxConcurrentHops (default 32) - both required because each branch holds its own unit of work and therefore its own pooled connection, and this endpoint has no single-flight, so N callers are N independent walks. DEPTH is still serial and inherently so: a level cannot be grouped until its parent has answered. Every node carries resolved plus unresolvedReason (depth-exceeded | hop-failed | instance-missing); the node itself is always real and only its descendants are in question, so one unreachable partner truncates its own branch and the call still answers 200 with the rest of the tree intact. MaxDescentDepth (default 10) bounds the walk and is its only protection against a cyclic correlation graph. Bounds live under Workflow:InstanceCorrelation and are validated at startup.",
+      "apiEndpoints": [
+        "GET {domain}/workflows/{workflow}/instances/{instance}/functions/instance-correlation",
+        "POST {domain}/workflows/{workflow}/internal/correlations/batch"
+      ]
+    },
     "instanceStartType": {
       "since": "0.0.94",
       "status": "stable",

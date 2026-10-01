@@ -4098,6 +4098,37 @@ public static partial class WorkflowLogs
         int roleCount);
 
     /// <summary>
+    /// Logs that a correlation-tree walk stopped at its depth bound. Warning rather than Debug: the
+    /// answer the caller receives is incomplete, and on a graph that cannot legitimately nest that
+    /// deep it is the first symptom of a cycle.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20466,
+        Level = LogLevel.Warning,
+        Message = "Correlation walk hit its depth bound and stopped. Domain={Domain}, Flow={Flow}, Instances={InstanceCount}, MaxDepth={MaxDepth}")]
+    public static partial void CorrelationWalkDepthExceeded(
+        this ILogger logger,
+        string domain,
+        string flow,
+        int instanceCount,
+        int maxDepth);
+
+    /// <summary>
+    /// Logs a correlation hop that could not be expanded. The branch is returned unresolved rather
+    /// than failing the whole tree, so this log is the only place the cause is recorded.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20467,
+        Level = LogLevel.Warning,
+        Message = "Correlation hop failed; its branch is reported unresolved. Domain={Domain}, Flow={Flow}, Instances={InstanceCount}, Reason={Reason}")]
+    public static partial void CorrelationHopFailed(
+        this ILogger logger,
+        string domain,
+        string flow,
+        int instanceCount,
+        string reason);
+
+    /// <summary>
     /// Logs that no provider call was made because the caller carried neither <c>act_sub</c> nor
     /// <c>client_id</c>. Debug: anonymous and device tokens are ordinary traffic, and a Warning on
     /// every one of their requests would bury the answers that matter.

@@ -24,6 +24,24 @@ public interface IInstanceCorrelationRepository : IRepository<InstanceCorrelatio
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// The same read as <see cref="GetByParentAsync"/> for MANY parents at once — one statement for
+    /// a whole level of a correlation tree instead of one per node.
+    /// </summary>
+    /// <remarks>
+    /// All parents must live in the schema the caller has switched <c>ICurrentSchema</c> to, which
+    /// is what makes a single statement correct: a level of the tree is grouped by flow before it
+    /// gets here. Callers group the answer by <see cref="InstanceCorrelation.ParentInstanceId"/>;
+    /// a parent with no children simply contributes no rows, so the result is NOT padded and its
+    /// length says nothing about how many parents were asked for.
+    /// </remarks>
+    /// <param name="parentInstanceIds">The parent instances to read children for.</param>
+    /// <param name="cancellationToken">Token to monitor for cancellation requests.</param>
+    /// <returns>Every correlation (active and completed) whose parent is in the set.</returns>
+    Task<List<InstanceCorrelation>> GetByParentsAsync(
+        IReadOnlyCollection<Guid> parentInstanceIds,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Finds active correlations where the specified instance ID is the parent instance.
     /// This method is used to identify all active child flows for a given parent workflow.
     /// </summary>

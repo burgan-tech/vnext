@@ -64,6 +64,9 @@ public static class RemoteServiceExtensions
         // it with no registered shell at all.
         services.AddRemoteService<Gateway.RemoteHumanTaskLeafGateway, Gateway.RemoteHumanTaskLeafGateway>(
             options, RemoteServiceProfile.Read);
+        // Same shape again: the correlation hop gateway holds its own IRemoteTransport shell.
+        services.AddRemoteService<Gateway.RemoteInstanceCorrelationGateway, Gateway.RemoteInstanceCorrelationGateway>(
+            options, RemoteServiceProfile.Read);
 
         return services;
     }

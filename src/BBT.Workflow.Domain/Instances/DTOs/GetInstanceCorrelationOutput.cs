@@ -118,4 +118,23 @@ public sealed class InstanceCorrelationNode
     /// Child subflow/subprocess instances.
     /// </summary>
     public List<InstanceCorrelationNode> Children { get; set; } = [];
+
+    /// <summary>
+    /// Whether this node's OWN SUBTREE was walked to the end. <c>false</c> means
+    /// <see cref="Children"/> is incomplete or empty for a reason other than "there are none" —
+    /// see <see cref="UnresolvedReason"/>.
+    /// </summary>
+    /// <remarks>
+    /// The node itself is always real; only its descendants are in question. Without this a client
+    /// cannot tell a genuine leaf from a partner domain that was unreachable, and the two are very
+    /// different answers — which is exactly how the pre-batch implementation misled callers about
+    /// cross-domain children. A tree whose nodes are all <c>true</c> is complete.
+    /// </remarks>
+    public bool Resolved { get; set; } = true;
+
+    /// <summary>
+    /// Why the subtree is incomplete, when <see cref="Resolved"/> is false: <c>depth-exceeded</c>,
+    /// <c>hop-failed</c>, or <c>instance-missing</c>. Omitted on a fully walked node.
+    /// </summary>
+    public string? UnresolvedReason { get; set; }
 }

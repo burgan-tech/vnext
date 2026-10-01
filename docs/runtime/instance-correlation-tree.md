@@ -117,17 +117,60 @@ own row commits first and `SubflowStateService` bubbles the state onto the corre
 (relay + Inbox backup), so during that normally sub-second window `ownState` can be ahead of
 `currentState`. That is propagation lag, not a bug.
 
+## How the walk runs
+
+The tree is expanded **one level at a time, batched by hop**, where a hop is a
+`(domain, flow, version)` group:
+
+```
+A (root, local)
+├── B  subflow, closed, same domain  ─┐ one hop, one pair of queries
+├── D  subprocess, same domain       ─┘
+└── C  subflow, active, OTHER domain ── separate hop -> POST .../internal/correlations/batch
+                                         ^ sibling hops run concurrently
+```
+
+- **One correlation read and one instance read per hop**, not two per node
+  (`IInstanceCorrelationRepository.GetByParentsAsync`). A level of five siblings in one flow costs
+  two queries, not ten.
+- **A cross-domain branch costs ONE call.** The far side re-enters the same resolver and recurses
+  locally, so a six-level subtree in a partner domain is one remote call, not six. This is also
+  what makes a cross-domain child's `key`, `ownState` and live `status` real — only the domain that
+  owns an instance can read its row, so each hop reports *self-data* for the instances it was asked
+  about and the parent merges it into the node it built from the correlation row.
+- **Sibling hops run in parallel**, bounded twice: `FanoutParallelism` (default 8) per request, and
+  a process-wide `MaxConcurrentHops` (default 32). Both matter — each branch holds its own unit of
+  work and therefore its own pooled connection, and this endpoint has no single-flight, so N
+  callers are N independent walks. The human-task fan-out established the bound the expensive way
+  (`53300 sorry, too many clients already`); see `CorrelationHopLimiter`.
+- **Depth is still serial, inherently.** A level cannot be grouped until its parent has answered.
+  Only the width parallelises.
+
+Configuration lives under `Workflow:InstanceCorrelation` and is validated at startup.
+
+## Incomplete answers are explicit
+
+Every node carries `resolved`, and `unresolvedReason` when it is false. **The node itself is always
+real — only its descendants are in question.**
+
+| `unresolvedReason` | Meaning |
+| --- | --- |
+| `depth-exceeded` | `MaxDescentDepth` (default 10) ran out. On a graph that cannot legitimately nest that deep, this is the first symptom of a cycle. |
+| `hop-failed` | A hop could not be expanded — most often an unreachable partner domain. **Only that branch is truncated**; the rest of the tree arrives intact and the call still returns 200. |
+| `instance-missing` | The row could not be read in the domain that should own it. READ COMMITTED permits it to vanish between the parent's correlation read and the child's own. |
+
+A tree whose nodes are all `resolved: true` is complete. Do not treat an empty `children` on an
+unresolved node as "no children" — that conflation is exactly what the old implementation forced on
+callers for every cross-domain child.
+
 ## Known limits
 
-- **N+1 reads.** One `GetByParentAsync` per node plus one instance read per child, recursively. A wide
-  or deep tree costs proportionally many round trips.
-- **No depth cap and no cycle guard.** Safe today because correlations are written only at spawn time
-  (`HandleSubFlowStep`, `SubProcessTaskExecutor`), which cannot produce a cycle. **Both become
-  mandatory if post-hoc correlation registration lands** (vnext-client-sdk-core#58 AB-20), since an
-  explicitly registered link could close a loop.
-- **Cross-domain children degrade.** A child in another domain is read from the local schema, so its
-  instance row is not found and the node falls back to correlation-carried data (`key`, `ownState` and
-  live `status` come back null/derived).
+- **No cycle guard.** `MaxDescentDepth` bounds the walk, but nothing tracks visited ids. Safe today
+  because correlations are written only at spawn time (`HandleSubFlowStep`, `SubProcessTaskExecutor`),
+  which cannot produce a cycle; a visited-set becomes worthwhile if post-hoc correlation
+  registration lands (vnext-client-sdk-core#58 AB-20).
+- **No cap on total nodes.** A pathologically wide tree is bounded only by depth and by the per-hop
+  batch limit (`CorrelationBatchRequest.MaxInstanceIds` = 500).
 - **The `{workflow}` route segment is not validated** against the instance's real flow. A mismatched
   key still answers `200` with the correct tree, only with an empty root `flowVersion`.
 
@@ -140,8 +183,11 @@ The handler carries no in-process gate, like the other read surfaces: `queryRole
 ## Implementation map
 
 - Handler: `InstanceCorrelationFunctionHandler` (orchestration), key `FunctionTypeConst.InstanceCorrelation`.
-- Read: `InstanceQueryAppService.GetInstanceCorrelationAsync` → `BuildCorrelationTreeAsync` (recursive).
-- Source rows: `IInstanceCorrelationRepository.GetByParentAsync` (active **and** completed).
+- Read: `InstanceQueryAppService.GetInstanceCorrelationAsync` → `InstanceCorrelationResolver` (batched, per-hop).
+- Hop routing: `IInstanceCorrelationGateway` → Routed / Local / Remote, on `IRuntimeInfoProvider.IsDomainMatch`.
+- Internal endpoint: `POST /{domain}/workflows/{workflow}/internal/correlations/batch`.
+- Bounds: `InstanceCorrelationOptions` (`Workflow:InstanceCorrelation`), `CorrelationHopLimiter`.
+- Source rows: `IInstanceCorrelationRepository.GetByParentsAsync` (batched; active **and** completed).
 - DTOs: `GetInstanceCorrelationInput` / `GetInstanceCorrelationOutput` / `InstanceCorrelationNode`.
 - URL template: `InstanceUrlTemplates.InstanceCorrelationTemplate`.
 - Telemetry read-kind: `InstanceReadKinds.InstanceCorrelation` (`instanceCorrelation`) — the span is

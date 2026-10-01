@@ -200,6 +200,7 @@ public sealed class InstanceControllerEnqueueRelayTests
             Substitute.For<IEventAppService>(),
             Substitute.For<IRelatedInstanceQueryAppService>(),
             Substitute.For<BBT.Workflow.Instances.HumanTask.IHumanTaskLeafResolver>(),
+            Substitute.For<BBT.Workflow.Instances.Correlation.IInstanceCorrelationResolver>(),
             new DefaultCallerRoleResolver(Substitute.For<ICurrentUser>()));
         return (enqueuer, controller);
     }

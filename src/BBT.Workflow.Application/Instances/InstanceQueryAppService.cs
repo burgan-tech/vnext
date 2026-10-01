@@ -50,6 +50,8 @@ public sealed class InstanceQueryAppService(
     IViewContentResolutionService viewContentResolutionService,
     ITaskConditionService taskConditionService,
     IUrlTemplateBuilder urlTemplateBuilder,
+    Correlation.IInstanceCorrelationResolver instanceCorrelationResolver,
+    Microsoft.Extensions.Options.IOptions<Correlation.InstanceCorrelationOptions> correlationOptions,
     ICurrentSchema currentSchema,
     ITransitionAuthorizationManager transitionAuthorizationManager,
     IRepresentationEtagService representationEtagService,
@@ -3307,11 +3309,34 @@ public sealed class InstanceQueryAppService(
             Href = urlTemplateBuilder.BuildInstanceUrl(input.Domain, instance.Flow, instance.Id.ToString())
         };
 
-        rootNode.Children = await BuildCorrelationTreeAsync(
-            instance.Id,
-            input.Workflow,
+        // The root's own children are just the first hop, so it goes through the same resolver as
+        // every level below it — which is what makes the walk batched, parallel across sibling
+        // hops, and able to leave this domain. The resolver is entered DIRECTLY rather than through
+        // the gateway: the root is this domain by construction (runtimeInfoProvider.Check above),
+        // and routing it would buy a redundant DI scope.
+        var rootExpansion = await instanceCorrelationResolver.ResolveAsync(
             input.Domain,
+            instance.Flow,
+            new CorrelationBatchRequest
+            {
+                InstanceIds = [instance.Id],
+                RemainingDepth = correlationOptions.Value.MaxDescentDepth,
+                FlowVersion = instance.FlowVersion
+            },
             cancellationToken);
+
+        if (!rootExpansion.IsSuccess)
+        {
+            return Result<GetInstanceCorrelationOutput>.Fail(rootExpansion.Error);
+        }
+
+        var rootResult = rootExpansion.Value!.FirstOrDefault(r => r.InstanceId == instance.Id);
+        if (rootResult is not null)
+        {
+            rootNode.Children = [.. rootResult.Children];
+            rootNode.Resolved = rootResult.Resolved;
+            rootNode.UnresolvedReason = rootResult.UnresolvedReason;
+        }
 
         return Result<GetInstanceCorrelationOutput>.Ok(new GetInstanceCorrelationOutput { Root = rootNode });
     }
@@ -3586,72 +3611,6 @@ public sealed class InstanceQueryAppService(
     /// a miss so the two can be told apart when the override's cost is measured.
     /// </summary>
     private const string HumanTaskBypassOutcome = "bypass";
-
-    private async Task<List<InstanceCorrelationNode>> BuildCorrelationTreeAsync(
-        Guid parentInstanceId,
-        string parentFlow,
-        string domain,
-        CancellationToken cancellationToken)
-    {
-        List<InstanceCorrelation> correlations;
-        using (currentSchema.Change(parentFlow))
-        {
-            correlations = await instanceCorrelationRepository.GetByParentAsync(parentInstanceId, cancellationToken);
-        }
-
-        if (correlations.Count == 0)
-        {
-            return [];
-        }
-
-        var children = new List<InstanceCorrelationNode>();
-        foreach (var correlation in correlations)
-        {
-            var childFlow = correlation.SubFlowName;
-            var childDomain = correlation.SubFlowDomain;
-            Instance? childInstance = null;
-
-            using (currentSchema.Change(childFlow))
-            {
-                childInstance = await instanceRepository.FindByIdentifierAsReadOnlyAsync(
-                    correlation.SubFlowInstanceId.ToString(),
-                    cancellationToken);
-            }
-
-            var node = new InstanceCorrelationNode
-            {
-                Id = correlation.SubFlowInstanceId,
-                Key = childInstance?.Key,
-                Flow = childFlow,
-                Domain = childDomain,
-                FlowVersion = correlation.SubFlowVersion,
-                CurrentState = correlation.SubFlowCurrentState ?? childInstance?.CurrentState,
-                OwnState = childInstance?.CurrentState,
-                Status = childInstance?.Status ??
-                         (correlation.IsCompleted ? InstanceStatus.Completed : InstanceStatus.Active),
-                SubFlowType = correlation.SubFlowType,
-                IsCompleted = correlation.IsCompleted,
-                CompletedAt = correlation.CompletedAt,
-                ParentState = correlation.ParentState,
-                CorrelationId = correlation.Id,
-                CreatedAt = correlation.CreatedAt,
-                TerminalOutcome = correlation.TerminalOutcome,
-                StateChangedAt = correlation.SubFlowStateChangedAt,
-                Href = urlTemplateBuilder.BuildInstanceUrl(
-                    childDomain, childFlow, correlation.SubFlowInstanceId.ToString())
-            };
-
-            node.Children = await BuildCorrelationTreeAsync(
-                correlation.SubFlowInstanceId,
-                childFlow,
-                childDomain,
-                cancellationToken);
-
-            children.Add(node);
-        }
-
-        return children;
-    }
 
     /// <summary>
     /// Represents the complete state information retrieved from a SubFlow or main flow.

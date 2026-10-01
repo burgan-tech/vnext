@@ -15,6 +15,7 @@ using BBT.Workflow.Definitions.Functions;
 using BBT.Workflow.Definitions.Schemas;
 using BBT.Workflow.Extentions;
 using BBT.Workflow.Gateway;
+using BBT.Workflow.Instances.Correlation;
 using BBT.Workflow.Instances.HumanTask;
 using BBT.Workflow.RepresentationEtag;
 using BBT.Workflow.Runtime;
@@ -50,6 +51,11 @@ public sealed class InstanceQueryAppServiceCorrelationTreeTests : IDisposable
     private readonly IInstanceCorrelationRepository _correlationRepository =
         Substitute.For<IInstanceCorrelationRepository>();
     private readonly IUrlTemplateBuilder _urlTemplateBuilder = Substitute.For<IUrlTemplateBuilder>();
+
+    // The resolver reads a LEVEL at a time, so the stubs are registries the batch reads filter,
+    // not per-id returns. StubInstance/StubChildren populate them; every test body is unchanged.
+    private readonly Dictionary<Guid, Instance> _instances = [];
+    private readonly Dictionary<Guid, List<InstanceCorrelation>> _childrenByParent = [];
     private readonly InstanceQueryAppService _service;
     private readonly IServiceProvider _ambient;
     private readonly IServiceProvider? _previousAmbient;
@@ -77,6 +83,55 @@ public sealed class InstanceQueryAppServiceCorrelationTreeTests : IDisposable
             .GetFlowAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
             .Returns(Result<Definitions.Workflow>.Ok(Definitions.Workflow.Create()));
 
+        // Batch reads, served from the registries the two Stub* helpers populate. This is what the
+        // resolver actually calls: one correlation read and one instance read PER LEVEL, never per
+        // node — so a test that stubs a level gets the whole level in one answer.
+        _correlationRepository
+            .GetByParentsAsync(Arg.Any<IReadOnlyCollection<Guid>>(), Arg.Any<CancellationToken>())
+            .Returns(ci =>
+            {
+                var ids = ci.ArgAt<IReadOnlyCollection<Guid>>(0);
+                return ids
+                    .SelectMany(id => _childrenByParent.TryGetValue(id, out var rows)
+                        ? rows
+                        : Enumerable.Empty<InstanceCorrelation>())
+                    .ToList();
+            });
+
+        _instanceRepository
+            .FindByIdsAsReadOnlyAsync(Arg.Any<IReadOnlyCollection<Guid>>(), Arg.Any<CancellationToken>())
+            .Returns(ci => ci.ArgAt<IReadOnlyCollection<Guid>>(0)
+                .Where(_instances.ContainsKey)
+                .Select(id => _instances[id])
+                .ToList());
+
+        var currentSchema = Substitute.For<ICurrentSchema>();
+        currentSchema.Change(Arg.Any<string>()).Returns(Substitute.For<IDisposable>());
+
+        // A REAL resolver, with a gateway that routes every hop back into it in-process. That is
+        // exactly what RoutedInstanceCorrelationGateway does for a same-domain hop, so the
+        // recursion under test is the production recursion rather than a stand-in.
+        var correlationGateway = Substitute.For<IInstanceCorrelationGateway>();
+        var correlationOptions = Options.Create(new Correlation.InstanceCorrelationOptions());
+        InstanceCorrelationResolver? resolver = null;
+        correlationGateway
+            .ResolveAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CorrelationBatchRequest>(),
+                Arg.Any<CancellationToken>())
+            .Returns(ci => resolver!.ResolveAsync(
+                ci.ArgAt<string>(0), ci.ArgAt<string>(1),
+                ci.ArgAt<CorrelationBatchRequest>(2), ci.ArgAt<CancellationToken>(3)));
+
+        resolver = new InstanceCorrelationResolver(
+            _correlationRepository,
+            _instanceRepository,
+            currentSchema,
+            _urlTemplateBuilder,
+            _ambient.GetRequiredService<IServiceScopeFactory>(),
+            correlationGateway,
+            new CorrelationHopLimiter(correlationOptions),
+            correlationOptions,
+            Substitute.For<ILogger<InstanceCorrelationResolver>>());
+
         _service = new InstanceQueryAppService(
             serviceProvider: _ambient,
             runtimeInfoProvider: Substitute.For<IRuntimeInfoProvider>(),
@@ -95,6 +150,8 @@ public sealed class InstanceQueryAppServiceCorrelationTreeTests : IDisposable
             viewContentResolutionService: Substitute.For<IViewContentResolutionService>(),
             taskConditionService: Substitute.For<ITaskConditionService>(),
             urlTemplateBuilder: _urlTemplateBuilder,
+            instanceCorrelationResolver: resolver,
+            correlationOptions: correlationOptions,
             currentSchema: Substitute.For<ICurrentSchema>(),
             transitionAuthorizationManager: Substitute.For<ITransitionAuthorizationManager>(),
             representationEtagService: Substitute.For<IRepresentationEtagService>(),
@@ -419,14 +476,13 @@ public sealed class InstanceQueryAppServiceCorrelationTreeTests : IDisposable
         _instanceRepository
             .FindByIdentifierAsReadOnlyAsync(id.ToString(), Arg.Any<CancellationToken>())
             .Returns(instance);
+        _instances[id] = instance;
         return instance;
     }
 
     private void StubChildren(Guid parentId, params InstanceCorrelation[] correlations)
     {
-        _correlationRepository
-            .GetByParentAsync(parentId, Arg.Any<CancellationToken>())
-            .Returns(correlations.ToList());
+        _childrenByParent[parentId] = [.. correlations];
     }
 
     private static InstanceCorrelation Correlation(

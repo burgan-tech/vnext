@@ -195,6 +195,14 @@ public static class InstanceUrlTemplates
     public const string HumanTaskLeafBatchTemplate = "/{0}/workflows/{1}/internal/human-task-leaf/batch";
 
     /// <summary>
+    /// Internal-only: expands a batch of this flow's instances into their correlated children,
+    /// recursing locally on the far side so one call covers a whole cross-domain branch. Never
+    /// expose publicly — it carries no authorization and is protected by network isolation only.
+    /// Format: /{domain}/workflows/{workflow}/internal/correlations/batch
+    /// </summary>
+    public const string CorrelationBatchTemplate = "/{0}/workflows/{1}/internal/correlations/batch";
+
+    /// <summary>
     /// URL template for retry instance endpoints.
     /// Format: /{domain}/workflows/{workflow}/instances/{instance}/retry
     /// </summary>
@@ -505,6 +513,10 @@ public static class InstanceUrlTemplates
     /// <summary>Generates the URL for the internal human-task leaf-resolution batch endpoint.</summary>
     public static string HumanTaskLeafBatch(string domain, string workflow, string? apiVersionPrefix = null)
         => BuildUrl(HumanTaskLeafBatchTemplate, apiVersionPrefix, domain, workflow);
+
+    /// <summary>Generates the URL for the internal correlation-expansion batch endpoint.</summary>
+    public static string CorrelationBatch(string domain, string workflow, string? apiVersionPrefix = null)
+        => BuildUrl(CorrelationBatchTemplate, apiVersionPrefix, domain, workflow);
 
     /// <summary>
     /// Generates URL for SubFlow Busy propagation endpoint.

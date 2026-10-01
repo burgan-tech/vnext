@@ -59,6 +59,9 @@ public static class GatewayServiceCollectionExtensions
         // would surface on EVERY human-task request, not only cross-domain ones.
         services.AddScoped<LocalHumanTaskLeafGateway>();
         services.AddScoped<IHumanTaskLeafGateway, RoutedHumanTaskLeafGateway>();
+
+        services.AddScoped<LocalInstanceCorrelationGateway>();
+        services.AddScoped<IInstanceCorrelationGateway, RoutedInstanceCorrelationGateway>();
         services.AddScoped<IAuthorizeGateway, RoutedAuthorizeGateway>();
         services.AddScoped<IRelatedInstanceReader, RoutedRelatedInstanceReader>();
 
