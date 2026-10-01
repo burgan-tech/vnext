@@ -122,7 +122,7 @@ public class HumanTaskFunctionTests : IDisposable
             currentSchema: _currentSchema,
             transitionAuthorizationManager: _authorizationManager,
             representationEtagService: Substitute.For<IRepresentationEtagService>(),
-            schemaFieldFilterService: Substitute.For<ISchemaFieldFilterService>(),
+            instanceDataReadService: new BBT.Workflow.Instances.InstanceDataReadService(Substitute.For<ISchemaFieldFilterService>()),
             callerRoleResolver: new DefaultCallerRoleResolver(_caller),
             paginationLinkGenerator: Substitute.For<BBT.Aether.Application.Pagination.IPaginationLinkGenerator>(),
             instanceFilteringOptions: Options.Create(new InstanceFilteringOptions()),

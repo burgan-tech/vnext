@@ -118,6 +118,8 @@ public sealed class TaskInvocationDiRegistrationTests
         // against (see the class remarks for exact coverage scope).
         services.AddSingleton(Substitute.For<DaprClient>());
         services.AddSingleton(Substitute.For<ICorrelationIdProvider>());
+        // Provided by Aether in the hosts; the instance-read trigger executors read as the task's own credential.
+        services.AddSingleton(Substitute.For<BBT.Aether.Users.ICurrentUser>());
         services.AddSingleton(Substitute.For<IComponentCacheStore>());
         services.AddScoped(_ => Substitute.For<IInstanceTaskRepository>());
         services.AddScoped(_ => Substitute.For<IInstanceRepository>());

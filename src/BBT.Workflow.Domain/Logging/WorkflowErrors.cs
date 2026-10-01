@@ -345,6 +345,27 @@ public static class WorkflowErrors
             target: instanceId.ToString());
 
     /// <summary>
+    /// A request introduced a value carrying the reserved <c>ENCRYPTED:AES256:</c> prefix at <paramref name="path"/>
+    /// that is not the token already stored there. The value is never echoed.
+    /// </summary>
+    public static Error EncryptedValueReserved(string path)
+        => Error.Validation(
+            WorkflowErrorCodes.EncryptedValueReserved,
+            $"The value at \"{path}\" carries a reserved x-encryption prefix (\"ENCRYPTED:AES256:\" or \"HASHED:\"); only the value already stored at that path may be sent back",
+            target: path);
+
+    /// <summary>
+    /// An <c>x-encryption.type: "encrypt"</c> value of the instance cannot be decrypted with this host's keyring,
+    /// so the engine refuses to run on it (it would act on the token string). Transient: nothing is written, the
+    /// instance is not faulted, and restoring the key recovers it.
+    /// </summary>
+    public static Error EncryptionKeyUnavailable(Guid instanceId, string path)
+        => Error.Transient(
+            WorkflowErrorCodes.EncryptionKeyUnavailable,
+            $"An encrypted field of instance \"{instanceId}\" cannot be decrypted (path \"{path}\"); its key is not available on this host",
+            target: instanceId.ToString());
+
+    /// <summary>
     /// Instance is Busy: a transition is already queued or executing.
     /// Returned when a new non-reserved async transition is requested while the
     /// instance is in Busy status (queued job or running pipeline).

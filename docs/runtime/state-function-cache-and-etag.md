@@ -285,10 +285,24 @@ mechanism with a data-centric material — the design principle is that the data
 signals **data change points**, not state or extension flux:
 
 ```
-etag = h(instanceId | latestDataEtag | flowVersion | callerHash)
-key  = data-fn:{domain}:{workflow}:{instance}:{callerHash}
+etag = h(generation | instanceId | latestDataEtag | flowVersion | callerHash)
+key  = data-fn:{generation}:{domain}:{workflow}:{instance}:{callerHash}
+generation = v3[-nomask]                                   # SchemaMasking:Enabled=false
 callerHash = h(roles | actor identity | culture | version)   # extensions deliberately EXCLUDED
 ```
+
+- **The generation is in the key AND the ETag.** `v2` retired every entry written before
+  `x-masking`. A prefix-only bump would have emptied the body cache but left the fingerprint fast
+  path answering 304 to a client holding a pre-masking ETag — with its unmasked body. The masking
+  switch is part of the generation for the same reason: it changes what a body means without a data
+  write. (`hash` is applied on write, so its digest is data and needs no generation segment.) `v3` retired every entry written before
+  `x-encryption.type: encrypt` (those bodies served `persisted`/`transport` fields in clear). See
+  [Field Masking and Encryption](../domain/field-masking.md).
+- **A row carrying `encrypt` tokens is never cached.** An allow-listed caller's body holds the plaintext (Redis
+  would keep it at rest), and a body built while a secret was unavailable holds tokens that must not outlive that.
+- **Trigger-task reads are ordinary callers here.** A `GetInstanceData` task reads as its own credential (its mapping
+  headers + the caller's `sub`/`act_sub`/`position`/`client_id`/`role` where unset), so its body is filtered for that scope and cached under it like
+  any caller's; there is no system-read bypass. See [Field Masking and Encryption](../domain/field-masking.md).
 
 - **Change signal is `InstanceData.ETag`** of the IsLatest row — a fresh ULID on every
   latest-line data write. It is read index-only via `UX_InstancesData_Instance_IsLatest`

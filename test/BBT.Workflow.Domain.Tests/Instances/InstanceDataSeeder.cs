@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using BBT.Workflow.Definitions;
 
@@ -58,6 +59,19 @@ public static class InstanceDataSeeder
 
             return instance.SeedRow(id, version, inputData, takesLatest);
         }
+    }
+
+    /// <summary>
+    /// Seeds a latest row exactly as the write funnel stores it — <paramref name="storedJson"/> may carry
+    /// <c>x-encryption.type: "encrypt"</c> tokens. The row is never decrypted in place; tests that need the plaintext bind
+    /// a protector to the instance (<see cref="Instance.BindDecryption"/>) or call one directly.
+    /// </summary>
+    public static InstanceData SeedStoredData(this Instance instance, string storedJson)
+    {
+        var row = new InstanceData(Guid.NewGuid(), instance.Id, WorkflowConstants.DefaultVersion,
+            new JsonData(storedJson), dataHash: "seeded", isLatest: true) { VersionNo = 1 };
+        instance.AcceptPersistedData(row);
+        return row;
     }
 
     private static InstanceData SeedRow(

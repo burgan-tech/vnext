@@ -43,6 +43,7 @@ public sealed class GetInstancesTaskExecutorTests
             Substitute.For<IRemoteInvokerService>(),
             gateway,
             Substitute.For<IDomainDiscoveryResolver>(),
+            Substitute.For<BBT.Aether.Users.ICurrentUser>(),
             NullLogger<GetInstancesTaskExecutor>.Instance);
 
     [Fact]
@@ -239,6 +240,7 @@ public sealed class GetInstancesTaskExecutorTests
             remoteInvoker,
             Substitute.For<IInstanceQueryGateway>(),
             Substitute.For<IDomainDiscoveryResolver>(),
+            Substitute.For<BBT.Aether.Users.ICurrentUser>(),
             NullLogger<GetInstancesTaskExecutor>.Instance);
 
         var result = await executor.ExecuteAsync(CreateContext(task), CancellationToken.None);

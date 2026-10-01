@@ -4060,6 +4060,68 @@ public static partial class WorkflowLogs
         int roleCount);
 
     /// <summary>
+    /// A master schema declares <c>x-encryption.type: "hash"</c> but the host has no usable
+    /// <c>SchemaEncryption:HashSalt</c> (missing or shorter than 16 UTF-8 bytes). The value is served FULLY
+    /// MASKED instead of hashed — fail closed, never in clear. Logged once per process.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20466,
+        Level = LogLevel.Warning,
+        Message = "x-encryption hash rule applied without a usable SchemaEncryption:HashSalt; values are served fully masked until a salt of at least {MinSaltBytes} bytes is configured")]
+    public static partial void SchemaHashSaltUnavailable(
+        this ILogger logger,
+        int minSaltBytes);
+
+    /// <summary>
+    /// Logs that a stored x-encryption token could not be opened (unknown key id, malformed token or failed
+    /// authentication). The engine refuses to run on the instance until the key is restored; readers see the token.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20468,
+        Level = LogLevel.Error,
+        Message = "x-encryption token at {Path} of instance {InstanceId} could not be decrypted (key version {KeyId}, reason {Reason})")]
+    public static partial void EncryptedValueUndecryptable(
+        this ILogger logger,
+        Guid instanceId,
+        string path,
+        string keyId,
+        string reason);
+
+    /// <summary>Logs that a request tried to introduce a value carrying the reserved token prefix (never the value).</summary>
+    [LoggerMessage(
+        EventId = 20469,
+        Level = LogLevel.Warning,
+        Message = "x-encryption reserved prefix rejected at {Path} of instance {InstanceId}")]
+    public static partial void EncryptedValueRejectedOnWrite(
+        this ILogger logger,
+        Guid instanceId,
+        string path);
+
+    /// <summary>
+    /// Logs that an instance's x-encryption secret was read synchronously because its row was opened without a preload.
+    /// Debug: correct, only slower — a steady stream names an entry point that should preload.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20471,
+        Level = LogLevel.Debug,
+        Message = "x-encryption secret of instance {InstanceId} in schema {Schema} loaded without a preload")]
+    public static partial void InstanceSecretLoadedWithoutPreload(
+        this ILogger logger,
+        Guid instanceId,
+        string schema);
+
+    /// <summary>Logs that the synchronous secret lookup failed; the row keeps its tokens (never plaintext).</summary>
+    [LoggerMessage(
+        EventId = 20472,
+        Level = LogLevel.Warning,
+        Message = "x-encryption secret lookup for instance {InstanceId} in schema {Schema} failed ({ErrorType}); encrypted values stay closed")]
+    public static partial void InstanceSecretLookupFailed(
+        this ILogger logger,
+        Guid instanceId,
+        string schema,
+        string errorType);
+
+    /// <summary>
     /// Logs that no provider call was made because the caller carried neither <c>act_sub</c> nor
     /// <c>client_id</c>. Debug: anonymous and device tokens are ordinary traffic, and a Warning on
     /// every one of their requests would bury the answers that matter.

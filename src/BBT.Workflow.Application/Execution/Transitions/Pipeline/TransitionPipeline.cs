@@ -20,6 +20,7 @@ namespace BBT.Workflow.Execution.Pipeline;
 public class TransitionPipeline
 {
     private readonly TransitionExecutor _executor;
+    private readonly ISubItemEventDataResolver? _subItemDataResolver;
     private readonly ContinuationDispatcher _continuationDispatcher;
     private readonly IInstanceBusyManager _busyMarker;
     private readonly ITransitionContextFactory _contextFactory;
@@ -71,8 +72,10 @@ public class TransitionPipeline
         IStateNotificationScheduler stateNotificationScheduler,
         ITransitionAdmissionService admissionService,
         IInstanceStatusLock statusLock,
-        ILogger<TransitionPipeline> logger)
+        ILogger<TransitionPipeline> logger,
+        ISubItemEventDataResolver? subItemDataResolver = null)
     {
+        _subItemDataResolver = subItemDataResolver;
         _executor = executor;
         _continuationDispatcher = continuationDispatcher;
         _busyMarker = busyMarker;
@@ -481,7 +484,8 @@ public class TransitionPipeline
             _logger.IncidentRecorded(instance.Id, incident.State, incident.Transition, incident.ErrorCode, incident.BoundaryAction);
         }
 
-        instance.Fault(context.Domain, context.CallerMode == ExecMode.Sync);
+        instance.Fault(context.Domain, context.CallerMode == ExecMode.Sync,
+            subItemData: await _subItemDataResolver.ResolveOrStoredAsync(instance, cancellationToken));
         await _instanceRepository.UpdateAsync(instance, true, cancellationToken);
         ActivityContext commitContext;
         using (var commitActivity = PipelineStepActivityHelper.StartTransitionActivity(

@@ -31,7 +31,8 @@ public sealed class SubflowCompletionService(
     ISubItemTerminalGuard terminalGuard,
     IDistributedEventBus eventBus,
     IOptions<WorkflowExecutionOptions> executionOptions,
-    ILogger<SubflowCompletionService> logger)
+    ILogger<SubflowCompletionService> logger,
+    ISubItemEventDataResolver? subItemDataResolver = null)
     : ISubflowCompletionService
 {
     /// <summary>
@@ -274,7 +275,8 @@ public sealed class SubflowCompletionService(
                             errorLayer: "SubFlow",
                             stackTrace: parentWorkflowResult.Error.Detail);
                         parentInstance.AddIncident(loadIncident);
-                        parentInstance.Fault(completedInput.Domain, completedInput.Sync);
+                        parentInstance.Fault(completedInput.Domain, completedInput.Sync,
+                            subItemData: await subItemDataResolver.ResolveOrStoredAsync(parentInstance, cancellationToken));
                         await instanceRepository.UpdateAsync(parentInstance, true, cancellationToken);
                         await correlationUow.CommitAsync(cancellationToken);
                         return;
@@ -315,7 +317,8 @@ public sealed class SubflowCompletionService(
                             errorLayer: "SubFlow",
                             stackTrace: mappingResult.Error.Detail);
                         parentInstance.AddIncident(incident);
-                        parentInstance.Fault(completedInput.Domain, completedInput.Sync);
+                        parentInstance.Fault(completedInput.Domain, completedInput.Sync,
+                            subItemData: await subItemDataResolver.ResolveOrStoredAsync(parentInstance, cancellationToken));
                         await instanceRepository.UpdateAsync(parentInstance, true, cancellationToken);
                         await correlationUow.CommitAsync(cancellationToken);
                         return;

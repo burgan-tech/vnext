@@ -86,10 +86,13 @@ public sealed class DaprHttpEndpointTaskExecutor : TaskExecutorBase<DaprHttpEndp
 
         var traceContext = _remoteInvoker.CreateTraceContext(context.ScriptContext);
 
+        // The caller's credential travels as the request's headers (the task itself declares none).
+        var envelope = WithCallerCredential(envelopeResult.Value!, context.ScriptContext);
+
         var result = await _remoteInvoker.InvokeAsync(
             TaskTypes.DaprHttpEndpoint,
             task.Key,
-            envelopeResult.Value!,
+            envelope,
             traceContext,
             cancellationToken);
 

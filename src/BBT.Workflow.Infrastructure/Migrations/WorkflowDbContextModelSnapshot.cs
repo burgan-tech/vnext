@@ -158,6 +158,27 @@ namespace BBT.Workflow.Migrations
                     b.ToTable("BackgroundJobs", "public");
                 });
 
+            modelBuilder.Entity("BBT.Workflow.Encryption.InstanceSecret", b =>
+                {
+                    b.Property<Guid>("InstanceId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<byte[]>("EncryptionKey")
+                        .IsRequired()
+                        .HasColumnType("bytea");
+
+                    b.Property<byte[]>("HashSalt")
+                        .IsRequired()
+                        .HasColumnType("bytea");
+
+                    b.HasKey("InstanceId");
+
+                    b.ToTable("InstanceSecrets", "public");
+                });
+
             modelBuilder.Entity("BBT.Workflow.Instances.Instance", b =>
                 {
                     b.Property<Guid>("Id")
@@ -828,6 +849,15 @@ namespace BBT.Workflow.Migrations
                     b.HasIndex(new[] { "InstanceId", "StartedAt" }, "IX_InstanceTransitions_Instance_StartedAt");
 
                     b.ToTable("InstanceTransitions", "public");
+                });
+
+            modelBuilder.Entity("BBT.Workflow.Encryption.InstanceSecret", b =>
+                {
+                    b.HasOne("BBT.Workflow.Instances.Instance", null)
+                        .WithMany()
+                        .HasForeignKey("InstanceId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("BBT.Workflow.Instances.InstanceAction", b =>

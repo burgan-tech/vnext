@@ -99,6 +99,13 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
         services.AddScoped<IStateFunctionCache, StateFunctionCache>();
         services.AddOptions<InstanceFunctionCacheOptions>()
             .BindConfiguration(InstanceFunctionCacheOptions.SectionName);
+        // x-masking kill switch. Folded into the data-function cache generation (key AND ETag).
+        services.AddOptions<BBT.Workflow.Authorization.SchemaMaskingOptions>()
+            .BindConfiguration(BBT.Workflow.Authorization.SchemaMaskingOptions.SectionName);
+        // x-encryption read-path transforms (type "hash") and the host-wide hash salt. Also in the cache generation.
+        services.AddOptions<BBT.Workflow.Authorization.SchemaEncryptionOptions>()
+            .BindConfiguration(BBT.Workflow.Authorization.SchemaEncryptionOptions.SectionName);
+        services.TryAddSingleton<BBT.Workflow.Authorization.IFieldEncryptionStatus, BBT.Workflow.Authorization.FieldEncryptionStatus>();
         services.AddScoped<IDataFunctionCache, DataFunctionCache>();
         services.AddScoped<IInstanceSchemaFunctionCache, InstanceSchemaFunctionCache>();
         // Application Services
@@ -136,6 +143,8 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
         services.AddScoped<IAuthorizeAppService, AuthorizeAppService>();
         services.AddScoped<IRepresentationEtagService, RepresentationEtagService>();
         services.AddScoped<ISchemaFieldFilterService, SchemaFieldFilterService>();
+        services.AddScoped<BBT.Workflow.Instances.IInstanceDataReadService, BBT.Workflow.Instances.InstanceDataReadService>();
+        services.AddScoped<BBT.Workflow.Instances.ISubItemEventDataResolver, BBT.Workflow.Instances.SubItemEventDataResolver>();
         services.AddScoped<IInstanceExtensionService, InstanceExtensionService>();
         services.AddScoped<IWorkflowOutputMappingService, WorkflowOutputMappingService>();
         services.AddScoped<ISubflowOutputMappingService, SubflowOutputMappingService>();

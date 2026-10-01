@@ -126,7 +126,7 @@ public class InstanceQueryAppServiceStateTests : IDisposable
             currentSchema: Substitute.For<ICurrentSchema>(),
             transitionAuthorizationManager: _transitionAuthorizationManager,
             representationEtagService: _representationEtagService,
-            schemaFieldFilterService: Substitute.For<ISchemaFieldFilterService>(),
+            instanceDataReadService: new BBT.Workflow.Instances.InstanceDataReadService(Substitute.For<ISchemaFieldFilterService>()),
             callerRoleResolver: new DefaultCallerRoleResolver(Substitute.For<ICurrentUser>()),
             paginationLinkGenerator: Substitute.For<BBT.Aether.Application.Pagination.IPaginationLinkGenerator>(),
             instanceFilteringOptions: Options.Create(new InstanceFilteringOptions()),
