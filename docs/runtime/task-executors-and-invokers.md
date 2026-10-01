@@ -4,8 +4,8 @@
 
 Task execution is split into executors and invokers. Executors always run inside
 Orchestration and understand workflow context. Invokers execute the typed binding and perform
-the external call — **where an invoker runs is mode-driven, not fixed**: five wire task types
-(`http`, `daprservice`, `soap`, `statestore`, `cacheaside`) run through an in-process invoker
+the external call — **where an invoker runs is mode-driven, not fixed**: four wire task types
+(`http`, `daprservice`, `soap`, `statestore`) run through an in-process invoker
 inside Orchestration by default, and everything else still ships to the Execution service.
 See [Task Invocation Routing](task-invocation-routing.md) for the resolution order, the
 config, and what the local path trades away.
@@ -48,7 +48,7 @@ config, and what the local path trades away.
 | State store | `StateStoreTaskExecutor` | Local by default: `LocalStateStoreTaskInvoker` (Orchestration), sharing `IStateStoreClient` with the function response cache. Falls back to `StateStoreTaskInvoker` (Execution) if reconfigured Remote. Dapr state store cache access ([details](state-store-task.md)) |
 | Trigger | `StartTriggerTaskExecutor`, `DirectTriggerTaskExecutor`, `SubProcessTaskExecutor` | Remote trigger invokers |
 | Data query | `GetInstancesTaskExecutor`, `GetInstanceDataTaskExecutor`, `GetInstanceTaskExecutor` (type `19`) | Remote data / instance invokers |
-| Cache-aside | `CacheAsideTaskExecutor` (type `18`) | Local by default: `LocalCacheAsideTaskInvoker` (Orchestration); a source-task miss re-enters the same router. Falls back to `CacheAsideTaskInvoker` (Execution) if reconfigured Remote. Dapr state-store read-through ([details](cache-aside-task.md)) |
+| Cache-aside | `CacheAsideTaskExecutor` (type `18`) | No invoker and no wire type of its own: the read-through runs in the Orchestration executor, cache get/set goes through `IStateStoreCacheGateway` (the `statestore` wire type, so it follows `Modes.statestore`), and the source runs through its own type's executor ([details](cache-aside-task.md)) |
 | Fan-out | `FanOutTaskExecutor` (type `21`) | Orchestrates inner tasks; see [FanOut Task](../domain/fan-out-task.md) |
 | Script | `ScriptTaskExecutor` | Executes in Orchestration through scripting module |
 | Python | `PythonTaskExecutor` | `PythonTaskInvoker` selects an explicit Python.NET, process, or container runtime ([details](python-task.md)) |
