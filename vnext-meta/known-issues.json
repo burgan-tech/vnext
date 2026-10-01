@@ -159,6 +159,16 @@
       "title": "In a function with multiple onExecutionTasks, every ScriptContext.TaskResponse slot carried the LAST executed task's payload: SetStandardResponse aliased each response tree into the shared Body, and the in-place expando merge of the next task's response rewrote the earlier slots. Output scripts reading TaskResponse composed the wrong response; OutputResponse slots (re-serialized snapshots) were unaffected.",
       "workaround": "Read task results from ScriptContext.OutputResponse[variableName] instead of TaskResponse, or publish the function with a single task. Fixed in 0.0.95 (#1025): TaskResponse slots are isolated per task and duplicate normalized task keys are rejected at publish.",
       "fixedIn": "0.0.95"
+    },
+    {
+      "id": "cacheaside-source-mapping-input-ignored",
+      "affectedVersions": ">=0.0.71 <=0.0.97",
+      "severity": "error",
+      "component": "task",
+      "path": "attributes.config.sourceMapping",
+      "title": "CacheAsideTask ran its source task without the source mapping's InputHandler: sourceMapping was applied only as output shaping over the cached raw source result, so a source that needs its configuration set by a mapping (for example GetInstanceData SetKey, an HTTP URL or body) ran unconfigured, and the cache held the raw payload instead of the shaped value.",
+      "workaround": "Upgrade to 0.0.98, where the source runs as a task with sourceMapping as its mapping (InputHandler -> invoke -> OutputHandler) and the shaped output is cached. Until then, run the configuring task separately in onExecutionTasks.",
+      "fixedIn": "0.0.98"
     }
   ]
 }

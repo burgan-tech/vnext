@@ -2,8 +2,8 @@
 
 ## Purpose
 
-Every task with a prepared binding — HTTP, Dapr service invocation, SOAP, state store,
-cache-aside, and any future type that gets an in-process invoker — can run two ways:
+Every task with a prepared binding — HTTP, Dapr service invocation, SOAP, state store
+(whose wire type also carries the cache-aside task's cache I/O), and any future type that gets an in-process invoker — can run two ways:
 
 - **Local**: inside the Orchestration host, in the same process as the pipeline step that
   triggered it.
@@ -25,14 +25,14 @@ silently is a **custom `storeName`**:
    block, that sets an explicit `storeName` instead of leaving it to resolve from
    `DAPR_STATE_STORE_NAME`.
 2. For each one, confirm that Dapr component's `scopes:` includes the **orchestrator** app id
-   — not only the execution app id. `statestore`/`cacheaside` now run against the Orchestration
+   — not only the execution app id. `statestore` (which also carries CacheAside's cache get/set) now runs against the Orchestration
    sidecar by default, so a component scoped only to execution will resolve there under the old
    (Remote) routing but fail at first execution under the new (Local) default, with no
    publish-time or startup signal.
 3. If a component cannot be rescoped before this version deploys, set
-   `"statestore": "Remote"` and `"cacheaside": "Remote"` under
-   `Workflow:TaskInvocation:Modes` (see [Reverting a type to Remote](#reverting-a-type-to-remote)
-   below) until it can be — this keeps that store name working exactly as it did before this
+   `"statestore": "Remote"` under `Workflow:TaskInvocation:Modes` (this covers CacheAside's cache
+   I/O too — there is no separate `cacheaside` key; see
+   [Reverting a type to Remote](#reverting-a-type-to-remote) below) until it can be — this keeps that store name working exactly as it did before this
    change, at the cost of losing the function-response-cache latency win for that store (see
    [Which types have a local invoker](#which-types-have-a-local-invoker)).
 
@@ -70,14 +70,13 @@ silent fallback to the pre-#1007 behavior, not an outage.
       "http": "Local",
       "daprservice": "Local",
       "soap": "Local",
-      "statestore": "Local",
-      "cacheaside": "Local"
+      "statestore": "Local"
     }
   }
 }
 ```
 
-`DefaultMode` stays `Remote`: only the five tested types below are local. A task
+`DefaultMode` stays `Remote`: only the four tested wire types below are local. A task
 type added to the runtime tomorrow with no entry in `Modes` runs Remote automatically — it does
 not silently start performing egress from the orchestrator just by existing. Pinned by
 `TaskInvocationDefaultsTests` (`test/BBT.Workflow.Application.Tests/Tasks/Invocation/`), which
@@ -108,7 +107,7 @@ why that gap matters when reverting under load).
 `TaskInvocationOptions.LocalInvocationTimeoutSeconds`, code default **`60`**). The local-path
 counterpart of `ExecutionApi:InvocationTimeoutSeconds` — see
 [What the local path loses](#what-the-local-path-loses) and [Timeout layering](#timeout-layering)
-for what it bounds and why it matters most for `daprservice`/`statestore`/`cacheaside`.
+for what it bounds and why it matters most for `daprservice`/`statestore`.
 
 ## Which types have a local invoker
 
@@ -118,7 +117,12 @@ for what it bounds and why it matters most for `daprservice`/`statestore`/`cache
 | `daprservice` | Dapr service invocation (type `3`) | `LocalDaprServiceTaskInvoker` | Calls another domain app directly from Orchestration instead of relaying through Execution. |
 | `soap` | SOAP (type `16`) | `LocalSoapTaskInvoker` | Shares the same named HTTP clients (and the same connection cap) as `http`. |
 | `statestore` | State Store (type `17`) | `LocalStateStoreTaskInvoker` | Runs through `StateStoreInvocation` over the shared `IStateStoreClient`; also backs the function response cache (`StateStoreCacheGateway`). See [State Store Task](state-store-task.md). |
-| `cacheaside` | Cache-Aside (type `18`) | `LocalCacheAsideTaskInvoker` | On a cache miss, dispatches the pre-resolved source-task envelope back through the same router/dispatcher — so a `http` source task run from a `cacheaside` task is itself subject to this table. See [Cache-Aside Task](cache-aside-task.md). |
+
+**Cache-Aside (type `18`) has no wire type of its own.** Its executor runs the read-through in
+Orchestration; the cache get/set goes through `IStateStoreCacheGateway` (the same gateway as the
+function response cache), which dispatches `statestore` envelopes — so cache I/O follows
+`Modes.statestore` exactly like the State Store task. Its source task runs through the source type's
+own executor and routes by that type's own mode. See [Cache-Aside Task](cache-aside-task.md).
 
 Every other wire type (`daprbinding`, `daprhttpendpoint`, `daprpubsub`, `daprconversation`,
 `python`, trigger/query types, …) has no local invoker today, so the capability gate always
@@ -140,21 +144,21 @@ used to provide:
    (default 60s) is the local-path counterpart.** `TaskInvocationDispatcher` wraps every in-process
    call in a linked cancellation token bounded by
    `Workflow:TaskInvocation:LocalInvocationTimeoutSeconds`, on top of whatever the task's own
-   binding carries. This matters unevenly across the five local types: `http` and `soap` bindings
-   already carry their own `timeoutSeconds`, so for them this is a backstop; `daprservice`,
-   `statestore` and `cacheaside` bindings have **no `timeoutSeconds` field at all**, so before this
-   dial existed a locally-run task of one of those three types had no deadline whatsoever below the
+   binding carries. This matters unevenly across the four local types: `http` and `soap` bindings
+   already carry their own `timeoutSeconds`, so for them this is a backstop; `daprservice`
+   and `statestore` bindings have **no `timeoutSeconds` field at all**, so before this
+   dial existed a locally-run task of one of those two types had no deadline whatsoever below the
    job execution budget (300s) — not even the 60s the remote path always enforced. See Timeout
    layering below for exactly where this sits.
-3. **The state path (`statestore`, `cacheaside`, and the function response cache) now shares the
+3. **The state path (`statestore`, the CacheAside task's cache I/O, and the function response cache) now shares the
    orchestrator sidecar's Dapr state component — and its go-redis connection pool — with the
    platform's own `IDistributedCacheService` consumers** (`ComponentCacheStore`,
    `StateFunctionCache`, `DistributedCacheIdempotencyStore`). Under `Remote` this domain-task
    traffic sat on the Execution sidecar's own pool, isolated from the platform's cache/lock/component
-   traffic; local `statestore`/`cacheaside` puts both on the same connection pool on the same
+   traffic; local `statestore` puts both on the same connection pool on the same
    sidecar. `Workflow:TaskInvocation:MaxConnectionsPerServer` bounds HTTP/SOAP egress only — there
    is no equivalent cap on the state path, and this is the widest blast radius of the three items
-   in this section: a noisy domain-owned `statestore`/`cacheaside` task can, in principle, starve
+   in this section: a noisy domain-owned `statestore` or CacheAside task can, in principle, starve
    the platform's own component cache or state-function cache reads on the same pool. An operator
    running cache-heavy domains should raise the orchestrator's Dapr Redis `poolSize` — the Helm
    chart (`vnext-helm-charts`, `charts/vnext`) already tunes Redis connection metadata per component
@@ -198,7 +202,7 @@ layer around every in-process call, regardless of task type:
 task's own timeoutSeconds (http/soap only; default 30s)  ⊂  LocalInvocationTimeoutSeconds (60s)  ⊂  TransitionJobTimeoutSeconds (job budget, 300s)  ⊂  chain lock lease (330s)
 ```
 
-For `daprservice`, `statestore` and `cacheaside` — whose bindings carry no `timeoutSeconds` field —
+For `daprservice` and `statestore` — whose bindings carry no `timeoutSeconds` field —
 the innermost layer does not exist, so `LocalInvocationTimeoutSeconds` is the first bound of any
 kind, not a backstop behind a tighter one:
 
@@ -238,7 +242,6 @@ components in both modes, with only `Workflow:TaskInvocation:Modes:*` differing.
 | `http` | 5.87 ms | 8.29 ms | +2.42 ms |
 | `soap` | 6.46 ms | 8.34 ms | +1.88 ms |
 | `statestore` | 0.69 ms | 2.24 ms | +1.55 ms |
-| `cacheaside` | 0.70 ms | 2.40 ms | +1.70 ms |
 
 The function response cache pays the same toll: `Cache.Get` on a hit is 0.68 ms local against
 2.19 ms remote.
@@ -250,7 +253,7 @@ that is where it becomes visible. Full method, trace-integrity check and the cac
 
 ## Environment prerequisites
 
-The local `statestore`/`cacheaside` invokers resolve their Dapr state store component through
+The local `statestore` invoker (which also serves CacheAside's cache I/O) resolves their Dapr state store component through
 `DAPR_STATE_STORE_NAME`, read from whichever host actually executes the task (see
 [State Store Task](state-store-task.md)). Local dev and docker already supply this to the
 Orchestration host — `launchSettings.json`, `etc/docker/.env.orchestration.dev`,
@@ -316,4 +319,4 @@ a config rollback into a new throughput bottleneck.
   trace integrity in both modes plus the measured hop cost
 - [Dapr Component Footprint](dapr-component-footprint.md) — per-host component matrix, including
   why Orchestration needs the `state` component for the platform cache and, since this change,
-  for local `statestore`/`cacheaside` domain tasks by default
+  for local `statestore` domain tasks and CacheAside cache I/O by default

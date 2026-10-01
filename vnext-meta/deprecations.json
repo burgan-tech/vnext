@@ -142,6 +142,17 @@
       "replacement": "state.subFlow.overrides.states.<childState>.views.<viewKey>",
       "severity": "warning",
       "message": "Legacy predecessor of overrides.views; same semantics and same migration path."
+    },
+    {
+      "id": "cacheaside-key-expression-removed",
+      "type": "field",
+      "component": "task",
+      "path": "attributes.config.keyExpression",
+      "deprecatedSince": "0.0.98",
+      "removedAt": "0.0.98",
+      "replacement": "attributes.config.key",
+      "severity": "error",
+      "message": "CacheAsideTask.keyExpression is removed. Move the expression into the key field as a ScriptCode object: key: { location: 'dynamicExpresso', code: '...' } (a non-dynamicExpresso location compiles an ICacheKeyMapping instead). FunctionCache keeps its own keyExpression; it is unrelated."
     }
   ]
 }
