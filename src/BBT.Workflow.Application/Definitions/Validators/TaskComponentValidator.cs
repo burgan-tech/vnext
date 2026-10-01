@@ -53,8 +53,8 @@ public sealed class TaskComponentValidator : IComponentValidator
                     result.ValidationErrors);
 
                 ScriptCodeValidator.Validate(
-                    cacheAside.KeyExpression,
-                    $"{nameof(CacheAsideTask)}.{nameof(CacheAsideTask.KeyExpression)}",
+                    cacheAside.KeyScript,
+                    $"{nameof(CacheAsideTask)}.{nameof(CacheAsideTask.KeyScript)}",
                     result.ValidationErrors);
             }
 

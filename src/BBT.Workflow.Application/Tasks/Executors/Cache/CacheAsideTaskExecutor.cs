@@ -83,7 +83,7 @@ public sealed class CacheAsideTaskExecutor : TaskExecutorBase<CacheAsideTask>
 
         // 2. A Dynamic Expresso key expression computes the key from the request/context and overrides
         //    the static key — the lightweight vary-by mechanism (no full .csx required).
-        if (task.KeyExpression is { } keyExpression && keyExpression.HasMappingCode)
+        if (task.KeyScript is { } keyExpression && keyExpression.HasMappingCode)
         {
             var keyResult = _expressoEvaluator.Evaluate(keyExpression, context.ScriptContext);
             if (!keyResult.IsSuccess)

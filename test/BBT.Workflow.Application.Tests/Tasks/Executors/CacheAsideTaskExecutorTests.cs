@@ -148,7 +148,7 @@ public sealed class CacheAsideTaskExecutorTests
             };
             if (keyExpressionCode is not null)
             {
-                config["keyExpression"] = new { location = "dynamicExpresso", code = keyExpressionCode, encoding = "NAT" };
+                config["key"] = new { location = "dynamicExpresso", code = keyExpressionCode, encoding = "NAT" };
             }
 
             _task = CacheAsideTask.Create(JsonSerializer.SerializeToElement(config));
