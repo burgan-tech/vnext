@@ -1914,6 +1914,32 @@ public sealed class EfCoreInstanceRepository(
         return instances;
     }
 
+    /// <inheritdoc />
+    public async Task<List<Instance>> GetForCorrelationWalkAsync(
+        IReadOnlyCollection<Guid> instanceIds,
+        CancellationToken cancellationToken = default)
+    {
+        if (instanceIds.Count == 0)
+            return [];
+
+        var dbSet = await GetDbSetAsync();
+
+        // No includes whatsoever — see the interface for why. Also no AsSplitQuery: with no
+        // collections there is no cartesian product to split, so a second round trip would buy
+        // nothing and cost one.
+        var instances = await dbSet
+            .Where(i => instanceIds.Contains(i.Id))
+            .AsNoTracking()
+            .ToListAsync(cancellationToken);
+
+        foreach (var instance in instances)
+        {
+            instance.MarkDataPartiallyLoaded();
+        }
+
+        return instances;
+    }
+
     private static string SanitizeIdentifier(string identifier)
     {
         return identifier.Replace("\"", "", StringComparison.Ordinal);

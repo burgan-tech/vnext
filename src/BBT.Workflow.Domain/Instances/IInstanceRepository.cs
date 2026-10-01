@@ -34,6 +34,29 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Reads a batch of instances for the correlation-tree walk: the columns only, with NO
+    /// collection includes at all.
+    /// </summary>
+    /// <remarks>
+    /// The walk reads exactly four things off each aggregate — <c>Key</c>, <c>CurrentState</c>,
+    /// <c>Status</c> and <c>FlowVersion</c> — and not one of them comes from <c>DataList</c> or
+    /// <c>ChildCorrelations</c> (children come from the correlation rows, read separately and in
+    /// one statement per level). <see cref="FindByIdsAsReadOnlyAsync"/> eager-loads
+    /// <c>DataList</c>, which honours the <c>LatestOnlyInstanceLoading</c> switch — OFF by default
+    /// — so it would pull EVERY version of EVERY node, at every level of the tree. That is the
+    /// same regression <see cref="GetForHumanTaskDescentAsync"/> was narrowed to fix (measured
+    /// there: 4 000 rows for a 200-candidate batch instead of 200), multiplied here by depth.
+    /// <para>
+    /// The rows come back with no data loaded at all, so they are stamped
+    /// <c>MarkDataPartiallyLoaded</c>: a reader that later reaches for history fails fast instead
+    /// of quietly answering from nothing.
+    /// </para>
+    /// </remarks>
+    Task<List<Instance>> GetForCorrelationWalkAsync(
+        IReadOnlyCollection<Guid> instanceIds,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Finds an instance by its identifier (GUID or key) without loading DataList.
     /// Loads ChildCorrelations (active-only) but skips all InstanceData versions.
     /// Non-tracking (AsNoTracking) — intended for monitoring read queries that do not need data history.

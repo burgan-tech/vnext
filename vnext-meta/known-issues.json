@@ -179,6 +179,16 @@
       "title": "With the script sandbox enabled, the shipped AllowedAssemblies baseline lacked System.ObjectModel, so a mapping that enumerates an ExpandoObject (foreach — ordinary mapping code) failed to compile with CS0012 (ExpandoObject implements INotifyPropertyChanged, which lives in System.ObjectModel; the netstandard facade's type-forward does not satisfy the binder). Direct System.ObjectModel types (ObservableCollection) failed with CS1069. Plain is/cast/dynamic access compiled — the failure was construct-dependent.",
       "workaround": "Add \"System.ObjectModel\" to Scripting:Sandbox:AllowedAssemblies in the environment's configuration, grant it per mapping via scripts.allowedAssemblies, or read the expando through the 'as IDictionary<string,object>' spelling without enumerating the expando itself. Fixed on master 2026-09-23 by adding the entry to both hosts' shipped baselines; fixedIn is stamped when the release containing the fix is cut.",
       "fixedIn": null
+    },
+    {
+      "id": "async-transition-offloaded-body-never-purged",
+      "affectedVersions": ">=0.0.98",
+      "severity": "warning",
+      "component": "runtime",
+      "path": "InstanceJobRequestData",
+      "title": "An async transition body offloaded to InstanceJobRequestData is never deleted",
+      "workaround": "A body above WorkflowExecution:AsyncTransitionInlineBodyMaxBytes (1 MiB default) is persisted to the standalone InstanceJobRequestData table at accept and read back by TransitionJobHandler. Nothing removes the row afterwards: not job completion, and not instance deletion, because the table deliberately carries no navigation from InstanceJob and therefore no foreign key or cascade. The rows that land here are by definition the large ones (a base64 file being the common case), so the table grows in proportion to large-body async transitions. Deleting on completion is not obviously safe - a retry re-enters the handler and hydrates from this row, so removing it early turns a recoverable retry into JOB_REQUEST_DATA_MISSING. Until a retention story lands, monitor the table's size per schema and purge offline against terminal instances only.",
+      "fixedIn": null
     }
   ]
 }

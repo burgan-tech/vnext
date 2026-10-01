@@ -82,9 +82,20 @@ public sealed class InstanceCorrelationResolver(
         // result would carry the node twice.
         var ids = request.InstanceIds.Distinct().ToArray();
 
+        // CLAMPED to this runtime's own bound, never taken on trust. RemainingDepth arrives from
+        // the caller on the internal batch endpoint, which carries no authorization — so without
+        // this a caller could hand in any depth it liked and walk straight past the one thing
+        // standing between a cyclic correlation graph and an infinite walk. Nothing can cycle today
+        // (correlations are written only at spawn time), but the backstop has to hold the moment a
+        // post-hoc correlation write lands, and a guard that is only correct until a future feature
+        // ships is not a guard. Mirrors the MaxInstanceIds check the endpoint already applies to the
+        // other half of this request. A no-op for every internal caller: the recursion only ever
+        // passes RemainingDepth - 1, and the public read starts at MaxDescentDepth.
+        var remainingDepth = Math.Min(request.RemainingDepth, _options.MaxDescentDepth);
+
         // Depth is checked BEFORE any query. Running the reads and then discarding them would pay
         // the whole cost of the level to report that it was out of budget.
-        if (request.RemainingDepth <= 0)
+        if (remainingDepth <= 0)
         {
             logger.CorrelationWalkDepthExceeded(domain, flow, ids.Length, _options.MaxDescentDepth);
             return Result<IReadOnlyList<CorrelationBatchResult>>.Ok(
@@ -105,7 +116,7 @@ public sealed class InstanceCorrelationResolver(
         List<InstanceCorrelation> correlations;
         using (currentSchema.Change(flow))
         {
-            selves = await instanceRepository.FindByIdsAsReadOnlyAsync(ids, cancellationToken);
+            selves = await instanceRepository.GetForCorrelationWalkAsync(ids, cancellationToken);
             correlations = await correlationRepository.GetByParentsAsync(ids, cancellationToken);
         }
 
@@ -141,7 +152,7 @@ public sealed class InstanceCorrelationResolver(
 
         if (allChildNodes.Count > 0)
         {
-            await ExpandAsync(allChildNodes, request.RemainingDepth - 1, cancellationToken);
+            await ExpandAsync(allChildNodes, remainingDepth - 1, cancellationToken);
         }
 
         return Result<IReadOnlyList<CorrelationBatchResult>>.Ok(

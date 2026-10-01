@@ -99,7 +99,7 @@ public sealed class InstanceQueryAppServiceCorrelationTreeTests : IDisposable
             });
 
         _instanceRepository
-            .FindByIdsAsReadOnlyAsync(Arg.Any<IReadOnlyCollection<Guid>>(), Arg.Any<CancellationToken>())
+            .GetForCorrelationWalkAsync(Arg.Any<IReadOnlyCollection<Guid>>(), Arg.Any<CancellationToken>())
             .Returns(ci => ci.ArgAt<IReadOnlyCollection<Guid>>(0)
                 .Where(_instances.ContainsKey)
                 .Select(id => _instances[id])

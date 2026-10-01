@@ -134,6 +134,18 @@ Why offload only large bodies, and to a separate table:
   unaffected; the mixed-version window touches only genuinely oversized bodies, which were
   **100% broken** before this fix anyway (durable stuck-Busy).
 
+**Retention is an open gap — the rows are never removed.** `InstanceJobRequestData` is
+insert-only: `EfCoreInstanceJobRepository.InsertRequestDataAsync` adds a row at accept, the handler
+reads it by job id, and **nothing deletes it** — not job completion, not instance deletion. The
+table is deliberately standalone (no navigation from `InstanceJob`, which is what keeps the hot
+metadata reads blob-free), and that same choice means it carries **no foreign key and no cascade**,
+so the rows outlive the instance they belonged to. Since the bodies that land here are by definition
+the oversized ones — a base64 file being the common case (finding AB-21) — the table grows without
+bound in proportion to large-body async transitions. Deleting on completion is not obviously safe:
+a retry re-enters `TransitionJobHandler`, which hydrates from this row, and a row removed too early
+turns a recoverable retry into `JOB_REQUEST_DATA_MISSING`. A retention story (purge on terminal
+instance cleanup, or an age-based sweep) is still owed.
+
 Compatibility: an in-flight payload from a build that predates the fix carries `Data` inline
 and the handler honors it. The reverse — a new offloaded (`DataInJobRow`) payload consumed by
 an old build — runs the transition **bodyless**; drain async transition jobs before rolling

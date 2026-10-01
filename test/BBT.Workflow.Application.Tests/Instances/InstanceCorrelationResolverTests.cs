@@ -76,7 +76,7 @@ public sealed class InstanceCorrelationResolverTests : IDisposable
             });
 
         _instanceRepository
-            .FindByIdsAsReadOnlyAsync(Arg.Any<IReadOnlyCollection<Guid>>(), Arg.Any<CancellationToken>())
+            .GetForCorrelationWalkAsync(Arg.Any<IReadOnlyCollection<Guid>>(), Arg.Any<CancellationToken>())
             .Returns(ci =>
             {
                 Interlocked.Increment(ref _instanceReadCount);
@@ -410,6 +410,35 @@ public sealed class InstanceCorrelationResolverTests : IDisposable
             .Count(c => c.GetMethodInfo().Name == nameof(ILogger.Log)
                         && (LogLevel)c.GetArguments()[0]! == LogLevel.Warning)
             .ShouldBe(1);
+    }
+
+    /// <summary>
+    /// A caller-supplied depth is CLAMPED to the runtime's own bound. The internal batch endpoint
+    /// carries no authorization, so an unclamped RemainingDepth would let any caller walk straight
+    /// past the walk's only protection against a cyclic graph.
+    /// </summary>
+    [Fact]
+    public async Task ACallerSuppliedDepth_IsClampedToTheConfiguredMaximum()
+    {
+        _options.MaxDescentDepth = 2;
+
+        // A 4-deep chain; the caller asks for 99 levels.
+        var ids = Enumerable.Range(0, 5).Select(_ => Guid.NewGuid()).ToArray();
+        foreach (var id in ids) StubInstance(id, ChildFlow);
+        for (var i = 0; i < ids.Length - 1; i++)
+            StubChildren(ids[i], Correlation(ids[i], ids[i + 1], ChildFlow, LocalDomain));
+
+        var resolver = BuildResolver(routeLocally: true);
+        var result = await resolver.ResolveAsync(
+            LocalDomain, RootFlow,
+            new CorrelationBatchRequest { InstanceIds = [ids[0]], RemainingDepth = 99 });
+
+        // Clamped to 2, so level 2 is marked rather than walked — not 99 levels deep.
+        var lvl1 = result.Value!.Single().Children.ShouldHaveSingleItem();
+        lvl1.Resolved.ShouldBeTrue();
+        var lvl2 = lvl1.Children.ShouldHaveSingleItem();
+        lvl2.Resolved.ShouldBeFalse();
+        lvl2.UnresolvedReason.ShouldBe("depth-exceeded");
     }
 
     /// <summary>Depth is checked BEFORE any query — an exhausted budget must not pay for a level.</summary>

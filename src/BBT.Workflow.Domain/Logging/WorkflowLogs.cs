@@ -990,7 +990,7 @@ public static partial class WorkflowLogs
     /// the arm exception was rethrown bare and the instance stayed durably Busy (finding AB-17).
     /// </summary>
     [LoggerMessage(
-        EventId = 10175,
+        EventId = 10178,
         Level = LogLevel.Warning,
         Message = "Arming transition job {JobName} failed after accept; fell back to the outbox for durable re-arm (instance {InstanceId}, transition {TransitionKey})")]
     public static partial void TransitionJobArmFailedFellBackToOutbox(
