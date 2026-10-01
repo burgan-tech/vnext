@@ -25,7 +25,7 @@ namespace BBT.Workflow.Application.Tests.Tasks.Invocation;
 /// Regression coverage for the container-build-time circular dependency (issue #1007 follow-up)
 /// that kept the Orchestration host from starting at all:
 /// <c>HttpTaskExecutor → ITaskInvocationDispatcher → ITaskInvocationRouter →
-/// ILocalTaskInvokerRegistry → IEnumerable&lt;ILocalTaskInvoker&gt; → LocalCacheAsideTaskInvoker
+/// ILocalTaskInvokerRegistry → IEnumerable&lt;ILocalTaskInvoker&gt; → LocalStateStoreTaskInvoker
 /// → ILocalTaskInvokerRegistry</c>. No existing unit test caught this because every unit test
 /// constructs these types by hand and no test built the real container with
 /// <c>ValidateOnBuild</c>.
@@ -87,7 +87,7 @@ public sealed class TaskInvocationDiRegistrationTests
         using var scope = provider.CreateScope();
 
         var registry = scope.ServiceProvider.GetRequiredService<ILocalTaskInvokerRegistry>();
-        registry.Has(TaskTypes.CacheAside).ShouldBeTrue();
+        registry.Has(TaskTypes.StateStore).ShouldBeTrue();
 
         var dispatcher = scope.ServiceProvider.GetRequiredService<ITaskInvocationDispatcher>();
         dispatcher.ShouldNotBeNull();

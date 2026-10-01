@@ -52,7 +52,7 @@ public sealed class TaskInvocationDispatcher(
     /// layer (<c>ExecutionApi:InvocationTimeoutSeconds</c>). Before this, the caller's own
     /// cancellation token was passed straight through to a local invoker with no deadline of its
     /// own — harmless for HTTP/SOAP, whose bindings carry their own <c>timeoutSeconds</c>, but a
-    /// genuine unbounded wait for DaprService/StateStore/CacheAside, whose bindings have no timeout
+    /// genuine unbounded wait for DaprService/StateStore, whose bindings have no timeout
     /// field at all. Follows the remote path's own-timer-vs-caller-token distinction: if only our
     /// linked timer fired, this is a local timeout and comes back as a failed result (408) the
     /// error boundary can act on, never an exception; if the caller's token fired, the
@@ -61,16 +61,16 @@ public sealed class TaskInvocationDispatcher(
     /// <para>
     /// <b>That distinction has to be made on the RESULT, not only in a catch clause.</b> The
     /// difference between this and the remote path is that here the invocation core runs
-    /// in-process, and four of the five cores (<c>HttpTaskInvocation</c>,
+    /// in-process, and the cores (<c>HttpTaskInvocation</c>,
     /// <c>DaprServiceInvocation</c>, <c>SoapInvocation</c>, <c>StateStoreInvocation</c>) catch
     /// cancellation themselves — guarded on <c>cancellationToken.IsCancellationRequested</c>, which
     /// is OUR linked token, so the guard holds whichever side cancelled — and return a failed
     /// result stamped <c>Metadata["Cancelled"] = true</c> rather than letting the exception out.
-    /// Relying on the catch alone therefore made both branches unreachable for those four: a local
+    /// Relying on the catch alone therefore made both branches unreachable for those: a local
     /// timeout surfaced as the core's own failure instead of a 408, <c>LocalTaskInvocationTimedOut</c>
     /// never fired, and — the part that actually changes pipeline behaviour — caller cancellation
     /// was downgraded to an ordinary task failure that the error boundary then acted on, instead of
-    /// unwinding. Only <c>CacheAsideInvocation</c> rethrows, which is why the catch below stays:
+    /// unwinding. The catch below stays for any core that does let the cancellation out:
     /// both shapes are real and both must map to the same two outcomes.
     /// </para>
     /// </summary>
@@ -105,7 +105,7 @@ public sealed class TaskInvocationDispatcher(
         catch (OperationCanceledException) when (
             timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
         {
-            // A core that let the cancellation out (CacheAsideInvocation): own per-invocation
+            // A core that let the cancellation out: own per-invocation
             // timeout, not caused by parent pipeline cancellation.
             return LocalTimeout(task.Key, wireTaskType);
         }

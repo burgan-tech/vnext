@@ -70,19 +70,6 @@ public static class InvokerActivityHelper
         return activity;
     }
 
-    /// <summary>
-    /// Starts a span for one step of the cache-aside protocol (<c>CacheAside.Read</c> /
-    /// <c>CacheAside.Write</c>), so a hit and a miss are told apart in the tree rather than inferred
-    /// from whether a source-task span happens to follow.
-    /// </summary>
-    public static Activity? StartCacheAsideActivity(string operation, string cacheKey)
-        => ActivitySource.StartActivity(
-            $"CacheAside.{operation}/{cacheKey}",
-            ActivityKind.Client);
-
-    /// <summary>Records whether the cache-aside read was a hit.</summary>
-    public static void SetCacheHit(Activity? activity, bool hit) => activity?.SetTag(TagCacheHit, hit);
-
     /// <summary>Marks the span failed with the invocation's error message.</summary>
     public static void SetError(Activity? activity, string? message)
         => activity?.SetStatus(ActivityStatusCode.Error, message);

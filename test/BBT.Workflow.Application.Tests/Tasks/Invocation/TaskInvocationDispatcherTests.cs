@@ -96,7 +96,7 @@ public sealed class TaskInvocationDispatcherTests
     {
         // F1: before this, a local invocation carried the caller's token straight through with no
         // deadline of its own. A local invoker whose underlying core propagates cancellation (the
-        // real behaviour of CacheAsideInvocation's own state-store step) must come back as a failed
+        // behaviour of a core that lets cancellation out) must come back as a failed
         // RESULT, not an unhandled OperationCanceledException, when OUR timer — not the caller's — fires.
         var harness = new Harness(ExecutionMode.Local, hangUntilCancelled: true, localInvocationTimeoutSeconds: 1);
 
@@ -246,9 +246,8 @@ public sealed class TaskInvocationDispatcherTests
 
                 if (hangUntilCancelled)
                 {
-                    // Mirrors CacheAsideInvocation's own state-store step, the one local invocation
-                    // core that actually propagates cancellation instead of swallowing it into a
-                    // failed result — see StateStoreInvocation/HttpTaskInvocation/DaprServiceInvocation
+                    // Mirrors a local invocation core that propagates cancellation instead of
+                    // swallowing it into a failed result — see StateStoreInvocation/HttpTaskInvocation/DaprServiceInvocation
                     // for the contrasting swallow-into-result behaviour.
                     await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
                 }
