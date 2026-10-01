@@ -111,7 +111,7 @@ public class TaskComponentValidatorTests
 
     [Theory]
     [InlineData("sourceMapping", "CacheAsideTask.SourceMapping")]
-    [InlineData("keyExpression", "CacheAsideTask.KeyExpression")]
+    [InlineData("key", "CacheAsideTask.KeyScript")]
     public void Validate_ShouldReturnError_WhenCacheAsideScriptSlotDeclaresOnlyLocation(
         string slot,
         string expectedMember)
@@ -121,7 +121,6 @@ public class TaskComponentValidatorTests
         {
             "type": "18",
             "config": {
-                "key": "customer-profile",
                 "storeName": "statestore",
                 "sourceTask": {"key": "t", "domain": "d", "flow": "sys-tasks", "version": "1.0.0"},
                 "{{slot}}": { "location": "./src/CacheMapping.csx" }
@@ -136,6 +135,27 @@ public class TaskComponentValidatorTests
         // Assert
         result.IsValid.ShouldBeFalse();
         result.ValidationErrors.ShouldContain(e => e.MemberNames.Contains(expectedMember));
+    }
+
+    [Fact]
+    public void Validate_ShouldReturnError_WhenCacheAsideKeyScriptIsNotValidBase64()
+    {
+        var taskJson = """
+        {
+            "type": "18",
+            "config": {
+                "storeName": "statestore",
+                "sourceTask": {"key": "t", "domain": "d", "flow": "sys-tasks", "version": "1.0.0"},
+                "key": { "location": "./src/CacheKey.csx", "code": "!!not-base64!!", "encoding": "B64" }
+            }
+        }
+        """;
+        var attributes = JsonDocument.Parse(taskJson).RootElement;
+
+        var result = _validator.Validate(attributes);
+
+        result.IsValid.ShouldBeFalse();
+        result.ValidationErrors.Count(e => e.MemberNames.Contains("CacheAsideTask.KeyScript")).ShouldBe(1);
     }
 
     [Fact]
