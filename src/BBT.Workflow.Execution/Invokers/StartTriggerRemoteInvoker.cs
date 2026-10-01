@@ -256,6 +256,7 @@ public sealed class StartTriggerRemoteInvoker : ITaskInvoker<StartTriggerBinding
             "application/json");
 
         AddHeaders(request, binding.Headers);
+        InvokerHelpers.ApplyRequestId(request);
         return request;
     }
 
@@ -285,6 +286,7 @@ public sealed class StartTriggerRemoteInvoker : ITaskInvoker<StartTriggerBinding
         };
 
         AddHeaders(request, binding.Headers);
+        InvokerHelpers.ApplyRequestId(request);
         return request;
     }
 

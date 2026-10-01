@@ -289,6 +289,16 @@
       "title": "CacheAsideTask ran its source task without the source mapping's InputHandler: sourceMapping was applied only as output shaping over the cached raw source result, so a source that needs its configuration set by a mapping (for example GetInstanceData SetKey, an HTTP URL or body) ran unconfigured, and the cache held the raw payload instead of the shaped value.",
       "workaround": "Upgrade to 0.0.98, where the source runs as a task with sourceMapping as its mapping (InputHandler -> invoke -> OutputHandler) and the shaped output is cached. Until then, run the configuring task separately in onExecutionTasks.",
       "fixedIn": "0.0.98"
+    },
+    {
+      "id": "task-binding-x-request-id-dropped",
+      "affectedVersions": ">=0.0.80 <=0.0.97",
+      "severity": "error",
+      "component": "task",
+      "path": "attributes.config.headers / input mapping headers (X-Request-Id)",
+      "title": "Task invokers treated X-Request-Id as a reserved trace header: a value set in the task's headers or input mapping was silently dropped from the outbound call and no value was sent in its place, so APIs that require it (OHVPS/BKM) rejected the call with 400 TR.OHVPS.Resource.InvalidFormat. StartTrigger and SubProcess never dropped the mapping's value but did not send vNext's request id either.",
+      "workaround": "Upgrade to 0.0.98, where a non-empty X-Request-Id from the input mapping is sent as is and, when the mapping sets none, vNext's own request id (the originating request's X-Request-Id) is sent — on every HTTP-shaped task type, StartTrigger and SubProcess included. Until then, call such APIs through a proxy that adds the header.",
+      "fixedIn": "0.0.98"
     }
   ]
 }
