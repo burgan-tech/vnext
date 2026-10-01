@@ -50,7 +50,7 @@ public sealed class TaskInvocationOptions
     /// in-process (local) task call — the local-path counterpart of the remote path's
     /// <c>ExecutionApi:InvocationTimeoutSeconds</c> (see <c>RemoteInvokerService</c>). Only
     /// <c>HttpTaskBinding</c> and <c>SoapTaskBinding</c> carry their own <c>timeoutSeconds</c>
-    /// field; <c>DaprServiceBinding</c>, and <c>StateStoreBinding</c> have
+    /// field; <c>DaprServiceBinding</c> and <c>StateStoreBinding</c> have
     /// none, so without this dial those two types had NO deadline at all on the local path — not
     /// even the job budget behind a <c>sync=true</c> transition. Applied uniformly to every local
     /// invoker regardless of task type, on top of whichever per-task-binding timeout also applies.
