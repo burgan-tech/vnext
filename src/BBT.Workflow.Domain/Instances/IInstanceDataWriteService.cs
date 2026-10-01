@@ -38,18 +38,12 @@ public interface IInstanceDataWriteService
     /// outcome those paths already had when the definition was read from an ambient scope.
     /// </param>
     /// <returns>The persisted row, or <c>null</c> when the merge produced no content change.</returns>
-    /// <param name="arrayMerge">
-    /// AB-18: how ARRAYS in <paramref name="delta"/> combine with the stored data. Null (the
-    /// default, and every caller that is not a transition body) keeps the historical behaviour —
-    /// the incoming array replaces the stored one outright.
-    /// </param>
     Task<InstanceData?> AppendAsync(
         Instance instance,
         JsonData delta,
         VersionStrategy? versionStrategy,
         CancellationToken cancellationToken = default,
-        Definitions.Workflow? workflow = null,
-        Definitions.ArrayMergeStrategy? arrayMerge = null);
+        Definitions.Workflow? workflow = null);
 
     /// <summary>
     /// Appends a row with an EXPLICIT, caller-authored version (the definition publish path):

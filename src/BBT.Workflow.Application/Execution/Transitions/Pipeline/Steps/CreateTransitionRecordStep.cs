@@ -192,11 +192,7 @@ public sealed class CreateTransitionRecordStep(
                 new JsonData(mappedData),
                 transition?.VersionStrategy,
                 cancellationToken,
-                context.Workflow,
-                // AB-18: only the TRANSITION BODY honours arrayMerge. Task outputs, subflow output
-                // mapping and the start path keep the historical whole-array replace — nothing that
-                // was not explicitly opted in changes behaviour.
-                transition?.ArrayMerge);
+                context.Workflow);
 
             if (transition?.Mapping is not null)
             {

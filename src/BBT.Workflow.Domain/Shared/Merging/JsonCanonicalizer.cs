@@ -103,8 +103,7 @@ public static class JsonCanonicalizer
     public static CanonicalResult MergeAndCanonicalize(
         JsonElement baseDoc,
         JsonElement delta,
-        JsonNumberPolicy numberPolicy = JsonNumberPolicy.Legacy,
-        bool mergeArrays = false)
+        JsonNumberPolicy numberPolicy = JsonNumberPolicy.Legacy)
     {
         var buffer = new ArrayBufferWriter<byte>(4096);
         using (var writer = new Utf8JsonWriter(buffer, new JsonWriterOptions
@@ -115,7 +114,7 @@ public static class JsonCanonicalizer
         {
             if (baseDoc.ValueKind == JsonValueKind.Object && delta.ValueKind == JsonValueKind.Object)
             {
-                var merged = MergeObjects(baseDoc, delta, mergeArrays);
+                var merged = MergeObjects(baseDoc, delta);
                 WriteObjectLevel(writer, merged, numberPolicy);
             }
             else
@@ -153,16 +152,7 @@ public static class JsonCanonicalizer
         public List<(string Key, MergedValue Value)> Properties { get; } = properties;
     }
 
-    /// <summary>
-    /// Both sides were arrays and the transition asked for <c>arrayMerge: M</c>, so the two were
-    /// folded into one list instead of the incoming side winning outright (AB-18).
-    /// </summary>
-    private sealed class MergedArray(List<JsonElement> items) : MergedValue
-    {
-        public List<JsonElement> Items { get; } = items;
-    }
-
-    private static MergedObject MergeObjects(JsonElement target, JsonElement source, bool mergeArrays)
+    private static MergedObject MergeObjects(JsonElement target, JsonElement source)
     {
         var (targetOrder, targetValues) = DistinctPropertiesInOrder(target);
         var (sourceOrder, sourceValues) = DistinctPropertiesInOrder(source);
@@ -172,7 +162,7 @@ public static class JsonCanonicalizer
         {
             var tv = targetValues[key];
             merged.Add((key, sourceValues.TryGetValue(key, out var sv)
-                ? MergeValue(tv, sv, mergeArrays)
+                ? MergeValue(tv, sv)
                 : new PassThrough(tv)));
         }
         foreach (var key in sourceOrder)
@@ -183,23 +173,17 @@ public static class JsonCanonicalizer
         return new MergedObject(merged);
     }
 
-    private static MergedValue MergeValue(JsonElement target, JsonElement source, bool mergeArrays)
+    private static MergedValue MergeValue(JsonElement target, JsonElement source)
     {
         // ObjectMerger.MergeValues: null-source keeps target; null-target lets source win.
         if (source.ValueKind == JsonValueKind.Null) return new PassThrough(target);
         if (target.ValueKind == JsonValueKind.Null) return new PassThrough(source);
 
         if (target.ValueKind == JsonValueKind.Object && source.ValueKind == JsonValueKind.Object)
-            return MergeObjects(target, source, mergeArrays);
+            return MergeObjects(target, source);
 
-        // AB-18: arrayMerge M folds the two arrays together instead of letting the incoming one win.
-        if (mergeArrays
-            && target.ValueKind == JsonValueKind.Array
-            && source.ValueKind == JsonValueKind.Array)
-            return new MergedArray(ArrayUnion.Union(target, source));
-
-        // Array+array under the default R (CollectionMergeStrategy: whole-array replace) and any
-        // type mismatch (DefaultMergeStrategy) both resolve to "source wins, target discarded".
+        // Array+array (CollectionMergeStrategy: whole-array replace) and any type mismatch
+        // (DefaultMergeStrategy) both resolve to "source wins, target subtree discarded".
         return new PassThrough(source);
     }
 
@@ -249,11 +233,6 @@ public static class JsonCanonicalizer
         {
             case MergedObject nested:
                 WriteObjectLevel(writer, nested, policy);
-                break;
-            case MergedArray mergedArray:
-                writer.WriteStartArray();
-                foreach (var item in mergedArray.Items) TransformAndWrite(writer, item, policy);
-                writer.WriteEndArray();
                 break;
             case PassThrough passThrough:
                 TransformAndWrite(writer, passThrough.Element, policy);

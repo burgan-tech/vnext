@@ -70,11 +70,10 @@ public sealed class InstanceDataWriteService(
         JsonData delta,
         VersionStrategy? versionStrategy,
         CancellationToken cancellationToken = default,
-        Definitions.Workflow? workflow = null,
-        ArrayMergeStrategy? arrayMerge = null)
+        Definitions.Workflow? workflow = null)
     {
         using var gate = await InstanceWriteGate.AcquireAsync(instance.Id, cancellationToken);
-        return await AppendCoreAsync(instance, delta, versionStrategy, workflow, arrayMerge, cancellationToken);
+        return await AppendCoreAsync(instance, delta, versionStrategy, workflow, cancellationToken);
     }
 
     private async Task<InstanceData?> AppendCoreAsync(
@@ -82,7 +81,6 @@ public sealed class InstanceDataWriteService(
         JsonData delta,
         VersionStrategy? versionStrategy,
         Definitions.Workflow? workflow,
-        ArrayMergeStrategy? arrayMerge,
         CancellationToken cancellationToken)
     {
         var context = await dbContextProvider.GetDbContextAsync();
@@ -92,8 +90,7 @@ public sealed class InstanceDataWriteService(
             var head = await ReadHeadAsync(context, instance.Id, cancellationToken);
             var writeOptions = executionOptions.Value.InstanceDataWrite;
             var plan = PlanAppend(
-                head, delta, versionStrategy, writeOptions.LegacyAppendPipeline, writeOptions.PreserveNumericPrecision,
-                mergeArrays: arrayMerge?.IsMerge == true);
+                head, delta, versionStrategy, writeOptions.LegacyAppendPipeline, writeOptions.PreserveNumericPrecision);
 
             // Version and size are only known now (PlanAppend needs the head read under the row
             // lock) — the span starts here rather than at method entry, per Task 9.
@@ -209,17 +206,9 @@ public sealed class InstanceDataWriteService(
         JsonData delta,
         VersionStrategy? versionStrategy,
         bool legacyPipeline,
-        bool preserveNumericPrecision = false,
-        bool mergeArrays = false)
+        bool preserveNumericPrecision = false)
     {
-        // AB-18: the legacy multi-pass merge cannot express arrayMerge M — its array step is a
-        // singleton strategy reached through a static recursive MergeValues with nowhere to carry
-        // the choice. A transition that explicitly opted into M therefore ALWAYS takes the
-        // canonicalizer path, even with the kill-switch on: silently degrading M back to R would
-        // reinstate exactly the data loss the setting exists to prevent. The kill-switch still
-        // governs every ordinary (R) append, which is what it was built to protect. The number
-        // policy stays Legacy in that override so the only behavioural difference is the array rule.
-        if (legacyPipeline && !mergeArrays)
+        if (legacyPipeline)
         {
             return PlanAppendLegacy(head, delta, versionStrategy);
         }
@@ -236,11 +225,11 @@ public sealed class InstanceDataWriteService(
             return new AppendPlan(delta, WorkflowConstants.DefaultVersion, IsDuplicate: false);
         }
 
-        var numberPolicy = preserveNumericPrecision && !legacyPipeline
+        var numberPolicy = preserveNumericPrecision
             ? JsonNumberPolicy.PreservePrecision
             : JsonNumberPolicy.Legacy;
         var baseElement = new JsonData(head.Data).JsonElement;
-        var result = JsonCanonicalizer.MergeAndCanonicalize(baseElement, delta.JsonElement, numberPolicy, mergeArrays);
+        var result = JsonCanonicalizer.MergeAndCanonicalize(baseElement, delta.JsonElement, numberPolicy);
 
         // No-change dedup on the MERGED result, same rule as legacy — the canonicalizer's hash
         // is byte-parity proven equal to ComputeDataHash(legacy merged content), so this compares
