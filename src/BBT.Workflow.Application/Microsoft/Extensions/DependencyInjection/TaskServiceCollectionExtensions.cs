@@ -215,6 +215,7 @@ public static class TaskServiceCollectionExtensions
 
         // Dynamic Expresso string evaluator (e.g. CacheAside key expressions).
         services.AddScoped<IDynamicExpressoValueEvaluator, DynamicExpressoValueEvaluator>();
+        services.AddScoped<ICacheKeyEvaluator, CacheKeyEvaluator>();
 
         // Unified evaluator registry
         services.AddScoped<ITaskEvaluatorRegistry, TaskEvaluatorRegistry>();
