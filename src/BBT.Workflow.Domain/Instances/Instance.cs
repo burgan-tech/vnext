@@ -818,7 +818,6 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
         incident.InstanceId = Id;
         _incidents.Add(incident);
         _pendingIncidents.Add(incident);
-        _pendingIncidents.Add(incident);
 
         if (!incident.IsResolved)
             HasActiveIncident = true;
