@@ -149,13 +149,13 @@ public sealed class TransitionExecutor
             if (result.IsSuccess)
                 PipelineStepActivityHelper.SetStepOutcome(stepActivity, result.Value!);
             else
-                PipelineStepActivityHelper.SetStepError(stepActivity, result.Error.Message);
+                PipelineStepActivityHelper.SetStepError(stepActivity, result.Error.Code, result.Error.Message);
 
             return result;
         }
         catch (Exception ex)
         {
-            PipelineStepActivityHelper.SetStepError(stepActivity, ex.Message);
+            PipelineStepActivityHelper.SetStepError(stepActivity, ex);
             _logger.LogError(ex, "Unhandled exception in step {StepName}", step.Name);
             return Result<StepOutcome>.Fail(Error.Failure(ex.GetType().Name, ex.Message));
         }
@@ -166,6 +166,7 @@ public sealed class TransitionExecutor
         var activity = Activity.Current;
         if (activity is null) return;
 
+        activity.SetTag(TelemetryConstants.TagNames.Domain, context.Workflow.Domain);
         activity.SetTag(TelemetryConstants.TagNames.Flow, context.Workflow.Key);
         activity.SetTag(TelemetryConstants.TagNames.FlowVersion, context.Workflow.Version);
         activity.SetTag(TelemetryConstants.TagNames.InstanceId, context.InstanceId.ToString());

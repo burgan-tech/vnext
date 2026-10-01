@@ -30,6 +30,24 @@ public class InstanceTaskTests : DomainTestBase<DomainEntryPoint>
         Assert.Null(instanceTask.FinishedAt);
         Assert.Null(instanceTask.Duration);
         Assert.Null(instanceTask.FaultedTaskId);
+        // Hook + order are now first-class columns, populated from the same args as the ExecutionKey
+        // hash (vnext-client-sdk-core#60).
+        Assert.Equal(TaskTrigger.OnExecute, instanceTask.TaskTrigger);
+        Assert.Equal(1, instanceTask.Order);
+    }
+
+    [Fact]
+    public void Constructor_ShouldRecordHookAndOrder_DistinctPerHook()
+    {
+        var transitionId = Guid.NewGuid();
+
+        var onEntry = new InstanceTask(Guid.NewGuid(), transitionId, "shared", TaskTrigger.OnEntry, 0);
+        var onExecute = new InstanceTask(Guid.NewGuid(), transitionId, "shared", TaskTrigger.OnExecute, 0);
+
+        // Same key + order under two hooks: the columns tell them apart even when ExecutionKey does not
+        // for a reader (it is a one-way hash).
+        Assert.Equal(TaskTrigger.OnEntry, onEntry.TaskTrigger);
+        Assert.Equal(TaskTrigger.OnExecute, onExecute.TaskTrigger);
     }
 
     [Fact]

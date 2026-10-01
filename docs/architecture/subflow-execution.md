@@ -87,6 +87,18 @@ For cross-domain forwarding, the chain-reserve claim travels in the internal req
 never accepted from a public header. Async acceptance may reserve the active chain before returning
 202 so polling sees the leaf as Busy; the forwarded child call then claims that reservation.
 
+A nested chain forwards one level at a time: every level re-runs its own pipeline up to order 10
+and awaits the level below. On the way back up, an **intermediate** level skips its post-commit
+settlement (`TransitionRunner.IsSettleFreeForwardRelay`) when three things hold: its caller is an
+identity-only relay (`WorkflowExecutionContext.IdentityOnlyResponse`, set from
+`SuppressResponseEnrichment`), its only post-commit job was the forward, and the child's own
+status (`ClientResponse.SubflowStatus`) is non-terminal. Its blocking correlation is then still
+open, so the settle could flip nothing, emit no verdict and publish nothing; the level answers
+`Busy` instead of paying a status lock, a reload and a commit. The client-facing root always
+settles, and a terminal child always forces the fresh reload. The span awaiting the relay carries
+`vnext.settle.skipped=true`. Measured on vnext-example `subflow-depth-lab`: a depth-5 transition
+went from 4 settles, 5 lock pairs and 39 SELECTs to 1, 2 and 30.
+
 ## Completion and Parent Resume
 
 Child terminal events use two delivery paths:

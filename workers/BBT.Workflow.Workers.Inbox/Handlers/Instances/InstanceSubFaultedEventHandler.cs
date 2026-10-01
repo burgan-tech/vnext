@@ -40,87 +40,97 @@ internal sealed class InstanceSubFaultedEventHandler(
             "InstanceSubFaulted.Handle", eventData, correlationIdProvider,
             EventTraceMode.IsolatedDelivery, envelope.Id, eventData.RearmAttempt);
 
-        // This delivery is the durable BACKUP of the post-commit terminal relay: in the normal case the
-        // relay already settled the parent and the settlement path answers AlreadySettled via the
-        // pre-lock probe. Dashboards separate primary vs backup deliveries on this tag.
-        Activity.Current?.SetTag(TelemetryConstants.TagNames.DeliveryRole, "backup");
+        // Exception filter that never catches: records the failure on the consumer span while
+        // it is still open (an isolated delivery is its own trace, so the error Aether records on
+        // Inbox.Process never reaches it) and lets the exception propagate untouched.
+        try
+        {
+            // This delivery is the durable BACKUP of the post-commit terminal relay: in the normal case the
+            // relay already settled the parent and the settlement path answers AlreadySettled via the
+            // pre-lock probe. Dashboards separate primary vs backup deliveries on this tag.
+            Activity.Current?.SetTag(TelemetryConstants.TagNames.DeliveryRole, "backup");
 
-        var scopeProps = new Dictionary<string, object>
-        {
-            [TelemetryConstants.TagNames.Domain] = eventData.Domain,
-            [TelemetryConstants.TagNames.Flow] = eventData.Flow,
-            [TelemetryConstants.TagNames.FlowVersion] = eventData.Version ?? "N/A",
-            [TelemetryConstants.TagNames.InstanceId] = eventData.InstanceId,
-            [TelemetryConstants.TagNames.RootInstanceId] = eventData.RootInstanceId?.ToString() ?? "N/A",
-            [TelemetryConstants.TagNames.ParentInstanceId] = eventData.InstanceId,
-            [TelemetryConstants.TagNames.SubflowInstanceId] = eventData.SubInstanceId,
-            [TelemetryConstants.TagNames.SubItemType] = (eventData.SubItemType ?? SubItemType.SubFlow).ToString(),
-            [TelemetryConstants.TagNames.SubItemOutcome] = "Faulted",
-            [TelemetryConstants.TagNames.TerminationOrigin] = eventData.TerminationOrigin?.ToString() ?? "legacy",
-            [TelemetryConstants.TagNames.TerminationInitiator] = eventData.InitiatorInstanceId?.ToString() ?? "N/A",
-            [TelemetryConstants.TagNames.TerminationCascadeId] = eventData.CascadeId?.ToString() ?? "N/A"
-        };
-        if (eventData.RootInstanceId.HasValue)
-        {
-            Activity.Current?.SetBaggage(TelemetryConstants.TagNames.RootInstanceId,
-                eventData.RootInstanceId.Value.ToString());
-        }
-        using (logger.BeginScope(scopeProps))
-        {
-            logger.SubFlowFaultReceived(
-                eventData.SubInstanceId,
-                eventData.InstanceId,
-                eventData.Domain,
-                eventData.Flow);
-
-            var body = new SubFlowFaultedInput
+            var scopeProps = new Dictionary<string, object>
             {
-                SubInstanceId = eventData.SubInstanceId,
-                InstanceId = eventData.InstanceId,
-                Domain = eventData.Domain,
-                Flow = eventData.Flow,
-                Version = eventData.Version,
-                FaultedState = eventData.FaultedState,
-                FaultedStateType = eventData.FaultedStateType,
-                FaultedStateSubType = eventData.FaultedStateSubType,
-                InstanceData = eventData.InstanceData,
-                FaultedAt = eventData.FaultedAt,
-                SubFlowName = eventData.SubFlowName,
-                IncidentMessage = eventData.IncidentMessage,
-                IncidentErrorCode = eventData.IncidentErrorCode,
-                IncidentErrorLayer = eventData.IncidentErrorLayer,
-                IncidentStackTrace = eventData.IncidentStackTrace,
-                IncidentStatusCode = eventData.IncidentStatusCode,
-                IncidentTraceId = eventData.IncidentTraceId,
-                IncidentTaskKey = eventData.IncidentTaskKey,
-                IncidentTransition = eventData.IncidentTransition,
-                IncidentState = eventData.IncidentState,
-                IncidentBoundaryAction = eventData.IncidentBoundaryAction,
-                IncidentBoundaryLevel = eventData.IncidentBoundaryLevel,
-                RootInstanceId = eventData.RootInstanceId,
-                SubItemType = eventData.SubItemType ?? SubItemType.SubFlow,
-                Termination = eventData.CascadeId.HasValue && eventData.InitiatorInstanceId.HasValue
-                    ? new TerminationContext(
-                        eventData.TerminationOrigin ?? TerminationOrigin.Direct,
-                        eventData.InitiatorInstanceId.Value,
-                        eventData.CascadeId.Value)
-                    : null,
-                // At-least-once async retry path: the sync caller (if any) was already answered
-                // by the synchronous hook. Force async here so a retried resume never blocks the
-                // worker with an inline sync chain; idempotent guards make duplicates no-ops.
-                Sync = false,
-                TraceRoot = eventData.TraceRoot,
-                ParentTraceRoot = eventData.ParentTraceRoot,
-                EpisodeStartedAt = eventData.EpisodeStartedAt,
-                EpisodeTrigger = eventData.EpisodeTrigger,
-                EpisodeTransitionKey = eventData.EpisodeTransitionKey,
-                EpisodeTraceRoot = eventData.EpisodeTraceRoot,
-                RearmAttempt = eventData.RearmAttempt
+                [TelemetryConstants.TagNames.Domain] = eventData.Domain,
+                [TelemetryConstants.TagNames.Flow] = eventData.Flow,
+                [TelemetryConstants.TagNames.FlowVersion] = eventData.Version ?? "N/A",
+                [TelemetryConstants.TagNames.InstanceId] = eventData.InstanceId,
+                [TelemetryConstants.TagNames.RootInstanceId] = eventData.RootInstanceId?.ToString() ?? "N/A",
+                [TelemetryConstants.TagNames.ParentInstanceId] = eventData.InstanceId,
+                [TelemetryConstants.TagNames.SubflowInstanceId] = eventData.SubInstanceId,
+                [TelemetryConstants.TagNames.SubItemType] = (eventData.SubItemType ?? SubItemType.SubFlow).ToString(),
+                [TelemetryConstants.TagNames.SubItemOutcome] = "Faulted",
+                [TelemetryConstants.TagNames.TerminationOrigin] = eventData.TerminationOrigin?.ToString() ?? "legacy",
+                [TelemetryConstants.TagNames.TerminationInitiator] = eventData.InitiatorInstanceId?.ToString() ?? "N/A",
+                [TelemetryConstants.TagNames.TerminationCascadeId] = eventData.CascadeId?.ToString() ?? "N/A"
             };
+            if (eventData.RootInstanceId.HasValue)
+            {
+                Activity.Current?.SetBaggage(TelemetryConstants.TagNames.RootInstanceId,
+                    eventData.RootInstanceId.Value.ToString());
+            }
+            using (logger.BeginScope(scopeProps))
+            {
+                logger.SubFlowFaultReceived(
+                    eventData.SubInstanceId,
+                    eventData.InstanceId,
+                    eventData.Domain,
+                    eventData.Flow);
 
-            var route = $"api/v1/{eventData.Domain}/workflows/{eventData.Flow}/instances/{eventData.InstanceId}/sub/fault";
-            await forwarder.ForwardAsync(HttpMethod.Post, route, body,
-                eventData.Domain, eventData.Flow, eventData.Version, eventData.InstanceId, cancellationToken);
+                var body = new SubFlowFaultedInput
+                {
+                    SubInstanceId = eventData.SubInstanceId,
+                    InstanceId = eventData.InstanceId,
+                    Domain = eventData.Domain,
+                    Flow = eventData.Flow,
+                    Version = eventData.Version,
+                    FaultedState = eventData.FaultedState,
+                    FaultedStateType = eventData.FaultedStateType,
+                    FaultedStateSubType = eventData.FaultedStateSubType,
+                    InstanceData = eventData.InstanceData,
+                    FaultedAt = eventData.FaultedAt,
+                    SubFlowName = eventData.SubFlowName,
+                    IncidentMessage = eventData.IncidentMessage,
+                    IncidentErrorCode = eventData.IncidentErrorCode,
+                    IncidentErrorLayer = eventData.IncidentErrorLayer,
+                    IncidentStackTrace = eventData.IncidentStackTrace,
+                    IncidentStatusCode = eventData.IncidentStatusCode,
+                    IncidentTraceId = eventData.IncidentTraceId,
+                    IncidentTaskKey = eventData.IncidentTaskKey,
+                    IncidentTransition = eventData.IncidentTransition,
+                    IncidentState = eventData.IncidentState,
+                    IncidentBoundaryAction = eventData.IncidentBoundaryAction,
+                    IncidentBoundaryLevel = eventData.IncidentBoundaryLevel,
+                    RootInstanceId = eventData.RootInstanceId,
+                    SubItemType = eventData.SubItemType ?? SubItemType.SubFlow,
+                    Termination = eventData.CascadeId.HasValue && eventData.InitiatorInstanceId.HasValue
+                        ? new TerminationContext(
+                            eventData.TerminationOrigin ?? TerminationOrigin.Direct,
+                            eventData.InitiatorInstanceId.Value,
+                            eventData.CascadeId.Value)
+                        : null,
+                    // At-least-once async retry path: the sync caller (if any) was already answered
+                    // by the synchronous hook. Force async here so a retried resume never blocks the
+                    // worker with an inline sync chain; idempotent guards make duplicates no-ops.
+                    Sync = false,
+                    TraceRoot = eventData.TraceRoot,
+                    ParentTraceRoot = eventData.ParentTraceRoot,
+                    EpisodeStartedAt = eventData.EpisodeStartedAt,
+                    EpisodeTrigger = eventData.EpisodeTrigger,
+                    EpisodeTransitionKey = eventData.EpisodeTransitionKey,
+                    EpisodeTraceRoot = eventData.EpisodeTraceRoot,
+                    RearmAttempt = eventData.RearmAttempt
+                };
+
+                var route = $"api/v1/{eventData.Domain}/workflows/{eventData.Flow}/instances/{eventData.InstanceId}/sub/fault";
+                await forwarder.ForwardAsync(HttpMethod.Post, route, body,
+                    eventData.Domain, eventData.Flow, eventData.Version, eventData.InstanceId, cancellationToken);
+            }
+        }
+        catch (Exception ex) when (traceScope.RecordFailure(ex))
+        {
+            throw;
         }
     }
 }

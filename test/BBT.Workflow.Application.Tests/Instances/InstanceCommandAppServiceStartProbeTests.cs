@@ -130,6 +130,10 @@ public class InstanceCommandAppServiceStartProbeTests : IDisposable
         result.IsSuccess.ShouldBeTrue();
         result.Value!.Id.ShouldBe(instanceId);
         result.Value.Key.ShouldBe("occupied-key");
+        // An idempotent hit runs no pipeline, so it does not determine the mode (#1003) — ExecutedAsync
+        // stays null and the controller falls back to the caller's sync query parameter (a 202 for an
+        // async caller, not a 200). Regression guard: defaulting it to false silently downgraded to 200.
+        result.Value.ExecutedAsync.ShouldBeNull();
     }
 
     [Fact]

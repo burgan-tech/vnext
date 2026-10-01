@@ -435,10 +435,7 @@ public class InstanceQueryAppServiceStateTests : IDisposable
     }
 
     /// <summary>
-    /// When the current state does not declare interaction.longPoll, no interaction block is emitted.
-    /// </summary>
-    /// <summary>
-    /// The declaration is not the signal. A state may declare <c>interaction.longPoll</c> and the
+    /// For a TERMINATING long poll the declaration is not the signal. A state may declare <c>interaction.longPoll</c> and the
     /// instance still not be parked on it — the pipeline only arms the marker when it actually pauses
     /// at <c>HandleLongPollTerminationStep</c>, and the fallback timeout or a delivered acknowledge
     /// clears it again.
@@ -448,9 +445,11 @@ public class InstanceQueryAppServiceStateTests : IDisposable
     /// endpoint answers <c>Ok()</c> idempotently there, so nothing broke loudly: the client simply
     /// posted an ack for every poll of that state and read a success back, and the one surface that
     /// would have revealed it — <c>authorize?ack=true</c> — answers allowed when nothing is awaiting,
-    /// for the same idempotency reason. Presence now follows <c>IsAwaitingLongPollAck</c>, which is
-    /// also why the state body's shape version was bumped: a client parked behind a 304 must not keep
-    /// reading the old presence rule.
+    /// for the same idempotency reason. Presence now follows <c>IsAwaitingLongPollAck</c> for a
+    /// terminating state, which is also why the state body's shape version was bumped: a client parked
+    /// behind a 304 must not keep reading the old presence rule. A non-terminating state never arms
+    /// the marker and is not subject to this condition — see
+    /// <see cref="GetInstanceStateAsync_WhenStateDeclaresLongPollWithoutTerminate_EmitsInteractionWithoutAck"/>.
     /// </remarks>
     [Fact]
     public async Task GetInstanceStateAsync_WhenNothingIsAwaitingTheAck_OmitsInteraction()
@@ -524,6 +523,23 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         var result = await _service.GetInstanceStateAsync(input, CancellationToken.None);
 
         // Assert
+        result.Result.IsSuccess.ShouldBeTrue();
+        result.Result.Value!.Interaction.ShouldBeNull();
+    }
+
+    /// <summary>
+    /// A non-terminating long poll is gated exactly like a terminating one: the block exists only for
+    /// a caller the interaction's arm admits.
+    /// </summary>
+    [Fact]
+    public async Task GetInstanceStateAsync_WhenNonTerminatingLongPollGateDeniesCaller_NoInteraction()
+    {
+        var (instance, workflow) = CreateInstanceWithLongPollState(terminate: false, fallbackSeconds: 120, withRoles: true);
+        SetupCommonMocks(instance, workflow);
+        SetupRuleGate(admitted: false);
+
+        var result = await _service.GetInstanceStateAsync(CreateInput(instance.Id.ToString()), CancellationToken.None);
+
         result.Result.IsSuccess.ShouldBeTrue();
         result.Result.Value!.Interaction.ShouldBeNull();
     }
@@ -2496,10 +2512,11 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         var instance = Instance.Create(Guid.NewGuid(), TestWorkflow, TestVersion, "test-key");
         var reviewState = workflow.States.First(s => s.Key == "review");
         instance.ChangeState(reviewState);
-        // The declaration alone is not the signal — the interaction is emitted only while the pipeline
-        // is actually parked waiting for the acknowledge. See
-        // GetInstanceStateAsync_WhenNothingIsAwaitingTheAck_OmitsInteraction for the other half.
-        instance.ArmLongPollAck(Guid.NewGuid());
+        // Mirror what the pipeline produces: only a terminating state parks the instance on an ack
+        // (HandleLongPollTerminationStep), so only then is the marker armed. A non-terminating state
+        // never arms it — arming it here regardless once hid that the block was suppressed for it.
+        if (terminate)
+            instance.ArmLongPollAck(Guid.NewGuid());
         return (instance, workflow);
     }
 

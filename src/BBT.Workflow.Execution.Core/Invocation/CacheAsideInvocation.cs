@@ -130,11 +130,14 @@ public static class CacheAsideInvocation
         // 1. Cache read (unless forceRefresh / uncacheable).
         if (canCache && !binding.ForceRefresh)
         {
+            // Declared outside the try so the catch below still sees it open: a `using` inside the
+            // try disposed the span before the catch ran, leaving a failed read with no status.
+            Activity? readActivity = null;
             try
             {
                 // The hit/miss decision is the whole point of this task type; without a span for it
                 // a reader can only infer the outcome from whether a source-task span follows.
-                using var readActivity = StartCacheAsideActivity("Read", binding.Key);
+                readActivity = StartCacheAsideActivity("Read", binding.Key);
                 var entry = await stateStore.GetAsync(
                     storeName!, binding.Key, binding.Consistency, metadata: null, cancellationToken);
                 SetCacheHit(readActivity, entry.Found);
@@ -155,6 +158,7 @@ public static class CacheAsideInvocation
             }
             catch (Exception ex)
             {
+                MarkCacheError(readActivity, ex);
                 if (!binding.BypassOnCacheError)
                 {
                     return TaskInvocationResult.Failure(
@@ -172,6 +176,10 @@ public static class CacheAsideInvocation
                 // promise "never throws".
                 try { onBypassedCacheError?.Invoke(CacheAsideBypassStage.Read, ex); } catch { /* diagnostic only */ }
             }
+            finally
+            {
+                readActivity?.Dispose();
+            }
         }
 
         // 2. Cache miss / forceRefresh: dispatch the source task through the delegate.
@@ -186,9 +194,10 @@ public static class CacheAsideInvocation
         // 3. Best-effort cache write.
         if (canCache)
         {
+            Activity? writeActivity = null;
             try
             {
-                using var writeActivity = StartCacheAsideActivity("Write", binding.Key);
+                writeActivity = StartCacheAsideActivity("Write", binding.Key);
                 await stateStore.SetAsync(
                     storeName!, binding.Key, sourceResult.Data, binding.TtlInSeconds, binding.Consistency,
                     concurrency: null, etag: null, metadata: null, cancellationToken);
@@ -199,6 +208,7 @@ public static class CacheAsideInvocation
             }
             catch (Exception ex)
             {
+                MarkCacheError(writeActivity, ex);
                 if (!binding.BypassOnCacheError)
                 {
                     return TaskInvocationResult.Failure(
@@ -212,6 +222,10 @@ public static class CacheAsideInvocation
                 // report-not-log split as the read path above. Same never-throws guarantee, too.
                 try { onBypassedCacheError?.Invoke(CacheAsideBypassStage.Write, ex); } catch { /* diagnostic only */ }
             }
+            finally
+            {
+                writeActivity?.Dispose();
+            }
         }
 
         return TaskInvocationResult.Success(
@@ -220,6 +234,18 @@ public static class CacheAsideInvocation
             executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
             taskType: taskType,
             metadata: BuildMetadata(stateStore, binding, storeName ?? string.Empty, cacheHit: false, refreshed: true, etag: null));
+    }
+
+    /// <summary>
+    /// Marks a cache read/write span failed. Recorded even when <c>bypassOnCacheError</c> swallows
+    /// the error — the invocation succeeds, but the cache operation this span describes did not.
+    /// </summary>
+    private static void MarkCacheError(Activity? activity, Exception exception)
+    {
+        if (activity is null) return;
+        activity.AddException(exception);
+        activity.SetStatus(ActivityStatusCode.Error, exception.Message);
+        activity.SetTag("error.type", exception.GetType().FullName ?? exception.GetType().Name);
     }
 
     private static Dictionary<string, object> BuildMetadata(

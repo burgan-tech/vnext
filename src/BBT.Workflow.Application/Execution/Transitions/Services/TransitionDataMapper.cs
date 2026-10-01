@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Instances;
+using BBT.Workflow.Logging;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
 using BBT.Aether.Results;
@@ -53,6 +54,8 @@ public sealed class TransitionDataMapper(
         IReadOnlyDictionary<string, string?>? headers,
         CancellationToken cancellationToken)
     {
+        using var activity = ScriptActivityHelper.StartExecuteActivity("transitionMapping");
+
         var result = await ResultExtensions.TryAsync(
             async ct =>
             {
@@ -72,6 +75,9 @@ public sealed class TransitionDataMapper(
             },
             cancellationToken,
             CreateMappingError);
+
+        if (!result.IsSuccess)
+            activity.SetResultError(result.Error.Code, result.Error.Message);
 
         // Map dynamic result to object? for proper nullability
         return result.IsSuccess

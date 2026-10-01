@@ -106,7 +106,11 @@ public sealed class InstanceController(
         }
 
         var result = await commandAppService.StartAsync(input, cancellationToken);
-        return InstanceResponseActionResultMapper.ToActionResult(result, HttpContext, async: !sync);
+        // Shape 200 vs 202 by the EFFECTIVE mode (#1003): a flow/transition executionType definition may
+        // have overridden the caller's sync query parameter. When the execution path did not determine it
+        // (null — e.g. an idempotent early return that ran no pipeline) or on failure, fall back to the query param.
+        return InstanceResponseActionResultMapper.ToActionResult(
+            result, HttpContext, async: (result.IsSuccess ? result.Value?.ExecutedAsync : null) ?? !sync);
     }
 
     [ApiExplorerSettings(IgnoreApi = true)]
@@ -582,7 +586,10 @@ public sealed class InstanceController(
             Headers = continuation.Headers,
             RouteValues = continuation.RouteValues,
             ExecutionActor = actor,
-            CallerSync = false,
+            // #1003: relay the caller's sync/async intent from the outbox event rather than hardcoding
+            // false. An event written before this field existed deserializes to false — the pre-#1003
+            // behaviour — so callers with no executionType are unaffected.
+            CallerSync = continuation.CallerSync,
             TraceParent = continuation.TraceParent,
             TraceState = continuation.TraceState,
             // Pure transport hop: relay the lane verbatim, never re-anchor. Re-anchoring here would
@@ -665,7 +672,11 @@ public sealed class InstanceController(
             input,
             cancellationToken);
 
-        return InstanceResponseActionResultMapper.ToActionResult(result, HttpContext, async: !sync);
+        // Shape 200 vs 202 by the EFFECTIVE mode (#1003): a flow/transition executionType definition may
+        // have overridden the caller's sync query parameter. When the execution path did not determine it
+        // (null) or on failure, fall back to the query param.
+        return InstanceResponseActionResultMapper.ToActionResult(
+            result, HttpContext, async: (result.IsSuccess ? result.Value?.ExecutedAsync : null) ?? !sync);
     }
 
     /// <summary>
@@ -964,6 +975,66 @@ public sealed class InstanceController(
         };
 
         var response = await queryAppService.GetInstanceHistoryAsync(input, cancellationToken);
+        return response.ToActionResult(HttpContext);
+    }
+
+    /// <summary>
+    /// Click-to-fetch execution metrics for one transition of an instance: every firing of that
+    /// transition as an attempt, each carrying the tasks that ran under it (duration, status, hook).
+    /// Read-only over the already-journaled transition/task rows (vnext-client-sdk-core#60).
+    /// </summary>
+    /// <param name="domain">Domain key</param>
+    /// <param name="workflow">Workflow key</param>
+    /// <param name="instance">Instance id or business key</param>
+    /// <param name="transitionKey">Transition definition key to group firings by</param>
+    /// <param name="cancellationToken">Cancellation token</param>
+    [HttpGet("{domain}/workflows/{workflow}/instances/{instance}/transitions/{transitionKey}/metrics")]
+    public async Task<IActionResult> GetTransitionMetricsAsync(
+        [FromRoute] string domain,
+        [FromRoute] string workflow,
+        [FromRoute] string instance,
+        [FromRoute] string transitionKey,
+        CancellationToken cancellationToken = default)
+    {
+        var input = new GetTransitionMetricsInput
+        {
+            Domain = domain,
+            Workflow = workflow,
+            Instance = instance,
+            TransitionKey = transitionKey
+        };
+
+        var response = await queryAppService.GetTransitionMetricsAsync(input, cancellationToken);
+        return response.ToActionResult(HttpContext);
+    }
+
+    /// <summary>
+    /// Click-to-fetch execution metrics for one state of an instance: every visit (entry→exit) as an
+    /// attempt, each carrying the state's onEntry and onExit tasks. Read-only over the already-journaled
+    /// transition/task rows (vnext-client-sdk-core#60).
+    /// </summary>
+    /// <param name="domain">Domain key</param>
+    /// <param name="workflow">Workflow key</param>
+    /// <param name="instance">Instance id or business key</param>
+    /// <param name="stateKey">State key whose visits to return</param>
+    /// <param name="cancellationToken">Cancellation token</param>
+    [HttpGet("{domain}/workflows/{workflow}/instances/{instance}/states/{stateKey}/metrics")]
+    public async Task<IActionResult> GetStateMetricsAsync(
+        [FromRoute] string domain,
+        [FromRoute] string workflow,
+        [FromRoute] string instance,
+        [FromRoute] string stateKey,
+        CancellationToken cancellationToken = default)
+    {
+        var input = new GetStateMetricsInput
+        {
+            Domain = domain,
+            Workflow = workflow,
+            Instance = instance,
+            StateKey = stateKey
+        };
+
+        var response = await queryAppService.GetStateMetricsAsync(input, cancellationToken);
         return response.ToActionResult(HttpContext);
     }
 

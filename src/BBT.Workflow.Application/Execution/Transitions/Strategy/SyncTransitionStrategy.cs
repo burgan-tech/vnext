@@ -1,7 +1,6 @@
 using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Logging;
 using System.Diagnostics;
-using BBT.Aether.Aspects;
 using BBT.Aether.Results;
 
 namespace BBT.Workflow.Execution.Strategies;
@@ -15,6 +14,9 @@ namespace BBT.Workflow.Execution.Strategies;
 public sealed class SyncTransitionStrategy(
     TransitionPipeline pipeline) : ITransitionStrategy
 {
+    /// <summary>Span name, unchanged from the one Aether's aspect derived from this method.</summary>
+    internal const string OperationName = "SyncTransitionStrategy.ExecuteAsync";
+
     public ExecMode Mode => ExecMode.Sync;
      
     /// <inheritdoc />
@@ -22,12 +24,17 @@ public sealed class SyncTransitionStrategy(
     /// Executes transition synchronously.
     /// Pipeline handles validation, context creation, locking, and sync dispatch chain.
     /// </summary>
-    [Trace]
+    /// <remarks>
+    /// Owns its span explicitly rather than through Aether's <c>[Trace]</c> aspect, which marks
+    /// every normal return <c>Ok</c> and so overwrote the error this method records from the
+    /// pipeline's <see cref="Result{T}"/>. The display name is kept for query continuity.
+    /// </remarks>
     public async Task<Result<TransitionExecutionContext>> ExecuteAsync(
         WorkflowExecutionContext context,
         CancellationToken cancellationToken)
     {
-        var activity = Activity.Current;
+        using var activity = PipelineStepActivityHelper.StartTransitionActivity(
+            OperationName, context.TransitionKey);
 
         // Pipeline handles: validation guard, context creation, lock, steps, sync dispatch chain
         var pipelineResult = await pipeline.RunAsync(context, cancellationToken);
@@ -68,7 +75,8 @@ public sealed class SyncTransitionStrategy(
 
         if (result.IsSuccess)
         {
-            activity.SetStatus(ActivityStatusCode.Ok);
+            // A faulted pipeline returns success but has already marked this span Error.
+            activity.SetOkUnlessError();
         }
         else
         {
@@ -83,7 +91,6 @@ public sealed class SyncTransitionStrategy(
     {
         if (activity is null) return;
 
-        activity.SetStatus(ActivityStatusCode.Error, error.Message);
-        activity.AddTag("error.code", error.Code);
+        activity.SetResultError(error.Code, error.Message);
     }
 }

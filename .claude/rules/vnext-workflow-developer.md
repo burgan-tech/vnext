@@ -245,7 +245,7 @@ A sixth profile is **composed on top of** the base, never selected instead of it
   so `ResponseShapeVersion` is unaffected. Adding a column to the aggregate? Add it to
   `CreateSnapshot` too — `EffectiveStatus` was forgotten there once and every script read the
   constructor default.
-- **Response-shape version**: `StateFunctionCache.ResponseShapeVersion` (currently `v12`) is folded into both the ETag material and the cache key. Bump it in the same commit as any change to what the state body carries — otherwise a client polling a parked instance keeps getting 304 and never sees the new shape.
+- **Response-shape version**: `StateFunctionCache.ResponseShapeVersion` (currently `v13`) is folded into both the ETag material and the cache key. Bump it in the same commit as any change to what the state body carries — otherwise a client polling a parked instance keeps getting 304 and never sees the new shape.
 - **`timeout` block**: `{ key, target, executeAtUtc, annotations }`, the workflow-level deadline armed for the
   polled instance. `annotations` is the effective timeout's (`timeout.annotations`); an override
   replaces it with the rest of the timeout, never merges. **Not** a `transitions[]` entry — a workflow timeout is instance-scoped, armed
@@ -277,6 +277,13 @@ A sixth profile is **composed on top of** the base, never selected instead of it
   on state entry.
 - **`incident` block**: always present, and it carries **links, not content** — `{ hasActiveIncident, active: { href } (only while the flag is true), history: { href } }`. Identical on the state body and on `metadata.incident` (single GET and list). `active.href` → `GET …/instances/{instance}/incidents/active` (newest unresolved, **404 `Instance:100037`** when none is open — a normal answer, since a retry can resolve between the poll and the follow-up); `history.href` → the paged history. Same `queryRoles` gate as the state function on both, and no stack trace anywhere. When lifted from an active subflow, `active.href` addresses the **leaf that owns the incident** while `history.href` stays on the polled instance. `HasActiveIncident` is a fingerprint member so raise/resolve without a state change moves the ETag. **Do not put incident fields back in the body**: the embedded summary is what made the state function read the incident table on its hottest path and what created the resolve-A-then-raise-B stale-`active` hole, both of which the link form removes.
 - **Scheduled entries in `transitions`**: the state body lists the runtime's armed scheduled transitions inside the existing `transitions` array as `{ name, kind: "scheduled", executeAtUtc, href, view, schema }` entries, appended after the available transitions and built from active `InstanceJob` rows (`JobType.ScheduledTransition`) whose `ExecuteAt` is stamped at scheduling time from the same instant the Dapr job is armed with. Each carries the transition definition's `annotations`, resolved via the job's `SourceState` (null, not a failure, when it no longer resolves) — every `transitions[]` kind carries annotations. The href/view/schema links use the same url shapes as triggerable entries but with `hasView`/`loadData`/`hasSchema` hardcoded false — a TEMPORARY uniformity concession for domain clients (they will adapt); scheduled transitions remain System-actor-gated at execution, so the href is not callable. Not role-filtered; not merged from subflows. Job-set changes deliberately do NOT participate in the fingerprint ETag (team decision, issue #864) — same-state re-arms can leave the scheduled entries stale behind a 304; documented as a known gap in `docs/runtime/state-function-cache-and-etag.md`.
+- **`interaction` block presence depends on `terminate`.** Both need the gate (rule or roles) to
+  admit the caller. `terminate: true` → only while `IsAwaitingLongPollAck`, with `ack.href` (the
+  pipeline is paused at 75). `terminate: false` → whenever the instance is in the declaring state,
+  **no** `ack` (the pipeline never pauses, no token, no fallback job); `fallbackTimeoutSeconds` there
+  tells the client how long to keep long polling. Do not gate the non-terminating block on the token —
+  it is never armed, and that is how the block vanished between v11 and v13. Ack endpoint and
+  `authorize?ack=true` only act on an armed token, so they are `terminate: true`-only by construction.
 - **`interaction.longPoll` authorization has two mutually exclusive arms** (issue #936): `roles` grants OR one condition `rule` (`IConditionMapping`, same slot shape as view/notification rules; validator rejects both, schema enforces exactly-one). Both surfaces — the state function's signal emit and the acknowledge endpoint — admit through the single `ILongPollInteractionGate`, which owns the arm selection (rule, else roles, else allow) and resolves caller roles lazily via a surface-supplied factory; the rule reads instance data via `context.Instance.Data` (lazy) — `context.Body` is deliberately NOT populated on this surface, unlike view-rule contexts; a rule returning false, throwing, or failing to compile denies (fail-closed; the fallback-timeout job still resumes the pipeline, so a broken rule cannot strand the instance). A rule-gated interaction body is NEVER stored in the shared state body cache (`CallerScopeHash` does not cover the headers/query/data a rule reads; bubbled subflow interactions skip caching conservatively). The fingerprint 304 path is untouched — rule-input changes behind an unchanged fingerprint are an accepted #864-class staleness gap; enforcement is never stale because the ack evaluates fresh. Full guide: `docs/domain/long-poll-termination.md`.
 
 ## Field masking (`x-masking`) — pointer
@@ -539,6 +546,12 @@ A sixth profile is **composed on top of** the base, never selected instead of it
 
 - `sync=true`: blocks until pipeline completes; full instance returned.
 - `sync=false` (default): immediate `{ id, status }`; client polls via State function.
+- **A flow/transition `executionType` (`S`/`A`) overrides the `sync` query parameter** (vnext#1003):
+  when set it is the source of truth (transition inner beats flow outer beats the query param); status,
+  enrichment and 200-vs-202 all follow the EFFECTIVE mode (`context.Mode`), and `CallerMode` keeps the
+  requested one. It is resolved ONLY for genuine external requests — `BuildTransitionContext` and the
+  start path skip it when `input.SuppressResponseEnrichment` is set, so runtime-internal subflow
+  start/forward keep their forced `sync=true`. Full guide: `docs/runtime/execution-type.md`.
 - Automatic continuations always execute inline and are awaited. An async request uses one initial
   `flow.transition` job; no Scheduler job is created for each automatic hop.
 - Runtime-generated child start, active-child forward and descended retry calls always set
@@ -793,6 +806,17 @@ place rather than deleted — removing it is a separate change, and it is the la
 - **Equal `ChangedAt` is ACCEPTED and re-applied**, only strictly-older is rejected. A duplicate
   delivery carries the same stamp; re-applying is idempotent, and rejecting it would close the only
   recovery path a redelivery has.
+- **The Inbox BACKUP checks before it locks** (`SubFlowStateChangedInput.IsBackupDelivery`, set only
+  by `InstanceSubStateChangedEventHandler`). One no-tracking `ProbeSubflowStateAsync` row: stale by
+  the same predicate, or the same notification (seq, else µs stamp) whose values the parent and the
+  open correlation already carry ⇒ dropped with no lock, no transaction, no write; anything else takes
+  the locked path. It is a plain READ COMMITTED select — no row lock, no write — so it does not
+  reintroduce the forbidden correlation-first CAS, and recovery is intact (an uncommitted first apply
+  leaves an older watermark). A backup that loses the lock re-probes before throwing. Relay
+  deliveries never probe.
+- **The state channel has its OWN lock backoff** (`WorkflowExecutionOptions.SubItemStateLockRetry`,
+  10 × 10 ms), not the terminal paths' 120 ms: the wait is `base*attempt + jitter(0..base)`, so at
+  120 ms the first retry alone slept 120–240 ms for a lock held a few ms (measured max 241 ms).
 - The UoW is `RequiresNew, IsTransactional = true` — not for the lock, for atomicity: without a
   transaction Aether stages the outbox rows *after* `UpdateAsync(autoSave)` already committed the
   Instance row, so the upward event and the state write could diverge.

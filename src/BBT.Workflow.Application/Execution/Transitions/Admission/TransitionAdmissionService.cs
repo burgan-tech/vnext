@@ -259,20 +259,28 @@ public sealed class TransitionAdmissionService(
         TransitionExecutionContext context,
         CancellationToken cancellationToken = default)
     {
+        // The Busy CAS (with ancestor propagation) was visible only as bare Db.UPDATE spans, so a
+        // sync 409 had no span saying why. Named per kind, outcome as a tag.
+        using var activity = StartAdmissionActivity("Admission.Reserve", context);
+
         var outcome = await busyManager.TryMarkBusyWithPropagationAsync(
             context.InstanceId, cancellationToken);
 
         switch (outcome)
         {
             case BusyMarkOutcome.Marked:
+                activity?.SetTag(TelemetryConstants.TagNames.AdmissionOutcome, "marked");
                 logger.InstanceBusyReserved(context.InstanceId, context.TransitionKey);
                 return Result.Ok();
 
             case BusyMarkOutcome.AlreadyBusy:
+                // A rejection, not a fault of this span's operation: the CAS worked and answered.
+                activity?.SetTag(TelemetryConstants.TagNames.AdmissionOutcome, "already_busy");
                 logger.TransitionRejectedInstanceBusy(context.InstanceId, context.TransitionKey);
                 return Result.Fail(WorkflowErrors.InstanceBusy(context.InstanceId, context.TransitionKey));
 
             default: // Skipped — completed or vanished between context creation and reserve
+                activity?.SetTag(TelemetryConstants.TagNames.AdmissionOutcome, "skipped");
                 return Result.Fail(ExecutionErrors.InstanceAlreadyCompleted(
                     context.InstanceId, context.Instance.Status.Description));
         }
@@ -290,7 +298,9 @@ public sealed class TransitionAdmissionService(
         // Exempt from the Busy 409; idempotent when already Busy (the CAS is a no-op). A
         // Completed instance is left untouched — HandleCancelPreflightStep surfaces the terminal
         // error.
+        using var activity = StartAdmissionActivity("Admission.TakeOver", context);
         await busyManager.MarkBusyAsync(context.InstanceId, cancellationToken);
+        activity?.SetTag(TelemetryConstants.TagNames.AdmissionOutcome, "marked");
         logger.InstanceBusyReserved(context.InstanceId, context.TransitionKey);
         return Result.Ok();
     }
@@ -300,17 +310,32 @@ public sealed class TransitionAdmissionService(
         TransitionExecutionContext context,
         CancellationToken cancellationToken = default)
     {
+        using var activity = StartAdmissionActivity("Admission.ReserveSubflowChain", context);
+
         await using var scope = await statusLock.AcquireAsync(context.LockKey, cancellationToken);
         if (!scope.IsAcquired)
+        {
+            activity?.SetTag(TelemetryConstants.TagNames.AdmissionOutcome, "lock_conflict");
             return Result.Fail(WorkflowErrors.InstanceLockConflict(context.InstanceId));
+        }
 
         // MarkBusyWithPropagation, NOT TryMarkBusyWithPropagation: the relay levels are already
         // Busy and the Try- variant deliberately short-circuits on AlreadyBusy (its 409 contract),
         // so it would never reach the leaf — which is the only level the client can observe.
         await busyManager.MarkBusyWithPropagationAsync(context.InstanceId, cancellationToken);
+        activity?.SetTag(TelemetryConstants.TagNames.AdmissionOutcome, "marked");
 
         logger.InstanceBusyReserved(context.InstanceId, context.TransitionKey);
         return Result.Ok();
+    }
+
+    private static System.Diagnostics.Activity? StartAdmissionActivity(
+        string operationName,
+        TransitionExecutionContext context)
+    {
+        var activity = PipelineStepActivityHelper.StartTransitionActivity(operationName, context.TransitionKey);
+        activity?.SetTag(TelemetryConstants.TagNames.InstanceId, context.InstanceId.ToString());
+        return activity;
     }
 
     /// <inheritdoc />

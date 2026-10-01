@@ -488,6 +488,9 @@ public sealed class InstanceQueryAppService(
     {
         runtimeInfoProvider.Check(input.Domain);
 
+        using var read = InstanceReadActivityHelper.StartRead(
+            InstanceReadKinds.TaskHistory, input.Domain, input.Workflow);
+
         return await GetInstanceByIdOrKeyAsync(input.Instance, cancellationToken)
             .BindAsync(instance =>
                 componentCacheStore.GetFlowAsync(input.Domain, input.Workflow, instance.FlowVersion, cancellationToken)
@@ -519,6 +522,9 @@ public sealed class InstanceQueryAppService(
     {
         runtimeInfoProvider.Check(input.Domain);
 
+        using var read = InstanceReadActivityHelper.StartRead(
+            InstanceReadKinds.ActionHistory, input.Domain, input.Workflow);
+
         return await GetInstanceByIdOrKeyAsync(input.Instance, cancellationToken)
             .BindAsync(instance =>
                 componentCacheStore.GetFlowAsync(input.Domain, input.Workflow, instance.FlowVersion, cancellationToken)
@@ -543,6 +549,201 @@ public sealed class InstanceQueryAppService(
                     Items = actions.Select(InstanceTaskActionDto.FromAction).ToList()
                 });
             });
+    }
+
+    public async Task<Result<GetInstanceMetricsOutput>> GetTransitionMetricsAsync(
+        GetTransitionMetricsInput input,
+        CancellationToken cancellationToken = default)
+    {
+        runtimeInfoProvider.Check(input.Domain);
+
+        using var read = InstanceReadActivityHelper.StartRead(
+            InstanceReadKinds.TransitionMetrics, input.Domain, input.Workflow);
+
+        return await GetInstanceByIdOrKeyAsync(input.Instance, cancellationToken)
+            .BindAsync(async instance =>
+            {
+                using var instanceScope = BeginInstanceScope(instance);
+
+                // Slim rows only (no Body/Header jsonb), filtered to this transition key in SQL so a
+                // single-key read does not materialize the instance's whole transition history. Every
+                // matching row is one firing — one attempt — 1:1 with the history firings.
+                var firings = await instanceTransitionRepository
+                    .GetByInstanceAndTransitionKeyAsReadOnlyAsync(
+                        instance.Id, input.TransitionKey, cancellationToken);
+
+                var tasksByRecord = await LoadMetricsTasksAsync(
+                    firings.Select(r => r.Id), cancellationToken);
+
+                var attempts = firings
+                    .Select((record, index) => new MetricsAttemptDto
+                    {
+                        Seq = index + 1,
+                        StartedAt = record.StartedAt,
+                        FinishedAt = record.FinishedAt,
+                        DurationMs = record.Duration?.TotalMilliseconds,
+                        TriggerType = record.TriggerType,
+                        TriggeredBy = record.CreatedBy,
+                        // Every task journaled under this firing, any hook — the transition's own
+                        // onExecute plus the adjacent states' onExit/onEntry that ran in the same
+                        // record. Hook tells them apart; the client groups by it.
+                        Tasks = OrderMetricsTasks(tasksByRecord[record.Id])
+                    })
+                    .ToList();
+
+                return Result<GetInstanceMetricsOutput>.Ok(new GetInstanceMetricsOutput
+                {
+                    Element = new MetricsElementDto { Kind = "transition", Key = input.TransitionKey },
+                    Count = attempts.Count,
+                    Attempts = attempts
+                });
+            });
+    }
+
+    public async Task<Result<GetInstanceMetricsOutput>> GetStateMetricsAsync(
+        GetStateMetricsInput input,
+        CancellationToken cancellationToken = default)
+    {
+        runtimeInfoProvider.Check(input.Domain);
+
+        using var read = InstanceReadActivityHelper.StartRead(
+            InstanceReadKinds.StateMetrics, input.Domain, input.Workflow);
+
+        return await GetInstanceByIdOrKeyAsync(input.Instance, cancellationToken)
+            .BindAsync(async instance =>
+            {
+                using var instanceScope = BeginInstanceScope(instance);
+
+                // Unlike transition-metrics, this cannot filter by a single key in SQL: a visit is
+                // bounded by the transition that ENTERED the state and the (differently-keyed) one that
+                // LEFT it, so the whole timeline is needed to pair them. Slim rows only (no jsonb), and
+                // an instance's transition count bounds the read.
+                var records = await instanceTransitionRepository
+                    .GetByInstanceIdAsReadOnlyAsync(instance.Id, cancellationToken);
+
+                // Pair the timeline into visits: the transition that ENTERED the state (ToState==key)
+                // carries the onEntry tasks; the next transition that LEFT it (FromState==key) carries
+                // the onExit tasks. A visit still open (entered, not yet left) has no leaving record.
+                var visits = PairStateVisits(records, input.StateKey);
+
+                var relevantRecordIds = visits
+                    .SelectMany(v => v.Leaving is null
+                        ? new[] { v.Entering.Id }
+                        : new[] { v.Entering.Id, v.Leaving.Id });
+
+                var tasksByRecord = await LoadMetricsTasksAsync(relevantRecordIds, cancellationToken);
+
+                var attempts = visits
+                    .Select((visit, index) =>
+                    {
+                        // onEntry from the entering record; onExit from the leaving record. Filtering by
+                        // hook is what separates them from the other tasks those same records also ran
+                        // (the transition's onExecute, the other state's lifecycle). Legacy rows with a
+                        // null hook cannot be classified into a phase and are omitted here.
+                        var entryTasks = tasksByRecord[visit.Entering.Id]
+                            .Where(t => t.Hook == Definitions.TaskTrigger.OnEntry);
+                        var exitTasks = visit.Leaving is null
+                            ? Enumerable.Empty<InstanceTaskMetricsRow>()
+                            : tasksByRecord[visit.Leaving.Id]
+                                .Where(t => t.Hook == Definitions.TaskTrigger.OnExit);
+
+                        // Entry into the state is when the entering transition finished (onEntry ran as
+                        // part of it); leaving is when the leaving transition started.
+                        var enteredAt = visit.Entering.FinishedAt ?? visit.Entering.StartedAt;
+                        var leftAt = visit.Leaving?.StartedAt;
+
+                        return new MetricsAttemptDto
+                        {
+                            Seq = index + 1,
+                            StartedAt = enteredAt,
+                            FinishedAt = leftAt,
+                            DurationMs = leftAt is { } left ? (left - enteredAt).TotalMilliseconds : null,
+                            TriggerType = visit.Entering.TriggerType,
+                            TriggeredBy = visit.Entering.CreatedBy,
+                            Tasks = OrderMetricsTasks(entryTasks.Concat(exitTasks))
+                        };
+                    })
+                    .ToList();
+
+                return Result<GetInstanceMetricsOutput>.Ok(new GetInstanceMetricsOutput
+                {
+                    Element = new MetricsElementDto { Kind = "state", Key = input.StateKey },
+                    Count = attempts.Count,
+                    Attempts = attempts
+                });
+            });
+    }
+
+    /// <summary>
+    /// Loads the metrics task rows for a set of transition records and groups them by owning record.
+    /// A column projection — the jsonb payloads never leave the database. The lookup answers empty for
+    /// a record with no tasks, so callers can index it without a guard.
+    /// </summary>
+    private async Task<ILookup<Guid, InstanceTaskMetricsRow>> LoadMetricsTasksAsync(
+        IEnumerable<Guid> recordIds,
+        CancellationToken cancellationToken)
+    {
+        var ids = recordIds.Distinct().ToList();
+        if (ids.Count == 0)
+        {
+            // No attempts ⇒ no tasks; skip the query entirely.
+            return Enumerable.Empty<InstanceTaskMetricsRow>().ToLookup(t => t.TransitionId);
+        }
+
+        var rows = await instanceTaskRepository.GetMetricsRowsByTransitionIdsAsync(ids, cancellationToken);
+        return rows.ToLookup(t => t.TransitionId);
+    }
+
+    /// <summary>Execution order within an attempt: start time, then declared order, then a stable id tiebreak.</summary>
+    private static List<MetricsTaskDto> OrderMetricsTasks(IEnumerable<InstanceTaskMetricsRow> tasks) =>
+        tasks
+            .OrderBy(t => t.StartedAt)
+            .ThenBy(t => t.Order)
+            .ThenBy(t => t.Id)
+            .Select(MetricsTaskDto.FromRow)
+            .ToList();
+
+    /// <summary>
+    /// Walks the instance's transition records (already ordered by StartedAt) and pairs them into
+    /// visits of one state: a record with <c>ToState == stateKey</c> opens a visit (its onEntry tasks),
+    /// the next record with <c>FromState == stateKey</c> closes it (its onExit tasks). A self-loop
+    /// (<c>FromState == ToState == stateKey</c>) closes the open visit and opens a new one in the same
+    /// record. A visit left open at the end (entered, not yet left) has a null leaving record.
+    /// </summary>
+    private static List<(InstanceTransitionSlim Entering, InstanceTransitionSlim? Leaving)> PairStateVisits(
+        IReadOnlyList<InstanceTransitionSlim> records,
+        string stateKey)
+    {
+        var visits = new List<(InstanceTransitionSlim Entering, InstanceTransitionSlim? Leaving)>();
+        InstanceTransitionSlim? open = null;
+
+        foreach (var record in records)
+        {
+            if (open is not null && record.FromState == stateKey)
+            {
+                visits.Add((open, record));
+                open = null;
+            }
+
+            if (record.ToState == stateKey)
+            {
+                // Re-entry without an intervening exit shouldn't happen for a well-formed history, but
+                // if it does the earlier visit is closed half-open rather than silently dropped.
+                if (open is not null)
+                {
+                    visits.Add((open, null));
+                }
+
+                open = record;
+            }
+        }
+
+        if (open is not null)
+        {
+            visits.Add((open, null));
+        }
+
+        return visits;
     }
 
     public async Task<Result<GetInstanceIncidentsOutput>> GetInstanceIncidentsAsync(
@@ -2170,8 +2371,10 @@ public sealed class InstanceQueryAppService(
     /// state; <c>fallbackTimeoutSeconds</c> is the EFFECTIVE value from
     /// <see cref="InstanceSubFlowOverrideExtensions.ResolveEffectiveLongPoll"/> — the state's own value,
     /// or the parent's override when one is stamped — so it always matches the window the pipeline
-    /// actually armed the fallback job with. The ack href is included only when <c>terminate</c> is true
-    /// (the pipeline pauses awaiting acknowledge in that case).
+    /// actually armed the fallback job with (terminating) or the window the client keeps polling for
+    /// (non-terminating). A terminating state's block, ack href included, is emitted only while the
+    /// acknowledge is outstanding (<c>IsAwaitingLongPollAck</c>); a non-terminating state never pauses
+    /// the pipeline, so its block carries no ack href and is emitted whenever the instance is in it.
     /// </summary>
     private async Task<InstanceInteractionOutput?> ResolveInteractionAsync(
         GetInstanceStateInput input,
@@ -2184,20 +2387,26 @@ public sealed class InstanceQueryAppService(
         if (currentStateValue.Interaction?.LongPoll is null)
             return null;
 
-        // The block describes an acknowledgement that is ACTUALLY OUTSTANDING, not one the state
-        // declares it may one day arm. Before this check it was emitted from the DEFINITION alone:
-        // measured on the bench, a leaf reported status A with a full interaction block including
-        // ack.href while `LongPollAckToken` was already cleared — the fallback had resumed the
-        // pipeline — and the acknowledge endpoint answered 200 idempotently. A client could not tell
-        // "there is an ack waiting for you" from "this state can pause", which is the only question
-        // the block exists to answer.
+        // Same resolver the pipeline armed the fallback job with, so the window the client is told
+        // is the window that will actually fire. Terminate is never overridable.
+        var effective = instance.ResolveEffectiveLongPoll(currentStateValue).LongPoll!;
+
+        // terminate=true: the block describes an acknowledgement that is ACTUALLY OUTSTANDING, not one
+        // the state declares it may one day arm. Emitted from the definition alone, a leaf reported
+        // status A with a full interaction block including ack.href while `LongPollAckToken` was
+        // already cleared — the fallback had resumed the pipeline — and the acknowledge endpoint
+        // answered 200 idempotently.
+        //
+        // terminate=false: there is no acknowledgement to wait for — the pipeline never pauses, so the
+        // marker is never armed and gating on it would suppress the block for good. The block is the
+        // directive itself ("keep long polling for fallbackTimeoutSeconds"), served whenever the
+        // instance is in the declaring state and the caller passes the gate.
         //
         // ETag safety: the token's lifetime is bracketed by status changes on both paths that clear
         // it — an acknowledge and the fallback job both resume the pipeline — and Status IS a
-        // fingerprint member, so the block's disappearance always rides a fingerprint change. If a
-        // future path ever clears the token WITHOUT a status change, the block would go stale behind
-        // a 304; that path does not exist today and adding one would need a fingerprint member.
-        if (!instance.IsAwaitingLongPollAck)
+        // fingerprint member, so the block's disappearance always rides a fingerprint change. The
+        // non-terminating block follows CurrentState, also a fingerprint member.
+        if (effective.Terminate && !instance.IsAwaitingLongPollAck)
             return null;
 
         // Only signal on the main-flow current state view, not a subflow terminal view.
@@ -2219,9 +2428,6 @@ public sealed class InstanceQueryAppService(
         if (admitted is not { IsSuccess: true, Value: true })
             return null;
 
-        // Same resolver the pipeline armed the fallback job with, so the window the client is told
-        // is the window that will actually fire. Terminate is never overridable.
-        var effective = instance.ResolveEffectiveLongPoll(currentStateValue).LongPoll!;
         return new InstanceInteractionOutput
         {
             TerminateLongPoll = effective.Terminate,
