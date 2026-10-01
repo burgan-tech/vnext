@@ -71,8 +71,14 @@ public sealed class StateFunctionCache(
     /// (from the effective timeout, parent override included). Both are properties of the flow
     /// version, which <see cref="InstanceStateFingerprint.FlowVersion"/> already covers, so — like
     /// <c>hasFunctions</c> — only the shape change needed invalidating, not the value.
+    /// v13 restored the <c>interaction</c> block for a NON-terminating long poll
+    /// (<c>terminate: false</c>). v11's outstanding-ack condition is right only for a terminating
+    /// state: a non-terminating one never pauses the pipeline, so the marker is never armed and the
+    /// block had vanished for it entirely. It is now emitted whenever the instance is in the declaring
+    /// state and the caller passes the gate, without an ack href. Its presence follows
+    /// <c>CurrentState</c>, already a fingerprint member.
     /// </remarks>
-    private const string ResponseShapeVersion = "v12";
+    private const string ResponseShapeVersion = "v13";
 
     private const string KeyPrefix = $"state-fn:{ResponseShapeVersion}:";
 
