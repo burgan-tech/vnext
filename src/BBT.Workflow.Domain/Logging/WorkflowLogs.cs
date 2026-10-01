@@ -252,6 +252,28 @@ public static partial class WorkflowLogs
         this ILogger logger, Guid instanceId, string transitionKey, string errorCode);
 
     /// <summary>
+    /// A CacheAside task's cache read or write failed and <c>bypassOnCacheError</c> let it continue
+    /// without the cache (read: the source runs; write: the source result is returned uncached).
+    /// The error is the state store's message as reported through the <c>statestore</c> gateway.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10176,
+        Level = LogLevel.Warning,
+        Message = "CacheAside {TaskKey}: cache {Stage} failed; continuing without the cache (bypassOnCacheError=true): {Error}")]
+    public static partial void CacheAsideBypassedCacheError(
+        this ILogger logger, string? taskKey, string stage, string? error);
+
+    /// <summary>
+    /// A CacheAside task's <c>sourceTask</c> resolved to another CacheAside task, which is rejected
+    /// (nested read-through would cache a cache).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10177,
+        Level = LogLevel.Warning,
+        Message = "CacheAside {TaskKey}: source task {SourceTaskKey} is itself a CacheAside task and was rejected")]
+    public static partial void CacheAsideSourceTypeRejected(this ILogger logger, string taskKey, string sourceTaskKey);
+
+    /// <summary>
     /// Logs at startup when a declared ActivitySource is missing from this host's MERGED
     /// configuration.
     /// <para>

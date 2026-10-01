@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using BBT.Aether.Results;
 using BBT.Workflow;
 using BBT.Workflow.Definitions;
+using BBT.Workflow.Functions;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
@@ -15,7 +16,6 @@ using BBT.Workflow.Tasks.Executors;
 using BBT.Workflow.Tasks.Factory;
 using BBT.Workflow.Tasks.Invocation;
 using Microsoft.Extensions.Logging.Abstractions;
-using Microsoft.Extensions.Options;
 using NSubstitute;
 using Shouldly;
 using Xunit;
@@ -23,87 +23,288 @@ using Xunit;
 namespace BBT.Workflow.Application.Tests.Tasks.Executors;
 
 /// <summary>
-/// The executor now dispatches through <see cref="ITaskInvocationDispatcher"/> instead of calling
-/// <see cref="IRemoteInvokerService"/> directly (issue #1007). These tests compose a REAL
-/// <c>TaskInvocationDispatcher</c> over a router stubbed to always resolve Remote, so every
-/// assertion that used to check the remote-invoker call directly still does — the point of this
-/// suite is the envelope the executor BUILDS (cache key, options, embedded source), not the
-/// local/remote routing decision, which is <c>TaskInvocationDispatcherTests</c>' and
-/// <c>TaskInvocationRouterTests</c>' job. Same harness shape as <c>HttpTaskExecutorRoutingTests</c>.
+/// The CacheAside executor runs the read-through itself: cache get/set through
+/// <see cref="IStateStoreCacheGateway"/> (which follows the <c>statestore</c> routing mode — pinned in
+/// <c>StateStoreCacheGatewayRoutingTests</c>), the source as a TASK through its own
+/// <see cref="ITaskExecutor"/> with <c>sourceMapping</c> as its mapping, and the task-level mapping's
+/// OutputHandler on the result like any other task. The gateway and the source executor are
+/// substituted; the executor under test is real.
 /// </summary>
 public sealed class CacheAsideTaskExecutorTests
 {
-    private const string CacheAsideType = "cacheaside";
+    private const string StaticKey = "customer:42:profile";
+    private const string SourceMappingCode = "public class SourceMapping {}";
 
     [Fact]
-    public async Task InvokeAsync_BuildsCacheAsideEnvelope_WithEmbeddedSource_AndReturnsInvokerResult()
+    public async Task Miss_RunsSourceExecutorWithSourceMapping_AndCachesItsOutput()
     {
-        var harness = new Harness(ttlInSeconds: 300, forceRefresh: true, bypassOnCacheError: false);
-        var payload = JsonSerializer.SerializeToElement(new { id = 7 });
-        harness.RemoteInvoker.InvokeAsync(
-                CacheAsideType, Arg.Any<string>(), Arg.Any<TaskEnvelope>(),
-                Arg.Any<TaskTraceContext>(), Arg.Any<CancellationToken>())
-            .Returns(Result<TaskInvocationResult>.Ok(TaskInvocationResult.Success(data: payload)));
+        var harness = new Harness();
+        object? cachedValue = null;
+        harness.Gateway.SetWithResultAsync(
+                Arg.Any<string>(), Arg.Do<object?>(v => cachedValue = v), Arg.Any<int?>(), Arg.Any<string?>(),
+                Arg.Any<string?>(), Arg.Any<TaskTraceContext>(), Arg.Any<CancellationToken>(), Arg.Any<string?>())
+            .Returns(new CacheSetResult(true));
 
         var result = await harness.ExecuteAsync();
 
         result.IsSuccess.ShouldBeTrue();
         result.Value!.IsSuccess.ShouldBeTrue();
 
-        // The cache read-through is dispatched to the Execution service as a 'cacheaside' invoke, with the
-        // resolved key, options and the pre-resolved source task envelope embedded.
-        await harness.RemoteInvoker.Received(1).InvokeAsync(
-            CacheAsideType, "customer-cache", Arg.Is<TaskEnvelope>(e =>
-                e.TaskType == CacheAsideType &&
-                e.Binding.GetProperty("Key").GetString() == "customer:42:profile" &&
-                e.Binding.GetProperty("TtlInSeconds").GetInt32() == 300 &&
-                e.Binding.GetProperty("ForceRefresh").GetBoolean() &&
-                e.Binding.GetProperty("BypassOnCacheError").GetBoolean() == false &&
-                e.Binding.GetProperty("SourceTask").GetProperty("TaskType").GetString() == "http"),
-            Arg.Any<TaskTraceContext>(), Arg.Any<CancellationToken>());
+        var sourceContext = harness.SourceContexts.ShouldHaveSingleItem();
+        sourceContext.OnExecuteTask.Mapping.ShouldBe(harness.Task.SourceMapping);
+        sourceContext.Task.ShouldBeSameAs(harness.SourceTask);
+        sourceContext.ScriptContext.ShouldNotBeSameAs(harness.OuterScriptContext);
+
+        JsonSerializer.Serialize(cachedValue, JsonSerializerConstants.JsonOptions).ShouldBe("""{"name":"shaped"}""");
+        await harness.Gateway.Received(1).SetWithResultAsync(
+            StaticKey, Arg.Any<object?>(), 300, "vnext-state", "Eventual",
+            Arg.Any<TaskTraceContext>(), Arg.Any<CancellationToken>(), "cacheaside");
+
+        ((bool)result.Value.Metadata!["CacheHit"]).ShouldBeFalse();
+        ((bool)result.Value.Metadata!["Refreshed"]).ShouldBeTrue();
     }
 
     [Fact]
-    public async Task InvokeAsync_ReturnsInvokerData_WhenNoSourceMapping()
+    public async Task Hit_DoesNotRunSourceExecutor()
     {
         var harness = new Harness();
-        var payload = JsonSerializer.SerializeToElement(new { name = "Ada" });
-        harness.RemoteInvoker.InvokeAsync(
-                CacheAsideType, Arg.Any<string>(), Arg.Any<TaskEnvelope>(),
-                Arg.Any<TaskTraceContext>(), Arg.Any<CancellationToken>())
-            .Returns(Result<TaskInvocationResult>.Ok(TaskInvocationResult.Success(data: payload)));
+        harness.Gateway.GetAsync(
+                Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<TaskTraceContext>(),
+                Arg.Any<CancellationToken>(), Arg.Any<string?>())
+            .Returns(new CacheGetResult(true, true, JsonSerializer.SerializeToElement(new { name = "cached" }),
+                Metadata: new Dictionary<string, object> { ["Key"] = "custom:" + StaticKey, ["StoreName"] = "vnext-state" }));
 
         var result = await harness.ExecuteAsync();
 
-        result.IsSuccess.ShouldBeTrue();
-        string dataJson = JsonSerializer.Serialize((object?)result.Value!.Data, JsonSerializerConstants.JsonOptions);
-        dataJson.ShouldContain("Ada");
+        result.Value!.IsSuccess.ShouldBeTrue();
+        ((bool)result.Value.Metadata!["CacheHit"]).ShouldBeTrue();
+        ((bool)result.Value.Metadata!["Refreshed"]).ShouldBeFalse();
+        result.Value.Metadata!["Key"].ShouldBe("custom:" + StaticKey);
+        JsonSerializer.Serialize((object?)result.Value.Data).ShouldContain("cached");
+        harness.Registry.ReceivedCalls().ShouldBeEmpty();
+        await harness.Gateway.DidNotReceiveWithAnyArgs().SetWithResultAsync(
+            default!, default, default, default, default, default!, default, default);
     }
 
     [Fact]
-    public async Task InvokeAsync_KeyExpression_OverridesKeyInEnvelope()
+    public async Task SourceBusinessFailure_IsNotCached_AndPropagatesStatus()
     {
-        var harness = new Harness(keyExpressionCode: "\"ignored-by-mock\"");
-        harness.ExpressoEvaluator.Evaluate(Arg.Any<ScriptCode>(), Arg.Any<ScriptContext>())
-            .Returns(Result<string>.Ok("customer:99:profile"));
-        harness.RemoteInvoker.InvokeAsync(
-                CacheAsideType, Arg.Any<string>(), Arg.Any<TaskEnvelope>(),
-                Arg.Any<TaskTraceContext>(), Arg.Any<CancellationToken>())
-            .Returns(Result<TaskInvocationResult>.Ok(TaskInvocationResult.Success(
-                data: JsonSerializer.SerializeToElement(new { ok = true }))));
+        var harness = new Harness();
+        harness.SourceResponse = new StandardTaskResponse { IsSuccess = false, StatusCode = 404, ErrorMessage = "not found" };
 
         var result = await harness.ExecuteAsync();
 
-        result.IsSuccess.ShouldBeTrue();
-        // The Dynamic Expresso result overrides the static key in the envelope sent to Execution.
-        await harness.RemoteInvoker.Received(1).InvokeAsync(
-            CacheAsideType, Arg.Any<string>(),
-            Arg.Is<TaskEnvelope>(e => e.Binding.GetProperty("Key").GetString() == "customer:99:profile"),
-            Arg.Any<TaskTraceContext>(), Arg.Any<CancellationToken>());
+        result.Value!.IsSuccess.ShouldBeFalse();
+        result.Value.StatusCode.ShouldBe(404);
+        await harness.Gateway.DidNotReceiveWithAnyArgs().SetWithResultAsync(
+            default!, default, default, default, default, default!, default, default);
     }
 
     [Fact]
-    public async Task InvokeAsync_WhenSourceTaskCannotBeResolved_Fails()
+    public async Task NoSourceMapping_CachesRawSourceData()
+    {
+        var harness = new Harness(withSourceMapping: false);
+
+        var result = await harness.ExecuteAsync();
+
+        result.Value!.IsSuccess.ShouldBeTrue();
+        var sourceMapping = harness.SourceContexts.ShouldHaveSingleItem().OnExecuteTask.Mapping;
+        sourceMapping.HasMappingCode.ShouldBeFalse();
+        sourceMapping.Code.ShouldBe(string.Empty);
+        await harness.Gateway.Received(1).SetWithResultAsync(
+            StaticKey, Arg.Any<object?>(), Arg.Any<int?>(), Arg.Any<string?>(), Arg.Any<string?>(),
+            Arg.Any<TaskTraceContext>(), Arg.Any<CancellationToken>(), "cacheaside");
+    }
+
+    [Fact]
+    public async Task ReadError_Bypass_RunsSource()
+    {
+        var harness = new Harness(bypassOnCacheError: true);
+        harness.SetReadResult(new CacheGetResult(false, false, default, Error: "redis down"));
+
+        var result = await harness.ExecuteAsync();
+
+        result.Value!.IsSuccess.ShouldBeTrue();
+        harness.SourceContexts.Count.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task ReadError_NoBypass_Fails()
+    {
+        var harness = new Harness(bypassOnCacheError: false);
+        harness.SetReadResult(new CacheGetResult(false, false, default, Error: "redis down"));
+
+        var result = await harness.ExecuteAsync();
+
+        result.Value!.IsSuccess.ShouldBeFalse();
+        result.Value.ErrorMessage.ShouldNotBeNull();
+        result.Value.ErrorMessage!.ShouldContain("redis down");
+        harness.SourceContexts.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task WriteError_Bypass_ReturnsSourceResult()
+    {
+        var harness = new Harness(bypassOnCacheError: true);
+        harness.SetWriteResult(new CacheSetResult(false, Error: "write refused"));
+
+        var result = await harness.ExecuteAsync();
+
+        result.Value!.IsSuccess.ShouldBeTrue();
+        JsonSerializer.Serialize((object?)result.Value.Data).ShouldContain("shaped");
+    }
+
+    [Fact]
+    public async Task WriteError_NoBypass_Fails()
+    {
+        var harness = new Harness(bypassOnCacheError: false);
+        harness.SetWriteResult(new CacheSetResult(false, Error: "write refused"));
+
+        var result = await harness.ExecuteAsync();
+
+        result.Value!.IsSuccess.ShouldBeFalse();
+        result.Value.ErrorMessage!.ShouldContain("write refused");
+    }
+
+    [Fact]
+    public async Task ForceRefresh_SkipsRead()
+    {
+        var harness = new Harness(forceRefresh: true);
+
+        var result = await harness.ExecuteAsync();
+
+        result.Value!.IsSuccess.ShouldBeTrue();
+        await harness.Gateway.DidNotReceiveWithAnyArgs().GetAsync(
+            default!, default, default, default!, default, default);
+        harness.SourceContexts.Count.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task TaskLevelMappingOutputHandler_RunsOnResult()
+    {
+        var harness = new Harness();
+        var mapping = harness.UseOuterMapping();
+        mapping.OutputHandler(Arg.Any<ScriptContext>())
+            .Returns(Task.FromResult(new ScriptResponse { Data = "projected" }));
+
+        var result = await harness.ExecuteAsync();
+
+        result.Value!.IsSuccess.ShouldBeTrue();
+        ((object?)result.Value.Data).ShouldBe("projected");
+    }
+
+    [Fact]
+    public async Task TaskLevelMappingInputHandler_SetCacheKey_IsUsed()
+    {
+        var harness = new Harness();
+        var mapping = harness.UseOuterMapping();
+        mapping.InputHandler(Arg.Any<WorkflowTask>(), Arg.Any<ScriptContext>())
+            .Returns(ci =>
+            {
+                ((CacheAsideTask)ci[0]).SetCacheKey("from-input");
+                return Task.FromResult(new ScriptResponse());
+            });
+
+        await harness.ExecuteAsync();
+
+        await harness.Gateway.Received(1).GetAsync(
+            "from-input", Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<TaskTraceContext>(),
+            Arg.Any<CancellationToken>(), "cacheaside");
+    }
+
+    [Fact]
+    public async Task KeyScript_OverridesKey()
+    {
+        var harness = new Harness(keyScriptCode: "public class Key {}");
+        harness.KeyEvaluator.EvaluateAsync(Arg.Any<ScriptCode>(), Arg.Any<ScriptContext>(), Arg.Any<CancellationToken>())
+            .Returns(Result<string>.Ok("customer:99:profile"));
+
+        await harness.ExecuteAsync();
+
+        await harness.Gateway.Received(1).GetAsync(
+            "customer:99:profile", Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<TaskTraceContext>(),
+            Arg.Any<CancellationToken>(), "cacheaside");
+    }
+
+    [Fact]
+    public async Task EmptyKeyScriptResult_KeepsStaticKey()
+    {
+        var harness = new Harness(keyScriptCode: "public class Key {}");
+        // The object form of 'key' carries no static key, so seed one the way an InputHandler would.
+        harness.Task.SetCacheKey(StaticKey);
+        harness.KeyEvaluator.EvaluateAsync(Arg.Any<ScriptCode>(), Arg.Any<ScriptContext>(), Arg.Any<CancellationToken>())
+            .Returns(Result<string>.Ok("  "));
+
+        await harness.ExecuteAsync();
+
+        await harness.Gateway.Received(1).GetAsync(
+            StaticKey, Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<TaskTraceContext>(),
+            Arg.Any<CancellationToken>(), "cacheaside");
+    }
+
+    [Fact]
+    public async Task KeyScriptFailure_FailsInputStage()
+    {
+        var harness = new Harness(keyScriptCode: "public class Key {}");
+        harness.KeyEvaluator.EvaluateAsync(Arg.Any<ScriptCode>(), Arg.Any<ScriptContext>(), Arg.Any<CancellationToken>())
+            .Returns(Result<string>.Fail(Error.Failure("key.failed", "key script blew up")));
+
+        var result = await harness.ExecuteAsync();
+
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Message.ShouldBe("key script blew up");
+        await harness.Gateway.DidNotReceiveWithAnyArgs().GetAsync(
+            default!, default, default, default!, default, default);
+    }
+
+    [Fact]
+    public async Task EmptyKey_Fails()
+    {
+        var harness = new Harness(staticKey: string.Empty);
+
+        var result = await harness.ExecuteAsync();
+
+        result.Value!.IsSuccess.ShouldBeFalse();
+        result.Value.ErrorMessage!.ShouldContain("non-empty 'key'");
+        harness.SourceContexts.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task SourceOfTypeCacheAside_IsRejected()
+    {
+        var harness = new Harness();
+        var nestedCacheAside = CacheAsideTask.Create(JsonSerializer.SerializeToElement(new Dictionary<string, object?>
+        {
+            ["key"] = "nested",
+            ["sourceTask"] = new { key = "x", domain = "core", flow = "sys-tasks", version = "1.0.0" }
+        }));
+        nestedCacheAside.SetReference(new Reference("nested-cache", "core", "sys-tasks", "1.0.0"));
+        harness.TaskFactory.CreateExecutionTaskAsync(Arg.Any<IReference>(), Arg.Any<CancellationToken>())
+            .Returns(Result<WorkflowTask>.Ok(nestedCacheAside));
+
+        var result = await harness.ExecuteAsync();
+
+        result.Value!.IsSuccess.ShouldBeFalse();
+        result.Value.ErrorMessage!.ShouldContain("cannot be a CacheAside task");
+        harness.Registry.ReceivedCalls().ShouldBeEmpty();
+        await harness.Gateway.DidNotReceiveWithAnyArgs().GetAsync(
+            default!, default, default, default!, default, default);
+    }
+
+    [Fact]
+    public async Task MissingSourceTask_Fails()
+    {
+        var harness = new Harness(withSourceTask: false);
+
+        var result = await harness.ExecuteAsync();
+
+        result.Value!.IsSuccess.ShouldBeFalse();
+        result.Value.ErrorMessage!.ShouldContain("sourceTask");
+        harness.Registry.ReceivedCalls().ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task UnresolvableSourceTask_Fails()
     {
         var harness = new Harness();
         harness.TaskFactory.CreateExecutionTaskAsync(Arg.Any<IReference>(), Arg.Any<CancellationToken>())
@@ -111,83 +312,142 @@ public sealed class CacheAsideTaskExecutorTests
 
         var result = await harness.ExecuteAsync();
 
-        // Source-resolution failure surfaces as a business failure (Result stays Ok via CreateErrorResponse).
         result.Value!.IsSuccess.ShouldBeFalse();
-        // The cache-aside invoker is never called when the source task cannot be resolved.
-        await harness.RemoteInvoker.DidNotReceive().InvokeAsync(
-            CacheAsideType, Arg.Any<string>(), Arg.Any<TaskEnvelope>(),
-            Arg.Any<TaskTraceContext>(), Arg.Any<CancellationToken>());
+        harness.Registry.ReceivedCalls().ShouldBeEmpty();
     }
 
     private sealed class Harness
     {
+        public IStateStoreCacheGateway Gateway { get; } = Substitute.For<IStateStoreCacheGateway>();
+        public ICacheKeyEvaluator KeyEvaluator { get; } = Substitute.For<ICacheKeyEvaluator>();
         public IRemoteInvokerService RemoteInvoker { get; } = Substitute.For<IRemoteInvokerService>();
+        public IScriptEngine ScriptEngine { get; } = Substitute.For<IScriptEngine>();
         public ITaskFactory TaskFactory { get; } = Substitute.For<ITaskFactory>();
-        public IDynamicExpressoValueEvaluator ExpressoEvaluator { get; } = Substitute.For<IDynamicExpressoValueEvaluator>();
-        private readonly CacheAsideTask _task;
+        public ITaskExecutorRegistry Registry { get; } = Substitute.For<ITaskExecutorRegistry>();
+        public ITaskExecutor SourceExecutor { get; } = Substitute.For<ITaskExecutor>();
+        public List<TaskExecutorContext> SourceContexts { get; } = [];
+        public HttpTask SourceTask { get; } = WorkflowTaskFactory.CreateHttpTask("src");
+        public CacheAsideTask Task { get; }
+        public ScriptContext OuterScriptContext { get; private set; } = null!;
+        public CacheAsideTaskExecutor Executor { get; }
+
+        /// <summary>What the source executor answers; defaults to a 200 with shaped data.</summary>
+        public StandardTaskResponse SourceResponse { get; set; } = new()
+        {
+            IsSuccess = true,
+            StatusCode = 200,
+            Data = new { name = "shaped" },
+            TaskType = "Http"
+        };
+
+        private ScriptCode _outerMapping = ScriptCode.FromNative(string.Empty);
 
         public Harness(
-            int? ttlInSeconds = 300,
-            bool forceRefresh = false,
+            bool withSourceMapping = true,
             bool bypassOnCacheError = true,
-            string? keyExpressionCode = null)
+            bool forceRefresh = false,
+            string? keyScriptCode = null,
+            string staticKey = StaticKey,
+            bool withSourceTask = true)
         {
-            var httpSource = WorkflowTaskFactory.CreateHttpTask("get-customer-http");
             TaskFactory.CreateExecutionTaskAsync(Arg.Any<IReference>(), Arg.Any<CancellationToken>())
-                .Returns(Result<WorkflowTask>.Ok(httpSource));
+                .Returns(Result<WorkflowTask>.Ok(SourceTask));
+
+            Registry.GetExecutor(Arg.Any<TaskType>()).Returns(Result<ITaskExecutor>.Ok(SourceExecutor));
+            SourceExecutor.ExecuteAsync(Arg.Any<TaskExecutorContext>(), Arg.Any<CancellationToken>())
+                .Returns(ci =>
+                {
+                    SourceContexts.Add((TaskExecutorContext)ci[0]);
+                    return System.Threading.Tasks.Task.FromResult(Result<StandardTaskResponse>.Ok(SourceResponse));
+                });
+
+            RemoteInvoker.CreateTraceContext(Arg.Any<ScriptContext>()).Returns(new TaskTraceContext());
+
+            SetReadResult(new CacheGetResult(true, false, default));
+            SetWriteResult(new CacheSetResult(true, Metadata: new Dictionary<string, object>
+            {
+                ["Key"] = "custom:" + StaticKey,
+                ["StoreName"] = "vnext-state"
+            }));
 
             var config = new Dictionary<string, object?>
             {
-                ["key"] = "customer:42:profile",
+                ["key"] = staticKey,
                 ["storeName"] = "vnext-state",
-                ["ttlInSeconds"] = ttlInSeconds,
+                ["ttlInSeconds"] = 300,
                 ["consistency"] = "Eventual",
-                ["sourceTask"] = new { key = "get-customer-http", domain = "core", flow = "sys-tasks", version = "1.0.0" },
                 ["bypassOnCacheError"] = bypassOnCacheError,
                 ["forceRefresh"] = forceRefresh
             };
-            if (keyExpressionCode is not null)
+            if (withSourceTask)
             {
-                config["key"] = new { location = "dynamicExpresso", code = keyExpressionCode, encoding = "NAT" };
+                config["sourceTask"] = new { key = "src", domain = "core", flow = "sys-tasks", version = "1.0.0" };
             }
 
-            _task = CacheAsideTask.Create(JsonSerializer.SerializeToElement(config));
-            _task.SetReference(new Reference("customer-cache", "core", "sys-tasks", "1.0.0"));
+            if (withSourceMapping)
+            {
+                config["sourceMapping"] = new { location = "./src/SourceMapping.csx", code = SourceMappingCode, encoding = "NAT" };
+            }
 
-            // Router always resolves Remote for this suite: it verifies the envelope the executor
-            // builds (cache key, options, embedded source), not the local/remote decision itself.
-            var router = Substitute.For<ITaskInvocationRouter>();
-            router.Resolve(Arg.Any<WorkflowTask>(), CacheAsideType)
-                .Returns(new TaskInvocationDecision(ExecutionMode.Remote, "test"));
-            var localInvokers = Substitute.For<ILocalTaskInvokerRegistry>();
+            if (keyScriptCode is not null)
+            {
+                config["key"] = new { location = "./src/Key.csx", code = keyScriptCode, encoding = "NAT" };
+            }
 
-            // A REAL dispatcher over stubbed collaborators, same convention as
-            // HttpTaskExecutorRoutingTests: this suite is about the executor's envelope, not about
-            // mocking the dispatcher away.
-            var dispatcher = new TaskInvocationDispatcher(
-                router, localInvokers, RemoteInvoker,
-                Options.Create(new TaskInvocationOptions()), NullLogger<TaskInvocationDispatcher>.Instance);
+            Task = CacheAsideTask.Create(JsonSerializer.SerializeToElement(config));
+            Task.SetReference(new Reference("customer-cache", "core", "sys-tasks", "1.0.0"));
+
+            var serviceProvider = Substitute.For<IServiceProvider>();
+            serviceProvider.GetService(typeof(ITaskExecutorRegistry)).Returns(Registry);
 
             Executor = new CacheAsideTaskExecutor(
-                RemoteInvoker,
-                Substitute.For<IScriptEngine>(),
+                ScriptEngine,
                 TaskFactory,
-                ExpressoEvaluator,
-                dispatcher,
+                KeyEvaluator,
+                Gateway,
+                RemoteInvoker,
+                serviceProvider,
                 NullLogger<CacheAsideTaskExecutor>.Instance);
         }
 
-        public CacheAsideTaskExecutor Executor { get; }
+        public void SetReadResult(CacheGetResult result) =>
+            Gateway.GetAsync(
+                    Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<TaskTraceContext>(),
+                    Arg.Any<CancellationToken>(), Arg.Any<string?>())
+                .Returns(result);
+
+        public void SetWriteResult(CacheSetResult result) =>
+            Gateway.SetWithResultAsync(
+                    Arg.Any<string>(), Arg.Any<object?>(), Arg.Any<int?>(), Arg.Any<string?>(), Arg.Any<string?>(),
+                    Arg.Any<TaskTraceContext>(), Arg.Any<CancellationToken>(), Arg.Any<string?>())
+                .Returns(result);
+
+        /// <summary>Gives the CacheAside task a non-empty task-level mapping and returns its compiled instance.</summary>
+        public IMapping UseOuterMapping()
+        {
+            _outerMapping = ScriptCode.FromNative("public class OuterMapping {}");
+            var mapping = Substitute.For<IMapping>();
+            mapping.InputHandler(Arg.Any<WorkflowTask>(), Arg.Any<ScriptContext>())
+                .Returns(System.Threading.Tasks.Task.FromResult(new ScriptResponse()));
+            mapping.OutputHandler(Arg.Any<ScriptContext>())
+                .Returns(ci => System.Threading.Tasks.Task.FromResult(new ScriptResponse()));
+            Func<IMapping> factory = () => mapping;
+            ScriptEngine.CompileToFactoryAsync<IMapping>(
+                    Arg.Any<ScriptCode>(), Arg.Any<ScriptSettings?>(), Arg.Any<CancellationToken>())
+                .Returns(System.Threading.Tasks.Task.FromResult(factory));
+            return mapping;
+        }
 
         public Task<Result<StandardTaskResponse>> ExecuteAsync()
         {
             var instance = Instance.Create(Guid.NewGuid(), "test-flow", "1.0", "ctx-key");
-            var scriptContext = new ScriptContext.Builder(NullLogger<ScriptContext>.Instance)
+            OuterScriptContext = new ScriptContext.Builder(NullLogger<ScriptContext>.Instance)
                 .SetRuntime(Substitute.For<IRuntimeInfoProvider>())
                 .SetInstance(instance)
                 .Build();
-            var onExecute = OnExecuteTask.Create(1, _task, ScriptCode.FromNative(string.Empty));
-            var context = new TaskExecutorContext(_task, onExecute, scriptContext, null, TaskTrigger.OnExecute, TaskExecutionOrigin.Flow);
+            var onExecute = OnExecuteTask.Create(1, Task, _outerMapping);
+            var context = new TaskExecutorContext(
+                Task, onExecute, OuterScriptContext, null, TaskTrigger.OnExecute, TaskExecutionOrigin.Flow);
             return Executor.ExecuteAsync(context, CancellationToken.None);
         }
     }

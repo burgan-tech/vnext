@@ -1,6 +1,7 @@
 using BBT.Workflow.BackgroundJobs.Options;
 using BBT.Workflow.BackgroundJobs.Recovery;
 using BBT.Workflow.Execution.ErrorHandling;
+using BBT.Workflow.Functions;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Scripting.Evaluators;
 using BBT.Workflow.Scripting.Functions;
@@ -175,6 +176,10 @@ public static class TaskServiceCollectionExtensions
         // Cache-Aside (read-through) executor: the read-through (state-store get/set, source task
         // on a miss) is dispatched locally or to the Execution service via ITaskInvocationDispatcher.
         services.AddTaskExecutor<CacheAsideTaskExecutor>();
+        // Cache get/set over the 'statestore' invocation path. Shared by the CacheAside executor and
+        // the function response cache (FunctionAppService); registered here because a task executor
+        // depends on it.
+        services.AddScoped<IStateStoreCacheGateway, StateStoreCacheGateway>();
 
         // In-process cache-aside invoker (issue #1007): serves the CacheAside local path. On a miss
         // it dispatches the source task through this same local registry when possible, falling

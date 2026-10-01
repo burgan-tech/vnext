@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using BBT.Aether.Guids;
+using BBT.Aether.MultiSchema;
 using BBT.Aether.Tracing;
 using BBT.Aether.Uow;
 using BBT.Workflow.Caching;
@@ -129,6 +130,8 @@ public sealed class TaskInvocationDiRegistrationTests
         services.AddScoped(_ => Substitute.For<IInstanceQueryGateway>());
         services.AddSingleton(Substitute.For<IGuidGenerator>());
         services.AddScoped(_ => Substitute.For<IDomainDiscoveryResolver>());
+        // Aether multi-schema scope, read by CacheKeyEvaluator (registered by AddTaskHandlers).
+        services.AddScoped(_ => Substitute.For<ICurrentSchema>());
 
         // A real (not faked) registration: self-contained (options + logger only), and it is the
         // Application module's own service (WorkflowApplicationModuleServiceCollectionExtensions),
