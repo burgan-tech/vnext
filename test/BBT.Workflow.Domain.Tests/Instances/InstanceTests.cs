@@ -825,6 +825,45 @@ public class InstanceTests : DomainTestBase<DomainEntryPoint>
         Assert.Equal(42, faultedEvent.InstanceData.Value.GetProperty("childValue").GetInt32());
     }
 
+    [Fact]
+    public void Fault_WhenTheIncidentWasLoadedDetached_StillCarriesItUpward()
+    {
+        // A no-tracking load puts the unresolved rows in the aggregate's DETACHED list
+        // (AcceptLoadedIncidents), not on the EF navigation. The upward payload used to read the
+        // navigation only, so a SubFlow faulted from such an aggregate told its parent nothing
+        // about why.
+        var instance = InstanceFactory.CreateDefault();
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.FlowType] = WorkflowType.SubFlow.Code;
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.Id] = Guid.NewGuid().ToString();
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.Domain] = "test-domain";
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.Flow] = "parent-flow";
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.Version] = "1.0.0";
+        instance.ChangeState(StateFactory.CreateDefault(
+            "faulted-child-state",
+            StateType.Intermediate,
+            StateSubType.Error));
+        instance.AcceptLoadedIncidents([InstanceIncidentFactory.Create(
+            state: "faulted-child-state",
+            transition: "submit",
+            taskKey: "call-external",
+            message: "bad request",
+            errorCode: "Task:Http:400",
+            errorLayer: "Task",
+            statusCode: 400,
+            boundaryAction: "Abort")]);
+
+        instance.Fault("child-domain");
+
+        var faultedEvent = instance.GetDomainEvents()
+            .Select(e => e.Event)
+            .OfType<InstanceSubFaultedEvent>()
+            .Single();
+
+        Assert.Equal(400, faultedEvent.IncidentStatusCode);
+        Assert.Equal("Task:Http:400", faultedEvent.IncidentErrorCode);
+        Assert.Equal("call-external", faultedEvent.IncidentTaskKey);
+    }
+
     [Theory]
     [InlineData("S", SubItemType.SubFlow)]
     [InlineData("P", SubItemType.SubProcess)]
