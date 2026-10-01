@@ -622,7 +622,8 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
         var executorContext = new TaskExecutorContext(
             task, onExecuteTask, context, instanceTransitionId, taskTrigger, origin)
         {
-            ResponseVariableKey = options.ResponseVariableKey
+            ResponseVariableKey = options.ResponseVariableKey,
+            SkipJournalProbe = options.SkipJournalProbe
         };
 
         // 8. Execute task

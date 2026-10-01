@@ -270,7 +270,7 @@ public sealed class InstanceCommandAppService(
     /// Step 3: Prepares the instance (create, configure, persist).
     /// Railway chain: Create Instance → Validate → Map Data → Persist
     /// </summary>
-    private async Task<Result<(Definitions.Workflow Workflow, Instance Instance)>> PrepareInstanceAsync(
+    private async Task<Result<(Definitions.Workflow Workflow, Instance Instance, object? AppendedPayload)>> PrepareInstanceAsync(
         Definitions.Workflow workflow,
         StartInstanceInput input,
         CancellationToken cancellationToken)
@@ -355,13 +355,17 @@ public sealed class InstanceCommandAppService(
     /// Maps the start payload and appends the initial data version IMMEDIATELY through the
     /// InstanceData write service (identity computed under the per-instance row lock).
     /// </summary>
-    private async Task<Result<(Definitions.Workflow Workflow, Instance Instance)>> MapAndAppendInstanceDataAsync(
+    /// <returns>
+    /// The workflow and instance, plus the mapped payload when one was appended (null otherwise) —
+    /// the pipeline uses it to skip mapping and appending the same attributes again.
+    /// </returns>
+    private async Task<Result<(Definitions.Workflow Workflow, Instance Instance, object? AppendedPayload)>> MapAndAppendInstanceDataAsync(
         (Definitions.Workflow Workflow, Instance Instance) data,
         StartInstanceInput input,
         CancellationToken cancellationToken)
     {
         if (input.Instance.Attributes == null)
-            return Result<(Definitions.Workflow, Instance)>.Ok(data);
+            return Result<(Definitions.Workflow, Instance, object?)>.Ok((data.Workflow, data.Instance, null));
 
         return await transitionDataMapper.MapTransitionDataAsync(
                 input.Instance.Attributes,
@@ -383,7 +387,7 @@ public sealed class InstanceCommandAppService(
                         data.Workflow);
                 }
             })
-            .MapAsync(_ => data);
+            .MapAsync(mappedData => (data.Workflow, data.Instance, mappedData));
     }
 
     /// <summary>
@@ -392,7 +396,7 @@ public sealed class InstanceCommandAppService(
     /// Underlying service returns Result - unexpected exceptions propagate to middleware.
     /// </summary>
     private Task<Result<StartInstanceOutput>> ExecuteStartTransitionAsync(
-        (Definitions.Workflow Workflow, Instance Instance) data,
+        (Definitions.Workflow Workflow, Instance Instance, object? AppendedPayload) data,
         StartInstanceInput input,
         CancellationToken cancellationToken)
     {
@@ -426,6 +430,14 @@ public sealed class InstanceCommandAppService(
         context.ResolvedWorkflow = data.Workflow;
         context.PayloadSchemaValidated = true;
 
+        // The payload is already the instance's initial data version (appended above, under the
+        // row lock); the pipeline's CreateTransitionRecordStep must not map and append it again.
+        if (data.AppendedPayload is not null)
+        {
+            context.StartPayloadPersisted = true;
+            context.StartMappedPayload = data.AppendedPayload;
+        }
+
         // Creation is the reservation: a sub-item is persisted Busy at creation (IsSubItem seed
         // in CreateAndPrepareInstanceAsync), and this request — the one that just created the
         // row — owns it. Without this, the child's own start transition classifies as Normal
@@ -442,6 +454,11 @@ public sealed class InstanceCommandAppService(
                 Id = data.Instance.Id,
                 Key = data.Instance.Key,
                 Status = transitionOutput.Status,
+                // Hand the pipeline's committed aggregate to the sync enrichment, as the transition
+                // path does: without it every sync start re-read the instance it had just settled
+                // (a full split-query load). The Busy guard in EnrichOutputCoreAsync still forces a
+                // reload when the snapshot may be stale, and the field is cleared before serialization.
+                PipelineInstance = transitionOutput.PipelineInstance,
                 // Stamp the effective sync/async outcome from context.Mode (the mode we resolved and
                 // dispatched on) so the controller shapes 200 vs 202 by what actually ran, not the caller's
                 // sync query parameter (#1003). Authoritative here — the output may have been built by the
@@ -877,8 +894,7 @@ public sealed class InstanceCommandAppService(
         // A Busy snapshot may be stale — a sync subflow completion resumes and finalizes the
         // parent in its own scope — so re-read as no-tracking (this scope may already track the
         // row with pre-resume values) to reflect the settled state. Also falls back to the DB
-        // read when PipelineInstance is not set (e.g. idempotent existing-instance path, and the
-        // start path, whose output never carries one).
+        // read when PipelineInstance is not set (e.g. the idempotent existing-instance path).
         var pipelineInstance = (output as InstanceOutputBase)?.PipelineInstance;
         var reusePipelineInstance = pipelineInstance is not null && !pipelineInstance.Status.Equals(InstanceStatus.Busy);
         activity?.SetTag(TelemetryConstants.TagNames.EnrichSource, reusePipelineInstance ? "pipeline" : "reload");

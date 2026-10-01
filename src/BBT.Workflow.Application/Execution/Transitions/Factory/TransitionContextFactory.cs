@@ -173,6 +173,8 @@ public sealed class TransitionContextFactory(
             IsPreReserved = input.IsPreReserved,
             SubflowChainReserved = input.SubflowChainReserved,
             RetryOfTransitionRecordId = input.Retry?.TransitionId,
+            StartPayloadPersisted = input.StartPayloadPersisted,
+            StartMappedPayload = input.StartMappedPayload,
             IsErrorBoundaryTransition = input.IsErrorBoundaryTransition,
             Termination = input.Termination,
 

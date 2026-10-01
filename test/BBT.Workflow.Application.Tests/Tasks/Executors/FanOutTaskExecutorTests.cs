@@ -344,4 +344,38 @@ public sealed class FanOutTaskExecutorTests
         harness.Engine.Calls.ShouldAllBe(c => !ReferenceEquals(c.Context, harness.ScriptContext));
         harness.ScriptContext.TaskResponse.ShouldBeEmpty();
     }
+
+    // Item journal rows live under the parent's transition record, keyed `{key}#{index}`. When the
+    // parent's attempt knows no row can exist yet, the items must not pay a probe SELECT that can
+    // never find one — they used to, because FanOut built its own engine options.
+    [Fact]
+    public async Task Execute_ForwardsTheParentsJournalProbeDecisionToEveryItem()
+    {
+        var harness = new FanOutHarness(instanceData: new
+        {
+            documents = new[] { new { id = "doc-a" }, new { id = "doc-b" } }
+        });
+
+        var response = await harness.ExecuteAsync(skipJournalProbe: true);
+
+        response.IsSuccess.ShouldBeTrue();
+        harness.Engine.Calls.Count.ShouldBe(2);
+        harness.Engine.Calls.ShouldAllBe(c => c.SkipJournalProbe);
+    }
+
+    // A retried parent attempt (the engine downgrades the flag after attempt #1) or a reused
+    // transition record must keep probing: the items' rows from the earlier attempt exist.
+    [Fact]
+    public async Task Execute_KeepsTheProbeForItemsWhenTheParentProbes()
+    {
+        var harness = new FanOutHarness(instanceData: new
+        {
+            documents = new[] { new { id = "doc-a" }, new { id = "doc-b" } }
+        });
+
+        var response = await harness.ExecuteAsync();
+
+        response.IsSuccess.ShouldBeTrue();
+        harness.Engine.Calls.ShouldAllBe(c => !c.SkipJournalProbe);
+    }
 }

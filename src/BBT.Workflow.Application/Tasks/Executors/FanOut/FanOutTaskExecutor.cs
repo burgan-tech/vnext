@@ -604,7 +604,11 @@ public sealed class FanOutTaskExecutor : TaskExecutorBase<FanOutTask>
             PreparedTask = itemTask,
             SuppressDataApply = true,
             JournalTaskKey = $"{task.Key}#{item.Index}",
-            CaptureResponse = true
+            CaptureResponse = true,
+            // Item rows live under the parent's transition record, keyed `{key}#{index}`: when the
+            // parent's attempt knows no row can exist yet, neither can one for its items. Without
+            // this every item paid a probe SELECT that could never find anything.
+            SkipJournalProbe = context.SkipJournalProbe
         };
 
         var engineResult = await engine.ExecuteAsync(

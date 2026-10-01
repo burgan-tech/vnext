@@ -55,4 +55,14 @@ public sealed record TaskExecutorContext(
     /// must not depend on Application.
     /// </summary>
     public string? ResponseVariableKey { get; init; }
+
+    /// <summary>
+    /// The journal-probe decision of the engine attempt running this task: true only when no
+    /// journal row can exist yet for it (fresh transition record, first attempt). Executors that
+    /// run nested tasks through the engine themselves (FanOut items) forward it, because their
+    /// rows are keyed under the same transition record and are equally new. Mirrors the
+    /// Application-layer <c>TaskEngineExecutionOptions.SkipJournalProbe</c>; the engine downgrades
+    /// that flag on retry, so a retried attempt hands its nested tasks <c>false</c> too.
+    /// </summary>
+    public bool SkipJournalProbe { get; init; }
 }

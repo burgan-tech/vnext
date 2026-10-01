@@ -30,7 +30,9 @@ public sealed class LocalInstanceCommandGateway : IInstanceCommandGateway
         StartInstanceInput input,
         CancellationToken cancellationToken = default)
     {
-        return await _serviceScopeFactory.ExecuteWithWorkflowAsync(input.Domain, input.Workflow, input.Version,
+        // Schema scope only: StartAsync resolves the definition itself (LoadWorkflowAsync) and
+        // fails the same way when it is missing, so loading it here as well was a discarded lookup.
+        return await _serviceScopeFactory.ExecuteInSchemaScopeAsync(input.Workflow,
             async (sp, ct) =>
             {
                 var commandService = sp.GetRequiredService<IInstanceCommandAppService>();
@@ -53,7 +55,7 @@ public sealed class LocalInstanceCommandGateway : IInstanceCommandGateway
         StartInstanceInput input,
         CancellationToken cancellationToken = default)
     {
-        return await _serviceScopeFactory.ExecuteWithWorkflowAsync(input.Domain, input.Workflow, input.Version,
+        return await _serviceScopeFactory.ExecuteInSchemaScopeAsync(input.Workflow,
             async (sp, ct) =>
             {
                 var commandService = sp.GetRequiredService<IInstanceCommandAppService>();
@@ -77,7 +79,9 @@ public sealed class LocalInstanceCommandGateway : IInstanceCommandGateway
         TransitionInput input,
         CancellationToken cancellationToken = default)
     {
-        return _serviceScopeFactory.ExecuteWithWorkflowAsync(input.Domain, input.Workflow, string.Empty,
+        // Schema scope only: TransitionAsync resolves the definition from the instance's BOUND
+        // version; the pre-load here resolved `latest` and discarded it.
+        return _serviceScopeFactory.ExecuteInSchemaScopeAsync(input.Workflow,
             async (sp, ct) =>
             {
                 var commandService = sp.GetRequiredService<IInstanceCommandAppService>();
@@ -107,7 +111,9 @@ public sealed class LocalInstanceCommandGateway : IInstanceCommandGateway
         ChildSubflowCancelInput input,
         CancellationToken cancellationToken = default)
     {
-        return _serviceScopeFactory.ExecuteWithWorkflowAsync(domain, flow, input.Version ?? string.Empty,
+        // Same as TransitionAsync: the cancel goes through TransitionAsync, which resolves the
+        // definition itself.
+        return _serviceScopeFactory.ExecuteInSchemaScopeAsync(flow,
             async (sp, ct) =>
             {
                 var commandService = sp.GetRequiredService<IInstanceCommandAppService>();

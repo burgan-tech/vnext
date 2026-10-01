@@ -216,11 +216,16 @@ internal sealed class FanOutHarness
 
     public FanOutTaskExecutor Executor { get; }
 
-    public Task<Result<StandardTaskResponse>> ExecuteAsync(CancellationToken cancellationToken = default)
+    public Task<Result<StandardTaskResponse>> ExecuteAsync(
+        CancellationToken cancellationToken = default,
+        bool skipJournalProbe = false)
     {
         var onExecute = OnExecuteTask.Create(1, _task, _mappingCode);
         var context = new TaskExecutorContext(
-            _task, onExecute, ScriptContext, null, TaskTrigger.OnExecute, TaskExecutionOrigin.Flow);
+            _task, onExecute, ScriptContext, null, TaskTrigger.OnExecute, TaskExecutionOrigin.Flow)
+        {
+            SkipJournalProbe = skipJournalProbe
+        };
         return Executor.ExecuteAsync(context, cancellationToken);
     }
 
@@ -370,7 +375,8 @@ internal sealed class RecordingTaskExecutionEngine : ITaskExecutionEngine
                 options.PreparedTask,
                 context,
                 taskTrigger,
-                origin);
+                origin,
+                options.SkipJournalProbe);
             _calls.Enqueue(call);
             OnCallStarted?.Invoke(call);
 
@@ -482,7 +488,8 @@ internal sealed record EngineCall(
     WorkflowTask? PreparedTask,
     ScriptContext Context,
     TaskTrigger TaskTrigger,
-    TaskExecutionOrigin Origin);
+    TaskExecutionOrigin Origin,
+    bool SkipJournalProbe);
 
 /// <summary>One recorded <c>ItemInputHandler</c> invocation: the task it was given to mutate, the
 /// context it ran on, and the item it was binding.</summary>
