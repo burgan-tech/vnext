@@ -23,6 +23,8 @@ public sealed class WorkflowOutputMappingService(
         if (workflow.Output is null || !workflow.Output.HasMappingCode)
             return Result<WorkflowOutputResult?>.Ok(null);
 
+        using var activity = ScriptActivityHelper.StartExecuteActivity("workflowOutput");
+
         try
         {
             var handler = await scriptEngine.CompileToInstanceAsync<IOutputHandler>(
@@ -47,6 +49,8 @@ public sealed class WorkflowOutputMappingService(
         catch (Exception ex)
         {
             logger.WorkflowOutputScriptFailed(workflow.Key, ex);
+            // The caller degrades to the standard envelope, but the script itself failed.
+            activity.SetError(ex);
             // On failure fall back to the standard envelope (non-blocking).
             return Result<WorkflowOutputResult?>.Ok(null);
         }

@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using System.Text.Json;
-using BBT.Aether.Aspects;
 using BBT.Aether.Guids;
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
@@ -73,7 +72,12 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
             TaskEngineExecutionOptions.Default, cancellationToken);
 
     /// <inheritdoc />
-    [Trace]
+    /// <remarks>
+    /// Owns the <c>Task.Execute.{key}</c> span explicitly instead of through Aether's
+    /// <c>[Trace]</c> aspect: the aspect stamps <c>Ok</c> on every normal return, and this method
+    /// reports failure through its <see cref="Result{T}"/>, so every <c>SetError</c> below was
+    /// overwritten and a failed task's span always read as successful.
+    /// </remarks>
     public async Task<Result<TasksExecutionResult>> ExecuteAsync(
         OnExecuteTask onExecuteTask,
         Guid? instanceTransitionId,
@@ -83,6 +87,9 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
         TaskEngineExecutionOptions options,
         CancellationToken cancellationToken)
     {
+        using var activity = TaskExecutionActivityHelper.StartExecuteActivity(
+            onExecuteTask.Task.Key, taskTrigger, context);
+
         if (origin == TaskExecutionOrigin.Flow && instanceTransitionId is null)
         {
             return Result<TasksExecutionResult>.Fail(Error.Validation(
@@ -95,18 +102,6 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
             onExecuteTask.ErrorBoundary,
             GetStateBoundary(context),
             context.Workflow?.ErrorBoundary);
-
-        Activity.Current?.SetDisplayName($"Task.Execute.{onExecuteTask.Task.Key}");
-        var activity = Activity.Current;
-        if (activity != null)
-        {
-            activity.SetTag(TelemetryConstants.TagNames.TaskKey, onExecuteTask.Task.Key);
-            activity.SetTag(TelemetryConstants.TagNames.InstanceId, context.Instance?.Id.ToString());
-            activity.SetTag(TelemetryConstants.TagNames.Flow, context.Workflow?.Key);
-            activity.SetTag(TelemetryConstants.TagNames.Layer, TelemetryConstants.Layers.Orchestration);
-            activity.SetTag(TelemetryConstants.TagNames.SpanCategory, TelemetryConstants.SpanCategories.Business);
-            activity.SetTag(TelemetryConstants.TagNames.TaskTrigger, taskTrigger.ToString());
-        }
 
         _logger.LogInformation(
             "Executing task {TaskKey} with error-aware retry.",

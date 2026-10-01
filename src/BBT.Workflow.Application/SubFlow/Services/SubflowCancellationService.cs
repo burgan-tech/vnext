@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using BBT.Aether.Events;
 using BBT.Aether.Uow;
 using BBT.Workflow.BackgroundJobs.Options;
@@ -48,7 +49,8 @@ public sealed class SubflowCancellationService(
             input.SubInstanceId,
             input.InstanceId,
             input.Domain,
-            input.Flow);
+            input.Flow,
+            operation: "cancellation");
         activity?.SetTag(TelemetryConstants.TagNames.FlowVersion, input.Version ?? "N/A");
         activity?.SetTag(TelemetryConstants.TagNames.RootInstanceId, input.RootInstanceId?.ToString() ?? "N/A");
         activity?.SetTag(TelemetryConstants.TagNames.ParentInstanceId, input.InstanceId.ToString());
@@ -73,6 +75,25 @@ public sealed class SubflowCancellationService(
         };
         using var logScope = logger.BeginScope(scopeProperties);
 
+        // The body used to throw straight through this span (lock not acquired, parent workflow
+        // not loadable), which then closed Unset. Record the failure before it propagates.
+        try
+        {
+            await CancellationCoreAsync(input, activity, scopeProperties, cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            SubFlowActivityHelper.SetError(activity, ex.Message, ex);
+            throw;
+        }
+    }
+
+    private async Task CancellationCoreAsync(
+        SubItemCanceledInput input,
+        Activity? activity,
+        Dictionary<string, object> scopeProperties,
+        CancellationToken cancellationToken)
+    {
         Instance? parentInstance;
         Definitions.Workflow? parentWorkflow = null;
 

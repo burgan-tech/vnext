@@ -63,13 +63,22 @@ public sealed class TransitionTimerJobHandler(
                     executionContext.Actor = ExecutionActor.System;
                     executionContext.CallerMode = ExecMode.Async;
                     executionContext.IsReentry = true; // Timer transitions are re-entry executions
-                    await workflowExecutionService.ExecuteTransitionAsync(
+                    var result = await workflowExecutionService.ExecuteTransitionAsync(
                         executionContext,
                         cancellationToken
                     );
 
-                    activity?.SetStatus(ActivityStatusCode.Ok);
-                    logger.JobCompleted(args.JobName, args.TransitionKey, args.InstanceId);
+                    if (result.IsSuccess)
+                    {
+                        activity.SetOkUnlessError();
+                        logger.JobCompleted(args.JobName, args.TransitionKey, args.InstanceId);
+                    }
+                    else
+                    {
+                        // Was discarded: a timer whose transition failed closed its span Ok.
+                        activity.SetResultError(result.Error.Code, result.Error.Message);
+                        logger.JobFailed(args.JobName, args.InstanceId, result.Error.Message ?? "Unknown error");
+                    }
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
@@ -78,8 +87,7 @@ public sealed class TransitionTimerJobHandler(
                 }
                 catch (Exception e)
                 {
-                    activity?.SetStatus(ActivityStatusCode.Error, e.Message);
-                    activity?.AddTag("error.type", e.GetType().Name);
+                    activity.SetError(e);
                     logger.JobFailed(e, args.JobName, args.InstanceId);
                 }
                 finally

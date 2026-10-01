@@ -60,6 +60,7 @@ public sealed class ComponentGenerationProvider(
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             logger.ComponentCacheOperationFailed(ex, CacheActivityHelper.OperationGenerationGet, redisKey);
+            activity.SetError(ex);
 
             // Deliberately not written back. A failed read is no evidence the token is absent, and
             // replacing it would invalidate every pod's resolutions for no reason — worse, if reads keep
@@ -81,6 +82,7 @@ public sealed class ComponentGenerationProvider(
             // The token is still usable for this call; it just will not be shared with other callers,
             // so they resolve from the backend too. Correct, only slower.
             logger.ComponentCacheOperationFailed(ex, CacheActivityHelper.OperationGenerationSet, redisKey);
+            activity.SetError(ex);
             return token;
         }
 

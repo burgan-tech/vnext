@@ -52,7 +52,8 @@ public sealed class SubflowFaultService(
             input.SubInstanceId,
             input.InstanceId,
             input.Domain,
-            input.Flow);
+            input.Flow,
+            operation: "fault");
         activity?.SetTag(TelemetryConstants.TagNames.FlowVersion, input.Version ?? "N/A");
         activity?.SetTag(TelemetryConstants.TagNames.RootInstanceId, input.RootInstanceId?.ToString() ?? "N/A");
         activity?.SetTag(TelemetryConstants.TagNames.ParentInstanceId, input.InstanceId.ToString());

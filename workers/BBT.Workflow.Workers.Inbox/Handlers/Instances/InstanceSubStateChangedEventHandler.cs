@@ -41,59 +41,69 @@ internal sealed class InstanceSubStateChangedEventHandler(
             "InstanceSubStateChanged.Handle", eventData, correlationIdProvider,
             EventTraceMode.IsolatedDelivery, envelope.Id);
 
-        // This delivery is the durable BACKUP of the post-commit sub-state relay: in the normal case
-        // the relay already applied the change and SubflowStateService answers out_of_order for this
-        // one under the same per-sub-item lock. Dashboards separate primary vs backup on this tag.
-        Activity.Current?.SetTag(TelemetryConstants.TagNames.DeliveryRole, "backup");
+        // Exception filter that never catches: records the failure on the consumer span while
+        // it is still open (an isolated delivery is its own trace, so the error Aether records on
+        // Inbox.Process never reaches it) and lets the exception propagate untouched.
+        try
+        {
+            // This delivery is the durable BACKUP of the post-commit sub-state relay: in the normal case
+            // the relay already applied the change and SubflowStateService answers out_of_order for this
+            // one under the same per-sub-item lock. Dashboards separate primary vs backup on this tag.
+            Activity.Current?.SetTag(TelemetryConstants.TagNames.DeliveryRole, "backup");
 
-        var scopeProps = new Dictionary<string, object>
-        {
-            [TelemetryConstants.TagNames.Domain] = eventData.Domain,
-            [TelemetryConstants.TagNames.Flow] = eventData.Flow,
-            [TelemetryConstants.TagNames.FlowVersion] = eventData.Version ?? "N/A",
-            [TelemetryConstants.TagNames.InstanceId] = eventData.ParentInstanceId,
-            [TelemetryConstants.TagNames.ParentInstanceId] = eventData.ParentInstanceId,
-            [TelemetryConstants.TagNames.SubflowInstanceId] = eventData.SubInstanceId,
-        };
-        if (eventData.RootInstanceId.HasValue)
-        {
-            scopeProps[TelemetryConstants.TagNames.RootInstanceId] = eventData.RootInstanceId.Value;
-            Activity.Current?.SetBaggage(TelemetryConstants.TagNames.RootInstanceId,
-                eventData.RootInstanceId.Value.ToString());
-        }
-        using (logger.BeginScope(scopeProps))
-        {
-            logger.SubFlowStateChangedEventReceived(
-                eventData.SubInstanceId,
-                eventData.ParentInstanceId,
-                eventData.NewState);
-
-            var body = new SubFlowStateChangedInput
+            var scopeProps = new Dictionary<string, object>
             {
-                ParentInstanceId = eventData.ParentInstanceId,
-                SubInstanceId = eventData.SubInstanceId,
-                Domain = eventData.Domain,
-                Flow = eventData.Flow,
-                Version = eventData.Version,
-                NewState = eventData.NewState,
-                PreviousState = eventData.PreviousState,
-                NewStateType = (StateType)eventData.NewStateType,
-                NewStateSubType = (StateSubType)eventData.NewStateSubType,
-                ChangedAt = eventData.ChangedAt,
-                NewStatus = eventData.NewStatus,
-                NotificationSeq = eventData.NotificationSeq,
-                IsBackupDelivery = true,
-                TraceRoot = eventData.TraceRoot,
-                ParentTraceRoot = eventData.ParentTraceRoot,
-                EpisodeStartedAt = eventData.EpisodeStartedAt,
-                EpisodeTrigger = eventData.EpisodeTrigger,
-                EpisodeTransitionKey = eventData.EpisodeTransitionKey,
-                EpisodeTraceRoot = eventData.EpisodeTraceRoot
+                [TelemetryConstants.TagNames.Domain] = eventData.Domain,
+                [TelemetryConstants.TagNames.Flow] = eventData.Flow,
+                [TelemetryConstants.TagNames.FlowVersion] = eventData.Version ?? "N/A",
+                [TelemetryConstants.TagNames.InstanceId] = eventData.ParentInstanceId,
+                [TelemetryConstants.TagNames.ParentInstanceId] = eventData.ParentInstanceId,
+                [TelemetryConstants.TagNames.SubflowInstanceId] = eventData.SubInstanceId,
             };
+            if (eventData.RootInstanceId.HasValue)
+            {
+                scopeProps[TelemetryConstants.TagNames.RootInstanceId] = eventData.RootInstanceId.Value;
+                Activity.Current?.SetBaggage(TelemetryConstants.TagNames.RootInstanceId,
+                    eventData.RootInstanceId.Value.ToString());
+            }
+            using (logger.BeginScope(scopeProps))
+            {
+                logger.SubFlowStateChangedEventReceived(
+                    eventData.SubInstanceId,
+                    eventData.ParentInstanceId,
+                    eventData.NewState);
 
-            var route = $"api/v1/{eventData.Domain}/workflows/{eventData.Flow}/instances/{eventData.ParentInstanceId}/sub/state";
-            await forwarder.ForwardAsync(HttpMethod.Post, route, body,
-                eventData.Domain, eventData.Flow, eventData.Version, eventData.ParentInstanceId, cancellationToken);
+                var body = new SubFlowStateChangedInput
+                {
+                    ParentInstanceId = eventData.ParentInstanceId,
+                    SubInstanceId = eventData.SubInstanceId,
+                    Domain = eventData.Domain,
+                    Flow = eventData.Flow,
+                    Version = eventData.Version,
+                    NewState = eventData.NewState,
+                    PreviousState = eventData.PreviousState,
+                    NewStateType = (StateType)eventData.NewStateType,
+                    NewStateSubType = (StateSubType)eventData.NewStateSubType,
+                    ChangedAt = eventData.ChangedAt,
+                    NewStatus = eventData.NewStatus,
+                    NotificationSeq = eventData.NotificationSeq,
+                    IsBackupDelivery = true,
+                    TraceRoot = eventData.TraceRoot,
+                    ParentTraceRoot = eventData.ParentTraceRoot,
+                    EpisodeStartedAt = eventData.EpisodeStartedAt,
+                    EpisodeTrigger = eventData.EpisodeTrigger,
+                    EpisodeTransitionKey = eventData.EpisodeTransitionKey,
+                    EpisodeTraceRoot = eventData.EpisodeTraceRoot
+                };
+
+                var route = $"api/v1/{eventData.Domain}/workflows/{eventData.Flow}/instances/{eventData.ParentInstanceId}/sub/state";
+                await forwarder.ForwardAsync(HttpMethod.Post, route, body,
+                    eventData.Domain, eventData.Flow, eventData.Version, eventData.ParentInstanceId, cancellationToken);
+            }
+        }
+        catch (Exception ex) when (traceScope.RecordFailure(ex))
+        {
+            throw;
         }
     }
 }
