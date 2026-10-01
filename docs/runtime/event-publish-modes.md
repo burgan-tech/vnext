@@ -109,6 +109,69 @@ commits in a unit of work that has no settlement. That is load-bearing when a ch
 transition targets its own initial state — nothing moves afterwards, so this is the parent's only
 notification for that child.
 
+Implementation notes for the coalescing:
+
+- **`Instance.ChangeState` does not publish. It arms.** The event is published at the episode's
+  **rest point** by `Instance.PublishPendingSubStateChange()`, called from
+  `TransitionSettlement.ApplyAsync` inside the pipeline's unit of work — so the event and the state
+  it describes commit together.
+- **The value is unchanged, only the count.** The old burst's LAST event carried the final
+  `CurrentState`; the single coalesced event carries the same one. `PreviousState` is now the state
+  the episode STARTED in (nothing reads it — pinned as unread by the parent-notification council).
+- **Rest point ⊋ Active.** `ShouldPublishSubState` publishes on `chainSettled && OwnsStatus`, with
+  two exclusions. It is deliberately broader than the activation verdict: a lost CAS or an
+  already-Active owner yields no verdict, but the state that hop wrote is real and the parent must
+  hear it. Parked Busy (`BusyParked`, an unmet auto-gate) and `BusySubtype` **do** publish — they are
+  rest points, the instance is sitting there waiting for input.
+- **Creation flushes explicitly.** `InstanceCommandAppService` pre-positions a new instance into its
+  initial state and commits in a unit of work with no settlement, so it calls
+  `PublishPendingSubStateChange()` itself. **Load-bearing:** when a child's start transition targets
+  its own initial state (e.g. `subflow-orchestration-grandchild` → `grandchild-initial`) nothing
+  moves afterwards, so the pipeline's rest point has nothing to publish and this is the parent's
+  ONLY notification for that child. Removing it silently strands the parent's `effectiveState`.
+- The coalescing state is two unmapped private fields on the aggregate. Their lifetime is the
+  tracked instance's, which is exactly one episode: the inline auto-chain reuses it
+  (`CreateFromPreloaded`), every post-commit / retry / subflow-callback boundary loads a fresh one.
+- Pinned by `SubStateChangeCoalescingTests`.
+
+### Child state → parent `EffectiveState` (`SubflowStateService`)
+
+- **It takes the SAME per-sub-item lock the three terminal paths take**
+  (`vnext:{domain}:{flow}:{parentId}:sub:{subId:N}`, bounded wait from
+  `WorkflowExecutionOptions.SubItemTerminalLockRetry`). Before that it was the only parent-mutation
+  path with no lock, which made its `SubFlowStateChangedAt` read-check-write a real TOCTOU: two
+  deliveries could both read the same stamp, both pass the check, and the OLDER one land last.
+- **Do not "fix" this with a CAS on the correlation row placed before the parent load.** Every
+  terminal path mutates the correlation and the parent in ONE `SaveChanges` batch, and EF emits
+  `Instances` before `InstancesCorrelations` — the order is always P → C. A correlation-first CAS
+  inverts that to C → P with an aggregate load in between, and deadlocks (40P01) against the
+  terminal paths on the hot path. The lock is the mechanism; the write order stays P → C.
+- **Equal `ChangedAt` is ACCEPTED and re-applied**, only strictly-older is rejected. A duplicate
+  delivery carries the same stamp; re-applying is idempotent, and rejecting it would close the only
+  recovery path a redelivery has.
+- **The Inbox BACKUP checks before it locks** (`SubFlowStateChangedInput.IsBackupDelivery`, set only
+  by `InstanceSubStateChangedEventHandler`). One no-tracking `ProbeSubflowStateAsync` row: stale by
+  the same predicate, or the same notification (seq, else µs stamp) whose values the parent and the
+  open correlation already carry ⇒ dropped with no lock, no transaction, no write; anything else takes
+  the locked path. It is a plain READ COMMITTED select — no row lock, no write — so it does not
+  reintroduce the forbidden correlation-first CAS, and recovery is intact (an uncommitted first apply
+  leaves an older watermark). A backup that loses the lock re-probes before throwing. Relay
+  deliveries never probe.
+- **The state channel has its OWN lock backoff** (`WorkflowExecutionOptions.SubItemStateLockRetry`,
+  10 × 10 ms), not the terminal paths' 120 ms: the wait is `base*attempt + jitter(0..base)`, so at
+  120 ms the first retry alone slept 120–240 ms for a lock held a few ms (measured max 241 ms).
+- The UoW is `RequiresNew, IsTransactional = true` — not for the lock, for atomicity: without a
+  transaction Aether stages the outbox rows *after* `UpdateAsync(autoSave)` already committed the
+  Instance row, so the upward event and the state write could diverge.
+- It loads through `FindForSubflowStateChangeAsync` (tracked parent + only this child's OPEN
+  correlation, **no `DataList`**), not the default detail load.
+- **It is the second post-commit relay call site.** When the parent is itself a subflow the write
+  raises the grandparent's `InstanceSubStateChangedEvent`; the service snapshots the aggregate's
+  events before saving, commits, releases its lock, then hands them to `IPostCommitRelayDispatcher`.
+  That is what makes the fast path walk the whole ancestor chain instead of stopping at depth 1 —
+  the runner never sees an event raised inside this service's own UoW. Capped by
+  `PostCommitRelayDispatcher.MaxRelayDepth`; past it the event still travels the outbox.
+
 ### Relay depth — the whole ancestor chain, not one level
 
 Applying a sub-state change to a parent that is ITSELF a subflow raises the grandparent's

@@ -105,6 +105,33 @@ transition variants).
 authoring it is a `vnext-schema` follow-up, not part of this change. Until then, those transitions fall
 back to the flow-level `executionType` (or the caller's query parameter).
 
+## Runtime-internal calls keep their forced mode
+
+- **A flow/transition `executionType` (`S`/`A`) overrides the `sync` query parameter** (vnext#1003):
+  when set it is the source of truth (transition inner beats flow outer beats the query param); status,
+  enrichment and 200-vs-202 all follow the EFFECTIVE mode (`context.Mode`), and `CallerMode` keeps the
+  requested one. It is resolved ONLY for genuine external requests — `BuildTransitionContext` and the
+  start path skip it when `input.SuppressResponseEnrichment` is set, so runtime-internal subflow
+  start/forward keep their forced `sync=true`. Full guide: `docs/runtime/execution-type.md`.
+- Automatic continuations always execute inline and are awaited. An async request uses one initial
+  `flow.transition` job; no Scheduler job is created for each automatic hop.
+- Runtime-generated child start, active-child forward and descended retry calls always set
+  `sync=true`, independent of original caller mode and SubFlow (`S`) / SubProcess (`P`) type. The
+  call awaits the child's current activation to a rest point, not future human/event completion.
+
+## A sync response never evaluates extensions
+
+- **A sync response never evaluates extensions** (0.0.93). `EnrichOutputCoreAsync` projects
+  reload-or-reuse → schema field filter → (only when `workflow.Output` has mapping code and the
+  instance is not a subflow) script context + output mapping. `extensions` stays on the DTO as an
+  always-empty map so the shape does not change, and the `?extensions=` query parameter is gone
+  from start/transition. `IInstanceExtensionService` is no longer a dependency of
+  `InstanceCommandAppService` — that is the kill switch, enforced by the compiler. Extensions run
+  only on read surfaces (`InstanceQueryAppService`: instance GET, instance list, data function,
+  extensions endpoint). Do not reintroduce the pass "just for parity": it cost an extension task
+  round (HTTP calls included) plus a full-instance-data `ScriptContext` build per sync transition
+  for a field no client read.
+
 ## Implementation map
 
 - Value object: `ExecutionType` (`src/BBT.Workflow.Domain/Definitions/ExecutionType.cs`).

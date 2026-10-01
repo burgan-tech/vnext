@@ -14,9 +14,8 @@
 src/BBT.Workflow.Infrastructure/Migrations/**/*.Designer.cs
 src/BBT.Workflow.Infrastructure/Migrations/**/*ModelSnapshot.cs
 
-# Postman/Mockoon exports - flat request/response/mock-route JSON blobs, not
+# Mockoon exports - flat request/response/mock-route JSON blobs, not
 # source relationships.
-docs/monitoring/endpoints/*.postman_collection.json
 etc/docker/config/mockoon/*.json
 
 # Dependency lockfiles - not meaningful graph nodes.

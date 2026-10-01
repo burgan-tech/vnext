@@ -144,6 +144,25 @@ is the one carrying the role narrowing, the restriction never applies at all.
 
 State keys are compared **Ordinal** (they match `^[a-z0-9-]+$`).
 
+### Authoring shapes and readers
+
+- All three are workflow-level `Transition` objects (`Workflow.Cancel/UpdateData/Exit`) — full surface
+  including `roles`, `view`, `schema`, `annotations`.
+- Two authorable shapes, mixable in one array: bare state key, or `{ state, roles }`
+  (`AvailableInJsonConverter`, modelled on `ViewDisplayJsonConverter`). Role-less entry ⇔ bare string.
+- `Write` derives the shape from `HasRoles`, it does **not** remember how the entry was authored: the
+  string form and the roles-bearing object form round-trip byte-for-byte, while a role-less *object*
+  (`{state}` or `{state, roles: []}`) normalizes to the equivalent string. Lossless and deliberate —
+  same rule as `ViewDisplayJsonConverter` collapsing SDI-only to a bare string. Don't add an
+  "authored shape" flag to defeat it.
+- Never read `AvailableIn` directly. Use `Transition.IsAvailableInState(stateKey)` (state-only gate,
+  empty ⇒ every state) and `FindAvailableIn(stateKey)` (for role narrowing). Ordinal comparison;
+  duplicate states ⇒ first match wins, validator errors.
+- Execution gate for the well-known three is `WellKnownTransitionSpecification` (error code
+  `Transition:100024`); it claims keys via `Workflow.IsWellKnownTransitionKey`, which matches reserved
+  aliases **and** configured custom keys — matching aliases only leaves a custom-keyed transition
+  ungated by every spec.
+
 ## Authorization
 
 `roles` on `cancel`, `updateData` and `exit` is enforced, using the same `RoleGrant` evaluation as

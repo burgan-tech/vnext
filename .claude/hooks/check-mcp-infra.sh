@@ -3,7 +3,7 @@
 #
 # The MCP servers in .mcp.json are started by Claude Code itself; this only checks
 # that the services they talk to are up. It deliberately does NOT start anything:
-# the docker infra may be owned by another compose file (see CLAUDE.local.md).
+# the docker infra may be owned by another compose file (AGENTS.md runbook, step 4).
 # Anything printed on stdout is added to the session context.
 
 set -u

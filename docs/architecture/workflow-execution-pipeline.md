@@ -53,11 +53,24 @@ Profiles remove irrelevant steps:
 
 | Profile | Trigger | Notes |
 | --- | --- | --- |
-| Manual | Manual | Full pipeline, auto-chain and subflow allowed. |
-| AutoChain | Automatic | Skips preflight, active-subflow forwarding, Busy marking and timeout application. ResourceLock still runs. `AllowSubFlow=false`. |
-| Scheduled | Scheduled | Skips preflight and active-subflow forwarding. `AllowSubFlow=false`. |
-| Event | Event | Skips preflight and active-subflow forwarding. `AllowSubFlow=true`. |
-| ErrorBoundary | Error boundary | Skips preflight, active-subflow forwarding and ResourceLock; `AllowSubFlow=false`; `AllowAutoChain=true` (Auto is not excluded). |
+| Manual | Manual | Full pipeline. |
+| AutoChain | Automatic | Skips preflight, active-subflow forwarding, Busy marking and timeout application. ResourceLock still runs. |
+| Scheduled | Scheduled | Skips preflight and active-subflow forwarding. |
+| Event | Event | Skips preflight and active-subflow forwarding. |
+| ErrorBoundary | Error boundary | Skips preflight, active-subflow forwarding and ResourceLock; `AllowAutoChain=true` (Auto is not excluded). |
+
+### Error-boundary profile: what it does not exclude
+
+The error-boundary profile skips Preflight, ForwardToActiveSubflow and ResourceLock. It does **not**
+disable subflow handling and does not remove the Auto step: the plan is built from
+`ExcludedStepOrders` alone (`TransitionExecutor.BuildExecutionPlan`), and `LifecycleOrder.SubFlow`
+(70) is in no exclusion set. A profile-level "allow subflow" flag used to exist and was never read;
+it was deleted rather than given teeth, because enforcing it would have been an unrequested
+behaviour change.
+
+Resolution: `IPipelineProfileResolver.Resolve(workflowContext, transitionContext)` — if
+`IsErrorBoundaryTransition` → ErrorBoundary; else by the **workflow context's** `TriggerType` (not
+the transition definition's — the two can disagree and the inbound trigger is authoritative).
 
 A sixth profile is **composed on top of** the trigger's profile rather than selected instead of it.
 For an `updateData` transition, `PipelineExecutionProfile.ForSelfTarget` layers the state-lifecycle
@@ -101,6 +114,34 @@ means "no state change" in only one of them:
   exactly that step.
 - **A genuine self-loop** (`from: A, target: A`) — the one case where it does mean unchanged. Authors
   wanting the no-state-change semantics use `$self`; naming a state reads as "enter that state".
+
+### Self-target composition: invariants
+
+- **`SkipsStateLifecycle() = IsSelfTargetTransition() && IsUpdateDataTransition()`.** Two separate
+  claims, deliberately: the first is a fact about the target, the second is the policy. Only
+  `updateData` skips the lifecycle.
+- **The `+Self` profile name is about the target, not the policy.** Reading `Manual+Self` as "every
+  `$self` transition gets this" is the wrong conclusion and has cost real work twice — the selection
+  lives in `PipelineProfileResolver`. `ForSelfTarget` is the mechanism; the resolver owns who gets it.
+- **Only `$self` counts — never a literal target that happens to equal the current state.** Reading
+  it as self killed the initial state's OnEntry entirely and turned retry into a no-op (start
+  pre-positions via `InstanceCommandAppService`, `instance.ChangeState(initialState)`). Guarding the
+  incidental cases one at a time was tried and is unsound — do not reintroduce the comparison.
+- `ChangeStateStep` suppresses its state-change metric/log/span event on this path **only** (it is
+  scoped to `SkipsStateLifecycle`, so a `$self` shared transition — which really does re-enter the
+  state — still reports its state change). `Instance.ChangeState` separately suppresses
+  `sub:state-changed` whenever previous == new, keyed on the states themselves rather than on
+  the transition — and it only ARMS that notification; see the coalescing rule below.
+- A parent with an open SubFlow correlation short-circuits earlier, at
+  `HandleUpdateDataDataOnlyStep (21)` — data only, nothing else.
+
+### Epilogue order: Auto before Schedule
+
+**The epilogue order is Auto → Schedule.** When Auto selected a winner (`Directives.NextTransition`
+is set), `ScheduleTransitionsStep` arms no timer — the old churn of "arm, then delete with
+CancelScheduledJobs on the chain's next hop" was removed on purpose. If the hop chained with the
+winner faults, the timers were never armed either (they would have been useless on a faulted
+instance anyway).
 
 ## Contracts
 

@@ -97,6 +97,24 @@ every task. The read contract is in place for when a writer lands (tracked as a 
 issue #939); recording sub-steps from the task engine is its own design decision (volume, hot-path
 cost) and is out of scope here.
 
+## Quick reference
+
+- `GET …/instances/{instance}/functions/tasks` returns the full `InstanceTasks` journal in
+  execution order (unpaged); `GET …/functions/actions?taskId={id}` returns one row's
+  `InstanceActions` (400 `Instance:100039` without a valid `taskId`, 404 `Instance:100038` when the
+  task isn't the instance's own). Both are `IInstanceFunctionHandler` registrations (keys in
+  `FunctionTypeConst.TaskHistory/ActionHistory`) under the same `queryRoles` gate as the state
+  function. No state-body involvement — no `ResponseShapeVersion` or fingerprint change.
+- **Metadata only, deliberately.** The journal's `Request`/`Response`/`InvocationResult` payloads
+  carry mapping-built headers (auth material included) and are served by NO API since the Monitor
+  host's removal (#982); the one payload-derived public field is the faulted row's `{"error": …}`
+  reason. The repository read projects columns in SQL (`InstanceTaskHistoryRow`) so the jsonb
+  payloads never leave the database — do not switch it back to materializing the entity, and do not
+  add payload fields here.
+- **`InstanceActions` has no writer** (never has, since the initial commit) — the action function
+  returns an empty list until one lands. `InstanceTask.FaultedTaskId` is equally never set.
+  Full guide: `docs/runtime/instance-task-and-action-history.md`.
+
 ## Implementation map
 
 - Handlers: `TaskHistoryFunctionHandler` / `ActionHistoryFunctionHandler`

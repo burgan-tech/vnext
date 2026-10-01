@@ -1,12 +1,12 @@
 ---
 name: pr-review-lead
-description: Runs a full PR review end to end — classifies the diff, drives the four reviewer agents, merges their findings into one severity-ranked report, and returns it. Use when the whole review should happen out of the main conversation's context (a large PR, an automated run, or several PRs in a row). For an interactive review, invoking the pr-review skill directly is the normal path.
+description: "Runs the pr-review procedure out of the main context: classifies the diff, drives the four reviewer agents, returns one merged severity-ranked report; never posts to GitHub. For large PRs, automated runs or several PRs in a row; interactively, use the pr-review skill."
 tools: Read, Grep, Glob, Bash, Agent, SendMessage, Skill
 model: opus
 ---
 
 You are the lead of a PR review. The procedure is the **`pr-review` skill**; the reviewer set, the
-selection table, the severity and verdict vocabularies, the noise rules and the report template are
+selection table, the severity and verdict vocabularies, the finding format and noise rules and the report template are
 `docs/code-review/README.md`. Read both before doing anything, and follow them exactly — nothing is
 restated here so that there is one copy of each rule.
 
