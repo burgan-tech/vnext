@@ -232,6 +232,17 @@
       "title": "Every outbound task forwards the request's credential (sub, act_sub, position, client_id, role)",
       "description": "Per credential header: if the request carries it and the task's mapping left it absent or empty, it is sent; a non-empty mapping value wins. Applies to HTTP, SOAP, DaprService, DaprHttpEndpoint, GetInstance/GetInstances/GetInstanceData, Start, SubProcess and DirectTrigger, for cross-domain/remote calls and same-domain in-process calls alike — previously only sub/act_sub were filled, and only on HTTP-style calls. role is forwarded only as the caller sent it (its request header); a role a provider resolved for the caller (morph-idm get-roles) is never carried. DaprHttpEndpointBinding gains an optional Headers field for this.",
       "action": "To send another identity than the caller's (e.g. a service role), set a non-empty value for that header in the task's input mapping. An empty mapping value no longer suppresses the header — it is filled from the request. Review services that authorize on a role header: they now receive the caller's role when the mapping does not set one."
+    },
+    {
+      "id": "cacheaside-source-as-task-and-script-key",
+      "type": "behavior",
+      "component": "task",
+      "path": "attributes.config.sourceMapping",
+      "since": "0.0.98",
+      "severity": "warning",
+      "title": "CacheAsideTask runs its source as a task; key accepts a script",
+      "description": "sourceMapping is now the SOURCE task's mapping (InputHandler before the call, OutputHandler after it) and the cache stores its shaped output instead of the raw source result; the task-level onExecutionTasks[].mapping OutputHandler runs on hits and misses. keyExpression is removed in favour of key as a ScriptCode object (dynamicExpresso or ICacheKeyMapping). Cache I/O follows the 'statestore' routing mode; the 'cacheaside' wire type and routing key are gone. Entries written by earlier versions hold raw source results and are read back as if shaped.",
+      "action": "Move keyExpression into key: { location: 'dynamicExpresso', code: <expression> }. If sourceMapping used to shape the cached raw result in its OutputHandler, keep it (it now shapes before caching) and drop reshaping that depended on the raw payload; flush or let TTL expire old cache entries. Remove any Workflow:TaskInvocation:Modes.cacheaside override; use Modes.statestore instead."
     }
   ]
 }

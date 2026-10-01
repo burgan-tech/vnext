@@ -8,9 +8,10 @@ namespace BBT.Workflow.Definitions;
 /// Cache-Aside (read-through) Task Definition.
 /// Implements the cache-aside pattern as a first-class workflow task:
 /// <list type="number">
-///   <item>Attempts to read the value from a configured Dapr state store (the cache).</item>
-///   <item>On a cache miss (or when <see cref="ForceRefresh"/> is set), executes the referenced
-///   <see cref="SourceTask"/>, applies the optional <see cref="SourceMapping"/> to shape the result,
+///   <item>Attempts to read the value from a configured Dapr state store (the cache); a hit returns the
+///   cached shaped value.</item>
+///   <item>On a cache miss (or when <see cref="ForceRefresh"/> is set), runs the referenced
+///   <see cref="SourceTask"/> as a task, shapes its result with the optional <see cref="SourceMapping"/>,
 ///   writes the shaped value back to the cache with <see cref="TtlInSeconds"/>, and returns it.</item>
 /// </list>
 /// This removes the need for workflow designers to hand-wire "check cache → call service → write cache"
@@ -30,7 +31,8 @@ public sealed class CacheAsideTask : WorkflowTask
     }
 
     /// <summary>
-    /// Cache key, used verbatim. A dynamic key is computed by a mapping <c>InputHandler</c> that calls
+    /// Cache key, used verbatim (the string form of <c>key</c>). The object form of <c>key</c> populates
+    /// <see cref="KeyScript"/> instead and leaves this empty; a mapping <c>InputHandler</c> may also call
     /// <see cref="SetCacheKey"/> (the standard mapping mechanism), exactly as the State Store task does.
     /// </summary>
     public string CacheKey { get; private set; } = string.Empty;
@@ -57,19 +59,18 @@ public sealed class CacheAsideTask : WorkflowTask
     public Reference SourceTask { get; private set; } = null!;
 
     /// <summary>
-    /// Optional mapping applied to the cached (raw source) result before it is returned. Runs as the
-    /// mapping's <c>OutputHandler</c> in the executor's output stage, on both hits and misses.
+    /// The source task's mapping (InputHandler before the source call, OutputHandler after); its output
+    /// is what is cached.
     /// </summary>
     public ScriptCode? SourceMapping { get; private set; }
 
     /// <summary>
-    /// Optional Dynamic Expresso expression (a <see cref="ScriptCode"/> with
-    /// <c>location = "dynamicExpresso"</c>) that computes the cache key from the request/script context,
-    /// e.g. <c>"customer:" + context.Headers.customerId + ":profile"</c>. When present, its evaluated
-    /// string result overrides <see cref="CacheKey"/> at runtime — the lightweight way to derive a
-    /// vary-by-correct key from user-supplied data without a full <c>.csx</c> mapping.
+    /// Key script — the object form of <c>key</c>. Any <see cref="ScriptCode"/> kind:
+    /// <c>location = "dynamicExpresso"</c> is a Dynamic Expresso expression, anything else a Roslyn
+    /// <c>ICacheKeyMapping</c>; NAT, B64 and REF encodings are all accepted. Evaluated in the executor's
+    /// input stage; a non-empty result overrides <see cref="CacheKey"/>.
     /// </summary>
-    public ScriptCode? KeyExpression { get; private set; }
+    public ScriptCode? KeyScript { get; private set; }
 
     /// <summary>
     /// When <c>true</c> (default), cache read/write failures fall back to the source task instead of failing
@@ -95,7 +96,7 @@ public sealed class CacheAsideTask : WorkflowTask
     internal void SetConsistencyInternal(string? consistency) => Consistency = consistency;
     internal void SetSourceTaskInternal(Reference sourceTask) => SourceTask = sourceTask;
     internal void SetSourceMappingInternal(ScriptCode? sourceMapping) => SourceMapping = sourceMapping;
-    internal void SetKeyExpressionInternal(ScriptCode? keyExpression) => KeyExpression = keyExpression;
+    internal void SetKeyScriptInternal(ScriptCode? keyScript) => KeyScript = keyScript;
     internal void SetBypassOnCacheErrorInternal(bool bypassOnCacheError) => BypassOnCacheError = bypassOnCacheError;
     internal void SetForceRefreshInternal(bool forceRefresh) => ForceRefresh = forceRefresh;
 
@@ -104,7 +105,12 @@ public sealed class CacheAsideTask : WorkflowTask
         base.Configure(config);
 
         if (config.TryGetProperty("key", out var key))
-            CacheKey = key.GetString() ?? string.Empty;
+        {
+            if (key.ValueKind == JsonValueKind.String)
+                CacheKey = key.GetString() ?? string.Empty;
+            else if (key.ValueKind == JsonValueKind.Object)
+                KeyScript = key.Deserialize<ScriptCode>(JsonSerializerConstants.JsonOptions);
+        }
 
         if (config.TryGetProperty("storeName", out var storeName))
         {
@@ -126,10 +132,6 @@ public sealed class CacheAsideTask : WorkflowTask
         if (config.TryGetProperty("sourceMapping", out var sourceMapping) &&
             sourceMapping.ValueKind == JsonValueKind.Object)
             SourceMapping = sourceMapping.Deserialize<ScriptCode>(JsonSerializerConstants.JsonOptions);
-
-        if (config.TryGetProperty("keyExpression", out var keyExpression) &&
-            keyExpression.ValueKind == JsonValueKind.Object)
-            KeyExpression = keyExpression.Deserialize<ScriptCode>(JsonSerializerConstants.JsonOptions);
 
         if (config.TryGetProperty("bypassOnCacheError", out var bypass) &&
             (bypass.ValueKind == JsonValueKind.True || bypass.ValueKind == JsonValueKind.False))
@@ -177,7 +179,7 @@ public sealed class CacheAsideTask : WorkflowTask
         cloned.Consistency = Consistency;
         cloned.SourceTask = SourceTask;
         cloned.SourceMapping = SourceMapping;
-        cloned.KeyExpression = KeyExpression;
+        cloned.KeyScript = KeyScript;
         cloned.BypassOnCacheError = BypassOnCacheError;
         cloned.ForceRefresh = ForceRefresh;
 
@@ -197,7 +199,7 @@ public sealed class CacheAsideTask : WorkflowTask
         SetConsistencyInternal(source.Consistency);
         SetSourceTaskInternal(source.SourceTask);
         SetSourceMappingInternal(source.SourceMapping);
-        SetKeyExpressionInternal(source.KeyExpression);
+        SetKeyScriptInternal(source.KeyScript);
         SetBypassOnCacheErrorInternal(source.BypassOnCacheError);
         SetForceRefreshInternal(source.ForceRefresh);
     }
@@ -214,7 +216,7 @@ public sealed class CacheAsideTask : WorkflowTask
         Consistency = null;
         SourceTask = null!;
         SourceMapping = null;
-        KeyExpression = null;
+        KeyScript = null;
         BypassOnCacheError = true;
         ForceRefresh = false;
     }

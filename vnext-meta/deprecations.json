@@ -164,6 +164,16 @@
       "replacement": "x-encryption.type 'encrypt'",
       "severity": "error",
       "message": "'transport' was declared by the vocabulary but never enforced by any runtime; it is removed and a schema carrying it is rejected at publish. Use 'encrypt' (AES-256-GCM of instance data at rest, decrypted for the exemption roles on read)."
+    },
+      "id": "cacheaside-key-expression-removed",
+      "type": "field",
+      "component": "task",
+      "path": "attributes.config.keyExpression",
+      "deprecatedSince": "0.0.98",
+      "removedAt": "0.0.98",
+      "replacement": "attributes.config.key",
+      "severity": "error",
+      "message": "CacheAsideTask.keyExpression is removed. Move the expression into the key field as a ScriptCode object: key: { location: 'dynamicExpresso', code: '...' } (a non-dynamicExpresso location compiles an ICacheKeyMapping instead). FunctionCache keeps its own keyExpression; it is unrelated."
     }
   ]
 }

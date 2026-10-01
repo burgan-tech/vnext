@@ -279,6 +279,16 @@
       "title": "Deleting an instance's InstanceSecrets row (crypto-shredding) takes effect on a pod only once its in-process L1 entry is gone (sliding SchemaEncryption:SecretCacheSlidingMinutes, default 30, or a restart); until then that pod keeps opening the values",
       "workaround": "After shredding, wait out the sliding window or restart the orchestration pods.",
       "fixedIn": null
+    },
+    {
+      "id": "cacheaside-source-mapping-input-ignored",
+      "affectedVersions": ">=0.0.71 <=0.0.97",
+      "severity": "error",
+      "component": "task",
+      "path": "attributes.config.sourceMapping",
+      "title": "CacheAsideTask ran its source task without the source mapping's InputHandler: sourceMapping was applied only as output shaping over the cached raw source result, so a source that needs its configuration set by a mapping (for example GetInstanceData SetKey, an HTTP URL or body) ran unconfigured, and the cache held the raw payload instead of the shaped value.",
+      "workaround": "Upgrade to 0.0.98, where the source runs as a task with sourceMapping as its mapping (InputHandler -> invoke -> OutputHandler) and the shaped output is cached. Until then, run the configuring task separately in onExecutionTasks.",
+      "fixedIn": "0.0.98"
     }
   ]
 }

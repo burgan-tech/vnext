@@ -45,8 +45,8 @@ When this page and the code disagree, the code wins; re-derive with the grep rec
 - **orchestration / state** — `CacheSet<T>`, `ComponentCacheStore`, `StateFunctionCache`,
   `DataFunctionCache`, `InstanceSchemaFunctionCache`, `CachingDiscoveryRegistryClient`,
   `DistributedCacheIdempotencyStore` (platform cache, `IDistributedCacheService`); plus, since
-  the task invocation routing change (issue #1007), `LocalStateStoreTaskInvoker` and
-  `LocalCacheAsideTaskInvoker` (domain task, `IStateStoreClient` — same abstraction and default
+  the task invocation routing change (issue #1007), `LocalStateStoreTaskInvoker`
+  (domain task and CacheAside cache I/O, `IStateStoreClient` — same abstraction and default
   `DAPR_STATE_STORE_NAME` resolution as the execution-side invokers below), and
   `StateStoreCacheGateway` for the function-level response cache. These are new consumers of the
   domain-task entry point on **this** host, not a second component — see

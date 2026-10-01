@@ -252,6 +252,28 @@ public static partial class WorkflowLogs
         this ILogger logger, Guid instanceId, string transitionKey, string errorCode);
 
     /// <summary>
+    /// A CacheAside task's cache read or write failed and <c>bypassOnCacheError</c> let it continue
+    /// without the cache (read: the source runs; write: the source result is returned uncached).
+    /// The error is the state store's message as reported through the <c>statestore</c> gateway.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10176,
+        Level = LogLevel.Warning,
+        Message = "CacheAside {TaskKey}: cache {Stage} failed; continuing without the cache (bypassOnCacheError=true): {Error}")]
+    public static partial void CacheAsideBypassedCacheError(
+        this ILogger logger, string? taskKey, string stage, string? error);
+
+    /// <summary>
+    /// A CacheAside task's <c>sourceTask</c> resolved to another CacheAside task, which is rejected
+    /// (nested read-through would cache a cache).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10177,
+        Level = LogLevel.Warning,
+        Message = "CacheAside {TaskKey}: source task {SourceTaskKey} is itself a CacheAside task and was rejected")]
+    public static partial void CacheAsideSourceTypeRejected(this ILogger logger, string taskKey, string sourceTaskKey);
+
+    /// <summary>
     /// Logs at startup when a declared ActivitySource is missing from this host's MERGED
     /// configuration.
     /// <para>
@@ -946,24 +968,6 @@ public static partial class WorkflowLogs
         Message = "SSL certificate validation is disabled for in-process task {TaskKey} ({TaskType}) - Url: {Url}")]
     public static partial void LocalTaskInvocationSslValidationDisabled(
         this ILogger logger, string? taskKey, string taskType, string url);
-
-    /// <summary>
-    /// Logs when the local cache-aside invoker swallows a cache read or write failure under
-    /// <c>bypassOnCacheError=true</c> and continues without the cache (read: falls through to the
-    /// source task; write: returns the source result anyway). <c>bypassOnCacheError</c> defaults to
-    /// <c>true</c>, so without this line a state-store outage silently degrades every cache-aside
-    /// task to its source task with no signal at any level — this is the sole diagnostic for that
-    /// degradation on the Orchestration host, restored via <c>CacheAsideInvocation</c>'s
-    /// notification callback (the shared core still does not log; it reports, and each host owns
-    /// its own message). Mirrors the Execution host's own <c>LogWarning</c> at the same two call
-    /// sites.
-    /// </summary>
-    [LoggerMessage(
-        EventId = 10173,
-        Level = LogLevel.Warning,
-        Message = "CacheAside {TaskKey}: cache {Stage} failed; continuing without the cache (bypassOnCacheError=true)")]
-    public static partial void LocalCacheAsideBypassedCacheError(
-        this ILogger logger, Exception exception, string? taskKey, string stage);
 
     /// <summary>
     /// Logs when an in-process (orchestrator-local) task invocation is aborted by
