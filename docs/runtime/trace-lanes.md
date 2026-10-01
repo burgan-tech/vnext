@@ -96,8 +96,9 @@ node any more — see [Trace Span Tree](trace-span-tree.md).
 | `TransitionJobHandler` | `Reset` from `payload.TraceRoot` / `ParentTraceRoot` / `LaneSeq` | `Reset` from `payload.EpisodeStartedAt` / `EpisodeTrigger` / `EpisodeTransitionKey` / `EpisodeTraceRoot` (`ToActivationEpisode()`); a payload with a null start seeds a `Partial` `job` episode at the job span |
 | `ForwardToSubflowJobHandler`, `StartSubflowJobHandler` | `EnterChildLane()` | **inherited** from the parent lane |
 | `TriggerTaskExecutorBase` (trigger-family tasks) | `EnterChildLane(trigger)` | **restarted** at the invocation span |
-| `EventTraceScope` (Inbox) | `Reset` from a lane-aware event, else the handler span | `Reset` from the event's three episode fields (null clears) |
-| `internal/subflow-forward`, `/complete`, `/sub/fault`, `/sub/cancel` | `Reset` from the request body | `Reset` from the body's three episode fields |
+| `EventTraceScope` (Inbox) | `Reset` from a lane-aware event, else the handler span | `Reset` from the event's four episode fields (null clears) |
+| `internal/subflow-forward`, `/complete`, `/sub/fault`, `/sub/cancel`, `/sub/state` | `Reset` from the request body | `Reset` from the body's four episode fields |
+| `sub/instances/start` (cross-domain child start) | — (keeps the child's own server-span anchor) | `Use` the body's episode (`CreateSubInstanceDto`); a SubProcess started from the **Execution host** (`SubProcessRemoteInvoker`) sends none, so that child's episode restarts at its own server span |
 | `StateNotifyJobHandler` | `Reset` from `payload.TraceRoot` / `ParentTraceRoot` | none — a notification is not a rest point |
 
 ## Safety rules
@@ -188,8 +189,8 @@ ones, always copied together**, beside `TraceRoot` / `ParentTraceRoot`:
 |---|---|---|
 | `TransitionJobPayload` (`ITraceableJobPayload` defaults null) | `AsyncTransitionStrategy.BuildDirectPayload`; the outbox relay may reconstruct it from `TransitionContinuationRequested` | `TransitionJobHandler` → `Reset(…, payload.ToActivationEpisode())` |
 | `TransitionContinuationRequested` (`ILaneAwareDistributedEvent`) | the initial async-accept outbox/fallback path; `TraceStampingDistributedEventBus` additionally fills any lane-aware event `??=`-style, never overwriting a preset value | Inbox `EventTraceScope`; the `/enqueue` relay copies it onto the job payload |
-| `InstanceSubCompletedEvent` / `InstanceSubFaultedEvent` / `InstanceSubCanceledEvent` | `TraceStampingDistributedEventBus` | their `IPostCommitEventRelay<TEvent>` relays and the Inbox `InstanceSub*EventHandler`s map them onto the inputs below |
-| `FlowCompletedInput` / `SubFlowFaultedInput` / `SubItemCanceledInput` | the relay / inbox mappings above | `internal/…/complete`, `/sub/fault`, `/sub/cancel` → `Reset`; the `Subflow*Service`s copy them back onto the event republished by a terminal revert |
+| `InstanceSubCompletedEvent` / `InstanceSubFaultedEvent` / `InstanceSubCanceledEvent` / `InstanceSubStateChangedEvent` | `TraceStampingDistributedEventBus` | their `IPostCommitEventRelay<TEvent>` relays and the Inbox `InstanceSub*EventHandler`s map them onto the inputs below |
+| `FlowCompletedInput` / `SubFlowFaultedInput` / `SubItemCanceledInput` / `SubFlowStateChangedInput` | the relay / inbox mappings above | `internal/…/complete`, `/sub/fault`, `/sub/cancel`, `/sub/state` → `Reset`; the `Subflow*Service`s copy them back onto the event republished by a terminal revert |
 | `SubflowForwardInput` | `RemoteInstanceCommandAppService` | `internal/subflow-forward` → `Reset` |
 | Cross-domain child start body (`CreateSubInstanceDto`) | `RemoteInstanceCommandAppService.StartSubAsync` | `sub/instances/start` → `Use` the carried episode while preserving the child server-span anchor |
 
@@ -218,7 +219,9 @@ them, and the client's question there is "fire → Active".
 - **Only status owners emit** (`OwnsStatus`). A non-owning execution beside an in-flight chain — an
   `updateData` on a Busy parent, a forwarded request — leaves the verdict to the owner.
 - **An automatic winner does not close the episode.** `TransitionPipeline` passes
-  `chainSettled:false` while another inline hop is pending. `ContinuationEnqueued` remains a legacy
+  `chainSettled:false` while another inline hop is pending. `ContinuationEnqueued`
+  (`PipelineDirectives.ContinuationEnqueued`, set by `MarkContinuationEnqueued`; read as
+  `chainSettled: !continuations.ContinuationEnqueued` in `PostCommitParentMutationService`) remains a legacy
   field; the current DI graph has no enqueue continuation strategy, so an automatic hop never
   becomes a Scheduler job.
 - **A parent handing off to a live SubFlow never emits.** It is still Busy, so `busy.subflow`

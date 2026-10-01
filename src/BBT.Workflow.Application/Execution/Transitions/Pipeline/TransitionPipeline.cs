@@ -20,6 +20,7 @@ namespace BBT.Workflow.Execution.Pipeline;
 public class TransitionPipeline
 {
     private readonly TransitionExecutor _executor;
+    private readonly ISubItemEventDataResolver? _subItemDataResolver;
     private readonly ContinuationDispatcher _continuationDispatcher;
     private readonly IInstanceBusyManager _busyMarker;
     private readonly ITransitionContextFactory _contextFactory;
@@ -71,8 +72,10 @@ public class TransitionPipeline
         IStateNotificationScheduler stateNotificationScheduler,
         ITransitionAdmissionService admissionService,
         IInstanceStatusLock statusLock,
-        ILogger<TransitionPipeline> logger)
+        ILogger<TransitionPipeline> logger,
+        ISubItemEventDataResolver? subItemDataResolver = null)
     {
+        _subItemDataResolver = subItemDataResolver;
         _executor = executor;
         _continuationDispatcher = continuationDispatcher;
         _busyMarker = busyMarker;
@@ -247,6 +250,10 @@ public class TransitionPipeline
             var pipelineResult = await _executor.ExecuteOneAsync(context, cancellationToken);
             if (!pipelineResult.IsSuccess)
             {
+                // The caller will see success for most faults (below), so the failure has to be
+                // put on the enclosing spans here or the transaction reads as a success.
+                Activity.Current.MarkFaultedOnLocalChain(pipelineResult.Error.Code, pipelineResult.Error.Message);
+
                 await MarkInstanceFaultedAsync(context, pipelineResult.Error, cancellationToken);
 
                 // The instance is now faulted (F) regardless. For caller-actionable errors
@@ -437,8 +444,7 @@ public class TransitionPipeline
         // commit that used to run unnamed after the failing step's span had already closed.
         using var activity = PipelineStepActivityHelper.StartTransitionActivity(
             "Instance.Fault", context.TransitionKey);
-        activity?.SetTag("error.code", error.Code);
-        activity?.SetStatus(ActivityStatusCode.Error, error.Message);
+        activity.SetResultError(error.Code, error.Message);
 
         await using var statusScope = await _statusLock.AcquireAsync(context.LockKey, cancellationToken);
 
@@ -478,7 +484,8 @@ public class TransitionPipeline
             _logger.IncidentRecorded(instance.Id, incident.State, incident.Transition, incident.ErrorCode, incident.BoundaryAction);
         }
 
-        instance.Fault(context.Domain, context.CallerMode == ExecMode.Sync);
+        instance.Fault(context.Domain, context.CallerMode == ExecMode.Sync,
+            subItemData: await _subItemDataResolver.ResolveOrStoredAsync(instance, cancellationToken));
         await _instanceRepository.UpdateAsync(instance, true, cancellationToken);
         ActivityContext commitContext;
         using (var commitActivity = PipelineStepActivityHelper.StartTransitionActivity(

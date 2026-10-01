@@ -391,6 +391,12 @@ public static class GraphQLAggregationService
         if (numeric) fallback = $"({fallback})::numeric";
         var path = field.Trim();
         if (path.StartsWith("attributes.", StringComparison.OrdinalIgnoreCase)) path = path[11..].Trim();
+
+        // groupBy keys are returned to the caller unfiltered and aggregates over ciphertext are meaningless.
+        if (context?.IsEncryptedOrAncestor(path) == true)
+            throw new BBT.Workflow.ExceptionHandling.SchemaFilterValidationException(
+                $"Field '{path}' is encrypted (x-encryption type 'encrypt') and cannot be grouped or aggregated.");
+
         return column == "Data" ? AttributeSqlExpression.Resolve(path, numeric ? "numeric" : "text", fallback, context) : fallback;
     }
 

@@ -2,7 +2,9 @@ using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using BBT.Aether.Results;
+using BBT.Aether.Users;
 using BBT.Workflow.Definitions;
+using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.ErrorHandling;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Runtime;
@@ -190,6 +192,54 @@ public abstract class TriggerTaskExecutorBase<TTask>(
     /// </summary>
     protected static int MapErrorToStatusCode(Error error)
         => ErrorNormalizer.MapPrefixToStatusCode(error.Prefix) ?? 500;
+
+    /// <summary>
+    /// The credential an instance read (GetInstance / GetInstances / GetInstanceData) runs as, same-domain and cross-domain
+    /// alike: the task's own headers, plus the caller's <c>sub</c>, <c>act_sub</c>, <c>position</c>, <c>client_id</c> and
+    /// <c>role</c> where the task did not set them (<see cref="HttpTaskInvocation.BuildOutgoingHeaders"/>). The caller's
+    /// values come from its request headers, so a role a provider resolved for it (morph-idm) is never carried — the target
+    /// resolves roles from the forwarded credential itself. The read's x-roles, x-masking and x-encryption are evaluated for
+    /// this caller.
+    /// </summary>
+    protected static Dictionary<string, string?> BuildReadCredential(JsonElement? taskHeaders, ScriptContext? scriptContext)
+        => HttpTaskInvocation.BuildOutgoingHeaders(
+            ConvertTaskHeadersToDictionary(taskHeaders),
+            scriptContext?.Headers is null ? null : scriptContext.GetHeadersAsDictionary());
+
+    /// <summary>
+    /// The same credential as <see cref="BuildReadCredential"/>, serialized as the remote binding's <c>Headers</c>: the
+    /// Execution host copies these onto the cross-domain request, so the target domain evaluates the same caller a
+    /// same-domain read would.
+    /// </summary>
+    protected static string SerializeReadCredential(string? bindingHeadersJson, ScriptContext? scriptContext)
+    {
+        Dictionary<string, string?>? bindingHeaders = null;
+        if (!string.IsNullOrWhiteSpace(bindingHeadersJson))
+        {
+            try
+            {
+                bindingHeaders = JsonSerializer.Deserialize<Dictionary<string, string?>>(bindingHeadersJson);
+            }
+            catch (JsonException)
+            {
+                bindingHeaders = null;
+            }
+        }
+
+        return JsonSerializer.Serialize(HttpTaskInvocation.BuildOutgoingHeaders(
+            bindingHeaders, scriptContext?.Headers is null ? null : scriptContext.GetHeadersAsDictionary()));
+    }
+
+    /// <summary>
+    /// Makes <paramref name="credential"/> the current user for the read, the way the target domain's middleware would
+    /// for the same headers. Always replaces the ambient user: <c>ICurrentUser</c> is AsyncLocal and role resolution reads
+    /// it before the headers, so leaving it in place would evaluate the pipeline caller instead of the task. An empty
+    /// credential is an unauthenticated, role-less user (<c>ChangeFromHeaders</c> is a no-op for an empty set).
+    /// </summary>
+    protected static IDisposable ReadAs(ICurrentUser currentUser, IReadOnlyDictionary<string, string?> credential)
+        => credential.Count == 0
+            ? currentUser.Change(new BasicUserInfo(null))
+            : currentUser.ChangeFromHeaders(credential);
 
     /// <summary>
     /// Converts task headers (JsonElement?) to Dictionary for local Input objects.

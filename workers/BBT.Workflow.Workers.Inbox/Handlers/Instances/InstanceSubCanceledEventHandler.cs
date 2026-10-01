@@ -37,76 +37,86 @@ internal sealed class InstanceSubCanceledEventHandler(
             "InstanceSubCanceled.Handle", eventData, correlationIdProvider,
             EventTraceMode.IsolatedDelivery, envelope.Id, eventData.RearmAttempt);
 
-        // This delivery is the durable BACKUP of the post-commit terminal relay: in the normal case the
-        // relay already settled the parent and the settlement path answers AlreadySettled via the
-        // pre-lock probe. Dashboards separate primary vs backup deliveries on this tag.
-        Activity.Current?.SetTag(TelemetryConstants.TagNames.DeliveryRole, "backup");
-
-        var scopeProps = new Dictionary<string, object>
+        // Exception filter that never catches: records the failure on the consumer span while
+        // it is still open (an isolated delivery is its own trace, so the error Aether records on
+        // Inbox.Process never reaches it) and lets the exception propagate untouched.
+        try
         {
-            [TelemetryConstants.TagNames.Domain] = eventData.Domain,
-            [TelemetryConstants.TagNames.Flow] = eventData.Flow,
-            [TelemetryConstants.TagNames.FlowVersion] = eventData.Version ?? "N/A",
-            [TelemetryConstants.TagNames.InstanceId] = eventData.InstanceId,
-            [TelemetryConstants.TagNames.RootInstanceId] = eventData.RootInstanceId?.ToString() ?? "N/A",
-            [TelemetryConstants.TagNames.ParentInstanceId] = eventData.InstanceId,
-            [TelemetryConstants.TagNames.SubflowInstanceId] = eventData.SubInstanceId,
-            [TelemetryConstants.TagNames.SubItemType] = eventData.SubItemType.ToString(),
-            [TelemetryConstants.TagNames.SubItemOutcome] = "Canceled",
-            [TelemetryConstants.TagNames.TerminationOrigin] = eventData.TerminationOrigin.ToString(),
-            [TelemetryConstants.TagNames.TerminationInitiator] = eventData.InitiatorInstanceId.ToString(),
-            [TelemetryConstants.TagNames.TerminationCascadeId] = eventData.CascadeId.ToString()
-        };
-        if (eventData.RootInstanceId.HasValue)
-        {
-            Activity.Current?.SetBaggage(
-                TelemetryConstants.TagNames.RootInstanceId,
-                eventData.RootInstanceId.Value.ToString());
-        }
+            // This delivery is the durable BACKUP of the post-commit terminal relay: in the normal case the
+            // relay already settled the parent and the settlement path answers AlreadySettled via the
+            // pre-lock probe. Dashboards separate primary vs backup deliveries on this tag.
+            Activity.Current?.SetTag(TelemetryConstants.TagNames.DeliveryRole, "backup");
 
-        using (logger.BeginScope(scopeProps))
-        {
-            logger.SubFlowEventReceived(
-                eventData.SubInstanceId,
-                eventData.InstanceId,
-                eventData.Domain,
-                eventData.Flow);
-
-            var body = new SubItemCanceledInput
+            var scopeProps = new Dictionary<string, object>
             {
-                InstanceId = eventData.InstanceId,
-                SubInstanceId = eventData.SubInstanceId,
-                Domain = eventData.Domain,
-                Flow = eventData.Flow,
-                Version = eventData.Version,
-                CanceledState = eventData.CanceledState,
-                CanceledAt = eventData.CanceledAt,
-                RootInstanceId = eventData.RootInstanceId,
-                Sync = false,
-                Termination = new TerminationContext(
-                    eventData.TerminationOrigin,
-                    eventData.InitiatorInstanceId,
-                    eventData.CascadeId),
-                // Relay the lane so the parent resume on the receiving side lands at the parent
-                // instance's level rather than nesting under the relay endpoint.
-                TraceRoot = eventData.TraceRoot,
-                ParentTraceRoot = eventData.ParentTraceRoot,
-                EpisodeStartedAt = eventData.EpisodeStartedAt,
-                EpisodeTrigger = eventData.EpisodeTrigger,
-                EpisodeTransitionKey = eventData.EpisodeTransitionKey,
-                EpisodeTraceRoot = eventData.EpisodeTraceRoot,
-                RearmAttempt = eventData.RearmAttempt
+                [TelemetryConstants.TagNames.Domain] = eventData.Domain,
+                [TelemetryConstants.TagNames.Flow] = eventData.Flow,
+                [TelemetryConstants.TagNames.FlowVersion] = eventData.Version ?? "N/A",
+                [TelemetryConstants.TagNames.InstanceId] = eventData.InstanceId,
+                [TelemetryConstants.TagNames.RootInstanceId] = eventData.RootInstanceId?.ToString() ?? "N/A",
+                [TelemetryConstants.TagNames.ParentInstanceId] = eventData.InstanceId,
+                [TelemetryConstants.TagNames.SubflowInstanceId] = eventData.SubInstanceId,
+                [TelemetryConstants.TagNames.SubItemType] = eventData.SubItemType.ToString(),
+                [TelemetryConstants.TagNames.SubItemOutcome] = "Canceled",
+                [TelemetryConstants.TagNames.TerminationOrigin] = eventData.TerminationOrigin.ToString(),
+                [TelemetryConstants.TagNames.TerminationInitiator] = eventData.InitiatorInstanceId.ToString(),
+                [TelemetryConstants.TagNames.TerminationCascadeId] = eventData.CascadeId.ToString()
             };
-            var route = $"api/v1/{eventData.Domain}/workflows/{eventData.Flow}/instances/{eventData.InstanceId}/sub/cancel";
-            await forwarder.ForwardAsync(
-                HttpMethod.Post,
-                route,
-                body,
-                eventData.Domain,
-                eventData.Flow,
-                eventData.Version,
-                eventData.InstanceId,
-                cancellationToken);
+            if (eventData.RootInstanceId.HasValue)
+            {
+                Activity.Current?.SetBaggage(
+                    TelemetryConstants.TagNames.RootInstanceId,
+                    eventData.RootInstanceId.Value.ToString());
+            }
+
+            using (logger.BeginScope(scopeProps))
+            {
+                logger.SubFlowEventReceived(
+                    eventData.SubInstanceId,
+                    eventData.InstanceId,
+                    eventData.Domain,
+                    eventData.Flow);
+
+                var body = new SubItemCanceledInput
+                {
+                    InstanceId = eventData.InstanceId,
+                    SubInstanceId = eventData.SubInstanceId,
+                    Domain = eventData.Domain,
+                    Flow = eventData.Flow,
+                    Version = eventData.Version,
+                    CanceledState = eventData.CanceledState,
+                    CanceledAt = eventData.CanceledAt,
+                    RootInstanceId = eventData.RootInstanceId,
+                    Sync = false,
+                    Termination = new TerminationContext(
+                        eventData.TerminationOrigin,
+                        eventData.InitiatorInstanceId,
+                        eventData.CascadeId),
+                    // Relay the lane so the parent resume on the receiving side lands at the parent
+                    // instance's level rather than nesting under the relay endpoint.
+                    TraceRoot = eventData.TraceRoot,
+                    ParentTraceRoot = eventData.ParentTraceRoot,
+                    EpisodeStartedAt = eventData.EpisodeStartedAt,
+                    EpisodeTrigger = eventData.EpisodeTrigger,
+                    EpisodeTransitionKey = eventData.EpisodeTransitionKey,
+                    EpisodeTraceRoot = eventData.EpisodeTraceRoot,
+                    RearmAttempt = eventData.RearmAttempt
+                };
+                var route = $"api/v1/{eventData.Domain}/workflows/{eventData.Flow}/instances/{eventData.InstanceId}/sub/cancel";
+                await forwarder.ForwardAsync(
+                    HttpMethod.Post,
+                    route,
+                    body,
+                    eventData.Domain,
+                    eventData.Flow,
+                    eventData.Version,
+                    eventData.InstanceId,
+                    cancellationToken);
+            }
+        }
+        catch (Exception ex) when (traceScope.RecordFailure(ex))
+        {
+            throw;
         }
     }
 }

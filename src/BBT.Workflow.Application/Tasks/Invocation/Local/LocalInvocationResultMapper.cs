@@ -26,25 +26,6 @@ internal static class LocalInvocationResultMapper
     };
 
     /// <summary>
-    /// The reverse direction, needed by <c>LocalCacheAsideTaskInvoker</c>: its source-dispatch
-    /// delegate must hand the shared <c>CacheAsideInvocation</c> core a wire-side result, whether
-    /// the source ran through a local invoker (which returns the orchestrator-side type) or through
-    /// the remote fallback.
-    /// </summary>
-    public static Execution.TaskInvocationResult ToWireResult(TaskInvocationResult result) => new()
-    {
-        IsSuccess = result.IsSuccess,
-        StatusCode = result.StatusCode,
-        Body = result.Body,
-        Data = result.Data,
-        ErrorMessage = result.ErrorMessage,
-        Headers = InvocationKeyNormalizer.Normalize(result.Headers),
-        Metadata = InvocationKeyNormalizer.Normalize(result.Metadata),
-        TaskType = result.TaskType,
-        ExecutionDurationMs = result.ExecutionDurationMs
-    };
-
-    /// <summary>
     /// Reads the exception type name the shared invocation cores stamp into
     /// <c>Metadata["ExceptionType"]</c> on their unhandled-exception path. The cores swallow the
     /// exception themselves by contract (they return a <see cref="Execution.TaskInvocationResult"/>,

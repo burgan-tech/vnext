@@ -141,6 +141,14 @@ without sharing code.
 
 ---
 
+### `cancel` and `exit` at execution
+
+- **`cancel` and `exit` are parent-retained, in `authorize` as at execution.**
+  `HandleCancelPreflightStep` (order 5) skips to `CreateTransition` (20), over the forward at order 10,
+  so they never reach the subflow; `IsSubflowForward` also excludes them (`BypassBusyCheck`). Together
+  with `updateData` and an in-state shared transition, those are the only keys `authorize` answers
+  against the parent while a SubFlow is active.
+
 ## Role resolution
 
 The caller's roles come from the configured `CallerRoleProvider` — **not** from `ICurrentUser.Roles`

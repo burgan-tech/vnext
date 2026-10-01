@@ -102,7 +102,7 @@ mid-transition when Roslyn compiles an empty script.
 `ScriptCodeValidator` closes that gap at publish time for every slot a definition can carry — transition
 `timer`/`rule`/`mapping`, `onExecutionTasks[].mapping`, state `onEntries`/`onExits`/`notifications`,
 `subFlow.mapping`, view- and schema-selection `rule`s, workflow and function `output`, function
-`cache.keyExpression`/`generationKeyExpression`, and `CacheAsideTask`'s `sourceMapping`/`keyExpression`.
+`cache.keyExpression`/`generationKeyExpression`, and `CacheAsideTask`'s `sourceMapping` and `key` script.
 Matching the `vnext-schema` guard:
 
 | Slot | Verdict |

@@ -201,6 +201,50 @@
       "action": "Rename the colliding task keys so each normalizes to a distinct variable name (and update the output script's TaskResponse/OutputResponse reads to match) before republishing the function."
     },
     {
+      "id": "get-instance-task-reads-guarded",
+      "type": "behavior",
+      "component": "task",
+      "path": "GetInstanceTask | GetInstancesTask | GetInstanceDataTask; GET instances/{instance} | GET instances",
+      "since": "0.0.99",
+      "severity": "warning",
+      "title": "Get* task reads and instance GET/list apply x-roles, x-masking and x-encryption",
+      "description": "Instance GET and list apply the same field exposure as the data function. GetInstance/GetInstances/GetInstanceData tasks no longer read under a system identity: they are evaluated as the header set the task presents — its mapping headers plus the pipeline caller's credential (sub, act_sub, position, client_id, role) for each one the mapping does not set — identically for a same-domain and a cross-domain read. role travels only as the caller sent it; a role a provider resolved (morph-idm get-roles) is never carried, the target resolves it from the forwarded credential. A task with no headers therefore reads as its caller.",
+      "action": "To read as someone other than the caller (e.g. a service role on the x-roles / x-encryption allow list), set the credential in the task's input mapping (SetHeaders); a mapping value always wins. Do not copy an encrypt token returned by the task into another field — the write is refused (EncryptedValueReservedException)."
+    },
+    {
+      "id": "script-sees-encrypt-tokens",
+      "type": "behavior",
+      "component": "script",
+      "path": "context.Instance.Data | context.Body (runtime-filled with instance data)",
+      "since": "0.0.99",
+      "severity": "warning",
+      "title": "Scripts see x-encryption 'encrypt' fields as tokens; context.Instance.DecryptAsync(path) opens them",
+      "description": "InstanceData.Data is the stored row (tokens included) everywhere in the engine, so context.Instance.Data, context.Instance.LatestData.Data / FindData(version).Data and the context.Body the runtime fills with instance data (extensions, view rules, output and timeout mapping, function info, transition task scripts after a parallel branch wrote data) carry the stored token of an encrypt field instead of its plaintext. context.Instance.DecryptAsync(path, cancellationToken) returns the plaintext of the instance's OWN field at that path and null for anything else (plain field, unknown path, undecryptable value, a token passed as a path). Unchanged: a SubFlow output mapping's Body (child data, opened by the child with its own key), a transition task's own request Body. DynamicExpresso rules, dynamic role grants and human-task text see the token.",
+      "action": "Where a script needs the value of an encrypt field (logic, comparison, passing it on), call await context.Instance.DecryptAsync(\"path\", cancellationToken). Do not copy a token into another field — the write is refused (EncryptedValueReservedException). Move DynamicExpresso conditions on encrypt fields to a C# condition script."
+    },
+    {
+      "id": "task-caller-credential-forwarded",
+      "type": "behavior",
+      "component": "task",
+      "path": "HttpTask | SoapTask | DaprServiceTask | DaprHttpEndpointTask | GetInstanceTask | GetInstancesTask | GetInstanceDataTask | StartTask | SubProcessTask | DirectTriggerTask headers",
+      "since": "0.0.99",
+      "severity": "warning",
+      "title": "Every outbound task forwards the request's credential (sub, act_sub, position, client_id, role)",
+      "description": "Per credential header: if the request carries it and the task's mapping left it absent or empty, it is sent; a non-empty mapping value wins. Applies to HTTP, SOAP, DaprService, DaprHttpEndpoint, GetInstance/GetInstances/GetInstanceData, Start, SubProcess and DirectTrigger, for cross-domain/remote calls and same-domain in-process calls alike — previously only sub/act_sub were filled, and only on HTTP-style calls. role is forwarded only as the caller sent it (its request header); a role a provider resolved for the caller (morph-idm get-roles) is never carried. DaprHttpEndpointBinding gains an optional Headers field for this.",
+      "action": "To send another identity than the caller's (e.g. a service role), set a non-empty value for that header in the task's input mapping. An empty mapping value no longer suppresses the header — it is filled from the request. Review services that authorize on a role header: they now receive the caller's role when the mapping does not set one."
+    },
+    {
+      "id": "cacheaside-source-as-task-and-script-key",
+      "type": "behavior",
+      "component": "task",
+      "path": "attributes.config.sourceMapping",
+      "since": "0.0.98",
+      "severity": "warning",
+      "title": "CacheAsideTask runs its source as a task; key accepts a script",
+      "description": "sourceMapping is now the SOURCE task's mapping (InputHandler before the call, OutputHandler after it) and the cache stores its shaped output instead of the raw source result; the task-level onExecutionTasks[].mapping OutputHandler runs on hits and misses. keyExpression is removed in favour of key as a ScriptCode object (dynamicExpresso or ICacheKeyMapping). Cache I/O follows the 'statestore' routing mode; the 'cacheaside' wire type and routing key are gone. Entries written by earlier versions hold raw source results and are read back as if shaped.",
+      "action": "Move keyExpression into key: { location: 'dynamicExpresso', code: <expression> }. If sourceMapping used to shape the cached raw result in its OutputHandler, keep it (it now shapes before caching) and drop reshaping that depended on the raw payload; flush or let TTL expire old cache entries. Remove any Workflow:TaskInvocation:Modes.cacheaside override; use Modes.statestore instead."
+    },
+    {
       "id": "async-transition-job-payload-reference-only",
       "type": "behavior",
       "component": "transition",

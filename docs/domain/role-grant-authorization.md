@@ -358,17 +358,53 @@ vnext-example's `AuthorizationChainLab/MorphIdmProviderTests`.
 An unrecognized provider name degrades to `default` rather than failing startup: a typo costs a
 role-resolution strategy, not a boundary.
 
-### Deliberate system-identity reads
+### Trigger-task reads and system-identity reads
 
-Some reads intentionally run as the system, not the caller, and skip `queryRoles` and `x-roles`
-entirely:
+- The instance-read trigger tasks — `GetInstanceData`, `GetInstance`, `GetInstances` — read as the header set they
+  present: the task's mapping headers plus the pipeline caller's credential — `sub`, `act_sub`, `position`, `client_id`,
+  `role` — wherever the mapping did not set them. `x-roles`, `x-masking` and `x-encryption` apply to that caller, the
+  same way for a same-domain read (under `ICurrentUser.Change`) and a cross-domain one (headers on the request). `role`
+  travels only as the caller sent it: a role morph-idm resolved is never carried — the target resolves it again from the
+  forwarded credential.
+- Related-instance access from scripts (`context.Related`) still runs as the system and skips `queryRoles`,
+  `x-roles` and `x-masking` — see [Related Instance Access](../runtime/script-related-instance-access.md).
 
-- `GetInstanceDataTaskExecutor` — a workflow task reading another instance.
-- Related-instance access from scripts (`context.Related`) — see
-  [Related Instance Access](../runtime/script-related-instance-access.md).
+**History.** From 2026-09-28 a SERVER-ONLY `SystemRead` flag made same-domain task reads unfiltered while cross-domain
+reads went out with no credential at all, so one task answered differently by domain. The flag is deleted.
 
-Copying a field read this way into instance data makes it visible to callers the grants would otherwise
-have filtered it from. Document it where you copy it.
+Copying a field read by a task or through `context.Related` into instance data makes it visible to callers the grants would otherwise
+have filtered or masked it from. Document it where you copy it. See [Field Masking](field-masking.md).
+
+## Definition-time validation of dynamic grants
+
+- Three role forms: **static** (`backoffice.operator`), **predefined** (`$InstanceStarter`,
+  `$PreviousUser`, `$InstanceBehalfOfStarter`, `$PreviousBehalfOfUser`), **dynamic**
+  (`$user.` / `$userBehalfOf.` / `$role.` + `$.context.<path>`). Only dynamic is validated; the
+  other two are free-form.
+- A qualifier prefix ⇒ dynamic *intent*. The remainder must be the literal `$.context.`
+  (**Ordinal — case-sensitive**) plus a non-empty nav path. `$user.customer`,
+  `$user.$.Context.x` and `$role.$.context.` are all errors.
+- Why strict: `DynamicRoleGrant.TryParse` returns null on any deviation, and runtime `IsMatch` then
+  falls through to the **static** comparison — the grant becomes silently inert (an ALLOW that never
+  grants, a DENY that never denies). Definition time is the only place it is visible.
+- Never re-implement the parse rules in a validator. Use `DynamicRoleGrant.Classify`, which shares
+  `TryParse`'s constants and comparisons; the `Classify == WellFormed ⟺ TryParse != null` invariant
+  is pinned by `DynamicRoleGrantTests`.
+
+## Evaluator invariants (quick list)
+
+- **Every decision point takes the caller's WHOLE role set, never one of them.** `IsAnyRoleAllowed`,
+  `IsRoleAllowedForGrantsAsync`, `IsTransitionAllowedForRoleAsync`, `IsTransitionAllowedInStateAsync`
+  and `FilterAuthorizedTransitionKeysAsync` all take `IReadOnlyCollection<string>?`. Feeding one role
+  — `ICallerRoleResolver.SingleRoleOf`, which is `roles[0]` — made the answer depend on header ORDER:
+  measured on the lab, `x-roles: other,ht-c-approver` was offered nothing while
+  `x-roles: ht-c-approver,other` was offered the transition, same caller, same grants. It also put
+  the deny group out of reach, since an AND across roles needs the roles. `SingleRoleOf` survives for
+  cache scoping (`CallerScopeHash`) and state aliasing display, never for a decision.
+- **Every surface evaluating a grant set must be given the same `AuthorizationRequestContext`.** Omitting
+  it does not fail closed, it makes `$.context.Headers/QueryParameters/RouteValues` **empty**, so the
+  grant silently cannot match — the transition vanishes from `availableTransitions` while the `authorize`
+  function, which does pass the context, still answers *allowed* for it.
 
 ## Behavior changes in 0.0.97
 

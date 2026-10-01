@@ -161,6 +161,136 @@
       "fixedIn": "0.0.95"
     },
     {
+      "id": "masked-field-same-version-republish-stale-etag",
+      "affectedVersions": ">=0.0.99",
+      "severity": "warning",
+      "component": "schema",
+      "path": "schema.attributes.schema.properties[].x-masking",
+      "title": "Re-publishing a master schema at the same version with changed x-masking (or x-roles) does not move the data-function ETag; clients holding a body keep it (304) until the instance data changes or the cache entry expires.",
+      "workaround": "Bump the schema version whenever x-masking or x-roles changes. A schema-generation token in the ETag material is the candidate fix, pending a 304-path latency measurement.",
+      "fixedIn": null
+    },
+    {
+      "id": "list-filter-probes-guarded-fields",
+      "affectedVersions": ">=0.0.79",
+      "severity": "warning",
+      "component": "query",
+      "path": "instances?filter= / sort / groupBy",
+      "title": "Instance list filters, sorting and groupBy run on the raw JSONB value, so a caller can probe an x-roles-hidden field through them. x-masking cannot be combined with x-filterOperators/x-sortable (rejected at publish), but the x-roles case is pre-existing.",
+      "workaround": "Do not declare x-filterOperators or x-sortable on fields guarded by x-roles; set Workflow:InstanceFiltering:EnforceMasterSchemaFiltering=true so only declared fields are filterable.",
+      "fixedIn": null
+    },
+    {
+      "id": "field-hash-low-entropy-values",
+      "affectedVersions": ">=0.0.99",
+      "severity": "warning",
+      "component": "schema",
+      "path": "schema.attributes.schema.properties[].x-encryption (type hash)",
+      "title": "x-encryption hash is pseudonymisation, not anonymisation: low-entropy values (national ids, phone numbers) can be brute-forced by anyone who can read the instance's salt from InstanceSecrets.",
+      "workaround": "Restrict database access; use x-roles to hide values that must not be matchable at all.",
+      "fixedIn": null
+    },
+    {
+      "id": "field-encryption-plaintext-copies",
+      "affectedVersions": ">=0.0.99",
+      "severity": "high",
+      "component": "runtime",
+      "path": "InstanceDataWriteService",
+      "title": "x-encryption 'encrypt' covers InstancesData only: InstanceTransition.Body/Header, InstanceTask.Request/Response/InvocationResult, outbox InstanceSubCompleted/Faulted payloads, job payloads and the human-task cache still hold the plaintext",
+      "workaround": "Treat encrypt as InstanceData field encryption, not 'PII encrypted at rest'. Restrict database/backup access accordingly; Phase 2 extends encryption to these copies.",
+      "fixedIn": null
+    },
+    {
+      "id": "field-encryption-lazy-history",
+      "affectedVersions": ">=0.0.99",
+      "severity": "medium",
+      "component": "runtime",
+      "path": "InstancesData",
+      "title": "Rows written before a field became x-encryption 'encrypt' stay plaintext (append-only history, lazy migration); new rows are encrypted",
+      "workaround": "A backfill tool is Phase 2. Until then treat history rows written before enablement as plaintext.",
+      "fixedIn": null
+    },
+    {
+      "id": "field-encryption-script-key-access",
+      "affectedVersions": ">=0.0.99",
+      "severity": "high",
+      "component": "runtime",
+      "path": "InstanceSecrets",
+      "title": "The per-instance x-encryption key and salt are stored in plaintext in the flow schema's InstanceSecrets table next to the data they protect; a database reader (or a script with raw database access) can decrypt every encrypt value",
+      "workaround": "Accepted (requester decision): database security is owned by the DB team and the runtime never serves the secrets. encrypt protects API exposure and single-table dumps, not a database reader.",
+      "fixedIn": null
+    },
+    {
+      "id": "field-encryption-rollback-floor",
+      "affectedVersions": ">=0.0.99",
+      "severity": "medium",
+      "component": "runtime",
+      "path": "SchemaEncryption:EncryptWrites",
+      "title": "A runtime older than 0.0.99 cannot open x-encryption tokens and would hand them to the engine as values",
+      "workaround": "Publish the first encrypt/hash schema only after every orchestration pod runs >= 0.0.99 and its migration (InstanceSecrets) is applied; roll back with SchemaEncryption__EncryptWrites=false rather than a binary downgrade.",
+      "fixedIn": null
+    },
+    {
+      "id": "field-encryption-selector-unguarded",
+      "affectedVersions": ">=0.0.99",
+      "severity": "medium",
+      "component": "runtime",
+      "path": "InstanceSelectorResolver",
+      "title": "Event selectors (FindByFilterAsync) carry no schema context and are not refused on an x-encryption 'encrypt' path; they match ciphertext and silently find nothing",
+      "workaround": "Never select on an encrypted field in an event mapping or selector.",
+      "fixedIn": null
+    },
+    {
+      "id": "field-encryption-same-instance-token-swap",
+      "affectedVersions": ">=0.0.99",
+      "severity": "low",
+      "component": "runtime",
+      "path": "AesGcmFieldCipher",
+      "title": "x-encryption tokens are bound to scheme, instance and path but not to the row, so a database writer could swap tokens between versions of the same instance and path without detection",
+      "workaround": "Accepted: it keeps unchanged values' tokens stable, echo possible and rollback safe. Database write access is outside the threat model.",
+      "fixedIn": null
+    },
+    {
+      "id": "field-encryption-job-deferral",
+      "affectedVersions": ">=0.0.99",
+      "severity": "low",
+      "component": "runtime",
+      "path": "InstanceDataWriteService",
+      "title": "A write that would carry an unopenable x-encryption encrypt value forward (its InstanceSecrets row deleted outside the runtime, or the token tampered) is refused with Instance:100040 at the write, so the transition fails at the step that writes instead of being refused before admission; reads keep serving the token",
+      "workaround": "The runtime deletes a secret row only together with its instance. A missing row is crypto-shredded data: cancel the instance, or write a new value to the field.",
+      "fixedIn": null
+    },
+    {
+      "id": "field-hash-no-cross-instance-matching",
+      "affectedVersions": ">=0.0.99",
+      "severity": "info",
+      "component": "schema",
+      "path": "schema.attributes.schema.properties[].x-encryption (type hash)",
+      "title": "x-encryption hash digests use a per-instance salt, so the same value hashes differently in two instances; digests cannot be joined or deduplicated across instances",
+      "workaround": "By design. Keep a value that must be matched across instances outside hash (e.g. under x-roles).",
+      "fixedIn": null
+    },
+    {
+      "id": "field-encryption-shred-l1-delay",
+      "affectedVersions": ">=0.0.99",
+      "severity": "low",
+      "component": "runtime",
+      "path": "InstanceSecretStore",
+      "title": "Deleting an instance's InstanceSecrets row (crypto-shredding) takes effect on a pod only once its in-process L1 entry is gone (sliding SchemaEncryption:SecretCacheSlidingMinutes, default 30, or a restart); until then that pod keeps opening the values",
+      "workaround": "After shredding, wait out the sliding window or restart the orchestration pods.",
+      "fixedIn": null
+    },
+    {
+      "id": "cacheaside-source-mapping-input-ignored",
+      "affectedVersions": ">=0.0.71 <=0.0.97",
+      "severity": "error",
+      "component": "task",
+      "path": "attributes.config.sourceMapping",
+      "title": "CacheAsideTask ran its source task without the source mapping's InputHandler: sourceMapping was applied only as output shaping over the cached raw source result, so a source that needs its configuration set by a mapping (for example GetInstanceData SetKey, an HTTP URL or body) ran unconfigured, and the cache held the raw payload instead of the shaped value.",
+      "workaround": "Upgrade to 0.0.98, where the source runs as a task with sourceMapping as its mapping (InputHandler -> invoke -> OutputHandler) and the shaped output is cached. Until then, run the configuring task separately in onExecutionTasks.",
+      "fixedIn": "0.0.98"
+    },
+    {
       "id": "async-transition-oversized-body-stuck-busy",
       "affectedVersions": ">=0.0.26",
       "severity": "error",

@@ -24,5 +24,11 @@ public sealed class DaprHttpEndpointBinding
     /// Request body as JSON string.
     /// </summary>
     public string? Body { get; init; }
+
+    /// <summary>
+    /// Request headers as JSON string — the caller's credential (sub, act_sub, position, client_id, role), added by the
+    /// orchestrator; the task definition itself declares no headers. Optional: absent means none.
+    /// </summary>
+    public string? Headers { get; init; }
 }
 

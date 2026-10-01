@@ -21,7 +21,7 @@ git diff --cached        # Staged changes
 
 From the diff output, identify:
 - What feature/component was added or modified
-- Which domain area it belongs to (see [Category Mapping](#category-mapping))
+- Which domain area it belongs to (see [REFERENCE.md](REFERENCE.md) § Category Mapping)
 - Whether this is a **new feature**, **feature update**, or **breaking change**
 
 The user may also provide additional context and details beyond the diff. Wait for this input before proceeding.
@@ -38,27 +38,34 @@ Do NOT guess on ambiguous points — ask first, then generate.
 
 ### Step 2: Fetch Current Docs State
 
-Use `gh` CLI to check if relevant documentation already exists:
+Read the docs from the **local sibling clone first** — `../vnext-docs` (the platform-repo convention
+in `AGENTS.md` § Platform repositories; a machine may record a different path in `CLAUDE.local.md`):
 
 ```bash
-# List existing doc files in the relevant category
-gh api "repos/burgan-tech/vnext-docs/git/trees/main?recursive=1" \
-  --jq '.tree[] | select(.path | startswith("docs/")) | .path'
-
-# Fetch a specific doc file content
-gh api "repos/burgan-tech/vnext-docs/contents/<path>" --jq '.content' | base64 -d
+git -C ../vnext-docs pull --ff-only            # only if the user agrees to refresh it
+find ../vnext-docs/docs ../vnext-docs/architecture -name '*.md*' | sort
 ```
 
-Check both Turkish source (`docs/`) and English translation (`i18n/en/docusaurus-plugin-content-docs/current/`).
+Check both the Turkish source (`docs/`) and the English translation
+(`i18n/en/docusaurus-plugin-content-docs/current/`).
+
+**Fallback only when no clone exists** (and after asking once whether to clone it to
+`../vnext-docs`): read the remote through `gh api`:
+
+```bash
+gh api "repos/burgan-tech/vnext-docs/git/trees/main?recursive=1" \
+  --jq '.tree[] | select(.path | startswith("docs/")) | .path'
+gh api "repos/burgan-tech/vnext-docs/contents/<path>" --jq '.content' | base64 -d
+```
 
 ### Step 3: Classify and Act
 
 #### A — New Feature (no existing doc counterpart)
 
 1. State clearly: "Bu özellik vnext-docs'da henüz belgelenmemiş. Yeni döküman oluşturulmalı."
-2. Produce a complete Markdown file following Docusaurus conventions (see [Doc Template](#doc-template))
+2. Produce a complete Markdown file following Docusaurus conventions (read [REFERENCE.md](REFERENCE.md) § Doc Template and § Docusaurus Conventions)
 3. Specify the exact target path: `docs/<category>/<filename>.md`
-4. Indicate where to register it in the sidebar file (`sidebars.ts` or `sidebars-architecture.ts`)
+4. Indicate where to register it in the sidebar file (`sidebars.ts` or `sidebars-architecture.ts`; snippet in [REFERENCE.md](REFERENCE.md) § Sidebar Registration)
 5. If the feature is user-facing, note that EN translation is also needed at `i18n/en/docusaurus-plugin-content-docs/current/<category>/<filename>.md`
 
 #### B — Feature Update (existing doc needs changes)
@@ -95,86 +102,6 @@ Write the generated doc content to a local file under `ai-docs/vnext-docs/` in t
 ```
 ai-docs/vnext-docs/<category>/<filename>.md          # Turkish (primary)
 ai-docs/vnext-docs/i18n-en/<category>/<filename>.md   # English (if needed)
-```
-
-## Category Mapping
-
-Map code changes to docs categories:
-
-| Code Area | Docs Category | Sidebar |
-|-----------|---------------|---------|
-| Pipeline steps, transitions | `docs/components/workflow` or `architecture/domain-model/` | `sidebars.ts` or `sidebars-architecture.ts` |
-| Task types (HTTP, Script, Dapr, etc.) | `docs/components/tasks/<type>.md` | `sidebars.ts` → Workflow → Tasks |
-| Functions (built-in, custom) | `docs/components/functions/` | `sidebars.ts` → Workflow → Functions |
-| Instance data, schema | `docs/concepts/instance-data` or `docs/components/schema` | `sidebars.ts` → Core Concepts |
-| Error handling, boundaries | `docs/how-to/error-handling` | `sidebars.ts` → Practical Guides |
-| Views, extensions | `docs/components/view` or `docs/components/extension` | `sidebars.ts` → Workflow |
-| SubFlow, correlation | `docs/getting-started/tutorial-subflow` | `sidebars.ts` → Getting Started |
-| API endpoints, REST | `docs/api-reference/rest-api` | `sidebars.ts` → API Reference |
-| DB schema, persistence | `architecture/data/` | `sidebars-architecture.ts` → Data |
-| Domain events, patterns | `architecture/patterns/` | `sidebars-architecture.ts` → Patterns |
-| Config (URL templates, discovery, timeout) | `docs/configuration/` | `sidebars.ts` → Yapılandırma |
-| Mappings, interfaces | `docs/components/mappings` or `docs/components/interfaces` | `sidebars.ts` → Workflow |
-
-## Doc Template
-
-```markdown
----
-sidebar_position: <number>
-title: <Title>
-description: <One-line description for SEO and sidebar>
----
-
-# <Title>
-
-<Brief introduction — what this feature/component does and why it exists.>
-
-## Genel Bakış
-
-<High-level explanation with a diagram or flow if applicable.>
-
-## Yapılandırma
-
-<Configuration options, JSON/YAML examples with field descriptions.>
-
-## Kullanım
-
-<Step-by-step usage with code snippets.>
-
-## Örnekler
-
-<Concrete examples showing real-world usage patterns.>
-
-## İlgili Konular
-
-- [Related Doc 1](./related-1)
-- [Related Doc 2](./related-2)
-```
-
-## Docusaurus Conventions
-
-- **No HTML comments** — use `{/* comment */}` for MDX comments
-- **Frontmatter required** — every page needs `title` at minimum
-- **Language** — TR primary, EN secondary; new content always starts in TR
-- **Blog truncation** — use `{/* truncate */}` marker
-- **Admonitions** — use `:::note`, `:::tip`, `:::warning`, `:::danger`, `:::info`
-- **Code blocks** — use fenced blocks with language tag; add `title="filename"` for file context
-- **Links** — relative paths for internal links: `[text](./sibling)` or `[text](../parent/child)`
-
-## Sidebar Registration
-
-When adding a new page, show the user the sidebar diff:
-
-```typescript
-// sidebars.ts — add to the relevant category
-{
-  type: 'category',
-  label: 'Category Name',
-  items: [
-    'category/existing-page',
-+   'category/new-page',      // ← new doc
-  ],
-}
 ```
 
 ## Checklist

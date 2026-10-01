@@ -26,6 +26,32 @@ public sealed class SchemaFilterContext
     };
 
     public bool EnforceFiltering { get; init; } = true;
+
+    /// <summary>
+    /// Paths declared <c>x-encryption.type: "encrypt"</c>. The database holds ciphertext there, so a filter, sort,
+    /// groupBy or aggregation on such a path — or on one of its ancestors, whose <c>@&gt;</c> containment would
+    /// reach it — is refused whatever <see cref="EnforceFiltering"/> says. Refused rather than answered with zero
+    /// rows: a silent empty result ("no instance for this customer yet") is how duplicates get created.
+    /// </summary>
+    public IReadOnlySet<string> EncryptedPaths { get; init; } = new HashSet<string>();
+
+    /// <summary>True when <paramref name="fieldPath"/> is an encrypted path or an ancestor of one.</summary>
+    public bool IsEncryptedOrAncestor(string fieldPath)
+    {
+        if (EncryptedPaths.Count == 0 || string.IsNullOrEmpty(fieldPath))
+            return false;
+        if (EncryptedPaths.Contains(fieldPath))
+            return true;
+
+        var prefix = fieldPath + ".";
+        foreach (var path in EncryptedPaths)
+        {
+            if (path.StartsWith(prefix, StringComparison.Ordinal))
+                return true;
+        }
+
+        return false;
+    }
     public IReadOnlyDictionary<string, SchemaFieldMetadata> Fields => _fields;
     public IReadOnlySet<string> ReadyIndexes { get; init; } = new HashSet<string>();
 
@@ -51,6 +77,7 @@ public sealed class SchemaFilterContext
     /// </summary>
     public bool IsFieldFilterable(string fieldPath)
     {
+        if (IsEncryptedOrAncestor(fieldPath)) return false;
         var metadata = GetFieldMetadata(fieldPath);
         return !EnforceFiltering || (metadata is not null && metadata.IsFilterable);
     }
@@ -61,6 +88,7 @@ public sealed class SchemaFilterContext
     /// </summary>
     public bool IsOperatorAllowed(string fieldPath, string internalOperator)
     {
+        if (IsEncryptedOrAncestor(fieldPath)) return false;
         if (!EnforceFiltering) return true;
         var metadata = GetFieldMetadata(fieldPath);
         if (metadata is null || !metadata.IsFilterable)
@@ -75,6 +103,7 @@ public sealed class SchemaFilterContext
     /// </summary>
     public bool IsFieldSortable(string fieldPath)
     {
+        if (IsEncryptedOrAncestor(fieldPath)) return false;
         var metadata = GetFieldMetadata(fieldPath);
         return !EnforceFiltering || (metadata is not null && metadata.Sortable);
     }

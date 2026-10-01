@@ -77,6 +77,7 @@ public sealed class TriggerLocalScopeTests : IDisposable
             Substitute.For<IRemoteInvokerService>(),
             gateway,
             Substitute.For<IDomainDiscoveryResolver>(),
+            Substitute.For<BBT.Aether.Users.ICurrentUser>(),
             NullLogger<GetInstanceTaskExecutor>.Instance);
 
     [Fact]

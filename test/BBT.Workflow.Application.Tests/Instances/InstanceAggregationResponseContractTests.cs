@@ -230,7 +230,7 @@ public sealed class InstanceAggregationResponseContractTests : IDisposable
             currentSchema: Substitute.For<ICurrentSchema>(),
             transitionAuthorizationManager: Substitute.For<ITransitionAuthorizationManager>(),
             representationEtagService: Substitute.For<IRepresentationEtagService>(),
-            schemaFieldFilterService: Substitute.For<ISchemaFieldFilterService>(),
+            instanceDataReadService: new BBT.Workflow.Instances.InstanceDataReadService(Substitute.For<ISchemaFieldFilterService>()),
             callerRoleResolver: Substitute.For<ICallerRoleResolver>(),
             paginationLinkGenerator: _paginationLinkGenerator,
             instanceFilteringOptions: Options.Create(new InstanceFilteringOptions()),

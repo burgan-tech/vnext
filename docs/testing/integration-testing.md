@@ -37,7 +37,7 @@ Tests and example flows are written in **vnext-example**, never in this reposito
 
 | Need | Repository | Path inside it |
 |---|---|---|
-| Example flows (19 workflows under domain `core`, plus `partner`) | vnext-example | `core/Workflows/<flow>/`, `partner/` |
+| Example flows (domain `core`, plus `partner`) | vnext-example | `core/Workflows/<flow>/`, `partner/` |
 | Integration test project | vnext-example | `tests/Core.IntegrationTests/` |
 | Scenario index (**must** be updated) | vnext-example | `TEST-SCENARIOS.md` |
 | Hand-driven `.http` files, Python behaviour/load tests | vnext-example | `api-tests/<scenario>/` |

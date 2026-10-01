@@ -55,7 +55,7 @@ public sealed class InstanceQueryAppService(
     ICurrentSchema currentSchema,
     ITransitionAuthorizationManager transitionAuthorizationManager,
     IRepresentationEtagService representationEtagService,
-    ISchemaFieldFilterService schemaFieldFilterService,
+    IInstanceDataReadService instanceDataReadService,
     ICallerRoleResolver callerRoleResolver,
     IPaginationLinkGenerator paginationLinkGenerator,
     IOptions<InstanceFilteringOptions> instanceFilteringOptions,
@@ -198,6 +198,8 @@ public sealed class InstanceQueryAppService(
         using var listActivity = InstanceReadActivityHelper.StartListPhase("request");
         runtimeInfoProvider.Check(input.Domain);
 
+        // Captured before the read envelope opens, so the tag lands on the transaction like the data
+        // function's read outcome does.
         using var read = InstanceReadActivityHelper.StartRead(
             InstanceReadKinds.List, input.Domain, input.Workflow);
 
@@ -228,6 +230,7 @@ public sealed class InstanceQueryAppService(
             {
 
                 SchemaFilterContext? schemaContext = null;
+                IReadOnlySet<string> encryptedPaths = new HashSet<string>();
                 using (InstanceReadActivityHelper.StartListPhase("metadata"))
                 {
                     // Resolve schema-driven filter/sort metadata from workflow's master schema
@@ -236,7 +239,10 @@ public sealed class InstanceQueryAppService(
                     {
                         var schemaResult = await componentCacheStore.GetSchemaAsync(flowResult.Value.Schema, ct);
                         if (schemaResult.IsSuccess)
+                        {
                             schemaContext = SchemaFilterMetadataResolver.Resolve(schemaResult.Value!.Schema);
+                            encryptedPaths = SchemaRolesParser.ParseExposure(schemaResult.Value!.Schema).EncryptPaths;
+                        }
                     }
 
                     if (schemaContext != null)
@@ -247,7 +253,8 @@ public sealed class InstanceQueryAppService(
                         schemaContext = new SchemaFilterContext(schemaContext.Fields)
                         {
                             EnforceFiltering = instanceFilteringOptions.Value.EnforceMasterSchemaFiltering,
-                            ReadyIndexes = ready
+                            ReadyIndexes = ready,
+                            EncryptedPaths = encryptedPaths
                         };
                     }
                 }
@@ -369,8 +376,9 @@ public sealed class InstanceQueryAppService(
                 // Normal flow: build instance outputs
                 var list = new List<GetInstanceOutput>();
                 var preparedFlows = new Dictionary<string, Definitions.Workflow>(StringComparer.Ordinal);
-                var listFieldFilter = schemaFieldFilterService is IListSchemaFieldFilterFactory filterFactory
-                    ? filterFactory.CreateForList() : schemaFieldFilterService;
+                // One reader for the page: schema metadata once per schema version, the page's secrets in one query.
+                var pageReader = instanceDataReadService.CreatePageReader(pagedList.Items.ToList());
+
                 var listExtensions = instanceExtensionService is IListExtensionServiceFactory extensionFactory
                     ? extensionFactory.CreateForList() : instanceExtensionService;
                 foreach (var instance in pagedList.Items)
@@ -386,8 +394,8 @@ public sealed class InstanceQueryAppService(
                         input.QueryParameters,
                         ct,
                         preparedFlows,
-                        listFieldFilter,
-                        listExtensions);
+                        preparedExtensions: listExtensions,
+                        pageReader: pageReader);
 
                     // Propagate extension errors - fail-fast behavior
                     if (!instanceOutputResult.IsSuccess)
@@ -1155,8 +1163,8 @@ public sealed class InstanceQueryAppService(
         Dictionary<string, string?>? queryParameters,
         CancellationToken cancellationToken,
         Dictionary<string, Definitions.Workflow>? preparedFlows = null,
-        ISchemaFieldFilterService? preparedFieldFilter = null,
-        IInstanceExtensionService? preparedExtensions = null)
+        IInstanceExtensionService? preparedExtensions = null,
+        IInstanceDataPageReader? pageReader = null)
     {
         Definitions.Workflow? flow = null;
         var version = instance.FlowVersion ?? string.Empty;
@@ -1167,6 +1175,12 @@ public sealed class InstanceQueryAppService(
             if (flow != null) preparedFlows?.Add(version, flow);
         }
 
+        // The exposure pass preloads the row's secrets and serves the row as stored, opened only for allow-listed callers.
+        var requestContext = new AuthorizationRequestContext(headers, queryParameters);
+        var attributes = pageReader is not null
+            ? await pageReader.ExposeAsync(flow, instance, instanceData, requestContext, cancellationToken)
+            : await instanceDataReadService.ExposeAsync(flow, instance, instanceData, requestContext, cancellationToken);
+
         var response = new GetInstanceOutput
         {
             Id = instance.Id,
@@ -1176,7 +1190,7 @@ public sealed class InstanceQueryAppService(
             Domain = domain,
             Key = instance.Key!,
             Tags = instance.Tags,
-            Attributes = instanceData?.Data.JsonElement,
+            Attributes = attributes,
             Metadata = new InstanceMetadataDto(instance)
         };
 
@@ -1211,12 +1225,6 @@ public sealed class InstanceQueryAppService(
 
         response.Extensions = extensionsResult.Value!;
 
-        response.Attributes =
-            await (preparedFieldFilter ?? schemaFieldFilterService).ApplyAsync(
-                flow, response.Attributes, instance,
-                new AuthorizationRequestContext(headers, queryParameters), cancellationToken) ??
-            response.Attributes;
-
         return Result<GetInstanceOutput>.Ok(response);
     }
 
@@ -1240,7 +1248,11 @@ public sealed class InstanceQueryAppService(
         var isLatestRequest = InstanceDataVersionComparer.IsRequestingLatest(input.Version);
         string? dataCacheKey = null;
         Caching.DataFunctionCacheEntry? validatedEntry = null;
-        if (dataFunctionCache.Enabled && isLatestRequest)
+
+        // A trigger task's read is an ordinary caller's (its own headers), so it is cached under its own scope.
+        var useCache = dataFunctionCache.Enabled && isLatestRequest;
+
+        if (useCache)
         {
             var fastPath = await TryServeDataFromFingerprintAsync(input, cancellationToken);
             if (fastPath.NotModified.HasValue)
@@ -1262,7 +1274,7 @@ public sealed class InstanceQueryAppService(
             InstanceReadKinds.Data,
             validatedEntry is not null
                 ? InstanceReadActivityHelper.FastPathCacheHit
-                : dataFunctionCache.Enabled && isLatestRequest
+                : useCache
                     ? InstanceReadActivityHelper.FastPathBuild
                     : InstanceReadActivityHelper.FastPathDisabled);
 
@@ -1295,12 +1307,10 @@ public sealed class InstanceQueryAppService(
                     }
                     else
                     {
-                        result.Data = instanceData?.Data.JsonElement;
-                        result.Data = await schemaFieldFilterService.ApplyAsync(
-                                          flow, result.Data, instance,
-                                          new AuthorizationRequestContext(input.Headers, input.QueryParameters),
-                                          cancellationToken) ??
-                                      result.Data;
+                        result.Data = await instanceDataReadService.ExposeAsync(
+                            flow, instance, instanceData,
+                            new AuthorizationRequestContext(input.Headers, input.QueryParameters),
+                            cancellationToken);
                     }
 
                     // If there's an active SubFlow and extensions are requested, fetch from SubFlow
@@ -1357,7 +1367,11 @@ public sealed class InstanceQueryAppService(
                     // cacheable; the entry holds ONLY the field-filtered data — extension output
                     // is never cached. No re-write when the data came from a validated entry.
                     // TTL is workflow-author-controlled with a host default.
-                    if (dataCacheKey is not null && instanceData is not null && validatedEntry is null)
+                    // A row carrying x-encryption "encrypt" tokens is never cached: an exempt caller's
+                    // body holds the plaintext (Redis would keep it at rest), and a body built while a
+                    // key was missing holds tokens that must not outlive the key's return.
+                    if (dataCacheKey is not null && instanceData is not null && validatedEntry is null &&
+                        !EncryptedValueFormat.MayContainToken(instanceData.Data.Json))
                     {
                         await dataFunctionCache.SetAsync(dataCacheKey, new Caching.DataFunctionCacheEntry
                         {
@@ -2359,8 +2373,10 @@ public sealed class InstanceQueryAppService(
     /// state; <c>fallbackTimeoutSeconds</c> is the EFFECTIVE value from
     /// <see cref="InstanceSubFlowOverrideExtensions.ResolveEffectiveLongPoll"/> — the state's own value,
     /// or the parent's override when one is stamped — so it always matches the window the pipeline
-    /// actually armed the fallback job with. The ack href is included only when <c>terminate</c> is true
-    /// (the pipeline pauses awaiting acknowledge in that case).
+    /// actually armed the fallback job with (terminating) or the window the client keeps polling for
+    /// (non-terminating). A terminating state's block, ack href included, is emitted only while the
+    /// acknowledge is outstanding (<c>IsAwaitingLongPollAck</c>); a non-terminating state never pauses
+    /// the pipeline, so its block carries no ack href and is emitted whenever the instance is in it.
     /// </summary>
     private async Task<InstanceInteractionOutput?> ResolveInteractionAsync(
         GetInstanceStateInput input,
@@ -2373,20 +2389,26 @@ public sealed class InstanceQueryAppService(
         if (currentStateValue.Interaction?.LongPoll is null)
             return null;
 
-        // The block describes an acknowledgement that is ACTUALLY OUTSTANDING, not one the state
-        // declares it may one day arm. Before this check it was emitted from the DEFINITION alone:
-        // measured on the bench, a leaf reported status A with a full interaction block including
-        // ack.href while `LongPollAckToken` was already cleared — the fallback had resumed the
-        // pipeline — and the acknowledge endpoint answered 200 idempotently. A client could not tell
-        // "there is an ack waiting for you" from "this state can pause", which is the only question
-        // the block exists to answer.
+        // Same resolver the pipeline armed the fallback job with, so the window the client is told
+        // is the window that will actually fire. Terminate is never overridable.
+        var effective = instance.ResolveEffectiveLongPoll(currentStateValue).LongPoll!;
+
+        // terminate=true: the block describes an acknowledgement that is ACTUALLY OUTSTANDING, not one
+        // the state declares it may one day arm. Emitted from the definition alone, a leaf reported
+        // status A with a full interaction block including ack.href while `LongPollAckToken` was
+        // already cleared — the fallback had resumed the pipeline — and the acknowledge endpoint
+        // answered 200 idempotently.
+        //
+        // terminate=false: there is no acknowledgement to wait for — the pipeline never pauses, so the
+        // marker is never armed and gating on it would suppress the block for good. The block is the
+        // directive itself ("keep long polling for fallbackTimeoutSeconds"), served whenever the
+        // instance is in the declaring state and the caller passes the gate.
         //
         // ETag safety: the token's lifetime is bracketed by status changes on both paths that clear
         // it — an acknowledge and the fallback job both resume the pipeline — and Status IS a
-        // fingerprint member, so the block's disappearance always rides a fingerprint change. If a
-        // future path ever clears the token WITHOUT a status change, the block would go stale behind
-        // a 304; that path does not exist today and adding one would need a fingerprint member.
-        if (!instance.IsAwaitingLongPollAck)
+        // fingerprint member, so the block's disappearance always rides a fingerprint change. The
+        // non-terminating block follows CurrentState, also a fingerprint member.
+        if (effective.Terminate && !instance.IsAwaitingLongPollAck)
             return null;
 
         // Only signal on the main-flow current state view, not a subflow terminal view.
@@ -2408,9 +2430,6 @@ public sealed class InstanceQueryAppService(
         if (admitted is not { IsSuccess: true, Value: true })
             return null;
 
-        // Same resolver the pipeline armed the fallback job with, so the window the client is told
-        // is the window that will actually fire. Terminate is never overridable.
-        var effective = instance.ResolveEffectiveLongPoll(currentStateValue).LongPoll!;
         return new InstanceInteractionOutput
         {
             TerminateLongPoll = effective.Terminate,

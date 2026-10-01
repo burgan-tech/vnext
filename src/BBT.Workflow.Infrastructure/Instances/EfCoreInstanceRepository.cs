@@ -403,6 +403,20 @@ public sealed class EfCoreInstanceRepository(
                 incidentEntry.State = EntityState.Added;
         }
 
+        // InstanceData rows are append-only and always inserted by IInstanceDataWriteService before
+        // they reach the aggregate. On a detached root the same Set.Update(root) walk would mark every
+        // loaded row Modified and re-send it — its stored content, hash and a possibly stale IsLatest.
+        // Attaching them Unchanged first pins them (Update(root) skips tracked entries); the content
+        // columns are additionally ignored after save in the model.
+        if (entry.State == EntityState.Detached)
+        {
+            foreach (var row in entity.DataList)
+            {
+                if (dbContext.Entry(row).State == EntityState.Detached)
+                    dbContext.Attach(row);
+            }
+        }
+
         var result = await base.UpdateAsync(entity, autoSave, cancellationToken);
         entity.ClearPendingIncidents();
 
@@ -1549,9 +1563,9 @@ public sealed class EfCoreInstanceRepository(
                     i.Tags,
                     i.CreatedAt,
                     i.ModifiedAt,
-                    DataJson = d.Data.Json,
-                    d.Version,
-                    d.IsLatest
+                    // The whole row, not d.Data.Json: a scalar projection skips entity
+                    // materialization, so x-encryption tokens would never be opened.
+                    Row = d
                 })
             .AsNoTracking()
             .Skip(skip)
@@ -1564,9 +1578,9 @@ public sealed class EfCoreInstanceRepository(
             r.Tags,
             r.CreatedAt,
             r.ModifiedAt,
-            JsonSerializer.Deserialize<JsonElement>(r.DataJson, JsonSerializerConstants.JsonOptions),
-            r.Version,
-            r.IsLatest))
+            r.Row.Data.JsonElement.Clone(),
+            r.Row.Version,
+            r.Row.IsLatest))
             .ToList();
     }
 

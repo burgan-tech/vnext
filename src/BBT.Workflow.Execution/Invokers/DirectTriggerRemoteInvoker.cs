@@ -330,7 +330,7 @@ public sealed class DirectTriggerRemoteInvoker : ITaskInvoker<DirectTriggerBindi
             Encoding.UTF8,
             "application/json");
 
-        AddHeaders(request, binding.Headers);
+        InvokerHelpers.AddBindingHeaders(request, binding.Headers);
         InvokerHelpers.ApplyTrustedCorrelationHeaders(request);
         return request;
     }
@@ -360,25 +360,9 @@ public sealed class DirectTriggerRemoteInvoker : ITaskInvoker<DirectTriggerBindi
                 "application/json")
         };
 
-        AddHeaders(request, binding.Headers);
+        InvokerHelpers.AddBindingHeaders(request, binding.Headers);
         InvokerHelpers.ApplyTrustedCorrelationHeaders(request);
         return request;
-    }
-
-    private static void AddHeaders(HttpRequestMessage request, string? headersJson)
-    {
-        if (string.IsNullOrEmpty(headersJson))
-            return;
-
-        var headers = JsonSerializer.Deserialize<Dictionary<string, string>>(headersJson);
-        if (headers != null)
-        {
-            foreach (var header in headers.Where(h =>
-                         h.Value != null && !InvokerHelpers.IsReservedTraceHeader(h.Key)))
-            {
-                request.Headers.TryAddWithoutValidation(header.Key, header.Value);
-            }
-        }
     }
 
     private Dictionary<string, object> CreateMetadata(

@@ -1,6 +1,6 @@
 ---
 name: domain-performance-audit
-description: Performance audit of a vNext domain package (a vnext-template repo such as vnext-onboarding or vnext-onboarding-ekyc) against the current runtime. Scans workflows, tasks, extensions, functions, views and scripts, then writes a short prioritised report. Use when the user says "performans incele", "domain performans", "domain audit", "bu domaini incele", "performance review", "iyileştirme noktası var mı", or points at a domain package and asks what to improve. For a diff of THIS runtime repo use workflow-code-review or pr-review instead.
+description: "Performance audit of a vNext domain package (vnext-template repo, e.g. vnext-onboarding) against the current runtime; writes a short prioritised report. Triggers: \"domain performans\", \"performans incele\", \"bu domaini incele\", \"domain audit\". For a diff of this repo use pr-review / workflow-code-review."
 ---
 
 # Domain Performance Audit

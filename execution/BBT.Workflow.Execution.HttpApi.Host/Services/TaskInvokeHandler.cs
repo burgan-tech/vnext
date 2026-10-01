@@ -120,6 +120,16 @@ public sealed class TaskInvokeHandler(
         using (logger.BeginScope(scope))
         {
             var result = await invokerRegistry.InvokeAsync(envelope, cancellationToken);
+
+            // The inner Invoke.* span is marked by the registry, but the transaction and this
+            // handler span used to close Unset on a failed task — so execution-side error views
+            // never counted it.
+            if (!result.IsSuccess)
+            {
+                handleActivity.SetResultError(result.StatusCode?.ToString(), result.ErrorMessage);
+                activity.SetResultError(result.StatusCode?.ToString(), result.ErrorMessage);
+            }
+
             return new TaskInvokeResponse
             {
                 Success = result.IsSuccess,

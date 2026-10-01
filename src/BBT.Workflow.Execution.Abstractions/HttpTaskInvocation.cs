@@ -316,6 +316,142 @@ public static class HttpTaskInvocation
         }
     }
 
+    /// <summary>
+    /// The caller credential a task carries to its target: <c>sub</c>, <c>act_sub</c>, <c>position</c>, <c>client_id</c>
+    /// and <c>role</c>. Only these are forwarded from the caller; everything else the target sees comes from the task's own
+    /// header definition.
+    /// </summary>
+    private static readonly string[] CredentialHeaders = [SubHeader, ActSubHeader, PositionHeader, ClientIdHeader, RoleHeader];
+
+    private const string PositionHeader = "position";
+    private const string ClientIdHeader = "client_id";
+    private const string RoleHeader = "role";
+
+    /// <summary>
+    /// The header set a task presents to its target, as a dictionary: the binding's headers without the reserved
+    /// trace/correlation headers and without Content-Type, plus the caller's credential (<c>sub</c>, <c>act_sub</c>,
+    /// <c>position</c>, <c>client_id</c>, <c>role</c>) for every credential header the binding did not set — a value the
+    /// binding sets (non-empty) always wins. Credential values come from <paramref name="callerHeaders"/>, the caller's own request
+    /// headers; <c>sub</c> / <c>act_sub</c> fall back to Activity baggage. <c>role</c> is forwarded only as the caller SENT
+    /// it: roles a provider resolved for the caller (morph-idm get-roles) are not in these headers and are never carried —
+    /// the target resolves them itself from the forwarded credential. Used for a GetInstance / GetInstances /
+    /// GetInstanceData read, in-process (as the read's current user) and cross-domain (as the request's headers) alike.
+    /// Keys are case-insensitive.
+    /// </summary>
+    public static Dictionary<string, string?> BuildOutgoingHeaders(
+        IReadOnlyDictionary<string, string?>? bindingHeaders,
+        IReadOnlyDictionary<string, string>? callerHeaders = null)
+    {
+        var headers = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+        if (bindingHeaders is not null)
+        {
+            foreach (var (name, value) in bindingHeaders)
+            {
+                if (value is null || IsReservedTraceHeader(name) ||
+                    string.Equals(name, "Content-Type", StringComparison.OrdinalIgnoreCase))
+                    continue;
+                headers[name] = value;
+            }
+        }
+
+        AppendCallerCredential(headers, callerHeaders);
+        return headers;
+    }
+
+    /// <summary>
+    /// Adds the caller's credential (<c>sub</c>, <c>act_sub</c>, <c>position</c>, <c>client_id</c>, <c>role</c>) to
+    /// <paramref name="headers"/> for every credential header the task's mapping left absent or EMPTY — a non-empty mapping
+    /// value always wins. Returns whether anything was added. Values come from <paramref name="callerHeaders"/>, the caller's request headers, so a role a provider
+    /// resolved (morph-idm get-roles) is never carried; <c>sub</c> / <c>act_sub</c> fall back to Activity baggage. Nothing
+    /// else is added or removed. <paramref name="headers"/> must use a case-insensitive comparer.
+    /// </summary>
+    public static bool AppendCallerCredential(
+        IDictionary<string, string?> headers,
+        IReadOnlyDictionary<string, string>? callerHeaders)
+    {
+        var changed = false;
+        foreach (var name in CredentialHeaders)
+        {
+            if (headers.TryGetValue(name, out var mapped) && !string.IsNullOrWhiteSpace(mapped))
+                continue;
+
+            var value = CallerValue(callerHeaders, name);
+            if (string.IsNullOrEmpty(value) && name == SubHeader)
+                value = Activity.Current?.GetBaggageItem(SubBaggage);
+            else if (string.IsNullOrEmpty(value) && name == ActSubHeader)
+                value = Activity.Current?.GetBaggageItem(ActSubBaggage);
+
+            var safe = name is SubHeader or ActSubHeader ? IsSafeIdentityClaim(value) : IsSafeHeaderValue(value);
+            if (safe)
+            {
+                // Remove first: an empty mapping entry may be spelled with other casing than the canonical name.
+                headers.Remove(name);
+                headers[name] = value;
+                changed = true;
+            }
+        }
+
+        return changed;
+    }
+
+    /// <summary>
+    /// The binding's header definition (JSON object) with the caller's credential added (see
+    /// <see cref="AppendCallerCredential"/>). Every header the definition already carries is kept as is — Content-Type and
+    /// reserved trace headers included, which the send path still handles — so only missing credential headers change.
+    /// A definition that is not a JSON object of strings is returned unchanged.
+    /// </summary>
+    public static string? WithCallerCredential(string? headersJson, IReadOnlyDictionary<string, string>? callerHeaders)
+    {
+        Dictionary<string, string?> headers;
+        if (string.IsNullOrWhiteSpace(headersJson))
+        {
+            headers = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+        }
+        else
+        {
+            Dictionary<string, string?>? parsed;
+            try
+            {
+                parsed = JsonSerializer.Deserialize<Dictionary<string, string?>>(headersJson);
+            }
+            catch (JsonException)
+            {
+                return headersJson;
+            }
+
+            if (parsed is null)
+                return headersJson;
+            headers = new Dictionary<string, string?>(parsed, StringComparer.OrdinalIgnoreCase);
+        }
+
+        return AppendCallerCredential(headers, callerHeaders) ? JsonSerializer.Serialize(headers) : headersJson;
+    }
+
+    private static string? CallerValue(IReadOnlyDictionary<string, string>? callerHeaders, string name)
+    {
+        if (callerHeaders is null)
+            return null;
+        foreach (var (key, value) in callerHeaders)
+        {
+            if (string.Equals(key, name, StringComparison.OrdinalIgnoreCase))
+                return value;
+        }
+        return null;
+    }
+
+    /// <summary>A header value that can be carried as is: present, bounded, no control characters (no header injection).</summary>
+    private static bool IsSafeHeaderValue(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value) || value.Length > 1024)
+            return false;
+        foreach (var character in value)
+        {
+            if (char.IsControl(character))
+                return false;
+        }
+        return true;
+    }
+
     private static bool IsSafeIdentityClaim(string? value)
     {
         if (string.IsNullOrEmpty(value) || value.Length > 128)

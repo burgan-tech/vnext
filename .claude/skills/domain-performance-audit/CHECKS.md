@@ -192,15 +192,6 @@ and meta checks read it, so it silently drifts from reality.
 
 Treat it as a one-line note in the report intro, not a numbered finding.
 
-## Tooling (optional)
-
-If the user asks about build or validation speed, the template tooling at the domain root is
-usually worth a look: whether `validate.js` reads and parses every component more than once, how
-it locates the line number for an error, whether `build.js` shells out to a second Node process,
-and whether the file walker in `index.js` descends into subfolders. These are real but they cost
-developer seconds, not production latency — keep them out of the main list unless asked.
-
-
 ## 13. Copy-pasted workflows and state templates
 
 **Scanner:** `!! ayni state kumesine sahip workflow: ...`; `tekrarlayan state kalibi xN: ...`.
@@ -337,3 +328,11 @@ do not let the report turn into one.
 
 **Recommend:** drop the body log, or lower it to `Debug` **with the fields masked** — lowering the
 level alone changes who sees it, not what it contains.
+
+## Tooling (optional)
+
+If the user asks about build or validation speed, the template tooling at the domain root is
+usually worth a look: whether `validate.js` reads and parses every component more than once, how
+it locates the line number for an error, whether `build.js` shells out to a second Node process,
+and whether the file walker in `index.js` descends into subfolders. These are real but they cost
+developer seconds, not production latency — keep them out of the main list unless asked.

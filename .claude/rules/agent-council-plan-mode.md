@@ -44,23 +44,12 @@ nobody argued the opposing side.
 
 ## Required flow
 
-1. Create or update a task record with the problem, scope, acceptance criteria, NFRs,
-   constraints, risk, affected components, known facts, assumptions, and open questions.
-2. Select the smallest council that covers the risk:
-   - Always: Solution Architect, Pragmatic Engineer, Test & Evidence Agent.
-   - Security/auth/PII/secrets: Security Guardian.
-   - Data/schema/transaction/consistency: Data Architect.
-   - Performance/latency/throughput/concurrency: Performance Engineer.
-   - Deployment/recovery/production operations: Reliability Engineer.
-   - Cross-service or High/Critical risk: Devil's Advocate.
-3. Collect independent proposals before exposing one proposal to another agent.
-4. Run at most two evidence-based objection rounds. An objection must identify the
-   claim, evidence, impact, requested revision, and response.
-5. Record a decision containing the selected approach, alternatives, dissent, risks,
-   verification plan, rollback plan, and unresolved conditions.
-6. Mark the result as `APPROVED`, `EXPERIMENT_REQUIRED`, `CLARIFICATION_REQUIRED`,
-   `BLOCKED`, or `REJECTED`. High/Critical decisions and Chair-gated decisions remain
-   blocked until the configured Chair approves them.
+The procedure — task record, council selection (Solution Architect, Pragmatic Engineer and Test &
+Evidence always; Security, Data, Performance, Reliability and Devil's Advocate by risk), independent
+proposals before cross-exposure, at most two evidence-based objection rounds, a recorded decision with
+dissent, rollback and verification plan, and one of `APPROVED` / `EXPERIMENT_REQUIRED` /
+`CLARIFICATION_REQUIRED` / `BLOCKED` / `REJECTED` — is the `agent-council` skill. High/Critical and
+Chair-gated decisions stay blocked until the configured Chair approves.
 
 ## Hard gates
 
@@ -98,14 +87,6 @@ changes. Keep the decision, dissent, evidence, and conditions linked to that tas
 
 ## Required plan artifact
 
-At minimum, the plan must link these sections or files:
-
-- Task/context and acceptance criteria
-- Council composition and separation-of-duties check
-- Independent proposals
-- Objections and responses
-- Decision matrix and selected approach
-- Dissent and accepted risks
-- Experiment/test/measurement plan
-- Rollback and deployment considerations
-- Chair decision when required
+The artifact checklist (context and acceptance criteria, composition and separation of duties,
+proposals, objections, decision matrix, dissent, experiment plan, rollback, Chair decision) is defined
+by the `agent-council` skill; a plan missing any of them is not a council output.

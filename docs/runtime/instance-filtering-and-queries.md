@@ -268,6 +268,16 @@ and `GetAbsenceEntryFilterSpecMapping.csx` / `GetRezervationsFilterSpecMapping.c
   truncated. The separate 5000-character total-filter limit still applies. Structured `includes`
   payloads retain their own size, depth, and property-count limits in `ValidateIncludesObject`.
 
+## Quick reference
+
+- **Filtering**: author instance queries with fluent `InstanceQuery` (default script import), never
+  hand-concatenated GraphQL JSON. Terminals: `.First()/.Last()` → event `Selector` (single-resolve);
+  `.Build()` → `InstanceQuerySpec` for `GetInstancesTask.SetFilterSpec(...)` (preferred; in-process when
+  same-domain) or `spec.ToFilterJson()/ToSortJson()/ToQueryString()` for raw `DaprServiceTask` calls.
+  Operators: Eq/Ne/Gt/Ge/Lt/Le/Like/StartsWith/EndsWith/In/NotIn/Between/IsNull/Includes + OrGroup/Not;
+  GroupBy + Count/Sum/Avg/Min/Max (list-only, aggregations nest under groupBy). Full guide with operator
+  table and migration examples: `docs/runtime/instance-filtering-and-queries.md`.
+
 ## References
 
 - Fluent builder: `src/BBT.Workflow.Domain/QueryExtensions/Fluent/InstanceQuery.cs`

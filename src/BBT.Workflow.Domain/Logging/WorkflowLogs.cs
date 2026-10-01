@@ -252,6 +252,28 @@ public static partial class WorkflowLogs
         this ILogger logger, Guid instanceId, string transitionKey, string errorCode);
 
     /// <summary>
+    /// A CacheAside task's cache read or write failed and <c>bypassOnCacheError</c> let it continue
+    /// without the cache (read: the source runs; write: the source result is returned uncached).
+    /// The error is the state store's message as reported through the <c>statestore</c> gateway.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10176,
+        Level = LogLevel.Warning,
+        Message = "CacheAside {TaskKey}: cache {Stage} failed; continuing without the cache (bypassOnCacheError=true): {Error}")]
+    public static partial void CacheAsideBypassedCacheError(
+        this ILogger logger, string? taskKey, string stage, string? error);
+
+    /// <summary>
+    /// A CacheAside task's <c>sourceTask</c> resolved to another CacheAside task, which is rejected
+    /// (nested read-through would cache a cache).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10177,
+        Level = LogLevel.Warning,
+        Message = "CacheAside {TaskKey}: source task {SourceTaskKey} is itself a CacheAside task and was rejected")]
+    public static partial void CacheAsideSourceTypeRejected(this ILogger logger, string taskKey, string sourceTaskKey);
+
+    /// <summary>
     /// Logs at startup when a declared ActivitySource is missing from this host's MERGED
     /// configuration.
     /// <para>
@@ -946,24 +968,6 @@ public static partial class WorkflowLogs
         Message = "SSL certificate validation is disabled for in-process task {TaskKey} ({TaskType}) - Url: {Url}")]
     public static partial void LocalTaskInvocationSslValidationDisabled(
         this ILogger logger, string? taskKey, string taskType, string url);
-
-    /// <summary>
-    /// Logs when the local cache-aside invoker swallows a cache read or write failure under
-    /// <c>bypassOnCacheError=true</c> and continues without the cache (read: falls through to the
-    /// source task; write: returns the source result anyway). <c>bypassOnCacheError</c> defaults to
-    /// <c>true</c>, so without this line a state-store outage silently degrades every cache-aside
-    /// task to its source task with no signal at any level — this is the sole diagnostic for that
-    /// degradation on the Orchestration host, restored via <c>CacheAsideInvocation</c>'s
-    /// notification callback (the shared core still does not log; it reports, and each host owns
-    /// its own message). Mirrors the Execution host's own <c>LogWarning</c> at the same two call
-    /// sites.
-    /// </summary>
-    [LoggerMessage(
-        EventId = 10173,
-        Level = LogLevel.Warning,
-        Message = "CacheAside {TaskKey}: cache {Stage} failed; continuing without the cache (bypassOnCacheError=true)")]
-    public static partial void LocalCacheAsideBypassedCacheError(
-        this ILogger logger, Exception exception, string? taskKey, string stage);
 
     /// <summary>
     /// Logs when an in-process (orchestrator-local) task invocation is aborted by
@@ -4098,12 +4102,74 @@ public static partial class WorkflowLogs
         int roleCount);
 
     /// <summary>
+    /// A master schema declares <c>x-encryption.type: "hash"</c> but the host has no usable
+    /// <c>SchemaEncryption:HashSalt</c> (missing or shorter than 16 UTF-8 bytes). The value is served FULLY
+    /// MASKED instead of hashed — fail closed, never in clear. Logged once per process.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20466,
+        Level = LogLevel.Warning,
+        Message = "x-encryption hash rule applied without a usable SchemaEncryption:HashSalt; values are served fully masked until a salt of at least {MinSaltBytes} bytes is configured")]
+    public static partial void SchemaHashSaltUnavailable(
+        this ILogger logger,
+        int minSaltBytes);
+
+    /// <summary>
+    /// Logs that a stored x-encryption token could not be opened (unknown key id, malformed token or failed
+    /// authentication). The engine refuses to run on the instance until the key is restored; readers see the token.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20468,
+        Level = LogLevel.Error,
+        Message = "x-encryption token at {Path} of instance {InstanceId} could not be decrypted (key version {KeyId}, reason {Reason})")]
+    public static partial void EncryptedValueUndecryptable(
+        this ILogger logger,
+        Guid instanceId,
+        string path,
+        string keyId,
+        string reason);
+
+    /// <summary>Logs that a request tried to introduce a value carrying the reserved token prefix (never the value).</summary>
+    [LoggerMessage(
+        EventId = 20469,
+        Level = LogLevel.Warning,
+        Message = "x-encryption reserved prefix rejected at {Path} of instance {InstanceId}")]
+    public static partial void EncryptedValueRejectedOnWrite(
+        this ILogger logger,
+        Guid instanceId,
+        string path);
+
+    /// <summary>
+    /// Logs that an instance's x-encryption secret was read synchronously because its row was opened without a preload.
+    /// Debug: correct, only slower — a steady stream names an entry point that should preload.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20471,
+        Level = LogLevel.Debug,
+        Message = "x-encryption secret of instance {InstanceId} in schema {Schema} loaded without a preload")]
+    public static partial void InstanceSecretLoadedWithoutPreload(
+        this ILogger logger,
+        Guid instanceId,
+        string schema);
+
+    /// <summary>Logs that the synchronous secret lookup failed; the row keeps its tokens (never plaintext).</summary>
+    [LoggerMessage(
+        EventId = 20472,
+        Level = LogLevel.Warning,
+        Message = "x-encryption secret lookup for instance {InstanceId} in schema {Schema} failed ({ErrorType}); encrypted values stay closed")]
+    public static partial void InstanceSecretLookupFailed(
+        this ILogger logger,
+        Guid instanceId,
+        string schema,
+        string errorType);
+
+    /// <summary>
     /// Logs that a correlation-tree walk stopped at its depth bound. Warning rather than Debug: the
     /// answer the caller receives is incomplete, and on a graph that cannot legitimately nest that
     /// deep it is the first symptom of a cycle.
     /// </summary>
     [LoggerMessage(
-        EventId = 20466,
+        EventId = 20473,
         Level = LogLevel.Warning,
         Message = "Correlation walk hit its depth bound and stopped. Domain={Domain}, Flow={Flow}, Instances={InstanceCount}, MaxDepth={MaxDepth}")]
     public static partial void CorrelationWalkDepthExceeded(
@@ -4118,7 +4184,7 @@ public static partial class WorkflowLogs
     /// than failing the whole tree, so this log is the only place the cause is recorded.
     /// </summary>
     [LoggerMessage(
-        EventId = 20467,
+        EventId = 20474,
         Level = LogLevel.Warning,
         Message = "Correlation hop failed; its branch is reported unresolved. Domain={Domain}, Flow={Flow}, Instances={InstanceCount}, Reason={Reason}")]
     public static partial void CorrelationHopFailed(
@@ -4127,6 +4193,7 @@ public static partial class WorkflowLogs
         string flow,
         int instanceCount,
         string reason);
+
 
     /// <summary>
     /// Logs that no provider call was made because the caller carried neither <c>act_sub</c> nor

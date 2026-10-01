@@ -46,9 +46,10 @@ public sealed class LongPollAckTimeoutJobHandler(
                     var result = await resumeService.ResumeAsync(
                         args.Domain, args.FlowName, args.Version, args.InstanceId, cancellationToken);
 
-                    activity?.SetStatus(
-                        result.IsSuccess ? ActivityStatusCode.Ok : ActivityStatusCode.Error,
-                        result.IsSuccess ? null : result.Error.Message);
+                    if (result.IsSuccess)
+                        activity.SetOkUnlessError();
+                    else
+                        activity.SetResultError(result.Error.Code, result.Error.Message);
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
@@ -57,8 +58,7 @@ public sealed class LongPollAckTimeoutJobHandler(
                 }
                 catch (Exception e)
                 {
-                    activity?.SetStatus(ActivityStatusCode.Error, e.Message);
-                    activity?.AddTag("error.type", e.GetType().Name);
+                    activity.SetError(e);
                     logger.JobFailed(e, args.JobName, args.InstanceId);
                 }
                 finally

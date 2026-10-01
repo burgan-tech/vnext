@@ -130,7 +130,7 @@ public sealed class DirectTriggerTaskExecutor : TriggerTaskExecutorBase<DirectTr
                 taskType: TaskType.ToString()));
         }
         
-        var headers = ConvertTaskHeadersToDictionary(task.Headers);
+        var headers = WithCallerCredential(ConvertTaskHeadersToDictionary(task.Headers), context.ScriptContext);
         
         var transitionData = task.Body.HasValue
             ? new TransitionDataInput(task.Body)
@@ -146,7 +146,7 @@ public sealed class DirectTriggerTaskExecutor : TriggerTaskExecutorBase<DirectTr
             data: transitionData,
             sync: task.TriggerSync)
         {
-            Headers = headers ?? new Dictionary<string, string?>()
+            Headers = headers
         };
 
         // Execute with retry pipeline for transient failures (e.g., instance lock scenarios)
@@ -230,6 +230,7 @@ public sealed class DirectTriggerTaskExecutor : TriggerTaskExecutorBase<DirectTr
             return Result<Guid>.Ok(instanceId);
         }
 
+        // Only the id is read.
         var queryInput = new GetInstanceInput
         {
             Domain = task.TriggerDomain,
@@ -347,7 +348,7 @@ public sealed class DirectTriggerTaskExecutor : TriggerTaskExecutorBase<DirectTr
             UseDapr = binding.UseDapr,
             ValidateSSL = binding.ValidateSSL,
             TimeoutSeconds = binding.TimeoutSeconds,
-            Headers = binding.Headers,
+            Headers = Execution.HttpTaskInvocation.WithCallerCredential(binding.Headers, CallerHeadersOf(context.ScriptContext)),
             BaseUrl = endpoint.BaseUrl.ToString(),
             DaprAppId = endpoint.DaprAppId,
             AcceptedStatusCodes = binding.AcceptedStatusCodes

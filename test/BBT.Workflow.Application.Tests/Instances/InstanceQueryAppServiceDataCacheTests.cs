@@ -131,7 +131,7 @@ public class InstanceQueryAppServiceDataCacheTests : IDisposable
             currentSchema: Substitute.For<ICurrentSchema>(),
             transitionAuthorizationManager: _transitionAuthorizationManager,
             representationEtagService: Substitute.For<IRepresentationEtagService>(),
-            schemaFieldFilterService: _schemaFieldFilterService,
+            instanceDataReadService: new BBT.Workflow.Instances.InstanceDataReadService(_schemaFieldFilterService),
             callerRoleResolver: new DefaultCallerRoleResolver(Substitute.For<ICurrentUser>()),
             paginationLinkGenerator: Substitute.For<BBT.Aether.Application.Pagination.IPaginationLinkGenerator>(),
             instanceFilteringOptions: Options.Create(new InstanceFilteringOptions()),
@@ -488,4 +488,24 @@ public class InstanceQueryAppServiceDataCacheTests : IDisposable
         Headers = new Dictionary<string, string?>(),
         QueryParameters = new Dictionary<string, string?>()
     };
+
+    /// <summary>
+    /// A system read (trigger task) is served under the engine's own identity: it never consults the
+    /// fingerprint, never reads or writes the caller-scoped cache and never runs the exposure pass, so a
+    /// task copying a field gets the stored value and no raw body lands under a caller hash.
+    /// </summary>
+    /// <summary>A caller read with identical content still goes through the exposure pass.</summary>
+    [Fact]
+    public async Task GetInstanceDataAsync_WhenNotSystemRead_RunsTheExposurePass()
+    {
+        var instance = CreateInstanceWithData(out _);
+        SetupFullPathMocks(instance);
+
+        await _service.GetInstanceDataAsync(CreateInput(instance.Id.ToString()), CancellationToken.None);
+
+        await _schemaFieldFilterService.Received(1)
+            .ApplyAsync(Arg.Any<Definitions.Workflow>(), Arg.Any<System.Text.Json.JsonElement?>(),
+                Arg.Any<Instance>(), Arg.Any<Authorization.AuthorizationRequestContext?>(), Arg.Any<CancellationToken>(),
+                Arg.Any<System.Collections.Generic.IReadOnlyDictionary<string, string>?>());
+    }
 }

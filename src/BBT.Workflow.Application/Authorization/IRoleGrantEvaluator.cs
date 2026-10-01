@@ -42,4 +42,5 @@ public interface IRoleGrantEvaluator
         IReadOnlyCollection<string>? callerRoles,
         IReadOnlyCollection<RoleGrant> grants,
         Transition? transition = null);
+
 }

@@ -1,6 +1,6 @@
 ---
 name: git-commit-message
-description: Generates a Conventional Commits-style English commit message by analyzing staged git changes. Use when the user asks for a commit message, wants to commit changes, mentions "commit", "git commit", or asks for help writing a commit message.
+description: "Generates a Conventional Commits-style English commit message from the staged diff; the single source for commit/PR title types. Never commits unless asked. Triggers: \"commit mesajı\", \"commit message\", \"git commit\", \"commit\"."
 ---
 
 # Git Commit Message Generator
@@ -29,6 +29,8 @@ description: Generates a Conventional Commits-style English commit message by an
 - `<scope>` is optional; use the affected module, layer, or file area
 
 ### Types
+
+This table is the single source for commit and PR title types; `create-github-pr` links here.
 
 | Type | Use when |
 |------|----------|

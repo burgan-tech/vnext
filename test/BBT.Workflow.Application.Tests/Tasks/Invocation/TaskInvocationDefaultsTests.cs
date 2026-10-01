@@ -24,7 +24,6 @@ public sealed class TaskInvocationDefaultsTests
         options.Modes[TaskTypes.DaprService].ShouldBe(ExecutionMode.Local);
         options.Modes[TaskTypes.Soap].ShouldBe(ExecutionMode.Local);
         options.Modes[TaskTypes.StateStore].ShouldBe(ExecutionMode.Local);
-        options.Modes[TaskTypes.CacheAside].ShouldBe(ExecutionMode.Local);
     }
 
     [Fact]

@@ -159,6 +159,27 @@ Same-domain reads never leave the process: `RoutedRelatedInstanceReader` dispatc
 `MaxResolutionsPerContext` defaults to 10 distinct related instances resolved per `ScriptContext`. Memo
 hits do not count against it.
 
+## Quick reference
+
+- `context.Related` (`IRelatedInstanceAccessor`) — one hop only: `HasParent` (sync), `ParentAsync()` (up,
+  from `parent.*` ExtraProperties), `SubAsync(key)` / `SubsAsync(key?)` / `SubKeysAsync()` (down, from
+  correlations incl. completed).
+- Key = `InstanceCorrelation.SubFlowName` (sub workflow key, no alias field). `SubAsync` = newest by
+  `CreatedAt`; `SubsAsync` returns all, oldest first, batched (never N+1).
+- `IsCompleted` = target instance status `C`; `CorrelationCompleted` = relationship closed (always null
+  for the parent direction). They disagree during the subflow completion window — don't conflate them.
+- Reads are **system-identity and unfiltered**: no query-role check, no `x-roles` filter, no extensions,
+  no data-function cache. Copying a related field into instance data bypasses `x-roles` for that field —
+  document it where you copy it.
+- Runs inside the current transition's DB transaction — sees that transition's own uncommitted writes.
+- Absence → `null`/empty list. Read failure or resolution-cap breach → `RelatedInstanceAccessException`.
+  Reading after `ScriptContext` disposal → `ObjectDisposedException`.
+- Same domain → in-process (`RoutedRelatedInstanceReader`); cross-domain → internal `related-data` /
+  `related-data/batch` endpoints (no in-app authorization — network isolation only; see
+  `docs/contracts/api-and-service-contracts.md` § Internal-Only Endpoints). Memoized per `ScriptContext`;
+  cap `Workflow:Scripting:RelatedAccess:MaxResolutionsPerContext` (default 10). Full guide:
+  `docs/runtime/script-related-instance-access.md`.
+
 ## Internal endpoints
 
 Cross-domain reads go over two internal-only routes on `InstanceController`, excluded from the public

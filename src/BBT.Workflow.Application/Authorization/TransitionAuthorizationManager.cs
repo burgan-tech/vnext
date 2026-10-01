@@ -463,6 +463,15 @@ public sealed class TransitionAuthorizationManager(
     internal static bool IsUnprovableRoleBoundDeny(RoleGrant grant, int normalizedRoleCount)
         => normalizedRoleCount == 0 && grant.IsDeny && IsRoleBound(grant.Role);
 
+    /// <summary>
+    /// A role-bound grant (static role or <c>$role.</c>, see <see cref="IsUnprovableRoleBoundDeny"/>) that a caller with no
+    /// roles cannot prove — whatever its kind. Used where an ALLOW match grants something (the x-masking/x-encryption
+    /// exemption lists): the role-less caller is evaluated with an empty role name, and a <c>$role.</c> value that
+    /// resolves to <c>""</c> would otherwise "match" it and hand out the raw value.
+    /// </summary>
+    internal static bool IsUnprovableRoleBoundGrant(RoleGrant grant, int normalizedRoleCount)
+        => normalizedRoleCount == 0 && IsRoleBound(grant.Role);
+
     private static bool IsRoleBound(string? grantRole)
     {
         if (string.IsNullOrWhiteSpace(grantRole))

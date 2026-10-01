@@ -136,12 +136,21 @@ public sealed class EventAppService(
                     : (object?)payload.ToDynamic())
                 .BuildAsync(cancellationToken);
 
-            var runner = await scriptEngine.CompileToInstanceAsync<IEventMapping>(
-                eventDefinition.Mapping,
-                flowScripts: workflow.Scripts,
-                cancellationToken: cancellationToken);
+            using var mappingActivity = ScriptActivityHelper.StartExecuteActivity("eventMapping");
+            try
+            {
+                var runner = await scriptEngine.CompileToInstanceAsync<IEventMapping>(
+                    eventDefinition.Mapping,
+                    flowScripts: workflow.Scripts,
+                    cancellationToken: cancellationToken);
 
-            mapping = await runner.Handler(scriptContext);
+                mapping = await runner.Handler(scriptContext);
+            }
+            catch (Exception ex)
+            {
+                mappingActivity.SetError(ex);
+                throw;
+            }
         }
         catch (Exception ex)
         {

@@ -28,6 +28,13 @@ public sealed class LongPollAckResumeService(
         Guid instanceId,
         CancellationToken cancellationToken = default)
     {
+        // Envelope for the pre-check load plus the resume: only the pipeline's own spans appeared
+        // before, so an ack that was skipped as already-resumed left no trace of its decision.
+        using var activity = PipelineStepActivityHelper.StartOperationActivity("LongPoll.AckResume");
+        activity?.SetTag(TelemetryConstants.TagNames.InstanceId, instanceId.ToString());
+        activity?.SetTag(TelemetryConstants.TagNames.Flow, flowKey);
+        activity?.SetTag(TelemetryConstants.TagNames.Domain, domain);
+
         // Cheap pre-check: skip work when the instance is no longer awaiting acknowledge
         // (already resumed by the other trigger). The pipeline-level guard in
         // ClearBusyOnResumeStep is the authoritative idempotency check under the reserved lock.
@@ -35,12 +42,14 @@ public sealed class LongPollAckResumeService(
         if (instance is null)
         {
             logger.InstanceNotFound(instanceId, flowKey);
+            activity?.SetTag(TelemetryConstants.TagNames.LongPollAckResumeOutcome, "instance_not_found");
             return Result.Ok();
         }
 
         if (!instance.IsAwaitingLongPollAck)
         {
             logger.LongPollAckResumeSkipped(instanceId);
+            activity?.SetTag(TelemetryConstants.TagNames.LongPollAckResumeOutcome, "not_awaiting");
             return Result.Ok();
         }
 
@@ -74,9 +83,11 @@ public sealed class LongPollAckResumeService(
         if (!result.IsSuccess)
         {
             logger.LongPollAckResumeFailed(instanceId, result.Error.Message ?? result.Error.Code);
+            activity.SetResultError(result.Error.Code, result.Error.Message);
             return Result.Fail(result.Error);
         }
 
+        activity?.SetTag(TelemetryConstants.TagNames.LongPollAckResumeOutcome, "resumed");
         logger.LongPollAckResumed(instanceId);
         return Result.Ok();
     }

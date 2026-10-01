@@ -2,7 +2,8 @@
 
 This directory is the **single source** for what a review of this repository checks. The
 `.claude/agents/pr-reviewer-*.md` shells and the `pr-review` skill read these files; nothing here is
-duplicated into an agent definition, a skill body or a CI workflow. Same model as
+duplicated into an agent definition, a skill body or a CI workflow — the shells only name their
+checklist, the repo files they must open, and link back here for the output contract. Same model as
 [Agent Council roles](../agent-council/roles/) — the role file holds the content, the runner holds
 the procedure.
 
@@ -10,7 +11,7 @@ Two entry points consume it:
 
 | Entry point | Shape |
 | --- | --- |
-| `pr-review` skill | Orchestrated: `pr-review-lead` classifies the diff, runs the relevant reviewers in parallel, merges findings, and optionally upserts one sticky PR comment. |
+| `pr-review` skill | Orchestrated. In the interactive path **the skill itself is the lead**: it classifies the diff, runs the relevant reviewers in parallel, merges findings, and optionally upserts one sticky PR comment. The `pr-review-lead` agent is the optional out-of-context runner of the same procedure (large PR, automated run, several PRs in a row) and never writes to GitHub. |
 | `workflow-code-review` skill | Single-session local review of an unstaged/staged diff, no PR, no GitHub write. |
 
 ## Reviewers
@@ -54,23 +55,14 @@ A diff touching only `docs/**` or `*.md` must **not** start pipeline or platform
 | `Request changes` | No CRITICAL, 3+ WARNING |
 | `Block` | One or more CRITICAL |
 
-## Noise rules (the line between useful and ignored)
+## Finding format and noise rules
 
-The lead applies these when merging, and reports how many findings each rule removed:
+This section is the one copy of the output contract. Reviewers apply the **reviewer rules** to their
+own output; the lead applies the **merge rules** when combining them.
 
-1. A finding without `file:line` is dropped.
-2. Same line + same rule ⇒ one finding; the highest severity survives.
-3. Every CRITICAL must cite a source of truth — a code file (`LifecycleOrder.cs`, …), a `/docs` page,
-   or a line in `.claude/rules/`. A CRITICAL without a citation is downgraded to WARNING.
-4. No findings about lines the diff did not change. Exception: the change breaks that line — then the
-   causal link is stated explicitly.
-5. At most 5 INFO findings; the rest are summarized as `+N more`.
-6. Uncertainty is stated, never hidden: a finding the reviewer could not confirm from the repo is
-   phrased as a question and capped at WARNING.
+### Finding format
 
-## Finding format
-
-Each reviewer returns findings in this shape, one per line, nothing else:
+Each reviewer returns **only** finding lines, one per line — no prose, no headings:
 
 ```
 SEVERITY | path/to/File.cs:123 | rule-id | claim | evidence | suggested fix
@@ -78,6 +70,38 @@ SEVERITY | path/to/File.cs:123 | rule-id | claim | evidence | suggested fix
 
 - `rule-id` — the checklist bullet's id, e.g. `pipeline/step-order`, `platform/logging-raw`.
 - `evidence` — the file or doc that makes the claim true. Empty evidence caps the finding at WARNING.
+- A finding about the PR body itself uses `PR:body:0` as its location.
+- The last line is always `SUMMARY | <n> findings | <one sentence on what you checked and skipped>`.
+
+### Reviewer rules
+
+1. Only findings about lines this diff changed. A pre-existing problem is out of scope unless the
+   change makes it reachable — then state the causal link.
+2. Every CRITICAL cites a file path (code, a `/docs` page or a `.claude/rules/` line) that proves it.
+   No citation ⇒ downgrade it to WARNING yourself.
+3. Could not confirm it from the repository ⇒ phrase it as a question and cap it at WARNING.
+4. Verify against the repository, never from memory. When a rule file and the code disagree, the
+   code wins — say so in the finding.
+5. Silence is a valid answer. Returning nothing on a clean diff is correct; padding the list with
+   restatements of the checklist is the main failure mode.
+
+Each reviewer checklist adds its own failure mode under *Reviewer-specific noise* at its end.
+
+### Merge rules (the line between useful and ignored)
+
+The lead applies these in order when merging, and reports how many findings each rule removed:
+
+1. A finding without `file:line` is dropped.
+2. Same line + same rule ⇒ one finding; the highest severity survives. Overlapping areas (for
+   example `platform` and `evidence` on the Aether local feed) merge into one finding citing both
+   rule ids.
+3. Every CRITICAL must cite a source of truth — a code file (`LifecycleOrder.cs`, …), a `/docs` page,
+   or a line in `.claude/rules/`. A CRITICAL without a citation is downgraded to WARNING.
+4. No findings about lines the diff did not change. Exception: the change breaks that line — then the
+   causal link is stated explicitly.
+5. At most 5 INFO findings; the rest are summarized as `+N more`.
+6. Uncertainty is stated, never hidden: a finding the reviewer could not confirm from the repo is
+   phrased as a question and capped at WARNING.
 
 ## Report template
 

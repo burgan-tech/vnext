@@ -14,7 +14,7 @@ never a change request on this PR.
 
 - [ ] `platform/aether-crosscutting` — Clock, GuidGenerator, Mapper, Tracing, Logging, Metrics, DistributedCache, DistributedLock, BackgroundJob, UnitOfWork, MultiSchema and Domain Events come from the Aether SDK. A hand-rolled equivalent (`DateTime.UtcNow`, `Guid.NewGuid()`, a bespoke lock) is a WARNING, CRITICAL when it is a lock or a clock inside the pipeline.
 - [ ] `platform/aether-uow` — the UoW scope matches the intent: `RequiresNew` where the work must survive the caller's rollback, `IsTransactional = true` where an outbox row and a state write must commit together.
-- [ ] `platform/aether-local-feed` — no `aether-local` NuGet source left uncommented in `nuget.config` and no `-local` `AetherPackageVersion` in `Directory.Build.props`. CI cannot restore either. (The evidence reviewer also guards this; duplicates merge.)
+- [ ] `platform/aether-local-feed` — no live Aether local feed left behind; the check and why CI breaks on it: [integration-testing §8](../../testing/integration-testing.md#8-aether-changes-during-development). Same guard as `evidence/guard-aether-feed`; duplicates merge.
 
 ## 2. Result pattern (`platform/result-*`)
 
@@ -65,3 +65,9 @@ never a change request on this PR.
 - [ ] `platform/style-naming` — PascalCase types/methods/public members, camelCase locals and private fields, `I` prefix on interfaces, UPPERCASE constants.
 - [ ] `platform/style-xmldoc` — public controllers, DTOs, requests/responses and implementation classes carry XML `<summary>`.
 - [ ] `platform/style-var` — `var` where the type is obvious; explicit type where it is not.
+
+## Reviewer-specific noise
+
+The shared output contract is [Finding format and noise rules](../README.md#finding-format-and-noise-rules).
+On top of it: style findings are INFO unless they hide a bug — do not spend the report's budget on
+naming. A fix that belongs in Aether is a proposal for the user, never a change request on this PR.

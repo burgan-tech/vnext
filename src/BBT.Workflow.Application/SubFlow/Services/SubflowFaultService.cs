@@ -30,7 +30,8 @@ public sealed class SubflowFaultService(
     ISubItemTerminalGuard terminalGuard,
     IDistributedEventBus eventBus,
     IOptions<WorkflowExecutionOptions> executionOptions,
-    ILogger<SubflowFaultService> logger)
+    ILogger<SubflowFaultService> logger,
+    ISubItemEventDataResolver? subItemDataResolver = null)
     : ISubflowFaultService
 {
     /// <summary>
@@ -52,7 +53,8 @@ public sealed class SubflowFaultService(
             input.SubInstanceId,
             input.InstanceId,
             input.Domain,
-            input.Flow);
+            input.Flow,
+            operation: "fault");
         activity?.SetTag(TelemetryConstants.TagNames.FlowVersion, input.Version ?? "N/A");
         activity?.SetTag(TelemetryConstants.TagNames.RootInstanceId, input.RootInstanceId?.ToString() ?? "N/A");
         activity?.SetTag(TelemetryConstants.TagNames.ParentInstanceId, input.InstanceId.ToString());
@@ -214,7 +216,8 @@ public sealed class SubflowFaultService(
                     if (!parentWorkflowResult.IsSuccess)
                     {
                         RecordIncident(parentInstance, input, ErrorAction.Abort, null);
-                        parentInstance.Fault(input.Domain, input.Sync);
+                        parentInstance.Fault(input.Domain, input.Sync,
+                            subItemData: await subItemDataResolver.ResolveOrStoredAsync(parentInstance, cancellationToken));
                         correlation.MarkSettled(input.FaultedAt);
                         await instanceRepository.UpdateAsync(parentInstance, true, cancellationToken);
                         await uow.CommitAsync(cancellationToken);
@@ -252,7 +255,8 @@ public sealed class SubflowFaultService(
                     }
                     else if (string.IsNullOrWhiteSpace(actionResult.TransitionKey))
                     {
-                        parentInstance.Fault(input.Domain, input.Sync);
+                        parentInstance.Fault(input.Domain, input.Sync,
+                            subItemData: await subItemDataResolver.ResolveOrStoredAsync(parentInstance, cancellationToken));
                     }
 
                     var mappingResult = await outputMappingService.ApplyAsync(

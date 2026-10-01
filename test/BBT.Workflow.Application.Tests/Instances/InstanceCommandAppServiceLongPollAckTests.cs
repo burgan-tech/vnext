@@ -92,7 +92,7 @@ public class InstanceCommandAppServiceLongPollAckTests : IDisposable
             transitionValidationService: Substitute.For<ITransitionValidationService>(),
             transitionAdmissionService: Substitute.For<ITransitionAdmissionService>(),
             representationEtagService: Substitute.For<IRepresentationEtagService>(),
-            schemaFieldFilterService: Substitute.For<ISchemaFieldFilterService>(),
+            instanceDataReadService: new BBT.Workflow.Instances.InstanceDataReadService(Substitute.For<ISchemaFieldFilterService>()),
             scriptContextFactory: Substitute.For<IScriptContextFactory>(),
             timerEvaluator: Substitute.For<ITimerEvaluator>(),
             transitionAuthorizationManager: _authManager,
