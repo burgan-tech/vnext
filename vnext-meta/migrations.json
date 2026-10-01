@@ -205,7 +205,7 @@
       "type": "behavior",
       "component": "task",
       "path": "attributes.config.sourceMapping",
-      "since": "0.0.96",
+      "since": "0.0.98",
       "severity": "warning",
       "title": "CacheAsideTask runs its source as a task; key accepts a script",
       "description": "sourceMapping is now the SOURCE task's mapping (InputHandler before the call, OutputHandler after it) and the cache stores its shaped output instead of the raw source result; the task-level onExecutionTasks[].mapping OutputHandler runs on hits and misses. keyExpression is removed in favour of key as a ScriptCode object (dynamicExpresso or ICacheKeyMapping). Cache I/O follows the 'statestore' routing mode; the 'cacheaside' wire type and routing key are gone. Entries written by earlier versions hold raw source results and are read back as if shaped.",

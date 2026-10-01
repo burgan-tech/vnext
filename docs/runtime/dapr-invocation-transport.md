@@ -6,7 +6,7 @@
 > Orchestration by shipped default and never reach this hop at all. Everything below still
 > applies exactly as written whenever a call does cross to Execution — by default that means
 > `daprbinding`, `daprhttpendpoint`, `daprpubsub`, `daprconversation`, `python`, the trigger/query
-> types, and any of the five local types reverted to Remote via configuration. See
+> types, and any of the four local types reverted to Remote via configuration. See
 > [Task Invocation Routing](task-invocation-routing.md) for the resolution order and the config.
 
 ## TL;DR

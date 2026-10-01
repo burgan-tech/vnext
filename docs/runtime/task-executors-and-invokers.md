@@ -16,7 +16,7 @@ config, and what the local path trades away.
 | --- | --- | --- |
 | Task executor | Orchestration/Application | Resolve workflow task definition, build binding, hand it to `ITaskInvocationDispatcher`. |
 | Invocation router/dispatcher | Orchestration/Application | Per call, decides Local vs. Remote (`ITaskInvocationRouter`) and either runs a local invoker or forwards through `IRemoteInvokerService` (`ITaskInvocationDispatcher`). See [Task Invocation Routing](task-invocation-routing.md). |
-| Local task invoker | **Orchestration**/Application (`Tasks/Invocation/Local/`) | For the five locally-routed types: executes the typed binding in-process against the same shared cores (`HttpTaskInvocation`, `StateStoreInvocation`, …) the Execution invokers use. |
+| Local task invoker | **Orchestration**/Application (`Tasks/Invocation/Local/`) | For the four locally-routed types: executes the typed binding in-process against the same shared cores (`HttpTaskInvocation`, `StateStoreInvocation`, …) the Execution invokers use. |
 | Task envelope | Execution abstractions | Stable request contract between Orchestration and Execution — unchanged whether or not a given call actually crosses the wire. |
 | Task invoker | **Execution** | Executes typed binding and returns invocation result, for any type still resolved Remote. |
 | Invoker registry | Execution | Routes `TaskType` to the correct remote invoker. |

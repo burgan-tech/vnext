@@ -59,7 +59,7 @@ removed). Everything runs in the Orchestration executor:
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `key` | string \| ScriptCode | yes | The cache key. A **string** is used verbatim. A **ScriptCode object** computes it at runtime: `location: "dynamicExpresso"` is a Dynamic Expresso expression (e.g. `"customer:" + context.Headers.customerId + ":profile"`); any other location is a C# `ICacheKeyMapping` (Roslyn). NAT, B64 and REF encodings are all accepted. A non-blank script result overrides a key set earlier in the input stage. The former `keyExpression` field is **removed** — see the `cacheaside-key-expression-removed` deprecation. |
+| `key` | string \| ScriptCode | yes, unless the task-level mapping `InputHandler` calls `SetCacheKey` | The cache key. A **string** is used verbatim. A **ScriptCode object** computes it at runtime: `location: "dynamicExpresso"` is a Dynamic Expresso expression (e.g. `"customer:" + context.Headers.customerid + ":profile"`; header keys are lowercased); any other location is a C# `ICacheKeyMapping` (Roslyn). NAT, B64 and REF encodings are all accepted — **give `"encoding": "NAT"` for plain text, because the default is B64** and a plain expression would fail to decode. A blank key at invoke time fails the task with "CacheAside requires a non-empty 'key'." A non-blank script result overrides a key set earlier in the input stage. The former `keyExpression` field is **removed** — see the `cacheaside-key-expression-removed` deprecation. |
 | `storeName` | string | no | Dapr state store component used as the cache. When omitted, `DAPR_STATE_STORE_NAME` of the executing runtime is used. |
 | `ttlInSeconds` | int | no | TTL for the cached entry. When absent or `0`, the entry has **no expiry**. |
 | `consistency` | string | no | `Eventual` (default) or `Strong` — passed through to the state store on read and write. |
@@ -122,7 +122,7 @@ the source's key is set from the request by `sourceMapping`.
 {
   "type": "18",
   "config": {
-    "key": { "location": "dynamicExpresso", "code": "\"customer:\" + context.Headers.customerid + \":profile\"" },
+    "key": { "location": "dynamicExpresso", "encoding": "NAT", "code": "\"customer:\" + context.Headers.customerid + \":profile\"" },
     "storeName": "customer-cache-store",
     "ttlInSeconds": 300,
     "consistency": "Eventual",
@@ -160,7 +160,7 @@ CacheAside task, by adding a `cache` block to the function definition:
 
 ```jsonc
 "cache": {
-  "keyExpression": { "location": "dynamicExpresso",
+  "keyExpression": { "location": "dynamicExpresso", "encoding": "NAT",
                      "code": "\"dcs:\" + context.Headers.configKey + \":\" + context.Headers.version + \":\" + sha256(context.Headers.varyBy)" },
   "storeName": "vnext-state",
   "ttlInSeconds": 300,
@@ -194,7 +194,7 @@ prefix scan / delete is required, so it stays Dapr-store-agnostic. Absent a stam
 
 ```jsonc
 "cache": {
-  "keyExpression": { "location": "dynamicExpresso",
+  "keyExpression": { "location": "dynamicExpresso", "encoding": "NAT",
                      "code": "\"dcs:\" + context.Headers.configKey + \":\" + context.Instance.Version + \":\" + sha256(context.Headers.varyBy)" },
   "generationKey": "dcs:gen:configA",   // db-var write bumps this → all variants invalidated
   "storeName": "vnext-state", "ttlInSeconds": 300, "bypassOnCacheError": true
