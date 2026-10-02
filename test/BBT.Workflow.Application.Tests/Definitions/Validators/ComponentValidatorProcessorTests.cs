@@ -3,6 +3,7 @@ using System.Linq;
 using System.Text.Json;
 using BBT.Workflow.Definitions.Validators;
 using BBT.Workflow.Runtime;
+using BBT.Workflow.Scripting.Sandbox;
 using Moq;
 using Shouldly;
 using Xunit;
@@ -14,6 +15,50 @@ namespace BBT.Workflow.Definitions.Validators;
 /// </summary>
 public class ComponentValidatorProcessorTests
 {
+    private static readonly IScriptAssemblyCatalog AllAvailable =
+        Mock.Of<IScriptAssemblyCatalog>(c => c.IsAvailable(It.IsAny<string>()) == true);
+
+    private static readonly IScriptAssemblyCatalog NoneAvailable =
+        Mock.Of<IScriptAssemblyCatalog>(c => c.IsAvailable(It.IsAny<string>()) == false);
+
+    private static Mock<IComponentValidator> PassingValidator(string type)
+    {
+        var mock = new Mock<IComponentValidator>();
+        mock.Setup(v => v.CanHandle(type)).Returns(true);
+        mock.Setup(v => v.Validate(It.IsAny<JsonElement>())).Returns(ComponentValidationResult.Success());
+        return mock;
+    }
+
+    [Fact]
+    public void Validate_UnavailableAllowedAssembly_FailsEvenWhenTypeValidatorPasses()
+    {
+        var processor = new ComponentValidatorProcessor(new[] { PassingValidator("sys-flows").Object }, NoneAvailable);
+        var attributes = JsonDocument.Parse("""{ "scripts": { "allowedAssemblies": ["Acme.Missing"] } }""").RootElement;
+
+        var result = processor.Validate("sys-flows", attributes);
+
+        result.IsValid.ShouldBeFalse();
+        result.ValidationErrors.ShouldContain(e => e.MemberNames.Contains("sys-flows.scripts.allowedAssemblies[0]"));
+    }
+
+    [Fact]
+    public void Validate_TypeOutsideScope_IsNotScanned()
+    {
+        var processor = new ComponentValidatorProcessor(new[] { PassingValidator("sys-schemas").Object }, NoneAvailable);
+        var attributes = JsonDocument.Parse("""{ "scripts": { "allowedAssemblies": ["Acme.Missing"] } }""").RootElement;
+
+        processor.Validate("sys-schemas", attributes).IsValid.ShouldBeTrue();
+    }
+
+    [Fact]
+    public void TryValidate_SeedData_IsNotScanned()
+    {
+        var processor = new ComponentValidatorProcessor(new[] { PassingValidator("sys-flows").Object }, NoneAvailable);
+        var attributes = JsonDocument.Parse("""{ "scripts": { "allowedAssemblies": ["Acme.Missing"] } }""").RootElement;
+
+        processor.TryValidate("sys-flows", attributes, out var result).ShouldBeTrue();
+        result.IsValid.ShouldBeTrue();
+    }
     [Fact]
     public void Validate_ShouldUseCorrectValidator_ForComponentType()
     {
@@ -27,7 +72,7 @@ public class ComponentValidatorProcessorTests
         
         mockValidator2.Setup(v => v.CanHandle("sys-tasks")).Returns(true);
         
-        var processor = new ComponentValidatorProcessor(new[] { mockValidator1.Object, mockValidator2.Object });
+        var processor = new ComponentValidatorProcessor(new[] { mockValidator1.Object, mockValidator2.Object }, AllAvailable);
         var attributes = JsonDocument.Parse("{}").RootElement;
         
         // Act
@@ -46,7 +91,7 @@ public class ComponentValidatorProcessorTests
         var mockValidator = new Mock<IComponentValidator>();
         mockValidator.Setup(v => v.CanHandle(It.IsAny<string>())).Returns(false);
         
-        var processor = new ComponentValidatorProcessor(new[] { mockValidator.Object });
+        var processor = new ComponentValidatorProcessor(new[] { mockValidator.Object }, AllAvailable);
         var attributes = JsonDocument.Parse("{}").RootElement;
         
         // Act & Assert
@@ -61,7 +106,7 @@ public class ComponentValidatorProcessorTests
         var mockValidator = new Mock<IComponentValidator>();
         mockValidator.Setup(v => v.CanHandle(It.IsAny<string>())).Returns(false);
         
-        var processor = new ComponentValidatorProcessor(new[] { mockValidator.Object });
+        var processor = new ComponentValidatorProcessor(new[] { mockValidator.Object }, AllAvailable);
         var attributes = JsonDocument.Parse("{}").RootElement;
         
         // Act
@@ -81,7 +126,7 @@ public class ComponentValidatorProcessorTests
         mockValidator.Setup(v => v.Validate(It.IsAny<JsonElement>()))
             .Returns(ComponentValidationResult.Success());
         
-        var processor = new ComponentValidatorProcessor(new[] { mockValidator.Object });
+        var processor = new ComponentValidatorProcessor(new[] { mockValidator.Object }, AllAvailable);
         var attributes = JsonDocument.Parse("{}").RootElement;
         
         // Act
@@ -102,7 +147,7 @@ public class ComponentValidatorProcessorTests
         // A real validator over a real definition: the reserved FanOutTask mode 'durable'. The whole
         // class of Configure-time authoring errors travels this one path — itemsPath not '$.'-rooted,
         // maxDegreeOfParallelism below 1, HttpTask without a url, SubProcessTask without a domain.
-        var processor = new ComponentValidatorProcessor(new[] { (IComponentValidator)new TaskComponentValidator() });
+        var processor = new ComponentValidatorProcessor(new[] { (IComponentValidator)new TaskComponentValidator() }, AllAvailable);
         var attributes = JsonDocument.Parse(
             """
             {
@@ -138,7 +183,7 @@ public class ComponentValidatorProcessorTests
         mockValidator.Setup(v => v.Validate(It.IsAny<JsonElement>()))
             .Throws(new ArgumentException("bad shape", "config"));
 
-        var processor = new ComponentValidatorProcessor(new[] { mockValidator.Object });
+        var processor = new ComponentValidatorProcessor(new[] { mockValidator.Object }, AllAvailable);
 
         var found = processor.TryValidate("sys-tasks", JsonDocument.Parse("{}").RootElement, out var result);
 
@@ -161,7 +206,7 @@ public class ComponentValidatorProcessorTests
     {
         var mockWorkflowValidator = new Mock<WorkflowValidator>();
         var processor = new ComponentValidatorProcessor(
-            new[] { (IComponentValidator)new FlowComponentValidator(mockWorkflowValidator.Object) });
+            new[] { (IComponentValidator)new FlowComponentValidator(mockWorkflowValidator.Object) }, AllAvailable);
 
         var attributes = JsonDocument.Parse(
             """
@@ -199,7 +244,7 @@ public class ComponentValidatorProcessorTests
         mockValidator.Setup(v => v.Validate(It.IsAny<JsonElement>()))
             .Throws(new InvalidOperationException("the component store is unreachable"));
 
-        var processor = new ComponentValidatorProcessor(new[] { mockValidator.Object });
+        var processor = new ComponentValidatorProcessor(new[] { mockValidator.Object }, AllAvailable);
 
         Should.Throw<InvalidOperationException>(
             () => processor.Validate("sys-tasks", JsonDocument.Parse("{}").RootElement));

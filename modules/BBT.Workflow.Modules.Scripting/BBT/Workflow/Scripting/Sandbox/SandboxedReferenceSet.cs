@@ -59,6 +59,20 @@ public static class SandboxedReferenceSet
         return refs;
     }
 
+    /// <summary>
+    /// True when <paramref name="simpleName"/> resolves the same way <see cref="Build"/> resolves a
+    /// grant entry: framework TPA first, then the plugin directory. <see cref="Build"/> silently
+    /// skips a name for which this returns false.
+    /// </summary>
+    public static bool IsResolvable(ScriptSandboxOptions options, string simpleName)
+    {
+        if (string.IsNullOrWhiteSpace(simpleName))
+            return false;
+
+        return TpaMap.Value.ContainsKey(simpleName)
+               || PluginMap(options.ResolvePluginDirectory()).ContainsKey(simpleName);
+    }
+
     private static Dictionary<string, string> BuildTpaMap()
     {
         var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
