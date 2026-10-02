@@ -144,6 +144,13 @@ in Dynamic Expresso terms instead.
   set + banned-API analyzer. Default `false` keeps existing behaviour byte-for-byte.
 - **`AllowedAssemblies`** — global baseline of referenceable assemblies. A mapping's
   `allowedAssemblies` is merged on top of this for that compile only.
+- **Publish-time check** — every name a component lists under `scripts.allowedAssemblies` (flow level
+  or on any script slot of a workflow, task, function or extension) must resolve in the publishing
+  runtime: a framework assembly or a DLL in `Scripting:Sandbox:PluginDirectory`. An unresolvable name
+  fails the publish with 400 and names the field, e.g.
+  `sys-flows.states[0].onEntries[1].mapping.scripts.allowedAssemblies[0]`. Use the simple name without
+  `.dll`. The check does not compile the script: a script that needs an assembly it never declares
+  still fails only at run time.
 - **`BannedNamespaces`** — *adds* to the mandatory platform baseline; it cannot remove an entry.
 
 ### Mandatory banned namespaces (non-overridable)
