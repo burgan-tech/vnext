@@ -1,4 +1,5 @@
 using System.Text;
+using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution.LongPoll;
 
 namespace BBT.Workflow.Instances;
@@ -42,11 +43,21 @@ namespace BBT.Workflow.Instances;
 /// with any other character would previously produce a name Dapr rejects; the builder now fails
 /// fast with a clear error instead.
 /// </para>
+/// <para>
+/// The one exception is the implicit source state <see cref="WellKnownStateKeys.Start"/> (<c>$start</c>):
+/// <c>$</c> is outside the Dapr-safe alphabet, so in the wire string it is written as the token
+/// <c>_start</c> and decoded back on parse. <see cref="SourceState"/> always carries the logical
+/// <c>$start</c> — it is persisted and matched against the instance's current state. <c>_</c> cannot
+/// open an authored state key (<c>^[a-z0-9-]+$</c>), so the token never collides with a real state.
+/// </para>
 /// </remarks>
 public sealed record JobName
 {
     private const string Prefix = "vnext.job.v1";
     private const char Delimiter = '.';
+
+    /// <summary>Dapr-safe wire spelling of <see cref="WellKnownStateKeys.Start"/> in the source-state segment.</summary>
+    private const string ImplicitStartWireToken = "_start";
 
     /// <summary>Hex characters of the job id kept as the per-enqueue invocation segment.</summary>
     private const int InvocationLength = 8;
@@ -192,13 +203,13 @@ public sealed record JobName
                 // invocation scoping) or {key} only (pre source-state scoping).
                 if (trailing == 3)
                 {
-                    sourceState = parts[2];
+                    sourceState = DecodeSourceState(parts[2]);
                     transitionKey = parts[3];
                     invocation = parts[4];
                 }
                 else if (trailing == 2)
                 {
-                    sourceState = parts[2];
+                    sourceState = DecodeSourceState(parts[2]);
                     transitionKey = parts[3];
                 }
                 else if (trailing == 1)
@@ -243,7 +254,12 @@ public sealed record JobName
         ValidateKey(transitionKey, nameof(transitionKey));
 
         // No source state available (rare edge paths) → emit a legacy-shaped single-key name.
-        var source = string.IsNullOrEmpty(sourceState) ? null : ValidateKey(sourceState, nameof(sourceState));
+        // The implicit start state is the one reserved key allowed through: it is encoded on the wire.
+        var source = string.IsNullOrEmpty(sourceState)
+            ? null
+            : sourceState == WellKnownStateKeys.Start
+                ? sourceState
+                : ValidateKey(sourceState, nameof(sourceState));
 
         // The invocation segment only has to separate enqueues of the same transition on one
         // instance; the first 8 hex of the job id is short, Dapr-safe and traceable back to the row.
@@ -265,7 +281,8 @@ public sealed record JobName
 
         if (sourceState is not null)
         {
-            builder.Append(Delimiter).Append(sourceState);
+            builder.Append(Delimiter).Append(
+                sourceState == WellKnownStateKeys.Start ? ImplicitStartWireToken : sourceState);
         }
 
         if (transitionKey is not null)
@@ -305,6 +322,9 @@ public sealed record JobName
 
         return key;
     }
+
+    private static string DecodeSourceState(string segment)
+        => segment == ImplicitStartWireToken ? WellKnownStateKeys.Start : segment;
 
     private static string ToWireCode(JobType type) => type switch
     {
