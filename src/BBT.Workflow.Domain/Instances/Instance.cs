@@ -741,7 +741,8 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
         if (IsSubItem && effectiveTermination.Origin == TerminationOrigin.Direct)
         {
             var subItemType = IsSubFlow ? SubItemType.SubFlow : SubItemType.SubProcess;
-            var activeIncident = IsSubFlow ? _incidents.LastOrDefault(i => !i.IsResolved) : null;
+            // Both sources: a no-tracking load keeps the unresolved rows off the EF navigation.
+            var activeIncident = IsSubFlow ? GetLoadedIncidents().LastOrDefault(i => !i.IsResolved) : null;
             var latestData = IsSubFlow ? LatestData : null;
             var contractInfo = ExtraProperties.ToSubFlowContractInfo();
             if (contractInfo.Id != Guid.Empty)
