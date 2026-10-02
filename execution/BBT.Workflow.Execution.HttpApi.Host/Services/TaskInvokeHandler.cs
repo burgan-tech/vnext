@@ -99,6 +99,14 @@ public sealed class TaskInvokeHandler(
             activity?.SetBaggage(TelemetryConstants.TagNames.ActSub, actSub);
         }
 
+        // Read by HttpTaskInvocation.ApplyTrustedCorrelationHeaders as the X-Request-Id an outbound
+        // task call carries when its input mapping did not set one. Every invoker on this host
+        // reaches that helper without the envelope, so the ambient request activity is the carrier.
+        if (!string.IsNullOrEmpty(traceContext?.RequestId))
+        {
+            activity?.SetBaggage(TelemetryConstants.TagNames.RequestId, traceContext.RequestId);
+        }
+
         var scope = new Dictionary<string, object>
         {
             [TelemetryConstants.TagNames.Domain] = traceContext?.Domain ?? "unknown",
