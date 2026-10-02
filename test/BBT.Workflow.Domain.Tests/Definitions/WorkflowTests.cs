@@ -883,5 +883,15 @@ public class WorkflowTests : DomainTestBase<DomainEntryPoint>
 
         Assert.Null(workflow.FindTransition("anything"));
     }
-}
 
+    [Fact]
+    public void Serialize_ShouldNotLeakDeclaresInitialState()
+    {
+        var workflow = Workflow.Create();
+        workflow.SetType("F");
+
+        var json = System.Text.Json.JsonSerializer.Serialize(workflow, JsonSerializerConstants.JsonOptions);
+
+        Assert.DoesNotContain("declaresInitialState", json, StringComparison.OrdinalIgnoreCase);
+    }
+}

@@ -305,6 +305,8 @@ The start transition's `target` is mandatory and must be a declared state key; `
 is not a valid start target. Dapr job names write the `$start` source as the wire token `_start`; the
 persisted source state stays `$start`.
 
+An instance stranded at `$start` (the async start job failed permanently) can only leave through well-known transitions with no `availableIn` restriction, because `availableIn` cannot name `$start`.
+
 Authoring note: work that used to run on an automatic hop out of a pass-through Initial state can
 move to `startTransition.onExecutionTasks`, but it then runs while the instance is being created —
 instance data is the start payload only.

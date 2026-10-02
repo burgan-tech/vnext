@@ -375,6 +375,7 @@ public sealed class Workflow : IDomainEntity, IReference, IReferenceSetter, IHas
     private State? implicitStartState;
 
     /// <summary>True when the definition declares its own Initial state (legacy authoring).</summary>
+    [JsonIgnore]
     public bool DeclaresInitialState => States.Any(s => s.StateType == StateType.Initial);
 
     /// <summary>
