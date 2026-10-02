@@ -326,6 +326,39 @@ public sealed class InstanceCorrelationResolverTests : IDisposable
         remote.Href.ShouldNotBeNullOrEmpty();
     }
 
+    /// <summary>
+    /// A partner on an OLDER runtime has no batch endpoint, so it answers 404 — and that must be
+    /// told apart from a transient failure. It is permanent until that domain is upgraded, so a
+    /// client retrying it forever is wrong; collapsing both into hop-failed would hide a
+    /// version-skew problem behind what looks like a flaky network.
+    /// </summary>
+    [Fact]
+    public async Task APartnerTooOldToHaveTheEndpoint_IsReportedAsUnsupported_NotAsAFailure()
+    {
+        var rootId = Guid.NewGuid();
+        var remoteChildId = Guid.NewGuid();
+        StubInstance(rootId, RootFlow);
+        StubChildren(rootId, Correlation(rootId, remoteChildId, ChildFlow, RemoteDomain));
+
+        // What RemoteHttpResponseHelper produces for a 404: the route is not there.
+        _gateway
+            .ResolveAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CorrelationBatchRequest>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(Result<IReadOnlyList<CorrelationBatchResult>>.Fail(
+                Error.NotFound("remote_error", "Not Found"))));
+
+        var resolver = BuildResolver(routeLocally: false);
+        var result = await resolver.ResolveAsync(LocalDomain, RootFlow, Request(rootId));
+
+        result.IsSuccess.ShouldBeTrue();
+        var node = result.Value!.Single().Children.Single();
+        node.Resolved.ShouldBeFalse();
+        node.UnresolvedReason.ShouldBe("hop-unsupported");
+        // Still a real, addressable node — the caller can go and look at it directly.
+        node.Id.ShouldBe(remoteChildId);
+        node.Domain.ShouldBe(RemoteDomain);
+    }
+
     /// <summary>A thrown transport fault is absorbed the same way a failed Result is.</summary>
     [Fact]
     public async Task AThrowingHop_IsAbsorbedAsAnUnresolvedBranch()

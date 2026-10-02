@@ -1,5 +1,6 @@
 using BBT.Aether.MultiSchema;
 using BBT.Aether.Results;
+using BBT.Workflow.Execution.ErrorHandling;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Gateway;
 using BBT.Workflow.Logging;
@@ -57,6 +58,19 @@ public sealed class InstanceCorrelationResolver(
 
     /// <summary>A hop failed — most often an unreachable partner domain.</summary>
     internal const string HopFailed = "hop-failed";
+
+    /// <summary>
+    /// The partner domain answered 404 for the hop endpoint itself — it runs a runtime that
+    /// predates the batch route, so it can never serve this branch.
+    /// </summary>
+    /// <remarks>
+    /// Distinct from <see cref="HopFailed"/> on purpose. Domains upgrade independently, so a
+    /// partner on an older runtime is an expected state, not an anomaly — and it is PERMANENT
+    /// until that domain is upgraded, where a transient failure is worth retrying. Collapsing the
+    /// two would make a version-skew problem look like a flaky network and send clients into a
+    /// retry loop against a domain that will never answer.
+    /// </remarks>
+    internal const string HopUnsupported = "hop-unsupported";
 
     /// <summary>The instance row could not be read in the domain that should own it.</summary>
     internal const string InstanceMissing = "instance-missing";
@@ -253,14 +267,20 @@ public sealed class InstanceCorrelationResolver(
             {
                 // A transport fault must not take the whole tree down with it — one unreachable
                 // partner domain would blank a view the caller mostly can see.
-                MarkHopFailed(members, ex.Message);
+                MarkHop(members, HopFailed);
                 logger.CorrelationHopFailed(key.Domain, key.Flow, members.Count, ex.Message);
                 return;
             }
 
             if (!hopResult.IsSuccess || hopResult.Value is null)
             {
-                MarkHopFailed(members, hopResult.Error.Message ?? "unknown");
+                // A 404 is the hop ENDPOINT being absent, not an instance being absent: this route
+                // answers per-id results in the body and never 404s for a missing instance. So it
+                // means the far side predates the batch endpoint.
+                var reason = hopResult.Error.Prefix == ErrorCodes.Prefixes.NotFound
+                    ? HopUnsupported
+                    : HopFailed;
+                MarkHop(members, reason);
                 logger.CorrelationHopFailed(
                     key.Domain, key.Flow, members.Count, hopResult.Error.Message ?? "unknown");
                 return;
@@ -336,15 +356,14 @@ public sealed class InstanceCorrelationResolver(
         node.UnresolvedReason = answer.UnresolvedReason;
     }
 
-    private static void MarkHopFailed(
+    private static void MarkHop(
         List<(InstanceCorrelationNode Node, InstanceCorrelation Correlation)> members,
         string reason)
     {
-        _ = reason;
         foreach (var (node, _) in members)
         {
             node.Resolved = false;
-            node.UnresolvedReason = HopFailed;
+            node.UnresolvedReason = reason;
         }
     }
 }

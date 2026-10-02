@@ -1007,7 +1007,7 @@ public static partial class WorkflowLogs
     /// double-failure window (scheduler AND database both unavailable).
     /// </summary>
     [LoggerMessage(
-        EventId = 10177,
+        EventId = 10180,
         Level = LogLevel.Error,
         Message = "Arm-failure outbox fallback failed for job {JobName} (instance {InstanceId}, transition {TransitionKey}); the instance stays Busy until manual recovery")]
     public static partial void TransitionJobArmOutboxFallbackFailed(
@@ -1020,7 +1020,7 @@ public static partial class WorkflowLogs
     /// incident) instead of executing.
     /// </summary>
     [LoggerMessage(
-        EventId = 10176,
+        EventId = 10179,
         Level = LogLevel.Error,
         Message = "Transition job {JobName} declares its request body in the job row, but no InstanceJobs row with JobId {JobId} exists; faulting instance {InstanceId} instead of running the transition bodyless")]
     public static partial void TransitionJobRequestDataRowMissing(
