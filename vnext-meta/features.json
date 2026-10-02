@@ -1,6 +1,11 @@
 {
   "runtimeVersion": "0.0.97",
   "engine": {
+    "implicitStartState": {
+      "since": "0.0.99",
+      "status": "stable",
+      "description": "Declaring an Initial state (stateType: 1) is optional. When none is declared the runtime's implicit '$start' state is the start transition's source: the instance is born there and startTransition.target decides where it enters. PURELY ADDITIVE / NON-BREAKING: definitions that declare one Initial state behave exactly as before; two or more are still rejected. '$start' is a reserved state key. Requires vnext-schema with states minContains 0."
+    },
     "executionType": {
       "since": "0.0.97",
       "status": "stable",

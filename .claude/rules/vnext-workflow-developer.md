@@ -254,6 +254,9 @@ Enum values (Instance Status, State Types, State Sub Types, Trigger Types): `AGE
   never read attributes off a sub-start or forward response.
 - Completion window: child terminal while parent correlation open ⇒ state function shows parent transitions.
 - Full guide: `docs/architecture/subflow-execution.md`.
+- **Initial state is optional:** with none declared the instance is born in the implicit `$start` state and
+  `startTransition.target` (mandatory, a declared state key) decides the entry; see
+  `docs/domain/well-known-transitions.md#well-known-state-keys`.
 
 ### Parent overrides are resolved child-side
 
