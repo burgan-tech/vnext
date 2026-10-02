@@ -149,15 +149,20 @@ public class WorkflowValidator
         if (workflow.Exit != null)
             ValidateAvailableIn(workflow.Exit, "exit transition", $"{nameof(Workflow)}.{nameof(Workflow.Exit)}", result, stateKeys);
 
-        // Validate StartTransition target
-        if (!workflow.StartTransition.Target.IsNullOrEmpty())
+        // Validate StartTransition target: mandatory and a declared state. Compared against the
+        // declared keys only — stateKeys also carries the reserved $self, which as a start target
+        // would leave the instance on its birth state ($start) forever.
+        if (string.IsNullOrWhiteSpace(workflow.StartTransition.Target))
         {
-            if (!stateKeys.Contains(workflow.StartTransition.Target))
-            {
-                result.AddError(new ValidationResult(
-                    $"The 'target' value in StartTransition does not match any state '{workflow.StartTransition.Target}'.",
-                    [$"{nameof(Workflow)}.{nameof(Workflow.StartTransition)}.{nameof(Transition.Target)}"]));
-            }
+            result.AddError(new ValidationResult(
+                "StartTransition must declare a target state.",
+                [$"{nameof(Workflow)}.{nameof(Workflow.StartTransition)}.{nameof(Transition.Target)}"]));
+        }
+        else if (workflow.States.All(s => s.Key != workflow.StartTransition.Target))
+        {
+            result.AddError(new ValidationResult(
+                $"The 'target' value in StartTransition does not match any state '{workflow.StartTransition.Target}'.",
+                [$"{nameof(Workflow)}.{nameof(Workflow.StartTransition)}.{nameof(Transition.Target)}"]));
         }
 
         // Validate SharedTransitions availableIn
@@ -195,7 +200,9 @@ public class WorkflowValidator
     }
 
     /// <summary>
-    /// Validates state count and that exactly one initial state exists.
+    /// Validates state count, that at most one Initial state is declared (none means the runtime's
+    /// implicit <see cref="WellKnownStateKeys.Start"/> is the start transition's source), and that
+    /// no state claims the reserved <c>$start</c> key.
     /// </summary>
     private void ValidateStateCountAndTypes(Workflow workflow, WorkflowValidationResult result)
     {
@@ -208,11 +215,18 @@ public class WorkflowValidator
         }
 
         var initialStateCount = workflow.States.Count(s => s.StateType == StateType.Initial);
-        if (initialStateCount != 1)
+        if (initialStateCount > 1)
         {
             result.AddError(new ValidationResult(
-                $"Workflow must contain exactly one initial state. Found: {initialStateCount}.",
+                $"Workflow may contain at most one initial state. Found: {initialStateCount}.",
                 [$"{nameof(Workflow)}.{nameof(Workflow.States)}"]));
+        }
+
+        foreach (var state in workflow.States.Where(s => s.Key == WellKnownStateKeys.Start))
+        {
+            result.AddError(new ValidationResult(
+                $"State key '{WellKnownStateKeys.Start}' is reserved by the runtime.",
+                [$"{nameof(Workflow)}.{nameof(Workflow.States)}[{state.Key}]"]));
         }
     }
 

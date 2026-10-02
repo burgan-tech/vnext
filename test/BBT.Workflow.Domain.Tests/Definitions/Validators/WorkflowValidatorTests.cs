@@ -1695,5 +1695,87 @@ public class WorkflowValidatorTests : DomainTestBase<DomainEntryPoint>
     }
 
     #endregion
-}
 
+    #region Initial State Validation Tests
+
+    private const string NoInitialStateWorkflowJson = """
+    {
+        "type": "F",
+        "labels": [{"label": "Test", "language": "en"}],
+        "states": [
+            {
+                "key": "step-1",
+                "stateType": "wizard",
+                "labels": [{"label": "Step 1", "language": "en"}],
+                "transitions": [
+                    {"key": "finish", "target": "done", "triggerType": "manual",
+                     "labels": [{"label": "Finish", "language": "en"}]}
+                ]
+            },
+            {
+                "key": "done",
+                "stateType": "finish",
+                "labels": [{"label": "Done", "language": "en"}],
+                "transitions": []
+            }
+        ],
+        "sharedTransitions": [],
+        "startTransition": {
+            "key": "start",
+            "target": "step-1",
+            "triggerType": "manual",
+            "labels": [{"label": "Start", "language": "en"}]
+        }
+    }
+    """;
+
+    [Fact]
+    public void Validate_ShouldPass_WhenNoInitialStateIsDeclared()
+    {
+        var result = _validator.Validate(DeserializeWorkflow(NoInitialStateWorkflowJson));
+
+        result.ValidationErrors.ShouldNotContain(e => e.ErrorMessage!.Contains("initial state"));
+        result.IsValid.ShouldBeTrue();
+    }
+
+    [Fact]
+    public void Validate_ShouldFail_WhenTwoInitialStatesAreDeclared()
+    {
+        var json = NoInitialStateWorkflowJson
+            .Replace("\"stateType\": \"wizard\"", "\"stateType\": \"initial\"")
+            .Replace("\"stateType\": \"finish\"", "\"stateType\": \"initial\"");
+
+        var result = _validator.Validate(DeserializeWorkflow(json));
+
+        result.ValidationErrors.ShouldContain(e =>
+            e.ErrorMessage == "Workflow may contain at most one initial state. Found: 2.");
+    }
+
+    [Fact]
+    public void Validate_ShouldFail_WhenAStateIsKeyedDollarStart()
+    {
+        var json = NoInitialStateWorkflowJson.Replace("\"key\": \"done\"", "\"key\": \"$start\"")
+                                             .Replace("\"target\": \"done\"", "\"target\": \"$start\"");
+
+        var result = _validator.Validate(DeserializeWorkflow(json));
+
+        result.ValidationErrors.ShouldContain(e =>
+            e.ErrorMessage == "State key '$start' is reserved by the runtime.");
+    }
+
+    [Theory]
+    [InlineData("$start")]
+    [InlineData("$self")]
+    [InlineData("missing-state")]
+    public void Validate_ShouldFail_WhenStartTransitionTargetIsNotADeclaredState(string target)
+    {
+        var json = NoInitialStateWorkflowJson.Replace("\"target\": \"step-1\"", $"\"target\": \"{target}\"");
+
+        var result = _validator.Validate(DeserializeWorkflow(json));
+
+        result.ValidationErrors.ShouldContain(e =>
+            e.ErrorMessage == $"The 'target' value in StartTransition does not match any state '{target}'.");
+    }
+
+    #endregion
+}
