@@ -55,10 +55,9 @@ public sealed class InstanceControllerEnqueueRelayTests
         payload.ShouldNotBeNull();
         // The job id is threaded as the enqueue argument so BackgroundJobInfo.Id == InstanceJob.JobId.
         capturedJobId.ShouldBe(continuation.JobId);
-        // AB-17: JobId + DataInJobRow must ALSO land on the payload — the handler reads them to
-        // hydrate an offloaded request body; a dropped copy would run the transition bodyless.
+        // The job id must ALSO land on the payload: it ties the running job back to its InstanceJob
+        // row, and a dropped copy breaks that link.
         payload!.JobId.ShouldBe(continuation.JobId);
-        payload.DataInJobRow.ShouldBe(continuation.DataInJobRow);
         payload!.Workflow.ShouldBe(continuation.Flow);
         payload.ExecutionActor.ShouldBe(ExecutionActor.User);
         payload.CallerSync.ShouldBeFalse();
@@ -168,7 +167,6 @@ public sealed class InstanceControllerEnqueueRelayTests
             CorrelationId = "corr-1",
             ChainDepth = 3,
             SubflowChainReserved = true,
-            DataInJobRow = true,
             RootInstanceId = Guid.NewGuid(),
             TraceRoot = "00-11111111111111111111111111111111-3333333333333333-01",
             ParentTraceRoot = "00-11111111111111111111111111111111-4444444444444444-01",

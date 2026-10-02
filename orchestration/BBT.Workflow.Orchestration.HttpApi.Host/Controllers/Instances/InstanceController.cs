@@ -619,7 +619,6 @@ public sealed class InstanceController(
             // the row's JobId must survive this rebuild or the handler would run the transition
             // bodyless.
             JobId = continuation.JobId,
-            DataInJobRow = continuation.DataInJobRow,
             InstanceKey = continuation.InstanceKey,
             Tags = continuation.Tags,
             Stage = continuation.Stage,

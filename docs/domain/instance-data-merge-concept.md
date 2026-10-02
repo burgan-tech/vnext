@@ -67,9 +67,8 @@ A transition body — a base64 file included — is stored, verbatim or merged, 
 (finding AB-21): the transition record (`InstanceTransitions.Body`), the task journal per
 task (`InstanceTasks.Request`, potentially `Response`/`InvocationResult`), the merged
 snapshot (`InstancesData.Data`, once per version row), and — for an async accept — the
-offloaded-body table (`InstanceJobRequestData`, only when the body exceeds the inline cap;
-since the AB-17 fix the Dapr job payload and outbox event carry a reference instead of a fifth
-and sixth in-flight copy). All of these
+background-job row Aether persists it in (`sys_queues.BackgroundJobs.Payload`; the scheduler
+itself is armed with a reference to that row, not the body, so it is not a further copy). All of these
 are `jsonb`, and base64 TOAST-compresses poorly: a 1 MiB file costs several MiB of storage
 per transition that carries it. Prefer uploading bytes to a document store and passing a
 reference through the workflow; a platform-level document-offload story (store once,

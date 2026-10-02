@@ -700,16 +700,6 @@ namespace BBT.Workflow.Migrations
                     b.ToTable("InstanceJobs", "public");
                 });
 
-            modelBuilder.Entity("BBT.Workflow.Instances.InstanceJobRequestData", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .HasColumnType("uuid");
-
-                    b.HasKey("Id");
-
-                    b.ToTable("InstanceJobRequestData", "public");
-                });
-
             modelBuilder.Entity("BBT.Workflow.Instances.InstanceTask", b =>
                 {
                     b.Property<Guid>("Id")
@@ -956,30 +946,6 @@ namespace BBT.Workflow.Migrations
                         .WithMany("Incidents")
                         .HasForeignKey("InstanceId")
                         .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-                });
-
-            modelBuilder.Entity("BBT.Workflow.Instances.InstanceJobRequestData", b =>
-                {
-                    b.OwnsOne("BBT.Workflow.JsonData", "Data", b1 =>
-                        {
-                            b1.Property<Guid>("InstanceJobRequestDataId")
-                                .HasColumnType("uuid");
-
-                            b1.Property<string>("Json")
-                                .IsRequired()
-                                .HasColumnType("jsonb")
-                                .HasColumnName("Data");
-
-                            b1.HasKey("InstanceJobRequestDataId");
-
-                            b1.ToTable("InstanceJobRequestData", "public");
-
-                            b1.WithOwner()
-                                .HasForeignKey("InstanceJobRequestDataId");
-                        });
-
-                    b.Navigation("Data")
                         .IsRequired();
                 });
 

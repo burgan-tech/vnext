@@ -272,33 +272,22 @@ public sealed class AsyncTransitionStrategy(
             "Transition.Enqueue", transContext.TransitionKey);
         enqueueActivity?.SetTag(TelemetryConstants.TagNames.JobName, jobName.Value);
 
-        // Decide inline vs offload. A body larger than the inline cap is persisted in its own
-        // InstanceJobRequestData row and the Dapr payload / outbox event carry a reference
-        // (DataInJobRow + JobId) instead: the scheduler's transport (etcd) refuses a payload over
-        // its ceiling (2 MiB default) at arm time — after the flip and job row commit — which left
-        // the instance durably Busy (AB-17). Small bodies stay inline, unchanged: that keeps the
-        // common case off the row (so metadata reads never transfer a body) AND keeps a
-        // not-yet-upgraded pod able to run the job during a rolling deploy (it reads Data inline).
+        // The body travels inline, whatever its size. Aether arms the scheduler with a reference to
+        // the job row rather than the row's payload, so an oversized body no longer reaches etcd and
+        // no longer fails the arm after the flip and job row have committed (AB-17). vNext therefore
+        // needs no size decision, no cap to tune and no second table of its own.
         var requestBody = context.Data?.Attributes;
-        var rawBody = requestBody?.GetRawText();
-        var offloadBody = rawBody is not null
-            && System.Text.Encoding.UTF8.GetByteCount(rawBody)
-                > executionOptions.Value.AsyncTransitionInlineBodyMaxBytes;
-
-        var inlineData = offloadBody ? (JsonElement?)null : requestBody;
 
         var directPayload = BuildDirectPayload(
-            context, transContext, jobName.Value, jobId, inlineData, offloadBody, activity, subflowChainReserved);
+            context, transContext, jobName.Value, jobId, requestBody, activity, subflowChainReserved);
         var outboxEvent = BuildOutboxEvent(
-            context, transContext, jobName, jobId, inlineData, offloadBody, activity, subflowChainReserved);
+            context, transContext, jobName, jobId, requestBody, activity, subflowChainReserved);
 
-        // IsTransactional: the job row, the offloaded-body row and the outbox write (if the gateway
-        // falls back) must commit as ONE transaction. Without it, a non-transactional root lets the
-        // autoSave job-row insert commit in its own implicit transaction BEFORE the body row is
-        // flushed at CommitAsync — a crash in between would leave DataInJobRow=true with no body row
-        // (the handler would then fault the instance on JOB_REQUEST_DATA_MISSING). Safe to make
-        // transactional here: arming is deferred, so no external call runs inside the UoW, and the
-        // whole block runs under the accept's status lock. Same posture as InstanceCommandAppService.
+        // IsTransactional: the job row and the outbox write (if the gateway falls back) must commit as
+        // ONE transaction, so a crash between them cannot leave a job row with nothing to deliver it.
+        // Safe to make transactional here: arming is deferred, so no external call runs inside the UoW,
+        // and the whole block runs under the accept's status lock. Same posture as
+        // InstanceCommandAppService.
         await using var uow = uowManager.Begin(
             new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew, IsTransactional = true });
 
@@ -307,13 +296,6 @@ public sealed class AsyncTransitionStrategy(
                 jobId, jobName, jobId, context.Domain, context.WorkflowKey, transContext.InstanceId),
             true,
             cancellationToken);
-
-        // Same transactional UoW as the job row, so the body and the row commit atomically — the
-        // handler only ever looks for a row when DataInJobRow says the accept committed one.
-        if (offloadBody)
-        {
-            await jobRepository.InsertRequestDataAsync(jobId, new JsonData(rawBody!), cancellationToken);
-        }
 
         // deferArming: the row must commit under the status lock so the duplicate-job guard's next
         // reader sees it, but the scheduler round-trip must not — it was the dominant term of the
@@ -343,8 +325,7 @@ public sealed class AsyncTransitionStrategy(
         TransitionExecutionContext transContext,
         string jobName,
         Guid jobId,
-        JsonElement? inlineData,
-        bool dataInJobRow,
+        JsonElement? data,
         Activity? activity,
         bool subflowChainReserved)
     {
@@ -356,11 +337,8 @@ public sealed class AsyncTransitionStrategy(
             Domain = transContext.Domain,
             Workflow = transContext.WorkflowKey,
             Version = transContext.Workflow.Version,
-            // Inline for a small body (unchanged); null when the body was offloaded to its own
-            // InstanceJobRequestData row and the handler hydrates it back by JobId (DataInJobRow).
-            Data = inlineData,
+            Data = data,
             JobId = jobId,
-            DataInJobRow = dataInJobRow,
             RawBody = null, // raw body is not propagated to the background job
             InstanceKey = context.Data?.Key,
             Tags = context.Data?.Tags,
@@ -400,8 +378,7 @@ public sealed class AsyncTransitionStrategy(
         TransitionExecutionContext transContext,
         JobName jobName,
         Guid jobId,
-        JsonElement? inlineData,
-        bool dataInJobRow,
+        JsonElement? data,
         Activity? activity,
         bool subflowChainReserved)
     {
@@ -414,11 +391,7 @@ public sealed class AsyncTransitionStrategy(
             TransitionKey = transContext.TransitionKey,
             JobName = jobName.Value,
             JobId = jobId,
-            // Inline for a small body (unchanged); null when offloaded to the InstanceJobRequestData
-            // row. The /enqueue relay rebuilds the payload from this event, so an offloaded body must
-            // stay out of it — otherwise it would re-enter the scheduler transport it was kept out of.
-            Data = inlineData,
-            DataInJobRow = dataInJobRow,
+            Data = data,
             InstanceKey = context.Data?.Key,
             Tags = context.Data?.Tags,
             Stage = context.Data?.Stage,

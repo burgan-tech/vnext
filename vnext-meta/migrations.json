@@ -245,15 +245,15 @@
       "action": "Move keyExpression into key: { location: 'dynamicExpresso', code: <expression> }. If sourceMapping used to shape the cached raw result in its OutputHandler, keep it (it now shapes before caching) and drop reshaping that depended on the raw payload; flush or let TTL expire old cache entries. Remove any Workflow:TaskInvocation:Modes.cacheaside override; use Modes.statestore instead."
     },
     {
-      "id": "async-transition-job-payload-reference-only",
+      "id": "async-transition-oversized-body-no-longer-stalls-the-arm",
       "type": "behavior",
       "component": "transition",
       "path": null,
       "since": "0.0.93",
       "severity": "warning",
-      "title": "Async transition job payloads are reference-only",
-      "description": "An async (sync=false) accept whose request body exceeds WorkflowExecution:AsyncTransitionInlineBodyMaxBytes (1 MiB default) persists the body in the new InstanceJobRequestData table; the Dapr job payload and the TransitionContinuationRequested outbox event carry DataInJobRow + the JobId instead of the body, keeping every message under the scheduler's (etcd) and pub/sub's ceilings. Smaller bodies stay inline unchanged. The job handler hydrates an offloaded body back from the table; in-flight payloads from older builds that carry Data inline keep working. A deferred-arm failure after the accept's commit falls back to the transactional outbox (durable re-arm, instance stays Busy) instead of leaving it stuck.",
-      "action": "No authoring change. Operators: drain async transition jobs before rolling the runtime back past the AddInstanceJobRequestDataTable migration, and prefer draining during a forward rolling deploy too — a pod without this change runs an offloaded (DataInJobRow) job with an empty body. Keep AsyncTransitionInlineBodyMaxBytes high enough that ordinary transitions stay inline and are unaffected by the mixed-version window."
+      "title": "Oversized async transition bodies no longer fail the scheduler arm",
+      "description": "An async (sync=false) accept used to send the request body to the Dapr scheduler inside the job payload. Dapr keeps one-shot jobs in etcd, whose practical ceiling (~2 MiB) is far below the 10 MB an HTTP request may carry, so an oversized body failed the arm AFTER the Busy flip and job row had committed - leaving the instance durably Busy with no incident. The Aether background-job layer now arms the scheduler with a REFERENCE to the job row (the CloudEvent envelope minus its data member) and rehydrates the handler arguments from that row on the callback, so the armed message is small and bounded regardless of body size. The body itself travels inline on the job payload as before and is persisted once, by Aether, in its own job row.",
+      "action": "No authoring change and no vNext configuration. The effective limit on an async transition body is now the host's Kestrel MaxRequestBodySize (10 MB by default), enforced at the HTTP boundary with a 413 before anything is committed - rather than a post-commit arm failure. Operators: during a rolling deploy a job armed by a pod running the previous runtime still carries its body inline and keeps working, so no drain is required."
     }
   ]
 }

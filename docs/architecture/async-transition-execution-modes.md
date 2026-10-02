@@ -104,58 +104,44 @@ siblings, not nested spans, in one trace, and
 At-least-once delivery means the transition job and its downstream handlers must stay
 idempotent regardless of which enqueue path was taken.
 
-## Reference-Only Job Payloads (Large Bodies)
+## Large Request Bodies
 
-A **small** async transition body (at or below
-`WorkflowExecution:AsyncTransitionInlineBodyMaxBytes`, 1 MiB by default) travels inline in
-the Dapr job payload, exactly as before. A **larger** body is offloaded: it is persisted in
-its own table `InstanceJobRequestData` (jsonb, keyed by the job id) at accept, and the Dapr
-payload and the outbox continuation event carry `DataInJobRow: true` + the `JobId` instead of
-the body. `TransitionJobHandler` hydrates it back from the table before rebuilding the
-`TransitionInput`. Scheduled-transition timer payloads always had this reference-only shape.
+An async transition body travels **inline** on the Dapr job payload whatever its size, and vNext
+applies no cap of its own. What changed is one layer down: the Aether background-job layer arms the
+scheduler with a **reference** to the job row — the CloudEvent envelope minus its `data` member, plus
+`payloadref`/`jobid` extension attributes — and rehydrates the handler arguments from that row on the
+callback. The armed message is therefore small and bounded no matter how large the body is.
 
-Why offload only large bodies, and to a separate table:
+Why that matters:
 
-- **The scheduler transport has a hard ceiling.** Dapr stores one-shot jobs in etcd, which
-  refuses messages over ~2 MiB — while Kestrel accepts request bodies up to 10 MB. A body in
-  the payload was refused **at arm time**, after the Busy flip and job row had committed,
-  leaving the instance durably Busy with no incident; on the observed Dapr build the oversized
-  job also stopped the scheduler for every domain until a restart (finding AB-17,
+- **The scheduler transport has a hard ceiling.** Dapr stores one-shot jobs in etcd, which refuses
+  messages over ~2 MiB, while Kestrel accepts request bodies up to 10 MB. While the body travelled in
+  the armed message it was refused **at arm time** — after the Busy flip and job row had committed —
+  leaving the instance durably Busy with no incident; on the observed Dapr build the oversized job
+  also stopped the scheduler for every domain until a restart (finding AB-17,
   [vnext-client-sdk-core#58](https://github.com/burgan-tech/vnext-client-sdk-core/issues/58)).
-- **A separate table keeps hot reads blob-free.** `InstanceJob` is read metadata-only on hot
-  paths — the state function's scheduled-transition listing, the updateData continuation
-  handoff, cancellation. A body column on `InstanceJob` would be transferred by all of them; a
-  separate table with no navigation from `InstanceJob` is loaded only by the handler's
-  by-id point read.
-- **Keeping small bodies inline preserves rolling-upgrade safety.** During a multi-replica
-  deploy, a not-yet-upgraded pod's handler has no hydrate branch and would run a
-  `DataInJobRow` job with an empty body. Because only bodies above the inline cap are
-  offloaded, the overwhelming majority of transitions (small bodies) stay inline and are
-  unaffected; the mixed-version window touches only genuinely oversized bodies, which were
-  **100% broken** before this fix anyway (durable stuck-Busy).
+- **The limit belongs to the layer that imposes it.** etcd's ceiling is a fact about Aether's
+  scheduler integration, not about workflow semantics, so the fix lives there. Every Aether consumer
+  gets it, and vNext needs no size threshold to tune and no table of its own.
+- **Rehydration is free.** The dispatcher already reads the job row to claim it
+  (`JobDispatcher.ClaimAsync`), so the arguments come from a row that was being loaded anyway — no
+  extra query is added to the dispatch path.
 
-**Retention is an open gap — the rows are never removed.** `InstanceJobRequestData` is
-insert-only: `EfCoreInstanceJobRepository.InsertRequestDataAsync` adds a row at accept, the handler
-reads it by job id, and **nothing deletes it** — not job completion, not instance deletion. The
-table is deliberately standalone (no navigation from `InstanceJob`, which is what keeps the hot
-metadata reads blob-free), and that same choice means it carries **no foreign key and no cascade**,
-so the rows outlive the instance they belonged to. Since the bodies that land here are by definition
-the oversized ones — a base64 file being the common case (finding AB-21) — the table grows without
-bound in proportion to large-body async transitions. Deleting on completion is not obviously safe:
-a retry re-enters `TransitionJobHandler`, which hydrates from this row, and a row removed too early
-turns a recoverable retry into `JOB_REQUEST_DATA_MISSING`. A retention story (purge on terminal
-instance cleanup, or an age-based sweep) is still owed.
+**The effective limit is now the HTTP boundary.** A body above the host's Kestrel
+`MaxRequestBodySize` (10 MB by default) is rejected with a 413 before anything is committed — an
+early, loud failure, rather than a post-commit arm failure that stranded the instance.
 
-Compatibility: an in-flight payload from a build that predates the fix carries `Data` inline
-and the handler honors it. The reverse — a new offloaded (`DataInJobRow`) payload consumed by
-an old build — runs the transition **bodyless**; drain async transition jobs before rolling
-the runtime back past the `AddInstanceJobRequestDataTable` migration, and prefer draining
-during a forward rolling deploy too (keep the inline cap high so ordinary transitions are
-never affected). A payload that declares `DataInJobRow` whose row is missing is a hard error:
-the handler routes the instance through recovery (`JOB_REQUEST_DATA_MISSING`) rather than
-silently running a schema-validated request without its body. Pinned by
-`AsyncTransitionStrategyTests` (inline vs offload, arm-failure outbox fallback) and
-`TransitionJobHandlerTests` (hydration, missing row, legacy inline payloads).
+Two safety behaviours are worth knowing about, both in Aether. A reference whose job row carries no
+`data` member records the job as **Failed** with a reason rather than invoking the handler with
+nothing — a schema-validated body was accepted, and running without it would corrupt instance data.
+And because job names resolve through a non-unique index, a callback whose `jobid` does not match the
+row the name resolved to is **refused** rather than run against another row's payload.
+
+Compatibility: a job armed by a pod running the previous runtime carries its body inline and no
+marker, and the dispatcher still honours it — a one-shot registration can outlive the deployment that
+created it by weeks, so no drain is required for a rolling deploy. Pinned by Aether's
+`EndToEndJobLifecycleTests` (bounded armed payload, schema survival, lost body, mismatched id, inline
+compatibility) and by `AsyncTransitionStrategyTests` (arm-failure outbox fallback).
 
 ## Observability
 

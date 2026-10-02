@@ -1014,19 +1014,6 @@ public static partial class WorkflowLogs
         this ILogger logger, Exception exception, string jobName, Guid instanceId, string transitionKey);
 
     /// <summary>
-    /// Logs when a transition job whose payload says the request body lives in the job row
-    /// (<c>DataInJobRow</c>) cannot find that row by its unique <c>JobId</c>. The transition must
-    /// not silently run bodyless, so the handler routes the instance through recovery (Faulted +
-    /// incident) instead of executing.
-    /// </summary>
-    [LoggerMessage(
-        EventId = 10179,
-        Level = LogLevel.Error,
-        Message = "Transition job {JobName} declares its request body in the job row, but no InstanceJobs row with JobId {JobId} exists; faulting instance {InstanceId} instead of running the transition bodyless")]
-    public static partial void TransitionJobRequestDataRowMissing(
-        this ILogger logger, string jobName, Guid jobId, Guid instanceId);
-
-    /// <summary>
     /// Logs when task instance resolution fails (for DirectTrigger, GetInstanceData).
     /// </summary>
     [LoggerMessage(
