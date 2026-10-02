@@ -150,7 +150,10 @@ in Dynamic Expresso terms instead.
   fails the publish with 400 and names the field, e.g.
   `sys-flows.states[0].onEntries[1].mapping.scripts.allowedAssemblies[0]`. Use the simple name without
   `.dll`. The check does not compile the script: a script that needs an assembly it never declares
-  still fails only at run time.
+  still fails only at run time. The check runs whatever `Scripting:Sandbox:Enabled` says: even though a
+  sandbox-off compile ignores the grant, a declared name that does not resolve is rejected. The
+  plugin-directory listing is read once per process, so a DLL mounted after start reports as
+  unavailable until restart (same as compile).
 - **`BannedNamespaces`** — *adds* to the mandatory platform baseline; it cannot remove an entry.
 
 ### Mandatory banned namespaces (non-overridable)
