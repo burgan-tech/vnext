@@ -100,9 +100,12 @@ public sealed class InstanceQueryAppServiceCorrelationTreeTests : IDisposable
 
         _instanceRepository
             .GetForCorrelationWalkAsync(Arg.Any<IReadOnlyCollection<Guid>>(), Arg.Any<CancellationToken>())
+            // Projects from the same stubbed instances the root lookup uses, exactly as the EF
+            // query projects from the row — one source of truth, two shapes.
             .Returns(ci => ci.ArgAt<IReadOnlyCollection<Guid>>(0)
                 .Where(_instances.ContainsKey)
                 .Select(id => _instances[id])
+                .Select(i => new CorrelationWalkRow(i.Id, i.Key, i.CurrentState, i.Status, i.FlowVersion))
                 .ToList());
 
         var currentSchema = Substitute.For<ICurrentSchema>();

@@ -1929,7 +1929,7 @@ public sealed class EfCoreInstanceRepository(
     }
 
     /// <inheritdoc />
-    public async Task<List<Instance>> GetForCorrelationWalkAsync(
+    public async Task<List<CorrelationWalkRow>> GetForCorrelationWalkAsync(
         IReadOnlyCollection<Guid> instanceIds,
         CancellationToken cancellationToken = default)
     {
@@ -1938,20 +1938,20 @@ public sealed class EfCoreInstanceRepository(
 
         var dbSet = await GetDbSetAsync();
 
-        // No includes whatsoever — see the interface for why. Also no AsSplitQuery: with no
-        // collections there is no cartesian product to split, so a second round trip would buy
-        // nothing and cost one.
-        var instances = await dbSet
+        // Projected in SQL: four columns, no includes, no aggregate. A tree walk touches every node
+        // of every level, so selecting whole rows multiplies the widest table in the schema by the
+        // size of the tree for four values. No AsSplitQuery either — with no collections there is no
+        // cartesian product to split, so a second round trip would cost one and buy nothing.
+        return await dbSet
             .Where(i => instanceIds.Contains(i.Id))
             .AsNoTracking()
+            .Select(i => new CorrelationWalkRow(
+                i.Id,
+                i.Key,
+                i.CurrentState,
+                i.Status,
+                i.FlowVersion))
             .ToListAsync(cancellationToken);
-
-        foreach (var instance in instances)
-        {
-            instance.MarkDataPartiallyLoaded();
-        }
-
-        return instances;
     }
 
     private static string SanitizeIdentifier(string identifier)

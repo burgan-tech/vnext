@@ -34,8 +34,8 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Reads a batch of instances for the correlation-tree walk: the columns only, with NO
-    /// collection includes at all.
+    /// Projects the four columns the correlation-tree walk reads, for a batch of instances. No
+    /// aggregate is materialised and no collection is included.
     /// </summary>
     /// <remarks>
     /// The walk reads exactly four things off each aggregate — <c>Key</c>, <c>CurrentState</c>,
@@ -47,12 +47,12 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
     /// same regression <see cref="GetForHumanTaskDescentAsync"/> was narrowed to fix (measured
     /// there: 4 000 rows for a 200-candidate batch instead of 200), multiplied here by depth.
     /// <para>
-    /// The rows come back with no data loaded at all, so they are stamped
-    /// <c>MarkDataPartiallyLoaded</c>: a reader that later reaches for history fails fast instead
-    /// of quietly answering from nothing.
+    /// Projecting rather than loading also removes the partial-load hazard at the root: there is no
+    /// <c>Instance</c> here that a later reader could mistake for fully loaded, so nothing has to be
+    /// stamped and nothing can quietly answer from data that was never fetched.
     /// </para>
     /// </remarks>
-    Task<List<Instance>> GetForCorrelationWalkAsync(
+    Task<List<CorrelationWalkRow>> GetForCorrelationWalkAsync(
         IReadOnlyCollection<Guid> instanceIds,
         CancellationToken cancellationToken = default);
 

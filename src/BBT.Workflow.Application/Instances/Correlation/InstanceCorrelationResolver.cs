@@ -126,7 +126,7 @@ public sealed class InstanceCorrelationResolver(
         // Both run in this flow's schema and share this hop's unit of work, which is correct and
         // deliberate: sequential reads on one connection are safe, and it keeps open connections
         // bounded by the fan-out WIDTH rather than width x depth.
-        List<Instance> selves;
+        List<CorrelationWalkRow> selves;
         List<InstanceCorrelation> correlations;
         using (currentSchema.Change(flow))
         {

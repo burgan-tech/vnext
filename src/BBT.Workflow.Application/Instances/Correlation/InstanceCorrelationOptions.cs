@@ -23,7 +23,9 @@ public sealed class InstanceCorrelationOptions
     /// nodes unresolved.
     /// </summary>
     /// <remarks>
-    /// A bound, not a guess at real nesting — domains run six levels today, so ten leaves headroom.
+    /// A bound, not a guess at real nesting — domains run six levels today, so twenty leaves ample
+    /// headroom. It is DEPTH, not a node count: a tree three levels deep with five hundred nodes
+    /// passes, a chain twenty-one deep does not.
     /// It is also the walk's ONLY protection against a cycle: correlations are written at spawn
     /// time and cannot currently form one, but a post-hoc correlation write API
     /// (vnext-client-sdk-core#58 AB-20) would change that, and this read path must not be the thing
@@ -31,7 +33,7 @@ public sealed class InstanceCorrelationOptions
     /// (<c>Resolved = false</c>, <c>depth-exceeded</c>), never silently rendered as "no children".
     /// </remarks>
     [Range(1, 100, ErrorMessage = "MaxDescentDepth must be between 1 and 100")]
-    public int MaxDescentDepth { get; set; } = 10;
+    public int MaxDescentDepth { get; set; } = 20;
 
     /// <summary>
     /// How many sibling hops ONE request expands concurrently. A hop is one (domain, flow) group of

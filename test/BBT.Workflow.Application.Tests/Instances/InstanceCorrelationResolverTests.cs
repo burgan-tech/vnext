@@ -42,7 +42,7 @@ public sealed class InstanceCorrelationResolverTests : IDisposable
     private readonly IInstanceCorrelationRepository _correlationRepository =
         Substitute.For<IInstanceCorrelationRepository>();
     private readonly IInstanceCorrelationGateway _gateway = Substitute.For<IInstanceCorrelationGateway>();
-    private readonly Dictionary<Guid, Instance> _instances = [];
+    private readonly Dictionary<Guid, CorrelationWalkRow> _instances = [];
     private readonly Dictionary<Guid, List<InstanceCorrelation>> _childrenByParent = [];
     private readonly InstanceCorrelationOptions _options = new();
     private readonly IServiceProvider _ambient;
@@ -474,6 +474,28 @@ public sealed class InstanceCorrelationResolverTests : IDisposable
         lvl2.UnresolvedReason.ShouldBe("depth-exceeded");
     }
 
+    /// <summary>
+    /// The walk reads a PROJECTION, never an aggregate. Pinned because the first implementation
+    /// called FindByIdsAsReadOnlyAsync, which eager-loads DataList — every data version of every
+    /// node, at every level. If someone re-points this at an aggregate read, this fails.
+    /// </summary>
+    [Fact]
+    public async Task TheWalk_ReadsAProjection_NeverTheInstanceAggregate()
+    {
+        var rootId = Guid.NewGuid();
+        StubInstance(rootId, RootFlow);
+
+        var resolver = BuildResolver(routeLocally: true);
+        await resolver.ResolveAsync(LocalDomain, RootFlow, Request(rootId));
+
+        await _instanceRepository.Received()
+            .GetForCorrelationWalkAsync(Arg.Any<IReadOnlyCollection<Guid>>(), Arg.Any<CancellationToken>());
+        await _instanceRepository.DidNotReceiveWithAnyArgs()
+            .FindByIdsAsReadOnlyAsync(default!, default);
+        await _instanceRepository.DidNotReceiveWithAnyArgs()
+            .FindByIdentifierAsReadOnlyAsync(default!, default);
+    }
+
     /// <summary>Depth is checked BEFORE any query — an exhausted budget must not pay for a level.</summary>
     [Fact]
     public async Task AnExhaustedDepthBudget_IssuesNoQueriesAtAll()
@@ -581,9 +603,10 @@ public sealed class InstanceCorrelationResolverTests : IDisposable
 
     private void StubInstance(Guid id, string flow, string ownState = "its-own-state")
     {
-        var instance = Instance.Create(id, flow, "1.0.0");
-        instance.ChangeState(State.Create(ownState, StateType.Intermediate, StateSubType.None, "Minor"));
-        _instances[id] = instance;
+        _ = flow;
+        // The walk reads a PROJECTION, not an aggregate — so the stub returns exactly the four
+        // columns the production query selects, and nothing the resolver could lean on by accident.
+        _instances[id] = new CorrelationWalkRow(id, $"key-{id:N}"[..12], ownState, InstanceStatus.Active, "1.0.0");
     }
 
     private void StubChildren(Guid parentId, params InstanceCorrelation[] correlations) =>

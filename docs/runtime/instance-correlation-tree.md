@@ -130,9 +130,12 @@ A (root, local)
                                          ^ sibling hops run concurrently
 ```
 
-- **One correlation read and one instance read per hop**, not two per node
+- **One correlation read and one projected instance read per hop**, not two per node
   (`IInstanceCorrelationRepository.GetByParentsAsync`). A level of five siblings in one flow costs
-  two queries, not ten.
+  two queries, not ten. The instance read is a **SQL projection** of the four columns the walk
+  actually uses (`CorrelationWalkRow`) — no aggregate is materialised, so a tree walk never
+  transfers whole instance rows, and there is no partially loaded aggregate for a later reader to
+  misuse.
 - **A cross-domain branch costs ONE call.** The far side re-enters the same resolver and recurses
   locally, so a six-level subtree in a partner domain is one remote call, not six. This is also
   what makes a cross-domain child's `key`, `ownState` and live `status` real — only the domain that
@@ -155,7 +158,7 @@ real — only its descendants are in question.**
 
 | `unresolvedReason` | Meaning |
 | --- | --- |
-| `depth-exceeded` | `MaxDescentDepth` (default 10) ran out. On a graph that cannot legitimately nest that deep, this is the first symptom of a cycle. |
+| `depth-exceeded` | `MaxDescentDepth` (default 20) ran out. On a graph that cannot legitimately nest that deep, this is the first symptom of a cycle. |
 | `hop-failed` | A hop could not be expanded — most often an unreachable partner domain. **Only that branch is truncated**; the rest of the tree arrives intact and the call still returns 200. |
 | `instance-missing` | The row could not be read in the domain that should own it. READ COMMITTED permits it to vanish between the parent's correlation read and the child's own. |
 
