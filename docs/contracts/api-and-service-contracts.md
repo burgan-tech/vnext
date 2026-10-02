@@ -17,7 +17,7 @@ contracts. Remote services call public runtime APIs rather than internal reposit
 | Contract | Direction | Stability notes |
 | --- | --- | --- |
 | Instance start/transition APIs | Client -> Orchestration | Route, response status, sync/async semantics are client contracts. |
-| Function APIs | Client -> Orchestration | `state`, `data`, `view`, `schema`, authorization, hierarchy. |
+| Function APIs | Client -> Orchestration | `state`, `data`, `view`, `schema`, authorization, [`instance-correlation`](../runtime/instance-correlation-tree.md). |
 | Task envelope | Orchestration -> Execution | Strongly typed binding and task type discriminator. |
 | Remote app services | Runtime -> Runtime | Uses public instance/function routes with forwarded headers. |
 | Domain events | Orchestration -> Outbox -> Inbox | Event payloads are distributed contracts. |
@@ -137,7 +137,7 @@ instance actually is; content follows what the client holds.
 A refusal is `403` with a body of `{"allowed": false}`. A consumer that reads only the `200` turns
 every refusal into "no answer".
 Built-in system functions (`state`, `view`, `data`, `schema`, `authorize`, `permissions`,
-`hierarchy`, `human-task`, `master`, `catalog`) have no `sys-functions` component and return `404`
+`instance-correlation`, `human-task`, `master`, `catalog`) have no `sys-functions` component and return `404`
 from `/info`.
 
 The HTTP `QUERY` method is **not supported** — declaring it is a component validation error and no

@@ -4,7 +4,7 @@
 
 Function handlers provide backend-driven view and state APIs behind stable function
 routes. They keep controller routing generic while allowing special behavior for system
-functions such as state, data, view, schema, authorization, permissions, hierarchy, and
+functions such as state, data, view, schema, authorization, permissions, instance-correlation, and
 human tasks.
 
 ## Boundaries
@@ -33,7 +33,7 @@ Application services own domain behavior and result construction.
 | `schema` | `SchemaFunctionHandler` | Returns transition-aware schema. |
 | `authorize` | `AuthorizeFunctionHandler` | Evaluates user/role access. |
 | `permissions` | `AuthorizationMatrixFunctionHandler` | Returns authorization matrix. |
-| `hierarchy` | `HierarchyFunctionHandler` | Returns instance hierarchy. |
+| `instance-correlation` | `InstanceCorrelationFunctionHandler` | Returns the instance-correlation tree, parent -> child. |
 | `humanTask` | `HumanTaskFunctionHandler` | Returns human task state for clients. |
 | `catalog` | `CatalogFunctionHandler` | Lists the workflow's declared functions, role-filtered, each linked to its `info` endpoint. |
 
@@ -167,7 +167,7 @@ either: a denied caller gets `403`, not an empty description. A slot that resolv
 content route is `404` (`Function:800004`); an unrecognized `target` is `400` (`Function:800005`).
 
 **Built-in system functions are not describable.** `state`, `view`, `data`, `schema`, `authorize`,
-`permissions`, `hierarchy`, `human-task`, `master` and `catalog` have no `sys-functions` component, so
+`permissions`, `instance-correlation`, `human-task`, `master` and `catalog` have no `sys-functions` component, so
 `/info` returns `404` for them.
 
 `GET {domain}/functions` still returns each function's full component definition for tooling that
@@ -339,7 +339,7 @@ function declares `roles`, the caller's roles are evaluated via
 `ITransitionAuthorizationManager.IsAnyRoleAllowedForGrantsAsync` at the single execution chokepoint
 (`FunctionAppService.ExecuteFunctionAsync`, covering both instance- and domain-scoped custom
 functions). No allow → **HTTP 403** (`WorkflowErrors.FunctionAccessDenied`); no `roles` → allow.
-Built-in functions (state/data/view/schema/authorize/permissions/hierarchy/extensions, `human-task`)
+Built-in functions (state/data/view/schema/authorize/permissions/instance-correlation/extensions, `human-task`)
 are **excluded** — they use their own handlers and never flow through `FunctionAppService`.
 
 ## Failure Modes

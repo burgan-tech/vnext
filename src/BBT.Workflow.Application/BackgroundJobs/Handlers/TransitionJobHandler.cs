@@ -106,12 +106,14 @@ public sealed class TransitionJobHandler(
                     BackgroundJobActivityHelper.EnrichActivity(activity, args);
                     BackgroundJobActivityHelper.EnrichActivityWithTransition(activity, args.TransitionKey);
 
+                    var data = args.Data;
+
                     // For async processing, instance should already be pre-reserved and in Busy status
                     // Reconstruct the original TransitionInput with Sync=true
                     var transitionInput = new TransitionInput(
                             args.Domain,
                             args.Workflow,
-                            new TransitionDataInput(args.Data)
+                            new TransitionDataInput(data)
                             {
                                 Key = args.InstanceKey,
                                 Tags = args.Tags,

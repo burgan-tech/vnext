@@ -123,6 +123,8 @@ public class InstanceQueryAppServiceStateTests : IDisposable
             viewContentResolutionService: _viewContentResolutionService,
             taskConditionService: Substitute.For<ITaskConditionService>(),
             urlTemplateBuilder: _urlTemplateBuilder,
+            instanceCorrelationResolver: Substitute.For<BBT.Workflow.Instances.Correlation.IInstanceCorrelationResolver>(),
+            correlationOptions: Microsoft.Extensions.Options.Options.Create(new BBT.Workflow.Instances.Correlation.InstanceCorrelationOptions()),
             currentSchema: Substitute.For<ICurrentSchema>(),
             transitionAuthorizationManager: _transitionAuthorizationManager,
             representationEtagService: _representationEtagService,

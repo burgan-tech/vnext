@@ -46,7 +46,11 @@ public sealed class TransitionContinuationRequested : IDistributedEvent, ILaneAw
     /// </summary>
     public required Guid JobId { get; init; }
 
-    /// <summary>The transition payload data (JSON), if any.</summary>
+    /// <summary>
+    /// The transition payload data (JSON), if any. Carried inline: the scheduler is armed with a
+    /// reference to the job row rather than the body, so the size ceiling that once forced this to be
+    /// reference-only (AB-17) no longer applies to the arm.
+    /// </summary>
     public JsonElement? Data { get; init; }
 
     /// <summary>Optional instance key.</summary>

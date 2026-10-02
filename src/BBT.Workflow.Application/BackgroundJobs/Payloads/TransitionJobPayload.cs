@@ -44,8 +44,21 @@ public sealed class TransitionJobPayload : ITraceableJobPayload
     
     /// <summary>
     /// Gets or sets the transition data as JSON.
+    /// <para>
+    /// Carried inline whatever its size. Aether arms the scheduler with a reference to the job row
+    /// rather than the row's payload, so the body never reaches the scheduler transport (etcd) and
+    /// an oversized one can no longer fail the arm after the Busy flip and job row have committed.
+    /// Historically this was reference-only (AB-17); payloads are now always complete. Non-null only
+    /// on payloads from builds that predate the fix; the handler still honors it for those.
+    /// </para>
     /// </summary>
     public JsonElement? Data { get; set; }
+
+    /// <summary>
+    /// The durable job row's <see cref="BBT.Workflow.Instances.InstanceJob.JobId"/>.
+    /// <see cref="Guid.Empty"/> on payloads from older builds.
+    /// </summary>
+    public Guid JobId { get; set; }
 
     /// <summary>
     /// Gets or sets the original, unmodified request body (as a literal string) captured at accept time.

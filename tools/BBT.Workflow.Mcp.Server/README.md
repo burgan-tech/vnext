@@ -77,7 +77,7 @@ still starts (live tools work) and a background task retries the meta load.
   `list_extensions`/`list_schemas`/`list_mappings`, `get_component`, `get_mapping_code` *(gated by `AllowCodeRead`)*.
   Wraps the Orchestration **Component Discovery API** (`GET /{domain}/components/*`).
 - **RuntimeTools** — `list_instances`, `get_instance`, `get_instance_data`, `get_instance_state`,
-  `get_instance_history`, `get_instance_hierarchy`, `get_runtime_config`. Wrap existing instance endpoints.
+  `get_instance_history`, `get_instance_correlation`, `get_runtime_config`. Wrap existing instance endpoints.
 - **MetaTools** — `query_features`, `get_version_info`, `list_known_issues`, `get_deprecations`,
   `check_security_policy`, `list_meta_components`. Read the `vnext-meta` npm package (loaded at startup).
 - **MutatingRuntimeTools** *(gated by `AllowMutations`)* — `start_instance`, `run_transition`,

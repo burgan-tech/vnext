@@ -622,4 +622,26 @@ public class TransitionJobHandlerTests
             r => r.FaultInstanceAsync(It.IsAny<TransitionJobPayload>(), It.IsAny<CancellationToken>()),
             Times.Never);
     }
+
+    /// <summary>
+    /// The request body travels inline on the job payload, whatever its size, and the handler hands
+    /// it to the pipeline verbatim.
+    /// </summary>
+    [Fact]
+    public async Task HandleAsync_WithInlineData_ExecutesTheTransitionWithThatBody()
+    {
+        var payload = CreatePayload();
+        payload.Data = System.Text.Json.JsonSerializer.SerializeToElement(new { legacy = true });
+        WorkflowExecutionContext? executed = null;
+        _executionService
+            .Setup(s => s.ExecuteTransitionAsync(It.IsAny<WorkflowExecutionContext>(), It.IsAny<CancellationToken>()))
+            .Callback<WorkflowExecutionContext, CancellationToken>((ctx, _) => executed = ctx)
+            .ReturnsAsync(Result<TransitionOutput>.Ok(new TransitionOutput()));
+        var handler = CreateHandler();
+
+        await handler.HandleAsync(payload, CancellationToken.None);
+
+        Assert.NotNull(executed?.Data?.Attributes);
+        Assert.True(executed!.Data!.Attributes!.Value.GetProperty("legacy").GetBoolean());
+    }
 }

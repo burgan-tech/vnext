@@ -299,6 +299,26 @@
       "title": "Task invokers treated X-Request-Id as a reserved trace header: a value set in the task's headers or input mapping was silently dropped from the outbound call and no value was sent in its place, so APIs that require it (OHVPS/BKM) rejected the call with 400 TR.OHVPS.Resource.InvalidFormat. StartTrigger and SubProcess never dropped the mapping's value but did not send vNext's request id either.",
       "workaround": "Upgrade to 0.0.98, where a non-empty X-Request-Id from the input mapping is sent as is and, when the mapping sets none, vNext's own request id (the originating request's X-Request-Id) is sent — on every HTTP-shaped task type, StartTrigger and SubProcess included. Until then, call such APIs through a proxy that adds the header.",
       "fixedIn": "0.0.98"
+    },
+    {
+      "id": "async-transition-oversized-body-stuck-busy",
+      "affectedVersions": ">=0.0.26",
+      "severity": "error",
+      "component": "transition",
+      "path": null,
+      "title": "An async (sync=false) transition whose request body exceeds the Dapr scheduler's message ceiling (etcd, 2 MiB default) was accepted with 202 but refused at arm time — after the Busy flip and the job row had committed — leaving the instance durably Busy with no transition record, no incident and no recovery path; the oversized job could also stop the dapr-scheduler for every domain until a restart, losing armed jobs.",
+      "workaround": "Keep async transition bodies well under 2 MiB (upload files to a document store and pass references). Fixed in the Aether background-job layer: the scheduler is armed with a reference to the job row rather than the row's payload, so the request body never reaches the scheduler transport (etcd) and its size can no longer fail the arm after the Busy flip and job row have committed. No vNext-side size cap or offload table is involved. fixedIn and the affectedVersions upper bound are stamped when the release containing the fix is cut.",
+      "fixedIn": null
+    },
+    {
+      "id": "sandbox-baseline-missing-system-objectmodel",
+      "affectedVersions": ">=0.0.26",
+      "severity": "error",
+      "component": "runtime",
+      "path": "Scripting:Sandbox:AllowedAssemblies",
+      "title": "With the script sandbox enabled, the shipped AllowedAssemblies baseline lacked System.ObjectModel, so a mapping that enumerates an ExpandoObject (foreach — ordinary mapping code) failed to compile with CS0012 (ExpandoObject implements INotifyPropertyChanged, which lives in System.ObjectModel; the netstandard facade's type-forward does not satisfy the binder). Direct System.ObjectModel types (ObservableCollection) failed with CS1069. Plain is/cast/dynamic access compiled — the failure was construct-dependent.",
+      "workaround": "Add \"System.ObjectModel\" to Scripting:Sandbox:AllowedAssemblies in the environment's configuration, grant it per mapping via scripts.allowedAssemblies, or read the expando through the 'as IDictionary<string,object>' spelling without enumerating the expando itself. Fixed on master 2026-09-23 by adding the entry to both hosts' shipped baselines; fixedIn is stamped when the release containing the fix is cut.",
+      "fixedIn": null
     }
   ]
 }

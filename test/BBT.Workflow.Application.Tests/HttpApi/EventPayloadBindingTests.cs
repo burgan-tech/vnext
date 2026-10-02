@@ -117,6 +117,7 @@ public sealed class EventPayloadBindingTests
             eventAppService: Substitute.For<IEventAppService>(),
             relatedInstanceQueryAppService: Substitute.For<IRelatedInstanceQueryAppService>(),
             humanTaskLeafResolver: Substitute.For<BBT.Workflow.Instances.HumanTask.IHumanTaskLeafResolver>(),
+            instanceCorrelationResolver: Substitute.For<BBT.Workflow.Instances.Correlation.IInstanceCorrelationResolver>(),
             callerRoleResolver: new BBT.Workflow.Authorization.DefaultCallerRoleResolver(
                 Substitute.For<BBT.Aether.Users.ICurrentUser>()));
 

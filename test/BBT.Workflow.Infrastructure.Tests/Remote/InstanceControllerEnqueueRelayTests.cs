@@ -55,6 +55,9 @@ public sealed class InstanceControllerEnqueueRelayTests
         payload.ShouldNotBeNull();
         // The job id is threaded as the enqueue argument so BackgroundJobInfo.Id == InstanceJob.JobId.
         capturedJobId.ShouldBe(continuation.JobId);
+        // The job id must ALSO land on the payload: it ties the running job back to its InstanceJob
+        // row, and a dropped copy breaks that link.
+        payload!.JobId.ShouldBe(continuation.JobId);
         payload!.Workflow.ShouldBe(continuation.Flow);
         payload.ExecutionActor.ShouldBe(ExecutionActor.User);
         payload.CallerSync.ShouldBeFalse();
@@ -88,13 +91,14 @@ public sealed class InstanceControllerEnqueueRelayTests
 
         payload.ShouldNotBeNull();
         // Renames, and members that deliberately do NOT land on the payload:
-        //   JobId          → the separate enqueue argument (asserted in the test above)
         //   RootInstanceId → Activity baggage on the Inbox hop (X-Root-Instance-Id), never payload
         //   ExecutionActor → string on the wire, enum on the payload (asserted above + fallback below)
+        // JobId is NO LONGER excluded: since AB-17 it is a real payload field (the handler reads it
+        // to hydrate an offloaded body), so the reflection check below asserts it is relayed — a
+        // future accidental drop of the controller's JobId copy fails here.
         var renames = new Dictionary<string, string> { ["Flow"] = nameof(TransitionJobPayload.Workflow) };
         var notRelayed = new[]
         {
-            nameof(TransitionContinuationRequested.JobId),
             nameof(TransitionContinuationRequested.RootInstanceId),
             nameof(TransitionContinuationRequested.ExecutionActor)
         };
@@ -194,6 +198,7 @@ public sealed class InstanceControllerEnqueueRelayTests
             Substitute.For<IEventAppService>(),
             Substitute.For<IRelatedInstanceQueryAppService>(),
             Substitute.For<BBT.Workflow.Instances.HumanTask.IHumanTaskLeafResolver>(),
+            Substitute.For<BBT.Workflow.Instances.Correlation.IInstanceCorrelationResolver>(),
             new DefaultCallerRoleResolver(Substitute.For<ICurrentUser>()));
         return (enqueuer, controller);
     }
