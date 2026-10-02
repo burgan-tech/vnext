@@ -39,6 +39,15 @@ internal static class InvokerHelpers
         HttpTaskInvocation.ApplyTrustedCorrelationHeaders(request);
 
     /// <summary>
+    /// Fills <c>X-Request-Id</c> from the ambient request id when the binding left it absent or
+    /// empty — the mapping's value wins. Delegates to <see cref="HttpTaskInvocation.ApplyRequestId"/>.
+    /// For invokers that apply only this rule; <see cref="ApplyTrustedCorrelationHeaders"/> already
+    /// includes it.
+    /// </summary>
+    public static void ApplyRequestId(HttpRequestMessage request) =>
+        HttpTaskInvocation.ApplyRequestId(request);
+
+    /// <summary>
     /// Copies a task binding's header definition (JSON object) onto an outbound request, skipping the reserved
     /// trace/correlation headers (<see cref="IsReservedTraceHeader"/>). Call
     /// <see cref="ApplyTrustedCorrelationHeaders"/> afterwards so sub / act_sub are filled only where the binding did not

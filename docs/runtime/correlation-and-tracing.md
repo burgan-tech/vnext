@@ -87,7 +87,7 @@ is the correct default for consistent traces.
 ## Reserved headers in task bindings
 
 Task binding header definitions (`binding.Headers` on http/soap/daprservice/trigger tasks) must
-not carry `traceparent`, `tracestate`, `baggage`, `x-request-id`, `X-Correlation-Id`, or
+not carry `traceparent`, `tracestate`, `baggage`, `X-Correlation-Id`, or
 `X-Workflow-Instance-Id` — the invokers skip these keys
 (`InvokerHelpers.IsReservedTraceHeader`). The live values are injected automatically:
 `traceparent`/`tracestate` by .NET's HttpClient instrumentation; the workflow-context pair by
@@ -101,7 +101,21 @@ lookups walk — the same reason type 6 carries the context in its invoke envelo
 forged correlation copied into a task definition would detach or spoof the workflow context;
 that's why the guard exists. The identity claims `sub`/`act_sub` are deliberately NOT reserved:
 a binding MAY set them and that value wins; when absent they are filled from the gateway token
-(baggage). For Dapr binding/pub-sub tasks (no HTTP header semantics) the invokers stamp the live
+(baggage).
+
+**`X-Request-Id` is not reserved either — the mapping wins, vNext fills.** A non-empty
+`X-Request-Id` set in the task's headers or input mapping is sent as is (exactly once). When the
+binding leaves it absent or empty, `ApplyTrustedCorrelationHeaders` sends vNext's own request id
+unchanged: `TaskTraceContext.RequestId` on the orchestrator paths, the `x_request_id` baggage that
+`TaskInvokeHandler` restores from the invoke envelope on the Execution host. Nothing is generated
+when vNext has none (a timer or event hop without a captured request id). APIs such as OHVPS/BKM
+require the header and may require a UUID that is unique per call — vNext's value is per client
+request and, without a client-sent id, Aether's fallback is `HttpContext.TraceIdentifier`, so set
+it in the mapping (`Guid.NewGuid()`) for those APIs. The header was reserved from 0.0.80 to 0.0.97,
+which dropped the mapping's value and sent none (`task-binding-x-request-id-dropped`).
+StartTrigger and SubProcess (cross-domain, Execution host) apply **only** this rule
+(`InvokerHelpers.ApplyRequestId`): their calls never carried the workflow-context or identity
+headers and still do not. Their mapping value was never filtered; what they gained is the fill. For Dapr binding/pub-sub tasks (no HTTP header semantics) the invokers stamp the live
 trace context into the operation metadata (`traceparent` / `cloudevent.traceparent`); the
 correlation/identity headers are not applied there.
 
@@ -116,7 +130,7 @@ for callers that pass no `isRestrictedHeader` callback. The reason is `HttpClien
 inbound request — or restored from a persisted job payload long after the fact — would win over the
 live `Activity` and parent the callee to a span that is not the caller's. The list is deliberately
 only the W3C trio, narrower than `HttpTaskInvocation.IsReservedTraceHeader`: the remote app-service
-path legitimately forwards `X-Request-Id` and friends. Pinned by
+path legitimately forwards `X-Request-Id` and the correlation headers. Pinned by
 `CurrentUserForwardHeadersHelperTraceHeaderTests`.
 
 ## Querying one request across all services

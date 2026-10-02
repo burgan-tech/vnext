@@ -33,24 +33,28 @@ public static class HttpTaskInvocation
     private const string CorrelationHeader = "X-Correlation-Id";
     private const string SubHeader = "sub";
     private const string ActSubHeader = "act_sub";
+    private const string RequestIdHeader = "X-Request-Id";
     private const string WorkflowInstanceBaggage = "workflow.instance.id";
     private const string CorrelationBaggage = "correlation.id";
     private const string SubBaggage = "sub";
     private const string ActSubBaggage = "act.sub";
+    private const string RequestIdBaggage = "x_request_id";
 
     /// <summary>
     /// Header names owned by the tracing/correlation infrastructure. Task binding definitions
     /// must never overwrite these on outbound calls: a stale traceparent copied into a binding
-    /// would detach the downstream service from the live trace, and a forged x-request-id or
-    /// workflow-context header would break log correlation or spoof workflow identity. The
-    /// live values are injected by HttpClient's DiagnosticsHandler (traceparent/tracestate) and
-    /// by <see cref="ApplyTrustedCorrelationHeaders"/>. The identity claims (sub/act_sub) are
-    /// deliberately NOT reserved: a developer may set them in the task binding and that value
-    /// wins — see <see cref="ApplyTrustedCorrelationHeaders"/>.
+    /// would detach the downstream service from the live trace, and a forged workflow-context
+    /// header would spoof workflow identity. The live values are injected by HttpClient's
+    /// DiagnosticsHandler (traceparent/tracestate) and by <see cref="ApplyTrustedCorrelationHeaders"/>.
+    /// The identity claims (sub/act_sub) and <c>X-Request-Id</c> are deliberately NOT reserved: a
+    /// developer may set them in the task binding and that value wins — see
+    /// <see cref="ApplyTrustedCorrelationHeaders"/>. <c>X-Request-Id</c> was reserved between
+    /// v0.0.80 and the fix, which silently dropped it from calls to APIs that REQUIRE it
+    /// (OHVPS/BKM answer 400 <c>TR.OHVPS.Resource.InvalidFormat</c> without it).
     /// </summary>
     private static readonly string[] ReservedTraceHeaders =
     [
-        "traceparent", "tracestate", "baggage", "x-request-id",
+        "traceparent", "tracestate", "baggage",
         WorkflowInstanceHeader, CorrelationHeader
     ];
 
@@ -259,6 +263,10 @@ public static class HttpTaskInvocation
     /// claims the platform provides as a DEFAULT — a developer who set them explicitly in the
     /// task binding's input mapping keeps their value; only when the binding did not set them
     /// are they filled from the gateway token.</item>
+    /// <item><b>X-Request-Id</b> is fill-if-absent too: a non-empty value from the binding's
+    /// input mapping wins; when the binding left it absent or empty, vNext's own request id (the
+    /// originating request's <c>X-Request-Id</c>, as the correlation provider holds it) is sent
+    /// unchanged. Nothing is generated when vNext has none.</item>
     /// </list>
     /// Value source per field: <paramref name="trusted"/> (the pipeline-built
     /// <see cref="TaskTraceContext"/>, same object the type-6 invoke envelope carries) wins when
@@ -314,7 +322,39 @@ public static class HttpTaskInvocation
                 request.Headers.TryAddWithoutValidation(ActSubHeader, actSub);
             }
         }
+
+        ApplyRequestId(request, trusted);
     }
+
+    /// <summary>
+    /// Fills <c>X-Request-Id</c> on an outbound request when the task binding's input mapping left
+    /// it absent or empty: a non-empty mapping value always wins; otherwise vNext's own request id
+    /// is sent unchanged — <paramref name="trusted"/>'s <c>RequestId</c> when supplied, else the
+    /// ambient <c>x_request_id</c> baggage the Execution host restores from the invoke envelope.
+    /// Nothing is generated when neither has one. Part of <see cref="ApplyTrustedCorrelationHeaders"/>;
+    /// public on its own for the invokers that apply ONLY this rule (StartTrigger and SubProcess,
+    /// whose calls never carried the workflow-context or identity headers).
+    /// </summary>
+    public static void ApplyRequestId(HttpRequestMessage request, TaskTraceContext? trusted = null)
+    {
+        if (HasNonEmptyHeader(request, RequestIdHeader))
+            return;
+
+        var requestId = !string.IsNullOrEmpty(trusted?.RequestId)
+            ? trusted!.RequestId
+            : Activity.Current?.GetBaggageItem(RequestIdBaggage);
+        if (IsSafeHeaderValue(requestId))
+        {
+            // Remove first: an empty mapping entry would otherwise be sent next to the value.
+            request.Headers.Remove(RequestIdHeader);
+            request.Headers.TryAddWithoutValidation(RequestIdHeader, requestId);
+        }
+    }
+
+    /// <summary>Whether the request already carries <paramref name="name"/> with a non-blank value.</summary>
+    private static bool HasNonEmptyHeader(HttpRequestMessage request, string name) =>
+        request.Headers.NonValidated.TryGetValues(name, out var values)
+        && values.Any(v => !string.IsNullOrWhiteSpace(v));
 
     /// <summary>
     /// The caller credential a task carries to its target: <c>sub</c>, <c>act_sub</c>, <c>position</c>, <c>client_id</c>

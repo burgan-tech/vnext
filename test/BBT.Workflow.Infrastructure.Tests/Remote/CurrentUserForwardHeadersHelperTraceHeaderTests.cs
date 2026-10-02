@@ -78,8 +78,8 @@ public sealed class CurrentUserForwardHeadersHelperTraceHeaderTests
     [Fact]
     public void MergeIntoRequest_NonTraceHeadersInInputHeaders_AreStillCopied()
     {
-        // The task-invoker guard (HttpTaskInvocation.ReservedTraceHeaders) also drops x-request-id;
-        // this path must NOT — correlation ids are legitimately forwarded cross-domain.
+        // Correlation ids such as x-request-id are legitimately forwarded cross-domain; only the
+        // W3C trio is dropped here.
         var request = new HttpRequestMessage(HttpMethod.Post, "http://x/");
         var forwardHeaders = new Dictionary<string, string?>();
         var inputHeaders = new Dictionary<string, string?>

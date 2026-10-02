@@ -207,6 +207,25 @@ public sealed class ScriptIncidentInfo
     /// that skipped the load.
     /// </summary>
     public bool IncidentsLoaded { get; init; }
+
+    /// <summary>
+    /// Projects the incidents loaded on <paramref name="instance"/>. Reads
+    /// <see cref="Instance.GetLoadedIncidents"/>, never the EF navigation: a script context always
+    /// holds a <see cref="Instance.CreateSnapshot"/>, and a snapshot carries every loaded incident in
+    /// its detached list, so the navigation is empty there and <see cref="ActiveIncident"/> would be
+    /// null while <see cref="HasActiveIncident"/> says true.
+    /// </summary>
+    internal static ScriptIncidentInfo From(Instance instance)
+    {
+        var loaded = instance.GetLoadedIncidents();
+        return new ScriptIncidentInfo
+        {
+            HasActiveIncident = instance.HasActiveIncident,
+            ActiveIncident = loaded.LastOrDefault(i => !i.IsResolved),
+            TotalIncidentCount = loaded.Count,
+            IncidentsLoaded = instance.IncidentsLoaded
+        };
+    }
 }
 
 public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncDisposable
@@ -626,13 +645,7 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
         // The live instance carries no decryptor; keep the one the builder bound to the snapshot being replaced.
         Instance?.CopyDecryptionTo(snapshot);
         Instance = snapshot;
-        Incident = new ScriptIncidentInfo
-        {
-            HasActiveIncident = snapshot.HasActiveIncident,
-            ActiveIncident = snapshot.Incidents.LastOrDefault(i => !i.IsResolved),
-            TotalIncidentCount = snapshot.Incidents.Count,
-            IncidentsLoaded = snapshot.IncidentsLoaded
-        };
+        Incident = ScriptIncidentInfo.From(snapshot);
     }
 
     /// <summary>
@@ -803,13 +816,7 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
 
         if (branch.Instance != null)
         {
-            branch.Incident = new ScriptIncidentInfo
-            {
-                HasActiveIncident = branch.Instance.HasActiveIncident,
-                ActiveIncident = branch.Instance.Incidents.LastOrDefault(incident => !incident.IsResolved),
-                TotalIncidentCount = branch.Instance.Incidents.Count,
-                IncidentsLoaded = branch.Instance.IncidentsLoaded
-            };
+            branch.Incident = ScriptIncidentInfo.From(branch.Instance);
         }
 
         if (Mutations.HasStageChange)
@@ -1048,13 +1055,7 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
         public Builder SetInstance(Instance instance)
         {
             _context.Instance = instance;
-            _context.Incident = new ScriptIncidentInfo
-            {
-                HasActiveIncident = instance.HasActiveIncident,
-                ActiveIncident = instance.Incidents.LastOrDefault(i => !i.IsResolved),
-                TotalIncidentCount = instance.Incidents.Count,
-                IncidentsLoaded = instance.IncidentsLoaded
-            };
+            _context.Incident = ScriptIncidentInfo.From(instance);
             return this;
         }
 

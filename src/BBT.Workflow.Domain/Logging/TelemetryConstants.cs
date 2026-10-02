@@ -972,9 +972,9 @@ public static class TelemetryConstants
         /// so a stale copy taken from the inbound request (or from a persisted job payload) would win
         /// over the live <see cref="System.Diagnostics.Activity"/> and parent the callee to a span that
         /// is not the caller's. The task-invoker path keeps its own, wider list in
-        /// <c>HttpTaskInvocation.ReservedTraceHeaders</c> (it also drops correlation headers the
-        /// binding must not override); this one is deliberately only the W3C trio, because the
-        /// remote app-service path legitimately forwards <c>X-Request-Id</c> and friends.
+        /// <c>HttpTaskInvocation.ReservedTraceHeaders</c> (it also drops the workflow-context headers
+        /// the binding must not override); this one is deliberately only the W3C trio, because the
+        /// remote app-service path legitimately forwards <c>X-Request-Id</c> and the correlation headers.
         /// </summary>
         public static readonly string[] W3CTraceContext = ["traceparent", "tracestate", "baggage"];
 

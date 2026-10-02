@@ -269,6 +269,7 @@ public sealed class SubProcessRemoteInvoker : ITaskInvoker<SubProcessBinding>
             "application/json");
 
         AddHeaders(request, binding.Headers);
+        InvokerHelpers.ApplyRequestId(request);
         return request;
     }
 
@@ -292,6 +293,7 @@ public sealed class SubProcessRemoteInvoker : ITaskInvoker<SubProcessBinding>
         };
 
         AddHeaders(request, binding.Headers);
+        InvokerHelpers.ApplyRequestId(request);
         return request;
     }
 
