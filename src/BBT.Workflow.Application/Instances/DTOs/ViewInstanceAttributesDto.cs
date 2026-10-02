@@ -36,6 +36,12 @@ public sealed class ViewInstanceAttributesDto
     public string? Label { get; set; }
 
     /// <summary>
+    /// Multi-language display labels of the view component.
+    /// </summary>
+    [JsonPropertyName("labels")]
+    public List<LanguageLabel>? Labels { get; set; }
+
+    /// <summary>
     /// Identifies which UI SDK / render engine should interpret the view content.
     /// </summary>
     [JsonPropertyName("renderer")]

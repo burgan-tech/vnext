@@ -141,6 +141,24 @@ public class InstanceQueryAppServiceSchemaCacheTests : IDisposable
             .GetDataFingerprintAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
 
+    /// <summary>
+    /// The schema response carries the schema component's <c>labels</c> (<c>attributes.labels</c>)
+    /// in their declared <c>[{ language, label }]</c> form.
+    /// </summary>
+    [Fact]
+    public async Task GetSchemaAsync_CarriesTheSchemaComponentsLabels()
+    {
+        var (instance, workflow) = CreateInstanceWithTransitionSchema();
+        SetupFullPathMocks(instance, workflow);
+
+        var result = await _service.GetSchemaAsync(CreateInput(instance.Id.ToString()), TestTransition, CancellationToken.None);
+
+        result.Result.IsSuccess.ShouldBeTrue();
+        var label = result.Result.Value!.Labels.ShouldHaveSingleItem();
+        label.Label.ShouldBe("Onay Formu");
+        label.Language.ShouldBe("tr-TR");
+    }
+
     [Fact]
     public async Task GetSchemaAsync_WhenIfNoneMatchMatchesFingerprintEtag_Returns304WithoutBuild()
     {
@@ -303,7 +321,8 @@ public class InstanceQueryAppServiceSchemaCacheTests : IDisposable
 
     private static SchemaDefinition SchemaFromJson() =>
         System.Text.Json.JsonSerializer.Deserialize<SchemaDefinition>("""
-            { "key": "approve-schema", "type": "JSON", "schema": { "type": "object" } }
+            { "key": "approve-schema", "type": "JSON", "schema": { "type": "object" },
+              "labels": [ { "label": "Onay Formu", "language": "tr-TR" } ] }
             """, new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true })!;
 
     private static GetSchemaInput CreateInput(string instanceId) => new()

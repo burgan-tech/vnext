@@ -357,6 +357,32 @@ public sealed class FunctionInfoAppServiceTests : IDisposable
     }
 
     /// <summary>
+    /// Each catalog entry carries the function component's <c>labels</c> (<c>attributes.labels</c>) in
+    /// their declared <c>[{ language, label }]</c> form, so a client can show the function by its
+    /// display text; a function that declares none carries none.
+    /// </summary>
+    [Fact]
+    public async Task Catalog_CarriesTheFunctionComponentsLabels()
+    {
+        var instance = SetupInstance();
+        SetupFlowWithFunctions("get-branches", "get-rates");
+        var labelled = FunctionTestFactory.FromJson(FunctionTestFactory.Attributes(
+            """ "labels": [ { "label": "Şubeler", "language": "tr-TR" }, { "label": "Branches", "language": "en-US" } ] """,
+            scope: "I"), "get-branches");
+        _componentCacheStore
+            .GetFunctionAsync(TestDomain, "get-branches", Arg.Any<string?>(), Arg.Any<CancellationToken>())
+            .Returns(Result<Function>.Ok(labelled));
+        SetupCatalogFunction("get-rates", "I");
+
+        var result = await _service.GetCatalogByInstanceAsync(TestDomain, TestFlow, instance.Id.ToString());
+
+        var entries = result.Value.ShouldNotBeNull().Functions.ToDictionary(f => f.Name);
+        entries["get-branches"].Labels!.Select(l => (l.Language, l.Label))
+            .ShouldBe([("tr-TR", "Şubeler"), ("en-US", "Branches")]);
+        entries["get-rates"].Labels.ShouldBeNull();
+    }
+
+    /// <summary>
     /// The catalog is scope-filtered, not role-filtered. A roles-bearing function is advertised to a
     /// caller holding none of its roles — deciding whether to surface the link is the middle tier's
     /// call, made against the <c>authorize</c> function.

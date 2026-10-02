@@ -91,7 +91,9 @@ fingerprint already covers. See
 GET /{domain}/workflows/{workflow}/instances/{instance}/functions/catalog
 ```
 
-Returns `{ "functions": [ { name, version, scope, href } ] }` in declaration order. Each href matches
+Returns `{ "functions": [ { name, version, scope, labels, href } ] }` in declaration order. `labels` is
+the function component's `attributes.labels` in its `[{ language, label }]` form, omitted when the
+component declares none. Each href matches
 the function's `scope`: `D` links to the domain `info` route, `F` and `I` to the instance one — the
 domain route rejects the latter two with `403`, so linking them there would be a dead link.
 
@@ -145,6 +147,21 @@ route accepts it. Surrounding tooling (Swagger/OpenAPI, gateways, client SDKs) d
 unrecognised method yet; model body-carrying reads as `POST`. See
 [Function Handler Architecture](../domain/function-handler-architecture.md) § Custom Function Contract.
 
+### Component labels on the state, view, schema and master responses
+
+Each of these responses carries the display labels of the thing it describes, in the definition's
+own `[{ language, label }]` form — every language, not one resolved for the caller; the client
+picks. The field is omitted when the definition declares none.
+
+| Response | Field | Source |
+| --- | --- | --- |
+| `functions/state` | `stateLabels`, each `transitions[].labels` and `transitions[].target.labels` | The displayed state's, each transition's and each target state's `labels` — see [current state and transition targets](#state-response-current-state-and-transition-targets). |
+| `functions/view` | `labels` | The view component's `labels`, for a local view and for one resolved from another domain alike. The older `label` string is unchanged. |
+| `functions/schema`, `functions/master` | `labels` | The schema component's `attributes.labels`. |
+
+Labels are a property of the component version. A schema component already in the component cache
+from an earlier build carries no `labels` until its next publish or until the cache entry expires.
+
 ### View response: display modes
 
 The view response keeps `display` as the SDI (single-document) string and adds a `modes` object
@@ -166,6 +183,45 @@ nested chain stays consistent. `correlations` is read through a dedicated query,
 concurrent completion its active subset can be a moment fresher than `activeCorrelations`.
 Changes to the correlation set participate in the state ETag — see
 [state-function cache and fingerprint ETag](../runtime/state-function-cache-and-etag.md).
+
+### State response: current state and transition targets
+
+The state response describes the displayed state and every transition's target state with the
+same vocabulary, so a client renders both with one code path — "Approve → Approved" instead of the
+keys `approve` and `approved`, and knows a transition enters a sub-flow without reading the
+workflow definition:
+
+```jsonc
+{
+  "state": "review", "stateType": "intermediate", "stateSubType": "human",
+  "stateLabels": [ { "label": "İnceleme", "language": "tr-TR" } ],
+  "transitions": [
+    { "name": "ask-ai", "kind": "stateTransition",
+      "labels": [ { "label": "Yapay Zekâya Danış", "language": "tr-TR" } ],
+      "target": {
+        "key": "ai-review", "stateType": "subFlow", "stateSubType": "none",
+        "labels": [ { "label": "Yapay Zekâ İncelemesi", "language": "tr-TR" } ],
+        "subFlow": "ai-assist"
+      },
+      "href": "...", "view": { ... }, "schema": { ... } }
+  ]
+}
+```
+
+- Labels — the transition's `labels`, `stateLabels`, `target.labels` — are the definition's own
+  `[{ language, label }]` list: every language, not one resolved for the caller; the client picks.
+  Omitted when the definition declares none.
+- `stateType` / `stateSubType` and `target.stateType` / `target.stateSubType` are camelCase enum
+  names (`intermediate`, `subFlow`, …; `none`, `human`, `success`, …).
+- `stateSubType` and `stateLabels` describe the same state as `stateType`: the active subflow's
+  state while one runs, otherwise the instance's own.
+- `target.key` is the target state key, with `$self` resolved to the state the transition is listed
+  in (for a scheduled entry, the job's source state). `target.subFlow` — only when the target is a
+  `subFlow` state — is the key of the flow that state starts.
+- A target state that no longer resolves leaves `target` with its raw `key` only; a transition that
+  no longer resolves carries no `target` and no `labels`.
+- During an active-subflow window the subflow's own entries are passed through as the subflow
+  described them; a parent-added shared transition is described against the parent's definition.
 
 ### State response: scheduled transitions inside `transitions`
 
@@ -222,19 +278,26 @@ HH:MM" — without polling anything else:
 
 ```jsonc
 "timeout": {
-  "key": "abandoned", "target": "cancelled", "executeAtUtc": "2026-09-21T14:30:00Z",
+  "key": "abandoned", "executeAtUtc": "2026-09-21T14:30:00Z",
+  "target": { "key": "cancelled", "stateType": "finish", "stateSubType": "cancelled",
+              "labels": [ { "label": "İptal Edildi", "language": "tr-TR" } ] },
   "annotations": { "ui/countdown": "visible" }
 }
 ```
 
 - **Not a `transitions[]` entry, deliberately.** A workflow timeout is instance-scoped rather than
   state-scoped, armed once at start and never re-armed, and is keyed by the virtual `$timeout` — so
-  it has no callable transition key, cannot carry the uniform `href`/`view`/`schema` link objects
-  every `transitions[]` item does, and `TransitionItem` has nowhere to put `target`.
+  it has no callable transition key and cannot carry the uniform `href`/`view`/`schema` link objects
+  every `transitions[]` item does.
 - `key` and `target` come from the **effective** timeout: the parent-supplied
   `subFlow.overrides.timeout` when the instance was started with one, otherwise the workflow's own.
   The same resolver feeds the arm and the fire path, so the deadline a client is shown is the one
   the runtime will act on.
+- `target` is described exactly as a `transitions[]` entry's `target` — key, type, sub type, labels,
+  and `subFlow` for a subFlow state (see
+  [current state and transition targets](#state-response-current-state-and-transition-targets)) —
+  resolved in the polled instance's own definition, since an override names the child's state. A
+  target that does not resolve keeps its raw `key` only.
 - `annotations` is the effective timeout's `timeout.annotations`, omitted when none is declared. An
   override **replaces** the child's timeout as a whole, annotations included — they are never merged
   with the child's own.

@@ -1,3 +1,5 @@
+using BBT.Workflow.Shared;
+
 namespace BBT.Workflow.Instances;
 
 /// <summary>
@@ -13,8 +15,9 @@ namespace BBT.Workflow.Instances;
 /// (unlike a <c>kind: "scheduled"</c> entry, which a state cancels on exit and re-arms on entry),
 /// and it is keyed by the virtual <c>$timeout</c> — there is no callable transition behind it. It
 /// therefore cannot honour the uniform <c>href</c>/<c>view</c>/<c>schema</c> shape every
-/// <c>transitions[]</c> item carries, and <c>TransitionItem</c> has nowhere to put
-/// <see cref="Target"/>. It rides as its own block, like <c>incident</c> and <c>interaction</c>.
+/// <c>transitions[]</c> item carries. It rides as its own block, like <c>incident</c> and
+/// <c>interaction</c> — but describes its target with the same <see cref="TransitionTarget"/> a
+/// <c>transitions[]</c> entry uses.
 /// </para>
 /// <para>
 /// <b>Always the polled instance.</b> The block is never merged from, nor descended into, an
@@ -47,10 +50,11 @@ public sealed class InstanceTimeoutOutput
 
     /// <summary>
     /// The state the instance will be pulled to when the deadline fires (<c>timeout.target</c>),
-    /// so a client can say what is about to happen and not merely when. Resolved from the same
-    /// effective timeout the runtime will act on.
+    /// so a client can say what is about to happen and not merely when — key, type, sub type and
+    /// labels, exactly as a <c>transitions[]</c> entry describes its target. Resolved from the same
+    /// effective timeout the runtime will act on, in the polled instance's own definition.
     /// </summary>
-    public string Target { get; set; } = string.Empty;
+    public TransitionTarget Target { get; set; } = new();
 
     /// <summary>
     /// The UTC instant the scheduler was armed to fire the timeout at, read from the persisted job
