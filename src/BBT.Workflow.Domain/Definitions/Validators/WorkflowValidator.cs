@@ -893,12 +893,13 @@ public class WorkflowValidator
 
         foreach (var grant in roleGrants)
         {
-            var message = DynamicRoleGrant.Classify(grant.Role) switch
+            var grantRole = grant.Role ?? throw new NotSupportedException("combinator evaluated before Task 3");
+            var message = DynamicRoleGrant.Classify(grantRole) switch
             {
                 DynamicRoleFormat.MissingContextPrefix =>
-                    $"Dynamic role '{grant.Role}' in '{context}' has an invalid path. Path must start with '{contextPrefix}' (case-sensitive).",
+                    $"Dynamic role '{grantRole}' in '{context}' has an invalid path. Path must start with '{contextPrefix}' (case-sensitive).",
                 DynamicRoleFormat.EmptyNavigationPath =>
-                    $"Dynamic role '{grant.Role}' in '{context}' has an empty navigation path after '{contextPrefix}'.",
+                    $"Dynamic role '{grantRole}' in '{context}' has an empty navigation path after '{contextPrefix}'.",
                 _ => null
             };
 

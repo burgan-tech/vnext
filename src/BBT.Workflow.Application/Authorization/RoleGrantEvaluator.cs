@@ -173,14 +173,16 @@ internal sealed class RoleGrantEvaluator : IRoleGrantEvaluator
     /// </summary>
     private bool IsMatch(RoleGrant grant, string normalizedRole, Transition? transition)
     {
+        var grantRole = grant.Role ?? throw new NotSupportedException("combinator evaluated before Task 3");
+
         // 1. Predefined role check
         var predefinedResult = MatchPredefinedRole(
-            grant.Role, _instance!, _previousTransition, _actorUserName, _subjectUserName);
+            grantRole, _instance!, _previousTransition, _actorUserName, _subjectUserName);
         if (predefinedResult.HasValue)
             return predefinedResult.Value;
 
         // 2. Dynamic context reference
-        var dynamicGrant = DynamicRoleGrant.TryParse(grant.Role);
+        var dynamicGrant = DynamicRoleGrant.TryParse(grantRole);
         if (dynamicGrant != null)
         {
             return ResolveDynamicRoleMatch(
@@ -192,7 +194,7 @@ internal sealed class RoleGrantEvaluator : IRoleGrantEvaluator
         }
 
         // 3. Static role comparison (OrdinalIgnoreCase)
-        return string.Equals(grant.Role, normalizedRole, StringComparison.OrdinalIgnoreCase);
+        return string.Equals(grantRole, normalizedRole, StringComparison.OrdinalIgnoreCase);
     }
 
     private JsonElement GetAuthContext(Transition? transition)

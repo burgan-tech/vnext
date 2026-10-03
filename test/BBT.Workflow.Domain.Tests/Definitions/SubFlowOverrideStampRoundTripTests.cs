@@ -54,6 +54,23 @@ public class SubFlowOverrideStampRoundTripTests : DomainTestBase<DomainEntryPoin
     }
 
     [Fact]
+    public void AllOfRoleGrant_WrittenWithDefaultOptions_KeepsLeavesWhenReadWithSharedOptions()
+    {
+        var read = RoundTrip(new Dictionary<string, SubFlowStateOverride>
+        {
+            ["otp-wait"] = SubFlowStateOverride.Create(
+                interaction: SubFlowStateInteractionOverride.Create(
+                    SubFlowLongPollOverride.Create(roles: Grants(
+                        """[{"grant":"allow","allOf":[{"role":"corp.teller"},{"role":"$InstanceStarter"}]}]"""))))
+        });
+
+        var grant = read["otp-wait"].Interaction!.LongPoll!.Roles!.ShouldHaveSingleItem();
+        grant.Role.ShouldBeNull();
+        grant.AnyOf.ShouldBeNull();
+        grant.LeafRoles.ShouldBe(["corp.teller", "$InstanceStarter"]);
+    }
+
+    [Fact]
     public void ExplicitEmptyRoles_SurviveAsEmptyNotNull()
     {
         var read = RoundTrip(new Dictionary<string, SubFlowStateOverride>

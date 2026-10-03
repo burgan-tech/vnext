@@ -40,7 +40,7 @@ public sealed class TransitionAuthorizationManager(
 
         // Fetch the previous manual transition only when some grant in the batch actually references it.
         InstanceTransition? previousTransition = null;
-        if (grantsForPrefetchHint.Any(g => ReferencesPreviousTransition(g.Role)))
+        if (grantsForPrefetchHint.Any(g => ReferencesPreviousTransition(g.Role ?? throw new NotSupportedException("combinator evaluated before Task 3"))))
         {
             // Spanned INSIDE the branch, so the span exists only when the query ran. A span on the
             // other side of this guard would report a lookup that never happened, and "this trace
@@ -461,7 +461,7 @@ public sealed class TransitionAuthorizationManager(
     /// <param name="grant">The grant under evaluation; only DENY grants are meaningful here.</param>
     /// <param name="normalizedRoleCount">The caller's role count after blank roles are dropped.</param>
     internal static bool IsUnprovableRoleBoundDeny(RoleGrant grant, int normalizedRoleCount)
-        => normalizedRoleCount == 0 && grant.IsDeny && IsRoleBound(grant.Role);
+        => normalizedRoleCount == 0 && grant.IsDeny && IsRoleBound(grant.Role ?? throw new NotSupportedException("combinator evaluated before Task 3"));
 
     /// <summary>
     /// A role-bound grant (static role or <c>$role.</c>, see <see cref="IsUnprovableRoleBoundDeny"/>) that a caller with no
@@ -470,7 +470,7 @@ public sealed class TransitionAuthorizationManager(
     /// resolves to <c>""</c> would otherwise "match" it and hand out the raw value.
     /// </summary>
     internal static bool IsUnprovableRoleBoundGrant(RoleGrant grant, int normalizedRoleCount)
-        => normalizedRoleCount == 0 && IsRoleBound(grant.Role);
+        => normalizedRoleCount == 0 && IsRoleBound(grant.Role ?? throw new NotSupportedException("combinator evaluated before Task 3"));
 
     private static bool IsRoleBound(string? grantRole)
     {
@@ -489,9 +489,10 @@ public sealed class TransitionAuthorizationManager(
 
     private static bool MatchesAnyStatic(RoleGrant grant, List<string> roles)
     {
+        var grantRole = grant.Role ?? throw new NotSupportedException("combinator evaluated before Task 3");
         foreach (var role in roles)
         {
-            if (string.Equals(grant.Role, role, StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(grantRole, role, StringComparison.OrdinalIgnoreCase))
                 return true;
         }
 

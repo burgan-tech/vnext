@@ -458,7 +458,7 @@ public sealed class AuthorizeAppService(
     {
         if (roles.Count == 0)
             return [];
-        return roles.Select(r => new RoleGrantDto { Role = r.Role, Grant = r.Grant }).ToList();
+        return roles.Select(r => new RoleGrantDto { Role = r.Role ?? throw new NotSupportedException("combinator evaluated before Task 3"), Grant = r.Grant }).ToList();
     }
 
     /// <summary>
