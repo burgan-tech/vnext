@@ -155,6 +155,22 @@ public sealed class RoleGrantCombinatorTests : IDisposable
         await _repo.Received(1).GetLastCompletedManualTransitionAsync(instance.Id, Arg.Any<CancellationToken>());
     }
 
+    [Theory]
+    [InlineData(new[] { "maker", "checker" }, true)]
+    [InlineData(new[] { "checker", "maker", "extra" }, true)]
+    [InlineData(new[] { "maker" }, false)]
+    [InlineData(new[] { "checker" }, false)]
+    public async Task AllOf_of_two_roles_is_met_across_a_multi_role_caller_on_an_instance(string[] callerRoles, bool expected)
+    {
+        _currentUser.ActorUserName.Returns("u-x");
+        _currentUser.UserName.Returns("u-x");
+        var set = Grants("""[{"allOf":[{"role":"maker"},{"role":"checker"}],"grant":"allow"}]""");
+
+        var evaluator = await _sut.CreateEvaluatorAsync(NewInstance(), null, null, set, CancellationToken.None);
+
+        evaluator.IsAnyRoleAllowed(callerRoles, set).ShouldBe(expected);
+    }
+
     private static InstanceTransition PreviousTransitionBy(Guid instanceId, string createdBy)
     {
         var transition = InstanceTransition.Create(

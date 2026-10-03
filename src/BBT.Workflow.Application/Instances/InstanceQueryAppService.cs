@@ -3445,6 +3445,11 @@ public sealed class InstanceQueryAppService(
             return Result<HumanTask.HumanTaskListOutput>.Fail(callerRolesResult.Error);
         var userRoles = callerRolesResult.Value ?? [];
 
+        // Read once per request from the request scope, before any fan-out: the isolated scopes of the
+        // leaf hops are fresh DI scopes with no ambient caller, so ICurrentUser resolved inside is empty.
+        var actorUserName = currentUser.ActorUserName?.Trim();
+        var subjectUserName = currentUser.UserName?.Trim();
+
         // Keyed on the caller scope, so the cache sits BEHIND the authorization filter and an entry
         // is only ever served back to the scope that produced it — which is what lets it hold
         // humanTask text at all. An override skips the READ and still takes the build gate and
@@ -3587,11 +3592,6 @@ public sealed class InstanceQueryAppService(
                 Interlocked.Increment(ref schemaLimitHit);
 
             using var descend = InstanceReadActivityHelper.StartHumanTaskDescend(flowKey, candidates.Count);
-
-            // Read from the request scope, BEFORE the isolated unit of work: the isolated scope is a
-            // fresh DI scope with no ambient caller, so ICurrentUser resolved inside it is empty.
-            var actorUserName = currentUser.ActorUserName?.Trim();
-            var subjectUserName = currentUser.UserName?.Trim();
 
             // Acquired BEFORE the unit of work, so a branch waiting for a slot is not waiting while
             // holding a connection. This is the only ceiling that spans requests; without it the
