@@ -19,8 +19,9 @@ has had no production caller since), and the human-task list reads `queryRoles`,
 
 ## `queryRoles` is enforced at the gateway, not in this runtime
 
-`queryRoles` is fully alive as a **definition** and as an **answer**: it is still evaluated, in full
-and per hop down the active-correlation chain, by `GET .../functions/authorize?queryRoles=true`. What
+`queryRoles` is fully alive as a **definition** and as an **answer**: it is still evaluated, in full,
+by `GET .../functions/authorize?queryRoles=true` — at the deepest active leaf of the SubFlow chain, with
+that leaf's grants (see [authorize-function](authorize-function.md)). What
 this runtime no longer does is evaluate it a *second* time on its own read path.
 
 The deployment target is an Internal Gateway that introspects the caller and consults that `authorize`
