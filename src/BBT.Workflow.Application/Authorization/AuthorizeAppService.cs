@@ -103,23 +103,11 @@ public sealed class AuthorizeAppService(
                 return Result<AuthorizeOutput>.Ok(new AuthorizeOutput { Allowed = ackAllowed });
             }
 
-            // queryRoles is a CONJUNCTION down the chain, because that is what the read surfaces
-            // enforce: the state function gates the polled instance (InstanceQueryAppService) and THEN
-            // descends, where the leaf gates again — two conjunctive gates. Answering from the leaf
-            // alone made `authorize` strictly weaker than the gate it exists to describe, so a gateway
-            // trusting it would admit callers the runtime itself refuses. The root's own verdict is
-            // taken here; the forward below re-enters this method at the child, which repeats it for
-            // its own level, so the whole chain down to the deepest active leaf is ANDed.
-            if (checkQueryRoles)
-            {
-                var rootAllowed = await transitionAuthorizationManager.IsQueryAllowedAsync(
-                    wf, instance, resolvedForForward.Value, requestContext, cancellationToken);
-                if (!rootAllowed)
-                {
-                    logger.AuthorizeRequest(domain, workflow, instanceId, DescribeTarget(null, null, true, false), Describe(resolvedForForward.Value), false);
-                    return Result<AuthorizeOutput>.Ok(new AuthorizeOutput { Allowed = false });
-                }
-            }
+            // queryRoles is decided at the LEAF only. A SubFlow is part of its parent's process, so the
+            // visibility of the whole chain is the deepest active instance's grant set (its parent-stamped
+            // override, else its own state/workflow queryRoles) — never an AND with the levels above it.
+            // The forward below re-enters this method at the child; each level that still has an active
+            // SubFlow forwards again, and only the instance without one evaluates.
 
             // Parent-declared overrides are deliberately NOT read here. They are stamped onto the child
             // when it starts (SubflowStarter) and resolved at the level they govern by the single

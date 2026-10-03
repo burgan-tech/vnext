@@ -44,7 +44,7 @@ describe the stable mental model, boundaries, failure modes, and change-safety r
 16. Read [Function Handler Architecture](domain/function-handler-architecture.md) § Custom Function Contract before declaring function `verbs` / input-output schemas and views, or changing verb enforcement.
 17. Read [Well-Known Transitions](domain/well-known-transitions.md) before changing `cancel` / `updateData` / `exit` behavior, what `availableTransitions` contains, or the `kind` discriminator clients switch on.
 18. Read [The `authorize` Function](domain/authorize-function.md) before changing anything the
-    Internal Gateway consults — the four selectors, what each one evaluates, the subflow conjunction,
+    Internal Gateway consults — the four selectors, what each one evaluates, the subflow leaf-only queryRoles rule,
     parent-retained transitions and role resolution. It is the runtime's authorization **oracle**, and
     since 0.0.94 the only place `queryRoles` and the acknowledge gate are answered.
 19. Read [Role Grant Authorization](domain/role-grant-authorization.md) before touching any role check — `roles`, `queryRoles`, schema `x-roles` — or adding an authorization decision point. Covers the single-evaluator rule, batching, and why discovery must pass the same request context as enforcement.

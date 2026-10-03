@@ -110,7 +110,7 @@ scope only, and `function.roles` is evaluated by `authorize` alone.
 
 ### `authorize` targets
 
-Full reference — what each selector evaluates, the subflow conjunction, parent-retained transitions,
+Full reference — what each selector evaluates, the subflow leaf-only rule, parent-retained transitions,
 role resolution and the audit line: [The `authorize` Function](../domain/authorize-function.md). The
 summary below is the API-surface view.
 
@@ -125,7 +125,7 @@ selectors (zero or two is a request error, not a silent default):
 |---|---|---|
 | `?transitionKey=` | may this transition be triggered (state **and** roles) | only when the parent does not retain it — `cancel`, `exit`, `updateData` and an in-state shared transition are answered against the parent, matching execution |
 | `?functionKey=` | may this **custom** function be invoked | yes |
-| `?queryRoles=true` | may this instance be read (the whole built-in read family) | yes — and the answer is the **conjunction** of the polled instance and every level down to the deepest active leaf |
+| `?queryRoles=true` | may this instance be read (the whole built-in read family) | yes — decided at the deepest active leaf only; the levels above are not ANDed |
 | `?ack=true` | may `POST .../longpoll/ack` be called | follows the endpoint's own rule: descends while this instance is not the one awaiting; **allowed** when nothing in the chain is awaiting, because the endpoint answers `Ok()` idempotently there |
 
 There is no per-built-in-function selector: `state`, `data`, `view`, `schema`, `master`, `tasks`,

@@ -189,7 +189,7 @@ The plan is built from `ExcludedStepOrders` alone (`TransitionExecutor.BuildExec
   (`CallerScopeHash`) only. Never read `currentUser.Roles` directly — use `currentUser.ResolveCallerRoles(headers)`.
 - Batch: one evaluator per instance/schema; pass every surface the same `AuthorizationRequestContext`.
 - `queryRoles` is ANSWERED (by `authorize?queryRoles=true`), not enforced on read paths — do not add
-  the gate back. `authorize` answers the CONJUNCTION down the chain; `?ack=true` is the long-poll ack pre-flight.
+  the gate back. `authorize` decides queryRoles at the deepest active subflow leaf only (no chain AND; a parent restricts via `subFlow.overrides.states.<state>.queryRoles`); `?ack=true` is the long-poll ack pre-flight.
 - The `queryRoles` gate reads the instance's OWN `CurrentState`, never `EffectiveState`.
 - `transition.roles` is not enforced at execution, by design — do not "fix" it. `cancel`/`exit` are
   parent-retained. Under `morph-idm` a non-blank `role` header replaces the service's answer.
