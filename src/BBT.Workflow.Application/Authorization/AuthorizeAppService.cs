@@ -458,8 +458,17 @@ public sealed class AuthorizeAppService(
     {
         if (roles.Count == 0)
             return [];
-        return roles.Select(r => new RoleGrantDto { Role = r.Role ?? throw new NotSupportedException("combinator evaluated before Task 3"), Grant = r.Grant }).ToList();
+        return roles.Select(r => new RoleGrantDto
+        {
+            Role = r.Role,
+            Grant = r.Grant,
+            AllOf = ToConditionDtos(r.AllOf),
+            AnyOf = ToConditionDtos(r.AnyOf)
+        }).ToList();
     }
+
+    private static List<RoleGrantConditionDto>? ToConditionDtos(IReadOnlyList<RoleGrantCondition>? conditions) =>
+        conditions?.Select(c => new RoleGrantConditionDto { Role = c.Role }).ToList();
 
     /// <summary>
     /// Normalizes version query param: null or whitespace → null (latest); otherwise trimmed.
