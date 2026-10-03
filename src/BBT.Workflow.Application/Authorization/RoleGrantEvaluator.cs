@@ -10,7 +10,7 @@ namespace BBT.Workflow.Authorization;
 /// obtain — the current user's actor/subject identity, the last completed manual transition, and the
 /// dynamic-role authorization context — so that a batch of grant sets is evaluated with one round of I/O.
 /// <para>
-/// Created by <see cref="TransitionAuthorizationManager.CreateEvaluatorAsync"/>, which performs the
+/// Created by <c>TransitionAuthorizationManager.CreateEvaluatorAsync</c>, which performs the
 /// asynchronous prefetch. When the evaluator carries no instance it degrades to
 /// <see cref="TransitionAuthorizationManager.EvaluateRolesStatic"/>, because predefined and dynamic
 /// grants have nothing to resolve against.

@@ -117,6 +117,8 @@ public sealed class HumanTaskLeafResolver(
             {
                 InstanceIds = [.. members.Select(m => m.Child)],
                 CallerRoles = request.CallerRoles,
+                ActorUserName = request.ActorUserName,
+                SubjectUserName = request.SubjectUserName,
                 Headers = request.Headers,
                 RemainingDepth = request.RemainingDepth - 1,
                 FlowVersion = hop.Version
@@ -238,6 +240,7 @@ public sealed class HumanTaskLeafResolver(
             workflow,
             requestContext,
             queryRoles,
+            new CallerIdentity(request.ActorUserName, request.SubjectUserName),
             cancellationToken);
 
         var callerRoles = request.CallerRoles as string[] ?? [.. request.CallerRoles];

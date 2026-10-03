@@ -17,7 +17,7 @@ namespace BBT.Workflow.Authorization;
 /// <para>
 /// All instance-bound evaluation funnels through a single <see cref="IRoleGrantEvaluator"/>; the methods on
 /// this class are thin wrappers that build one evaluator and query it. Callers that evaluate many grant sets
-/// should create the evaluator themselves via <see cref="CreateEvaluatorAsync"/> so the instance-bound I/O is
+/// should create the evaluator themselves via <c>CreateEvaluatorAsync</c> so the instance-bound I/O is
 /// paid once for the whole batch.
 /// </para>
 /// </summary>
@@ -26,11 +26,27 @@ public sealed class TransitionAuthorizationManager(
     IInstanceTransitionRepository instanceTransitionRepository) : ITransitionAuthorizationManager
 {
     /// <inheritdoc />
+    public Task<IRoleGrantEvaluator> CreateEvaluatorAsync(
+        Instance? instance,
+        WorkflowDefinition? workflow,
+        AuthorizationRequestContext? requestContext,
+        IEnumerable<RoleGrant> grantsForPrefetchHint,
+        CancellationToken cancellationToken = default)
+        => CreateEvaluatorAsync(
+            instance,
+            workflow,
+            requestContext,
+            grantsForPrefetchHint,
+            new CallerIdentity(currentUser.ActorUserName, currentUser.UserName),
+            cancellationToken);
+
+    /// <inheritdoc />
     public async Task<IRoleGrantEvaluator> CreateEvaluatorAsync(
         Instance? instance,
         WorkflowDefinition? workflow,
         AuthorizationRequestContext? requestContext,
         IEnumerable<RoleGrant> grantsForPrefetchHint,
+        CallerIdentity identity,
         CancellationToken cancellationToken = default)
     {
         // Without an instance there is nothing for predefined or dynamic grants to resolve against,
@@ -58,8 +74,8 @@ public sealed class TransitionAuthorizationManager(
             workflow,
             requestContext,
             previousTransition,
-            currentUser.ActorUserName?.Trim(),
-            currentUser.UserName?.Trim());
+            identity.ActorUserName?.Trim(),
+            identity.SubjectUserName?.Trim());
     }
 
     /// <inheritdoc />

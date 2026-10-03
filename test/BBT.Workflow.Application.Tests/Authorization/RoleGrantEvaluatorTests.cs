@@ -15,7 +15,7 @@ namespace BBT.Workflow.Authorization;
 
 /// <summary>
 /// Unit tests for the single role grant evaluation core reached via
-/// <see cref="ITransitionAuthorizationManager.CreateEvaluatorAsync"/>.
+/// <c>ITransitionAuthorizationManager.CreateEvaluatorAsync</c>.
 /// <para>
 /// Two properties are pinned here. First, <b>equivalence</b>: over a matrix of static-only grant sets
 /// and caller roles the evaluator must agree with

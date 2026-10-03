@@ -4,7 +4,7 @@ namespace BBT.Workflow.Authorization;
 
 /// <summary>
 /// A batch-scoped role grant evaluator. Created once per authorization batch via
-/// <see cref="ITransitionAuthorizationManager.CreateEvaluatorAsync"/> and then queried synchronously
+/// <c>ITransitionAuthorizationManager.CreateEvaluatorAsync</c> and then queried synchronously
 /// any number of times, so that a caller evaluating many grant sets (schema field paths, the
 /// transitions of a state, the instances of a list) pays the instance-bound I/O only once.
 /// <para>

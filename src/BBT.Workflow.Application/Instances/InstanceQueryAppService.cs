@@ -55,6 +55,7 @@ public sealed class InstanceQueryAppService(
     IRepresentationEtagService representationEtagService,
     IInstanceDataReadService instanceDataReadService,
     ICallerRoleResolver callerRoleResolver,
+    ICurrentUser currentUser,
     IPaginationLinkGenerator paginationLinkGenerator,
     IOptions<InstanceFilteringOptions> instanceFilteringOptions,
     IOptions<HumanTask.HumanTaskFunctionOptions> humanTaskOptions,
@@ -3587,6 +3588,11 @@ public sealed class InstanceQueryAppService(
 
             using var descend = InstanceReadActivityHelper.StartHumanTaskDescend(flowKey, candidates.Count);
 
+            // Read from the request scope, BEFORE the isolated unit of work: the isolated scope is a
+            // fresh DI scope with no ambient caller, so ICurrentUser resolved inside it is empty.
+            var actorUserName = currentUser.ActorUserName?.Trim();
+            var subjectUserName = currentUser.UserName?.Trim();
+
             // Acquired BEFORE the unit of work, so a branch waiting for a slot is not waiting while
             // holding a connection. This is the only ceiling that spans requests; without it the
             // per-request width multiplies by however many callers happen to coincide.
@@ -3602,6 +3608,8 @@ public sealed class InstanceQueryAppService(
                     {
                         InstanceIds = [.. candidates.Select(c => c.Id)],
                         CallerRoles = userRoles,
+                        ActorUserName = actorUserName,
+                        SubjectUserName = subjectUserName,
                         Headers = headers is null
                             ? []
                             : new Dictionary<string, string?>(headers, StringComparer.OrdinalIgnoreCase),
