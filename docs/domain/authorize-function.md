@@ -90,7 +90,7 @@ onto the leaf with `subFlow.overrides.states.<state>.queryRoles`. (The built-in 
 gate on `queryRoles` at all; this selector is the only place the decision is taken.) Parent-owned
 transitions and `?ack=true` are unchanged: they are still answered at the instance that owns them.
 
-Resolution per level, highest first:
+Resolution at the deciding (leaf or standalone) instance, highest first:
 
 1. the parent's stamped `subflow.state_role_overrides` entry for the instance's **`CurrentState`**;
 2. that state's own `queryRoles`;
