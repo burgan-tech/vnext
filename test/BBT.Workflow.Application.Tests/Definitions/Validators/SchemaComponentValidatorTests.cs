@@ -265,4 +265,72 @@ public class SchemaComponentValidatorTests
         result.IsValid.ShouldBeFalse();
         result.ValidationErrors.ShouldContain(e => e.ErrorMessage!.Contains("use 'encrypt'"));
     }
+
+    [Theory]
+    [InlineData("$user.$CreatedBy")]
+    [InlineData("$user.$context.Instance.Data.customerId")]
+    public void Validate_WhenXRolesHasAnInvalidDynamicPath_ShouldFailUnderSchemaXRoles(string role)
+    {
+        var result = _validator.Validate(MasterSchema(
+            "\"a\":{\"type\":\"string\",\"x-roles\":[{\"role\":\"" + role + "\",\"grant\":\"allow\"}]}"));
+
+        result.IsValid.ShouldBeFalse();
+        result.ValidationErrors.ShouldContain(e => e.MemberNames.Contains("schema.x-roles") && e.ErrorMessage!.Contains(role));
+    }
+
+    [Fact]
+    public void Validate_WhenXRolesCombinatorLeafIsInvalid_ShouldFailNamingTheLeaf()
+    {
+        var result = _validator.Validate(MasterSchema(
+            "\"a\":{\"type\":\"string\",\"x-roles\":[{\"grant\":\"deny\",\"allOf\":[{\"role\":\"ops\"},{\"role\":\"$user.$CreatedBy\"}]}]}"));
+
+        result.IsValid.ShouldBeFalse();
+        result.ValidationErrors.ShouldContain(e => e.ErrorMessage!.Contains("$user.$CreatedBy"));
+    }
+
+    [Fact]
+    public void Validate_WhenXRolesCombinatorIsValid_ShouldPass()
+    {
+        var result = _validator.Validate(MasterSchema(
+            "\"a\":{\"type\":\"string\",\"x-roles\":[{\"grant\":\"allow\",\"anyOf\":[{\"role\":\"$InstanceStarter\"},{\"role\":\"$InstanceBehalfOfStarter\"}]}," +
+            "{\"grant\":\"deny\",\"allOf\":[{\"role\":\"ops\"},{\"role\":\"$user.$.context.Instance.Data.customerId\"}]}]}"));
+
+        result.IsValid.ShouldBeTrue(string.Join(" | ", result.ValidationErrors.Select(e => e.ErrorMessage)));
+    }
+
+    [Theory]
+    [InlineData("""{"grant":"allow","role":"a","allOf":[{"role":"b"}]}""")]
+    [InlineData("""{"grant":"allow","allOf":[{"role":"a"}],"anyOf":[{"role":"b"}]}""")]
+    [InlineData("""{"grant":"allow","anyOf":[{"role":"a","grant":"allow"}]}""")]
+    [InlineData("""{"grant":"allow"}""")]
+    public void Validate_WhenXRolesEntryHasABadShape_ShouldFailUnderSchemaXRoles(string entry)
+    {
+        var result = _validator.Validate(MasterSchema(
+            "\"a\":{\"type\":\"string\",\"x-roles\":[" + entry + "]}"));
+
+        result.IsValid.ShouldBeFalse();
+        result.ValidationErrors.ShouldContain(e => e.MemberNames.Contains("schema.x-roles"));
+    }
+
+    [Fact]
+    public void Validate_WhenXMaskingExemptionUsesACombinator_ShouldFailWithTheExemptionRule()
+    {
+        var result = _validator.Validate(MasterSchema(
+            "\"iban\":{\"type\":\"string\",\"x-masking\":{\"operator\":\"mask\",\"roles\":[{\"grant\":\"allow\",\"anyOf\":[{\"role\":\"a\"}]}]}}"));
+
+        result.IsValid.ShouldBeFalse();
+        result.ValidationErrors.ShouldContain(e =>
+            e.MemberNames.Contains("schema.x-masking.roles") && e.ErrorMessage!.Contains("exemption list"));
+    }
+
+    [Fact]
+    public void Validate_WhenXEncryptionExemptionUsesACombinator_ShouldFailWithTheExemptionRule()
+    {
+        var result = _validator.Validate(MasterSchema(
+            "\"e\":{\"type\":\"string\",\"x-encryption\":{\"type\":\"encrypt\",\"roles\":[{\"grant\":\"allow\",\"allOf\":[{\"role\":\"a\"}]}]}}"));
+
+        result.IsValid.ShouldBeFalse();
+        result.ValidationErrors.ShouldContain(e =>
+            e.MemberNames.Contains("schema.x-encryption.roles") && e.ErrorMessage!.Contains("exemption list"));
+    }
 }

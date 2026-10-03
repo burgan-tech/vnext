@@ -167,7 +167,8 @@ public static class SchemaRolesParser
     /// <summary>
     /// Exemption grants are allow-only: a caller matching one sees the raw value, everyone else the transformed one.
     /// A <c>deny</c> entry is dropped rather than honoured (the publish validator rejects it), so a stray deny can never
-    /// widen what anyone sees.
+    /// widen what anyone sees. A combinator is dropped too (decision K1, the validator rejects it): no exemption means
+    /// the value stays masked — fail closed.
     /// </summary>
     private static IReadOnlyList<RoleGrant> ParseExemptGrants(JsonElement rolesArray)
     {
@@ -178,13 +179,18 @@ public static class SchemaRolesParser
         var allow = new List<RoleGrant>(all.Count);
         foreach (var grant in all)
         {
-            if (!grant.IsDeny)
+            if (!grant.IsDeny && !grant.IsCombinator)
                 allow.Add(grant);
         }
 
         return allow;
     }
 
+    /// <summary>
+    /// Reads every entry as a <see cref="RoleGrant"/> (a plain role, or an <c>allOf</c> / <c>anyOf</c> combinator).
+    /// Lenient at runtime: an entry that does not parse is skipped, never thrown on — the publish-time validator
+    /// (<c>SchemaComponentValidator</c>) is the gate that rejects it with the reason.
+    /// </summary>
     private static IReadOnlyList<RoleGrant> ParseRoleGrants(JsonElement rolesArray)
     {
         var list = new List<RoleGrant>();
@@ -192,24 +198,60 @@ public static class SchemaRolesParser
         {
             if (item.ValueKind != JsonValueKind.Object)
                 continue;
-            if (!item.TryGetProperty("role", out var roleEl) || !item.TryGetProperty("grant", out var grantEl))
-                continue;
-            if (roleEl.ValueKind != JsonValueKind.String || grantEl.ValueKind != JsonValueKind.String)
-                continue;
-            var role = roleEl.GetString();
-            var grant = grantEl.GetString();
-            if (string.IsNullOrWhiteSpace(role) || string.IsNullOrWhiteSpace(grant))
-                continue;
             try
             {
-                list.Add(new RoleGrant(role.Trim(), grant.Trim()));
+                var grant = item.Deserialize<RoleGrant>(JsonSerializerConstants.JsonOptions);
+                if (grant is not null)
+                    list.Add(grant);
             }
-            catch (ArgumentException)
+            catch (Exception ex) when (ex is JsonException or ArgumentException)
             {
-                // Skip invalid grant (e.g. unknown grant type)
+                // Skip an unparseable grant (unknown grant type, bad shape, extra child member).
             }
         }
         return list;
+    }
+
+    /// <summary>
+    /// Every role array a schema declares, with the path of its property: <c>x-roles</c> (a full grant list) and the
+    /// <c>roles</c> of <c>x-masking</c> / <c>x-encryption</c> (exemption lists, which take no combinators). Same walk
+    /// as the parser, so the publish-time validator and the runtime see the same arrays.
+    /// </summary>
+    public static IEnumerable<(string Path, string Member, JsonElement Array, bool Exemption)> EnumerateRoleArrays(
+        JsonElement schemaRoot)
+    {
+        var found = new List<(string, string, JsonElement, bool)>();
+        CollectRoleArrays(schemaRoot, string.Empty, found);
+        return found;
+    }
+
+    private static void CollectRoleArrays(
+        JsonElement node, string pathPrefix, List<(string, string, JsonElement, bool)> found)
+    {
+        if (node.ValueKind != JsonValueKind.Object ||
+            !node.TryGetProperty(PropertiesKey, out var properties) || properties.ValueKind != JsonValueKind.Object)
+            return;
+
+        foreach (var property in properties.EnumerateObject())
+        {
+            var path = string.IsNullOrEmpty(pathPrefix) ? property.Name : $"{pathPrefix}.{property.Name}";
+            var propValue = property.Value;
+            if (propValue.ValueKind != JsonValueKind.Object)
+                continue;
+
+            if (propValue.TryGetProperty(RolesKey, out var xRoles) && xRoles.ValueKind == JsonValueKind.Array)
+                found.Add((path, $"schema.{RolesKey}", xRoles, false));
+
+            foreach (var keyword in new[] { MaskingKey, EncryptionKey })
+            {
+                if (propValue.TryGetProperty(keyword, out var declaration) && declaration.ValueKind == JsonValueKind.Object &&
+                    declaration.TryGetProperty("roles", out var exempt) && exempt.ValueKind == JsonValueKind.Array)
+                    found.Add((path, $"schema.{keyword}.roles", exempt, true));
+            }
+
+            if (propValue.TryGetProperty(PropertiesKey, out _))
+                CollectRoleArrays(propValue, path, found);
+        }
     }
 
     private static string? ReadString(JsonElement element, string name)

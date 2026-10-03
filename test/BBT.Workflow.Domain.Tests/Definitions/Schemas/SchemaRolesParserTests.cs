@@ -255,4 +255,61 @@ public sealed class SchemaRolesParserTests
         exposure.EncryptPaths.ShouldBe(["a"]);
         exposure.PathMaskRules["b"].Operator.ShouldBe(FieldMaskRule.HashOperator);
     }
+
+    [Fact]
+    public void XRoles_allOf_is_parsed_not_dropped()
+    {
+        var schema = JsonDocument.Parse("""
+            {"properties":{"riskNote":{"x-roles":[
+                {"grant":"allow","role":"corporate.ops"},
+                {"grant":"deny","allOf":[{"role":"corporate.ops"},{"role":"$InstanceBehalfOfStarter"}]}]}}}
+            """).RootElement;
+
+        var roles = SchemaRolesParser.ParsePropertyRoles(schema)["riskNote"];
+
+        roles.Count.ShouldBe(2);
+        roles[1].AllOf!.Count.ShouldBe(2);
+        roles[1].IsDeny.ShouldBeTrue();
+    }
+
+    [Fact]
+    public void XRoles_unparseable_entry_is_skipped_at_runtime()
+    {
+        var schema = JsonDocument.Parse("""
+            {"properties":{"a":{"x-roles":[
+                {"grant":"allow","role":"r","allOf":[{"role":"x"}]},
+                {"grant":"allow","anyOf":[{"role":"x","grant":"allow"}]},
+                {"grant":"allow","role":"ok"}]}}}
+            """).RootElement;
+
+        var roles = SchemaRolesParser.ParsePropertyRoles(schema)["a"];
+
+        roles.Count.ShouldBe(1);
+        roles[0].Role.ShouldBe("ok");
+    }
+
+    [Fact]
+    public void Exemption_list_with_combinator_is_dropped_fail_closed()
+    {
+        var masking = JsonDocument.Parse("""
+            {"operator":"mask","roles":[
+                {"grant":"allow","anyOf":[{"role":"a"}]},
+                {"grant":"allow","role":"corporate.ops"}]}
+            """).RootElement;
+
+        var rule = SchemaRolesParser.ParseMaskRule(masking);
+
+        rule.ExemptRoles.Count.ShouldBe(1);
+        rule.ExemptRoles[0].Role.ShouldBe("corporate.ops");
+    }
+
+    [Fact]
+    public void Exemption_list_with_only_a_combinator_masks_for_everyone()
+    {
+        var masking = JsonDocument.Parse("""
+            {"operator":"mask","roles":[{"grant":"allow","anyOf":[{"role":"a"}]}]}
+            """).RootElement;
+
+        SchemaRolesParser.ParseMaskRule(masking).ExemptRoles.ShouldBeEmpty();
+    }
 }

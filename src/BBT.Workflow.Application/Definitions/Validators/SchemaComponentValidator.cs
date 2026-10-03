@@ -1,5 +1,6 @@
 using System.Text.Json;
 using BBT.Workflow.Authorization;
+using BBT.Workflow.Definitions;
 using BBT.Workflow.Definitions.Schemas;
 using BBT.Workflow.Runtime;
 
@@ -60,6 +61,7 @@ public sealed class SchemaComponentValidator(
                     result.AddError(ex.Message, "schema.x-indexed");
                 }
 
+                ValidateRoleGrants(schema.Schema, result);
                 ValidateMasking(schema, result);
             }
 
@@ -69,6 +71,44 @@ public sealed class SchemaComponentValidator(
         {
             result.AddError($"Invalid JSON format for schema: {ex.Message}", nameof(SchemaDefinition));
             return result;
+        }
+    }
+
+    /// <summary>
+    /// Every <c>x-roles</c> entry and every exemption list entry must read as a <see cref="RoleGrant"/> (one of
+    /// <c>role</c> / <c>allOf</c> / <c>anyOf</c>) whose leaves pass the dynamic-role rules. The runtime parser skips
+    /// what does not parse, so this is the only place a malformed entry is reported.
+    /// </summary>
+    private static void ValidateRoleGrants(JsonElement root, ComponentValidationResult result)
+    {
+        foreach (var (path, member, element, exemption) in SchemaRolesParser.EnumerateRoleArrays(root))
+        {
+            foreach (var item in element.EnumerateArray())
+            {
+                RoleGrant? grant;
+                try
+                {
+                    grant = item.Deserialize<RoleGrant>(JsonSerializerConstants.JsonOptions);
+                }
+                catch (Exception ex) when (ex is JsonException or ArgumentException)
+                {
+                    result.AddError($"Field '{path}': {member} entry is invalid. {ex.Message}", member);
+                    continue;
+                }
+
+                if (grant is null)
+                {
+                    result.AddError($"Field '{path}': {member} entry must be an object.", member);
+                    continue;
+                }
+
+                var context = $"{path}.{member}";
+                var messages = exemption
+                    ? RoleGrantDefinitionRules.ValidateExemption(grant, context)
+                    : RoleGrantDefinitionRules.Validate(grant, context);
+                foreach (var message in messages)
+                    result.AddError(message, member);
+            }
         }
     }
 
