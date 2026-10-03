@@ -25,7 +25,8 @@ public sealed class Function : IDomainEntity, IFunctionReference, IReferenceSett
         bool rawResponse = false,
         FunctionCache? cache = null,
         List<string>? verbs = null,
-        ExecutionLogSetting? executionLog = null
+        ExecutionLogSetting? executionLog = null,
+        LanguageLabel[]? labels = null
     ) : this()
     {
         Scope = scope;
@@ -37,6 +38,7 @@ public sealed class Function : IDomainEntity, IFunctionReference, IReferenceSett
         Cache = cache;
         this.verbs = NormalizeVerbs(verbs);
         ExecutionLog = executionLog;
+        Labels = labels ?? [];
     }
 
     /// <summary>
@@ -60,6 +62,11 @@ public sealed class Function : IDomainEntity, IFunctionReference, IReferenceSett
     public string Version { get; private set; }
 
     public TaskScope Scope { get; private set; }
+
+    /// <summary>
+    /// Multi-language display labels of the function component (<c>attributes.labels</c>).
+    /// </summary>
+    public LanguageLabel[] Labels { get; private set; } = [];
     [JsonInclude] public OnExecuteTask? Task { get; private set; }
 
     [JsonInclude] [JsonPropertyName("onExecutionTasks")]

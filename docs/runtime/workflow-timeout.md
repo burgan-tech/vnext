@@ -8,11 +8,12 @@ carries, why `$timeout` is resolved to a key at order 20 rather than 38, and the
 
 ## The `timeout` block and the effective-timeout resolver
 
-- **`timeout` block**: `{ key, target, executeAtUtc, annotations }`, the workflow-level deadline armed for the
+- **`timeout` block**: `{ key, target: { key, stateType, stateSubType, labels, subFlow }, executeAtUtc, annotations }`
+  — `target` uses the same `TransitionTarget` a `transitions[]` entry does — the workflow-level deadline armed for the
   polled instance. `annotations` is the effective timeout's (`timeout.annotations`); an override
   replaces it with the rest of the timeout, never merges. **Not** a `transitions[]` entry — a workflow timeout is instance-scoped, armed
-  once at start, never re-armed, and keyed by the virtual `$timeout`, so it has no callable key and
-  `TransitionItem` has no `target`. `key`/`target` come from the **effective** timeout, resolved by
+  once at start, never re-armed, and keyed by the virtual `$timeout`, so it has no callable key.
+  `key`/`target` come from the **effective** timeout, resolved by
   `InstanceMetadataExtensions.ResolveEffectiveTimeout` — the parent's `subFlow.overrides.timeout`
   when the instance carries one, else `workflow.Timeout`. **That one resolver is also what the arm
   (`InstanceCommandAppService`) and the fire path (`FlowTimeoutJobHandler`, `ApplyTimeoutStateStep`)

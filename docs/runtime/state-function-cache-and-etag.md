@@ -106,7 +106,7 @@ etag = h(responseShapeVersion | instanceId | effectiveState | status | flowVersi
   same fingerprint, so 304 works with an empty cache (after TTL expiry, Redis flush, or
   failover).
 - **`responseShapeVersion` guards runtime-side body changes** (`StateFunctionCache.ResponseShapeVersion`,
-  currently `v9`). The material is derived from instance facts and caller scope only — it says nothing
+  currently `v14`). The material is derived from instance facts and caller scope only — it says nothing
   about what the body *contains*. So when a runtime release changes the body for an unchanged instance
   (v2 started listing the workflow-level `updateData` and `exit` transitions; v3 added the workflow's
   `functions` discovery links; v4 replaced that inline list with a `hasFunctions` flag plus a link to
@@ -123,7 +123,10 @@ etag = h(responseShapeVersion | instanceId | effectiveState | status | flowVersi
   `interaction` block from "the state declares one" to "an acknowledge is actually pending"
   (`Instance.IsAwaitingLongPollAck`) — a shape change with no new field, and exactly the kind a
   parked client would otherwise never see; v12 started carrying `annotations` on the
-  `kind: "scheduled"` entries and on the `timeout` block), every previously issued ETag must be
+  `kind: "scheduled"` entries and on the `timeout` block; v13 restored the `interaction` block for a
+  non-terminating long poll; v14 added `labels` and a `target` object to every `transitions[]`
+  entry, the top-level `stateSubType` and `stateLabels`, and turned the `timeout` block's `target`
+  string into the same object), every previously issued ETag must be
   invalidated: otherwise a client
   long-polling an instance parked in a human state would keep receiving 304 and never observe the new
   shape. The same constant is a segment of the cache key, so bumping it also discards bodies written by
@@ -170,6 +173,9 @@ etag = h(responseShapeVersion | instanceId | effectiveState | status | flowVersi
   so like `hasFunctions` they are a property of the flow version, which `FlowVersion` already
   hashes. The `v12` bump was for the shape — scheduled entries and the timeout block started
   carrying them — not for a value that could drift.
+- **`labels`, `target`, `stateSubType` and `stateLabels` need no fingerprint member** for the same
+  reason: they come from definitions, a property of the flow version (or, for a subflow's state,
+  from the descended body the subflow variant already covers). The `v14` bump was for the shape.
 - **`hasActiveIncident` is in the hash** because the body's `incident` block flips with it and the
   flag can move without a state/status change (Boundary Abort with a transition raises one,
   `FinalizeTransitionStep` resolves it). The flag is the block's *only* varying member: since `v9`
@@ -351,13 +357,18 @@ Both return a resolved schema document (`GetSchemaOutput`) — the flow-level ma
 (`IInstanceSchemaFunctionCache`) and, by user decision, the data-centric change signal:
 
 ```
-master etag = h(instanceId | latestDataEtag | flowVersion | callerHash)
-schema etag = h(instanceId | latestDataEtag | effectiveState | flowVersion | callerHash | transitionKey)
-master key  = master-fn:{domain}:{workflow}:{instance}:{callerHash}
-schema key  = schema-fn:{domain}:{workflow}:{instance}:{callerHash}:{transitionKey}
+master etag = h(shapeVersion | instanceId | latestDataEtag | flowVersion | callerHash)
+schema etag = h(shapeVersion | instanceId | latestDataEtag | effectiveState | flowVersion | callerHash | transitionKey)
+master key  = master-fn:{shapeVersion}:{domain}:{workflow}:{instance}:{callerHash}
+schema key  = schema-fn:{shapeVersion}:{domain}:{workflow}:{instance}:{callerHash}:{transitionKey}
 callerHash  = h(roles | actor identity | culture | version)   # no extensions dimension
 ```
 
+- `shapeVersion` (`InstanceSchemaFunctionCache.ResponseShapeVersion`, currently `v2`) plays the
+  role `responseShapeVersion` plays for the state body: it is in the key, so a bump discards bodies
+  an earlier build wrote, and in the ETag, so a client holding an earlier build's ETag gets a `200`
+  with the new shape rather than a `304`. v2 added the schema component's `labels`. Bump it in the
+  same commit as any change to what a master/schema body carries.
 - `effectiveState` is only in the **schema** material: transition resolution
   (`ResolveTransition(transitionKey, currentState)`) is state-dependent, and
   `EffectiveState == CurrentState` whenever no active subflow exists.

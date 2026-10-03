@@ -135,6 +135,7 @@ public sealed class FunctionInfoAppService(
                     Name = reference.Key,
                     Version = reference.Version ?? string.Empty,
                     Scope = scope.Code,
+                    Labels = function.Labels.Length > 0 ? function.Labels.ToList() : null,
                     // The href must match the scope: the domain route rejects Flow and Instance
                     // scopes with 403, so linking them there would be a dead link.
                     Href = scope.Equals(TaskScope.Domain)

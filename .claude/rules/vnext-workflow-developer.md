@@ -111,7 +111,7 @@ The plan is built from `ExcludedStepOrders` alone (`TransitionExecutor.BuildExec
 
 - `FunctionTypeConst.Longpooling`: `GET /functions/state` → `200` | `304`; no server-side hold.
   ETag: `LatestData?.ETag` (entity), `IRepresentationEtagService.Generate(output)` (representation).
-- Bump `StateFunctionCache.ResponseShapeVersion` (currently `v13`) in the same commit as any change to
+- Bump `StateFunctionCache.ResponseShapeVersion` (currently `v14`) in the same commit as any change to
   what the state body carries — otherwise parked pollers keep getting 304.
 - Every built-in instance function descends an active subflow — except `data`.
 - Parent overrides resolve in ONE place per kind and REPLACE (never merge): `IsQueryAllowedAsync`,

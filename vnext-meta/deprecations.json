@@ -165,6 +165,7 @@
       "severity": "error",
       "message": "'transport' was declared by the vocabulary but never enforced by any runtime; it is removed and a schema carrying it is rejected at publish. Use 'encrypt' (AES-256-GCM of instance data at rest, decrypted for the exemption roles on read)."
     },
+    {
       "id": "cacheaside-key-expression-removed",
       "type": "field",
       "component": "task",

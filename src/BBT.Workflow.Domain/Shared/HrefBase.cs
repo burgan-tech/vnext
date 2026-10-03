@@ -31,6 +31,19 @@ public sealed class TransitionItem : HrefBase
     public string Kind { get; set; } = string.Empty;
 
     /// <summary>
+    /// The transition definition's display labels, in the definition's own <c>[{ language, label }]</c>
+    /// form — every language, not one resolved for the caller, so a client picks its own and the body
+    /// stays culture-independent. Null — and omitted from the JSON — when the definition declares none.
+    /// </summary>
+    public List<LanguageLabel>? Labels { get; set; }
+
+    /// <summary>
+    /// The state this transition moves the instance to. Null — and omitted from the JSON — when the
+    /// transition definition no longer resolves.
+    /// </summary>
+    public TransitionTarget? Target { get; set; }
+
+    /// <summary>
     /// The UTC instant the runtime is armed to execute this transition at. Present only on
     /// <c>kind: "scheduled"</c> entries (read from the persisted job state); null — and omitted from
     /// the JSON — for every caller-triggerable kind. Always <see cref="DateTimeKind.Utc"/>, so it
@@ -53,6 +66,45 @@ public sealed class TransitionItem : HrefBase
     /// Use namespaced keys to avoid collisions (e.g., <c>ui/visible-in</c>, <c>ui/priority</c>).
     /// </summary>
     public Dictionary<string, string>? Annotations { get; set; }
+}
+
+/// <summary>
+/// The target state of a <c>transitions[]</c> entry, described with the same vocabulary the state
+/// response uses for the current state (<c>state</c> / <c>stateType</c> / <c>stateSubType</c> /
+/// <c>stateLabels</c>), so a client renders both with one code path.
+/// </summary>
+public sealed class TransitionTarget
+{
+    /// <summary>
+    /// The target state key. <c>$self</c> is resolved to the state the transition is listed in. When
+    /// the target state does not resolve, the raw authored key — and every other member is null.
+    /// </summary>
+    public string Key { get; set; } = string.Empty;
+
+    /// <summary>
+    /// State type in camelCase (<c>initial</c>, <c>intermediate</c>, <c>finish</c>, <c>subFlow</c>,
+    /// <c>wizard</c>). Null when the target state does not resolve.
+    /// </summary>
+    public string? StateType { get; set; }
+
+    /// <summary>
+    /// State sub type in camelCase (<c>none</c>, <c>success</c>, <c>error</c>, <c>terminated</c>,
+    /// <c>suspended</c>, <c>busy</c>, <c>human</c>, <c>cancelled</c>, <c>timeout</c>). Null when the
+    /// target state does not resolve.
+    /// </summary>
+    public string? StateSubType { get; set; }
+
+    /// <summary>
+    /// The target state's display labels in the definition's own <c>[{ language, label }]</c> form.
+    /// Null — and omitted — when the state declares none.
+    /// </summary>
+    public List<LanguageLabel>? Labels { get; set; }
+
+    /// <summary>
+    /// When <see cref="StateType"/> is <c>subFlow</c>: the key of the flow the target state starts.
+    /// Null — and omitted — for every other target.
+    /// </summary>
+    public string? SubFlow { get; set; }
 }
 
 /// <summary>
@@ -194,6 +246,13 @@ public sealed class WorkflowFunctionHref : HrefBase
     /// domain route, Flow and Instance scopes to the instance route, since the domain route rejects them.
     /// </summary>
     public string Scope { get; set; } = string.Empty;
+
+    /// <summary>
+    /// The function component's display labels in the definition's own <c>[{ language, label }]</c>
+    /// form — every language, the client picks. Null — and omitted from the JSON — when the
+    /// component declares none.
+    /// </summary>
+    public List<LanguageLabel>? Labels { get; set; }
 }
 
 /// <summary>
