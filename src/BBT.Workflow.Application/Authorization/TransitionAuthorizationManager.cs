@@ -450,7 +450,7 @@ public sealed class TransitionAuthorizationManager(
     /// </summary>
     /// <remarks>
     /// Takes the grant's single <see cref="RoleGrant.Role"/>: exemption lists never carry an <c>allOf</c> /
-    /// <c>anyOf</c> combinator (rejected at publish, decision K1), so every grant reaching here is a single leaf.
+    /// <c>anyOf</c> combinator (rejected at publish), so every grant reaching here is a single leaf.
     /// </remarks>
     internal static bool IsUnprovableRoleBoundGrant(RoleGrant grant, int normalizedRoleCount)
         => normalizedRoleCount == 0 && IsRoleBound(grant.Role!);

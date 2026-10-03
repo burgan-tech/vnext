@@ -167,7 +167,7 @@ public static class SchemaRolesParser
     /// <summary>
     /// Exemption grants are allow-only: a caller matching one sees the raw value, everyone else the transformed one.
     /// A <c>deny</c> entry is dropped rather than honoured (the publish validator rejects it), so a stray deny can never
-    /// widen what anyone sees. A combinator is dropped too (decision K1, the validator rejects it): no exemption means
+    /// widen what anyone sees. A combinator is dropped too (the validator rejects it): no exemption means
     /// the value stays masked — fail closed.
     /// </summary>
     private static IReadOnlyList<RoleGrant> ParseExemptGrants(JsonElement rolesArray)

@@ -276,10 +276,10 @@ back. Both now use `JsonSerializerConstants.JsonOptions`.
 
 - **Combinators (`allOf` / `anyOf`) are evaluated here too**, by the same evaluator as every other
   surface — see [Role Grant Authorization](../domain/role-grant-authorization.md#combinators-allof--anyof).
-- **Empty `queryRoles` is still dropped (K2).** The three-valued rule changes how a grant set is
+- **Empty `queryRoles` is still dropped.** The three-valued rule changes how a grant set is
   folded, not what an undeclared one means: a leaf whose state and workflow declare nothing is dropped
   (fail-closed), exactly as described above.
-- **The decision is taken at the leaf (K3).** The list descends to the deepest active leaf and
+- **The decision is taken at the leaf.** The list descends to the deepest active leaf and
   evaluates `stamped parent override ?? leaf state queryRoles ?? leaf workflow queryRoles`. The
   intermediate flows between the root and the leaf are **not** evaluated.
 - **The caller's identity travels with the roles.** The leaf hop runs in an isolated scope with no

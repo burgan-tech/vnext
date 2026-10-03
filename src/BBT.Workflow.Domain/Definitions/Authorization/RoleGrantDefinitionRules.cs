@@ -29,7 +29,7 @@ public static class RoleGrantDefinitionRules
         }
     }
 
-    /// <summary>x-masking / x-encryption exemption lists: plain allow grants only (decision K1).</summary>
+    /// <summary>x-masking / x-encryption exemption lists: plain allow grants only.</summary>
     public static IEnumerable<string> ValidateExemption(RoleGrant grant, string context)
     {
         if (grant.IsCombinator)

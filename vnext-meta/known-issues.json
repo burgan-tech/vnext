@@ -299,6 +299,16 @@
       "title": "Task invokers treated X-Request-Id as a reserved trace header: a value set in the task's headers or input mapping was silently dropped from the outbound call and no value was sent in its place, so APIs that require it (OHVPS/BKM) rejected the call with 400 TR.OHVPS.Resource.InvalidFormat. StartTrigger and SubProcess never dropped the mapping's value but did not send vNext's request id either.",
       "workaround": "Upgrade to 0.0.98, where a non-empty X-Request-Id from the input mapping is sent as is and, when the mapping sets none, vNext's own request id (the originating request's X-Request-Id) is sent — on every HTTP-shaped task type, StartTrigger and SubProcess included. Until then, call such APIs through a proxy that adds the header.",
       "fixedIn": "0.0.98"
+    },
+    {
+      "id": "role-grant-combinators-rollback-floor",
+      "affectedVersions": ">=0.0.99",
+      "severity": "medium",
+      "component": "runtime",
+      "path": "roles[] | queryRoles[] | transitions[].roles[] | availableIn[].roles[] | schema x-roles[] | subFlow.overrides (allOf / anyOf grants)",
+      "title": "A runtime older than 0.0.99 cannot read an allOf / anyOf grant: the flow fails to load, a combinator override stamp is treated as malformed (the child falls back to its own grants), and an old x-roles parser skips the entry so a combinator deny vanishes",
+      "workaround": "Author the first allOf / anyOf grant only after every pod, and every domain that stamps overrides onto this one, runs a release containing combinators. Do not binary-downgrade once a combinator has been published: remove the combinator grants (or re-publish without them) first.",
+      "fixedIn": null
     }
   ]
 }

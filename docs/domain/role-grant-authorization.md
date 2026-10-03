@@ -308,13 +308,13 @@ literal and **case-sensitive**. Anything else with a qualifier prefix is a publi
 | `$user.$context.Instance.CreatedBy` | **invalid** | missing the `.` after `$` |
 | `$user.$.context.Instance.Data.CreatedBy` | wrong | resolves, but `CreatedBy` is an instance property, **not** inside `Data` — the grant never matches |
 
-### Predefined roles resolve against the grant's own instance (K8)
+### Predefined roles resolve against the grant's own instance
 
 `$InstanceStarter` and `$PreviousUser` (and their behalf-of twins) are read from the instance **the grant
 is evaluated for** — also when the grant is a parent-stamped override running on a child. A parent's
 override naming `$InstanceStarter` therefore means the *child's* starter, not the parent's.
 
-### Where combinators are not accepted (K1)
+### Where combinators are not accepted
 
 `x-masking` and `x-encryption` exemption lists take plain `{ "role", "grant": "allow" }` entries only
 (`RoleGrantDefinitionRules.ValidateExemption` rejects a combinator at publish). They are an allow-list of
@@ -526,6 +526,20 @@ have filtered or masked it from. Document it where you copy it. See [Field Maski
 3. **A subflow decides `queryRoles` at its leaf only** — see [Authorize Function](authorize-function.md);
    the root's `queryRoles` no longer restrict while the instance is inside a SubFlow.
 4. **Authorization matrix shape**: combinator grants carry `allOf` / `anyOf` and omit `role`.
+5. **Publish now rejects malformed grants it used to skip.** A schema `x-roles` entry that is malformed
+   (missing `grant`, bad shape, an unknown grant value, or a malformed `$user.` / `$userBehalfOf.` /
+   `$role.` path) and a function `roles` entry with a malformed dynamic path are refused at publish with
+   the reason. Before they were silently skipped or inert — a deny that never fired. *Fix the grant
+   before re-publishing.*
+6. **`queryRoles` is leaf-only, and that loosens a root restriction.** While an instance is inside a
+   SubFlow, `authorize?queryRoles=true` is decided by the deepest leaf's grants (stamped override, else
+   the leaf state, else the leaf workflow; an empty leaf allows). A root that declared `queryRoles`
+   while a SubFlow leaf declares none no longer restricts: add
+   `subFlow.overrides.states.<state>.queryRoles` on the parent, or `queryRoles` on the leaf. *Less
+   restrictive for that case.* See the migration `query-roles-decided-at-subflow-leaf`.
+7. **Rollout order.** Author the first `allOf` / `anyOf` grant only after every pod (and every domain
+   that stamps overrides onto this one) runs this release; an older pod cannot read a combinator grant.
+   See the known issue `role-grant-combinators-rollback-floor`.
 
 ## Behavior changes in 0.0.97
 

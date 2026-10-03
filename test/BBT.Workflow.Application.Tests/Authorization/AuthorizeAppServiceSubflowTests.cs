@@ -25,7 +25,7 @@ namespace BBT.Workflow.Authorization;
 /// <summary>
 /// Unit tests for <see cref="AuthorizeAppService"/>'s behaviour on an instance with an active SubFlow.
 /// <para>
-/// These pin the descent rules: queryRoles is decided at the deepest active leaf only (K9 — a SubFlow
+/// These pin the descent rules: queryRoles is decided at the deepest active leaf only (a SubFlow
 /// is part of its parent's process, so the levels above are never ANDed), a parent-declared override
 /// RETURNED at depth 1 in the past (so a grandchild's gate never ran), and the overrides were read from
 /// the parent's definition rather than from the child's stamp (so a directly addressed leaf got the
@@ -155,10 +155,10 @@ public sealed class AuthorizeAppServiceSubflowTests : IDisposable
             checkQueryRoles: false, checkAck: true,
             requestContext: new AuthorizationRequestContext(new Dictionary<string, string?>()));
 
-    // ------------------------------------------------- A1: leaf-only (K9)
+    // ------------------------------------------------- A1: leaf-only
 
     /// <summary>
-    /// K9. A SubFlow is part of its parent's process, so while an instance is inside one the queryRoles
+    /// A SubFlow is part of its parent's process, so while an instance is inside one the queryRoles
     /// decision is the deepest active leaf's — the root's own queryRoles are not evaluated and the
     /// gateway forward is taken regardless of what the root would have said.
     /// </summary>

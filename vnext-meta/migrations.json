@@ -254,6 +254,28 @@
       "title": "Publish rejects allowedAssemblies names that do not resolve",
       "description": "Publish of sys-flows / sys-tasks / sys-functions / sys-extensions now returns 400 when any declared scripts.allowedAssemblies simple name (flow level or on any script slot's scripts.allowedAssemblies) is neither a framework assembly nor a DLL in Scripting:Sandbox:PluginDirectory; the error member names the field path. It applies even when Scripting:Sandbox:Enabled=false, where the compile ignores the grant, so such a name previously had no effect.",
       "action": "Remove the unused or misspelled name, use the simple name without .dll, or have the platform team mount the assembly in the plugin directory before publishing."
+    },
+    {
+      "id": "query-roles-decided-at-subflow-leaf",
+      "type": "behavior",
+      "component": "workflow",
+      "path": "functions/authorize?queryRoles=true | queryRoles | subFlow.overrides.states.<state>.queryRoles",
+      "since": "0.0.99",
+      "severity": "warning",
+      "title": "While an instance is inside a SubFlow, authorize?queryRoles=true is decided at the deepest leaf only",
+      "description": "The root's queryRoles no longer restrict authorize?queryRoles=true while the instance is inside a SubFlow. The deepest active leaf's grants decide, resolved as the parent's stamped override, else the leaf state's queryRoles, else the leaf workflow's queryRoles; a leaf that declares none allows. The intermediate flows between the root and the leaf are not evaluated. A root that declared queryRoles to hide its subflow instances from a caller therefore stops hiding them unless the leaf carries its own restriction.",
+      "action": "Where a root declares queryRoles and a SubFlow leaf declares none, add subFlow.overrides.states.<state>.queryRoles on the parent (it is stamped onto the leaf and replaces the leaf's own), or declare queryRoles on the leaf state or workflow, before upgrading."
+    },
+    {
+      "id": "publish-rejects-malformed-role-grants",
+      "type": "behavior",
+      "component": "schema",
+      "path": "schema.attributes.schema.properties[].x-roles | function roles",
+      "since": "0.0.99",
+      "severity": "warning",
+      "title": "Publish rejects malformed schema x-roles entries and function roles with a malformed dynamic path",
+      "description": "A schema x-roles entry that is malformed (missing grant, wrong shape, unknown grant value, or a $user. / $userBehalfOf. / $role. reference whose path is malformed) and a function.roles entry with a malformed dynamic path are now rejected at publish with the reason. Before, the runtime silently skipped such an x-roles entry and a malformed dynamic path never matched anything, so a deny written that way never fired.",
+      "action": "Fix the grant (give it a grant of allow or deny, exactly one of role / allOf / anyOf, and a well-formed dynamic path such as $user.$.context.Instance.CreatedBy) before re-publishing."
     }
   ]
 }
