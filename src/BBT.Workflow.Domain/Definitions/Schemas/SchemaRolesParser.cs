@@ -202,7 +202,7 @@ public static class SchemaRolesParser
             {
                 var grant = item.Deserialize<RoleGrant>(JsonSerializerConstants.JsonOptions);
                 if (grant is not null)
-                    list.Add(grant);
+                    list.Add(TrimRoles(grant));
             }
             catch (Exception ex) when (ex is JsonException or ArgumentException)
             {
@@ -210,6 +210,29 @@ public static class SchemaRolesParser
             }
         }
         return list;
+    }
+
+    /// <summary>
+    /// x-roles role names have always been trimmed (the pre-combinator parser did <c>role.Trim()</c>); the grant types
+    /// keep what they are given, so the trim happens here. Without it a padded deny would stop matching its role.
+    /// </summary>
+    private static RoleGrant TrimRoles(RoleGrant grant)
+    {
+        static bool Padded(string role) => role.Length != role.Trim().Length;
+
+        if (grant.Role is not null)
+            return Padded(grant.Role) ? new RoleGrant(grant.Role.Trim(), grant.Grant) : grant;
+
+        static IReadOnlyList<RoleGrantCondition>? TrimChildren(IReadOnlyList<RoleGrantCondition>? children)
+            => children?.Any(c => Padded(c.Role)) == true
+                ? children.Select(c => new RoleGrantCondition(c.Role.Trim())).ToList()
+                : children;
+
+        var allOf = TrimChildren(grant.AllOf);
+        var anyOf = TrimChildren(grant.AnyOf);
+        return ReferenceEquals(allOf, grant.AllOf) && ReferenceEquals(anyOf, grant.AnyOf)
+            ? grant
+            : new RoleGrant(null, grant.Grant, allOf, anyOf);
     }
 
     /// <summary>

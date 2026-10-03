@@ -1,6 +1,7 @@
 using System.Text.Json;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Definitions.Schemas;
+using System.Linq;
 using Shouldly;
 using Xunit;
 
@@ -254,6 +255,37 @@ public sealed class SchemaRolesParserTests
 
         exposure.EncryptPaths.ShouldBe(["a"]);
         exposure.PathMaskRules["b"].Operator.ShouldBe(FieldMaskRule.HashOperator);
+    }
+
+    [Fact]
+    public void XRoles_padded_role_is_trimmed_so_a_deny_still_matches()
+    {
+        var schema = JsonDocument.Parse("""
+            {"properties":{"f":{"x-roles":[{"role":" blocked ","grant":"deny"}]}}}
+            """).RootElement;
+
+        var roles = SchemaRolesParser.ParsePropertyRoles(schema)["f"];
+
+        roles.Count.ShouldBe(1);
+        roles[0].Role.ShouldBe("blocked");
+        roles[0].IsDeny.ShouldBeTrue();
+    }
+
+    [Fact]
+    public void XRoles_padded_leaf_inside_allOf_is_trimmed()
+    {
+        var schema = JsonDocument.Parse("""
+            {"properties":{"f":{"x-roles":[
+                {"grant":"deny","allOf":[{"role":" maker"},{"role":"checker "}]},
+                {"grant":"allow","anyOf":[{"role":" a "}]}]}}}
+            """).RootElement;
+
+        var roles = SchemaRolesParser.ParsePropertyRoles(schema)["f"];
+
+        roles[0].AllOf!.Select(c => c.Role).ShouldBe(["maker", "checker"]);
+        roles[0].IsDeny.ShouldBeTrue();
+        roles[1].AnyOf!.Select(c => c.Role).ShouldBe(["a"]);
+        roles[1].IsAllow.ShouldBeTrue();
     }
 
     [Fact]
