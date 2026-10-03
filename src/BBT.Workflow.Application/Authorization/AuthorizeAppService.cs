@@ -123,7 +123,7 @@ public sealed class AuthorizeAppService(
                 : role;
 
             // Only the forward is spanned, not the whole method. Everything above answered locally —
-            // parent-owned transitions, transition and queryRole overrides — and never touched the
+            // parent-owned transitions, transition overrides — and never touched the
             // subflow. Spanning the method would report a descent that did not happen, and
             // "this trace has no Subflow.Descend" would stop meaning "nothing descended".
             using var descent = InstanceReadActivityHelper.StartDescendScope(

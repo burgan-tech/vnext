@@ -206,18 +206,24 @@ public sealed class AuthorizeAppServiceSubflowTests : IDisposable
     }
 
     /// <summary>
-    /// Every level that still has an active SubFlow only forwards; none of them evaluates. With a deny-all
-    /// manager at every level above the leaf (A and B deny, C allows) the deepest leaf alone decides.
+    /// A MIDDLE level: an instance that itself has an active SubFlow, whose own grants would deny
+    /// everyone, still only forwards — it never evaluates its own queryRoles. The gateway (the leaf)
+    /// alone answers, exactly once.
     /// </summary>
     [Fact]
-    public async Task QueryRoles_ThreeLevels_OnlyDeepestLeafDecides()
+    public async Task QueryRoles_IntermediateLevelWithActiveSubflow_OnlyForwards()
     {
         GivenInstance(ParentWithActiveSubflow());
-        GivenRootQueryVerdict(false);
+        GivenRootQueryVerdict(false); // this level's own grants deny everyone
         GivenLeafVerdict(true);
 
         (await AuthorizeQueryRolesAsync()).Value!.Allowed.ShouldBeTrue();
 
+        await _gateway.Received(1).GetAuthorizeResultForInstanceAsync(
+            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(),
+            Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>(),
+            Arg.Is<bool>(q => q), Arg.Any<bool>(),
+            Arg.Any<AuthorizationRequestContext?>(), Arg.Any<CancellationToken>());
         await _authManager.DidNotReceiveWithAnyArgs().IsQueryAllowedAsync(
             default!, default!, default, default, default);
     }

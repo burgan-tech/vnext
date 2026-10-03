@@ -183,7 +183,7 @@ The plan is built from `ExcludedStepOrders` alone (`TransitionExecutor.BuildExec
   Never re-implement parse rules — use `DynamicRoleGrant.Classify` (shares `TryParse`).
 - **One evaluator**: `IRoleGrantEvaluator` via `ITransitionAuthorizationManager.CreateEvaluatorAsync`.
   `authorized = DenyGroupOk AND AllowGroupOk`, deny first; empty set ⇒ allow.
-- A role-less caller cannot clear a role-bound deny (`IsUnprovableRoleBoundDeny`); a denied role is not
+- Grants evaluate three-valued (Kleene): a role-bound leaf is Unknown for a role-less caller, a deny fires on Yes or Unknown, an allow only on Yes; a denied role is not
   bought back by an allowed one. Never loop the caller's roles returning on the first allowed one.
 - Every decision point takes the WHOLE role set; `ICallerRoleResolver.SingleRoleOf` is for cache scoping
   (`CallerScopeHash`) only. Never read `currentUser.Roles` directly — use `currentUser.ResolveCallerRoles(headers)`.

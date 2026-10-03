@@ -615,8 +615,8 @@ public static class WorkflowErrors
     /// Maps to HTTP 403 rather than a gateway error: the only safe reading of an unknown set is denial.
     /// <para>
     /// No built-in provider produces it since 0.0.94: morph-idm resolves its failures to an empty set,
-    /// which is safe because a role-less caller cannot pass a role-bound deny
-    /// (<c>TransitionAuthorizationManager.IsRoleBound</c>). Kept for a future provider
+    /// which is safe because a role-bound leaf is Unknown for a role-less caller
+    /// (a deny refuses unless an identity leaf rules it out). Kept for a future provider
     /// that cannot make the same guarantee, and because consumers may still match on the code.
     /// </para>
     /// </summary>
