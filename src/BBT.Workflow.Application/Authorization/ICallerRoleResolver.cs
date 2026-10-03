@@ -22,7 +22,7 @@ namespace BBT.Workflow.Authorization;
 /// <b>Neither built-in provider fails.</b> The default one is in-process; morph-idm resolves every
 /// failure (error status, timeout, transport, unparseable body, no caller identity) to an EMPTY set,
 /// logged and span-tagged by kind. That is safe only because the grant engine refuses a role-less
-/// caller at every role-bound deny (<c>TransitionAuthorizationManager.IsUnprovableRoleBoundDeny</c>)
+/// caller at every role-bound deny (<c>TransitionAuthorizationManager.IsRoleBound</c>)
 /// and no allowlist grant can match an empty set — so an empty set narrows access and never widens
 /// it. The failure channel and the call sites' <c>!IsSuccess</c> branches are kept for a future
 /// provider that cannot uphold that; such a provider's failure is a denial.

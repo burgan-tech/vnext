@@ -74,7 +74,7 @@ public sealed class MorphIdmCallerRoleResolverTests
     //
     // The provider's failure never breaks the request. It resolves to an empty role set and the
     // grant engine decides on that: an allowlist grant cannot match, and a role-bound deny refuses a
-    // role-less caller (TransitionAuthorizationManager.IsUnprovableRoleBoundDeny), so an outage
+    // role-less caller (TransitionAuthorizationManager.IsRoleBound), so an outage
     // narrows what a caller sees and never widens it. What distinguishes the cases is the log level
     // and the span tags, which is what these tests pin.
 

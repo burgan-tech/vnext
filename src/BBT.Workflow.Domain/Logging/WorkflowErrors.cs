@@ -616,7 +616,7 @@ public static class WorkflowErrors
     /// <para>
     /// No built-in provider produces it since 0.0.94: morph-idm resolves its failures to an empty set,
     /// which is safe because a role-less caller cannot pass a role-bound deny
-    /// (<c>TransitionAuthorizationManager.IsUnprovableRoleBoundDeny</c>). Kept for a future provider
+    /// (<c>TransitionAuthorizationManager.IsRoleBound</c>). Kept for a future provider
     /// that cannot make the same guarantee, and because consumers may still match on the code.
     /// </para>
     /// </summary>

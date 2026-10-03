@@ -81,6 +81,12 @@ public sealed class RoleGrantEvaluatorTests
             """[{"role":"maker","grant":"allow"},{"role":"maker","grant":"deny"}]""",
             """[{"role":"a","grant":"deny"},{"role":"b","grant":"deny"}]""",
             """[{"role":"maker","grant":"allow"},{"role":"checker","grant":"allow"}]""",
+            // Combinators: both paths must route them through the same three-valued matcher.
+            """[{"allOf":[{"role":"maker"},{"role":"checker"}],"grant":"allow"}]""",
+            """[{"anyOf":[{"role":"maker"},{"role":"checker"}],"grant":"allow"}]""",
+            """[{"allOf":[{"role":"maker"},{"role":"checker"}],"grant":"deny"}]""",
+            """[{"anyOf":[{"role":"maker"},{"role":"checker"}],"grant":"deny"}]""",
+            """[{"role":"maker","grant":"allow"},{"anyOf":[{"role":"blocked"},{"role":"checker"}],"grant":"deny"}]""",
         };
         var roles = new string?[] { null, "", "maker", "MAKER", "blocked", "checker", "someone-else", " maker " };
 
@@ -266,6 +272,35 @@ public sealed class RoleGrantEvaluatorTests
         var blacklist = Grants("""[{"role":"blocked","grant":"deny"}]""");
         TransitionAuthorizationManager.EvaluateRolesStatic(["other"], blacklist).ShouldBeTrue();
         TransitionAuthorizationManager.EvaluateRolesStatic(["other", "blocked"], blacklist).ShouldBeFalse();
+    }
+
+    [Fact]
+    public void TheStaticTwinEvaluatesCombinatorsAcrossTheCallersRoles()
+    {
+        // allOf is satisfied by the caller's role SET, not by one role carrying every leaf.
+        var allOf = Grants("""[{"allOf":[{"role":"maker"},{"role":"checker"}],"grant":"allow"}]""");
+        TransitionAuthorizationManager.EvaluateRolesStatic(["maker", "checker"], allOf).ShouldBeTrue();
+        TransitionAuthorizationManager.EvaluateRolesStatic(["maker"], allOf).ShouldBeFalse();
+
+        var anyOf = Grants("""[{"anyOf":[{"role":"maker"},{"role":"checker"}],"grant":"deny"}]""");
+        TransitionAuthorizationManager.EvaluateRolesStatic(["checker"], anyOf).ShouldBeFalse();
+        TransitionAuthorizationManager.EvaluateRolesStatic(["viewer"], anyOf).ShouldBeTrue();
+        // A role-bound deny the caller cannot rule out refuses: Unknown OR Unknown = Unknown.
+        TransitionAuthorizationManager.EvaluateRolesStatic(Array.Empty<string>(), anyOf).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task ARoleLessCallerDoesNotMatchADynamicRoleResolvingToEmpty()
+    {
+        // A $role. leaf is role-bound: with no roles to compare it is Unknown, and an ALLOW admits
+        // only on a proven Yes — a path that resolves to "" must not stand in for the missing role.
+        var requestContext = new AuthorizationRequestContext(
+            Headers: new Dictionary<string, string?> { ["x-branch"] = "" });
+        var grants = Grants("""[{"role":"$role.$.context.Headers.x-branch","grant":"allow"}]""");
+        var evaluator = await _sut.CreateEvaluatorAsync(
+            NewInstance(), null, requestContext, grants, CancellationToken.None);
+
+        evaluator.IsAnyRoleAllowed(null, grants).ShouldBeFalse();
     }
 
     [Fact]

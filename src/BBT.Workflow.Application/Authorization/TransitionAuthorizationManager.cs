@@ -38,9 +38,10 @@ public sealed class TransitionAuthorizationManager(
         if (instance == null)
             return new RoleGrantEvaluator(null, null, null, null, null, null);
 
-        // Fetch the previous manual transition only when some grant in the batch actually references it.
+        // Fetch the previous manual transition only when some grant in the batch actually references it —
+        // as its single role or as any leaf of an allOf / anyOf combinator.
         InstanceTransition? previousTransition = null;
-        if (grantsForPrefetchHint.Any(g => ReferencesPreviousTransition(g.Role ?? throw new NotSupportedException("combinator evaluated before Task 3"))))
+        if (grantsForPrefetchHint.SelectMany(g => g.LeafRoles).Any(ReferencesPreviousTransition))
         {
             // Spanned INSIDE the branch, so the span exists only when the query ran. A span on the
             // other side of this guard would report a lookup that never happened, and "this trace
@@ -370,7 +371,7 @@ public sealed class TransitionAuthorizationManager(
     /// If at least one ALLOW grant exists, the set is an allowlist (default deny unless an ALLOW matches).
     /// A grant set with no ALLOW grant is a blacklist (default allow unless a matching DENY applies),
     /// controlled by <paramref name="defaultAllowWhenNoAllowGrant"/>.
-    /// When role is null, no regular role grants match; only the grant count check applies (empty grants → allow).
+    /// When role is null the caller has no roles: a role-bound grant can neither be proven nor ruled out for it.
     /// Used as the no-instance path of <see cref="IRoleGrantEvaluator"/>, where predefined and dynamic
     /// grants have nothing to resolve against.
     /// </summary>
@@ -387,8 +388,9 @@ public sealed class TransitionAuthorizationManager(
 
     /// <summary>
     /// The multi-role form, and the one <see cref="IRoleGrantEvaluator"/> degrades to when it holds
-    /// no instance. Same two phases as the instance-bound path: the DENY group is an AND evaluated
-    /// first, the ALLOW group an OR evaluated only if nothing denied.
+    /// no instance. Same two phases as the instance-bound path — the DENY group is an AND evaluated
+    /// first, the ALLOW group an OR evaluated only if nothing denied — because it is the same code:
+    /// both call <see cref="RoleGrantMatcher.Decide"/> and differ only in how one leaf matches.
     /// </summary>
     /// <remarks>
     /// This twin must move whenever the instance-bound evaluator moves. They are two spellings of
@@ -396,8 +398,10 @@ public sealed class TransitionAuthorizationManager(
     /// drift would mean an authorization answer that depends on whether an instance happened to be
     /// loaded, which is not a distinction any caller can see or reason about.
     /// <para>
-    /// Static comparison only: with no instance there is nothing for a predefined or dynamic grant
-    /// to resolve against, so those grants simply never match here.
+    /// Static comparison only: with no instance there is nothing for a predefined or identity-bound
+    /// dynamic leaf to resolve against, so those leaves are <see cref="GrantMatch.No"/> here. A
+    /// role-bound leaf is <see cref="GrantMatch.Unknown"/> for a caller with no roles, exactly as on
+    /// the instance-bound path.
     /// </para>
     /// </remarks>
     public static bool EvaluateRolesStatic(
@@ -415,84 +419,65 @@ public sealed class TransitionAuthorizationManager(
                 normalized.Add(role.Trim());
         }
 
-        // Phase 1 - DENY group, AND. One matching deny refuses, whatever else the caller carries —
-        // and a role-bound deny refuses a caller with no roles at all (see IsUnprovableRoleBoundDeny).
-        foreach (var grant in roleGrants)
-        {
-            if (grant.IsDeny &&
-                (IsUnprovableRoleBoundDeny(grant, normalized.Count) || MatchesAnyStatic(grant, normalized)))
-                return false;
-        }
-
-        // Phase 2 - ALLOW group, OR.
-        var hasAllowGrant = false;
-        foreach (var grant in roleGrants)
-        {
-            if (!grant.IsAllow)
-                continue;
-
-            hasAllowGrant = true;
-            if (MatchesAnyStatic(grant, normalized))
-                return true;
-        }
-
-        // Blacklist (deny-only) set: no ALLOW grant defined → allow when not explicitly denied.
-        return defaultAllowWhenNoAllowGrant && !hasAllowGrant;
+        return RoleGrantMatcher.Decide(roleGrants, leafRole =>
+            !IsRoleBound(leafRole) ? GrantMatch.No
+            : normalized.Count == 0 ? GrantMatch.Unknown
+            : MatchesAnyStatic(leafRole, normalized) ? GrantMatch.Yes
+            : GrantMatch.No, defaultAllowWhenNoAllowGrant);
     }
 
     /// <summary>
-    /// Whether a DENY grant must refuse because the caller carries no roles to check it against.
-    /// </summary>
-    /// <remarks>
-    /// <para><b>A role-bound deny cannot be cleared by an empty role set.</b> A static role or a
-    /// <c>$role.</c> reference is a statement about the caller's ROLES; with none to compare,
-    /// "nothing matched" is not evidence that the caller is not the denied one. Read as a pass it
-    /// made every blacklist a blanket allow for a token minted by a role-less process, and — once
-    /// an external provider's failure resolves to an empty set — for any caller whose roles could
-    /// not be fetched. The grant author wrote a refusal; the runtime must not be the one to waive it.</para>
-    /// <para><b>Identity-bound denies keep their normal evaluation.</b> Predefined roles
-    /// (<c>$InstanceStarter</c>, …) and <c>$user.</c> / <c>$userBehalfOf.</c> references match on the
-    /// caller's identity, not on its roles, so the absence of roles hides nothing from them.</para>
-    /// <para>The classification mirrors <see cref="RoleGrantEvaluator"/>'s match order (predefined,
-    /// then dynamic, then static) so a grant is role-bound here exactly when it would be compared
-    /// against a role there — including a malformed dynamic grant, which falls through to the static
-    /// comparison and is therefore role-bound.</para>
-    /// </remarks>
-    /// <param name="grant">The grant under evaluation; only DENY grants are meaningful here.</param>
-    /// <param name="normalizedRoleCount">The caller's role count after blank roles are dropped.</param>
-    internal static bool IsUnprovableRoleBoundDeny(RoleGrant grant, int normalizedRoleCount)
-        => normalizedRoleCount == 0 && grant.IsDeny && IsRoleBound(grant.Role ?? throw new NotSupportedException("combinator evaluated before Task 3"));
-
-    /// <summary>
-    /// A role-bound grant (static role or <c>$role.</c>, see <see cref="IsUnprovableRoleBoundDeny"/>) that a caller with no
+    /// A role-bound grant (static role or <c>$role.</c>, see <see cref="IsRoleBound"/>) that a caller with no
     /// roles cannot prove — whatever its kind. Used where an ALLOW match grants something (the x-masking/x-encryption
     /// exemption lists): the role-less caller is evaluated with an empty role name, and a <c>$role.</c> value that
     /// resolves to <c>""</c> would otherwise "match" it and hand out the raw value.
     /// </summary>
+    /// <remarks>
+    /// Takes the grant's single <see cref="RoleGrant.Role"/>: exemption lists never carry an <c>allOf</c> /
+    /// <c>anyOf</c> combinator (rejected at publish, decision K1), so every grant reaching here is a single leaf.
+    /// </remarks>
     internal static bool IsUnprovableRoleBoundGrant(RoleGrant grant, int normalizedRoleCount)
-        => normalizedRoleCount == 0 && IsRoleBound(grant.Role ?? throw new NotSupportedException("combinator evaluated before Task 3"));
+        => normalizedRoleCount == 0 && IsRoleBound(grant.Role!);
 
-    private static bool IsRoleBound(string? grantRole)
+    /// <summary>
+    /// Whether a leaf role is a statement about the caller's ROLES — a static role or a <c>$role.</c>
+    /// reference — rather than about its identity.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>A role-bound leaf cannot be decided for an empty role set.</b> With no roles to compare,
+    /// "nothing matched" is not evidence that the caller is not the denied one. Read as a pass it made
+    /// every blacklist a blanket allow for a token minted by a role-less process, and — once an external
+    /// provider's failure resolves to an empty set — for any caller whose roles could not be fetched. Such
+    /// a leaf is therefore <see cref="GrantMatch.Unknown"/> for a role-less caller, and a deny that cannot
+    /// be ruled out refuses (<see cref="RoleGrantMatcher.Decide"/>).</para>
+    /// <para><b>Identity-bound leaves keep their normal evaluation.</b> Predefined roles
+    /// (<c>$InstanceStarter</c>, …) and <c>$user.</c> / <c>$userBehalfOf.</c> references match on the
+    /// caller's identity, not on its roles, so the absence of roles hides nothing from them.</para>
+    /// <para>The classification mirrors <see cref="RoleGrantEvaluator"/>'s match order (predefined,
+    /// then dynamic, then static) so a leaf is role-bound here exactly when it would be compared
+    /// against a role there — including a malformed dynamic grant, which falls through to the static
+    /// comparison and is therefore role-bound.</para>
+    /// </remarks>
+    internal static bool IsRoleBound(string leafRole)
     {
-        if (string.IsNullOrWhiteSpace(grantRole))
+        if (string.IsNullOrWhiteSpace(leafRole))
             return true;
 
-        if (grantRole is PredefinedInstanceRoles.InstanceStarter
+        if (leafRole is PredefinedInstanceRoles.InstanceStarter
             or PredefinedInstanceRoles.PreviousUser
             or PredefinedInstanceRoles.InstanceBehalfOfStarter
             or PredefinedInstanceRoles.PreviousBehalfOfUser)
             return false;
 
-        var dynamicGrant = DynamicRoleGrant.TryParse(grantRole);
+        var dynamicGrant = DynamicRoleGrant.TryParse(leafRole);
         return dynamicGrant is null || dynamicGrant.Qualifier == DynamicRoleQualifier.Role;
     }
 
-    private static bool MatchesAnyStatic(RoleGrant grant, List<string> roles)
+    private static bool MatchesAnyStatic(string leafRole, List<string> roles)
     {
-        var grantRole = grant.Role ?? throw new NotSupportedException("combinator evaluated before Task 3");
         foreach (var role in roles)
         {
-            if (string.Equals(grantRole, role, StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(leafRole, role, StringComparison.OrdinalIgnoreCase))
                 return true;
         }
 
