@@ -583,6 +583,7 @@ expectations:
 
 ## Related
 
+- [Role Grants — a Worked Example](role-grant-walkthrough.md) — one definition evaluated on every surface, with verdict tables.
 - [Well-Known Transitions](well-known-transitions.md) — how `cancel` / `updateData` / `exit` roles are enforced.
 - [API and Service Contracts](../contracts/api-and-service-contracts.md) — internal-only endpoints with no in-app authorization.
 - `.claude/rules/vnext-workflow-developer.md` § Role Grant Validation — definition-time rules.
