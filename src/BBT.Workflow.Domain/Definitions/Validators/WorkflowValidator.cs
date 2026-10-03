@@ -889,21 +889,9 @@ public class WorkflowValidator
         if (roleGrants.Count == 0)
             return;
 
-        const string contextPrefix = "$.context.";
-
         foreach (var grant in roleGrants)
         {
-            var grantRole = grant.Role ?? throw new NotSupportedException("combinator evaluated before Task 3");
-            var message = DynamicRoleGrant.Classify(grantRole) switch
-            {
-                DynamicRoleFormat.MissingContextPrefix =>
-                    $"Dynamic role '{grantRole}' in '{context}' has an invalid path. Path must start with '{contextPrefix}' (case-sensitive).",
-                DynamicRoleFormat.EmptyNavigationPath =>
-                    $"Dynamic role '{grantRole}' in '{context}' has an empty navigation path after '{contextPrefix}'.",
-                _ => null
-            };
-
-            if (message != null)
+            foreach (var message in RoleGrantDefinitionRules.Validate(grant, context))
                 result.AddError(new ValidationResult(message, [context]));
         }
     }

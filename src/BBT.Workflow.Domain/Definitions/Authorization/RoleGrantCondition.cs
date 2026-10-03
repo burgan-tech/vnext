@@ -7,6 +7,8 @@ namespace BBT.Workflow.Definitions;
 /// One leaf of a <see cref="RoleGrant"/> combinator (<c>allOf</c> / <c>anyOf</c>).
 /// JSON format: { "role": "morph-idm.maker" }. Combinators do not nest, so a leaf is only a role.
 /// </summary>
+// Depth 1 is enforced at the wire: any extra member (a 'grant', a nested combinator) fails deserialization.
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed class RoleGrantCondition
 {
     private RoleGrantCondition()
