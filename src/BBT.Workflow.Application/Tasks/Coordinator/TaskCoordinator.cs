@@ -515,7 +515,7 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
     }
 
     /// <summary>
-    /// Emits <see cref="WorkflowLogs.DuplicateTaskKeyAtSameOrder"/> once per task key that repeats
+    /// Emits <see cref="WorkflowLogs.DuplicateTaskKeyAtSameOrder"/> once per shared response slot
     /// within this Order group. Two entries sharing a response slot at one order cannot both be
     /// merged, so the run fails; publish rejects this shape (WorkflowValidator) and only definitions
     /// published before that check can still reach here.
@@ -562,11 +562,13 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
 
         foreach (var duplicate in duplicates)
         {
+            // Task key(s) (not the camelCased slot name) so the log stays searchable by definition
+            // key; a slot shared by entries with different task keys names every distinct key.
+            var taskKeys = string.Join(", ", duplicate.Select(t => t.Task.Key).Distinct(StringComparer.Ordinal));
             _logger.DuplicateTaskKeyAtSameOrder(
                 transitionKey ?? "N/A",
                 taskTrigger.ToString(),
-                // Task key (not the camelCased slot name) so the log stays searchable by definition key.
-                duplicate.First().Task.Key,
+                taskKeys,
                 duplicate.Count(),
                 order,
                 instanceId);

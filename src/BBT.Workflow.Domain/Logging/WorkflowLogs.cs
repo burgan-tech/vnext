@@ -1188,8 +1188,9 @@ public static partial class WorkflowLogs
     /// <c>TaskTrigger.Extension</c> too (<c>FunctionAppService.cs</c>) but with
     /// <see cref="TaskExecutionOrigin.Function"/> — a multi-task function
     /// (<c>FunctionAppService.GetSingleTaskVariableKey</c>) listing the same task twice at the same
-    /// order is still an authoring mistake with no per-entry response-key override to save it, so
-    /// this warning MUST still fire for that shape. Gating on the trigger instead of the origin
+    /// order without distinct <c>variableKey</c> values still shares one response slot (an authoring
+    /// mistake the entries' own <c>variableKey</c> would resolve), so this warning MUST still fire
+    /// for that shape. Gating on the trigger instead of the origin
     /// would silently swallow it.
     /// </summary>
     [LoggerMessage(
