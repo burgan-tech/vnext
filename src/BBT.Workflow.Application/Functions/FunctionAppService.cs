@@ -694,7 +694,7 @@ public sealed class FunctionAppService(
     {
         var tasks = function.GetExecuteTasks();
         return tasks.Count == 1
-            ? tasks[0].Task.Key.ToVariableName()
+            ? tasks[0].ResponseVariableKey
             : null;
     }
 
