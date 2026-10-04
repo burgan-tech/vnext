@@ -1778,4 +1778,142 @@ public class WorkflowValidatorTests : DomainTestBase<DomainEntryPoint>
     }
 
     #endregion
+
+    #region Task Response Slot Validation Tests
+
+    private static WorkflowDefinition CreateWorkflowWithOnEntries(string onEntriesJson)
+    {
+        var json = $$"""
+        {
+            "type": "F",
+            "labels": [{"label": "Test", "language": "en"}],
+            "startTransition": {
+                "key": "start", "target": "spawning", "triggerType": "manual", "versionStrategy": "Minor",
+                "labels": [{"label": "Start", "language": "en"}], "onExecutionTasks": []
+            },
+            "states": [
+                {
+                    "key": "spawning", "stateType": "initial",
+                    "labels": [{"label": "Spawning", "language": "en"}],
+                    "onEntries": {{onEntriesJson}}
+                },
+                { "key": "done", "stateType": "finish", "labels": [{"label": "Done", "language": "en"}] }
+            ]
+        }
+        """;
+
+        return JsonSerializer.Deserialize<WorkflowDefinition>(json, JsonSerializerConstants.JsonOptions)!;
+    }
+
+    private static string Entry(int order, string taskKey, string? variableKey = null)
+    {
+        var variableKeyFragment = variableKey is null ? "" : $", \"variableKey\": \"{variableKey}\"";
+        return $$"""
+        {
+            "order": {{order}},
+            "task": {"key": "{{taskKey}}", "domain": "d", "flow": "sys-tasks", "version": "1.0.0"},
+            "mapping": { "location": "./src/X.csx", "code": "cmV0dXJuIHRydWU7" }
+            {{variableKeyFragment}}
+        }
+        """;
+    }
+
+    private const string SlotMember = "Workflow.States[spawning].OnEntries[1].VariableKey";
+
+    [Fact]
+    public void Validate_SameTaskSameOrderWithoutVariableKey_IsRejected()
+    {
+        var workflow = CreateWorkflowWithOnEntries($"[{Entry(1, "spawn-child")}, {Entry(1, "spawn-child")}]");
+
+        var result = _validator.Validate(workflow);
+
+        result.ValidationErrors.ShouldContain(e => e.MemberNames.Contains(SlotMember)
+            && e.ErrorMessage!.Contains("spawnChild") && e.ErrorMessage.Contains("variableKey"));
+    }
+
+    [Fact]
+    public void Validate_SameTaskSameOrderWithDistinctVariableKeys_IsAccepted()
+    {
+        var workflow = CreateWorkflowWithOnEntries(
+            $"[{Entry(1, "spawn-child", "primaryChild")}, {Entry(1, "spawn-child", "secondaryChild")}]");
+
+        var result = _validator.Validate(workflow);
+
+        result.ValidationErrors.ShouldNotContain(e => e.MemberNames.Any(m => m.EndsWith(".VariableKey")));
+    }
+
+    [Fact]
+    public void Validate_SameTaskDifferentOrders_IsAccepted()
+    {
+        var workflow = CreateWorkflowWithOnEntries($"[{Entry(1, "spawn-child")}, {Entry(2, "spawn-child")}]");
+
+        var result = _validator.Validate(workflow);
+
+        result.ValidationErrors.ShouldNotContain(e => e.MemberNames.Any(m => m.EndsWith(".VariableKey")));
+    }
+
+    [Fact]
+    public void Validate_DistinctKeysNormalizingToSameSlotAtSameOrder_IsRejected()
+    {
+        // "send-notification" and "send_notification" both file under "sendNotification".
+        var workflow = CreateWorkflowWithOnEntries(
+            $"[{Entry(1, "send-notification")}, {Entry(1, "send_notification")}]");
+
+        var result = _validator.Validate(workflow);
+
+        result.ValidationErrors.ShouldContain(e => e.MemberNames.Contains(SlotMember));
+    }
+
+    [Fact]
+    public void Validate_VariableKeyEqualToSiblingFallbackSlot_IsRejected()
+    {
+        // The explicit name collides with the sibling's legacy slot.
+        var workflow = CreateWorkflowWithOnEntries(
+            $"[{Entry(1, "spawn-child")}, {Entry(1, "other-task", "spawnChild")}]");
+
+        var result = _validator.Validate(workflow);
+
+        result.ValidationErrors.ShouldContain(e => e.MemberNames.Contains(SlotMember));
+    }
+
+    [Theory]
+    [InlineData("primary-child")]
+    [InlineData("1child")]
+    public void Validate_InvalidVariableKeyFormat_IsRejected(string variableKey)
+    {
+        var workflow = CreateWorkflowWithOnEntries($"[{Entry(1, "spawn-child", variableKey)}]");
+
+        var result = _validator.Validate(workflow);
+
+        result.ValidationErrors.ShouldContain(e =>
+            e.MemberNames.Contains("Workflow.States[spawning].OnEntries[0].VariableKey"));
+    }
+
+    [Fact]
+    public void Validate_TransitionOnExecutionTasksCollision_IsRejected()
+    {
+        var json = $$"""
+        {
+            "type": "F",
+            "labels": [{"label": "Test", "language": "en"}],
+            "startTransition": {
+                "key": "start", "target": "s", "triggerType": "manual", "versionStrategy": "Minor",
+                "labels": [{"label": "Start", "language": "en"}],
+                "onExecutionTasks": [{{Entry(1, "spawn-child")}}, {{Entry(1, "spawn-child")}}]
+            },
+            "states": [
+                { "key": "s", "stateType": "initial", "labels": [{"label": "S", "language": "en"}] },
+                { "key": "done", "stateType": "finish", "labels": [{"label": "Done", "language": "en"}] }
+            ]
+        }
+        """;
+        var workflow = JsonSerializer.Deserialize<WorkflowDefinition>(json, JsonSerializerConstants.JsonOptions)!;
+
+        var result = _validator.Validate(workflow);
+
+        result.ValidationErrors.ShouldContain(e =>
+            e.MemberNames.Any(m => m.EndsWith("OnExecutionTasks[1].VariableKey")));
+    }
+
+    #endregion
 }
