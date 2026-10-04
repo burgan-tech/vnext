@@ -40,9 +40,10 @@ public sealed class FunctionComponentValidator : IComponentValidator
                 {
                     result.AddError("Function output is required.", $"{nameof(Function)}.{nameof(Function.Output)}");
                 }
-
-                ValidateTaskKeysDistinct(function, result);
             }
+
+            // Also runs for a legacy single `task`, whose variableKey format is checked here.
+            ValidateTaskKeysDistinct(function, result);
 
             // Validate scope
             if (function.Scope == default)
@@ -80,7 +81,8 @@ public sealed class FunctionComponentValidator : IComponentValidator
         if (function.Task?.VariableKey is { } legacyKey && !OnExecuteTask.IsValidVariableKey(legacyKey))
         {
             result.AddError(
-                $"Function task variableKey '{legacyKey}' is not a valid response slot name.",
+                $"Function task variableKey '{legacyKey}' is not a valid response slot name: " +
+                "use letters, digits and '_', starting with a letter or '_' (max 100 characters).",
                 $"{nameof(Function)}.{nameof(Function.Task)}.{nameof(OnExecuteTask.VariableKey)}");
         }
 

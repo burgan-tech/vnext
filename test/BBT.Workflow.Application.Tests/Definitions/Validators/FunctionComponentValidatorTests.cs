@@ -557,6 +557,25 @@ public class FunctionComponentValidatorTests
     }
 
     [Fact]
+    public void Validate_LegacySingleTaskInvalidVariableKey_IsRejected()
+    {
+        var attributes = JsonDocument.Parse("""
+        {
+            "scope": "F",
+            "task": {
+                "type": "6",
+                "config": { "url": "https://example.com", "method": "GET" },
+                "variableKey": "bad-name"
+            }
+        }
+        """).RootElement;
+
+        var result = _validator.Validate(attributes);
+
+        result.ValidationErrors.ShouldContain(e => e.MemberNames.Contains("Function.Task.VariableKey"));
+    }
+
+    [Fact]
     public void Validate_InvalidVariableKeyFormat_IsRejected()
     {
         var result = _validator.Validate(MultiTaskFunction(""", "variableKey": "bad-name" """, "", secondKey: "other"));
