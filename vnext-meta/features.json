@@ -450,6 +450,13 @@
       ],
       "schemaPath": "task.type=18",
       "documentation": "docs/runtime/cache-aside-task.md"
+    },
+    "taskVariableKey": {
+      "since": "0.0.99",
+      "status": "stable",
+      "description": "A task entry (onEntries, onExits and transition onExecutionTasks in workflows, onExecutionTasks in functions) accepts an optional `variableKey` naming the slot its response is filed under in context.TaskResponse and OutputResponse. The effective slot is variableKey when authored, else ToVariableName(task.key) (send-notification -> sendNotification), used verbatim. PURELY ADDITIVE / NON-BREAKING: an entry without variableKey behaves exactly as before. Entries sharing an order run in parallel and are merged by slot, so the same task listed twice at one order (for example two SubProcess starts) needs a variableKey on at least one of them. WorkflowValidator rejects a same-order slot collision and a malformed variableKey, and FunctionComponentValidator compares the effective slots across all onExecutionTasks, at publish; different orders may reuse a slot and the later run overwrites it. TaskCoordinator threads the key into ResponseVariableKey and every executor honors it. Requires the vnext-schema release that adds variableKey to the task-entry definitions (not yet released when this entry was written); before it, authoring validation rejects the field.",
+      "schemaPath": "workflow.attributes.states[].onEntries[].variableKey (also onExits and transition onExecutionTasks) | function.attributes.onExecutionTasks[].variableKey",
+      "documentation": "docs/runtime/script-context-and-engine.md"
     }
   }
 }

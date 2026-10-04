@@ -33,6 +33,17 @@ entire runtime. Side effects should remain explicit through approved helpers.
 | `CSharpEvaluator` | Compiles and evaluates script code. |
 | `TransitionExecutionContext.Cache` | Holds script context for the current transition only. |
 
+### Response slot: `variableKey`
+
+Each task entry files its response under one slot in `context.TaskResponse` (and
+`OutputResponse`): the entry's `variableKey` when authored, else `ToVariableName(task.key)`
+(`send-notification` → `sendNotification`). Entries at the same `order` run in parallel and are
+merged by slot, so two entries at one order must use distinct slots — the same task listed twice
+(e.g. two SubProcess starts) needs a `variableKey` on at least one of them. Publish rejects a
+same-order collision (`WorkflowValidator`, `FunctionComponentValidator`); different orders may
+reuse a slot and the later run overwrites it. The value is used verbatim:
+`context.TaskResponse["primaryChild"]`.
+
 ## Failure Modes
 
 - Compilation failures should fail the calling task/condition with a clear error.
