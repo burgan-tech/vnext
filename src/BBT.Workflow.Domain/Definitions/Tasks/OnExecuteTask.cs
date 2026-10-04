@@ -1,4 +1,6 @@
+using System.Text;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 
 namespace BBT.Workflow.Definitions;
 
@@ -8,6 +10,9 @@ namespace BBT.Workflow.Definitions;
 /// </summary>
 public sealed class OnExecuteTask
 {
+    private const int VariableKeyMaxLength = 100;
+    private static readonly Regex VariableKeyPattern = new("^[A-Za-z_][A-Za-z0-9_]*$", RegexOptions.Compiled);
+
     private OnExecuteTask()
     {
     }
@@ -17,13 +22,15 @@ public sealed class OnExecuteTask
         int order,
         Reference task,
         ScriptCode mapping,
-        ErrorBoundary? errorBoundary
+        ErrorBoundary? errorBoundary,
+        string? variableKey
     )
     {
         Order = order;
         Task = task;
         Mapping = mapping;
         ErrorBoundary = errorBoundary;
+        VariableKey = variableKey;
     }
 
     /// <summary>
@@ -49,22 +56,47 @@ public sealed class OnExecuteTask
     public ErrorBoundary? ErrorBoundary { get; private set; }
 
     /// <summary>
+    /// Optional name of this entry's response slot in <c>ScriptContext.TaskResponse</c> /
+    /// <c>OutputResponse</c>. Entries at the same order run in parallel and are merged by slot, so
+    /// the same task listed twice at one order needs a distinct value here or the merge rejects the
+    /// two different payloads. Used verbatim — not normalized — so a script reads exactly this name.
+    /// </summary>
+    [JsonPropertyName("variableKey")]
+    public string? VariableKey { get; private set; }
+
+    /// <summary>
+    /// The slot this entry's response is filed under: <see cref="VariableKey"/> when authored, else
+    /// the legacy <c>ToVariableName(task.key)</c>. Validators compare this value; the coordinator
+    /// threads <see cref="VariableKey"/> into <c>TaskEngineExecutionOptions.ResponseVariableKey</c>.
+    /// </summary>
+    [JsonIgnore]
+    public string? ResponseVariableKey =>
+        !string.IsNullOrWhiteSpace(VariableKey) ? VariableKey : Task?.Key?.ToVariableName();
+
+    /// <summary>True when <paramref name="value"/> is usable as a response slot name.</summary>
+    public static bool IsValidVariableKey(string value) =>
+        value.Length <= VariableKeyMaxLength && VariableKeyPattern.IsMatch(value);
+
+    /// <summary>
     /// Creates a new OnExecuteTask instance.
     /// </summary>
     /// <param name="order">The execution order.</param>
     /// <param name="task">Reference to the task definition.</param>
     /// <param name="mapping">Optional mapping script.</param>
     /// <param name="errorBoundary">Optional task-level error boundary.</param>
+    /// <param name="variableKey">Optional response slot name; defaults to the task key's variable name.</param>
     public static OnExecuteTask Create(
         int order,
         IReference task,
         ScriptCode mapping,
-        ErrorBoundary? errorBoundary = null)
+        ErrorBoundary? errorBoundary = null,
+        string? variableKey = null)
     {
         return new OnExecuteTask(
             order,
             task.ToReference(),
             mapping,
-            errorBoundary);
+            errorBoundary,
+            variableKey);
     }
 }
