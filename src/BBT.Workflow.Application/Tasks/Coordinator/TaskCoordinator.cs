@@ -464,6 +464,8 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
     /// journal ("script-task" next to "script-task#1"); suffixing all of them reads correctly.
     /// A <see cref="TaskEngineExecutionOptions.JournalTaskKey"/> the caller already set (FanOut sets
     /// its own, e.g. "fan-out-docs#3") is never overwritten.
+    /// Also threads an authored <c>variableKey</c> into <see cref="TaskEngineExecutionOptions.ResponseVariableKey"/>,
+    /// so two runs of the same task at one order file under distinct slots and the parallel merge accepts both.
     /// </summary>
     /// <remarks>
     /// Called for every group regardless of size (including groups of one) so the decision comes
@@ -476,16 +478,14 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
     {
         var result = new TaskEngineExecutionOptions[groupTasks.Count];
 
-        if (groupTasks.Count == 1)
+        Dictionary<string, int>? keyCounts = null;
+        if (groupTasks.Count > 1)
         {
-            result[0] = baseOptions;
-            return result;
-        }
-
-        var keyCounts = new Dictionary<string, int>(StringComparer.Ordinal);
-        foreach (var task in groupTasks)
-        {
-            keyCounts[task.Task.Key] = keyCounts.GetValueOrDefault(task.Task.Key) + 1;
+            keyCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+            foreach (var task in groupTasks)
+            {
+                keyCounts[task.Task.Key] = keyCounts.GetValueOrDefault(task.Task.Key) + 1;
+            }
         }
 
         var seenPerKey = new Dictionary<string, int>(StringComparer.Ordinal);
@@ -494,11 +494,18 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
             var task = groupTasks[i];
             var options = baseOptions;
 
-            if (keyCounts[task.Task.Key] > 1 && string.IsNullOrEmpty(options.JournalTaskKey))
+            if (keyCounts is not null && keyCounts[task.Task.Key] > 1 && string.IsNullOrEmpty(options.JournalTaskKey))
             {
                 var position = seenPerKey.GetValueOrDefault(task.Task.Key);
                 seenPerKey[task.Task.Key] = position + 1;
                 options = options with { JournalTaskKey = $"{task.Task.Key}#{position}" };
+            }
+
+            // The definition's own response slot. A caller-supplied key (the extension path) is
+            // never overwritten, and the extension refiner still runs after this and wins.
+            if (!string.IsNullOrWhiteSpace(task.VariableKey) && options.ResponseVariableKey is null)
+            {
+                options = options with { ResponseVariableKey = task.VariableKey };
             }
 
             result[i] = options;
@@ -509,11 +516,9 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
 
     /// <summary>
     /// Emits <see cref="WorkflowLogs.DuplicateTaskKeyAtSameOrder"/> once per task key that repeats
-    /// within this Order group. A hook listing the same task key twice at the same order now
-    /// executes correctly (see <see cref="ResolveGroupEngineOptions"/>) but is still almost
-    /// certainly an authoring mistake, so it is surfaced as a warning rather than silently accepted
-    /// or rejected outright — <c>WorkflowValidationResult</c> has no warning severity to carry this
-    /// at definition-validation time (only hard errors), so it is logged here at execution time.
+    /// within this Order group. Two entries sharing a response slot at one order cannot both be
+    /// merged, so the run fails; publish rejects this shape (WorkflowValidator) and only definitions
+    /// published before that check can still reach here.
     /// </summary>
     /// <remarks>
     /// Gated on <see cref="TaskExecutionOrigin.Extension"/> — NOT <see cref="TaskTrigger.Extension"/>.
@@ -551,7 +556,8 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
             return;
 
         var duplicates = groupTasks
-            .GroupBy(t => t.Task.Key, StringComparer.Ordinal)
+            .Where(t => t.ResponseVariableKey is not null)
+            .GroupBy(t => t.ResponseVariableKey!, StringComparer.Ordinal)
             .Where(g => g.Count() > 1);
 
         foreach (var duplicate in duplicates)
@@ -559,7 +565,8 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
             _logger.DuplicateTaskKeyAtSameOrder(
                 transitionKey ?? "N/A",
                 taskTrigger.ToString(),
-                duplicate.Key,
+                // Task key (not the camelCased slot name) so the log stays searchable by definition key.
+                duplicate.First().Task.Key,
                 duplicate.Count(),
                 order,
                 instanceId);

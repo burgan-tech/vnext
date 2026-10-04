@@ -144,4 +144,64 @@ public sealed class TaskCoordinatorGroupEngineOptionsTests
         resolved[0].ResponseVariableKey.ShouldBeNull();
         resolved[1].ResponseVariableKey.ShouldBeNull();
     }
+
+    [Fact]
+    public void ResolveGroupEngineOptions_VariableKey_BecomesResponseVariableKey_AlongsideJournalSuffix()
+    {
+        var groupTasks = new List<OnExecuteTask>
+        {
+            OnExecuteTask.Create(1, WorkflowTaskFactory.CreateHttpTask("spawn-child"), ScriptCode.FromNative(string.Empty), variableKey: "primaryChild"),
+            OnExecuteTask.Create(1, WorkflowTaskFactory.CreateHttpTask("spawn-child"), ScriptCode.FromNative(string.Empty), variableKey: "secondaryChild"),
+        };
+
+        var resolved = TaskCoordinator.ResolveGroupEngineOptions(groupTasks, TaskEngineExecutionOptions.Default);
+
+        resolved[0].ResponseVariableKey.ShouldBe("primaryChild");
+        resolved[1].ResponseVariableKey.ShouldBe("secondaryChild");
+        // The journal disambiguator is independent and unchanged.
+        resolved[0].JournalTaskKey.ShouldBe("spawn-child#0");
+        resolved[1].JournalTaskKey.ShouldBe("spawn-child#1");
+    }
+
+    [Fact]
+    public void ResolveGroupEngineOptions_SingleTaskWithVariableKey_SetsResponseVariableKey()
+    {
+        var groupTasks = new List<OnExecuteTask>
+        {
+            OnExecuteTask.Create(1, WorkflowTaskFactory.CreateHttpTask("spawn-child"), ScriptCode.FromNative(string.Empty), variableKey: "onlyChild"),
+        };
+
+        var resolved = TaskCoordinator.ResolveGroupEngineOptions(groupTasks, TaskEngineExecutionOptions.Default);
+
+        resolved[0].ResponseVariableKey.ShouldBe("onlyChild");
+        resolved[0].JournalTaskKey.ShouldBeNull();
+    }
+
+    [Fact]
+    public void ResolveGroupEngineOptions_CallerResponseVariableKey_IsNotOverwritten()
+    {
+        var groupTasks = new List<OnExecuteTask>
+        {
+            OnExecuteTask.Create(1, WorkflowTaskFactory.CreateHttpTask("spawn-child"), ScriptCode.FromNative(string.Empty), variableKey: "fromDefinition"),
+        };
+        var baseOptions = TaskEngineExecutionOptions.Default with { ResponseVariableKey = "fromCaller" };
+
+        var resolved = TaskCoordinator.ResolveGroupEngineOptions(groupTasks, baseOptions);
+
+        resolved[0].ResponseVariableKey.ShouldBe("fromCaller");
+    }
+
+    [Fact]
+    public void ResolveGroupEngineOptions_SingleTaskWithoutVariableKey_ReturnsBaseOptionsByReference()
+    {
+        var groupTasks = new List<OnExecuteTask>
+        {
+            OnExecuteTask.Create(1, WorkflowTaskFactory.CreateHttpTask("spawn-child"), ScriptCode.FromNative(string.Empty)),
+        };
+        var baseOptions = TaskEngineExecutionOptions.Default;
+
+        var resolved = TaskCoordinator.ResolveGroupEngineOptions(groupTasks, baseOptions);
+
+        ReferenceEquals(resolved[0], baseOptions).ShouldBeTrue();
+    }
 }

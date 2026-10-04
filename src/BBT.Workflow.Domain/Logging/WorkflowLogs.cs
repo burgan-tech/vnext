@@ -1195,7 +1195,7 @@ public static partial class WorkflowLogs
     [LoggerMessage(
         EventId = 10155,
         Level = LogLevel.Warning,
-        Message = "Duplicate task key at the same order in transition {TransitionKey}, hook {Hook}: task '{TaskKey}' appears {OccurrenceCount} times at order {Order}. This is usually an authoring mistake — give the entries distinct orders if they are meant to run as separate steps. InstanceId={InstanceId}")]
+        Message = "Duplicate task key at the same order in transition {TransitionKey}, hook {Hook}: task '{TaskKey}' shares one response slot across {OccurrenceCount} entries at order {Order}. This is usually an authoring mistake — give the entries distinct orders or distinct variableKey values if they are meant to run as separate steps. InstanceId={InstanceId}")]
     public static partial void DuplicateTaskKeyAtSameOrder(
         this ILogger logger,
         string transitionKey,
