@@ -17,7 +17,7 @@ contracts. Remote services call public runtime APIs rather than internal reposit
 | Contract | Direction | Stability notes |
 | --- | --- | --- |
 | Instance start/transition APIs | Client -> Orchestration | Route, response status, sync/async semantics are client contracts. |
-| Function APIs | Client -> Orchestration | `state`, `data`, `view`, `schema`, authorization, hierarchy. |
+| Function APIs | Client -> Orchestration | `state`, `data`, `view`, `schema`, authorization, [`instance-correlation`](../runtime/instance-correlation-tree.md). |
 | Task envelope | Orchestration -> Execution | Strongly typed binding and task type discriminator. |
 | Remote app services | Runtime -> Runtime | Uses public instance/function routes with forwarded headers. |
 | Domain events | Orchestration -> Outbox -> Inbox | Event payloads are distributed contracts. |
@@ -110,7 +110,7 @@ scope only, and `function.roles` is evaluated by `authorize` alone.
 
 ### `authorize` targets
 
-Full reference — what each selector evaluates, the subflow conjunction, parent-retained transitions,
+Full reference — what each selector evaluates, the subflow leaf-only rule, parent-retained transitions,
 role resolution and the audit line: [The `authorize` Function](../domain/authorize-function.md). The
 summary below is the API-surface view.
 
@@ -125,7 +125,7 @@ selectors (zero or two is a request error, not a silent default):
 |---|---|---|
 | `?transitionKey=` | may this transition be triggered (state **and** roles) | only when the parent does not retain it — `cancel`, `exit`, `updateData` and an in-state shared transition are answered against the parent, matching execution |
 | `?functionKey=` | may this **custom** function be invoked | yes |
-| `?queryRoles=true` | may this instance be read (the whole built-in read family) | yes — and the answer is the **conjunction** of the polled instance and every level down to the deepest active leaf |
+| `?queryRoles=true` | may this instance be read (the whole built-in read family) | yes — decided at the deepest active leaf only; the levels above are not ANDed |
 | `?ack=true` | may `POST .../longpoll/ack` be called | follows the endpoint's own rule: descends while this instance is not the one awaiting; **allowed** when nothing in the chain is awaiting, because the endpoint answers `Ok()` idempotently there |
 
 There is no per-built-in-function selector: `state`, `data`, `view`, `schema`, `master`, `tasks`,
@@ -139,7 +139,7 @@ instance actually is; content follows what the client holds.
 A refusal is `403` with a body of `{"allowed": false}`. A consumer that reads only the `200` turns
 every refusal into "no answer".
 Built-in system functions (`state`, `view`, `data`, `schema`, `authorize`, `permissions`,
-`hierarchy`, `human-task`, `master`, `catalog`) have no `sys-functions` component and return `404`
+`instance-correlation`, `human-task`, `master`, `catalog`) have no `sys-functions` component and return `404`
 from `/info`.
 
 The HTTP `QUERY` method is **not supported** — declaring it is a component validation error and no

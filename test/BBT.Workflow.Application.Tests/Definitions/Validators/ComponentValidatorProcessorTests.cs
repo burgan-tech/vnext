@@ -218,8 +218,8 @@ public class ComponentValidatorProcessorTests
                 "type": "F",
                 "executionType": "MAYBE",
                 "states": [
-                    { "key": "initial", "stateType": "I" },
-                    { "key": "completed", "stateType": "C" }
+                    { "key": "initial", "stateType": 1 },
+                    { "key": "completed", "stateType": 3 }
                 ],
                 "startTransition": { "key": "start", "target": "initial" }
             }

@@ -1006,6 +1006,31 @@ public class WorkflowValidatorTests : DomainTestBase<DomainEntryPoint>
             e.ErrorMessage.Contains("AvailableIn[review].Roles", StringComparison.Ordinal));
     }
 
+    [Theory]
+    [InlineData("""{"grant":"allow","allOf":[{"role":"$user.$CreatedBy"}]}""", "invalid path")]
+    [InlineData("""{"grant":"allow","anyOf":[{"role":"$user.$.context."}]}""", "empty navigation path")]
+    public void Validate_ShouldClassifyCombinatorLeaves_InQueryRoles(string grantJson, string expected)
+    {
+        var workflow = DeserializeWorkflow($$"""
+        {
+            "type": "F",
+            "labels": [{"label": "Test", "language": "en"}],
+            "states": [
+                { "key": "review", "stateType": "initial", "labels": [{"label": "Review", "language": "en"}], "transitions": [] }
+            ],
+            "queryRoles": [ {{grantJson}} ],
+            "startTransition": { "key": "start", "target": "review", "triggerType": "manual", "labels": [{"label": "Start", "language": "en"}] }
+        }
+        """);
+
+        var result = _validator.Validate(workflow);
+
+        result.IsValid.ShouldBeFalse();
+        result.ValidationErrors.ShouldContain(e =>
+            e.ErrorMessage!.Contains(expected, StringComparison.Ordinal) &&
+            e.ErrorMessage.Contains("QueryRoles", StringComparison.Ordinal));
+    }
+
     [Fact]
     public void Validate_ShouldPass_WhenAvailableInMixesBothFormsValidly()
     {

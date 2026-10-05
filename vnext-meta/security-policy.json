@@ -64,7 +64,19 @@
       "id": "roleless-caller-cannot-clear-role-bound-deny",
       "scope": "authorization",
       "enforcedSince": "0.0.96",
-      "description": "A caller with no roles cannot pass a role-bound DENY grant (a static role or a $role. reference): TransitionAuthorizationManager.IsUnprovableRoleBoundDeny refuses it in both RoleGrantEvaluator and EvaluateRolesStatic, on every surface and for every caller-role provider. Identity-bound denies (predefined roles, $user., $userBehalfOf.) keep their normal evaluation. This is what makes MorphIdmCallerRoleResolver resolving every failure (error status, timeout, transport, unparseable body, no act_sub/client_id) to an empty role set safe: an empty set can only narrow access, never widen it."
+      "description": "A caller with no roles cannot pass a role-bound DENY grant (a static role or a $role. reference): the Kleene rule in RoleGrantMatcher (a role-bound leaf is Unknown for a role-less caller and a deny fires on Unknown) refuses it in both RoleGrantEvaluator and EvaluateRolesStatic, on every surface and for every caller-role provider. Identity-bound denies (predefined roles, $user., $userBehalfOf.) keep their normal evaluation. This is what makes MorphIdmCallerRoleResolver resolving every failure (error status, timeout, transport, unparseable body, no act_sub/client_id) to an empty role set safe: an empty set can only narrow access, never widen it."
+    },
+    {
+      "id": "role-grant-combinators-three-valued-evaluation",
+      "scope": "authorization",
+      "enforcedSince": "0.0.99",
+      "description": "Grants are evaluated three-valued by the single RoleGrantMatcher (used by RoleGrantEvaluator and EvaluateRolesStatic): a role-bound leaf (static role, $role.) is Unknown for a role-less caller, identity leaves ($InstanceStarter, $PreviousUser, $InstanceBehalfOfStarter, $PreviousBehalfOfUser, $user., $userBehalfOf.) are always Yes/No (No when there is no instance). allOf: No dominates, else Unknown, else Yes; anyOf: Yes dominates, else Unknown, else No. A deny fires on Yes OR Unknown, an allow admits only on Yes, so an unprovable condition can only narrow access. A role-less caller is therefore no longer admitted by an ALLOW $role. reference that resolved to an empty string. Combinators are depth 1 with { role } children, validated at publish (RoleGrantDefinitionRules); x-masking / x-encryption exemption lists reject them. Predefined roles resolve against the grant's own instance."
+    },
+    {
+      "id": "queryroles-decided-at-subflow-leaf-only",
+      "scope": "authorization",
+      "enforcedSince": "0.0.99",
+      "description": "For an instance with an active SubFlow, AuthorizeAppService does not evaluate queryRoles above the deepest active leaf: it only forwards, and the leaf decides (parent-stamped subFlow.overrides.states.<state>.queryRoles, else the leaf state's queryRoles, else the leaf workflow's); there is no AND down the chain, an empty leaf set allows. Consequence: the root's queryRoles no longer restrict anyone while the instance is inside a SubFlow; a parent restricts via overrides. The human-task list uses the same leaf resolution and carries the caller's act_sub/sub in the leaf hop body (self-asserted, like the roles)."
     },
     {
       "id": "transition-predefined-and-dynamic-role-grants",

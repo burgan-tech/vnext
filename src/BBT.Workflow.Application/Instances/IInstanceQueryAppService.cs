@@ -132,11 +132,11 @@ public interface IInstanceQueryAppService : IApplicationService
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Retrieves the runtime hierarchy of an instance as a recursive tree.
-    /// Includes direct and indirect child subflow/subprocess instances.
+    /// Retrieves the instance-correlation tree, walked parent -> child.
+    /// Includes direct and indirect correlated child subflow/subprocess instances.
     /// </summary>
-    Task<Result<GetInstanceHierarchyOutput>> GetInstanceHierarchyAsync(
-        GetInstanceHierarchyInput input,
+    Task<Result<GetInstanceCorrelationOutput>> GetInstanceCorrelationAsync(
+        GetInstanceCorrelationInput input,
         CancellationToken cancellationToken = default);
 
     /// <summary>

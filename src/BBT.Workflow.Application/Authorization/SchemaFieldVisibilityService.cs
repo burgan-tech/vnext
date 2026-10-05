@@ -22,7 +22,7 @@ public static class SchemaFieldVisibilityService
     /// <param name="callerRoles">Caller roles.</param>
     /// <param name="evaluator">
     /// Evaluator built for the instance being read. Create it once for the whole schema — via
-    /// <see cref="ITransitionAuthorizationManager.CreateEvaluatorAsync"/> with the union of every path's
+    /// <c>ITransitionAuthorizationManager.CreateEvaluatorAsync</c> with the union of every path's
     /// grants — so a schema with many guarded fields costs one prefetch, not one per field.
     /// </param>
     /// <returns>

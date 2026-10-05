@@ -92,7 +92,7 @@ Orchestration → Execution precedent — and is out of scope here.
 | Service | Interface | Profile | Purpose |
 | --- | --- | --- | --- |
 | Instance command | `IRemoteInstanceCommandAppService` | Mutating | Start, transition, complete, mark busy, subflow callbacks. |
-| Instance query | `IRemoteInstanceQueryAppService` | Read | Instance, data, state, view, hierarchy, lists. |
+| Instance query | `IRemoteInstanceQueryAppService` | Read | Instance, data, state, view, instance-correlation, lists. |
 | Retry | `IRemoteInstanceRetryAppService` | Mutating | Retry faulted or incident-backed instances. |
 | Authorization | `IRemoteAuthorizeAppService` | Read | Authorize and permissions matrix across domains. |
 | Related data | `RemoteRelatedInstanceReader` | Read | `internal/related-data` (+ batch); system identity, no header forwarding. |

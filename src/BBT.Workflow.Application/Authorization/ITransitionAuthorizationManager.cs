@@ -52,6 +52,20 @@ public interface ITransitionAuthorizationManager
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Same as the overload above, but the predefined roles are matched against the supplied
+    /// <paramref name="identity"/> instead of the ambient <see cref="BBT.Aether.Users.ICurrentUser"/>. Used where the
+    /// public caller travelled in a request body (the human-task leaf hop). The identity is used verbatim:
+    /// a null member does not fall back to the ambient user.
+    /// </summary>
+    Task<IRoleGrantEvaluator> CreateEvaluatorAsync(
+        Instance? instance,
+        WorkflowDefinition? workflow,
+        AuthorizationRequestContext? requestContext,
+        IEnumerable<RoleGrant> grantsForPrefetchHint,
+        CallerIdentity identity,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Evaluates whether the given role is allowed for the transition using transition.Roles.
     /// When instance is present, predefined and dynamic role grants are resolved and matched against current user.
     /// When role is null, only predefined/dynamic role grants are evaluated; regular role grants yield no match.

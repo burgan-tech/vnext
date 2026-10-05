@@ -889,20 +889,9 @@ public class WorkflowValidator
         if (roleGrants.Count == 0)
             return;
 
-        const string contextPrefix = "$.context.";
-
         foreach (var grant in roleGrants)
         {
-            var message = DynamicRoleGrant.Classify(grant.Role) switch
-            {
-                DynamicRoleFormat.MissingContextPrefix =>
-                    $"Dynamic role '{grant.Role}' in '{context}' has an invalid path. Path must start with '{contextPrefix}' (case-sensitive).",
-                DynamicRoleFormat.EmptyNavigationPath =>
-                    $"Dynamic role '{grant.Role}' in '{context}' has an empty navigation path after '{contextPrefix}'.",
-                _ => null
-            };
-
-            if (message != null)
+            foreach (var message in RoleGrantDefinitionRules.Validate(grant, context))
                 result.AddError(new ValidationResult(message, [context]));
         }
     }

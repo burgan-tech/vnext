@@ -117,6 +117,8 @@ public sealed class HumanTaskLeafResolver(
             {
                 InstanceIds = [.. members.Select(m => m.Child)],
                 CallerRoles = request.CallerRoles,
+                ActorUserName = request.ActorUserName,
+                SubjectUserName = request.SubjectUserName,
                 Headers = request.Headers,
                 RemainingDepth = request.RemainingDepth - 1,
                 FlowVersion = hop.Version
@@ -238,6 +240,7 @@ public sealed class HumanTaskLeafResolver(
             workflow,
             requestContext,
             queryRoles,
+            new CallerIdentity(request.ActorUserName, request.SubjectUserName),
             cancellationToken);
 
         var callerRoles = request.CallerRoles as string[] ?? [.. request.CallerRoles];
@@ -264,9 +267,10 @@ public sealed class HumanTaskLeafResolver(
     /// The grants that decide whether this caller may see this leaf.
     /// </summary>
     /// <remarks>
-    /// Mirrors <c>TransitionAuthorizationManager.IsQueryAllowedAsync</c>'s state-then-workflow
-    /// resolution, with the stamped parent override in front of both — the one step that reader
-    /// cannot take, because it resolves overrides from a parent that a leaf does not have.
+    /// Mirrors <c>TransitionAuthorizationManager.IsQueryAllowedAsync</c>: the stamped parent override
+    /// first, then the state's own <c>queryRoles</c>, then the workflow's. That reader applies the stamp
+    /// too, so the two stay in step by construction; this resolver returns the grants themselves because
+    /// the leaf hop evaluates them against the leaf instance in its own scope.
     /// </remarks>
     private static IReadOnlyCollection<RoleGrant> ResolveQueryRoles(
         Instance instance,

@@ -22,7 +22,7 @@ OTel/APM tracing (the `Function.Execute` span) is always emitted regardless.
 `FunctionAppService.ExecuteFunctionAsync` — the functions in the `sys-functions` registry — only those
 with `executionLog: E` are journaled. The gate and the write sit in that one method, so the scope
 is enforced structurally: the runtime's built-in instance read functions (`state`, `data`, `view`,
-`schema`, `tasks`, `actions`, `hierarchy`, …) are served by their own handlers and never reach it, so
+`schema`, `tasks`, `actions`, `instance-correlation`, …) are served by their own handlers and never reach it, so
 they are never journaled here. Their telemetry lives in APM (the
 `Instance.Read/{kind}` and `Function.Execute` spans) — which is where the team decided the built-in
 read firehose belongs ("elk var diye"). Journaling `state`, the highest-QPS route, would swamp the

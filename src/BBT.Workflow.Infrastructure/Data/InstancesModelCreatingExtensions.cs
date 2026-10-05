@@ -324,7 +324,7 @@ public static class InstancesModelCreatingExtensions
                 .HasFilter("\"IsCompleted\" = false AND \"SubFlowType\" = 'S'");
 
             // Unfiltered counterpart for the reads that must see completed rows too: GetByParentAsync
-            // (state-function correlation list, hierarchy tree, monitor) and the correlation aggregates
+            // (state-function correlation list, instance-correlation tree, monitor) and the correlation aggregates
             // in ProjectStateFingerprint. Neither partial index above can serve those — both exclude
             // exactly the completed rows these reads are after.
             b.HasIndex(new[] { nameof(InstanceCorrelation.ParentInstanceId) }, "IX_InstancesCorrelations_ByParent");

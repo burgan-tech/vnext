@@ -17,7 +17,7 @@ those transitions.
 
 Both are `IInstanceFunctionHandler` registrations dispatched by the `{function}` route segment
 (`TaskHistoryFunctionHandler` / `ActionHistoryFunctionHandler`, keys in `FunctionTypeConst`), like
-`state`, `data` and `hierarchy` — so a custom function named `tasks` or `actions` is
+`state`, `data` and `instance-correlation` — so a custom function named `tasks` or `actions` is
 shadowed, the same rule every system function key has always had. `{instance}` accepts the instance
 id or business key. Responses are **unpaged** — the full set returns at once; a task list is bounded
 by the instance's own transition count, and actions by one task's sub-steps.

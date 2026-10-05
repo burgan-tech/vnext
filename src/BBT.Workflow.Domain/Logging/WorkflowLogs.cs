@@ -985,6 +985,35 @@ public static partial class WorkflowLogs
         this ILogger logger, string? taskKey, string taskType, int timeoutSeconds);
 
     /// <summary>
+    /// Logs when a DEFERRED arm of an accepted async transition failed AFTER the status flip and
+    /// the durable job row had committed, and the accept fell back to the transactional outbox: the
+    /// Inbox relay re-arms the same job (idempotent by job name), the instance stays Busy until it
+    /// does, and the request still returns 202. Chosen over releasing the flip because an arm
+    /// failure is ambiguous — the scheduler may have registered the job before the client saw the
+    /// error — and releasing while it is live would break single-owner-Busy. Before this fallback
+    /// the arm exception was rethrown bare and the instance stayed durably Busy (finding AB-17).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10178,
+        Level = LogLevel.Warning,
+        Message = "Arming transition job {JobName} failed after accept; fell back to the outbox for durable re-arm (instance {InstanceId}, transition {TransitionKey})")]
+    public static partial void TransitionJobArmFailedFellBackToOutbox(
+        this ILogger logger, Exception exception, string jobName, Guid instanceId, string transitionKey);
+
+    /// <summary>
+    /// Logs when even the outbox fallback for a failed deferred arm could not be published. The
+    /// durable job row is committed but nothing is armed and no outbox row was staged, so the
+    /// instance stays Busy until manual recovery — the operator's signal for the residual
+    /// double-failure window (scheduler AND database both unavailable).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10180,
+        Level = LogLevel.Error,
+        Message = "Arm-failure outbox fallback failed for job {JobName} (instance {InstanceId}, transition {TransitionKey}); the instance stays Busy until manual recovery")]
+    public static partial void TransitionJobArmOutboxFallbackFailed(
+        this ILogger logger, Exception exception, string jobName, Guid instanceId, string transitionKey);
+
+    /// <summary>
     /// Logs when task instance resolution fails (for DirectTrigger, GetInstanceData).
     /// </summary>
     [LoggerMessage(
@@ -4121,6 +4150,38 @@ public static partial class WorkflowLogs
         Guid instanceId,
         string schema,
         string errorType);
+
+    /// <summary>
+    /// Logs that a correlation-tree walk stopped at its depth bound. Warning rather than Debug: the
+    /// answer the caller receives is incomplete, and on a graph that cannot legitimately nest that
+    /// deep it is the first symptom of a cycle.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20473,
+        Level = LogLevel.Warning,
+        Message = "Correlation walk hit its depth bound and stopped. Domain={Domain}, Flow={Flow}, Instances={InstanceCount}, MaxDepth={MaxDepth}")]
+    public static partial void CorrelationWalkDepthExceeded(
+        this ILogger logger,
+        string domain,
+        string flow,
+        int instanceCount,
+        int maxDepth);
+
+    /// <summary>
+    /// Logs a correlation hop that could not be expanded. The branch is returned unresolved rather
+    /// than failing the whole tree, so this log is the only place the cause is recorded.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20474,
+        Level = LogLevel.Warning,
+        Message = "Correlation hop failed; its branch is reported unresolved. Domain={Domain}, Flow={Flow}, Instances={InstanceCount}, Reason={Reason}")]
+    public static partial void CorrelationHopFailed(
+        this ILogger logger,
+        string domain,
+        string flow,
+        int instanceCount,
+        string reason);
+
 
     /// <summary>
     /// Logs that no provider call was made because the caller carried neither <c>act_sub</c> nor

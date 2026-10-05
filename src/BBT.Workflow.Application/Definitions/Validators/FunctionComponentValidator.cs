@@ -54,13 +54,32 @@ public sealed class FunctionComponentValidator : IComponentValidator
             ValidateVerbs(function, result);
             ValidateContractReferences(function, result);
             ValidateScriptCodes(function, result);
+            ValidateRoles(function, result);
 
+            return result;
+        }
+        catch (ArgumentException ex)
+        {
+            // A malformed RoleGrant (bad shape, blank leaf) throws from its constructor during deserialization.
+            result.AddError(ex.Message, nameof(Function));
             return result;
         }
         catch (JsonException ex)
         {
             result.AddError($"Invalid JSON format for function: {ex.Message}", nameof(Function));
             return result;
+        }
+    }
+
+    /// <summary>Validates dynamic-role formats in <c>roles</c>, leaf by leaf for combinators.</summary>
+    private static void ValidateRoles(Function function, ComponentValidationResult result)
+    {
+        const string member = $"{nameof(Function)}.{nameof(Function.Roles)}";
+
+        foreach (var grant in function.Roles)
+        {
+            foreach (var message in RoleGrantDefinitionRules.Validate(grant, member))
+                result.AddError(message, member);
         }
     }
 

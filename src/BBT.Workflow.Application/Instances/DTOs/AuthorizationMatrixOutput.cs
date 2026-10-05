@@ -67,15 +67,34 @@ public sealed class AuthorizationMatrixFunctionDto
 }
 
 /// <summary>
-/// Role grant for DTOs (role + grant allow/deny).
+/// Role grant for DTOs. A plain grant is <c>{ role, grant }</c>; a combinator grant carries
+/// <c>allOf</c> or <c>anyOf</c> instead of <c>role</c> (exactly one of the three is present).
 /// </summary>
 public sealed class RoleGrantDto
 {
     [JsonPropertyName("role")]
-    public string Role { get; set; } = string.Empty;
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Role { get; set; }
 
     [JsonPropertyName("grant")]
     public string Grant { get; set; } = "allow";
+
+    [JsonPropertyName("allOf")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<RoleGrantConditionDto>? AllOf { get; set; }
+
+    [JsonPropertyName("anyOf")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<RoleGrantConditionDto>? AnyOf { get; set; }
+}
+
+/// <summary>
+/// Leaf of a combinator grant: a plain role, no grant and no nesting.
+/// </summary>
+public sealed class RoleGrantConditionDto
+{
+    [JsonPropertyName("role")]
+    public string Role { get; set; } = string.Empty;
 }
 
 /// <summary>

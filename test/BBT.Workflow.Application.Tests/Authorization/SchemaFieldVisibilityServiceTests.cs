@@ -259,4 +259,45 @@ public sealed class SchemaFieldVisibilityServiceTests
 
         await _repo.Received(1).GetLastCompletedManualTransitionAsync(instance.Id, Arg.Any<CancellationToken>());
     }
+
+    // ── Combinators in x-roles (surface table: ALI / OPS / VELI / ANON x iban / riskNote) ──
+
+    private const string SurfaceSchema = """
+        {"properties":{
+          "iban":{"x-roles":[
+             {"grant":"allow","anyOf":[{"role":"$InstanceStarter"},{"role":"$InstanceBehalfOfStarter"}]},
+             {"grant":"allow","role":"corporate.ops"}]},
+          "riskNote":{"x-roles":[
+             {"grant":"allow","role":"corporate.ops"},
+             {"grant":"deny","allOf":[{"role":"corporate.ops"},{"role":"$InstanceBehalfOfStarter"}]}]}}}
+        """;
+
+    [Theory]
+    // roles, actor, subject, iban visible, riskNote visible
+    [InlineData("customer-role", "u-ali", "u-ali", true, false)]   // ALI
+    [InlineData("corporate.ops", "u-ops", "c-acme", true, false)]  // OPS: deny allOf is Yes
+    [InlineData("corporate.ops", "u-ops", "u-x", true, true)]      // ops, another subject
+    [InlineData(null, "u-veli", "c-acme", true, false)]            // VELI: behalf-of starter
+    [InlineData(null, "u-x", "u-x", false, false)]                 // ANON
+    public async Task SurfaceTable_CombinatorsDecideFieldVisibility(
+        string? role, string actor, string subject, bool ibanVisible, bool riskNoteVisible)
+    {
+        _currentUser.ActorUserName.Returns(actor);
+        _currentUser.UserName.Returns(subject);
+        var pathGrants = BBT.Workflow.Definitions.Schemas.SchemaRolesParser.ParsePropertyRoles(
+            JsonDocument.Parse(SurfaceSchema).RootElement);
+        var instance = Instance.Create(Guid.NewGuid(), "flow", "1.0.0", "key");
+        instance.CreatedBy = "u-ali";
+        instance.CreatedByBehalfOf = "c-acme";
+        var all = new List<RoleGrant>();
+        foreach (var grants in pathGrants.Values)
+            all.AddRange(grants);
+        var evaluator = await _manager.CreateEvaluatorAsync(instance, null, null, all, CancellationToken.None);
+
+        var visible = SchemaFieldVisibilityService.GetVisiblePaths(
+            pathGrants, role is null ? null : new[] { role }, evaluator);
+
+        visible.Contains("iban").ShouldBe(ibanVisible);
+        visible.Contains("riskNote").ShouldBe(riskNoteVisible);
+    }
 }

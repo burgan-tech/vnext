@@ -102,7 +102,15 @@ public class HumanTaskLeafDescentScenarioTests
     /// Builds one runtime per distinct domain in the chain, creates the chained instances in the
     /// runtime that owns each link, and returns the root's id plus the hop log.
     /// </summary>
-    private static (DomainRuntime RootRuntime, Guid RootId, HopLog Hops) BuildChain(params Link[] chain)
+    private static (DomainRuntime RootRuntime, Guid RootId, HopLog Hops) BuildChain(params Link[] chain) =>
+        BuildChainWith(null, chain);
+
+    /// <param name="authorizationManager">
+    /// A real manager to evaluate grants with; null keeps the always-allow substitute the shape tests use.
+    /// </param>
+    /// <param name="chain">The links, root first, leaf last.</param>
+    private static (DomainRuntime RootRuntime, Guid RootId, HopLog Hops) BuildChainWith(
+        ITransitionAuthorizationManager? authorizationManager, params Link[] chain)
     {
         var runtimes = chain
             .Select(l => l.Domain)
@@ -166,13 +174,14 @@ public class HumanTaskLeafDescentScenarioTests
         }
 
         foreach (var runtime in runtimes.Values)
-            runtime.Resolver = BuildResolver(runtime, d => runtimes[d], hops);
+            runtime.Resolver = BuildResolver(runtime, d => runtimes[d], hops, authorizationManager);
 
         return (runtimes[chain[0].Domain], child!.Id, hops);
     }
 
     private static HumanTaskLeafResolver BuildResolver(
-        DomainRuntime runtime, Func<string, DomainRuntime> lookup, HopLog hops)
+        DomainRuntime runtime, Func<string, DomainRuntime> lookup, HopLog hops,
+        ITransitionAuthorizationManager? realManager = null)
     {
         var componentCache = Substitute.For<IComponentCacheStore>();
         componentCache
@@ -202,11 +211,15 @@ public class HumanTaskLeafDescentScenarioTests
                 Arg.Any<string[]>(), Arg.Any<IReadOnlyCollection<RoleGrant>>(), Arg.Any<Transition?>())
             .Returns(true);
 
-        var authorizationManager = Substitute.For<ITransitionAuthorizationManager>();
-        authorizationManager.CreateEvaluatorAsync(
-                Arg.Any<Instance>(), Arg.Any<Definitions.Workflow>(), Arg.Any<AuthorizationRequestContext?>(),
-                Arg.Any<IEnumerable<RoleGrant>>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(evaluator));
+        var authorizationManager = realManager ?? Substitute.For<ITransitionAuthorizationManager>();
+        if (realManager is null)
+        {
+            // The leaf resolver goes through the identity-carrying overload.
+            ((ITransitionAuthorizationManager)authorizationManager).CreateEvaluatorAsync(
+                    Arg.Any<Instance>(), Arg.Any<Definitions.Workflow>(), Arg.Any<AuthorizationRequestContext?>(),
+                    Arg.Any<IEnumerable<RoleGrant>>(), Arg.Any<CallerIdentity>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(evaluator));
+        }
 
         var runtimeInfo = Substitute.For<IRuntimeInfoProvider>();
         runtimeInfo.IsDomainMatch(Arg.Any<string>())
@@ -362,6 +375,80 @@ public class HumanTaskLeafDescentScenarioTests
         answer.Title.ShouldBe("A step");
         hops.Local.ShouldBeEmpty();
         hops.Remote.ShouldBeEmpty();
+    }
+
+    /// <summary>
+    /// The leaf hop runs with no ambient caller (ICurrentUser is empty), so the public caller's
+    /// identity must travel in the request: $InstanceStarter is matched against it.
+    /// </summary>
+    [Fact]
+    public async Task TheCallersIdentityInTheRequestDrivesInstanceStarterGrants()
+    {
+        var manager = new TransitionAuthorizationManager(
+            Substitute.For<BBT.Aether.Users.ICurrentUser>(), Substitute.For<IInstanceTransitionRepository>());
+        var (root, rootId, _) = BuildChainWith(manager, new Link("A", Core, Title: "A step"));
+        var leaf = root.Instances[rootId];
+        leaf.CreatedBy = "u-ali";
+        leaf.ExtraProperties[DomainConsts.MetaDataKeys.StateRoleOverrides] = StarterOverride;
+
+        (await AskAsync(root, rootId, "A", actor: "u-ali")).Authorized.ShouldBeTrue();
+        (await AskAsync(root, rootId, "A", actor: "u-other")).Authorized.ShouldBeFalse();
+        (await AskAsync(root, rootId, "A", actor: null)).Authorized.ShouldBeFalse();
+    }
+
+    /// <summary>
+    /// The identity is evaluated against the LEAF instance's own creator, not the root's: A is
+    /// started by u-ali, its subflow C by svc-onboarding, and C carries the stamped override.
+    /// </summary>
+    [Fact]
+    public async Task StampedGrantsAreEvaluatedAgainstTheLeafsOwnCreator()
+    {
+        var manager = new TransitionAuthorizationManager(
+            Substitute.For<BBT.Aether.Users.ICurrentUser>(), Substitute.For<IInstanceTransitionRepository>());
+        var (root, rootId, _) = BuildChainWith(
+            manager, new Link("A", Core), new Link("C", Core, Title: "C step"));
+
+        root.Instances[rootId].CreatedBy = "u-ali";
+        var leaf = root.Instances.Values.Single(i => i.Key == "CASE-1" && i.Id != rootId);
+        leaf.CreatedBy = "svc-onboarding";
+        leaf.ExtraProperties[DomainConsts.MetaDataKeys.StateRoleOverrides] = StarterOverride;
+
+        (await AskAsync(root, rootId, "A", actor: "u-ali")).Authorized.ShouldBeFalse();
+        (await AskAsync(root, rootId, "A", actor: "svc-onboarding")).Authorized.ShouldBeTrue();
+    }
+
+    /// <summary>The wire contract carries the identity (the cross-domain hop is a JSON round-trip).</summary>
+    [Fact]
+    public void TheIdentitySurvivesTheJsonRoundTrip()
+    {
+        var request = new HumanTaskLeafRequest { ActorUserName = "u-ali", SubjectUserName = "u-veli" };
+
+        var back = JsonSerializer.Deserialize<HumanTaskLeafRequest>(
+            JsonSerializer.Serialize(request, JsonSerializerConstants.JsonOptions),
+            JsonSerializerConstants.JsonOptions);
+
+        back.ShouldNotBeNull();
+        back!.ActorUserName.ShouldBe("u-ali");
+        back.SubjectUserName.ShouldBe("u-veli");
+    }
+
+    private const string StarterOverride =
+        """{"awaiting-human":{"queryRoles":[{"role":"$InstanceStarter","grant":"allow"}]}}""";
+
+    private static async Task<HumanTaskLeafResult> AskAsync(
+        DomainRuntime root, Guid rootId, string rootFlow, string? actor)
+    {
+        var result = await root.Resolver.ResolveAsync(
+            root.Domain,
+            rootFlow,
+            new HumanTaskLeafRequest
+            {
+                InstanceIds = [rootId],
+                CallerRoles = ["clerk"],
+                ActorUserName = actor,
+                RemainingDepth = 8
+            });
+        return result.Value!.ShouldHaveSingleItem();
     }
 
     /// <summary>
