@@ -97,7 +97,7 @@ public class HumanTaskFunctionTests : IDisposable
         _authorizationManager.CreateEvaluatorAsync(
                 Arg.Any<Instance>(), Arg.Any<Definitions.Workflow>(),
                 Arg.Any<AuthorizationRequestContext?>(), Arg.Any<IEnumerable<RoleGrant>>(),
-                Arg.Any<CancellationToken>())
+                Arg.Any<CallerIdentity>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(_evaluator));
         Authorize(true);
 
@@ -133,6 +133,7 @@ public class HumanTaskFunctionTests : IDisposable
             instanceSchemaFunctionCache: Substitute.For<IInstanceSchemaFunctionCache>(),
 
             humanTaskFunctionCache: _cache,
+            currentUser: Substitute.For<ICurrentUser>(),
             descentLimiter: new HumanTask.HumanTaskDescentLimiter(
                 Microsoft.Extensions.Options.Options.Create(new HumanTask.HumanTaskFunctionOptions())),
             logger: Substitute.For<ILogger<InstanceQueryAppService>>());

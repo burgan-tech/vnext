@@ -8,7 +8,10 @@ namespace BBT.Workflow.Instances.Caching;
 /// Shared caller-scope hashing for the built-in instance function caches. The scope covers
 /// role/roles, the current actor identity ($InstanceStarter/$PreviousUser pseudo-roles are
 /// matched against ICurrentUser — see TransitionAuthorizationManager, so two callers with
-/// identical role headers can receive different responses), the resolved culture (localized
+/// identical role headers can receive different responses) and the behalf-of subject
+/// (<c>ICurrentUser.UserName</c>, the token's <c>sub</c>: <c>$InstanceBehalfOfStarter</c> and
+/// <c>$userBehalfOf.</c> grants compare it, so two callers sharing an actor but acting for
+/// different subjects can also receive different responses), the resolved culture (localized
 /// labels), requested extensions and the requested version. Folding this hash into cache
 /// keys and ETags guarantees a caller switching role, actor, or culture never receives
 /// another scope's cached answer or a false 304.
@@ -41,6 +44,7 @@ internal static class CallerScopeHash
             sortedRoles,
             currentUser.Id ?? string.Empty,
             currentUser.ActorUserName ?? string.Empty,
+            currentUser.UserName ?? string.Empty,
             culture,
             sortedExtensions,
             version ?? string.Empty);

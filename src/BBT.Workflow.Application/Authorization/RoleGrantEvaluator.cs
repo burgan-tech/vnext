@@ -10,7 +10,7 @@ namespace BBT.Workflow.Authorization;
 /// obtain — the current user's actor/subject identity, the last completed manual transition, and the
 /// dynamic-role authorization context — so that a batch of grant sets is evaluated with one round of I/O.
 /// <para>
-/// Created by <see cref="TransitionAuthorizationManager.CreateEvaluatorAsync"/>, which performs the
+/// Created by <c>TransitionAuthorizationManager.CreateEvaluatorAsync</c>, which performs the
 /// asynchronous prefetch. When the evaluator carries no instance it degrades to
 /// <see cref="TransitionAuthorizationManager.EvaluateRolesStatic"/>, because predefined and dynamic
 /// grants have nothing to resolve against.
@@ -88,53 +88,43 @@ internal sealed class RoleGrantEvaluator : IRoleGrantEvaluator
         // is the side that resolves predefined and dynamic grants, and a dynamic grant's context
         // build serializes the instance's full latest data. A refusal now skips that entirely.
         //
-        // A caller with NO roles cannot clear a role-bound deny: "nothing matched" is not evidence
-        // it is not the denied caller. See TransitionAuthorizationManager.IsUnprovableRoleBoundDeny.
-        var roleCount = HasNoRoles(roles) ? 0 : roles.Count;
-        foreach (var grant in grants)
-        {
-            if (grant.IsDeny &&
-                (TransitionAuthorizationManager.IsUnprovableRoleBoundDeny(grant, roleCount)
-                 || MatchesAnyRole(grant, roles, transition)))
-                return false;
-        }
-
         // ── Phase 2: the ALLOW group, OR ────────────────────────────────────────────────────────
         //
-        // Any one allow grant matching any one of the caller's roles admits. A set with no allow
-        // grant at all is a blacklist — it has already said everything it had to say in phase 1 —
-        // so it admits here rather than falling through to a refusal.
-        var hasAllowGrant = false;
-        foreach (var grant in grants)
-        {
-            if (!grant.IsAllow)
-                continue;
-
-            hasAllowGrant = true;
-            if (MatchesAnyRole(grant, roles, transition))
-                return true;
-        }
-
-        return !hasAllowGrant;
+        // Any one allow grant matching admits. A set with no allow grant at all is a blacklist — it
+        // has already said everything it had to say in phase 1 — so it admits rather than refusing.
+        //
+        // ── Three-valued leaves (Kleene) ────────────────────────────────────────────────────────
+        //
+        // Both phases live in RoleGrantMatcher.Decide, shared with the static twin; this method only
+        // says how ONE leaf matches. A caller with NO roles cannot be compared against a role-bound
+        // leaf (static role, $role.): "nothing matched" is not evidence it is not the denied caller,
+        // so the leaf is Unknown. A deny fires on Yes OR Unknown, an allow admits only on Yes — so a
+        // role-less caller still cannot clear a role-bound deny, and inside an allOf an identity leaf
+        // that is a proven No still rules the whole deny out (Unknown AND No = No).
+        var noRoles = HasNoRoles(roles);
+        return RoleGrantMatcher.Decide(grants, leafRole =>
+            noRoles && TransitionAuthorizationManager.IsRoleBound(leafRole)
+                ? GrantMatch.Unknown
+                : MatchesAnyRole(leafRole, roles, transition) ? GrantMatch.Yes : GrantMatch.No);
     }
 
     /// <summary>
-    /// Whether one grant matches anything the caller carries.
+    /// Whether one leaf role matches anything the caller carries.
     /// </summary>
     /// <remarks>
-    /// A predefined (<c>$InstanceStarter</c>) or identity-bound dynamic (<c>$user.</c>) grant matches
+    /// A predefined (<c>$InstanceStarter</c>) or identity-bound dynamic (<c>$user.</c>) leaf matches
     /// on the GRANT's side and answers the same for every caller role, so the first iteration decides
-    /// it; only static grants and <c>$role.</c> references actually vary. The loop is therefore
+    /// it; only static leaves and <c>$role.</c> references actually vary. The loop is therefore
     /// bounded by how many roles a caller has, and short-circuits on the first hit.
     /// </remarks>
     private bool MatchesAnyRole(
-        RoleGrant grant,
+        string leafRole,
         IReadOnlyList<string> roles,
         Transition? transition)
     {
         foreach (var role in roles)
         {
-            if (IsMatch(grant, role, transition))
+            if (IsMatch(leafRole, role, transition))
                 return true;
         }
 
@@ -169,18 +159,18 @@ internal sealed class RoleGrantEvaluator : IRoleGrantEvaluator
     }
 
     /// <summary>
-    /// Resolves a single grant: predefined role, then dynamic context reference, then static comparison.
+    /// Resolves a single leaf role: predefined role, then dynamic context reference, then static comparison.
     /// </summary>
-    private bool IsMatch(RoleGrant grant, string normalizedRole, Transition? transition)
+    private bool IsMatch(string grantRole, string normalizedRole, Transition? transition)
     {
         // 1. Predefined role check
         var predefinedResult = MatchPredefinedRole(
-            grant.Role, _instance!, _previousTransition, _actorUserName, _subjectUserName);
+            grantRole, _instance!, _previousTransition, _actorUserName, _subjectUserName);
         if (predefinedResult.HasValue)
             return predefinedResult.Value;
 
         // 2. Dynamic context reference
-        var dynamicGrant = DynamicRoleGrant.TryParse(grant.Role);
+        var dynamicGrant = DynamicRoleGrant.TryParse(grantRole);
         if (dynamicGrant != null)
         {
             return ResolveDynamicRoleMatch(
@@ -192,7 +182,7 @@ internal sealed class RoleGrantEvaluator : IRoleGrantEvaluator
         }
 
         // 3. Static role comparison (OrdinalIgnoreCase)
-        return string.Equals(grant.Role, normalizedRole, StringComparison.OrdinalIgnoreCase);
+        return string.Equals(grantRole, normalizedRole, StringComparison.OrdinalIgnoreCase);
     }
 
     private JsonElement GetAuthContext(Transition? transition)

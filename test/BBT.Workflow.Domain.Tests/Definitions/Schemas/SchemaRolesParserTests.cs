@@ -1,6 +1,7 @@
 using System.Text.Json;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Definitions.Schemas;
+using System.Linq;
 using Shouldly;
 using Xunit;
 
@@ -254,5 +255,93 @@ public sealed class SchemaRolesParserTests
 
         exposure.EncryptPaths.ShouldBe(["a"]);
         exposure.PathMaskRules["b"].Operator.ShouldBe(FieldMaskRule.HashOperator);
+    }
+
+    [Fact]
+    public void XRoles_padded_role_is_trimmed_so_a_deny_still_matches()
+    {
+        var schema = JsonDocument.Parse("""
+            {"properties":{"f":{"x-roles":[{"role":" blocked ","grant":"deny"}]}}}
+            """).RootElement;
+
+        var roles = SchemaRolesParser.ParsePropertyRoles(schema)["f"];
+
+        roles.Count.ShouldBe(1);
+        roles[0].Role.ShouldBe("blocked");
+        roles[0].IsDeny.ShouldBeTrue();
+    }
+
+    [Fact]
+    public void XRoles_padded_leaf_inside_allOf_is_trimmed()
+    {
+        var schema = JsonDocument.Parse("""
+            {"properties":{"f":{"x-roles":[
+                {"grant":"deny","allOf":[{"role":" maker"},{"role":"checker "}]},
+                {"grant":"allow","anyOf":[{"role":" a "}]}]}}}
+            """).RootElement;
+
+        var roles = SchemaRolesParser.ParsePropertyRoles(schema)["f"];
+
+        roles[0].AllOf!.Select(c => c.Role).ShouldBe(["maker", "checker"]);
+        roles[0].IsDeny.ShouldBeTrue();
+        roles[1].AnyOf!.Select(c => c.Role).ShouldBe(["a"]);
+        roles[1].IsAllow.ShouldBeTrue();
+    }
+
+    [Fact]
+    public void XRoles_allOf_is_parsed_not_dropped()
+    {
+        var schema = JsonDocument.Parse("""
+            {"properties":{"riskNote":{"x-roles":[
+                {"grant":"allow","role":"corporate.ops"},
+                {"grant":"deny","allOf":[{"role":"corporate.ops"},{"role":"$InstanceBehalfOfStarter"}]}]}}}
+            """).RootElement;
+
+        var roles = SchemaRolesParser.ParsePropertyRoles(schema)["riskNote"];
+
+        roles.Count.ShouldBe(2);
+        roles[1].AllOf!.Count.ShouldBe(2);
+        roles[1].IsDeny.ShouldBeTrue();
+    }
+
+    [Fact]
+    public void XRoles_unparseable_entry_is_skipped_at_runtime()
+    {
+        var schema = JsonDocument.Parse("""
+            {"properties":{"a":{"x-roles":[
+                {"grant":"allow","role":"r","allOf":[{"role":"x"}]},
+                {"grant":"allow","anyOf":[{"role":"x","grant":"allow"}]},
+                {"grant":"allow","role":"ok"}]}}}
+            """).RootElement;
+
+        var roles = SchemaRolesParser.ParsePropertyRoles(schema)["a"];
+
+        roles.Count.ShouldBe(1);
+        roles[0].Role.ShouldBe("ok");
+    }
+
+    [Fact]
+    public void Exemption_list_with_combinator_is_dropped_fail_closed()
+    {
+        var masking = JsonDocument.Parse("""
+            {"operator":"mask","roles":[
+                {"grant":"allow","anyOf":[{"role":"a"}]},
+                {"grant":"allow","role":"corporate.ops"}]}
+            """).RootElement;
+
+        var rule = SchemaRolesParser.ParseMaskRule(masking);
+
+        rule.ExemptRoles.Count.ShouldBe(1);
+        rule.ExemptRoles[0].Role.ShouldBe("corporate.ops");
+    }
+
+    [Fact]
+    public void Exemption_list_with_only_a_combinator_masks_for_everyone()
+    {
+        var masking = JsonDocument.Parse("""
+            {"operator":"mask","roles":[{"grant":"allow","anyOf":[{"role":"a"}]}]}
+            """).RootElement;
+
+        SchemaRolesParser.ParseMaskRule(masking).ExemptRoles.ShouldBeEmpty();
     }
 }

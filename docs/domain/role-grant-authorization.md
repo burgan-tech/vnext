@@ -19,8 +19,9 @@ has had no production caller since), and the human-task list reads `queryRoles`,
 
 ## `queryRoles` is enforced at the gateway, not in this runtime
 
-`queryRoles` is fully alive as a **definition** and as an **answer**: it is still evaluated, in full
-and per hop down the active-correlation chain, by `GET .../functions/authorize?queryRoles=true`. What
+`queryRoles` is fully alive as a **definition** and as an **answer**: it is still evaluated, in full,
+by `GET .../functions/authorize?queryRoles=true` — at the deepest active leaf of the SubFlow chain, with
+that leaf's grants (see [authorize-function](authorize-function.md)). What
 this runtime no longer does is evaluate it a *second* time on its own read path.
 
 The deployment target is an Internal Gateway that introspects the caller and consults that `authorize`
@@ -98,7 +99,9 @@ empty grant set → allowed
    `$role.$.context…` reference is a statement about the caller's *roles*; with none to compare,
    "nothing matched" is not evidence that the caller is not the denied one, so the deny refuses.
    Identity-bound denies — the four predefined roles and `$user.` / `$userBehalfOf.` — match on the
-   caller's identity, not its roles, and keep their normal evaluation.
+   caller's identity, not its roles, and keep their normal evaluation. Stated precisely this is the
+   three-valued rule of [Combinators](#combinators-allof--anyof): a role-bound leaf is *Unknown* for a
+   role-less caller, and a deny fires on Yes **or** Unknown.
 
 A caller with no roles is still evaluated once, so predefined and dynamic grants apply to them.
 
@@ -107,7 +110,7 @@ a process that carries no roles, and — under `morph-idm` — any caller whose 
 fetched (see below) all arrive with an empty set. Read as a pass, every blacklist became a blanket
 allow for all of them: the grant author wrote a refusal and the runtime waived it. The rule applies
 to every provider and every surface, because it lives in the one evaluator
-(`TransitionAuthorizationManager.IsUnprovableRoleBoundDeny`, used by both `RoleGrantEvaluator` and
+(the Kleene rule in `RoleGrantMatcher`, used by both `RoleGrantEvaluator` and
 `EvaluateRolesStatic`).
 
 | Grant set | Caller roles | Result |
@@ -223,6 +226,115 @@ what other roles they hold.
 Dynamic grants are validated at definition time by `DynamicRoleGrant.Classify`. A malformed dynamic
 grant falls through to static comparison and becomes **silently inert** — an ALLOW that never grants,
 a DENY that never denies. Never re-implement the parse rules; call `Classify`.
+
+## Combinators (`allOf` / `anyOf`)
+
+A grant is normally `{ "role": "...", "grant": "allow|deny" }`. To say "the caller is the starter **and**
+holds `branch-manager`" — one condition made of several — a grant may carry **exactly one** of `role`,
+`allOf` or `anyOf`. The plain form is unchanged and gives the same result as before.
+
+```json
+{ "allOf": [ { "role": "$InstanceStarter" }, { "role": "branch-manager" } ], "grant": "allow" }
+{ "anyOf": [ { "role": "$InstanceStarter" }, { "role": "$InstanceBehalfOfStarter" } ], "grant": "allow" }
+```
+
+Shape rules, enforced at publish (`RoleGrantDefinitionRules`) and when a schema's `x-roles` is parsed:
+
+- `role` XOR `allOf` XOR `anyOf`; `grant` stays on the outer grant.
+- Children are `{ "role": "..." }` only — no `grant`, no nesting (**depth 1**). A child may be a static,
+  predefined or dynamic role; dynamic children are validated like any dynamic grant.
+- A combinator needs at least one child, and an unknown member on a child is rejected rather than
+  ignored (a typo would otherwise make the child silently inert). Inside a schema's `x-roles` an
+  unparseable entry (bad shape, extra child member) is skipped by `SchemaRolesParser` instead, as before.
+- There is no second matcher: a combinator is evaluated by the same `RoleGrantMatcher` as a plain grant.
+
+### Three-valued evaluation
+
+A condition does not always have a yes/no answer. A **role-bound leaf** (a static role or a `$role.`
+reference) is a statement about the caller's *roles*; for a caller with no roles it is neither
+proven nor disproven, so it is **Unknown**. **Identity leaves** — the four predefined roles, `$user.`
+and `$userBehalfOf.` — compare the caller's identity, so they are always **Yes** or **No**. On the
+no-instance path (no instance to read the starter or history from) an identity leaf is **No**.
+
+| Leaf | Caller has roles | Caller has no roles |
+|---|---|---|
+| static role / `$role.…` | Yes if matched, else No | **Unknown** |
+| `$InstanceStarter`, `$PreviousUser`, `$InstanceBehalfOfStarter`, `$PreviousBehalfOfUser`, `$user.…`, `$userBehalfOf.…` | Yes / No | Yes / No |
+
+Combinators fold their children (Kleene):
+
+| `allOf` children | Result | | `anyOf` children | Result |
+|---|---|---|---|---|
+| any **No** | No | | any **Yes** | Yes |
+| else any **Unknown** | Unknown | | else any **Unknown** | Unknown |
+| all **Yes** | Yes | | all **No** | No |
+
+### Set decision
+
+The canonical rule above is unchanged; only "matches" became three-valued:
+
+- a **deny** grant fires on **Yes or Unknown** — one that cannot be ruled out refuses;
+- an **allow** grant admits only on **Yes**;
+- an empty set allows; a set of denies only (a blacklist) allows when no deny fired.
+
+So the role-less-caller rule 5 is just this: every role-bound deny is Unknown for them, so it fires. An
+`allOf` deny that contains an identity leaf can rule itself out (identity No ⇒ the `allOf` is No), which
+is what makes the examples below work for role-less callers too.
+
+### Examples
+
+| Intent | Grant set |
+|---|---|
+| Customer: the starter who also holds `customer` | `allow allOf[$InstanceStarter, customer]` |
+| Corporate: either of two profiles (OR of two ANDs) | `allow allOf[$InstanceStarter, corporate-user]`, `allow allOf[$InstanceBehalfOfStarter, corporate-user]` |
+| Starter or the person they act for | `allow anyOf[$InstanceStarter, $InstanceBehalfOfStarter]` |
+| Four eyes: the maker acts, but not twice | `allow maker`, `deny allOf[maker, $PreviousUser]` |
+| Blacklist: block a role only for its own starter | `deny allOf[blocked, $InstanceStarter]` |
+
+The four-eyes pair means: whoever holds `maker` is allowed, *unless* they hold `maker` **and** were also
+the previous user. A caller without `maker` cannot satisfy the `allOf`, so the deny does not fire for them
+(No dominates), and they are refused by the allow side only.
+
+### Dynamic path spelling
+
+A dynamic child (and a plain dynamic grant) is `<qualifier>$.context.<path>` — the `$.context.` part is
+literal and **case-sensitive**. Anything else with a qualifier prefix is a publish error.
+
+| Spelling | Valid? | Why |
+|---|---|---|
+| `$user.$.context.Instance.CreatedBy` | valid | the starter, compared with the user |
+| `$userBehalfOf.$.context.Instance.CreatedByBehalfOf` | valid | the behalf-of starter |
+| `$user.$.context.Instance.Data.<field>` | valid | a field inside the instance data |
+| `$user.$CreatedBy` | **invalid** | no `.context.` — becomes inert if it slipped through |
+| `$user.$context.Instance.CreatedBy` | **invalid** | missing the `.` after `$` |
+| `$user.$.context.Instance.Data.CreatedBy` | wrong | resolves, but `CreatedBy` is an instance property, **not** inside `Data` — the grant never matches |
+
+### Predefined roles resolve against the grant's own instance
+
+`$InstanceStarter` and `$PreviousUser` (and their behalf-of twins) are read from the instance **the grant
+is evaluated for** — also when the grant is a parent-stamped override running on a child. A parent's
+override naming `$InstanceStarter` therefore means the *child's* starter, not the parent's.
+
+### Where combinators are not accepted
+
+`x-masking` and `x-encryption` exemption lists take plain `{ "role", "grant": "allow" }` entries only
+(`RoleGrantDefinitionRules.ValidateExemption` rejects a combinator at publish). They are an allow-list of
+who sees a value in the clear; a three-valued fold has no place there. `x-roles` field visibility,
+`transition.roles`, `queryRoles`, `availableIn.roles`, function `roles` and subflow overrides all accept
+combinators.
+
+### The one behavior change
+
+A **role-less caller against an ALLOW grant of a `$role.` reference** used to resolve the reference to `""`
+and could be admitted by an allow that compared against nothing. A role-bound leaf is now Unknown, and an
+allow admits only on Yes, so that caller is **no longer admitted**. Denies were already refusing role-less
+callers (rule 5) and are unchanged; plain static and predefined grants evaluate exactly as before.
+
+### In the authorization matrix
+
+`functions/authorize` returns the grants it evaluated. A combinator is shown as
+`{ "allOf": [ { "role": "..." } ], "grant": "..." }` (or `anyOf`) with **`role` omitted** on the grant;
+a plain grant keeps `{ "role", "grant" }`. A client reading the matrix must tolerate a grant without `role`.
 
 ## One evaluator, one decision
 
@@ -406,6 +518,30 @@ have filtered or masked it from. Document it where you copy it. See [Field Maski
   grant silently cannot match — the transition vanishes from `availableTransitions` while the `authorize`
   function, which does pass the context, still answers *allowed* for it.
 
+## Behavior changes in 0.0.99
+
+1. **Role-grant combinators.** Grants may carry `allOf` / `anyOf` (see [Combinators](#combinators-allof--anyof)).
+   Purely additive for definitions that do not use them.
+2. **A role-less caller is no longer admitted by an ALLOW `$role.` reference** that resolved to `""`.
+   *More restrictive, for that one case.*
+3. **A subflow decides `queryRoles` at its leaf only** — see [Authorize Function](authorize-function.md);
+   the root's `queryRoles` no longer restrict while the instance is inside a SubFlow.
+4. **Authorization matrix shape**: combinator grants carry `allOf` / `anyOf` and omit `role`.
+5. **Publish now rejects malformed grants it used to skip.** A schema `x-roles` entry that is malformed
+   (missing `grant`, bad shape, an unknown grant value, or a malformed `$user.` / `$userBehalfOf.` /
+   `$role.` path) and a function `roles` entry with a malformed dynamic path are refused at publish with
+   the reason. Before they were silently skipped or inert — a deny that never fired. *Fix the grant
+   before re-publishing.*
+6. **`queryRoles` is leaf-only, and that loosens a root restriction.** While an instance is inside a
+   SubFlow, `authorize?queryRoles=true` is decided by the deepest leaf's grants (stamped override, else
+   the leaf state, else the leaf workflow; an empty leaf allows). A root that declared `queryRoles`
+   while a SubFlow leaf declares none no longer restricts: add
+   `subFlow.overrides.states.<state>.queryRoles` on the parent, or `queryRoles` on the leaf. *Less
+   restrictive for that case.* See the migration `query-roles-decided-at-subflow-leaf`.
+7. **Rollout order.** Author the first `allOf` / `anyOf` grant only after every pod (and every domain
+   that stamps overrides onto this one) runs this release; an older pod cannot read a combinator grant.
+   See the known issue `role-grant-combinators-rollback-floor`.
+
 ## Behavior changes in 0.0.97
 
 1. **`morph-idm`: a request `role` header now decides, and morph-idm is not called.** Before, the
@@ -447,6 +583,7 @@ expectations:
 
 ## Related
 
+- [Role Grants — a Worked Example](role-grant-walkthrough.md) — one definition evaluated on every surface, with verdict tables.
 - [Well-Known Transitions](well-known-transitions.md) — how `cancel` / `updateData` / `exit` roles are enforced.
 - [API and Service Contracts](../contracts/api-and-service-contracts.md) — internal-only endpoints with no in-app authorization.
 - `.claude/rules/vnext-workflow-developer.md` § Role Grant Validation — definition-time rules.

@@ -183,13 +183,13 @@ The plan is built from `ExcludedStepOrders` alone (`TransitionExecutor.BuildExec
   Never re-implement parse rules — use `DynamicRoleGrant.Classify` (shares `TryParse`).
 - **One evaluator**: `IRoleGrantEvaluator` via `ITransitionAuthorizationManager.CreateEvaluatorAsync`.
   `authorized = DenyGroupOk AND AllowGroupOk`, deny first; empty set ⇒ allow.
-- A role-less caller cannot clear a role-bound deny (`IsUnprovableRoleBoundDeny`); a denied role is not
+- Grants evaluate three-valued (Kleene): a role-bound leaf is Unknown for a role-less caller, a deny fires on Yes or Unknown, an allow only on Yes; a denied role is not
   bought back by an allowed one. Never loop the caller's roles returning on the first allowed one.
 - Every decision point takes the WHOLE role set; `ICallerRoleResolver.SingleRoleOf` is for cache scoping
   (`CallerScopeHash`) only. Never read `currentUser.Roles` directly — use `currentUser.ResolveCallerRoles(headers)`.
 - Batch: one evaluator per instance/schema; pass every surface the same `AuthorizationRequestContext`.
 - `queryRoles` is ANSWERED (by `authorize?queryRoles=true`), not enforced on read paths — do not add
-  the gate back. `authorize` answers the CONJUNCTION down the chain; `?ack=true` is the long-poll ack pre-flight.
+  the gate back. `authorize` decides queryRoles at the deepest active subflow leaf only (no chain AND; a parent restricts via `subFlow.overrides.states.<state>.queryRoles`); `?ack=true` is the long-poll ack pre-flight.
 - The `queryRoles` gate reads the instance's OWN `CurrentState`, never `EffectiveState`.
 - `transition.roles` is not enforced at execution, by design — do not "fix" it. `cancel`/`exit` are
   parent-retained. Under `morph-idm` a non-blank `role` header replaces the service's answer.

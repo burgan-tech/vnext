@@ -55,6 +55,7 @@ public sealed class InstanceQueryAppService(
     IRepresentationEtagService representationEtagService,
     IInstanceDataReadService instanceDataReadService,
     ICallerRoleResolver callerRoleResolver,
+    ICurrentUser currentUser,
     IPaginationLinkGenerator paginationLinkGenerator,
     IOptions<InstanceFilteringOptions> instanceFilteringOptions,
     IOptions<HumanTask.HumanTaskFunctionOptions> humanTaskOptions,
@@ -3444,6 +3445,11 @@ public sealed class InstanceQueryAppService(
             return Result<HumanTask.HumanTaskListOutput>.Fail(callerRolesResult.Error);
         var userRoles = callerRolesResult.Value ?? [];
 
+        // Read once per request from the request scope, before any fan-out: the isolated scopes of the
+        // leaf hops are fresh DI scopes with no ambient caller, so ICurrentUser resolved inside is empty.
+        var actorUserName = currentUser.ActorUserName?.Trim();
+        var subjectUserName = currentUser.UserName?.Trim();
+
         // Keyed on the caller scope, so the cache sits BEHIND the authorization filter and an entry
         // is only ever served back to the scope that produced it — which is what lets it hold
         // humanTask text at all. An override skips the READ and still takes the build gate and
@@ -3602,6 +3608,8 @@ public sealed class InstanceQueryAppService(
                     {
                         InstanceIds = [.. candidates.Select(c => c.Id)],
                         CallerRoles = userRoles,
+                        ActorUserName = actorUserName,
+                        SubjectUserName = subjectUserName,
                         Headers = headers is null
                             ? []
                             : new Dictionary<string, string?>(headers, StringComparer.OrdinalIgnoreCase),

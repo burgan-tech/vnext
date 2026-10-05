@@ -1,3 +1,4 @@
+using System;
 using System.Text.Json;
 using BBT.Workflow.Definitions.Validators;
 using BBT.Workflow.Runtime;
@@ -89,5 +90,58 @@ public class FlowComponentValidatorTests
         // Assert
         result.IsValid.ShouldBeTrue();
         _mockWorkflowValidator.Verify(v => v.Validate(It.IsAny<Workflow>()), Times.Once);
+    }
+
+    private static string WorkflowWithQueryRoles(string queryRolesJson) => $$"""
+    {
+        "type": "F",
+        "labels": [{"label": "Test", "language": "en"}],
+        "states": [
+            { "key": "review", "stateType": "initial", "labels": [{"label": "Review", "language": "en"}], "transitions": [] }
+        ],
+        "queryRoles": {{queryRolesJson}},
+        "startTransition": { "key": "start", "target": "review", "triggerType": "manual", "labels": [{"label": "Start", "language": "en"}] }
+    }
+    """;
+
+    [Theory]
+    [InlineData("""[{"grant":"allow","role":"a","allOf":[{"role":"b"}]}]""")]
+    [InlineData("""[{"grant":"allow","allOf":[]}]""")]
+    [InlineData("""[{"grant":"allow"}]""")]
+    public void Validate_ShouldReturnValidationError_WhenRoleGrantShapeIsMalformed(string queryRoles)
+    {
+        var validator = new FlowComponentValidator(new WorkflowValidator());
+        var attributes = JsonDocument.Parse(WorkflowWithQueryRoles(queryRoles)).RootElement;
+
+        var result = validator.Validate(attributes);
+
+        result.IsValid.ShouldBeFalse();
+    }
+
+    [Fact]
+    public void Validate_ShouldReportExactlyOneOf_WhenRoleAndAllOfCombined()
+    {
+        var validator = new FlowComponentValidator(new WorkflowValidator());
+        var attributes = JsonDocument.Parse(
+            WorkflowWithQueryRoles("""[{"grant":"allow","role":"a","allOf":[{"role":"b"}]}]""")).RootElement;
+
+        var result = validator.Validate(attributes);
+
+        result.IsValid.ShouldBeFalse();
+        result.ValidationErrors.ShouldContain(e =>
+            e.ErrorMessage!.Contains("exactly one of 'role', 'allOf' or 'anyOf'", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("""[{"grant":"allow","allOf":[{"role":"a","grant":"allow"}]}]""")]
+    [InlineData("""[{"grant":"allow","allOf":[{"role":"a","allOf":[{"role":"b"}]}]}]""")]
+    public void Validate_ShouldReturnValidationError_WhenCombinatorChildCarriesExtraMembers(string queryRoles)
+    {
+        var validator = new FlowComponentValidator(new WorkflowValidator());
+        var attributes = JsonDocument.Parse(WorkflowWithQueryRoles(queryRoles)).RootElement;
+
+        var result = validator.Validate(attributes);
+
+        result.IsValid.ShouldBeFalse();
     }
 }

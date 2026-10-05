@@ -28,6 +28,21 @@ public sealed class HumanTaskLeafRequest
     public IReadOnlyList<string> CallerRoles { get; init; } = [];
 
     /// <summary>
+    /// The public caller's actor identity (<c>act_sub</c>), matched by <c>$InstanceStarter</c> and
+    /// <c>$PreviousUser</c> against the LEAF instance's own history. The hop runs in a scope with no
+    /// ambient caller, so the identity travels with the roles. Self-asserted, exactly like
+    /// <see cref="CallerRoles"/>: the endpoint is unauthenticated and the posture is unchanged
+    /// (see <c>RemoteHumanTaskLeafGateway</c> remarks).
+    /// </summary>
+    public string? ActorUserName { get; init; }
+
+    /// <summary>
+    /// The public caller's subject identity (<c>sub</c>), matched by <c>$InstanceBehalfOfStarter</c> and
+    /// <c>$PreviousBehalfOfUser</c>. Self-asserted like <see cref="ActorUserName"/>.
+    /// </summary>
+    public string? SubjectUserName { get; init; }
+
+    /// <summary>
     /// Headers backing the <c>$.context.Headers.*</c> namespace dynamic role grants read. A grant
     /// evaluated without them does not fail closed — it silently cannot match — so they must follow
     /// the roles across the boundary.
