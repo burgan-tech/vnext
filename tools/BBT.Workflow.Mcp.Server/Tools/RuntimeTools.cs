@@ -10,7 +10,7 @@ namespace BBT.Workflow.Mcp.Tools;
 /// <summary>
 /// Read-only MCP tools over existing Orchestration instance/runtime endpoints for the configured domain
 /// (<c>Mcp:Domain</c>): instance listing (GraphQL filter, paging, aggregations), single-instance reads,
-/// state/data/history/hierarchy, and runtime config.
+/// state/data/history/instance-correlation tree, and runtime config.
 /// </summary>
 [McpServerToolType]
 public sealed class RuntimeTools(IOrchestrationClient client, IOptions<McpOptions> options)
@@ -62,10 +62,10 @@ public sealed class RuntimeTools(IOrchestrationClient client, IOptions<McpOption
     public Task<JsonNode?> GetInstanceHistoryAsync(string workflow, string instance, CancellationToken cancellationToken = default) =>
         InstancePath(workflow, instance, "/transitions", cancellationToken);
 
-    [McpServerTool(Name = "get_instance_hierarchy")]
-    [Description("Get the subflow/parent hierarchy of an instance (hierarchy system function).")]
-    public Task<JsonNode?> GetInstanceHierarchyAsync(string workflow, string instance, CancellationToken cancellationToken = default) =>
-        InstancePath(workflow, instance, "/functions/hierarchy", cancellationToken);
+    [McpServerTool(Name = "get_instance_correlation")]
+    [Description("Get the instance-correlation tree of an instance, parent -> child (instance-correlation system function).")]
+    public Task<JsonNode?> GetInstanceCorrelationAsync(string workflow, string instance, CancellationToken cancellationToken = default) =>
+        InstancePath(workflow, instance, "/functions/instance-correlation", cancellationToken);
 
     [McpServerTool(Name = "get_runtime_config")]
     [Description("Get the runtime configuration (version, domain, schema map).")]

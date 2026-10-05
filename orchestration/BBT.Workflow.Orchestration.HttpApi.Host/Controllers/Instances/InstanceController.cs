@@ -49,6 +49,7 @@ public sealed class InstanceController(
     IEventAppService eventAppService,
     IRelatedInstanceQueryAppService relatedInstanceQueryAppService,
     BBT.Workflow.Instances.HumanTask.IHumanTaskLeafResolver humanTaskLeafResolver,
+    BBT.Workflow.Instances.Correlation.IInstanceCorrelationResolver instanceCorrelationResolver,
     ICallerRoleResolver callerRoleResolver) : AetherControllerBase
 {
     /// <summary>
@@ -552,6 +553,40 @@ public sealed class InstanceController(
     }
 
     /// <summary>
+    /// Internal-only: expands a batch of this flow's instances into their correlated children,
+    /// recursing locally so one call covers a whole branch that lives in this domain.
+    /// </summary>
+    /// <remarks>
+    /// The counterpart of the public <c>…/functions/instance-correlation</c> read, for the hop a
+    /// parent domain cannot perform itself: correlation rows name a child's domain, but only that
+    /// domain's runtime can read the child's schema. Carries no authorization — like the other
+    /// <c>internal/</c> routes it is protected by network isolation, and the public function it
+    /// serves has no gate of its own either.
+    /// </remarks>
+    /// <response code="200">One result per requested id, including the ones that could not resolve.</response>
+    /// <response code="400">More ids were requested than <see cref="CorrelationBatchRequest.MaxInstanceIds"/> allows.</response>
+    [ApiExplorerSettings(IgnoreApi = true)]
+    [HttpPost("{domain}/workflows/{workflow}/internal/correlations/batch")]
+    public async Task<IActionResult> ExpandCorrelationsAsync(
+        [FromRoute] string domain,
+        [FromRoute] string workflow,
+        [FromBody] CorrelationBatchRequest input,
+        CancellationToken cancellationToken = default)
+    {
+        // Defence in depth: this endpoint carries no authorization, so it must not trust the
+        // caller's batch size.
+        if (input.InstanceIds.Count > CorrelationBatchRequest.MaxInstanceIds)
+        {
+            return BadRequest(
+                $"At most {CorrelationBatchRequest.MaxInstanceIds} instance ids may be expanded in one batch.");
+        }
+
+        var result = await instanceCorrelationResolver.ResolveAsync(domain, workflow, input, cancellationToken);
+
+        return FromResult(result);
+    }
+
+    /// <summary>
     /// Enqueues a (chained) transition as a background job. Internal endpoint the Inbox forwards
     /// <c>TransitionContinuationRequested</c> events to when outbox continuations are enabled, so
     /// the Dapr job is enqueued in the Orchestration process (never in the Inbox). Preserves the
@@ -580,6 +615,10 @@ public sealed class InstanceController(
             Workflow = continuation.Flow,
             Version = continuation.Version,
             Data = continuation.Data,
+            // Reference-only relay (AB-17): the accept stored the body in the job row; the flag and
+            // the row's JobId must survive this rebuild or the handler would run the transition
+            // bodyless.
+            JobId = continuation.JobId,
             InstanceKey = continuation.InstanceKey,
             Tags = continuation.Tags,
             Stage = continuation.Stage,

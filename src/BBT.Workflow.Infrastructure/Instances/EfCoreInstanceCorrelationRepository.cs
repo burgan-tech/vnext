@@ -33,6 +33,33 @@ public sealed class EfCoreInstanceCorrelationRepository(
     }
 
     /// <inheritdoc />
+    public async Task<List<InstanceCorrelation>> GetByParentsAsync(
+        IReadOnlyCollection<Guid> parentInstanceIds,
+        CancellationToken cancellationToken = default)
+    {
+        if (parentInstanceIds.Count == 0)
+        {
+            return [];
+        }
+
+        // Distinct because a caller assembling a level may legitimately hold the same parent twice
+        // (two correlations of one parent were grouped separately upstream), and a duplicated id in
+        // the IN list would duplicate every one of that parent's rows in the answer.
+        var ids = parentInstanceIds.Distinct().ToArray();
+
+        return await (await GetDbSetAsync())
+            .AsNoTracking()
+            .Where(c => ids.Contains(c.ParentInstanceId))
+            // ParentInstanceId leads so one level's rows arrive already clustered per parent; the
+            // remaining two keys reproduce GetByParentAsync's order WITHIN a parent, so a batched
+            // level and a per-node walk build the children in the same sequence.
+            .OrderBy(c => c.ParentInstanceId)
+            .ThenBy(c => c.ParentState)
+            .ThenBy(c => c.CompletedAt)
+            .ToListAsync(cancellationToken);
+    }
+
+    /// <inheritdoc />
     public async Task<List<InstanceCorrelation>> GetActiveByParentAsync(
         Guid parentInstanceId,
         CancellationToken cancellationToken = default)

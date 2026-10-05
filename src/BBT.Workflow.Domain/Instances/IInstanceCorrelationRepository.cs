@@ -11,7 +11,7 @@ public interface IInstanceCorrelationRepository : IRepository<InstanceCorrelatio
 {
     /// <summary>
     /// Finds all correlations where the specified instance ID is the parent instance.
-    /// Includes both active and completed correlations for building full hierarchy trees.
+    /// Includes both active and completed correlations for building full instance-correlation trees.
     /// </summary>
     /// <param name="parentInstanceId">The unique identifier of the parent workflow instance.</param>
     /// <param name="cancellationToken">Token to monitor for cancellation requests.</param>
@@ -21,6 +21,24 @@ public interface IInstanceCorrelationRepository : IRepository<InstanceCorrelatio
     /// </returns>
     Task<List<InstanceCorrelation>> GetByParentAsync(
         Guid parentInstanceId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// The same read as <see cref="GetByParentAsync"/> for MANY parents at once — one statement for
+    /// a whole level of a correlation tree instead of one per node.
+    /// </summary>
+    /// <remarks>
+    /// All parents must live in the schema the caller has switched <c>ICurrentSchema</c> to, which
+    /// is what makes a single statement correct: a level of the tree is grouped by flow before it
+    /// gets here. Callers group the answer by <see cref="InstanceCorrelation.ParentInstanceId"/>;
+    /// a parent with no children simply contributes no rows, so the result is NOT padded and its
+    /// length says nothing about how many parents were asked for.
+    /// </remarks>
+    /// <param name="parentInstanceIds">The parent instances to read children for.</param>
+    /// <param name="cancellationToken">Token to monitor for cancellation requests.</param>
+    /// <returns>Every correlation (active and completed) whose parent is in the set.</returns>
+    Task<List<InstanceCorrelation>> GetByParentsAsync(
+        IReadOnlyCollection<Guid> parentInstanceIds,
         CancellationToken cancellationToken = default);
 
     /// <summary>

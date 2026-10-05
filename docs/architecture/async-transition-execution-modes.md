@@ -95,12 +95,53 @@ siblings, not nested spans, in one trace, and
 | Crash point | Behavior |
 | --- | --- |
 | Direct enqueue call itself fails | `TransitionEnqueueGateway` falls back to the outbox event in the same call — no orphaned intent, no lost continuation. |
+| Deferred arm (`ArmAsync`, after the accept's commit, outside the status lock) fails | The accept **falls back to the transactional outbox**: it publishes the same continuation event (`PublishOutboxFallbackAsync`) so the Inbox relay re-arms the identical job (idempotent by job name), the instance stays Busy until it does, and the request still returns 202. The flip is **not** released — an arm failure is ambiguous (the scheduler may have registered the job before the client saw the error), and releasing while the job is live server-side would break single-owner-Busy (a re-delivered job runs `IsPreReserved` with no re-check). This is finding AB-17's own remedy (c). With reference-only payloads the arm message is always small, so this path is reached only by genuine scheduler/infra failures, never by an oversized body. `TransitionJobArmFailedFellBackToOutbox` (10175) is the signal; `TransitionJobArmOutboxFallbackFailed` (10177) means the outbox publish also failed (scheduler AND DB down) and the instance stays Busy for manual recovery — no double-owner, because nothing was released. |
+| Process crashes between the accept's commit and the arm | The residual window neither the fallback nor a release can cover: the committed row has no armed job and no code left to run. Same manual-intervention posture as the row below. |
 | Commit succeeds, before/during Dapr enqueue | The durable `InstanceJob` intent is already committed; nothing re-arms a lost job automatically (there is no reaper) — this is the same manual-intervention posture `EnableChainReaper=false` had before, now the only posture. |
 | Job killed mid-chain | The Dapr job retry re-runs the job from its start; the active-job guard (keyed by job name) and the transition record's duplicate-key guard keep re-delivery idempotent. There is no per-hop checkpoint to resume from — a killed job re-executes whatever hops had not yet committed. |
 | Instance already Busy, new request arrives | Rejected by the plain Busy gate; cancel/exit/timeout/updateData are exempt by design (see the Locking section referenced above), not by any chain-ownership token. |
 
 At-least-once delivery means the transition job and its downstream handlers must stay
 idempotent regardless of which enqueue path was taken.
+
+## Large Request Bodies
+
+An async transition body travels **inline** on the Dapr job payload whatever its size, and vNext
+applies no cap of its own. What changed is one layer down: the Aether background-job layer arms the
+scheduler with a **reference** to the job row — the CloudEvent envelope minus its `data` member, plus
+`payloadref`/`jobid` extension attributes — and rehydrates the handler arguments from that row on the
+callback. The armed message is therefore small and bounded no matter how large the body is.
+
+Why that matters:
+
+- **The scheduler transport has a hard ceiling.** Dapr stores one-shot jobs in etcd, which refuses
+  messages over ~2 MiB, while Kestrel accepts request bodies up to 10 MB. While the body travelled in
+  the armed message it was refused **at arm time** — after the Busy flip and job row had committed —
+  leaving the instance durably Busy with no incident; on the observed Dapr build the oversized job
+  also stopped the scheduler for every domain until a restart (finding AB-17,
+  [vnext-client-sdk-core#58](https://github.com/burgan-tech/vnext-client-sdk-core/issues/58)).
+- **The limit belongs to the layer that imposes it.** etcd's ceiling is a fact about Aether's
+  scheduler integration, not about workflow semantics, so the fix lives there. Every Aether consumer
+  gets it, and vNext needs no size threshold to tune and no table of its own.
+- **Rehydration is free.** The dispatcher already reads the job row to claim it
+  (`JobDispatcher.ClaimAsync`), so the arguments come from a row that was being loaded anyway — no
+  extra query is added to the dispatch path.
+
+**The effective limit is now the HTTP boundary.** A body above the host's Kestrel
+`MaxRequestBodySize` (10 MB by default) is rejected with a 413 before anything is committed — an
+early, loud failure, rather than a post-commit arm failure that stranded the instance.
+
+Two safety behaviours are worth knowing about, both in Aether. A reference whose job row carries no
+`data` member records the job as **Failed** with a reason rather than invoking the handler with
+nothing — a schema-validated body was accepted, and running without it would corrupt instance data.
+And because job names resolve through a non-unique index, a callback whose `jobid` does not match the
+row the name resolved to is **refused** rather than run against another row's payload.
+
+Compatibility: a job armed by a pod running the previous runtime carries its body inline and no
+marker, and the dispatcher still honours it — a one-shot registration can outlive the deployment that
+created it by weeks, so no drain is required for a rolling deploy. Pinned by Aether's
+`EndToEndJobLifecycleTests` (bounded armed payload, schema survival, lost body, mismatched id, inline
+compatibility) and by `AsyncTransitionStrategyTests` (arm-failure outbox fallback).
 
 ## Observability
 

@@ -89,6 +89,20 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
         // Singleton on purpose: a per-request ceiling caps nothing across requests, and it is the
         // product of the two that meets the connection pool.
         services.AddSingleton<HumanTaskDescentLimiter>();
+
+        // Bounds for the correlation-tree walk. Same posture as the human-task fan-out above and
+        // for the same reason: FanoutParallelism reaches Parallel.ForEachAsync (negative =
+        // UNBOUNDED), MaxConcurrentHops sizes a semaphore that 0 would deadlock, and
+        // MaxDescentDepth is the walk's only protection against a cyclic correlation graph.
+        services.AddOptions<BBT.Workflow.Instances.Correlation.InstanceCorrelationOptions>()
+            .BindConfiguration(BBT.Workflow.Instances.Correlation.InstanceCorrelationOptions.SectionName)
+            .ValidateDataAnnotations()
+            .ValidateOnStart();
+        services.AddScoped<BBT.Workflow.Instances.Correlation.IInstanceCorrelationResolver,
+            BBT.Workflow.Instances.Correlation.InstanceCorrelationResolver>();
+        // Singleton for the same reason as the human-task limiter: a per-request ceiling caps
+        // nothing across requests, and it is their product that meets the connection pool.
+        services.AddSingleton<BBT.Workflow.Instances.Correlation.CorrelationHopLimiter>();
         services.AddOptions<HumanTaskFunctionCacheOptions>()
             .BindConfiguration(HumanTaskFunctionCacheOptions.SectionName)
             .ValidateDataAnnotations()

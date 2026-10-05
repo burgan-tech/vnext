@@ -43,6 +43,25 @@ public sealed record InstanceTaskRow(
 /// only when the row is Faulted (its content is then the small <c>{"error": ...}</c> object the
 /// fault reason is read from), null for every other status.
 /// </summary>
+/// <summary>
+/// The four columns the instance-correlation walk reads off an instance, projected in SQL so the
+/// aggregate is never materialised.
+/// </summary>
+/// <remarks>
+/// The walk needs <see cref="Key"/>, <see cref="CurrentState"/>, <see cref="Status"/> and
+/// <see cref="FlowVersion"/> and nothing else — children come from the correlation rows, read
+/// separately. Loading whole <c>Instance</c> aggregates instead would transfer every column of
+/// every node at every level of the tree, and the projection also removes the question entirely:
+/// there is no aggregate here to be mistaken for a fully loaded one, so no partial-load stamp is
+/// needed and no reader can reach for history that was never fetched.
+/// </remarks>
+public sealed record CorrelationWalkRow(
+    Guid Id,
+    string? Key,
+    string? CurrentState,
+    InstanceStatus Status,
+    string? FlowVersion);
+
 public sealed record InstanceTaskHistoryRow(
     Guid Id,
     string TaskKey,

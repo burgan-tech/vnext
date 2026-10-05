@@ -68,6 +68,7 @@ public sealed class WorkflowExecutionOptions
     /// </summary>
     public int StatusLockLeaseSeconds { get; set; } = 5;
 
+    
     /// <summary>
     /// PostgreSQL timeouts for the InstanceData write funnel: every SaveChanges that inserts
     /// InstanceData rows takes a per-instance <c>FOR UPDATE</c> row lock and runs with these

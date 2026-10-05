@@ -1,9 +1,11 @@
 using System.Diagnostics;
+using System.Text.Json;
 using BBT.Aether.BackgroundJob;
 using BBT.Aether.Results;
 using BBT.Aether.Uow;
 using BBT.Workflow.BackgroundJobs;
 using BBT.Workflow.BackgroundJobs.Handlers;
+using BBT.Workflow.BackgroundJobs.Options;
 using BBT.Workflow.BackgroundJobs.Payloads;
 using BBT.Workflow.Execution.Continuations;
 using BBT.Workflow.Execution.Events;
@@ -12,6 +14,7 @@ using BBT.Workflow.Execution.Validation;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace BBT.Workflow.Execution.Strategies;
 
@@ -53,6 +56,7 @@ public sealed class AsyncTransitionStrategy(
     IUnitOfWorkManager uowManager,
     ITransitionAdmissionService admissionService,
     ITransitionEnqueueGateway enqueueGateway,
+    IOptions<WorkflowExecutionOptions> executionOptions,
     ILogger<AsyncTransitionStrategy> logger) : ITransitionStrategy
 {
     public ExecMode Mode => ExecMode.Async;
@@ -126,10 +130,13 @@ public sealed class AsyncTransitionStrategy(
             ctx.InstanceId, sourceStateKey, context.TransitionKey, jobId);
         EnrichTelemetry(activity, ctx, jobName.Value);
 
-        // Set inside the under-lock callback, read after it: the handle is non-null only when the
-        // direct path recorded the job with arming deferred, i.e. when this method still owes the
-        // scheduler a call.
+        // Both set inside the under-lock callback, read after it. The handle is non-null only when
+        // the direct path recorded the job with arming deferred, i.e. when this method still owes
+        // the scheduler a call. The outbox event is captured so that if that deferred arm fails,
+        // the accept re-arms the identical job through the transactional outbox instead of releasing
+        // the flip — see the arm-failure catch below for why releasing would be unsafe.
         IBackgroundJobArmHandle? armHandle = null;
+        TransitionContinuationRequested? outboxEvent = null;
 
         // updateData (Unconditional) accepts every request, in parallel: no duplicate-job dedupe.
         // Two simultaneous updateData requests share the same logical identity (instance, source
@@ -173,7 +180,8 @@ public sealed class AsyncTransitionStrategy(
 
                 if (enqueueResult.IsSuccess)
                 {
-                    armHandle = enqueueResult.Value.ArmHandle;
+                    armHandle = enqueueResult.Value.Outcome.ArmHandle;
+                    outboxEvent = enqueueResult.Value.OutboxEvent;
                     LogEnqueueSuccess(context, jobName.Value);
                     return Result.Ok();
                 }
@@ -192,14 +200,48 @@ public sealed class AsyncTransitionStrategy(
             try
             {
                 await armHandle.ArmAsync(cancellationToken);
+                logger.TransitionJobArmedAfterLock(armHandle.JobId);
             }
             catch (Exception ex)
             {
+                // The flip and the job row are already committed but the deferred arm failed. Do NOT
+                // release the flip: the failure is ambiguous — the scheduler may have registered the
+                // job before the client observed the error (a timeout/reset, not a definite reject) —
+                // and releasing while the job is live server-side would let it later run against an
+                // instance re-admitted to a different owner, breaking single-owner-Busy. Instead
+                // fall back to the transactional outbox: the Inbox relay re-arms the SAME job
+                // (idempotent by job name), the instance stays Busy until it does, and the request
+                // still succeeds (202). This is finding AB-17's own recommended remedy (c). With
+                // reference-only payloads the arm message is always small, so this path is reached
+                // only by genuine scheduler/infra failures, never by an oversized body.
                 armActivity?.SetStatus(ActivityStatusCode.Error, ex.Message);
-                throw;
-            }
+                logger.TransitionJobArmFailedFellBackToOutbox(
+                    ex, jobName.Value, ctx.InstanceId, ctx.TransitionKey);
 
-            logger.TransitionJobArmedAfterLock(armHandle.JobId);
+                try
+                {
+                    // CancellationToken.None + its own UoW so the outbox row is staged durably even
+                    // if the request aborted; the enqueue's UoW has already committed and closed.
+                    await using var fallbackUow = uowManager.Begin(
+                        new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew });
+                    await enqueueGateway.PublishOutboxFallbackAsync(outboxEvent!, CancellationToken.None);
+                    await fallbackUow.CommitAsync(CancellationToken.None);
+                }
+                catch (Exception outboxEx)
+                {
+                    // Scheduler AND outbox both unavailable: the row is committed but nothing will
+                    // deliver it. The instance stays Busy for manual recovery — no double-owner risk,
+                    // because the flip was never released. Fail the request so the caller retries.
+                    logger.TransitionJobArmOutboxFallbackFailed(
+                        outboxEx, jobName.Value, ctx.InstanceId, ctx.TransitionKey);
+                    var fallbackError = Error.Dependency(
+                        WorkflowErrorCodes.Dependency,
+                        $"Failed to arm transition job '{jobName.Value}' and its outbox fallback also failed: {outboxEx.Message}",
+                        "Dapr");
+                    SetActivityError(activity, fallbackError);
+                    return Result<TransitionExecutionContext>.Fail(fallbackError);
+                }
+            }
         }
 
         var result = acceptResult.IsSuccess
@@ -215,7 +257,7 @@ public sealed class AsyncTransitionStrategy(
     /// to <see cref="ITransitionEnqueueGateway"/> — both within a single RequiresNew unit of work so
     /// the intent and the delivery action (Dapr schedule or outbox row) commit atomically.
     /// </summary>
-    private async Task<Result<TransitionEnqueueOutcome>> EnqueueAndSaveJobAsync(
+    private async Task<Result<EnqueueAndSaveResult>> EnqueueAndSaveJobAsync(
         WorkflowExecutionContext context,
         TransitionExecutionContext transContext,
         JobName jobName,
@@ -230,14 +272,28 @@ public sealed class AsyncTransitionStrategy(
             "Transition.Enqueue", transContext.TransitionKey);
         enqueueActivity?.SetTag(TelemetryConstants.TagNames.JobName, jobName.Value);
 
-        var directPayload = BuildDirectPayload(context, transContext, jobName.Value, activity, subflowChainReserved);
-        var outboxEvent = BuildOutboxEvent(context, transContext, jobName, jobId, activity, subflowChainReserved);
+        // The body travels inline, whatever its size. Aether arms the scheduler with a reference to
+        // the job row rather than the row's payload, so an oversized body no longer reaches etcd and
+        // no longer fails the arm after the flip and job row have committed (AB-17). vNext therefore
+        // needs no size decision, no cap to tune and no second table of its own.
+        var requestBody = context.Data?.Attributes;
 
+        var directPayload = BuildDirectPayload(
+            context, transContext, jobName.Value, jobId, requestBody, activity, subflowChainReserved);
+        var outboxEvent = BuildOutboxEvent(
+            context, transContext, jobName, jobId, requestBody, activity, subflowChainReserved);
+
+        // IsTransactional: the job row and the outbox write (if the gateway falls back) must commit as
+        // ONE transaction, so a crash between them cannot leave a job row with nothing to deliver it.
+        // Safe to make transactional here: arming is deferred, so no external call runs inside the UoW,
+        // and the whole block runs under the accept's status lock. Same posture as
+        // InstanceCommandAppService.
         await using var uow = uowManager.Begin(
-            new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew });
+            new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew, IsTransactional = true });
 
         await jobRepository.InsertAsync(
-            InstanceJob.Create(jobId, jobName, jobId, context.Domain, context.WorkflowKey, transContext.InstanceId),
+            InstanceJob.Create(
+                jobId, jobName, jobId, context.Domain, context.WorkflowKey, transContext.InstanceId),
             true,
             cancellationToken);
 
@@ -250,8 +306,16 @@ public sealed class AsyncTransitionStrategy(
         await uow.CommitAsync(cancellationToken);
 
         enqueueActivity?.SetTag(TelemetryConstants.TagNames.EnqueuePath, outcome.Path.ToString());
-        return Result<TransitionEnqueueOutcome>.Ok(outcome);
+        return Result<EnqueueAndSaveResult>.Ok(new EnqueueAndSaveResult(outcome, outboxEvent));
     }
+
+    /// <summary>
+    /// The enqueue's two outputs the accept path needs after the lock: the delivery outcome (which
+    /// path, plus the deferred arm handle) and the outbox event to fall back to if the arm fails.
+    /// </summary>
+    private readonly record struct EnqueueAndSaveResult(
+        TransitionEnqueueOutcome Outcome,
+        TransitionContinuationRequested OutboxEvent);
 
     /// <summary>
     /// Builds the payload for the direct Dapr enqueue path.
@@ -260,6 +324,8 @@ public sealed class AsyncTransitionStrategy(
         WorkflowExecutionContext context,
         TransitionExecutionContext transContext,
         string jobName,
+        Guid jobId,
+        JsonElement? data,
         Activity? activity,
         bool subflowChainReserved)
     {
@@ -271,7 +337,8 @@ public sealed class AsyncTransitionStrategy(
             Domain = transContext.Domain,
             Workflow = transContext.WorkflowKey,
             Version = transContext.Workflow.Version,
-            Data = context.Data?.Attributes,
+            Data = data,
+            JobId = jobId,
             RawBody = null, // raw body is not propagated to the background job
             InstanceKey = context.Data?.Key,
             Tags = context.Data?.Tags,
@@ -311,6 +378,7 @@ public sealed class AsyncTransitionStrategy(
         TransitionExecutionContext transContext,
         JobName jobName,
         Guid jobId,
+        JsonElement? data,
         Activity? activity,
         bool subflowChainReserved)
     {
@@ -323,7 +391,7 @@ public sealed class AsyncTransitionStrategy(
             TransitionKey = transContext.TransitionKey,
             JobName = jobName.Value,
             JobId = jobId,
-            Data = context.Data?.Attributes,
+            Data = data,
             InstanceKey = context.Data?.Key,
             Tags = context.Data?.Tags,
             Stage = context.Data?.Stage,

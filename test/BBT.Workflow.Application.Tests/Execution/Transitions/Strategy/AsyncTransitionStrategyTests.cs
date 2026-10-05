@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using BBT.Workflow;
 using BBT.Aether.DistributedLock;
 using BBT.Aether.Results;
 using BBT.Aether.Uow;
@@ -12,6 +14,7 @@ using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Logging;
 using BBT.Aether.BackgroundJob;
 using BBT.Workflow.BackgroundJobs;
+using BBT.Workflow.BackgroundJobs.Options;
 using BBT.Workflow.BackgroundJobs.Payloads;
 using BBT.Workflow.Execution.Continuations;
 using BBT.Workflow.Execution.Events;
@@ -20,6 +23,7 @@ using BBT.Workflow.Execution.Validation;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Shared;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Moq;
 using Shouldly;
 using Xunit;
@@ -51,6 +55,9 @@ public class AsyncTransitionStrategyTests
     /// (pinned in TransitionAdmissionServiceTests); these tests drive it as an input.
     /// </summary>
     private AcceptFlip _acceptFlip = AcceptFlip.Reserved;
+
+    /// <summary>Execution options the strategy reads; the inline-body cap drives inline-vs-offload.</summary>
+    private readonly WorkflowExecutionOptions _executionOptions = new();
 
     public AsyncTransitionStrategyTests()
     {
@@ -87,6 +94,7 @@ public class AsyncTransitionStrategyTests
             _uowManager.Object,
             _mockAdmissionService.Object,
             _mockEnqueueGateway.Object,
+            Options.Create(_executionOptions),
             _mockLogger.Object);
     }
 
@@ -725,6 +733,79 @@ public class AsyncTransitionStrategyTests
         _mockArmHandle.Verify(x => x.ArmAsync(It.IsAny<CancellationToken>()), Times.Once);
         armedWhileLockHeld.ShouldBeFalse();
     }
+
+    #region Arm-failure outbox fallback (AB-17)
+
+    /// <summary>
+    /// A deferred-arm failure lands AFTER the flip and the job row have committed. Releasing the
+    /// flip would be unsafe — the arm is ambiguous (the scheduler may have registered the job before
+    /// the client saw the error), and a re-delivered job runs IsPreReserved with no re-check. So the
+    /// accept falls back to the transactional outbox (durable re-arm), keeps the instance Busy, and
+    /// succeeds; it never releases the flip and never closes the row.
+    /// </summary>
+    [Fact]
+    public async Task ExecuteAsync_WhenArmFails_FallsBackToOutbox_KeepsBusy_AndSucceeds()
+    {
+        var (wfCtx, txCtx) = SetupSuccessfulContext();
+        _acceptFlip = AcceptFlip.Reserved;
+        _mockArmHandle
+            .Setup(x => x.ArmAsync(It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("scheduler unreachable (ambiguous)"));
+        TransitionContinuationRequested? republished = null;
+        _mockEnqueueGateway
+            .Setup(x => x.PublishOutboxFallbackAsync(
+                It.IsAny<TransitionContinuationRequested>(), It.IsAny<CancellationToken>()))
+            .Callback<TransitionContinuationRequested, CancellationToken>((e, _) => republished = e)
+            .Returns(Task.CompletedTask);
+
+        var result = await _strategy.ExecuteAsync(wfCtx, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        republished.ShouldNotBeNull().InstanceId.ShouldBe(txCtx.InstanceId);
+        // The flip is never released — that is the single-owner-Busy safety this fallback exists for.
+        _mockAdmissionService.Verify(
+            x => x.ReleaseReservationAsync(It.IsAny<TransitionExecutionContext>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+        _mockAdmissionService.Verify(
+            x => x.ReleaseSubflowChainAsync(It.IsAny<TransitionExecutionContext>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+        // The row is NOT closed — the re-armed job needs it live.
+        _mockJobRepository.Verify(
+            x => x.MarkAsProcessedAsync(txCtx.InstanceId, It.IsAny<string>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    /// <summary>
+    /// If even the outbox fallback fails (scheduler AND database down), the request fails so the
+    /// caller retries; the flip is still never released (no double-owner), the instance stays Busy
+    /// for manual recovery.
+    /// </summary>
+    [Fact]
+    public async Task ExecuteAsync_WhenArmAndOutboxBothFail_FailsWithoutReleasing()
+    {
+        var (wfCtx, _) = SetupSuccessfulContext();
+        _acceptFlip = AcceptFlip.ChainReserved;
+        _mockArmHandle
+            .Setup(x => x.ArmAsync(It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("scheduler down"));
+        _mockEnqueueGateway
+            .Setup(x => x.PublishOutboxFallbackAsync(
+                It.IsAny<TransitionContinuationRequested>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("outbox down"));
+
+        var result = await _strategy.ExecuteAsync(wfCtx, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.Dependency);
+        _mockAdmissionService.Verify(
+            x => x.ReleaseReservationAsync(It.IsAny<TransitionExecutionContext>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+        _mockAdmissionService.Verify(
+            x => x.ReleaseSubflowChainAsync(It.IsAny<TransitionExecutionContext>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    #endregion
 
     [Fact]
     public async Task Accept_ShouldNotArm_WhenTheGatewayFellBackToTheOutbox()

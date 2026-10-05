@@ -4,9 +4,10 @@ using BBT.Workflow.Definitions;
 namespace BBT.Workflow.Instances;
 
 /// <summary>
-/// Input for retrieving instance hierarchy (recursive tree of subflow/subprocess children).
+/// Input for retrieving the instance-correlation tree (recursive, parent -> child, over the
+/// instance's correlated subflow/subprocess children).
 /// </summary>
-public sealed class GetInstanceHierarchyInput : IHasDomain
+public sealed class GetInstanceCorrelationInput : IHasDomain
 {
     /// <summary>
     /// Domain.
