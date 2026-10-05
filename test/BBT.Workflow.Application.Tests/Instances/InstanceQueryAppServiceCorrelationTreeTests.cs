@@ -160,6 +160,7 @@ public sealed class InstanceQueryAppServiceCorrelationTreeTests : IDisposable
             representationEtagService: Substitute.For<IRepresentationEtagService>(),
             instanceDataReadService: new BBT.Workflow.Instances.InstanceDataReadService(Substitute.For<ISchemaFieldFilterService>()),
             callerRoleResolver: new DefaultCallerRoleResolver(Substitute.For<ICurrentUser>()),
+            currentUser: Substitute.For<ICurrentUser>(),
             paginationLinkGenerator: Substitute.For<BBT.Aether.Application.Pagination.IPaginationLinkGenerator>(),
             instanceFilteringOptions: Options.Create(new InstanceFilteringOptions()),
             humanTaskOptions: Options.Create(new HumanTaskFunctionOptions()),
