@@ -53,7 +53,7 @@ refusal into "no answer".
 |---|---|---|---|
 | `?transitionKey=` | the transition is offered in the instance's **current state**, AND `transition.roles`, AND the `availableIn` entry's roles for that state (composed as **AND**) | `Transition.Roles`, `availableIn[state].roles`, the parent's stamped `subflow.transition_role_overrides` | Only when the parent does **not** retain it |
 | `?functionKey=` | the custom function's own `roles` | `Function.Roles` — **no roles defined ⇒ allowed** | Yes |
-| `?queryRoles=true` | the state's (or workflow root's) `queryRoles` | the parent's stamped `subflow.state_role_overrides` → the state's own `queryRoles` → the workflow root's | Yes, and the answer is a **conjunction** |
+| `?queryRoles=true` | the state's (or workflow root's) `queryRoles` | the parent's stamped `subflow.state_role_overrides` → the state's own `queryRoles` → the workflow root's | Yes — decided at the deepest active leaf only |
 | `?ack=true` | the entered state's `interaction.longPoll` arm — `roles` **or** the condition `rule` | `ILongPollInteractionGate` (the same object the endpoint and the state function's signal emit use) | Follows the endpoint's own rule (`IsAwaitingLongPollAck`) |
 
 ### `?transitionKey=` — actionability
@@ -80,14 +80,17 @@ Built-in functions have **no** selector of their own. `state`, `data`, `view`, `
 `state` may not read `data` either. A function with no `roles` declared is allowed — absence is not a
 denial.
 
-### `?queryRoles=true` — visibility, and it is a CONJUNCTION
+### `?queryRoles=true` — visibility, decided at the leaf
 
-The answer is the polled instance's own verdict **AND** every level beneath it, down to the deepest
-active leaf. That mirrors what the read path used to do — gate the polled instance, then descend and
-gate again — and it is why answering from the leaf alone was wrong: it made the oracle strictly
-*weaker* than the thing it describes.
+A SubFlow is part of its parent's process, so for an instance with an active SubFlow the answer is
+the **deepest active leaf's** verdict alone, computed from the leaf's own grants. The levels above are
+**not** ANDed: the root's `queryRoles` no longer restrict anyone while the instance is inside a SubFlow,
+and a leaf whose `queryRoles` are empty allows. A parent that wants to restrict the leaf stamps it
+onto the leaf with `subFlow.overrides.states.<state>.queryRoles`. (The built-in read surfaces do not
+gate on `queryRoles` at all; this selector is the only place the decision is taken.) Parent-owned
+transitions and `?ack=true` are unchanged: they are still answered at the instance that owns them.
 
-Resolution per level, highest first:
+Resolution at the deciding (leaf or standalone) instance, highest first:
 
 1. the parent's stamped `subflow.state_role_overrides` entry for the instance's **`CurrentState`**;
 2. that state's own `queryRoles`;

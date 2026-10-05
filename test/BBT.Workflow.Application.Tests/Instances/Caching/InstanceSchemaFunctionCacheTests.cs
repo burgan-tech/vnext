@@ -71,9 +71,9 @@ public class InstanceSchemaFunctionCacheTests
         var sut = CreateSut();
 
         sut.BuildKey(CreateMasterInput())
-            .ShouldStartWith($"master-fn:v1:{TestDomain}:{TestWorkflow}:{TestInstance}:");
+            .ShouldStartWith($"master-fn:v2:{TestDomain}:{TestWorkflow}:{TestInstance}:");
         sut.BuildKey(CreateSchemaInput(), "approve")
-            .ShouldStartWith($"schema-fn:v1:{TestDomain}:{TestWorkflow}:{TestInstance}:");
+            .ShouldStartWith($"schema-fn:v2:{TestDomain}:{TestWorkflow}:{TestInstance}:");
         sut.BuildKey(CreateSchemaInput(), "approve").ShouldEndWith(":approve");
     }
 

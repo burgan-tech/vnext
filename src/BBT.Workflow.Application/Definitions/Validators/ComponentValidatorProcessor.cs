@@ -1,4 +1,5 @@
 using System.Text.Json;
+using BBT.Workflow.Scripting.Sandbox;
 
 namespace BBT.Workflow.Definitions.Validators;
 
@@ -8,7 +9,10 @@ namespace BBT.Workflow.Definitions.Validators;
 /// and orchestrates the validation operation.
 /// </summary>
 /// <param name="validators">A collection of component validators available for validation.</param>
-public sealed class ComponentValidatorProcessor(IEnumerable<IComponentValidator> validators)
+/// <param name="assemblyCatalog">Resolves <c>scripts.allowedAssemblies</c> names at publish time.</param>
+public sealed class ComponentValidatorProcessor(
+    IEnumerable<IComponentValidator> validators,
+    IScriptAssemblyCatalog assemblyCatalog)
 {
     /// <summary>
     /// Validates a component by finding the appropriate validator and executing the validation.
@@ -23,7 +27,13 @@ public sealed class ComponentValidatorProcessor(IEnumerable<IComponentValidator>
         if (validator == null)
             throw new NotSupportedException($"No validator found for component type '{componentType}'.");
 
-        return Invoke(validator, componentType, attributes);
+        var result = Invoke(validator, componentType, attributes);
+
+        // Component definitions only — TryValidate validates seed data, which is instance data.
+        if (AllowedAssembliesPublishCheck.AppliesTo(componentType))
+            AllowedAssembliesPublishCheck.Validate(componentType, attributes, assemblyCatalog, result);
+
+        return result;
     }
 
     /// <summary>

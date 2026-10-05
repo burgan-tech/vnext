@@ -197,6 +197,7 @@ GET {domain}/workflows/{workflow}/instances/{instance}/functions/catalog
 {
   "functions": [
     { "name": "get-branches", "version": "1.0.0", "scope": "D",
+      "labels": [ { "label": "Şubeler", "language": "tr-TR" } ],
       "href": "/api/core/functions/get-branches/info" },
     { "name": "calc-limit", "version": "1.0.0", "scope": "F",
       "href": "/api/core/workflows/onboarding/instances/{id}/functions/calc-limit/info" }

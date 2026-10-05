@@ -319,6 +319,16 @@
       "title": "With the script sandbox enabled, the shipped AllowedAssemblies baseline lacked System.ObjectModel, so a mapping that enumerates an ExpandoObject (foreach — ordinary mapping code) failed to compile with CS0012 (ExpandoObject implements INotifyPropertyChanged, which lives in System.ObjectModel; the netstandard facade's type-forward does not satisfy the binder). Direct System.ObjectModel types (ObservableCollection) failed with CS1069. Plain is/cast/dynamic access compiled — the failure was construct-dependent.",
       "workaround": "Add \"System.ObjectModel\" to Scripting:Sandbox:AllowedAssemblies in the environment's configuration, grant it per mapping via scripts.allowedAssemblies, or read the expando through the 'as IDictionary<string,object>' spelling without enumerating the expando itself. Fixed on master 2026-09-23 by adding the entry to both hosts' shipped baselines; fixedIn is stamped when the release containing the fix is cut.",
       "fixedIn": null
+    },
+    {
+      "id": "role-grant-combinators-rollback-floor",
+      "affectedVersions": ">=0.0.99",
+      "severity": "medium",
+      "component": "runtime",
+      "path": "roles[] | queryRoles[] | transitions[].roles[] | availableIn[].roles[] | schema x-roles[] | subFlow.overrides (allOf / anyOf grants)",
+      "title": "A runtime older than 0.0.99 cannot read an allOf / anyOf grant: the flow fails to load, a combinator override stamp is treated as malformed (the child falls back to its own grants), and an old x-roles parser skips the entry so a combinator deny vanishes",
+      "workaround": "Author the first allOf / anyOf grant only after every pod, and every domain that stamps overrides onto this one, runs a release containing combinators. Do not binary-downgrade once a combinator has been published: remove the combinator grants (or re-publish without them) first.",
+      "fixedIn": null
     }
   ]
 }

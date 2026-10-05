@@ -25,14 +25,20 @@ public sealed class InstanceSchemaFunctionCache(
     ILogger<InstanceSchemaFunctionCache> logger) : IInstanceSchemaFunctionCache
 {
     /// <summary>
-    /// The <c>v1</c> segment is a cache generation, not a response-shape version: bump it whenever a
-    /// change alters what a cached body means for a given caller hash. It was introduced to retire
-    /// entries written before caller roles became provider-resolved.
+    /// Version of what a master/schema body carries. A segment of the cache key — so bumping it
+    /// discards bodies written by an earlier build — and of the ETag material — so a client still
+    /// holding an earlier build's ETag gets a 200 with the new shape instead of a 304.
+    /// v1 retired entries written before caller roles became provider-resolved. v2 added the schema
+    /// component's <c>labels</c>; they are a property of the component version, so no fingerprint
+    /// member was needed — only the shape change.
     /// </summary>
-    internal const string MasterKeyPrefix = "master-fn:v1:";
+    internal const string ResponseShapeVersion = "v2";
+
+    /// <summary>Cache-key prefix of the master function.</summary>
+    internal const string MasterKeyPrefix = $"master-fn:{ResponseShapeVersion}:";
 
     /// <inheritdoc cref="MasterKeyPrefix" />
-    internal const string SchemaKeyPrefix = "schema-fn:v1:";
+    internal const string SchemaKeyPrefix = $"schema-fn:{ResponseShapeVersion}:";
 
     /// <summary>
     /// Length of the fingerprint ETag (hex chars of the SHA-256 digest — 128 bits).
@@ -57,6 +63,7 @@ public sealed class InstanceSchemaFunctionCache(
     /// <inheritdoc />
     public string ComputeEtag(GetMasterInput input, InstanceDataFingerprint fingerprint) =>
         HashEtag(string.Join('|',
+            ResponseShapeVersion,
             fingerprint.Id,
             fingerprint.LatestDataEtag ?? string.Empty,
             fingerprint.FlowVersion ?? string.Empty,
@@ -65,6 +72,7 @@ public sealed class InstanceSchemaFunctionCache(
     /// <inheritdoc />
     public string ComputeEtag(GetSchemaInput input, InstanceDataFingerprint fingerprint, string transitionKey) =>
         HashEtag(string.Join('|',
+            ResponseShapeVersion,
             fingerprint.Id,
             fingerprint.LatestDataEtag ?? string.Empty,
             fingerprint.EffectiveState ?? string.Empty,

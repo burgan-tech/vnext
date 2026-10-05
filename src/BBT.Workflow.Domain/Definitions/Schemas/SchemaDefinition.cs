@@ -15,11 +15,13 @@ public sealed class SchemaDefinition : IDomainEntity, ISchemaReference, IReferen
     [JsonConstructor]
     private SchemaDefinition(
         string type,
-        JsonElement schema
+        JsonElement schema,
+        LanguageLabel[]? labels
     ) : this()
     {
         Type = type;
         Schema = schema;
+        Labels = labels ?? [];
     }
 
     /// <summary>
@@ -48,6 +50,11 @@ public sealed class SchemaDefinition : IDomainEntity, ISchemaReference, IReferen
     /// Schema Definition
     /// </summary>
     public JsonElement Schema { get; private set; }
+
+    /// <summary>
+    /// Multi-language display labels of the schema component (<c>attributes.labels</c>).
+    /// </summary>
+    public LanguageLabel[] Labels { get; private set; } = [];
 
     public static string ComponentTypeKey => RuntimeSysSchemaInfo.Schemas;
     public string ComponentKey => ComponentTypeKey;

@@ -77,8 +77,16 @@ public sealed class StateFunctionCache(
     /// block had vanished for it entirely. It is now emitted whenever the instance is in the declaring
     /// state and the caller passes the gate, without an ack href. Its presence follows
     /// <c>CurrentState</c>, already a fingerprint member.
+    /// v14 started carrying <c>labels</c> and a <c>target</c> object (<c>key</c>, <c>stateType</c>,
+    /// <c>stateSubType</c>, <c>labels</c>, <c>subFlow</c>) on every <c>transitions[]</c> entry, plus the
+    /// top-level <c>stateSubType</c> and <c>stateLabels</c> of the displayed state, and turned the
+    /// <c>timeout</c> block's <c>target</c> string into the same object. All of it comes from
+    /// definitions — a property of the flow version that <see cref="InstanceStateFingerprint.FlowVersion"/>
+    /// already covers, or, for a subflow's state, part of the live descended body that the
+    /// displayed-state member of the subflow ETag variant covers — so, like v12's annotations, only the
+    /// shape change needed invalidating.
     /// </remarks>
-    private const string ResponseShapeVersion = "v13";
+    private const string ResponseShapeVersion = "v14";
 
     private const string KeyPrefix = $"state-fn:{ResponseShapeVersion}:";
 

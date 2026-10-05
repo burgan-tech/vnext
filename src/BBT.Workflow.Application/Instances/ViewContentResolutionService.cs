@@ -123,6 +123,7 @@ public sealed class ViewContentResolutionService(
             Display = view.Display,
             Modes = MapDisplayModes(view.DisplayModes),
             Label = string.Empty,
+            Labels = view.Labels is { Length: > 0 } labels ? labels.ToList() : null,
             Renderer = view.Renderer
         };
     }
@@ -147,6 +148,7 @@ public sealed class ViewContentResolutionService(
             Display = attrs?.Display?.Sdi ?? string.Empty,
             Modes = MapDisplayModes(attrs?.Display),
             Label = attrs?.Label ?? string.Empty,
+            Labels = attrs?.Labels is { Count: > 0 } labels ? labels : null,
             Renderer = attrs?.Renderer
         };
     }

@@ -289,3 +289,24 @@ rejected.
 | Validation | `src/BBT.Workflow.Domain/Definitions/Validators/WorkflowValidator.cs` |
 | Pipeline steps | `.../Pipeline/Steps/HandleCancelPreflightStep.cs`, `ForwardToActiveSubflowStep.cs`, `HandleUpdateDataDataOnlyStep.cs`, `HandleFinishStep.cs` |
 | State-machine exemption + state gate | `src/BBT.Workflow.Domain/Definitions/Specifications/WellKnownTransitionSpecification.cs`, `SharedTransitionAvailabilitySpecification.cs`, `SubFlowBypassSpecification.cs` |
+
+## Well-known state keys
+
+| Key | Meaning | Where it appears |
+|---|---|---|
+| `$self` | Transition target only: resolve to the current state | `target` of `updateData` and self transitions |
+| `$start` | The start transition's source when the definition declares no Initial state (`stateType: 1`). The instance is born here and the start transition moves it to `startTransition.target`. No tasks, view or transitions; never declared, never a target. | `Instance.CurrentState` until the start transition commits (async start, subflow child creation); `fromState` of the start transition record |
+
+A definition may still declare one Initial state; it then behaves exactly as before and `$start`
+never appears. Two or more Initial states are rejected at publish. Defined in
+`WellKnownStateKeys.Start`; resolved by `Workflow.GetInitialState()` / `Workflow.FindState()`.
+
+The start transition's `target` is mandatory and must be a declared state key; `$self` (and `$start`)
+is not a valid start target. Dapr job names write the `$start` source as the wire token `_start`; the
+persisted source state stays `$start`.
+
+An instance stranded at `$start` (the async start job failed permanently) can only leave through well-known transitions with no `availableIn` restriction, because `availableIn` cannot name `$start`.
+
+Authoring note: work that used to run on an automatic hop out of a pass-through Initial state can
+move to `startTransition.onExecutionTasks`, but it then runs while the instance is being created —
+instance data is the start payload only.

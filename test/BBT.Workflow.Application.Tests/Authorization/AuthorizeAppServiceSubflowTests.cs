@@ -25,12 +25,11 @@ namespace BBT.Workflow.Authorization;
 /// <summary>
 /// Unit tests for <see cref="AuthorizeAppService"/>'s behaviour on an instance with an active SubFlow.
 /// <para>
-/// These pin the three defects the 2026-09-22 council found in the descent, each of which made
-/// <c>authorize</c> answer a different question from the surface it exists to describe:
-/// the root's own <c>queryRoles</c> was never evaluated (so the answer was strictly weaker than the
-/// state function's two conjunctive gates), a parent-declared override RETURNED at depth 1 (so a
-/// grandchild's gate never ran), and the overrides were read from the parent's definition rather than
-/// from the child's stamp (so a directly addressed leaf got the opposite verdict).
+/// These pin the descent rules: queryRoles is decided at the deepest active leaf only (a SubFlow
+/// is part of its parent's process, so the levels above are never ANDed), a parent-declared override
+/// RETURNED at depth 1 in the past (so a grandchild's gate never ran), and the overrides were read from
+/// the parent's definition rather than from the child's stamp (so a directly addressed leaf got the
+/// opposite verdict).
 /// </para>
 /// </summary>
 public sealed class AuthorizeAppServiceSubflowTests : IDisposable
@@ -156,16 +155,15 @@ public sealed class AuthorizeAppServiceSubflowTests : IDisposable
             checkQueryRoles: false, checkAck: true,
             requestContext: new AuthorizationRequestContext(new Dictionary<string, string?>()));
 
-    // ------------------------------------------------- A1: conjunction with the root
+    // ------------------------------------------------- A1: leaf-only
 
     /// <summary>
-    /// The defect this change exists to fix. Before it, the forward REPLACED the root's verdict, so a
-    /// parent whose own queryRoles denied the caller still answered "allowed" whenever the leaf did —
-    /// while the state function, which gates the polled instance and then descends, refused. A gateway
-    /// trusting authorize would have admitted a read the runtime itself rejects.
+    /// A SubFlow is part of its parent's process, so while an instance is inside one the queryRoles
+    /// decision is the deepest active leaf's — the root's own queryRoles are not evaluated and the
+    /// gateway forward is taken regardless of what the root would have said.
     /// </summary>
     [Fact]
-    public async Task QueryRoles_RootDenies_DeniesWithoutDescending()
+    public async Task QueryRoles_RootDenies_LeafAllows_Allows()
     {
         GivenInstance(ParentWithActiveSubflow());
         GivenRootQueryVerdict(false);
@@ -174,15 +172,19 @@ public sealed class AuthorizeAppServiceSubflowTests : IDisposable
         var result = await AuthorizeQueryRolesAsync();
 
         result.IsSuccess.ShouldBeTrue();
-        result.Value!.Allowed.ShouldBeFalse();
+        result.Value!.Allowed.ShouldBeTrue();
 
-        await _gateway.DidNotReceive().GetAuthorizeResultForInstanceAsync(
+        await _authManager.DidNotReceive().IsQueryAllowedAsync(
+            Arg.Any<WorkflowDefinition>(), Arg.Any<Instance>(), Arg.Any<IReadOnlyCollection<string>?>(),
+            Arg.Any<AuthorizationRequestContext?>(), Arg.Any<CancellationToken>());
+        await _gateway.Received(1).GetAuthorizeResultForInstanceAsync(
             Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(),
-            Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<bool>(), Arg.Any<bool>(),
+            Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>(),
+            Arg.Is<bool>(q => q), Arg.Any<bool>(),
             Arg.Any<AuthorizationRequestContext?>(), Arg.Any<CancellationToken>());
     }
 
-    /// <summary>The other half of the conjunction: the root passing is not the answer, only permission to ask.</summary>
+    /// <summary>A leaf refusal is the refusal, whatever the root would have said.</summary>
     [Fact]
     public async Task QueryRoles_RootAllows_LeafDenies_Denies()
     {
@@ -204,24 +206,26 @@ public sealed class AuthorizeAppServiceSubflowTests : IDisposable
     }
 
     /// <summary>
-    /// A1a. The descent must reach the deepest active leaf, so every level below the root is consulted
-    /// through the forward — which re-enters this service at the child and repeats the rule there.
-    /// Previously a parent-declared override returned at depth 1 and a grandchild's own gate never ran.
+    /// A MIDDLE level: an instance that itself has an active SubFlow, whose own grants would deny
+    /// everyone, still only forwards — it never evaluates its own queryRoles. The gateway (the leaf)
+    /// alone answers, exactly once.
     /// </summary>
     [Fact]
-    public async Task QueryRoles_AlwaysDescends_WhenRootAllows()
+    public async Task QueryRoles_IntermediateLevelWithActiveSubflow_OnlyForwards()
     {
         GivenInstance(ParentWithActiveSubflow());
-        GivenRootQueryVerdict(true);
+        GivenRootQueryVerdict(false); // this level's own grants deny everyone
         GivenLeafVerdict(true);
 
-        await AuthorizeQueryRolesAsync();
+        (await AuthorizeQueryRolesAsync()).Value!.Allowed.ShouldBeTrue();
 
         await _gateway.Received(1).GetAuthorizeResultForInstanceAsync(
             Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(),
             Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>(),
             Arg.Is<bool>(q => q), Arg.Any<bool>(),
             Arg.Any<AuthorizationRequestContext?>(), Arg.Any<CancellationToken>());
+        await _authManager.DidNotReceiveWithAnyArgs().IsQueryAllowedAsync(
+            default!, default!, default, default, default);
     }
 
     // --------------------------------------------------------------- ack target

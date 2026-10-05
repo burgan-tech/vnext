@@ -111,7 +111,7 @@ The plan is built from `ExcludedStepOrders` alone (`TransitionExecutor.BuildExec
 
 - `FunctionTypeConst.Longpooling`: `GET /functions/state` → `200` | `304`; no server-side hold.
   ETag: `LatestData?.ETag` (entity), `IRepresentationEtagService.Generate(output)` (representation).
-- Bump `StateFunctionCache.ResponseShapeVersion` (currently `v13`) in the same commit as any change to
+- Bump `StateFunctionCache.ResponseShapeVersion` (currently `v14`) in the same commit as any change to
   what the state body carries — otherwise parked pollers keep getting 304.
 - Every built-in instance function descends an active subflow — except `data`.
 - Parent overrides resolve in ONE place per kind and REPLACE (never merge): `IsQueryAllowedAsync`,
@@ -183,13 +183,13 @@ The plan is built from `ExcludedStepOrders` alone (`TransitionExecutor.BuildExec
   Never re-implement parse rules — use `DynamicRoleGrant.Classify` (shares `TryParse`).
 - **One evaluator**: `IRoleGrantEvaluator` via `ITransitionAuthorizationManager.CreateEvaluatorAsync`.
   `authorized = DenyGroupOk AND AllowGroupOk`, deny first; empty set ⇒ allow.
-- A role-less caller cannot clear a role-bound deny (`IsUnprovableRoleBoundDeny`); a denied role is not
+- Grants evaluate three-valued (Kleene): a role-bound leaf is Unknown for a role-less caller, a deny fires on Yes or Unknown, an allow only on Yes; a denied role is not
   bought back by an allowed one. Never loop the caller's roles returning on the first allowed one.
 - Every decision point takes the WHOLE role set; `ICallerRoleResolver.SingleRoleOf` is for cache scoping
   (`CallerScopeHash`) only. Never read `currentUser.Roles` directly — use `currentUser.ResolveCallerRoles(headers)`.
 - Batch: one evaluator per instance/schema; pass every surface the same `AuthorizationRequestContext`.
 - `queryRoles` is ANSWERED (by `authorize?queryRoles=true`), not enforced on read paths — do not add
-  the gate back. `authorize` answers the CONJUNCTION down the chain; `?ack=true` is the long-poll ack pre-flight.
+  the gate back. `authorize` decides queryRoles at the deepest active subflow leaf only (no chain AND; a parent restricts via `subFlow.overrides.states.<state>.queryRoles`); `?ack=true` is the long-poll ack pre-flight.
 - The `queryRoles` gate reads the instance's OWN `CurrentState`, never `EffectiveState`.
 - `transition.roles` is not enforced at execution, by design — do not "fix" it. `cancel`/`exit` are
   parent-retained. Under `morph-idm` a non-blank `role` header replaces the service's answer.
@@ -254,6 +254,9 @@ Enum values (Instance Status, State Types, State Sub Types, Trigger Types): `AGE
   never read attributes off a sub-start or forward response.
 - Completion window: child terminal while parent correlation open ⇒ state function shows parent transitions.
 - Full guide: `docs/architecture/subflow-execution.md`.
+- **Initial state is optional:** with none declared the instance is born in the implicit `$start` state and
+  `startTransition.target` (mandatory, a declared state key) decides the entry; see
+  `docs/domain/well-known-transitions.md#well-known-state-keys`.
 
 ### Parent overrides are resolved child-side
 

@@ -37,6 +37,13 @@ public sealed class GetViewOutput
     public string Label { get; set; }
 
     /// <summary>
+    /// The view component's display labels, in the definition's own <c>[{ language, label }]</c>
+    /// form — every language, the client picks. Null — and omitted from the JSON — when the
+    /// component declares none.
+    /// </summary>
+    public List<LanguageLabel>? Labels { get; set; }
+
+    /// <summary>
     /// Identifies which UI SDK / render engine should interpret the view content.
     /// Only relevant when <see cref="Type"/> is Json. Null when not specified.
     /// </summary>

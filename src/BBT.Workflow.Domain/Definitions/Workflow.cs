@@ -372,17 +372,26 @@ public sealed class Workflow : IDomainEntity, IReference, IReferenceSetter, IHas
         states.Add(state);
     }
 
+    private State? implicitStartState;
+
+    /// <summary>True when the definition declares its own Initial state (legacy authoring).</summary>
+    [JsonIgnore]
+    public bool DeclaresInitialState => States.Any(s => s.StateType == StateType.Initial);
+
+    /// <summary>
+    /// The state an instance is born in: the declared Initial state, or — when none is declared —
+    /// the runtime's implicit <see cref="WellKnownStateKeys.Start"/> state (no tasks, view or
+    /// transitions). It is never added to <see cref="States"/>.
+    /// </summary>
     public Result<State> GetInitialState()
-    {
-        var state = States.FirstOrDefault(s => s.StateType == StateType.Initial);
-        return state is not null
-            ? Result<State>.Ok(state)
-            : Result<State>.Fail(WorkflowErrors.StateNotFound(Key, "initial"));
-    }
+        => Result<State>.Ok(States.FirstOrDefault(s => s.StateType == StateType.Initial) ?? ImplicitStartState);
+
+    private State ImplicitStartState
+        => implicitStartState ??= State.Create(WellKnownStateKeys.Start, StateType.Initial, StateSubType.None, "Patch");
 
     public Result<State> GetState(string key)
     {
-        var state = States.FirstOrDefault(s => s.Key == key);
+        var state = FindState(key);
         return state is not null
             ? Result<State>.Ok(state)
             : Result<State>.Fail(WorkflowErrors.StateNotFound(Key, key));
@@ -410,9 +419,8 @@ public sealed class Workflow : IDomainEntity, IReference, IReferenceSetter, IHas
     }
 
     public State? FindState(string key)
-    {
-        return States.FirstOrDefault(s => s.Key == key);
-    }
+        => States.FirstOrDefault(s => s.Key == key)
+           ?? (key == WellKnownStateKeys.Start && !DeclaresInitialState ? ImplicitStartState : null);
 
     public Transition? FindSharedTransition(string key)
     {

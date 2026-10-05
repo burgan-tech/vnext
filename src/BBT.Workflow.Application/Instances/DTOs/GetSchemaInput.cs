@@ -60,6 +60,13 @@ public sealed class GetSchemaOutput
     public JsonElement Schema { get; set; }
 
     /// <summary>
+    /// The schema component's display labels, in the definition's own <c>[{ language, label }]</c>
+    /// form — every language, the client picks. Null — and omitted from the JSON — when the
+    /// component declares none.
+    /// </summary>
+    public List<LanguageLabel>? Labels { get; set; }
+
+    /// <summary>
     /// Fingerprint ETag (RFC 7232 quoted) for cache validation.
     /// </summary>
     public string? ETag

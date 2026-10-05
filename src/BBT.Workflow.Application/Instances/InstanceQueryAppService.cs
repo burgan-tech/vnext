@@ -57,6 +57,7 @@ public sealed class InstanceQueryAppService(
     IRepresentationEtagService representationEtagService,
     IInstanceDataReadService instanceDataReadService,
     ICallerRoleResolver callerRoleResolver,
+    ICurrentUser currentUser,
     IPaginationLinkGenerator paginationLinkGenerator,
     IOptions<InstanceFilteringOptions> instanceFilteringOptions,
     IOptions<HumanTask.HumanTaskFunctionOptions> humanTaskOptions,
@@ -1001,6 +1002,8 @@ public sealed class InstanceQueryAppService(
                     AvailableTransitions: availableTransitions,
                     CurrentState: subFlowValue.State,
                     StateType: subFlowValue.StateType,
+                    StateSubType: subFlowValue.StateSubType,
+                    StateLabels: subFlowValue.StateLabels,
                     Status: subFlowValue.Status,
                     SubFlowData: subFlowValue.Data,
                     SubFlowView: subFlowValue.View,
@@ -1979,6 +1982,7 @@ public sealed class InstanceQueryAppService(
                 .Select(key =>
                 {
                     var subFlowItem = subFlowItemsByName.GetValueOrDefault(key);
+                    Transition? transition = null;
                     bool hasView, loadData, hasSchema;
                     Dictionary<string, string>? annotations;
                     if (subFlowItem != null)
@@ -1990,14 +1994,14 @@ public sealed class InstanceQueryAppService(
                     }
                     else
                     {
-                        var transition = currentWorkflow.ResolveTransition(key, currentStateValue);
+                        transition = currentWorkflow.ResolveTransition(key, currentStateValue);
                         hasView = transition?.View is { Views.Count: > 0 };
                         loadData = false;
                         hasSchema = transition?.Schema != null;
                         annotations = transition?.Annotations;
                     }
 
-                    return new TransitionItem
+                    var item = new TransitionItem
                     {
                         Name = key,
                         Kind = !string.IsNullOrWhiteSpace(subFlowItem?.Kind)
@@ -2020,6 +2024,18 @@ public sealed class InstanceQueryAppService(
                         },
                         Annotations = annotations
                     };
+
+                    // A subflow's own entry already carries its labels and target, described against
+                    // the subflow's definition — taken as-is, like its kind. A parent-added shared
+                    // transition is described against the parent's.
+                    if (subFlowItem != null)
+                    {
+                        item.Labels = subFlowItem.Labels;
+                        item.Target = subFlowItem.Target;
+                        return item;
+                    }
+
+                    return WithDefinitionDescriptors(item, currentWorkflow, transition, currentStateValue.Key);
                 })
                 .ToList();
         }
@@ -2030,7 +2046,7 @@ public sealed class InstanceQueryAppService(
                 var transition = currentWorkflow.ResolveTransition(transitionKey, currentStateValue);
                 var hasView = transition?.View is { Views.Count: > 0 };
                 var hasSchema = transition?.Schema != null;
-                return new TransitionItem
+                return WithDefinitionDescriptors(new TransitionItem
                 {
                     Name = transitionKey,
                     Kind = ResolveTransitionKind(currentWorkflow, currentStateValue, transitionKey),
@@ -2049,7 +2065,7 @@ public sealed class InstanceQueryAppService(
                         HasSchema = hasSchema
                     },
                     Annotations = transition?.Annotations
-                };
+                }, currentWorkflow, transition, currentStateValue.Key);
             }).ToList();
         }
 
@@ -2170,6 +2186,14 @@ public sealed class InstanceQueryAppService(
             StateType = subFlowStateInfo.StateType.IsNullOrWhiteSpace()
                 ? ToCamelCaseName(currentStateValue.StateType)
                 : subFlowStateInfo.StateType!,
+            // Same subject as stateType: the subflow's state when descended (its own entry already
+            // carries its labels), otherwise this instance's own.
+            StateSubType = subFlowStateInfo.SubFlowTransitionItems != null
+                ? subFlowStateInfo.StateSubType ?? string.Empty
+                : ToCamelCaseName(currentStateValue.SubType),
+            StateLabels = subFlowStateInfo.SubFlowTransitionItems != null
+                ? subFlowStateInfo.StateLabels
+                : ToLabelList(currentStateValue.Labels),
             Status = subFlowStateInfo.Status,
             ActiveCorrelations = allActiveCorrelations,
             Correlations = allCorrelationHrefs,
@@ -2259,6 +2283,8 @@ public sealed class InstanceQueryAppService(
     /// <see cref="InstanceJob.SourceState"/> — scheduled transitions are only ever armed from a state's
     /// own <c>ScheduledTransitions</c>, never from shared transitions. Unlike the three link flags this
     /// is real content, not a placeholder; null when the state or transition no longer resolves.
+    /// <c>labels</c> and the target descriptors are resolved the same way, with <c>$self</c> meaning
+    /// the source state.
     /// </para>
     /// </summary>
     private IEnumerable<TransitionItem> BuildScheduledTransitionEntries(
@@ -2270,27 +2296,31 @@ public sealed class InstanceQueryAppService(
         activeScheduledTransitionJobs
             .Where(j => j.ExecuteAt.HasValue && !string.IsNullOrEmpty(j.TransitionKey))
             .OrderBy(j => j.ExecuteAt!.Value)
-            .Select(j => new TransitionItem
+            .Select(j =>
             {
-                Name = j.TransitionKey!,
-                Kind = ScheduledTransitionKind,
-                ExecuteAtUtc = j.ExecuteAt!.Value,
-                Href = urlTemplateBuilder.BuildTransitionUrl(domain, workflow, instanceId, j.TransitionKey!),
-                View = new ViewHref
+                var transition = ResolveScheduledTransition(currentWorkflow, j);
+                return WithDefinitionDescriptors(new TransitionItem
                 {
-                    Href = urlTemplateBuilder.BuildViewUrl(domain, workflow, instanceId, j.TransitionKey!),
-                    HasView = false,
-                    LoadData = false
-                },
-                Schema = new SchemaHref
-                {
-                    Href = urlTemplateBuilder.BuildSchemaUrl(domain, workflow, instanceId, j.TransitionKey!),
-                    HasSchema = false
-                },
-                Annotations = ResolveScheduledTransitionAnnotations(currentWorkflow, j)
+                    Name = j.TransitionKey!,
+                    Kind = ScheduledTransitionKind,
+                    ExecuteAtUtc = j.ExecuteAt!.Value,
+                    Href = urlTemplateBuilder.BuildTransitionUrl(domain, workflow, instanceId, j.TransitionKey!),
+                    View = new ViewHref
+                    {
+                        Href = urlTemplateBuilder.BuildViewUrl(domain, workflow, instanceId, j.TransitionKey!),
+                        HasView = false,
+                        LoadData = false
+                    },
+                    Schema = new SchemaHref
+                    {
+                        Href = urlTemplateBuilder.BuildSchemaUrl(domain, workflow, instanceId, j.TransitionKey!),
+                        HasSchema = false
+                    },
+                    Annotations = transition?.Annotations
+                }, currentWorkflow, transition, j.SourceState!);
             });
 
-    private static Dictionary<string, string>? ResolveScheduledTransitionAnnotations(
+    private static Transition? ResolveScheduledTransition(
         Definitions.Workflow workflow,
         InstanceJob job)
     {
@@ -2299,8 +2329,65 @@ public sealed class InstanceQueryAppService(
 
         var stateResult = workflow.GetState(job.SourceState);
         return stateResult.IsSuccess
-            ? stateResult.Value?.FindTransition(job.TransitionKey!)?.Annotations
+            ? stateResult.Value?.FindTransition(job.TransitionKey!)
             : null;
+    }
+
+    /// <summary>
+    /// Fills the definition-derived descriptors of a <c>transitions[]</c> entry — <c>labels</c> and the
+    /// target state — so a client can render the transition by its display text and know where it
+    /// leads without reading the workflow definition itself. <paramref name="fromStateKey"/> is the
+    /// state the transition is listed in, which <c>$self</c> resolves to. Leaves the entry untouched
+    /// when the transition no longer resolves; keeps the raw target, without a type, when the target
+    /// state does not.
+    /// </summary>
+    /// <summary>
+    /// A definition's labels as the response list, or null — so the field is omitted — when it
+    /// declares none.
+    /// </summary>
+    private static List<LanguageLabel>? ToLabelList(IReadOnlyCollection<LanguageLabel> labels) =>
+        labels.Count > 0 ? labels.ToList() : null;
+
+    private static TransitionItem WithDefinitionDescriptors(
+        TransitionItem item,
+        Definitions.Workflow workflow,
+        Transition? transition,
+        string fromStateKey)
+    {
+        if (transition is null)
+            return item;
+
+        item.Labels = ToLabelList(transition.Labels);
+
+        item.Target = DescribeTargetState(workflow, transition.Target, fromStateKey);
+        return item;
+    }
+
+    /// <summary>
+    /// Describes a target state with the vocabulary the response uses for the current state — key,
+    /// type, sub type, labels, and the flow a subFlow state starts. Shared by every
+    /// <c>transitions[]</c> entry and the <c>timeout</c> block so a client renders all of them with one
+    /// code path. <paramref name="fromStateKey"/> is what <c>$self</c> resolves to. A target that does
+    /// not resolve keeps its raw key and nothing else.
+    /// </summary>
+    private static TransitionTarget DescribeTargetState(
+        Definitions.Workflow workflow,
+        string targetKey,
+        string fromStateKey)
+    {
+        var targetState = workflow.GetState(targetKey, fromStateKey);
+        if (!targetState.IsSuccess || targetState.Value is null)
+            return new TransitionTarget { Key = targetKey };
+
+        var state = targetState.Value;
+        return new TransitionTarget
+        {
+            Key = state.Key,
+            StateType = ToCamelCaseName(state.StateType),
+            StateSubType = ToCamelCaseName(state.SubType),
+            Labels = ToLabelList(state.Labels),
+            SubFlow = state.StateType == StateType.SubFlow ? state.SubFlow?.Process.Key : null
+        };
     }
 
     /// <summary>
@@ -2357,7 +2444,9 @@ public sealed class InstanceQueryAppService(
         return new InstanceTimeoutOutput
         {
             Key = effectiveTimeout.Key,
-            Target = effectiveTimeout.Target,
+            // Resolved in the polled instance's own definition: a parent-supplied override names the
+            // child's state, so the child's workflow is the one that knows it.
+            Target = DescribeTargetState(currentWorkflow, effectiveTimeout.Target, instance.GetCurrentState),
             ExecuteAtUtc = timeoutJob.ExecuteAt!.Value,
             Annotations = effectiveTimeout.Annotations
         };
@@ -2827,7 +2916,8 @@ public sealed class InstanceQueryAppService(
             {
                 Key = schema.Key,
                 Type = schema.Type,
-                Schema = schema.Schema
+                Schema = schema.Schema,
+                Labels = schema.Labels.Length > 0 ? schema.Labels.ToList() : null
             });
     }
 
@@ -3008,7 +3098,8 @@ public sealed class InstanceQueryAppService(
             {
                 Key = schema.Key,
                 Type = schema.Type,
-                Schema = schema.Schema
+                Schema = schema.Schema,
+                Labels = schema.Labels.Length > 0 ? schema.Labels.ToList() : null
             });
     }
 
@@ -3383,6 +3474,11 @@ public sealed class InstanceQueryAppService(
             return Result<HumanTask.HumanTaskListOutput>.Fail(callerRolesResult.Error);
         var userRoles = callerRolesResult.Value ?? [];
 
+        // Read once per request from the request scope, before any fan-out: the isolated scopes of the
+        // leaf hops are fresh DI scopes with no ambient caller, so ICurrentUser resolved inside is empty.
+        var actorUserName = currentUser.ActorUserName?.Trim();
+        var subjectUserName = currentUser.UserName?.Trim();
+
         // Keyed on the caller scope, so the cache sits BEHIND the authorization filter and an entry
         // is only ever served back to the scope that produced it — which is what lets it hold
         // humanTask text at all. An override skips the READ and still takes the build gate and
@@ -3541,6 +3637,8 @@ public sealed class InstanceQueryAppService(
                     {
                         InstanceIds = [.. candidates.Select(c => c.Id)],
                         CallerRoles = userRoles,
+                        ActorUserName = actorUserName,
+                        SubjectUserName = subjectUserName,
                         Headers = headers is null
                             ? []
                             : new Dictionary<string, string?>(headers, StringComparer.OrdinalIgnoreCase),
@@ -3649,6 +3747,8 @@ public sealed class InstanceQueryAppService(
         string? CurrentState,
         string? StateType,
         InstanceStatus? Status,
+        string? StateSubType = null,
+        List<LanguageLabel>? StateLabels = null,
         DataHref? SubFlowData = null,
         ViewHref? SubFlowView = null,
         List<ActiveCorrelationHref>? SubFlowActiveCorrelations = null,

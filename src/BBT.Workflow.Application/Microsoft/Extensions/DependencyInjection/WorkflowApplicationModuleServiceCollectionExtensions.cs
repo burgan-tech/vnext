@@ -11,6 +11,7 @@ using BBT.Workflow.Instances.Related;
 using BBT.Workflow.RepresentationEtag;
 using BBT.Workflow.Resilience;
 using BBT.Workflow.Runtime;
+using BBT.Workflow.Scripting.Sandbox;
 using BBT.Workflow.Extentions;
 using BBT.Workflow.SubFlow;
 using BBT.Workflow.Authorization;
@@ -247,6 +248,11 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
         services.AddSingleton<IComponentValidator, SchemaComponentValidator>();
         services.AddSingleton<IComponentValidator, ExtensionComponentValidator>();
         services.AddSingleton<IComponentValidator, MappingComponentValidator>();
+        // Publish-time allowedAssemblies check. Factory + GetService because read-only hosts
+        // (AddApplicationCacheModule) register validators without AddTaskHandlers, i.e. without
+        // ScriptSandboxOptions; they never publish, so the defaults are enough there.
+        services.TryAddSingleton<IScriptAssemblyCatalog>(sp =>
+            new SandboxScriptAssemblyCatalog(sp.GetService<ScriptSandboxOptions>() ?? new ScriptSandboxOptions()));
         services.AddSingleton<ComponentValidatorProcessor>();
     }
 
