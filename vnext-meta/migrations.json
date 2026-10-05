@@ -238,11 +238,11 @@
       "type": "behavior",
       "component": "task",
       "path": "attributes.config.sourceMapping",
-      "since": "0.0.98",
+      "since": "0.0.99",
       "severity": "warning",
       "title": "CacheAsideTask runs its source as a task; key accepts a script",
       "description": "sourceMapping is now the SOURCE task's mapping (InputHandler before the call, OutputHandler after it) and the cache stores its shaped output instead of the raw source result; the task-level onExecutionTasks[].mapping OutputHandler runs on hits and misses. keyExpression is removed in favour of key as a ScriptCode object (dynamicExpresso or ICacheKeyMapping). Cache I/O follows the 'statestore' routing mode; the 'cacheaside' wire type and routing key are gone. Entries written by earlier versions hold raw source results and are read back as if shaped.",
-      "action": "Move keyExpression into key: { location: 'dynamicExpresso', code: <expression> }. If sourceMapping used to shape the cached raw result in its OutputHandler, keep it (it now shapes before caching) and drop reshaping that depended on the raw payload; flush or let TTL expire old cache entries. Remove any Workflow:TaskInvocation:Modes.cacheaside override; use Modes.statestore instead."
+      "action": "Move keyExpression into key: { location: 'dynamicExpresso', encoding: 'NAT', code: <expression> } (encoding defaults to B64, so plain-text code needs NAT). If sourceMapping used to shape the cached raw result in its OutputHandler, keep it (it now shapes before caching) and drop reshaping that depended on the raw payload; flush or let TTL expire old cache entries. Remove any Workflow:TaskInvocation:Modes.cacheaside override; use Modes.statestore instead."
     },
     {
       "id": "async-transition-oversized-body-no-longer-stalls-the-arm",
@@ -260,7 +260,7 @@
       "type": "behavior",
       "component": "script",
       "path": "attributes.scripts.allowedAssemblies",
-      "since": "0.0.98",
+      "since": "0.0.99",
       "severity": "warning",
       "title": "Publish rejects allowedAssemblies names that do not resolve",
       "description": "Publish of sys-flows / sys-tasks / sys-functions / sys-extensions now returns 400 when any declared scripts.allowedAssemblies simple name (flow level or on any script slot's scripts.allowedAssemblies) is neither a framework assembly nor a DLL in Scripting:Sandbox:PluginDirectory; the error member names the field path. It applies even when Scripting:Sandbox:Enabled=false, where the compile ignores the grant, so such a name previously had no effect.",
