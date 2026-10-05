@@ -201,12 +201,14 @@ public static partial class WorkflowLogs
         string status);
 
     /// <summary>
-    /// Logs when the short status lock could not be acquired within its bounded retry budget.
+    /// Logs when the short status lock could not be acquired. <c>InstanceStatusLock</c> makes a
+    /// single attempt by design — a held lock means a concurrent hop is mid-flip and the caller's
+    /// retry is the back-pressure — so the message must not suggest an in-process retry budget.
     /// </summary>
     [LoggerMessage(
         EventId = 10139,
         Level = LogLevel.Warning,
-        Message = "Status lock acquisition failed for {LockKey} after bounded retries")]
+        Message = "Status lock acquisition failed for {LockKey} (single attempt; held by a concurrent hop — the caller retries)")]
     public static partial void StatusLockAcquireFailed(
         this ILogger logger,
         string lockKey);

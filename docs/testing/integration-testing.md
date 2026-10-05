@@ -192,15 +192,45 @@ everything is in the observability stack from `etc/docker`:
 | MockLab admin | `GET http://localhost:3001/_admin/logs` | The exact body the runtime sent; a broken template shows up in the `X-Mocklab-Template-Error` response header |
 | Host logs | `./run-docker.sh logs <domain> [host]` (when started with `up`) | stdout of a host |
 
+**Read first:** vnext-example `TEST-SCENARIOS.md` § *Koşum Öncesi Kontrol* — environment checklist,
+the suite index with every suite's dependencies (MockLab, roles/headers, Dapr scheduler/pub-sub,
+optional domains, caller-role provider) and the traps below. Each suite's own `README.md` carries its
+specifics. Cluster a red run by error signature before reading anything as a regression.
+
 Test-side helpers worth knowing (`WorkflowTestBase`): `RunAcceptedAsync` fails immediately with the
-runtime's error body when a transition is rejected; `AssertNotFaultedAsync` after any start state that
-has `onEntries`; `SendRawAsync` for header-less requests; `Headers(roles)` for the standard caller
-header set. A parked auto-chain rests in **Busy** — wait for the state, not the status.
+runtime's error body when a transition is rejected; `SubmitAsync` does the same without waiting for the
+addressed instance to settle (a parent with an open SubFlow stays Busy); `AssertNotFaultedAsync` after
+any start state that has `onEntries`; `SendRawAsync` for header-less requests; `Headers(roles)` for the
+standard caller header set.
+
+Runtime behaviours that read like regressions and are not (verified 2026-10-05 on `master`):
+
+- **A parked auto-chain rests in Busy** — `ResolveAvailableStep` keeps a target with auto transitions
+  Busy when no rule fires. Wait for the state, not the status, and drive the `updateData` that opens
+  the gate (`data-integrity-lab` was recorded as a "run-parallel hang" for seven weeks because its
+  test never sent those updates).
+- **409 `Failed to acquire lock` is retried by the client.** `InstanceStatusLock` is single-attempt by
+  design; `WorkflowTestBase.RunAsync` retries exactly that signature (5 × 200 ms). A test that fires the
+  moment it observes a state lands while the runtime finishes the same hop under the lock (a leaf
+  reports its state while the parent applies the leaf's `sub:state-changed` relay). Never discard
+  `RunAsync`'s status — a swallowed refusal becomes a 60 s "never reached state X".
+- **Read functions do not enforce `queryRoles`** (gate removed 2026-09-23): `state`, `data`, `schema`,
+  `master`, `view`, `/incidents` answer every caller; the rule is answered by
+  `authorize?queryRoles=true`. A test expecting a 403 from a read is stale. A denied role is not bought
+  back by another allowed role of the same caller (#1057).
+- **`$InstanceStarter` / `$PreviousUser` match `act_sub`**, not `user_reference`; the standard header set
+  deliberately omits `act_sub`.
 
 ## 7. Cross-domain scenarios
 
-A parent in `core` driving components in `partner` over Dapr needs the three-domain lab
-(`labs/cross-domain/lab.sh up`, discovery on `:4231`, partner on `:4211`). Use the
+A parent in `core` driving components in `partner` over Dapr needs the cross-domain lab
+(`labs/cross-domain/lab.sh up`: partner `:4211`, credit `:4221`, discovery `:4231`). The urls are
+committed in `test.runsettings`, so the suites do not trust "the variable is set": vnext-example's
+`OptionalDomainEndpoint` probes `GET {url}/health` (2 s) and checks the reported `domain`, and the
+dependent tests **skip** when it does not answer. A cross-domain test that times out on a core-only
+stack is a test defect. Note the offset clash: `run-docker.sh up discovery` records discovery at offset
+20 (`:4221`), where `lab.sh` puts **credit** — the domain check makes such a mix-up skip instead of
+misfire. Use the
 `cross-domain-lab` skill; the lab README lists its own pitfalls (`vNextApi__BaseUrl` must not be
 `localhost`, `DbMigrator exit 139` means a stale image, change loop is `images → down → up`).
 
