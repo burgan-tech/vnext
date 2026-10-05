@@ -926,8 +926,8 @@ public class WorkflowValidator
         {
             var statePath = $"{nameof(Workflow)}.States[{state.Key}]";
 
-            ValidateTaskScriptCodes(state.OnEntries, $"{statePath}.{nameof(State.OnEntries)}", errors);
-            ValidateTaskScriptCodes(state.OnExits, $"{statePath}.{nameof(State.OnExits)}", errors);
+            ValidateTaskCollection(state.OnEntries, $"{statePath}.{nameof(State.OnEntries)}", errors);
+            ValidateTaskCollection(state.OnExits, $"{statePath}.{nameof(State.OnExits)}", errors);
 
             ScriptCodeValidator.Validate(
                 state.SubFlow?.Mapping,
@@ -971,24 +971,65 @@ public class WorkflowValidator
             ScriptCodeValidator.Validate(transition.Rule, $"{basePath}.{nameof(Transition.Rule)}", errors);
         }
 
-        ValidateTaskScriptCodes(
+        ValidateTaskCollection(
             transition.OnExecutionTasks, $"{basePath}.{nameof(Transition.OnExecutionTasks)}", errors);
 
         ValidateViewRules(transition.View, $"{basePath}.{nameof(Transition.View)}", errors);
     }
 
     /// <summary>
-    /// Validates the mapping of each task in an OnExecute collection.
+    /// Validates one OnExecute collection: each entry's mapping script, and the response slots.
+    /// Entries at the same order run in parallel and are merged by slot
+    /// (<see cref="OnExecuteTask.ResponseVariableKey"/>); two entries filing under one slot carry
+    /// different payloads (a SubProcess returns its new instance id, every response its own duration),
+    /// so the merge would throw at run time. A later order may reuse a slot: its
+    /// write overwrites the earlier value, whether that order runs one entry or a parallel group (the
+    /// merge compares only the slots the branches of one group actually wrote).
     /// </summary>
-    private static void ValidateTaskScriptCodes(
+    private static void ValidateTaskCollection(
         IEnumerable<OnExecuteTask> tasks,
         string basePath,
         IList<ValidationResult> errors)
     {
-        foreach (var (task, index) in tasks.Select((t, i) => (t, i)))
+        var entries = tasks.Select((t, i) => (Task: t, Index: i)).ToList();
+
+        foreach (var (task, index) in entries)
         {
             ScriptCodeValidator.Validate(
                 task.Mapping, $"{basePath}[{index}].{nameof(OnExecuteTask.Mapping)}", errors);
+
+            if (task.VariableKey is not null && !OnExecuteTask.IsValidVariableKey(task.VariableKey))
+            {
+                errors.Add(new ValidationResult(
+                    $"{basePath}[{index}] variableKey '{task.VariableKey}' is not a valid response slot name: " +
+                    "use letters, digits and '_', starting with a letter or '_' (max 100 characters).",
+                    [$"{basePath}[{index}].{nameof(OnExecuteTask.VariableKey)}"]));
+            }
+        }
+
+        foreach (var group in entries.GroupBy(e => e.Task.Order))
+        {
+            // response slot -> index of the entry that claimed it first
+            var claimed = new Dictionary<string, int>(StringComparer.Ordinal);
+
+            foreach (var (task, index) in group)
+            {
+                var slot = task.ResponseVariableKey;
+                if (string.IsNullOrWhiteSpace(slot))
+                    continue;
+
+                if (claimed.TryGetValue(slot, out var firstIndex))
+                {
+                    errors.Add(new ValidationResult(
+                        $"{basePath}[{index}] and {basePath}[{firstIndex}] run in parallel at order {task.Order} " +
+                        $"and both file their response under '{slot}'; the parallel merge would reject the two " +
+                        "different payloads. Give one of them a distinct 'variableKey' or a different order.",
+                        [$"{basePath}[{index}].{nameof(OnExecuteTask.VariableKey)}"]));
+                    continue;
+                }
+
+                claimed[slot] = index;
+            }
         }
     }
 

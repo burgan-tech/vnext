@@ -515,4 +515,71 @@ public class FunctionComponentValidatorTests
         // Assert
         result.IsValid.ShouldBeTrue();
     }
+
+    private static JsonElement MultiTaskFunction(string firstEntryExtra, string secondEntryExtra, string secondKey = "t") =>
+        JsonDocument.Parse($$"""
+        {
+            "scope": "F",
+            "onExecutionTasks": [
+                { "order": 1, "task": {"key": "t", "domain": "d", "flow": "sys-tasks", "version": "1.0.0"},
+                  "mapping": { "location": "./src/A.csx", "code": "cmV0dXJuIHRydWU7" } {{firstEntryExtra}} },
+                { "order": 1, "task": {"key": "{{secondKey}}", "domain": "d", "flow": "sys-tasks", "version": "1.0.0"},
+                  "mapping": { "location": "./src/B.csx", "code": "cmV0dXJuIHRydWU7" } {{secondEntryExtra}} }
+            ],
+            "output": { "location": "./src/Output.csx", "code": "cmV0dXJuIHRydWU7" }
+        }
+        """).RootElement;
+
+    [Fact]
+    public void Validate_SameTaskTwiceWithoutVariableKey_IsRejected()
+    {
+        var result = _validator.Validate(MultiTaskFunction("", ""));
+
+        result.ValidationErrors.ShouldContain(e => e.MemberNames.Contains("Function.OnExecutionTasks[1]"));
+    }
+
+    [Fact]
+    public void Validate_SameTaskTwiceWithDistinctVariableKeys_IsAccepted()
+    {
+        var result = _validator.Validate(MultiTaskFunction(
+            """, "variableKey": "first" """, """, "variableKey": "second" """));
+
+        result.ValidationErrors.ShouldNotContain(e => e.MemberNames.Any(m => m.StartsWith("Function.OnExecutionTasks")));
+    }
+
+    [Fact]
+    public void Validate_VariableKeyClaimingSiblingFallbackSlot_IsRejected()
+    {
+        // Second entry's variableKey "t" equals the first entry's legacy slot ToVariableName("t").
+        var result = _validator.Validate(MultiTaskFunction("", """, "variableKey": "t" """, secondKey: "other"));
+
+        result.ValidationErrors.ShouldContain(e => e.MemberNames.Contains("Function.OnExecutionTasks[1]"));
+    }
+
+    [Fact]
+    public void Validate_LegacySingleTaskInvalidVariableKey_IsRejected()
+    {
+        var attributes = JsonDocument.Parse("""
+        {
+            "scope": "F",
+            "task": {
+                "type": "6",
+                "config": { "url": "https://example.com", "method": "GET" },
+                "variableKey": "bad-name"
+            }
+        }
+        """).RootElement;
+
+        var result = _validator.Validate(attributes);
+
+        result.ValidationErrors.ShouldContain(e => e.MemberNames.Contains("Function.Task.VariableKey"));
+    }
+
+    [Fact]
+    public void Validate_InvalidVariableKeyFormat_IsRejected()
+    {
+        var result = _validator.Validate(MultiTaskFunction(""", "variableKey": "bad-name" """, "", secondKey: "other"));
+
+        result.ValidationErrors.ShouldContain(e => e.MemberNames.Contains("Function.OnExecutionTasks[0].VariableKey"));
+    }
 }

@@ -849,72 +849,114 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
     }
 
     /// <summary>
-    /// Deterministically merges one completed parallel branch into this context.
-    /// The coordinator calls this method in task definition order.
+    /// Merges one completed parallel branch — a round of one. See <see cref="MergeParallelBranches"/>.
+    /// Calling this once per branch is NOT a round merge: sibling branches merged one call at a time
+    /// cannot detect each other's conflicting writes. Merge siblings together with
+    /// <see cref="MergeParallelBranches"/>.
     /// </summary>
     public void MergeParallelBranch(ScriptContext branch)
     {
-        ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(branch);
-
-        MergeDictionary(TaskResponse, branch.TaskResponse, mergeIntoBody: true);
-        MergeDictionary(OutputResponse, branch.OutputResponse, mergeIntoBody: false);
-        MergeMetadata(branch.MetaData);
-
-        if (branch.Mutations.HasStageChange)
-        {
-            if (Mutations.HasStageChange && !string.Equals(Mutations.Stage, branch.Mutations.Stage, StringComparison.Ordinal))
-                throw new InvalidOperationException("Parallel tasks produced conflicting instance Stage mutations.");
-            Mutations.SetStage(branch.Mutations.Stage);
-        }
-
-        // The branch's task outputs were persisted IMMEDIATELY by the InstanceData write
-        // service (row identity computed under the row lock); nothing is re-appended here.
-        // Only sync this context's snapshot with the branch's freshest persisted row so
-        // later tasks and rules read the merged content.
-        var branchData = branch.Instance?.LatestData;
-        if (Instance != null && branchData != null && branchData.Id != Instance.LatestData?.Id
-            && InstanceDataVersionComparer.CompareVersionStrings(
-                branchData.Version, Instance.LatestData?.Version ?? string.Empty) >= 0)
-        {
-            Instance.AcceptPersistedData(branchData.CreateSnapshot());
-        }
+        MergeParallelBranches([branch]);
     }
 
-    private void MergeDictionary(
-        Dictionary<string, dynamic?> target,
-        Dictionary<string, dynamic?> source,
-        bool mergeIntoBody)
+    /// <summary>
+    /// Deterministically merges the completed branches of ONE parallel round, in list order (the
+    /// coordinator passes task definition order). Every branch must have been created by
+    /// <see cref="CreateParallelBranch"/> from this context, with this context left untouched until
+    /// the merge.
+    /// <para>
+    /// A slot (TaskResponse / OutputResponse / MetaData key) counts as written by a branch when the
+    /// branch added it or replaced its value. Branches container-copy these dictionaries with the
+    /// values shared by reference, so an inherited slot the branch never touched is the very same
+    /// reference and is skipped. A written slot overwrites this context's value, as a sequential run
+    /// would; only two branches of the same round writing one slot with non-equivalent payloads is a
+    /// conflict. An in-place mutation of an inherited value inside a branch is not detected — the same
+    /// visibility trade-off <see cref="CreateParallelBranch"/> documents.
+    /// </para>
+    /// </summary>
+    public void MergeParallelBranches(IReadOnlyList<ScriptContext> branches)
     {
-        foreach (var (key, value) in source)
-        {
-            if (target.TryGetValue(key, out var existing))
-            {
-                if (!JsonEquivalent(existing, value))
-                    throw new InvalidOperationException($"Parallel tasks produced conflicting output for key '{key}'.");
-                continue;
-            }
+        ThrowIfDisposed();
+        ArgumentNullException.ThrowIfNull(branches);
 
+        // Pass 1, against the untouched pre-round state: collect each branch's writes and reject
+        // two branches writing one slot differently. Slot conflicts are detected before any write is
+        // applied; a Stage mutation conflict is checked afterwards, per branch.
+        var taskWrites = CollectRoundWrites(TaskResponse, branches, static b => b.TaskResponse, "output");
+        var outputWrites = CollectRoundWrites(OutputResponse, branches, static b => b.OutputResponse, "output");
+        var metadataWrites = CollectRoundWrites(MetaData!, branches, static b => b.MetaData!, "metadata");
+
+        // Pass 2: apply in branch order.
+        foreach (var (key, value) in taskWrites)
+        {
             var cloned = CloneDynamic(value);
-            target.Add(key, cloned);
-            if (mergeIntoBody)
-                SetBody(cloned);
+            TaskResponse[key] = cloned;
+            SetBody(cloned);
+        }
+
+        foreach (var (key, value) in outputWrites)
+            OutputResponse[key] = CloneDynamic(value);
+
+        foreach (var (key, value) in metadataWrites)
+            MetaData[key] = CloneDynamic(value)!;
+
+        foreach (var branch in branches)
+        {
+            if (branch.Mutations.HasStageChange)
+            {
+                if (Mutations.HasStageChange && !string.Equals(Mutations.Stage, branch.Mutations.Stage, StringComparison.Ordinal))
+                    throw new InvalidOperationException("Parallel tasks produced conflicting instance Stage mutations.");
+                Mutations.SetStage(branch.Mutations.Stage);
+            }
+
+            // The branch's task outputs were persisted IMMEDIATELY by the InstanceData write
+            // service (row identity computed under the row lock); nothing is re-appended here.
+            // Only sync this context's snapshot with the branch's freshest persisted row so
+            // later tasks and rules read the merged content.
+            var branchData = branch.Instance?.LatestData;
+            if (Instance != null && branchData != null && branchData.Id != Instance.LatestData?.Id
+                && InstanceDataVersionComparer.CompareVersionStrings(
+                    branchData.Version, Instance.LatestData?.Version ?? string.Empty) >= 0)
+            {
+                Instance.AcceptPersistedData(branchData.CreateSnapshot());
+            }
         }
     }
 
-    private void MergeMetadata(Dictionary<string, dynamic> source)
+    /// <summary>
+    /// The slots the round's branches wrote, first writer per slot, in branch order. An entry whose
+    /// value is the same reference as <paramref name="current"/>'s is inherited and untouched.
+    /// </summary>
+    private static List<KeyValuePair<string, dynamic?>> CollectRoundWrites(
+        Dictionary<string, dynamic?> current,
+        IReadOnlyList<ScriptContext> branches,
+        Func<ScriptContext, Dictionary<string, dynamic?>> slotsOf,
+        string kind)
     {
-        foreach (var (key, value) in source)
-        {
-            if (MetaData.TryGetValue(key, out var existing))
-            {
-                if (!JsonEquivalent(existing, value))
-                    throw new InvalidOperationException($"Parallel tasks produced conflicting metadata for key '{key}'.");
-                continue;
-            }
+        var writes = new List<KeyValuePair<string, dynamic?>>();
+        var firstWrite = new Dictionary<string, dynamic?>(current.Comparer);
 
-            MetaData.Add(key, CloneDynamic(value)!);
+        foreach (var branch in branches)
+        {
+            foreach (var (key, value) in slotsOf(branch))
+            {
+                if (current.TryGetValue(key, out var inherited) && ReferenceEquals(inherited, value))
+                    continue;
+
+                if (firstWrite.TryGetValue(key, out var earlier))
+                {
+                    if (!JsonEquivalent(earlier, value))
+                        throw new InvalidOperationException($"Parallel tasks produced conflicting {kind} for key '{key}'.");
+                    continue;
+                }
+
+                firstWrite[key] = value;
+                writes.Add(new KeyValuePair<string, dynamic?>(key, value));
+            }
         }
+
+        return writes;
     }
 
     /// <summary>

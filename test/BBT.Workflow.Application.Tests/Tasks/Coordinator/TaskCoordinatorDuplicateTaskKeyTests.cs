@@ -221,6 +221,36 @@ public sealed class TaskCoordinatorDuplicateTaskKeyTests
     }
 
     /// <summary>
+    /// Grouping is by response slot: the same task key at one order with distinct
+    /// <c>variableKey</c> values files under distinct slots, so no warning is due.
+    /// </summary>
+    [Fact]
+    public async Task ExecuteWithDetailsAsync_SameTaskKeyDistinctVariableKeys_DoesNotLogWarning()
+    {
+        var engine = Substitute.For<ITaskExecutionEngine>();
+        var definitions = new[]
+        {
+            OnExecuteTask.Create(0, WorkflowTaskFactory.CreateHttpTask("spawn-child"), ScriptCode.FromNative(string.Empty), variableKey: "primaryChild"),
+            OnExecuteTask.Create(0, WorkflowTaskFactory.CreateHttpTask("spawn-child"), ScriptCode.FromNative(string.Empty), variableKey: "secondaryChild")
+        };
+        StubEngine(engine, new ConcurrentDictionary<OnExecuteTask, TaskEngineExecutionOptions>());
+
+        var logger = Substitute.For<ILogger<TaskCoordinator>>();
+        logger.IsEnabled(Arg.Any<LogLevel>()).Returns(true);
+        var services = new ServiceCollection().AddSingleton(engine).BuildServiceProvider();
+        var coordinator = CreateCoordinator(engine, services, logger);
+
+        await coordinator.ExecuteWithDetailsAsync(
+            definitions, Guid.NewGuid(), TaskTrigger.OnExecute, TaskExecutionOrigin.Flow, CreateContext());
+
+        logger.ReceivedCalls()
+            .Any(call => call.GetMethodInfo().Name == nameof(ILogger.Log)
+                         && call.GetArguments()[1] is EventId id
+                         && id.Id == 10155)
+            .ShouldBeFalse();
+    }
+
+    /// <summary>
     /// After the extension-response-key fix, two extensions sharing a task Reference at the same
     /// order file their outputs under their OWN keys (<c>TaskEngineExecutionOptions.ResponseVariableKey</c>,
     /// set per-extension by <c>InstanceExtensionService</c>'s <c>optionsRefiner</c>) — this is a

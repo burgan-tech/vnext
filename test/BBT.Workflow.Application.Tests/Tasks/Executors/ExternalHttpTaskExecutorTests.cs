@@ -1,9 +1,11 @@
 using System;
 using System.Net;
 using System.Net.Http;
+using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using BBT.Workflow;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
@@ -60,6 +62,20 @@ public sealed class ExternalHttpTaskExecutorTests
         handler.LastRequest!.RequestUri!.ToString().ShouldBe("https://api.example.com/orders");
         handler.LastRequest.Method.ShouldBe(HttpMethod.Post);
         handler.LastBody!.ShouldContain("\"orderId\"");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ResponseVariableKeySet_FilesResponseUnderThatSlot()
+    {
+        var executor = CreateExecutor(new StubHttpMessageHandler(Ok()));
+        var task = CreateTask("""{ "url": "https://api.example.com/orders", "method": "GET" }""");
+        var context = CreateContext(task, responseVariableKey: "primaryCall");
+
+        var result = await executor.ExecuteAsync(context);
+
+        result.IsSuccess.ShouldBeTrue();
+        context.ScriptContext.TaskResponse.ShouldContainKey("primaryCall");
+        context.ScriptContext.TaskResponse.ShouldNotContainKey(task.Key.ToVariableName());
     }
 
     /// <summary>
@@ -133,7 +149,7 @@ public sealed class ExternalHttpTaskExecutorTests
             NullLogger<ExternalHttpTaskExecutor>.Instance);
     }
 
-    private static TaskExecutorContext CreateContext(ExternalHttpTask task)
+    private static TaskExecutorContext CreateContext(ExternalHttpTask task, string? responseVariableKey = null)
     {
         var onExecute = OnExecuteTask.Create(1, task, ScriptCode.FromNative(string.Empty));
         var instance = Instances.Instance.Create(Guid.NewGuid(), TestWorkflow, TestVersion, "ctx-key");
@@ -147,7 +163,10 @@ public sealed class ExternalHttpTaskExecutorTests
             .SetWorkflow(workflow)
             .Build();
 
-        return new TaskExecutorContext(task, onExecute, scriptContext, null, TaskTrigger.OnExecute,TaskExecutionOrigin.Flow);
+        return new TaskExecutorContext(task, onExecute, scriptContext, null, TaskTrigger.OnExecute, TaskExecutionOrigin.Flow)
+        {
+            ResponseVariableKey = responseVariableKey
+        };
     }
 
     private sealed class SingleClientFactory(HttpMessageHandler handler) : IHttpClientFactory
