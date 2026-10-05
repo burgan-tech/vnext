@@ -153,7 +153,7 @@ public class ScriptContextCowBranchTests
     }
 
     [Fact]
-    public void MergeParallelBranch_Behavior_Unchanged()
+    public void MergeParallelBranch_NewSlot_IsMergedIntoResponsesAndBody()
     {
         var parent = ParentContext();
 
@@ -168,51 +168,128 @@ public class ScriptContextCowBranchTests
 
         parent.TaskResponse.ContainsKey("branchTask").ShouldBeTrue();
         Assert.Contains("branchResult", BodyJson(parent));
+    }
 
-        // Conflict contract unchanged: a second branch producing a DIFFERENT value for the same
-        // key still throws.
-        var conflicting = parent.CreateParallelBranch();
-        conflicting.TaskResponse["branchTask"] = new { Different = true };
-        Assert.Throws<InvalidOperationException>(() => parent.MergeParallelBranch(conflicting));
+    /// <summary>
+    /// A later round re-writing a slot an earlier round left behind is an overwrite, exactly as a
+    /// sequential run would be — the merge must not compare it against the inherited value.
+    /// </summary>
+    [Fact]
+    public void MergeParallelBranches_InheritedSlotRewrittenByOneBranch_Overwrites()
+    {
+        var parent = ParentContext(); // seedTask already present
+
+        var rewriter = parent.CreateParallelBranch();
+        rewriter.SetStandardResponse(new StandardTaskResponse { Data = new { Seed = "rewritten" }, IsSuccess = true }, "seedTask");
+        var sibling = parent.CreateParallelBranch();
+        sibling.SetStandardResponse(new StandardTaskResponse { Data = new { Other = 1 }, IsSuccess = true }, "otherTask");
+
+        Should.NotThrow(() => parent.MergeParallelBranches([rewriter, sibling]));
+
+        JsonSerializer.Serialize((object?)parent.TaskResponse["seedTask"], ScriptContext.JsonScriptBodyOptions)
+            .ShouldContain("rewritten");
+        parent.TaskResponse.ContainsKey("otherTask").ShouldBeTrue();
+    }
+
+    [Fact]
+    public void MergeParallelBranches_UntouchedInheritedSlot_KeepsItsValueByReference()
+    {
+        var parent = ParentContext();
+        // object-typed so ReferenceEquals binds statically (a dynamic operand makes the call
+        // dynamic, and Shouldly's extension method cannot bind on a dynamic receiver).
+        object? before = parent.TaskResponse["seedTask"];
+
+        var branch = parent.CreateParallelBranch();
+        branch.SetStandardResponse(new StandardTaskResponse { Data = new { X = 1 }, IsSuccess = true }, "otherTask");
+
+        parent.MergeParallelBranches([branch]);
+
+        ReferenceEquals(before, (object?)parent.TaskResponse["seedTask"]).ShouldBeTrue();
+    }
+
+    [Fact]
+    public void MergeParallelBranches_TwoBranchesWriteOneSlotDifferently_Conflicts()
+    {
+        var parent = ParentContext();
+
+        var first = parent.CreateParallelBranch();
+        first.SetStandardResponse(new StandardTaskResponse { Data = new { V = 1 }, IsSuccess = true }, "sharedTask");
+        var second = parent.CreateParallelBranch();
+        second.SetStandardResponse(new StandardTaskResponse { Data = new { V = 2 }, IsSuccess = true }, "sharedTask");
+
+        var ex = Assert.Throws<InvalidOperationException>(() => parent.MergeParallelBranches([first, second]));
+        ex.Message.ShouldBe("Parallel tasks produced conflicting output for key 'sharedTask'.");
+    }
+
+    [Fact]
+    public void MergeParallelBranches_TwoBranchesRewriteInheritedSlotDifferently_Conflicts()
+    {
+        var parent = ParentContext();
+
+        var first = parent.CreateParallelBranch();
+        first.SetStandardResponse(new StandardTaskResponse { Data = new { Seed = "a" }, IsSuccess = true }, "seedTask");
+        var second = parent.CreateParallelBranch();
+        second.SetStandardResponse(new StandardTaskResponse { Data = new { Seed = "b" }, IsSuccess = true }, "seedTask");
+
+        Assert.Throws<InvalidOperationException>(() => parent.MergeParallelBranches([first, second]));
+    }
+
+    [Fact]
+    public void MergeParallelBranches_InheritedMetadataRewrittenByOneBranch_Overwrites_TwoWritersConflict()
+    {
+        var parent = ParentContext();
+        parent.MetaData["trace"] = "parent";
+
+        var rewriter = parent.CreateParallelBranch();
+        rewriter.MetaData["trace"] = "branch";
+        parent.MergeParallelBranches([rewriter]);
+        ((string)parent.MetaData["trace"]).ShouldBe("branch");
+
+        var a = parent.CreateParallelBranch();
+        a.MetaData["trace"] = "a";
+        var b = parent.CreateParallelBranch();
+        b.MetaData["trace"] = "b";
+        var ex = Assert.Throws<InvalidOperationException>(() => parent.MergeParallelBranches([a, b]));
+        ex.Message.ShouldBe("Parallel tasks produced conflicting metadata for key 'trace'.");
     }
 
     /// <summary>
     /// B7: JsonEquivalent's JsonElement fast-path (JsonElement.DeepEquals) must reach the same
     /// no-conflict verdict as the legacy serialize-and-compare path for two structurally identical
     /// documents — including when their property order differs, since DeepEquals compares object
-    /// members regardless of declaration order. Both sides of the comparison are seeded as raw
-    /// JsonElement directly on the dictionaries (bypassing CloneDynamic, which would otherwise
-    /// round-trip a JsonElement into an ExpandoObject on first merge) so the fast path — which
-    /// requires BOTH operands to still be JsonElement — is actually exercised, not the legacy
-    /// fallback.
+    /// members regardless of declaration order. Both branches of one round write the slot as a raw
+    /// JsonElement directly on their dictionaries (bypassing CloneDynamic, which would otherwise
+    /// round-trip a JsonElement into an ExpandoObject) so the fast path — which requires BOTH
+    /// operands to still be JsonElement — is actually exercised between the two branches, not the
+    /// legacy fallback.
     /// </summary>
     [Fact]
     public void MergeParallelBranch_JsonElementValues_StructurallyEquivalent_NoConflict()
     {
         var parent = ParentContext();
-        parent.TaskResponse["sharedTask"] = JsonDocument.Parse("""{"a":1,"b":[1,2,3]}""").RootElement;
-
-        var branch = parent.CreateParallelBranch();
+        var first = parent.CreateParallelBranch();
+        first.TaskResponse["sharedTask"] = JsonDocument.Parse("""{"a":1,"b":[1,2,3]}""").RootElement;
+        var second = parent.CreateParallelBranch();
         // Same content, different property order — DeepEquals must still consider these equal.
-        branch.TaskResponse["sharedTask"] = JsonDocument.Parse("""{"b":[1,2,3],"a":1}""").RootElement;
+        second.TaskResponse["sharedTask"] = JsonDocument.Parse("""{"b":[1,2,3],"a":1}""").RootElement;
 
-        Should.NotThrow(() => parent.MergeParallelBranch(branch));
+        Should.NotThrow(() => parent.MergeParallelBranches([first, second]));
     }
 
     /// <summary>
-    /// B7: the fast-path must still detect genuine differences — the conflict contract is not
-    /// weakened by swapping the comparison mechanism.
+    /// B7: the fast-path must still detect genuine differences between two branches of one round —
+    /// the conflict contract is not weakened by swapping the comparison mechanism.
     /// </summary>
     [Fact]
     public void MergeParallelBranch_JsonElementValues_StructurallyDifferent_Conflicts()
     {
         var parent = ParentContext();
-        parent.TaskResponse["sharedTask"] = JsonDocument.Parse("""{"a":1}""").RootElement;
+        var first = parent.CreateParallelBranch();
+        first.TaskResponse["sharedTask"] = JsonDocument.Parse("""{"a":1}""").RootElement;
+        var second = parent.CreateParallelBranch();
+        second.TaskResponse["sharedTask"] = JsonDocument.Parse("""{"a":2}""").RootElement;
 
-        var branch = parent.CreateParallelBranch();
-        branch.TaskResponse["sharedTask"] = JsonDocument.Parse("""{"a":2}""").RootElement;
-
-        Assert.Throws<InvalidOperationException>(() => parent.MergeParallelBranch(branch));
+        Assert.Throws<InvalidOperationException>(() => parent.MergeParallelBranches([first, second]));
     }
 
     /// <summary>
@@ -241,6 +318,7 @@ public class ScriptContextCowBranchTests
             "Dispose",
             "DisposeAsync",
             "MergeParallelBranch",
+            "MergeParallelBranches",
             "RefreshInstance",
             "SetBody",
             "SetOutputResponse",

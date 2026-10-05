@@ -383,8 +383,9 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
         {
             var results = await Task.WhenAll(executionTasks);
 
-            foreach (var outcome in results)
-                context.MergeParallelBranch(outcome.Context);
+            // One round: the merge must see every branch at once to tell a slot an earlier order left
+            // behind (overwritten, like a sequential run) from two branches of this group colliding.
+            context.MergeParallelBranches(results.Select(outcome => outcome.Context).ToList());
 
 
             // If there was a failure, return it with error boundary info
