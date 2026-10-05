@@ -19,6 +19,10 @@
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
     <PackageReference Include="Polly.Extensions.Http" Version="3.0.0" />
+    <!-- x-masking engine. Exact pin: a 0.x single-maintainer package on the PII read path; any upgrade
+         is a deliberate change re-run against Infrastructure.Tests/Masking golden vectors. Only the
+         operator layer is used (see TasmanianDevilFieldMaskingEngine); no other project references it. -->
+    <PackageReference Include="TasmanianDevil" Version="[0.3.0]" />
     <ProjectReference Include="..\BBT.Workflow.Application\BBT.Workflow.Application.csproj" />
     <ProjectReference Include="..\BBT.Workflow.Domain\BBT.Workflow.Domain.csproj" />
   </ItemGroup>
@@ -27,5 +31,6 @@
   </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="BBT.Workflow.Infrastructure.Tests" />
+    <InternalsVisibleTo Include="BBT.Workflow.Benchmarks" />
   </ItemGroup>
 </Project>

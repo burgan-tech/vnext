@@ -185,6 +185,7 @@ public sealed class InstanceControllerRelatedDataTests
             Substitute.For<IEventAppService>(),
             relatedInstanceQueryAppService,
             Substitute.For<BBT.Workflow.Instances.HumanTask.IHumanTaskLeafResolver>(),
+            Substitute.For<BBT.Workflow.Instances.Correlation.IInstanceCorrelationResolver>(),
             new DefaultCallerRoleResolver(Substitute.For<ICurrentUser>()))
         {
             ControllerContext = new ControllerContext { HttpContext = httpContext }

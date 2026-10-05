@@ -1,133 +1,72 @@
-# .NET Coding Standards (Always Apply)
+---
+paths:
+  - "src/**"
+  - "orchestration/**"
+  - "execution/**"
+  - "workers/**"
+  - "modules/**"
+  - "tools/**"
+  - "test/**"
+  - "**/*.cs"
+  - "**/*.csproj"
+---
 
-You are a senior .NET backend developer and an expert in C#, ASP.NET Core, SOLID, Domain Driven Design and Entity Framework Core.
+# .NET Coding Standards (path-scoped: loads with C# code)
 
-## Code Style and Structure
-- Write concise, idiomatic C# code with accurate examples.
-- Follow Aether Framework's recommended folder and module structure (e.g., *.Application, *.Domain, *.Infrastructure, *.HttpApi).
-- Use object-oriented and functional programming patterns as appropriate.
-- Prefer LINQ and lambda expressions for collection operations.
-- Use descriptive variable and method names (e.g., `IsUserSignedIn`, `CalculateTotal`).
-- Follow Microsoft's modular development approach with extension structure to separate concerns between layers.
-- Place an extension class in the namespace of the type it extends to minimize `using` directives. Extensions are generally organized in `BBT.Workflow.Domain`, but this is not mandatory.
-- Follow Clean Architecture and SOLID principles.
-- Apply Domain-Driven Design patterns: Aggregates, Entities, ValueObjects, Repositories, Domain Events.
-- All cross-cutting concerns (Clock, GuidGenerator, Mapper, Tracing, Logging, Metrics) MUST use the Aether SDK.
-- Workflow, orchestration, task handling, and runtime logic MUST follow vNext architectural conventions.
-- Avoid business logic inside controllers, constructors, or infrastructure components.
-- Always use `async/await` for I/O.
-- Use Dependency Injection everywhere.
-- Do not leak EF entities across layers.
-- Apply the Result pattern for business operations.
+Repo-specific rules only — general C#/SOLID/DDD practice is assumed. Layout, hosts and layers:
+`AGENTS.md` § Architecture Overview.
 
-## Naming Conventions
-- PascalCase for class names, method names, public members.
-- camelCase for local variables and private fields.
-- UPPERCASE for constants.
-- Prefix interface names with `I` (e.g., `IUserService`).
+## Structure and layering
+- Clean Architecture + DDD: aggregates, entities, value objects, repositories, domain events. No
+  business logic in controllers, constructors or infrastructure components; never leak EF entities
+  across layers. Orchestration must not depend on Execution internals.
+- Put an extension class in the namespace of the type it extends (fewer `using`s); extensions usually
+  live in `BBT.Workflow.Domain`, not mandatory.
+- DI everywhere; `async/await` for all I/O; `BackgroundService` / `IHostedService` for background work.
+- Workflows are deterministic; schedules are persistent; transitions follow the pipeline.
 
-## Aether SDK Usage Rules
-Use SDK components for:
-- Aspects & Interceptors
-- DistributedCache / DistributedLock
-- BackgroundJob
-- Result Pattern & Error Management
-- Exception Handling
-- Cross Cutting Concerns
-- MultiSchema
-- Domain Events
-- Unit of Work (UoW)
-- OpenTelemetry
+## Aether SDK — use it, do not hand-roll
+All cross-cutting concerns go through Aether: Clock, GuidGenerator, Mapper, tracing, logging, metrics,
+aspects/interceptors, `DistributedCache` / `DistributedLock`, BackgroundJob, Result pattern and error
+management, exception handling, MultiSchema, domain events, Unit of Work, OpenTelemetry. Aether lives
+in a sibling repo — propose SDK changes, never edit it (`AGENTS.md` § Platform repositories).
 
-## Domain Events (Outbox Delivery)
+## Result pattern and errors
+- Business operations return `Result<T>`; exceptions only for infrastructure failures, never control flow.
+- Unified error responses come from the global exception-handling middleware; controllers return the
+  right HTTP status codes.
 
-**The EventHook infrastructure no longer exists** (`IEventPublishHook<TEvent>`, `IEventHookInvoker`,
-`EventHookAttribute`, `EventHookMode` are deleted). Every distributed event publishes plainly
-through the transactional outbox — there is no synchronous, pre-commit hook path anymore. Each
-event MUST have:
+## Caching
+- Shared state goes through `IDistributedCache` (Redis). An in-process `MemoryCache` is allowed only as
+  a deliberate L1 tier in front of it (`ComponentL1Cache`, `DiscoveryL1Cache`, the discovery provider) —
+  do not add a new one without the same invalidation story.
+- Avoid N+1; include related entities deliberately (include strategy: workflow card).
 
-1. **Contract** in `*.Events.Contracts/*/Events/` with `[EventName]` — no `[EventHook]` attribute,
-   there is nothing left for it to configure.
-2. **Event Handler** (`IEventHandler<TEvent>`) in `workers/BBT.Workflow.Workers.Inbox/Handlers/`
-   - Asynchronous, distributed message consumption
-   - Domain match guard: `if (!runtimeInfoProvider.IsDomainMatch(eventData.Domain)) return;`
-   - Standard multi-schema and UoW patterns
-3. **Logging extensions** in `BBT.Workflow.Domain/Logging/WorkflowLogs.cs` — never raw `logger.Log*`
+## Multi-schema
+Resolve the schema through `ICurrentSchema` (headers, routes, query string, custom resolvers) and wrap
+infrastructure operations in `currentSchema.Use(flow)`.
 
-**Registering a relay is what gives an event a second delivery path.** An
-`IPostCommitEventRelay<TEvent>` registered in `AddPipelineServices` opts that event into the
-**Outbox + PostCommitRelay** mode: after commit, `PostCommitRelayDispatcher` relays it as an
-immediate command via `IInstanceCommandGateway` (local in-process, or Dapr service invocation
-cross-domain), and its Inbox handler becomes a durable **backup**. There is no marker interface and
-no central switch to edit; removing the registration is the kill switch. Four events are registered
-today — the three subflow terminal events (backup deduplicated by `ISubItemTerminalGuard`) and
-`InstanceSubStateChangedEvent` (guarded by the per-sub-item lock plus the monotonic
-`SubFlowStateChangedAt` stamp). Every other event has exactly one handler, and that stays the
-default: a new relayed event needs a durable backup, an idempotent order-safe receiver guard,
-measured latency evidence and a council row. Full contract, relay semantics, and the wakeup signal
-that makes the outbox path near-instant: `docs/runtime/event-publish-modes.md`.
+## Distributed events
+How delivery works (outbox, wake-up signal, relay opt-in by DI registration) is `AGENTS.md` § Domain
+Events and `docs/runtime/event-publish-modes.md`. EventHook is deleted — do not reintroduce
+`IEventPublishHook`, `[EventHook]` or a pre-commit path. Checklist for a new event:
+- [ ] Contract in `*.Events.Contracts/*/Events/` with `[EventName]` (no marker interface)
+- [ ] `IEventHandler<TEvent>` in `workers/BBT.Workflow.Workers.Inbox/Handlers/` with the domain guard
+      `if (!runtimeInfoProvider.IsDomainMatch(eventData.Domain)) return;` plus the standard multi-schema
+      and UoW patterns; auto-registered by `AddAetherEventBus`
+- [ ] `WorkflowLogs` entries: `{EventName}Received` (Information), `{EventName}IgnoredDomainMismatch`
+      (Debug), `{EventName}Succeeded` (Information), `{EventName}ProcessingFailed` (Error)
+- [ ] Handler is idempotent (relay and Inbox backup may both deliver)
+- [ ] Immediate path needed? Add an `IPostCommitEventRelay<TEvent>`, register it in
+      `AddPipelineServices`, tag the Inbox handler's activity `vnext.delivery.role = backup`. Needs a
+      durable backup, an order-safe receiver guard, measured latency evidence and a council row.
 
-### Event development checklist
-- [ ] Event contract in `*.Events.Contracts/*/Events/` with `[EventName]` (no marker interface — a
-      relay is opted in by DI registration, not by the contract)
-- [ ] Event handler implementing `IEventHandler<TEvent>`
-- [ ] Logging extensions in `BBT.Workflow.Domain/Logging/WorkflowLogs.cs`:
-  - `{EventName}Received` (Information)
-  - `{EventName}IgnoredDomainMismatch` (Debug)
-  - `{EventName}Succeeded` (Information)
-  - `{EventName}ProcessingFailed` (Error)
-- [ ] Handler auto-registered by `AddAetherEventBus` (assembly scanning) — no manual hook registration
-- [ ] Use `WorkflowLogs.cs` extension methods — never raw `logger.Log*`
-- [ ] If the event needs the immediate path: add an `IPostCommitEventRelay<TEvent>` class, register
-      it in `AddPipelineServices`, and tag its Inbox handler's activity `vnext.delivery.role = backup`.
-      Nothing in the dispatcher changes.
-
-### Why the Inbox handler alone is enough
-- **Outbox-first**: the outbox row is written before commit succeeds, so a handler always has
-  durable work to consume — no in-process shortcut is needed for correctness.
-- **Wakeup-assisted**: a loss-tolerant Dapr nudge wakes the Outbox/Inbox poll loops immediately
-  after a commit stores a row, so the common case does not wait out the idle poll interval.
-- **Idempotency still required**: for the three subflow-terminal events, the relay and the Inbox
-  backup may both settle the same terminal outcome — handlers must stay idempotent regardless of
-  event category.
-
-## C# / .NET Usage
-- Use C# 10+ features when appropriate (records, pattern matching, null-coalescing assignment).
-- Leverage ASP.NET Core middleware plus Aether modules/features.
-- Use EF Core via Aether's `AetherDbContext` and repository abstractions.
-
-## Syntax & Formatting
-- Follow Microsoft C# Coding Conventions.
-- Use expressive syntax: null-conditional operators, string interpolation.
-- Use `var` when the type is obvious.
-- Keep code clean and consistent.
-
-## Error Handling & Validation
-- Exceptions only for exceptional cases — never control flow.
-- Use Data Annotations or Fluent Validation in the application layer.
-- Use global exception-handling middleware for unified error responses.
-- Return appropriate HTTP status codes from `HttpApi` controllers.
-
-## Logging Standards
-- NEVER use raw `logger.LogInformation/Debug/Error`.
-- ALWAYS use the `LoggerMessage` source-generated extensions in `BBT.Workflow.Domain/Logging/WorkflowLogs.cs`.
-- When adding logging scenarios:
-  1. Add `[LoggerMessage]` partials in `WorkflowLogs.cs` with EventId + message template.
-  2. Use structured parameters (`{InstanceId}`, `{Flow}`, `{TransitionKey}`).
-  3. Pick the right level: `Debug` (traces), `Information` (state changes), `Warning` (recoverable), `Error` (failures).
-  4. Use unique EventIds following existing patterns (10xxx transitions, 40xxx events, 20xxx instances, 50xxx discovery).
-
-**The EventId must be unique, and nothing but a test enforces it.** The source generator accepts a
-duplicate, Debug and Release both build clean, and the collision only surfaces in a log pipeline —
-where a dashboard or alert keyed to that number silently matches two unrelated events and the person
-reading it cannot tell which one fired. Eighteen such collisions had accumulated before
-`WorkflowLogEventIdUniquenessTests` was added; it now fails the build instead. Two **overloads of the
-same event** may share an id (today only `JobFailed`, which takes either an exception or a
-Result-pattern error string); that allowance is an explicit list in the test, so widening it is a
-decision someone makes on purpose.
-
-When adding a message, take the next free id **above your region's own block** rather than filling a
-gap — a gap may be a retired id that a saved query still references.
+## Logging — `WorkflowLogs.cs` only
+Never call `logger.Log*` directly. Add a `[LoggerMessage]` partial in
+`BBT.Workflow.Domain/Logging/WorkflowLogs.cs` with an EventId, a template with structured parameters
+(`{InstanceId}`, `{Flow}`, `{TransitionKey}`) and the right level (Debug traces, Information state
+changes, Warning recoverable, Error failures). EventId regions: 10xxx transitions, 20xxx instances,
+40xxx events, 50xxx discovery. Logs carry `runtimeKey`, `domain` and the correlation id.
 
 ```csharp
 // BAD
@@ -137,79 +76,29 @@ logger.LogInformation($"Processing instance {instanceId}");
 logger.InstanceCompletedCleanupEventReceived(instanceId, flow);
 ```
 
-## API Design
-- Follow RESTful conventions in the `HttpApi` layer.
-- Use versioning when multiple versions are expected.
+**The EventId must be unique, and nothing but a test enforces it.** The source generator accepts a
+duplicate, Debug and Release both build clean, and the collision only surfaces in a log pipeline —
+where a dashboard or alert keyed to that number silently matches two unrelated events. Eighteen such
+collisions had accumulated before `WorkflowLogEventIdUniquenessTests` was added; it now fails the build
+instead. Two **overloads of the same event** may share an id (today only `JobFailed`); that allowance is
+an explicit list in the test, so widening it is a decision someone makes on purpose. Take the next free
+id **above your region's own block** rather than filling a gap — a gap may be a retired id that a saved
+query still references.
 
-## Performance
-- Async/await for all I/O.
-- Always use `IDistributedCache` (not `IMemoryCache`).
-- Avoid N+1 — include related entities deliberately.
-- Use `PagedResultDto` / pagination for large data sets.
+## Telemetry
+Start an `Activity` for major operations (span conventions: `docs/runtime/trace-span-tree.md`).
 
-## Key Conventions
-- DI for loose coupling and testability.
-- Repository pattern or EF Core directly based on complexity.
-- AutoMapper for object mapping when useful.
-- Background work via `IHostedService` / `BackgroundService`.
+## API documentation
+XML summaries are mandatory on controllers, DTOs/requests/responses, interfaces and their methods;
+implementation classes also describe their lifecycle and purpose. Controllers follow REST conventions.
 
-## Testing
-- xUnit for unit tests.
-- NSubstitute, Shouldly, Moq for mocking.
-- Integration tests under `Application.Tests`, `Domain.Tests`, etc.
+## Tests
+- `test/` holds **unit tests only** (xUnit). New tests use **NSubstitute** for mocks and **Shouldly**
+  for assertions; Moq remains only in existing tests — do not add it to new ones.
+- Integration tests live in the sibling vnext-example repo and run against the locally built runtime:
+  `AGENTS.md` § Testing and `docs/testing/integration-testing.md`.
 
-## Security
-- Enforce HTTPS / SSL.
-
-## Git & Versioning
-- Branch naming: `feature/`, `hotfix/`, `chore/`.
-- SemVer for runtime packages.
-
-## API Documentation
-- Swagger/OpenAPI for API documentation.
-- XML comments on controllers, DTOs, classes, interfaces, methods.
-- DTOs/Requests/Responses MUST include XML summaries.
-- Implementation classes MUST include lifecycle and purpose summaries.
-- Controllers MUST include API summaries.
-
-## Documentation Locations
-- Developer-focused implementation docs → `/docs` (index: `docs/README.md`; agent map: `docs/agent-onboarding.md`)
-- `/ai-docs` is gitignored local scratch for generated dumps (e.g. vnext-docs staging). It is not committed and is not a source of truth.
-- When the user says "add to document", update English docs and ensure Navigation/Overview grouping in `docs/README.md`.
-
-## Sibling repositories
-Repo map, GitHub URLs, trust rules and Context7 tags: `AGENTS.md` § Platform repositories (single source).
-
-## File Structure Expectation
-```
-root/
- ├─ docs/
- ├─ src/
- ├─ test/
- ├─ tools/
- └─ README.md
- (`ai-docs/` is gitignored local scratch; test projects live under `test/` not `tests/`)
-```
-
-## Architectural Rules
-- Workflows MUST be deterministic.
-- Transition types MUST follow the pipeline.
-- Schedules MUST be persistent.
-- Orchestration MUST NOT depend on Execution internals.
-- Execution MAY scale independently.
-
-## Multi-Schema Architecture
-- Resolve schema through `ICurrentSchema`.
-- Sources: headers, routes, query string, custom resolvers.
-
-## OpenTelemetry
-- Start an `Activity` for major operations.
-- Logs must include `runtimeKey`, `domain`, correlation ID.
-
-## Result Pattern & Error Handling
-- Use `Result<T>` for business operations.
-- Exceptions only for infrastructure failures.
-
-## Background Services
-- `BackgroundService` for task processors.
-- `IHostedService` for lifecycle control.
+## Documentation
+Implementation docs go in `/docs` (index `docs/README.md`, agent map `docs/agent-onboarding.md`); "add
+to document" means English docs plus the index entry. `ai-docs/` is git-ignored scratch, never a source
+of truth. Branches: `feature/`, `hotfix/`, `chore/`.

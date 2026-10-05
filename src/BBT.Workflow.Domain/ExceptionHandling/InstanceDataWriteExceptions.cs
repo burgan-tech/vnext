@@ -20,3 +20,37 @@ public class InstanceDataLockTimeoutException(Guid instanceId) : UserFriendlyExc
 public class InstanceDataWriteTimeoutException(Guid instanceId) : UserFriendlyException(
     code: WorkflowErrorCodes.InstanceDataWriteTimeout,
     message: $"Instance data write timed out for instance \"{instanceId}\"");
+
+/// <summary>
+/// An <c>x-encryption.type: "encrypt"</c> value of the instance cannot be decrypted with this host's
+/// keyring. The engine refuses to act on the token string; restoring the key recovers. Maps to HTTP 503.
+/// </summary>
+public class EncryptionKeyUnavailableException(Guid instanceId, string path) : UserFriendlyException(
+    code: WorkflowErrorCodes.EncryptionKeyUnavailable,
+    message: $"An encrypted field of instance \"{instanceId}\" cannot be decrypted (path \"{path}\"); its key is not available on this host")
+{
+    /// <summary>The first undecryptable path.</summary>
+    public string Path { get; } = path;
+}
+
+/// <summary>
+/// A request introduced a string carrying the reserved <c>ENCRYPTED:AES256:</c> prefix at a path where it is not
+/// the token already stored. The value itself is never echoed. Maps to HTTP 400.
+/// </summary>
+public class EncryptedValueReservedException(string path) : UserFriendlyException(
+    code: WorkflowErrorCodes.EncryptedValueReserved,
+    message: $"The value at \"{path}\" carries a reserved x-encryption prefix (\"ENCRYPTED:AES256:\" or \"HASHED:\"); only the value already stored at that path may be sent back")
+{
+    /// <summary>The offending path.</summary>
+    public string Path { get; } = path;
+}
+
+/// <summary>
+/// The master schema could not be resolved while field encryption is configured; the write is refused so that
+/// nothing is stored in plaintext by accident. Transient. Maps to HTTP 503.
+/// </summary>
+public class EncryptionSchemaUnavailableException(string schemaKey) : UserFriendlyException(
+    code: WorkflowErrorCodes.EncryptionSchemaUnavailable,
+    message: $"Master schema \"{schemaKey}\" could not be resolved; the instance data write is refused because field encryption is configured")
+{
+}

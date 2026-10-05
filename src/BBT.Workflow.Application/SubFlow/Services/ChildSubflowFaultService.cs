@@ -14,7 +14,8 @@ namespace BBT.Workflow.SubFlow;
 /// </summary>
 public sealed class ChildSubflowFaultService(
     IInstanceRepository instanceRepository,
-    ILogger<ChildSubflowFaultService> logger) : IChildSubflowFaultService
+    ILogger<ChildSubflowFaultService> logger,
+    ISubItemEventDataResolver? subItemDataResolver = null) : IChildSubflowFaultService
 {
     /// <inheritdoc />
     public async Task<Result> FaultChildAsync(
@@ -49,7 +50,8 @@ public sealed class ChildSubflowFaultService(
             return Result.Ok();
         }
 
-        childInstance.Fault(domain, termination: termination);
+        childInstance.Fault(domain, termination: termination,
+            subItemData: await subItemDataResolver.ResolveOrStoredAsync(childInstance, cancellationToken));
         await instanceRepository.UpdateAsync(childInstance, true, cancellationToken);
 
         logger.ChildSubflowFaultApplied(instanceId, parentInstanceId);

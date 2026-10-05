@@ -33,8 +33,8 @@ namespace BBT.Workflow.Authorization;
 /// at all; a non-success status, a timeout, a transport error and an unparseable body are each logged
 /// at Error and tagged by kind; <c>204</c>, a blank body and an empty roles array are logged at
 /// Warning — and every one of them resolves to an EMPTY role set. The request continues and the
-/// grant engine decides on that set: an allowlist grant cannot match, and a role-bound deny refuses a
-/// role-less caller (<c>TransitionAuthorizationManager.IsUnprovableRoleBoundDeny</c>). An outage
+/// grant engine decides on that set: an allowlist grant cannot match, and a role-bound leaf is Unknown
+/// for a role-less caller (a deny refuses unless an identity leaf rules it out). An outage
 /// therefore narrows what a caller sees and never widens it, without turning every read into a 403.
 /// </para>
 /// <para>

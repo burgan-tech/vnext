@@ -68,3 +68,11 @@ and [`.claude/rules/vnext-workflow-developer.md`](../../../.claude/rules/vnext-w
 - [ ] `contract/config-helm` — a **mandatory** new config key or env var has a counterpart in the sibling `vnext-helm-charts` (`charts/vnext`, `appEnvConfig`/`extraEnvConfig`), or the PR explicitly flags the follow-up. Runtime options have no chart-side defaults and `WorkflowExecutionOptionsValidator` fails startup on bad values.
 - [ ] `contract/config-defaults` — a new option has a safe default and a documented range; it does not change existing behaviour silently.
 - [ ] `contract/config-dapr` — a new Dapr component, subscription or app-id is reflected in `etc/docker` and in [Dapr Component Footprint](../../runtime/dapr-component-footprint.md).
+
+## Reviewer-specific noise
+
+The shared output contract is [Finding format and noise rules](../README.md#finding-format-and-noise-rules).
+On top of it: do not demand a `vnext-meta` entry for a change that is not consumer-visible —
+over-triggering on meta files is this reviewer's main failure mode. Sibling repos
+(`vnext-helm-charts`, `vnext-schema`, `vnext-example`) are not edited from here; a gap there is a
+follow-up the PR should flag, not a change request.

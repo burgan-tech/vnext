@@ -17,8 +17,6 @@ public static class TaskTypes
 
     public const string StateStore = "statestore";
 
-    public const string CacheAside = "cacheaside";
-
     public const string Soap = "soap";
 
     // Trigger tasks (for cross-domain execution)

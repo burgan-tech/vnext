@@ -149,15 +149,20 @@ public class WorkflowValidator
         if (workflow.Exit != null)
             ValidateAvailableIn(workflow.Exit, "exit transition", $"{nameof(Workflow)}.{nameof(Workflow.Exit)}", result, stateKeys);
 
-        // Validate StartTransition target
-        if (!workflow.StartTransition.Target.IsNullOrEmpty())
+        // Validate StartTransition target: mandatory and a declared state. Compared against the
+        // declared keys only — stateKeys also carries the reserved $self, which as a start target
+        // would leave the instance on its birth state ($start) forever.
+        if (string.IsNullOrWhiteSpace(workflow.StartTransition.Target))
         {
-            if (!stateKeys.Contains(workflow.StartTransition.Target))
-            {
-                result.AddError(new ValidationResult(
-                    $"The 'target' value in StartTransition does not match any state '{workflow.StartTransition.Target}'.",
-                    [$"{nameof(Workflow)}.{nameof(Workflow.StartTransition)}.{nameof(Transition.Target)}"]));
-            }
+            result.AddError(new ValidationResult(
+                "StartTransition must declare a target state.",
+                [$"{nameof(Workflow)}.{nameof(Workflow.StartTransition)}.{nameof(Transition.Target)}"]));
+        }
+        else if (workflow.States.All(s => s.Key != workflow.StartTransition.Target))
+        {
+            result.AddError(new ValidationResult(
+                $"The 'target' value in StartTransition does not match any state '{workflow.StartTransition.Target}'.",
+                [$"{nameof(Workflow)}.{nameof(Workflow.StartTransition)}.{nameof(Transition.Target)}"]));
         }
 
         // Validate SharedTransitions availableIn
@@ -195,7 +200,9 @@ public class WorkflowValidator
     }
 
     /// <summary>
-    /// Validates state count and that exactly one initial state exists.
+    /// Validates state count, that at most one Initial state is declared (none means the runtime's
+    /// implicit <see cref="WellKnownStateKeys.Start"/> is the start transition's source), and that
+    /// no state claims the reserved <c>$start</c> key.
     /// </summary>
     private void ValidateStateCountAndTypes(Workflow workflow, WorkflowValidationResult result)
     {
@@ -208,11 +215,18 @@ public class WorkflowValidator
         }
 
         var initialStateCount = workflow.States.Count(s => s.StateType == StateType.Initial);
-        if (initialStateCount != 1)
+        if (initialStateCount > 1)
         {
             result.AddError(new ValidationResult(
-                $"Workflow must contain exactly one initial state. Found: {initialStateCount}.",
+                $"Workflow may contain at most one initial state. Found: {initialStateCount}.",
                 [$"{nameof(Workflow)}.{nameof(Workflow.States)}"]));
+        }
+
+        foreach (var state in workflow.States.Where(s => s.Key == WellKnownStateKeys.Start))
+        {
+            result.AddError(new ValidationResult(
+                $"State key '{WellKnownStateKeys.Start}' is reserved by the runtime.",
+                [$"{nameof(Workflow)}.{nameof(Workflow.States)}[{state.Key}]"]));
         }
     }
 
@@ -875,20 +889,9 @@ public class WorkflowValidator
         if (roleGrants.Count == 0)
             return;
 
-        const string contextPrefix = "$.context.";
-
         foreach (var grant in roleGrants)
         {
-            var message = DynamicRoleGrant.Classify(grant.Role) switch
-            {
-                DynamicRoleFormat.MissingContextPrefix =>
-                    $"Dynamic role '{grant.Role}' in '{context}' has an invalid path. Path must start with '{contextPrefix}' (case-sensitive).",
-                DynamicRoleFormat.EmptyNavigationPath =>
-                    $"Dynamic role '{grant.Role}' in '{context}' has an empty navigation path after '{contextPrefix}'.",
-                _ => null
-            };
-
-            if (message != null)
+            foreach (var message in RoleGrantDefinitionRules.Validate(grant, context))
                 result.AddError(new ValidationResult(message, [context]));
         }
     }
@@ -923,8 +926,8 @@ public class WorkflowValidator
         {
             var statePath = $"{nameof(Workflow)}.States[{state.Key}]";
 
-            ValidateTaskScriptCodes(state.OnEntries, $"{statePath}.{nameof(State.OnEntries)}", errors);
-            ValidateTaskScriptCodes(state.OnExits, $"{statePath}.{nameof(State.OnExits)}", errors);
+            ValidateTaskCollection(state.OnEntries, $"{statePath}.{nameof(State.OnEntries)}", errors);
+            ValidateTaskCollection(state.OnExits, $"{statePath}.{nameof(State.OnExits)}", errors);
 
             ScriptCodeValidator.Validate(
                 state.SubFlow?.Mapping,
@@ -968,24 +971,65 @@ public class WorkflowValidator
             ScriptCodeValidator.Validate(transition.Rule, $"{basePath}.{nameof(Transition.Rule)}", errors);
         }
 
-        ValidateTaskScriptCodes(
+        ValidateTaskCollection(
             transition.OnExecutionTasks, $"{basePath}.{nameof(Transition.OnExecutionTasks)}", errors);
 
         ValidateViewRules(transition.View, $"{basePath}.{nameof(Transition.View)}", errors);
     }
 
     /// <summary>
-    /// Validates the mapping of each task in an OnExecute collection.
+    /// Validates one OnExecute collection: each entry's mapping script, and the response slots.
+    /// Entries at the same order run in parallel and are merged by slot
+    /// (<see cref="OnExecuteTask.ResponseVariableKey"/>); two entries filing under one slot carry
+    /// different payloads (a SubProcess returns its new instance id, every response its own duration),
+    /// so the merge would throw at run time. A later order may reuse a slot: its
+    /// write overwrites the earlier value, whether that order runs one entry or a parallel group (the
+    /// merge compares only the slots the branches of one group actually wrote).
     /// </summary>
-    private static void ValidateTaskScriptCodes(
+    private static void ValidateTaskCollection(
         IEnumerable<OnExecuteTask> tasks,
         string basePath,
         IList<ValidationResult> errors)
     {
-        foreach (var (task, index) in tasks.Select((t, i) => (t, i)))
+        var entries = tasks.Select((t, i) => (Task: t, Index: i)).ToList();
+
+        foreach (var (task, index) in entries)
         {
             ScriptCodeValidator.Validate(
                 task.Mapping, $"{basePath}[{index}].{nameof(OnExecuteTask.Mapping)}", errors);
+
+            if (task.VariableKey is not null && !OnExecuteTask.IsValidVariableKey(task.VariableKey))
+            {
+                errors.Add(new ValidationResult(
+                    $"{basePath}[{index}] variableKey '{task.VariableKey}' is not a valid response slot name: " +
+                    "use letters, digits and '_', starting with a letter or '_' (max 100 characters).",
+                    [$"{basePath}[{index}].{nameof(OnExecuteTask.VariableKey)}"]));
+            }
+        }
+
+        foreach (var group in entries.GroupBy(e => e.Task.Order))
+        {
+            // response slot -> index of the entry that claimed it first
+            var claimed = new Dictionary<string, int>(StringComparer.Ordinal);
+
+            foreach (var (task, index) in group)
+            {
+                var slot = task.ResponseVariableKey;
+                if (string.IsNullOrWhiteSpace(slot))
+                    continue;
+
+                if (claimed.TryGetValue(slot, out var firstIndex))
+                {
+                    errors.Add(new ValidationResult(
+                        $"{basePath}[{index}] and {basePath}[{firstIndex}] run in parallel at order {task.Order} " +
+                        $"and both file their response under '{slot}'; the parallel merge would reject the two " +
+                        "different payloads. Give one of them a distinct 'variableKey' or a different order.",
+                        [$"{basePath}[{index}].{nameof(OnExecuteTask.VariableKey)}"]));
+                    continue;
+                }
+
+                claimed[slot] = index;
+            }
         }
     }
 

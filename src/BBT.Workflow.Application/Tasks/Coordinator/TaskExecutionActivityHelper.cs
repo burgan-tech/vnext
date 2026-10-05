@@ -1,5 +1,7 @@
 using System.Diagnostics;
+using BBT.Workflow.Definitions;
 using BBT.Workflow.Logging;
+using BBT.Workflow.Scripting;
 
 namespace BBT.Workflow.Tasks.Coordinator;
 
@@ -59,6 +61,36 @@ public static class TaskExecutionActivityHelper
     public const string OperationJournalComplete = "Task.Journal.Complete";
 
     /// <summary>
+    /// Operation name prefix for one task's whole execution (resolve, attempts, retries, boundary).
+    /// </summary>
+    public const string OperationExecute = "Task.Execute";
+
+    /// <summary>
+    /// Starts the <c>Task.Execute.{key}</c> span that owns one task's execution in
+    /// <c>TaskExecutionEngine.ExecuteAsync</c>. It used to come from Aether's <c>[Trace]</c> aspect,
+    /// which marks every normal return <c>Ok</c> and therefore erased the engine's own error status;
+    /// it now lives on <c>BBT.Workflow.Tasks</c> and ends with whatever status the engine set.
+    /// </summary>
+    /// <param name="taskKey">The task key (becomes part of the display name).</param>
+    /// <param name="taskTrigger">What triggered the task (OnExecute, OnEntry, …).</param>
+    /// <param name="context">The script context the task runs in, for correlation tags.</param>
+    public static Activity? StartExecuteActivity(string taskKey, TaskTrigger taskTrigger, ScriptContext context)
+    {
+        var activity = ActivitySource.StartActivity($"{OperationExecute}.{taskKey}", ActivityKind.Internal);
+        if (activity is null) return null;
+
+        activity.SetTag(TelemetryConstants.TagNames.TaskKey, taskKey);
+        activity.SetTag(TelemetryConstants.TagNames.TaskTrigger, taskTrigger.ToString());
+        activity.SetTag(TelemetryConstants.TagNames.InstanceId, context.Instance?.Id.ToString());
+        activity.SetTag(TelemetryConstants.TagNames.Flow, context.Workflow?.Key);
+        activity.SetTag(TelemetryConstants.TagNames.Domain, context.Workflow?.Domain);
+        activity.SetTag(TelemetryConstants.TagNames.TransitionKey, context.Transition?.Key);
+        activity.SetTag(TelemetryConstants.TagNames.Layer, TelemetryConstants.Layers.Orchestration);
+        activity.SetTag(TelemetryConstants.TagNames.SpanCategory, TelemetryConstants.SpanCategories.Business);
+        return activity;
+    }
+
+    /// <summary>
     /// Starts the span for a trigger-family task's LOCAL (same-domain, in-process) invocation.
     /// <para>
     /// NOT gated on verbose tracing: the remote branch of these tasks produces a Dapr/HTTP client
@@ -106,8 +138,8 @@ public static class TaskExecutionActivityHelper
     /// Starts a new activity as a child of the current activity for an executor phase
     /// (PrepareInput, Invoke, ProcessOutput). These phases are business-level and always on —
     /// not gated behind verbose tracing — so they are visible under the existing
-    /// <c>Task.Execute.{key}</c> span (created by Aether's <c>[Trace]</c> aspect on
-    /// <c>TaskExecutionEngine.ExecuteAsync</c>) in every trace, not just verbose ones.
+    /// <c>Task.Execute.{key}</c> span (<see cref="StartExecuteActivity"/>) in every trace, not
+    /// just verbose ones.
     /// When taskKey/taskType are provided, enriches the span with standard tags for filtering.
     /// </summary>
     /// <param name="operationName">The name of the operation (e.g. Task.PrepareInput, Task.Invoke, Task.ProcessOutput).</param>

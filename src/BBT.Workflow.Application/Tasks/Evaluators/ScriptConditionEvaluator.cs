@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
+using BBT.Workflow.Logging;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks.Evaluation;
 using Microsoft.Extensions.Logging;
@@ -37,7 +38,11 @@ public sealed class ScriptConditionEvaluator : IConditionEvaluator
         ScriptContext context,
         CancellationToken cancellationToken = default)
     {
-        return await ResultExtensions.TryAsync(async ct =>
+        // Only Script.Compile used to appear: on a warm cache an auto-transition condition or timer
+        // script ran with no span, so its cost was indistinguishable from the step around it.
+        using var activity = ScriptActivityHelper.StartExecuteActivity("condition");
+
+        var evaluation = await ResultExtensions.TryAsync(async ct =>
             {
                 var scriptRunner = await _scriptEngine.CompileToInstanceAsync<IConditionMapping>(
                     script,
@@ -57,5 +62,10 @@ public sealed class ScriptConditionEvaluator : IConditionEvaluator
             .OnFailure(error => _logger.LogError(
                 "Condition script evaluation failed: {Error}",
                 error.Message));
+
+        if (!evaluation.IsSuccess)
+            activity.SetResultError(evaluation.Error.Code, evaluation.Error.Message);
+
+        return evaluation;
     }
 }

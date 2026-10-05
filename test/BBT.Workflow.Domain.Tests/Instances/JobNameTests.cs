@@ -1,5 +1,6 @@
 using System;
 using System.Text.RegularExpressions;
+using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution.LongPoll;
 using Xunit;
 
@@ -227,5 +228,51 @@ public class JobNameTests
     public void Parse_ShouldThrow_OnInvalidName()
     {
         Assert.Throws<FormatException>(() => JobName.Parse("trans-abc-go"));
+    }
+
+    [Fact]
+    public void ForAsyncTransition_FromImplicitStart_ProducesDaprSafeName()
+    {
+        var jobName = JobName.ForAsyncTransition(Instance, WellKnownStateKeys.Start, "start-implicit", Invocation);
+
+        Assert.DoesNotContain("$", jobName.Value);
+        Assert.Contains("._start.", jobName.Value);
+        Assert.Matches(DaprSafe, jobName.Value);
+        // The logical key stays "$start" — it is persisted on InstanceJob.SourceState and matched
+        // against the instance's current state; only the wire string is encoded.
+        Assert.Equal("$start", jobName.SourceState);
+        Assert.Equal("start-implicit", jobName.TransitionKey);
+    }
+
+    [Fact]
+    public void Parse_OfImplicitStartName_RoundTripsSourceState()
+    {
+        var built = JobName.ForAsyncTransition(Instance, WellKnownStateKeys.Start, "start-implicit", Invocation);
+
+        var parsed = JobName.Parse(built.Value);
+
+        Assert.Equal("$start", parsed.SourceState);
+        Assert.Equal("start-implicit", parsed.TransitionKey);
+        Assert.Equal(JobType.AsyncTransition, parsed.Type);
+        Assert.Equal(Instance, parsed.InstanceId);
+        Assert.Equal(InvocationSegment, parsed.Invocation);
+    }
+
+    [Fact]
+    public void ForAsyncTransition_FromOrdinaryState_IsUnchanged()
+    {
+        var built = JobName.ForAsyncTransition(Instance, "step-1", "go", Invocation);
+
+        Assert.Contains(".step-1.", built.Value);
+        Assert.Equal("step-1", JobName.Parse(built.Value).SourceState);
+    }
+
+    [Theory]
+    [InlineData("$self")]
+    [InlineData("a$b")]
+    public void ForAsyncTransition_WithOtherUnsafeSourceState_StillThrows(string sourceState)
+    {
+        Assert.Throws<ArgumentException>(
+            () => JobName.ForAsyncTransition(Instance, sourceState, "go", Invocation));
     }
 }

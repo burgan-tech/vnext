@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
@@ -24,8 +25,6 @@ public sealed class HttpTaskInvokerReservedHeadersTests
     [InlineData("TraceParent")]
     [InlineData("tracestate")]
     [InlineData("baggage")]
-    [InlineData("x-request-id")]
-    [InlineData("X-Request-Id")]
     [InlineData("X-Correlation-Id")]
     [InlineData("X-Workflow-Instance-Id")]
     public async Task InvokeAsync_ReservedTraceHeaderInBinding_IsNotCopiedToRequest(string headerName)
@@ -48,20 +47,42 @@ public sealed class HttpTaskInvokerReservedHeadersTests
         InvokerHelpers.IsReservedTraceHeader("TRACEPARENT").ShouldBeTrue();
         InvokerHelpers.IsReservedTraceHeader("TraceState").ShouldBeTrue();
         InvokerHelpers.IsReservedTraceHeader("Baggage").ShouldBeTrue();
-        InvokerHelpers.IsReservedTraceHeader("X-REQUEST-ID").ShouldBeTrue();
         InvokerHelpers.IsReservedTraceHeader("X-CORRELATION-ID").ShouldBeTrue();
         InvokerHelpers.IsReservedTraceHeader("X-Workflow-Instance-Id").ShouldBeTrue();
         // Identity claims are NOT reserved: a developer may set them in the binding (fill-if-absent).
         InvokerHelpers.IsReservedTraceHeader("SUB").ShouldBeFalse();
         InvokerHelpers.IsReservedTraceHeader("Act_Sub").ShouldBeFalse();
+        // X-Request-Id is NOT reserved either: APIs such as OHVPS/BKM require the mapping's value.
+        InvokerHelpers.IsReservedTraceHeader("X-REQUEST-ID").ShouldBeFalse();
         InvokerHelpers.IsReservedTraceHeader("Authorization").ShouldBeFalse();
         InvokerHelpers.IsReservedTraceHeader("X-Custom").ShouldBeFalse();
+    }
+
+    /// <summary>
+    /// The Execution host's invokers reach the header helper without the envelope; the request
+    /// id travels as the request activity's baggage (set by TaskInvokeHandler). A mapping value
+    /// still wins over it.
+    /// </summary>
+    [Theory]
+    [InlineData(null, "vnext-rid")]
+    [InlineData("""{"X-Request-ID":"mapping-rid"}""", "mapping-rid")]
+    public async Task InvokeAsync_RequestIdFromBaggage_FillsOnlyWhenMappingIsAbsent(string? headers, string expected)
+    {
+        var handler = new CapturingHttpMessageHandler();
+        var invoker = CreateInvoker(handler);
+
+        using var activity = new System.Diagnostics.Activity("execution-request").Start();
+        activity.SetBaggage("x_request_id", "vnext-rid");
+
+        await invoker.InvokeAsync(CreateDescriptor(headers: headers));
+
+        handler.RequestHeaderValues("X-Request-Id").ShouldBe([expected]);
     }
 
     private static HttpTaskInvoker CreateInvoker(CapturingHttpMessageHandler handler) =>
         new(new FakeHttpClientFactory(handler), NullLogger<HttpTaskInvoker>.Instance);
 
-    private static TaskDescriptor<HttpTaskBinding> CreateDescriptor(string headers) =>
+    private static TaskDescriptor<HttpTaskBinding> CreateDescriptor(string? headers) =>
         new()
         {
             TaskType = TaskTypes.Http,
@@ -86,6 +107,11 @@ public sealed class HttpTaskInvokerReservedHeadersTests
 
         public bool RequestHeaderContains(string name) =>
             _requestHeaders?.NonValidated.Contains(name) ?? false;
+
+        public string[] RequestHeaderValues(string name) =>
+            _requestHeaders is not null && _requestHeaders.NonValidated.TryGetValues(name, out var values)
+                ? values.ToArray()
+                : [];
 
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,

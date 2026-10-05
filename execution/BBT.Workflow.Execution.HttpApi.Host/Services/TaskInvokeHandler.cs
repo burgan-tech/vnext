@@ -99,6 +99,14 @@ public sealed class TaskInvokeHandler(
             activity?.SetBaggage(TelemetryConstants.TagNames.ActSub, actSub);
         }
 
+        // Read by HttpTaskInvocation.ApplyTrustedCorrelationHeaders as the X-Request-Id an outbound
+        // task call carries when its input mapping did not set one. Every invoker on this host
+        // reaches that helper without the envelope, so the ambient request activity is the carrier.
+        if (!string.IsNullOrEmpty(traceContext?.RequestId))
+        {
+            activity?.SetBaggage(TelemetryConstants.TagNames.RequestId, traceContext.RequestId);
+        }
+
         var scope = new Dictionary<string, object>
         {
             [TelemetryConstants.TagNames.Domain] = traceContext?.Domain ?? "unknown",
@@ -120,6 +128,16 @@ public sealed class TaskInvokeHandler(
         using (logger.BeginScope(scope))
         {
             var result = await invokerRegistry.InvokeAsync(envelope, cancellationToken);
+
+            // The inner Invoke.* span is marked by the registry, but the transaction and this
+            // handler span used to close Unset on a failed task — so execution-side error views
+            // never counted it.
+            if (!result.IsSuccess)
+            {
+                handleActivity.SetResultError(result.StatusCode?.ToString(), result.ErrorMessage);
+                activity.SetResultError(result.StatusCode?.ToString(), result.ErrorMessage);
+            }
+
             return new TaskInvokeResponse
             {
                 Success = result.IsSuccess,

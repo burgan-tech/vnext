@@ -123,10 +123,12 @@ public class InstanceQueryAppServiceStateTests : IDisposable
             viewContentResolutionService: _viewContentResolutionService,
             taskConditionService: Substitute.For<ITaskConditionService>(),
             urlTemplateBuilder: _urlTemplateBuilder,
+            instanceCorrelationResolver: Substitute.For<BBT.Workflow.Instances.Correlation.IInstanceCorrelationResolver>(),
+            correlationOptions: Microsoft.Extensions.Options.Options.Create(new BBT.Workflow.Instances.Correlation.InstanceCorrelationOptions()),
             currentSchema: Substitute.For<ICurrentSchema>(),
             transitionAuthorizationManager: _transitionAuthorizationManager,
             representationEtagService: _representationEtagService,
-            schemaFieldFilterService: Substitute.For<ISchemaFieldFilterService>(),
+            instanceDataReadService: new BBT.Workflow.Instances.InstanceDataReadService(Substitute.For<ISchemaFieldFilterService>()),
             callerRoleResolver: new DefaultCallerRoleResolver(Substitute.For<ICurrentUser>()),
             paginationLinkGenerator: Substitute.For<BBT.Aether.Application.Pagination.IPaginationLinkGenerator>(),
             instanceFilteringOptions: Options.Create(new InstanceFilteringOptions()),
@@ -137,6 +139,7 @@ public class InstanceQueryAppServiceStateTests : IDisposable
             instanceSchemaFunctionCache: Substitute.For<Caching.IInstanceSchemaFunctionCache>(),
 
             humanTaskFunctionCache: Substitute.For<Caching.IHumanTaskFunctionCache>(),
+            currentUser: Substitute.For<ICurrentUser>(),
             descentLimiter: new HumanTask.HumanTaskDescentLimiter(
                 Microsoft.Extensions.Options.Options.Create(new HumanTask.HumanTaskFunctionOptions())),
             logger: Substitute.For<ILogger<InstanceQueryAppService>>());
@@ -601,6 +604,272 @@ public class InstanceQueryAppServiceStateTests : IDisposable
     }
 
     /// <summary>
+    /// Every <c>transitions[]</c> entry carries the definition's labels in their declared
+    /// <c>[{ language, label }]</c> form and the state it leads to: <c>$self</c> resolved to the
+    /// current state, a subflow state named with the flow it starts. A transition without labels
+    /// carries none rather than an empty list.
+    /// </summary>
+    [Fact]
+    public async Task GetInstanceStateAsync_TransitionEntries_CarryLabelsAndTargetState()
+    {
+        var instance = Instance.Create(Guid.NewGuid(), TestWorkflow, TestVersion, "test-key");
+        var state = State.Create(TestState, StateType.Intermediate, StateSubType.None,
+            VersionStrategy.IncreaseMinor.Code);
+        var approve = Transition.Create("approve", TestState, "approved", TriggerType.Manual,
+            VersionStrategy.IncreasePatch.Code);
+        approve.AddLanguage("Onayla", "tr-TR");
+        approve.AddLanguage("Approve", "en-US");
+        state.AddTransition(approve);
+        state.AddTransition(Transition.Create("ask-ai", TestState, "ai-review", TriggerType.Manual,
+            VersionStrategy.IncreasePatch.Code));
+        instance.ChangeState(state);
+
+        var approved = State.Create("approved", StateType.Finish, StateSubType.Success,
+            VersionStrategy.IncreaseMinor.Code);
+        approved.AddLanguage("Onaylandı", "tr-TR");
+        var aiReview = State.Create("ai-review", StateType.SubFlow, StateSubType.None,
+            VersionStrategy.IncreaseMinor.Code);
+        aiReview.SetSubFlow("S", new Reference("ai-assist", TestDomain, "sys-flows", "1.0.0"), null!, null);
+
+        var workflow = BuildWorkflow(state);
+        workflow.AddState(approved);
+        workflow.AddState(aiReview);
+        workflow.AddSharedTransition(Transition.Create("add-note", null, "$self", TriggerType.Manual,
+            VersionStrategy.IncreasePatch.Code));
+        SetupCommonMocks(instance, workflow);
+
+        var result = await _service.GetInstanceStateAsync(CreateInput(instance.Id.ToString()), CancellationToken.None);
+
+        result.Result.IsSuccess.ShouldBeTrue();
+        var transitions = result.Result.Value!.Transitions.ToDictionary(t => t.Name);
+
+        transitions["approve"].Labels.ShouldNotBeNull();
+        transitions["approve"].Labels!.Select(l => (l.Language, l.Label))
+            .ShouldBe([("tr-TR", "Onayla"), ("en-US", "Approve")]);
+        var approveTarget = transitions["approve"].Target.ShouldNotBeNull();
+        approveTarget.Key.ShouldBe("approved");
+        approveTarget.StateType.ShouldBe("finish");
+        approveTarget.StateSubType.ShouldBe("success");
+        approveTarget.Labels!.Single().Label.ShouldBe("Onaylandı");
+        approveTarget.SubFlow.ShouldBeNull();
+
+        transitions["ask-ai"].Labels.ShouldBeNull();
+        var askTarget = transitions["ask-ai"].Target.ShouldNotBeNull();
+        askTarget.Key.ShouldBe("ai-review");
+        askTarget.StateType.ShouldBe("subFlow");
+        askTarget.StateSubType.ShouldBe("none");
+        askTarget.Labels.ShouldBeNull();
+        askTarget.SubFlow.ShouldBe("ai-assist");
+
+        transitions["add-note"].Target!.Key.ShouldBe(TestState);
+        transitions["add-note"].Target!.StateType.ShouldBe("intermediate");
+    }
+
+    /// <summary>
+    /// The state body carries the displayed state's labels in the definition's own
+    /// <c>[{ language, label }]</c> form beside <c>stateType</c>; a state without labels carries none.
+    /// </summary>
+    [Fact]
+    public async Task GetInstanceStateAsync_CarriesTheCurrentStatesLabels()
+    {
+        var instance = Instance.Create(Guid.NewGuid(), TestWorkflow, TestVersion, "test-key");
+        var state = State.Create(TestState, StateType.Intermediate, StateSubType.None,
+            VersionStrategy.IncreaseMinor.Code);
+        state.AddLanguage("İnceleme", "tr-TR");
+        state.AddLanguage("Review", "en-US");
+        instance.ChangeState(state);
+        SetupCommonMocks(instance, BuildWorkflow(state));
+
+        var result = await _service.GetInstanceStateAsync(CreateInput(instance.Id.ToString()), CancellationToken.None);
+
+        result.Result.IsSuccess.ShouldBeTrue();
+        result.Result.Value!.StateLabels!.Select(l => (l.Language, l.Label))
+            .ShouldBe([("tr-TR", "İnceleme"), ("en-US", "Review")]);
+        result.Result.Value.StateType.ShouldBe("intermediate");
+        result.Result.Value.StateSubType.ShouldBe("none");
+    }
+
+    [Fact]
+    public async Task GetInstanceStateAsync_ReturnsTheCurrentStatesSubTypeAsCamelCase()
+    {
+        var instance = Instance.Create(Guid.NewGuid(), TestWorkflow, TestVersion, "test-key");
+        var state = State.Create(TestState, StateType.Intermediate, StateSubType.Human,
+            VersionStrategy.IncreaseMinor.Code);
+        instance.ChangeState(state);
+        SetupCommonMocks(instance, BuildWorkflow(state));
+
+        var result = await _service.GetInstanceStateAsync(CreateInput(instance.Id.ToString()), CancellationToken.None);
+
+        result.Result.Value!.StateSubType.ShouldBe("human");
+    }
+
+    [Fact]
+    public async Task GetInstanceStateAsync_WhenStateDeclaresNoLabels_OmitsStateLabels()
+    {
+        var (instance, workflow) = CreateSimpleActiveInstance();
+        SetupCommonMocks(instance, workflow);
+
+        var result = await _service.GetInstanceStateAsync(CreateInput(instance.Id.ToString()), CancellationToken.None);
+
+        result.Result.Value!.StateLabels.ShouldBeNull();
+        System.Text.Json.JsonSerializer.Serialize(result.Result.Value, JsonSerializerConstants.JsonOptions)
+            .ShouldNotContain("stateLabels");
+    }
+
+    /// <summary>
+    /// While a subflow is active the body describes the subflow's state — <c>state</c>,
+    /// <c>stateType</c> and therefore <c>stateLabels</c> all come from the descended body, never from
+    /// the parent's own SubFlow state.
+    /// </summary>
+    [Fact]
+    public async Task GetInstanceStateAsync_WhenSubFlowIsActive_ReturnsTheSubFlowStatesLabels()
+    {
+        var (instance, workflow) = CreateParentWithActiveSubFlow();
+        workflow.GetState(TestState).Value!.AddLanguage("Ebeveyn", "tr-TR");
+        SetupCommonMocks(instance, workflow);
+        var subLabels = System.Text.Json.JsonSerializer.Deserialize<List<LanguageLabel>>(
+            """[{"language":"tr-TR","label":"Alt İnceleme"}]""", JsonSerializerConstants.JsonOptions)!;
+        _instanceQueryGateway
+            .GetFunctionWithStateAsync(Arg.Any<GetFunctionWithInstanceInput>(), Arg.Any<CancellationToken>())
+            .Returns(ConditionalResult<GetInstanceStateOutput>.Success(new GetInstanceStateOutput
+            {
+                Status = InstanceStatus.Active,
+                State = "sub-review",
+                StateType = "intermediate",
+                StateSubType = "human",
+                StateLabels = subLabels,
+                Transitions = [],
+                ActiveCorrelations = []
+            }));
+
+        var result = await _service.GetInstanceStateAsync(CreateInput(instance.Id.ToString()), CancellationToken.None);
+
+        result.Result.IsSuccess.ShouldBeTrue();
+        result.Result.Value!.State.ShouldBe("sub-review");
+        result.Result.Value.StateLabels.ShouldBe(subLabels);
+        result.Result.Value.StateSubType.ShouldBe("human");
+    }
+
+    /// <summary>
+    /// A target that no longer resolves to a state keeps its raw key and carries no type — the entry
+    /// is still listed.
+    /// </summary>
+    [Fact]
+    public async Task GetInstanceStateAsync_TransitionWithUnresolvableTarget_KeepsRawTargetWithoutType()
+    {
+        var instance = Instance.Create(Guid.NewGuid(), TestWorkflow, TestVersion, "test-key");
+        var state = State.Create(TestState, StateType.Intermediate, StateSubType.None,
+            VersionStrategy.IncreaseMinor.Code);
+        state.AddTransition(Transition.Create("approve", TestState, "approved", TriggerType.Manual,
+            VersionStrategy.IncreasePatch.Code));
+        instance.ChangeState(state);
+        var workflow = BuildWorkflow(state);
+        SetupCommonMocks(instance, workflow);
+
+        var result = await _service.GetInstanceStateAsync(CreateInput(instance.Id.ToString()), CancellationToken.None);
+
+        var entry = result.Result.Value!.Transitions.Single(t => t.Name == "approve");
+        entry.Target!.Key.ShouldBe("approved");
+        entry.Target.StateType.ShouldBeNull();
+        entry.Target.StateSubType.ShouldBeNull();
+        entry.Target.Labels.ShouldBeNull();
+    }
+
+    /// <summary>
+    /// While a subflow is active the parent lists the subflow's own entries; their labels and target
+    /// were described against the subflow's definition and are passed through unchanged, like kind.
+    /// </summary>
+    [Fact]
+    public async Task GetInstanceStateAsync_WhenSubFlowIsActive_PassesSubFlowLabelsAndTargetThrough()
+    {
+        var (instance, workflow) = CreateParentWithActiveSubFlow();
+        SetupCommonMocks(instance, workflow);
+        var labels = System.Text.Json.JsonSerializer.Deserialize<List<LanguageLabel>>(
+            """[{"language":"tr-TR","label":"Bitir"}]""", JsonSerializerConstants.JsonOptions)!;
+        _instanceQueryGateway
+            .GetFunctionWithStateAsync(Arg.Any<GetFunctionWithInstanceInput>(), Arg.Any<CancellationToken>())
+            .Returns(ConditionalResult<GetInstanceStateOutput>.Success(new GetInstanceStateOutput
+            {
+                Status = InstanceStatus.Active,
+                State = "sub-review",
+                ActiveCorrelations = [],
+                Transitions =
+                [
+                    new Shared.TransitionItem
+                    {
+                        Name = "sub-done",
+                        Kind = "stateTransition",
+                        Href = "https://sub-transition-url",
+                        Labels = labels,
+                        Target = new Shared.TransitionTarget
+                        {
+                            Key = "sub-finished",
+                            StateType = "finish",
+                            StateSubType = "success"
+                        }
+                    }
+                ]
+            }));
+
+        var result = await _service.GetInstanceStateAsync(CreateInput(instance.Id.ToString()), CancellationToken.None);
+
+        result.Result.IsSuccess.ShouldBeTrue();
+        var entry = result.Result.Value!.Transitions.Single(t => t.Name == "sub-done");
+        entry.Labels.ShouldBe(labels);
+        entry.Target!.Key.ShouldBe("sub-finished");
+        entry.Target.StateType.ShouldBe("finish");
+        entry.Target.StateSubType.ShouldBe("success");
+        entry.Target.SubFlow.ShouldBeNull();
+    }
+
+    /// <summary>
+    /// Wire shape: labels serialize in the definition's <c>[{ language, label }]</c> form beside the
+    /// target descriptors, and every one of them is omitted when absent.
+    /// </summary>
+    [Fact]
+    public void TransitionItem_SerializesLabelsAndTarget_AndOmitsThemWhenAbsent()
+    {
+        var transition = Transition.Create("ask-ai", null, "ai-review", TriggerType.Manual,
+            VersionStrategy.IncreasePatch.Code);
+        transition.AddLanguage("Ask the AI", "en-US");
+        var described = new Shared.TransitionItem
+        {
+            Name = "ask-ai",
+            Kind = "stateTransition",
+            Href = "/t/ask-ai",
+            Labels = transition.Labels.ToList(),
+            Target = new Shared.TransitionTarget
+            {
+                Key = "ai-review",
+                StateType = "subFlow",
+                StateSubType = "none",
+                Labels = transition.Labels.ToList(),
+                SubFlow = "ai-assist"
+            }
+        };
+        var bare = new Shared.TransitionItem { Name = "x", Kind = "stateTransition", Href = "/t/x" };
+
+        var describedJson = System.Text.Json.JsonSerializer.Serialize(described, JsonSerializerConstants.JsonOptions);
+        var bareJson = System.Text.Json.JsonSerializer.Serialize(bare, JsonSerializerConstants.JsonOptions);
+
+        describedJson.ShouldContain("\"labels\":[{\"label\":\"Ask the AI\",\"language\":\"en-US\"}]");
+        describedJson.ShouldContain(
+            "\"target\":{\"key\":\"ai-review\",\"stateType\":\"subFlow\",\"stateSubType\":\"none\"," +
+            "\"labels\":[{\"label\":\"Ask the AI\",\"language\":\"en-US\"}],\"subFlow\":\"ai-assist\"}");
+        bareJson.ShouldNotContain("labels");
+        bareJson.ShouldNotContain("target");
+
+        // Round-trips: the parent reads a subflow's entries back through the gateway.
+        var back = System.Text.Json.JsonSerializer.Deserialize<Shared.TransitionItem>(
+            describedJson, JsonSerializerConstants.JsonOptions)!;
+        back.Labels!.Single().Label.ShouldBe("Ask the AI");
+        back.Labels!.Single().Language.ShouldBe("en-US");
+        back.Target!.Key.ShouldBe("ai-review");
+        back.Target.StateSubType.ShouldBe("none");
+        back.Target.Labels!.Single().Label.ShouldBe("Ask the AI");
+    }
+
+    /// <summary>
     /// Scheduled transitions ride inside the <c>transitions</c> list as <c>kind: "scheduled"</c>
     /// entries built from the persisted job state: appended after the caller-triggerable entries,
     /// ordered by execution time ascending, each carrying the transition key and the UTC execution
@@ -776,7 +1045,7 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         var timeout = result.Result.Value!.Timeout;
         timeout.ShouldNotBeNull();
         timeout!.Key.ShouldBe("abandoned");
-        timeout.Target.ShouldBe("cancelled");
+        timeout.Target.Key.ShouldBe("cancelled");
         timeout.ExecuteAtUtc.ShouldBe(executeAt.UtcDateTime);
         timeout.ExecuteAtUtc.Kind.ShouldBe(DateTimeKind.Utc);
 
@@ -888,8 +1157,52 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         var timeout = result.Result.Value!.Timeout;
         timeout.ShouldNotBeNull();
         timeout!.Key.ShouldBe("child-push-timeout");
-        timeout.Target.ShouldBe("child-cancelled");
+        timeout.Target.Key.ShouldBe("child-cancelled");
         timeout.ExecuteAtUtc.ShouldBe(executeAt.UtcDateTime);
+    }
+
+    /// <summary>
+    /// The block describes its target exactly as a <c>transitions[]</c> entry does — key, type, sub
+    /// type and labels — so a client says "auto-cancels at 14:30 → İptal Edildi" without reading the
+    /// workflow definition. A target that does not resolve keeps its raw key only.
+    /// </summary>
+    [Fact]
+    public async Task GetInstanceStateAsync_TimeoutTarget_IsDescribedLikeATransitionTarget()
+    {
+        var (instance, workflow) = CreateInstanceWithTimeout("abandoned", "cancelled");
+        var cancelled = State.Create("cancelled", StateType.Finish, StateSubType.Cancelled,
+            VersionStrategy.IncreaseMinor.Code);
+        cancelled.AddLanguage("İptal Edildi", "tr-TR");
+        workflow.AddState(cancelled);
+        SetupCommonMocks(instance, workflow);
+        SetupTimeoutJob(instance, new DateTimeOffset(2026, 9, 21, 14, 30, 0, TimeSpan.Zero));
+
+        var result = await _service.GetInstanceStateAsync(
+            CreateInput(instance.Id.ToString()), CancellationToken.None);
+
+        var target = result.Result.Value!.Timeout.ShouldNotBeNull().Target;
+        target.Key.ShouldBe("cancelled");
+        target.StateType.ShouldBe("finish");
+        target.StateSubType.ShouldBe("cancelled");
+        target.Labels!.Single().Label.ShouldBe("İptal Edildi");
+        target.SubFlow.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task GetInstanceStateAsync_TimeoutTargetThatDoesNotResolve_KeepsTheRawKeyOnly()
+    {
+        var (instance, workflow) = CreateInstanceWithTimeout("abandoned", "cancelled");
+        SetupCommonMocks(instance, workflow);
+        SetupTimeoutJob(instance, new DateTimeOffset(2026, 9, 21, 14, 30, 0, TimeSpan.Zero));
+
+        var result = await _service.GetInstanceStateAsync(
+            CreateInput(instance.Id.ToString()), CancellationToken.None);
+
+        var target = result.Result.Value!.Timeout.ShouldNotBeNull().Target;
+        target.Key.ShouldBe("cancelled");
+        target.StateType.ShouldBeNull();
+        target.StateSubType.ShouldBeNull();
+        target.Labels.ShouldBeNull();
     }
 
     /// <summary>
@@ -905,7 +1218,12 @@ public class InstanceQueryAppServiceStateTests : IDisposable
             Timeout = new InstanceTimeoutOutput
             {
                 Key = "abandoned",
-                Target = "cancelled",
+                Target = new Shared.TransitionTarget
+                {
+                    Key = "cancelled",
+                    StateType = "finish",
+                    StateSubType = "cancelled"
+                },
                 ExecuteAtUtc = new DateTime(2026, 9, 21, 14, 30, 0, DateTimeKind.Utc)
             }
         };
@@ -916,7 +1234,8 @@ public class InstanceQueryAppServiceStateTests : IDisposable
 
         withJson.ShouldContain("\"executeAtUtc\":\"2026-09-21T14:30:00Z\"");
         withJson.ShouldContain("\"key\":\"abandoned\"");
-        withJson.ShouldContain("\"target\":\"cancelled\"");
+        withJson.ShouldContain(
+            "\"target\":{\"key\":\"cancelled\",\"stateType\":\"finish\",\"stateSubType\":\"cancelled\"}");
         withoutJson.ShouldNotContain("timeout");
     }
 
@@ -994,6 +1313,37 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         scheduled[0].Annotations.ShouldNotBeNull();
         scheduled[0].Annotations!["ui/source"].ShouldBe("scheduled");
         scheduled[1].Annotations.ShouldBeNull();
+    }
+
+    /// <summary>
+    /// Scheduled entries are described like every other kind: labels and target from the definition
+    /// resolved via the job's source state, <c>$self</c> meaning that source state.
+    /// </summary>
+    [Fact]
+    public async Task GetInstanceStateAsync_ScheduledEntries_CarryLabelsAndTarget()
+    {
+        var instance = Instance.Create(Guid.NewGuid(), TestWorkflow, TestVersion, "test-key");
+        var state = State.Create(TestState, StateType.Intermediate, StateSubType.None,
+            VersionStrategy.IncreaseMinor.Code);
+        var reminder = Transition.Create("send-reminder", TestState, "$self", TriggerType.Scheduled,
+            VersionStrategy.IncreasePatch.Code);
+        reminder.AddLanguage("Hatırlatma", "tr-TR");
+        state.AddTransition(reminder);
+        instance.ChangeState(state);
+        var workflow = BuildWorkflow(state);
+        SetupCommonMocks(instance, workflow);
+        _instanceJobRepository
+            .GetListActiveAsync(instance.Id, Arg.Any<CancellationToken>())
+            .Returns([CreateScheduledTransitionJob(instance.Id, "send-reminder",
+                new DateTimeOffset(2026, 8, 3, 12, 0, 0, TimeSpan.Zero))]);
+
+        var result = await _service.GetInstanceStateAsync(
+            CreateInput(instance.Id.ToString()), CancellationToken.None);
+
+        var entry = result.Result.Value!.Transitions.Single(t => t.Kind == "scheduled");
+        entry.Labels!.Single().Label.ShouldBe("Hatırlatma");
+        entry.Target!.Key.ShouldBe(TestState);
+        entry.Target.StateType.ShouldBe("intermediate");
     }
 
     /// <summary>
@@ -1084,14 +1434,14 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         var withAnnotations = new InstanceTimeoutOutput
         {
             Key = "abandoned",
-            Target = "cancelled",
+            Target = new Shared.TransitionTarget { Key = "cancelled" },
             ExecuteAtUtc = new DateTime(2026, 9, 21, 14, 30, 0, DateTimeKind.Utc),
             Annotations = new Dictionary<string, string> { ["ui/countdown"] = "visible" }
         };
         var withoutAnnotations = new InstanceTimeoutOutput
         {
             Key = "abandoned",
-            Target = "cancelled",
+            Target = new Shared.TransitionTarget { Key = "cancelled" },
             ExecuteAtUtc = new DateTime(2026, 9, 21, 14, 30, 0, DateTimeKind.Utc)
         };
 

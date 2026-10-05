@@ -11,6 +11,7 @@ using BBT.Workflow.Instances.Related;
 using BBT.Workflow.RepresentationEtag;
 using BBT.Workflow.Resilience;
 using BBT.Workflow.Runtime;
+using BBT.Workflow.Scripting.Sandbox;
 using BBT.Workflow.Extentions;
 using BBT.Workflow.SubFlow;
 using BBT.Workflow.Authorization;
@@ -18,6 +19,7 @@ using BBT.Workflow.BackgroundJobs;
 using BBT.Workflow.Events;
 using BBT.Workflow.Functions;
 using BBT.Workflow.Functions.Contracts;
+using Microsoft.Extensions.Options;
 using BBT.Workflow.Functions.Validation;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -87,6 +89,20 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
         // Singleton on purpose: a per-request ceiling caps nothing across requests, and it is the
         // product of the two that meets the connection pool.
         services.AddSingleton<HumanTaskDescentLimiter>();
+
+        // Bounds for the correlation-tree walk. Same posture as the human-task fan-out above and
+        // for the same reason: FanoutParallelism reaches Parallel.ForEachAsync (negative =
+        // UNBOUNDED), MaxConcurrentHops sizes a semaphore that 0 would deadlock, and
+        // MaxDescentDepth is the walk's only protection against a cyclic correlation graph.
+        services.AddOptions<BBT.Workflow.Instances.Correlation.InstanceCorrelationOptions>()
+            .BindConfiguration(BBT.Workflow.Instances.Correlation.InstanceCorrelationOptions.SectionName)
+            .ValidateDataAnnotations()
+            .ValidateOnStart();
+        services.AddScoped<BBT.Workflow.Instances.Correlation.IInstanceCorrelationResolver,
+            BBT.Workflow.Instances.Correlation.InstanceCorrelationResolver>();
+        // Singleton for the same reason as the human-task limiter: a per-request ceiling caps
+        // nothing across requests, and it is their product that meets the connection pool.
+        services.AddSingleton<BBT.Workflow.Instances.Correlation.CorrelationHopLimiter>();
         services.AddOptions<HumanTaskFunctionCacheOptions>()
             .BindConfiguration(HumanTaskFunctionCacheOptions.SectionName)
             .ValidateDataAnnotations()
@@ -98,6 +114,13 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
         services.AddScoped<IStateFunctionCache, StateFunctionCache>();
         services.AddOptions<InstanceFunctionCacheOptions>()
             .BindConfiguration(InstanceFunctionCacheOptions.SectionName);
+        // x-masking kill switch. Folded into the data-function cache generation (key AND ETag).
+        services.AddOptions<BBT.Workflow.Authorization.SchemaMaskingOptions>()
+            .BindConfiguration(BBT.Workflow.Authorization.SchemaMaskingOptions.SectionName);
+        // x-encryption read-path transforms (type "hash") and the host-wide hash salt. Also in the cache generation.
+        services.AddOptions<BBT.Workflow.Authorization.SchemaEncryptionOptions>()
+            .BindConfiguration(BBT.Workflow.Authorization.SchemaEncryptionOptions.SectionName);
+        services.TryAddSingleton<BBT.Workflow.Authorization.IFieldEncryptionStatus, BBT.Workflow.Authorization.FieldEncryptionStatus>();
         services.AddScoped<IDataFunctionCache, DataFunctionCache>();
         services.AddScoped<IInstanceSchemaFunctionCache, InstanceSchemaFunctionCache>();
         // Application Services
@@ -108,11 +131,22 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
         services.AddScoped<IRelatedInstanceQueryAppService, RelatedInstanceQueryAppService>();
         services.AddScoped<IViewContentResolutionService, ViewContentResolutionService>();
         services.AddScoped<IInstanceRetryAppService, InstanceRetryAppService>();
-        services.AddScoped<IStateStoreCacheGateway, StateStoreCacheGateway>();
         services.AddScoped<IFunctionContractResolver, FunctionContractResolver>();
         services.AddScoped<IFunctionAccessPolicy, FunctionAccessPolicy>();
         services.AddScoped<IFunctionRequestValidationService, FunctionRequestValidationService>();
         services.AddScoped<IFunctionAppService, FunctionAppService>();
+        // Journal tunables (Workflow:FunctionExecutionJournal): QueueCapacity + BatchSize.
+        services.AddOptions<FunctionExecutionJournalOptions>()
+            .BindConfiguration(FunctionExecutionJournalOptions.SectionName);
+        // Singleton: the journal is a process-wide bounded queue shared by the producer (the function
+        // path, via IFunctionExecutionJournal) and the background writer (which reads the concrete type's
+        // ChannelReader). Registering the concrete once and forwarding the interface keeps them one instance.
+        // Capacity is read once here — a bounded channel's bound is fixed for the process's life.
+        services.AddSingleton<FunctionExecutionJournal>(sp =>
+            new FunctionExecutionJournal(
+                sp.GetRequiredService<IOptions<FunctionExecutionJournalOptions>>().Value.QueueCapacity));
+        services.AddSingleton<IFunctionExecutionJournal>(sp => sp.GetRequiredService<FunctionExecutionJournal>());
+        services.AddScoped<IFunctionMetricsAppService, FunctionMetricsAppService>();
         services.AddScoped<IFunctionInfoAppService, FunctionInfoAppService>();
         services.AddScoped<IEventAppService, EventAppService>();
         services.AddScoped<IInstanceSelectorResolver, InstanceSelectorResolver>();
@@ -124,6 +158,8 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
         services.AddScoped<IAuthorizeAppService, AuthorizeAppService>();
         services.AddScoped<IRepresentationEtagService, RepresentationEtagService>();
         services.AddScoped<ISchemaFieldFilterService, SchemaFieldFilterService>();
+        services.AddScoped<BBT.Workflow.Instances.IInstanceDataReadService, BBT.Workflow.Instances.InstanceDataReadService>();
+        services.AddScoped<BBT.Workflow.Instances.ISubItemEventDataResolver, BBT.Workflow.Instances.SubItemEventDataResolver>();
         services.AddScoped<IInstanceExtensionService, InstanceExtensionService>();
         services.AddScoped<IWorkflowOutputMappingService, WorkflowOutputMappingService>();
         services.AddScoped<ISubflowOutputMappingService, SubflowOutputMappingService>();
@@ -212,6 +248,11 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
         services.AddSingleton<IComponentValidator, SchemaComponentValidator>();
         services.AddSingleton<IComponentValidator, ExtensionComponentValidator>();
         services.AddSingleton<IComponentValidator, MappingComponentValidator>();
+        // Publish-time allowedAssemblies check. Factory + GetService because read-only hosts
+        // (AddApplicationCacheModule) register validators without AddTaskHandlers, i.e. without
+        // ScriptSandboxOptions; they never publish, so the defaults are enough there.
+        services.TryAddSingleton<IScriptAssemblyCatalog>(sp =>
+            new SandboxScriptAssemblyCatalog(sp.GetService<ScriptSandboxOptions>() ?? new ScriptSandboxOptions()));
         services.AddSingleton<ComponentValidatorProcessor>();
     }
 

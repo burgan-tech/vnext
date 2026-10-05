@@ -16,7 +16,7 @@
     {
       "id": "query-filter-value-length",
       "scope": "query",
-      "enforcedSince": "0.0.90",
+      "enforcedSince": "0.0.94",
       "description": "InstanceQueryValidator and SQL condition builders enforce InputValidator.MaxValueLength before SQL compilation. Each decoded scalar operand may contain at most 1000 UTF-16 code units (.NET string.Length), including every array element and each legacy comma-separated in/nin/between operand. Applies to instance columns and JSON attributes, including nested fields, logical groups and filter envelopes. HTTP queries reject violations with 400 and validation code filter.valueTooLong; GetInstancesTask returns a validation failure before local/remote dispatch, which can invoke the workflow error boundary. Includes objects retain their dedicated size/depth/property limits. Stored instance data is unaffected. The constant existed before this release, but the filter paths did not enforce it.",
       "maxLength": 1000,
       "lengthUnit": "utf16-code-units",
@@ -64,13 +64,37 @@
       "id": "roleless-caller-cannot-clear-role-bound-deny",
       "scope": "authorization",
       "enforcedSince": "0.0.96",
-      "description": "A caller with no roles cannot pass a role-bound DENY grant (a static role or a $role. reference): TransitionAuthorizationManager.IsUnprovableRoleBoundDeny refuses it in both RoleGrantEvaluator and EvaluateRolesStatic, on every surface and for every caller-role provider. Identity-bound denies (predefined roles, $user., $userBehalfOf.) keep their normal evaluation. This is what makes MorphIdmCallerRoleResolver resolving every failure (error status, timeout, transport, unparseable body, no act_sub/client_id) to an empty role set safe: an empty set can only narrow access, never widen it."
+      "description": "A caller with no roles cannot pass a role-bound DENY grant (a static role or a $role. reference): the Kleene rule in RoleGrantMatcher (a role-bound leaf is Unknown for a role-less caller and a deny fires on Unknown) refuses it in both RoleGrantEvaluator and EvaluateRolesStatic, on every surface and for every caller-role provider. Identity-bound denies (predefined roles, $user., $userBehalfOf.) keep their normal evaluation. This is what makes MorphIdmCallerRoleResolver resolving every failure (error status, timeout, transport, unparseable body, no act_sub/client_id) to an empty role set safe: an empty set can only narrow access, never widen it."
+    },
+    {
+      "id": "role-grant-combinators-three-valued-evaluation",
+      "scope": "authorization",
+      "enforcedSince": "0.0.99",
+      "description": "Grants are evaluated three-valued by the single RoleGrantMatcher (used by RoleGrantEvaluator and EvaluateRolesStatic): a role-bound leaf (static role, $role.) is Unknown for a role-less caller, identity leaves ($InstanceStarter, $PreviousUser, $InstanceBehalfOfStarter, $PreviousBehalfOfUser, $user., $userBehalfOf.) are always Yes/No (No when there is no instance). allOf: No dominates, else Unknown, else Yes; anyOf: Yes dominates, else Unknown, else No. A deny fires on Yes OR Unknown, an allow admits only on Yes, so an unprovable condition can only narrow access. A role-less caller is therefore no longer admitted by an ALLOW $role. reference that resolved to an empty string. Combinators are depth 1 with { role } children, validated at publish (RoleGrantDefinitionRules); x-masking / x-encryption exemption lists reject them. Predefined roles resolve against the grant's own instance."
+    },
+    {
+      "id": "queryroles-decided-at-subflow-leaf-only",
+      "scope": "authorization",
+      "enforcedSince": "0.0.99",
+      "description": "For an instance with an active SubFlow, AuthorizeAppService does not evaluate queryRoles above the deepest active leaf: it only forwards, and the leaf decides (parent-stamped subFlow.overrides.states.<state>.queryRoles, else the leaf state's queryRoles, else the leaf workflow's); there is no AND down the chain, an empty leaf set allows. Consequence: the root's queryRoles no longer restrict anyone while the instance is inside a SubFlow; a parent restricts via overrides. The human-task list uses the same leaf resolution and carries the caller's act_sub/sub in the leaf hop body (self-asserted, like the roles)."
     },
     {
       "id": "transition-predefined-and-dynamic-role-grants",
       "scope": "transition",
       "enforcedSince": "0.0.1",
       "description": "When an instance is present, TransitionAuthorizationManager resolves $InstanceStarter, $PreviousUser, $InstanceBehalfOfStarter, $PreviousBehalfOfUser against CreatedBy/CreatedByBehalfOf and last completed manual transition; dynamic grants use $.context.* paths compared to actor, subject, or caller role."
+    },
+    {
+      "id": "schema-field-masking-allow-only-exemption",
+      "scope": "authorization",
+      "enforcedSince": "0.0.99",
+      "description": "SchemaFieldFilterService applies master-schema x-masking after x-roles pruning on instance GET, instance list, the data function and sync start/transition attributes (IInstanceDataReadService), and on the Get* trigger tasks for the header set the task presents. x-masking.roles and x-encryption.roles are allow-only exemption lists resolved with IRoleGrantEvaluator.IsAnyRoleAllowed; role-resolution failure, an empty role set and unlisted roles keep the value transformed, and a role-less caller never satisfies a role-bound grant (static role or $role.). FieldMaskingDefinition rejects deny grants and co-occurrence with x-filterOperators, x-sortable or an active x-encryption at publish. x-encryption.type 'hash' is applied on write under a per-instance salt and takes no roles."
+    },
+    {
+      "id": "schema-field-encryption-at-rest",
+      "scope": "data-protection",
+      "enforcedSince": "0.0.99",
+      "description": "x-encryption.type 'encrypt': InstanceDataWriteService seals the declared string paths of InstancesData with AES-256-GCM under the instance's own key (AAD bound to scheme, instance and path) after validation; InstanceData.Data is the column as stored and is never decrypted in place (no plaintext member, no materialization interceptor), so no tracking state writes plaintext; decryption only through IInstanceDataProtector.UnprotectAsync (write funnel, read guard, script DecryptAsync of the instance's own path); content and DataHash are ignored after save and detached rows are attached Unchanged. DataHash of a row with tokens is keyed. Per-instance key and salt are generated by the runtime and stored in the flow schema's InstanceSecrets table (plaintext by decision: database security is owned by the DB team); they are cached in-process only, never in Redis, and never served on any API, log, span or cache. Allow-listed callers (x-encryption.roles) read plaintext on the data function and sync responses, all others the stored token; instance GET/list serve the stored token. A write carrying an undecryptable value forward is refused (Instance:100040) and reserved-prefix injection is rejected (Instance:100041). Queries on encrypted paths are refused. Scope: InstanceData only."
     }
   ]
 }

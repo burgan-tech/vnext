@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Runtime.ExceptionServices;
 
 namespace System.Text.Json.Serialization;
 
@@ -27,7 +28,22 @@ public sealed class IEquatableJsonConverter<T> : JsonConverter<T>
             throw new JsonException($"Invalid or empty code for {typeof(T).Name}.");
         }
         
-        return FromCodeMethod.Invoke(null, new object[] { code }) as T;
+        try
+        {
+            return FromCodeMethod.Invoke(null, new object[] { code }) as T;
+        }
+        catch (TargetInvocationException ex) when (ex.InnerException is not null)
+        {
+            // FromCode reports an unknown code by throwing ArgumentException; reflection wraps that in
+            // TargetInvocationException, whose message is the useless "Exception has been thrown by the
+            // target of an invocation." Unwrap and rethrow the inner exception (stack preserved) so the
+            // publish-time ComponentValidatorProcessor — which catches ArgumentException and turns it
+            // into a field-scoped validation error carrying the real "Unknown … type: X" message — can
+            // do its job. Without this, a mistyped value-object code (executionType, taskScope, …)
+            // escapes as an opaque HTTP 500 with the author told nothing.
+            ExceptionDispatchInfo.Capture(ex.InnerException).Throw();
+            throw; // unreachable; the line above always throws.
+        }
     }
 
     public override void Write(Utf8JsonWriter writer, T value, JsonSerializerOptions options)

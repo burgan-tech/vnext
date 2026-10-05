@@ -134,26 +134,44 @@ public sealed class PipelineStepActivityHelperTests : IDisposable
     }
 
     [Fact]
-    public void SetStepError_RecordsErrorStatusAndMessage()
+    public void SetStepError_RecordsErrorStatusMessageAndCode()
     {
-        // Covers TransitionExecutor.ExecuteStepWithBoundaryAsync's two error paths (failed Result and
-        // unhandled exception), both of which delegate to SetStepError with the failure message.
+        // Covers TransitionExecutor.ExecuteStepWithBoundaryAsync's failed-Result path.
         var collected = new List<Activity>();
         using var listener = CreateListener("BBT.Workflow.Pipeline", collected);
         using (var activity = PipelineStepActivityHelper.StartStepActivity(new FakeStep(20, "CreateTransitionRecordStep")))
         {
-            PipelineStepActivityHelper.SetStepError(activity, "boom");
+            PipelineStepActivityHelper.SetStepError(activity, "Instance:100031", "boom");
         }
 
         var span = collected.Single();
         Assert.Equal(ActivityStatusCode.Error, span.Status);
         Assert.Equal("boom", span.StatusDescription);
+        Assert.Equal("Instance:100031", span.GetTagItem("error.code"));
+    }
+
+    [Fact]
+    public void SetStepError_WithException_RecordsTypeAndExceptionEvent()
+    {
+        // The unhandled-exception path used to keep only the message; the stack trace was lost.
+        var collected = new List<Activity>();
+        using var listener = CreateListener("BBT.Workflow.Pipeline", collected);
+        using (var activity = PipelineStepActivityHelper.StartStepActivity(new FakeStep(30, "RunOnExecuteTasksStep")))
+        {
+            PipelineStepActivityHelper.SetStepError(activity, new InvalidOperationException("boom"));
+        }
+
+        var span = collected.Single();
+        Assert.Equal(ActivityStatusCode.Error, span.Status);
+        Assert.Equal(typeof(InvalidOperationException).FullName, span.GetTagItem("error.type"));
+        Assert.Contains(span.Events, e => e.Name == "exception");
     }
 
     [Fact]
     public void SetStepError_NullActivity_IsNoOp()
     {
-        Should.NotThrow(() => PipelineStepActivityHelper.SetStepError(null, "boom"));
+        Should.NotThrow(() => PipelineStepActivityHelper.SetStepError(null, "code", "boom"));
+        Should.NotThrow(() => PipelineStepActivityHelper.SetStepError(null, new InvalidOperationException("boom")));
     }
 
     private sealed class FakeStep : ITransitionStep

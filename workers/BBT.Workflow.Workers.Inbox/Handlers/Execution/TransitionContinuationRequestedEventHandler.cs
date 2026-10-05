@@ -40,27 +40,37 @@ internal sealed class TransitionContinuationRequestedEventHandler(
             "TransitionContinuationRequested.Handle", eventData, correlationIdProvider,
             EventTraceMode.ContinueTrace, envelope.Id);
 
-        // The only lane-aware handler that set no root baggage. DaprOrchestrationForwarder reads
-        // exactly this to stamp X-Root-Instance-Id on the forwarded call, so without it the
-        // continuation hop was the one place a trace lost the tag that selects a whole business
-        // request. Absent on an event from a pre-field producer — then this is a no-op, as before.
-        if (eventData.RootInstanceId.HasValue)
+        // Exception filter that never catches: records the failure on the consumer span while
+        // it is still open (an isolated delivery is its own trace, so the error Aether records on
+        // Inbox.Process never reaches it) and lets the exception propagate untouched.
+        try
         {
-            Activity.Current?.SetBaggage(
-                TelemetryConstants.TagNames.RootInstanceId,
-                eventData.RootInstanceId.Value.ToString());
+            // The only lane-aware handler that set no root baggage. DaprOrchestrationForwarder reads
+            // exactly this to stamp X-Root-Instance-Id on the forwarded call, so without it the
+            // continuation hop was the one place a trace lost the tag that selects a whole business
+            // request. Absent on an event from a pre-field producer — then this is a no-op, as before.
+            if (eventData.RootInstanceId.HasValue)
+            {
+                Activity.Current?.SetBaggage(
+                    TelemetryConstants.TagNames.RootInstanceId,
+                    eventData.RootInstanceId.Value.ToString());
+            }
+
+            logger.TransitionContinuationReceived(
+                eventData.InstanceId, eventData.TransitionKey, eventData.JobName);
+
+            var route =
+                $"api/v1/{eventData.Domain}/workflows/{eventData.Flow}/instances/{eventData.InstanceId}/transitions/{eventData.TransitionKey}/enqueue";
+
+            await forwarder.ForwardAsync(HttpMethod.Post, route, eventData,
+                eventData.Domain, eventData.Flow, eventData.Version, eventData.InstanceId, cancellationToken);
+
+            logger.TransitionContinuationEnqueued(
+                eventData.InstanceId, eventData.TransitionKey, eventData.JobName);
         }
-
-        logger.TransitionContinuationReceived(
-            eventData.InstanceId, eventData.TransitionKey, eventData.JobName);
-
-        var route =
-            $"api/v1/{eventData.Domain}/workflows/{eventData.Flow}/instances/{eventData.InstanceId}/transitions/{eventData.TransitionKey}/enqueue";
-
-        await forwarder.ForwardAsync(HttpMethod.Post, route, eventData,
-            eventData.Domain, eventData.Flow, eventData.Version, eventData.InstanceId, cancellationToken);
-
-        logger.TransitionContinuationEnqueued(
-            eventData.InstanceId, eventData.TransitionKey, eventData.JobName);
+        catch (Exception ex) when (traceScope.RecordFailure(ex))
+        {
+            throw;
+        }
     }
 }

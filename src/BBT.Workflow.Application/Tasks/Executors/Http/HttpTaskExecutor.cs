@@ -95,8 +95,11 @@ public sealed class HttpTaskExecutor : TaskExecutorBase<HttpTask>
         // dispatch paths need the same object.
         var traceContext = _remoteInvoker.CreateTraceContext(context.ScriptContext);
 
+        // The caller's credential travels with the task's own headers, in-process and to the Execution host alike.
+        var envelope = WithCallerCredential(envelopeResult.Value!, context.ScriptContext);
+
         var result = await _dispatcher.DispatchAsync(
-            task, Execution.TaskTypes.Http, envelopeResult.Value!, traceContext, cancellationToken);
+            task, Execution.TaskTypes.Http, envelope, traceContext, cancellationToken);
 
         if (!result.IsSuccess)
         {

@@ -75,6 +75,16 @@ public class TransitionValidationService(
         TransitionExecutionContext context,
         CancellationToken cancellationToken = default)
     {
+        // x-encryption: a request may not introduce a value carrying a reserved prefix (ENCRYPTED:, HASHED:) —
+        // only send back the value already stored at the same path. Refused here, before admission, so a client
+        // error is a 400 and never reaches the write funnel inside the pipeline (where it would fault the
+        // instance). The funnel keeps its own check for values produced by mappings.
+        if (context.DataElement is { } payload && EncryptedValueFormat.MayContainReserved(payload.GetRawText()) &&
+            EncryptedValueFormat.FindIntroducedToken(payload, context.Instance?.LatestData?.Data.JsonElement) is { } path)
+        {
+            return Result.Fail(WorkflowErrors.EncryptedValueReserved(path));
+        }
+
         // Guard: No schema defined
         if (context.Transition?.Schema is null)
             return Result.Ok();

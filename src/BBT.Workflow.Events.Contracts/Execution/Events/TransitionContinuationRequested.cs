@@ -46,7 +46,11 @@ public sealed class TransitionContinuationRequested : IDistributedEvent, ILaneAw
     /// </summary>
     public required Guid JobId { get; init; }
 
-    /// <summary>The transition payload data (JSON), if any.</summary>
+    /// <summary>
+    /// The transition payload data (JSON), if any. Carried inline: the scheduler is armed with a
+    /// reference to the job row rather than the body, so the size ceiling that once forced this to be
+    /// reference-only (AB-17) no longer applies to the arm.
+    /// </summary>
     public JsonElement? Data { get; init; }
 
     /// <summary>Optional instance key.</summary>
@@ -91,6 +95,25 @@ public sealed class TransitionContinuationRequested : IDistributedEvent, ILaneAw
     /// SubFlow chain down to the leaf, so the relay may claim that reserve when forwarding.
     /// </summary>
     public bool SubflowChainReserved { get; init; }
+
+    /// <summary>
+    /// The original caller's sync/async intent, carried across the outbox hop so the rebuilt
+    /// <c>TransitionJobPayload.CallerSync</c> (and thus <c>TransitionExecutionContext.CallerMode</c>)
+    /// keeps reporting the terminal completion/fault signal the way the caller asked (vnext#1003).
+    /// <para>
+    /// Before #1003, <see cref="Mode"/> always equalled the caller mode, so the consumer's historical
+    /// hardcoded <c>false</c> was harmless; now a flow/transition <c>executionType=A</c> (async) can force
+    /// an async dispatch for a <c>sync=true</c> caller, and that intent must survive the outbox path
+    /// exactly as it already does on the direct-enqueue payload
+    /// (<c>AsyncTransitionStrategy.BuildDirectPayload</c>).
+    /// </para>
+    /// <para>
+    /// A plain <c>bool</c> (not <c>required</c>): an outbox row written before this field existed
+    /// deserializes to <c>false</c> — the pre-#1003 behaviour — so no Inbox poison-loop and no change
+    /// for callers that never set an <c>executionType</c>.
+    /// </para>
+    /// </summary>
+    public bool CallerSync { get; init; }
 
     /// <summary>
     /// Root (ancestor) instance id of the business request — constant at the top-level flow's id

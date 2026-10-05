@@ -34,6 +34,21 @@ public sealed class GetInstanceStateOutput
     public string StateType { get; set; } = string.Empty;
 
     /// <summary>
+    /// Current state's sub type in camelCase (<c>none</c>, <c>success</c>, <c>error</c>,
+    /// <c>terminated</c>, <c>suspended</c>, <c>busy</c>, <c>human</c>, <c>cancelled</c>,
+    /// <c>timeout</c>). Describes the same state as <see cref="StateType"/>.
+    /// </summary>
+    public string StateSubType { get; set; } = string.Empty;
+
+    /// <summary>
+    /// The displayed state's display labels, in the definition's own <c>[{ language, label }]</c>
+    /// form — every language, the client picks. Describes the same state as <see cref="StateType"/>:
+    /// the active subflow's state while one is running, otherwise this instance's own. Null — and
+    /// omitted from the JSON — when the state declares none.
+    /// </summary>
+    public List<LanguageLabel>? StateLabels { get; set; }
+
+    /// <summary>
     /// Instance status
     /// </summary>
     public InstanceStatus? Status { get; set; }

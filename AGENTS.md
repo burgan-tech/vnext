@@ -1,14 +1,16 @@
 # AGENTS.md
 
-This is the single session-bootstrap file for every coding agent working in this repository (Codex, Cursor, Copilot, Gemini CLI read it directly; Claude Code imports it from `CLAUDE.md`). Tool-specific wiring lives in `CLAUDE.md` (Claude skills, local overrides) and in three pointer files under `.cursor/rules/` — see [AI guidance layout](#ai-guidance-layout) at the end of this file.
+This is the single session-bootstrap file for every coding agent working in this repository (Codex, Cursor, Copilot, Gemini CLI read it directly; Claude Code imports it from `CLAUDE.md`). Tool-specific wiring lives in `CLAUDE.md` (Claude skills, local overrides) and in one pointer file per rule under `.cursor/rules/` — see [AI guidance layout](#ai-guidance-layout) at the end of this file.
 
 ## Project Rules (always apply)
 
-These rules are authoritative for all work in this repo. Read them before writing code:
+These rules are authoritative for all work in this repo. The two code rules are path-scoped — they load
+automatically once you read or edit code under `src/`, the hosts, `workers/`, `modules/`, `test/` or
+`vnext-meta/`; for a design question asked before any code is open, read them explicitly:
 
 - [Agent onboarding](docs/agent-onboarding.md) — source-of-truth order, where-is-X, known pitfalls. When this file disagrees with code, trust `LifecycleOrder.cs` / `PipelineExecutionProfile.cs`.
-- [.NET / Aether / vNext coding standards](.claude/rules/dotnet-coding-standards.md) — style, naming, Aether SDK usage, outbox event delivery, logging via `WorkflowLogs.cs`, Result pattern, multi-schema rules.
-- [vNext workflow developer reference](.claude/rules/vnext-workflow-developer.md) — pipeline step order, profiles, subflow lifecycle, error boundary, long-polling, instance data, `vnext-meta`.
+- [.NET / Aether / vNext coding standards](.claude/rules/dotnet-coding-standards.md) *(path-scoped)* — Aether SDK usage, event checklist, logging via `WorkflowLogs.cs`, Result pattern, multi-schema, tests.
+- [vNext workflow developer reference](.claude/rules/vnext-workflow-developer.md) *(path-scoped)* — the runtime quick-reference card: pipeline, profiles, locking, subflow, authorization, state function; each section links its `/docs` page.
 - [Agent Council plan mode](.claude/rules/agent-council-plan-mode.md) — non-trivial decisions must produce an evidence-backed plan before implementation.
 - [Codebase navigation — graphify first](.claude/rules/graphify-navigation.md) — when `graphify-out/graph.json` exists, query it (`graphify path`/`explain`/`query`) before grepping or reading broadly.
 - [Verifying a change through the MCP servers](.claude/rules/mcp-observability-verification.md) — after exercising a change locally, confirm it with traces, span durations, logs and persisted rows (`.mcp.json`: openobserve, postgres, redis, elasticsearch); a green test run is not evidence on its own.
@@ -78,7 +80,7 @@ Commands run without a terminal, so the script never prompts — pass everything
    — the call is **asynchronous**: it answers `{"statusUrl": "/api/package/publish/status/<id>"}`; poll
    that URL (or `docker logs init-X`) until the job says completed before running `wf sync`.
    Known quirk: `wf check` may print "API: Not accessible" while `/health` is 200 and `wf sync` works;
-   trust `curl localhost:<port>/health`. Verified 2026-09-08 on core: 7 system + 23 example workflows
+   trust `curl localhost:<port>/health`. Verified 2026-09-08 on core: system + example workflows
    loaded, smoke workflow start → transition → Completed.
    Every port above is written in `ai-docs/local-environments/X.md` — read it instead of computing.
 6. Report the base URL and the record path `ai-docs/local-environments/X.md`; point integration tests
@@ -92,7 +94,7 @@ dotnet test test/BBT.Workflow.Application.Tests   # Single project
 dotnet test --filter "FullyQualifiedName~MyTest"  # Single test
 ```
 
-Test projects: `Domain.Tests`, `Application.Tests`, `Infrastructure.Tests`, `TestBase` (shared utilities).
+Test projects (`test/`, unit tests only): `Domain.Tests`, `Application.Tests`, `Infrastructure.Tests`, `TestBase` and `Shared` (shared utilities), `Benchmarks`.
 
 **Integration tests** live in the sibling **vnext-example** repo (`tests/Core.IntegrationTests`, on the
 `VNext.Testing.Sdk` from **vnext-integration-test**) and run against the **locally built** runtime — never
@@ -169,16 +171,26 @@ backup, an idempotent order-safe receiver guard, measured latency evidence and a
 
 ## Domain Concepts
 
-### Transition Pipeline
+Runtime rules live in **one** place — the quick-reference card
+[vNext workflow developer reference](.claude/rules/vnext-workflow-developer.md) (loaded automatically when
+you work on code) — and each topic's narrative lives in its `/docs` page. This section is only the map;
+do not copy a rule or a table back into it, every behaviour change would then have to touch every copy.
+When the card, a doc page and the code disagree, the code wins (`LifecycleOrder.cs`,
+`PipelineExecutionProfile.cs`, `PipelineProfileResolver.cs`).
 
-Transitions execute through a deterministic pipeline of ordered steps (`LifecycleOrder`); each step
-returns `Result<StepOutcome>`. The **ordered step table, `StepOutcome` values, `PipelineExecutionProfile`
-exclusions, the `updateData`-only self-target composition and `TransitionExecutionContext` reuse rules
-live in one place**: [vNext workflow developer reference](.claude/rules/vnext-workflow-developer.md).
-The narrative version is [Workflow Execution Pipeline](docs/architecture/workflow-execution-pipeline.md);
-the code is `src/BBT.Workflow.Domain/Execution/Transitions/Pipeline/LifecycleOrder.cs` and
-`PipelineExecutionProfile.cs`. When they disagree, the code wins. Do not copy the step table into
-this file again — every step change then has to touch every copy.
+| Concept | One-line orientation | Read |
+|---|---|---|
+| Transition pipeline | Ordered steps (`LifecycleOrder`), each returns `Result<StepOutcome>`; profiles exclude steps; only `updateData` skips the state lifecycle | card § Transition Pipeline Order · [workflow-execution-pipeline](docs/architecture/workflow-execution-pipeline.md) |
+| Sync vs async | `sync=true` blocks to a rest point, `sync=false` (default) answers `{ id, status }` and the client polls; a flow/transition `executionType` overrides the query parameter; runtime-generated child calls are always `sync=true` | card § Sync vs Async · [execution-type](docs/runtime/execution-type.md) |
+| State function / long-polling | Conditional GET with ETag, `304` drives client polling, no server-side hold; role-filtered transitions; subflow descent | card § Long-Polling · [state-function-cache-and-etag](docs/runtime/state-function-cache-and-etag.md) |
+| Well-known transitions, `availableIn` | `cancel` / `updateData` / `exit` are listed by configured key with a `kind`; `availableIn` roles AND with `transition.roles` | [well-known-transitions](docs/domain/well-known-transitions.md) · [role-grant-authorization](docs/domain/role-grant-authorization.md) |
+| Client loop (backend-driven view) | start → poll state → view (+ data when `loadData`) → transition → poll until `Completed` | [vnext-docs](https://burgan-tech.github.io/vnext-docs/) · [view-display-modes](docs/domain/view-display-modes.md) |
+| View selection | `views[]` in declaration order, first matching `IConditionMapping` rule wins; last rule-less entry is the fallback | card § View Selection |
+| Instance data | Immutable SemVer versions, full-merge model, `LatestData` + `DataList`; filter with fluent `InstanceQuery` | [instance-data-merge-concept](docs/domain/instance-data-merge-concept.md) · [instance-filtering-and-queries](docs/runtime/instance-filtering-and-queries.md) |
+| Error boundary | Task → State → Global (`CompiledBoundaryChain`); `BoundaryOutcomeHandler` maps the action onto the pipeline | card § Error Boundary |
+| SubFlow / SubProcess | A state starts only an `S` SubFlow; a `P` SubProcess is started by `SubProcessTask`; completion window shows parent transitions | card § SubFlow Lifecycle · [subflow-execution](docs/architecture/subflow-execution.md) |
+| Instance load / includes | Includes are applied at load time (`WithDetailsAsync()`), never inside a step; never carry a tracked instance across a post-commit boundary | card § Instance Repository Include Strategy · [inline-chain-context-reuse](docs/architecture/inline-chain-context-reuse.md) |
+| Locking | The Busy flag is the mutex; one millisecond-scale status lock per hop | card § Locking |
 
 ### Status / State / Type Semantics
 
@@ -190,86 +202,17 @@ this file again — every step change then has to touch every copy.
 
 **Trigger Types**: `Manual = 0`, `Automatic = 1`, `Scheduled = 2`, `Event = 3`.
 
-### Sync vs Async Execution
-
-- `sync=true`: Request blocks until pipeline completes; response includes full instance data. Use for deterministic short-lived processes and backend-to-backend integration.
-- `sync=false` (default): Request accepted immediately with `{ id, status }`. Client polls via State function for completion. Use for human tasks, external API calls, and mobile/web clients.
-- Automatic continuations never create per-hop Scheduler jobs. They run inline and are awaited by the request or by the initial async transition job.
-- Runtime-generated subflow start, active-child forward and descended child retry calls always use `sync=true`, independent of the parent caller mode and `S`/`P` definition type. This awaits the child's current activation to a rest point, not its future human/event lifetime.
-
-### Long-Polling / State Function
-
-- Conditional GET with ETag: `GET /functions/state` → `200` (changed) | `304` (not modified → wait → retry).
-- ETag sources: `LatestData?.ETag` for entity, `IRepresentationEtagService.Generate(output)` for representation.
-- **Role filtering**: `ITransitionAuthorizationManager` filters available transitions per role. Supports `$InstanceStarter`, `$PreviousUser` pseudo-roles.
-- **Well-known transitions**: `cancel`, `updateData` and `exit` are listed in `availableTransitions` (configured key, not the well-known alias) with `kind` = `cancel` / `updateData` / `exit`, and their `roles` are role-filtered like any other transition. Full guide: `docs/domain/well-known-transitions.md`.
-- **`availableIn`**: accepts bare state keys or `{ state, roles }` objects (mixable). Per-state `roles` compose with `transition.roles` as an **AND**. State function and `authorize` enforce state+roles; the execution policy enforces state only. Use `Transition.IsAvailableInState` / `FindAvailableIn`, never the raw list.
-- No server-side hold — 304 response drives client-side polling.
-- Subflow completion window: while parent correlation is open, State function shows **parent** main-flow transitions instead of subflow terminal view.
-
-### User Integration (Backend-Driven View)
-
-Client interaction follows a deterministic loop managed by vNext Client Workflow Manager SDK:
-1. Start instance → poll State function until `status = Active`
-2. Fetch view definition via View function → fetch data via Data function if `loadData: true`
-3. Render UI → user triggers transition → check for transition-level view (modal/popup)
-4. Submit transition → re-poll State function → loop until `status = Completed`
-
-Backend-Driven View approach: UI changes deploy via backend only, minimizing mobile/web release cycles.
-
-### View Selection
-
-- `views[]` array on states and transitions; evaluated in declaration order, first matching rule wins.
-- Rule: inline C# script implementing `IConditionMapping` with access to `ScriptContext` (Headers, QueryParameters, Instance.Data, State, Transition).
-- Last entry without a rule serves as default/fallback — always include one.
-- `loadData: true` → instance data loaded alongside view response.
-
-### Instance Data
-
-- **Immutable, versioned** (SemVer): task results → Patch, schema additions → Minor, breaking changes → Major.
-- **Full-merge model**: each version contains the complete state + delta. `LatestData` marks current version, `DataList` contains history.
-- **Queryable**: filterable on instance columns (`key`, `status`, `currentState`, `createdAt`, etc.) and `attributes.*` JSON paths using GraphQL-style filter syntax.
-- **Operators**: `eq`, `ne`, `gt`, `ge`, `lt`, `le`, `between`, `like`, `startswith`, `endswith`, `in`, `nin`, `isnull`.
-- **Logical operators**: `and`, `or`, `not` for complex nested queries.
-- **Aggregations**: `groupBy` with `count`, `sum`, `avg`, `min`, `max`.
-- Master schema (`attributes.schema`) governs data structure; changes are versioned.
-
-### Error Boundary
-
-- **Levels**: Task → State → Global (resolved by `CompiledBoundaryChain`). Rules sorted by `EffectivePriority` ASC → specificity DESC → definition order.
-- **Actions**: `Abort`, `Retry`, `Rollback`, `Ignore`, `Notify`, `Log`.
-- **Pipeline mapping** (`BoundaryOutcomeHandler`): `Log`/`Ignore` → `Continue()`; transition set → `RequestNextTransition` + `SkipToFinalize()`; abort without transition → Fail → instance fault.
-- Error-boundary profile skips Preflight, ForwardToActiveSubflow and ResourceLock. It does **not** disable subflow handling and does not remove the Auto step: the plan is built from `ExcludedStepOrders` alone, and `LifecycleOrder.SubFlow` (70) is in no exclusion set.
-
-### SubFlow Lifecycle
-
-- **SubFlow (S)**: On completion → output mapping → `ResumePipelineAsync` with `ResumeFrom = ClearBusyOnResumeStep` (order 79). Parent pipeline resumes execution.
-- **SubProcess (P)**: On completion → correlation complete + persist → no parent resume (fire-and-forget).
-- Start uses `StrictIdempotency: true` with parent metadata in `ExtraProperties`.
-- Start, active-child forward and descended retry calls use `sync=true`; `S` versus `P` controls parent continuation, not call transport mode.
-- On resume failure, correlation is reverted in a new UoW for retry.
-- **Completion window**: If subflow is in terminal status while parent correlation is still open, State function shows parent transitions instead of subflow terminal view.
-
-### Instance Repository Include Strategy
-
-- Pipeline steps do NOT call EF `Include` directly — includes are applied at load time via `WithDetailsAsync()`.
-- Default load: `DataList` (or latest-only when `WorkflowExecution:LatestOnlyInstanceLoading` is on) + `Include(ChildCorrelations.Where(!IsCompleted))` with split queries.
-- `GetResultAsync(includeDetails: false)` is lean (no DataList/correlations). `true` uses `WithDetailsAsync()`.
-- History paths use `AsNoTracking` + explicit filtered includes.
-- **Rule**: Do not add unnecessary includes. If `TransitionExecutionContext` already has the data, do not re-query.
-- Inline context reuse is valid only inside the same pipeline/UoW. Never carry a tracked instance across a post-commit, retry or subflow callback boundary.
-
 ---
 
 ## Platform repositories
 
 The platform is spread over sibling repositories under `github.com/burgan-tech`. Expect each as a
-sibling checkout of this one (`../<repo>`) — the layout `nuget.config`, `labs/cross-domain/lab.sh` and
+sibling checkout of this one (`../<repo>`) — the layout `nuget.config`, vnext-example's `labs/cross-domain/lab.sh` and
 the runbook above already assume. When one is missing, ask the user **once** (clone into `../<repo>`
 or use a path they name), remember the answer (Claude: auto-memory; other agents: the developer's
 git-ignored `CLAUDE.local.md`), and never write an absolute path into a committed file. Use this table
 for impact analysis: a runtime change names the repos it touches; in-repo dependencies come from the
-knowledge graph (`code-review-graph` MCP tools, `graphify`).
+knowledge graph (`graphify`, see the navigation rule).
 
 | Repo | What it is | Consult when | Trust / rules |
 |------|------------|--------------|---------------|
@@ -303,8 +246,9 @@ Content lives in exactly one place; each tool has a thin entry point that points
 | `AGENTS.md` | Bootstrap for every agent (this file) | yes |
 | `CLAUDE.md` | Claude Code entry: imports `AGENTS.md`, lists skills, imports `CLAUDE.local.md` | yes, keep thin |
 | `docs/agent-onboarding.md` | Source-of-truth order, where-is-X, known pitfalls | yes |
-| `.claude/rules/*.md` | Always-on rules — **single source**. Claude Code loads them natively | yes |
-| `.cursor/rules/*.mdc` | Three 8-line pointers; each `@`-includes one file from `.claude/rules/` so Cursor reads the same text | only when a rule file is added/renamed |
+| `docs/ai-capabilities.md` | Catalog: every AI skill, agent, MCP server, script — when and how | yes, with every new skill/agent |
+| `.claude/rules/*.md` | Rules — **single source**. Claude Code loads them natively: always, or only for matching files when the frontmatter has `paths:` (the two code rules) | yes |
+| `.cursor/rules/*.mdc` | One short pointer per rule file; each `@`-includes its `.claude/rules/` file so Cursor reads the same text, with the same always-on / path-scoped setting | only when a rule file is added/renamed |
 | `.claude/skills/*/SKILL.md` | On-demand skills — **single source**. Cursor loads `.claude/skills/` directly for compatibility; there is no `.cursor/skills/` | yes |
 | `.claude/agents/*.md` | Claude Code subagents — **thin shells only**. Each one points at the file that holds its content (today: `docs/code-review/reviewers/*.md`); other agents ignore the folder | yes |
 | `docs/` | Implementation docs, indexed from `docs/README.md`; `docs/testing/` holds the integration-test contract that the `runtime-integration-test` skill executes, `docs/code-review/` the reviewer checklists that `pr-review` and `workflow-code-review` both run | yes |
@@ -315,4 +259,6 @@ Workflow for a rule or skill change: edit under `.claude/` and commit. Nothing i
 Adding a **new** rule file also needs a matching pointer in `.cursor/rules/` (copy an existing one and
 change the `@` path); adding a skill needs nothing.
 Facts that belong to the runtime (step order, profile exclusions, event delivery modes) go in
-`.claude/rules/` or a `/docs` page and are **linked** from here, never duplicated.
+`.claude/rules/` or a `/docs` page and are **linked** from here, never duplicated. Writing rules for the
+always-loaded files (size budget, what belongs in a rule vs a doc page, the check script):
+[agent-onboarding § Editing the AI guidance](docs/agent-onboarding.md#editing-the-ai-guidance).

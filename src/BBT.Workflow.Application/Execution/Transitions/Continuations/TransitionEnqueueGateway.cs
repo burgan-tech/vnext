@@ -56,6 +56,18 @@ public sealed class TransitionEnqueueGateway(
         return new TransitionEnqueueOutcome(TransitionEnqueuePath.Outbox);
     }
 
+    /// <inheritdoc />
+    public Task PublishOutboxFallbackAsync(
+        TransitionContinuationRequested outboxEvent,
+        CancellationToken cancellationToken = default)
+    {
+        // No log here: the caller (AsyncTransitionStrategy) already logs the accurate
+        // TransitionJobArmFailedFellBackToOutbox (10175) before invoking this, and 10127's fixed
+        // text ("Direct Dapr enqueue failed") describes the wrong stage — the direct enqueue
+        // succeeded, the deferred arm did not.
+        return eventBus.PublishAsync(outboxEvent, subject: null, useOutbox: true, cancellationToken);
+    }
+
     /// <summary>
     /// Attempts to enqueue the job directly via <see cref="ITransitionJobEnqueuer"/>.
     /// Uses TryAsync because Dapr is an external dependency; failures are safe to catch here

@@ -15,7 +15,7 @@ review time.
 
 These are mechanical, fast, and each one is CRITICAL because CI or a later reader breaks on them.
 
-- [ ] `evidence/guard-aether-feed` — `nuget.config` has no uncommented `aether-local` source and no live `packageSourceMapping` block for it, and `Directory.Build.props` has no `-local` `AetherPackageVersion`. CI cannot restore a `-local` version (integration-testing contract §8).
+- [ ] `evidence/guard-aether-feed` — no live Aether local feed: `nuget.config` has no active `aether-local` source/mapping and `Directory.Build.props` no `-local` `AetherPackageVersion`. Procedure and revert steps: [integration-testing §8](../../testing/integration-testing.md#8-aether-changes-during-development).
 - [ ] `evidence/guard-local-paths` — no absolute machine path (`/Volumes/...`, `/Users/...`, `C:\...`) in a committed file. Sibling repos are referenced as `../<repo>`.
 - [ ] `evidence/guard-secrets` — no token, password, connection string with credentials, or API key in a committed file, including `.http` files and test fixtures.
 - [ ] `evidence/guard-ai-docs` — nothing under `ai-docs/` or a `CLAUDE.local.md` is staged.
@@ -54,3 +54,11 @@ The rule: **a green test run is not, by itself, a verified result.**
 - [ ] `evidence/claim-unbacked` — the PR claims a performance, latency, recovery, security or compatibility improvement with no number, trace, query or persisted-row evidence behind it. WARNING, and the finding names which MCP server would have answered it (`openobserve` for spans and durations, `postgres` for persisted rows, `redis` for cache/lock state, `elasticsearch` for APM traces).
 - [ ] `evidence/claim-mislabelled` — the PR says "verified" where the evidence was only a passing test suite. The honest phrasing is "tests passed, not confirmed against traces"; ask for the label to be corrected.
 - [ ] `evidence/claim-duration-misread` — a duration is cited as a regression without checking the three known traps: an unexplained gap that is an episode traced elsewhere under its own lane anchor; a duration that is the scenario's own configured timeout or mock delay; and `POST /job/{jobName}`, which is Dapr's job callback and is not client latency.
+
+## Reviewer-specific noise
+
+The shared output contract is [Finding format and noise rules](../README.md#finding-format-and-noise-rules).
+On top of it: **a false "this needs an integration test" is the most expensive noise this reviewer
+can produce** — when genuinely unsure, raise a WARNING phrased as a question, never a demand. A
+missing unit test is a WARNING that names the test project it belongs in. If `../vnext-example` is
+not checked out, say so instead of guessing what is in it.

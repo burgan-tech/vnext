@@ -1,13 +1,14 @@
 using System.Text.Json;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Definitions.Schemas;
+using System.Linq;
 using Shouldly;
 using Xunit;
 
 namespace BBT.Workflow.Definitions.Schemas;
 
 /// <summary>
-/// Unit tests for SchemaRolesParser (master schema field-level "roles" vocabulary).
+/// Unit tests for SchemaRolesParser (master schema field-level <c>x-roles</c> and <c>x-masking</c> vocabulary).
 /// </summary>
 public sealed class SchemaRolesParserTests
 {
@@ -39,14 +40,14 @@ public sealed class SchemaRolesParserTests
             ""properties"": {
                 ""amount"": {
                     ""type"": ""number"",
-                    ""roles"": [
+                    ""x-roles"": [
                         { ""role"": ""morph-idm.maker"", ""grant"": ""allow"" },
                         { ""role"": ""morph-idm.approver"", ""grant"": ""allow"" }
                     ]
                 },
                 ""internalNotes"": {
                     ""type"": ""string"",
-                    ""roles"": [
+                    ""x-roles"": [
                         { ""role"": ""morph-idm.approver"", ""grant"": ""allow"" }
                     ]
                 },
@@ -74,7 +75,7 @@ public sealed class SchemaRolesParserTests
                     ""properties"": {
                         ""foo"": {
                             ""type"": ""string"",
-                            ""roles"": [{ ""role"": ""admin"", ""grant"": ""allow"" }]
+                            ""x-roles"": [{ ""role"": ""admin"", ""grant"": ""allow"" }]
                         }
                     }
                 }
@@ -92,7 +93,7 @@ public sealed class SchemaRolesParserTests
         var schema = JsonDocument.Parse(@"{
             ""properties"": {
                 ""a"": {
-                    ""roles"": [
+                    ""x-roles"": [
                         { ""role"": ""r1"", ""grant"": ""allow"" },
                         { ""role"": ""r2"", ""grant"": ""invalid"" }
                     ]
@@ -103,5 +104,244 @@ public sealed class SchemaRolesParserTests
         result.Count.ShouldBe(1);
         result["a"].Count.ShouldBe(1);
         result["a"][0].Role.ShouldBe("r1");
+    }
+
+    [Fact]
+    public void ParsePropertyRoles_WhenLegacyRolesKey_IsIgnored()
+    {
+        // The keyword is x-roles. A bare "roles" was the pre-release spelling; the fixtures above used it
+        // for months after the parser moved on, which is why they were red on master.
+        var schema = JsonDocument.Parse(@"{
+            ""properties"": { ""a"": { ""type"": ""string"", ""roles"": [{ ""role"": ""r1"", ""grant"": ""allow"" }] } }
+        }").RootElement;
+        SchemaRolesParser.ParsePropertyRoles(schema).ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void ParseExposure_ReadsRolesAndMaskingInOneWalk()
+    {
+        var schema = JsonDocument.Parse(@"{
+            ""properties"": {
+                ""iban"": {
+                    ""type"": ""string"",
+                    ""x-masking"": { ""operator"": ""mask"", ""params"": { ""keepFirst"": 2, ""keepLast"": 4, ""maskingChar"": ""#"" },
+                                    ""roles"": [ { ""role"": ""morph-idm.auditor"", ""grant"": ""allow"" } ] }
+                },
+                ""note"": { ""type"": ""string"", ""x-roles"": [ { ""role"": ""admin"", ""grant"": ""allow"" } ],
+                            ""x-masking"": { ""operator"": ""replace"", ""params"": { ""value"": ""[hidden]"" } } },
+                ""customer"": { ""type"": ""object"", ""properties"": {
+                    ""tckn"": { ""type"": ""string"", ""x-masking"": { ""operator"": ""mask"" } } } }
+            }
+        }").RootElement;
+
+        var result = SchemaRolesParser.ParseExposure(schema);
+
+        result.PathRoleGrants.Keys.ShouldBe(["note"]);
+        result.PathMaskRules.Count.ShouldBe(3);
+        var iban = result.PathMaskRules["iban"];
+        iban.Operator.ShouldBe(FieldMaskRule.MaskOperator);
+        iban.KeepFirst.ShouldBe(2);
+        iban.KeepLast.ShouldBe(4);
+        iban.MaskingChar.ShouldBe("#");
+        iban.ExemptRoles.Count.ShouldBe(1);
+        iban.ExemptRoles[0].Role.ShouldBe("morph-idm.auditor");
+        result.PathMaskRules["note"].Operator.ShouldBe(FieldMaskRule.ReplaceOperator);
+        result.PathMaskRules["note"].ReplaceValue.ShouldBe("[hidden]");
+        var tckn = result.PathMaskRules["customer.tckn"];
+        (tckn.KeepFirst, tckn.KeepLast, tckn.MaskingChar).ShouldBe((0, 0, "*"));
+    }
+
+    [Theory]
+    [InlineData(@"""x-masking"": ""mask""")]
+    [InlineData(@"""x-masking"": { ""operator"": ""redact"" }")]
+    [InlineData(@"""x-masking"": { }")]
+    [InlineData(@"""x-masking"": { ""operator"": ""mask"", ""params"": { ""keepFirst"": -3, ""maskingChar"": ""ab"" } }")]
+    public void ParseExposure_WhenDeclarationIsMalformed_FailsClosedToFullMask(string masking)
+    {
+        // The publish validator rejects all of these; if one ever reaches the runtime it must mask
+        // everything rather than turn into a clear value.
+        var schema = JsonDocument.Parse(@"{ ""properties"": { ""a"": { ""type"": ""string"", " + masking + " } } }").RootElement;
+
+        var rule = SchemaRolesParser.ParseExposure(schema).PathMaskRules["a"];
+
+        rule.Operator.ShouldBe(FieldMaskRule.MaskOperator);
+        (rule.KeepFirst, rule.KeepLast, rule.MaskingChar).ShouldBe((0, 0, "*"));
+    }
+
+    [Fact]
+    public void ParseExposure_DropsDenyGrantsFromTheExemptionList()
+    {
+        var schema = JsonDocument.Parse(@"{ ""properties"": { ""a"": { ""type"": ""string"",
+            ""x-masking"": { ""operator"": ""mask"", ""roles"": [
+                { ""role"": ""teller"", ""grant"": ""deny"" }, { ""role"": ""auditor"", ""grant"": ""allow"" } ] } } } }").RootElement;
+
+        var rule = SchemaRolesParser.ParseExposure(schema).PathMaskRules["a"];
+
+        rule.ExemptRoles.Count.ShouldBe(1);
+        rule.ExemptRoles[0].Role.ShouldBe("auditor");
+    }
+
+    [Fact]
+    public void ParseExposure_DoesNotDescendIntoItemsOrDefs()
+    {
+        var schema = JsonDocument.Parse(@"{ ""properties"": {
+            ""accounts"": { ""type"": ""array"", ""items"": { ""type"": ""object"", ""properties"": {
+                ""iban"": { ""type"": ""string"", ""x-masking"": { ""operator"": ""mask"" } } } } } },
+            ""$defs"": { ""x"": { ""properties"": { ""y"": { ""type"": ""string"", ""x-masking"": { ""operator"": ""mask"" } } } } } }").RootElement;
+
+        SchemaRolesParser.ParseExposure(schema).IsEmpty.ShouldBeTrue();
+    }
+
+    [Fact]
+    public void ParseExposure_ReadsAHashEncryptionAsARule_AndIgnoresOtherEncryptionTypes()
+    {
+        var schema = JsonDocument.Parse(@"{ ""properties"": {
+            ""tckn"": { ""type"": ""string"", ""x-encryption"": { ""type"": ""hash"", ""params"": { ""algorithm"": ""sha512"" },
+                        ""roles"": [ { ""role"": ""auditor"", ""grant"": ""deny"" }, { ""role"": ""teller"", ""grant"": ""allow"" } ] } },
+            ""email"": { ""type"": ""string"", ""x-encryption"": { ""type"": ""persisted"" } },
+            ""phone"": { ""type"": ""string"", ""x-encryption"": { ""type"": ""none"" } } } }").RootElement;
+
+        var rules = SchemaRolesParser.ParseExposure(schema).PathMaskRules;
+
+        rules.Keys.ShouldBe(["tckn"]);
+        SchemaRolesParser.ParseExposure(schema).EncryptPaths.ShouldBeEmpty();
+        rules["tckn"].Operator.ShouldBe(FieldMaskRule.HashOperator);
+        rules["tckn"].HashAlgorithm.ShouldBe(FieldMaskRule.Sha512);
+        rules["tckn"].IsEncryption.ShouldBeTrue();
+        rules["tckn"].ExemptRoles.ShouldBeEmpty(); // hashing is irreversible: a hash rule never exempts anyone
+        SchemaRolesParser.ParseExposure(schema).HashPaths["tckn"].ShouldBe(FieldMaskRule.Sha512);
+    }
+
+    [Fact]
+    public void ParseExposure_WhenBothTransformsAreDeclared_TheLaterStageWins()
+    {
+        var schema = JsonDocument.Parse(@"{ ""properties"": { ""a"": { ""type"": ""string"",
+            ""x-masking"": { ""operator"": ""mask"" }, ""x-encryption"": { ""type"": ""hash"" } } } }").RootElement;
+
+        SchemaRolesParser.ParseExposure(schema).PathMaskRules["a"].Operator.ShouldBe(FieldMaskRule.HashOperator);
+    }
+
+    [Fact]
+    public void ParseExposure_ReadsEncrypt_AsAnAtRestRule_AndListsItsPaths()
+    {
+        var schema = JsonDocument.Parse(@"{ ""properties"": {
+            ""customer"": { ""type"": ""object"", ""properties"": {
+                ""email"": { ""type"": ""string"", ""x-encryption"": { ""type"": ""encrypt"",
+                             ""roles"": [ { ""role"": ""auditor"", ""grant"": ""allow"" } ] } } } },
+            ""tckn"": { ""type"": ""string"", ""x-encryption"": { ""type"": ""hash"" } } } }").RootElement;
+
+        var exposure = SchemaRolesParser.ParseExposure(schema);
+
+        exposure.PathMaskRules["customer.email"].Operator.ShouldBe(FieldMaskRule.EncryptOperator);
+        exposure.PathMaskRules["customer.email"].IsAtRestEncryption.ShouldBeTrue();
+        exposure.PathMaskRules["customer.email"].IsEncryption.ShouldBeTrue();
+        exposure.PathMaskRules["customer.email"].ExemptRoles.Count.ShouldBe(1);
+        exposure.PathMaskRules["tckn"].IsAtRestEncryption.ShouldBeFalse();
+        exposure.EncryptPaths.ShouldBe(["customer.email"]);
+    }
+
+    /// <summary>
+    /// Case is rejected at publish, tolerated here: a declaration that slipped past the validator must still
+    /// encrypt (fail closed) rather than store the value in plaintext.
+    /// </summary>
+    [Fact]
+    public void ParseExposure_ToleratesCase_SoAnUnvalidatedDeclarationFailsClosed()
+    {
+        var schema = JsonDocument.Parse(@"{ ""properties"": {
+            ""a"": { ""type"": ""string"", ""x-encryption"": { ""type"": ""Encrypt"" } },
+            ""b"": { ""type"": ""string"", ""x-encryption"": { ""type"": ""HASH"" } } } }").RootElement;
+
+        var exposure = SchemaRolesParser.ParseExposure(schema);
+
+        exposure.EncryptPaths.ShouldBe(["a"]);
+        exposure.PathMaskRules["b"].Operator.ShouldBe(FieldMaskRule.HashOperator);
+    }
+
+    [Fact]
+    public void XRoles_padded_role_is_trimmed_so_a_deny_still_matches()
+    {
+        var schema = JsonDocument.Parse("""
+            {"properties":{"f":{"x-roles":[{"role":" blocked ","grant":"deny"}]}}}
+            """).RootElement;
+
+        var roles = SchemaRolesParser.ParsePropertyRoles(schema)["f"];
+
+        roles.Count.ShouldBe(1);
+        roles[0].Role.ShouldBe("blocked");
+        roles[0].IsDeny.ShouldBeTrue();
+    }
+
+    [Fact]
+    public void XRoles_padded_leaf_inside_allOf_is_trimmed()
+    {
+        var schema = JsonDocument.Parse("""
+            {"properties":{"f":{"x-roles":[
+                {"grant":"deny","allOf":[{"role":" maker"},{"role":"checker "}]},
+                {"grant":"allow","anyOf":[{"role":" a "}]}]}}}
+            """).RootElement;
+
+        var roles = SchemaRolesParser.ParsePropertyRoles(schema)["f"];
+
+        roles[0].AllOf!.Select(c => c.Role).ShouldBe(["maker", "checker"]);
+        roles[0].IsDeny.ShouldBeTrue();
+        roles[1].AnyOf!.Select(c => c.Role).ShouldBe(["a"]);
+        roles[1].IsAllow.ShouldBeTrue();
+    }
+
+    [Fact]
+    public void XRoles_allOf_is_parsed_not_dropped()
+    {
+        var schema = JsonDocument.Parse("""
+            {"properties":{"riskNote":{"x-roles":[
+                {"grant":"allow","role":"corporate.ops"},
+                {"grant":"deny","allOf":[{"role":"corporate.ops"},{"role":"$InstanceBehalfOfStarter"}]}]}}}
+            """).RootElement;
+
+        var roles = SchemaRolesParser.ParsePropertyRoles(schema)["riskNote"];
+
+        roles.Count.ShouldBe(2);
+        roles[1].AllOf!.Count.ShouldBe(2);
+        roles[1].IsDeny.ShouldBeTrue();
+    }
+
+    [Fact]
+    public void XRoles_unparseable_entry_is_skipped_at_runtime()
+    {
+        var schema = JsonDocument.Parse("""
+            {"properties":{"a":{"x-roles":[
+                {"grant":"allow","role":"r","allOf":[{"role":"x"}]},
+                {"grant":"allow","anyOf":[{"role":"x","grant":"allow"}]},
+                {"grant":"allow","role":"ok"}]}}}
+            """).RootElement;
+
+        var roles = SchemaRolesParser.ParsePropertyRoles(schema)["a"];
+
+        roles.Count.ShouldBe(1);
+        roles[0].Role.ShouldBe("ok");
+    }
+
+    [Fact]
+    public void Exemption_list_with_combinator_is_dropped_fail_closed()
+    {
+        var masking = JsonDocument.Parse("""
+            {"operator":"mask","roles":[
+                {"grant":"allow","anyOf":[{"role":"a"}]},
+                {"grant":"allow","role":"corporate.ops"}]}
+            """).RootElement;
+
+        var rule = SchemaRolesParser.ParseMaskRule(masking);
+
+        rule.ExemptRoles.Count.ShouldBe(1);
+        rule.ExemptRoles[0].Role.ShouldBe("corporate.ops");
+    }
+
+    [Fact]
+    public void Exemption_list_with_only_a_combinator_masks_for_everyone()
+    {
+        var masking = JsonDocument.Parse("""
+            {"operator":"mask","roles":[{"grant":"allow","anyOf":[{"role":"a"}]}]}
+            """).RootElement;
+
+        SchemaRolesParser.ParseMaskRule(masking).ExemptRoles.ShouldBeEmpty();
     }
 }

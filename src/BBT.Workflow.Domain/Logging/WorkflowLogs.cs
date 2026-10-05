@@ -201,12 +201,14 @@ public static partial class WorkflowLogs
         string status);
 
     /// <summary>
-    /// Logs when the short status lock could not be acquired within its bounded retry budget.
+    /// Logs when the short status lock could not be acquired. <c>InstanceStatusLock</c> makes a
+    /// single attempt by design — a held lock means a concurrent hop is mid-flip and the caller's
+    /// retry is the back-pressure — so the message must not suggest an in-process retry budget.
     /// </summary>
     [LoggerMessage(
         EventId = 10139,
         Level = LogLevel.Warning,
-        Message = "Status lock acquisition failed for {LockKey} after bounded retries")]
+        Message = "Status lock acquisition failed for {LockKey} (single attempt; held by a concurrent hop — the caller retries)")]
     public static partial void StatusLockAcquireFailed(
         this ILogger logger,
         string lockKey);
@@ -250,6 +252,28 @@ public static partial class WorkflowLogs
         Message = "Subflow start coordination failed for instance {InstanceId} on transition {TransitionKey} ({ErrorCode}); faulting the parent")]
     public static partial void SubflowStartCoordinationFaulted(
         this ILogger logger, Guid instanceId, string transitionKey, string errorCode);
+
+    /// <summary>
+    /// A CacheAside task's cache read or write failed and <c>bypassOnCacheError</c> let it continue
+    /// without the cache (read: the source runs; write: the source result is returned uncached).
+    /// The error is the state store's message as reported through the <c>statestore</c> gateway.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10176,
+        Level = LogLevel.Warning,
+        Message = "CacheAside {TaskKey}: cache {Stage} failed; continuing without the cache (bypassOnCacheError=true): {Error}")]
+    public static partial void CacheAsideBypassedCacheError(
+        this ILogger logger, string? taskKey, string stage, string? error);
+
+    /// <summary>
+    /// A CacheAside task's <c>sourceTask</c> resolved to another CacheAside task, which is rejected
+    /// (nested read-through would cache a cache).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10177,
+        Level = LogLevel.Warning,
+        Message = "CacheAside {TaskKey}: source task {SourceTaskKey} is itself a CacheAside task and was rejected")]
+    public static partial void CacheAsideSourceTypeRejected(this ILogger logger, string taskKey, string sourceTaskKey);
 
     /// <summary>
     /// Logs at startup when a declared ActivitySource is missing from this host's MERGED
@@ -948,24 +972,6 @@ public static partial class WorkflowLogs
         this ILogger logger, string? taskKey, string taskType, string url);
 
     /// <summary>
-    /// Logs when the local cache-aside invoker swallows a cache read or write failure under
-    /// <c>bypassOnCacheError=true</c> and continues without the cache (read: falls through to the
-    /// source task; write: returns the source result anyway). <c>bypassOnCacheError</c> defaults to
-    /// <c>true</c>, so without this line a state-store outage silently degrades every cache-aside
-    /// task to its source task with no signal at any level — this is the sole diagnostic for that
-    /// degradation on the Orchestration host, restored via <c>CacheAsideInvocation</c>'s
-    /// notification callback (the shared core still does not log; it reports, and each host owns
-    /// its own message). Mirrors the Execution host's own <c>LogWarning</c> at the same two call
-    /// sites.
-    /// </summary>
-    [LoggerMessage(
-        EventId = 10173,
-        Level = LogLevel.Warning,
-        Message = "CacheAside {TaskKey}: cache {Stage} failed; continuing without the cache (bypassOnCacheError=true)")]
-    public static partial void LocalCacheAsideBypassedCacheError(
-        this ILogger logger, Exception exception, string? taskKey, string stage);
-
-    /// <summary>
     /// Logs when an in-process (orchestrator-local) task invocation is aborted by
     /// <see cref="BBT.Workflow.Tasks.Invocation.TaskInvocationOptions.LocalInvocationTimeoutSeconds"/> —
     /// the local-path counterpart of the remote path's own-timer log line
@@ -979,6 +985,35 @@ public static partial class WorkflowLogs
         Message = "In-process invocation of task {TaskKey} ({TaskType}) timed out after {TimeoutSeconds}s [timeout.layer=local]")]
     public static partial void LocalTaskInvocationTimedOut(
         this ILogger logger, string? taskKey, string taskType, int timeoutSeconds);
+
+    /// <summary>
+    /// Logs when a DEFERRED arm of an accepted async transition failed AFTER the status flip and
+    /// the durable job row had committed, and the accept fell back to the transactional outbox: the
+    /// Inbox relay re-arms the same job (idempotent by job name), the instance stays Busy until it
+    /// does, and the request still returns 202. Chosen over releasing the flip because an arm
+    /// failure is ambiguous — the scheduler may have registered the job before the client saw the
+    /// error — and releasing while it is live would break single-owner-Busy. Before this fallback
+    /// the arm exception was rethrown bare and the instance stayed durably Busy (finding AB-17).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10178,
+        Level = LogLevel.Warning,
+        Message = "Arming transition job {JobName} failed after accept; fell back to the outbox for durable re-arm (instance {InstanceId}, transition {TransitionKey})")]
+    public static partial void TransitionJobArmFailedFellBackToOutbox(
+        this ILogger logger, Exception exception, string jobName, Guid instanceId, string transitionKey);
+
+    /// <summary>
+    /// Logs when even the outbox fallback for a failed deferred arm could not be published. The
+    /// durable job row is committed but nothing is armed and no outbox row was staged, so the
+    /// instance stays Busy until manual recovery — the operator's signal for the residual
+    /// double-failure window (scheduler AND database both unavailable).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10180,
+        Level = LogLevel.Error,
+        Message = "Arm-failure outbox fallback failed for job {JobName} (instance {InstanceId}, transition {TransitionKey}); the instance stays Busy until manual recovery")]
+    public static partial void TransitionJobArmOutboxFallbackFailed(
+        this ILogger logger, Exception exception, string jobName, Guid instanceId, string transitionKey);
 
     /// <summary>
     /// Logs when task instance resolution fails (for DirectTrigger, GetInstanceData).
@@ -1184,14 +1219,15 @@ public static partial class WorkflowLogs
     /// <c>TaskTrigger.Extension</c> too (<c>FunctionAppService.cs</c>) but with
     /// <see cref="TaskExecutionOrigin.Function"/> — a multi-task function
     /// (<c>FunctionAppService.GetSingleTaskVariableKey</c>) listing the same task twice at the same
-    /// order is still an authoring mistake with no per-entry response-key override to save it, so
-    /// this warning MUST still fire for that shape. Gating on the trigger instead of the origin
+    /// order without distinct <c>variableKey</c> values still shares one response slot (an authoring
+    /// mistake the entries' own <c>variableKey</c> would resolve), so this warning MUST still fire
+    /// for that shape. Gating on the trigger instead of the origin
     /// would silently swallow it.
     /// </summary>
     [LoggerMessage(
         EventId = 10155,
         Level = LogLevel.Warning,
-        Message = "Duplicate task key at the same order in transition {TransitionKey}, hook {Hook}: task '{TaskKey}' appears {OccurrenceCount} times at order {Order}. This is usually an authoring mistake — give the entries distinct orders if they are meant to run as separate steps. InstanceId={InstanceId}")]
+        Message = "Duplicate task key at the same order in transition {TransitionKey}, hook {Hook}: task '{TaskKey}' shares one response slot across {OccurrenceCount} entries at order {Order}. This is usually an authoring mistake — give the entries distinct orders or distinct variableKey values if they are meant to run as separate steps. InstanceId={InstanceId}")]
     public static partial void DuplicateTaskKeyAtSameOrder(
         this ILogger logger,
         string transitionKey,
@@ -1485,6 +1521,21 @@ public static partial class WorkflowLogs
         this ILogger logger,
         string lockKey,
         Guid subInstanceId);
+
+    /// <summary>
+    /// Logs when a backup (Inbox) delivery of a SubFlow state change is dropped before the lock
+    /// because the committed rows already reflect it — the post-commit relay applied the same
+    /// notification, or a newer one. No lock, no transaction, no write.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40137,
+        Level = LogLevel.Debug,
+        Message = "Backup SubFlow state event for {SubInstanceId} already applied to parent {ParentInstanceId} ({Reason}); skipped without taking the lock")]
+    public static partial void SubFlowStateChangeBackupAlreadyApplied(
+        this ILogger logger,
+        Guid subInstanceId,
+        Guid parentInstanceId,
+        string reason);
 
     /// <summary>
     /// Logs when a SubFlow state changed event is received by the hook.
@@ -4041,6 +4092,100 @@ public static partial class WorkflowLogs
         int roleCount);
 
     /// <summary>
+    /// A master schema declares <c>x-encryption.type: "hash"</c> but the host has no usable
+    /// <c>SchemaEncryption:HashSalt</c> (missing or shorter than 16 UTF-8 bytes). The value is served FULLY
+    /// MASKED instead of hashed — fail closed, never in clear. Logged once per process.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20466,
+        Level = LogLevel.Warning,
+        Message = "x-encryption hash rule applied without a usable SchemaEncryption:HashSalt; values are served fully masked until a salt of at least {MinSaltBytes} bytes is configured")]
+    public static partial void SchemaHashSaltUnavailable(
+        this ILogger logger,
+        int minSaltBytes);
+
+    /// <summary>
+    /// Logs that a stored x-encryption token could not be opened (unknown key id, malformed token or failed
+    /// authentication). The engine refuses to run on the instance until the key is restored; readers see the token.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20468,
+        Level = LogLevel.Error,
+        Message = "x-encryption token at {Path} of instance {InstanceId} could not be decrypted (key version {KeyId}, reason {Reason})")]
+    public static partial void EncryptedValueUndecryptable(
+        this ILogger logger,
+        Guid instanceId,
+        string path,
+        string keyId,
+        string reason);
+
+    /// <summary>Logs that a request tried to introduce a value carrying the reserved token prefix (never the value).</summary>
+    [LoggerMessage(
+        EventId = 20469,
+        Level = LogLevel.Warning,
+        Message = "x-encryption reserved prefix rejected at {Path} of instance {InstanceId}")]
+    public static partial void EncryptedValueRejectedOnWrite(
+        this ILogger logger,
+        Guid instanceId,
+        string path);
+
+    /// <summary>
+    /// Logs that an instance's x-encryption secret was read synchronously because its row was opened without a preload.
+    /// Debug: correct, only slower — a steady stream names an entry point that should preload.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20471,
+        Level = LogLevel.Debug,
+        Message = "x-encryption secret of instance {InstanceId} in schema {Schema} loaded without a preload")]
+    public static partial void InstanceSecretLoadedWithoutPreload(
+        this ILogger logger,
+        Guid instanceId,
+        string schema);
+
+    /// <summary>Logs that the synchronous secret lookup failed; the row keeps its tokens (never plaintext).</summary>
+    [LoggerMessage(
+        EventId = 20472,
+        Level = LogLevel.Warning,
+        Message = "x-encryption secret lookup for instance {InstanceId} in schema {Schema} failed ({ErrorType}); encrypted values stay closed")]
+    public static partial void InstanceSecretLookupFailed(
+        this ILogger logger,
+        Guid instanceId,
+        string schema,
+        string errorType);
+
+    /// <summary>
+    /// Logs that a correlation-tree walk stopped at its depth bound. Warning rather than Debug: the
+    /// answer the caller receives is incomplete, and on a graph that cannot legitimately nest that
+    /// deep it is the first symptom of a cycle.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20473,
+        Level = LogLevel.Warning,
+        Message = "Correlation walk hit its depth bound and stopped. Domain={Domain}, Flow={Flow}, Instances={InstanceCount}, MaxDepth={MaxDepth}")]
+    public static partial void CorrelationWalkDepthExceeded(
+        this ILogger logger,
+        string domain,
+        string flow,
+        int instanceCount,
+        int maxDepth);
+
+    /// <summary>
+    /// Logs a correlation hop that could not be expanded. The branch is returned unresolved rather
+    /// than failing the whole tree, so this log is the only place the cause is recorded.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20474,
+        Level = LogLevel.Warning,
+        Message = "Correlation hop failed; its branch is reported unresolved. Domain={Domain}, Flow={Flow}, Instances={InstanceCount}, Reason={Reason}")]
+    public static partial void CorrelationHopFailed(
+        this ILogger logger,
+        string domain,
+        string flow,
+        int instanceCount,
+        string reason);
+
+
+    /// <summary>
     /// Logs that no provider call was made because the caller carried neither <c>act_sub</c> nor
     /// <c>client_id</c>. Debug: anonymous and device tokens are ordinary traffic, and a Warning on
     /// every one of their requests would bury the answers that matter.
@@ -4566,6 +4711,49 @@ public static partial class WorkflowLogs
         string workflowKey,
         string functionKey,
         string errorMessage);
+
+    /// <summary>
+    /// Logs when the best-effort function-execution journal write fails (vnext-client-sdk-core#60,
+    /// item C1). The metrics row is dropped; the function's own response is unaffected.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 80006,
+        Level = LogLevel.Error,
+        Message = "Failed to journal execution of function {FunctionKey} (domain {Domain}); the metrics row was dropped.")]
+    public static partial void FunctionExecutionJournalWriteFailed(
+        this ILogger logger,
+        Exception exception,
+        string functionKey,
+        string domain);
+
+    /// <summary>
+    /// Logs when the background journal writer fails to persist a batch of execution rows
+    /// (vnext-client-sdk-core#60). The whole batch is dropped; the writer loop keeps running so a
+    /// transient DB fault never stops journaling. Best-effort: the recorded functions are unaffected.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 80007,
+        Level = LogLevel.Error,
+        Message = "Failed to flush a batch of {BatchSize} function-execution rows; the batch was dropped.")]
+    public static partial void FunctionExecutionJournalBatchWriteFailed(
+        this ILogger logger,
+        Exception exception,
+        int batchSize);
+
+    /// <summary>
+    /// Logs when the bounded journal queue was full and execution records were dropped
+    /// (vnext-client-sdk-core#60). Journaling is best-effort by design — under sustained load the
+    /// runtime sheds telemetry rows rather than slowing the functions it records. Reported by the
+    /// writer, off the hot path, as a running total so drops are visible without per-record logging.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 80008,
+        Level = LogLevel.Warning,
+        Message = "Function-execution journal dropped {DroppedDelta} record(s) (queue full); {DroppedTotal} dropped since start.")]
+    public static partial void FunctionExecutionJournalRecordsDropped(
+        this ILogger logger,
+        long droppedDelta,
+        long droppedTotal);
 
     #endregion
 

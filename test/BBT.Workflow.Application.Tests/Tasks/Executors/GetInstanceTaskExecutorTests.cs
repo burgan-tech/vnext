@@ -46,6 +46,7 @@ public sealed class GetInstanceTaskExecutorTests
             remoteInvoker ?? Substitute.For<IRemoteInvokerService>(),
             gateway,
             endpointResolver ?? Substitute.For<IDomainDiscoveryResolver>(),
+            Substitute.For<BBT.Aether.Users.ICurrentUser>(),
             NullLogger<GetInstanceTaskExecutor>.Instance);
 
     private static GetInstanceOutput SampleOutput() => new()

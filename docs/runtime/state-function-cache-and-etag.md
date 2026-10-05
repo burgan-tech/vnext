@@ -106,7 +106,7 @@ etag = h(responseShapeVersion | instanceId | effectiveState | status | flowVersi
   same fingerprint, so 304 works with an empty cache (after TTL expiry, Redis flush, or
   failover).
 - **`responseShapeVersion` guards runtime-side body changes** (`StateFunctionCache.ResponseShapeVersion`,
-  currently `v9`). The material is derived from instance facts and caller scope only — it says nothing
+  currently `v14`). The material is derived from instance facts and caller scope only — it says nothing
   about what the body *contains*. So when a runtime release changes the body for an unchanged instance
   (v2 started listing the workflow-level `updateData` and `exit` transitions; v3 added the workflow's
   `functions` discovery links; v4 replaced that inline list with a `hasFunctions` flag plus a link to
@@ -123,7 +123,10 @@ etag = h(responseShapeVersion | instanceId | effectiveState | status | flowVersi
   `interaction` block from "the state declares one" to "an acknowledge is actually pending"
   (`Instance.IsAwaitingLongPollAck`) — a shape change with no new field, and exactly the kind a
   parked client would otherwise never see; v12 started carrying `annotations` on the
-  `kind: "scheduled"` entries and on the `timeout` block), every previously issued ETag must be
+  `kind: "scheduled"` entries and on the `timeout` block; v13 restored the `interaction` block for a
+  non-terminating long poll; v14 added `labels` and a `target` object to every `transitions[]`
+  entry, the top-level `stateSubType` and `stateLabels`, and turned the `timeout` block's `target`
+  string into the same object), every previously issued ETag must be
   invalidated: otherwise a client
   long-polling an instance parked in a human state would keep receiving 304 and never observe the new
   shape. The same constant is a segment of the cache key, so bumping it also discards bodies written by
@@ -170,6 +173,9 @@ etag = h(responseShapeVersion | instanceId | effectiveState | status | flowVersi
   so like `hasFunctions` they are a property of the flow version, which `FlowVersion` already
   hashes. The `v12` bump was for the shape — scheduled entries and the timeout block started
   carrying them — not for a value that could drift.
+- **`labels`, `target`, `stateSubType` and `stateLabels` need no fingerprint member** for the same
+  reason: they come from definitions, a property of the flow version (or, for a subflow's state,
+  from the descended body the subflow variant already covers). The `v14` bump was for the shape.
 - **`hasActiveIncident` is in the hash** because the body's `incident` block flips with it and the
   flag can move without a state/status change (Boundary Abort with a transition raises one,
   `FinalizeTransitionStep` resolves it). The flag is the block's *only* varying member: since `v9`
@@ -285,10 +291,24 @@ mechanism with a data-centric material — the design principle is that the data
 signals **data change points**, not state or extension flux:
 
 ```
-etag = h(instanceId | latestDataEtag | flowVersion | callerHash)
-key  = data-fn:{domain}:{workflow}:{instance}:{callerHash}
+etag = h(generation | instanceId | latestDataEtag | flowVersion | callerHash)
+key  = data-fn:{generation}:{domain}:{workflow}:{instance}:{callerHash}
+generation = v3[-nomask]                                   # SchemaMasking:Enabled=false
 callerHash = h(roles | actor identity | culture | version)   # extensions deliberately EXCLUDED
 ```
+
+- **The generation is in the key AND the ETag.** `v2` retired every entry written before
+  `x-masking`. A prefix-only bump would have emptied the body cache but left the fingerprint fast
+  path answering 304 to a client holding a pre-masking ETag — with its unmasked body. The masking
+  switch is part of the generation for the same reason: it changes what a body means without a data
+  write. (`hash` is applied on write, so its digest is data and needs no generation segment.) `v3` retired every entry written before
+  `x-encryption.type: encrypt` (those bodies served `persisted`/`transport` fields in clear). See
+  [Field Masking and Encryption](../domain/field-masking.md).
+- **A row carrying `encrypt` tokens is never cached.** An allow-listed caller's body holds the plaintext (Redis
+  would keep it at rest), and a body built while a secret was unavailable holds tokens that must not outlive that.
+- **Trigger-task reads are ordinary callers here.** A `GetInstanceData` task reads as its own credential (its mapping
+  headers + the caller's `sub`/`act_sub`/`position`/`client_id`/`role` where unset), so its body is filtered for that scope and cached under it like
+  any caller's; there is no system-read bypass. See [Field Masking and Encryption](../domain/field-masking.md).
 
 - **Change signal is `InstanceData.ETag`** of the IsLatest row — a fresh ULID on every
   latest-line data write. It is read index-only via `UX_InstancesData_Instance_IsLatest`
@@ -337,13 +357,18 @@ Both return a resolved schema document (`GetSchemaOutput`) — the flow-level ma
 (`IInstanceSchemaFunctionCache`) and, by user decision, the data-centric change signal:
 
 ```
-master etag = h(instanceId | latestDataEtag | flowVersion | callerHash)
-schema etag = h(instanceId | latestDataEtag | effectiveState | flowVersion | callerHash | transitionKey)
-master key  = master-fn:{domain}:{workflow}:{instance}:{callerHash}
-schema key  = schema-fn:{domain}:{workflow}:{instance}:{callerHash}:{transitionKey}
+master etag = h(shapeVersion | instanceId | latestDataEtag | flowVersion | callerHash)
+schema etag = h(shapeVersion | instanceId | latestDataEtag | effectiveState | flowVersion | callerHash | transitionKey)
+master key  = master-fn:{shapeVersion}:{domain}:{workflow}:{instance}:{callerHash}
+schema key  = schema-fn:{shapeVersion}:{domain}:{workflow}:{instance}:{callerHash}:{transitionKey}
 callerHash  = h(roles | actor identity | culture | version)   # no extensions dimension
 ```
 
+- `shapeVersion` (`InstanceSchemaFunctionCache.ResponseShapeVersion`, currently `v2`) plays the
+  role `responseShapeVersion` plays for the state body: it is in the key, so a bump discards bodies
+  an earlier build wrote, and in the ETag, so a client holding an earlier build's ETag gets a `200`
+  with the new shape rather than a `304`. v2 added the schema component's `labels`. Bump it in the
+  same commit as any change to what a master/schema body carries.
 - `effectiveState` is only in the **schema** material: transition resolution
   (`ResolveTransition(transitionKey, currentState)`) is state-dependent, and
   `EffectiveState == CurrentState` whenever no active subflow exists.
@@ -361,6 +386,88 @@ callerHash  = h(roles | actor identity | culture | version)   # no extensions di
   rebuilds, never staleness).
 - Observability: shared EventIds 20420-20425 with a `{Function}` parameter
   (`InstanceSchemaFunctionCache*`), component types `master-fn` / `schema-fn`.
+
+## State body and descent rules
+
+These rules cover what the state function and its sibling read surfaces serve and from which level.
+
+### Every built-in function descends — except `data`
+
+- **Every built-in instance function descends an active subflow — except `data`.** The client holds
+  the ROOT and never the leaf, so `state`, `authorize`, `view`, `schema`, `master` and `extensions`
+  all walk into the active correlation. `data` does not, and the state body's own `data.href`
+  addresses the polled instance, so a client following the link it was given reads the root's
+  attributes while looking at the leaf's state. Measured, and pinned by
+  `TheStateFunctionDescendsButTheDataFunctionDoesNot`; whether a client wants the case's data or the
+  leaf's working copy is a product decision, not a settled one.
+
+### Parent overrides resolve in one place per kind
+
+- **The parent's subflow overrides resolve in ONE place per kind, and they REPLACE.** Override wins
+  outright; absent an override the object's own definition applies. There is no merge — OR-ing the
+  child's own grants back in hands the narrowing straight back to the roles it was taken from.
+  `states`/`queryRoles` → `IsQueryAllowedAsync`; `transitions`/`roles` →
+  `TransitionAuthorizationManager.EffectiveTransitionGrants`; `views` →
+  `GetSubFlowViewWithOverrideAsync`. The first two read the map **stamped on the child**
+  (`SubFlowTransitionOverrideReader` / `SubFlowStateOverrideReader`), which is the only form that
+  works at a directly-addressed leaf; the legacy `views` map (`overrides.views` / `viewOverrides`,
+  resolved through `GetSubFlowViewWithOverrideAsync`) is deliberately parent-side only and is not
+  stamped — but the scoped `overrides.states.*.views` / `overrides.transitions.*.views` ARE stamped
+  and resolved child-side; see *Parent overrides are resolved child-side, on the child's own state*
+  below. Resolving per surface is how they diverged: at such a leaf `authorize` read the PARENT's definition,
+  found nothing, and gave the OPPOSITE verdict to the state function for both roles.
+
+### `authorize` answers two different questions
+
+- **`authorize` answers two different questions and the parameter picks which.**
+  `?transitionKey=` is actionability, `?queryRoles=true` is visibility — the state function's
+  `transitions` and its 403 answer the same two. They must agree question-for-question, and the
+  verdict is in the BODY on both statuses: a refusal is `403` with `{"allowed":false}`, so reading
+  only the 200 turns every refusal into "no answer".
+
+### `queryRoles` resolution honours the parent's stamped override
+
+- **`queryRoles` resolution is one method, and it honours the parent's stamped override.**
+  `TransitionAuthorizationManager.IsQueryAllowedAsync` resolves, highest first: the parent's stamped
+  `subflow.state_role_overrides` entry for the instance's effective state → that state's own
+  `queryRoles` → the workflow root's. It **replaces**, never merges — a parent that narrowed a child's
+  visibility meant to narrow it. Every read gate goes through it: state, data, view, schema and
+  incident functions, `authorize`'s query branch, and the human-task list. Reading the stamp there
+  rather than per surface is what makes the narrowing apply wherever the child is reached from; the
+  parent-side reader (`AuthorizeAppService`, `subFlowConfig.Overrides.States`) cannot serve it,
+  because it needs an active SubFlow correlation that the child being asked about does not have.
+  `SubflowStarter` had always written that map and nothing read it.
+
+### `Instance.Type` is write-once
+
+- **`Instance.Type` is write-once, and it is NOT the relationship check.** `R`/`S`/`P` records how
+  the instance was *started*, derived once in `SetInfoMetadata` from `parent.id` + `parent.flowtype`
+  and never updated (latched on `IsTransient`; the EF property is pinned clean in
+  `EfCoreInstanceRepository.UpdateAsync`). **`parent.flowtype` alone is not a discriminator** —
+  `SetInfoMetadata` `TryAdd`s the instance's OWN workflow type code there when the key is absent, so
+  a workflow whose definition declares `type: "S"` and is started directly through the API carries
+  `parent.flowtype: "S"` with no parent at all, and `IsSubFlow` answers true for it. Several
+  vnext-example workflows are in exactly that shape. `IsSubFlow`/`IsSubItem` and every `parent.*`
+  reader are deliberately UNTOUCHED — do not "unify" them with `Type`; that is a behaviour change
+  (it would restore output mapping for those roots and stop their empty-parent subflow-terminal
+  events) and needs its own council row and measured evidence. Served as `metadata.type` on the
+  instance GET, the list view and `GetInstanceTask`; filterable/sortable as **`instanceType`**, never
+  the bare `type`, which would collide with a same-named business attribute. Not in the state body,
+  so `ResponseShapeVersion` is unaffected. Adding a column to the aggregate? Add it to
+  `CreateSnapshot` too — `EffectiveStatus` was forgotten there once and every script read the
+  constructor default.
+
+### `incident` block
+
+- **`incident` block**: always present, and it carries **links, not content** — `{ hasActiveIncident, active: { href } (only while the flag is true), history: { href } }`. Identical on the state body and on `metadata.incident` (single GET and list). `active.href` → `GET …/instances/{instance}/incidents/active` (newest unresolved, **404 `Instance:100037`** when none is open — a normal answer, since a retry can resolve between the poll and the follow-up); `history.href` → the paged history. Same `queryRoles` gate as the state function on both, and no stack trace anywhere. When lifted from an active subflow, `active.href` addresses the **leaf that owns the incident** while `history.href` stays on the polled instance. `HasActiveIncident` is a fingerprint member so raise/resolve without a state change moves the ETag. **Do not put incident fields back in the body**: the embedded summary is what made the state function read the incident table on its hottest path and what created the resolve-A-then-raise-B stale-`active` hole, both of which the link form removes.
+
+### Scheduled entries in `transitions`
+
+- **Scheduled entries in `transitions`**: the state body lists the runtime's armed scheduled transitions inside the existing `transitions` array as `{ name, kind: "scheduled", executeAtUtc, href, view, schema }` entries, appended after the available transitions and built from active `InstanceJob` rows (`JobType.ScheduledTransition`) whose `ExecuteAt` is stamped at scheduling time from the same instant the Dapr job is armed with. Each carries the transition definition's `annotations`, resolved via the job's `SourceState` (null, not a failure, when it no longer resolves) — every `transitions[]` kind carries annotations. The href/view/schema links use the same url shapes as triggerable entries but with `hasView`/`loadData`/`hasSchema` hardcoded false — a TEMPORARY uniformity concession for domain clients (they will adapt); scheduled transitions remain System-actor-gated at execution, so the href is not callable. Not role-filtered; not merged from subflows. Job-set changes deliberately do NOT participate in the fingerprint ETag (team decision, issue #864) — same-state re-arms can leave the scheduled entries stale behind a 304; documented as a known gap in `docs/runtime/state-function-cache-and-etag.md`.
+
+The workflow-level `timeout` block of the state body is described in
+[Workflow Timeout](workflow-timeout.md); `interaction.longPoll` authorization in
+[Long-Poll Termination](../domain/long-poll-termination.md).
 
 ## Configuration
 

@@ -53,9 +53,11 @@ public abstract class TaskExecutorBase<TTask>(ILogger logger) : ITaskExecutor
 
         // 2. PrepareInput (virtual - custom per executor)
         Result<ScriptResponse?> inputResult;
-        using (TaskExecutionActivityHelper.StartActivity(TaskExecutionActivityHelper.OperationPrepareInput, taskKey, taskTypeStr))
+        using (var phaseActivity = TaskExecutionActivityHelper.StartActivity(TaskExecutionActivityHelper.OperationPrepareInput, taskKey, taskTypeStr))
         {
             inputResult = await PrepareInputAsync(task, context, cancellationToken);
+            if (!inputResult.IsSuccess)
+                phaseActivity.SetResultError(inputResult.Error.Code, inputResult.Error.Message);
         }
         if (!inputResult.IsSuccess)
         {
@@ -79,9 +81,11 @@ public abstract class TaskExecutorBase<TTask>(ILogger logger) : ITaskExecutor
 
         // 4. Invoke (abstract or virtual)
         Result<TaskInvocationResult> invokeResult;
-        using (TaskExecutionActivityHelper.StartActivity(TaskExecutionActivityHelper.OperationInvoke, taskKey, taskTypeStr))
+        using (var phaseActivity = TaskExecutionActivityHelper.StartActivity(TaskExecutionActivityHelper.OperationInvoke, taskKey, taskTypeStr))
         {
             invokeResult = await InvokeAsync(task, context, cancellationToken);
+            if (!invokeResult.IsSuccess)
+                phaseActivity.SetResultError(invokeResult.Error.Code, invokeResult.Error.Message);
         }
         if (!invokeResult.IsSuccess)
         {
@@ -115,9 +119,11 @@ public abstract class TaskExecutorBase<TTask>(ILogger logger) : ITaskExecutor
 
         // 6. ProcessOutput (virtual - custom per executor)
         Result<object?> outputResult;
-        using (TaskExecutionActivityHelper.StartActivity(TaskExecutionActivityHelper.OperationProcessOutput, taskKey, taskTypeStr))
+        using (var phaseActivity = TaskExecutionActivityHelper.StartActivity(TaskExecutionActivityHelper.OperationProcessOutput, taskKey, taskTypeStr))
         {
             outputResult = await ProcessOutputAsync(task, invokeResult.Value!, context, cancellationToken);
+            if (!outputResult.IsSuccess)
+                phaseActivity.SetResultError(outputResult.Error.Code, outputResult.Error.Message);
         }
         if (!outputResult.IsSuccess)
         {
@@ -297,8 +303,8 @@ public abstract class TaskExecutorBase<TTask>(ILogger logger) : ITaskExecutor
     /// one <see cref="TaskExecutorContext"/> within one thread (the pipeline does not fan phases of
     /// the SAME task out concurrently), so there is no concurrent writer to race against.
     /// CONSTRAINT: this helper compiles <c>context.OnExecuteTask.Mapping</c> and NOTHING else. A
-    /// call site holding a different <see cref="ScriptCode"/> (e.g. CacheAside's SourceMapping, the
-    /// notification state-channel mapping) must NOT route through here — it would silently compile
+    /// call site holding a different <see cref="ScriptCode"/> (e.g. the
+    /// notification state-channel mapping or CacheAside's key script) must NOT route through here — it would silently compile
     /// the wrong script; keep such sites on the engine's <c>CompileToInstanceAsync</c> overloads.
     /// </remarks>
     protected static async Task<T> GetOrCompileMappingAsync<T>(
@@ -363,5 +369,53 @@ public abstract class TaskExecutorBase<TTask>(ILogger logger) : ITaskExecutor
         };
 
         context.SetStandardResponse(response, variableKey);
+    }
+
+    /// <summary>
+    /// The envelope with the caller's credential (<c>sub</c>, <c>act_sub</c>, <c>position</c>, <c>client_id</c>,
+    /// <c>role</c>) added to its binding's <c>Headers</c> wherever the task's own mapping did not set them
+    /// (<see cref="Execution.HttpTaskInvocation.WithCallerCredential"/>). Done here, on the orchestrator side, so the same
+    /// header set travels whether the task runs in-process or in the Execution host — the invoke envelope's trace context
+    /// carries only <c>sub</c> / <c>act_sub</c>. The caller values are its request headers, so a role a provider resolved
+    /// (morph-idm) is never carried.
+    /// </summary>
+    protected static TaskEnvelope WithCallerCredential(TaskEnvelope envelope, ScriptContext? scriptContext)
+    {
+        if (envelope.Binding.ValueKind != JsonValueKind.Object)
+            return envelope;
+
+        var binding = System.Text.Json.Nodes.JsonNode.Parse(envelope.Binding.GetRawText())!.AsObject();
+        var current = binding["Headers"]?.GetValue<string?>();
+        var merged = Execution.HttpTaskInvocation.WithCallerCredential(current, CallerHeadersOf(scriptContext));
+        if (merged == current)
+            return envelope;
+
+        binding["Headers"] = merged;
+        return new TaskEnvelope
+        {
+            TaskType = envelope.TaskType,
+            Version = envelope.Version,
+            TaskKey = envelope.TaskKey,
+            Binding = JsonSerializer.SerializeToElement(binding)
+        };
+    }
+
+    /// <summary>The caller's request headers, the source of the forwarded credential (never provider-resolved roles).</summary>
+    protected static IReadOnlyDictionary<string, string>? CallerHeadersOf(ScriptContext? scriptContext) =>
+        scriptContext?.Headers is null ? null : scriptContext.GetHeadersAsDictionary();
+
+    /// <summary>
+    /// <paramref name="taskHeaders"/> (the task's mapping headers, kept as they are) with the caller's credential added for
+    /// every credential header the mapping left absent or empty — for a task whose target runs in-process from the header
+    /// dictionary (a same-domain Start / SubProcess / DirectTrigger). Same rule as the remote binding headers.
+    /// </summary>
+    protected static Dictionary<string, string?> WithCallerCredential(
+        Dictionary<string, string?>? taskHeaders, ScriptContext? scriptContext)
+    {
+        var headers = taskHeaders is null
+            ? new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+            : new Dictionary<string, string?>(taskHeaders, StringComparer.OrdinalIgnoreCase);
+        Execution.HttpTaskInvocation.AppendCallerCredential(headers, CallerHeadersOf(scriptContext));
+        return headers;
     }
 }

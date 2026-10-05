@@ -323,10 +323,12 @@ public sealed class InstanceQueryAppServiceInstanceFilteringTests : IDisposable
             viewContentResolutionService: Substitute.For<IViewContentResolutionService>(),
             taskConditionService: Substitute.For<ITaskConditionService>(),
             urlTemplateBuilder: urlTemplateBuilder,
+            instanceCorrelationResolver: Substitute.For<BBT.Workflow.Instances.Correlation.IInstanceCorrelationResolver>(),
+            correlationOptions: Microsoft.Extensions.Options.Options.Create(new BBT.Workflow.Instances.Correlation.InstanceCorrelationOptions()),
             currentSchema: Substitute.For<ICurrentSchema>(),
             transitionAuthorizationManager: Substitute.For<ITransitionAuthorizationManager>(),
             representationEtagService: Substitute.For<IRepresentationEtagService>(),
-            schemaFieldFilterService: Substitute.For<ISchemaFieldFilterService>(),
+            instanceDataReadService: new BBT.Workflow.Instances.InstanceDataReadService(Substitute.For<ISchemaFieldFilterService>()),
             callerRoleResolver: new DefaultCallerRoleResolver(Substitute.For<ICurrentUser>()),
             paginationLinkGenerator: _paginationLinkGenerator,
             instanceFilteringOptions: instanceFilteringOptions,
@@ -337,6 +339,7 @@ public sealed class InstanceQueryAppServiceInstanceFilteringTests : IDisposable
             instanceSchemaFunctionCache: Substitute.For<Caching.IInstanceSchemaFunctionCache>(),
 
             humanTaskFunctionCache: Substitute.For<Caching.IHumanTaskFunctionCache>(),
+            currentUser: Substitute.For<ICurrentUser>(),
             descentLimiter: new HumanTask.HumanTaskDescentLimiter(
                 Microsoft.Extensions.Options.Options.Create(new HumanTask.HumanTaskFunctionOptions())),
             logger: Substitute.For<ILogger<InstanceQueryAppService>>());

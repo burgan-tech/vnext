@@ -49,6 +49,7 @@ public sealed class InstanceController(
     IEventAppService eventAppService,
     IRelatedInstanceQueryAppService relatedInstanceQueryAppService,
     BBT.Workflow.Instances.HumanTask.IHumanTaskLeafResolver humanTaskLeafResolver,
+    BBT.Workflow.Instances.Correlation.IInstanceCorrelationResolver instanceCorrelationResolver,
     ICallerRoleResolver callerRoleResolver) : AetherControllerBase
 {
     /// <summary>
@@ -106,7 +107,11 @@ public sealed class InstanceController(
         }
 
         var result = await commandAppService.StartAsync(input, cancellationToken);
-        return InstanceResponseActionResultMapper.ToActionResult(result, HttpContext, async: !sync);
+        // Shape 200 vs 202 by the EFFECTIVE mode (#1003): a flow/transition executionType definition may
+        // have overridden the caller's sync query parameter. When the execution path did not determine it
+        // (null — e.g. an idempotent early return that ran no pipeline) or on failure, fall back to the query param.
+        return InstanceResponseActionResultMapper.ToActionResult(
+            result, HttpContext, async: (result.IsSuccess ? result.Value?.ExecutedAsync : null) ?? !sync);
     }
 
     [ApiExplorerSettings(IgnoreApi = true)]
@@ -548,6 +553,40 @@ public sealed class InstanceController(
     }
 
     /// <summary>
+    /// Internal-only: expands a batch of this flow's instances into their correlated children,
+    /// recursing locally so one call covers a whole branch that lives in this domain.
+    /// </summary>
+    /// <remarks>
+    /// The counterpart of the public <c>…/functions/instance-correlation</c> read, for the hop a
+    /// parent domain cannot perform itself: correlation rows name a child's domain, but only that
+    /// domain's runtime can read the child's schema. Carries no authorization — like the other
+    /// <c>internal/</c> routes it is protected by network isolation, and the public function it
+    /// serves has no gate of its own either.
+    /// </remarks>
+    /// <response code="200">One result per requested id, including the ones that could not resolve.</response>
+    /// <response code="400">More ids were requested than <see cref="CorrelationBatchRequest.MaxInstanceIds"/> allows.</response>
+    [ApiExplorerSettings(IgnoreApi = true)]
+    [HttpPost("{domain}/workflows/{workflow}/internal/correlations/batch")]
+    public async Task<IActionResult> ExpandCorrelationsAsync(
+        [FromRoute] string domain,
+        [FromRoute] string workflow,
+        [FromBody] CorrelationBatchRequest input,
+        CancellationToken cancellationToken = default)
+    {
+        // Defence in depth: this endpoint carries no authorization, so it must not trust the
+        // caller's batch size.
+        if (input.InstanceIds.Count > CorrelationBatchRequest.MaxInstanceIds)
+        {
+            return BadRequest(
+                $"At most {CorrelationBatchRequest.MaxInstanceIds} instance ids may be expanded in one batch.");
+        }
+
+        var result = await instanceCorrelationResolver.ResolveAsync(domain, workflow, input, cancellationToken);
+
+        return FromResult(result);
+    }
+
+    /// <summary>
     /// Enqueues a (chained) transition as a background job. Internal endpoint the Inbox forwards
     /// <c>TransitionContinuationRequested</c> events to when outbox continuations are enabled, so
     /// the Dapr job is enqueued in the Orchestration process (never in the Inbox). Preserves the
@@ -576,13 +615,20 @@ public sealed class InstanceController(
             Workflow = continuation.Flow,
             Version = continuation.Version,
             Data = continuation.Data,
+            // Reference-only relay (AB-17): the accept stored the body in the job row; the flag and
+            // the row's JobId must survive this rebuild or the handler would run the transition
+            // bodyless.
+            JobId = continuation.JobId,
             InstanceKey = continuation.InstanceKey,
             Tags = continuation.Tags,
             Stage = continuation.Stage,
             Headers = continuation.Headers,
             RouteValues = continuation.RouteValues,
             ExecutionActor = actor,
-            CallerSync = false,
+            // #1003: relay the caller's sync/async intent from the outbox event rather than hardcoding
+            // false. An event written before this field existed deserializes to false — the pre-#1003
+            // behaviour — so callers with no executionType are unaffected.
+            CallerSync = continuation.CallerSync,
             TraceParent = continuation.TraceParent,
             TraceState = continuation.TraceState,
             // Pure transport hop: relay the lane verbatim, never re-anchor. Re-anchoring here would
@@ -665,7 +711,11 @@ public sealed class InstanceController(
             input,
             cancellationToken);
 
-        return InstanceResponseActionResultMapper.ToActionResult(result, HttpContext, async: !sync);
+        // Shape 200 vs 202 by the EFFECTIVE mode (#1003): a flow/transition executionType definition may
+        // have overridden the caller's sync query parameter. When the execution path did not determine it
+        // (null) or on failure, fall back to the query param.
+        return InstanceResponseActionResultMapper.ToActionResult(
+            result, HttpContext, async: (result.IsSuccess ? result.Value?.ExecutedAsync : null) ?? !sync);
     }
 
     /// <summary>
@@ -964,6 +1014,66 @@ public sealed class InstanceController(
         };
 
         var response = await queryAppService.GetInstanceHistoryAsync(input, cancellationToken);
+        return response.ToActionResult(HttpContext);
+    }
+
+    /// <summary>
+    /// Click-to-fetch execution metrics for one transition of an instance: every firing of that
+    /// transition as an attempt, each carrying the tasks that ran under it (duration, status, hook).
+    /// Read-only over the already-journaled transition/task rows (vnext-client-sdk-core#60).
+    /// </summary>
+    /// <param name="domain">Domain key</param>
+    /// <param name="workflow">Workflow key</param>
+    /// <param name="instance">Instance id or business key</param>
+    /// <param name="transitionKey">Transition definition key to group firings by</param>
+    /// <param name="cancellationToken">Cancellation token</param>
+    [HttpGet("{domain}/workflows/{workflow}/instances/{instance}/transitions/{transitionKey}/metrics")]
+    public async Task<IActionResult> GetTransitionMetricsAsync(
+        [FromRoute] string domain,
+        [FromRoute] string workflow,
+        [FromRoute] string instance,
+        [FromRoute] string transitionKey,
+        CancellationToken cancellationToken = default)
+    {
+        var input = new GetTransitionMetricsInput
+        {
+            Domain = domain,
+            Workflow = workflow,
+            Instance = instance,
+            TransitionKey = transitionKey
+        };
+
+        var response = await queryAppService.GetTransitionMetricsAsync(input, cancellationToken);
+        return response.ToActionResult(HttpContext);
+    }
+
+    /// <summary>
+    /// Click-to-fetch execution metrics for one state of an instance: every visit (entry→exit) as an
+    /// attempt, each carrying the state's onEntry and onExit tasks. Read-only over the already-journaled
+    /// transition/task rows (vnext-client-sdk-core#60).
+    /// </summary>
+    /// <param name="domain">Domain key</param>
+    /// <param name="workflow">Workflow key</param>
+    /// <param name="instance">Instance id or business key</param>
+    /// <param name="stateKey">State key whose visits to return</param>
+    /// <param name="cancellationToken">Cancellation token</param>
+    [HttpGet("{domain}/workflows/{workflow}/instances/{instance}/states/{stateKey}/metrics")]
+    public async Task<IActionResult> GetStateMetricsAsync(
+        [FromRoute] string domain,
+        [FromRoute] string workflow,
+        [FromRoute] string instance,
+        [FromRoute] string stateKey,
+        CancellationToken cancellationToken = default)
+    {
+        var input = new GetStateMetricsInput
+        {
+            Domain = domain,
+            Workflow = workflow,
+            Instance = instance,
+            StateKey = stateKey
+        };
+
+        var response = await queryAppService.GetStateMetricsAsync(input, cancellationToken);
         return response.ToActionResult(HttpContext);
     }
 

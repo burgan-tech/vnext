@@ -24,7 +24,9 @@ public sealed class Function : IDomainEntity, IFunctionReference, IReferenceSett
         List<RoleGrant>? roles = null,
         bool rawResponse = false,
         FunctionCache? cache = null,
-        List<string>? verbs = null
+        List<string>? verbs = null,
+        ExecutionLogSetting? executionLog = null,
+        LanguageLabel[]? labels = null
     ) : this()
     {
         Scope = scope;
@@ -35,6 +37,8 @@ public sealed class Function : IDomainEntity, IFunctionReference, IReferenceSett
         RawResponse = rawResponse;
         Cache = cache;
         this.verbs = NormalizeVerbs(verbs);
+        ExecutionLog = executionLog;
+        Labels = labels ?? [];
     }
 
     /// <summary>
@@ -58,6 +62,11 @@ public sealed class Function : IDomainEntity, IFunctionReference, IReferenceSett
     public string Version { get; private set; }
 
     public TaskScope Scope { get; private set; }
+
+    /// <summary>
+    /// Multi-language display labels of the function component (<c>attributes.labels</c>).
+    /// </summary>
+    public LanguageLabel[] Labels { get; private set; } = [];
     [JsonInclude] public OnExecuteTask? Task { get; private set; }
 
     [JsonInclude] [JsonPropertyName("onExecutionTasks")]
@@ -95,6 +104,21 @@ public sealed class Function : IDomainEntity, IFunctionReference, IReferenceSett
     /// </summary>
     [JsonInclude] [JsonPropertyName("cache")]
     public FunctionCache? Cache { get; private set; }
+
+    /// <summary>
+    /// Opt-in for the function-execution journal (vnext-client-sdk-core#60). <c>E</c> (enabled) records every
+    /// invocation of this function in the <c>FunctionExecutions</c> table; <c>D</c> (disabled) — the default
+    /// when the field is absent — records none, so existing definitions keep the no-logging behaviour.
+    /// </summary>
+    [JsonInclude] [JsonPropertyName("executionLog")]
+    public ExecutionLogSetting? ExecutionLog { get; private set; }
+
+    /// <summary>
+    /// True only when the definition explicitly opts this function into the execution journal.
+    /// Absent (<c>null</c>) or <c>D</c> (disabled) ⇒ <c>false</c>, keeping logging off by default.
+    /// </summary>
+    [JsonIgnore]
+    public bool ExecutionLoggingEnabled => ExecutionLog is not null && ExecutionLog.Equals(ExecutionLogSetting.Enabled);
 
     [JsonInclude] [JsonPropertyName("verbs")]
     private List<string> verbs = [];

@@ -106,12 +106,14 @@ public sealed class TransitionJobHandler(
                     BackgroundJobActivityHelper.EnrichActivity(activity, args);
                     BackgroundJobActivityHelper.EnrichActivityWithTransition(activity, args.TransitionKey);
 
+                    var data = args.Data;
+
                     // For async processing, instance should already be pre-reserved and in Busy status
                     // Reconstruct the original TransitionInput with Sync=true
                     var transitionInput = new TransitionInput(
                             args.Domain,
                             args.Workflow,
-                            new TransitionDataInput(args.Data)
+                            new TransitionDataInput(data)
                             {
                                 Key = args.InstanceKey,
                                 Tags = args.Tags,
@@ -151,7 +153,7 @@ public sealed class TransitionJobHandler(
 
                     if (!result.IsSuccess)
                     {
-                        activity?.SetStatus(ActivityStatusCode.Error, result.Error.Message);
+                        activity.SetResultError(result.Error.Code, result.Error.Message);
                         logger.JobFailed(args.JobName, args.InstanceId, result.Error.Message ?? "Unknown error");
 
                         if (IsLockConflict(result.Error))
@@ -169,7 +171,9 @@ public sealed class TransitionJobHandler(
                     }
                     else
                     {
-                        activity?.SetStatus(ActivityStatusCode.Ok);
+                        // A pipeline that faulted the instance returns success but has already
+                        // marked this span Error (MarkFaultedOnLocalChain) — keep it.
+                        activity.SetOkUnlessError();
                         logger.JobCompleted(args.JobName, args.TransitionKey, args.InstanceId);
                     }
                 }
@@ -198,8 +202,7 @@ public sealed class TransitionJobHandler(
                 }
                 catch (Exception e)
                 {
-                    activity?.SetStatus(ActivityStatusCode.Error, e.Message);
-                    activity?.AddTag("error.type", e.GetType().Name);
+                    activity.SetError(e);
                     logger.JobFailed(e, args.JobName, args.InstanceId);
                 }
                 finally

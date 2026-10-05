@@ -40,9 +40,10 @@ public sealed class FunctionComponentValidator : IComponentValidator
                 {
                     result.AddError("Function output is required.", $"{nameof(Function)}.{nameof(Function.Output)}");
                 }
-
-                ValidateTaskKeysDistinct(function, result);
             }
+
+            // Also runs for a legacy single `task`, whose variableKey format is checked here.
+            ValidateTaskKeysDistinct(function, result);
 
             // Validate scope
             if (function.Scope == default)
@@ -53,7 +54,14 @@ public sealed class FunctionComponentValidator : IComponentValidator
             ValidateVerbs(function, result);
             ValidateContractReferences(function, result);
             ValidateScriptCodes(function, result);
+            ValidateRoles(function, result);
 
+            return result;
+        }
+        catch (ArgumentException ex)
+        {
+            // A malformed RoleGrant (bad shape, blank leaf) throws from its constructor during deserialization.
+            result.AddError(ex.Message, nameof(Function));
             return result;
         }
         catch (JsonException ex)
@@ -63,40 +71,69 @@ public sealed class FunctionComponentValidator : IComponentValidator
         }
     }
 
+    /// <summary>Validates dynamic-role formats in <c>roles</c>, leaf by leaf for combinators.</summary>
+    private static void ValidateRoles(Function function, ComponentValidationResult result)
+    {
+        const string member = $"{nameof(Function)}.{nameof(Function.Roles)}";
+
+        foreach (var grant in function.Roles)
+        {
+            foreach (var message in RoleGrantDefinitionRules.Validate(grant, member))
+                result.AddError(message, member);
+        }
+    }
+
     /// <summary>
     /// Rejects task keys that collide across <c>onExecutionTasks</c>. Each task files its response
-    /// under <c>ToVariableName(task.key)</c> in <c>ScriptContext.TaskResponse</c>/<c>OutputResponse</c>,
+    /// under its response slot in <c>ScriptContext.TaskResponse</c>/<c>OutputResponse</c>,
     /// so two entries resolving to the same variable name overwrite each other's slot and the output
     /// script reads one task's payload where it expects the other's. Distinct raw keys can still
     /// collide after normalization ("user-info" and "user_info" both become "userInfo"), so the
-    /// comparison is on the normalized name.
+    /// comparison is on the normalized name. The slot is <c>variableKey</c> when authored, else
+    /// <c>ToVariableName(task.key)</c>.
     /// </summary>
     private static void ValidateTaskKeysDistinct(Function function, ComponentValidationResult result)
     {
-        // normalized variable name -> the raw key that claimed it first
+        // effective response slot -> label of the entry that claimed it first
         var claimed = new Dictionary<string, string>(StringComparer.Ordinal);
+
+        if (function.Task?.VariableKey is { } legacyKey && !OnExecuteTask.IsValidVariableKey(legacyKey))
+        {
+            result.AddError(
+                $"Function task variableKey '{legacyKey}' is not a valid response slot name: " +
+                "use letters, digits and '_', starting with a letter or '_' (max 100 characters).",
+                $"{nameof(Function)}.{nameof(Function.Task)}.{nameof(OnExecuteTask.VariableKey)}");
+        }
 
         foreach (var (task, index) in function.OnExecutionTasks.Select((t, i) => (t, i)))
         {
-            var rawKey = task.Task?.Key;
-            if (string.IsNullOrWhiteSpace(rawKey))
+            if (task.VariableKey is not null && !OnExecuteTask.IsValidVariableKey(task.VariableKey))
+            {
+                result.AddError(
+                    $"Function onExecutionTasks[{index}] variableKey '{task.VariableKey}' is not a valid response " +
+                    "slot name: use letters, digits and '_', starting with a letter or '_' (max 100 characters).",
+                    $"{nameof(Function)}.{nameof(Function.OnExecutionTasks)}[{index}].{nameof(OnExecuteTask.VariableKey)}");
+            }
+
+            var variableName = task.ResponseVariableKey;
+            if (string.IsNullOrWhiteSpace(variableName))
             {
                 continue;
             }
 
-            var variableName = rawKey.ToVariableName();
-            if (claimed.TryGetValue(variableName, out var firstRawKey))
+            var label = task.VariableKey is null ? $"task key '{task.Task?.Key}'" : $"variableKey '{task.VariableKey}'";
+            if (claimed.TryGetValue(variableName, out var firstLabel))
             {
                 result.AddError(
-                    $"Function onExecutionTasks[{index}] task key '{rawKey}' collides with '{firstRawKey}': " +
+                    $"Function onExecutionTasks[{index}] {label} collides with {firstLabel}: " +
                     $"both resolve to the response variable '{variableName}', so the later task's output would " +
-                    "overwrite the earlier one's in ScriptContext.TaskResponse/OutputResponse. Give each task " +
-                    "a key that normalizes to a distinct variable name.",
+                    "overwrite the earlier one's in ScriptContext.TaskResponse/OutputResponse. Give each entry " +
+                    "a distinct 'variableKey' or a task key that normalizes to a distinct variable name.",
                     $"{nameof(Function)}.{nameof(Function.OnExecutionTasks)}[{index}]");
                 continue;
             }
 
-            claimed[variableName] = rawKey;
+            claimed[variableName] = label;
         }
     }
 

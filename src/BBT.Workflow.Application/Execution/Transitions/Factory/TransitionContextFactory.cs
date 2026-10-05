@@ -13,7 +13,8 @@ namespace BBT.Workflow.Execution.Transitions.Factory;
 public sealed class TransitionContextFactory(
     IInstanceRepository instanceRepository,
     IComponentCacheStore componentCacheStore,
-    IRuntimeInfoProvider runtimeInfoProvider) : ITransitionContextFactory
+    IRuntimeInfoProvider runtimeInfoProvider,
+    IInstanceSecretPreloader? secretPreloader = null) : ITransitionContextFactory
 {
     /// <inheritdoc />
     /// <summary>
@@ -105,6 +106,11 @@ public sealed class TransitionContextFactory(
         // pipeline (FinalizeTransitionStep resolve, Fault's upward payload, the script context's
         // Incident block) sees them. No query when the flag is false.
         await instanceRepository.LoadActiveIncidentsAsync(result.Value, cancellationToken);
+
+        // Cache the row's x-encryption secret in one query, so a script's DecryptAsync (and the write funnel) open
+        // values without another round trip. The row itself is never decrypted here.
+        if (secretPreloader is not null && EncryptedValueFormat.MayContainToken(result.Value.LatestData?.Data.Json))
+            await secretPreloader.PreloadAsync([result.Value.Id], cancellationToken);
 
         return result;
     }

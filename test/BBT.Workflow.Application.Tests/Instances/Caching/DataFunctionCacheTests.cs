@@ -28,11 +28,15 @@ public class DataFunctionCacheTests
     private readonly IDistributedCacheService _distributedCache = Substitute.For<IDistributedCacheService>();
     private readonly ICurrentUser _currentUser = Substitute.For<ICurrentUser>();
 
-    private DataFunctionCache CreateSut(InstanceFunctionCacheOptions? options = null) =>
+    private DataFunctionCache CreateSut(
+        InstanceFunctionCacheOptions? options = null, bool maskingEnabled = true,
+        BBT.Workflow.Authorization.SchemaEncryptionOptions? encryption = null) =>
         new(_distributedCache,
             _currentUser,
             Options.Create(options ?? new InstanceFunctionCacheOptions()),
-            Substitute.For<ILogger<DataFunctionCache>>());
+            Substitute.For<ILogger<DataFunctionCache>>(),
+            Options.Create(new BBT.Workflow.Authorization.SchemaMaskingOptions { Enabled = maskingEnabled }),
+            Options.Create(encryption ?? new BBT.Workflow.Authorization.SchemaEncryptionOptions()));
 
     private static GetInstanceDataInput CreateInput(
         IReadOnlyList<string>? roles = null,
@@ -68,9 +72,9 @@ public class DataFunctionCacheTests
     {
         var key = CreateSut().BuildKey(CreateInput());
 
-        // The v1 segment is a cache generation: bump it whenever a change alters what a cached body
-        // means for a given caller hash, as the move to provider-resolved caller roles did.
-        key.ShouldStartWith($"data-fn:v1:{TestDomain}:{TestWorkflow}:{TestInstance}:");
+        // The v2 segment is a cache generation: bump it whenever a change alters what a cached body
+        // means for a given caller hash — v1 for provider-resolved caller roles, v2 for x-masking, v3 for x-encryption encrypt.
+        key.ShouldStartWith($"data-fn:v3:{TestDomain}:{TestWorkflow}:{TestInstance}:");
     }
 
     [Fact]
@@ -247,4 +251,34 @@ public class DataFunctionCacheTests
         {
             PropertyNameCaseInsensitive = true
         })!;
+
+    [Fact]
+    public void ComputeEtag_ContainsTheGeneration_SoAPreMaskingEtagNeverValidates()
+    {
+        // Recompute the v1 material by hand: id | latestDataEtag | flowVersion | callerHash. A client that
+        // cached a body under v1 must get a 200, never a 304, from the fingerprint fast path.
+        var sut = CreateSut();
+        var input = CreateInput();
+        var fingerprint = CreateFingerprint();
+        var v2 = sut.ComputeEtag(input, fingerprint);
+        var callerHash = sut.BuildKey(input).Split(':')[^1];
+        var v1Material = string.Join('|', fingerprint.Id, fingerprint.LatestDataEtag, fingerprint.FlowVersion, callerHash);
+        var v1 = Convert.ToHexStringLower(
+            System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(v1Material)))[..32];
+
+        v2.ShouldNotBe(v1);
+    }
+
+    [Fact]
+    public void MaskingSwitch_MovesBothTheKeyAndTheEtag()
+    {
+        var input = CreateInput();
+        var fingerprint = CreateFingerprint();
+        var on = CreateSut(maskingEnabled: true);
+        var off = CreateSut(maskingEnabled: false);
+
+        off.BuildKey(input).ShouldNotBe(on.BuildKey(input));
+        off.ComputeEtag(input, fingerprint).ShouldNotBe(on.ComputeEtag(input, fingerprint));
+        off.BuildKey(input).ShouldStartWith("data-fn:v3-nomask:");
+    }
 }

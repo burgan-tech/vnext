@@ -272,6 +272,45 @@ public sealed class EfCoreInstanceRepository(
     }
 
     /// <inheritdoc />
+    public async Task<SubflowStateProbe?> ProbeSubflowStateAsync(
+        Guid instanceId,
+        Guid subInstanceId,
+        CancellationToken cancellationToken = default)
+    {
+        // One no-tracking row: the parent's projection columns plus the open correlation's watermark
+        // as a correlated sub-select. No includes, no row lock (plain READ COMMITTED), no write.
+        var dbSet = await GetDbSetAsync();
+        var row = await dbSet
+            .AsNoTracking()
+            .Where(i => i.Id == instanceId)
+            .Select(i => new
+            {
+                i.EffectiveState,
+                i.EffectiveStateType,
+                i.EffectiveStateSubType,
+                i.EffectiveStatus,
+                Correlation = i.ChildCorrelations
+                    .Where(c => c.SubFlowInstanceId == subInstanceId && !c.IsCompleted)
+                    .Select(c => new { c.SubFlowCurrentState, c.SubFlowNotificationSeq, c.SubFlowStateChangedAt })
+                    .FirstOrDefault()
+            })
+            .FirstOrDefaultAsync(cancellationToken);
+
+        if (row is null)
+            return null;
+
+        return new SubflowStateProbe(
+            row.EffectiveState,
+            row.EffectiveStateType,
+            row.EffectiveStateSubType,
+            row.EffectiveStatus,
+            row.Correlation is not null,
+            row.Correlation?.SubFlowCurrentState,
+            row.Correlation?.SubFlowNotificationSeq ?? 0,
+            row.Correlation?.SubFlowStateChangedAt);
+    }
+
+    /// <inheritdoc />
     public async Task<Instance?> FindForPostCommitSettlementAsync(
         Guid instanceId,
         bool includeLatestData,
@@ -362,6 +401,20 @@ public sealed class EfCoreInstanceRepository(
             var incidentEntry = dbContext.Entry(incident);
             if (incidentEntry.State == EntityState.Detached)
                 incidentEntry.State = EntityState.Added;
+        }
+
+        // InstanceData rows are append-only and always inserted by IInstanceDataWriteService before
+        // they reach the aggregate. On a detached root the same Set.Update(root) walk would mark every
+        // loaded row Modified and re-send it — its stored content, hash and a possibly stale IsLatest.
+        // Attaching them Unchanged first pins them (Update(root) skips tracked entries); the content
+        // columns are additionally ignored after save in the model.
+        if (entry.State == EntityState.Detached)
+        {
+            foreach (var row in entity.DataList)
+            {
+                if (dbContext.Entry(row).State == EntityState.Detached)
+                    dbContext.Attach(row);
+            }
         }
 
         var result = await base.UpdateAsync(entity, autoSave, cancellationToken);
@@ -1510,9 +1563,9 @@ public sealed class EfCoreInstanceRepository(
                     i.Tags,
                     i.CreatedAt,
                     i.ModifiedAt,
-                    DataJson = d.Data.Json,
-                    d.Version,
-                    d.IsLatest
+                    // The whole row, not d.Data.Json: a scalar projection skips entity
+                    // materialization, so x-encryption tokens would never be opened.
+                    Row = d
                 })
             .AsNoTracking()
             .Skip(skip)
@@ -1525,9 +1578,9 @@ public sealed class EfCoreInstanceRepository(
             r.Tags,
             r.CreatedAt,
             r.ModifiedAt,
-            JsonSerializer.Deserialize<JsonElement>(r.DataJson, JsonSerializerConstants.JsonOptions),
-            r.Version,
-            r.IsLatest))
+            r.Row.Data.JsonElement.Clone(),
+            r.Row.Version,
+            r.Row.IsLatest))
             .ToList();
     }
 
@@ -1873,6 +1926,32 @@ public sealed class EfCoreInstanceRepository(
         }
 
         return instances;
+    }
+
+    /// <inheritdoc />
+    public async Task<List<CorrelationWalkRow>> GetForCorrelationWalkAsync(
+        IReadOnlyCollection<Guid> instanceIds,
+        CancellationToken cancellationToken = default)
+    {
+        if (instanceIds.Count == 0)
+            return [];
+
+        var dbSet = await GetDbSetAsync();
+
+        // Projected in SQL: four columns, no includes, no aggregate. A tree walk touches every node
+        // of every level, so selecting whole rows multiplies the widest table in the schema by the
+        // size of the tree for four values. No AsSplitQuery either — with no collections there is no
+        // cartesian product to split, so a second round trip would cost one and buy nothing.
+        return await dbSet
+            .Where(i => instanceIds.Contains(i.Id))
+            .AsNoTracking()
+            .Select(i => new CorrelationWalkRow(
+                i.Id,
+                i.Key,
+                i.CurrentState,
+                i.Status,
+                i.FlowVersion))
+            .ToListAsync(cancellationToken);
     }
 
     private static string SanitizeIdentifier(string identifier)

@@ -49,6 +49,24 @@ public interface IInstanceQueryAppService : IApplicationService
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Returns the attempts model of one transition key on an instance — every firing of that
+    /// transition, each with the tasks that ran under it (vnext-client-sdk-core#60). Read-only over
+    /// the already-journaled transition/task rows.
+    /// </summary>
+    Task<Result<GetInstanceMetricsOutput>> GetTransitionMetricsAsync(
+        GetTransitionMetricsInput input,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns the attempts model of one state on an instance — every visit (entry→exit), each with
+    /// the state's onEntry and onExit tasks (vnext-client-sdk-core#60). Read-only over the
+    /// already-journaled transition/task rows.
+    /// </summary>
+    Task<Result<GetInstanceMetricsOutput>> GetStateMetricsAsync(
+        GetStateMetricsInput input,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Pages the error-boundary incident history of an instance, newest first. Gated by the same
     /// <c>queryRoles</c> check as the state function.
     /// </summary>
@@ -114,11 +132,11 @@ public interface IInstanceQueryAppService : IApplicationService
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Retrieves the runtime hierarchy of an instance as a recursive tree.
-    /// Includes direct and indirect child subflow/subprocess instances.
+    /// Retrieves the instance-correlation tree, walked parent -> child.
+    /// Includes direct and indirect correlated child subflow/subprocess instances.
     /// </summary>
-    Task<Result<GetInstanceHierarchyOutput>> GetInstanceHierarchyAsync(
-        GetInstanceHierarchyInput input,
+    Task<Result<GetInstanceCorrelationOutput>> GetInstanceCorrelationAsync(
+        GetInstanceCorrelationInput input,
         CancellationToken cancellationToken = default);
 
     /// <summary>

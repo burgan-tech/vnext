@@ -312,9 +312,9 @@ through the **full** task engine — its own retry loop, its own per-item error 
 output from ever reaching instance data.
 
 The item's branch context is **discarded**, never merged back with
-`ScriptContext.MergeParallelBranch()`. Merging would collide: N items reusing the same inner
-task's key inside the shared `TaskResponse` dictionary would trip `MergeDictionary`'s
-duplicate-key guard (`InvalidOperationException`). Fan-out deliberately does not use that
+`ScriptContext.MergeParallelBranches()`. Merging would collide: N items filing under the same
+inner task's slot in the shared `TaskResponse` dictionary are N different writers of one slot in
+one round, which the slot-aware merge rejects (`InvalidOperationException`). Fan-out deliberately does not use that
 mechanism — it builds its own aggregate (`FanOutResult`) instead.
 
 This is why `ItemInputHandler` **must be pure with respect to instance data**: it runs N times

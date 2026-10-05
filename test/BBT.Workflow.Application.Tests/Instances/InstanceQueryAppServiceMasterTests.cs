@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -93,10 +94,12 @@ public class InstanceQueryAppServiceMasterTests : IDisposable
             viewContentResolutionService: Substitute.For<IViewContentResolutionService>(),
             taskConditionService: Substitute.For<ITaskConditionService>(),
             urlTemplateBuilder: Substitute.For<IUrlTemplateBuilder>(),
+            instanceCorrelationResolver: Substitute.For<BBT.Workflow.Instances.Correlation.IInstanceCorrelationResolver>(),
+            correlationOptions: Microsoft.Extensions.Options.Options.Create(new BBT.Workflow.Instances.Correlation.InstanceCorrelationOptions()),
             currentSchema: Substitute.For<ICurrentSchema>(),
             transitionAuthorizationManager: _transitionAuthorizationManager,
             representationEtagService: Substitute.For<IRepresentationEtagService>(),
-            schemaFieldFilterService: Substitute.For<ISchemaFieldFilterService>(),
+            instanceDataReadService: new BBT.Workflow.Instances.InstanceDataReadService(Substitute.For<ISchemaFieldFilterService>()),
             callerRoleResolver: new DefaultCallerRoleResolver(Substitute.For<ICurrentUser>()),
             paginationLinkGenerator: Substitute.For<BBT.Aether.Application.Pagination.IPaginationLinkGenerator>(),
             instanceFilteringOptions: Options.Create(new InstanceFilteringOptions()),
@@ -107,6 +110,7 @@ public class InstanceQueryAppServiceMasterTests : IDisposable
             instanceSchemaFunctionCache: _instanceSchemaFunctionCache,
 
             humanTaskFunctionCache: Substitute.For<Caching.IHumanTaskFunctionCache>(),
+            currentUser: Substitute.For<ICurrentUser>(),
             descentLimiter: new HumanTask.HumanTaskDescentLimiter(
                 Microsoft.Extensions.Options.Options.Create(new HumanTask.HumanTaskFunctionOptions())),
             logger: Substitute.For<ILogger<InstanceQueryAppService>>());
@@ -138,6 +142,38 @@ public class InstanceQueryAppServiceMasterTests : IDisposable
         // No forwarding when there is no active subflow.
         await _instanceQueryGateway.DidNotReceive()
             .GetFunctionWithMasterAsync(Arg.Any<GetFunctionWithInstanceInput>(), Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// The master response carries the schema component's <c>labels</c> (<c>attributes.labels</c>)
+    /// in their declared <c>[{ language, label }]</c> form.
+    /// </summary>
+    [Fact]
+    public async Task GetMasterAsync_CarriesTheSchemaComponentsLabels()
+    {
+        var instance = CreateInstance();
+        var workflow = BuildWorkflow(withMasterSchema: true);
+        SetupCommonMocks(instance, workflow);
+        SetupMasterSchema("""[{"label":"Başvuru","language":"tr-TR"},{"label":"Application","language":"en-US"}]""");
+
+        var result = await _service.GetMasterAsync(CreateInput(instance.Id.ToString()), CancellationToken.None);
+
+        result.Result.IsSuccess.ShouldBeTrue();
+        result.Result.Value!.Labels!.Select(l => (l.Language, l.Label))
+            .ShouldBe([("tr-TR", "Başvuru"), ("en-US", "Application")]);
+    }
+
+    [Fact]
+    public async Task GetMasterAsync_WhenSchemaDeclaresNoLabels_OmitsThem()
+    {
+        var instance = CreateInstance();
+        var workflow = BuildWorkflow(withMasterSchema: true);
+        SetupCommonMocks(instance, workflow);
+        SetupMasterSchema();
+
+        var result = await _service.GetMasterAsync(CreateInput(instance.Id.ToString()), CancellationToken.None);
+
+        result.Result.Value!.Labels.ShouldBeNull();
     }
 
     [Fact]
@@ -394,10 +430,11 @@ public class InstanceQueryAppServiceMasterTests : IDisposable
             .Returns(true);
     }
 
-    private void SetupMasterSchema()
+    private void SetupMasterSchema(string? labelsJson = null)
     {
+        var labels = labelsJson is null ? string.Empty : $", \"labels\": {labelsJson}";
         var schema = JsonSerializer.Deserialize<SchemaDefinition>(
-            """{ "type": "JSON", "schema": { "type": "object", "properties": {} } }""",
+            $$"""{ "type": "JSON", "schema": { "type": "object", "properties": {} }{{labels}} }""",
             new JsonSerializerOptions { PropertyNameCaseInsensitive = true })!;
         schema.SetReference(new Reference(MasterSchemaKey, TestDomain, "sys-schemas", TestVersion));
         _componentCacheStore

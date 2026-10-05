@@ -75,7 +75,7 @@ public static class OrchestrationApiServiceCollectionExtensions
         services.AddScoped<IInstanceFunctionHandler, ExtensionsFunctionHandler>();
         services.AddScoped<IInstanceFunctionHandler, AuthorizeFunctionHandler>();
         services.AddScoped<IInstanceFunctionHandler, AuthorizationMatrixFunctionHandler>();
-        services.AddScoped<IInstanceFunctionHandler, HierarchyFunctionHandler>();
+        services.AddScoped<IInstanceFunctionHandler, InstanceCorrelationFunctionHandler>();
         services.AddScoped<IInstanceFunctionHandler, MasterFunctionHandler>();
         services.AddScoped<IInstanceFunctionHandler, CatalogFunctionHandler>();
         services.AddScoped<IInstanceFunctionHandler, TaskHistoryFunctionHandler>();
@@ -129,6 +129,11 @@ public static class OrchestrationApiServiceCollectionExtensions
         // inside ExecuteAsync so enabling or disabling the cache is a config change, not a redeploy
         // of different wiring. It returns immediately when discovery or the cache is off.
         services.AddHostedService<DiscoveryCacheRefreshHostedService>();
+
+        // Drains the function-execution journal queue and bulk-inserts rows off the request path
+        // (vnext-client-sdk-core#60). Unconditional and Orchestration-only — this is the host that
+        // executes domain functions, so it is the only host that enqueues journal records.
+        services.AddHostedService<BBT.Workflow.Functions.FunctionExecutionJournalWriter>();
 
 #if DEBUG
         // Pays the Roslyn cold cost (assembly load + JIT + reference materialization, ~seconds) at

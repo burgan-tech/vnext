@@ -1,6 +1,6 @@
 ---
 name: agent-council
-description: Runs the evidence-based Agent Council decision process for non-trivial vNext decisions — architecture, technology selection, cross-service changes, data model, security, reliability, and performance. Produces independent role proposals, two objection rounds, and a recorded decision with dissent under ai-docs/agent-council/sessions/ (local, git-ignored) and one row in the committed log docs/agent-council/sessions/README.md. Use when the user says "council", "council işlet", "karar verelim", "hangisini seçelim", "eklemeli miyim", "should we add", "mimari karar", "bunu yapmalı mıyız", or asks any design/technology/cross-service question whose answer will be a recommendation.
+description: "Runs the evidence-based Agent Council for non-trivial vNext decisions (architecture, technology, cross-service, data, security, reliability, performance) and logs the decision. Triggers: \"council\", \"karar verelim\", \"eklemeli miyim\", \"mimari karar\", or any question whose answer is a recommendation."
 ---
 
 # Agent Council
@@ -12,45 +12,14 @@ Authority documents live in `docs/agent-council/`: `CHARTER.md`, `PROCESS.md`,
 Read `PROCESS.md` and the templates before producing artifacts — this skill is the
 procedure, those files are the contract.
 
-## Trigger
+## Trigger, scope and mandatory disclosure
 
-Activate on either signal.
-
-**Phrases**: "council", "council işlet", "karar verelim", "hangisini seçelim",
-"eklemeli miyim", "eklemeli miyiz", "yapmalı mıyız", "should we add", "should we
-build", "mimari karar", "hangi yaklaşım".
-
-**Shape** — no trigger phrase needed. Activate when the user asks a question whose
-honest answer is a *recommendation* rather than a fact, and the subject is one of:
-
-- a new component type, task type, service, endpoint family or public contract
-- moving a responsibility between services (Orchestration / Execution / workers)
-- adopting or dropping a technology, broker, library or infrastructure dependency
-- a data model, schema, migration or consistency change
-- an authentication, authorization, secret or PII boundary
-- a performance/latency/throughput claim that would justify a change
-- a deployment, recovery or production-operations change
-
-A request arriving from another team ("ekipler istedi", "product asked for") is a
-**strong** signal, not a weak one: it means an outside party already holds a position
-that has not been argued against.
-
-## When this skill does NOT apply
-
-Do not activate for: a single-file or single-method fix, a rename, a typo, a
-documentation edit, a test addition, a purely informational question ("how does X
-work?", "where is Y?"), or a decision the user has already made and is asking you to
-carry out. In those cases answer directly.
-
-If unsure, say in one sentence that the question looks council-shaped and ask —
-do not silently skip.
-
-## Mandatory disclosure
-
-Any answer to a qualifying question **must open by stating council status**: either
-that the council ran (with a link to the session), or that it was skipped and why.
-Silently answering a council-shaped question from a single perspective is a rule
-violation, not a shortcut.
+When the council applies (trigger phrases, the question *shape* that needs no phrase, the cases it
+does not apply to) and the obligation to open every qualifying answer with its council status are
+defined once, in the always-on rule
+[`.claude/rules/agent-council-plan-mode.md`](../../rules/agent-council-plan-mode.md) § Trigger and
+§ Mandatory disclosure. Read it there; it is not restated here. If unsure whether a question
+qualifies, say in one sentence that it looks council-shaped and ask.
 
 ## Workflow
 
@@ -69,18 +38,8 @@ UTC time, reason and evidence.
 
 ### 2. COUNCIL_SELECTED — pick the smallest sufficient council
 
-Per `COUNCIL-SELECTION.md`:
-
-| Trigger | Role |
-|---|---|
-| Always | Solution Architect, Pragmatic Engineer, Test & Evidence |
-| Auth, authorization, PII, secrets | Security Guardian |
-| Data model, migration, consistency, transaction | Data Architect |
-| Latency, throughput, allocation, cache, concurrency | Performance Engineer |
-| Deployment, recovery, production operations | Reliability Engineer |
-| Cross-service, or High/Critical risk | Devil's Advocate |
-
-Size: Low 3 · Medium 3–5 · High 4–7 · Critical all applicable + a named human expert.
+Apply [`docs/agent-council/COUNCIL-SELECTION.md`](../../../docs/agent-council/COUNCIL-SELECTION.md)
+— the core roles, the conditional-role triggers and the size per risk level live there.
 
 **Record which blind spot each added role closes, and why each omitted role was
 omitted.** Do not select every role by default.
@@ -133,7 +92,10 @@ Verdict: `APPROVED` · `EXPERIMENT_REQUIRED` · `CLARIFICATION_REQUIRED` · `BLO
 `REJECTED`.
 
 **Append the decision to the log.** Add one row to `docs/agent-council/sessions/README.md`
-(`| date | [task-id](<task-id>/DECISION.md) | topic | risk | verdict | selected approach | follow-up |`).
+in the same shape as the existing rows:
+`| YYYY-MM-DD | [<task-id>](../../../ai-docs/agent-council/sessions/<task-id>/DECISION.md) | topic | risk | verdict | selected approach | follow-up |`.
+Keep each free-text cell to ~300 characters (decision + status + one-sentence rationale); the
+detail belongs in the local session folder.
 The log is the team's decision history; a session without a row is not recorded. If a later
 session changes the verdict, update the row and point `Follow-up` at the superseding session.
 

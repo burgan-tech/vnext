@@ -90,8 +90,11 @@ public sealed class SoapTaskExecutor : TaskExecutorBase<SoapTask>
         // dispatch paths need the same object.
         var traceContext = _remoteInvoker.CreateTraceContext(context.ScriptContext);
 
+        // The caller's credential travels with the task's own headers, in-process and to the Execution host alike.
+        var envelope = WithCallerCredential(envelopeResult.Value!, context.ScriptContext);
+
         var result = await _dispatcher.DispatchAsync(
-            task, Execution.TaskTypes.Soap, envelopeResult.Value!, traceContext, cancellationToken);
+            task, Execution.TaskTypes.Soap, envelope, traceContext, cancellationToken);
 
         if (!result.IsSuccess)
         {

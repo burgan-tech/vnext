@@ -53,6 +53,53 @@ public static class ActivityExtensions
     }
 
     /// <summary>
+    /// Marks the activity Error from a Result-pattern failure: status, <c>error.code</c> and, when
+    /// given, <c>error.type</c>. The single entry point for "this span's operation failed with a
+    /// business/infrastructure <c>Error</c>" so every span spells the attributes the same way.
+    /// </summary>
+    public static Activity? SetResultError(this Activity? activity, string? errorCode, string? errorMessage, string? errorType = null)
+    {
+        if (activity != null)
+        {
+            activity.SetStatus(ActivityStatusCode.Error, errorMessage);
+            if (!string.IsNullOrEmpty(errorCode))
+                activity.SetTag(TelemetryConstants.TagNames.ErrorCode, errorCode);
+            if (!string.IsNullOrEmpty(errorType))
+                activity.SetTag(TelemetryConstants.TagNames.ErrorType, errorType);
+        }
+        return activity;
+    }
+
+    /// <summary>
+    /// Sets <c>Ok</c> unless the span already carries <c>Error</c>. <see cref="Activity.SetStatus"/>
+    /// replaces the previous status, so an unconditional <c>Ok</c> at the end of a handler erases
+    /// an error a nested call recorded on the same span (see <see cref="MarkFaultedOnLocalChain"/>).
+    /// </summary>
+    public static Activity? SetOkUnlessError(this Activity? activity)
+    {
+        if (activity is { Status: not ActivityStatusCode.Error })
+            activity.SetStatus(ActivityStatusCode.Ok);
+        return activity;
+    }
+
+    /// <summary>
+    /// Marks the activity and every in-process ancestor Error with
+    /// <see cref="TelemetryConstants.TagNames.InstanceFaulted"/>. Used where a pipeline failure
+    /// faults the instance but the operation deliberately still returns success (200 +
+    /// <c>Status=F</c>). The walk follows <see cref="Activity.Parent"/>, which is null past a
+    /// remote or explicitly supplied parent context, so it stops at the local root — the job's
+    /// flat-lane span, or the HTTP server span on the sync path — and never reaches another trace.
+    /// </summary>
+    public static void MarkFaultedOnLocalChain(this Activity? activity, string? errorCode, string? errorMessage)
+    {
+        for (var current = activity; current != null; current = current.Parent)
+        {
+            current.SetResultError(errorCode, errorMessage);
+            current.SetTag(TelemetryConstants.TagNames.InstanceFaulted, true);
+        }
+    }
+
+    /// <summary>
     /// Records an exception and sets the activity status to Error.
     /// Wraps OpenTelemetry's RecordException, sets standard error.type and status.
     /// </summary>

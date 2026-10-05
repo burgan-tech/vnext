@@ -92,10 +92,12 @@ public class InstanceQueryAppServiceTaskHistoryTests : IDisposable
             viewContentResolutionService: Substitute.For<IViewContentResolutionService>(),
             taskConditionService: Substitute.For<ITaskConditionService>(),
             urlTemplateBuilder: Substitute.For<IUrlTemplateBuilder>(),
+            instanceCorrelationResolver: Substitute.For<BBT.Workflow.Instances.Correlation.IInstanceCorrelationResolver>(),
+            correlationOptions: Microsoft.Extensions.Options.Options.Create(new BBT.Workflow.Instances.Correlation.InstanceCorrelationOptions()),
             currentSchema: Substitute.For<ICurrentSchema>(),
             transitionAuthorizationManager: _transitionAuthorizationManager,
             representationEtagService: Substitute.For<IRepresentationEtagService>(),
-            schemaFieldFilterService: Substitute.For<ISchemaFieldFilterService>(),
+            instanceDataReadService: new BBT.Workflow.Instances.InstanceDataReadService(Substitute.For<ISchemaFieldFilterService>()),
             callerRoleResolver: new DefaultCallerRoleResolver(Substitute.For<ICurrentUser>()),
             paginationLinkGenerator: Substitute.For<BBT.Aether.Application.Pagination.IPaginationLinkGenerator>(),
             instanceFilteringOptions: Options.Create(new InstanceFilteringOptions()),
@@ -106,6 +108,7 @@ public class InstanceQueryAppServiceTaskHistoryTests : IDisposable
             instanceSchemaFunctionCache: Substitute.For<Caching.IInstanceSchemaFunctionCache>(),
 
             humanTaskFunctionCache: Substitute.For<Caching.IHumanTaskFunctionCache>(),
+            currentUser: Substitute.For<ICurrentUser>(),
             descentLimiter: new HumanTask.HumanTaskDescentLimiter(
                 Microsoft.Extensions.Options.Options.Create(new HumanTask.HumanTaskFunctionOptions())),
             logger: Substitute.For<ILogger<InstanceQueryAppService>>());
@@ -166,12 +169,12 @@ public class InstanceQueryAppServiceTaskHistoryTests : IDisposable
                     Guid.NewGuid(), "send-mail", "start", "initial", "draft", TriggerType.Manual,
                     Definitions.TaskStatus.Completed, BusinessStatus.Success,
                     startedAt, startedAt.AddMilliseconds(55), TimeSpan.FromMilliseconds(55),
-                    FaultedResponseJson: null),
+                    FaultedResponseJson: null, Hook: TaskTrigger.OnEntry, Order: 0),
                 new InstanceTaskHistoryRow(
                     Guid.NewGuid(), "call-api", "approve", "draft", "approved", TriggerType.Automatic,
                     Definitions.TaskStatus.Faulted, BusinessStatus.Unknown,
                     startedAt.AddSeconds(1), startedAt.AddSeconds(2), TimeSpan.FromSeconds(1),
-                    FaultedResponseJson: """{"error":"connection refused"}""")
+                    FaultedResponseJson: """{"error":"connection refused"}""", Hook: null, Order: null)
             ]);
 
         var result = await _service.GetInstanceTasksAsync(TasksInput(instance.Id.ToString()), CancellationToken.None);
@@ -190,11 +193,17 @@ public class InstanceQueryAppServiceTaskHistoryTests : IDisposable
         completed.BusinessStatus.ShouldBe(BusinessStatus.Success);
         completed.DurationMs.ShouldBe(55);
         completed.Error.ShouldBeNull();
+        // The task's own hook + order surface on the DTO, distinct from TriggerType (the transition's).
+        completed.Hook.ShouldBe(TaskTrigger.OnEntry);
+        completed.Order.ShouldBe(0);
 
         var faulted = output.Items[1];
         faulted.Status.ShouldBe(Definitions.TaskStatus.Faulted);
         faulted.BusinessStatus.ShouldBe(BusinessStatus.Unknown);
         faulted.Error.ShouldBe("connection refused");
+        // A legacy (pre-column) row reports unknown hook/order rather than fabricating.
+        faulted.Hook.ShouldBeNull();
+        faulted.Order.ShouldBeNull();
     }
 
     [Fact]

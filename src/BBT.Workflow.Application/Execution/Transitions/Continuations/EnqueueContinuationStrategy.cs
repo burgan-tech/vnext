@@ -93,9 +93,15 @@ public sealed class EnqueueContinuationStrategy(
             Workflow = current.WorkflowKey,
             Version = current.Workflow.Version,
             Data = null, // chained auto-transitions carry no new request payload
+            JobId = jobId,
             Headers = current.Headers.ToDictionary(kvp => kvp.Key, kvp => kvp.Value),
             RouteValues = current.RouteValues.ToDictionary(kvp => kvp.Key, kvp => kvp.Value),
             ExecutionActor = ExecutionActor.System,
+            // #1003 latent note: to fully preserve a sync caller's intent under a forced-async
+            // (executionType) chain this should be `current.CallerMode == ExecMode.Sync`, mirroring
+            // AsyncTransitionStrategy. Left as false because this whole strategy is unreachable today
+            // (only InlineContinuationStrategy is registered); if it is ever wired up, set CallerSync
+            // here AND on the outboxEvent below from current.CallerMode.
             CallerSync = false,
             TraceParent = activity?.Id,
             TraceState = activity?.TraceStateString,

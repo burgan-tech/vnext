@@ -151,6 +151,21 @@ public static class WorkflowApiBaseServiceCollectionExtensions
                     .ConfigureWarnings(w => w.Ignore(RelationalEventId.PendingModelChangesWarning));
             });
 
+        // Function-execution journal (vnext-client-sdk-core#60, item C1). Domain-wide, fixed
+        // sys_metrics schema — same posture as the messaging context above.
+        services.AddAetherNpgsql<MetricsDbContext>(
+            configuration.GetConnectionString("Default")!,
+            SchemaSwitchingMode.QualifiedNames,
+            (_, options) =>
+            {
+                options.UseNpgsql(configuration.GetConnectionString("Default"),
+                        npgsqlOptions =>
+                        {
+                            npgsqlOptions.MigrationsHistoryTable("__Workflow_Migrations", "sys_metrics");
+                        })
+                    .ConfigureWarnings(w => w.Ignore(RelationalEventId.PendingModelChangesWarning));
+            });
+
         return services;
     }
 
@@ -410,6 +425,14 @@ public static class WorkflowApiBaseServiceCollectionExtensions
             // conflict; statement cancelled by statement_timeout → transient (retried by relays).
             opt.Map(WorkflowErrorCodes.InstanceDataLockTimeout, HttpStatusCode.Conflict);
             opt.Map(WorkflowErrorCodes.InstanceDataWriteTimeout, HttpStatusCode.ServiceUnavailable);
+            // x-encryption "encrypt": a missing key or unresolvable schema is transient (503, relays
+            // retry); a reserved-prefix value is the caller's error.
+            opt.Map(WorkflowErrorCodes.EncryptionKeyUnavailable, HttpStatusCode.ServiceUnavailable);
+            opt.Map(WorkflowErrorCodes.EncryptionSchemaUnavailable, HttpStatusCode.ServiceUnavailable);
+            opt.Map(WorkflowErrorCodes.EncryptedValueReserved, HttpStatusCode.BadRequest);
+            // A filter/sort/groupBy the master schema refuses (x-filterOperators, x-sortable, and every
+            // x-encryption "encrypt" path) is the caller's error. It surfaced as 500 before.
+            opt.Map(WorkflowErrorCodes.SchemaFilterValidation, HttpStatusCode.BadRequest);
             opt.Map(WorkflowErrorCodes.RuntimeSchemaInvalidState, HttpStatusCode.BadRequest);
             opt.Map(WorkflowErrorCodes.TransitionLocked, HttpStatusCode.Conflict);
             opt.Map(WorkflowErrorCodes.AutoTransitionConditionNotMet, HttpStatusCode.BadRequest);

@@ -4,6 +4,10 @@ Two built-in system functions over the task journal (issue #939). They complete 
 history family — transitions (`…/transitions`), incidents (`…/incidents`) — with what ran inside
 those transitions.
 
+> **Grouped view.** This function is a flat, execution-ordered list. For the per-firing / per-visit
+> **attempts** model — one attempt per transition firing or state visit, tasks phase-grouped by hook —
+> see [Transition and State Metrics](transition-and-state-metrics.md), which builds on the same journal.
+
 ## Functions
 
 | Function | Returns |
@@ -13,7 +17,7 @@ those transitions.
 
 Both are `IInstanceFunctionHandler` registrations dispatched by the `{function}` route segment
 (`TaskHistoryFunctionHandler` / `ActionHistoryFunctionHandler`, keys in `FunctionTypeConst`), like
-`state`, `data` and `hierarchy` — so a custom function named `tasks` or `actions` is
+`state`, `data` and `instance-correlation` — so a custom function named `tasks` or `actions` is
 shadowed, the same rule every system function key has always had. `{instance}` accepts the instance
 id or business key. Responses are **unpaged** — the full set returns at once; a task list is bounded
 by the instance's own transition count, and actions by one task's sub-steps.
@@ -42,7 +46,9 @@ Each item projects one `InstanceTask` journal row joined with its owning transit
       "transitionKey": "approve",    // owning transition + its state context
       "fromState": "draft",
       "toState": "approved",         // null while that transition is in progress
-      "triggerType": "manual",
+      "triggerType": "manual",       // the TRANSITION's trigger — NOT the task's hook (see below)
+      "hook": "onExecute",           // the task's phase: onExecute | onEntry | onExit | …; null on legacy rows
+      "order": 0,                    // task's order within its hook group (equal ⇒ parallel); null on legacy rows
       "status": "completed",         // platform status: waiting | busy | completed | faulted
       "businessStatus": "success",   // business outcome: unknown | success | failed
       "startedAt": "…", "finishedAt": "…", "durationMs": 184.2,
@@ -51,6 +57,16 @@ Each item projects one `InstanceTask` journal row joined with its owning transit
   ]
 }
 ```
+
+#### `hook` vs `triggerType`
+
+`triggerType` is how the owning *transition* was triggered (manual,
+automatic, …); `hook` is the *task's* phase within that transition — a state's `onEntry` tasks vs
+the transition's `onExecute` tasks, which without this field were indistinguishable (a reader could
+not tell them apart, and the same task key under two hooks produced identical rows;
+vnext-client-sdk-core#60). `hook` and `order` are promoted out of the `ExecutionKey` hash into real
+columns on `InstanceTasks`; rows journaled before that migration carry `null` for both — the API
+reports unknown rather than back-deriving from the one-way hash.
 
 **Metadata only — deliberately.** The journal's `Request`, `Response` and `InvocationResult`
 payloads are NOT exposed here: mapping scripts write the headers they build (including auth
@@ -80,6 +96,24 @@ has had no production writer since the initial commit, so the function returns a
 every task. The read contract is in place for when a writer lands (tracked as a follow-up to
 issue #939); recording sub-steps from the task engine is its own design decision (volume, hot-path
 cost) and is out of scope here.
+
+## Quick reference
+
+- `GET …/instances/{instance}/functions/tasks` returns the full `InstanceTasks` journal in
+  execution order (unpaged); `GET …/functions/actions?taskId={id}` returns one row's
+  `InstanceActions` (400 `Instance:100039` without a valid `taskId`, 404 `Instance:100038` when the
+  task isn't the instance's own). Both are `IInstanceFunctionHandler` registrations (keys in
+  `FunctionTypeConst.TaskHistory/ActionHistory`) under the same `queryRoles` gate as the state
+  function. No state-body involvement — no `ResponseShapeVersion` or fingerprint change.
+- **Metadata only, deliberately.** The journal's `Request`/`Response`/`InvocationResult` payloads
+  carry mapping-built headers (auth material included) and are served by NO API since the Monitor
+  host's removal (#982); the one payload-derived public field is the faulted row's `{"error": …}`
+  reason. The repository read projects columns in SQL (`InstanceTaskHistoryRow`) so the jsonb
+  payloads never leave the database — do not switch it back to materializing the entity, and do not
+  add payload fields here.
+- **`InstanceActions` has no writer** (never has, since the initial commit) — the action function
+  returns an empty list until one lands. `InstanceTask.FaultedTaskId` is equally never set.
+  Full guide: `docs/runtime/instance-task-and-action-history.md`.
 
 ## Implementation map
 

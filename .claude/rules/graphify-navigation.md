@@ -1,6 +1,6 @@
 # Codebase Navigation & Architecture Rule (Graphify First)
 
-Applies whenever `graphify-out/graph.json` exists in the repo (see the `graphify` skill,
+Applies whenever `graphify-out/graph.json` exists in the repo (git-ignored build output; scope in
 `.graphifyignore`). Governs how to answer architecture, dependency, and "how does X relate to Y"
 questions — before falling back to manual exploration.
 
@@ -14,7 +14,8 @@ questions — before falling back to manual exploration.
    - Component understanding ("What does X do?", "What touches X?"): run `graphify explain "X"`.
    - Open-ended architecture discovery ("How does the subflow lifecycle work end to end?"): run
      `graphify query "<question>"`.
-   - Full command reference and the query/path/explain flow: `.claude/skills/graphify/SKILL.md`.
+   - Full command reference: the user-level `graphify` skill when it is installed
+     (`~/.claude/skills/graphify/`, not part of this repo), else `graphify --help`.
 3. **Read files only after pruning.** Use the graph's answer to identify the exact source files or
    symbols involved, then open only those with `Read`/`Grep` for the actual implementation detail.
    The graph tells you *where* to look; it is not a substitute for reading the code you are about

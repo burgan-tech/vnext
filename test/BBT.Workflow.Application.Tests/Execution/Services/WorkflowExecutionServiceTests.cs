@@ -45,7 +45,32 @@ public sealed class WorkflowExecutionServiceTests
         output.Continuations.PostCommitJobs.Single().ShouldBeSameAs(postCommitJob);
     }
 
-    private static TransitionExecutionContext CreateExecutionContext()
+    [Theory]
+    [InlineData(ExecMode.Sync, false)]
+    [InlineData(ExecMode.Async, true)]
+    public async Task ExecuteTransitionCoreAsync_SetsExecutedAsyncFromEffectiveMode(
+        ExecMode mode, bool expectedExecutedAsync)
+    {
+        // #1003: the response's ExecutedAsync (which the controller shapes 200-vs-202 from) must reflect
+        // the EFFECTIVE execution mode carried on the context, not the caller's query parameter.
+        var strategyFactory = Substitute.For<IExecutionStrategyFactory>();
+        var strategy = Substitute.For<ITransitionStrategy>();
+        var transitionRunner = Substitute.For<ITransitionRunner>();
+        var executionContext = CreateExecutionContext(mode);
+        strategyFactory.Get(mode).Returns(Result<ITransitionStrategy>.Ok(strategy));
+        strategy.ExecuteAsync(Arg.Any<WorkflowExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(Result<TransitionExecutionContext>.Ok(executionContext));
+
+        var service = new WorkflowExecutionService(strategyFactory, transitionRunner);
+
+        var result = await service.ExecuteTransitionCoreAsync(
+            new WorkflowExecutionContext { Mode = mode }, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        result.Value!.Output.ExecutedAsync.ShouldBe(expectedExecutedAsync);
+    }
+
+    private static TransitionExecutionContext CreateExecutionContext(ExecMode mode = ExecMode.Sync)
     {
         var instanceId = Guid.NewGuid();
         return new TransitionExecutionContext
@@ -58,6 +83,7 @@ public sealed class WorkflowExecutionServiceTests
             ExecutionChainId = Guid.NewGuid().ToString("N"),
             RequestedAt = DateTimeOffset.UtcNow,
             Instance = Instance.Create(instanceId, "test-workflow", "1.0.0"),
+            Mode = mode,
             TraceId = Guid.NewGuid().ToString("N"),
             SpanId = Guid.NewGuid().ToString("N")[..16]
         };

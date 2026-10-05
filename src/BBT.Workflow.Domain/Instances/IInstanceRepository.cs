@@ -34,6 +34,29 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Projects the four columns the correlation-tree walk reads, for a batch of instances. No
+    /// aggregate is materialised and no collection is included.
+    /// </summary>
+    /// <remarks>
+    /// The walk reads exactly four things off each aggregate — <c>Key</c>, <c>CurrentState</c>,
+    /// <c>Status</c> and <c>FlowVersion</c> — and not one of them comes from <c>DataList</c> or
+    /// <c>ChildCorrelations</c> (children come from the correlation rows, read separately and in
+    /// one statement per level). <see cref="FindByIdsAsReadOnlyAsync"/> eager-loads
+    /// <c>DataList</c>, which honours the <c>LatestOnlyInstanceLoading</c> switch — OFF by default
+    /// — so it would pull EVERY version of EVERY node, at every level of the tree. That is the
+    /// same regression <see cref="GetForHumanTaskDescentAsync"/> was narrowed to fix (measured
+    /// there: 4 000 rows for a 200-candidate batch instead of 200), multiplied here by depth.
+    /// <para>
+    /// Projecting rather than loading also removes the partial-load hazard at the root: there is no
+    /// <c>Instance</c> here that a later reader could mistake for fully loaded, so nothing has to be
+    /// stamped and nothing can quietly answer from data that was never fetched.
+    /// </para>
+    /// </remarks>
+    Task<List<CorrelationWalkRow>> GetForCorrelationWalkAsync(
+        IReadOnlyCollection<Guid> instanceIds,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Finds an instance by its identifier (GUID or key) without loading DataList.
     /// Loads ChildCorrelations (active-only) but skips all InstanceData versions.
     /// Non-tracking (AsNoTracking) — intended for monitoring read queries that do not need data history.
@@ -340,6 +363,17 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
     /// is null and must not be read.
     /// </summary>
     Task<Instance?> FindForSubflowStateChangeAsync(
+        Guid instanceId,
+        Guid subInstanceId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Reads, no-tracking and in one row, the parent's effective projection and the watermark of the
+    /// given sub-instance's OPEN correlation — see <see cref="SubflowStateProbe"/>. Null when the
+    /// parent does not exist. Used before the per-sub-item lock to drop a backup delivery the
+    /// committed rows already reflect; it never replaces the locked load for a write.
+    /// </summary>
+    Task<SubflowStateProbe?> ProbeSubflowStateAsync(
         Guid instanceId,
         Guid subInstanceId,
         CancellationToken cancellationToken = default);

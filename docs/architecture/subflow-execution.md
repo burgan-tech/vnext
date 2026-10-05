@@ -76,6 +76,16 @@ task.
 continuation path is now unreachable from a valid definition. It is left in place deliberately;
 deleting it is a separate change.
 
+**A SubProcess is started by its own task**: `SubProcessTask` (`TaskType.SubProcess = 14`). That
+executor starts the child and creates the correlation itself —
+`SubProcessTaskExecutor.CreateCorrelationAsync` builds an `InstanceCorrelation` stamped
+`SubFlowType.SubProcess` and calls `AddCorrelation` on the tracked parent. That is the only sanctioned
+path to a `P` relationship.
+
+The council session `2026-09-22-sync-subprocess-continuation-admission` closed `VOID` on this rule:
+the sync/async divergence was a **symptom of the invalid definition**, not a runtime defect to patch
+in admission.
+
 ## Forwarding to an Active Child
 
 When a parent receives a transition while it has an active SubFlow correlation,
@@ -86,6 +96,18 @@ When a parent receives a transition while it has an active SubFlow correlation,
 For cross-domain forwarding, the chain-reserve claim travels in the internal request body. It is
 never accepted from a public header. Async acceptance may reserve the active chain before returning
 202 so polling sees the leaf as Busy; the forwarded child call then claims that reservation.
+
+A nested chain forwards one level at a time: every level re-runs its own pipeline up to order 10
+and awaits the level below. On the way back up, an **intermediate** level skips its post-commit
+settlement (`TransitionRunner.IsSettleFreeForwardRelay`) when three things hold: its caller is an
+identity-only relay (`WorkflowExecutionContext.IdentityOnlyResponse`, set from
+`SuppressResponseEnrichment`), its only post-commit job was the forward, and the child's own
+status (`ClientResponse.SubflowStatus`) is non-terminal. Its blocking correlation is then still
+open, so the settle could flip nothing, emit no verdict and publish nothing; the level answers
+`Busy` instead of paying a status lock, a reload and a commit. The client-facing root always
+settles, and a terminal child always forces the fresh reload. The span awaiting the relay carries
+`vnext.settle.skipped=true`. Measured on vnext-example `subflow-depth-lab`: a depth-5 transition
+went from 4 settles, 5 lock pairs and 39 SELECTs to 1, 2 and 30.
 
 ## Completion and Parent Resume
 
@@ -103,6 +125,24 @@ If resume fails, the correlation is reopened in a new UoW so the terminal event 
 Terminal relay DTOs preserve the terminal event's `Sync` flag. Runtime-generated child starts are
 synchronous, so their normal terminal chain remains synchronous; externally supplied terminal
 commands still keep their explicit contract value.
+
+### Resume mechanics and runtime-internal child calls
+
+- **SubFlow (S)**: completion → output mapping → `ResumePipelineAsync` (`ExecMode.Resume`, `ResumeFrom = ClearBusyOnResumeStep`, `IsSubFlowResume = true`). Parent resumes from step 79.
+- **SubProcess (P)**: completion → correlation complete + persist → no parent resume (fire-and-forget).
+- On resume failure, correlation reverted in a new UoW.
+- Start: `CreateInstanceInput` with parent metadata in `ExtraProperties`, `StrictIdempotency: true`.
+- `SubflowStarter`, `ForwardToSubflowJobHandler` and descended subflow retry force `sync=true`.
+  `S` versus `P` controls parent terminal-resume behavior, not the child-call mode.
+- Those runtime-internal child calls also set `SuppressResponseEnrichment` (SERVER-ONLY flag on
+  `StartInstanceInput` / `TransitionInput`, same posture as `ChainReserved`; set locally by the
+  starter/handler and cross-domain by the `sub/instances/start` and `internal/subflow-forward`
+  endpoints themselves — it is not carried in a body). The child still awaits its pipeline but
+  answers identity-only (`Id`, `Key`, `Status`): the starter reads `IsSuccess`, the relay reads
+  `Status`, and the client's attributes/extensions come from the **parent's** own
+  `EnrichOutputCoreAsync`. Do not read attributes off a sub-start or forward response.
+
+**Completion window.** If subflow is in terminal status (`Completed`/`Faulted`/`Passive`) while parent correlation is still open, State function shows **parent** main-flow transitions instead of subflow terminal view.
 
 ## Retry
 

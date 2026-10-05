@@ -336,6 +336,14 @@ public static class TelemetryConstants
         public const string SettleCas = "vnext.settle.cas";
 
         /// <summary>
+        /// Stamped (<c>true</c>) on the span awaiting the relay (the level above's <c>SubFlow.Forward</c>) when an intermediate level of a
+        /// SubFlow forward chain returned without its post-commit settlement: an identity-only relay
+        /// whose child is still non-terminal, so the parent's blocking correlation is open and the
+        /// settle reload could change nothing. Absent on every other settle.
+        /// </summary>
+        public const string SettleSkipped = "vnext.settle.skipped";
+
+        /// <summary>
         /// How the activation episode ended — see <see cref="ActivationOutcomes"/>. Stamped on
         /// <c>Instance.Activation/{key}</c>.
         /// </summary>
@@ -380,6 +388,26 @@ public static class TelemetryConstants
 
         /// <summary>On <c>Transition.Enqueue</c>: which delivery path the enqueue gateway took (<c>Direct</c> or <c>Outbox</c>).</summary>
         public const string EnqueuePath = "vnext.enqueue.path";
+
+        /// <summary>
+        /// The execution mode the CALLER requested (from the <c>sync</c> query parameter): <c>SYNC</c>/<c>ASYNC</c>.
+        /// vnext#1003. Compare with <see cref="ExecutionEffective"/> to find requests whose definition
+        /// overrode the caller (query for <c>requested != effective</c>).
+        /// </summary>
+        public const string ExecutionRequested = "vnext.execution.requested";
+
+        /// <summary>
+        /// The EFFECTIVE execution mode after applying the flow/transition <c>executionType</c> definition
+        /// (vnext#1003): <c>SYNC</c>/<c>ASYNC</c>. Equals <see cref="ExecutionRequested"/> unless a
+        /// definition overrode the caller's <c>sync</c> query parameter.
+        /// </summary>
+        public const string ExecutionEffective = "vnext.execution.effective";
+
+        /// <summary>
+        /// <c>true</c> when a flow/transition <c>executionType</c> definition overrode the caller's requested
+        /// mode (vnext#1003) — the flag to filter on to see "definition said X, caller sent Y".
+        /// </summary>
+        public const string ExecutionOverridden = "vnext.execution.overridden";
 
         /// <summary>Number of items in a fan-out batch.</summary>
         public const string FanOutItemCount = "vnext.fanout.item.count";
@@ -594,6 +622,27 @@ public static class TelemetryConstants
 
         /// <summary>Standard OpenTelemetry error.code attribute.</summary>
         public const string ErrorCode = "error.code";
+
+        /// <summary>
+        /// Set to <c>true</c> on every in-process span above a pipeline failure that faulted the
+        /// instance. The request still answers 200 with <c>Status=F</c>, so without it the
+        /// transaction reads as a success and the fault is visible only on the child
+        /// <c>Instance.Fault</c> span.
+        /// </summary>
+        public const string InstanceFaulted = "vnext.instance.faulted";
+
+        /// <summary>
+        /// Outcome of an admission status flip on an <c>Admission.*</c> span:
+        /// <c>marked</c> | <c>already_busy</c> | <c>skipped</c> | <c>lock_conflict</c>. The sync-path
+        /// 409 <c>Instance:100031</c> is the <c>already_busy</c> case.
+        /// </summary>
+        public const string AdmissionOutcome = "vnext.admission.outcome";
+
+        /// <summary>
+        /// Outcome on a <c>LongPoll.AckResume</c> span: <c>resumed</c> | <c>not_awaiting</c>
+        /// (the other trigger already resumed it) | <c>instance_not_found</c>.
+        /// </summary>
+        public const string LongPollAckResumeOutcome = "vnext.longpoll.ack_resume.outcome";
 
         /// <summary>Standard OpenTelemetry db.system.name attribute (SemConv v1.25+).</summary>
         public const string DbSystemName = "db.system.name";
@@ -923,9 +972,9 @@ public static class TelemetryConstants
         /// so a stale copy taken from the inbound request (or from a persisted job payload) would win
         /// over the live <see cref="System.Diagnostics.Activity"/> and parent the callee to a span that
         /// is not the caller's. The task-invoker path keeps its own, wider list in
-        /// <c>HttpTaskInvocation.ReservedTraceHeaders</c> (it also drops correlation headers the
-        /// binding must not override); this one is deliberately only the W3C trio, because the
-        /// remote app-service path legitimately forwards <c>X-Request-Id</c> and friends.
+        /// <c>HttpTaskInvocation.ReservedTraceHeaders</c> (it also drops the workflow-context headers
+        /// the binding must not override); this one is deliberately only the W3C trio, because the
+        /// remote app-service path legitimately forwards <c>X-Request-Id</c> and the correlation headers.
         /// </summary>
         public static readonly string[] W3CTraceContext = ["traceparent", "tracestate", "baggage"];
 

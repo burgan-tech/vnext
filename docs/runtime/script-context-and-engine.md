@@ -33,6 +33,23 @@ entire runtime. Side effects should remain explicit through approved helpers.
 | `CSharpEvaluator` | Compiles and evaluates script code. |
 | `TransitionExecutionContext.Cache` | Holds script context for the current transition only. |
 
+### Response slot: `variableKey`
+
+Each task entry files its response under one slot in `context.TaskResponse` (and
+`OutputResponse`): the entry's `variableKey` when authored, else `ToVariableName(task.key)`
+(`send-notification` → `sendNotification`). Entries at the same `order` run in parallel and are
+merged by slot, so two entries at one order must use distinct slots — the same task listed twice
+(e.g. two SubProcess starts) needs a `variableKey` on at least one of them. Publish rejects a
+same-order collision (`WorkflowValidator`, `FunctionComponentValidator`). A later order may reuse a
+slot: its write overwrites the earlier value whether that order runs one entry or a parallel group.
+The parallel merge (`ScriptContext.MergeParallelBranches`) compares only the slots the branches of
+one group actually wrote, and throws "Parallel tasks produced conflicting output" only when two
+branches of the same group write one slot with different payloads. An extension's
+task entry files its response under the extension's own key; a `variableKey` there is ignored (the
+extension key wins). The value is used verbatim: `context.TaskResponse["primaryChild"]`.
+Inside a parallel task, assign the slot (`context.TaskResponse["x"] = ...`); mutating an inherited
+value in place is invisible to the merge and is shared with sibling tasks.
+
 ## Failure Modes
 
 - Compilation failures should fail the calling task/condition with a clear error.

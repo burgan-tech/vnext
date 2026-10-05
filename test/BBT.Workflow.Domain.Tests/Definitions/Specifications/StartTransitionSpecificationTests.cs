@@ -103,10 +103,33 @@ public class StartTransitionSpecificationTests
         result.Error.Message.ShouldContain("Initial state");
     }
 
+    [Fact]
+    public void IsSatisfiedBy_WhenCurrentIsImplicitStart_ShouldReturnSuccess()
+    {
+        // Arrange — a workflow that declares no Initial state
+        var workflow = Workflow.Create();
+        workflow.SetStartTransition(Transition.Create(
+            "start-transition",
+            WellKnownStateKeys.Start,
+            "next-state",
+            TriggerType.Manual,
+            "Patch"));
+        var implicitStart = workflow.GetInitialState().Value!;
+        var context = CreateContext(workflow, "start-transition", StateType.Initial, implicitStart);
+
+        // Act
+        var result = _specification.IsSatisfiedBy(context);
+
+        // Assert
+        context.Current.Key.ShouldBe(WellKnownStateKeys.Start);
+        result.IsSuccess.ShouldBeTrue();
+    }
+
     private static TransitionExecutionContext CreateContext(
         Workflow workflow,
         string transitionKey,
-        StateType currentStateType)
+        StateType currentStateType,
+        State? current = null)
     {
         var instanceId = Guid.NewGuid();
         var instance = Instance.Create(instanceId, "sys_flows", "1.0.0","test-key");
@@ -127,7 +150,7 @@ public class StartTransitionSpecificationTests
             Trigger = TriggerType.Manual,
             Instance = instance,
             Workflow = workflow,
-            Current = currentState
+            Current = current ?? currentState
         };
 
         return context;

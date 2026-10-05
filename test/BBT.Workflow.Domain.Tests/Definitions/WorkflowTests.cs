@@ -243,16 +243,66 @@ public class WorkflowTests : DomainTestBase<DomainEntryPoint>
     }
 
     [Fact]
-    public void GetInitialState_ShouldReturnFailure_WhenNoInitialState()
+    public void GetInitialState_ShouldReturnImplicitStart_WhenNoInitialStateDeclared()
     {
         // Arrange
         var workflow = WorkflowFactory.CreateDefault();
+        workflow.AddState(State.Create("step-1", StateType.Wizard, StateSubType.None, "Patch"));
 
         // Act
         var result = workflow.GetInitialState();
 
         // Assert
-        Assert.False(result.IsSuccess);
+        Assert.True(result.IsSuccess);
+        Assert.Equal(WellKnownStateKeys.Start, result.Value!.Key);
+        Assert.Equal(StateType.Initial, result.Value.StateType);
+        Assert.Empty(result.Value.Transitions);
+        Assert.Empty(result.Value.OnEntries);
+        Assert.Empty(result.Value.OnExits);
+        Assert.Null(result.Value.View);
+    }
+
+    [Fact]
+    public void GetInitialState_ShouldPreferDeclaredInitialState_OverImplicitStart()
+    {
+        var workflow = WorkflowFactory.CreateDefault();
+        workflow.AddState(State.Create("draft", StateType.Initial, StateSubType.None, "Patch"));
+
+        var result = workflow.GetInitialState();
+
+        Assert.Equal("draft", result.Value!.Key);
+    }
+
+    [Fact]
+    public void ImplicitStart_ShouldBeResolvableByKey_AndNotListedInStates()
+    {
+        var workflow = WorkflowFactory.CreateDefault();
+        workflow.AddState(State.Create("step-1", StateType.Wizard, StateSubType.None, "Patch"));
+
+        var initial = workflow.GetInitialState().Value!;
+
+        Assert.Same(initial, workflow.FindState(WellKnownStateKeys.Start));
+        Assert.True(workflow.GetState(WellKnownStateKeys.Start).IsSuccess);
+        Assert.DoesNotContain(workflow.States, s => s.Key == WellKnownStateKeys.Start);
+        Assert.False(workflow.DeclaresInitialState);
+    }
+
+    [Fact]
+    public void ImplicitStart_ShouldNotResolve_WhenInitialStateIsDeclared()
+    {
+        var workflow = WorkflowFactory.CreateDefault();
+        workflow.AddState(State.Create("draft", StateType.Initial, StateSubType.None, "Patch"));
+
+        Assert.Null(workflow.FindState(WellKnownStateKeys.Start));
+        Assert.False(workflow.GetState(WellKnownStateKeys.Start).IsSuccess);
+        Assert.True(workflow.DeclaresInitialState);
+    }
+
+    [Fact]
+    public void ImplicitStart_ShouldNotBeTreatedAsSelfTarget()
+    {
+        // $start must never ride the $self resolution path.
+        Assert.DoesNotContain(WellKnownStateKeys.Start, WellKnownStateKeys.ReservedTargetKeys);
     }
 
     [Fact]
@@ -821,5 +871,27 @@ public class WorkflowTests : DomainTestBase<DomainEntryPoint>
         // Act & Assert
         Assert.Throws<ArgumentException>(() => workflow.SetReference(reference));
     }
-}
 
+    [Fact]
+    public void FindTransition_ShouldReturnNull_NotThrow_WhenStartTransitionIsNull()
+    {
+        // #1003 guard: FindTransition is now called per request during execution-mode resolution, which
+        // exposed that a workflow with no StartTransition would NRE on the previously-unguarded
+        // StartTransition.Key. A fresh workflow has every well-known transition null and no shared ones,
+        // so the lookup must simply return null.
+        var workflow = Workflow.Create();
+
+        Assert.Null(workflow.FindTransition("anything"));
+    }
+
+    [Fact]
+    public void Serialize_ShouldNotLeakDeclaresInitialState()
+    {
+        var workflow = Workflow.Create();
+        workflow.SetType("F");
+
+        var json = System.Text.Json.JsonSerializer.Serialize(workflow, JsonSerializerConstants.JsonOptions);
+
+        Assert.DoesNotContain("declaresInitialState", json, StringComparison.OrdinalIgnoreCase);
+    }
+}

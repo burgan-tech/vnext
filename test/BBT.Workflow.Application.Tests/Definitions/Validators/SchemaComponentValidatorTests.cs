@@ -183,4 +183,154 @@ public class SchemaComponentValidatorTests
         var example = JsonDocument.Parse("""{"type":"view","schema":{"type":"object","examples":[{"x-indexed":true}]}}""").RootElement;
         _validator.Validate(example).IsValid.ShouldBeTrue();
     }
+
+    private static JsonElement MasterSchema(string properties) => JsonDocument.Parse(
+        "{\"type\":\"master\",\"schema\":{\"type\":\"object\",\"properties\":{" + properties + "}}}").RootElement;
+
+    [Fact]
+    public void Validate_WhenXMaskingIsValid_ShouldPass()
+    {
+        var result = new SchemaComponentValidator(new BBT.Workflow.Authorization.FakeFieldMaskingEngine())
+            .Validate(MasterSchema("\"iban\":{\"type\":\"string\",\"x-masking\":{\"operator\":\"mask\",\"params\":{\"keepLast\":4}}}"));
+
+        result.IsValid.ShouldBeTrue(string.Join(" | ", result.ValidationErrors.Select(e => e.ErrorMessage)));
+    }
+
+    [Fact]
+    public void Validate_WhenXMaskingUsesADenyGrant_ShouldFailUnderSchemaXMasking()
+    {
+        var result = _validator.Validate(MasterSchema(
+            "\"iban\":{\"type\":\"string\",\"x-masking\":{\"operator\":\"mask\",\"roles\":[{\"role\":\"teller\",\"grant\":\"deny\"}]}}"));
+
+        result.IsValid.ShouldBeFalse();
+        result.ValidationErrors.ShouldContain(e => e.MemberNames.Contains("schema.x-masking") && e.ErrorMessage!.Contains("only grant 'allow'"));
+    }
+
+    [Fact]
+    public void Validate_WhenEngineRejectsTheRule_ShouldFailUnderSchemaXMasking()
+    {
+        var engine = NSubstitute.Substitute.For<BBT.Workflow.Authorization.IFieldMaskingEngine>();
+        NSubstitute.SubstituteExtensions.Returns(
+            engine.Validate(NSubstitute.Arg.Any<BBT.Workflow.Definitions.Schemas.FieldMaskRule>()),
+            (System.Collections.Generic.IReadOnlyList<string>)new[] { "engine says no" });
+
+        var result = new SchemaComponentValidator(engine)
+            .Validate(MasterSchema("\"iban\":{\"type\":\"string\",\"x-masking\":{\"operator\":\"mask\"}}"));
+
+        result.ValidationErrors.ShouldContain(e => e.ErrorMessage == "Field 'iban': engine says no");
+    }
+
+    private sealed class EncryptionStatus(bool canEncrypt) : BBT.Workflow.Authorization.IFieldEncryptionStatus
+    {
+        public bool CanEncrypt => canEncrypt;
+    }
+
+    private const string EncryptedEmail = "\"email\":{\"type\":\"string\",\"x-encryption\":{\"type\":\"encrypt\"}}";
+
+    [Fact]
+    public void Validate_WhenEncryptIsDeclaredAndTheHostCanEncrypt_ShouldPass()
+    {
+        var result = new SchemaComponentValidator(new BBT.Workflow.Authorization.FakeFieldMaskingEngine(), new EncryptionStatus(true))
+            .Validate(MasterSchema(EncryptedEmail));
+
+        result.IsValid.ShouldBeTrue(string.Join(" | ", result.ValidationErrors.Select(e => e.ErrorMessage)));
+    }
+
+    /// <summary>
+    /// Without an active key (or with EncryptWrites off) the value would be stored in plaintext; the publish is the
+    /// only point where that is visible, so it is refused there.
+    /// </summary>
+    [Fact]
+    public void Validate_WhenEncryptIsDeclaredAndTheHostCannotEncrypt_ShouldFailUnderSchemaXEncryption()
+    {
+        foreach (var validator in new[]
+                 {
+                     new SchemaComponentValidator(new BBT.Workflow.Authorization.FakeFieldMaskingEngine(), new EncryptionStatus(false)),
+                     new SchemaComponentValidator(new BBT.Workflow.Authorization.FakeFieldMaskingEngine()),
+                 })
+        {
+            var result = validator.Validate(MasterSchema(EncryptedEmail));
+
+            result.IsValid.ShouldBeFalse();
+            result.ValidationErrors.ShouldContain(e =>
+                e.MemberNames.Contains("schema.x-encryption") && e.ErrorMessage!.Contains("stored in plaintext"));
+        }
+    }
+
+    [Fact]
+    public void Validate_WhenARemovedEncryptionTypeIsDeclared_ShouldFailNamingTheReplacement()
+    {
+        var result = _validator.Validate(MasterSchema("\"email\":{\"type\":\"string\",\"x-encryption\":{\"type\":\"persisted\"}}"));
+
+        result.IsValid.ShouldBeFalse();
+        result.ValidationErrors.ShouldContain(e => e.ErrorMessage!.Contains("use 'encrypt'"));
+    }
+
+    [Theory]
+    [InlineData("$user.$CreatedBy")]
+    [InlineData("$user.$context.Instance.Data.customerId")]
+    public void Validate_WhenXRolesHasAnInvalidDynamicPath_ShouldFailUnderSchemaXRoles(string role)
+    {
+        var result = _validator.Validate(MasterSchema(
+            "\"a\":{\"type\":\"string\",\"x-roles\":[{\"role\":\"" + role + "\",\"grant\":\"allow\"}]}"));
+
+        result.IsValid.ShouldBeFalse();
+        result.ValidationErrors.ShouldContain(e => e.MemberNames.Contains("schema.x-roles") && e.ErrorMessage!.Contains(role));
+    }
+
+    [Fact]
+    public void Validate_WhenXRolesCombinatorLeafIsInvalid_ShouldFailNamingTheLeaf()
+    {
+        var result = _validator.Validate(MasterSchema(
+            "\"a\":{\"type\":\"string\",\"x-roles\":[{\"grant\":\"deny\",\"allOf\":[{\"role\":\"ops\"},{\"role\":\"$user.$CreatedBy\"}]}]}"));
+
+        result.IsValid.ShouldBeFalse();
+        result.ValidationErrors.ShouldContain(e => e.ErrorMessage!.Contains("$user.$CreatedBy"));
+    }
+
+    [Fact]
+    public void Validate_WhenXRolesCombinatorIsValid_ShouldPass()
+    {
+        var result = _validator.Validate(MasterSchema(
+            "\"a\":{\"type\":\"string\",\"x-roles\":[{\"grant\":\"allow\",\"anyOf\":[{\"role\":\"$InstanceStarter\"},{\"role\":\"$InstanceBehalfOfStarter\"}]}," +
+            "{\"grant\":\"deny\",\"allOf\":[{\"role\":\"ops\"},{\"role\":\"$user.$.context.Instance.Data.customerId\"}]}]}"));
+
+        result.IsValid.ShouldBeTrue(string.Join(" | ", result.ValidationErrors.Select(e => e.ErrorMessage)));
+    }
+
+    [Theory]
+    [InlineData("""{"grant":"allow","role":"a","allOf":[{"role":"b"}]}""")]
+    [InlineData("""{"grant":"allow","allOf":[{"role":"a"}],"anyOf":[{"role":"b"}]}""")]
+    [InlineData("""{"grant":"allow","anyOf":[{"role":"a","grant":"allow"}]}""")]
+    [InlineData("""{"grant":"allow"}""")]
+    public void Validate_WhenXRolesEntryHasABadShape_ShouldFailUnderSchemaXRoles(string entry)
+    {
+        var result = _validator.Validate(MasterSchema(
+            "\"a\":{\"type\":\"string\",\"x-roles\":[" + entry + "]}"));
+
+        result.IsValid.ShouldBeFalse();
+        result.ValidationErrors.ShouldContain(e => e.MemberNames.Contains("schema.x-roles"));
+    }
+
+    [Fact]
+    public void Validate_WhenXMaskingExemptionUsesACombinator_ShouldFailWithTheExemptionRule()
+    {
+        var result = _validator.Validate(MasterSchema(
+            "\"iban\":{\"type\":\"string\",\"x-masking\":{\"operator\":\"mask\",\"roles\":[{\"grant\":\"allow\",\"anyOf\":[{\"role\":\"a\"}]}]}}"));
+
+        result.IsValid.ShouldBeFalse();
+        result.ValidationErrors.ShouldContain(e =>
+            e.MemberNames.Contains("schema.x-masking.roles") && e.ErrorMessage!.Contains("exemption list"));
+    }
+
+    [Fact]
+    public void Validate_WhenXEncryptionExemptionUsesACombinator_ShouldFailWithTheExemptionRule()
+    {
+        var result = _validator.Validate(MasterSchema(
+            "\"e\":{\"type\":\"string\",\"x-encryption\":{\"type\":\"encrypt\",\"roles\":[{\"grant\":\"allow\",\"allOf\":[{\"role\":\"a\"}]}]}}"));
+
+        result.IsValid.ShouldBeFalse();
+        result.ValidationErrors.ShouldContain(e =>
+            e.MemberNames.Contains("schema.x-encryption.roles") && e.ErrorMessage!.Contains("exemption list"));
+    }
 }

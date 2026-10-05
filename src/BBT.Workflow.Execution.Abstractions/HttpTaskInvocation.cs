@@ -33,24 +33,28 @@ public static class HttpTaskInvocation
     private const string CorrelationHeader = "X-Correlation-Id";
     private const string SubHeader = "sub";
     private const string ActSubHeader = "act_sub";
+    private const string RequestIdHeader = "X-Request-Id";
     private const string WorkflowInstanceBaggage = "workflow.instance.id";
     private const string CorrelationBaggage = "correlation.id";
     private const string SubBaggage = "sub";
     private const string ActSubBaggage = "act.sub";
+    private const string RequestIdBaggage = "x_request_id";
 
     /// <summary>
     /// Header names owned by the tracing/correlation infrastructure. Task binding definitions
     /// must never overwrite these on outbound calls: a stale traceparent copied into a binding
-    /// would detach the downstream service from the live trace, and a forged x-request-id or
-    /// workflow-context header would break log correlation or spoof workflow identity. The
-    /// live values are injected by HttpClient's DiagnosticsHandler (traceparent/tracestate) and
-    /// by <see cref="ApplyTrustedCorrelationHeaders"/>. The identity claims (sub/act_sub) are
-    /// deliberately NOT reserved: a developer may set them in the task binding and that value
-    /// wins — see <see cref="ApplyTrustedCorrelationHeaders"/>.
+    /// would detach the downstream service from the live trace, and a forged workflow-context
+    /// header would spoof workflow identity. The live values are injected by HttpClient's
+    /// DiagnosticsHandler (traceparent/tracestate) and by <see cref="ApplyTrustedCorrelationHeaders"/>.
+    /// The identity claims (sub/act_sub) and <c>X-Request-Id</c> are deliberately NOT reserved: a
+    /// developer may set them in the task binding and that value wins — see
+    /// <see cref="ApplyTrustedCorrelationHeaders"/>. <c>X-Request-Id</c> was reserved between
+    /// v0.0.80 and the fix, which silently dropped it from calls to APIs that REQUIRE it
+    /// (OHVPS/BKM answer 400 <c>TR.OHVPS.Resource.InvalidFormat</c> without it).
     /// </summary>
     private static readonly string[] ReservedTraceHeaders =
     [
-        "traceparent", "tracestate", "baggage", "x-request-id",
+        "traceparent", "tracestate", "baggage",
         WorkflowInstanceHeader, CorrelationHeader
     ];
 
@@ -259,6 +263,10 @@ public static class HttpTaskInvocation
     /// claims the platform provides as a DEFAULT — a developer who set them explicitly in the
     /// task binding's input mapping keeps their value; only when the binding did not set them
     /// are they filled from the gateway token.</item>
+    /// <item><b>X-Request-Id</b> is fill-if-absent too: a non-empty value from the binding's
+    /// input mapping wins; when the binding left it absent or empty, vNext's own request id (the
+    /// originating request's <c>X-Request-Id</c>, as the correlation provider holds it) is sent
+    /// unchanged. Nothing is generated when vNext has none.</item>
     /// </list>
     /// Value source per field: <paramref name="trusted"/> (the pipeline-built
     /// <see cref="TaskTraceContext"/>, same object the type-6 invoke envelope carries) wins when
@@ -314,6 +322,174 @@ public static class HttpTaskInvocation
                 request.Headers.TryAddWithoutValidation(ActSubHeader, actSub);
             }
         }
+
+        ApplyRequestId(request, trusted);
+    }
+
+    /// <summary>
+    /// Fills <c>X-Request-Id</c> on an outbound request when the task binding's input mapping left
+    /// it absent or empty: a non-empty mapping value always wins; otherwise vNext's own request id
+    /// is sent unchanged — <paramref name="trusted"/>'s <c>RequestId</c> when supplied, else the
+    /// ambient <c>x_request_id</c> baggage the Execution host restores from the invoke envelope.
+    /// Nothing is generated when neither has one. Part of <see cref="ApplyTrustedCorrelationHeaders"/>;
+    /// public on its own for the invokers that apply ONLY this rule (StartTrigger and SubProcess,
+    /// whose calls never carried the workflow-context or identity headers).
+    /// </summary>
+    public static void ApplyRequestId(HttpRequestMessage request, TaskTraceContext? trusted = null)
+    {
+        if (HasNonEmptyHeader(request, RequestIdHeader))
+            return;
+
+        var requestId = !string.IsNullOrEmpty(trusted?.RequestId)
+            ? trusted!.RequestId
+            : Activity.Current?.GetBaggageItem(RequestIdBaggage);
+        if (IsSafeHeaderValue(requestId))
+        {
+            // Remove first: an empty mapping entry would otherwise be sent next to the value.
+            request.Headers.Remove(RequestIdHeader);
+            request.Headers.TryAddWithoutValidation(RequestIdHeader, requestId);
+        }
+    }
+
+    /// <summary>Whether the request already carries <paramref name="name"/> with a non-blank value.</summary>
+    private static bool HasNonEmptyHeader(HttpRequestMessage request, string name) =>
+        request.Headers.NonValidated.TryGetValues(name, out var values)
+        && values.Any(v => !string.IsNullOrWhiteSpace(v));
+
+    /// <summary>
+    /// The caller credential a task carries to its target: <c>sub</c>, <c>act_sub</c>, <c>position</c>, <c>client_id</c>
+    /// and <c>role</c>. Only these are forwarded from the caller; everything else the target sees comes from the task's own
+    /// header definition.
+    /// </summary>
+    private static readonly string[] CredentialHeaders = [SubHeader, ActSubHeader, PositionHeader, ClientIdHeader, RoleHeader];
+
+    private const string PositionHeader = "position";
+    private const string ClientIdHeader = "client_id";
+    private const string RoleHeader = "role";
+
+    /// <summary>
+    /// The header set a task presents to its target, as a dictionary: the binding's headers without the reserved
+    /// trace/correlation headers and without Content-Type, plus the caller's credential (<c>sub</c>, <c>act_sub</c>,
+    /// <c>position</c>, <c>client_id</c>, <c>role</c>) for every credential header the binding did not set — a value the
+    /// binding sets (non-empty) always wins. Credential values come from <paramref name="callerHeaders"/>, the caller's own request
+    /// headers; <c>sub</c> / <c>act_sub</c> fall back to Activity baggage. <c>role</c> is forwarded only as the caller SENT
+    /// it: roles a provider resolved for the caller (morph-idm get-roles) are not in these headers and are never carried —
+    /// the target resolves them itself from the forwarded credential. Used for a GetInstance / GetInstances /
+    /// GetInstanceData read, in-process (as the read's current user) and cross-domain (as the request's headers) alike.
+    /// Keys are case-insensitive.
+    /// </summary>
+    public static Dictionary<string, string?> BuildOutgoingHeaders(
+        IReadOnlyDictionary<string, string?>? bindingHeaders,
+        IReadOnlyDictionary<string, string>? callerHeaders = null)
+    {
+        var headers = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+        if (bindingHeaders is not null)
+        {
+            foreach (var (name, value) in bindingHeaders)
+            {
+                if (value is null || IsReservedTraceHeader(name) ||
+                    string.Equals(name, "Content-Type", StringComparison.OrdinalIgnoreCase))
+                    continue;
+                headers[name] = value;
+            }
+        }
+
+        AppendCallerCredential(headers, callerHeaders);
+        return headers;
+    }
+
+    /// <summary>
+    /// Adds the caller's credential (<c>sub</c>, <c>act_sub</c>, <c>position</c>, <c>client_id</c>, <c>role</c>) to
+    /// <paramref name="headers"/> for every credential header the task's mapping left absent or EMPTY — a non-empty mapping
+    /// value always wins. Returns whether anything was added. Values come from <paramref name="callerHeaders"/>, the caller's request headers, so a role a provider
+    /// resolved (morph-idm get-roles) is never carried; <c>sub</c> / <c>act_sub</c> fall back to Activity baggage. Nothing
+    /// else is added or removed. <paramref name="headers"/> must use a case-insensitive comparer.
+    /// </summary>
+    public static bool AppendCallerCredential(
+        IDictionary<string, string?> headers,
+        IReadOnlyDictionary<string, string>? callerHeaders)
+    {
+        var changed = false;
+        foreach (var name in CredentialHeaders)
+        {
+            if (headers.TryGetValue(name, out var mapped) && !string.IsNullOrWhiteSpace(mapped))
+                continue;
+
+            var value = CallerValue(callerHeaders, name);
+            if (string.IsNullOrEmpty(value) && name == SubHeader)
+                value = Activity.Current?.GetBaggageItem(SubBaggage);
+            else if (string.IsNullOrEmpty(value) && name == ActSubHeader)
+                value = Activity.Current?.GetBaggageItem(ActSubBaggage);
+
+            var safe = name is SubHeader or ActSubHeader ? IsSafeIdentityClaim(value) : IsSafeHeaderValue(value);
+            if (safe)
+            {
+                // Remove first: an empty mapping entry may be spelled with other casing than the canonical name.
+                headers.Remove(name);
+                headers[name] = value;
+                changed = true;
+            }
+        }
+
+        return changed;
+    }
+
+    /// <summary>
+    /// The binding's header definition (JSON object) with the caller's credential added (see
+    /// <see cref="AppendCallerCredential"/>). Every header the definition already carries is kept as is — Content-Type and
+    /// reserved trace headers included, which the send path still handles — so only missing credential headers change.
+    /// A definition that is not a JSON object of strings is returned unchanged.
+    /// </summary>
+    public static string? WithCallerCredential(string? headersJson, IReadOnlyDictionary<string, string>? callerHeaders)
+    {
+        Dictionary<string, string?> headers;
+        if (string.IsNullOrWhiteSpace(headersJson))
+        {
+            headers = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+        }
+        else
+        {
+            Dictionary<string, string?>? parsed;
+            try
+            {
+                parsed = JsonSerializer.Deserialize<Dictionary<string, string?>>(headersJson);
+            }
+            catch (JsonException)
+            {
+                return headersJson;
+            }
+
+            if (parsed is null)
+                return headersJson;
+            headers = new Dictionary<string, string?>(parsed, StringComparer.OrdinalIgnoreCase);
+        }
+
+        return AppendCallerCredential(headers, callerHeaders) ? JsonSerializer.Serialize(headers) : headersJson;
+    }
+
+    private static string? CallerValue(IReadOnlyDictionary<string, string>? callerHeaders, string name)
+    {
+        if (callerHeaders is null)
+            return null;
+        foreach (var (key, value) in callerHeaders)
+        {
+            if (string.Equals(key, name, StringComparison.OrdinalIgnoreCase))
+                return value;
+        }
+        return null;
+    }
+
+    /// <summary>A header value that can be carried as is: present, bounded, no control characters (no header injection).</summary>
+    private static bool IsSafeHeaderValue(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value) || value.Length > 1024)
+            return false;
+        foreach (var character in value)
+        {
+            if (char.IsControl(character))
+                return false;
+        }
+        return true;
     }
 
     private static bool IsSafeIdentityClaim(string? value)

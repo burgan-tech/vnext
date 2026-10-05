@@ -50,11 +50,14 @@ public sealed class InstanceQueryAppService(
     IViewContentResolutionService viewContentResolutionService,
     ITaskConditionService taskConditionService,
     IUrlTemplateBuilder urlTemplateBuilder,
+    Correlation.IInstanceCorrelationResolver instanceCorrelationResolver,
+    Microsoft.Extensions.Options.IOptions<Correlation.InstanceCorrelationOptions> correlationOptions,
     ICurrentSchema currentSchema,
     ITransitionAuthorizationManager transitionAuthorizationManager,
     IRepresentationEtagService representationEtagService,
-    ISchemaFieldFilterService schemaFieldFilterService,
+    IInstanceDataReadService instanceDataReadService,
     ICallerRoleResolver callerRoleResolver,
+    ICurrentUser currentUser,
     IPaginationLinkGenerator paginationLinkGenerator,
     IOptions<InstanceFilteringOptions> instanceFilteringOptions,
     IOptions<HumanTask.HumanTaskFunctionOptions> humanTaskOptions,
@@ -196,6 +199,8 @@ public sealed class InstanceQueryAppService(
         using var listActivity = InstanceReadActivityHelper.StartListPhase("request");
         runtimeInfoProvider.Check(input.Domain);
 
+        // Captured before the read envelope opens, so the tag lands on the transaction like the data
+        // function's read outcome does.
         using var read = InstanceReadActivityHelper.StartRead(
             InstanceReadKinds.List, input.Domain, input.Workflow);
 
@@ -226,6 +231,7 @@ public sealed class InstanceQueryAppService(
             {
 
                 SchemaFilterContext? schemaContext = null;
+                IReadOnlySet<string> encryptedPaths = new HashSet<string>();
                 using (InstanceReadActivityHelper.StartListPhase("metadata"))
                 {
                     // Resolve schema-driven filter/sort metadata from workflow's master schema
@@ -234,7 +240,10 @@ public sealed class InstanceQueryAppService(
                     {
                         var schemaResult = await componentCacheStore.GetSchemaAsync(flowResult.Value.Schema, ct);
                         if (schemaResult.IsSuccess)
+                        {
                             schemaContext = SchemaFilterMetadataResolver.Resolve(schemaResult.Value!.Schema);
+                            encryptedPaths = SchemaRolesParser.ParseExposure(schemaResult.Value!.Schema).EncryptPaths;
+                        }
                     }
 
                     if (schemaContext != null)
@@ -245,7 +254,8 @@ public sealed class InstanceQueryAppService(
                         schemaContext = new SchemaFilterContext(schemaContext.Fields)
                         {
                             EnforceFiltering = instanceFilteringOptions.Value.EnforceMasterSchemaFiltering,
-                            ReadyIndexes = ready
+                            ReadyIndexes = ready,
+                            EncryptedPaths = encryptedPaths
                         };
                     }
                 }
@@ -367,8 +377,9 @@ public sealed class InstanceQueryAppService(
                 // Normal flow: build instance outputs
                 var list = new List<GetInstanceOutput>();
                 var preparedFlows = new Dictionary<string, Definitions.Workflow>(StringComparer.Ordinal);
-                var listFieldFilter = schemaFieldFilterService is IListSchemaFieldFilterFactory filterFactory
-                    ? filterFactory.CreateForList() : schemaFieldFilterService;
+                // One reader for the page: schema metadata once per schema version, the page's secrets in one query.
+                var pageReader = instanceDataReadService.CreatePageReader(pagedList.Items.ToList());
+
                 var listExtensions = instanceExtensionService is IListExtensionServiceFactory extensionFactory
                     ? extensionFactory.CreateForList() : instanceExtensionService;
                 foreach (var instance in pagedList.Items)
@@ -384,8 +395,8 @@ public sealed class InstanceQueryAppService(
                         input.QueryParameters,
                         ct,
                         preparedFlows,
-                        listFieldFilter,
-                        listExtensions);
+                        preparedExtensions: listExtensions,
+                        pageReader: pageReader);
 
                     // Propagate extension errors - fail-fast behavior
                     if (!instanceOutputResult.IsSuccess)
@@ -480,6 +491,9 @@ public sealed class InstanceQueryAppService(
     {
         runtimeInfoProvider.Check(input.Domain);
 
+        using var read = InstanceReadActivityHelper.StartRead(
+            InstanceReadKinds.TaskHistory, input.Domain, input.Workflow);
+
         return await GetInstanceByIdOrKeyAsync(input.Instance, cancellationToken)
             .BindAsync(instance =>
                 componentCacheStore.GetFlowAsync(input.Domain, input.Workflow, instance.FlowVersion, cancellationToken)
@@ -511,6 +525,9 @@ public sealed class InstanceQueryAppService(
     {
         runtimeInfoProvider.Check(input.Domain);
 
+        using var read = InstanceReadActivityHelper.StartRead(
+            InstanceReadKinds.ActionHistory, input.Domain, input.Workflow);
+
         return await GetInstanceByIdOrKeyAsync(input.Instance, cancellationToken)
             .BindAsync(instance =>
                 componentCacheStore.GetFlowAsync(input.Domain, input.Workflow, instance.FlowVersion, cancellationToken)
@@ -535,6 +552,201 @@ public sealed class InstanceQueryAppService(
                     Items = actions.Select(InstanceTaskActionDto.FromAction).ToList()
                 });
             });
+    }
+
+    public async Task<Result<GetInstanceMetricsOutput>> GetTransitionMetricsAsync(
+        GetTransitionMetricsInput input,
+        CancellationToken cancellationToken = default)
+    {
+        runtimeInfoProvider.Check(input.Domain);
+
+        using var read = InstanceReadActivityHelper.StartRead(
+            InstanceReadKinds.TransitionMetrics, input.Domain, input.Workflow);
+
+        return await GetInstanceByIdOrKeyAsync(input.Instance, cancellationToken)
+            .BindAsync(async instance =>
+            {
+                using var instanceScope = BeginInstanceScope(instance);
+
+                // Slim rows only (no Body/Header jsonb), filtered to this transition key in SQL so a
+                // single-key read does not materialize the instance's whole transition history. Every
+                // matching row is one firing — one attempt — 1:1 with the history firings.
+                var firings = await instanceTransitionRepository
+                    .GetByInstanceAndTransitionKeyAsReadOnlyAsync(
+                        instance.Id, input.TransitionKey, cancellationToken);
+
+                var tasksByRecord = await LoadMetricsTasksAsync(
+                    firings.Select(r => r.Id), cancellationToken);
+
+                var attempts = firings
+                    .Select((record, index) => new MetricsAttemptDto
+                    {
+                        Seq = index + 1,
+                        StartedAt = record.StartedAt,
+                        FinishedAt = record.FinishedAt,
+                        DurationMs = record.Duration?.TotalMilliseconds,
+                        TriggerType = record.TriggerType,
+                        TriggeredBy = record.CreatedBy,
+                        // Every task journaled under this firing, any hook — the transition's own
+                        // onExecute plus the adjacent states' onExit/onEntry that ran in the same
+                        // record. Hook tells them apart; the client groups by it.
+                        Tasks = OrderMetricsTasks(tasksByRecord[record.Id])
+                    })
+                    .ToList();
+
+                return Result<GetInstanceMetricsOutput>.Ok(new GetInstanceMetricsOutput
+                {
+                    Element = new MetricsElementDto { Kind = "transition", Key = input.TransitionKey },
+                    Count = attempts.Count,
+                    Attempts = attempts
+                });
+            });
+    }
+
+    public async Task<Result<GetInstanceMetricsOutput>> GetStateMetricsAsync(
+        GetStateMetricsInput input,
+        CancellationToken cancellationToken = default)
+    {
+        runtimeInfoProvider.Check(input.Domain);
+
+        using var read = InstanceReadActivityHelper.StartRead(
+            InstanceReadKinds.StateMetrics, input.Domain, input.Workflow);
+
+        return await GetInstanceByIdOrKeyAsync(input.Instance, cancellationToken)
+            .BindAsync(async instance =>
+            {
+                using var instanceScope = BeginInstanceScope(instance);
+
+                // Unlike transition-metrics, this cannot filter by a single key in SQL: a visit is
+                // bounded by the transition that ENTERED the state and the (differently-keyed) one that
+                // LEFT it, so the whole timeline is needed to pair them. Slim rows only (no jsonb), and
+                // an instance's transition count bounds the read.
+                var records = await instanceTransitionRepository
+                    .GetByInstanceIdAsReadOnlyAsync(instance.Id, cancellationToken);
+
+                // Pair the timeline into visits: the transition that ENTERED the state (ToState==key)
+                // carries the onEntry tasks; the next transition that LEFT it (FromState==key) carries
+                // the onExit tasks. A visit still open (entered, not yet left) has no leaving record.
+                var visits = PairStateVisits(records, input.StateKey);
+
+                var relevantRecordIds = visits
+                    .SelectMany(v => v.Leaving is null
+                        ? new[] { v.Entering.Id }
+                        : new[] { v.Entering.Id, v.Leaving.Id });
+
+                var tasksByRecord = await LoadMetricsTasksAsync(relevantRecordIds, cancellationToken);
+
+                var attempts = visits
+                    .Select((visit, index) =>
+                    {
+                        // onEntry from the entering record; onExit from the leaving record. Filtering by
+                        // hook is what separates them from the other tasks those same records also ran
+                        // (the transition's onExecute, the other state's lifecycle). Legacy rows with a
+                        // null hook cannot be classified into a phase and are omitted here.
+                        var entryTasks = tasksByRecord[visit.Entering.Id]
+                            .Where(t => t.Hook == Definitions.TaskTrigger.OnEntry);
+                        var exitTasks = visit.Leaving is null
+                            ? Enumerable.Empty<InstanceTaskMetricsRow>()
+                            : tasksByRecord[visit.Leaving.Id]
+                                .Where(t => t.Hook == Definitions.TaskTrigger.OnExit);
+
+                        // Entry into the state is when the entering transition finished (onEntry ran as
+                        // part of it); leaving is when the leaving transition started.
+                        var enteredAt = visit.Entering.FinishedAt ?? visit.Entering.StartedAt;
+                        var leftAt = visit.Leaving?.StartedAt;
+
+                        return new MetricsAttemptDto
+                        {
+                            Seq = index + 1,
+                            StartedAt = enteredAt,
+                            FinishedAt = leftAt,
+                            DurationMs = leftAt is { } left ? (left - enteredAt).TotalMilliseconds : null,
+                            TriggerType = visit.Entering.TriggerType,
+                            TriggeredBy = visit.Entering.CreatedBy,
+                            Tasks = OrderMetricsTasks(entryTasks.Concat(exitTasks))
+                        };
+                    })
+                    .ToList();
+
+                return Result<GetInstanceMetricsOutput>.Ok(new GetInstanceMetricsOutput
+                {
+                    Element = new MetricsElementDto { Kind = "state", Key = input.StateKey },
+                    Count = attempts.Count,
+                    Attempts = attempts
+                });
+            });
+    }
+
+    /// <summary>
+    /// Loads the metrics task rows for a set of transition records and groups them by owning record.
+    /// A column projection — the jsonb payloads never leave the database. The lookup answers empty for
+    /// a record with no tasks, so callers can index it without a guard.
+    /// </summary>
+    private async Task<ILookup<Guid, InstanceTaskMetricsRow>> LoadMetricsTasksAsync(
+        IEnumerable<Guid> recordIds,
+        CancellationToken cancellationToken)
+    {
+        var ids = recordIds.Distinct().ToList();
+        if (ids.Count == 0)
+        {
+            // No attempts ⇒ no tasks; skip the query entirely.
+            return Enumerable.Empty<InstanceTaskMetricsRow>().ToLookup(t => t.TransitionId);
+        }
+
+        var rows = await instanceTaskRepository.GetMetricsRowsByTransitionIdsAsync(ids, cancellationToken);
+        return rows.ToLookup(t => t.TransitionId);
+    }
+
+    /// <summary>Execution order within an attempt: start time, then declared order, then a stable id tiebreak.</summary>
+    private static List<MetricsTaskDto> OrderMetricsTasks(IEnumerable<InstanceTaskMetricsRow> tasks) =>
+        tasks
+            .OrderBy(t => t.StartedAt)
+            .ThenBy(t => t.Order)
+            .ThenBy(t => t.Id)
+            .Select(MetricsTaskDto.FromRow)
+            .ToList();
+
+    /// <summary>
+    /// Walks the instance's transition records (already ordered by StartedAt) and pairs them into
+    /// visits of one state: a record with <c>ToState == stateKey</c> opens a visit (its onEntry tasks),
+    /// the next record with <c>FromState == stateKey</c> closes it (its onExit tasks). A self-loop
+    /// (<c>FromState == ToState == stateKey</c>) closes the open visit and opens a new one in the same
+    /// record. A visit left open at the end (entered, not yet left) has a null leaving record.
+    /// </summary>
+    private static List<(InstanceTransitionSlim Entering, InstanceTransitionSlim? Leaving)> PairStateVisits(
+        IReadOnlyList<InstanceTransitionSlim> records,
+        string stateKey)
+    {
+        var visits = new List<(InstanceTransitionSlim Entering, InstanceTransitionSlim? Leaving)>();
+        InstanceTransitionSlim? open = null;
+
+        foreach (var record in records)
+        {
+            if (open is not null && record.FromState == stateKey)
+            {
+                visits.Add((open, record));
+                open = null;
+            }
+
+            if (record.ToState == stateKey)
+            {
+                // Re-entry without an intervening exit shouldn't happen for a well-formed history, but
+                // if it does the earlier visit is closed half-open rather than silently dropped.
+                if (open is not null)
+                {
+                    visits.Add((open, null));
+                }
+
+                open = record;
+            }
+        }
+
+        if (open is not null)
+        {
+            visits.Add((open, null));
+        }
+
+        return visits;
     }
 
     public async Task<Result<GetInstanceIncidentsOutput>> GetInstanceIncidentsAsync(
@@ -790,6 +1002,8 @@ public sealed class InstanceQueryAppService(
                     AvailableTransitions: availableTransitions,
                     CurrentState: subFlowValue.State,
                     StateType: subFlowValue.StateType,
+                    StateSubType: subFlowValue.StateSubType,
+                    StateLabels: subFlowValue.StateLabels,
                     Status: subFlowValue.Status,
                     SubFlowData: subFlowValue.Data,
                     SubFlowView: subFlowValue.View,
@@ -952,8 +1166,8 @@ public sealed class InstanceQueryAppService(
         Dictionary<string, string?>? queryParameters,
         CancellationToken cancellationToken,
         Dictionary<string, Definitions.Workflow>? preparedFlows = null,
-        ISchemaFieldFilterService? preparedFieldFilter = null,
-        IInstanceExtensionService? preparedExtensions = null)
+        IInstanceExtensionService? preparedExtensions = null,
+        IInstanceDataPageReader? pageReader = null)
     {
         Definitions.Workflow? flow = null;
         var version = instance.FlowVersion ?? string.Empty;
@@ -964,6 +1178,12 @@ public sealed class InstanceQueryAppService(
             if (flow != null) preparedFlows?.Add(version, flow);
         }
 
+        // The exposure pass preloads the row's secrets and serves the row as stored, opened only for allow-listed callers.
+        var requestContext = new AuthorizationRequestContext(headers, queryParameters);
+        var attributes = pageReader is not null
+            ? await pageReader.ExposeAsync(flow, instance, instanceData, requestContext, cancellationToken)
+            : await instanceDataReadService.ExposeAsync(flow, instance, instanceData, requestContext, cancellationToken);
+
         var response = new GetInstanceOutput
         {
             Id = instance.Id,
@@ -973,7 +1193,7 @@ public sealed class InstanceQueryAppService(
             Domain = domain,
             Key = instance.Key!,
             Tags = instance.Tags,
-            Attributes = instanceData?.Data.JsonElement,
+            Attributes = attributes,
             Metadata = new InstanceMetadataDto(instance)
         };
 
@@ -1008,12 +1228,6 @@ public sealed class InstanceQueryAppService(
 
         response.Extensions = extensionsResult.Value!;
 
-        response.Attributes =
-            await (preparedFieldFilter ?? schemaFieldFilterService).ApplyAsync(
-                flow, response.Attributes, instance,
-                new AuthorizationRequestContext(headers, queryParameters), cancellationToken) ??
-            response.Attributes;
-
         return Result<GetInstanceOutput>.Ok(response);
     }
 
@@ -1037,7 +1251,11 @@ public sealed class InstanceQueryAppService(
         var isLatestRequest = InstanceDataVersionComparer.IsRequestingLatest(input.Version);
         string? dataCacheKey = null;
         Caching.DataFunctionCacheEntry? validatedEntry = null;
-        if (dataFunctionCache.Enabled && isLatestRequest)
+
+        // A trigger task's read is an ordinary caller's (its own headers), so it is cached under its own scope.
+        var useCache = dataFunctionCache.Enabled && isLatestRequest;
+
+        if (useCache)
         {
             var fastPath = await TryServeDataFromFingerprintAsync(input, cancellationToken);
             if (fastPath.NotModified.HasValue)
@@ -1059,7 +1277,7 @@ public sealed class InstanceQueryAppService(
             InstanceReadKinds.Data,
             validatedEntry is not null
                 ? InstanceReadActivityHelper.FastPathCacheHit
-                : dataFunctionCache.Enabled && isLatestRequest
+                : useCache
                     ? InstanceReadActivityHelper.FastPathBuild
                     : InstanceReadActivityHelper.FastPathDisabled);
 
@@ -1092,12 +1310,10 @@ public sealed class InstanceQueryAppService(
                     }
                     else
                     {
-                        result.Data = instanceData?.Data.JsonElement;
-                        result.Data = await schemaFieldFilterService.ApplyAsync(
-                                          flow, result.Data, instance,
-                                          new AuthorizationRequestContext(input.Headers, input.QueryParameters),
-                                          cancellationToken) ??
-                                      result.Data;
+                        result.Data = await instanceDataReadService.ExposeAsync(
+                            flow, instance, instanceData,
+                            new AuthorizationRequestContext(input.Headers, input.QueryParameters),
+                            cancellationToken);
                     }
 
                     // If there's an active SubFlow and extensions are requested, fetch from SubFlow
@@ -1154,7 +1370,11 @@ public sealed class InstanceQueryAppService(
                     // cacheable; the entry holds ONLY the field-filtered data — extension output
                     // is never cached. No re-write when the data came from a validated entry.
                     // TTL is workflow-author-controlled with a host default.
-                    if (dataCacheKey is not null && instanceData is not null && validatedEntry is null)
+                    // A row carrying x-encryption "encrypt" tokens is never cached: an exempt caller's
+                    // body holds the plaintext (Redis would keep it at rest), and a body built while a
+                    // key was missing holds tokens that must not outlive the key's return.
+                    if (dataCacheKey is not null && instanceData is not null && validatedEntry is null &&
+                        !EncryptedValueFormat.MayContainToken(instanceData.Data.Json))
                     {
                         await dataFunctionCache.SetAsync(dataCacheKey, new Caching.DataFunctionCacheEntry
                         {
@@ -1360,7 +1580,7 @@ public sealed class InstanceQueryAppService(
                     // own ChildCorrelations collection is loaded with an active-only filtered include, so
                     // the completed rows the response exposes require this dedicated read. Ordering is
                     // applied here rather than in the shared repository method, whose ParentState ordering
-                    // the hierarchy and monitor consumers already depend on.
+                    // the instance-correlation and monitor consumers already depend on.
                     var allCorrelations = (await instanceCorrelationRepository
                             .GetByParentAsync(data.instance.Id, cancellationToken))
                         .OrderBy(c => c.CreatedAt)
@@ -1762,6 +1982,7 @@ public sealed class InstanceQueryAppService(
                 .Select(key =>
                 {
                     var subFlowItem = subFlowItemsByName.GetValueOrDefault(key);
+                    Transition? transition = null;
                     bool hasView, loadData, hasSchema;
                     Dictionary<string, string>? annotations;
                     if (subFlowItem != null)
@@ -1773,14 +1994,14 @@ public sealed class InstanceQueryAppService(
                     }
                     else
                     {
-                        var transition = currentWorkflow.ResolveTransition(key, currentStateValue);
+                        transition = currentWorkflow.ResolveTransition(key, currentStateValue);
                         hasView = transition?.View is { Views.Count: > 0 };
                         loadData = false;
                         hasSchema = transition?.Schema != null;
                         annotations = transition?.Annotations;
                     }
 
-                    return new TransitionItem
+                    var item = new TransitionItem
                     {
                         Name = key,
                         Kind = !string.IsNullOrWhiteSpace(subFlowItem?.Kind)
@@ -1803,6 +2024,18 @@ public sealed class InstanceQueryAppService(
                         },
                         Annotations = annotations
                     };
+
+                    // A subflow's own entry already carries its labels and target, described against
+                    // the subflow's definition — taken as-is, like its kind. A parent-added shared
+                    // transition is described against the parent's.
+                    if (subFlowItem != null)
+                    {
+                        item.Labels = subFlowItem.Labels;
+                        item.Target = subFlowItem.Target;
+                        return item;
+                    }
+
+                    return WithDefinitionDescriptors(item, currentWorkflow, transition, currentStateValue.Key);
                 })
                 .ToList();
         }
@@ -1813,7 +2046,7 @@ public sealed class InstanceQueryAppService(
                 var transition = currentWorkflow.ResolveTransition(transitionKey, currentStateValue);
                 var hasView = transition?.View is { Views.Count: > 0 };
                 var hasSchema = transition?.Schema != null;
-                return new TransitionItem
+                return WithDefinitionDescriptors(new TransitionItem
                 {
                     Name = transitionKey,
                     Kind = ResolveTransitionKind(currentWorkflow, currentStateValue, transitionKey),
@@ -1832,7 +2065,7 @@ public sealed class InstanceQueryAppService(
                         HasSchema = hasSchema
                     },
                     Annotations = transition?.Annotations
-                };
+                }, currentWorkflow, transition, currentStateValue.Key);
             }).ToList();
         }
 
@@ -1953,6 +2186,14 @@ public sealed class InstanceQueryAppService(
             StateType = subFlowStateInfo.StateType.IsNullOrWhiteSpace()
                 ? ToCamelCaseName(currentStateValue.StateType)
                 : subFlowStateInfo.StateType!,
+            // Same subject as stateType: the subflow's state when descended (its own entry already
+            // carries its labels), otherwise this instance's own.
+            StateSubType = subFlowStateInfo.SubFlowTransitionItems != null
+                ? subFlowStateInfo.StateSubType ?? string.Empty
+                : ToCamelCaseName(currentStateValue.SubType),
+            StateLabels = subFlowStateInfo.SubFlowTransitionItems != null
+                ? subFlowStateInfo.StateLabels
+                : ToLabelList(currentStateValue.Labels),
             Status = subFlowStateInfo.Status,
             ActiveCorrelations = allActiveCorrelations,
             Correlations = allCorrelationHrefs,
@@ -2042,6 +2283,8 @@ public sealed class InstanceQueryAppService(
     /// <see cref="InstanceJob.SourceState"/> — scheduled transitions are only ever armed from a state's
     /// own <c>ScheduledTransitions</c>, never from shared transitions. Unlike the three link flags this
     /// is real content, not a placeholder; null when the state or transition no longer resolves.
+    /// <c>labels</c> and the target descriptors are resolved the same way, with <c>$self</c> meaning
+    /// the source state.
     /// </para>
     /// </summary>
     private IEnumerable<TransitionItem> BuildScheduledTransitionEntries(
@@ -2053,27 +2296,31 @@ public sealed class InstanceQueryAppService(
         activeScheduledTransitionJobs
             .Where(j => j.ExecuteAt.HasValue && !string.IsNullOrEmpty(j.TransitionKey))
             .OrderBy(j => j.ExecuteAt!.Value)
-            .Select(j => new TransitionItem
+            .Select(j =>
             {
-                Name = j.TransitionKey!,
-                Kind = ScheduledTransitionKind,
-                ExecuteAtUtc = j.ExecuteAt!.Value,
-                Href = urlTemplateBuilder.BuildTransitionUrl(domain, workflow, instanceId, j.TransitionKey!),
-                View = new ViewHref
+                var transition = ResolveScheduledTransition(currentWorkflow, j);
+                return WithDefinitionDescriptors(new TransitionItem
                 {
-                    Href = urlTemplateBuilder.BuildViewUrl(domain, workflow, instanceId, j.TransitionKey!),
-                    HasView = false,
-                    LoadData = false
-                },
-                Schema = new SchemaHref
-                {
-                    Href = urlTemplateBuilder.BuildSchemaUrl(domain, workflow, instanceId, j.TransitionKey!),
-                    HasSchema = false
-                },
-                Annotations = ResolveScheduledTransitionAnnotations(currentWorkflow, j)
+                    Name = j.TransitionKey!,
+                    Kind = ScheduledTransitionKind,
+                    ExecuteAtUtc = j.ExecuteAt!.Value,
+                    Href = urlTemplateBuilder.BuildTransitionUrl(domain, workflow, instanceId, j.TransitionKey!),
+                    View = new ViewHref
+                    {
+                        Href = urlTemplateBuilder.BuildViewUrl(domain, workflow, instanceId, j.TransitionKey!),
+                        HasView = false,
+                        LoadData = false
+                    },
+                    Schema = new SchemaHref
+                    {
+                        Href = urlTemplateBuilder.BuildSchemaUrl(domain, workflow, instanceId, j.TransitionKey!),
+                        HasSchema = false
+                    },
+                    Annotations = transition?.Annotations
+                }, currentWorkflow, transition, j.SourceState!);
             });
 
-    private static Dictionary<string, string>? ResolveScheduledTransitionAnnotations(
+    private static Transition? ResolveScheduledTransition(
         Definitions.Workflow workflow,
         InstanceJob job)
     {
@@ -2082,8 +2329,65 @@ public sealed class InstanceQueryAppService(
 
         var stateResult = workflow.GetState(job.SourceState);
         return stateResult.IsSuccess
-            ? stateResult.Value?.FindTransition(job.TransitionKey!)?.Annotations
+            ? stateResult.Value?.FindTransition(job.TransitionKey!)
             : null;
+    }
+
+    /// <summary>
+    /// Fills the definition-derived descriptors of a <c>transitions[]</c> entry — <c>labels</c> and the
+    /// target state — so a client can render the transition by its display text and know where it
+    /// leads without reading the workflow definition itself. <paramref name="fromStateKey"/> is the
+    /// state the transition is listed in, which <c>$self</c> resolves to. Leaves the entry untouched
+    /// when the transition no longer resolves; keeps the raw target, without a type, when the target
+    /// state does not.
+    /// </summary>
+    /// <summary>
+    /// A definition's labels as the response list, or null — so the field is omitted — when it
+    /// declares none.
+    /// </summary>
+    private static List<LanguageLabel>? ToLabelList(IReadOnlyCollection<LanguageLabel> labels) =>
+        labels.Count > 0 ? labels.ToList() : null;
+
+    private static TransitionItem WithDefinitionDescriptors(
+        TransitionItem item,
+        Definitions.Workflow workflow,
+        Transition? transition,
+        string fromStateKey)
+    {
+        if (transition is null)
+            return item;
+
+        item.Labels = ToLabelList(transition.Labels);
+
+        item.Target = DescribeTargetState(workflow, transition.Target, fromStateKey);
+        return item;
+    }
+
+    /// <summary>
+    /// Describes a target state with the vocabulary the response uses for the current state — key,
+    /// type, sub type, labels, and the flow a subFlow state starts. Shared by every
+    /// <c>transitions[]</c> entry and the <c>timeout</c> block so a client renders all of them with one
+    /// code path. <paramref name="fromStateKey"/> is what <c>$self</c> resolves to. A target that does
+    /// not resolve keeps its raw key and nothing else.
+    /// </summary>
+    private static TransitionTarget DescribeTargetState(
+        Definitions.Workflow workflow,
+        string targetKey,
+        string fromStateKey)
+    {
+        var targetState = workflow.GetState(targetKey, fromStateKey);
+        if (!targetState.IsSuccess || targetState.Value is null)
+            return new TransitionTarget { Key = targetKey };
+
+        var state = targetState.Value;
+        return new TransitionTarget
+        {
+            Key = state.Key,
+            StateType = ToCamelCaseName(state.StateType),
+            StateSubType = ToCamelCaseName(state.SubType),
+            Labels = ToLabelList(state.Labels),
+            SubFlow = state.StateType == StateType.SubFlow ? state.SubFlow?.Process.Key : null
+        };
     }
 
     /// <summary>
@@ -2140,7 +2444,9 @@ public sealed class InstanceQueryAppService(
         return new InstanceTimeoutOutput
         {
             Key = effectiveTimeout.Key,
-            Target = effectiveTimeout.Target,
+            // Resolved in the polled instance's own definition: a parent-supplied override names the
+            // child's state, so the child's workflow is the one that knows it.
+            Target = DescribeTargetState(currentWorkflow, effectiveTimeout.Target, instance.GetCurrentState),
             ExecuteAtUtc = timeoutJob.ExecuteAt!.Value,
             Annotations = effectiveTimeout.Annotations
         };
@@ -2610,7 +2916,8 @@ public sealed class InstanceQueryAppService(
             {
                 Key = schema.Key,
                 Type = schema.Type,
-                Schema = schema.Schema
+                Schema = schema.Schema,
+                Labels = schema.Labels.Length > 0 ? schema.Labels.ToList() : null
             });
     }
 
@@ -2791,7 +3098,8 @@ public sealed class InstanceQueryAppService(
             {
                 Key = schema.Key,
                 Type = schema.Type,
-                Schema = schema.Schema
+                Schema = schema.Schema,
+                Labels = schema.Labels.Length > 0 ? schema.Labels.ToList() : null
             });
     }
 
@@ -3073,26 +3381,26 @@ public sealed class InstanceQueryAppService(
     }
 
     /// <inheritdoc />
-    public async Task<Result<GetInstanceHierarchyOutput>> GetInstanceHierarchyAsync(
-        GetInstanceHierarchyInput input,
+    public async Task<Result<GetInstanceCorrelationOutput>> GetInstanceCorrelationAsync(
+        GetInstanceCorrelationInput input,
         CancellationToken cancellationToken = default)
     {
         runtimeInfoProvider.Check(input.Domain);
 
         using var read = InstanceReadActivityHelper.StartRead(
-            InstanceReadKinds.Hierarchy, input.Domain, input.Workflow);
+            InstanceReadKinds.InstanceCorrelation, input.Domain, input.Workflow);
 
         var instanceResult = await GetInstanceByIdOrKeyAsync(input.Instance, cancellationToken);
         if (!instanceResult.IsSuccess)
         {
-            return Result<GetInstanceHierarchyOutput>.Fail(instanceResult.Error);
+            return Result<GetInstanceCorrelationOutput>.Fail(instanceResult.Error);
         }
 
         var instance = instanceResult.Value!;
         var flowResult = await componentCacheStore.GetFlowAsync(input.Domain, input.Workflow, instance.FlowVersion, cancellationToken);
         var flowVersion = flowResult.IsSuccess ? flowResult.Value?.Version : null;
 
-        var rootNode = new InstanceHierarchyNode
+        var rootNode = new InstanceCorrelationNode
         {
             Id = instance.Id,
             Key = instance.Key,
@@ -3100,20 +3408,47 @@ public sealed class InstanceQueryAppService(
             Domain = input.Domain,
             FlowVersion = flowVersion ?? string.Empty,
             CurrentState = instance.CurrentState,
+            OwnState = instance.CurrentState,
             Status = instance.Status,
             SubFlowType = null,
             IsCompleted = instance.Status == InstanceStatus.Completed,
             CompletedAt = instance.CompletedAt,
-            ParentState = null
+            ParentState = null,
+            // The root is nobody's correlated child, so the link-scoped members (CorrelationId,
+            // CreatedAt, TerminalOutcome, StateChangedAt) stay null by construction.
+            Href = urlTemplateBuilder.BuildInstanceUrl(input.Domain, instance.Flow, instance.Id.ToString())
         };
 
-        rootNode.Children = await BuildHierarchyTreeAsync(
-            instance.Id,
-            input.Workflow,
+        // The root's own children are just the first hop, so it goes through the same resolver as
+        // every level below it — which is what makes the walk batched, parallel across sibling
+        // hops, and able to leave this domain. The resolver is entered DIRECTLY rather than through
+        // the gateway: the root is this domain by construction (runtimeInfoProvider.Check above),
+        // and routing it would buy a redundant DI scope.
+        var rootExpansion = await instanceCorrelationResolver.ResolveAsync(
             input.Domain,
+            instance.Flow,
+            new CorrelationBatchRequest
+            {
+                InstanceIds = [instance.Id],
+                RemainingDepth = correlationOptions.Value.MaxDescentDepth,
+                FlowVersion = instance.FlowVersion
+            },
             cancellationToken);
 
-        return Result<GetInstanceHierarchyOutput>.Ok(new GetInstanceHierarchyOutput { Root = rootNode });
+        if (!rootExpansion.IsSuccess)
+        {
+            return Result<GetInstanceCorrelationOutput>.Fail(rootExpansion.Error);
+        }
+
+        var rootResult = rootExpansion.Value!.FirstOrDefault(r => r.InstanceId == instance.Id);
+        if (rootResult is not null)
+        {
+            rootNode.Children = [.. rootResult.Children];
+            rootNode.Resolved = rootResult.Resolved;
+            rootNode.UnresolvedReason = rootResult.UnresolvedReason;
+        }
+
+        return Result<GetInstanceCorrelationOutput>.Ok(new GetInstanceCorrelationOutput { Root = rootNode });
     }
 
     /// <inheritdoc />
@@ -3138,6 +3473,11 @@ public sealed class InstanceQueryAppService(
         if (!callerRolesResult.IsSuccess)
             return Result<HumanTask.HumanTaskListOutput>.Fail(callerRolesResult.Error);
         var userRoles = callerRolesResult.Value ?? [];
+
+        // Read once per request from the request scope, before any fan-out: the isolated scopes of the
+        // leaf hops are fresh DI scopes with no ambient caller, so ICurrentUser resolved inside is empty.
+        var actorUserName = currentUser.ActorUserName?.Trim();
+        var subjectUserName = currentUser.UserName?.Trim();
 
         // Keyed on the caller scope, so the cache sits BEHIND the authorization filter and an entry
         // is only ever served back to the scope that produced it — which is what lets it hold
@@ -3297,6 +3637,8 @@ public sealed class InstanceQueryAppService(
                     {
                         InstanceIds = [.. candidates.Select(c => c.Id)],
                         CallerRoles = userRoles,
+                        ActorUserName = actorUserName,
+                        SubjectUserName = subjectUserName,
                         Headers = headers is null
                             ? []
                             : new Dictionary<string, string?>(headers, StringComparer.OrdinalIgnoreCase),
@@ -3387,65 +3729,6 @@ public sealed class InstanceQueryAppService(
     /// </summary>
     private const string HumanTaskBypassOutcome = "bypass";
 
-    private async Task<List<InstanceHierarchyNode>> BuildHierarchyTreeAsync(
-        Guid parentInstanceId,
-        string parentFlow,
-        string domain,
-        CancellationToken cancellationToken)
-    {
-        List<InstanceCorrelation> correlations;
-        using (currentSchema.Change(parentFlow))
-        {
-            correlations = await instanceCorrelationRepository.GetByParentAsync(parentInstanceId, cancellationToken);
-        }
-
-        if (correlations.Count == 0)
-        {
-            return [];
-        }
-
-        var children = new List<InstanceHierarchyNode>();
-        foreach (var correlation in correlations)
-        {
-            var childFlow = correlation.SubFlowName;
-            var childDomain = correlation.SubFlowDomain;
-            Instance? childInstance = null;
-
-            using (currentSchema.Change(childFlow))
-            {
-                childInstance = await instanceRepository.FindByIdentifierAsReadOnlyAsync(
-                    correlation.SubFlowInstanceId.ToString(),
-                    cancellationToken);
-            }
-
-            var node = new InstanceHierarchyNode
-            {
-                Id = correlation.SubFlowInstanceId,
-                Key = childInstance?.Key,
-                Flow = childFlow,
-                Domain = childDomain,
-                FlowVersion = correlation.SubFlowVersion,
-                CurrentState = correlation.SubFlowCurrentState ?? childInstance?.CurrentState,
-                Status = childInstance?.Status ??
-                         (correlation.IsCompleted ? InstanceStatus.Completed : InstanceStatus.Active),
-                SubFlowType = correlation.SubFlowType,
-                IsCompleted = correlation.IsCompleted,
-                CompletedAt = correlation.CompletedAt,
-                ParentState = correlation.ParentState
-            };
-
-            node.Children = await BuildHierarchyTreeAsync(
-                correlation.SubFlowInstanceId,
-                childFlow,
-                childDomain,
-                cancellationToken);
-
-            children.Add(node);
-        }
-
-        return children;
-    }
-
     /// <summary>
     /// Represents the complete state information retrieved from a SubFlow or main flow.
     /// Used to pass transitions, state, status, and additional SubFlow-specific data like view extensions and active correlations.
@@ -3464,6 +3747,8 @@ public sealed class InstanceQueryAppService(
         string? CurrentState,
         string? StateType,
         InstanceStatus? Status,
+        string? StateSubType = null,
+        List<LanguageLabel>? StateLabels = null,
         DataHref? SubFlowData = null,
         ViewHref? SubFlowView = null,
         List<ActiveCorrelationHref>? SubFlowActiveCorrelations = null,

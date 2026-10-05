@@ -340,7 +340,7 @@ public sealed class SubProcessTaskExecutor : TriggerTaskExecutorBase<SubProcessT
             InstanceId = subFlowInstanceId,
             Callback = GetCallbackAppId(),
             ExtraProperties = BuildExtraPropertiesAsDictionary(context.ScriptContext, task),
-            Headers = binding.Headers,
+            Headers = Execution.HttpTaskInvocation.WithCallerCredential(binding.Headers, CallerHeadersOf(context.ScriptContext)),
             BaseUrl = endpoint.BaseUrl.ToString(),
             DaprAppId = endpoint.DaprAppId,
             AcceptedStatusCodes = binding.AcceptedStatusCodes
@@ -357,7 +357,7 @@ public sealed class SubProcessTaskExecutor : TriggerTaskExecutorBase<SubProcessT
     private StartInstanceInput BuildStartInstanceInput(SubProcessTask task, ScriptContext context,
         Guid subFlowInstanceId)
     {
-        var headers = ConvertTaskHeadersToDictionary(task.Headers);
+        var headers = WithCallerCredential(ConvertTaskHeadersToDictionary(task.Headers), context);
 
         return new StartInstanceInput(
                 domain: task.TriggerDomain,
@@ -374,7 +374,7 @@ public sealed class SubProcessTaskExecutor : TriggerTaskExecutorBase<SubProcessT
                     Callback = GetCallbackAppId(),
                     ExtraProperties = BuildExtraProperties(context, task)
                 },
-                Headers = headers ?? new Dictionary<string, string?>(),
+                Headers = headers,
                 StrictIdempotency = true // Service-to-service call: return 409 if active instance exists
             };
     }

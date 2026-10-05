@@ -31,6 +31,12 @@ public sealed class FlowComponentValidator(WorkflowValidator workflowValidator) 
             var workflowResult = workflowValidator.Validate(workflow);
             return ComponentValidationResult.FromWorkflowValidationResult(workflowResult);
         }
+        catch (ArgumentException ex)
+        {
+            // A malformed RoleGrant (bad shape, blank leaf) throws from its constructor during deserialization.
+            result.AddError(ex.Message, nameof(Workflow));
+            return result;
+        }
         catch (JsonException ex)
         {
             result.AddError($"Invalid JSON format for workflow: {ex.Message}", nameof(Workflow));

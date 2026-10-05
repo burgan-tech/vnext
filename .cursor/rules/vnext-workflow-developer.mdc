@@ -1,7 +1,7 @@
 ---
 description: vNext workflow engine domain knowledge — pipeline steps, profiles, locking, subflow lifecycle, well-known transitions, role grants
-globs:
-alwaysApply: true
+globs: src/**,orchestration/**,execution/**,workers/**,modules/**,tools/**,test/**,**/*.cs,**/*.csproj,vnext-meta/**
+alwaysApply: false
 ---
 Apply the referenced file exactly as written. It is the single source of this rule, shared with
 Claude Code (`.claude/rules/`); edit it there — nothing lives in this pointer.

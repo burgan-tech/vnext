@@ -102,7 +102,7 @@ mid-transition when Roslyn compiles an empty script.
 `ScriptCodeValidator` closes that gap at publish time for every slot a definition can carry — transition
 `timer`/`rule`/`mapping`, `onExecutionTasks[].mapping`, state `onEntries`/`onExits`/`notifications`,
 `subFlow.mapping`, view- and schema-selection `rule`s, workflow and function `output`, function
-`cache.keyExpression`/`generationKeyExpression`, and `CacheAsideTask`'s `sourceMapping`/`keyExpression`.
+`cache.keyExpression`/`generationKeyExpression`, and `CacheAsideTask`'s `sourceMapping` and `key` script.
 Matching the `vnext-schema` guard:
 
 | Slot | Verdict |
@@ -132,7 +132,7 @@ in Dynamic Expresso terms instead.
     "Enabled": false,
     "AllowUnsafe": false,
     "PluginDirectory": "/app/assemblies",
-    "AllowedAssemblies": [ "System.Private.CoreLib", "System.Runtime", "System.Collections", "System.Linq", "System.Linq.Expressions", "System.Text.RegularExpressions", "Microsoft.CSharp", "netstandard" ],
+    "AllowedAssemblies": [ "System.Private.CoreLib", "System.Runtime", "System.Collections", "System.Linq", "System.Linq.Expressions", "System.Text.RegularExpressions", "Microsoft.CSharp", "System.ObjectModel", "netstandard" ],
     "BannedNamespaces": []
   }
 }
@@ -143,7 +143,21 @@ in Dynamic Expresso terms instead.
 - **`Scripting:Sandbox:Enabled`** — when `true`, **all** mapping compiles use the restricted reference
   set + banned-API analyzer. Default `false` keeps existing behaviour byte-for-byte.
 - **`AllowedAssemblies`** — global baseline of referenceable assemblies. A mapping's
+  `allowedAssemblies` is merged on top of this for that compile only. `System.ObjectModel` is in
+  the baseline because enumerating an `ExpandoObject` (a `foreach`, common in mappings) binds
+  `INotifyPropertyChanged`, which lives there; without it the compile fails with CS0012 — do not
+  remove it (finding AB-22).
   `allowedAssemblies` is merged on top of this for that compile only.
+- **Publish-time check** — every name a component lists under `scripts.allowedAssemblies` (flow level
+  or on any script slot of a workflow, task, function or extension) must resolve in the publishing
+  runtime: a framework assembly or a DLL in `Scripting:Sandbox:PluginDirectory`. An unresolvable name
+  fails the publish with 400 and names the field, e.g.
+  `sys-flows.states[0].onEntries[1].mapping.scripts.allowedAssemblies[0]`. Use the simple name without
+  `.dll`. The check does not compile the script: a script that needs an assembly it never declares
+  still fails only at run time. The check runs whatever `Scripting:Sandbox:Enabled` says: even though a
+  sandbox-off compile ignores the grant, a declared name that does not resolve is rejected. The
+  plugin-directory listing is read once per process, so a DLL mounted after start reports as
+  unavailable until restart (same as compile).
 - **`BannedNamespaces`** — *adds* to the mandatory platform baseline; it cannot remove an entry.
 
 ### Mandatory banned namespaces (non-overridable)

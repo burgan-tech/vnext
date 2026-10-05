@@ -34,6 +34,19 @@ public interface ITransitionEnqueueGateway
         TransitionContinuationRequested outboxEvent,
         bool deferArming = false,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Publishes <paramref name="outboxEvent"/> to the transactional outbox as a fallback when a
+    /// DEFERRED arm failed after the accept already committed the durable job row. Symmetric with
+    /// the direct-enqueue failure fallback inside <see cref="EnqueueAsync"/>, but for the arm that
+    /// the accept path performs outside the status lock. The Inbox relay re-arms the SAME job
+    /// (idempotent by job name), so the instance stays Busy until delivery instead of releasing a
+    /// flip whose job may have registered server-side despite an ambiguous arm failure.
+    /// <para>Must be called within an ambient unit of work so the outbox row is staged transactionally.</para>
+    /// </summary>
+    Task PublishOutboxFallbackAsync(
+        TransitionContinuationRequested outboxEvent,
+        CancellationToken cancellationToken = default);
 }
 
 /// <summary>

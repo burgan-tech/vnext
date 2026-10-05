@@ -4,6 +4,7 @@ using BBT.Workflow.Data.ValueConverters;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Instances;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Metadata;
 using Microsoft.EntityFrameworkCore.ChangeTracking;
 
 namespace BBT.Workflow.Data;
@@ -192,6 +193,22 @@ public static class InstancesModelCreatingExtensions
                 .IncludeProperties(p => new { p.Key, p.Type });
         });
 
+        // x-encryption per-instance secrets (key + hash salt), one row per instance in the flow schema, created by
+        // the write funnel on the instance's first protected write, cascade-deleted with it. Plaintext by decision
+        // (committee, 2026-09-30); only the runtime reads it and it is never served.
+        builder.Entity<BBT.Workflow.Encryption.InstanceSecret>(b =>
+        {
+            b.ToTable("InstanceSecrets", schema);
+            b.HasKey(p => p.InstanceId);
+            b.Property(p => p.EncryptionKey).IsRequired().HasColumnType("bytea");
+            b.Property(p => p.HashSalt).IsRequired().HasColumnType("bytea");
+            b.Property(p => p.CreatedAt).IsRequired();
+            b.HasOne<Instance>()
+                .WithMany()
+                .HasForeignKey(p => p.InstanceId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
         builder.Entity<InstanceIncident>(b =>
         {
             b.ToTable("InstanceIncidents", schema);
@@ -307,7 +324,7 @@ public static class InstancesModelCreatingExtensions
                 .HasFilter("\"IsCompleted\" = false AND \"SubFlowType\" = 'S'");
 
             // Unfiltered counterpart for the reads that must see completed rows too: GetByParentAsync
-            // (state-function correlation list, hierarchy tree, monitor) and the correlation aggregates
+            // (state-function correlation list, instance-correlation tree, monitor) and the correlation aggregates
             // in ProjectStateFingerprint. Neither partial index above can serve those — both exclude
             // exactly the completed rows these reads are after.
             b.HasIndex(new[] { nameof(InstanceCorrelation.ParentInstanceId) }, "IX_InstancesCorrelations_ByParent");
@@ -341,17 +358,25 @@ public static class InstancesModelCreatingExtensions
                 .IsRequired()
                 .HasMaxLength(WorkflowConstants.MaxETagLength);
             
+            // Rows are immutable once inserted: content and its hash are never rewritten. Ignoring them
+            // after save keeps them out of every UPDATE — a detached aggregate's Set.Update(graph) walk
+            // (retry/fault scopes) marks every reachable row Modified.
             b.Property(p => p.DataHash)
                 .IsRequired()
                 .HasDefaultValue("99914b932bd37a50b983c5e7c90ae93b") // Default Value: {}
-                .HasMaxLength(WorkflowConstants.MaxDataHashLength);
+                .HasMaxLength(WorkflowConstants.MaxDataHashLength)
+                .Metadata.SetAfterSaveBehavior(PropertySaveBehavior.Ignore);
 
+            // The column holds the row as stored (x-encryption "encrypt" tokens at encrypted paths), and so does
+            // InstanceData.Data — it is never decrypted in place. Content is write-once: after save EF never writes
+            // it again, so no tracking state (a detached graph Update) can rewrite the column.
             b.OwnsOne(p => p.Data, d =>
             {
                 d.Ignore(g => g.JsonElement);
                 d.Property(g => g.Json)
                     .HasColumnType("jsonb")
-                    .HasColumnName(nameof(InstanceData.Data));
+                    .HasColumnName(nameof(InstanceData.Data))
+                    .Metadata.SetAfterSaveBehavior(PropertySaveBehavior.Ignore);
 
                 // Partial GIN index serving the attribute (JSONB containment) filters. The equals
                 // path already emits "Data" @> {param} (AttributeConditionBuilder),
@@ -485,6 +510,12 @@ public static class InstancesModelCreatingExtensions
             b.Property(p => p.TaskId)
                 .IsRequired()
                 .HasMaxLength(TaskConstants.MaxKeyLength);
+
+            // The task's hook + order, promoted out of the ExecutionKey hash so the tasks function
+            // can report which phase a row ran under (vnext-client-sdk-core#60). Nullable — legacy
+            // rows predate the columns and stay null ("unknown").
+            b.Property(p => p.TaskTrigger)
+                .HasConversion<int?>();
 
             b.OwnsOne(p => p.Request, d =>
             {
