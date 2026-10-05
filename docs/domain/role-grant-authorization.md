@@ -332,7 +332,9 @@ callers (rule 5) and are unchanged; plain static and predefined grants evaluate 
 
 ### In the authorization matrix
 
-`functions/authorize` returns the grants it evaluated. A combinator is shown as
+The authorization matrix is the `permissions` function (`FunctionTypeConst.AuthorizationMatrix`), not
+`functions/authorize` — `authorize` only answers `{ "allowed": true | false }`. The matrix lists the grants
+as declared. A combinator is shown as
 `{ "allOf": [ { "role": "..." } ], "grant": "..." }` (or `anyOf`) with **`role` omitted** on the grant;
 a plain grant keeps `{ "role", "grant" }`. A client reading the matrix must tolerate a grant without `role`.
 

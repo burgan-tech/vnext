@@ -97,9 +97,9 @@ completion window, and it is a normal, observable state. Real example from a liv
 { "flow": "start-video-call", "currentState": "completed", "status": "C", "isCompleted": false }
 ```
 
-**2. `isCompleted` says *whether*, `terminalOutcome` says *how*.** The outcome is `Completed`,
-`Faulted` or `Canceled`. A UI that colours a node green on `isCompleted` alone will paint a faulted
-child green. Both are absent while the link is still open.
+**2. `isCompleted` says *whether*, `terminalOutcome` says *how*.** The outcome is `completed`,
+`faulted` or `canceled` (the enum is serialized camelCase). A UI that colours a node green on
+`isCompleted` alone will paint a faulted child green. Both are absent while the link is still open.
 
 **3. The root is not descended.** `GET …/functions/state` on the same instance descends into the
 active subflow and reports the deepest leaf's state, but this tree's **root** reports the root's own

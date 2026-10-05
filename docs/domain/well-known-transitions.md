@@ -175,7 +175,7 @@ Enforcement points:
 - **State function** — `availableTransitions` is filtered per caller, so an unauthorized caller
   never sees the key. While in a subflow, parent-owned keys are filtered against the **parent's**
   grants (the subflow already filtered its own).
-- **`/functions/authorize`** and **`/functions/authorization-matrix`** — evaluate and report these
+- **`/functions/authorize`** and **`/functions/permissions`** (the authorization matrix) — evaluate and report these
   transitions.
 - **Subflow overrides** — a parent's `subFlow.overrides.transitions[key].roles` replaces the
   subflow's grants for that key, as for any other transition. No `availableIn` narrowing is applied

@@ -34,7 +34,7 @@ contracts. Remote services call public runtime APIs rather than internal reposit
 | `GET /{domain}/workflows/{workflow}/instances/{instance}/functions/data` | Latest data, optional extensions, ETag. |
 | `GET /{domain}/workflows/{workflow}/instances/{instance}/functions/view` | Backend-driven view selection. |
 | `GET /{domain}/workflows/{workflow}/instances/{instance}/functions/schema` | Transition-aware schema. |
-| `POST /{domain}/workflows/{workflow}/instances/{instance}/transitions/{transition}` | Runs a transition sync or async. |
+| `PATCH /{domain}/workflows/{workflow}/instances/{instance}/transitions/{transition}` | Runs a transition sync or async. |
 | `GET /{domain}/functions` | Lists domain function definitions, including `verbs[]` and input/output schema and view references. |
 | `GET\|POST\|PATCH\|DELETE /{domain}/functions/{function}` | Invokes a custom domain function. `GET /{function}` invokes — it is not a metadata route. |
 | `GET\|POST\|PATCH\|DELETE /{domain}/workflows/{workflow}/instances/{instance}/functions/{function}` | Invokes a custom instance function. |
