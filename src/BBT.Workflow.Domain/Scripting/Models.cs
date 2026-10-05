@@ -850,6 +850,9 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
 
     /// <summary>
     /// Merges one completed parallel branch — a round of one. See <see cref="MergeParallelBranches"/>.
+    /// Calling this once per branch is NOT a round merge: sibling branches merged one call at a time
+    /// cannot detect each other's conflicting writes. Merge siblings together with
+    /// <see cref="MergeParallelBranches"/>.
     /// </summary>
     public void MergeParallelBranch(ScriptContext branch)
     {
@@ -878,7 +881,8 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
         ArgumentNullException.ThrowIfNull(branches);
 
         // Pass 1, against the untouched pre-round state: collect each branch's writes and reject
-        // two branches writing one slot differently. Nothing is applied until every branch passed.
+        // two branches writing one slot differently. Slot conflicts are detected before any write is
+        // applied; a Stage mutation conflict is checked afterwards, per branch.
         var taskWrites = CollectRoundWrites(TaskResponse, branches, static b => b.TaskResponse, "output");
         var outputWrites = CollectRoundWrites(OutputResponse, branches, static b => b.OutputResponse, "output");
         var metadataWrites = CollectRoundWrites(MetaData!, branches, static b => b.MetaData!, "metadata");

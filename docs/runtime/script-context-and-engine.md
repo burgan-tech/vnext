@@ -40,11 +40,11 @@ Each task entry files its response under one slot in `context.TaskResponse` (and
 (`send-notification` → `sendNotification`). Entries at the same `order` run in parallel and are
 merged by slot, so two entries at one order must use distinct slots — the same task listed twice
 (e.g. two SubProcess starts) needs a `variableKey` on at least one of them. Publish rejects a
-same-order collision (`WorkflowValidator`, `FunctionComponentValidator`). Reusing a slot at a
-later order is safe when that order has a single entry. A parallel group (two or more entries at
-one order) must not reuse a slot already written earlier in the same transition: known limitation,
-the parallel merge compares each branch against the slots inherited from earlier orders and hooks
-and throws "Parallel tasks produced conflicting output" when the payload differs. An extension's
+same-order collision (`WorkflowValidator`, `FunctionComponentValidator`). A later order may reuse a
+slot: its write overwrites the earlier value whether that order runs one entry or a parallel group.
+The parallel merge (`ScriptContext.MergeParallelBranches`) compares only the slots the branches of
+one group actually wrote, and throws "Parallel tasks produced conflicting output" only when two
+branches of the same group write one slot with different payloads. An extension's
 task entry files its response under the extension's own key; a `variableKey` there is ignored (the
 extension key wins). The value is used verbatim: `context.TaskResponse["primaryChild"]`.
 

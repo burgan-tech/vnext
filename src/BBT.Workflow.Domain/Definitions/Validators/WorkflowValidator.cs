@@ -993,9 +993,9 @@ public class WorkflowValidator
     /// Entries at the same order run in parallel and are merged by slot
     /// (<see cref="OnExecuteTask.ResponseVariableKey"/>); two entries filing under one slot carry
     /// different payloads (a SubProcess returns its new instance id, every response its own duration),
-    /// so the merge would throw at run time. Reusing a slot at a later order is safe when that order has
-    /// one entry; a parallel group must not reuse a slot already written earlier in the same transition
-    /// (known limitation: the merge compares branches against inherited slots).
+    /// so the merge would throw at run time. A later order may reuse a slot: its
+    /// write overwrites the earlier value, whether that order runs one entry or a parallel group (the
+    /// merge compares only the slots the branches of one group actually wrote).
     /// </summary>
     private static void ValidateTaskCollection(
         IEnumerable<OnExecuteTask> tasks,
