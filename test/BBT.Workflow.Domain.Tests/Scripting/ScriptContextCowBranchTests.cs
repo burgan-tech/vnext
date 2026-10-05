@@ -325,4 +325,26 @@ public class ScriptContextCowBranchTests
             "SetStandardResponse"
         });
     }
+
+    [Fact]
+    public void MergeParallelBranches_SlotConflict_LeavesTheParentUntouched()
+    {
+        var parent = ParentContext();
+        object? seedBefore = parent.TaskResponse["seedTask"];
+        var bodyBefore = BodyJson(parent);
+
+        var writesNew = parent.CreateParallelBranch();
+        writesNew.SetStandardResponse(new StandardTaskResponse { Data = new { Fresh = 1 }, IsSuccess = true }, "freshTask");
+        var first = parent.CreateParallelBranch();
+        first.SetStandardResponse(new StandardTaskResponse { Data = new { V = 1 }, IsSuccess = true }, "sharedTask");
+        var second = parent.CreateParallelBranch();
+        second.SetStandardResponse(new StandardTaskResponse { Data = new { V = 2 }, IsSuccess = true }, "sharedTask");
+
+        Assert.Throws<InvalidOperationException>(() => parent.MergeParallelBranches([writesNew, first, second]));
+
+        Assert.False(parent.TaskResponse.ContainsKey("freshTask"));
+        Assert.False(parent.TaskResponse.ContainsKey("sharedTask"));
+        Assert.True(ReferenceEquals(seedBefore, (object?)parent.TaskResponse["seedTask"]));
+        Assert.Equal(bodyBefore, BodyJson(parent));
+    }
 }

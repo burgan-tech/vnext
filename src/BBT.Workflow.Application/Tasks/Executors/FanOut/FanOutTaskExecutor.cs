@@ -564,8 +564,9 @@ public sealed class FanOutTaskExecutor : TaskExecutorBase<FanOutTask>
         FanOutBatchCancellation.ItemWindow window,
         long startTimestamp)
     {
-        // The branch is DISCARDED, never merged back. MergeParallelBranch would collide N item
-        // responses on the single inner task key (MergeDictionary throws on a duplicate), and the
+        // The branch is DISCARDED, never merged back. N items filing under the single inner task
+        // slot are N different writers of one slot in one round, which MergeParallelBranches
+        // rejects as a conflict, and the
         // batch's write point is the output handler, not the items. Branch creation is copy-on-
         // write (Body shared until the item's first write, dictionaries container-copied), so the
         // per-item cost is small. It is also not disposed: the RelatedInstanceAccessor memo is

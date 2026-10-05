@@ -47,6 +47,8 @@ one group actually wrote, and throws "Parallel tasks produced conflicting output
 branches of the same group write one slot with different payloads. An extension's
 task entry files its response under the extension's own key; a `variableKey` there is ignored (the
 extension key wins). The value is used verbatim: `context.TaskResponse["primaryChild"]`.
+Inside a parallel task, assign the slot (`context.TaskResponse["x"] = ...`); mutating an inherited
+value in place is invisible to the merge and is shared with sibling tasks.
 
 ## Failure Modes
 
