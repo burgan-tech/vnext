@@ -265,7 +265,7 @@ public class InstanceQueryAppServiceDataHistoryTests : IDisposable
     }
 
     [Fact]
-    public async Task GetInstanceDataHistoryRowAsync_WhenRowIsUnknownOrOfAnotherInstance_ReturnsInstanceDataNotFound()
+    public async Task GetInstanceDataHistoryRowAsync_WhenRowIsUnknown_ReturnsInstanceDataNotFound()
     {
         var instance = CreateInstanceWithRows(out _);
         SetupInstanceAndFlow(instance);

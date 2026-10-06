@@ -296,6 +296,15 @@
       ],
       "schemaPath": "incident"
     },
+    "instanceDataHistory": {
+      "since": "0.0.100",
+      "status": "stable",
+      "description": "Read-only paged history of an instance's data: one InstancesData row per data write, newest first. GET .../instances/{instance}/data/history returns { items, page, pageSize <= 100, hasNext } where each item carries id, version, versionNo, enteredAt, eTag, isLatest and data; includeData=false returns metadata only. GET .../data/history/{rowId} returns one row and answers 404 (Instance:100013) when the row is unknown or belongs to another instance. Every row's data goes through the same per-caller exposure pass as the data function (schema field filtering and secret handling) - the raw stored form is never returned. No in-process queryRoles gate: the gateway decides via authorize?queryRoles=true, like the incident history. No schema or table change and no ResponseShapeVersion change.",
+      "apiEndpoints": [
+        "GET {domain}/workflows/{workflow}/instances/{instance}/data/history",
+        "GET {domain}/workflows/{workflow}/instances/{instance}/data/history/{rowId}"
+      ]
+    },
     "taskAndActionHistory": {
       "since": "0.0.93",
       "status": "stable",
