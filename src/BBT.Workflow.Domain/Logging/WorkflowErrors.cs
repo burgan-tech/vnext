@@ -73,6 +73,18 @@ public static class WorkflowErrors
             $"Instance data not found for key {key} and version {version}",
             target: $"{key}@{version}");
 
+    /// <summary>
+    /// The data row addressed by the data-history row read does not exist or belongs to a different instance than
+    /// the one in the route — a data row is never served across instances.
+    /// </summary>
+    /// <param name="rowId">The requested data row id.</param>
+    /// <param name="instanceIdentifier">The instance id or key from the route.</param>
+    public static Error InstanceDataRowNotFound(Guid rowId, string instanceIdentifier)
+        => Error.NotFound(
+            WorkflowErrorCodes.NotFoundInstanceData,
+            $"Data row \"{rowId}\" not found for instance \"{instanceIdentifier}\"",
+            target: rowId.ToString());
+
     #endregion
 
     #region Workflow Definition Errors

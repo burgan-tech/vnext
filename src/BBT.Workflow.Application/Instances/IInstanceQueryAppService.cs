@@ -75,6 +75,23 @@ public interface IInstanceQueryAppService : IApplicationService
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Pages the data rows of an instance, newest first. With <see cref="GetInstanceDataHistoryInput.IncludeData"/>
+    /// each row's data goes through the same exposure pass as the data function (<c>x-roles</c> → <c>x-masking</c>
+    /// → <c>x-encryption</c>); the stored form is never served.
+    /// </summary>
+    Task<Result<GetInstanceDataHistoryOutput>> GetInstanceDataHistoryAsync(
+        GetInstanceDataHistoryInput input,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// One data row of an instance, exposed like the data function. <c>NotFound</c> when the row does not exist or
+    /// belongs to a different instance.
+    /// </summary>
+    Task<Result<InstanceDataHistoryItemDto>> GetInstanceDataHistoryRowAsync(
+        GetInstanceDataHistoryRowInput input,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Returns the newest unresolved incident of an instance, or <c>NotFound</c> when none is open.
     /// The target of the <c>incident.active</c> link; gated by the same <c>queryRoles</c> check as the
     /// state function.

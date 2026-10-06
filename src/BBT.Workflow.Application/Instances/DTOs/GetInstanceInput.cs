@@ -185,6 +185,83 @@ public sealed class GetInstanceIncidentsInput : IHasDomain
 }
 
 /// <summary>
+/// Input for the paged data-row history of an instance.
+/// </summary>
+public sealed class GetInstanceDataHistoryInput : IHasDomain
+{
+    [Required]
+    [StringLength(WorkflowConstants.MaxDomainLength)]
+    public string Domain { get; set; } = string.Empty;
+
+    [Required]
+    [StringLength(WorkflowConstants.MaxFlowLength)]
+    public string Workflow { get; set; } = string.Empty;
+
+    [Required]
+    public string Instance { get; set; } = string.Empty;
+
+    /// <summary>1-based page number (default 1).</summary>
+    public int Page { get; set; } = 1;
+
+    /// <summary>Page size (default 20, max 100).</summary>
+    public int PageSize { get; set; } = 20;
+
+    /// <summary>
+    /// Whether each row carries its (exposed) data. <c>false</c> serves the row metadata only and skips the
+    /// exposure pass entirely (default <c>true</c>).
+    /// </summary>
+    public bool IncludeData { get; set; } = true;
+
+    /// <summary>HTTP headers from the request (dynamic role grants and the exposure pass read them).</summary>
+    public Dictionary<string, string?>? Headers { get; set; }
+
+    /// <summary>Query parameters from the request (dynamic role grants and the exposure pass read them).</summary>
+    public Dictionary<string, string?>? QueryParameters { get; set; }
+
+    /// <summary>
+    /// Caller roles as the configured provider resolved them. Not read for a decision here; carried for parity with
+    /// the other instance reads.
+    /// </summary>
+    public IReadOnlyCollection<string>? Roles { get; set; }
+
+    /// <summary>Upper bound applied to <see cref="PageSize"/>.</summary>
+    public const int MaxPageSize = 100;
+}
+
+/// <summary>
+/// Input for one data row of an instance's data history.
+/// </summary>
+public sealed class GetInstanceDataHistoryRowInput : IHasDomain
+{
+    [Required]
+    [StringLength(WorkflowConstants.MaxDomainLength)]
+    public string Domain { get; set; } = string.Empty;
+
+    [Required]
+    [StringLength(WorkflowConstants.MaxFlowLength)]
+    public string Workflow { get; set; } = string.Empty;
+
+    [Required]
+    public string Instance { get; set; } = string.Empty;
+
+    /// <summary>The data row's id, as listed by the data-history read.</summary>
+    [Required]
+    public Guid RowId { get; set; }
+
+    /// <summary>HTTP headers from the request (dynamic role grants and the exposure pass read them).</summary>
+    public Dictionary<string, string?>? Headers { get; set; }
+
+    /// <summary>Query parameters from the request (dynamic role grants and the exposure pass read them).</summary>
+    public Dictionary<string, string?>? QueryParameters { get; set; }
+
+    /// <summary>
+    /// Caller roles as the configured provider resolved them. Not read for a decision here; carried for parity with
+    /// the other instance reads.
+    /// </summary>
+    public IReadOnlyCollection<string>? Roles { get; set; }
+}
+
+/// <summary>
 /// Input for the tasks system function of an instance.
 /// </summary>
 public sealed class GetInstanceTasksInput : IHasDomain

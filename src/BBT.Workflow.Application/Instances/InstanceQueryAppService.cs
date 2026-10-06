@@ -784,6 +784,94 @@ public sealed class InstanceQueryAppService(
             });
     }
 
+    /// <inheritdoc />
+    /// <remarks>
+    /// Rows are exposed one after another through <see cref="IInstanceDataReadService.ExposeAsync"/>, so a page of
+    /// rows carrying <c>x-encryption</c> tokens preloads the instance's secrets once per such row. Acceptable for a
+    /// developer read capped at <see cref="GetInstanceDataHistoryInput.MaxPageSize"/> rows; the list page reader is
+    /// not reused because it preloads per instance from the LATEST row only.
+    /// </remarks>
+    public async Task<Result<GetInstanceDataHistoryOutput>> GetInstanceDataHistoryAsync(
+        GetInstanceDataHistoryInput input,
+        CancellationToken cancellationToken = default)
+    {
+        runtimeInfoProvider.Check(input.Domain);
+
+        using var read = InstanceReadActivityHelper.StartRead(
+            InstanceReadKinds.DataHistory, input.Domain, input.Workflow);
+
+        var page = input.Page < 1 ? 1 : input.Page;
+        var pageSize = Math.Clamp(input.PageSize, 1, GetInstanceDataHistoryInput.MaxPageSize);
+
+        return await GetInstanceByIdOrKeyAsync(input.Instance, cancellationToken)
+            .BindAsync(instance =>
+                componentCacheStore.GetFlowAsync(input.Domain, input.Workflow, instance.FlowVersion, cancellationToken)
+                    .MapAsync(workflow => (instance, workflow)))
+            .BindAsync(async data =>
+            {
+                using var instanceScope = BeginInstanceScope(data.instance);
+
+                var paged = await instanceRepository.GetDataHistoryPagedAsync(
+                    data.instance.Id, page, pageSize, cancellationToken);
+
+                var requestContext = new AuthorizationRequestContext(input.Headers, input.QueryParameters);
+                var items = new List<InstanceDataHistoryItemDto>(paged.Items.Count);
+                foreach (var row in paged.Items)
+                {
+                    var exposed = input.IncludeData
+                        ? await instanceDataReadService.ExposeAsync(
+                            data.workflow, data.instance, row, requestContext, cancellationToken)
+                        : null;
+                    items.Add(InstanceDataHistoryItemDto.FromRow(row, exposed));
+                }
+
+                return Result<GetInstanceDataHistoryOutput>.Ok(new GetInstanceDataHistoryOutput
+                {
+                    Items = items,
+                    Page = paged.CurrentPage,
+                    PageSize = paged.PageSize,
+                    HasNext = paged.HasNext
+                });
+            });
+    }
+
+    /// <inheritdoc />
+    public async Task<Result<InstanceDataHistoryItemDto>> GetInstanceDataHistoryRowAsync(
+        GetInstanceDataHistoryRowInput input,
+        CancellationToken cancellationToken = default)
+    {
+        runtimeInfoProvider.Check(input.Domain);
+
+        using var read = InstanceReadActivityHelper.StartRead(
+            InstanceReadKinds.DataHistory, input.Domain, input.Workflow);
+
+        return await GetInstanceByIdOrKeyAsync(input.Instance, cancellationToken)
+            .BindAsync(instance =>
+                componentCacheStore.GetFlowAsync(input.Domain, input.Workflow, instance.FlowVersion, cancellationToken)
+                    .MapAsync(workflow => (instance, workflow)))
+            .BindAsync(async data =>
+            {
+                using var instanceScope = BeginInstanceScope(data.instance);
+
+                var row = await instanceRepository.FindDataRowAsync(data.instance.Id, input.RowId, cancellationToken);
+
+                // The repository already filters on both ids; the second check keeps a row of another instance
+                // from ever being exposed should that contract slip.
+                if (row is null || row.InstanceId != data.instance.Id)
+                {
+                    return Result<InstanceDataHistoryItemDto>.Fail(
+                        WorkflowErrors.InstanceDataRowNotFound(input.RowId, input.Instance));
+                }
+
+                var exposed = await instanceDataReadService.ExposeAsync(
+                    data.workflow, data.instance, row,
+                    new AuthorizationRequestContext(input.Headers, input.QueryParameters),
+                    cancellationToken);
+
+                return Result<InstanceDataHistoryItemDto>.Ok(InstanceDataHistoryItemDto.FromRow(row, exposed));
+            });
+    }
+
     public async Task<Result<GetInstanceHistoryOutput>> GetInstanceHistoryAsync(
         GetInstanceHistoryInput input,
         CancellationToken cancellationToken = default)
