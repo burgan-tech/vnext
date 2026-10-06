@@ -161,12 +161,12 @@ public class InstanceQueryAppServiceDataHistoryTests : IDisposable
             });
 
         var result = await _service.GetInstanceDataHistoryAsync(
-            CreateInput(instance.Id.ToString()), CancellationToken.None);
+            CreateInput(instance.Id.ToString(), headers: CallerHeaders, query: CallerQuery), CancellationToken.None);
 
         result.IsSuccess.ShouldBeTrue();
         await _schemaFieldFilterService.Received(rows.Count)
             .ApplyAsync(Arg.Any<Definitions.Workflow?>(), Arg.Any<JsonElement?>(), Arg.Any<Instance>(),
-                Arg.Any<AuthorizationRequestContext?>(), Arg.Any<CancellationToken>(),
+                Arg.Is<AuthorizationRequestContext?>(c => IsCallerContext(c)), Arg.Any<CancellationToken>(),
                 Arg.Any<IReadOnlyDictionary<string, string>?>());
         foreach (var item in result.Value!.Items)
         {
@@ -250,7 +250,7 @@ public class InstanceQueryAppServiceDataHistoryTests : IDisposable
             .Returns(Task.FromResult<JsonElement?>(Json("""{ "masked": "***" }""")));
 
         var result = await _service.GetInstanceDataHistoryRowAsync(
-            CreateRowInput(instance.Id.ToString(), row.Id), CancellationToken.None);
+            CreateRowInput(instance.Id.ToString(), row.Id, CallerHeaders, CallerQuery), CancellationToken.None);
 
         result.IsSuccess.ShouldBeTrue();
         var item = result.Value!;
@@ -260,7 +260,7 @@ public class InstanceQueryAppServiceDataHistoryTests : IDisposable
         item.Data!.Value.GetProperty("masked").GetString().ShouldBe("***");
         await _schemaFieldFilterService.Received(1)
             .ApplyAsync(Arg.Any<Definitions.Workflow?>(), Arg.Any<JsonElement?>(), Arg.Any<Instance>(),
-                Arg.Any<AuthorizationRequestContext?>(), Arg.Any<CancellationToken>(),
+                Arg.Is<AuthorizationRequestContext?>(c => IsCallerContext(c)), Arg.Any<CancellationToken>(),
                 Arg.Any<IReadOnlyDictionary<string, string>?>());
     }
 
@@ -323,25 +323,39 @@ public class InstanceQueryAppServiceDataHistoryTests : IDisposable
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
-    private static GetInstanceDataHistoryInput CreateInput(string instance, int page = 1, int pageSize = 20) => new()
+    private static readonly Dictionary<string, string?> CallerHeaders =
+        new Dictionary<string, string?> { ["X-Caller"] = "caller-1" };
+
+    private static readonly Dictionary<string, string?> CallerQuery =
+        new Dictionary<string, string?> { ["tenant"] = "tenant-1" };
+
+    /// <summary>Matches the request context built from <see cref="CallerHeaders"/> / <see cref="CallerQuery"/>.</summary>
+    private static bool IsCallerContext(AuthorizationRequestContext? context) =>
+        context is not null
+        && context.Headers is not null && context.Headers["X-Caller"] == "caller-1"
+        && context.QueryParameters is not null && context.QueryParameters["tenant"] == "tenant-1";
+
+    private static GetInstanceDataHistoryInput CreateInput(string instance, int page = 1, int pageSize = 20,
+        Dictionary<string, string?>? headers = null, Dictionary<string, string?>? query = null) => new()
     {
         Domain = TestDomain,
         Workflow = TestWorkflow,
         Instance = instance,
         Page = page,
         PageSize = pageSize,
-        Headers = new Dictionary<string, string?>(),
-        QueryParameters = new Dictionary<string, string?>()
+        Headers = headers ?? new Dictionary<string, string?>(),
+        QueryParameters = query ?? new Dictionary<string, string?>()
     };
 
-    private static GetInstanceDataHistoryRowInput CreateRowInput(string instance, Guid rowId) => new()
+    private static GetInstanceDataHistoryRowInput CreateRowInput(string instance, Guid rowId,
+        Dictionary<string, string?>? headers = null, Dictionary<string, string?>? query = null) => new()
     {
         Domain = TestDomain,
         Workflow = TestWorkflow,
         Instance = instance,
         RowId = rowId,
-        Headers = new Dictionary<string, string?>(),
-        QueryParameters = new Dictionary<string, string?>()
+        Headers = headers ?? new Dictionary<string, string?>(),
+        QueryParameters = query ?? new Dictionary<string, string?>()
     };
 
     private static JsonElement Json(string json)
