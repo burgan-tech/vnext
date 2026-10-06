@@ -656,16 +656,28 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
     public void SetStandardResponse(StandardTaskResponse response, string? taskKey = null)
     {
         ThrowIfDisposed();
-        var value = MergeToBody(response, JsonScriptBodyOptions);
-        if (!string.IsNullOrWhiteSpace(taskKey) && value != null)
+        if (response == null)
+            return;
+
+        var value = ToDynamic(response, JsonScriptBodyOptions);
+        if (value == null)
+            return;
+
+        if (!string.IsNullOrWhiteSpace(taskKey))
         {
-            // The merge above aliases this tree into Body (a null Body IS it; a non-null Body
-            // absorbs its subtrees by reference), and ExpandoObjectMergeStrategy mutates its merge
-            // target in place — so a slot sharing that structure is rewritten by the NEXT task's
-            // merge, and every slot ends up carrying the last task's payload (the two-tasks-in-one-
-            // function collision). The slot must own an isolated copy, in both directions: later
-            // Body merges cannot reach it, and a script mutating it cannot write through into Body.
+            // Populate isolated slot copy before merging into Body.
+            // Decouples the slot copy so subsequent Body merges or key collisions cannot mutate it.
             TaskResponse[taskKey!] = DynamicCloner.DeepClone(value);
+        }
+
+        EnsureBodyOwned();
+        if (Body == null)
+        {
+            Body = value;
+        }
+        else
+        {
+            ExpandoObjectMergeStrategy.Merge(Body, value);
         }
     }
 

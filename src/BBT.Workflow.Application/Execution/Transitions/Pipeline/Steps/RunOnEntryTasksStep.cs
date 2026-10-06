@@ -141,7 +141,7 @@ public sealed class RunOnEntryTasksStep(
         }
         
         context.ApplyScriptContextChanges(scriptContext);
-        await instanceRepository.UpdateAsync(context.Instance, true, cancellationToken);
+        await instanceRepository.UpdateAsync(context.Instance, false, cancellationToken);
         
         return Result<StepOutcome>.Ok(StepOutcome.Continue());
     }

@@ -10,7 +10,8 @@ namespace BBT.Workflow.Execution.Pipeline.Steps;
 /// Updates the transition record and performs cleanup operations.
 /// </summary>
 public sealed class FinalizeTransitionStep(
-    IInstanceTransitionRepository instanceTransitionRepository) : ITransitionStep
+    IInstanceTransitionRepository instanceTransitionRepository,
+    IInstanceRepository instanceRepository) : ITransitionStep
 {
     /// <inheritdoc />
     public int Order => LifecycleOrder.Finalize;
@@ -41,6 +42,9 @@ public sealed class FinalizeTransitionStep(
         ResolveIncidentOnSuccessfulErrorBoundaryTransition(context);
 
         PerformCleanup(context);
+
+        // Consolidated flush of all instance changes accumulated across transition steps (OnExit, ChangeState, OnExecute, OnEntry).
+        await instanceRepository.UpdateAsync(context.Instance, true, cancellationToken);
 
         return Result<StepOutcome>.Ok(StepOutcome.Continue());
     }

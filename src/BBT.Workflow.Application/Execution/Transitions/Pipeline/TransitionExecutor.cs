@@ -105,7 +105,7 @@ public sealed class TransitionExecutor
     /// </summary>
     private static Dictionary<string, object> BuildLogScope(TransitionExecutionContext context)
     {
-        var props = new Dictionary<string, object>
+        var props = new Dictionary<string, object>(14, StringComparer.Ordinal)
         {
             [TelemetryConstants.TagNames.Domain]    = context.Domain,
             [TelemetryConstants.TagNames.Flow]    = context.Workflow.Key,
@@ -234,29 +234,33 @@ public sealed class TransitionExecutor
         TransitionExecutionContext context,
         PipelineExecutionProfile profile)
     {
-        var ordered = _steps
-            .Where(s => !profile.ExcludedStepOrders.Contains(s.Order))
-            .ToList();
-
         var startOrder = context.Directives.ConsumeResumeFrom();
-        if (startOrder.HasValue)
-            ordered = ordered.Where(s => s.Order >= startOrder.Value).ToList();
+        var terminalReached = context.Directives.TerminalReached;
+        var skipEpilogue = context.Directives.Epilogue == EpilogueMode.Skip;
+        var excluded = profile.ExcludedStepOrders;
 
-        if (context.Directives.TerminalReached)
+        var result = new List<ITransitionStep>(_steps.Count);
+        for (var i = 0; i < _steps.Count; i++)
         {
-            var maxOrder = LifecycleOrder.Finalize;
-            ordered = ordered.Where(s => s.Order <= maxOrder).ToList();
+            var step = _steps[i];
+            var order = step.Order;
+
+            if (excluded.Contains(order))
+                continue;
+
+            if (startOrder.HasValue && order < startOrder.Value)
+                continue;
+
+            if (terminalReached && order > LifecycleOrder.Finalize)
+                continue;
+
+            if (skipEpilogue && (order == LifecycleOrder.Schedule || order == LifecycleOrder.Auto))
+                continue;
+
+            result.Add(step);
         }
 
-        if (context.Directives.Epilogue == EpilogueMode.Skip)
-        {
-            ordered = ordered
-                .Where(s => s.Order != LifecycleOrder.Schedule &&
-                            s.Order != LifecycleOrder.Auto)
-                .ToList();
-        }
-
-        return ordered;
+        return result;
     }
 
     /// <summary>

@@ -50,17 +50,36 @@ public static class DynamicCloner
         return value switch
         {
             ExpandoObject expando => CloneExpando(expando, depth + 1),
-            List<object?> list => list.ConvertAll(item => DeepClone(item, depth + 1)),
-            object?[] array => Array.ConvertAll(array, item => DeepClone(item, depth + 1)),
+            List<object?> list => CloneList(list, depth + 1),
+            object?[] array => CloneArray(array, depth + 1),
             _ => value // leaf: string / number / bool / null / JsonElement — immutable, share
         };
+    }
+
+    private static List<object?> CloneList(List<object?> list, int depth)
+    {
+        var count = list.Count;
+        var copy = new List<object?>(count);
+        for (var i = 0; i < count; i++)
+            copy.Add(DeepClone(list[i], depth));
+        return copy;
+    }
+
+    private static object?[] CloneArray(object?[] array, int depth)
+    {
+        var length = array.Length;
+        var copy = new object?[length];
+        for (var i = 0; i < length; i++)
+            copy[i] = DeepClone(array[i], depth);
+        return copy;
     }
 
     private static ExpandoObject CloneExpando(ExpandoObject source, int depth)
     {
         var clone = new ExpandoObject();
         var target = (IDictionary<string, object?>)clone;
-        foreach (var (key, value) in (IDictionary<string, object?>)source)
+        var src = (IDictionary<string, object?>)source;
+        foreach (var (key, value) in src)
             target[key] = DeepClone(value, depth);
         return clone;
     }
