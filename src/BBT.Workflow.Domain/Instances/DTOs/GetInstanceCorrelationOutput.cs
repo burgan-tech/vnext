@@ -134,7 +134,8 @@ public sealed class InstanceCorrelationNode
 
     /// <summary>
     /// Why the subtree is incomplete, when <see cref="Resolved"/> is false: <c>depth-exceeded</c>,
-    /// <c>hop-failed</c>, or <c>instance-missing</c>. Omitted on a fully walked node.
+    /// <c>hop-failed</c>, <c>instance-missing</c>, or <c>hop-unsupported</c> (the partner domain runs a
+    /// runtime without the batch route). Omitted on a fully walked node.
     /// </summary>
     public string? UnresolvedReason { get; set; }
 }

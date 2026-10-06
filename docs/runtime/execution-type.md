@@ -8,7 +8,7 @@ executes, independently of what the caller asks for. vnext#1003.
 - **`A`** (asynchronous) — the request is accepted and the pipeline runs in the background via the
   scheduler (HTTP `202 Accepted`, `{ id, status }`); the client polls the state function.
 
-It is an optional string enum (`S` / `A`, upper-case only) on both the **flow** definition
+It is an optional string enum (`S` / `A`; the vnext-schema enum enforces upper case at authoring, while the runtime parses case-insensitively and trims, so `"s"` is accepted on publish) on both the **flow** definition
 (`attributes.executionType`) and **transition** definitions (state, shared, and start transitions).
 
 ## Non-breaking by construction
