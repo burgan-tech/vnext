@@ -23,6 +23,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Filters;
 using BBT.Workflow.Authorization;
 using BBT.Workflow.Logging;
+using BBT.Workflow.Schedule;
 
 using BBT.Workflow.Instances.HumanTask;
 
@@ -47,6 +48,7 @@ public sealed class InstanceController(
     ITransitionJobEnqueuer transitionJobEnqueuer,
     IInstanceCommandGateway instanceCommandGateway,
     IEventAppService eventAppService,
+    IInstanceScheduleAppService scheduleAppService,
     IRelatedInstanceQueryAppService relatedInstanceQueryAppService,
     BBT.Workflow.Instances.HumanTask.IHumanTaskLeafResolver humanTaskLeafResolver,
     BBT.Workflow.Instances.Correlation.IInstanceCorrelationResolver instanceCorrelationResolver,
@@ -877,6 +879,101 @@ public sealed class InstanceController(
 
         var result = await eventAppService.HandleAsync(input, cancellationToken);
         return EventDeliveryResultMapper.ToActionResult(result, input, HttpContext, Logger);
+    }
+
+    /// <summary>
+    /// Starts a new workflow instance because a schedule fired. Driven by a Dapr cron input binding
+    /// whose <c>route</c> points here; any scheduler able to POST will do.
+    /// Internal integration endpoint — hidden from the public API surface.
+    /// </summary>
+    /// <param name="domain">Target domain.</param>
+    /// <param name="workflow">Target workflow key.</param>
+    /// <param name="scheduleId">
+    /// Identity of the schedule that fired. Keeps two components targeting the same workflow apart when
+    /// their schedules coincide; omit it and coincident ticks of the same workflow collapse into one
+    /// instance.
+    /// </param>
+    /// <param name="sync">When true, blocks until the pipeline reaches a rest point.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    /// <remarks>
+    /// <para>
+    /// Separate from <c>instances/events</c> by design. An event delivery carries a message a mapping
+    /// script must interpret; a tick carries only "the time arrived". Routing schedules through the
+    /// event path would force every schedulable workflow to ship an <c>event.mapping</c> script whose
+    /// only job is to invent a key.
+    /// </para>
+    /// <para>
+    /// <b>The body is ignored.</b> Dapr's cron binding sends none, and forwards none of the component's
+    /// own metadata, so seed data travels as query parameters instead: every parameter other than
+    /// <c>scheduleId</c> and <c>sync</c> becomes an instance attribute, always as a string.
+    /// </para>
+    /// <para>
+    /// <b>Every replica fires.</b> The cron binding has no leader election, so an N-replica deployment
+    /// calls this N times per tick. The instance key is derived from the tick instant carried in the
+    /// <c>readtimeutc</c> header, so all N calls agree on it and the start path's key idempotency
+    /// collapses them into one instance — each caller is answered <c>SUCCESS</c>.
+    /// </para>
+    /// <para>
+    /// The response is an <see cref="EventDeliveryResponse"/>, not an instance envelope, for the same
+    /// reason the event endpoint returns one: a Dapr-shaped body is safe for any Dapr caller. Dapr's
+    /// cron binding discards the response entirely — a failed tick is never redelivered.
+    /// </para>
+    /// </remarks>
+    /// <response code="200">Dapr signal: <c>SUCCESS</c> when the instance was started (or already existed for this tick), <c>DROP</c> when the tick can never be processed.</response>
+    /// <response code="500">Transient failure.</response>
+    [ApiExplorerSettings(IgnoreApi = true)]
+    [HttpPost("{domain}/workflows/{workflow}/instances/schedule")]
+    [ProducesResponseType(typeof(EventDeliveryResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status500InternalServerError)]
+    public async Task<IActionResult> ScheduleStartAsync(
+        [FromRoute] string domain,
+        [FromRoute] string workflow,
+        [FromQuery] string? scheduleId = null,
+        [FromQuery] bool sync = false,
+        CancellationToken cancellationToken = default)
+    {
+        var input = new ScheduledStartInput
+        {
+            Domain = domain,
+            Workflow = workflow,
+            ScheduleId = scheduleId,
+            Sync = sync,
+            Attributes = ReadScheduleAttributes(HttpContext.Request.Query),
+            Headers = HttpContext.Request.Headers
+                .ToDictionary(h => h.Key.ToLower(), h => h.Value.FirstOrDefault())
+        };
+
+        var result = await scheduleAppService.StartAsync(input, cancellationToken);
+        return ScheduledStartResultMapper.ToActionResult(result, input, HttpContext, Logger);
+    }
+
+    /// <summary>
+    /// Query parameters that steer the endpoint itself and must not leak into the started instance's
+    /// data. Everything else in the query string is seed data.
+    /// </summary>
+    private static readonly HashSet<string> ReservedScheduleQueryKeys =
+        new(StringComparer.OrdinalIgnoreCase) { "scheduleId", "sync" };
+
+    /// <summary>
+    /// Projects the query string onto the new instance's initial attributes, dropping the reserved
+    /// keys. A repeated parameter keeps its first value: a schedule's seed data is configuration, and
+    /// silently concatenating duplicates would hide a typo in the component YAML.
+    /// </summary>
+    internal static Dictionary<string, string> ReadScheduleAttributes(IQueryCollection query)
+    {
+        var attributes = new Dictionary<string, string>();
+
+        foreach (var parameter in query)
+        {
+            if (ReservedScheduleQueryKeys.Contains(parameter.Key))
+                continue;
+
+            var value = parameter.Value.FirstOrDefault();
+            if (value is not null)
+                attributes[parameter.Key] = value;
+        }
+
+        return attributes;
     }
 
     /// <summary>

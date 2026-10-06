@@ -17,6 +17,7 @@ using BBT.Workflow.SubFlow;
 using BBT.Workflow.Authorization;
 using BBT.Workflow.BackgroundJobs;
 using BBT.Workflow.Events;
+using BBT.Workflow.Schedule;
 using BBT.Workflow.Functions;
 using BBT.Workflow.Functions.Contracts;
 using Microsoft.Extensions.Options;
@@ -149,6 +150,7 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
         services.AddScoped<IFunctionMetricsAppService, FunctionMetricsAppService>();
         services.AddScoped<IFunctionInfoAppService, FunctionInfoAppService>();
         services.AddScoped<IEventAppService, EventAppService>();
+        services.AddScoped<IInstanceScheduleAppService, InstanceScheduleAppService>();
         services.AddScoped<IInstanceSelectorResolver, InstanceSelectorResolver>();
         services.AddScoped<IComponentDiscoveryAppService, ComponentDiscoveryAppService>();
         services.AddScoped<ITransitionAuthorizationManager, TransitionAuthorizationManager>();

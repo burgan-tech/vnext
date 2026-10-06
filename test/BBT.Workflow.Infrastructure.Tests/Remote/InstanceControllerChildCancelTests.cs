@@ -7,6 +7,7 @@ using BBT.Aether.Results;
 using BBT.Aether.Users;
 using BBT.Workflow.BackgroundJobs;
 using BBT.Workflow.Events;
+using BBT.Workflow.Schedule;
 using BBT.Workflow.Gateway;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Instances.Events;
@@ -246,6 +247,7 @@ public sealed class InstanceControllerChildCancelTests
         Substitute.For<ITransitionJobEnqueuer>(),
         Substitute.For<IInstanceCommandGateway>(),
         Substitute.For<IEventAppService>(),
+            Substitute.For<IInstanceScheduleAppService>(),
         relatedInstanceQueryAppService ?? Substitute.For<IRelatedInstanceQueryAppService>(), Substitute.For<BBT.Workflow.Instances.HumanTask.IHumanTaskLeafResolver>(),
             Substitute.For<BBT.Workflow.Instances.Correlation.IInstanceCorrelationResolver>(),
         new DefaultCallerRoleResolver(Substitute.For<ICurrentUser>()));
