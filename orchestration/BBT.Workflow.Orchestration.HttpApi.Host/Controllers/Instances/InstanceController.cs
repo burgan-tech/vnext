@@ -1125,7 +1125,8 @@ public sealed class InstanceController(
     /// Pages the instance data history (one row per data write), newest first. Each row's data goes
     /// through the same per-caller exposure as the <c>data</c> function (field filtering and secret
     /// handling), never the raw stored form. Not gated here: <c>queryRoles</c> is answered by
-    /// <c>authorize?queryRoles=true</c>, which the gateway consults before forwarding.
+    /// <c>authorize?queryRoles=true</c>, which the gateway consults before forwarding. Hidden from the
+    /// public Swagger group: it serves local-development tooling (vNext Forge Instance Monitor).
     /// </summary>
     /// <param name="domain">Domain key</param>
     /// <param name="workflow">Workflow key</param>
@@ -1134,6 +1135,7 @@ public sealed class InstanceController(
     /// <param name="pageSize">Page size (default 20, max 100)</param>
     /// <param name="includeData">When false, rows carry metadata only and no data (default true)</param>
     /// <param name="cancellationToken">Cancellation token</param>
+    [ApiExplorerSettings(IgnoreApi = true)]
     [HttpGet("{domain}/workflows/{workflow}/instances/{instance}/data/history")]
     public async Task<IActionResult> GetInstanceDataHistoryAsync(
         [FromRoute] string domain,
@@ -1177,6 +1179,7 @@ public sealed class InstanceController(
     /// <param name="instance">Instance id or business key</param>
     /// <param name="rowId">Data history row id</param>
     /// <param name="cancellationToken">Cancellation token</param>
+    [ApiExplorerSettings(IgnoreApi = true)]
     [HttpGet("{domain}/workflows/{workflow}/instances/{instance}/data/history/{rowId:guid}")]
     public async Task<IActionResult> GetInstanceDataHistoryRowAsync(
         [FromRoute] string domain,

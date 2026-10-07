@@ -29,8 +29,6 @@ contracts. Remote services call public runtime APIs rather than internal reposit
 | --- | --- |
 | `GET /{domain}/workflows/{workflow}/instances/{instance}/functions/state` | Conditional state response, available transitions, role filtering, ETag, child correlations, workflow function discovery links, incident summary. |
 | `GET /{domain}/workflows/{workflow}/instances/{instance}/incidents` | Paged error-boundary incident history (newest first); since 0.0.95 no in-process `queryRoles` gate — the gateway decides via `authorize?queryRoles=true`; never carries stack traces. |
-| `GET /{domain}/workflows/{workflow}/instances/{instance}/data/history` | Paged instance data history, one row per data write, newest first (`page`, `pageSize` <= 100, `includeData`); each row's data is exposed per caller exactly like the `data` function, never the raw stored form; no in-process `queryRoles` gate. |
-| `GET /{domain}/workflows/{workflow}/instances/{instance}/data/history/{rowId}` | One data-history row with the same per-caller exposure; 404 (`Instance:100013`) when the row is unknown or belongs to another instance. |
 | `GET /{domain}/workflows/{workflow}/instances/{instance}/functions/tasks` | Full task execution history in execution order (unpaged); since 0.0.95 the `queryRoles` decision belongs to the gateway (`authorize?queryRoles=true`). Execution metadata + fault reason only — journaled payloads are not exposed on any API. |
 | `GET /{domain}/workflows/{workflow}/instances/{instance}/functions/actions?taskId={id}` | Action history (execution sub-steps) of one task journal row in execution order (unpaged); `400` (`Instance:100039`) without a valid `taskId`, `404` (`Instance:100038`) when the task is not the instance's own. Same `queryRoles` gate. |
 | `GET /{domain}/workflows/{workflow}/instances/{instance}/functions/data` | Latest data, optional extensions, ETag. |
@@ -485,6 +483,16 @@ Two more back the accept-time SubFlow chain reserve (see
 | --- | --- | --- |
 | POST | `.../instances/{instance}/internal/subflow-forward?transitionKey=` | Same contract as the public transition endpoint: `200` (sync) / `202` (async), or the mapped error. The sync body is identity-only (`id`, `key`, `status`): the relay reads `status` and nothing else, so response enrichment (attributes, ETag) is suppressed on this surface. (Extensions are not evaluated on any sync write response since 0.0.93.) |
 | PUT | `.../instances/{instance}/internal/busy-release` | `200`, also when the instance is absent (no-op). |
+
+Two more serve local-development tooling (the vNext Forge Instance Monitor) rather than other runtimes.
+Unlike `internal/related-data`, they are not unfiltered: every row's data goes through the same
+per-caller exposure pass as the `data` function (schema field filtering and secret handling), and
+there is no in-process `queryRoles` gate — the gateway decides via `authorize?queryRoles=true`:
+
+| Method | Route | Response |
+| --- | --- | --- |
+| GET | `.../instances/{instance}/data/history` | `200` page of data-history rows, one per data write, newest first (`page`, `pageSize` <= 100, `includeData`). |
+| GET | `.../instances/{instance}/data/history/{rowId}` | `200` one row with the same exposure; `404` (`Instance:100013`) when the row is unknown or belongs to another instance. |
 
 The endpoint contract can represent both response modes, but current runtime-generated active-child
 forward calls always set `sync=true` and therefore await the child activation. The distinction is
