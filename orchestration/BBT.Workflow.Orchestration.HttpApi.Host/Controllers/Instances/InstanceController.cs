@@ -893,6 +893,11 @@ public sealed class InstanceController(
     /// their schedules coincide; omit it and coincident ticks of the same workflow collapse into one
     /// instance.
     /// </param>
+    /// <param name="version">
+    /// Pins the workflow version to start. Omit to start the latest published version, which is what a
+    /// schedule normally wants; supply one to keep a schedule on a known version across a deployment
+    /// that publishes a newer one. An unknown value is rejected by the start path.
+    /// </param>
     /// <param name="sync">When true, blocks until the pipeline reaches a rest point.</param>
     /// <param name="cancellationToken">A cancellation token.</param>
     /// <remarks>
@@ -905,7 +910,8 @@ public sealed class InstanceController(
     /// <para>
     /// <b>The body is ignored.</b> Dapr's cron binding sends none, and forwards none of the component's
     /// own metadata, so seed data travels as query parameters instead: every parameter other than
-    /// <c>scheduleId</c> and <c>sync</c> becomes an instance attribute, always as a string.
+    /// <c>scheduleId</c>, <c>version</c> and <c>sync</c> becomes an instance attribute, always as a
+    /// string.
     /// </para>
     /// <para>
     /// <b>Every replica fires.</b> The cron binding has no leader election, so an N-replica deployment
@@ -929,6 +935,7 @@ public sealed class InstanceController(
         [FromRoute] string domain,
         [FromRoute] string workflow,
         [FromQuery] string? scheduleId = null,
+        [FromQuery] string? version = null,
         [FromQuery] bool sync = false,
         CancellationToken cancellationToken = default)
     {
@@ -937,6 +944,7 @@ public sealed class InstanceController(
             Domain = domain,
             Workflow = workflow,
             ScheduleId = scheduleId,
+            Version = version,
             Sync = sync,
             Attributes = ReadScheduleAttributes(HttpContext.Request.Query),
             Headers = HttpContext.Request.Headers
@@ -952,7 +960,7 @@ public sealed class InstanceController(
     /// data. Everything else in the query string is seed data.
     /// </summary>
     private static readonly HashSet<string> ReservedScheduleQueryKeys =
-        new(StringComparer.OrdinalIgnoreCase) { "scheduleId", "sync" };
+        new(StringComparer.OrdinalIgnoreCase) { "scheduleId", "version", "sync" };
 
     /// <summary>
     /// Projects the query string onto the new instance's initial attributes, dropping the reserved

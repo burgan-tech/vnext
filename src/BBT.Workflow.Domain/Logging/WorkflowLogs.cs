@@ -4259,6 +4259,22 @@ public static partial class WorkflowLogs
         string flow,
         string instanceKey);
 
+    /// <summary>
+    /// Logs a scheduler tick skipped because an instance for it already exists. Distinct from the
+    /// in-flight case: here the winning replica has already finished, and the instance may even have
+    /// completed — the start path would treat a completed key as free and create a duplicate, so this
+    /// probe is what stops a drifting replica doubling the occurrence.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20480,
+        Level = LogLevel.Debug,
+        Message = "Scheduled start skipped; an instance for this tick already exists. Domain={Domain}, Flow={Flow}, InstanceKey={InstanceKey}")]
+    public static partial void ScheduledStartTickAlreadyHandled(
+        this ILogger logger,
+        string domain,
+        string flow,
+        string instanceKey);
+
 
     /// <summary>
     /// Logs that no provider call was made because the caller carried neither <c>act_sub</c> nor

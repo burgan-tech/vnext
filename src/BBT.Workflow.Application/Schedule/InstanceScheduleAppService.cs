@@ -26,17 +26,17 @@ namespace BBT.Workflow.Schedule;
 public sealed class InstanceScheduleAppService(
     IInstanceCommandAppService instanceCommandAppService,
     IRuntimeInfoProvider runtimeInfoProvider,
+    IInstanceRepository instanceRepository,
     IDistributedLockService lockService,
     IClock clock,
     ILogger<InstanceScheduleAppService> logger) : IInstanceScheduleAppService
 {
     /// <summary>
-    /// How long a claimed tick stays claimed. It has to outlive the slowest straggler, not the start:
-    /// replica tickers drift, so a late replica can arrive well after the winner has finished. Five
-    /// minutes covers that comfortably while still expiring on its own. Each tick has its own key, so
-    /// claims never accumulate against one another.
+    /// Lease for the per-tick lock. Only has to cover one start. Correctness does not rest on it: if
+    /// the lease lapses mid-start the row probe below still rejects the duplicate, because the start
+    /// path commits the instance well before the pipeline finishes.
     /// </summary>
-    private const int TickClaimSeconds = 300;
+    private const int TickLockSeconds = 30;
 
     /// <inheritdoc />
     public async Task<Result<object?>> StartAsync(
@@ -72,7 +72,8 @@ public sealed class InstanceScheduleAppService(
 
         logger.ScheduledStartReceived(input.Domain, input.Workflow, input.ScheduleId, instanceKey);
 
-        var startInput = new StartInstanceInput(input.Domain, input.Workflow, version: null, sync: input.Sync)
+        var startInput = new StartInstanceInput(
+            input.Domain, input.Workflow, version: input.Version, sync: input.Sync)
         {
             Instance = new CreateInstanceInput
             {
@@ -85,22 +86,16 @@ public sealed class InstanceScheduleAppService(
             Headers = new Dictionary<string, string?>(input.Headers)
         };
 
-        // Claim the tick before starting anything. The instance key alone does NOT collapse replicas:
-        // the start path's idempotency is a check-then-insert over a non-unique index, so simultaneous
-        // callers all pass the probe before any commits (measured: ten parallel calls carrying one
-        // tick produced nine instances), and it treats a COMPLETED instance as a free key, so a
-        // straggler arriving after a short flow finished creates a second one (measured: two).
+        // Two different races, two different guards.
         //
-        // The claim is taken with the distributed lock's atomic acquire but is deliberately NEVER
-        // released — it is a marker, not a scope, and expires on its own. That is what makes it
-        // outlive both the start and the instance's own lifetime. Holding a lock across the start
-        // instead would be wrong twice over: it would not survive completion, and a sync start (or an
-        // `executionType: S` flow, which overrides the caller's request) runs the whole pipeline —
-        // tasks, HTTP calls, subflow starts — which must never happen under a held lock.
+        // 1) SIMULTANEOUS replicas. The start path's idempotency is a check-then-insert over a
+        //    non-unique index, so concurrent callers all pass the probe before any commits. Measured:
+        //    ten parallel calls carrying one tick produced nine instances. The lock serialises them.
         var tickKey = $"vnext:schedule:{input.Domain}:{input.Workflow}:{instanceKey}";
-        var claim = await lockService.TryAcquireLockAsync(tickKey, TickClaimSeconds, cancellationToken);
+        await using var tickLock = await lockService.TryAcquireLockAsync(
+            tickKey, TickLockSeconds, cancellationToken);
 
-        if (claim is null)
+        if (tickLock is null)
         {
             logger.ScheduledStartTickAlreadyInFlight(input.Domain, input.Workflow, instanceKey);
             return Result<object?>.Ok(null);
@@ -109,9 +104,18 @@ public sealed class InstanceScheduleAppService(
         activity?.SetTag(TelemetryConstants.TagNames.LockKey, tickKey);
         activity?.SetTag(TelemetryConstants.TagNames.LockAcquired, true);
 
-        // No `await using`: disposing the handle would release the claim and reopen both races above.
-        // A failed start keeps the tick claimed on purpose — nothing redelivers a cron tick, and the
-        // next tick carries a different key, so there is nothing a release would enable.
+        // 2) A STRAGGLER arriving after the winner released. Serialising is not enough on its own:
+        //    the start path treats a COMPLETED instance as a free key
+        //    (`if (existingInstance.IsCompleted) return null;`), so a replica whose ticker drifted
+        //    past a short flow's completion starts a second instance. Measured: two. This probe is
+        //    status-agnostic, which the start path's own probe deliberately is not.
+        var existing = await instanceRepository.FindByIdentifierSlimAsync(instanceKey, cancellationToken);
+        if (existing is not null)
+        {
+            logger.ScheduledStartTickAlreadyHandled(input.Domain, input.Workflow, instanceKey);
+            return Result<object?>.Ok(null);
+        }
+
         var result = await instanceCommandAppService.StartAsync(startInput, cancellationToken);
 
         if (!result.IsSuccess)

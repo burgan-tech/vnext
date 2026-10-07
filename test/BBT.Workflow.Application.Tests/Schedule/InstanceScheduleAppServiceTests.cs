@@ -29,6 +29,7 @@ public sealed class InstanceScheduleAppServiceTests
     private readonly IRuntimeInfoProvider _runtimeInfoProvider = Substitute.For<IRuntimeInfoProvider>();
     private readonly IClock _clock = Substitute.For<IClock>();
     private readonly IDistributedLockService _lockService = Substitute.For<IDistributedLockService>();
+    private readonly IInstanceRepository _instanceRepository = Substitute.For<IInstanceRepository>();
 
     public InstanceScheduleAppServiceTests()
     {
@@ -45,17 +46,19 @@ public sealed class InstanceScheduleAppServiceTests
     }
 
     private InstanceScheduleAppService CreateSut() => new(
-        _commandAppService, _runtimeInfoProvider, _lockService, _clock,
+        _commandAppService, _runtimeInfoProvider, _instanceRepository, _lockService, _clock,
         NullLogger<InstanceScheduleAppService>.Instance);
 
     private static ScheduledStartInput Tick(
         string? scheduleId = "daily",
         string? readTimeUtc = "2026-10-05 07:25:42.93172757 +0000 UTC",
-        Dictionary<string, string>? attributes = null) => new()
+        Dictionary<string, string>? attributes = null,
+        string? version = null) => new()
     {
         Domain = "morph-touch",
         Workflow = "rezervation",
         ScheduleId = scheduleId,
+        Version = version,
         Attributes = attributes ?? new Dictionary<string, string>(),
         Headers = new Dictionary<string, string?>
         {
@@ -227,13 +230,12 @@ public sealed class InstanceScheduleAppServiceTests
     }
 
     /// <summary>
-    /// The claim must OUTLIVE the start, so it is never released. Releasing it would reopen two
-    /// measured defects at once: ten parallel calls producing nine instances, and a straggler
-    /// creating a second instance after a short flow has already completed (the start path treats a
-    /// completed instance as a free key).
+    /// The lock must be RELEASED. Its only job is to serialise simultaneous replicas; holding it after
+    /// the start would leak one row per tick into <c>sys_queues.DistributedLocks</c> forever, because
+    /// a tick key never recurs and the table's only delete is the release.
     /// </summary>
     [Fact]
-    public async Task Tick_claim_is_never_released()
+    public async Task Tick_lock_is_released()
     {
         var handle = Substitute.For<IDistributedLockHandle>();
         _lockService
@@ -242,16 +244,12 @@ public sealed class InstanceScheduleAppServiceTests
 
         await CreateSut().StartAsync(Tick());
 
-        await handle.DidNotReceive().ReleaseAsync(Arg.Any<CancellationToken>());
-        await handle.DidNotReceive().DisposeAsync();
+        await handle.Received().DisposeAsync();
     }
 
-    /// <summary>
-    /// A failed start keeps the tick claimed. Nothing redelivers a cron tick and the next tick carries
-    /// a different key, so releasing would enable nothing — and would reopen the straggler race.
-    /// </summary>
+    /// <summary>The lock is released even when the start is refused, so a failure cannot leak a row.</summary>
     [Fact]
-    public async Task Failed_start_still_keeps_the_tick_claimed()
+    public async Task Tick_lock_is_released_even_when_the_start_fails()
     {
         var handle = Substitute.For<IDistributedLockHandle>();
         _lockService
@@ -264,7 +262,52 @@ public sealed class InstanceScheduleAppServiceTests
         var result = await CreateSut().StartAsync(Tick());
 
         result.IsSuccess.ShouldBeFalse();
-        await handle.DidNotReceive().ReleaseAsync(Arg.Any<CancellationToken>());
+        await handle.Received().DisposeAsync();
+    }
+
+    /// <summary>
+    /// A straggler arriving after the winner released must not start a second instance. Serialising
+    /// alone cannot stop it: the start path treats a COMPLETED instance as a free key, so the guard
+    /// has to be a status-agnostic probe. Measured before this probe existed: two instances.
+    /// </summary>
+    [Fact]
+    public async Task Straggler_finding_an_existing_instance_starts_nothing()
+    {
+        _instanceRepository
+            .FindByIdentifierSlimAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Instance.Create(Guid.NewGuid(), "morph-touch", "rezervation", "1.0.0"));
+
+        var result = await CreateSut().StartAsync(Tick());
+
+        result.IsSuccess.ShouldBeTrue();
+        await _commandAppService.DidNotReceive()
+            .StartAsync(Arg.Any<StartInstanceInput>(), Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>An explicit version pins the workflow the schedule starts.</summary>
+    [Fact]
+    public async Task Version_is_passed_through_to_the_start()
+    {
+        StartInstanceInput? captured = null;
+        await _commandAppService.StartAsync(
+            Arg.Do<StartInstanceInput>(i => captured = i), Arg.Any<CancellationToken>());
+
+        await CreateSut().StartAsync(Tick(version: "1.2.0"));
+
+        captured!.Version.ShouldBe("1.2.0");
+    }
+
+    /// <summary>Omitting it keeps the latest-version default a schedule normally wants.</summary>
+    [Fact]
+    public async Task Version_defaults_to_latest_when_absent()
+    {
+        StartInstanceInput? captured = null;
+        await _commandAppService.StartAsync(
+            Arg.Do<StartInstanceInput>(i => captured = i), Arg.Any<CancellationToken>());
+
+        await CreateSut().StartAsync(Tick());
+
+        captured!.Version.ShouldBeNull();
     }
 
     /// <summary>

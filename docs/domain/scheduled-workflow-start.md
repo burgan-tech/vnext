@@ -77,6 +77,7 @@ starts the instance with `{ "branchCode": "99999", "reportType": "daily" }`.
 | Reserved parameter | Meaning |
 | --- | --- |
 | `scheduleId` | Identity of this schedule (see below). Never becomes instance data. |
+| `version` | Pin the workflow version to start. Omit for the latest published version. |
 | `sync` | Block until a rest point. Default `false`; a scheduler wants a fast acknowledgement. |
 
 **Values are always strings.** A query string carries no types, so a workflow whose start schema
@@ -103,40 +104,38 @@ It is truncated to the second on purpose. Replicas stamp `readTimeUTC` from thei
 disagree in the sub-second digits; truncating is what makes them agree. A schedule firing more than
 once per second cannot be deduplicated this way.
 
-**2. A claim on the tick**, taken before the start:
+**2. Two guards around the create**, because there are two different races.
+
+*Simultaneous replicas* are serialised by a short lock on
 
 ```
 vnext:schedule:{domain}:{workflow}:{instanceKey}
 ```
 
-The key alone is **not** sufficient, and this is worth understanding before changing any of it. The
-start path's idempotency has two gaps, both measured on a live runtime:
+The key alone is not enough: the start path's idempotency is a check-then-insert over a non-unique
+index, so concurrent callers all pass the probe before any commits. **Measured: ten parallel calls
+carrying one tick produced nine instances.** One replica takes the lock and starts the instance; the
+others answer `SUCCESS` without starting anything, because the tick *is* being handled. They log
+`ScheduledStartTickAlreadyInFlight` (20479, Debug).
 
-- It is a check-then-insert, and neither index on `Instances.Key` is unique, so simultaneous callers
-  all pass the probe before any of them commits. **Ten parallel calls carrying one tick produced nine
-  instances.**
-- It treats a **completed** instance as a free key (`if (existingInstance.IsCompleted) return null;`).
-  A straggler arriving after a short flow finished therefore starts a second one. **Measured: two.**
+*A straggler that arrives after the winner released* is rejected by a status-agnostic probe for an
+instance already carrying the tick's key. Serialising cannot stop this one: the start path treats a
+**completed** instance as a free key (`if (existingInstance.IsCompleted) return null;`), so a replica
+whose ticker drifted past a short flow's completion would start a second instance. **Measured: two.**
+The probe logs `ScheduledStartTickAlreadyHandled` (20480, Debug).
 
-The claim closes both. It is taken through the distributed lock store's atomic acquire, but it is
-**deliberately never released** — it is a marker with a TTL, not a scope. That is what lets it outlive
-both the start and the instance's own lifetime. One replica claims the tick and starts the instance;
-the others fail to claim it, start nothing, and answer `SUCCESS`, because the tick *is* being handled.
-They log `ScheduledStartTickAlreadyInFlight` (20479, Debug). Re-measured after the fix: ten and twenty
-parallel calls each produce exactly one instance, and the straggler-after-completion case produces one.
+The lock is **released** when the start returns. That matters beyond tidiness: a tick key never
+recurs, and `sys_queues.DistributedLocks` is only ever pruned by a release, so holding the lock would
+leak one dead row per tick forever. Correctness does not depend on the lease either — if it lapses
+mid-start, the probe still rejects the duplicate, because the instance is committed well before the
+pipeline finishes.
 
-The claim is taken **before** the start, never around it. A `sync=true` start — or an
-`executionType: S` flow, which overrides the caller's request — runs the whole pipeline, including
-tasks, HTTP calls and subflow starts. Holding a lock across that would break the repo's locking rule
-and pin a lease for the duration of arbitrary work.
+Re-measured after both guards: ten and twenty parallel calls each produce exactly one instance, and
+the straggler-after-completion case produces one.
 
-The TTL is 300 seconds: long enough to cover the slowest straggler, short enough to expire on its own.
-Each tick has its own key, so claims never accumulate against one another. A failed start keeps the
-tick claimed on purpose — nothing redelivers a cron tick, and the next tick carries a different key.
-
-**One consequence worth knowing:** a replica that loses the claim acknowledges the tick before the
-winner has committed anything. If the winner then fails, the occurrence is lost — the redundancy of
-having several replicas does not cover a failing winner.
+**One consequence worth knowing:** a replica that loses the lock acknowledges the tick before the
+winner has committed anything. If the winner then fails, the occurrence is lost — having several
+replicas does not cover a failing winner.
 
 ### Key length
 
@@ -299,6 +298,7 @@ domain) — logged with the reason. A non-2xx means a transient failure.
 | 20477 | Error | The component targets a runtime serving another domain. Permanent until the YAML is fixed. |
 | 20478 | Error | The start was refused. The occurrence is lost — nothing retries it. |
 | 20479 | Debug | Another replica already holds this tick's lock. Expected on every multi-replica deployment; one caller wins and the rest log this. |
+| 20480 | Debug | An instance for this tick already exists, so a drifting replica was rejected — including the case where the first instance has already completed. |
 
 Each tick starts a `Schedule.Start` span tagged with the domain and flow.
 

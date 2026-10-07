@@ -42,6 +42,14 @@ public sealed class ScheduledStartInput
         new Dictionary<string, string?>();
 
     /// <summary>
+    /// Pins the workflow version to start, from the <c>version</c> query parameter. Null starts the
+    /// latest published version, which is what a schedule normally wants. Supplying one makes the
+    /// schedule reproducible across a deployment that publishes a new version. An unknown or
+    /// malformed value is rejected by the start path's own resolution, so it needs no check here.
+    /// </summary>
+    public string? Version { get; init; }
+
+    /// <summary>
     /// Whether to block until the pipeline reaches a rest point. Defaults to false: a scheduler wants
     /// a fast acknowledgement, and Dapr's cron binding discards the response regardless.
     /// </summary>
