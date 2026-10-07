@@ -74,6 +74,11 @@ per transition that carries it. Prefer uploading bytes to a document store and p
 reference through the workflow; a platform-level document-offload story (store once,
 reference everywhere) is an open ask on the same finding.
 
+A flow with `attributes.history: "none"` (vnext#1006) drops most of these copies: no transition
+record, no task journal, and the merged snapshot is buffered in memory and written once (at Finish,
+at a SubFlow handoff or on a fault) — one `InstancesData` row per instance without SubFlow, at most
+`1 + 2·N` with N SubFlow states. See [History Mode](../runtime/history-mode.md).
+
 ## Failure Modes
 
 - Invalid JSON schema input fails before unsafe data is persisted.
