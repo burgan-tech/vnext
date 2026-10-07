@@ -208,7 +208,7 @@ internal static class TransitionSettlement
         !hasOpenSubFlow &&
         !context.Instance.Status.Equals(InstanceStatus.Faulted);
 
-    private static bool HasOpenSubFlow(TransitionExecutionContext context) =>
+    internal static bool HasOpenSubFlow(TransitionExecutionContext context) =>
         context.Instance.ActiveCorrelations.Any(c =>
             c.SubFlowType.Equals(SubFlowType.SubFlow) && !c.IsCompleted);
 }

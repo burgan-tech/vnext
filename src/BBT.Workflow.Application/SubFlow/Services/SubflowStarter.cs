@@ -146,6 +146,12 @@ public sealed class SubflowStarter(
             }
         };
 
+        // A history-none parent requires a history-none SubFlow child (vnext#1006). Stamped only for
+        // none, so children of flag-less parents carry exactly the same metadata as before; the child
+        // enforces it at start (InstanceCommandAppService.StartAsync), which works across domains.
+        if (workflow.SuppressesHistory)
+            createInstanceInput.ExtraProperties[DomainConsts.MetaDataKeys.History] = HistoryMode.None.Code;
+
         // Apply timeout override from SubFlow config if present
         if (timeoutOverride != null)
         {

@@ -16,7 +16,8 @@ namespace BBT.Workflow.Execution.Pipeline.Steps;
 public sealed class HandleSubFlowStep(
     IInstanceRepository instanceRepository,
     IGuidGenerator guidGenerator,
-    ILogger<HandleSubFlowStep> logger) : ITransitionStep
+    ILogger<HandleSubFlowStep> logger,
+    IInstanceDataWriteService? instanceDataWriteService = null) : ITransitionStep
 {
     /// <inheritdoc />
     public int Order => LifecycleOrder.SubFlow;
@@ -118,7 +119,21 @@ public sealed class HandleSubFlowStep(
         var correlation = CreateCorrelation(context);
         context.Instance.AddCorrelation(correlation);
 
-        await instanceRepository.UpdateAsync(context.Instance, true, cancellationToken);
+        // history: none (vnext#1006): the handoff ends this stage, and the child's input mapping,
+        // the output mapping and the resume all read the parent from the database — so the buffered
+        // data is written here, in one transaction with the correlation.
+        if (context.Instance.IsDataBuffered && instanceDataWriteService is not null)
+        {
+            await instanceDataWriteService.FlushAsync(
+                context.Instance,
+                context.Workflow,
+                ct => instanceRepository.UpdateAsync(context.Instance, true, ct),
+                cancellationToken);
+        }
+        else
+        {
+            await instanceRepository.UpdateAsync(context.Instance, true, cancellationToken);
+        }
 
         // Enqueue post-commit job - actual subflow start happens after lock release
         var behavior = context.Target!.SubFlow!.Type.Equals(SubFlowType.SubProcess)

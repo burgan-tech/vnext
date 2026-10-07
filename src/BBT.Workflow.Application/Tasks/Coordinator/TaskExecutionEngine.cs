@@ -581,8 +581,11 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
             taskTrigger,
             onExecuteTask.Order);
 
-        // 3. Get persistence strategy
-        var persistenceStrategy = GetPersistenceStrategy(origin);
+        // 3. Get persistence strategy. history: none (vnext#1006) keeps no task journal: the rows
+        //    would also reference a transition record that is never written.
+        var persistenceStrategy = context.Workflow?.SuppressesHistory == true
+            ? null
+            : GetPersistenceStrategy(origin);
 
         // 4. Record metrics start
 

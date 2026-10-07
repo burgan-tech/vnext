@@ -195,6 +195,15 @@ public static class InstanceMetadataExtensions
             : null;
     }
     
+    /// <summary>
+    /// True when a SubFlow (<c>S</c>) start carries a parent stamp of <c>history: none</c> (vnext#1006).
+    /// SubProcess (<c>P</c>) starts are exempt: they never block or resume their parent.
+    /// </summary>
+    public static bool RequiresHistoryNoneChild(this ExtraPropertyDictionary? md)
+        => md is not null
+           && string.Equals(GetString(md, DomainConsts.MetaDataKeys.History), HistoryMode.None.Code, StringComparison.OrdinalIgnoreCase)
+           && string.Equals(GetString(md, DomainConsts.MetaDataKeys.FlowType), SubFlowType.SubFlow.Code, StringComparison.Ordinal);
+
     private static string? GetString(ExtraPropertyDictionary md, string key)
     {
         if (!md.TryGetValue(key, out var raw) || raw is null)

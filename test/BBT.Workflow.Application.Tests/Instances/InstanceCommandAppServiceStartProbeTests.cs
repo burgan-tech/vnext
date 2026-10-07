@@ -154,6 +154,50 @@ public class InstanceCommandAppServiceStartProbeTests : IDisposable
             .FindLeanByIdAsync(default, default);
     }
 
+    /// <summary>
+    /// history: none (vnext#1006): a SubFlow child started by a history-none parent must itself be
+    /// history-none. The refusal comes before the idempotency probe — nothing is read or written.
+    /// </summary>
+    [Fact]
+    public async Task StartAsync_FullHistoryChildUnderHistoryNoneParent_FailsBeforeAnyRead()
+    {
+        var input = CreateInput(key: "k", strict: true);
+        input.Instance.ExtraProperties[DomainConsts.MetaDataKeys.History] = "none";
+        input.Instance.ExtraProperties[DomainConsts.MetaDataKeys.FlowType] = "S";
+
+        var result = await _service.StartAsync(input, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.HistoryNoneSubFlowChildNotEligible);
+        await _instanceRepository.DidNotReceiveWithAnyArgs().FindActiveByKeyLeanAsync(default!, default);
+        await _instanceRepository.DidNotReceiveWithAnyArgs().InsertAsync(default!, default, default);
+    }
+
+    [Theory]
+    [InlineData("none", "S", true)]   // a history-none child is eligible
+    [InlineData("none", "P", false)]  // SubProcess children are exempt
+    [InlineData(null, "S", false)]    // no stamp: a full-history parent
+    public async Task StartAsync_EligibleChild_ReachesTheIdempotencyProbe(string? stamp, string flowType, bool childIsNone)
+    {
+        var workflow = CreateWorkflow();
+        if (childIsNone)
+            workflow.SetHistory(HistoryMode.None);
+        _componentCacheStore.GetFlowAsync(Domain, Flow, Arg.Any<string?>(), Arg.Any<CancellationToken>())
+            .Returns(Result<Definitions.Workflow>.Ok(workflow));
+        var key = "k-" + Guid.NewGuid();
+        _instanceRepository.FindActiveByKeyLeanAsync(key, Arg.Any<CancellationToken>())
+            .Returns(Instance.Create(Guid.NewGuid(), Flow, Version, key));
+
+        var input = CreateInput(key: key, strict: true);
+        if (stamp is not null)
+            input.Instance.ExtraProperties[DomainConsts.MetaDataKeys.History] = stamp;
+        input.Instance.ExtraProperties[DomainConsts.MetaDataKeys.FlowType] = flowType;
+
+        var result = await _service.StartAsync(input, CancellationToken.None);
+
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.ActiveInstanceAlreadyExists);
+    }
+
     private static StartInstanceInput CreateInput(Guid? id = null, string? key = null, bool strict = true)
         => new(Domain, Flow, Version)
         {

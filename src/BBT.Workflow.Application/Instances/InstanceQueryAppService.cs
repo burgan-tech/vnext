@@ -536,6 +536,9 @@ public sealed class InstanceQueryAppService(
             {
                 using var instanceScope = BeginInstanceScope(data.instance);
 
+                // history: none (vnext#1006) keeps no task journal: an empty list, not a 404.
+                if (data.workflow.SuppressesHistory)
+                    return Result<GetInstanceTaskActionsOutput>.Ok(new GetInstanceTaskActionsOutput { TaskId = input.TaskId });
 
                 var taskRef = await instanceTaskRepository.GetRefForInstanceAsync(
                     data.instance.Id, input.TaskId, cancellationToken);
