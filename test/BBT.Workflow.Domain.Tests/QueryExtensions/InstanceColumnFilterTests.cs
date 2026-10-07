@@ -447,6 +447,51 @@ public class InstanceColumnFilterTests
         parameters.ShouldBeEmpty();
     }
 
+    [Theory]
+    [InlineData("eq", "=")]
+    [InlineData("ne", "!=")]
+    public void BuildCondition_IdColumn_BindsUuidParameter(string op, string sqlOp)
+    {
+        var id = Guid.NewGuid();
+        var parameterIndex = 0;
+
+        var (condition, parameters) = InstanceColumnConditionBuilder.BuildCondition(
+            "Id", op, id.ToString(), ref parameterIndex);
+
+        condition.ShouldBe($"s.\"Id\" {sqlOp} {{0}}");
+        parameters.Count.ShouldBe(1);
+        parameters[0].NpgsqlDbType.ShouldBe(NpgsqlTypes.NpgsqlDbType.Uuid);
+        parameters[0].Value.ShouldBe(id);
+    }
+
+    [Theory]
+    [InlineData("in", "IN")]
+    [InlineData("nin", "NOT IN")]
+    public void BuildCondition_IdColumn_SetOperators_BindUuidParameters(string op, string sqlOp)
+    {
+        var id1 = Guid.NewGuid();
+        var id2 = Guid.NewGuid();
+        var parameterIndex = 0;
+
+        var (condition, parameters) = InstanceColumnConditionBuilder.BuildCondition(
+            "Id", op, $"{id1},{id2}", ref parameterIndex);
+
+        condition.ShouldBe($"s.\"Id\" {sqlOp} ({{0}}, {{1}})");
+        parameters.Select(p => p.NpgsqlDbType).ShouldAllBe(t => t == NpgsqlTypes.NpgsqlDbType.Uuid);
+        parameters.Select(p => p.Value).ShouldBe(new object[] { id1, id2 });
+    }
+
+    [Theory]
+    [InlineData("eq", "kimlik-degil")]
+    [InlineData("in", "kimlik-degil")]
+    public void BuildCondition_IdColumn_InvalidGuid_ShouldThrowArgumentException(string op, string value)
+    {
+        var parameterIndex = 0;
+
+        Should.Throw<ArgumentException>(() =>
+            InstanceColumnConditionBuilder.BuildCondition("Id", op, value, ref parameterIndex));
+    }
+
     [Fact]
     public void BuildCondition_InvalidColumn_ShouldThrow()
     {

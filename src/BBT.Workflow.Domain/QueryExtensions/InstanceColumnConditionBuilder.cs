@@ -352,7 +352,7 @@ public static class InstanceColumnConditionBuilder
     {
         return columnName switch
         {
-            "Id" => ColumnType.String,
+            "Id" => ColumnType.Guid,
             "Key" => ColumnType.String,
             "Flow" => ColumnType.String,
             "CurrentState" => ColumnType.String,
@@ -384,6 +384,7 @@ public static class InstanceColumnConditionBuilder
             ColumnType.DateTime => CreateDateTimeParameter(value),
             ColumnType.Boolean => CreateBooleanParameter(value),
             ColumnType.Integer => CreateIntegerParameter(value),
+            ColumnType.Guid => CreateGuidParameter(value),
             _ => new NpgsqlParameter { Value = value }
         };
     }
@@ -415,6 +416,19 @@ public static class InstanceColumnConditionBuilder
     }
     
     /// <summary>
+    /// Create uuid parameter; a malformed value is a validation error (400), not a database 42883.
+    /// </summary>
+    private static NpgsqlParameter CreateGuidParameter(string value)
+    {
+        if (Guid.TryParse(value, out var guidValue))
+        {
+            return new NpgsqlParameter { Value = guidValue, NpgsqlDbType = NpgsqlDbType.Uuid };
+        }
+
+        throw new ArgumentException($"Invalid Guid value: {value}");
+    }
+
+    /// <summary>
     /// Create Integer parameter with proper parsing
     /// </summary>
     private static NpgsqlParameter CreateIntegerParameter(string value)
@@ -435,7 +449,8 @@ public static class InstanceColumnConditionBuilder
         String,
         DateTime,
         Boolean,
-        Integer
+        Integer,
+        Guid
     }
 }
 
