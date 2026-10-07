@@ -484,6 +484,16 @@ Two more back the accept-time SubFlow chain reserve (see
 | POST | `.../instances/{instance}/internal/subflow-forward?transitionKey=` | Same contract as the public transition endpoint: `200` (sync) / `202` (async), or the mapped error. The sync body is identity-only (`id`, `key`, `status`): the relay reads `status` and nothing else, so response enrichment (attributes, ETag) is suppressed on this surface. (Extensions are not evaluated on any sync write response since 0.0.93.) |
 | PUT | `.../instances/{instance}/internal/busy-release` | `200`, also when the instance is absent (no-op). |
 
+Two more serve local-development tooling (the vNext Forge Instance Monitor) rather than other runtimes.
+Unlike `internal/related-data`, they are not unfiltered: every row's data goes through the same
+per-caller exposure pass as the `data` function (schema field filtering and secret handling), and
+there is no in-process `queryRoles` gate — the gateway decides via `authorize?queryRoles=true`:
+
+| Method | Route | Response |
+| --- | --- | --- |
+| GET | `.../instances/{instance}/data/history` | `200` page of data-history rows, one per data write, newest first (`page`, `pageSize` <= 100, `includeData`). |
+| GET | `.../instances/{instance}/data/history/{rowId}` | `200` one row with the same exposure; `404` (`Instance:100013`) when the row is unknown or belongs to another instance. |
+
 The endpoint contract can represent both response modes, but current runtime-generated active-child
 forward calls always set `sync=true` and therefore await the child activation. The distinction is
 important when diagnosing traces or changing ownership semantics; see

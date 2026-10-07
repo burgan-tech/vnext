@@ -1611,6 +1611,48 @@ public sealed class EfCoreInstanceRepository(
                   .ToList();
     }
 
+    /// <inheritdoc />
+    public async Task<HateoasPagedList<InstanceData>> GetDataHistoryPagedAsync(
+        Guid instanceId,
+        int page,
+        int pageSize,
+        CancellationToken cancellationToken = default)
+    {
+        if (page < 1) page = 1;
+        if (pageSize < 1) pageSize = 1;
+
+        var context = await GetDbContextAsync();
+
+        // N+1 read: one extra row tells us whether a next page exists without a COUNT(*).
+        // Whole entities, not a projection: the exposure pass works on the row as stored.
+        var rows = await context.InstancesData
+            .AsNoTracking()
+            .Where(d => d.InstanceId == instanceId)
+            .OrderByDescending(d => d.EnteredAt)
+            .ThenByDescending(d => d.Id)
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize + 1)
+            .ToListAsync(cancellationToken);
+
+        var hasNext = rows.Count > pageSize;
+        if (hasNext)
+            rows.RemoveAt(rows.Count - 1);
+
+        return new HateoasPagedList<InstanceData>(rows, page, pageSize, hasNext);
+    }
+
+    /// <inheritdoc />
+    public async Task<InstanceData?> FindDataRowAsync(
+        Guid instanceId,
+        Guid rowId,
+        CancellationToken cancellationToken = default)
+    {
+        var context = await GetDbContextAsync();
+        return await context.InstancesData
+            .AsNoTracking()
+            .FirstOrDefaultAsync(d => d.Id == rowId && d.InstanceId == instanceId, cancellationToken);
+    }
+
     public async Task<List<InstanceAndDataModel>> GetActiveDataListSinceAsync(
         DateTime since, int skip, int take, CancellationToken cancellationToken = default)
     {
