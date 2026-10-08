@@ -53,6 +53,7 @@ public class CreateTransitionRecordStepRetryTests
             Substitute.For<IGuidGenerator>(),
             _dataMapper,
             Substitute.For<IRuntimeInfoProvider>(),
+            BBT.Workflow.Application.Files.FileTestDoubles.PassThroughOffload(),
             Substitute.For<ILogger<CreateTransitionRecordStep>>());
     }
 

@@ -24,6 +24,7 @@ using BBT.Workflow.Telemetry;
 using BBT.Workflow.Execution.Transitions.Services;
 using BBT.Workflow.Execution.Validation;
 using BBT.Workflow.Extentions;
+using BBT.Workflow.Files;
 using BBT.Workflow.Headers;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Definitions.Timer;
@@ -62,6 +63,8 @@ public sealed class InstanceCommandAppService(
     ILongPollAckResumeService longPollAckResumeService,
     IInstanceCommandGateway instanceCommandGateway,
     IWorkflowOutputMappingService workflowOutputMappingService,
+    IFileOffloadService fileOffloadService,
+    IRequestRawBodyProvider rawBodyProvider,
     ILogger<InstanceCommandAppService> logger)
     : ApplicationService(serviceProvider), IInstanceCommandAppService
 {
@@ -283,7 +286,7 @@ public sealed class InstanceCommandAppService(
 
     /// <summary>
     /// Step 3: Prepares the instance (create, configure, persist).
-    /// Railway chain: Create Instance → Validate → Map Data → Persist
+    /// Railway chain: Create Instance → Validate → x-storage swap → Persist → Map Data
     /// </summary>
     private async Task<Result<(Definitions.Workflow Workflow, Instance Instance)>> PrepareInstanceAsync(
         Definitions.Workflow workflow,
@@ -311,6 +314,7 @@ public sealed class InstanceCommandAppService(
                 input.Instance.Callback,
                 cancellationToken)
             .ThenAsync(instance => ValidateStartTransitionAsync(workflow, instance, input, cancellationToken))
+            .ThenAsync(instance => OffloadStartFilesAsync(workflow, instance, input, cancellationToken))
             .ThenAsync(instance => PersistInstanceAsync(workflow, instance, cancellationToken))
             .ThenAsync(data => MapAndAppendInstanceDataAsync(data, input, cancellationToken));
 
@@ -349,6 +353,54 @@ public sealed class InstanceCommandAppService(
                     logger.StartTransitionValidationFailed(instance.Id, error.Code);
                     return Result<Instance>.Fail(error);
                 });
+    }
+
+    /// <summary>
+    /// x-storage on start (spec §3): swap file content for handles after validation and before the
+    /// instance row exists, so a store failure creates no instance and a retry with the same key is not
+    /// turned into an idempotent no-op. The start transition later runs with
+    /// <c>PayloadSchemaValidated</c> and reuses the swapped attributes. A start has no LatestData, so an
+    /// external content-less reference is always rejected.
+    /// </summary>
+    private async Task<Result<Instance>> OffloadStartFilesAsync(
+        Definitions.Workflow workflow,
+        Instance instance,
+        StartInstanceInput input,
+        CancellationToken cancellationToken)
+    {
+        // Not applicable ⇒ no work and no span (trace-span-tree: non-applicable steps leave no trace).
+        if (input.Instance.Attributes is not { ValueKind: JsonValueKind.Object })
+            return Result<Instance>.Ok(instance);
+        var fields = await fileOffloadService.GetFieldsAsync(workflow, cancellationToken);
+        if (fields.Count == 0)
+            return Result<Instance>.Ok(instance);
+
+        using var activity = PipelineStepActivityHelper.StartTransitionActivity(
+            "Files.Offload", workflow.StartTransition?.Key);
+        var result = await fileOffloadService.OffloadAsync(new FileOffloadRequest(
+            workflow,
+            instance.Id,
+            input.Instance.Attributes,
+            LatestData: null,
+            input.TrustedPayload ? FileOffloadMode.Trusted : FileOffloadMode.External), cancellationToken);
+        if (!result.IsSuccess)
+        {
+            activity?.SetStatus(ActivityStatusCode.Error, result.Error.Code);
+            return Result<Instance>.Fail(result.Error);
+        }
+
+        if (result.Value!.Changed)
+        {
+            input.Instance.Attributes = result.Value.Payload;
+            // Scripts read ScriptContext.RawBody, which is whatever the provider returns: a client start
+            // must expose the handles, never the bytes (the envelope's other members are kept). A trusted
+            // start (subflow input, trigger task) has no raw body of its own and must not overwrite the
+            // outer request's.
+            if (!input.TrustedPayload)
+                rawBodyProvider.ReplaceRawBodyAttributes(result.Value.Payload);
+        }
+
+        return Result<Instance>.Ok(instance);
     }
 
     /// <summary>
@@ -807,7 +859,11 @@ public sealed class InstanceCommandAppService(
             // accept pre-set nor reserves a second time — and it still settles the status at the
             // end, because OwnerReentry sets OwnsStatus.
             IsPreReserved = input.ChainReserved,
-            SubflowChainReserved = input.ChainReserved
+            SubflowChainReserved = input.ChainReserved,
+
+            // Server-only (never bound from a request): a DirectTrigger transition carries a body the
+            // flow authored, so its x-storage references are kept as is instead of echo-checked.
+            TrustedPayload = input.TrustedPayload
         };
     }
 

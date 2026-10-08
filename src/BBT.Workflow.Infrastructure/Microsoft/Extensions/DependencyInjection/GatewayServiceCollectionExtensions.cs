@@ -1,4 +1,7 @@
+using BBT.Workflow.Files;
 using BBT.Workflow.Gateway;
+using BBT.Workflow.Scripting.Functions;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using BBT.Workflow.Scripting.Related;
 
 namespace Microsoft.Extensions.DependencyInjection;
@@ -64,6 +67,19 @@ public static class GatewayServiceCollectionExtensions
         services.AddScoped<IInstanceCorrelationGateway, RoutedInstanceCorrelationGateway>();
         services.AddScoped<IAuthorizeGateway, RoutedAuthorizeGateway>();
         services.AddScoped<IRelatedInstanceReader, RoutedRelatedInstanceReader>();
+
+        // x-storage file reads (service-to-service). Remote half aliases the AddRemoteService registration in
+        // AddVNextApiServices — same reason as RemoteRelatedInstanceReader above.
+        services.AddKeyedScoped<IInstanceFileGateway, LocalInstanceFileGateway>(InstanceFileGatewayKeys.Local);
+        services.AddKeyedScoped<IInstanceFileGateway>(
+            InstanceFileGatewayKeys.Remote,
+            (serviceProvider, _) => serviceProvider.GetRequiredService<RemoteInstanceFileGateway>());
+        services.AddScoped<IInstanceFileGateway, RoutedInstanceFileGateway>();
+
+        // ScriptBase.GetFileAsync. Registered here, beside the gateway it needs, rather than with the other
+        // scripting services: ScriptServices takes it as an optional dependency, so a host without the gateway
+        // stack simply gets scripts whose GetFileAsync reports the reader as unavailable.
+        services.TryAddScoped<IScriptFileReader, ScriptFileReader>();
 
         return services;
     }

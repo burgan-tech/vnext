@@ -68,6 +68,7 @@ public class CreateTransitionRecordStepTimeoutKeyTests
             Substitute.For<IGuidGenerator>(),
             dataMapper,
             Substitute.For<IRuntimeInfoProvider>(),
+            BBT.Workflow.Application.Files.FileTestDoubles.PassThroughOffload(),
             Substitute.For<ILogger<CreateTransitionRecordStep>>());
     }
 

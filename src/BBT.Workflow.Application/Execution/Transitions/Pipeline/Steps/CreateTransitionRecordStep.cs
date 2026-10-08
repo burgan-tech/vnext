@@ -1,6 +1,7 @@
 using BBT.Aether.Guids;
 using BBT.Workflow.Execution.Transitions.Services;
 using BBT.Workflow.Definitions;
+using BBT.Workflow.Files;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Runtime;
 using System.Text.Json;
@@ -21,6 +22,7 @@ public sealed class CreateTransitionRecordStep(
     IGuidGenerator guidGenerator,
     ITransitionDataMapper transitionDataMapper,
     IRuntimeInfoProvider runtimeInfoProvider,
+    IFileOffloadService fileOffloadService,
     ILogger<CreateTransitionRecordStep> logger) : ITransitionStep
 {
     /// <inheritdoc />
@@ -196,6 +198,11 @@ public sealed class CreateTransitionRecordStep(
             context.Instance.SetStage(context.Stage);
         }
 
+        if (mappedData != null && transition?.Mapping is not null)
+        {
+            mappedData = await OffloadMappedFilesAsync(context, mappedData, cancellationToken);
+        }
+
         if (mappedData != null)
         {
             await instanceDataWriteService.AppendAsync(
@@ -210,6 +217,42 @@ public sealed class CreateTransitionRecordStep(
                 instanceTransition.SetBody(new JsonData(mappedData));
             }
         }
+    }
+
+    /// <summary>
+    /// x-storage defence in depth (spec §3): <c>content</c> a transition mapping produces is offloaded (Trusted)
+    /// before it reaches the data funnel or the transition record body. Runs only for a mapped transition: the
+    /// field lookup loads the master schema through the component cache once; no <c>x-storage</c> field ⇒ no
+    /// conversion and no span. Otherwise a read-only probe over the element decides — only a <c>content</c> member
+    /// at an <c>x-storage</c> path opens the <c>Files.Offload</c> span and calls the offload. A failure throws
+    /// (<see cref="FileOffloadFailure"/>) and follows the pipeline's normal error path.
+    /// </summary>
+    private async Task<object?> OffloadMappedFilesAsync(
+        TransitionExecutionContext context,
+        object mappedData,
+        CancellationToken cancellationToken)
+    {
+        var fields = await fileOffloadService.GetFieldsAsync(context.Workflow, cancellationToken);
+        if (fields.Count == 0)
+            return mappedData;
+
+        var element = mappedData is JsonElement e
+            ? e
+            : JsonSerializer.SerializeToElement(mappedData, JsonSerializerConstants.JsonOptions);
+        // Read-only probe: no content at any x-storage path ⇒ nothing to offload, no mutable DOM, no span.
+        if (element.ValueKind != JsonValueKind.Object || !FileNodeWalker.AnyContent(element, fields))
+            return mappedData;
+
+        using var activity = PipelineStepActivityHelper.StartTransitionActivity("Files.Offload", context.TransitionKey);
+        var offload = await fileOffloadService.OffloadAsync(new FileOffloadRequest(
+            context.Workflow, context.Instance.Id, element, LatestData: null, FileOffloadMode.Trusted, fields), cancellationToken);
+        if (!offload.IsSuccess)
+        {
+            activity?.SetStatus(System.Diagnostics.ActivityStatusCode.Error, offload.Error.Code);
+            throw FileOffloadFailure.ToException(offload.Error);
+        }
+
+        return offload.Value!.Changed ? offload.Value.Payload : mappedData;
     }
 
     /// <summary>

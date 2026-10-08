@@ -8,6 +8,7 @@ using BBT.Workflow.Definitions;
 using BBT.Workflow.Encryption;
 using BBT.Workflow.ExceptionHandling;
 using BBT.Workflow.Execution.Pipeline;
+using BBT.Workflow.Files;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Shared.Merging;
@@ -87,11 +88,17 @@ public sealed class InstanceDataWriteService(
         CancellationToken cancellationToken = default,
         Definitions.Workflow? workflow = null)
     {
+        // Before the gate: the master schema is loaded once (validation, x-encryption and x-storage all read it), and
+        // the x-storage offload runs here — no binding I/O under the instance gate or the row lock, and the buffered
+        // (history: none) path below never sees the bytes either.
+        var schema = await LoadSchemaAsync(workflow, cancellationToken);
+        delta = await OffloadFilesAsync(instance, workflow, schema.Schema, delta, cancellationToken);
+
         using var gate = await InstanceWriteGate.AcquireAsync(instance.Id, cancellationToken);
         if (instance.DataBuffer is { } buffer)
-            return await AppendBufferedAsync(instance, buffer, delta, versionStrategy, workflow, cancellationToken);
+            return await AppendBufferedAsync(instance, buffer, delta, versionStrategy, schema, cancellationToken);
 
-        return await AppendCoreAsync(instance, delta, versionStrategy, workflow, cancellationToken);
+        return await AppendCoreAsync(instance, delta, versionStrategy, schema, cancellationToken);
     }
 
     /// <inheritdoc />
@@ -109,6 +116,7 @@ public sealed class InstanceDataWriteService(
             return null;
         }
 
+        var schema = await LoadSchemaAsync(workflow, cancellationToken);
         using var gate = await InstanceWriteGate.AcquireAsync(instance.Id, cancellationToken);
         var baseVersion = buffer.BaseRow?.Version;
 
@@ -119,7 +127,7 @@ public sealed class InstanceDataWriteService(
             instance,
             buffer.AccumulatedDelta!,
             VersionStrategy.None,
-            workflow,
+            schema,
             cancellationToken,
             versionResolver: head =>
             {
@@ -144,7 +152,7 @@ public sealed class InstanceDataWriteService(
         InstanceDataBuffer buffer,
         JsonData delta,
         VersionStrategy? versionStrategy,
-        Definitions.Workflow? workflow,
+        SchemaLoad schemaLoad,
         CancellationToken cancellationToken)
     {
         var headRow = buffer.Head;
@@ -152,7 +160,7 @@ public sealed class InstanceDataWriteService(
             ? null
             : new InstanceDataHeadRow { Version = headRow.Version, DataHash = headRow.DataHash, Data = headRow.Data.Json };
 
-        var schema = await ResolveSchemaAsync(workflow, head, cancellationToken);
+        var schema = ResolveSchema(schemaLoad, head);
         var writeOptions = executionOptions.Value.InstanceDataWrite;
         var plan = PlanAppend(
             head, delta, versionStrategy, writeOptions.LegacyAppendPipeline, writeOptions.PreserveNumericPrecision);
@@ -181,7 +189,7 @@ public sealed class InstanceDataWriteService(
         Instance instance,
         JsonData delta,
         VersionStrategy? versionStrategy,
-        Definitions.Workflow? workflow,
+        SchemaLoad schemaLoad,
         CancellationToken cancellationToken,
         Func<InstanceDataHeadRow?, string>? versionResolver = null,
         Func<CancellationToken, Task>? afterPersist = null)
@@ -190,7 +198,7 @@ public sealed class InstanceDataWriteService(
 
         return await RunLockedAsync(context, instance.Id, cancellationToken, async () =>
         {
-            var row = await AppendLockedAsync(context, instance, delta, versionStrategy, workflow, versionResolver, cancellationToken);
+            var row = await AppendLockedAsync(context, instance, delta, versionStrategy, schemaLoad, versionResolver, cancellationToken);
 
             // Runs inside the row-lock transaction, so a flush and the caller's own save commit together.
             if (afterPersist is not null)
@@ -205,12 +213,12 @@ public sealed class InstanceDataWriteService(
         Instance instance,
         JsonData delta,
         VersionStrategy? versionStrategy,
-        Definitions.Workflow? workflow,
+        SchemaLoad schemaLoad,
         Func<InstanceDataHeadRow?, string>? versionResolver,
         CancellationToken cancellationToken)
     {
         var head = await ReadHeadAsync(context, instance.Id, cancellationToken);
-        var schema = await ResolveSchemaAsync(workflow, head, cancellationToken);
+        var schema = ResolveSchema(schemaLoad, head);
         var (encryption, plainHead, sanitizedDelta) =
             await PrepareEncryptionAsync(context, instance.Id, schema, head, delta, cancellationToken);
 
@@ -273,8 +281,11 @@ public sealed class InstanceDataWriteService(
         CancellationToken cancellationToken = default,
         Definitions.Workflow? workflow = null)
     {
+        var schema = await LoadSchemaAsync(workflow, cancellationToken);
+        data = await OffloadFilesAsync(instance, workflow, schema.Schema, data, cancellationToken);
+
         using var gate = await InstanceWriteGate.AcquireAsync(instance.Id, cancellationToken);
-        return await AppendExplicitCoreAsync(instance, id, version, data, workflow, cancellationToken);
+        return await AppendExplicitCoreAsync(instance, id, version, data, schema, cancellationToken);
     }
 
     private async Task<InstanceData> AppendExplicitCoreAsync(
@@ -282,7 +293,7 @@ public sealed class InstanceDataWriteService(
         Guid id,
         string version,
         JsonData data,
-        Definitions.Workflow? workflow,
+        SchemaLoad schemaLoad,
         CancellationToken cancellationToken)
     {
         // Version and data are already known at entry — unlike AppendCoreAsync, no head read is
@@ -305,7 +316,7 @@ public sealed class InstanceDataWriteService(
             }
 
             var head = await ReadHeadAsync(context, instance.Id, cancellationToken);
-            var schema = await ResolveSchemaAsync(workflow, head, cancellationToken);
+            var schema = ResolveSchema(schemaLoad, head);
             var (encryption, _, sanitized) =
                 await PrepareEncryptionAsync(context, instance.Id, schema, head, data, cancellationToken);
             var content = encryption.Secret is { } secret
@@ -569,26 +580,77 @@ public sealed class InstanceDataWriteService(
     }
 
     /// <summary>
-    /// Resolves the workflow's master schema once per append — validation and <c>x-encryption</c> both read it.
+    /// x-storage defence in depth (spec §3): <c>content</c> produced by task outputs or subflow output mappings is
+    /// offloaded (Trusted) before the row is written. Runs outside the instance write gate and the row lock.
+    /// </summary>
+    /// <remarks>
+    /// Runs on every append, so the no-op path does no extra I/O: the fields come from the schema the append already
+    /// loaded (<see cref="LoadSchemaAsync"/>; no second component-cache read) through a memo whose hit allocates
+    /// nothing. No workflow or no resolved schema (same rule as validation — the caller holds the definition), a
+    /// host without the Application module (workers, DbMigrator), a master schema without <c>x-storage</c> fields, or
+    /// a delta with no <c>content</c> member at any <c>x-storage</c> path (read-only probe, no mutable DOM) ⇒ no span
+    /// and no offload call. A failure throws (<see cref="FileOffloadFailure"/>: 503 store unavailable / 400 invalid
+    /// node) and follows the caller's normal error path; nothing has been written.
+    /// </remarks>
+    private async Task<JsonData> OffloadFilesAsync(
+        Instance instance,
+        Definitions.Workflow? workflow,
+        SchemaDefinition? schema,
+        JsonData delta,
+        CancellationToken cancellationToken)
+    {
+        if (workflow is null || schema is null)
+            return delta;
+
+        // Resolved lazily for the same reason as IComponentCacheStore: the service lives in the Application module.
+        var offloadService = serviceProvider.GetService<IFileOffloadService>();
+        if (offloadService is null)
+            return delta;
+
+        var fields = offloadService.GetFields(schema);
+        if (fields.Count == 0)
+            return delta;
+
+        var element = delta.JsonElement;
+        if (element.ValueKind != System.Text.Json.JsonValueKind.Object || !FileNodeWalker.AnyContent(element, fields))
+            return delta;
+
+        using var activity = PipelineStepActivityHelper.StartOperationActivity("Files.Offload");
+        var result = await offloadService.OffloadAsync(new FileOffloadRequest(
+            workflow, instance.Id, element, LatestData: null, FileOffloadMode.Trusted, fields), cancellationToken);
+        if (!result.IsSuccess)
+        {
+            activity?.SetStatus(ActivityStatusCode.Error, result.Error.Code);
+            throw FileOffloadFailure.ToException(result.Error);
+        }
+
+        return result.Value!.Changed && result.Value.Payload is { } payload
+            ? JsonData.FromElement(payload)
+            : delta;
+    }
+
+    /// <summary>
+    /// The master schema as loaded before the write gate: <see cref="FailedKey"/> is set when the workflow names a
+    /// schema that could not be loaded (the head-dependent decision is taken under the lock, <see cref="ResolveSchema"/>).
+    /// </summary>
+    private readonly record struct SchemaLoad(SchemaDefinition? Schema, string? FailedKey);
+
+    /// <summary>
+    /// Loads the workflow's master schema once per append, before the write gate — validation, <c>x-encryption</c>
+    /// and <c>x-storage</c> all read it.
     /// </summary>
     /// <remarks>
     /// The definition arrives as an argument from the caller, which already holds it (the pipeline
     /// context, the script context, the start path's own load). It used to be read from an ambient
     /// scope, and a caller running outside such a scope silently skipped validation; passing it
     /// explicitly keeps that outcome visible at each call site instead of hiding it here.
-    /// <para>
-    /// A schema that cannot be resolved is skipped (logged) as before — unless the instance's head already carries
-    /// <c>x-encryption</c> values: then the write cannot know which paths to protect and is refused
-    /// (<see cref="EncryptionSchemaUnavailableException"/>, 503) instead of storing them in plaintext.
-    /// </para>
     /// </remarks>
-    private async Task<SchemaDefinition?> ResolveSchemaAsync(
+    private async Task<SchemaLoad> LoadSchemaAsync(
         Definitions.Workflow? workflow,
-        InstanceDataHeadRow? head,
         CancellationToken cancellationToken)
     {
         if (workflow?.Schema is null)
-            return null;
+            return default;
 
         // Resolved lazily: IComponentCacheStore lives in the Application module, which non-HTTP
         // hosts (workers, DbMigrator) do not load. Those hosts never pass a workflow, so this line
@@ -597,18 +659,26 @@ public sealed class InstanceDataWriteService(
         if (componentCacheStore is null)
         {
             logger.InstanceDataSchemaLoadFailed(workflow.Schema.Key, "IComponentCacheStore is not registered in this host");
-            return SchemaUnavailable(workflow.Schema.Key, head);
+            return new SchemaLoad(null, workflow.Schema.Key);
         }
 
         var schemaResult = await componentCacheStore.GetSchemaAsync(workflow.Schema, cancellationToken);
         if (!schemaResult.IsSuccess)
         {
             logger.InstanceDataSchemaLoadFailed(workflow.Schema.Key, schemaResult.Error.Message);
-            return SchemaUnavailable(workflow.Schema.Key, head);
+            return new SchemaLoad(null, workflow.Schema.Key);
         }
 
-        return schemaResult.Value;
+        return new SchemaLoad(schemaResult.Value, null);
     }
+
+    /// <summary>
+    /// The loaded schema, or — when it could not be loaded — skipped (logged at load) as before, unless the
+    /// instance's head already carries <c>x-encryption</c> values: then the write cannot know which paths to protect
+    /// and is refused (<see cref="EncryptionSchemaUnavailableException"/>, 503) instead of storing them in plaintext.
+    /// </summary>
+    private SchemaDefinition? ResolveSchema(SchemaLoad load, InstanceDataHeadRow? head)
+        => load.FailedKey is { } key ? SchemaUnavailable(key, head) : load.Schema;
 
     // An instance whose head already carries x-encryption values is known to use them: without the schema the
     // write cannot know which paths to protect, so it is refused rather than stored in plaintext.

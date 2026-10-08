@@ -23,6 +23,7 @@ using Microsoft.Extensions.Options;
 using BBT.Workflow.Functions.Validation;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using BBT.Workflow.Files;
 using Microsoft.Extensions.Logging;
 
 namespace Microsoft.Extensions.DependencyInjection;
@@ -124,6 +125,8 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
         services.AddScoped<IDataFunctionCache, DataFunctionCache>();
         services.AddScoped<IInstanceSchemaFunctionCache, InstanceSchemaFunctionCache>();
         // Application Services
+        services.TryAddScoped<IFileOffloadService, FileOffloadService>();
+        services.TryAddScoped<IInstanceFileAppService, InstanceFileAppService>();
         services.AddScoped<IDefinitionAppService, DefinitionAppService>();
         services.AddScoped<IPublishCompletedAppService, PublishCompletedAppService>();
         services.AddScoped<IInstanceCommandAppService, InstanceCommandAppService>();

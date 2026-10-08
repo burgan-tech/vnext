@@ -65,6 +65,14 @@ public sealed class WorkflowExecutionContext
     [System.Text.Json.Serialization.JsonIgnore]
     public bool PayloadSchemaValidated { get; set; }
 
+    /// <summary>
+    /// The payload was produced by the runtime itself (subflow input mapping, trigger task), not by a
+    /// client; <c>x-storage</c> references in it are kept as is. Copied from the input's server-only
+    /// <c>TrustedPayload</c> flag. Transport-only, never serialized: a hop must not inherit another's trust.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool TrustedPayload { get; set; }
+
     /// <summary>Gets or sets the transition key to execute.</summary>
     [Enrich(Name = "vnext.transition.key")]
     public string TransitionKey { get; set; } = default!;

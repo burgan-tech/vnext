@@ -151,7 +151,9 @@ public sealed class InstanceController(
             StrictIdempotency = true,
             // This surface is called only by a parent runtime, which reads IsSuccess from the
             // response and nothing else — never project attributes here.
-            SuppressResponseEnrichment = true
+            SuppressResponseEnrichment = true,
+            // Cross-domain child start from a parent runtime (subflow input mapping): runtime-produced.
+            TrustedPayload = true
         };
         var httpContext = httpContextAccessor.HttpContext;
         if (httpContext is not null)
@@ -487,6 +489,43 @@ public sealed class InstanceController(
         // instance maps to 204 No Content — deliberately NOT 404, which would be indistinguishable
         // from a misrouted request or a wrong app id. Absence is data; a wrong route is a fault.
         return FromResult(result);
+    }
+
+    /// <summary>
+    /// Reads an x-storage file of one instance for <c>ScriptBase.GetFileAsync</c> in another domain.
+    /// Internal-to-internal, same posture as <c>internal/related-data</c>: no caller identity, no queryRoles and no
+    /// x-roles check (trusted network; service authentication is on the security roadmap — see
+    /// docs/contracts/api-and-service-contracts.md). Never expose this route publicly. The handle is still looked up in
+    /// the instance's latest data, so the binding and object key never come from the caller.
+    /// </summary>
+    /// <response code="200">The raw bytes; <c>ETag</c> and <c>X-File-Handle</c> (base64 UTF-8 JSON of the handle) set.</response>
+    /// <response code="404">The file is not referenced by the instance's latest data, or the instance does not exist.</response>
+    /// <response code="503">The file store is unavailable.</response>
+    [ApiExplorerSettings(IgnoreApi = true)]
+    [HttpGet("{domain}/workflows/{workflow}/instances/{instance}/internal/file")]
+    public async Task<IActionResult> GetInternalFileAsync(
+        [FromRoute] string domain,
+        [FromRoute] string workflow,
+        [FromRoute] string instance,
+        [FromQuery, Required] string file,
+        [FromServices] BBT.Workflow.Files.IInstanceFileAppService fileAppService,
+        CancellationToken cancellationToken = default)
+    {
+        var result = await fileAppService.ReadAsync(
+            new BBT.Workflow.Files.InstanceFileRequest(domain, workflow, instance, file, IfNoneMatch: null, Authorization: null),
+            cancellationToken);
+        if (!result.IsSuccess)
+            return FromResult(result);
+
+        var content = result.Value!;
+        Response.Headers[HeadersConstants.ETag] = $"\"{content.Handle.ETag}\"";
+        Response.Headers[HeadersConstants.XFileHandle] = Convert.ToBase64String(
+            System.Text.Encoding.UTF8.GetBytes(content.Handle.ToJsonNode().ToJsonString()));
+        // The stored mimeType is client-supplied; an unparseable one is served as opaque bytes.
+        var contentType = Microsoft.Net.Http.Headers.MediaTypeHeaderValue.TryParse(content.Handle.MimeType, out _)
+            ? content.Handle.MimeType!
+            : "application/octet-stream";
+        return File(content.Bytes!, contentType);
     }
 
     /// <summary>

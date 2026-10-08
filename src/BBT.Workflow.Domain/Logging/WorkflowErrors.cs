@@ -404,6 +404,27 @@ public static class WorkflowErrors
             $"An encrypted field of instance \"{instanceId}\" cannot be decrypted (path \"{path}\"); its key is not available on this host",
             target: instanceId.ToString());
 
+    /// <summary>The binding holding <c>x-storage</c> files is unavailable; transient, nothing was persisted.</summary>
+    public static Error FileStoreUnavailable(string component)
+        => Error.Transient(
+            WorkflowErrorCodes.FileStoreUnavailable,
+            $"File store \"{component}\" is unavailable; the request was not applied and can be retried",
+            target: component);
+
+    /// <summary>An <c>x-storage</c> node is malformed or references a file not stored at that path.</summary>
+    public static Error FileReferenceInvalid(string path, string reason)
+        => Error.Validation(
+            WorkflowErrorCodes.FileReferenceInvalid,
+            $"The file at \"{path}\" is invalid: {reason}",
+            target: path);
+
+    /// <summary>The file is not referenced by the instance's latest data.</summary>
+    public static Error FileNotFound(string file)
+        => Error.NotFound(
+            WorkflowErrorCodes.FileNotFound,
+            $"File \"{file}\" is not referenced by this instance",
+            target: file);
+
     /// <summary>
     /// Instance is Busy: a transition is already queued or executing.
     /// Returned when a new non-reserved async transition is requested while the

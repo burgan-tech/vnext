@@ -146,7 +146,8 @@ public sealed class DirectTriggerTaskExecutor : TriggerTaskExecutorBase<DirectTr
             data: transitionData,
             sync: task.TriggerSync)
         {
-            Headers = headers
+            Headers = headers,
+            TrustedPayload = true // task body is authored by the flow, not a client
         };
 
         // Execute with retry pipeline for transient failures (e.g., instance lock scenarios)

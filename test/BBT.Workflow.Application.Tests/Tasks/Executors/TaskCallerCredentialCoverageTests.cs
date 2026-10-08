@@ -68,6 +68,7 @@ public sealed class TaskCallerCredentialCoverageTests
 
         sent.ShouldNotBeNull();
         ShouldCarryTheCaller(sent!.Headers!, expectedRole: "svc.starter"); // empty "position" filled, role kept
+        sent.TrustedPayload.ShouldBeTrue(); // the task body is flow-authored, not a client payload
     }
 
     [Fact]

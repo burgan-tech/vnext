@@ -20,6 +20,7 @@ using BBT.Workflow.Execution.Continuations;
 using BBT.Workflow.Execution.Events;
 using BBT.Workflow.Execution.Strategies;
 using BBT.Workflow.Execution.Validation;
+using BBT.Workflow.Files;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Shared;
 using Microsoft.Extensions.Logging;
@@ -44,6 +45,7 @@ public class AsyncTransitionStrategyTests
     private readonly Mock<ITransitionAdmissionService> _mockAdmissionService = new();
     private readonly Mock<ITransitionEnqueueGateway> _mockEnqueueGateway = new();
     private readonly Mock<IBackgroundJobArmHandle> _mockArmHandle = new();
+    private readonly Mock<IFileAdmission> _mockFileAdmission = new();
 
     /// <summary>True while the faked admission holds its status lock (i.e. during the callback).</summary>
     private bool _lockHeld;
@@ -87,6 +89,11 @@ public class AsyncTransitionStrategyTests
         // Default: admission admits and runs the callback under its lock, reporting _acceptFlip.
         SetupAdmissionAdmits();
 
+        // Default: the x-storage swap passes the request through.
+        _mockFileAdmission
+            .Setup(x => x.ApplyAsync(It.IsAny<TransitionExecutionContext>(), It.IsAny<WorkflowExecutionContext>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result.Ok());
+
         _strategy = new AsyncTransitionStrategy(
             _mockContextFactory.Object,
             _mockJobRepository.Object,
@@ -94,6 +101,7 @@ public class AsyncTransitionStrategyTests
             _uowManager.Object,
             _mockAdmissionService.Object,
             _mockEnqueueGateway.Object,
+            _mockFileAdmission.Object,
             Options.Create(_executionOptions),
             _mockLogger.Object);
     }
@@ -316,6 +324,83 @@ public class AsyncTransitionStrategyTests
                 It.IsAny<TransitionExecutionContext>(),
                 It.IsAny<Func<AcceptFlip, CancellationToken, Task<Result>>>(),
                 It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    /// <summary>
+    /// x-storage (spec §3): a store failure answers 503 before the accept lock, the Busy flip and
+    /// the job/outbox rows — never a 202 for a request whose files were not stored.
+    /// </summary>
+    [Fact]
+    public async Task ExecuteAsync_WhenTheFileSwapFails_ShouldFailWithoutLockOrEnqueue()
+    {
+        var (wfCtx, _) = SetupSuccessfulContext();
+        _mockFileAdmission
+            .Setup(x => x.ApplyAsync(It.IsAny<TransitionExecutionContext>(), It.IsAny<WorkflowExecutionContext>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result.Fail(WorkflowErrors.FileStoreUnavailable("vnext-blob-local")));
+
+        var result = await _strategy.ExecuteAsync(wfCtx, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.FileStoreUnavailable);
+        _mockAdmissionService.Verify(
+            x => x.AcceptAsync(
+                It.IsAny<TransitionExecutionContext>(),
+                It.IsAny<Func<AcceptFlip, CancellationToken, Task<Result>>>(),
+                It.IsAny<CancellationToken>()),
+            Times.Never);
+        _mockEnqueueGateway.Verify(
+            x => x.EnqueueAsync(
+                It.IsAny<TransitionJobPayload>(),
+                It.IsAny<TransitionContinuationRequested>(),
+                It.IsAny<bool>(),
+                It.IsAny<CancellationToken>()),
+            Times.Never);
+        _mockJobRepository.Verify(
+            x => x.InsertAsync(It.IsAny<InstanceJob>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    /// <summary>The job payload and the outbox event carry the swapped payload, never the bytes.</summary>
+    [Fact]
+    public async Task ExecuteAsync_ShouldEnqueueTheSwappedPayload()
+    {
+        var (wfCtx, _) = SetupSuccessfulContext();
+        wfCtx.Data = new TransitionDataInfo(JsonDocument.Parse("""{"doc":{"content":"AAEC"}}""").RootElement.Clone());
+        var swapped = JsonDocument.Parse("""{"doc":{"file":"6f1c"}}""").RootElement.Clone();
+        _mockFileAdmission
+            .Setup(x => x.ApplyAsync(It.IsAny<TransitionExecutionContext>(), It.IsAny<WorkflowExecutionContext>(), It.IsAny<CancellationToken>()))
+            .Callback<TransitionExecutionContext, WorkflowExecutionContext, CancellationToken>((ctx, wf, _) =>
+            {
+                ctx.Data = swapped;
+                wf.Data!.Attributes = swapped;
+            })
+            .ReturnsAsync(Result.Ok());
+        var (payload, outboxEvent) = CaptureEnqueue();
+
+        var result = await _strategy.ExecuteAsync(wfCtx, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        payload()!.Data!.Value.GetRawText().ShouldNotContain("content");
+        payload()!.Data!.Value.GetRawText().ShouldContain("6f1c");
+        outboxEvent()!.Data!.Value.GetRawText().ShouldNotContain("content");
+    }
+
+    /// <summary>The start path swapped before the instance row and marks the payload validated.</summary>
+    [Fact]
+    public async Task ExecuteAsync_PayloadAlreadyValidated_ShouldNotSwapAgain()
+    {
+        var (wfCtx, _) = SetupSuccessfulContext();
+        wfCtx.PayloadSchemaValidated = true;
+        _mockValidationService
+            .Setup(x => x.ValidatePolicyAsync(It.IsAny<TransitionExecutionContext>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result.Ok());
+
+        var result = await _strategy.ExecuteAsync(wfCtx, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        _mockFileAdmission.Verify(
+            x => x.ApplyAsync(It.IsAny<TransitionExecutionContext>(), It.IsAny<WorkflowExecutionContext>(), It.IsAny<CancellationToken>()),
             Times.Never);
     }
 

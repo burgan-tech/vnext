@@ -73,6 +73,13 @@ public sealed class TransitionInput(
     public bool SuppressResponseEnrichment { get; set; }
 
     /// <summary>
+    /// The payload was produced by the runtime (subflow input mapping, trigger task), not by a client.
+    /// <c>x-storage</c> references in it are kept as is instead of being checked against the instance's data.
+    /// SERVER-ONLY: the public endpoints build the input themselves and never set it.
+    /// </summary>
+    public bool TrustedPayload { get; set; }
+
+    /// <summary>
     /// Creates a WorkflowExecutionContext from this TransitionInput for manual transition execution.
     /// </summary>
     /// <param name="instanceId">The workflow instance identifier</param>
@@ -102,7 +109,8 @@ public sealed class TransitionInput(
                 Stage = Data?.Stage,
             },
             IsReentry = false, // Manual transitions are never re-entry
-            IsPreReserved = ChainReserved
+            IsPreReserved = ChainReserved,
+            TrustedPayload = TrustedPayload
         };
     }
 }

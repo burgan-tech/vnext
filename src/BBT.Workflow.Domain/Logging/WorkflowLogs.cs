@@ -4643,6 +4643,59 @@ public static partial class WorkflowLogs
 
     #endregion
   
+    #region File Offload (x-storage, 2049x)
+
+    /// <summary>Logs that an inline file was written to its binding and replaced by a handle. Content is never logged.</summary>
+    [LoggerMessage(
+        EventId = 20490,
+        Level = LogLevel.Information,
+        Message = "File offloaded: instance {InstanceId}, path {Path}, component {Component}, file {File}, size {Size}")]
+    public static partial void FileOffloaded(
+        this ILogger logger,
+        Guid instanceId,
+        string path,
+        string component,
+        string file,
+        long size);
+
+    /// <summary>Logs that the file binding failed an operation.</summary>
+    [LoggerMessage(
+        EventId = 20491,
+        Level = LogLevel.Warning,
+        Message = "File store {Component} failed ({Operation}) for instance {InstanceId}")]
+    public static partial void FileStoreFailed(
+        this ILogger logger,
+        Exception ex,
+        string component,
+        string operation,
+        Guid instanceId);
+
+    /// <summary>Logs that a malformed or foreign file reference was rejected on write.</summary>
+    [LoggerMessage(
+        EventId = 20492,
+        Level = LogLevel.Warning,
+        Message = "File reference rejected: instance {InstanceId}, path {Path}, reason {Reason}")]
+    public static partial void FileReferenceRejected(
+        this ILogger logger,
+        Guid instanceId,
+        string path,
+        string reason);
+
+    /// <summary>Logs a file read through the file function.</summary>
+    [LoggerMessage(
+        EventId = 20493,
+        Level = LogLevel.Information,
+        Message = "File read: domain {Domain}, flow {Flow}, instance {InstanceId}, file {File}, authorized {Authorized}")]
+    public static partial void FileRead(
+        this ILogger logger,
+        string domain,
+        string flow,
+        string instanceId,
+        string file,
+        bool authorized);
+
+    #endregion
+
     #region Server Configuration
 
     /// <summary>

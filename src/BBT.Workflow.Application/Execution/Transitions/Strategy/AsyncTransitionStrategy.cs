@@ -11,6 +11,7 @@ using BBT.Workflow.Execution.Continuations;
 using BBT.Workflow.Execution.Events;
 using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Execution.Validation;
+using BBT.Workflow.Files;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
 using Microsoft.Extensions.Logging;
@@ -56,6 +57,7 @@ public sealed class AsyncTransitionStrategy(
     IUnitOfWorkManager uowManager,
     ITransitionAdmissionService admissionService,
     ITransitionEnqueueGateway enqueueGateway,
+    IFileAdmission fileAdmission,
     IOptions<WorkflowExecutionOptions> executionOptions,
     ILogger<AsyncTransitionStrategy> logger) : ITransitionStrategy
 {
@@ -64,7 +66,7 @@ public sealed class AsyncTransitionStrategy(
     /// <inheritdoc />
     /// <summary>
     /// Executes transition asynchronously by enqueuing a background job.
-    /// Railway chain: Create Context → Validate (schema + policy) → Set Busy → Enqueue Job → Return Context
+    /// Railway chain: Create Context → Validate (schema + policy) → x-storage swap → Set Busy → Enqueue Job → Return Context
     /// </summary>
     /// <remarks>
     /// Validation must run BEFORE lock acquisition and job enqueue so that callers
@@ -81,6 +83,7 @@ public sealed class AsyncTransitionStrategy(
         var activity = Activity.Current;
         return ctxFactory.CreateAsync(context, cancellationToken)
             .BindAsync(ctx => ValidateAsync(ctx, context.PayloadSchemaValidated, cancellationToken))
+            .BindAsync(ctx => ApplyFilesAsync(ctx, context, cancellationToken))
             .BindAsync(ctx => EnqueueJobAndReturnContextAsync(ctx, context, activity, cancellationToken));
     }
 
@@ -106,6 +109,36 @@ public sealed class AsyncTransitionStrategy(
         return validationResult.IsSuccess
             ? Result<TransitionExecutionContext>.Ok(ctx)
             : Result<TransitionExecutionContext>.Fail(validationResult.Error);
+    }
+
+    /// <summary>
+    /// x-storage swap (spec §3) after validation and before the accept lock, the Busy flip and the
+    /// job/outbox rows — the job payload is built from <c>context.Data.Attributes</c>, which the swap
+    /// rewrites, so the bytes never reach the job row or the outbox. A store failure answers 503 before
+    /// any 202. Skipped when the caller already validated (and so swapped) the payload: the start path.
+    /// </summary>
+    /// <remarks>
+    /// KNOWN LIMITATION until the async parent proxy (Phase 2): a request this parent relays to its active
+    /// SubFlow is swapped NOWHERE. It is skipped here (<c>SubflowForwardRule.WillForward</c>, the leaf
+    /// owns the swap), its bytes ride the parent's job payload, and the relay reaches the leaf with
+    /// <c>ChainReserved</c> — so the leaf re-enters <c>IsPreReserved</c>, which the sync pipeline reads as
+    /// an already-validated payload and does not swap either. The bytes are then persisted in the leaf's
+    /// transition record and instance data. Phase 2 removes it: the parent proxies the request and the
+    /// leaf performs a full admission (validation and swap) of its own. A SYNC forward is not affected —
+    /// it relays without a chain reserve and the leaf swaps at its own validation point.
+    /// </remarks>
+    private async Task<Result<TransitionExecutionContext>> ApplyFilesAsync(
+        TransitionExecutionContext ctx,
+        WorkflowExecutionContext context,
+        CancellationToken cancellationToken)
+    {
+        if (context.PayloadSchemaValidated)
+            return Result<TransitionExecutionContext>.Ok(ctx);
+
+        var files = await fileAdmission.ApplyAsync(ctx, context, cancellationToken);
+        return files.IsSuccess
+            ? Result<TransitionExecutionContext>.Ok(ctx)
+            : Result<TransitionExecutionContext>.Fail(files.Error);
     }
 
     /// <summary>

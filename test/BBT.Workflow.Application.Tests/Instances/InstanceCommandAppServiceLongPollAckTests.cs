@@ -100,6 +100,8 @@ public class InstanceCommandAppServiceLongPollAckTests : IDisposable
             longPollAckResumeService: _resumeService,
             instanceCommandGateway: _gateway,
             workflowOutputMappingService: Substitute.For<IWorkflowOutputMappingService>(),
+            fileOffloadService: BBT.Workflow.Application.Files.FileTestDoubles.PassThroughOffload(),
+            rawBodyProvider: Substitute.For<BBT.Workflow.Scripting.IRequestRawBodyProvider>(),
             logger: Substitute.For<ILogger<InstanceCommandAppService>>());
     }
 
