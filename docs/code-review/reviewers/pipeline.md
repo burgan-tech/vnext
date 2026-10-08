@@ -50,7 +50,7 @@ Each of these is a regression the repo has already paid for; treat a reintroduct
 
 - [ ] `pipeline/lock-one-per-hop` — exactly one distributed lock per request-handling hop, on `ctx.LockKey`, held only across the status check-and-set. No lock is held across context creation, schema/policy validation or the pipeline body.
 - [ ] `pipeline/lock-ordering` — fast-fail Busy check → validation → lock → flip → work → release.
-- [ ] `pipeline/lock-no-nesting` — nothing inside `AcceptAsync`'s callback calls `ReserveAsync` / `TakeOverAsync` / `ReserveSubflowChainAsync` / `Release*`; `InstanceStatusLock` is single-attempt and non-reentrant.
+- [ ] `pipeline/lock-no-nesting` — nothing inside `AcceptAsync`'s callback calls `ReserveAsync` / `TakeOverAsync` / `Release*`; `InstanceStatusLock` is single-attempt and non-reentrant. `ReserveSubflowChainAsync` is **legacy**: the async accept no longer reserves the chain (parents proxy forwardable transitions to the leaf), it has no caller and must not gain one (`pipeline/subflow-transition-proxy`).
 - [ ] `pipeline/lock-updatedata-exempt` — `updateData` (`Unconditional`) takes no lock and no duplicate-job guard on either path. Re-adding either loses data for parallel notifiers.
 - [ ] `pipeline/lock-dup-job-guard` — the duplicate-active-job guard stays inside the lock's critical section; it has no DB constraint behind it and a partial unique index cannot replace it.
 

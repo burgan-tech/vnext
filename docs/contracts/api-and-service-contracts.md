@@ -34,7 +34,7 @@ contracts. Remote services call public runtime APIs rather than internal reposit
 | `GET /{domain}/workflows/{workflow}/instances/{instance}/functions/data` | Latest data, optional extensions, ETag. |
 | `GET /{domain}/workflows/{workflow}/instances/{instance}/functions/view` | Backend-driven view selection. |
 | `GET /{domain}/workflows/{workflow}/instances/{instance}/functions/schema` | Transition-aware schema. |
-| `GET\|HEAD /{domain}/workflows/{workflow}/instances/{instance}/functions/file?file={guid}` | Raw bytes of an `x-storage` file of this instance (latest data only, no SubFlow descent). State `queryRoles` -> `403`, `x-roles` on the path -> `404` (`Instance:100049`), missing/invalid `file` -> `400` (`Instance:100048`), store down -> `503` (`Instance:100047`). `ETag`/`If-None-Match` `304`, `Range` `206`/`416`, `Accept-Ranges`, `Content-Disposition`, `Content-Encoding: identity`. See [File Storage](../runtime/file-storage.md). |
+| `GET\|HEAD /{domain}/workflows/{workflow}/instances/{instance}/functions/file?file={guid}` | Raw bytes of an `x-storage` file of this instance (latest data only, no SubFlow descent). State `queryRoles` -> `403` (decided before the file is located), `x-roles` on the path, an unknown or invalid stored handle -> `404` (`Instance:100049`), missing `file` -> `400` (`Instance:100048`), store down -> `503` (`Instance:100047`), master schema unavailable -> `503` (`Instance:100050`), foreign `{domain}` -> `NotFoundDomain`. `ETag`/`If-None-Match` `304`, `Range` `206`/`416`, `Accept-Ranges`, `Content-Disposition` (`attachment` for HTML/SVG/XML/script types), `Content-Security-Policy: sandbox; default-src 'none'`, unparseable stored type -> `application/octet-stream`, `Content-Encoding: identity`. See [File Storage](../runtime/file-storage.md). |
 | `PATCH /{domain}/workflows/{workflow}/instances/{instance}/transitions/{transition}` | Runs a transition sync or async. |
 | `GET /{domain}/functions` | Lists domain function definitions, including `verbs[]` and input/output schema and view references. |
 | `GET\|POST\|PATCH\|DELETE /{domain}/functions/{function}` | Invokes a custom domain function. `GET /{function}` invokes — it is not a metadata route. |
@@ -54,9 +54,10 @@ On `start` and transition bodies for a flow whose master schema declares `x-stor
 
 | Code | HTTP | When |
 | --- | --- | --- |
-| `Instance:100048` `FileReferenceInvalid` | `400` | `content` and `file` together, invalid base64, a content-less reference that is not at the same path in the instance's latest data (always on `start`) |
+| `Instance:100048` `FileReferenceInvalid` | `400` | `content` and `file` together, invalid base64, a content-less reference that is not at the same path in the instance's latest data (always on `start`), or a `file` node that is not a valid handle (GUID file id, allowed component) |
 | `Instance:100047` `FileStoreUnavailable` | `503` | The binding failed; answered synchronously before any `202`, a failing `start` creates no instance |
 | `Instance:100049` `FileNotFound` | `404` | `functions/file` / `internal/file` only |
+| `Instance:100050` `FileSchemaUnavailable` | `503` | The flow's master schema cannot be loaded and the body carries a `content`/`file` member; answered before any persist or `202`, retry. Also on `functions/file` / `internal/file` |
 
 ### Custom function verbs and payload validation
 
@@ -490,7 +491,7 @@ related-instance reads (see
 | --- | --- | --- |
 | GET | `.../instances/{instance}/internal/related-data` | `200` snapshot, `204` if the instance does not exist. |
 | POST | `.../workflows/{workflow}/internal/related-data/batch` | `200` array (possibly `[]`), `400` above 100 ids. |
-| GET | `.../instances/{instance}/internal/file?file=` | `200` raw bytes of an x-storage file (`ETag`, `X-File-Handle`), for `ScriptBase.GetFileAsync` in another domain; `404` (`Instance:100049`) if the latest data does not reference the file, `503` (`Instance:100047`) if the store is unavailable. **No authorization (no caller identity, `queryRoles` or `x-roles`): internal network only.** See [File Storage](../runtime/file-storage.md). |
+| GET | `.../instances/{instance}/internal/file?file=` | `200` raw bytes of an x-storage file (`ETag`, `X-File-Handle`), for `ScriptBase.GetFileAsync` in another domain; `404` (`Instance:100049`) if the latest data does not reference the file (or the stored handle is invalid), `503` (`Instance:100047`) if the store is unavailable, `503` (`Instance:100050`) if the master schema cannot be loaded. **No authorization (no caller identity, `queryRoles` or `x-roles`): internal network only.** See [File Storage](../runtime/file-storage.md). |
 
 Two more carry SubFlow forwards between runtimes. Since vnext#101 a parent proxies a forwardable
 transition to the active SubFlow (see [SubFlow Transition Proxy](../architecture/subflow-transition-proxy.md))

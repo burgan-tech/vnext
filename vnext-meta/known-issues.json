@@ -399,6 +399,36 @@
       "title": "Instance data appended from a definition's seed data passes no workflow to the write funnel, so x-storage content in seed data is stored inline in the instance data instead of being offloaded.",
       "workaround": "Do not place x-storage file content in seed data; upload it through a transition after the instance exists.",
       "fixedIn": null
+    },
+    {
+      "id": "file-async-proxy-overlapping-revert",
+      "affectedVersions": ">=0.0.100",
+      "severity": "low",
+      "component": "runtime",
+      "path": "SubflowProxyService async forward revert",
+      "title": "Two overlapping async requests proxied through one parent to its active SubFlow: when one forward fails and reverts, the revert can clear the Busy stamp the other request set; the next child notification restores the parent's status.",
+      "workaround": "None needed in normal operation (self-heals on the next child notification); clients should not fire overlapping async transitions at the same parent.",
+      "fixedIn": null
+    },
+    {
+      "id": "file-missing-object-503",
+      "affectedVersions": ">=0.0.100",
+      "severity": "low",
+      "component": "runtime",
+      "path": "DaprBindingFileBlobStore.GetAsync",
+      "title": "A get of an x-storage object that no longer exists in the store (deleted by a bucket lifecycle rule or by hand) answers 503 Instance:100047 FileStoreUnavailable, indistinguishable from a store outage, because the Dapr binding reports both as an invocation error.",
+      "workaround": "Do not expire objects still referenced by instance data; check the store for the object key (FileStorage:KeyPrefix + file) when a 503 persists for one file only.",
+      "fixedIn": null
+    },
+    {
+      "id": "file-duplicate-property-names",
+      "affectedVersions": ">=0.0.100",
+      "severity": "low",
+      "component": "runtime",
+      "path": "FileNodeWalker / FileOffloadService (x-storage nodes with duplicate member names)",
+      "title": "A payload whose x-storage node repeats a member name (for example two 'content' or 'file' members) is handled inconsistently: the read-only element probe and the mutable node used by the swap do not necessarily see the same occurrence, so the outcome (swap, keep or reject) is not defined.",
+      "workaround": "Send well-formed JSON without duplicate member names; standard JSON serializers never produce them.",
+      "fixedIn": null
     }
   ]
 }
