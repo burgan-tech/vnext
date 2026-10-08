@@ -95,13 +95,6 @@ public static class TaskServiceCollectionExtensions
             .ValidateOnStart();
         services.TryAddSingleton<FanOutConcurrencyLimiter>();
 
-        // Process-lifetime gRPC channel/client holder for RemoteInvokerService's "grpc"
-        // transport (ExecutionApi:Transport). Singleton so every request-scoped invoker shares
-        // ONE HTTP/2 connection to the Dapr sidecar instead of opening a new channel per scope;
-        // internally lazy (see GrpcTaskInvokerClientProvider) so the default "http" transport
-        // never constructs one.
-        services.TryAddSingleton<GrpcTaskInvokerClientProvider>();
-
         // Service-invocation client for RemoteInvokerService's HTTP transport: the SDK's non-obsolete
         // DaprClient.CreateInvokeHttpClient() (the InvokeMethod* family is [Obsolete] in 1.17). Singleton,
         // shared with the Execution invokers when both layers live in one host (TryAdd).
