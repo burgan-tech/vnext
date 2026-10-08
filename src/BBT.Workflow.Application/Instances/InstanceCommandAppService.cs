@@ -373,6 +373,9 @@ public sealed class InstanceCommandAppService(
         // Not applicable ⇒ no work and no span (trace-span-tree: non-applicable steps leave no trace).
         if (input.Instance.Attributes is not { ValueKind: JsonValueKind.Object })
             return Result<Instance>.Ok(instance);
+        // Nothing file-shaped in the attributes ⇒ nothing to swap or check, whatever the schema declares: no schema load.
+        if (!FileNodeWalker.AnyFileShapedNode(input.Instance.Attributes.Value))
+            return Result<Instance>.Ok(instance);
         // A master schema that cannot be loaded fails closed (503 FileSchemaUnavailable, no instance row) when the
         // attributes could carry a file; otherwise the start proceeds with no fields.
         var resolved = FileStorageFields.ForPayload(

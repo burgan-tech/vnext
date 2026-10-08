@@ -235,14 +235,15 @@ public sealed class CreateTransitionRecordStep(
         object mappedData,
         CancellationToken cancellationToken)
     {
-        var fieldsResult = await fileOffloadService.GetFieldsAsync(context.Workflow, cancellationToken);
-        if (fieldsResult.IsSuccess && fieldsResult.Value!.Count == 0)
-            return mappedData;
-
         var element = mappedData is JsonElement e
             ? e
             : JsonSerializer.SerializeToElement(mappedData, JsonSerializerConstants.JsonOptions);
-        if (element.ValueKind != JsonValueKind.Object)
+        // Nothing file-shaped anywhere ⇒ nothing to offload or validate whatever the schema says: no schema load.
+        if (element.ValueKind != JsonValueKind.Object || !FileNodeWalker.AnyFileShapedNode(element))
+            return mappedData;
+
+        var fieldsResult = await fileOffloadService.GetFieldsAsync(context.Workflow, cancellationToken);
+        if (fieldsResult.IsSuccess && fieldsResult.Value!.Count == 0)
             return mappedData;
 
         // Master schema unavailable: fail closed only when the mapped data could carry a file.

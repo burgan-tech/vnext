@@ -46,6 +46,12 @@ public sealed class FileAdmission(IFileOffloadService offloadService, IRequestRa
         var payloadElement = context.DataElement;
         if (payloadElement is not { ValueKind: JsonValueKind.Object })
             return Result.Ok();
+        // No object anywhere carries a content or file member ⇒ no x-storage path of any schema can hold work (the
+        // offload only acts on those two members), so the master schema is not loaded at all. This keeps the hot path
+        // of every transition without a file at a payload walk (I4: the L1 schema load is ~20-90 µs per call).
+        if (!FileNodeWalker.AnyFileShapedNode(payloadElement.Value))
+            return Result.Ok();
+
         // A master schema that cannot be loaded fails closed (503 FileSchemaUnavailable, before anything is persisted
         // or enqueued) when the payload could carry a file; otherwise the request proceeds with no fields.
         var resolved = FileStorageFields.ForPayload(

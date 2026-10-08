@@ -36,6 +36,20 @@ public static class FileNodeWalker
     /// </summary>
     public static bool AnyFileShapedNode(JsonElement root)
     {
+        // Fast path over the raw UTF-8: a member named content/file appears verbatim as "content" / "file" unless its
+        // name is escaped, and an escape always contains a backslash. No backslash and neither literal ⇒ no such member
+        // (a match may also be a string VALUE — then the exact walk below decides).
+        if (root.ValueKind is JsonValueKind.Object or JsonValueKind.Array)
+        {
+            var raw = System.Runtime.InteropServices.JsonMarshal.GetRawUtf8Value(root);
+            if (raw.IndexOf((byte)'\\') < 0 && raw.IndexOf("\"file\""u8) < 0 && raw.IndexOf("\"content\""u8) < 0)
+                return false;
+        }
+        return AnyFileShapedMember(root);
+    }
+
+    private static bool AnyFileShapedMember(JsonElement root)
+    {
         switch (root.ValueKind)
         {
             case JsonValueKind.Object:
@@ -43,14 +57,14 @@ public static class FileNodeWalker
                 {
                     if (property.NameEquals("content") || property.NameEquals("file"))
                         return true;
-                    if (AnyFileShapedNode(property.Value))
+                    if (AnyFileShapedMember(property.Value))
                         return true;
                 }
                 return false;
             case JsonValueKind.Array:
                 foreach (var item in root.EnumerateArray())
                 {
-                    if (AnyFileShapedNode(item))
+                    if (AnyFileShapedMember(item))
                         return true;
                 }
                 return false;

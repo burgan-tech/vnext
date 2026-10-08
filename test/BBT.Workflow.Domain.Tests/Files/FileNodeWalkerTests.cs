@@ -81,6 +81,9 @@ public sealed class FileNodeWalkerTests
     [InlineData("""{ "a": { "b": [ { "content": 5 } ] } }""", true)]
     [InlineData("""{ "deep": [ [ { "file": "x" } ] ] }""", true)]
     [InlineData("""{ "p": "content" }""", false)]
+    [InlineData("""{ "p": "\"file\"" }""", false)]                // the literal as a value: the exact walk decides
+    [InlineData("""{ "p": { "\u0066ile": "x" } }""", true)]        // an escaped name never slips past the fast path
+    [InlineData("""{ "p": { "c\u006fntent": "AA==" } }""", true)]
     public void AnyFileShapedNode_LooksAtEveryObject(string json, bool expected)
         => FileNodeWalker.AnyFileShapedNode(System.Text.Json.JsonDocument.Parse(json).RootElement).ShouldBe(expected);
 

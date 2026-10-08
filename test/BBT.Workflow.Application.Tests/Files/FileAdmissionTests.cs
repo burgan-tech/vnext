@@ -300,6 +300,19 @@ public sealed class FileAdmissionTests
         _rawBody.DidNotReceiveWithAnyArgs().ReplaceRawBodyAttributes(default);
     }
 
+    /// <summary>I4: no content/file member anywhere ⇒ the master schema is not even loaded (hot path of every transition).</summary>
+    [Fact]
+    public async Task ApplyAsync_PayloadWithoutFileShapedNodes_DoesNotLoadTheSchema()
+    {
+        var (ctx, wf) = Create(data: JsonDocument.Parse("""{ "passport": { "name": "p.pdf" }, "files": [ 1, 2 ] }""").RootElement.Clone());
+
+        var result = await _sut.ApplyAsync(ctx, wf, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        await _offload.DidNotReceiveWithAnyArgs().GetFieldsAsync(default!, default);
+        await _offload.DidNotReceiveWithAnyArgs().OffloadAsync(default!, default);
+    }
+
     [Fact]
     public async Task ApplyAsync_NonObjectPayload_SkipsTheOffload()
     {
