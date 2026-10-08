@@ -62,15 +62,11 @@ public class RemoteInvokerServiceTests
             })
             .Build();
 
-        // Real (not mocked) provider: it's cheap and lazy — building it does not open a
-        // gRPC channel, and these tests never exercise the "grpc" transport branch.
-        var grpcClientProvider = new GrpcTaskInvokerClientProvider(config);
-
         var invokeClient = new HttpClient(new InvocationHandler { InnerHandler = _stub, DaprEndpoint = Sidecar });
 
         return new RemoteInvokerService(
             new DaprServiceInvocationClient(invokeClient),
-            config, _logger.Object, _correlationIdProvider.Object, grpcClientProvider);
+            config, _logger.Object, _correlationIdProvider.Object);
     }
 
     private static TaskEnvelope CreateEnvelope() => new()

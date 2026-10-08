@@ -98,11 +98,10 @@ public sealed class TaskInvocationDiRegistrationTests
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
-                // Read by GrpcTaskInvokerClientProvider's constructor (VNextAppIds.ExecutionOrDefault)
-                // only when something actually RESOLVES it (it is lazy beyond that — see its own
-                // remarks); ValidateOnBuild itself never invokes a constructor, only the static graph.
-                // Present so a test that does resolve the full dispatcher graph does not fail on
-                // unrelated missing configuration.
+                // Read by RemoteInvokerService's constructor (VNextAppIds.ExecutionOrDefault) only
+                // when something actually RESOLVES it; ValidateOnBuild itself never invokes a
+                // constructor, only the static graph. Present so a test that does resolve the full
+                // dispatcher graph does not fail on unrelated missing configuration.
                 ["APP_DOMAIN"] = "test-domain"
             })
             .Build();
