@@ -478,14 +478,17 @@ related-instance reads (see
 | --- | --- | --- |
 | GET | `.../instances/{instance}/internal/related-data` | `200` snapshot, `204` if the instance does not exist. |
 | POST | `.../workflows/{workflow}/internal/related-data/batch` | `200` array (possibly `[]`), `400` above 100 ids. |
+| GET | `.../instances/{instance}/internal/file?file=` | `200` raw bytes of an x-storage file (`ETag`, `X-File-Handle`), for `ScriptBase.GetFileAsync` in another domain; `404` if the latest data does not reference the file, `503` if the store is unavailable. |
 
-Two more back the accept-time SubFlow chain reserve (see
-[vnext-workflow-developer](../../.claude/rules/vnext-workflow-developer.md) § SubFlow Lifecycle):
+Two more carry SubFlow forwards between runtimes. Since vnext#101 a parent proxies a forwardable
+transition to the active SubFlow (see [SubFlow Transition Proxy](../architecture/subflow-transition-proxy.md))
+and no longer reserves the chain; `busy-release` and the `ChainReserved` claim on `subflow-forward` are
+**LEGACY**, kept for older-version runtimes (deprecation `subflow-chain-reserve-claim`):
 
 | Method | Route | Response |
 | --- | --- | --- |
 | POST | `.../instances/{instance}/internal/subflow-forward?transitionKey=` | Same contract as the public transition endpoint: `200` (sync) / `202` (async), or the mapped error. The sync body is identity-only (`id`, `key`, `status`): the relay reads `status` and nothing else, so response enrichment (attributes, ETag) is suppressed on this surface. (Extensions are not evaluated on any sync write response since 0.0.93.) |
-| PUT | `.../instances/{instance}/internal/busy-release` | `200`, also when the instance is absent (no-op). |
+| PUT | `.../instances/{instance}/internal/busy-release` | LEGACY. `200`, also when the instance is absent (no-op). Only older parents' compensation calls it. |
 
 Two more serve local-development tooling (the vNext Forge Instance Monitor) rather than other runtimes.
 Unlike `internal/related-data`, they are not unfiltered: every row's data goes through the same
@@ -497,12 +500,13 @@ there is no in-process `queryRoles` gate — the gateway decides via `authorize?
 | GET | `.../instances/{instance}/data/history` | `200` page of data-history rows, one per data write, newest first (`page`, `pageSize` <= 100, `includeData`). |
 | GET | `.../instances/{instance}/data/history/{rowId}` | `200` one row with the same exposure; `404` (`Instance:100013`) when the row is unknown or belongs to another instance. |
 
-The endpoint contract can represent both response modes, but current runtime-generated active-child
-forward calls always set `sync=true` and therefore await the child activation. The distinction is
+The endpoint contract can represent both response modes. The transition proxy forwards in the parent's
+resolved mode (async stays async); only the legacy `ForwardToSubflowJobHandler` path always sets
+`sync=true` and awaits the child activation. The distinction is
 important when diagnosing traces or changing ownership semantics; see
 [Subflow Execution](../architecture/subflow-execution.md).
 
-`internal/subflow-forward` exists **because** it is internal. The relay must carry a claim proving the
+`internal/subflow-forward` exists **because** it is internal. An older-version relay must carry a claim proving the
 originating accept already reserved this chain's Busy flag, and the public transition endpoint cannot
 carry one safely: it copies every inbound header into `TransitionInput.Headers` unfiltered and
 serializes only the data element on the cross-domain hop, so a header-borne claim would be forgeable
@@ -525,7 +529,8 @@ orchestration host's public port unreachable from outside the cluster/mesh. This
 the pre-existing internal endpoints above, but the **blast radius is larger**: `sub/state`,
 `child-cancel`, and `child-fault` perform one narrow, parameterized action each, whereas
 `internal/related-data` and its batch form return **complete, unfiltered instance data for any instance
-id supplied** (no `x-roles` filtering, no query-role check). Whoever owns ingress and NetworkPolicy for
+id supplied** (no `x-roles` filtering, no query-role check), and `internal/file` returns the **raw bytes of
+any x-storage file the instance references** with no caller identity, `queryRoles` or `x-roles` check. Whoever owns ingress and NetworkPolicy for
 this host must confirm these paths are not exposed before any environment goes live — this cannot be
 verified from application code alone, since nothing in the application layer restricts it.
 

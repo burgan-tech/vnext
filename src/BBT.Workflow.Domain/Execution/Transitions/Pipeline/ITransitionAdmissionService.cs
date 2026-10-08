@@ -41,23 +41,30 @@ public enum AdmissionKind
 }
 
 /// <summary>
-/// What an accept did to the instance status under the admission lock. Tells the accept path
-/// whether the chain reserve was taken here (so the relay may claim it) and what to compensate
-/// when the work that follows the flip fails.
+/// What an accept did to the instance status under the admission lock. Tells the accept path what
+/// to compensate when the work that follows the flip fails.
+/// <para>
+/// There is no chain-reserve value any more: a parent no longer reserves its active SubFlow chain
+/// on an async accept (the transition is proxied to the leaf, which admits it itself). A chain
+/// reserve taken by an OLDER runtime still reaches this one as the
+/// <c>TransitionInput.ChainReserved</c> claim and is carried as
+/// <see cref="TransitionExecutionContext.SubflowChainReserved"/> (vnext-meta deprecation
+/// <c>subflow-chain-reserve-claim</c>).
+/// </para>
 /// </summary>
 public enum AcceptFlip
 {
-    /// <summary>No status flip: updateData, an owner re-entry, or an internal resume.</summary>
+    /// <summary>
+    /// No status flip: updateData, an owner re-entry, an internal resume, or a request a Busy parent
+    /// relays to its active SubFlow (<see cref="ITransitionAdmissionService.IsSubflowForward"/>).
+    /// </summary>
     None = 0,
 
     /// <summary>Active→Busy reserve; this accept owns the Busy flag.</summary>
     Reserved = 1,
 
     /// <summary>Unconditional Busy flip for cancel/exit/timeout, and it actually changed the status.</summary>
-    TakenOver = 2,
-
-    /// <summary>The whole active SubFlow chain was marked Busy down to the leaf.</summary>
-    ChainReserved = 3
+    TakenOver = 2
 }
 
 /// <summary>
@@ -84,8 +91,9 @@ public interface ITransitionAdmissionService
     /// Returns whether a Busy instance should have this request forwarded to its active SubFlow
     /// instead of being rejected: a <see cref="AdmissionKind.Normal"/> request against a Busy
     /// parent that has an open SubFlow-type correlation. Such requests are admitted without a
-    /// reserve — <c>ForwardToActiveSubflowStep</c> forwards them and the subflow runs its own
-    /// admission in its own context.
+    /// reserve of the parent or of the chain below it — <c>ForwardToActiveSubflowStep</c> forwards
+    /// them and the subflow runs its own admission in its own context. (A client transition is
+    /// normally proxied to the leaf at intake and never reaches this check.)
     /// </summary>
     bool IsSubflowForward(TransitionExecutionContext context);
 
@@ -126,6 +134,11 @@ public interface ITransitionAdmissionService
     /// classifies as a relay: under the short status lock, marks this instance Busy and propagates
     /// down every active SubFlow correlation to the leaf.
     /// <para>
+    /// LEGACY: the async accept no longer reserves the chain (the transition is proxied to the leaf);
+    /// no production caller remains. Kept with the receiving side of the chain-reserve claim until the
+    /// <c>subflow-chain-reserve-claim</c> deprecation is removed.
+    /// </para>
+    /// <para>
     /// The relay levels are already Busy for their subflow's lifetime by design, so in practice
     /// this flips only the leaf — and the leaf is the instance a long-polling client actually
     /// observes, because the state function reports the deepest active subflow's status. Without
@@ -142,7 +155,9 @@ public interface ITransitionAdmissionService
     /// <summary>
     /// Compensates a successful <see cref="ReserveSubflowChainAsync"/> whose follow-up work never
     /// ran. Releases only what the chain reserve actually flipped — levels holding an open SubFlow
-    /// correlation are recursed past, not settled. Never throws.
+    /// correlation are recursed past, not settled. Never throws. Still reached by
+    /// <c>TransitionRunner</c>'s E31 compensation for a job an older runtime's accept enqueued with
+    /// the chain claim (in flight across an upgrade, or relayed by an older parent).
     /// </summary>
     Task ReleaseSubflowChainAsync(TransitionExecutionContext context, CancellationToken cancellationToken = default);
 

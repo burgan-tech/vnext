@@ -580,18 +580,20 @@ public class AsyncTransitionStrategyTests
     #region Subflow chain claim
 
     [Fact]
-    public async Task ExecuteAsync_WhenAdmissionReservedTheChain_ShouldStampTheClaimOnTheEnqueuedJob()
+    public async Task ExecuteAsync_SubflowForwardAccept_ShouldNotStampAClaim()
     {
-        // Without the claim the leaf — which this accept flipped Busy — rejects the relay with 409.
+        // The accept no longer reserves the chain (admission reports no flip for a subflow
+        // forward), so the parent job carries no claim and its forward runs the leaf's own
+        // admission. (Was: AcceptFlip.ChainReserved → SubflowChainReserved = true.)
         var (wfCtx, _) = SetupSuccessfulContext();
-        _acceptFlip = AcceptFlip.ChainReserved;
+        _acceptFlip = AcceptFlip.None;
 
         var (payload, outboxEvent) = CaptureEnqueue();
 
         await _strategy.ExecuteAsync(wfCtx, CancellationToken.None);
 
-        payload()!.SubflowChainReserved.ShouldBeTrue();
-        outboxEvent()!.SubflowChainReserved.ShouldBeTrue();
+        payload()!.SubflowChainReserved.ShouldBeFalse();
+        outboxEvent()!.SubflowChainReserved.ShouldBeFalse();
     }
 
     [Fact]
@@ -612,18 +614,21 @@ public class AsyncTransitionStrategyTests
     [Fact]
     public async Task ExecuteAsync_WhenRelayArrivesWithAnInheritedClaim_ShouldCarryItOntoTheNextHop()
     {
-        // An intermediate relay's own accept classifies as OwnerReentry, so admission performs no
-        // flip for it. If the claim were not inherited from the context it would be dropped after
-        // the first hop and the leaf would reject the forward with a 409, deadlocking the chain.
+        // Receiving side kept (deprecation subflow-chain-reserve-claim): an OLDER parent's relay
+        // arrives with the claim, so this intermediate accept classifies as OwnerReentry and
+        // admission performs no flip for it. If the claim were not inherited from the context it
+        // would be dropped here and the leaf — which that older accept flipped Busy — would reject
+        // the forward with a 409, deadlocking the chain.
         var (wfCtx, txCtx) = SetupSuccessfulContext();
         txCtx.SubflowChainReserved = true;
         _acceptFlip = AcceptFlip.None;
 
-        var (payload, _) = CaptureEnqueue();
+        var (payload, outboxEvent) = CaptureEnqueue();
 
         await _strategy.ExecuteAsync(wfCtx, CancellationToken.None);
 
         payload()!.SubflowChainReserved.ShouldBeTrue();
+        outboxEvent()!.SubflowChainReserved.ShouldBeTrue();
     }
 
     #endregion
@@ -869,7 +874,7 @@ public class AsyncTransitionStrategyTests
     public async Task ExecuteAsync_WhenArmAndOutboxBothFail_FailsWithoutReleasing()
     {
         var (wfCtx, _) = SetupSuccessfulContext();
-        _acceptFlip = AcceptFlip.ChainReserved;
+        _acceptFlip = AcceptFlip.Reserved;
         _mockArmHandle
             .Setup(x => x.ArmAsync(It.IsAny<CancellationToken>()))
             .ThrowsAsync(new InvalidOperationException("scheduler down"));

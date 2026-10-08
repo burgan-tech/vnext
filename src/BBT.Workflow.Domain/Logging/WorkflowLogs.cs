@@ -1768,6 +1768,23 @@ public static partial class WorkflowLogs
         string errorMessage);
 
     /// <summary>
+    /// Logs when the SubFlow proxy could not write the parent's EffectiveStatus (the async pre-stamp
+    /// to Busy, or its compare-and-set revert). The forward is not affected; the parent's projection
+    /// catches up at the child's next rest-point notification.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40109,
+        Level = LogLevel.Warning,
+        Message = "Proxy of transition {TransitionKey} to subflow instance {SubflowInstanceId}: writing parent instance {ParentInstanceId} EffectiveStatus={EffectiveStatus} failed")]
+    public static partial void SubFlowProxyEffectiveStatusWriteFailed(
+        this ILogger logger,
+        Exception exception,
+        string transitionKey,
+        Guid subflowInstanceId,
+        Guid parentInstanceId,
+        string effectiveStatus);
+
+    /// <summary>
     /// Logs when a SubFlow fault propagation event is received (upward: child faulted, notifying parent).
     /// </summary>
     [LoggerMessage(

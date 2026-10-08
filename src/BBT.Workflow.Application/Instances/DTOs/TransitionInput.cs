@@ -54,6 +54,13 @@ public sealed class TransitionInput(
     /// forgeable and would defeat the Busy-as-mutex guarantee). Cross-domain forwards carry it in
     /// the body of the internal-only subflow-forward endpoint instead.
     /// </para>
+    /// <para>
+    /// LEGACY: this runtime's accepts no longer reserve the chain (a parent proxies the transition to
+    /// its active SubFlow, whose own admission runs). The claim is still ACCEPTED from older-version
+    /// parents and still sent for a job an older accept enqueued (vnext-meta deprecation
+    /// <c>subflow-chain-reserve-claim</c>). A relay carrying it is not proxied, and its body is still
+    /// run through the x-storage swap at the leaf (<c>WorkflowExecutionContext.ChainReservedRelay</c>).
+    /// </para>
     /// </summary>
     public bool ChainReserved { get; set; }
 

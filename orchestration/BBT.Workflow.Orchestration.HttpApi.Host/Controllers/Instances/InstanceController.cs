@@ -281,6 +281,11 @@ public sealed class InstanceController(
     /// <summary>
     /// Marks an instance Busy and recursively propagates to nested SubFlows.
     /// Internal endpoint for cross-domain SubFlow busy propagation.
+    /// <para>
+    /// LEGACY receiving side: this runtime's accepts no longer reserve a SubFlow chain, so only an
+    /// older-version parent still calls it. Kept until the <c>subflow-chain-reserve-claim</c>
+    /// deprecation (vnext-meta) is removed.
+    /// </para>
     /// </summary>
     /// <param name="domain">Target workflow domain.</param>
     /// <param name="workflow">Target workflow definition key.</param>
@@ -384,6 +389,8 @@ public sealed class InstanceController(
     /// Releases an accept-time SubFlow chain reserve, recursively propagating to nested SubFlows.
     /// Internal-only compensation endpoint — the mirror of <see cref="MarkBusyAsync"/>. Levels
     /// holding an open SubFlow correlation are Busy by design and are recursed past, not released.
+    /// LEGACY receiving side, like <see cref="MarkBusyAsync"/>: reached only by the compensation of a
+    /// chain reserve an older-version runtime took (<c>subflow-chain-reserve-claim</c> deprecation).
     /// </summary>
     /// <param name="domain">Target workflow domain.</param>
     /// <param name="workflow">Target workflow definition key.</param>

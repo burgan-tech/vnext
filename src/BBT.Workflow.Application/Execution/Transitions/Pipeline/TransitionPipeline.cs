@@ -144,7 +144,9 @@ public class TransitionPipeline
         // data, job payload). Only at the request's single validation point — a job re-entry and the
         // start path carry a payload that was already swapped (the async accept / the start before
         // the instance row). A request this parent relays to its active SubFlow is left for the leaf.
-        if (!payloadAlreadyValidated)
+        // An older-version parent's relay (ChainReservedRelay) is pre-reserved but was swapped
+        // nowhere, so it is swapped here even though IsPreReserved skips the schema.
+        if (!payloadAlreadyValidated || workflowContext.ChainReservedRelay)
         {
             var files = await _fileAdmission.ApplyAsync(context, workflowContext, cancellationToken);
             if (!files.IsSuccess)
@@ -210,10 +212,9 @@ public class TransitionPipeline
                 // which runs the same admission logic in its own context. It does NOT own the
                 // parent's status.
                 //
-                // Deliberately NO chain reserve here, unlike the async accept: a sync caller
-                // blocks until the relay has actually reached the leaf, so there is no window in
-                // which it could observe a stale Active. Reserving the chain here would only
-                // widen the stranded-Busy surface.
+                // No chain reserve here, and none on the async accept either any more: the leaf
+                // runs its own admission when the relay reaches it (a client request is proxied
+                // there at intake and does not get here at all).
                 if (_admissionService.IsSubflowForward(context))
                     return await RunChainAsync(context, cancellationToken);
 

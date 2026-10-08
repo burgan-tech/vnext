@@ -25,8 +25,8 @@ namespace BBT.Workflow.Execution.Strategies;
 /// <para>
 /// The accept takes exactly ONE distributed lock, and it is the same short status lock the sync
 /// pipeline uses: <see cref="ITransitionAdmissionService.AcceptAsync"/> acquires
-/// <c>ctx.LockKey</c>, performs the kind's status flip (reserve / take-over / chain reserve /
-/// nothing), and runs the duplicate-job guard and the durable enqueue while still holding it.
+/// <c>ctx.LockKey</c>, performs the kind's status flip (reserve / take-over / nothing), and runs
+/// the duplicate-job guard and the durable enqueue while still holding it.
 /// The guard shares that critical section because its check-then-insert has no database
 /// constraint behind it — it is not a second concern deserving a second lock. Ordering is
 /// fast-fail Busy check → validation → lock → flip → guard → enqueue → release, so no lock is
@@ -34,13 +34,13 @@ namespace BBT.Workflow.Execution.Strategies;
 /// moment the request is accepted.
 /// </para>
 /// <para>
-/// A Busy parent with an active SubFlow is admitted without a reserve of its own — it is Busy for
-/// the subflow's lifetime by design — but its SubFlow chain IS reserved down to the leaf before the
-/// response, because the state function reports the deepest active subflow's status. Skipping that
-/// would answer the caller while the leaf still reads Active, and a client long polling on the
-/// parent would see no work in progress. The relay carries the claim
-/// (<c>TransitionInput.ChainReserved</c>) so the leaf's own admission treats the pre-set Busy as an
-/// owner re-entry instead of a 409.
+/// A Busy parent with an active SubFlow is admitted without a reserve — neither of itself (it is
+/// Busy for the subflow's lifetime by design) nor of the chain below it. A client transition never
+/// gets here for such a parent: <c>SubflowProxyService</c> proxies it to the leaf at intake, and the
+/// leaf runs the full admission. An entry that still reaches this strategy with a forwardable key
+/// enqueues a parent job without a chain claim, and its forward runs the leaf's normal admission.
+/// The only chain claim (<c>TransitionInput.ChainReserved</c>) this strategy still carries is one an
+/// older-version parent sent, inherited from <see cref="TransitionExecutionContext.SubflowChainReserved"/>.
 /// </para>
 /// <para>
 /// Enqueue atomicity is governed by <c>WorkflowExecutionOptions.DirectEnqueueContinuations</c>:
@@ -118,14 +118,12 @@ public sealed class AsyncTransitionStrategy(
     /// any 202. Skipped when the caller already validated (and so swapped) the payload: the start path.
     /// </summary>
     /// <remarks>
-    /// KNOWN LIMITATION until the async parent proxy (Phase 2): a request this parent relays to its active
-    /// SubFlow is swapped NOWHERE. It is skipped here (<c>SubflowForwardRule.WillForward</c>, the leaf
-    /// owns the swap), its bytes ride the parent's job payload, and the relay reaches the leaf with
-    /// <c>ChainReserved</c> — so the leaf re-enters <c>IsPreReserved</c>, which the sync pipeline reads as
-    /// an already-validated payload and does not swap either. The bytes are then persisted in the leaf's
-    /// transition record and instance data. Phase 2 removes it: the parent proxies the request and the
-    /// leaf performs a full admission (validation and swap) of its own. A SYNC forward is not affected —
-    /// it relays without a chain reserve and the leaf swaps at its own validation point.
+    /// A request this parent relays to its active SubFlow is skipped here
+    /// (<c>SubflowForwardRule.WillForward</c>): the leaf owns the swap. A client request is proxied to
+    /// the leaf at intake and never gets here; any other entry enqueues a parent job without a chain
+    /// claim, so its forward reaches the leaf as a normal request that the leaf admits (and swaps) at
+    /// its own validation point. A relay an OLDER parent sends with the chain claim re-enters the leaf
+    /// pre-reserved; the leaf's pipeline still swaps it (<c>WorkflowExecutionContext.ChainReservedRelay</c>).
     /// </remarks>
     private async Task<Result<TransitionExecutionContext>> ApplyFilesAsync(
         TransitionExecutionContext ctx,
@@ -201,12 +199,11 @@ public sealed class AsyncTransitionStrategy(
                         WorkflowErrors.TransitionJobAlreadyActive(ctx.InstanceId, ctx.TransitionKey));
                 }
 
-                // Inherit the claim: an intermediate relay's own accept classifies as OwnerReentry
-                // (it arrives pre-reserved), so admission performs no flip for it. Seeding from the
-                // context carries the originating accept's chain reserve through every hop —
-                // otherwise the claim is dropped after the first relay and the leaf, which that
-                // same accept flipped Busy, rejects the forward with a 409.
-                var chainReserved = ctx.SubflowChainReserved || flip == AcceptFlip.ChainReserved;
+                // This accept never reserves the chain; the only claim is one INHERITED from an
+                // older-version parent's relay (it arrives pre-reserved, so admission performs no
+                // flip for it). Carrying it on keeps that older accept's chain reserve claimable at
+                // the leaf, which it flipped Busy — dropping it would make the leaf 409 the relay.
+                var chainReserved = ctx.SubflowChainReserved;
 
                 var enqueueResult = await EnqueueAndSaveJobAsync(
                     context, ctx, jobName, jobId, activity, chainReserved, ct);

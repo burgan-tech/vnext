@@ -48,6 +48,7 @@ public class InstanceCommandAppServiceBusyFastFailTests : IDisposable
     private readonly IComponentCacheStore _componentCacheStore = Substitute.For<IComponentCacheStore>();
     private readonly ITransitionAdmissionService _admissionService = Substitute.For<ITransitionAdmissionService>();
     private readonly IWorkflowExecutionService _executionService = Substitute.For<IWorkflowExecutionService>();
+    private readonly BBT.Workflow.SubFlow.ISubflowProxyService _proxyService = Substitute.For<BBT.Workflow.SubFlow.ISubflowProxyService>();
     private readonly InstanceCommandAppService _service;
     private readonly IServiceProvider _ambient;
     private readonly IServiceProvider? _previousAmbient;
@@ -91,6 +92,7 @@ public class InstanceCommandAppServiceBusyFastFailTests : IDisposable
             workflowOutputMappingService: Substitute.For<IWorkflowOutputMappingService>(),
             fileOffloadService: BBT.Workflow.Application.Files.FileTestDoubles.PassThroughOffload(),
             rawBodyProvider: Substitute.For<BBT.Workflow.Scripting.IRequestRawBodyProvider>(),
+            subflowProxyService: _proxyService,
             logger: Substitute.For<ILogger<InstanceCommandAppService>>());
     }
 
@@ -164,7 +166,8 @@ public class InstanceCommandAppServiceBusyFastFailTests : IDisposable
     [Fact]
     public async Task TransitionAsync_BusyWithActiveSubflow_FallsThroughToFullPath()
     {
-        // Forward adayı — fast-fail devreye girmez; tam yükleme yapılır (pipeline forward eder).
+        // Forward adayı — fast-fail devreye girmez. The proxy declines here (the substitute answers
+        // null, as it does for a non-forwardable key), so the request runs on the parent.
         var instanceId = Guid.NewGuid();
         SetupSnapshot(instanceId, InstanceStatus.Busy, hasActiveSubFlow: true);
         await _service.TransitionAsync(
@@ -217,9 +220,10 @@ public class InstanceCommandAppServiceBusyFastFailTests : IDisposable
     [Fact]
     public async Task TransitionAsync_BusyLeafWithChainReservedClaim_FallsThroughToFullPath()
     {
-        // Relay to the leaf: the accept already flipped this instance Busy as part of its SubFlow
-        // chain reserve, so the Busy the fast-fail sees is the relay's own. Without the exemption
-        // the forward 409s and the flow deadlocks at the leaf.
+        // Relay to the leaf from an OLDER-version parent (the receiving side is kept, deprecation
+        // subflow-chain-reserve-claim): its accept already flipped this instance Busy as part of its
+        // SubFlow chain reserve, so the Busy the fast-fail sees is the relay's own. Without the
+        // exemption the forward 409s and the flow deadlocks at the leaf.
         var instanceId = Guid.NewGuid();
         SetupSnapshot(instanceId, InstanceStatus.Busy, hasActiveSubFlow: false);
         _admissionService
@@ -232,9 +236,32 @@ public class InstanceCommandAppServiceBusyFastFailTests : IDisposable
         await _service.TransitionAsync(
             instanceId.ToString(), "regular-transition", input, CancellationToken.None);
 
-        // The claim exempts the relay from the Busy fast-fail, so the request reaches execution.
+        // The claim exempts the relay from the Busy fast-fail, so the request reaches execution as
+        // an owner re-entry — and marked as a relay, so the leaf still runs the x-storage swap on it.
         await _executionService.Received(1)
-            .ExecuteTransitionAsync(Arg.Any<WorkflowExecutionContext>(), Arg.Any<CancellationToken>());
+            .ExecuteTransitionAsync(
+                Arg.Is<WorkflowExecutionContext>(c =>
+                    c.IsPreReserved && c.SubflowChainReserved && c.ChainReservedRelay),
+                Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task TransitionAsync_WithoutClaim_IsNotMarkedAsAChainReservedRelay()
+    {
+        var instanceId = Guid.NewGuid();
+        SetupSnapshot(instanceId, InstanceStatus.Active, hasActiveSubFlow: false);
+        _admissionService
+            .ClassifyKey(Arg.Any<Definitions.Workflow>(), "regular-transition")
+            .Returns(AdmissionKind.Normal);
+
+        await _service.TransitionAsync(
+            instanceId.ToString(), "regular-transition", CreateInput(), CancellationToken.None);
+
+        await _executionService.Received(1)
+            .ExecuteTransitionAsync(
+                Arg.Is<WorkflowExecutionContext>(c =>
+                    !c.IsPreReserved && !c.SubflowChainReserved && !c.ChainReservedRelay),
+                Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -295,6 +322,91 @@ public class InstanceCommandAppServiceBusyFastFailTests : IDisposable
         result.Error.Code.ShouldBe(WorkflowErrorCodes.InstanceCompleted);
         await _executionService.DidNotReceiveWithAnyArgs()
             .ExecuteTransitionAsync(default!, default);
+    }
+
+    [Fact]
+    public async Task TransitionAsync_ProxiedAsync_ReturnsParentIdentityWithoutRunningTheParent()
+    {
+        // A parent with an active SubFlow proxies a forwardable key: no execution entry (no lock,
+        // no Busy, no job) on the parent, and the answer is the parent's id with the child's status.
+        var instanceId = Guid.NewGuid();
+        SetupSnapshot(instanceId, InstanceStatus.Busy, hasActiveSubFlow: true);
+        _proxyService
+            .TryProxyAsync(Arg.Any<InstanceExecutionSnapshot>(), Arg.Any<Definitions.Workflow>(),
+                "regular-transition", Arg.Any<TransitionInput>(), Arg.Any<CancellationToken>())
+            .Returns(Result<TransitionOutput>.Ok(new TransitionOutput
+            {
+                Id = instanceId, Status = InstanceStatus.Busy, ExecutedAsync = true
+            }));
+
+        var result = await _service.TransitionAsync(
+            instanceId.ToString(), "regular-transition", CreateInput(), CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        result.Value!.Id.ShouldBe(instanceId);
+        result.Value.Status.ShouldBe(InstanceStatus.Busy);
+        result.Value.ExecutedAsync.ShouldBe(true);
+        result.Value.Key.ShouldBe("key");
+        await _executionService.DidNotReceiveWithAnyArgs().ExecuteTransitionAsync(default!, default);
+        // Async: identity only — the parent aggregate is not read for an enriched body.
+        await _instanceRepository.DidNotReceiveWithAnyArgs().FindByIdentifierAsReadOnlyAsync(default!, default);
+    }
+
+    [Fact]
+    public async Task TransitionAsync_ProxiedSync_EnrichesFromTheParent()
+    {
+        var instanceId = Guid.NewGuid();
+        SetupSnapshot(instanceId, InstanceStatus.Busy, hasActiveSubFlow: true);
+        _proxyService
+            .TryProxyAsync(Arg.Any<InstanceExecutionSnapshot>(), Arg.Any<Definitions.Workflow>(),
+                "regular-transition", Arg.Any<TransitionInput>(), Arg.Any<CancellationToken>())
+            .Returns(Result<TransitionOutput>.Ok(new TransitionOutput
+            {
+                Id = instanceId, Status = InstanceStatus.Active, ExecutedAsync = false
+            }));
+
+        var result = await _service.TransitionAsync(
+            instanceId.ToString(), "regular-transition", CreateInput(), CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        result.Value!.Status.ShouldBe(InstanceStatus.Active);
+        await _executionService.DidNotReceiveWithAnyArgs().ExecuteTransitionAsync(default!, default);
+        // The sync body is the parent's, as it was when the parent ran the forward itself.
+        await _instanceRepository.Received(1)
+            .FindByIdentifierAsReadOnlyAsync(instanceId.ToString(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task TransitionAsync_ProxyError_IsReturnedAsIs()
+    {
+        var instanceId = Guid.NewGuid();
+        SetupSnapshot(instanceId, InstanceStatus.Busy, hasActiveSubFlow: true);
+        var childError = Error.Validation("Instance:999", "child said no");
+        _proxyService
+            .TryProxyAsync(Arg.Any<InstanceExecutionSnapshot>(), Arg.Any<Definitions.Workflow>(),
+                "regular-transition", Arg.Any<TransitionInput>(), Arg.Any<CancellationToken>())
+            .Returns(Result<TransitionOutput>.Fail(childError));
+
+        var result = await _service.TransitionAsync(
+            instanceId.ToString(), "regular-transition", CreateInput(), CancellationToken.None);
+
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Code.ShouldBe("Instance:999");
+        await _executionService.DidNotReceiveWithAnyArgs().ExecuteTransitionAsync(default!, default);
+    }
+
+    [Fact]
+    public async Task TransitionAsync_TerminalParent_IsNeverProxied()
+    {
+        var instanceId = Guid.NewGuid();
+        SetupSnapshot(instanceId, InstanceStatus.Faulted, hasActiveSubFlow: true);
+
+        var result = await _service.TransitionAsync(
+            instanceId.ToString(), "regular-transition", CreateInput(), CancellationToken.None);
+
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.InstanceCompleted);
+        await _proxyService.DidNotReceiveWithAnyArgs()
+            .TryProxyAsync(default!, default!, default!, default!, default);
     }
 
     private void SetupSnapshot(Guid instanceId, InstanceStatus status, bool hasActiveSubFlow)

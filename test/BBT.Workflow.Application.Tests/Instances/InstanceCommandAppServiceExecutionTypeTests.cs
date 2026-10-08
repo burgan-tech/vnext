@@ -93,6 +93,7 @@ public sealed class InstanceCommandAppServiceExecutionTypeTests : IDisposable
             workflowOutputMappingService: Substitute.For<IWorkflowOutputMappingService>(),
             fileOffloadService: BBT.Workflow.Application.Files.FileTestDoubles.PassThroughOffload(),
             rawBodyProvider: Substitute.For<BBT.Workflow.Scripting.IRequestRawBodyProvider>(),
+            subflowProxyService: Substitute.For<BBT.Workflow.SubFlow.ISubflowProxyService>(),
             logger: Substitute.For<ILogger<InstanceCommandAppService>>());
     }
 

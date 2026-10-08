@@ -120,6 +120,7 @@ public class InstanceCommandAppServiceStartFilesTests : IDisposable
             workflowOutputMappingService: Substitute.For<IWorkflowOutputMappingService>(),
             fileOffloadService: _offload,
             rawBodyProvider: _rawBody,
+            subflowProxyService: Substitute.For<BBT.Workflow.SubFlow.ISubflowProxyService>(),
             logger: Substitute.For<ILogger<InstanceCommandAppService>>());
     }
 

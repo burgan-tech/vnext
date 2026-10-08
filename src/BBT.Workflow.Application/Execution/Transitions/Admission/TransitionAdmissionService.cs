@@ -133,8 +133,7 @@ public sealed class TransitionAdmissionService(
         }
         catch
         {
-            // A throwing enqueue strands the flip exactly as a failed one does, and for a chain
-            // reserve it strands the LEAF — which no caller holds a handle to.
+            // A throwing enqueue strands the flip exactly as a failed one does.
             await CompensateUnderLockAsync(context, flip, cancellationToken);
             throw;
         }
@@ -178,14 +177,15 @@ public sealed class TransitionAdmissionService(
 
             default: // AdmissionKind.Normal
             {
+                // The parent is Busy for the subflow's lifetime by design and does not reserve
+                // itself, and it no longer reserves the chain below it either: a client transition
+                // is proxied to the leaf at intake (SubflowProxyService), and the leaf runs the
+                // full admission there. An entry that still reaches the async accept with a
+                // forwardable key enqueues a parent job with NO flip and NO chain claim; its forward
+                // then runs the leaf's normal admission. Old-version parents that still reserve the
+                // chain are honoured on the receiving side (TransitionInput.ChainReserved).
                 if (IsSubflowForward(context))
-                {
-                    // The parent is Busy for the subflow's lifetime by design and does not reserve
-                    // itself; the chain BELOW it must be Busy before the caller is answered.
-                    await busyManager.MarkBusyWithPropagationAsync(context.InstanceId, cancellationToken);
-                    logger.InstanceBusyReserved(context.InstanceId, context.TransitionKey);
-                    return Result<AcceptFlip>.Ok(AcceptFlip.ChainReserved);
-                }
+                    return Result<AcceptFlip>.Ok(AcceptFlip.None);
 
                 var admission = CheckAdmission(context);
                 if (!admission.IsSuccess)
@@ -231,10 +231,6 @@ public sealed class TransitionAdmissionService(
                 case AcceptFlip.TakenOver:
                     if (await busyManager.TryReleaseAsync(context.InstanceId, cancellationToken))
                         logger.InstanceStatusSettled(context.InstanceId, InstanceStatus.Active.Code);
-                    break;
-
-                case AcceptFlip.ChainReserved:
-                    await busyManager.ReleaseWithPropagationAsync(context.InstanceId, cancellationToken);
                     break;
             }
         }

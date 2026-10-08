@@ -30,6 +30,7 @@ using BBT.Workflow.Runtime;
 using BBT.Workflow.Definitions.Timer;
 using Dapr.Jobs.Models;
 using BBT.Workflow.Scripting;
+using BBT.Workflow.SubFlow;
 using BBT.Workflow.Tasks.Evaluation;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
@@ -65,6 +66,7 @@ public sealed class InstanceCommandAppService(
     IWorkflowOutputMappingService workflowOutputMappingService,
     IFileOffloadService fileOffloadService,
     IRequestRawBodyProvider rawBodyProvider,
+    ISubflowProxyService subflowProxyService,
     ILogger<InstanceCommandAppService> logger)
     : ApplicationService(serviceProvider), IInstanceCommandAppService
 {
@@ -705,8 +707,9 @@ public sealed class InstanceCommandAppService(
         //    bound Flow/FlowVersion, so the workflow definition is resolved ONCE here (from the
         //    component cache) and reused for the rest of the request. Classification decides the
         //    fast-fail: cancel/exit/updateData are exempt, and a Busy parent with an active
-        //    SubFlow is admitted so the pipeline can forward the request to the subflow. This is
-        //    a fast-fail only — the authoritative decision is the reserve under the status lock.
+        //    SubFlow is not rejected here — a forwardable request is proxied to the subflow below
+        //    (step 3), anything else runs on the parent. This is a fast-fail only — the
+        //    authoritative decision is the reserve under the status lock.
         InstanceExecutionSnapshot? snapshot;
         Definitions.Workflow? workflowDefinition = null;
         // Named because it is the head of every transition request and used to sit unattributed
@@ -768,6 +771,33 @@ public sealed class InstanceCommandAppService(
                 instance));
         }
 
+        // 3) A parent with an active SubFlow is a proxy for a forwardable transition: no lock, no
+        //    Busy, no job here. It resolves the mode (its own definition, else the caller's flag) and
+        //    the child admits the request in exactly that mode — validation, x-storage swap, Busy CAS,
+        //    its own job. A child that is itself a parent proxies again, so the leaf is reached
+        //    level by level. Non-forwardable keys (updateData/cancel/exit/timeout, a shared transition
+        //    available in this state, an old-version relay that claims a chain reserve) run here.
+        var proxied = await subflowProxyService.TryProxyAsync(
+            snapshot, workflowDefinition!, transitionKey, input, cancellationToken);
+        if (proxied is { } proxyResult)
+        {
+            if (!proxyResult.IsSuccess)
+                return proxyResult;
+
+            var proxiedOutput = proxyResult.Value!;
+            AddTransitionHeader(proxiedOutput, snapshot.Flow!, snapshot.FlowVersion);
+
+            // Same response contract as the run-here path below: a sync client gets the parent's
+            // enriched body (the status stays the child's — enrichment only lifts a Busy that has
+            // meanwhile settled terminal); an async client and a runtime-internal relay get identity.
+            if (proxiedOutput.ExecutedAsync != true && !input.SuppressResponseEnrichment)
+                return await EnrichSyncOutputAsync(proxiedOutput, proxiedOutput.Id, workflowDefinition,
+                    new AuthorizationRequestContext(input.Headers), cancellationToken);
+
+            proxiedOutput.Key = snapshot.Key;
+            return proxyResult;
+        }
+
         var context = BuildTransitionContext(snapshot, transitionKey, input, workflowDefinition!);
 
         // No validation here. Validation belongs to the execution entry, and both entries run it
@@ -806,25 +836,12 @@ public sealed class InstanceCommandAppService(
         TransitionInput input,
         Definitions.Workflow workflow)
     {
-        // #1003: the definition is the source of truth for sync/async — a transition's executionType
-        // (inner) wins over the flow's (outer), and either overrides the caller's sync query parameter.
-        // Absent any definition, the caller's mode stands (pre-#1003 behaviour). CallerMode always keeps
-        // what the caller asked for, so the requested-vs-effective divergence is visible on the trace.
-        // EXCEPT runtime-internal calls: the same-domain subflow forward and the cross-domain relay set
-        // SuppressResponseEnrichment and force sync=true so the parent forwards synchronously into the
-        // active child — executionType must NOT flip that to async.
-        var callerMode = input.Sync ? ExecMode.Sync : ExecMode.Async;
-        var effectiveMode = callerMode;
-        if (!input.SuppressResponseEnrichment)
-        {
-            // Alias-aware: a well-known transition (cancel/updateData/exit) invoked by its reserved alias
-            // while the workflow uses a custom key resolves here too, matching the pipeline's own lookup.
-            var transition = workflow.ResolveWellKnownTransition(transitionKey)
-                             ?? workflow.FindTransitionInContext(transitionKey);
-            effectiveMode = ExecutionModeResolver.Resolve(
-                transition?.ExecutionType, workflow.ExecutionType, callerMode);
-            TagExecutionMode(callerMode, effectiveMode, transition?.ExecutionType, workflow.ExecutionType);
-        }
+        // #1003: the definition is the source of truth for sync/async — see TransitionRequestMode,
+        // shared with the SubFlow proxy. CallerMode always keeps what the caller asked for, so the
+        // requested-vs-effective divergence is visible on the trace. Runtime-internal calls
+        // (SuppressResponseEnrichment: the subflow forward, the cross-domain relay, the proxy) carry
+        // the mode decided one level up as the sync flag and are not re-resolved here.
+        var (callerMode, effectiveMode) = TransitionRequestMode.Resolve(workflow, transitionKey, input);
 
         return new WorkflowExecutionContext
         {
@@ -861,6 +878,10 @@ public sealed class InstanceCommandAppService(
             IsPreReserved = input.ChainReserved,
             SubflowChainReserved = input.ChainReserved,
 
+            // ...but its body is still an unswapped client payload: the older parent's accept left
+            // the x-storage swap to the leaf. Tells the pipeline to swap it despite IsPreReserved.
+            ChainReservedRelay = input.ChainReserved,
+
             // Server-only (never bound from a request): a DirectTrigger transition carries a body the
             // flow authored, so its x-storage references are kept as is instead of echo-checked.
             TrustedPayload = input.TrustedPayload
@@ -877,22 +898,7 @@ public sealed class InstanceCommandAppService(
         ExecMode effective,
         Definitions.ExecutionType? transitionExecutionType,
         Definitions.ExecutionType? flowExecutionType)
-    {
-        var activity = System.Diagnostics.Activity.Current;
-        if (activity is null)
-        {
-            return;
-        }
-
-        activity.SetTag(TelemetryConstants.TagNames.ExecutionRequested, ToModeTag(requested));
-        activity.SetTag(TelemetryConstants.TagNames.ExecutionEffective, ToModeTag(effective));
-        if (ExecutionModeResolver.IsOverriddenByDefinition(transitionExecutionType, flowExecutionType, requested))
-        {
-            activity.SetTag(TelemetryConstants.TagNames.ExecutionOverridden, true);
-        }
-    }
-
-    private static string ToModeTag(ExecMode mode) => mode == ExecMode.Async ? "ASYNC" : "SYNC";
+        => TransitionRequestMode.Tag(requested, effective, transitionExecutionType, flowExecutionType);
 
     /// <summary>
     /// Adds workflow header to the transition response using instance flow and version.

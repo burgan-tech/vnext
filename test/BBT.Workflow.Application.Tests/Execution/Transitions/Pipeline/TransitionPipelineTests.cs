@@ -982,6 +982,53 @@ public class TransitionPipelineTests
         await _fileAdmission.DidNotReceiveWithAnyArgs().ApplyAsync(default!, default!, default);
     }
 
+    /// <summary>
+    /// Ruling 17: an older-version parent relays with the chain-reserve claim, so the leaf enters
+    /// pre-reserved — but no level ran the x-storage swap on that client body (the older parent's
+    /// accept left it to the leaf). The swap must run here despite IsPreReserved, or the bytes are
+    /// persisted at the leaf. The schema is still not re-validated (unchanged owner re-entry semantics).
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_ChainReservedRelayFromAnOlderParent_SwapsDespitePreReserved()
+    {
+        var context = CreateTransitionExecutionContext();
+        var workflowContext = CreateWorkflowExecutionContext(context);
+        workflowContext.IsPreReserved = true;
+        workflowContext.SubflowChainReserved = true;
+        workflowContext.ChainReservedRelay = true;
+        SetupContextFactory(context);
+        SetupStepsToContinue();
+
+        var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        await _fileAdmission.Received(1).ApplyAsync(context, workflowContext, Arg.Any<CancellationToken>());
+        await _mockValidationService.Received(1)
+            .ValidatePolicyAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>());
+        await _mockValidationService.DidNotReceive()
+            .ValidateAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// The discriminator is the relay flag, not the claim: a job re-entry of an accept that took (or
+    /// inherited) the chain reserve carries SubflowChainReserved too, and its payload was swapped at
+    /// that accept — it must not be swapped again.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_JobReentryCarryingTheChainClaim_DoesNotSwapAgain()
+    {
+        var context = CreateTransitionExecutionContext();
+        var workflowContext = CreateWorkflowExecutionContext(context);
+        workflowContext.IsPreReserved = true;
+        workflowContext.SubflowChainReserved = true;
+        SetupContextFactory(context);
+        SetupStepsToContinue();
+
+        await _pipeline.RunAsync(workflowContext, CancellationToken.None);
+
+        await _fileAdmission.DidNotReceiveWithAnyArgs().ApplyAsync(default!, default!, default);
+    }
+
     /// <summary>The start path swapped before persisting the instance row and says so.</summary>
     [Fact]
     public async Task RunAsync_PayloadAlreadyValidatedByStart_DoesNotSwapAgain()

@@ -105,6 +105,25 @@ public sealed class FileAdmissionTests
         ctx.DataElement!.Value.GetRawText().ShouldBe(Incoming.GetRawText());
     }
 
+    [Theory]
+    [InlineData("waiting-child", false)] // available in the parent's current state: runs (and swaps) here
+    [InlineData("some-other-state", true)] // not available: forwarded like any other key, the leaf swaps
+    public async Task ApplyAsync_ParentSharedTransition_FollowsTheProxyPredicate(string availableIn, bool forwarded)
+    {
+        var (ctx, wf) = Create(withActiveSubFlow: true, transitionKey: "escalate");
+        var shared = Transition.Create("escalate", null, "$self", TriggerType.Manual, "Patch");
+        shared.AddAvailableIn(availableIn);
+        ctx.Workflow.AddSharedTransition(shared);
+        SubflowForwardRule.WillForward(ctx).ShouldBe(forwarded);
+
+        await _sut.ApplyAsync(ctx, wf, CancellationToken.None);
+
+        if (forwarded)
+            await _offload.DidNotReceiveWithAnyArgs().OffloadAsync(default!, default);
+        else
+            await _offload.ReceivedWithAnyArgs(1).OffloadAsync(default!, default);
+    }
+
     [Fact]
     public async Task ApplyAsync_UpdateDataOnAParentWithActiveSubFlow_IsSwappedHere()
     {
