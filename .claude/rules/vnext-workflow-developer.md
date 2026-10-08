@@ -146,6 +146,15 @@ The plan is built from `ExcludedStepOrders` alone (`TransitionExecutor.BuildExec
   A sub item hands its parent PLAINTEXT (`ISubItemEventDataResolver`).
 - Full guide: `docs/domain/field-masking.md`.
 
+## File storage (`x-storage`)
+
+- A master-schema property (or one array level's `items`) with `x-storage: { binding }` keeps file bytes in a
+  Dapr output binding; instance data, records and reads carry a handle (`component/file/name/mimeType/size/eTag/owner`).
+  Swap runs after schema validation, before persist/enqueue; a forwarded request is swapped at the leaf; External
+  bodies are reference-checked against `LatestData`, Trusted (runtime-produced) ones are not. Codes
+  `Instance:100047` (503) / `100048` (400) / `100049` (404). Reads: `functions/file` (`queryRoles` + `x-roles`),
+  `internal/file` has no auth. Full guide: `docs/runtime/file-storage.md`.
+
 ## Task / Action History (system functions)
 
 - `functions/tasks` returns the `InstanceTasks` journal; `functions/actions?taskId=` one row's
