@@ -6,16 +6,19 @@ using BBT.Workflow.Definitions;
 using BBT.Workflow.Definitions.Schemas;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
+using BBT.Workflow.Runtime;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace BBT.Workflow.Files;
 
 /// <summary>
 /// Reads an x-storage file of ONE instance: the handle must be in that instance's latest data at one of its
 /// schema's x-storage paths (no subflow descent, no history), so the binding and object key always come from the
-/// record, never from the caller. With <see cref="InstanceFileRequest.Authorization"/> it applies the state's
-/// queryRoles (denied → 403) and the x-roles of the file's path and every ancestor (hidden → 404, existence is not
-/// revealed); without it, it is the service-to-service read (internal endpoint, scripts).
+/// record, never from the caller — and the record itself must name a GUID file in an allowed component. With
+/// <see cref="InstanceFileRequest.Authorization"/> it applies the state's queryRoles before locating the file (denied →
+/// 403, whether or not the file exists) and the x-roles of the file's path and every ancestor (hidden → 404, existence
+/// is not revealed); without it, it is the service-to-service read (internal endpoint, scripts).
 /// </summary>
 /// <remarks>Runs inside the instance flow's schema scope: the HTTP route establishes it, the local gateway opens it.</remarks>
 public sealed class InstanceFileAppService(
@@ -25,6 +28,8 @@ public sealed class InstanceFileAppService(
     IFileBlobStore blobStore,
     ICallerRoleResolver callerRoleResolver,
     ITransitionAuthorizationManager authorizationManager,
+    IRuntimeInfoProvider runtimeInfoProvider,
+    IOptions<FileStorageOptions> options,
     ILogger<InstanceFileAppService> logger) : IInstanceFileAppService
 {
     private const string ArraySegment = "[]";
@@ -33,6 +38,8 @@ public sealed class InstanceFileAppService(
     public async Task<Result<InstanceFileContent>> ReadAsync(InstanceFileRequest request, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
+        // Same treatment as the data/state functions: a route domain that is not this runtime's is 404 (NotFoundDomain).
+        runtimeInfoProvider.Check(request.Domain);
 
         var instance = await instanceRepository.FindByIdentifierAsReadOnlyAsync(request.Instance, cancellationToken);
         // A different flow sharing the schema must not serve this route's files.
@@ -44,17 +51,27 @@ public sealed class InstanceFileAppService(
             return Result<InstanceFileContent>.Fail(flow.Error);
         var workflow = flow.Value!;
 
-        var located = await LocateAsync(workflow, instance, request.File, cancellationToken);
-        if (located is null)
-            return Result<InstanceFileContent>.Fail(WorkflowErrors.FileNotFound(request.File));
-        var (handle, path, field) = located.Value;
-
+        // The state's queryRoles are decided BEFORE the file is located: a denied caller gets 403 whether or not the
+        // file exists, so the answer is no existence oracle. x-roles need the file's path and come after (hidden ⇒ 404).
+        IReadOnlyList<string>? callerRoles = null;
         if (request.Authorization is { } authorization)
         {
-            var denied = await AuthorizeAsync(workflow, instance, field, request.File, authorization, cancellationToken);
-            if (denied is { } error)
-                return Result<InstanceFileContent>.Fail(error);
+            var allowed = await AuthorizeQueryAsync(workflow, instance, authorization, cancellationToken);
+            if (!allowed.IsSuccess)
+                return Result<InstanceFileContent>.Fail(allowed.Error);
+            callerRoles = allowed.Value!;
         }
+
+        var located = await LocateAsync(workflow, instance, request.File, cancellationToken);
+        if (!located.IsSuccess)
+            return Result<InstanceFileContent>.Fail(located.Error);
+        if (located.Value is not { } found)
+            return Result<InstanceFileContent>.Fail(WorkflowErrors.FileNotFound(request.File));
+        var (handle, path, field) = found;
+
+        if (request.Authorization is { } pathAuthorization
+            && !await IsPathVisibleAsync(workflow, instance, field, callerRoles!, pathAuthorization, cancellationToken))
+            return Result<InstanceFileContent>.Fail(WorkflowErrors.FileNotFound(request.File));
 
         logger.FileRead(request.Domain, instance.Flow, instance.Id.ToString(), handle.File, request.Authorization is not null);
 
@@ -67,51 +84,63 @@ public sealed class InstanceFileAppService(
             : Result<InstanceFileContent>.Fail(bytes.Error);
     }
 
-    private async Task<(FileHandle Handle, string Path, FileStorageField Field)?> LocateAsync(
+    /// <summary>
+    /// The handle at one of the flow's x-storage paths in the latest data whose <c>file</c> is <paramref name="file"/>;
+    /// null when there is none. The stored record alone is not trusted: a handle whose <c>file</c> is not a GUID or whose
+    /// <c>component</c> is neither declared by the flow's master schema nor in <c>FileStorage:AllowedBindings</c> is
+    /// treated as absent (404) and the store is never called with it. A master schema that cannot be loaded is
+    /// <c>FileSchemaUnavailable</c> (503).
+    /// </summary>
+    private async Task<Result<(FileHandle Handle, string Path, FileStorageField Field)?>> LocateAsync(
         Definitions.Workflow workflow, Instance instance, string file, CancellationToken cancellationToken)
     {
         var latest = instance.LatestData;
-        if (latest is null)
-            return null;
+        if (latest is null || !FileHandle.IsFileId(file))
+            return Result<(FileHandle, string, FileStorageField)?>.Ok(null);
 
-        var fields = await offloadService.GetFieldsAsync(workflow, cancellationToken);
+        var resolved = await offloadService.GetFieldsAsync(workflow, cancellationToken);
+        if (!resolved.IsSuccess)
+            return Result<(FileHandle, string, FileStorageField)?>.Fail(resolved.Error);
+        var fields = resolved.Value!;
         if (fields.Count == 0)
-            return null;
+            return Result<(FileHandle, string, FileStorageField)?>.Ok(null);
 
+        var allowed = options.Value.AllowedComponents(fields);
         var root = JsonNode.Parse(latest.Data.Json);
         foreach (var field in fields)
         {
             foreach (var (node, path) in FileNodeWalker.Find(root, field))
             {
-                if (FileHandle.TryRead(node) is { } handle && string.Equals(handle.File, file, StringComparison.Ordinal))
-                    return (handle, path, field);
+                if (FileHandle.TryRead(node) is not { } handle || !string.Equals(handle.File, file, StringComparison.Ordinal))
+                    continue;
+                if (!handle.IsAllowed(allowed))
+                {
+                    logger.FileHandleRejectedOnRead(instance.Id, path, handle.Component);
+                    return Result<(FileHandle, string, FileStorageField)?>.Ok(null);
+                }
+                return Result<(FileHandle, string, FileStorageField)?>.Ok((handle, path, field));
             }
         }
 
-        return null;
+        return Result<(FileHandle, string, FileStorageField)?>.Ok(null);
     }
 
-    /// <summary>Returns the denial, or <c>null</c> when the caller may read the file.</summary>
-    private async Task<Error?> AuthorizeAsync(
+    /// <summary>The caller's roles when the state's queryRoles allow the read; the denial otherwise.</summary>
+    private async Task<Result<IReadOnlyList<string>>> AuthorizeQueryAsync(
         Definitions.Workflow workflow,
         Instance instance,
-        FileStorageField field,
-        string file,
         AuthorizationRequestContext authorization,
         CancellationToken cancellationToken)
     {
         // A provider failure is a denial (ICallerRoleResolver contract); neither built-in provider fails.
         var resolved = await callerRoleResolver.ResolveRolesAsync(authorization.Headers, cancellationToken);
         if (!resolved.IsSuccess)
-            return resolved.Error;
+            return Result<IReadOnlyList<string>>.Fail(resolved.Error);
         IReadOnlyList<string> callerRoles = resolved.Value ?? [];
 
-        if (!await authorizationManager.IsQueryAllowedAsync(workflow, instance, callerRoles, authorization, cancellationToken))
-            return WorkflowErrors.QueryAccessDenied(instance.EffectiveState ?? instance.GetCurrentState);
-
-        return await IsPathVisibleAsync(workflow, instance, field, callerRoles, authorization, cancellationToken)
-            ? null
-            : WorkflowErrors.FileNotFound(file);
+        return await authorizationManager.IsQueryAllowedAsync(workflow, instance, callerRoles, authorization, cancellationToken)
+            ? Result<IReadOnlyList<string>>.Ok(callerRoles)
+            : Result<IReadOnlyList<string>>.Fail(WorkflowErrors.QueryAccessDenied(instance.EffectiveState ?? instance.GetCurrentState));
     }
 
     /// <summary>

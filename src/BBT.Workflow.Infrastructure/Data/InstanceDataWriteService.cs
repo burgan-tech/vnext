@@ -92,7 +92,7 @@ public sealed class InstanceDataWriteService(
         // the x-storage offload runs here — no binding I/O under the instance gate or the row lock, and the buffered
         // (history: none) path below never sees the bytes either.
         var schema = await LoadSchemaAsync(workflow, cancellationToken);
-        delta = await OffloadFilesAsync(instance, workflow, schema.Schema, delta, cancellationToken);
+        delta = await OffloadFilesAsync(instance, workflow, schema, delta, cancellationToken);
 
         using var gate = await InstanceWriteGate.AcquireAsync(instance.Id, cancellationToken);
         if (instance.DataBuffer is { } buffer)
@@ -282,7 +282,7 @@ public sealed class InstanceDataWriteService(
         Definitions.Workflow? workflow = null)
     {
         var schema = await LoadSchemaAsync(workflow, cancellationToken);
-        data = await OffloadFilesAsync(instance, workflow, schema.Schema, data, cancellationToken);
+        data = await OffloadFilesAsync(instance, workflow, schema, data, cancellationToken);
 
         using var gate = await InstanceWriteGate.AcquireAsync(instance.Id, cancellationToken);
         return await AppendExplicitCoreAsync(instance, id, version, data, schema, cancellationToken);
@@ -586,20 +586,22 @@ public sealed class InstanceDataWriteService(
     /// <remarks>
     /// Runs on every append, so the no-op path does no extra I/O: the fields come from the schema the append already
     /// loaded (<see cref="LoadSchemaAsync"/>; no second component-cache read) through a memo whose hit allocates
-    /// nothing. No workflow or no resolved schema (same rule as validation — the caller holds the definition), a
+    /// nothing. No workflow or no master schema on it (same rule as validation — the caller holds the definition), a
     /// host without the Application module (workers, DbMigrator), a master schema without <c>x-storage</c> fields, or
-    /// a delta with no <c>content</c> member at any <c>x-storage</c> path (read-only probe, no mutable DOM) ⇒ no span
-    /// and no offload call. A failure throws (<see cref="FileOffloadFailure"/>: 503 store unavailable / 400 invalid
-    /// node) and follows the caller's normal error path; nothing has been written.
+    /// a delta with no <c>content</c> or <c>file</c> member at any <c>x-storage</c> path (read-only probe, no mutable
+    /// DOM) ⇒ no span and no offload call. A master schema that could not be loaded refuses the write
+    /// (<see cref="FileSchemaUnavailableException"/>, 503) when the delta could carry a file — the paths are unknown —
+    /// and leaves any other delta alone. A failure throws (<see cref="FileOffloadFailure"/>: 503 store unavailable /
+    /// 400 invalid node) and follows the caller's normal error path; nothing has been written.
     /// </remarks>
     private async Task<JsonData> OffloadFilesAsync(
         Instance instance,
         Definitions.Workflow? workflow,
-        SchemaDefinition? schema,
+        SchemaLoad schemaLoad,
         JsonData delta,
         CancellationToken cancellationToken)
     {
-        if (workflow is null || schema is null)
+        if (workflow is null || (schemaLoad.Schema is null && schemaLoad.FailedKey is null))
             return delta;
 
         // Resolved lazily for the same reason as IComponentCacheStore: the service lives in the Application module.
@@ -607,12 +609,19 @@ public sealed class InstanceDataWriteService(
         if (offloadService is null)
             return delta;
 
-        var fields = offloadService.GetFields(schema);
-        if (fields.Count == 0)
+        var element = delta.JsonElement;
+        if (element.ValueKind != System.Text.Json.JsonValueKind.Object)
             return delta;
 
-        var element = delta.JsonElement;
-        if (element.ValueKind != System.Text.Json.JsonValueKind.Object || !FileNodeWalker.AnyContent(element, fields))
+        if (schemaLoad.Schema is not { } schema)
+        {
+            return FileNodeWalker.AnyFileShapedNode(element)
+                ? throw new FileSchemaUnavailableException(schemaLoad.FailedKey!)
+                : delta;
+        }
+
+        var fields = offloadService.GetFields(schema);
+        if (fields.Count == 0 || !FileNodeWalker.AnyContentOrFile(element, fields))
             return delta;
 
         using var activity = PipelineStepActivityHelper.StartOperationActivity("Files.Offload");

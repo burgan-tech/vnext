@@ -12,6 +12,7 @@ using BBT.Workflow.Definitions;
 using BBT.Workflow.Definitions.Schemas;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
+using BBT.Workflow.Runtime;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using Shouldly;
@@ -52,6 +53,16 @@ public sealed class InstanceFileAppServiceTests
 
     private static readonly byte[] Bytes = [1, 2, 3];
 
+    private const string F1 = "0b9f6f3e-1c1a-4a7e-9c55-3f1d2a6b7c80";
+    private const string FA = "1a1a1a1a-0000-4000-8000-00000000000a";
+    private const string FB = "1b1b1b1b-0000-4000-8000-00000000000b";
+    private const string FAbc = "abcabcab-0000-4000-8000-000000000abc";
+    private const string FOld = "01d01d01-0000-4000-8000-000000000001";
+    private const string FNew = "0e00e00e-0000-4000-8000-000000000002";
+
+    private readonly IRuntimeInfoProvider _runtime = Substitute.For<IRuntimeInfoProvider>();
+    private FileStorageOptions _options = new();
+
     public InstanceFileAppServiceTests() : this(MasterSchema) { }
 
     private InstanceFileAppServiceTests(string masterSchema)
@@ -75,8 +86,16 @@ public sealed class InstanceFileAppServiceTests
         _authz.CreateEvaluatorAsync(default, default, default, default!, default).ReturnsForAnyArgs(_evaluator);
         _evaluator.IsAnyRoleAllowed(default, default!, default).ReturnsForAnyArgs(true);
 
-        _sut = new InstanceFileAppService(
-            _repository, _cache, _offload, _store, _roles, _authz, NullLogger<InstanceFileAppService>.Instance);
+        _sut = CreateSut();
+    }
+
+    private InstanceFileAppService CreateSut()
+    {
+        _runtime.When(r => r.Check(Arg.Is<string>(d => d != Domain)))
+            .Do(ci => throw new BBT.Workflow.ExceptionHandling.NotFoundDomainException(ci.Arg<string>(), Domain));
+        return new InstanceFileAppService(
+            _repository, _cache, _offload, _store, _roles, _authz, _runtime,
+            Microsoft.Extensions.Options.Options.Create(_options), NullLogger<InstanceFileAppService>.Instance);
     }
 
     private void UseSchema(string masterSchema)
@@ -88,7 +107,7 @@ public sealed class InstanceFileAppServiceTests
         _cache.GetSchemaAsync(Domain, "master", "1.0.0", Arg.Any<CancellationToken>())
             .Returns(Result<SchemaDefinition>.Ok(schema));
         _offload.GetFieldsAsync(Arg.Any<Definitions.Workflow>(), Arg.Any<CancellationToken>())
-            .Returns(FileStorageSchemaParser.Parse(schema.Schema));
+            .Returns(Result<IReadOnlyList<FileStorageField>>.Ok(FileStorageSchemaParser.Parse(schema.Schema)));
     }
 
     private string Handle(string file) =>
@@ -103,38 +122,38 @@ public sealed class InstanceFileAppServiceTests
     [Fact]
     public async Task FileInLatestData_ReturnsBytesFromTheStoreAndTheHandle()
     {
-        Seed("1.0.0", $$"""{ "passport": {{Handle("f-1")}}, "other": 1 }""");
+        Seed("1.0.0", $$"""{ "passport": {{Handle(F1)}}, "other": 1 }""");
 
-        var result = await _sut.ReadAsync(Request("f-1"), CancellationToken.None);
+        var result = await _sut.ReadAsync(Request(F1), CancellationToken.None);
 
         result.IsSuccess.ShouldBeTrue();
         result.Value!.NotModified.ShouldBeFalse();
         result.Value.Bytes.ShouldBe(Bytes);
         result.Value.Path.ShouldBe("passport");
-        result.Value.Handle.File.ShouldBe("f-1");
+        result.Value.Handle.File.ShouldBe(F1);
         result.Value.Handle.MimeType.ShouldBe("application/pdf");
         result.Value.Handle.ETag.ShouldBe(ETag);
-        await _store.Received(1).GetAsync(Binding, "f-1", Arg.Any<CancellationToken>());
+        await _store.Received(1).GetAsync(Binding, F1, Arg.Any<CancellationToken>());
     }
 
     [Fact]
     public async Task FileInArrayItem_IsFoundByItsId()
     {
-        Seed("1.0.0", $$"""{ "files": [ {{Handle("a")}}, {{Handle("b")}} ] }""");
+        Seed("1.0.0", $$"""{ "files": [ {{Handle(FA)}}, {{Handle(FB)}} ] }""");
 
-        var result = await _sut.ReadAsync(Request("b"), CancellationToken.None);
+        var result = await _sut.ReadAsync(Request(FB), CancellationToken.None);
 
         result.IsSuccess.ShouldBeTrue();
         result.Value!.Path.ShouldBe("files[1]");
-        await _store.Received(1).GetAsync(Binding, "b", Arg.Any<CancellationToken>());
+        await _store.Received(1).GetAsync(Binding, FB, Arg.Any<CancellationToken>());
     }
 
     [Fact]
     public async Task FileIdComparison_IsOrdinal()
     {
-        Seed("1.0.0", $$"""{ "passport": {{Handle("abc")}} }""");
+        Seed("1.0.0", $$"""{ "passport": {{Handle(FAbc)}} }""");
 
-        var result = await _sut.ReadAsync(Request("ABC"), CancellationToken.None);
+        var result = await _sut.ReadAsync(Request(FAbc.ToUpperInvariant()), CancellationToken.None);
 
         result.Error.Code.ShouldBe(WorkflowErrorCodes.FileNotFound);
     }
@@ -142,10 +161,10 @@ public sealed class InstanceFileAppServiceTests
     [Fact]
     public async Task FileOnlyInAnOlderVersion_IsNotFound()
     {
-        Seed("1.0.0", $$"""{ "passport": {{Handle("old")}} }""");
-        Seed("1.0.1", $$"""{ "passport": {{Handle("new")}} }""");
+        Seed("1.0.0", $$"""{ "passport": {{Handle(FOld)}} }""");
+        Seed("1.0.1", $$"""{ "passport": {{Handle(FNew)}} }""");
 
-        var result = await _sut.ReadAsync(Request("old"), CancellationToken.None);
+        var result = await _sut.ReadAsync(Request(FOld), CancellationToken.None);
 
         result.IsSuccess.ShouldBeFalse();
         result.Error.Code.ShouldBe(WorkflowErrorCodes.FileNotFound);
@@ -155,9 +174,9 @@ public sealed class InstanceFileAppServiceTests
     [Fact]
     public async Task HandleOutsideAnXStoragePath_IsNotFound()
     {
-        Seed("1.0.0", $$"""{ "elsewhere": {{Handle("f-1")}} }""");
+        Seed("1.0.0", $$"""{ "elsewhere": {{Handle(F1)}} }""");
 
-        var result = await _sut.ReadAsync(Request("f-1"), CancellationToken.None);
+        var result = await _sut.ReadAsync(Request(F1), CancellationToken.None);
 
         result.Error.Code.ShouldBe(WorkflowErrorCodes.FileNotFound);
     }
@@ -166,7 +185,7 @@ public sealed class InstanceFileAppServiceTests
     public async Task UnknownInstance_IsNotFound()
     {
         var result = await _sut.ReadAsync(
-            new InstanceFileRequest(Domain, Flow, Guid.NewGuid().ToString(), "f-1", null, null), CancellationToken.None);
+            new InstanceFileRequest(Domain, Flow, Guid.NewGuid().ToString(), F1, null, null), CancellationToken.None);
 
         result.Error.Code.ShouldBe(WorkflowErrorCodes.FileNotFound);
     }
@@ -174,10 +193,10 @@ public sealed class InstanceFileAppServiceTests
     [Fact]
     public async Task InstanceOfAnotherFlow_IsNotFound()
     {
-        Seed("1.0.0", $$"""{ "passport": {{Handle("f-1")}} }""");
+        Seed("1.0.0", $$"""{ "passport": {{Handle(F1)}} }""");
 
         var result = await _sut.ReadAsync(
-            new InstanceFileRequest(Domain, "other-flow", _instance.Id.ToString(), "f-1", null, null), CancellationToken.None);
+            new InstanceFileRequest(Domain, "other-flow", _instance.Id.ToString(), F1, null, null), CancellationToken.None);
 
         result.Error.Code.ShouldBe(WorkflowErrorCodes.FileNotFound);
     }
@@ -189,9 +208,9 @@ public sealed class InstanceFileAppServiceTests
     [InlineData("*")]
     public async Task IfNoneMatchOnTheETag_IsNotModified_WithoutAStoreRead(string ifNoneMatch)
     {
-        Seed("1.0.0", $$"""{ "passport": {{Handle("f-1")}} }""");
+        Seed("1.0.0", $$"""{ "passport": {{Handle(F1)}} }""");
 
-        var result = await _sut.ReadAsync(Request("f-1", ifNoneMatch), CancellationToken.None);
+        var result = await _sut.ReadAsync(Request(F1, ifNoneMatch), CancellationToken.None);
 
         result.IsSuccess.ShouldBeTrue();
         result.Value!.NotModified.ShouldBeTrue();
@@ -204,9 +223,9 @@ public sealed class InstanceFileAppServiceTests
     [InlineData("\"other\"")]
     public async Task IfNoneMatchOnAnotherTagOrUnquoted_ReadsTheStore(string ifNoneMatch)
     {
-        Seed("1.0.0", $$"""{ "passport": {{Handle("f-1")}} }""");
+        Seed("1.0.0", $$"""{ "passport": {{Handle(F1)}} }""");
 
-        var result = await _sut.ReadAsync(Request("f-1", ifNoneMatch), CancellationToken.None);
+        var result = await _sut.ReadAsync(Request(F1, ifNoneMatch), CancellationToken.None);
 
         result.Value!.NotModified.ShouldBeFalse();
         result.Value.Bytes.ShouldBe(Bytes);
@@ -215,11 +234,11 @@ public sealed class InstanceFileAppServiceTests
     [Fact]
     public async Task StoreFailure_IsPropagated()
     {
-        Seed("1.0.0", $$"""{ "passport": {{Handle("f-1")}} }""");
-        _store.GetAsync(Binding, "f-1", Arg.Any<CancellationToken>())
+        Seed("1.0.0", $$"""{ "passport": {{Handle(F1)}} }""");
+        _store.GetAsync(Binding, F1, Arg.Any<CancellationToken>())
             .Returns(Result<byte[]>.Fail(WorkflowErrors.FileStoreUnavailable(Binding)));
 
-        var result = await _sut.ReadAsync(Request("f-1"), CancellationToken.None);
+        var result = await _sut.ReadAsync(Request(F1), CancellationToken.None);
 
         result.Error.Code.ShouldBe(WorkflowErrorCodes.FileStoreUnavailable);
     }
@@ -227,10 +246,10 @@ public sealed class InstanceFileAppServiceTests
     [Fact]
     public async Task WithAuthorization_QueryRolesDeny_IsForbidden()
     {
-        Seed("1.0.0", $$"""{ "passport": {{Handle("f-1")}} }""");
+        Seed("1.0.0", $$"""{ "passport": {{Handle(F1)}} }""");
         _authz.IsQueryAllowedAsync(default!, default!, default, default, default).ReturnsForAnyArgs(false);
 
-        var result = await _sut.ReadAsync(Request("f-1", auth: Caller), CancellationToken.None);
+        var result = await _sut.ReadAsync(Request(F1, auth: Caller), CancellationToken.None);
 
         result.IsSuccess.ShouldBeFalse();
         result.Error.Code.ShouldBe(WorkflowErrorCodes.AuthorizationRoleDenied);
@@ -248,10 +267,10 @@ public sealed class InstanceFileAppServiceTests
             "files": { "type": "array", "x-roles": [ { "role": "officer", "grant": "allow" } ],
                        "items": { "type": "object", "x-storage": { "binding": "vnext-blob-local" } } } } }
             """);
-        Seed("1.0.0", $$"""{ "files": [ {{Handle("f-1")}} ] }""");
+        Seed("1.0.0", $$"""{ "files": [ {{Handle(F1)}} ] }""");
         _evaluator.IsAnyRoleAllowed(default, default!, default).ReturnsForAnyArgs(false);
 
-        var result = await sut.ReadAsync(Request("f-1", auth: Caller), CancellationToken.None);
+        var result = await sut.ReadAsync(Request(F1, auth: Caller), CancellationToken.None);
 
         result.Error.Code.ShouldBe(WorkflowErrorCodes.FileNotFound);
         await _store.DidNotReceiveWithAnyArgs().GetAsync(default!, default!, default);
@@ -270,13 +289,13 @@ public sealed class InstanceFileAppServiceTests
                 "tax": { "type": "object", "x-roles": [ { "role": "customer", "grant": "allow" } ],
                          "x-storage": { "binding": "vnext-blob-local" } } } } } }
             """);
-        Seed("1.0.0", $$"""{ "docs": { "tax": {{Handle("f-1")}} } }""");
+        Seed("1.0.0", $$"""{ "docs": { "tax": {{Handle(F1)}} } }""");
         // The leaf allows the caller, the ancestor does not: every guarded prefix must allow.
         _evaluator.IsAnyRoleAllowed(Arg.Any<IReadOnlyCollection<string>?>(),
                 Arg.Is<IReadOnlyCollection<RoleGrant>>(g => GrantRole(g) == "officer"), Arg.Any<Transition?>())
             .Returns(false);
 
-        var result = await sut.ReadAsync(Request("f-1", auth: Caller), CancellationToken.None);
+        var result = await sut.ReadAsync(Request(F1, auth: Caller), CancellationToken.None);
 
         result.Error.Code.ShouldBe(WorkflowErrorCodes.FileNotFound);
     }
@@ -289,9 +308,9 @@ public sealed class InstanceFileAppServiceTests
             "files": { "type": "array", "x-roles": [ { "role": "customer", "grant": "allow" } ],
                        "items": { "type": "object", "x-storage": { "binding": "vnext-blob-local" } } } } }
             """);
-        Seed("1.0.0", $$"""{ "files": [ {{Handle("f-1")}} ] }""");
+        Seed("1.0.0", $$"""{ "files": [ {{Handle(F1)}} ] }""");
 
-        var result = await sut.ReadAsync(Request("f-1", auth: Caller), CancellationToken.None);
+        var result = await sut.ReadAsync(Request(F1, auth: Caller), CancellationToken.None);
 
         result.IsSuccess.ShouldBeTrue();
         result.Value!.Bytes.ShouldBe(Bytes);
@@ -300,11 +319,11 @@ public sealed class InstanceFileAppServiceTests
     [Fact]
     public async Task WithAuthorization_RoleResolutionFailure_IsADenial()
     {
-        Seed("1.0.0", $$"""{ "passport": {{Handle("f-1")}} }""");
+        Seed("1.0.0", $$"""{ "passport": {{Handle(F1)}} }""");
         _roles.ResolveRolesAsync(Arg.Any<IReadOnlyDictionary<string, string?>?>(), Arg.Any<CancellationToken>())
             .Returns(Result<string[]?>.Fail(Error.Failure("roles:down", "provider down")));
 
-        var result = await _sut.ReadAsync(Request("f-1", auth: Caller), CancellationToken.None);
+        var result = await _sut.ReadAsync(Request(F1, auth: Caller), CancellationToken.None);
 
         result.IsSuccess.ShouldBeFalse();
         await _store.DidNotReceiveWithAnyArgs().GetAsync(default!, default!, default);
@@ -318,17 +337,109 @@ public sealed class InstanceFileAppServiceTests
             "files": { "type": "array", "x-roles": [ { "role": "officer", "grant": "allow" } ],
                        "items": { "type": "object", "x-storage": { "binding": "vnext-blob-local" } } } } }
             """);
-        Seed("1.0.0", $$"""{ "files": [ {{Handle("f-1")}} ] }""");
+        Seed("1.0.0", $$"""{ "files": [ {{Handle(F1)}} ] }""");
         _authz.IsQueryAllowedAsync(default!, default!, default, default, default).ReturnsForAnyArgs(false);
         _evaluator.IsAnyRoleAllowed(default, default!, default).ReturnsForAnyArgs(false);
 
-        var result = await sut.ReadAsync(Request("f-1"), CancellationToken.None);
+        var result = await sut.ReadAsync(Request(F1), CancellationToken.None);
 
         result.IsSuccess.ShouldBeTrue();
         result.Value!.Bytes.ShouldBe(Bytes);
         await _roles.DidNotReceiveWithAnyArgs().ResolveRolesAsync(default, default);
         await _authz.DidNotReceiveWithAnyArgs().IsQueryAllowedAsync(default!, default!, default, default, default);
         await _authz.DidNotReceiveWithAnyArgs().CreateEvaluatorAsync(default, default, default, default!, default);
+    }
+
+    // ── I1: the stored record alone is not trusted ──────────────────────────────────────────────────────────
+
+    private string RawHandle(string component, string file) =>
+        $$"""{ "component": "{{component}}", "file": "{{file}}", "size": 3, "eTag": "{{ETag}}", "owner": { "domain": "{{Domain}}", "flow": "{{Flow}}", "instance": "{{_instance.Id}}" } }""";
+
+    [Fact]
+    public async Task StoredHandleWithAForeignComponent_IsNotFound_AndTheStoreIsNeverCalled()
+    {
+        Seed("1.0.0", $$"""{ "passport": {{RawHandle("other-bucket", F1)}} }""");
+
+        var result = await _sut.ReadAsync(Request(F1), CancellationToken.None);
+
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.FileNotFound);
+        await _store.DidNotReceiveWithAnyArgs().GetAsync(default!, default!, default);
+    }
+
+    [Theory]
+    [InlineData("../secrets/key")]
+    [InlineData("not-a-guid")]
+    [InlineData("0b9f6f3e1c1a4a7e9c553f1d2a6b7c80")]
+    public async Task RequestedOrStoredFileThatIsNotAGuid_IsNotFound_AndTheStoreIsNeverCalled(string file)
+    {
+        Seed("1.0.0", $$"""{ "passport": {{RawHandle(Binding, file)}} }""");
+
+        var result = await _sut.ReadAsync(Request(file), CancellationToken.None);
+
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.FileNotFound);
+        await _store.DidNotReceiveWithAnyArgs().GetAsync(default!, default!, default);
+    }
+
+    [Fact]
+    public async Task StoredHandleOfAnAllowedBinding_IsRead()
+    {
+        _options = new FileStorageOptions { AllowedBindings = ["vnext-blob-parent"] };
+        var sut = CreateSut();
+        _store.GetAsync("vnext-blob-parent", F1, Arg.Any<CancellationToken>()).Returns(Result<byte[]>.Ok(Bytes));
+        Seed("1.0.0", $$"""{ "passport": {{RawHandle("vnext-blob-parent", F1)}} }""");
+
+        var result = await sut.ReadAsync(Request(F1), CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        await _store.Received(1).GetAsync("vnext-blob-parent", F1, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task StoredHandleWithAnEmptyETag_IsNotFound()
+    {
+        Seed("1.0.0", $$"""{ "passport": { "component": "{{Binding}}", "file": "{{F1}}", "size": 3, "eTag": "", "owner": { "domain": "d", "flow": "f", "instance": "i" } } }""");
+
+        var result = await _sut.ReadAsync(Request(F1), CancellationToken.None);
+
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.FileNotFound);
+    }
+
+    // ── I3 / M3 / M4 ─────────────────────────────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task SchemaUnavailable_Is503()
+    {
+        Seed("1.0.0", $$"""{ "passport": {{Handle(F1)}} }""");
+        _offload.GetFieldsAsync(Arg.Any<Definitions.Workflow>(), Arg.Any<CancellationToken>())
+            .Returns(Result<IReadOnlyList<FileStorageField>>.Fail(WorkflowErrors.FileSchemaUnavailable("master")));
+
+        var result = await _sut.ReadAsync(Request(F1), CancellationToken.None);
+
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.FileSchemaUnavailable);
+        await _store.DidNotReceiveWithAnyArgs().GetAsync(default!, default!, default);
+    }
+
+    /// <summary>queryRoles are decided before the file is located: a denied caller gets 403 for a file that does not exist too.</summary>
+    [Fact]
+    public async Task WithAuthorization_QueryRolesDeny_IsForbidden_EvenForAMissingFile()
+    {
+        Seed("1.0.0", $$"""{ "passport": {{Handle(F1)}} }""");
+        _authz.IsQueryAllowedAsync(default!, default!, default, default, default).ReturnsForAnyArgs(false);
+
+        var missing = await _sut.ReadAsync(Request(FB, auth: Caller), CancellationToken.None);
+        var present = await _sut.ReadAsync(Request(F1, auth: Caller), CancellationToken.None);
+
+        missing.Error.Code.ShouldBe(WorkflowErrorCodes.AuthorizationRoleDenied);
+        present.Error.Code.ShouldBe(WorkflowErrorCodes.AuthorizationRoleDenied);
+        await _offload.DidNotReceiveWithAnyArgs().GetFieldsAsync(default!, default);
+    }
+
+    [Fact]
+    public async Task ForeignRouteDomain_IsNotFoundDomain_LikeTheDataFunction()
+    {
+        await Should.ThrowAsync<BBT.Workflow.ExceptionHandling.NotFoundDomainException>(
+            () => _sut.ReadAsync(new InstanceFileRequest("other-domain", Flow, _instance.Id.ToString(), F1, null, null), CancellationToken.None));
+        await _repository.DidNotReceiveWithAnyArgs().FindByIdentifierAsReadOnlyAsync(default!, default);
     }
 
     private InstanceFileAppService WithRoles(string masterSchema)

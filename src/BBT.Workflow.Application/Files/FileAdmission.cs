@@ -17,7 +17,7 @@ public interface IFileAdmission
     /// Offloads <c>content</c> in the request payload to the store and replaces it with handles on
     /// <paramref name="context"/>, <paramref name="workflowContext"/> and — for a client (External) payload
     /// only — the request's raw body. A failure leaves all three untouched and is returned as is
-    /// (503 FileStoreUnavailable / 400 FileReferenceInvalid).
+    /// (503 FileStoreUnavailable / 400 FileReferenceInvalid / 503 FileSchemaUnavailable).
     /// </summary>
     Task<Result> ApplyAsync(
         TransitionExecutionContext context,
@@ -46,7 +46,13 @@ public sealed class FileAdmission(IFileOffloadService offloadService, IRequestRa
         var payloadElement = context.DataElement;
         if (payloadElement is not { ValueKind: JsonValueKind.Object })
             return Result.Ok();
-        var fields = await offloadService.GetFieldsAsync(context.Workflow, cancellationToken);
+        // A master schema that cannot be loaded fails closed (503 FileSchemaUnavailable, before anything is persisted
+        // or enqueued) when the payload could carry a file; otherwise the request proceeds with no fields.
+        var resolved = FileStorageFields.ForPayload(
+            await offloadService.GetFieldsAsync(context.Workflow, cancellationToken), payloadElement.Value);
+        if (!resolved.IsSuccess)
+            return Result.Fail(resolved.Error);
+        var fields = resolved.Value!;
         if (fields.Count == 0)
             return Result.Ok();
 
@@ -57,7 +63,8 @@ public sealed class FileAdmission(IFileOffloadService offloadService, IRequestRa
             context.Instance.Id,
             payloadElement,
             context.Instance.LatestData?.Data.JsonElement,
-            trusted ? FileOffloadMode.Trusted : FileOffloadMode.External), cancellationToken);
+            trusted ? FileOffloadMode.Trusted : FileOffloadMode.External,
+            fields), cancellationToken);
         if (!result.IsSuccess)
         {
             activity?.SetStatus(ActivityStatusCode.Error, result.Error.Code);

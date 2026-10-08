@@ -4711,6 +4711,28 @@ public static partial class WorkflowLogs
         string file,
         bool authorized);
 
+    /// <summary>Logs that the master schema could not be loaded, so the flow's x-storage paths are unknown.</summary>
+    [LoggerMessage(
+        EventId = 20494,
+        Level = LogLevel.Warning,
+        Message = "File storage fields unavailable: master schema {SchemaKey} of flow {Flow} could not be loaded ({Reason})")]
+    public static partial void FileSchemaUnavailable(
+        this ILogger logger,
+        string schemaKey,
+        string flow,
+        string reason);
+
+    /// <summary>Logs that a stored file handle failed validation (GUID file id, allowed component) and was not served.</summary>
+    [LoggerMessage(
+        EventId = 20495,
+        Level = LogLevel.Warning,
+        Message = "Stored file handle rejected on read: instance {InstanceId}, path {Path}, component {Component}")]
+    public static partial void FileHandleRejectedOnRead(
+        this ILogger logger,
+        Guid instanceId,
+        string path,
+        string component);
+
     #endregion
 
     #region Server Configuration

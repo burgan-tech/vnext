@@ -17,7 +17,7 @@ namespace BBT.Workflow.Application.Files;
 internal static class FileOffloadTestFactory
 {
     public static (FileOffloadService Service, Definitions.Workflow Workflow) Create(
-        string masterSchemaJson, IFileBlobStore store, string domain, string flow)
+        string masterSchemaJson, IFileBlobStore store, string domain, string flow, FileStorageOptions? options = null)
     {
         var workflow = Definitions.Workflow.Create();
         workflow.SetReference(new Reference(flow, domain, "sys-flows", "1.0.0"));
@@ -36,6 +36,7 @@ internal static class FileOffloadTestFactory
         var runtime = Substitute.For<IRuntimeInfoProvider>();
         runtime.Domain.Returns(domain);
 
-        return (new FileOffloadService(cache, store, runtime, NullLogger<FileOffloadService>.Instance), workflow);
+        return (new FileOffloadService(cache, store, runtime,
+            Microsoft.Extensions.Options.Options.Create(options ?? new FileStorageOptions()), NullLogger<FileOffloadService>.Instance), workflow);
     }
 }

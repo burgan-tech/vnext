@@ -324,10 +324,18 @@ public sealed class AuthorizeAppServiceSubflowTests : IDisposable
     public async Task SharedTransitionAvailableInCurrentState_IsAnsweredOnTheParent()
     {
         GivenParentWithSharedTransition(ParentInWaitingWithActiveSubflow(), availableIn: "waiting");
-        GivenLeafVerdict(true);
+        // The leaf would deny and the parent allows: the verdict must be the parent's.
+        GivenLeafVerdict(false);
+        _authManager.IsTransitionAllowedInStateAsync(
+                Arg.Any<WorkflowDefinition>(), Arg.Is<Transition>(t => t.Key == "escalate"), "waiting",
+                Arg.Any<Instance?>(), Arg.Any<IReadOnlyCollection<string>?>(),
+                Arg.Any<AuthorizationRequestContext?>(), Arg.Any<CancellationToken>())
+            .Returns(true);
 
-        await AuthorizeTransitionAsync("escalate");
+        var result = await AuthorizeTransitionAsync("escalate");
 
+        result.IsSuccess.ShouldBeTrue();
+        result.Value!.Allowed.ShouldBeTrue();
         await _gateway.DidNotReceive().GetAuthorizeResultForInstanceAsync(
             Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(),
             Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<bool>(), Arg.Any<bool>(),

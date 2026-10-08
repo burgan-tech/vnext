@@ -1,6 +1,7 @@
 using BBT.Aether.Guids;
 using BBT.Workflow.Execution.Transitions.Services;
 using BBT.Workflow.Definitions;
+using BBT.Workflow.ExceptionHandling;
 using BBT.Workflow.Files;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Runtime;
@@ -223,24 +224,36 @@ public sealed class CreateTransitionRecordStep(
     /// x-storage defence in depth (spec §3): <c>content</c> a transition mapping produces is offloaded (Trusted)
     /// before it reaches the data funnel or the transition record body. Runs only for a mapped transition: the
     /// field lookup loads the master schema through the component cache once; no <c>x-storage</c> field ⇒ no
-    /// conversion and no span. Otherwise a read-only probe over the element decides — only a <c>content</c> member
-    /// at an <c>x-storage</c> path opens the <c>Files.Offload</c> span and calls the offload. A failure throws
-    /// (<see cref="FileOffloadFailure"/>) and follows the pipeline's normal error path.
+    /// conversion and no span. Otherwise a read-only probe over the element decides — only a <c>content</c> or a
+    /// <c>file</c> member at an <c>x-storage</c> path opens the <c>Files.Offload</c> span and calls the offload (content is
+    /// stored, a file handle is validated). A failure throws (<see cref="FileOffloadFailure"/>) and follows the
+    /// pipeline's normal error path; a master schema that cannot be loaded throws
+    /// <see cref="FileSchemaUnavailableException"/> when the mapped data could carry a file.
     /// </summary>
     private async Task<object?> OffloadMappedFilesAsync(
         TransitionExecutionContext context,
         object mappedData,
         CancellationToken cancellationToken)
     {
-        var fields = await fileOffloadService.GetFieldsAsync(context.Workflow, cancellationToken);
-        if (fields.Count == 0)
+        var fieldsResult = await fileOffloadService.GetFieldsAsync(context.Workflow, cancellationToken);
+        if (fieldsResult.IsSuccess && fieldsResult.Value!.Count == 0)
             return mappedData;
 
         var element = mappedData is JsonElement e
             ? e
             : JsonSerializer.SerializeToElement(mappedData, JsonSerializerConstants.JsonOptions);
-        // Read-only probe: no content at any x-storage path ⇒ nothing to offload, no mutable DOM, no span.
-        if (element.ValueKind != JsonValueKind.Object || !FileNodeWalker.AnyContent(element, fields))
+        if (element.ValueKind != JsonValueKind.Object)
+            return mappedData;
+
+        // Master schema unavailable: fail closed only when the mapped data could carry a file.
+        var resolved = FileStorageFields.ForPayload(fieldsResult, element);
+        if (!resolved.IsSuccess)
+            throw new FileSchemaUnavailableException(resolved.Error.Target ?? context.Workflow.Schema?.Key ?? string.Empty);
+        var fields = resolved.Value!;
+
+        // Read-only probe: no content and no file reference at any x-storage path ⇒ nothing to offload or validate,
+        // no mutable DOM, no span.
+        if (!FileNodeWalker.AnyContentOrFile(element, fields))
             return mappedData;
 
         using var activity = PipelineStepActivityHelper.StartTransitionActivity("Files.Offload", context.TransitionKey);

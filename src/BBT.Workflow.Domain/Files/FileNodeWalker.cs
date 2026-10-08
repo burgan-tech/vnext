@@ -28,10 +28,60 @@ public static class FileNodeWalker
         return false;
     }
 
+    /// <summary>
+    /// Schema-less probe, for when the master schema could not be loaded: does any object anywhere in
+    /// <paramref name="root"/> carry a <c>content</c> or <c>file</c> member? False ⇒ no x-storage path of any schema
+    /// could hold work, so the write is unaffected by the missing schema; true ⇒ the paths are unknown and the write is
+    /// refused (<c>FileSchemaUnavailable</c>).
+    /// </summary>
+    public static bool AnyFileShapedNode(JsonElement root)
+    {
+        switch (root.ValueKind)
+        {
+            case JsonValueKind.Object:
+                foreach (var property in root.EnumerateObject())
+                {
+                    if (property.NameEquals("content") || property.NameEquals("file"))
+                        return true;
+                    if (AnyFileShapedNode(property.Value))
+                        return true;
+                }
+                return false;
+            case JsonValueKind.Array:
+                foreach (var item in root.EnumerateArray())
+                {
+                    if (AnyFileShapedNode(item))
+                        return true;
+                }
+                return false;
+            default:
+                return false;
+        }
+    }
+
+    /// <summary>
+    /// Read-only probe: does any node at a <paramref name="fields"/> path carry a <c>content</c> or a <c>file</c> member?
+    /// The trusted write paths use it — a <c>content</c> is offloaded and a <c>file</c> handle is validated (GUID file
+    /// id, allowed component), so either one is work.
+    /// </summary>
+    public static bool AnyContentOrFile(JsonElement root, IReadOnlyList<FileStorageField> fields)
+    {
+        foreach (var field in fields)
+        {
+            if (AnyMember(root, field.Segments, 0, includeFile: true))
+                return true;
+        }
+        return false;
+    }
+
     private static bool AnyContent(JsonElement node, IReadOnlyList<string> segments, int index)
+        => AnyMember(node, segments, index, includeFile: false);
+
+    private static bool AnyMember(JsonElement node, IReadOnlyList<string> segments, int index, bool includeFile)
     {
         if (index == segments.Count)
-            return node.ValueKind == JsonValueKind.Object && node.TryGetProperty("content", out _);
+            return node.ValueKind == JsonValueKind.Object
+                   && (node.TryGetProperty("content", out _) || (includeFile && node.TryGetProperty("file", out _)));
 
         var segment = segments[index];
         if (segment == "[]")
@@ -40,7 +90,7 @@ public static class FileNodeWalker
                 return false;
             foreach (var item in node.EnumerateArray())
             {
-                if (AnyContent(item, segments, index + 1))
+                if (AnyMember(item, segments, index + 1, includeFile))
                     return true;
             }
             return false;
@@ -48,7 +98,7 @@ public static class FileNodeWalker
 
         return node.ValueKind == JsonValueKind.Object
                && node.TryGetProperty(segment, out var child)
-               && AnyContent(child, segments, index + 1);
+               && AnyMember(child, segments, index + 1, includeFile);
     }
 
     private static IEnumerable<(JsonObject, string)> Find(JsonNode? node, IReadOnlyList<string> segments, int index, string path)

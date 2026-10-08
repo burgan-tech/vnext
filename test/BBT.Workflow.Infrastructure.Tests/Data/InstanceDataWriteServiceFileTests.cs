@@ -141,7 +141,7 @@ public class InstanceDataWriteServiceFileTests
     }
 
     [Fact]
-    public async Task XStorageFlow_DeltaWithoutContent_NoOffloadCall_AndNoSpan()
+    public async Task XStorageFlow_DeltaWithoutContentOrFile_NoOffloadCall_AndNoSpan()
     {
         var spans = new List<Activity>();
         using var listener = Listen(spans);
@@ -150,7 +150,7 @@ public class InstanceDataWriteServiceFileTests
         instance.EnableDataBuffering();
 
         var row = await CreateService().AppendAsync(instance,
-            new JsonData("""{"passport":{"component":"vnext-blob-local","file":"f-1"},"other":1}"""),
+            new JsonData("""{"passport":{"name":"p.pdf"},"other":{"file":"not-at-an-x-storage-path"}}"""),
             VersionStrategy.IncreaseMinor, CancellationToken.None, CreateWorkflow());
 
         row.ShouldNotBeNull();
@@ -174,6 +174,52 @@ public class InstanceDataWriteServiceFileTests
 
         await _offload.Received(1).OffloadAsync(Arg.Any<FileOffloadRequest>(), Arg.Any<CancellationToken>());
         spans.Count(a => a.TraceId == root.TraceId && a.DisplayName == "Files.Offload").ShouldBe(1);
+    }
+
+    /// <summary>A handle in a runtime-produced delta is validated by the Trusted offload; a forged one fails the write.</summary>
+    [Fact]
+    public async Task XStorageFlow_DeltaWithAForgedHandle_ThrowsFileReferenceInvalid_BeforeTouchingTheDatabase()
+    {
+        _offload.OffloadAsync(Arg.Any<FileOffloadRequest>(), Arg.Any<CancellationToken>())
+            .Returns(Result<FileOffloadResult>.Fail(WorkflowErrors.FileReferenceInvalid("passport", "the file reference is not a valid handle of an allowed component")));
+        var instance = InstanceFactory.CreateDefault();
+
+        await Should.ThrowAsync<FileReferenceInvalidException>(() => CreateService().AppendAsync(
+            instance, new JsonData(Handled), VersionStrategy.IncreaseMinor, CancellationToken.None, CreateWorkflow()));
+
+        await _offload.Received(1).OffloadAsync(
+            Arg.Is<FileOffloadRequest>(r => r.Mode == FileOffloadMode.Trusted), Arg.Any<CancellationToken>());
+        await _dbContextProvider.DidNotReceive().GetDbContextAsync();
+    }
+
+    [Fact]
+    public async Task SchemaUnavailable_DeltaWithAFileNode_ThrowsFileSchemaUnavailable_BeforeTouchingTheDatabase()
+    {
+        _componentCache.GetSchemaAsync("test-domain", "master", "1.0.0", Arg.Any<CancellationToken>())
+            .Returns(Result<SchemaDefinition>.Fail(Error.Failure("schema:down", "down")));
+        var instance = InstanceFactory.CreateDefault();
+
+        var ex = await Should.ThrowAsync<FileSchemaUnavailableException>(() => CreateService().AppendAsync(
+            instance, new JsonData(Delta), VersionStrategy.IncreaseMinor, CancellationToken.None, CreateWorkflow()));
+
+        ex.Code.ShouldBe(WorkflowErrorCodes.FileSchemaUnavailable);
+        await _offload.DidNotReceiveWithAnyArgs().OffloadAsync(default!, default);
+        await _dbContextProvider.DidNotReceive().GetDbContextAsync();
+    }
+
+    [Fact]
+    public async Task SchemaUnavailable_DeltaWithoutAFileNode_IsWrittenAsBefore()
+    {
+        _componentCache.GetSchemaAsync("test-domain", "master", "1.0.0", Arg.Any<CancellationToken>())
+            .Returns(Result<SchemaDefinition>.Fail(Error.Failure("schema:down", "down")));
+        var instance = InstanceFactory.CreateDefault();
+        instance.EnableDataBuffering();
+
+        var row = await CreateService().AppendAsync(instance, new JsonData("""{"name":"x"}"""),
+            VersionStrategy.IncreaseMinor, CancellationToken.None, CreateWorkflow());
+
+        row.ShouldNotBeNull();
+        await _offload.DidNotReceiveWithAnyArgs().OffloadAsync(default!, default);
     }
 
     private static ActivityListener Listen(List<Activity> spans)

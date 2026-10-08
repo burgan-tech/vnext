@@ -44,8 +44,8 @@ public sealed class FileFunctionHandlerTests
     private void Returns(Result<InstanceFileContent> r) =>
         _files.ReadAsync(Arg.Any<InstanceFileRequest>(), Arg.Any<CancellationToken>()).Returns(r);
 
-    private void ReturnsContent(bool notModified = false) =>
-        Returns(Result<InstanceFileContent>.Ok(new InstanceFileContent(Handle(), "passport", notModified ? null : Bytes, notModified)));
+    private void ReturnsContent(bool notModified = false, FileHandle? handle = null) =>
+        Returns(Result<InstanceFileContent>.Ok(new InstanceFileContent(handle ?? Handle(), "passport", notModified ? null : Bytes, notModified)));
 
     private async Task<WebApplication> StartAsync()
     {
@@ -96,6 +96,82 @@ public sealed class FileFunctionHandlerTests
         disposition.ShouldStartWith("inline");
         disposition.ShouldContain("filename*=UTF-8''kimlik-%C3%B6n.pdf");
         response.Content.Headers.ContentEncoding.ShouldBe(["identity"]);
+    }
+
+    // ── I2: client-declared media types never run as documents of this origin ───────────────────────────────
+
+    [Theory]
+    [InlineData("text/html", "attachment")]
+    [InlineData("text/html; charset=utf-8", "attachment")]
+    [InlineData("image/svg+xml", "attachment")]
+    [InlineData("application/xhtml+xml", "attachment")]
+    [InlineData("application/xml", "attachment")]
+    [InlineData("text/xml", "attachment")]
+    [InlineData("application/javascript", "attachment")]
+    [InlineData("text/javascript", "attachment")]
+    [InlineData("application/rss+xml", "attachment")]
+    [InlineData("application/pdf", "inline")]
+    [InlineData("image/png", "inline")]
+    public async Task Get_DispositionFollowsTheMediaType_AndAlwaysCarriesTheSandboxCsp(string mime, string disposition)
+    {
+        ReturnsContent(handle: Handle(mime: mime));
+        await using var app = await StartAsync();
+
+        var response = await app.GetTestClient().GetAsync(Url);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.OK);
+        response.Content.Headers.ContentDisposition!.DispositionType.ShouldBe(disposition);
+        response.Headers.GetValues("Content-Security-Policy").ShouldBe(["sandbox; default-src 'none'"]);
+    }
+
+    [Theory]
+    [InlineData("not a media type")]
+    [InlineData("text/html\r\nX-Injected: 1")]
+    [InlineData("")]
+    [InlineData(null)]
+    public async Task Get_UnparseableStoredMimeType_IsServedAsOctetStream(string? mime)
+    {
+        ReturnsContent(handle: Handle(mime: mime));
+        await using var app = await StartAsync();
+
+        var response = await app.GetTestClient().GetAsync(Url);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.OK);
+        response.Content.Headers.ContentType!.MediaType.ShouldBe("application/octet-stream");
+        response.Content.Headers.ContentDisposition!.DispositionType.ShouldBe("inline");
+        response.Headers.GetValues("Content-Security-Policy").ShouldBe(["sandbox; default-src 'none'"]);
+    }
+
+    [Theory]
+    [InlineData("a\"b.pdf")]
+    [InlineData("evil\r\nSet-Cookie: x=1.pdf")]
+    public async Task Get_QuoteOrCrlfInTheName_StaysInsideTheDispositionHeader(string name)
+    {
+        ReturnsContent(handle: Handle(name: name));
+        await using var app = await StartAsync();
+
+        var response = await app.GetTestClient().GetAsync(Url);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.OK);
+        response.Headers.Contains("Set-Cookie").ShouldBeFalse();
+        var header = response.Content.Headers.GetValues("Content-Disposition").Single();
+        header.ShouldNotContain("\r");
+        header.ShouldNotContain("\n");
+        response.Content.Headers.ContentDisposition!.DispositionType.ShouldBe("inline");
+    }
+
+    [Fact]
+    public async Task Get_LongName_IsServedAsStored()
+    {
+        // The write path caps names at 255 characters (FileOffloadService.NormalizeName); the header carries it whole.
+        var name = new string('a', 251) + ".pdf";
+        ReturnsContent(handle: Handle(name: name));
+        await using var app = await StartAsync();
+
+        var response = await app.GetTestClient().GetAsync(Url);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.OK);
+        response.Content.Headers.ContentDisposition!.ToString().ShouldContain(name);
     }
 
     [Fact]

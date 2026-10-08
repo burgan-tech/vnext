@@ -418,6 +418,13 @@ public static class WorkflowErrors
             $"The file at \"{path}\" is invalid: {reason}",
             target: path);
 
+    /// <summary>The master schema could not be resolved, so the x-storage paths of the request are unknown.</summary>
+    public static Error FileSchemaUnavailable(string schemaKey)
+        => Error.Transient(
+            WorkflowErrorCodes.FileSchemaUnavailable,
+            $"Master schema \"{schemaKey}\" could not be resolved; the request may carry x-storage files and was not applied, it can be retried",
+            target: schemaKey);
+
     /// <summary>The file is not referenced by the instance's latest data.</summary>
     public static Error FileNotFound(string file)
         => Error.NotFound(

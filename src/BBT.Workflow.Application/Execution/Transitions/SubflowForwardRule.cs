@@ -12,7 +12,9 @@ public static class SubflowForwardRule
     /// <summary>
     /// True when the parent will forward this request: it has an active subflow, the transition is
     /// not a parent shared transition available in the parent's current state (that one runs on the
-    /// parent), and it is not updateData (always executed on the instance it targets).
+    /// parent), and it is not updateData (always executed on the instance it targets) nor cancel/exit
+    /// (the preflight step short-circuits them to the parent's own CreateTransition, past the forward
+    /// order, so they are recorded — and must be swapped — on the parent).
     /// <para>
     /// The shared-transition rule is the SubFlow proxy's
     /// (<see cref="SubFlowBypassSpecification.IsParentSharedTransitionAndAvailable(Definitions.Workflow, string, string?)"/>),
@@ -25,5 +27,7 @@ public static class SubflowForwardRule
         => (context.Instance.HasActiveSubFlow || context.Instance.Subflow != null)
            && !SubFlowBypassSpecification.IsParentSharedTransitionAndAvailable(
                context.Workflow, context.TransitionKey, context.Current?.Key)
-           && !context.IsUpdateDataTransition();
+           && !context.IsUpdateDataTransition()
+           && !context.IsCancelTransition()
+           && !context.IsExitTransition();
 }

@@ -49,7 +49,7 @@ public class CreateTransitionRecordStepFileTests
                 Arg.Any<Dictionary<string, string?>>(), Arg.Any<CancellationToken>())
             .Returns(Result<object?>.Ok(JsonDocument.Parse(Mapped).RootElement.Clone()));
         _offload.GetFieldsAsync(Arg.Any<Definitions.Workflow>(), Arg.Any<CancellationToken>())
-            .Returns((IReadOnlyList<FileStorageField>)[new FileStorageField(["passport"], "vnext-blob-local")]);
+            .Returns(Result<IReadOnlyList<FileStorageField>>.Ok([new FileStorageField(["passport"], "vnext-blob-local")]));
 
         _step = new CreateTransitionRecordStep(
             _transitionRepository,
@@ -111,13 +111,9 @@ public class CreateTransitionRecordStepFileTests
     }
 
     [Fact]
-    public async Task MappingOutputWithoutContent_NoOffloadCall_AndNoSpan()
+    public async Task MappingOutputWithoutContentOrFile_NoOffloadCall_AndNoSpan()
     {
-        _dataMapper.MapTransitionDataAsync(
-                Arg.Any<object?>(), Arg.Any<Transition?>(), Arg.Any<Definitions.Workflow>(),
-                Arg.Any<Instance>(), Arg.Any<IRuntimeInfoProvider>(),
-                Arg.Any<Dictionary<string, string?>>(), Arg.Any<CancellationToken>())
-            .Returns(Result<object?>.Ok(JsonDocument.Parse(Handled).RootElement.Clone()));
+        MapTo("""{"passport":{"name":"p.pdf"},"other":1}""");
         var spans = new List<Activity>();
         using var listener = Listen(spans);
         using var root = new Activity("mapping-no-content").Start();
@@ -144,6 +140,60 @@ public class CreateTransitionRecordStepFileTests
         spans.Count(a => a.TraceId == root.TraceId && a.DisplayName == "Files.Offload").ShouldBe(1);
     }
 
+    /// <summary>
+    /// A handle a mapping produces (copied from elsewhere) is not trusted blindly: it reaches the Trusted offload,
+    /// which validates it (GUID file id, allowed component); a forged one fails the transition with 400.
+    /// </summary>
+    [Fact]
+    public async Task MappingOutputWithAForgedHandle_IsValidated_AndRejected()
+    {
+        MapTo(Handled);
+        _offload.OffloadAsync(Arg.Any<FileOffloadRequest>(), Arg.Any<CancellationToken>())
+            .Returns(Result<FileOffloadResult>.Fail(WorkflowErrors.FileReferenceInvalid("passport", "the file reference is not a valid handle of an allowed component")));
+
+        await Should.ThrowAsync<FileReferenceInvalidException>(
+            () => _step.ExecuteAsync(CreateContext(withMapping: true), CancellationToken.None));
+
+        await _offload.Received(1).OffloadAsync(
+            Arg.Is<FileOffloadRequest>(r => r.Mode == FileOffloadMode.Trusted), Arg.Any<CancellationToken>());
+        await _dataWriteService.DidNotReceiveWithAnyArgs().AppendAsync(default!, default!, default, default, default);
+    }
+
+    [Fact]
+    public async Task SchemaUnavailable_WithContent_ThrowsFileSchemaUnavailable_AndAppendsNothing()
+    {
+        _offload.GetFieldsAsync(Arg.Any<Definitions.Workflow>(), Arg.Any<CancellationToken>())
+            .Returns(Result<IReadOnlyList<FileStorageField>>.Fail(WorkflowErrors.FileSchemaUnavailable("master")));
+
+        var ex = await Should.ThrowAsync<FileSchemaUnavailableException>(
+            () => _step.ExecuteAsync(CreateContext(withMapping: true), CancellationToken.None));
+
+        ex.Code.ShouldBe(WorkflowErrorCodes.FileSchemaUnavailable);
+        await _offload.DidNotReceiveWithAnyArgs().OffloadAsync(default!, default);
+        await _dataWriteService.DidNotReceiveWithAnyArgs().AppendAsync(default!, default!, default, default, default);
+    }
+
+    [Fact]
+    public async Task SchemaUnavailable_WithoutAFileNode_Proceeds()
+    {
+        MapTo("""{"name":"x"}""");
+        _offload.GetFieldsAsync(Arg.Any<Definitions.Workflow>(), Arg.Any<CancellationToken>())
+            .Returns(Result<IReadOnlyList<FileStorageField>>.Fail(WorkflowErrors.FileSchemaUnavailable("master")));
+
+        var result = await _step.ExecuteAsync(CreateContext(withMapping: true), CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        await _offload.DidNotReceiveWithAnyArgs().OffloadAsync(default!, default);
+        await _dataWriteService.ReceivedWithAnyArgs(1).AppendAsync(default!, default!, default, default, default);
+    }
+
+    private void MapTo(string json)
+        => _dataMapper.MapTransitionDataAsync(
+                Arg.Any<object?>(), Arg.Any<Transition?>(), Arg.Any<Definitions.Workflow>(),
+                Arg.Any<Instance>(), Arg.Any<IRuntimeInfoProvider>(),
+                Arg.Any<Dictionary<string, string?>>(), Arg.Any<CancellationToken>())
+            .Returns(Result<object?>.Ok(JsonDocument.Parse(json).RootElement.Clone()));
+
     private static ActivityListener Listen(List<Activity> spans)
     {
         var listener = new ActivityListener
@@ -169,7 +219,7 @@ public class CreateTransitionRecordStepFileTests
     public async Task FlowWithoutXStorage_SkipsTheOffloadEntirely()
     {
         _offload.GetFieldsAsync(Arg.Any<Definitions.Workflow>(), Arg.Any<CancellationToken>())
-            .Returns((IReadOnlyList<FileStorageField>)[]);
+            .Returns(Result<IReadOnlyList<FileStorageField>>.Ok([]));
 
         var result = await _step.ExecuteAsync(CreateContext(withMapping: true), CancellationToken.None);
 

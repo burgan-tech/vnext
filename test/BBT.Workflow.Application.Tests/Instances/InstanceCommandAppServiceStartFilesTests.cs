@@ -91,7 +91,7 @@ public class InstanceCommandAppServiceStartFilesTests : IDisposable
                 return Result<FileOffloadResult>.Ok(new FileOffloadResult(Swapped, Changed: true));
             });
         _offload.GetFieldsAsync(default!, default).ReturnsForAnyArgs(
-            (IReadOnlyList<FileStorageField>)[new FileStorageField(["passport"], "vnext-blob-local")]);
+            Result<IReadOnlyList<FileStorageField>>.Ok([new FileStorageField(["passport"], "vnext-blob-local")]));
         _instanceRepository.InsertAsync(default!, default, default)
             .ReturnsForAnyArgs(ci => { _order.Add("insert"); return ci.Arg<Instance>(); });
 
@@ -194,13 +194,55 @@ public class InstanceCommandAppServiceStartFilesTests : IDisposable
     [Fact]
     public async Task StartAsync_FlowWithoutXStorage_SkipsTheOffload()
     {
-        _offload.GetFieldsAsync(default!, default).ReturnsForAnyArgs((IReadOnlyList<FileStorageField>)[]);
+        _offload.GetFieldsAsync(default!, default).ReturnsForAnyArgs(Result<IReadOnlyList<FileStorageField>>.Ok([]));
         var input = CreateInput();
 
         await _service.StartAsync(input, CancellationToken.None);
 
         await _offload.DidNotReceiveWithAnyArgs().OffloadAsync(default!, default);
         input.Instance.Attributes!.Value.GetRawText().ShouldBe(Incoming.GetRawText());
+        await _instanceRepository.ReceivedWithAnyArgs(1).InsertAsync(default!, default, default);
+    }
+
+    /// <summary>The fields the start already resolved reach the offload (no second derivation).</summary>
+    [Fact]
+    public async Task StartAsync_PassesTheResolvedFieldsToTheOffload()
+    {
+        await _service.StartAsync(CreateInput(), CancellationToken.None);
+
+        await _offload.Received(1).GetFieldsAsync(Arg.Any<Definitions.Workflow>(), Arg.Any<CancellationToken>());
+        await _offload.Received(1).OffloadAsync(
+            Arg.Is<FileOffloadRequest>(r => r.Fields != null && r.Fields.Count == 1 && r.Fields[0].Binding == "vnext-blob-local"),
+            Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>Master schema unavailable and the attributes carry a file ⇒ 503 FileSchemaUnavailable, no instance.</summary>
+    [Fact]
+    public async Task StartAsync_SchemaUnavailable_WithAFileNode_CreatesNoInstance()
+    {
+        _offload.GetFieldsAsync(default!, default).ReturnsForAnyArgs(
+            Result<IReadOnlyList<FileStorageField>>.Fail(WorkflowErrors.FileSchemaUnavailable("master")));
+
+        var result = await _service.StartAsync(CreateInput(), CancellationToken.None);
+
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.FileSchemaUnavailable);
+        await _offload.DidNotReceiveWithAnyArgs().OffloadAsync(default!, default);
+        await _instanceRepository.DidNotReceiveWithAnyArgs().InsertAsync(default!, default, default);
+    }
+
+    /// <summary>Master schema unavailable but nothing file-shaped in the attributes ⇒ the start is unaffected.</summary>
+    [Fact]
+    public async Task StartAsync_SchemaUnavailable_WithoutAFileNode_Proceeds()
+    {
+        _offload.GetFieldsAsync(default!, default).ReturnsForAnyArgs(
+            Result<IReadOnlyList<FileStorageField>>.Fail(WorkflowErrors.FileSchemaUnavailable("master")));
+        var input = CreateInput();
+        input.Instance.Attributes = JsonDocument.Parse("""{ "name": "x" }""").RootElement.Clone();
+
+        await _service.StartAsync(input, CancellationToken.None);
+
+        await _offload.DidNotReceiveWithAnyArgs().OffloadAsync(default!, default);
         await _instanceRepository.ReceivedWithAnyArgs(1).InsertAsync(default!, default, default);
     }
 

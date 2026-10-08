@@ -373,7 +373,13 @@ public sealed class InstanceCommandAppService(
         // Not applicable ⇒ no work and no span (trace-span-tree: non-applicable steps leave no trace).
         if (input.Instance.Attributes is not { ValueKind: JsonValueKind.Object })
             return Result<Instance>.Ok(instance);
-        var fields = await fileOffloadService.GetFieldsAsync(workflow, cancellationToken);
+        // A master schema that cannot be loaded fails closed (503 FileSchemaUnavailable, no instance row) when the
+        // attributes could carry a file; otherwise the start proceeds with no fields.
+        var resolved = FileStorageFields.ForPayload(
+            await fileOffloadService.GetFieldsAsync(workflow, cancellationToken), input.Instance.Attributes.Value);
+        if (!resolved.IsSuccess)
+            return Result<Instance>.Fail(resolved.Error);
+        var fields = resolved.Value!;
         if (fields.Count == 0)
             return Result<Instance>.Ok(instance);
 
@@ -384,7 +390,8 @@ public sealed class InstanceCommandAppService(
             instance.Id,
             input.Instance.Attributes,
             LatestData: null,
-            input.TrustedPayload ? FileOffloadMode.Trusted : FileOffloadMode.External), cancellationToken);
+            input.TrustedPayload ? FileOffloadMode.Trusted : FileOffloadMode.External,
+            fields), cancellationToken);
         if (!result.IsSuccess)
         {
             activity?.SetStatus(ActivityStatusCode.Error, result.Error.Code);

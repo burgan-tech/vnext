@@ -434,6 +434,7 @@ public static class WorkflowApiBaseServiceCollectionExtensions
             opt.Map(WorkflowErrorCodes.FileStoreUnavailable, HttpStatusCode.ServiceUnavailable);
             opt.Map(WorkflowErrorCodes.FileReferenceInvalid, HttpStatusCode.BadRequest);
             opt.Map(WorkflowErrorCodes.FileNotFound, HttpStatusCode.NotFound);
+            opt.Map(WorkflowErrorCodes.FileSchemaUnavailable, HttpStatusCode.ServiceUnavailable);
             // history: none (vnext#1006): an ineligible SubFlow child is the author's error; retry is
             // a conflict with the flow's declared mode.
             opt.Map(WorkflowErrorCodes.HistoryNoneSubFlowChildNotEligible, HttpStatusCode.BadRequest);

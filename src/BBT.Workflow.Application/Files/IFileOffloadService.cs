@@ -34,13 +34,36 @@ public interface IFileOffloadService
     /// <summary>
     /// The workflow's <c>x-storage</c> fields: loads the master schema through the component cache (which deserializes
     /// it per call), then <see cref="GetFields"/>. A caller that already holds the resolved schema uses
-    /// <see cref="GetFields"/> directly.
+    /// <see cref="GetFields"/> directly. No master schema ⇒ no fields. A master schema that cannot be loaded ⇒
+    /// <c>FileSchemaUnavailable</c> (503): the caller decides with <see cref="FileStorageFields.ForPayload"/> whether
+    /// its payload is affected.
     /// </summary>
-    Task<IReadOnlyList<FileStorageField>> GetFieldsAsync(Definitions.Workflow workflow, CancellationToken cancellationToken);
+    Task<Result<IReadOnlyList<FileStorageField>>> GetFieldsAsync(Definitions.Workflow workflow, CancellationToken cancellationToken);
 
     /// <summary>
     /// The <c>x-storage</c> fields of an already-resolved master schema. Memoized by the schema's content (exact UTF-8
     /// bytes, compared without allocating), so a republished schema is re-parsed and an unchanged one is not.
     /// </summary>
     IReadOnlyList<FileStorageField> GetFields(SchemaDefinition schema);
+}
+
+/// <summary>The fail-closed rule for a master schema that cannot be loaded (spec §3, I3).</summary>
+public static class FileStorageFields
+{
+    /// <summary>
+    /// <paramref name="fields"/> when they were resolved. When the master schema could not be loaded, the payload is
+    /// refused (<c>FileSchemaUnavailable</c>) only if some object in it carries a <c>content</c> or <c>file</c> member —
+    /// the paths are unknown, so bytes could be persisted inline or an unchecked reference kept. A payload with
+    /// neither member is unaffected by any x-storage declaration and proceeds with no fields (the outage does not
+    /// block flows or requests that carry no file).
+    /// </summary>
+    public static Result<IReadOnlyList<FileStorageField>> ForPayload(
+        Result<IReadOnlyList<FileStorageField>> fields, JsonElement payload)
+    {
+        if (fields.IsSuccess)
+            return fields;
+        return FileNodeWalker.AnyFileShapedNode(payload)
+            ? fields
+            : Result<IReadOnlyList<FileStorageField>>.Ok([]);
+    }
 }

@@ -45,7 +45,7 @@ public sealed class FileAdmissionTests
         _offload.OffloadAsync(default!, default).ReturnsForAnyArgs(
             Result<FileOffloadResult>.Ok(new FileOffloadResult(Swapped, Changed: true)));
         _offload.GetFieldsAsync(default!, default).ReturnsForAnyArgs(
-            (IReadOnlyList<FileStorageField>)[new FileStorageField(["passport"], "vnext-blob-local")]);
+            Result<IReadOnlyList<FileStorageField>>.Ok([new FileStorageField(["passport"], "vnext-blob-local")]));
         _sut = new FileAdmission(_offload, _rawBody);
     }
 
@@ -136,6 +136,90 @@ public sealed class FileAdmissionTests
         await _offload.ReceivedWithAnyArgs(1).OffloadAsync(default!, default);
     }
 
+    /// <summary>
+    /// cancel and exit on a parent with an active SubFlow are not forwarded: the preflight step short-circuits them to
+    /// the parent's own CreateTransition (past the forward order), so the parent records them and must swap them.
+    /// </summary>
+    [Theory]
+    [InlineData(WellKnownTransitionKeys.Cancel)]
+    [InlineData(WellKnownTransitionKeys.Exit)]
+    public async Task ApplyAsync_CancelOrExitOnAParentWithActiveSubFlow_IsSwappedHere(string transitionKey)
+    {
+        var (ctx, wf) = Create(withActiveSubFlow: true, transitionKey: transitionKey);
+        SubflowForwardRule.WillForward(ctx).ShouldBeFalse();
+
+        var result = await _sut.ApplyAsync(ctx, wf, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        await _offload.Received(1).OffloadAsync(
+            Arg.Is<FileOffloadRequest>(r => r.Mode == FileOffloadMode.External), Arg.Any<CancellationToken>());
+        ctx.DataElement!.Value.GetRawText().ShouldBe(Swapped.GetRawText());
+    }
+
+    /// <summary>Same rows through the real offloader: a forged reference on cancel/exit is a 400, nothing stored.</summary>
+    [Theory]
+    [InlineData(WellKnownTransitionKeys.Cancel)]
+    [InlineData(WellKnownTransitionKeys.Exit)]
+    public async Task ApplyAsync_CancelOrExitOnAParentWithActiveSubFlow_RejectsAForgedReference(string transitionKey)
+    {
+        var store = Substitute.For<IFileBlobStore>();
+        var (service, workflow) = FileOffloadTestFactory.Create(
+            """{ "type": "object", "properties": { "passport": { "type": "object", "x-storage": { "binding": "vnext-blob-local" } } } }""",
+            store, domain: "test-domain", flow: "parent-workflow");
+        var sut = new FileAdmission(service, _rawBody);
+        var forged = JsonDocument.Parse(
+            $$"""{ "passport": { "component": "vnext-blob-local", "file": "{{Guid.NewGuid()}}", "size": 1, "eTag": "e", "owner": { "domain": "d", "flow": "f", "instance": "i" } } }""").RootElement.Clone();
+        var (ctx, wf) = Create(withActiveSubFlow: true, transitionKey: transitionKey, workflow: workflow, data: forged);
+
+        var result = await sut.ApplyAsync(ctx, wf, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.FileReferenceInvalid);
+        await store.DidNotReceiveWithAnyArgs().PutAsync(default!, default!, default, default, default);
+        _rawBody.DidNotReceiveWithAnyArgs().ReplaceRawBodyAttributes(default);
+    }
+
+    /// <summary>The fields admission already resolved reach the offload (no second derivation).</summary>
+    [Fact]
+    public async Task ApplyAsync_PassesTheResolvedFieldsToTheOffload()
+    {
+        var (ctx, wf) = Create();
+
+        await _sut.ApplyAsync(ctx, wf, CancellationToken.None);
+
+        await _offload.Received(1).GetFieldsAsync(Arg.Any<Definitions.Workflow>(), Arg.Any<CancellationToken>());
+        await _offload.Received(1).OffloadAsync(
+            Arg.Is<FileOffloadRequest>(r => r.Fields != null && r.Fields.Count == 1), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ApplyAsync_SchemaUnavailable_WithAFileNode_Is503AndTouchesNothing()
+    {
+        _offload.GetFieldsAsync(default!, default).ReturnsForAnyArgs(
+            Result<IReadOnlyList<FileStorageField>>.Fail(WorkflowErrors.FileSchemaUnavailable("master")));
+        var (ctx, wf) = Create();
+
+        var result = await _sut.ApplyAsync(ctx, wf, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.FileSchemaUnavailable);
+        await _offload.DidNotReceiveWithAnyArgs().OffloadAsync(default!, default);
+        ctx.DataElement!.Value.GetRawText().ShouldBe(Incoming.GetRawText());
+    }
+
+    [Fact]
+    public async Task ApplyAsync_SchemaUnavailable_WithoutAFileNode_Proceeds()
+    {
+        _offload.GetFieldsAsync(default!, default).ReturnsForAnyArgs(
+            Result<IReadOnlyList<FileStorageField>>.Fail(WorkflowErrors.FileSchemaUnavailable("master")));
+        var (ctx, wf) = Create(data: JsonDocument.Parse("""{ "name": "x", "items": [ { "a": 1 } ] }""").RootElement.Clone());
+
+        var result = await _sut.ApplyAsync(ctx, wf, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        await _offload.DidNotReceiveWithAnyArgs().OffloadAsync(default!, default);
+    }
+
     [Theory]
     [InlineData(false, FileOffloadMode.External)]
     [InlineData(true, FileOffloadMode.Trusted)]
@@ -200,7 +284,7 @@ public sealed class FileAdmissionTests
     [Fact]
     public async Task ApplyAsync_FlowWithoutXStorage_SkipsTheOffloadAndOpensNoSpan()
     {
-        _offload.GetFieldsAsync(default!, default).ReturnsForAnyArgs((IReadOnlyList<FileStorageField>)[]);
+        _offload.GetFieldsAsync(default!, default).ReturnsForAnyArgs(Result<IReadOnlyList<FileStorageField>>.Ok([]));
         var key = "no-files-" + Guid.NewGuid().ToString("N");
         var (ctx, wf) = Create(transitionKey: key);
         var spans = ListenForFileSpans(key, out var listener);
@@ -263,8 +347,10 @@ public sealed class FileAdmissionTests
     }
 
     private static (TransitionExecutionContext Ctx, WorkflowExecutionContext Wf) Create(
-        bool withActiveSubFlow = false, string transitionKey = "submit")
+        bool withActiveSubFlow = false, string transitionKey = "submit",
+        Definitions.Workflow? workflow = null, JsonElement? data = null)
     {
+        var payload = data ?? Incoming;
         var instance = Instance.Create(Guid.NewGuid(), "parent-workflow", "1.0.0");
         if (withActiveSubFlow)
         {
@@ -283,11 +369,11 @@ public sealed class FileAdmissionTests
             CorrelationId = Guid.NewGuid().ToString("N"),
             ExecutionChainId = Guid.NewGuid().ToString("N"),
             RequestedAt = DateTimeOffset.UtcNow,
-            Workflow = Definitions.Workflow.Create(),
+            Workflow = workflow ?? Definitions.Workflow.Create(),
             Current = StateFactory.CreateDefault("waiting-child", StateType.SubFlow),
             Transition = Transition.Create(transitionKey, "waiting-child", "waiting-child", TriggerType.Manual, "Patch"),
             Instance = instance,
-            Data = Incoming,
+            Data = payload,
             TraceId = Guid.NewGuid().ToString("N"),
             SpanId = Guid.NewGuid().ToString("N")[..16]
         };
@@ -297,7 +383,7 @@ public sealed class FileAdmissionTests
             Domain = "test-domain",
             WorkflowKey = instance.Flow,
             TransitionKey = transitionKey,
-            Data = new TransitionDataInfo(Incoming)
+            Data = new TransitionDataInfo(payload)
         };
         return (ctx, wf);
     }
