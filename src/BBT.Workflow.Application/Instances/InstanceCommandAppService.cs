@@ -78,6 +78,21 @@ public sealed class InstanceCommandAppService(
 
         var workflow = workflowResult.Value!;
 
+        // A history-none parent only starts history-none SubFlow children (vnext#1006). Checked before
+        // anything is persisted; the parent faults through its post-commit coordination path.
+        if (input.Instance.ExtraProperties.RequiresHistoryNoneChild() && !workflow.SuppressesHistory)
+        {
+            var parentFlow = input.Instance.ExtraProperties.TryGetValue(DomainConsts.MetaDataKeys.Flow, out var flow)
+                ? flow?.ToString()
+                : null;
+            var parentId = input.Instance.ExtraProperties.TryGetValue(DomainConsts.MetaDataKeys.Id, out var id)
+                ? id?.ToString()
+                : null;
+            logger.SubFlowChildHistoryNotSuppressed(parentId, workflow.Key, workflow.Version);
+            return Result<StartInstanceOutput>.Fail(
+                WorkflowErrors.HistoryNoneSubFlowChildNotEligible(workflow.Key, workflow.Version, parentFlow));
+        }
+
         // The start request opened the activation episode (the request middleware seeded its start
         // from the server span); name the trigger and the transition now that both are known.
         using var episode = WorkflowTraceLane.UseEpisode(
@@ -373,7 +388,9 @@ public sealed class InstanceCommandAppService(
                 cancellationToken)
             .TapAsync(async mappedData =>
             {
-                if (mappedData != null)
+                // history: none (vnext#1006) writes no initial row: the start transition maps the same
+                // payload again in the pipeline, where the data is buffered until the single write.
+                if (mappedData != null && !data.Workflow.SuppressesHistory)
                 {
                     await instanceDataWriteService.AppendAsync(
                         data.Instance,

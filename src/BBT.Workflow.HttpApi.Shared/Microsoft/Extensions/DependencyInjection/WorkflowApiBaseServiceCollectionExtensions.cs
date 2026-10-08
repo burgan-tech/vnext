@@ -430,6 +430,10 @@ public static class WorkflowApiBaseServiceCollectionExtensions
             opt.Map(WorkflowErrorCodes.EncryptionKeyUnavailable, HttpStatusCode.ServiceUnavailable);
             opt.Map(WorkflowErrorCodes.EncryptionSchemaUnavailable, HttpStatusCode.ServiceUnavailable);
             opt.Map(WorkflowErrorCodes.EncryptedValueReserved, HttpStatusCode.BadRequest);
+            // history: none (vnext#1006): an ineligible SubFlow child is the author's error; retry is
+            // a conflict with the flow's declared mode.
+            opt.Map(WorkflowErrorCodes.HistoryNoneSubFlowChildNotEligible, HttpStatusCode.BadRequest);
+            opt.Map(WorkflowErrorCodes.HistoryNoneRetryNotSupported, HttpStatusCode.Conflict);
             // A filter/sort/groupBy the master schema refuses (x-filterOperators, x-sortable, and every
             // x-encryption "encrypt" path) is the caller's error. It surfaced as 500 before.
             opt.Map(WorkflowErrorCodes.SchemaFilterValidation, HttpStatusCode.BadRequest);

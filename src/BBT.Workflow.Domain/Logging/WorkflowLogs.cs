@@ -4184,6 +4184,98 @@ public static partial class WorkflowLogs
         int instanceCount,
         string reason);
 
+    /// <summary>
+    /// Logs that a SubFlow child refused to start: its <c>history: none</c> parent requires a
+    /// <c>history: none</c> child (vnext#1006). The parent faults through post-commit coordination.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20475,
+        Level = LogLevel.Warning,
+        Message = "SubFlow child refused under a history-none parent. ParentInstanceId={ParentInstanceId}, ChildFlow={ChildFlow}, ChildVersion={ChildVersion}")]
+    public static partial void SubFlowChildHistoryNotSuppressed(
+        this ILogger logger,
+        string? parentInstanceId,
+        string childFlow,
+        string childVersion);
+
+    /// <summary>
+    /// Logs that retry was rejected because the instance's flow runs with <c>history: none</c> (vnext#1006).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20476,
+        Level = LogLevel.Information,
+        Message = "Retry rejected for history-none instance. InstanceId={InstanceId}, Flow={Flow}")]
+    public static partial void InstanceRetryRejectedHistoryNone(
+        this ILogger logger,
+        Guid instanceId,
+        string flow);
+
+    /// <summary>
+    /// Logs a data append that was merged into the in-memory buffer of a <c>history: none</c> instance
+    /// instead of being persisted (vnext#1006).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20477,
+        Level = LogLevel.Debug,
+        Message = "Instance data buffered in memory. InstanceId={InstanceId}, Version={Version}")]
+    public static partial void InstanceDataBuffered(
+        this ILogger logger,
+        Guid instanceId,
+        string version);
+
+    /// <summary>
+    /// Logs the single write of a <c>history: none</c> instance's buffered data (vnext#1006).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20478,
+        Level = LogLevel.Information,
+        Message = "Instance data buffer flushed. InstanceId={InstanceId}, Version={Version}, Persisted={Persisted}")]
+    public static partial void InstanceDataBufferFlushed(
+        this ILogger logger,
+        Guid instanceId,
+        string? version,
+        bool persisted);
+
+    /// <summary>
+    /// Logs that the persisted data head moved since the buffer was attached (for example a SubFlow
+    /// output mapping wrote in between); the buffered delta is re-based onto the persisted head.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20479,
+        Level = LogLevel.Warning,
+        Message = "Instance data buffer re-based onto a moved head. InstanceId={InstanceId}, BaseVersion={BaseVersion}, HeadVersion={HeadVersion}")]
+    public static partial void InstanceDataBufferDrift(
+        this ILogger logger,
+        Guid instanceId,
+        string? baseVersion,
+        string? headVersion);
+
+    /// <summary>
+    /// Logs a best-effort buffer flush that failed on the fault path. The fault still proceeds; the
+    /// buffered data is lost (accepted for <c>history: none</c>, vnext#1006).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20480,
+        Level = LogLevel.Error,
+        Message = "Instance data buffer flush failed on the fault path; the fault proceeds without it. InstanceId={InstanceId}")]
+    public static partial void InstanceDataBufferFlushFailed(
+        this ILogger logger,
+        Exception exception,
+        Guid instanceId);
+
+    /// <summary>
+    /// Logs that a <c>history: none</c> stage came to rest at a non-Finish state and is faulted (vnext#1006).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20481,
+        Level = LogLevel.Warning,
+        Message = "History-none stage rested at a non-Finish state; faulting. InstanceId={InstanceId}, Flow={Flow}, State={State}")]
+    public static partial void HistoryNoneStageFaulted(
+        this ILogger logger,
+        Guid instanceId,
+        string flow,
+        string state);
+
 
     /// <summary>
     /// Logs that no provider call was made because the caller carried neither <c>act_sub</c> nor

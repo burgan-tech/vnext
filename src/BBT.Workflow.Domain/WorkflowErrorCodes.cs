@@ -103,6 +103,25 @@ public static class WorkflowErrorCodes
     /// </summary>
     public const string EncryptionSchemaUnavailable = "Instance:100043";
 
+    /// <summary>
+    /// A parent with <c>history: none</c> started a SubFlow (<c>S</c>) child whose own definition is not
+    /// <c>history: none</c> (vnext#1006). Raised by the child before anything is persisted; the parent
+    /// faults through the post-commit coordination path. Maps to HTTP 400.
+    /// </summary>
+    public const string HistoryNoneSubFlowChildNotEligible = "Instance:100044";
+
+    /// <summary>
+    /// Retry was requested for an instance whose flow runs with <c>history: none</c>; retry needs the
+    /// transition and task journal such a flow never writes (vnext#1006). Maps to HTTP 409.
+    /// </summary>
+    public const string HistoryNoneRetryNotSupported = "Instance:100045";
+
+    /// <summary>
+    /// Incident code: a <c>history: none</c> stage came to rest at a non-Finish state (for example every
+    /// automatic rule evaluated false), so the one-shot flow could not finish and is faulted (vnext#1006).
+    /// </summary>
+    public const string HistoryNoneNotTerminal = "Instance:100046";
+
     #endregion
     
     #region Transition Errors (100xxx)

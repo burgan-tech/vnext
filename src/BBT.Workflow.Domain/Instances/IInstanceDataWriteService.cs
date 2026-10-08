@@ -2,7 +2,9 @@ namespace BBT.Workflow.Instances;
 
 /// <summary>
 /// The ONLY way an <see cref="InstanceData"/> version is written (architecture decision: no
-/// aggregate-side data mutation, no deferred batching). Every append is persisted IMMEDIATELY —
+/// aggregate-side data mutation). The one deferred case is a <c>history: none</c> instance
+/// (<see cref="Instance.IsDataBuffered"/>, vnext#1006): its appends merge into the in-memory
+/// <see cref="InstanceDataBuffer"/> and <see cref="FlushAsync"/> writes them once. Otherwise every append is persisted IMMEDIATELY —
 /// task outputs included, parallel or sequential — and the row's whole identity is computed
 /// UNDER the per-instance database row lock from the authoritative head:
 /// <see cref="InstanceData.VersionNo"/> = head + 1, <see cref="InstanceData.Version"/> =
@@ -69,4 +71,20 @@ public interface IInstanceDataWriteService
         JsonData data,
         CancellationToken cancellationToken = default,
         Definitions.Workflow? workflow = null);
+
+    /// <summary>
+    /// Writes the buffered data of a <c>history: none</c> instance (vnext#1006) as ONE row: the
+    /// accumulated delta is merged onto the persisted head under the row lock (encryption, hashing and
+    /// validation as for <see cref="AppendAsync"/>), and the buffer is rebased onto the written row.
+    /// <paramref name="inSameTransaction"/> runs inside the same transaction after the write — the
+    /// caller's own save (completion, correlation) commits atomically with the data. It must not call
+    /// <see cref="AppendAsync"/>: the per-instance gate is not re-entrant. Without a buffer or pending
+    /// change only the callback runs.
+    /// </summary>
+    /// <returns>The persisted row, or <c>null</c> when nothing was written.</returns>
+    Task<InstanceData?> FlushAsync(
+        Instance instance,
+        Definitions.Workflow? workflow,
+        Func<CancellationToken, Task>? inSameTransaction = null,
+        CancellationToken cancellationToken = default);
 }

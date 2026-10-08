@@ -88,7 +88,93 @@ public sealed class InstanceDataWriteService(
         Definitions.Workflow? workflow = null)
     {
         using var gate = await InstanceWriteGate.AcquireAsync(instance.Id, cancellationToken);
+        if (instance.DataBuffer is { } buffer)
+            return await AppendBufferedAsync(instance, buffer, delta, versionStrategy, workflow, cancellationToken);
+
         return await AppendCoreAsync(instance, delta, versionStrategy, workflow, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async Task<InstanceData?> FlushAsync(
+        Instance instance,
+        Definitions.Workflow? workflow,
+        Func<CancellationToken, Task>? inSameTransaction = null,
+        CancellationToken cancellationToken = default)
+    {
+        var buffer = instance.DataBuffer;
+        if (buffer is null || !buffer.HasPendingChanges)
+        {
+            if (inSameTransaction is not null)
+                await inSameTransaction(cancellationToken);
+            return null;
+        }
+
+        using var gate = await InstanceWriteGate.AcquireAsync(instance.Id, cancellationToken);
+        var baseVersion = buffer.BaseRow?.Version;
+
+        // The accumulated delta is merged onto the PERSISTED head, so encryption, hashing, sanitizing
+        // and validation run exactly as for a direct append; only the version is folded from the
+        // strategies the buffer accepted.
+        var row = await AppendCoreAsync(
+            instance,
+            buffer.AccumulatedDelta!,
+            VersionStrategy.None,
+            workflow,
+            cancellationToken,
+            versionResolver: head =>
+            {
+                if (!string.Equals(head?.Version, baseVersion, StringComparison.Ordinal))
+                    logger.InstanceDataBufferDrift(instance.Id, baseVersion, head?.Version);
+                return buffer.ResolveVersion(head?.Version);
+            },
+            afterPersist: inSameTransaction);
+
+        buffer.MarkFlushed(row);
+        logger.InstanceDataBufferFlushed(instance.Id, row?.Version, row is not null);
+        return row;
+    }
+
+    /// <summary>
+    /// Buffered append of a <c>history: none</c> instance (vnext#1006): merges the delta onto the
+    /// buffer's in-memory head with the same <see cref="PlanAppend"/> rules and validates the merged
+    /// content, without touching the database. The buffer changes only after validation passes.
+    /// </summary>
+    private async Task<InstanceData?> AppendBufferedAsync(
+        Instance instance,
+        InstanceDataBuffer buffer,
+        JsonData delta,
+        VersionStrategy? versionStrategy,
+        Definitions.Workflow? workflow,
+        CancellationToken cancellationToken)
+    {
+        var headRow = buffer.Head;
+        var head = headRow is null
+            ? null
+            : new InstanceDataHeadRow { Version = headRow.Version, DataHash = headRow.DataHash, Data = headRow.Data.Json };
+
+        var schema = await ResolveSchemaAsync(workflow, head, cancellationToken);
+        var writeOptions = executionOptions.Value.InstanceDataWrite;
+        var plan = PlanAppend(
+            head, delta, versionStrategy, writeOptions.LegacyAppendPipeline, writeOptions.PreserveNumericPrecision);
+        if (plan.IsDuplicate)
+            return null;
+
+        // A head carrying x-encryption values holds tokens, not the plaintext the schema describes:
+        // the flush validates the opened document instead.
+        if (!EncryptedValueFormat.MayContainReserved(plan.Content.Json))
+            await ValidateAgainstSchemaAsync(schema, plan.Content);
+
+        var accumulated = buffer.AccumulatedDelta is { } previous
+            ? JsonData.FromNormalized(JsonCanonicalizer.MergeAndCanonicalize(
+                previous.JsonElement,
+                delta.JsonElement,
+                writeOptions.PreserveNumericPrecision ? JsonNumberPolicy.PreservePrecision : JsonNumberPolicy.Legacy).NormalizedJson)
+            : delta;
+
+        var row = buffer.Accept(
+            instance.Id, plan.Content, InstanceData.ComputeDataHash(plan.Content), plan.Version, accumulated, versionStrategy);
+        logger.InstanceDataBuffered(instance.Id, row.Version);
+        return row;
     }
 
     private async Task<InstanceData?> AppendCoreAsync(
@@ -96,64 +182,86 @@ public sealed class InstanceDataWriteService(
         JsonData delta,
         VersionStrategy? versionStrategy,
         Definitions.Workflow? workflow,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<InstanceDataHeadRow?, string>? versionResolver = null,
+        Func<CancellationToken, Task>? afterPersist = null)
     {
         var context = await dbContextProvider.GetDbContextAsync();
 
         return await RunLockedAsync(context, instance.Id, cancellationToken, async () =>
         {
-            var head = await ReadHeadAsync(context, instance.Id, cancellationToken);
-            var schema = await ResolveSchemaAsync(workflow, head, cancellationToken);
-            var (encryption, plainHead, sanitizedDelta) =
-                await PrepareEncryptionAsync(context, instance.Id, schema, head, delta, cancellationToken);
+            var row = await AppendLockedAsync(context, instance, delta, versionStrategy, workflow, versionResolver, cancellationToken);
 
-            var writeOptions = executionOptions.Value.InstanceDataWrite;
-            var plan = PlanAppend(
-                plainHead, sanitizedDelta, versionStrategy, writeOptions.LegacyAppendPipeline, writeOptions.PreserveNumericPrecision);
+            // Runs inside the row-lock transaction, so a flush and the caller's own save commit together.
+            if (afterPersist is not null)
+                await afterPersist(cancellationToken);
 
-            // x-encryption "hash" is applied to the merged document BEFORE dedup: the digest is deterministic
-            // within the instance, so an unchanged value hashes to what the head already stores.
-            var content = encryption.Secret is { } secret
-                ? protector!.ApplyHashes(plan.Content, encryption.Paths.Hash, secret)
-                : plan.Content;
-
-            // Version and size are only known now (PlanAppend needs the head read under the row
-            // lock) — the span starts here rather than at method entry, per Task 9.
-            using var activity = StartAppendActivity(
-                plan.Version, Encoding.UTF8.GetByteCount(content.NormalizedJson));
-
-            // A row that will carry tokens is hashed with a key (see AesGcmFieldCipher.KeyedHash); the
-            // dedup compares in that scheme. A head hashed in the other scheme misses once — one extra row.
-            var dataHash = encryption.KeyedHash
-                ? InstanceDataProtector.KeyedDataHash(content, encryption.Secret!)
-                : InstanceData.ComputeDataHash(content);
-            var isDuplicate = encryption.Secret is not null
-                ? head is not null && string.Equals(dataHash, head.DataHash, StringComparison.OrdinalIgnoreCase)
-                : plan.IsDuplicate;
-
-            if (isDuplicate)
-            {
-                return null;
-            }
-
-            await ValidateAgainstSchemaAsync(schema, content);
-
-            var stored = Seal(instance.Id, content, encryption);
-
-            // A strategy append always sits at or above the head → it takes the latest flag.
-            // VersionNo is line-scoped: the next ordinal WITHIN the target Version string.
-            var row = new InstanceData(Guid.NewGuid(), instance.Id, plan.Version, stored, dataHash, isLatest: true)
-            {
-                // A new semantic-version line always starts at one. Only same-version appends
-                // need MAX(VersionNo), which removes one query from every version increment.
-                VersionNo = head is null || !string.Equals(plan.Version, head.Version, StringComparison.Ordinal)
-                    ? 1
-                    : await ReadLineMaxAsync(context, instance.Id, plan.Version, cancellationToken) + 1
-            };
-
-            await PersistAsync(context, instance, row, demoteStaleLatest: head is not null, cancellationToken);
             return row;
         });
+    }
+
+    private async Task<InstanceData?> AppendLockedAsync(
+        WorkflowDbContext context,
+        Instance instance,
+        JsonData delta,
+        VersionStrategy? versionStrategy,
+        Definitions.Workflow? workflow,
+        Func<InstanceDataHeadRow?, string>? versionResolver,
+        CancellationToken cancellationToken)
+    {
+        var head = await ReadHeadAsync(context, instance.Id, cancellationToken);
+        var schema = await ResolveSchemaAsync(workflow, head, cancellationToken);
+        var (encryption, plainHead, sanitizedDelta) =
+            await PrepareEncryptionAsync(context, instance.Id, schema, head, delta, cancellationToken);
+
+        var writeOptions = executionOptions.Value.InstanceDataWrite;
+        var plan = PlanAppend(
+            plainHead, sanitizedDelta, versionStrategy, writeOptions.LegacyAppendPipeline, writeOptions.PreserveNumericPrecision);
+        if (versionResolver is not null)
+            plan = plan with { Version = versionResolver(head) };
+
+        // x-encryption "hash" is applied to the merged document BEFORE dedup: the digest is deterministic
+        // within the instance, so an unchanged value hashes to what the head already stores.
+        var content = encryption.Secret is { } secret
+            ? protector!.ApplyHashes(plan.Content, encryption.Paths.Hash, secret)
+            : plan.Content;
+
+        // Version and size are only known now (PlanAppend needs the head read under the row
+        // lock) — the span starts here rather than at method entry, per Task 9.
+        using var activity = StartAppendActivity(
+            plan.Version, Encoding.UTF8.GetByteCount(content.NormalizedJson));
+
+        // A row that will carry tokens is hashed with a key (see AesGcmFieldCipher.KeyedHash); the
+        // dedup compares in that scheme. A head hashed in the other scheme misses once — one extra row.
+        var dataHash = encryption.KeyedHash
+            ? InstanceDataProtector.KeyedDataHash(content, encryption.Secret!)
+            : InstanceData.ComputeDataHash(content);
+        var isDuplicate = encryption.Secret is not null
+            ? head is not null && string.Equals(dataHash, head.DataHash, StringComparison.OrdinalIgnoreCase)
+            : plan.IsDuplicate;
+
+        if (isDuplicate)
+        {
+            return null;
+        }
+
+        await ValidateAgainstSchemaAsync(schema, content);
+
+        var stored = Seal(instance.Id, content, encryption);
+
+        // A strategy append always sits at or above the head → it takes the latest flag.
+        // VersionNo is line-scoped: the next ordinal WITHIN the target Version string.
+        var row = new InstanceData(Guid.NewGuid(), instance.Id, plan.Version, stored, dataHash, isLatest: true)
+        {
+            // A new semantic-version line always starts at one. Only same-version appends
+            // need MAX(VersionNo), which removes one query from every version increment.
+            VersionNo = head is null || !string.Equals(plan.Version, head.Version, StringComparison.Ordinal)
+                ? 1
+                : await ReadLineMaxAsync(context, instance.Id, plan.Version, cancellationToken) + 1
+        };
+
+        await PersistAsync(context, instance, row, demoteStaleLatest: head is not null, cancellationToken);
+        return row;
     }
 
     /// <inheritdoc />

@@ -357,6 +357,33 @@ public static class WorkflowErrors
             target: instanceId.ToString());
 
     /// <summary>
+    /// A <c>history: none</c> parent started a SubFlow child whose definition keeps full history (vnext#1006).
+    /// </summary>
+    public static Error HistoryNoneSubFlowChildNotEligible(string childFlow, string childVersion, string? parentFlow)
+        => Error.Validation(
+            WorkflowErrorCodes.HistoryNoneSubFlowChildNotEligible,
+            $"SubFlow '{childFlow}@{childVersion}' cannot start under parent '{parentFlow}' with history 'none': the child definition must also declare history 'none'",
+            target: childFlow);
+
+    /// <summary>
+    /// Retry is not available for an instance of a <c>history: none</c> flow (vnext#1006).
+    /// </summary>
+    public static Error HistoryNoneRetryNotSupported(Guid instanceId, string flow)
+        => Error.Conflict(
+            WorkflowErrorCodes.HistoryNoneRetryNotSupported,
+            $"Instance {instanceId} of flow '{flow}' runs with history 'none'; retry needs the transition history that such a flow never writes",
+            target: instanceId.ToString());
+
+    /// <summary>
+    /// A <c>history: none</c> stage came to rest at a non-Finish state (vnext#1006).
+    /// </summary>
+    public static Error HistoryNoneNotTerminal(Guid instanceId, string state)
+        => Error.Validation(
+            WorkflowErrorCodes.HistoryNoneNotTerminal,
+            $"Instance {instanceId} runs with history 'none' and came to rest at non-Finish state '{state}'; a one-shot flow must reach a Finish state",
+            target: state);
+
+    /// <summary>
     /// A request introduced a value carrying the reserved <c>ENCRYPTED:AES256:</c> prefix at <paramref name="path"/>
     /// that is not the token already stored there. The value is never echoed.
     /// </summary>

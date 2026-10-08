@@ -56,6 +56,29 @@ public class CreateTransitionRecordStepRetryTests
             Substitute.For<ILogger<CreateTransitionRecordStep>>());
     }
 
+    /// <summary>
+    /// history: none (vnext#1006): no transition row is read or written — not even a retry lookup —
+    /// but the in-memory record is still carried (scripts read CurrentTransition) and marked fresh, so
+    /// the task steps never probe a journal that does not exist.
+    /// </summary>
+    [Fact]
+    public async Task ExecuteAsync_HistoryNone_KeepsTheRecordInMemoryOnly()
+    {
+        var context = CreateContext();
+        context.Workflow.SetHistory(HistoryMode.None);
+        context.RetryOfTransitionRecordId = Guid.NewGuid();
+
+        var result = await _step.ExecuteAsync(context, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        context.Items[BBT.Workflow.Execution.Pipeline.WellKnownItems.InstanceTransition].ShouldBeOfType<InstanceTransition>();
+        context.Items[CreateTransitionRecordStep.TransitionRecordFreshKey].ShouldBe(true);
+        await _transitionRepository.DidNotReceiveWithAnyArgs().FindAsync(Arg.Any<Guid>(), Arg.Any<bool>(), Arg.Any<CancellationToken>());
+        await _transitionRepository.DidNotReceiveWithAnyArgs().InsertAsync(default!, default, default);
+        await _transitionRepository.DidNotReceiveWithAnyArgs().UpdateAsync(default!, default, default);
+        await _instanceRepository.Received(1).UpdateAsync(context.Instance, true, Arg.Any<CancellationToken>());
+    }
+
     [Fact]
     public async Task ExecuteAsync_RetryWithExistingRecord_ReusesItInsteadOfInserting()
     {

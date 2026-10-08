@@ -54,6 +54,38 @@ public class SubflowStarterTests
             Arg.Any<CancellationToken>());
     }
 
+    /// <summary>
+    /// history: none (vnext#1006): a history-none parent stamps <c>parent.history</c> so the child can
+    /// refuse to start unless it is history-none too; a flag-less parent's child metadata is unchanged.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task StartAsync_StampsParentHistory_OnlyForHistoryNoneParents(bool parentIsNone)
+    {
+        var gateway = Substitute.For<IInstanceCommandGateway>();
+        var starter = new SubflowStarter(gateway, new ConfigurationBuilder().Build(),
+            Substitute.For<IScriptEngine>(), Substitute.For<ILogger<SubflowStarter>>());
+        var workflow = WorkflowFactory.CreateDefault();
+        if (parentIsNone)
+            workflow.SetHistory(HistoryMode.None);
+        var parent = Instance.Create(Guid.NewGuid(), workflow.Key, workflow.Version, "parent");
+        var state = StateFactory.CreateDefault("child", StateType.SubFlow);
+        state.SetSubFlow("S", new Reference("child-flow", "remote", "sys-flows", "1.0.0"), null!, null);
+        var childId = Guid.NewGuid();
+        var correlation = InstanceCorrelation.Create(Guid.NewGuid(), parent.Id, state.Key,
+            childId, "S", "remote", "child-flow", "1.0.0");
+        StartInstanceInput? captured = null;
+        gateway.StartSubAsync(Arg.Do<StartInstanceInput>(i => captured = i), Arg.Any<CancellationToken>())
+            .Returns(Result<StartInstanceOutput>.Ok(new StartInstanceOutput { Id = childId, Status = InstanceStatus.Completed }));
+
+        await starter.StartAsync(workflow, parent, state, TransitionFactory.CreateDefault(), correlation, null!, ExecMode.Sync);
+
+        captured.ShouldNotBeNull();
+        captured!.Instance.ExtraProperties.ContainsKey(DomainConsts.MetaDataKeys.History).ShouldBe(parentIsNone);
+        captured.Instance.ExtraProperties.RequiresHistoryNoneChild().ShouldBe(parentIsNone);
+    }
+
     [Fact]
     public async Task StartAsync_SuppressesChildResponseEnrichment()
     {

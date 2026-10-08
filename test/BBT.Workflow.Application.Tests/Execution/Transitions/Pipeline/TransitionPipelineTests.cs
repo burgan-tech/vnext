@@ -935,6 +935,109 @@ public class TransitionPipelineTests
 
     #endregion
 
+    #region History None Tests (vnext#1006)
+
+    private TransitionPipeline CreatePipelineWithWriter(IInstanceDataWriteService writer) => new(
+        new TransitionExecutor(_mockSteps, Substitute.For<ILogger<TransitionExecutor>>()),
+        new ContinuationDispatcher(new IContinuationStrategy[] { new InlineContinuationStrategy() }),
+        _mockBusyMarker,
+        _mockContextFactory,
+        _mockInstanceRepository,
+        _mockInstanceJobRepository,
+        _mockUowManager,
+        _mockValidationService,
+        new PipelineProfileResolver(),
+        _mockStateNotificationScheduler,
+        _mockAdmissionService,
+        _mockStatusLock,
+        _mockLogger,
+        instanceDataWriteService: writer);
+
+    private TransitionExecutionContext CreateHistoryNoneContext()
+    {
+        var context = CreateTransitionExecutionContext();
+        context.Workflow.SetHistory(HistoryMode.None);
+        context.Instance.EnableDataBuffering();
+        return context;
+    }
+
+    [Fact]
+    public async Task HistoryNone_StageRestingAtNonFinishState_IsFaulted_AndTheBufferIsWritten()
+    {
+        var writer = Substitute.For<IInstanceDataWriteService>();
+        var pipeline = CreatePipelineWithWriter(writer);
+        var context = CreateHistoryNoneContext();
+        SetupContextFactory(context);
+        SetupStepsToSucceed();
+
+        var result = await pipeline.RunAsync(CreateWorkflowExecutionContext(context), CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        await _mockInstanceRepository.Received(1).UpdateAsync(
+            Arg.Is<Instance>(x => x.Status.Equals(InstanceStatus.Faulted)
+                                  && x.GetLoadedIncidents().Any(i => i.ErrorCode == WorkflowErrorCodes.HistoryNoneNotTerminal)),
+            true,
+            Arg.Any<CancellationToken>());
+        // Through a snapshot, never the tracked aggregate: the fault-path write runs on another
+        // DbContext, and the stage's own commit would otherwise insert the row again (23505).
+        await writer.Received(1).FlushAsync(
+            Arg.Is<Instance>(i => i.Id == context.Instance.Id && !ReferenceEquals(i, context.Instance)),
+            context.Workflow, null, Arg.Any<CancellationToken>());
+        await _mockStateNotificationScheduler.DidNotReceiveWithAnyArgs()
+            .ScheduleAsync(default!, default);
+    }
+
+    [Fact]
+    public async Task HistoryNone_StageThatCompleted_IsNotFaulted()
+    {
+        var writer = Substitute.For<IInstanceDataWriteService>();
+        var pipeline = CreatePipelineWithWriter(writer);
+        var context = CreateHistoryNoneContext();
+        SetupContextFactory(context);
+        SetupStepsToSucceed();
+        _mockSteps.Single(s => s.Order == LifecycleOrder.Finalize)
+            .ExecuteAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(callInfo =>
+            {
+                callInfo.ArgAt<TransitionExecutionContext>(0).Instance.Complete(context.Domain);
+                return Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.Continue()));
+            });
+
+        var result = await pipeline.RunAsync(CreateWorkflowExecutionContext(context), CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        context.Instance.Status.ShouldBe(InstanceStatus.Completed);
+        await _mockInstanceRepository.DidNotReceive().UpdateAsync(
+            Arg.Is<Instance>(x => x.Status.Equals(InstanceStatus.Faulted)), Arg.Any<bool>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task HistoryNone_StepFailure_WritesTheBufferBeforeFaulting_EvenWhenTheWriteFails()
+    {
+        var writer = Substitute.For<IInstanceDataWriteService>();
+        writer.FlushAsync(Arg.Any<Instance>(), Arg.Any<Definitions.Workflow?>(), Arg.Any<Func<CancellationToken, Task>?>(), Arg.Any<CancellationToken>())
+            .Returns<Task<InstanceData?>>(_ => throw new InvalidOperationException("flush failed"));
+        var pipeline = CreatePipelineWithWriter(writer);
+        var context = CreateHistoryNoneContext();
+        SetupContextFactory(context);
+        SetupStepsToSucceed();
+        _mockSteps[0].ExecuteAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(Result<StepOutcome>.Fail(Error.Failure("step.failed", "boom"))));
+
+        var result = await pipeline.RunAsync(CreateWorkflowExecutionContext(context), CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        // Through a snapshot, never the tracked aggregate: the fault-path write runs on another
+        // DbContext, and the stage's own commit would otherwise insert the row again (23505).
+        await writer.Received(1).FlushAsync(
+            Arg.Is<Instance>(i => i.Id == context.Instance.Id && !ReferenceEquals(i, context.Instance)),
+            context.Workflow, null, Arg.Any<CancellationToken>());
+        await _mockInstanceRepository.Received(1).UpdateAsync(
+            Arg.Is<Instance>(x => x.Status.Equals(InstanceStatus.Faulted)), true, Arg.Any<CancellationToken>());
+    }
+
+    #endregion
+
     #region Fault Handling Tests
 
     [Fact]

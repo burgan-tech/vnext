@@ -100,6 +100,16 @@ public sealed class InstanceRetryAppService(
 
         var instance = instanceResult.Value!;
 
+        // history: none (vnext#1006): retry re-runs the open transition record and skips the tasks the
+        // journal marks as done — a flow that writes neither cannot be retried, on any branch.
+        var workflowResult = await LoadWorkflowAsync(input, instance, cancellationToken);
+        if (workflowResult.IsSuccess && workflowResult.Value.Workflow.SuppressesHistory)
+        {
+            logger.InstanceRetryRejectedHistoryNone(instance.Id, instance.Flow);
+            return Result<RetryInstanceOutput>.Fail(
+                WorkflowErrors.HistoryNoneRetryNotSupported(instance.Id, instance.Flow));
+        }
+
         // Step 2: Scenario 1 - Instance itself is Faulted
         if (instance.Status.Equals(InstanceStatus.Faulted))
         {

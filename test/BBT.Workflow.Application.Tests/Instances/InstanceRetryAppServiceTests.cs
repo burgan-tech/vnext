@@ -498,6 +498,24 @@ public sealed class InstanceRetryAppServiceRestartBranchTests : IDisposable
         Instance = freshInstance
     };
 
+    /// <summary>
+    /// history: none (vnext#1006): a flow that writes no transition or task journal cannot be retried —
+    /// 409 before any branch (unfault CAS, subflow probe, restart) runs.
+    /// </summary>
+    [Fact]
+    public async Task HistoryNoneFlow_IsRejectedWith409_BeforeAnyBranch()
+    {
+        _workflow.SetHistory(HistoryMode.None);
+
+        var result = await _service.RetryAsync(CreateInput());
+
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.HistoryNoneRetryNotSupported);
+        await _instanceRepository.DidNotReceiveWithAnyArgs().TryUnfaultAsync(default!, default);
+        await _instanceQueryGateway.DidNotReceiveWithAnyArgs().GetFunctionWithStateAsync(default!, default);
+        await _instanceTransitionRepository.DidNotReceiveWithAnyArgs().GetByInstanceIdAsReadOnlyAsync(default, default);
+    }
+
     /// <summary>Exit 1 of the table: the restart succeeds. Busy is re-armed, no fault, no exception.</summary>
     [Fact]
     public async Task RestartSucceeds_ReArmsBusy_ReturnsSuccess_AndNeverFaultsTheParent()

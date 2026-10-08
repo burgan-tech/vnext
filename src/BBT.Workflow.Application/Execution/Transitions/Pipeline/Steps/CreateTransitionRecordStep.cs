@@ -46,7 +46,8 @@ public sealed class CreateTransitionRecordStep(
         // the original record cannot be found, fall back to normal creation — a retry must not
         // fail on a missing audit row.
         var isReusedRecord = false;
-        if (context.RetryOfTransitionRecordId is { } retriedRecordId)
+        var suppressesHistory = context.Workflow.SuppressesHistory;
+        if (context.RetryOfTransitionRecordId is { } retriedRecordId && !suppressesHistory)
         {
             var original = await instanceTransitionRepository.FindAsync(
                 retriedRecordId, true, cancellationToken);
@@ -68,7 +69,7 @@ public sealed class CreateTransitionRecordStep(
             .TapAsync(mappedData => AppendMappedDataAsync(
                 context, mappedData, transition, instanceTransition, cancellationToken))
             .TapAsync(_ => PersistTransitionRecordAsync(
-                context.Instance, instanceTransition, isReusedRecord, cancellationToken))
+                context.Instance, instanceTransition, isReusedRecord, suppressesHistory, cancellationToken))
             .Tap(_ => UpdateContextItems(context, instanceTransition, isReusedRecord))
             .Map(_ => StepOutcome.Continue());
     }
@@ -81,10 +82,20 @@ public sealed class CreateTransitionRecordStep(
         Instance instance,
         InstanceTransition instanceTransition,
         bool isReusedRecord,
+        bool suppressesHistory,
         CancellationToken cancellationToken)
     {
         using var activity = PipelineStepActivityHelper.StartTransitionActivity(
             "TransitionRecord.Persist", instanceTransition.TransitionId);
+
+        // history: none (vnext#1006): the record stays in memory (scripts still read
+        // CurrentTransition); only the instance's own field changes (key, tags, stage) are saved.
+        if (suppressesHistory)
+        {
+            await instanceRepository.UpdateAsync(instance, true, cancellationToken);
+            return;
+        }
+
         await instanceRepository.UpdateAsync(instance, false, cancellationToken);
         if (isReusedRecord)
             await instanceTransitionRepository.UpdateAsync(instanceTransition, true, cancellationToken);

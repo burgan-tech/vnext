@@ -1,6 +1,19 @@
 {
   "runtimeVersion": "0.0.99",
   "engine": {
+    "historyMode": {
+      "since": "0.0.100",
+      "status": "stable",
+      "description": "attributes.history: 'none' | 'full' (omitted = full) on the workflow definition, at the root of attributes (not under config). 'none' marks a ONE-SHOT flow: no InstanceTransitions or InstanceTasks rows are written, and InstancesData is buffered in memory and written once - at Finish (atomically with the completion), at a SubFlow handoff, or on an in-pipeline fault; one row per instance without SubFlow, at most 1 + 2*N with N SubFlow states. PUBLISH (errors, not warnings, flow-local only): at least one Finish state; only Automatic state transitions; every non-Finish state has a transition; no sharedTransitions, cancel, exit, updateData, workflow timeout, subFlow.overrides.timeout, interaction.longPoll, Wizard state or Suspended/Busy/Human subtype; every state must reach a Finish state. RUNTIME: a none parent stamps parent.history on its SubFlow (S) child start and the child refuses to start unless it is none too (Instance:100044, parent faults); a none stage that rests at a non-Finish state is faulted with incident Instance:100046 (HistoryNoneNotTerminal). SURFACE: POST retry answers 409 Instance:100045; transitions history, functions/tasks and functions/actions answer 200 with empty lists. ACCEPTED LOSSES: post-commit faults, job timeouts and crashes leave a Faulted instance without the data since the last flush; $PreviousUser grants never resolve. PURELY ADDITIVE: flows without the field keep full history. Requires a vnext-schema release with attributes.history; an older runtime ignores the field.",
+      "schemaPath": "workflow.attributes.history",
+      "apiEndpoints": [
+        "POST {domain}/workflows/{workflow}/instances/{instance}/retry",
+        "GET {domain}/workflows/{workflow}/instances/{instance}/transitions",
+        "GET {domain}/workflows/{workflow}/instances/{instance}/functions/tasks",
+        "GET {domain}/workflows/{workflow}/instances/{instance}/functions/actions"
+      ],
+      "documentation": "docs/runtime/history-mode.md"
+    },
     "roleGrantCombinators": {
       "since": "0.0.99",
       "status": "stable",

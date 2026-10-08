@@ -289,6 +289,10 @@ Enum values (Instance Status, State Types, State Sub Types, Trigger Types): `AGE
 - Immutable, SemVer-versioned: task results → Patch, schema additions → Minor, breaking → Major.
 - Full-merge model: each version = full state + delta. `LatestData` = current; `DataList` = history.
 - Queryable via filters on instance columns and `attributes.*` JSON paths.
+- `attributes.history: none` (one-shot flow): no `InstanceTransitions`/`InstanceTasks`; data is buffered
+  (`InstanceDataBuffer`, outside the EF navigation) and flushed at Finish, SubFlow handoff or fault; a
+  non-Finish rest faults (`Instance:100046`); a `none` parent needs `none` S children (`Instance:100044`);
+  `/retry` → 409. Full guide: `docs/runtime/history-mode.md`.
 
 ## Related Instance Access (scripts)
 

@@ -21,8 +21,9 @@ public sealed class FinalizeTransitionStep(
     {
         
         var recordId = GetTransitionRecordId(context);
-        
-        if (recordId != Guid.Empty)
+
+        // history: none (vnext#1006): the record was never persisted, so there is nothing to complete.
+        if (recordId != Guid.Empty && !context.Workflow.SuppressesHistory)
         {
             // Prefer the record created/reused earlier in this pipeline. Resume and recovery
             // paths may not carry it, so retain the repository read as a fallback.

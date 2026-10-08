@@ -423,6 +423,9 @@ instance — and nothing is capped inline any more, because no surface embeds th
 ### Retry: `POST …/instances/{instance}/retry`
 
 - Accepts only a **Faulted** instance; anything else is `400` with `Instance:100027`.
+- An instance of a `history: "none"` flow is never retryable: `409` with `Instance:100045`, before any
+  other check. Its `GET …/transitions`, `functions/tasks` and `functions/actions` answer `200` with
+  empty lists ([History Mode](../runtime/history-mode.md)).
 - The optional body's `attributes` are merged into instance data *before* the re-executed
   transition's OnExecute runs, so the same task can take a different path on the retry.
 - Unfaulting closes **every** open incident on the instance, not just the newest, and clears
