@@ -139,7 +139,7 @@ instance actually is; content follows what the client holds.
 A refusal is `403` with a body of `{"allowed": false}`. A consumer that reads only the `200` turns
 every refusal into "no answer".
 Built-in system functions (`state`, `view`, `data`, `schema`, `authorize`, `permissions`,
-`instance-correlation`, `human-task`, `master`, `catalog`) have no `sys-functions` component and return `404`
+`instance-correlation`, `human-task`, `master`, `catalog`, `file`) have no `sys-functions` component and return `404`
 from `/info`.
 
 The HTTP `QUERY` method is **not supported** — declaring it is a component validation error and no

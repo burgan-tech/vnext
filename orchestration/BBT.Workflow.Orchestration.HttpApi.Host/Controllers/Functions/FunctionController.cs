@@ -1,6 +1,7 @@
 using System.Text.Json;
 using BBT.Aether.AspNetCore.Controllers;
 using BBT.Aether.Users;
+using BBT.Workflow.Definitions.Functions;
 using BBT.Workflow.Functions;
 using BBT.Workflow.Instances.DTOs;
 using Microsoft.AspNetCore.Mvc;
@@ -285,6 +286,19 @@ public sealed class FunctionController(
 
         return FunctionResponseActionResultMapper.ToActionResult(result, HttpContext);
     }
+
+    /// <summary>HEAD for the <c>file</c> system function: same headers (incl. Content-Length) as GET, no body.</summary>
+    [ApiExplorerSettings(IgnoreApi = true)]
+    [HttpHead("{domain}/workflows/{workflow}/instances/{instance}/functions/file")]
+    public Task<IActionResult> HeadFileFunctionAsync(
+        [FromRoute] string domain,
+        [FromRoute] string workflow,
+        [FromRoute] string instance,
+        [FromQuery] FunctionQueryParameters parameters,
+        [FromHeader(Name = "If-None-Match")] string? ifNoneMatch,
+        CancellationToken cancellationToken = default)
+        => GetFunctionWithInstanceAsync(
+            domain, FunctionTypeConst.File, workflow, instance, parameters, ifNoneMatch, cancellationToken);
 
     [HttpPost("{domain}/functions/{function}")]
     [HttpPatch("{domain}/functions/{function}")]

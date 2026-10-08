@@ -80,6 +80,7 @@ public static class OrchestrationApiServiceCollectionExtensions
         services.AddScoped<IInstanceFunctionHandler, CatalogFunctionHandler>();
         services.AddScoped<IInstanceFunctionHandler, TaskHistoryFunctionHandler>();
         services.AddScoped<IInstanceFunctionHandler, ActionHistoryFunctionHandler>();
+        services.AddScoped<IInstanceFunctionHandler, FileFunctionHandler>();
         services.AddScoped<IInstanceFunctionHandlerFactory, InstanceFunctionHandlerFactory>();
 
         services.AddScoped<IDomainFunctionHandler, HumanTaskFunctionHandler>();
