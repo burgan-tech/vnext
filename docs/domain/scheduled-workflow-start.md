@@ -89,53 +89,47 @@ with no start schema works unchanged.
 
 ## Running more than one replica
 
-Dapr's cron binding has **no leader election**. Every replica that loads the component runs its own
-ticker, so a three-pod deployment calls this endpoint three times for every tick.
+**Delivery assumption.** This endpoint assumes Dapr delivers a given tick to **one replica**. The
+runtime takes no lock and keeps no marker of its own around the create: a schedule that fires once is
+simply started once.
 
-Two mechanisms make that produce exactly one instance.
+Two things still protect the common redelivery case:
 
-**1. A key derived from the tick.** All replicas compute the same value:
+**The instance key is derived from the tick.**
 
 ```
 {scheduleId}-{yyyyMMddTHHmmssZ}      e.g.  daily-1135-20261005T083500Z
 ```
 
-It is truncated to the second on purpose. Replicas stamp `readTimeUTC` from their own clocks and
-disagree in the sub-second digits; truncating is what makes them agree. A schedule firing more than
-once per second cannot be deduplicated this way.
+It is truncated to the second deliberately, so two deliveries of the same tick compute the same key
+even when their timestamps differ in the sub-second digits. The start path's own idempotency
+(`CheckExistingInstanceAsync`) then returns the existing instance instead of creating a second —
+provided that instance is still **active**.
 
-**2. Two guards around the create**, because there are two different races.
+**`scheduleId` separates overlapping schedules.** Two components targeting the same workflow whose
+ticks coincide would otherwise compute the same key and collapse into one instance. Give each
+component its own; omit it and the workflow key is used instead.
 
-*Simultaneous replicas* are serialised by a short lock on
+### What the assumption costs
 
-```
-vnext:schedule:{domain}:{workflow}:{instanceKey}
-```
+Two cases are knowingly not covered. Both were measured on a live runtime before the guards were
+removed, so they are documented facts rather than theory:
 
-The key alone is not enough: the start path's idempotency is a check-then-insert over a non-unique
-index, so concurrent callers all pass the probe before any commits. **Measured: ten parallel calls
-carrying one tick produced nine instances.** One replica takes the lock and starts the instance; the
-others answer `SUCCESS` without starting anything, because the tick *is* being handled. They log
-`ScheduledStartTickAlreadyInFlight` (20479, Debug).
+| Case | Result |
+| --- | --- |
+| Two deliveries of one tick arriving **simultaneously** | **Nine instances from ten parallel calls.** The start path's idempotency is a check-then-insert over a non-unique index, so concurrent callers all pass the probe before any commits. |
+| A delivery arriving **after** the first instance completed | **Two instances.** The start path treats a completed instance as a free key (`if (existingInstance.IsCompleted) return null;`). |
 
-*A straggler that arrives after the winner released* is rejected by a status-agnostic probe for an
-instance already carrying the tick's key. Serialising cannot stop this one: the start path treats a
-**completed** instance as a free key (`if (existingInstance.IsCompleted) return null;`), so a replica
-whose ticker drifted past a short flow's completion would start a second instance. **Measured: two.**
-The probe logs `ScheduledStartTickAlreadyHandled` (20480, Debug).
+Neither can occur while one tick means one delivery. Both become reachable if that ever stops holding —
+for example if a future Dapr version, or a different scheduler pointed at this endpoint, delivers a
+tick to more than one replica, or redelivers one after a short flow has finished.
 
-The lock is **released** when the start returns. That matters beyond tidiness: a tick key never
-recurs, and `sys_queues.DistributedLocks` is only ever pruned by a release, so holding the lock would
-leak one dead row per tick forever. Correctness does not depend on the lease either — if it lapses
-mid-start, the probe still rejects the duplicate, because the instance is committed well before the
-pipeline finishes.
-
-Re-measured after both guards: ten and twenty parallel calls each produce exactly one instance, and
-the straggler-after-completion case produces one.
-
-**One consequence worth knowing:** a replica that loses the lock acknowledges the tick before the
-winner has committed anything. If the winner then fails, the occurrence is lost — having several
-replicas does not cover a failing winner.
+Worth knowing when reading the Dapr documentation: the **single-replica delivery guarantee is
+documented for the Scheduler service** (Jobs API, actor reminders, workflow jobs), which states a
+triggered job goes to "a single replica for the same app ID … in a randomly load balanced manner".
+`bindings.cron` is **not** listed among the features the Scheduler handles, and the component itself
+constructs a ticker per sidecar with no leader election. If you scale the orchestration host beyond
+one replica, verify the behaviour before relying on it.
 
 ### Key length
 
@@ -297,8 +291,6 @@ domain) — logged with the reason. A non-2xx means a transient failure.
 | 20476 | Warning | No usable tick header; the key fell back to the local clock, weakening the cross-replica guarantee to "same second". |
 | 20477 | Error | The component targets a runtime serving another domain. Permanent until the YAML is fixed. |
 | 20478 | Error | The start was refused. The occurrence is lost — nothing retries it. |
-| 20479 | Debug | Another replica already holds this tick's lock. Expected on every multi-replica deployment; one caller wins and the rest log this. |
-| 20480 | Debug | An instance for this tick already exists, so a drifting replica was rejected — including the case where the first instance has already completed. |
 
 Each tick starts a `Schedule.Start` span tagged with the domain and flow.
 

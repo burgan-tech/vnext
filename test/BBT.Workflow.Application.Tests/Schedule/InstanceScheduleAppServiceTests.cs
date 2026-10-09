@@ -4,7 +4,6 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using BBT.Aether.Clock;
-using BBT.Aether.DistributedLock;
 using BBT.Aether.Results;
 using BBT.Workflow.ExceptionHandling;
 using BBT.Workflow.Instances;
@@ -28,25 +27,19 @@ public sealed class InstanceScheduleAppServiceTests
         Substitute.For<IInstanceCommandAppService>();
     private readonly IRuntimeInfoProvider _runtimeInfoProvider = Substitute.For<IRuntimeInfoProvider>();
     private readonly IClock _clock = Substitute.For<IClock>();
-    private readonly IDistributedLockService _lockService = Substitute.For<IDistributedLockService>();
-    private readonly IInstanceRepository _instanceRepository = Substitute.For<IInstanceRepository>();
 
     public InstanceScheduleAppServiceTests()
     {
         _clock.UtcNow.Returns(new DateTime(2030, 1, 1, 0, 0, 0, DateTimeKind.Utc));
         _runtimeInfoProvider.IsDomainMatch(Arg.Any<string>()).Returns(true);
         _runtimeInfoProvider.Domain.Returns("morph-touch");
-        // Lock granted by default; the contended case has its own test.
-        _lockService
-            .TryAcquireLockAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
-            .Returns(Substitute.For<IDistributedLockHandle>());
         _commandAppService
             .StartAsync(Arg.Any<StartInstanceInput>(), Arg.Any<CancellationToken>())
             .Returns(Result<StartInstanceOutput>.Ok(new StartInstanceOutput { Id = Guid.NewGuid() }));
     }
 
     private InstanceScheduleAppService CreateSut() => new(
-        _commandAppService, _runtimeInfoProvider, _instanceRepository, _lockService, _clock,
+        _commandAppService, _runtimeInfoProvider, _clock,
         NullLogger<InstanceScheduleAppService>.Instance);
 
     private static ScheduledStartInput Tick(
@@ -173,117 +166,6 @@ public sealed class InstanceScheduleAppServiceTests
         captured!.Headers.ShouldContainKey(ScheduleTickKey.ReadTimeUtcHeader);
     }
 
-    /// <summary>
-    /// The guarantee this feature rests on. The start path's key idempotency is a check-then-insert
-    /// over a NON-unique index, so simultaneous callers all pass the probe before any commits —
-    /// measured on a live runtime, ten parallel calls carrying one tick produced nine instances.
-    /// Replicas fire simultaneously by nature, so the per-tick lock is what makes one tick mean one
-    /// instance.
-    /// </summary>
-    [Fact]
-    public async Task Tick_is_claimed_under_a_key_derived_from_the_instance_key()
-    {
-        string? lockKey = null;
-        _lockService
-            .TryAcquireLockAsync(
-                Arg.Do<string>(k => lockKey = k), Arg.Any<int>(), Arg.Any<CancellationToken>())
-            .Returns(Substitute.For<IDistributedLockHandle>());
-
-        await CreateSut().StartAsync(Tick());
-
-        lockKey.ShouldBe("vnext:schedule:morph-touch:rezervation:daily-20261005T072542Z");
-    }
-
-    /// <summary>
-    /// A replica that loses the race must not start a second instance, and must not report failure
-    /// either: the tick IS being handled, just by somebody else.
-    /// </summary>
-    [Fact]
-    public async Task Losing_the_tick_claim_starts_nothing_and_still_succeeds()
-    {
-        _lockService
-            .TryAcquireLockAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
-            .Returns((IDistributedLockHandle?)null);
-
-        var result = await CreateSut().StartAsync(Tick());
-
-        result.IsSuccess.ShouldBeTrue();
-        await _commandAppService.DidNotReceive()
-            .StartAsync(Arg.Any<StartInstanceInput>(), Arg.Any<CancellationToken>());
-    }
-
-    /// <summary>Different ticks must not contend with each other.</summary>
-    [Fact]
-    public async Task Different_ticks_take_different_claims()
-    {
-        var keys = new List<string>();
-        _lockService
-            .TryAcquireLockAsync(Arg.Do<string>(keys.Add), Arg.Any<int>(), Arg.Any<CancellationToken>())
-            .Returns(Substitute.For<IDistributedLockHandle>());
-
-        var sut = CreateSut();
-        await sut.StartAsync(Tick(readTimeUtc: "2026-10-05 07:25:42.1 +0000 UTC"));
-        await sut.StartAsync(Tick(readTimeUtc: "2026-10-05 07:25:43.1 +0000 UTC"));
-
-        keys.Count.ShouldBe(2);
-        keys[0].ShouldNotBe(keys[1]);
-    }
-
-    /// <summary>
-    /// The lock must be RELEASED. Its only job is to serialise simultaneous replicas; holding it after
-    /// the start would leak one row per tick into <c>sys_queues.DistributedLocks</c> forever, because
-    /// a tick key never recurs and the table's only delete is the release.
-    /// </summary>
-    [Fact]
-    public async Task Tick_lock_is_released()
-    {
-        var handle = Substitute.For<IDistributedLockHandle>();
-        _lockService
-            .TryAcquireLockAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
-            .Returns(handle);
-
-        await CreateSut().StartAsync(Tick());
-
-        await handle.Received().DisposeAsync();
-    }
-
-    /// <summary>The lock is released even when the start is refused, so a failure cannot leak a row.</summary>
-    [Fact]
-    public async Task Tick_lock_is_released_even_when_the_start_fails()
-    {
-        var handle = Substitute.For<IDistributedLockHandle>();
-        _lockService
-            .TryAcquireLockAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
-            .Returns(handle);
-        _commandAppService
-            .StartAsync(Arg.Any<StartInstanceInput>(), Arg.Any<CancellationToken>())
-            .Returns(Result<StartInstanceOutput>.Fail(Error.Validation("X", "schema rejected")));
-
-        var result = await CreateSut().StartAsync(Tick());
-
-        result.IsSuccess.ShouldBeFalse();
-        await handle.Received().DisposeAsync();
-    }
-
-    /// <summary>
-    /// A straggler arriving after the winner released must not start a second instance. Serialising
-    /// alone cannot stop it: the start path treats a COMPLETED instance as a free key, so the guard
-    /// has to be a status-agnostic probe. Measured before this probe existed: two instances.
-    /// </summary>
-    [Fact]
-    public async Task Straggler_finding_an_existing_instance_starts_nothing()
-    {
-        _instanceRepository
-            .FindByIdentifierSlimAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns(Instance.Create(Guid.NewGuid(), "morph-touch", "rezervation", "1.0.0"));
-
-        var result = await CreateSut().StartAsync(Tick());
-
-        result.IsSuccess.ShouldBeTrue();
-        await _commandAppService.DidNotReceive()
-            .StartAsync(Arg.Any<StartInstanceInput>(), Arg.Any<CancellationToken>());
-    }
-
     /// <summary>An explicit version pins the workflow the schedule starts.</summary>
     [Fact]
     public async Task Version_is_passed_through_to_the_start()
@@ -308,27 +190,6 @@ public sealed class InstanceScheduleAppServiceTests
         await CreateSut().StartAsync(Tick());
 
         captured!.Version.ShouldBeNull();
-    }
-
-    /// <summary>
-    /// The claim is taken BEFORE the start, not around it. A sync start (or an `executionType: S`
-    /// flow, which overrides the caller's request) runs the whole pipeline — tasks, HTTP calls,
-    /// subflow starts — and the repo's locking rule forbids holding a lock across that.
-    /// </summary>
-    [Fact]
-    public async Task Tick_is_claimed_before_the_start_is_attempted()
-    {
-        var order = new List<string>();
-        _lockService
-            .TryAcquireLockAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
-            .Returns(_ => { order.Add("claim"); return Substitute.For<IDistributedLockHandle>(); });
-        _commandAppService
-            .When(x => x.StartAsync(Arg.Any<StartInstanceInput>(), Arg.Any<CancellationToken>()))
-            .Do(_ => order.Add("start"));
-
-        await CreateSut().StartAsync(Tick());
-
-        order.ShouldBe(["claim", "start"]);
     }
 
     /// <summary>A refused start must surface its error unchanged for the mapper to classify.</summary>

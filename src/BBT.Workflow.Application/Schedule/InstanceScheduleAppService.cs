@@ -4,7 +4,6 @@ using System.Threading;
 using System.Threading.Tasks;
 using BBT.Aether.Results;
 using BBT.Aether.Clock;
-using BBT.Aether.DistributedLock;
 using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
@@ -26,17 +25,9 @@ namespace BBT.Workflow.Schedule;
 public sealed class InstanceScheduleAppService(
     IInstanceCommandAppService instanceCommandAppService,
     IRuntimeInfoProvider runtimeInfoProvider,
-    IInstanceRepository instanceRepository,
-    IDistributedLockService lockService,
     IClock clock,
     ILogger<InstanceScheduleAppService> logger) : IInstanceScheduleAppService
 {
-    /// <summary>
-    /// Lease for the per-tick lock. Only has to cover one start. Correctness does not rest on it: if
-    /// the lease lapses mid-start the row probe below still rejects the duplicate, because the start
-    /// path commits the instance well before the pipeline finishes.
-    /// </summary>
-    private const int TickLockSeconds = 30;
 
     /// <inheritdoc />
     public async Task<Result<object?>> StartAsync(
@@ -86,36 +77,14 @@ public sealed class InstanceScheduleAppService(
             Headers = new Dictionary<string, string?>(input.Headers)
         };
 
-        // Two different races, two different guards.
+        // No guard of our own around the create. Dapr's cron binding is taken to deliver a tick to a
+        // single replica, so concurrent deliveries of one tick are not expected, and a redelivery of a
+        // tick whose instance is still active is absorbed by the start path's own key idempotency
+        // (CheckExistingInstanceAsync returns the existing instance rather than creating a second).
         //
-        // 1) SIMULTANEOUS replicas. The start path's idempotency is a check-then-insert over a
-        //    non-unique index, so concurrent callers all pass the probe before any commits. Measured:
-        //    ten parallel calls carrying one tick produced nine instances. The lock serialises them.
-        var tickKey = $"vnext:schedule:{input.Domain}:{input.Workflow}:{instanceKey}";
-        await using var tickLock = await lockService.TryAcquireLockAsync(
-            tickKey, TickLockSeconds, cancellationToken);
-
-        if (tickLock is null)
-        {
-            logger.ScheduledStartTickAlreadyInFlight(input.Domain, input.Workflow, instanceKey);
-            return Result<object?>.Ok(null);
-        }
-
-        activity?.SetTag(TelemetryConstants.TagNames.LockKey, tickKey);
-        activity?.SetTag(TelemetryConstants.TagNames.LockAcquired, true);
-
-        // 2) A STRAGGLER arriving after the winner released. Serialising is not enough on its own:
-        //    the start path treats a COMPLETED instance as a free key
-        //    (`if (existingInstance.IsCompleted) return null;`), so a replica whose ticker drifted
-        //    past a short flow's completion starts a second instance. Measured: two. This probe is
-        //    status-agnostic, which the start path's own probe deliberately is not.
-        var existing = await instanceRepository.FindByIdentifierSlimAsync(instanceKey, cancellationToken);
-        if (existing is not null)
-        {
-            logger.ScheduledStartTickAlreadyHandled(input.Domain, input.Workflow, instanceKey);
-            return Result<object?>.Ok(null);
-        }
-
+        // The residual case is a redelivery arriving after that instance has already COMPLETED: the
+        // start path treats a completed instance as a free key and would create a second one. That is
+        // accepted — see docs/domain/scheduled-workflow-start.md § Delivery assumption.
         var result = await instanceCommandAppService.StartAsync(startInput, cancellationToken);
 
         if (!result.IsSuccess)

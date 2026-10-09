@@ -4244,36 +4244,6 @@ public static partial class WorkflowLogs
         string instanceKey,
         string reason);
 
-    /// <summary>
-    /// Logs a scheduler tick skipped because another replica already holds the per-tick lock and is
-    /// creating the instance. Expected on every multi-replica deployment — one of N callers wins the
-    /// tick and the rest log this. Not an error.
-    /// </summary>
-    [LoggerMessage(
-        EventId = 20479,
-        Level = LogLevel.Debug,
-        Message = "Scheduled start skipped; another replica is creating this tick's instance. Domain={Domain}, Flow={Flow}, InstanceKey={InstanceKey}")]
-    public static partial void ScheduledStartTickAlreadyInFlight(
-        this ILogger logger,
-        string domain,
-        string flow,
-        string instanceKey);
-
-    /// <summary>
-    /// Logs a scheduler tick skipped because an instance for it already exists. Distinct from the
-    /// in-flight case: here the winning replica has already finished, and the instance may even have
-    /// completed — the start path would treat a completed key as free and create a duplicate, so this
-    /// probe is what stops a drifting replica doubling the occurrence.
-    /// </summary>
-    [LoggerMessage(
-        EventId = 20480,
-        Level = LogLevel.Debug,
-        Message = "Scheduled start skipped; an instance for this tick already exists. Domain={Domain}, Flow={Flow}, InstanceKey={InstanceKey}")]
-    public static partial void ScheduledStartTickAlreadyHandled(
-        this ILogger logger,
-        string domain,
-        string flow,
-        string instanceKey);
 
 
     /// <summary>
