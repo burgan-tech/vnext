@@ -43,14 +43,14 @@ Each of these is a regression the repo has already paid for; treat a reintroduct
 - [ ] `pipeline/subflow-sync` — runtime-generated child start, active-child forward and descended retry calls force `sync=true` regardless of the caller's mode and of `S` vs `P`, and set `SuppressResponseEnrichment`. Nothing reads attributes off a sub-start or forward response.
 - [ ] `pipeline/subflow-idempotency` — `StrictIdempotency: true` on the child start, with complete parent metadata in `ExtraProperties` (parentId, parentKey, domain, flow, version, state, transition, flowType).
 - [ ] `pipeline/subflow-revert` — resume failure reverts the correlation in a **new** UoW so the retry path still has something to claim.
-- [ ] `pipeline/subflow-chain-reserve` — an async transition on a parent with an active SubFlow reserves the chain down to the leaf (`MarkBusyWithPropagationAsync`, not the `Try…` variant) **and** the relay claims that reserve via `ChainReserved` → `IsPreReserved`. A claim without a reserve, or a reserve without a claim, is CRITICAL. The sync path deliberately does not chain-reserve.
+- [ ] `pipeline/subflow-transition-proxy` — a forwardable transition (`AdmissionKind.Normal`, active `S` SubFlow, not an available parent shared transition) is proxied by `SubflowProxyService` with no parent lock, Busy flip or job; the proxy, `ForwardToActiveSubflowStep`, `FileAdmission` and authorize share `IsParentSharedTransitionAndAvailable`. A new accept-time chain reserve, or a relay claiming a reserve that was not taken, is CRITICAL; the old claim stays accepted on the receiving side (`subflow-chain-reserve-claim`). See `docs/architecture/subflow-transition-proxy.md`.
 - [ ] `pipeline/subflow-state-notify` — `sub:state-changed` is armed by `Instance.ChangeState` and published once per activation episode at the rest point. A per-hop publish, or removing the explicit flush in `InstanceCommandAppService`, is CRITICAL.
 
 ## 5. Locking and the Busy flag (`pipeline/lock-*`)
 
 - [ ] `pipeline/lock-one-per-hop` — exactly one distributed lock per request-handling hop, on `ctx.LockKey`, held only across the status check-and-set. No lock is held across context creation, schema/policy validation or the pipeline body.
 - [ ] `pipeline/lock-ordering` — fast-fail Busy check → validation → lock → flip → work → release.
-- [ ] `pipeline/lock-no-nesting` — nothing inside `AcceptAsync`'s callback calls `ReserveAsync` / `TakeOverAsync` / `ReserveSubflowChainAsync` / `Release*`; `InstanceStatusLock` is single-attempt and non-reentrant.
+- [ ] `pipeline/lock-no-nesting` — nothing inside `AcceptAsync`'s callback calls `ReserveAsync` / `TakeOverAsync` / `Release*`; `InstanceStatusLock` is single-attempt and non-reentrant. `ReserveSubflowChainAsync` is **legacy**: the async accept no longer reserves the chain (parents proxy forwardable transitions to the leaf), it has no caller and must not gain one (`pipeline/subflow-transition-proxy`).
 - [ ] `pipeline/lock-updatedata-exempt` — `updateData` (`Unconditional`) takes no lock and no duplicate-job guard on either path. Re-adding either loses data for parallel notifiers.
 - [ ] `pipeline/lock-dup-job-guard` — the duplicate-active-job guard stays inside the lock's critical section; it has no DB constraint behind it and a partial unique index cannot replace it.
 

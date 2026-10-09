@@ -478,6 +478,43 @@ public sealed class EfCoreInstanceRepository(
     }
 
     /// <inheritdoc />
+    public async Task<bool> TryCompareAndSetEffectiveStatusAsync(
+        Guid instanceId,
+        InstanceStatus expected,
+        InstanceStatus effectiveStatus,
+        CancellationToken cancellationToken = default)
+    {
+        var dbSet = await GetDbSetAsync();
+        return await CompareAndSetEffectiveStatusAsync(dbSet, instanceId, expected, effectiveStatus, cancellationToken);
+    }
+
+    /// <summary>
+    /// Core of <see cref="TryCompareAndSetEffectiveStatusAsync"/> over an instance queryable. Internal so
+    /// integration tests can run the exact production statement against a real database.
+    /// </summary>
+    internal static async Task<bool> CompareAndSetEffectiveStatusAsync(
+        IQueryable<Instance> query,
+        Guid instanceId,
+        InstanceStatus expected,
+        InstanceStatus effectiveStatus,
+        CancellationToken cancellationToken)
+    {
+        // Same single-column, set-based shape as SetEffectiveStatusAsync, guarded on the value the
+        // caller itself wrote: once the level below has moved the column, the revert is a no-op.
+        var updated = await query
+            .Where(i => i.Id == instanceId
+                        && i.EffectiveStatus == expected
+                        && i.Status != InstanceStatus.Completed
+                        && i.Status != InstanceStatus.Faulted
+                        && i.Status != InstanceStatus.Passive)
+            .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(i => i.EffectiveStatus, effectiveStatus)
+                    .SetProperty(i => i.ModifiedAt, DateTime.UtcNow),
+                cancellationToken);
+        return updated > 0;
+    }
+
+    /// <inheritdoc />
     public async Task<bool> TryMarkBusyAsync(Instance instance, CancellationToken cancellationToken = default)
     {
         // The aggregate is loaded with its active correlations on every caller of this overload
@@ -950,7 +987,8 @@ public sealed class EfCoreInstanceRepository(
     /// <remarks>
     /// The subflow member deliberately mirrors <c>ProjectStateFingerprint</c>'s expression so it
     /// is served by IX_InstancesCorrelations_ActiveBlockingSubFlow (partial: IsCompleted = false
-    /// AND SubFlowType = 'S'). No includes — a single-row projection for admission checks.
+    /// AND SubFlowType = 'S'), and so is the active-subflow reference beside it. No includes — a
+    /// single-row projection for admission checks.
     /// </remarks>
     private static IQueryable<InstanceExecutionSnapshot> ProjectExecutionSnapshot(IQueryable<Instance> query) =>
         query.Select(i => new InstanceExecutionSnapshot(
@@ -960,7 +998,15 @@ public sealed class EfCoreInstanceRepository(
             i.CurrentState,
             i.Flow,
             i.FlowVersion,
-            i.ChildCorrelations.Any(c => !c.IsCompleted && c.SubFlowType == SubFlowType.SubFlow)));
+            i.ChildCorrelations.Any(c => !c.IsCompleted && c.SubFlowType == SubFlowType.SubFlow),
+            // Same filter as Instance.Subflow; earliest first, like ActiveCorrelations. At most one
+            // blocking S correlation is open at a time, the ordering only makes the pick deterministic.
+            i.ChildCorrelations
+                .Where(c => !c.IsCompleted && c.SubFlowType == SubFlowType.SubFlow)
+                .OrderBy(c => c.CreatedAt)
+                .Select(c => new ActiveSubFlowRef(c.SubFlowInstanceId, c.SubFlowDomain, c.SubFlowName, c.SubFlowVersion))
+                .FirstOrDefault(),
+            i.EffectiveStatus));
 
     /// <inheritdoc />
     public async Task<InstanceDataFingerprint?> GetDataFingerprintAsync(

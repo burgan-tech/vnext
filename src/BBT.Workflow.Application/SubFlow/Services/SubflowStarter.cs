@@ -222,7 +222,9 @@ public sealed class SubflowStarter(
             StrictIdempotency = true, // Service-to-service call: return 409 if active instance exists
             // sync=true awaits the child's activation to a rest point; the response body is read
             // for IsSuccess only (below), so the child must not project attributes/extensions.
-            SuppressResponseEnrichment = true
+            SuppressResponseEnrichment = true,
+            // Payload comes from the subflow input mapping, not a client.
+            TrustedPayload = true
         };
 
         var startResult = await instanceCommandGateway.StartSubAsync(subFlowStartInput, cancellationToken);

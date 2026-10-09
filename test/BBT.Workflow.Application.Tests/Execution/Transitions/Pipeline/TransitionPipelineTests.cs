@@ -13,6 +13,8 @@ using BBT.Workflow.Execution.Continuations;
 using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Execution.PostCommit;
 using BBT.Workflow.Execution.Validation;
+using BBT.Workflow.Files;
+using BBT.Workflow.Application.Files;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Shared;
@@ -41,6 +43,7 @@ public class TransitionPipelineTests
     private readonly ITransitionAdmissionService _mockAdmissionService;
     private readonly IInstanceStatusLock _mockStatusLock;
     private readonly List<ITransitionStep> _mockSteps;
+    private readonly IFileAdmission _fileAdmission = FileTestDoubles.PassThroughAdmission();
     private readonly TransitionPipeline _pipeline;
 
     public TransitionPipelineTests()
@@ -125,6 +128,7 @@ public class TransitionPipelineTests
             _mockStateNotificationScheduler,
             _mockAdmissionService,
             _mockStatusLock,
+            _fileAdmission,
             _mockLogger);
     }
 
@@ -935,6 +939,133 @@ public class TransitionPipelineTests
 
     #endregion
 
+    #region x-storage File Admission Tests
+
+    /// <summary>
+    /// The sync path's single validation point is also its x-storage swap point (spec §3): the
+    /// swap runs once, after validation and before the status reserve.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_RequestNotYetValidated_AppliesTheFileSwapOnceBeforeTheReserve()
+    {
+        var context = CreateTransitionExecutionContext();
+        var workflowContext = CreateWorkflowExecutionContext(context);
+        SetupContextFactory(context);
+        SetupStepsToContinue();
+        var order = new List<string>();
+        _mockValidationService.ValidateAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(_ => { order.Add("validate"); return Result.Ok(); });
+        _fileAdmission.ApplyAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<WorkflowExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(_ => { order.Add("files"); return Result.Ok(); });
+        _mockAdmissionService.ReserveAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(_ => { order.Add("reserve"); return Result.Ok(); });
+
+        var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        await _fileAdmission.Received(1).ApplyAsync(context, workflowContext, Arg.Any<CancellationToken>());
+        order.ShouldBe(new[] { "validate", "files", "reserve" });
+    }
+
+    /// <summary>A job re-entry carries the payload the async accept already swapped.</summary>
+    [Fact]
+    public async Task RunAsync_PreReservedJobReentry_DoesNotSwapAgain()
+    {
+        var context = CreateTransitionExecutionContext();
+        var workflowContext = CreateWorkflowExecutionContext(context);
+        workflowContext.IsPreReserved = true;
+        SetupContextFactory(context);
+        SetupStepsToContinue();
+
+        await _pipeline.RunAsync(workflowContext, CancellationToken.None);
+
+        await _fileAdmission.DidNotReceiveWithAnyArgs().ApplyAsync(default!, default!, default);
+    }
+
+    /// <summary>
+    /// Ruling 17: an older-version parent relays with the chain-reserve claim, so the leaf enters
+    /// pre-reserved — but no level ran the x-storage swap on that client body (the older parent's
+    /// accept left it to the leaf). The swap must run here despite IsPreReserved, or the bytes are
+    /// persisted at the leaf. The schema is still not re-validated (unchanged owner re-entry semantics).
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_ChainReservedRelayFromAnOlderParent_SwapsDespitePreReserved()
+    {
+        var context = CreateTransitionExecutionContext();
+        var workflowContext = CreateWorkflowExecutionContext(context);
+        workflowContext.IsPreReserved = true;
+        workflowContext.SubflowChainReserved = true;
+        workflowContext.ChainReservedRelay = true;
+        SetupContextFactory(context);
+        SetupStepsToContinue();
+
+        var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        await _fileAdmission.Received(1).ApplyAsync(context, workflowContext, Arg.Any<CancellationToken>());
+        await _mockValidationService.Received(1)
+            .ValidatePolicyAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>());
+        await _mockValidationService.DidNotReceive()
+            .ValidateAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// The discriminator is the relay flag, not the claim: a job re-entry of an accept that took (or
+    /// inherited) the chain reserve carries SubflowChainReserved too, and its payload was swapped at
+    /// that accept — it must not be swapped again.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_JobReentryCarryingTheChainClaim_DoesNotSwapAgain()
+    {
+        var context = CreateTransitionExecutionContext();
+        var workflowContext = CreateWorkflowExecutionContext(context);
+        workflowContext.IsPreReserved = true;
+        workflowContext.SubflowChainReserved = true;
+        SetupContextFactory(context);
+        SetupStepsToContinue();
+
+        await _pipeline.RunAsync(workflowContext, CancellationToken.None);
+
+        await _fileAdmission.DidNotReceiveWithAnyArgs().ApplyAsync(default!, default!, default);
+    }
+
+    /// <summary>The start path swapped before persisting the instance row and says so.</summary>
+    [Fact]
+    public async Task RunAsync_PayloadAlreadyValidatedByStart_DoesNotSwapAgain()
+    {
+        var context = CreateTransitionExecutionContext();
+        var workflowContext = CreateWorkflowExecutionContext(context);
+        workflowContext.PayloadSchemaValidated = true;
+        SetupContextFactory(context);
+        SetupStepsToContinue();
+
+        await _pipeline.RunAsync(workflowContext, CancellationToken.None);
+
+        await _fileAdmission.DidNotReceiveWithAnyArgs().ApplyAsync(default!, default!, default);
+    }
+
+    /// <summary>A store failure answers the caller before anything is reserved or run.</summary>
+    [Fact]
+    public async Task RunAsync_FileSwapFails_ReturnsTheErrorWithoutReserveOrSteps()
+    {
+        var context = CreateTransitionExecutionContext();
+        var workflowContext = CreateWorkflowExecutionContext(context);
+        SetupContextFactory(context);
+        SetupStepsToContinue();
+        _fileAdmission.ApplyAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<WorkflowExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(Result.Fail(WorkflowErrors.FileStoreUnavailable("vnext-blob-local")));
+
+        var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.FileStoreUnavailable);
+        await _mockAdmissionService.DidNotReceiveWithAnyArgs().ReserveAsync(default!, default);
+        foreach (var step in _mockSteps)
+            await step.DidNotReceiveWithAnyArgs().ExecuteAsync(default!, default);
+    }
+
+    #endregion
+
     #region History None Tests (vnext#1006)
 
     private TransitionPipeline CreatePipelineWithWriter(IInstanceDataWriteService writer) => new(
@@ -950,6 +1081,7 @@ public class TransitionPipelineTests
         _mockStateNotificationScheduler,
         _mockAdmissionService,
         _mockStatusLock,
+        _fileAdmission,
         _mockLogger,
         instanceDataWriteService: writer);
 
@@ -1312,6 +1444,7 @@ public class TransitionPipelineTests
             _mockStateNotificationScheduler,
             _mockAdmissionService,
             _mockStatusLock,
+            _fileAdmission,
             _mockLogger);
     }
 

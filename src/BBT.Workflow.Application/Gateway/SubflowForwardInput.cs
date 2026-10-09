@@ -33,6 +33,11 @@ public record SubflowForwardInput
     /// True when the originating accept reserved this SubFlow chain's Busy flag down to the leaf,
     /// so the target must admit the relay as an owner re-entry instead of rejecting the pre-set
     /// Busy with a 409.
+    /// <para>
+    /// LEGACY claim: this runtime's accepts no longer reserve the chain and send it only for a job
+    /// an older runtime's accept enqueued; it is still ACCEPTED from older-version parents
+    /// (vnext-meta deprecation <c>subflow-chain-reserve-claim</c>).
+    /// </para>
     /// </summary>
     public bool ChainReserved { get; init; }
 

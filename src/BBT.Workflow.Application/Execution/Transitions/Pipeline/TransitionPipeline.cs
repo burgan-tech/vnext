@@ -4,6 +4,7 @@ using BBT.Aether.Uow;
 using BBT.Workflow.BackgroundJobs;
 using BBT.Workflow.Execution.Continuations;
 using BBT.Workflow.Execution.Validation;
+using BBT.Workflow.Files;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Telemetry;
@@ -34,6 +35,7 @@ public class TransitionPipeline
     private readonly IInstanceStatusLock _statusLock;
     private readonly ILogger<TransitionPipeline> _logger;
     private readonly IInstanceDataWriteService? _instanceDataWriteService;
+    private readonly IFileAdmission _fileAdmission;
 
     /// <summary>
     /// Maximum allowed chain depth for automatic transitions.
@@ -73,6 +75,7 @@ public class TransitionPipeline
         IStateNotificationScheduler stateNotificationScheduler,
         ITransitionAdmissionService admissionService,
         IInstanceStatusLock statusLock,
+        IFileAdmission fileAdmission,
         ILogger<TransitionPipeline> logger,
         ISubItemEventDataResolver? subItemDataResolver = null,
         IInstanceDataWriteService? instanceDataWriteService = null)
@@ -91,6 +94,7 @@ public class TransitionPipeline
         _stateNotificationScheduler = stateNotificationScheduler;
         _admissionService = admissionService;
         _statusLock = statusLock;
+        _fileAdmission = fileAdmission;
         _logger = logger;
     }
 
@@ -135,6 +139,19 @@ public class TransitionPipeline
             : await _validationService.ValidateAsync(context, cancellationToken);
         if (!validationResult.IsSuccess)
             return Result<TransitionExecutionContext>.Fail(validationResult.Error);
+
+        // x-storage: swap file content for handles before anything is recorded (transition body,
+        // data, job payload). Only at the request's single validation point — a job re-entry and the
+        // start path carry a payload that was already swapped (the async accept / the start before
+        // the instance row). A request this parent relays to its active SubFlow is left for the leaf.
+        // An older-version parent's relay (ChainReservedRelay) is pre-reserved but was swapped
+        // nowhere, so it is swapped here even though IsPreReserved skips the schema.
+        if (!payloadAlreadyValidated || workflowContext.ChainReservedRelay)
+        {
+            var files = await _fileAdmission.ApplyAsync(context, workflowContext, cancellationToken);
+            if (!files.IsSuccess)
+                return Result<TransitionExecutionContext>.Fail(files.Error);
+        }
 
         if (context.SkipImmediateExecution)
             return Result<TransitionExecutionContext>.Ok(context);
@@ -195,10 +212,9 @@ public class TransitionPipeline
                 // which runs the same admission logic in its own context. It does NOT own the
                 // parent's status.
                 //
-                // Deliberately NO chain reserve here, unlike the async accept: a sync caller
-                // blocks until the relay has actually reached the leaf, so there is no window in
-                // which it could observe a stale Active. Reserving the chain here would only
-                // widen the stranded-Busy surface.
+                // No chain reserve here, and none on the async accept either any more: the leaf
+                // runs its own admission when the relay reaches it (a client request is proxied
+                // there at intake and does not get here at all).
                 if (_admissionService.IsSubflowForward(context))
                     return await RunChainAsync(context, cancellationToken);
 

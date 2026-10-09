@@ -245,6 +245,19 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Compare-and-set on <see cref="Instance.EffectiveStatus"/> alone: writes
+    /// <paramref name="effectiveStatus"/> only while the column still holds
+    /// <paramref name="expected"/> and the row is not terminal. For undoing a stamp this caller wrote
+    /// itself — a value the level below has already replaced must not be overwritten.
+    /// </summary>
+    /// <returns>True when this call changed the column.</returns>
+    Task<bool> TryCompareAndSetEffectiveStatusAsync(
+        Guid instanceId,
+        InstanceStatus expected,
+        InstanceStatus effectiveStatus,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Aggregate-aware variant of <see cref="TryMarkBusyAsync(Guid,CancellationToken)"/> for
     /// callers holding the change-tracked instance (pipeline steps, settlement): on a successful CAS
     /// it applies <c>Busy()</c> in memory AND aligns the change tracker's baseline for the status

@@ -115,7 +115,11 @@ back to the flow-level `executionType` (or the caller's query parameter).
   start/forward keep their forced `sync=true`. Full guide: `docs/runtime/execution-type.md`.
 - Automatic continuations always execute inline and are awaited. An async request uses one initial
   `flow.transition` job; no Scheduler job is created for each automatic hop.
-- Runtime-generated child start, active-child forward and descended retry calls always set
+- A parent with an active SubFlow resolves the mode once (transition `executionType` > flow
+  `executionType` > caller `sync`) and its [transition proxy](../architecture/subflow-transition-proxy.md)
+  calls the child in **that** mode, so an async request stays async down the chain; the response is `202`
+  or `200` per the parent's mode. Only the legacy job path (`ForwardToSubflowJobHandler`) forces `sync=true`.
+- Runtime-generated child start and descended retry calls always set
   `sync=true`, independent of original caller mode and SubFlow (`S`) / SubProcess (`P`) type. The
   call awaits the child's current activation to a rest point, not future human/event completion.
 

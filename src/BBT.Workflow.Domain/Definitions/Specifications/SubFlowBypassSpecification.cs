@@ -43,11 +43,20 @@ public sealed class SubFlowBypassSpecification : ITransitionSpecification
     /// Aligned with SharedTransitionAvailabilitySpecification logic.
     /// </summary>
     private static bool IsParentSharedTransitionAndAvailable(TransitionExecutionContext context)
+        => IsParentSharedTransitionAndAvailable(context.Workflow, context.TransitionKey, context.Current.Key);
+
+    /// <summary>
+    /// Context-free form of the same rule, for callers that decide before any execution context
+    /// exists (the SubFlow proxy at transition intake): true when <paramref name="transitionKey"/>
+    /// names a shared transition of <paramref name="workflow"/> that is available in
+    /// <paramref name="currentState"/>, so it runs on the parent instead of being forwarded.
+    /// </summary>
+    public static bool IsParentSharedTransitionAndAvailable(Workflow workflow, string transitionKey, string? currentState)
     {
-        var sharedTransition = context.Workflow.FindSharedTransition(context.TransitionKey);
-        if (sharedTransition == null)
+        var sharedTransition = workflow.FindSharedTransition(transitionKey);
+        if (sharedTransition == null || currentState is null)
             return false;
 
-        return sharedTransition.IsAvailableInState(context.Current.Key);
+        return sharedTransition.IsAvailableInState(currentState);
     }
 }

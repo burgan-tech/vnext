@@ -40,6 +40,36 @@ public abstract class ScriptBase
         Services = services ?? throw new ArgumentNullException(nameof(services));
     }
 
+    #region File Functions
+
+    /// <summary>
+    /// Reads an x-storage file by its handle coordinates (<c>owner.domain</c>, <c>owner.flow</c>,
+    /// <c>owner.instance</c>, <c>file</c>), in this domain or another one. The handle must be in that instance's
+    /// latest data; no caller authorization applies (service-to-service). The bytes are returned in memory: a mapping
+    /// that copies them into a task request stores them in that task's record.
+    /// </summary>
+    /// <param name="domain">Domain owning the instance.</param>
+    /// <param name="flow">Flow key of the instance.</param>
+    /// <param name="instance">Instance id or key.</param>
+    /// <param name="file">The handle's <c>file</c> id.</param>
+    /// <returns>The file content and its handle metadata.</returns>
+    /// <exception cref="InvalidOperationException">No file reader is injected, or the read failed.</exception>
+    protected async Task<ScriptFile> GetFileAsync(string domain, string flow, string instance, string file)
+    {
+        if (Services?.FileReader is not { } reader)
+            throw new InvalidOperationException("File reader is not available. Ensure services are injected.");
+
+        ArgumentException.ThrowIfNullOrWhiteSpace(domain);
+        ArgumentException.ThrowIfNullOrWhiteSpace(flow);
+        ArgumentException.ThrowIfNullOrWhiteSpace(instance);
+        ArgumentException.ThrowIfNullOrWhiteSpace(file);
+
+        return await reader.ReadAsync(domain, flow, instance, file, System.Threading.CancellationToken.None)
+            .ConfigureAwait(false);
+    }
+
+    #endregion
+
     #region Secret Functions
 
     /// <summary>

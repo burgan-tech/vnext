@@ -63,6 +63,8 @@ public sealed class SchemaComponentValidator(
 
                 ValidateRoleGrants(schema.Schema, result);
                 ValidateMasking(schema, result);
+                foreach (var message in FileStorageSchemaParser.Validate(schema.Schema))
+                    result.AddError(message, $"schema.{FileStorageSchemaParser.Keyword}");
             }
 
             return result;

@@ -24,7 +24,7 @@ key symbols. The reasons, measurements and incident history behind each rule liv
 | Order | Step | Responsibility |
 |-------|------|----------------|
 | 5 | HandleCancelPreflightStep | Detect cancel/exit; short-circuit if instance already completed |
-| 10 | ForwardToActiveSubflowStep | Queue post-commit forward to active subflow; skip epilogue. Does not forward `updateData` or parent shared `$self` transitions. |
+| 10 | ForwardToActiveSubflowStep | Queue post-commit forward to active subflow (normally the transition proxy already did); skip epilogue. Does not forward `updateData` or an available parent shared transition. |
 | 19 | SetBusyStep | Set instance status to Busy and persist |
 | 20 | CreateTransitionRecordStep | Create transition record; duplicate key guard |
 | 21 | HandleUpdateDataDataOnlyStep | Parent with active SubFlow: persist update data and skip lifecycle/epilogue |
@@ -146,6 +146,15 @@ The plan is built from `ExcludedStepOrders` alone (`TransitionExecutor.BuildExec
   A sub item hands its parent PLAINTEXT (`ISubItemEventDataResolver`).
 - Full guide: `docs/domain/field-masking.md`.
 
+## File storage (`x-storage`)
+
+- A master-schema property (or one array level's `items`) with `x-storage: { binding }` keeps file bytes in a
+  Dapr output binding; instance data, records and reads carry a handle (`component/file/name/mimeType/size/eTag/owner`).
+  Swap runs after schema validation, before persist/enqueue; a forwarded request is swapped at the leaf; External
+  bodies are reference-checked against `LatestData`, Trusted (runtime-produced) ones are not. Codes
+  `Instance:100047` (503) / `100048` (400) / `100049` (404). Reads: `functions/file` (`queryRoles` + `x-roles`),
+  `internal/file` has no auth. Full guide: `docs/runtime/file-storage.md`.
+
 ## Task / Action History (system functions)
 
 - `functions/tasks` returns the `InstanceTasks` journal; `functions/actions?taskId=` one row's
@@ -200,7 +209,8 @@ The plan is built from `ExcludedStepOrders` alone (`TransitionExecutor.BuildExec
 - `sync=true` blocks to completion; `sync=false` (default) returns `{ id, status }` for polling.
 - A flow/transition `executionType` (`S`/`A`) overrides `sync` (transition > flow > query); never for
   runtime-internal calls (`SuppressResponseEnrichment`). Automatic continuations always run inline.
-- Runtime-generated child start, active-child forward and descended retry always use `sync=true`.
+- Runtime-generated child start and descended retry always use `sync=true`; the SubFlow proxy forwards in
+  the parent's resolved mode (async stays async), only the legacy forward job uses `sync=true`.
 - A sync response never evaluates extensions; `IInstanceExtensionService` stays out of
   `InstanceCommandAppService` — do not reintroduce the pass.
 - Full guide: `docs/runtime/execution-type.md`.
@@ -223,7 +233,7 @@ The plan is built from `ExcludedStepOrders` alone (`TransitionExecutor.BuildExec
   (`vnext:{domain}:{flow}:{id}`): sync admission (`ReserveAsync` / `TakeOverAsync`) or async
   `ITransitionAdmissionService.AcceptAsync`. Never hold it across the pipeline body.
 - Order: fast-fail Busy check → validation → lock → flip → work → release.
-- Never call `ReserveAsync`/`TakeOverAsync`/`ReserveSubflowChainAsync`/`Release*` inside
+- Never call `ReserveAsync`/`TakeOverAsync`/`Release*` inside
   `AcceptAsync`'s callback — the lock is held and non-reentrant.
 - The duplicate-active-job guard lives in that critical section; no partial unique index can replace it.
 - cancel/exit/timeout flip Busy at the accept; `updateData` (`Unconditional`) takes NO lock and NO
@@ -276,13 +286,14 @@ Enum values (Instance Status, State Types, State Sub Types, Trigger Types): `AGE
 - Never add a correlation-first CAS before the parent load — write order stays P → C (40P01 otherwise).
 - Full guide: `docs/runtime/event-publish-modes.md`.
 
-### Accept-time chain reserve
+### SubFlow transition proxy
 
-- Async `IsSubflowForward` accepts call `ReserveSubflowChainAsync` (`MarkBusyWithPropagationAsync`,
-  not the `Try…` variant) before the 202; the sync path deliberately does not reserve.
-- The relay claims it via `TransitionInput.ChainReserved` → `AdmissionKind.OwnerReentry`; never claim
-  a reserve that was not taken. Cross-domain: internal `POST .../internal/subflow-forward` only.
-- Full guide: `docs/architecture/subflow-chain-reserve.md`.
+- A forwardable key (`Normal`, active `S` SubFlow, not an available parent shared transition) is proxied
+  by `SubflowProxyService` before the parent pipeline: no parent lock, Busy or job; the leaf admits it.
+  Never reserve the chain on an accept again.
+- Async pre-stamps the parent `EffectiveStatus` and reverts by CAS on failure; `ChainReserved` from older
+  parents stays accepted (not proxied) — deprecation `subflow-chain-reserve-claim`.
+- Full guide: `docs/architecture/subflow-transition-proxy.md` (old reserve: `subflow-chain-reserve.md`, LEGACY).
 
 ## Instance Data
 

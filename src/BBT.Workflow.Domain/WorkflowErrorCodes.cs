@@ -122,6 +122,22 @@ public static class WorkflowErrorCodes
     /// </summary>
     public const string HistoryNoneNotTerminal = "Instance:100046";
 
+    /// <summary>The Dapr binding holding <c>x-storage</c> files could not store or return an object. Transient; nothing was persisted. Maps to HTTP 503.</summary>
+    public const string FileStoreUnavailable = "Instance:100047";
+
+    /// <summary>An <c>x-storage</c> node is malformed: <c>content</c> with <c>file</c>, invalid base64, or a <c>file</c> reference that is not already stored at that path on this instance. Maps to HTTP 400.</summary>
+    public const string FileReferenceInvalid = "Instance:100048";
+
+    /// <summary>The requested file is not referenced by the instance's latest data. Maps to HTTP 404.</summary>
+    public const string FileNotFound = "Instance:100049";
+
+    /// <summary>
+    /// The flow's master schema could not be resolved while a request may carry <c>x-storage</c> nodes, so the runtime
+    /// cannot know which paths hold files and refuses the write instead of persisting bytes or unchecked references.
+    /// Transient. Maps to HTTP 503.
+    /// </summary>
+    public const string FileSchemaUnavailable = "Instance:100050";
+
     #endregion
     
     #region Transition Errors (100xxx)

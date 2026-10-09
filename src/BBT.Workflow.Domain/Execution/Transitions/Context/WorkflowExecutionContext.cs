@@ -65,6 +65,32 @@ public sealed class WorkflowExecutionContext
     [System.Text.Json.Serialization.JsonIgnore]
     public bool PayloadSchemaValidated { get; set; }
 
+    /// <summary>
+    /// The payload was produced by the runtime itself (subflow input mapping, trigger task), not by a
+    /// client; <c>x-storage</c> references in it are kept as is. Copied from the input's server-only
+    /// <c>TrustedPayload</c> flag. Transport-only, never serialized: a hop must not inherit another's trust.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool TrustedPayload { get; set; }
+
+    /// <summary>
+    /// The request is a relay an OLDER-version parent sent with the chain-reserve claim
+    /// (<c>TransitionInput.ChainReserved</c>): it enters pre-reserved (<see cref="IsPreReserved"/>),
+    /// yet its body is a client payload that no level has run the x-storage file swap on — the older
+    /// parent's accept skipped the swap because it relays, and a pre-reserved request reads as
+    /// "already validated" everywhere else. The sync pipeline runs the swap for it regardless of
+    /// <see cref="IsPreReserved"/>; at a level that relays it further the swap is still left to the leaf.
+    /// <para>
+    /// Set ONLY by the transition intake (<c>InstanceCommandAppService</c>) from the input's claim.
+    /// A background-job re-entry (<c>TransitionJobHandler</c>) is pre-reserved too but never sets
+    /// this: its payload was swapped at the accept that enqueued it. Transport-only, never
+    /// serialized, never copied onto a continuation hop. Removed with the
+    /// <c>subflow-chain-reserve-claim</c> deprecation.
+    /// </para>
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool ChainReservedRelay { get; set; }
+
     /// <summary>Gets or sets the transition key to execute.</summary>
     [Enrich(Name = "vnext.transition.key")]
     public string TransitionKey { get; set; } = default!;

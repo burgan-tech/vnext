@@ -444,12 +444,14 @@ public sealed class TransitionRunnerPostCommitTests
     }
 
     [Fact]
-    public async Task RunAsync_PostCommitErrorWithoutFaultRequest_ReleasesTheChainReserveTheAcceptLeftBehind()
+    public async Task RunAsync_PostCommitErrorWithoutFaultRequest_ReleasesTheChainReserveAnOlderAcceptLeftBehind()
     {
-        // E31. The accept marked the whole subflow chain Busy down to the leaf, the post-commit
-        // forward then failed with a client error, and the failure policy declined to fault. That
-        // path runs neither Settle nor Fault, so nothing undid the reservation and every level
-        // stayed Busy forever — Busy has no recovery API, retry requires Faulted.
+        // E31, kept for the rollout (deprecation subflow-chain-reserve-claim). This runtime's accepts
+        // no longer reserve the chain, but a parent job an OLDER runtime's accept enqueued still
+        // carries SubflowChainReserved: that accept marked the whole subflow chain Busy down to the
+        // leaf, the post-commit forward then failed with a client error, and the failure policy
+        // declined to fault. That path runs neither Settle nor Fault, so without this release every
+        // level stays Busy forever — Busy has no recovery API, retry requires Faulted.
         var error = Error.Conflict("Instance:100031", "leaf instance is busy");
         var harness = new RunnerHarness(new StagePlan(
             "pipeline",
@@ -473,8 +475,9 @@ public sealed class TransitionRunnerPostCommitTests
     [Fact]
     public async Task RunAsync_PostCommitErrorWithoutChainReserve_DoesNotRelease()
     {
-        // Releasing a reservation this accept never took would settle an instance that is
-        // legitimately Busy for some other reason.
+        // Every forward this runtime's accept admits: no chain reserve was taken, so the E31 branch
+        // is a no-op. Releasing a reservation this accept never took would settle an instance that
+        // is legitimately Busy for some other reason.
         var error = Error.Validation("PostCommit:Rejected", "child rejected the request");
         var harness = new RunnerHarness(new StagePlan(
             "pipeline",

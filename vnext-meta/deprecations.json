@@ -197,6 +197,17 @@
       "replacement": "Dapr HTTP service invocation (the default, unchanged): POST /api/v1/execution/invoke/{type}/{key}",
       "severity": "warning",
       "message": "The opt-in Orchestration -> Execution gRPC proxy-mode transport is removed (issue #1056). Orchestration always invokes Execution over Dapr HTTP service invocation; ExecutionApi:Transport is no longer read, so a leftover 'grpc' value is ignored. Execution no longer binds the second h2c Kestrel port (Kestrel:GrpcPort) or serves the TaskInvoker gRPC service, and listens only on its hosting URL (ASPNETCORE_URLS). An environment that had moved the Execution sidecar to app-protocol grpc and app-port = execution.grpcPort must return to app-protocol http and the HTTP port (the vnext Helm chart defaults). Dapr sidecar gRPC ports and OTLP gRPC export are unaffected."
+    },
+    {
+      "id": "subflow-chain-reserve-claim",
+      "type": "behavior",
+      "component": "runtime",
+      "path": "TransitionInput.ChainReserved / SubflowForwardInput.ChainReserved (POST /{domain}/workflows/{workflow}/instances/{instance}/internal/subflow-forward), PUT /{domain}/workflows/{workflow}/instances/{instance}/busy, PUT /{domain}/workflows/{workflow}/instances/{instance}/internal/busy-release",
+      "deprecatedSince": "0.0.100",
+      "removedAt": null,
+      "replacement": "Leaf-side admission via the SubFlow transition proxy: a parent with an active SubFlow forwards the transition to the leaf in the parent's execution mode, and the leaf validates, swaps x-storage files, flips Busy and schedules its own job.",
+      "severity": "warning",
+      "message": "Parents no longer reserve the SubFlow chain on an async accept; they proxy forwardable transitions to the active SubFlow (#101). The chain-reserve claim (ChainReserved on the internal subflow-forward relay and on TransitionInput), the PUT .../busy chain propagation and PUT .../internal/busy-release are still ACCEPTED from older-version runtimes, and this runtime still sends the claim and runs the release compensation for a parent job an older runtime's accept enqueued (in flight across an upgrade). A relay that carries the claim is not proxied, keeps the owner re-entry admission at the leaf, and its body still goes through the x-storage file swap there. Mixed-version domains need no action. Planned removal no earlier than 0.0.103 (three releases), once no older runtime can still reserve a chain or have such a job in flight."
     }
 ]
 }

@@ -112,6 +112,8 @@ public class SubflowStarterTests
         captured.ShouldNotBeNull();
         captured!.Sync.ShouldBeTrue();
         captured.SuppressResponseEnrichment.ShouldBeTrue();
+        // The payload is the runtime's own input-mapping output, never a client body.
+        captured.TrustedPayload.ShouldBeTrue();
     }
 
     /// <summary>

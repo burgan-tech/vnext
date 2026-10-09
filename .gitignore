@@ -321,3 +321,6 @@ docs/superpowers/specs/2026-08-27-performans-firsatlari.md
 
 # graphify knowledge-graph output
 graphify-out/
+
+# Local blob storage for the x-storage local binding (etc/docker/docker-compose*.yml)
+etc/docker/data/blobs/

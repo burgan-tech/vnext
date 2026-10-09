@@ -349,6 +349,86 @@
       "title": "A runtime older than 0.0.99 cannot read an allOf / anyOf grant: the flow fails to load, a combinator override stamp is treated as malformed (the child falls back to its own grants), and an old x-roles parser skips the entry so a combinator deny vanishes",
       "workaround": "Author the first allOf / anyOf grant only after every pod, and every domain that stamps overrides onto this one, runs a release containing combinators. Do not binary-downgrade once a combinator has been published: remove the combinator grants (or re-publish without them) first.",
       "fixedIn": null
+    },
+    {
+      "id": "file-store-orphans-on-rollback",
+      "affectedVersions": ">=0.0.100",
+      "severity": "warning",
+      "component": "runtime",
+      "path": "schema x-storage (FileOffloadService)",
+      "title": "The file object is written to the binding before the unit of work commits and before the transition is reserved or accepted, so a unit-of-work rollback after the store, or a 409 (Busy, SubFlow completion window) answered after the store, leaves an unreferenced object in the binding. Nothing in the runtime tracks or collects such objects.",
+      "workaround": "Apply a lifecycle/expiry rule on the bucket or directory behind the binding (use FileStorage:KeyPrefix to scope it); an orphan is harmless to instance data.",
+      "fixedIn": null
+    },
+    {
+      "id": "file-store-no-delete",
+      "affectedVersions": ">=0.0.100",
+      "severity": "warning",
+      "component": "runtime",
+      "path": "schema x-storage (FileOffloadService)",
+      "title": "Clearing (null/absent) or replacing an x-storage field never deletes the previous object, and there is no retention or garbage collection: every object ever stored for an instance stays in the binding.",
+      "workaround": "Manage retention in the store itself (lifecycle rules); do not change FileStorage:KeyPrefix after the first write, or stored objects become unreachable.",
+      "fixedIn": null
+    },
+    {
+      "id": "file-in-task-record",
+      "affectedVersions": ">=0.0.100",
+      "severity": "warning",
+      "component": "task",
+      "path": "InstanceTask.Request / InstanceTask.Response",
+      "title": "Task records are not covered by the x-storage swap: a mapping that puts file bytes (for example a base64 string) into a task request or response stores them in the task record as authored.",
+      "workaround": "Pass the handle (not the content) through mappings and fetch bytes with ScriptBase.GetFileAsync only where the task needs them; avoid echoing bytes into task responses.",
+      "fixedIn": null
+    },
+    {
+      "id": "file-trusted-payload-cross-domain",
+      "affectedVersions": ">=0.0.100",
+      "severity": "warning",
+      "component": "instance",
+      "path": "StartTrigger / SubProcess / DirectTrigger tasks and SubFlow forwards to another domain",
+      "title": "The trusted-payload flag does not cross domains: Start/SubProcess trigger tasks, DirectTrigger and proxied SubFlow forwards that target another domain call its public endpoints, so a content-less x-storage reference in such a body is rejected there with 400 Instance:100048 (a handle from this domain's store is not readable by the other domain anyway).",
+      "workaround": "Send content (base64) rather than a handle in cross-domain bodies, or have the owning domain read the file with ScriptBase.GetFileAsync.",
+      "fixedIn": null
+    },
+    {
+      "id": "file-seed-data-not-offloaded",
+      "affectedVersions": ">=0.0.100",
+      "severity": "info",
+      "component": "runtime",
+      "path": "DefinitionAppService seed data (x-storage fields)",
+      "title": "Instance data appended from a definition's seed data passes no workflow to the write funnel, so x-storage content in seed data is stored inline in the instance data instead of being offloaded.",
+      "workaround": "Do not place x-storage file content in seed data; upload it through a transition after the instance exists.",
+      "fixedIn": null
+    },
+    {
+      "id": "file-async-proxy-overlapping-revert",
+      "affectedVersions": ">=0.0.100",
+      "severity": "low",
+      "component": "runtime",
+      "path": "SubflowProxyService async forward revert",
+      "title": "Two overlapping async requests proxied through one parent to its active SubFlow: when one forward fails and reverts, the revert can clear the Busy stamp the other request set; the next child notification restores the parent's status.",
+      "workaround": "None needed in normal operation (self-heals on the next child notification); clients should not fire overlapping async transitions at the same parent.",
+      "fixedIn": null
+    },
+    {
+      "id": "file-missing-object-503",
+      "affectedVersions": ">=0.0.100",
+      "severity": "low",
+      "component": "runtime",
+      "path": "DaprBindingFileBlobStore.GetAsync",
+      "title": "A get of an x-storage object that no longer exists in the store (deleted by a bucket lifecycle rule or by hand) answers 503 Instance:100047 FileStoreUnavailable, indistinguishable from a store outage, because the Dapr binding reports both as an invocation error.",
+      "workaround": "Do not expire objects still referenced by instance data; check the store for the object key (FileStorage:KeyPrefix + file) when a 503 persists for one file only.",
+      "fixedIn": null
+    },
+    {
+      "id": "file-duplicate-property-names",
+      "affectedVersions": ">=0.0.100",
+      "severity": "low",
+      "component": "runtime",
+      "path": "FileNodeWalker / FileOffloadService (x-storage nodes with duplicate member names)",
+      "title": "A payload whose x-storage node repeats a member name (for example two 'content' or 'file' members) is handled inconsistently: the read-only element probe and the mutable node used by the swap do not necessarily see the same occurrence, so the outcome (swap, keep or reject) is not defined.",
+      "workaround": "Send well-formed JSON without duplicate member names; standard JSON serializers never produce them.",
+      "fixedIn": null
     }
   ]
 }

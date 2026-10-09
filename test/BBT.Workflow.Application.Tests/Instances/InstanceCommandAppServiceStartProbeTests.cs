@@ -86,6 +86,9 @@ public class InstanceCommandAppServiceStartProbeTests : IDisposable
             longPollAckResumeService: Substitute.For<ILongPollAckResumeService>(),
             instanceCommandGateway: Substitute.For<IInstanceCommandGateway>(),
             workflowOutputMappingService: Substitute.For<IWorkflowOutputMappingService>(),
+            fileOffloadService: BBT.Workflow.Application.Files.FileTestDoubles.PassThroughOffload(),
+            rawBodyProvider: Substitute.For<BBT.Workflow.Scripting.IRequestRawBodyProvider>(),
+            subflowProxyService: Substitute.For<BBT.Workflow.SubFlow.ISubflowProxyService>(),
             logger: Substitute.For<ILogger<InstanceCommandAppService>>());
     }
 

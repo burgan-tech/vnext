@@ -1768,6 +1768,23 @@ public static partial class WorkflowLogs
         string errorMessage);
 
     /// <summary>
+    /// Logs when the SubFlow proxy could not write the parent's EffectiveStatus (the async pre-stamp
+    /// to Busy, or its compare-and-set revert). The forward is not affected; the parent's projection
+    /// catches up at the child's next rest-point notification.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40109,
+        Level = LogLevel.Warning,
+        Message = "Proxy of transition {TransitionKey} to subflow instance {SubflowInstanceId}: writing parent instance {ParentInstanceId} EffectiveStatus={EffectiveStatus} failed")]
+    public static partial void SubFlowProxyEffectiveStatusWriteFailed(
+        this ILogger logger,
+        Exception exception,
+        string transitionKey,
+        Guid subflowInstanceId,
+        Guid parentInstanceId,
+        string effectiveStatus);
+
+    /// <summary>
     /// Logs when a SubFlow fault propagation event is received (upward: child faulted, notifying parent).
     /// </summary>
     [LoggerMessage(
@@ -4643,6 +4660,81 @@ public static partial class WorkflowLogs
 
     #endregion
   
+    #region File Offload (x-storage, 2049x)
+
+    /// <summary>Logs that an inline file was written to its binding and replaced by a handle. Content is never logged.</summary>
+    [LoggerMessage(
+        EventId = 20490,
+        Level = LogLevel.Information,
+        Message = "File offloaded: instance {InstanceId}, path {Path}, component {Component}, file {File}, size {Size}")]
+    public static partial void FileOffloaded(
+        this ILogger logger,
+        Guid instanceId,
+        string path,
+        string component,
+        string file,
+        long size);
+
+    /// <summary>Logs that the file binding failed an operation.</summary>
+    [LoggerMessage(
+        EventId = 20491,
+        Level = LogLevel.Warning,
+        Message = "File store {Component} failed ({Operation}) for instance {InstanceId}")]
+    public static partial void FileStoreFailed(
+        this ILogger logger,
+        Exception ex,
+        string component,
+        string operation,
+        Guid instanceId);
+
+    /// <summary>Logs that a malformed or foreign file reference was rejected on write.</summary>
+    [LoggerMessage(
+        EventId = 20492,
+        Level = LogLevel.Warning,
+        Message = "File reference rejected: instance {InstanceId}, path {Path}, reason {Reason}")]
+    public static partial void FileReferenceRejected(
+        this ILogger logger,
+        Guid instanceId,
+        string path,
+        string reason);
+
+    /// <summary>Logs a file read through the file function.</summary>
+    [LoggerMessage(
+        EventId = 20493,
+        Level = LogLevel.Information,
+        Message = "File read: domain {Domain}, flow {Flow}, instance {InstanceId}, file {File}, authorized {Authorized}")]
+    public static partial void FileRead(
+        this ILogger logger,
+        string domain,
+        string flow,
+        string instanceId,
+        string file,
+        bool authorized);
+
+    /// <summary>Logs that the master schema could not be loaded, so the flow's x-storage paths are unknown.</summary>
+    [LoggerMessage(
+        EventId = 20494,
+        Level = LogLevel.Warning,
+        Message = "File storage fields unavailable: master schema {SchemaKey} of flow {Flow} could not be loaded ({Reason})")]
+    public static partial void FileSchemaUnavailable(
+        this ILogger logger,
+        string schemaKey,
+        string flow,
+        string reason);
+
+    /// <summary>Logs that a stored file handle failed validation (GUID file id, allowed component) and was not served.</summary>
+    [LoggerMessage(
+        EventId = 20495,
+        Level = LogLevel.Warning,
+        Message = "Stored file handle rejected on read: instance {InstanceId}, path {Path}, component {Component}")]
+    public static partial void FileHandleRejectedOnRead(
+        this ILogger logger,
+        Guid instanceId,
+        string path,
+        string component);
+
+    #endregion
+
     #region Server Configuration
 
     /// <summary>
