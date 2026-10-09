@@ -5,7 +5,7 @@ namespace BBT.Workflow.Scripting;
 /// <summary>
 /// Defines the contract for task input and output data binding operations in workflow execution.
 /// This interface enables custom mapping logic for transforming data before and after task execution,
-/// providing flexibility for data manipulation, validation, and audit logging.
+/// providing flexibility for data manipulation and audit logging.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -35,6 +35,7 @@ namespace BBT.Workflow.Scripting;
 /// <item><description>OutputHandler data is automatically merged into the workflow instance</description></item>
 /// <item><description>Use ScriptContext to access workflow state, instance data, and runtime information</description></item>
 /// <item><description>Implement proper error handling and logging within handlers</description></item>
+/// <item><description>InputHandler is not a gate: its return value never stops the task (see <see cref="InputHandler"/>)</description></item>
 /// </list>
 /// </remarks>
 public interface IMapping
@@ -43,7 +44,6 @@ public interface IMapping
     /// Handles input data binding and task configuration before task execution.
     /// This method is called prior to executing the workflow task and allows for:
     /// - Modifying task parameters and configuration
-    /// - Validating input data
     /// - Preparing audit information
     /// - Transforming data for task consumption
     /// </summary>
@@ -57,8 +57,8 @@ public interface IMapping
     /// </param>
     /// <returns>
     /// A ScriptResponse containing audit data and metadata about the input processing.
-    /// The response data is logged for task audit purposes and can include:
-    /// - Input validation results
+    /// The response is only written to the task's audit record (the task request); the runtime
+    /// does not read it for any decision. It can include:
     /// - Data transformation logs
     /// - Processing timestamps
     /// - Custom audit information
@@ -68,14 +68,28 @@ public interface IMapping
     /// The InputHandler is invoked during the task preparation phase and should:
     /// </para>
     /// <list type="bullet">
-    /// <item><description>Validate and transform input data as needed</description></item>
+    /// <item><description>Transform input data as needed</description></item>
     /// <item><description>Configure the WorkflowTask object for execution</description></item>
-    /// <item><description>Generate comprehensive audit information</description></item>
-    /// <item><description>Handle any input-related errors gracefully</description></item>
+    /// <item><description>Generate audit information</description></item>
     /// </list>
     /// <para>
-    /// Common use cases include dynamic endpoint generation, input validation,
-    /// authentication token preparation, and custom header configuration.
+    /// Common use cases include dynamic endpoint generation, authentication token preparation,
+    /// and custom header configuration.
+    /// </para>
+    /// <para>
+    /// <strong>The InputHandler cannot reject the task through its return value.</strong>
+    /// Whatever it returns — including a <c>Data["error"]</c> entry, a <c>StatusCode</c> or an
+    /// empty response — the task is invoked afterwards with the WorkflowTask as configured.
+    /// For a task that writes (StartTrigger, DirectTrigger, SubProcess, an HTTP POST, a publish),
+    /// the write happens even when the handler found the input invalid; the OutputHandler only
+    /// sees the result afterwards and cannot undo it.
+    /// </para>
+    /// <para>
+    /// Validate before the task instead: a transition rule or condition, an automatic transition
+    /// to an error state, or a preceding validation step decides whether the task runs at all.
+    /// As a last resort, throwing from the InputHandler prevents the invocation: the task fails
+    /// as a task execution error, the OutputHandler is not run, and the failure is not a
+    /// business response, so <c>AcceptedStatusCodes</c> do not apply to it.
     /// </para>
     /// </remarks>
     Task<ScriptResponse> InputHandler(
