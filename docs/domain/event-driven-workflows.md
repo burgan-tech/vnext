@@ -145,6 +145,11 @@ top level only, so an instance status code is safe there. **Never return `StartI
 delivery as failed, and it will redeliver the same message forever without ever advancing the
 partition offset.
 
+> **A timer is not an event.** To start a workflow on a schedule, use
+> [`instances/schedule`](scheduled-workflow-start.md) rather than pointing a Dapr cron binding at
+> this endpoint — a tick carries no message to map, and the schedule endpoint needs no
+> `event.mapping`.
+
 ## Delivery infrastructure (owned by the domain)
 
 The runtime never subscribes. You route broker messages to the endpoint with **declarative Dapr

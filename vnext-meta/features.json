@@ -496,6 +496,12 @@
       "schemaPath": "workflow.attributes.states[].onEntries[].variableKey (also onExits and transition onExecutionTasks) | function.attributes.onExecutionTasks[].variableKey",
       "documentation": "docs/runtime/script-context-and-engine.md"
     },
+    "scheduledWorkflowStart": {
+      "since": "0.0.99",
+      "status": "stable",
+      "description": "POST {domain}/workflows/{workflow}/instances/schedule starts a new instance when an external scheduler fires. Built for a Dapr bindings.cron component whose `route` points at it; any caller that can POST works. The tick carries no body and Dapr forwards none of the component's metadata, so seed data travels as query parameters (always strings) and `scheduleId` / `version` / `sync` are reserved. An optional `version` pins the workflow version; omitted, the latest published version starts. The instance key is derived from the tick as {scheduleId}-{yyyyMMddTHHmmssZ}, truncated to the second because replicas stamp readTimeUTC from their own clocks; an over-long scope is shortened with an 8-char SHA-256 digest so the key fits Instances.Key (100). Assumes Dapr delivers a tick to ONE replica: the runtime takes no lock of its own. A redelivery whose instance is still active is absorbed by the start path's key idempotency; a redelivery after that instance COMPLETED would create a second instance, which is an accepted, documented limit. Answers the Dapr protocol body (SUCCESS / DROP); a cron tick is never redelivered, so a dropped occurrence is lost. PURELY ADDITIVE: no existing endpoint, contract or workflow definition changes, and a workflow needs no event.mapping to be schedulable.",
+      "documentation": "docs/domain/scheduled-workflow-start.md"
+    },
     "fileStorage": {
       "since": "0.0.100",
       "status": "stable",

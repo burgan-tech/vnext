@@ -10,6 +10,7 @@ using BBT.Workflow.Authorization;
 using BBT.Workflow.BackgroundJobs;
 using BBT.Workflow.BackgroundJobs.Payloads;
 using BBT.Workflow.Events;
+using BBT.Workflow.Schedule;
 using BBT.Workflow.Execution.Events;
 using BBT.Workflow.Gateway;
 using BBT.Workflow.Instances;
@@ -196,6 +197,7 @@ public sealed class InstanceControllerEnqueueRelayTests
             enqueuer,
             Substitute.For<IInstanceCommandGateway>(),
             Substitute.For<IEventAppService>(),
+            Substitute.For<IInstanceScheduleAppService>(),
             Substitute.For<IRelatedInstanceQueryAppService>(),
             Substitute.For<BBT.Workflow.Instances.HumanTask.IHumanTaskLeafResolver>(),
             Substitute.For<BBT.Workflow.Instances.Correlation.IInstanceCorrelationResolver>(),

@@ -4292,8 +4292,66 @@ public static partial class WorkflowLogs
         Guid instanceId,
         string flow,
         string state);
+    /// Logs a scheduler tick arriving at the schedule endpoint. One line per tick per replica, so an
+    /// N-replica deployment logs N of these for the same InstanceKey — that repetition is the signal
+    /// that cross-replica collapsing is doing its job.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20496,
+        Level = LogLevel.Information,
+        Message = "Scheduled start received. Domain={Domain}, Flow={Flow}, ScheduleId={ScheduleId}, InstanceKey={InstanceKey}")]
+    public static partial void ScheduledStartReceived(
+        this ILogger logger,
+        string domain,
+        string flow,
+        string? scheduleId,
+        string instanceKey);
 
+    /// <summary>
+    /// Logs a scheduled start whose tick header was absent or unparsable. The start still proceeds,
+    /// but the instance key falls back to this runtime's own clock, which only collapses calls landing
+    /// in the same second rather than calls belonging to the same tick.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20497,
+        Level = LogLevel.Warning,
+        Message = "Scheduled start has no usable tick header; key derived from the local clock. Domain={Domain}, Flow={Flow}, ScheduleId={ScheduleId}")]
+    public static partial void ScheduledStartTickHeaderMissing(
+        this ILogger logger,
+        string domain,
+        string flow,
+        string? scheduleId);
 
+    /// <summary>
+    /// Logs a scheduled start rejected because the component targets a runtime serving another domain.
+    /// A permanent misconfiguration: nothing retries a cron tick, so this recurs every tick until the
+    /// component is fixed.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20498,
+        Level = LogLevel.Error,
+        Message = "Scheduled start rejected: domain mismatch. Domain={Domain}, Flow={Flow}, Reason={Reason}")]
+    public static partial void ScheduledStartDomainMismatch(
+        this ILogger logger,
+        string domain,
+        string flow,
+        string reason);
+
+    /// <summary>
+    /// Logs a scheduled start that the command service refused (schema validation, policy, or a
+    /// workflow that does not exist). The tick is lost — Dapr's cron binding discards the response and
+    /// never redelivers.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20499,
+        Level = LogLevel.Error,
+        Message = "Scheduled start failed. Domain={Domain}, Flow={Flow}, InstanceKey={InstanceKey}, Reason={Reason}")]
+    public static partial void ScheduledStartFailed(
+        this ILogger logger,
+        string domain,
+        string flow,
+        string instanceKey,
+        string reason);
     /// <summary>
     /// Logs that no provider call was made because the caller carried neither <c>act_sub</c> nor
     /// <c>client_id</c>. Debug: anonymous and device tokens are ordinary traffic, and a Warning on
