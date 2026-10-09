@@ -63,6 +63,9 @@ public sealed class RuntimeCacheBackend<T>(
         var runtimeInfoProvider = services.GetRequiredService<IRuntimeInfoProvider>();
 
         runtimeInfoProvider.Check(domain);
+        // RuntimeService stamps the current domain on what it loads; load as the requested one,
+        // which differs from the caller's when a co-hosted domain's component is resolved.
+        using var domainScope = runtimeInfoProvider.UseDomain(domain);
 
         var all = await runtimeService.GetAsync<T>(key, cancellationToken);
         var filtered = all
@@ -84,6 +87,9 @@ public sealed class RuntimeCacheBackend<T>(
         var runtimeInfoProvider = services.GetRequiredService<IRuntimeInfoProvider>();
 
         runtimeInfoProvider.Check(domain);
+        // RuntimeService stamps the current domain on what it loads; load as the requested one,
+        // which differs from the caller's when a co-hosted domain's component is resolved.
+        using var domainScope = runtimeInfoProvider.UseDomain(domain);
 
         // Infrastructure exceptions (DB, connection) will bubble up - this is expected per Railway Pattern
         

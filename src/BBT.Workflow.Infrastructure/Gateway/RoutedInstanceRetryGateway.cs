@@ -37,7 +37,7 @@ public sealed class RoutedInstanceRetryGateway : IInstanceRetryGateway
         CancellationToken cancellationToken = default)
     {
         return _runtimeInfoProvider.IsDomainMatch(input.Domain)
-            ? _local.RetryAsync(input, cancellationToken)
+            ? LocalDomainCall.Run(input.Domain, () => _local.RetryAsync(input, cancellationToken))
             : _remote.RetryAsync(input, cancellationToken);
     }
 }

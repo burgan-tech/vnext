@@ -36,7 +36,9 @@ cd etc/docker && ./run-docker.sh dev      # Dev mode: apps in containers, with d
 cd etc/docker && ./run-docker.sh stage    # Staging mode (asks the domain)
 cd etc/docker && ./run-docker.sh up       # Infra + sidecars + DbMigrator + all hosts as local binaries on a
                                           # domain (asks which). `up sales --offset 10` runs a second domain
-                                          # beside core; `plan` shows ports without starting; records land in
+                                          # beside core; `up core --with sales,hr` serves several domains
+                                          # from ONE host set (docs/runtime/multi-domain-hosting.md);
+                                          # `plan` shows ports without starting; records land in
                                           # ai-docs/local-environments/<domain>.md
 
 # Or run API hosts by hand (requires infrastructure running)
@@ -54,7 +56,9 @@ Commands run without a terminal, so the script never prompts — pass everything
    is X already registered, which offset does it have, is anything else running?
 2. Decide the offset: `core` → none (offset 0). Another domain → its recorded offset, else the next
    free multiple of 10 (`./run-docker.sh plan X --offset N` shows ports and app-ids; it refuses collisions).
-   Tell the user the offset you picked before starting.
+   Tell the user the offset you picked before starting. Several domains at once and memory is tight →
+   co-host them on one host set instead: `./run-docker.sh up <primary> --with X,Y` (one database, co-hosted
+   domains in `<domain>_`-prefixed schemas; [Multi-Domain Hosting](docs/runtime/multi-domain-hosting.md)).
 3. `./run-docker.sh up X --offset N` (`--no-build` only if the build is
    known to be fresh). It brings up infra + sidecars, runs DbMigrator, starts the hosts and waits for
    `/health`. Expect a few minutes on a cold build.

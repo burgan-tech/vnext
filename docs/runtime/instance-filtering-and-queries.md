@@ -185,7 +185,7 @@ platform serializes to the wire format on both paths:
 public Task<ScriptResponse> InputHandler(WorkflowTask task, ScriptContext context)
 {
     var getInstancesTask = task as GetInstancesTask;
-    getInstancesTask.SetDomain(GetConfigValue("APP_DOMAIN"));
+    getInstancesTask.SetDomain(context.Runtime.Domain); // the domain being served — also right when co-hosted
     getInstancesTask.SetFlow("rezervation");
     getInstancesTask.SetPageSize(100);
 

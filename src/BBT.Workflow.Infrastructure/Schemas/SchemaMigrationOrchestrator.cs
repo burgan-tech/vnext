@@ -13,7 +13,8 @@ public sealed class SchemaMigrationOrchestrator(
     IMultiSchemaMigrator<WorkflowDbContext> migrator,
     IDistributedLockService lockService,
     IOptions<SchemaMigrationOptions> options,
-    ILogger<SchemaMigrationOrchestrator> logger) : ISchemaMigrationOrchestrator
+    ILogger<SchemaMigrationOrchestrator> logger,
+    ISchemaNameFormatter? schemaNameFormatter = null) : ISchemaMigrationOrchestrator
 {
     private const string LockKeyPrefix = "schema-migration";
 
@@ -23,7 +24,9 @@ public sealed class SchemaMigrationOrchestrator(
         if (string.IsNullOrWhiteSpace(schemaName))
             throw new ArgumentNullException(nameof(schemaName), "Schema name cannot be null or empty");
 
-        var lockKey = $"{LockKeyPrefix}:{schemaName}";
+        // Keyed on the physical schema: with multi-domain hosting two co-hosted domains' same flow key
+        // are different schemas, and a raw-name key would make the second migration skip.
+        var lockKey = $"{LockKeyPrefix}:{schemaNameFormatter?.Format(schemaName) ?? schemaName}";
 
         try
         {

@@ -37,7 +37,8 @@ public abstract class TriggerTaskExecutorBase<TTask>(
     protected abstract string GetTargetDomain(TTask task);
 
     /// <summary>
-    /// Checks if the target domain matches the current runtime domain.
+    /// Checks if the target domain is served by this process (the current domain or another domain
+    /// hosted beside it), so the task runs in-process instead of through Dapr.
     /// </summary>
     protected bool IsSameDomain(TTask task)
     {
@@ -45,7 +46,8 @@ public abstract class TriggerTaskExecutorBase<TTask>(
         if (string.IsNullOrEmpty(targetDomain))
             return true;
 
-        return string.Equals(RuntimeInfoProvider.Domain, targetDomain, StringComparison.OrdinalIgnoreCase);
+        return string.Equals(RuntimeInfoProvider.Domain, targetDomain, StringComparison.OrdinalIgnoreCase)
+               || RuntimeInfoProvider.IsDomainMatch(targetDomain);
     }
 
     /// <inheritdoc />
@@ -166,6 +168,9 @@ public abstract class TriggerTaskExecutorBase<TTask>(
         // Restart the activation episode too: the client waiting on THIS instance does not observe
         // the triggered one, so the target's time-to-Active is measured from this invocation.
         using var lane = WorkflowTraceLane.EnterChildLane(TelemetryConstants.ActivationTriggers.Trigger);
+
+        // A co-hosted target domain runs in-process: serve it as that domain.
+        using var domainScope = DomainScope.Begin(GetTargetDomain(task));
 
         var result = await action(cancellationToken);
 

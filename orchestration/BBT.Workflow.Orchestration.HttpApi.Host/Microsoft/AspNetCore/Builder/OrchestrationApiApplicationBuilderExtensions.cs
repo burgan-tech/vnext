@@ -39,6 +39,7 @@ public static class OrchestrationApiApplicationBuilderExtensions
             useSwagger: !app.Environment.IsProduction(),
             useSwaggerUi: !app.Environment.IsProduction());
         app.UseRouting();
+        app.UseDomainResolution();
         app.UseSchemaResolution();
         app.UseAetherUnitOfWork();
         app.UseHttpBodyLogging();

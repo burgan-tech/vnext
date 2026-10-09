@@ -3,6 +3,7 @@ using System.Text;
 using BBT.Aether.DistributedLock;
 using BBT.Workflow.Discovery;
 using BBT.Workflow.Logging;
+using BBT.Workflow.Runtime;
 
 namespace BBT.Workflow.HostedServices;
 
@@ -45,6 +46,31 @@ public sealed class DomainDiscoveryInitializationHostedService(
     /// completes immediately — which made assertions against it racy in practice.
     /// </summary>
     internal async Task RunAsync(CancellationToken stoppingToken)
+    {
+        // Multi-domain hosting registers every hosted domain, each under its own domain scope: the
+        // registration identity and the lock key both read the current domain.
+        IReadOnlyList<string>? hostedDomains;
+        using (var probe = scopeFactory.CreateScope())
+        {
+            hostedDomains = probe.ServiceProvider.GetService<IRuntimeInfoProvider>()?.HostedDomains;
+        }
+
+        if (hostedDomains is not { Count: > 1 })
+        {
+            await RunForCurrentDomainAsync(stoppingToken);
+            return;
+        }
+
+        foreach (var domain in hostedDomains)
+        {
+            using (DomainScope.Begin(domain))
+            {
+                await RunForCurrentDomainAsync(stoppingToken);
+            }
+        }
+    }
+
+    private async Task RunForCurrentDomainAsync(CancellationToken stoppingToken)
     {
         try
         {

@@ -83,7 +83,7 @@ contract [testing/integration-testing.md](testing/integration-testing.md)
   any core-process change that needs end-to-end proof. Whether a test is required at all:
   [policy table](testing/integration-testing.md#1-policy--when-an-integration-test-is-required) —
   small isolated fixes do not need one; when unsure it proposes and waits.
-- **Run:** `cd etc/docker && ./run-docker.sh up <domain> [--offset N]`, then in `../vnext-example`:
+- **Run:** `cd etc/docker && ./run-docker.sh up <domain> [--offset N] [--with <d1,d2>]`, then in `../vnext-example`:
   `dotnet test tests/Core.IntegrationTests --settings tests/Core.IntegrationTests/test.runsettings --filter "FullyQualifiedName~<Scenario>"`
   with `VNEXT_BASE_URL` pointing at the local orchestration host.
 - **Produces / boundary:** counts, runtime commit and the cause of every red. A new scenario needs a
@@ -120,7 +120,7 @@ session start. Rule: a green test run is not evidence — quote the measured num
   for where time goes and whether caches hit; `python3 scripts/trace-profile.py trace <trace-id>` for one
   trace with inclusive and self time.
 
-**Local environment** — `etc/docker/run-docker.sh status | up <domain> [--offset N] | plan | down`,
+**Local environment** — `etc/docker/run-docker.sh status | up <domain> [--offset N] [--with <d1,d2>] | plan | down`,
 records in `ai-docs/local-environments/<domain>.md`; full runbook in
 [AGENTS.md](../AGENTS.md#runbook-bring-up-domain-x-for-agents).
 

@@ -68,7 +68,7 @@ On a master-schema **property**, or on the `items` schema of an array property:
   does not have to equal the field's own binding (a SubFlow can hand a parent's file down), but it can never
   be an arbitrary component or key. An invalid handle is never read (`404`) and never accepted on a write
   (`400`).
-- `owner`: the instance whose write created the object (runtime `APP_DOMAIN`, flow key, instance id) -
+- `owner`: the instance whose write created the object (the domain being served, flow key, instance id; with [multi-domain hosting](multi-domain-hosting.md) that is the request's domain, not only `APP_DOMAIN`) -
   informational, tells a client which instance's `functions/file` to call.
 - Object key in the component: `{FileStorage:KeyPrefix}{file}`.
 

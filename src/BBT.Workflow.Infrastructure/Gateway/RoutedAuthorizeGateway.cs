@@ -47,7 +47,7 @@ public sealed class RoutedAuthorizeGateway : IAuthorizeGateway
         CancellationToken cancellationToken = default)
     {
         return _runtimeInfoProvider.IsDomainMatch(domain)
-            ? _local.GetAuthorizeResultForInstanceAsync(domain, workflow, instanceId, role, transitionKey, functionKey, version, checkQueryRoles, checkAck, requestContext, cancellationToken)
+            ? LocalDomainCall.Run(domain, () => _local.GetAuthorizeResultForInstanceAsync(domain, workflow, instanceId, role, transitionKey, functionKey, version, checkQueryRoles, checkAck, requestContext, cancellationToken))
             : _remote.GetAuthorizeResultForInstanceAsync(domain, workflow, instanceId, role, transitionKey, functionKey, version, checkQueryRoles, checkAck, requestContext, cancellationToken);
     }
 
@@ -60,7 +60,7 @@ public sealed class RoutedAuthorizeGateway : IAuthorizeGateway
         CancellationToken cancellationToken = default)
     {
         return _runtimeInfoProvider.IsDomainMatch(domain)
-            ? _local.GetAuthorizationMatrixForInstanceAsync(domain, workflow, instanceId, version, cancellationToken)
+            ? LocalDomainCall.Run(domain, () => _local.GetAuthorizationMatrixForInstanceAsync(domain, workflow, instanceId, version, cancellationToken))
             : _remote.GetAuthorizationMatrixForInstanceAsync(domain, workflow, instanceId, version, cancellationToken);
     }
 }

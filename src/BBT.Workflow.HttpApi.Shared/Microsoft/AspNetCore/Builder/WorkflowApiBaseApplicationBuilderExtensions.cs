@@ -23,6 +23,18 @@ public static class WorkflowApiBaseApplicationBuilderExtensions
     {
         return app.UseMiddleware<WorkflowRuntimeMiddleware>();
     }
+
+    /// <summary>
+    /// Opens the request's domain scope from the <c>{domain}</c> route value (or the <c>X-Workflow</c>
+    /// header) so a process hosting several domains serves each request as its own domain.
+    /// Must run after <c>UseRouting</c>, before the unit of work and the controllers.
+    /// </summary>
+    /// <param name="app">The application builder</param>
+    /// <returns>The application builder for chaining</returns>
+    public static IApplicationBuilder UseDomainResolution(this IApplicationBuilder app)
+    {
+        return app.UseMiddleware<DomainResolutionMiddleware>();
+    }
     
     /// <summary>
     /// Adds app version middleware that writes X-App-Version header to every response.

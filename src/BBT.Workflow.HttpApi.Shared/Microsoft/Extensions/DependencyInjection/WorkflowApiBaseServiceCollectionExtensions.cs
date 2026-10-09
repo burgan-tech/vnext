@@ -468,6 +468,7 @@ public static class WorkflowApiBaseServiceCollectionExtensions
     public static IServiceCollection AddRuntimeMiddleware(this IServiceCollection services)
     {
         services.AddScoped<WorkflowRuntimeMiddleware>();
+        services.AddScoped<DomainResolutionMiddleware>();
 
         return services;
     }

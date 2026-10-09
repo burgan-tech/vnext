@@ -7,7 +7,9 @@
 #   ./run-docker.sh stage [domain]      # same with release images        (dev/stage: one domain at a time)
 #
 # Local hosts, one or MORE domains side by side (infra in docker, runtime as locally built binaries):
-#   ./run-docker.sh up [domain] [--offset N] [--no-build] [--skip-migrate] [--db <name>]
+#   ./run-docker.sh up [domain] [--offset N] [--no-build] [--skip-migrate] [--db <name>] [--with <d1,d2>]
+#                                                  # --with: ONE host set serves the co-hosted domains too
+#                                                  # (APP_DOMAINS, same database) — docs/runtime/multi-domain-hosting.md
 #   ./run-docker.sh plan <domain> [--offset N]     # show ports / app-ids / env, write the sidecar compose — start nothing
 #   ./run-docker.sh switch <domain>                # stop every running domain, then `up <domain>`
 #   ./run-docker.sh down [domain|--all] [--infra]  # stop one domain's hosts+sidecars (default: all)
@@ -79,6 +81,8 @@ port_busy() { lsof -nP -iTCP:"$1" -sTCP:LISTEN >/dev/null 2>&1; }
 
 dom_dir() { printf '%s/%s' "$DOMAINS" "$1"; }
 stored() { cat "$(dom_dir "$1")/$2" 2>/dev/null || true; }   # stored <domain> <key>
+# co-hosted domains of a primary (multi-domain hosting): --with wins, else what the last up stored
+cohosted() { if [ -n "${WITH_ARG+x}" ]; then printf '%s' "$WITH_ARG"; else stored "$1" cohosted; fi; }
 registered_domains() { local d; for d in "$DOMAINS"/*/; do [ -f "$d/offset" ] && basename "$d"; done 2>/dev/null; return 0; }
 domain_running() {   # any live pid for this domain
   local p; for p in "$(dom_dir "$1")"/pids/*.pid; do [ -f "$p" ] && pid_alive "$(cat "$p")" && return 0; done; return 1
@@ -177,6 +181,7 @@ load_env() {
   ENVS=()
   while IFS= read -r line; do [ -n "$line" ] && ENVS+=("$line"); done < <(profile_env "$project" "$profile")
   ENVS+=("APP_DOMAIN=$domain")
+  [ -n "$(cohosted "$domain")" ] && ENVS+=("APP_DOMAINS=$(cohosted "$domain")")
   [ "$(f "$row" 5)" = 1 ] && ENVS+=("ConnectionStrings__Default=$(connection_string "$project" "$db")")
   if [ "$offset" != 0 ]; then
     ENVS+=("DAPR_APP_ID=$(app_id "$(f "$row" 8)" "$domain" "$offset")")
@@ -428,6 +433,7 @@ write_record() {   # <domain> <running|stopped>
 |---|---|
 | Status | **$status** ($now) |
 | Port offset | $offset |
+| Co-hosted domains | $([ -n "$(stored "$domain" cohosted)" ] && printf '\`%s\` (same hosts and database; \`wf domain use <d>\` per domain)' "$(stored "$domain" cohosted)" || printf 'none') |
 | Database | \`$db\` on localhost:5432 (postgres/postgres) |
 | Base URL | http://localhost:$(app_port 4201 "$offset") |
 | Init (package publisher) | http://localhost:$(init_port "$offset") (\`$(init_name "$domain" "$offset")\`) |
@@ -523,7 +529,7 @@ cmd_up() {
   DDIR="$(dom_dir "$domain")"; mkdir -p "$DDIR/logs" "$DDIR/pids" "$STATE"
   print_plan "$domain" "$offset" "$db"
   if domain_running "$domain"; then log "stopping running $domain hosts"; stop_domain "$domain"; fi
-  printf '%s' "$offset" > "$DDIR/offset"; printf '%s' "$db" > "$DDIR/db"
+  printf '%s' "$offset" > "$DDIR/offset"; printf '%s' "$db" > "$DDIR/db"; printf '%s' "$(cohosted "$domain")" > "$DDIR/cohosted"
   check_ports_free "$offset" "$domain"
   ensure_infra "$domain" "$offset"
   [ "${NO_BUILD:-0}" = "1" ] || build_all
@@ -534,6 +540,7 @@ cmd_up() {
   wait_healthy "$offset"
   printf '%s' "$domain" > "$STATE/last"
   register_wf_domain "$domain" "$offset" "$db"
+  local co; for co in $(cohosted "$domain" | tr ',' ' '); do register_wf_domain "$co" "$offset" "$db"; done
   write_record "$domain" running
   printf '\n\033[1;32mready\033[0m  %s  →  http://localhost:%s   record: %s\n\n' "$domain" "$(app_port 4201 "$offset")" "$RECORDS/$domain.md"
 }
@@ -554,7 +561,7 @@ cmd_status() {
   printf 'infra:  postgres %s\n' "$(compose ps --services --status running 2>/dev/null | grep -qx postgres && echo up || echo down)"
   for d in $(registered_domains); do
     offset="$(stored "$d" offset)"; [ -n "$offset" ] || continue
-    printf '\n%s  offset=%s  db=%s  base=http://localhost:%s\n' "$d" "$offset" "$(stored "$d" db)" "$(app_port 4201 "$offset")"
+    printf '\n%s  offset=%s  db=%s  base=http://localhost:%s%s\n' "$d" "$offset" "$(stored "$d" db)" "$(app_port 4201 "$offset")" "$([ -n "$(stored "$d" cohosted)" ] && printf '  also serves: %s' "$(stored "$d" cohosted)")"
     while IFS= read -r h; do
       name="$(f "$h" 1)"; port="$(app_port "$(f "$h" 4)" "$offset")"; pid="$(cat "$(dom_dir "$d")/pids/$name.pid" 2>/dev/null || true)"
       if pid_alive "$pid"; then
@@ -606,6 +613,8 @@ while [ $# -gt 0 ]; do
     --all)          POSITIONAL+=("--all") ;;
     --offset)       shift; OFFSET_ARG="${1:-}"; [ -n "$OFFSET_ARG" ] || die "--offset needs a value" ;;
     --db)           shift; DB_OVERRIDE="${1:-}"; [ -n "$DB_OVERRIDE" ] || die "--db needs a value" ;;
+    --with)         shift; WITH_ARG="${1:-}"
+                    [[ "$WITH_ARG" =~ ^[A-Za-z0-9_-]+(,[A-Za-z0-9_-]+)*$ ]] || die "--with needs a comma-separated domain list" ;;
     -h|--help)      usage 0 ;;
     -*)             die "unknown flag: $1" ;;
     *)              POSITIONAL+=("$1") ;;
