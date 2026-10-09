@@ -38,6 +38,37 @@ public class CallerModePropagationTests
         context.CallerMode.ShouldBe(ExecMode.Async);
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void TransitionInput_ToExecutionContext_CopiesTrustedPayload(bool trusted)
+    {
+        var input = new TransitionInput("domain", "workflow", sync: true) { TrustedPayload = trusted };
+
+        input.ToExecutionContext("inst-1", "1.0.0", "trans-1").TrustedPayload.ShouldBe(trusted);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void StartInstanceInput_ToExecutionContext_CopiesTrustedPayload(bool trusted)
+    {
+        var input = new StartInstanceInput("domain", "workflow", sync: true)
+        {
+            Instance = new CreateInstanceInput { Attributes = null },
+            TrustedPayload = trusted
+        };
+
+        input.ToExecutionContext(Guid.NewGuid(), "start").TrustedPayload.ShouldBe(trusted);
+    }
+
+    [Fact]
+    public void TrustedPayload_DefaultsToFalse_ForPublicInputs()
+    {
+        new TransitionInput("domain", "workflow", sync: true).TrustedPayload.ShouldBeFalse();
+        new StartInstanceInput("domain", "workflow", sync: true).TrustedPayload.ShouldBeFalse();
+    }
+
     [Fact]
     public void StartInstanceInput_ToExecutionContext_SyncTrue_SetsBothModeAndCallerModeToSync()
     {

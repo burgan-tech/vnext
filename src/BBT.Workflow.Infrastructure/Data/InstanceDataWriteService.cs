@@ -8,6 +8,7 @@ using BBT.Workflow.Definitions;
 using BBT.Workflow.Encryption;
 using BBT.Workflow.ExceptionHandling;
 using BBT.Workflow.Execution.Pipeline;
+using BBT.Workflow.Files;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Shared.Merging;
@@ -87,73 +88,188 @@ public sealed class InstanceDataWriteService(
         CancellationToken cancellationToken = default,
         Definitions.Workflow? workflow = null)
     {
+        // Before the gate: the master schema is loaded once (validation, x-encryption and x-storage all read it), and
+        // the x-storage offload runs here — no binding I/O under the instance gate or the row lock, and the buffered
+        // (history: none) path below never sees the bytes either.
+        var schema = await LoadSchemaAsync(workflow, cancellationToken);
+        delta = await OffloadFilesAsync(instance, workflow, schema, delta, cancellationToken);
+
         using var gate = await InstanceWriteGate.AcquireAsync(instance.Id, cancellationToken);
-        return await AppendCoreAsync(instance, delta, versionStrategy, workflow, cancellationToken);
+        if (instance.DataBuffer is { } buffer)
+            return await AppendBufferedAsync(instance, buffer, delta, versionStrategy, schema, cancellationToken);
+
+        return await AppendCoreAsync(instance, delta, versionStrategy, schema, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async Task<InstanceData?> FlushAsync(
+        Instance instance,
+        Definitions.Workflow? workflow,
+        Func<CancellationToken, Task>? inSameTransaction = null,
+        CancellationToken cancellationToken = default)
+    {
+        var buffer = instance.DataBuffer;
+        if (buffer is null || !buffer.HasPendingChanges)
+        {
+            if (inSameTransaction is not null)
+                await inSameTransaction(cancellationToken);
+            return null;
+        }
+
+        var schema = await LoadSchemaAsync(workflow, cancellationToken);
+        using var gate = await InstanceWriteGate.AcquireAsync(instance.Id, cancellationToken);
+        var baseVersion = buffer.BaseRow?.Version;
+
+        // The accumulated delta is merged onto the PERSISTED head, so encryption, hashing, sanitizing
+        // and validation run exactly as for a direct append; only the version is folded from the
+        // strategies the buffer accepted.
+        var row = await AppendCoreAsync(
+            instance,
+            buffer.AccumulatedDelta!,
+            VersionStrategy.None,
+            schema,
+            cancellationToken,
+            versionResolver: head =>
+            {
+                if (!string.Equals(head?.Version, baseVersion, StringComparison.Ordinal))
+                    logger.InstanceDataBufferDrift(instance.Id, baseVersion, head?.Version);
+                return buffer.ResolveVersion(head?.Version);
+            },
+            afterPersist: inSameTransaction);
+
+        buffer.MarkFlushed(row);
+        logger.InstanceDataBufferFlushed(instance.Id, row?.Version, row is not null);
+        return row;
+    }
+
+    /// <summary>
+    /// Buffered append of a <c>history: none</c> instance (vnext#1006): merges the delta onto the
+    /// buffer's in-memory head with the same <see cref="PlanAppend"/> rules and validates the merged
+    /// content, without touching the database. The buffer changes only after validation passes.
+    /// </summary>
+    private async Task<InstanceData?> AppendBufferedAsync(
+        Instance instance,
+        InstanceDataBuffer buffer,
+        JsonData delta,
+        VersionStrategy? versionStrategy,
+        SchemaLoad schemaLoad,
+        CancellationToken cancellationToken)
+    {
+        var headRow = buffer.Head;
+        var head = headRow is null
+            ? null
+            : new InstanceDataHeadRow { Version = headRow.Version, DataHash = headRow.DataHash, Data = headRow.Data.Json };
+
+        var schema = ResolveSchema(schemaLoad, head);
+        var writeOptions = executionOptions.Value.InstanceDataWrite;
+        var plan = PlanAppend(
+            head, delta, versionStrategy, writeOptions.LegacyAppendPipeline, writeOptions.PreserveNumericPrecision);
+        if (plan.IsDuplicate)
+            return null;
+
+        // A head carrying x-encryption values holds tokens, not the plaintext the schema describes:
+        // the flush validates the opened document instead.
+        if (!EncryptedValueFormat.MayContainReserved(plan.Content.Json))
+            await ValidateAgainstSchemaAsync(schema, plan.Content);
+
+        var accumulated = buffer.AccumulatedDelta is { } previous
+            ? JsonData.FromNormalized(JsonCanonicalizer.MergeAndCanonicalize(
+                previous.JsonElement,
+                delta.JsonElement,
+                writeOptions.PreserveNumericPrecision ? JsonNumberPolicy.PreservePrecision : JsonNumberPolicy.Legacy).NormalizedJson)
+            : delta;
+
+        var row = buffer.Accept(
+            instance.Id, plan.Content, InstanceData.ComputeDataHash(plan.Content), plan.Version, accumulated, versionStrategy);
+        logger.InstanceDataBuffered(instance.Id, row.Version);
+        return row;
     }
 
     private async Task<InstanceData?> AppendCoreAsync(
         Instance instance,
         JsonData delta,
         VersionStrategy? versionStrategy,
-        Definitions.Workflow? workflow,
-        CancellationToken cancellationToken)
+        SchemaLoad schemaLoad,
+        CancellationToken cancellationToken,
+        Func<InstanceDataHeadRow?, string>? versionResolver = null,
+        Func<CancellationToken, Task>? afterPersist = null)
     {
         var context = await dbContextProvider.GetDbContextAsync();
 
         return await RunLockedAsync(context, instance.Id, cancellationToken, async () =>
         {
-            var head = await ReadHeadAsync(context, instance.Id, cancellationToken);
-            var schema = await ResolveSchemaAsync(workflow, head, cancellationToken);
-            var (encryption, plainHead, sanitizedDelta) =
-                await PrepareEncryptionAsync(context, instance.Id, schema, head, delta, cancellationToken);
+            var row = await AppendLockedAsync(context, instance, delta, versionStrategy, schemaLoad, versionResolver, cancellationToken);
 
-            var writeOptions = executionOptions.Value.InstanceDataWrite;
-            var plan = PlanAppend(
-                plainHead, sanitizedDelta, versionStrategy, writeOptions.LegacyAppendPipeline, writeOptions.PreserveNumericPrecision);
+            // Runs inside the row-lock transaction, so a flush and the caller's own save commit together.
+            if (afterPersist is not null)
+                await afterPersist(cancellationToken);
 
-            // x-encryption "hash" is applied to the merged document BEFORE dedup: the digest is deterministic
-            // within the instance, so an unchanged value hashes to what the head already stores.
-            var content = encryption.Secret is { } secret
-                ? protector!.ApplyHashes(plan.Content, encryption.Paths.Hash, secret)
-                : plan.Content;
-
-            // Version and size are only known now (PlanAppend needs the head read under the row
-            // lock) — the span starts here rather than at method entry, per Task 9.
-            using var activity = StartAppendActivity(
-                plan.Version, Encoding.UTF8.GetByteCount(content.NormalizedJson));
-
-            // A row that will carry tokens is hashed with a key (see AesGcmFieldCipher.KeyedHash); the
-            // dedup compares in that scheme. A head hashed in the other scheme misses once — one extra row.
-            var dataHash = encryption.KeyedHash
-                ? InstanceDataProtector.KeyedDataHash(content, encryption.Secret!)
-                : InstanceData.ComputeDataHash(content);
-            var isDuplicate = encryption.Secret is not null
-                ? head is not null && string.Equals(dataHash, head.DataHash, StringComparison.OrdinalIgnoreCase)
-                : plan.IsDuplicate;
-
-            if (isDuplicate)
-            {
-                return null;
-            }
-
-            await ValidateAgainstSchemaAsync(schema, content);
-
-            var stored = Seal(instance.Id, content, encryption);
-
-            // A strategy append always sits at or above the head → it takes the latest flag.
-            // VersionNo is line-scoped: the next ordinal WITHIN the target Version string.
-            var row = new InstanceData(Guid.NewGuid(), instance.Id, plan.Version, stored, dataHash, isLatest: true)
-            {
-                // A new semantic-version line always starts at one. Only same-version appends
-                // need MAX(VersionNo), which removes one query from every version increment.
-                VersionNo = head is null || !string.Equals(plan.Version, head.Version, StringComparison.Ordinal)
-                    ? 1
-                    : await ReadLineMaxAsync(context, instance.Id, plan.Version, cancellationToken) + 1
-            };
-
-            await PersistAsync(context, instance, row, demoteStaleLatest: head is not null, cancellationToken);
             return row;
         });
+    }
+
+    private async Task<InstanceData?> AppendLockedAsync(
+        WorkflowDbContext context,
+        Instance instance,
+        JsonData delta,
+        VersionStrategy? versionStrategy,
+        SchemaLoad schemaLoad,
+        Func<InstanceDataHeadRow?, string>? versionResolver,
+        CancellationToken cancellationToken)
+    {
+        var head = await ReadHeadAsync(context, instance.Id, cancellationToken);
+        var schema = ResolveSchema(schemaLoad, head);
+        var (encryption, plainHead, sanitizedDelta) =
+            await PrepareEncryptionAsync(context, instance.Id, schema, head, delta, cancellationToken);
+
+        var writeOptions = executionOptions.Value.InstanceDataWrite;
+        var plan = PlanAppend(
+            plainHead, sanitizedDelta, versionStrategy, writeOptions.LegacyAppendPipeline, writeOptions.PreserveNumericPrecision);
+        if (versionResolver is not null)
+            plan = plan with { Version = versionResolver(head) };
+
+        // x-encryption "hash" is applied to the merged document BEFORE dedup: the digest is deterministic
+        // within the instance, so an unchanged value hashes to what the head already stores.
+        var content = encryption.Secret is { } secret
+            ? protector!.ApplyHashes(plan.Content, encryption.Paths.Hash, secret)
+            : plan.Content;
+
+        // Version and size are only known now (PlanAppend needs the head read under the row
+        // lock) — the span starts here rather than at method entry, per Task 9.
+        using var activity = StartAppendActivity(
+            plan.Version, Encoding.UTF8.GetByteCount(content.NormalizedJson));
+
+        // A row that will carry tokens is hashed with a key (see AesGcmFieldCipher.KeyedHash); the
+        // dedup compares in that scheme. A head hashed in the other scheme misses once — one extra row.
+        var dataHash = encryption.KeyedHash
+            ? InstanceDataProtector.KeyedDataHash(content, encryption.Secret!)
+            : InstanceData.ComputeDataHash(content);
+        var isDuplicate = encryption.Secret is not null
+            ? head is not null && string.Equals(dataHash, head.DataHash, StringComparison.OrdinalIgnoreCase)
+            : plan.IsDuplicate;
+
+        if (isDuplicate)
+        {
+            return null;
+        }
+
+        await ValidateAgainstSchemaAsync(schema, content);
+
+        var stored = Seal(instance.Id, content, encryption);
+
+        // A strategy append always sits at or above the head → it takes the latest flag.
+        // VersionNo is line-scoped: the next ordinal WITHIN the target Version string.
+        var row = new InstanceData(Guid.NewGuid(), instance.Id, plan.Version, stored, dataHash, isLatest: true)
+        {
+            // A new semantic-version line always starts at one. Only same-version appends
+            // need MAX(VersionNo), which removes one query from every version increment.
+            VersionNo = head is null || !string.Equals(plan.Version, head.Version, StringComparison.Ordinal)
+                ? 1
+                : await ReadLineMaxAsync(context, instance.Id, plan.Version, cancellationToken) + 1
+        };
+
+        await PersistAsync(context, instance, row, demoteStaleLatest: head is not null, cancellationToken);
+        return row;
     }
 
     /// <inheritdoc />
@@ -165,8 +281,11 @@ public sealed class InstanceDataWriteService(
         CancellationToken cancellationToken = default,
         Definitions.Workflow? workflow = null)
     {
+        var schema = await LoadSchemaAsync(workflow, cancellationToken);
+        data = await OffloadFilesAsync(instance, workflow, schema, data, cancellationToken);
+
         using var gate = await InstanceWriteGate.AcquireAsync(instance.Id, cancellationToken);
-        return await AppendExplicitCoreAsync(instance, id, version, data, workflow, cancellationToken);
+        return await AppendExplicitCoreAsync(instance, id, version, data, schema, cancellationToken);
     }
 
     private async Task<InstanceData> AppendExplicitCoreAsync(
@@ -174,7 +293,7 @@ public sealed class InstanceDataWriteService(
         Guid id,
         string version,
         JsonData data,
-        Definitions.Workflow? workflow,
+        SchemaLoad schemaLoad,
         CancellationToken cancellationToken)
     {
         // Version and data are already known at entry — unlike AppendCoreAsync, no head read is
@@ -197,7 +316,7 @@ public sealed class InstanceDataWriteService(
             }
 
             var head = await ReadHeadAsync(context, instance.Id, cancellationToken);
-            var schema = await ResolveSchemaAsync(workflow, head, cancellationToken);
+            var schema = ResolveSchema(schemaLoad, head);
             var (encryption, _, sanitized) =
                 await PrepareEncryptionAsync(context, instance.Id, schema, head, data, cancellationToken);
             var content = encryption.Secret is { } secret
@@ -461,26 +580,86 @@ public sealed class InstanceDataWriteService(
     }
 
     /// <summary>
-    /// Resolves the workflow's master schema once per append — validation and <c>x-encryption</c> both read it.
+    /// x-storage defence in depth (spec §3): <c>content</c> produced by task outputs or subflow output mappings is
+    /// offloaded (Trusted) before the row is written. Runs outside the instance write gate and the row lock.
+    /// </summary>
+    /// <remarks>
+    /// Runs on every append, so the no-op path does no extra I/O: the fields come from the schema the append already
+    /// loaded (<see cref="LoadSchemaAsync"/>; no second component-cache read) through a memo whose hit allocates
+    /// nothing. No workflow or no master schema on it (same rule as validation — the caller holds the definition), a
+    /// host without the Application module (workers, DbMigrator), a master schema without <c>x-storage</c> fields, or
+    /// a delta with no <c>content</c> or <c>file</c> member at any <c>x-storage</c> path (read-only probe, no mutable
+    /// DOM) ⇒ no span and no offload call. A master schema that could not be loaded refuses the write
+    /// (<see cref="FileSchemaUnavailableException"/>, 503) when the delta could carry a file — the paths are unknown —
+    /// and leaves any other delta alone. A failure throws (<see cref="FileOffloadFailure"/>: 503 store unavailable /
+    /// 400 invalid node) and follows the caller's normal error path; nothing has been written.
+    /// </remarks>
+    private async Task<JsonData> OffloadFilesAsync(
+        Instance instance,
+        Definitions.Workflow? workflow,
+        SchemaLoad schemaLoad,
+        JsonData delta,
+        CancellationToken cancellationToken)
+    {
+        if (workflow is null || (schemaLoad.Schema is null && schemaLoad.FailedKey is null))
+            return delta;
+
+        // Resolved lazily for the same reason as IComponentCacheStore: the service lives in the Application module.
+        var offloadService = serviceProvider.GetService<IFileOffloadService>();
+        if (offloadService is null)
+            return delta;
+
+        var element = delta.JsonElement;
+        if (element.ValueKind != System.Text.Json.JsonValueKind.Object)
+            return delta;
+
+        if (schemaLoad.Schema is not { } schema)
+        {
+            return FileNodeWalker.AnyFileShapedNode(element)
+                ? throw new FileSchemaUnavailableException(schemaLoad.FailedKey!)
+                : delta;
+        }
+
+        var fields = offloadService.GetFields(schema);
+        if (fields.Count == 0 || !FileNodeWalker.AnyContentOrFile(element, fields))
+            return delta;
+
+        using var activity = PipelineStepActivityHelper.StartOperationActivity("Files.Offload");
+        var result = await offloadService.OffloadAsync(new FileOffloadRequest(
+            workflow, instance.Id, element, LatestData: null, FileOffloadMode.Trusted, fields), cancellationToken);
+        if (!result.IsSuccess)
+        {
+            activity?.SetStatus(ActivityStatusCode.Error, result.Error.Code);
+            throw FileOffloadFailure.ToException(result.Error);
+        }
+
+        return result.Value!.Changed && result.Value.Payload is { } payload
+            ? JsonData.FromElement(payload)
+            : delta;
+    }
+
+    /// <summary>
+    /// The master schema as loaded before the write gate: <see cref="FailedKey"/> is set when the workflow names a
+    /// schema that could not be loaded (the head-dependent decision is taken under the lock, <see cref="ResolveSchema"/>).
+    /// </summary>
+    private readonly record struct SchemaLoad(SchemaDefinition? Schema, string? FailedKey);
+
+    /// <summary>
+    /// Loads the workflow's master schema once per append, before the write gate — validation, <c>x-encryption</c>
+    /// and <c>x-storage</c> all read it.
     /// </summary>
     /// <remarks>
     /// The definition arrives as an argument from the caller, which already holds it (the pipeline
     /// context, the script context, the start path's own load). It used to be read from an ambient
     /// scope, and a caller running outside such a scope silently skipped validation; passing it
     /// explicitly keeps that outcome visible at each call site instead of hiding it here.
-    /// <para>
-    /// A schema that cannot be resolved is skipped (logged) as before — unless the instance's head already carries
-    /// <c>x-encryption</c> values: then the write cannot know which paths to protect and is refused
-    /// (<see cref="EncryptionSchemaUnavailableException"/>, 503) instead of storing them in plaintext.
-    /// </para>
     /// </remarks>
-    private async Task<SchemaDefinition?> ResolveSchemaAsync(
+    private async Task<SchemaLoad> LoadSchemaAsync(
         Definitions.Workflow? workflow,
-        InstanceDataHeadRow? head,
         CancellationToken cancellationToken)
     {
         if (workflow?.Schema is null)
-            return null;
+            return default;
 
         // Resolved lazily: IComponentCacheStore lives in the Application module, which non-HTTP
         // hosts (workers, DbMigrator) do not load. Those hosts never pass a workflow, so this line
@@ -489,18 +668,26 @@ public sealed class InstanceDataWriteService(
         if (componentCacheStore is null)
         {
             logger.InstanceDataSchemaLoadFailed(workflow.Schema.Key, "IComponentCacheStore is not registered in this host");
-            return SchemaUnavailable(workflow.Schema.Key, head);
+            return new SchemaLoad(null, workflow.Schema.Key);
         }
 
         var schemaResult = await componentCacheStore.GetSchemaAsync(workflow.Schema, cancellationToken);
         if (!schemaResult.IsSuccess)
         {
             logger.InstanceDataSchemaLoadFailed(workflow.Schema.Key, schemaResult.Error.Message);
-            return SchemaUnavailable(workflow.Schema.Key, head);
+            return new SchemaLoad(null, workflow.Schema.Key);
         }
 
-        return schemaResult.Value;
+        return new SchemaLoad(schemaResult.Value, null);
     }
+
+    /// <summary>
+    /// The loaded schema, or — when it could not be loaded — skipped (logged at load) as before, unless the
+    /// instance's head already carries <c>x-encryption</c> values: then the write cannot know which paths to protect
+    /// and is refused (<see cref="EncryptionSchemaUnavailableException"/>, 503) instead of storing them in plaintext.
+    /// </summary>
+    private SchemaDefinition? ResolveSchema(SchemaLoad load, InstanceDataHeadRow? head)
+        => load.FailedKey is { } key ? SchemaUnavailable(key, head) : load.Schema;
 
     // An instance whose head already carries x-encryption values is known to use them: without the schema the
     // write cannot know which paths to protect, so it is refused rather than stored in plaintext.

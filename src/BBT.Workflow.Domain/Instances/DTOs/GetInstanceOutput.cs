@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Shared;
 
@@ -295,6 +296,65 @@ public sealed class GetInstanceIncidentsOutput
 
     /// <summary>Incidents on this page, newest first. Stack traces are never included.</summary>
     public List<IncidentDetailDto> Items { get; set; } = [];
+
+    /// <summary>1-based page number.</summary>
+    public int Page { get; set; }
+
+    /// <summary>Page size.</summary>
+    public int PageSize { get; set; }
+
+    /// <summary>Whether a next page exists.</summary>
+    public bool HasNext { get; set; }
+}
+
+/// <summary>
+/// One data row of an instance's data history. <see cref="Data"/> is the row as the caller may see it — the same
+/// <c>x-roles</c> / <c>x-masking</c> / <c>x-encryption</c> exposure as the data function — never the stored form.
+/// </summary>
+public sealed class InstanceDataHistoryItemDto
+{
+    /// <summary>The data row's id (addresses the single-row read).</summary>
+    public Guid Id { get; set; }
+
+    /// <summary>Semantic version of the row.</summary>
+    public string Version { get; set; } = string.Empty;
+
+    /// <summary>1-based ordinal of the row within its <see cref="Version"/> line.</summary>
+    public long VersionNo { get; set; }
+
+    /// <summary>When the row was written (UTC); the global chronology of the history.</summary>
+    public DateTime EnteredAt { get; set; }
+
+    /// <summary>The row's entity ETag, unquoted.</summary>
+    public string ETag { get; set; } = string.Empty;
+
+    /// <summary>Whether this is the instance's latest data row.</summary>
+    public bool IsLatest { get; set; }
+
+    /// <summary>The exposed data; omitted when the caller asked for metadata only.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public JsonElement? Data { get; set; }
+
+    /// <summary>Maps a row's metadata; <paramref name="exposedData"/> must already be the exposed form.</summary>
+    public static InstanceDataHistoryItemDto FromRow(InstanceData row, JsonElement? exposedData) => new()
+    {
+        Id = row.Id,
+        Version = row.Version,
+        VersionNo = row.VersionNo,
+        EnteredAt = row.EnteredAt,
+        ETag = row.ETag,
+        IsLatest = row.IsLatest,
+        Data = exposedData
+    };
+}
+
+/// <summary>
+/// One page of an instance's data history, newest first.
+/// </summary>
+public sealed class GetInstanceDataHistoryOutput
+{
+    /// <summary>Data rows on this page, newest first.</summary>
+    public List<InstanceDataHistoryItemDto> Items { get; set; } = [];
 
     /// <summary>1-based page number.</summary>
     public int Page { get; set; }

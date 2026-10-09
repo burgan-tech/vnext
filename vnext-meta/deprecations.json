@@ -170,22 +170,44 @@
       "type": "field",
       "component": "task",
       "path": "attributes.config.keyExpression",
-      "deprecatedSince": "0.0.98",
-      "removedAt": "0.0.98",
+      "deprecatedSince": "0.0.99",
+      "removedAt": "0.0.99",
       "replacement": "attributes.config.key",
       "severity": "error",
-      "message": "CacheAsideTask.keyExpression is removed. Move the expression into the key field as a ScriptCode object: key: { location: 'dynamicExpresso', code: '...' } (a non-dynamicExpresso location compiles an ICacheKeyMapping instead). FunctionCache keeps its own keyExpression; it is unrelated."
+      "message": "CacheAsideTask.keyExpression is removed. Move the expression into the key field as a ScriptCode object: key: { location: 'dynamicExpresso', encoding: 'NAT', code: '...' } (encoding defaults to B64, so plain-text code needs NAT) (a non-dynamicExpresso location compiles an ICacheKeyMapping instead). FunctionCache keeps its own keyExpression; it is unrelated."
     },
     {
     "id": "instance-hierarchy-function-renamed",
     "type": "endpoint",
     "component": "runtime",
     "path": "GET /{domain}/workflows/{workflow}/instances/{instance}/functions/hierarchy",
-    "deprecatedSince": "0.0.98",
-    "removedAt": "0.0.98",
+    "deprecatedSince": "0.0.99",
+    "removedAt": "0.0.99",
     "replacement": "GET /{domain}/workflows/{workflow}/instances/{instance}/functions/instance-correlation",
     "severity": "error",
     "message": "The 'hierarchy' system function was renamed to 'instance-correlation' (vnext-client-sdk-core#58 AB-20). It is a HARD BREAK with no alias: the old path now falls through to custom-function resolution and answers 404 (Cache:300001, 'Function not found in runtime backend'). The name was changed because the tree is built purely from InstanceCorrelation rows, so it now says what it actually reads. The RESPONSE BODY IS UNCHANGED for every field that already existed - only the route changed - and it gains eight members: correlationId (the link's own id, the handle for addressing the correlation rather than the instance), createdAt (when the child was spawned), terminalOutcome (Completed/Faulted/Canceled - isCompleted only says whether the link ended, not how), stateChangedAt, href and ownState. NOTE href is INSTANCE-scoped here (it addresses the node's own instance resource); the state function's correlations[].href, on the same InstanceCorrelation row, is DATA-scoped - same field name, different target, so do not assume parity. ownState is the node's OWN state, added because currentState reports the deepest active descendant's state and therefore misplaces a node that has an active subflow of its own; currentState keeps its existing meaning. The four link-scoped members are absent on the root, which is nobody's correlated child. resolved and unresolvedReason describe whether this node's own SUBTREE was walked to the end: false means children is incomplete for a reason other than 'there are none' (depth-exceeded, hop-failed, instance-missing). The node itself is always real; only its descendants are in question. A client that cannot distinguish a genuine leaf from an unreachable partner domain must read these. The MCP tool 'get_instance_hierarchy' was renamed to 'get_instance_correlation' in the same change. Deployment note: a gateway that allowlists paths must learn the new one. The OTel read-kind also changed, so spans moved from Instance.Read/hierarchy to Instance.Read/instanceCorrelation - saved dashboard queries filtering on the old value stop matching."
+    },
+    {
+      "id": "execution-grpc-transport-removed",
+      "type": "behavior",
+      "component": "runtime",
+      "path": "ExecutionApi:Transport = 'grpc', Kestrel:GrpcPort",
+      "deprecatedSince": "0.0.100",
+      "removedAt": "0.0.100",
+      "replacement": "Dapr HTTP service invocation (the default, unchanged): POST /api/v1/execution/invoke/{type}/{key}",
+      "severity": "warning",
+      "message": "The opt-in Orchestration -> Execution gRPC proxy-mode transport is removed (issue #1056). Orchestration always invokes Execution over Dapr HTTP service invocation; ExecutionApi:Transport is no longer read, so a leftover 'grpc' value is ignored. Execution no longer binds the second h2c Kestrel port (Kestrel:GrpcPort) or serves the TaskInvoker gRPC service, and listens only on its hosting URL (ASPNETCORE_URLS). An environment that had moved the Execution sidecar to app-protocol grpc and app-port = execution.grpcPort must return to app-protocol http and the HTTP port (the vnext Helm chart defaults). Dapr sidecar gRPC ports and OTLP gRPC export are unaffected."
+    },
+    {
+      "id": "subflow-chain-reserve-claim",
+      "type": "behavior",
+      "component": "runtime",
+      "path": "TransitionInput.ChainReserved / SubflowForwardInput.ChainReserved (POST /{domain}/workflows/{workflow}/instances/{instance}/internal/subflow-forward), PUT /{domain}/workflows/{workflow}/instances/{instance}/busy, PUT /{domain}/workflows/{workflow}/instances/{instance}/internal/busy-release",
+      "deprecatedSince": "0.0.100",
+      "removedAt": null,
+      "replacement": "Leaf-side admission via the SubFlow transition proxy: a parent with an active SubFlow forwards the transition to the leaf in the parent's execution mode, and the leaf validates, swaps x-storage files, flips Busy and schedules its own job.",
+      "severity": "warning",
+      "message": "Parents no longer reserve the SubFlow chain on an async accept; they proxy forwardable transitions to the active SubFlow (#101). The chain-reserve claim (ChainReserved on the internal subflow-forward relay and on TransitionInput), the PUT .../busy chain propagation and PUT .../internal/busy-release are still ACCEPTED from older-version runtimes, and this runtime still sends the claim and runs the release compensation for a parent job an older runtime's accept enqueued (in flight across an upgrade). A relay that carries the claim is not proxied, keeps the owner re-entry admission at the leaf, and its body still goes through the x-storage file swap there. Mixed-version domains need no action. Planned removal no earlier than 0.0.103 (three releases), once no older runtime can still reserve a chain or have such a job in flight."
     }
-  ]
+]
 }

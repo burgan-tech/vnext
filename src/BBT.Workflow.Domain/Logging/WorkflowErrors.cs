@@ -73,6 +73,18 @@ public static class WorkflowErrors
             $"Instance data not found for key {key} and version {version}",
             target: $"{key}@{version}");
 
+    /// <summary>
+    /// The data row addressed by the data-history row read does not exist or belongs to a different instance than
+    /// the one in the route — a data row is never served across instances.
+    /// </summary>
+    /// <param name="rowId">The requested data row id.</param>
+    /// <param name="instanceIdentifier">The instance id or key from the route.</param>
+    public static Error InstanceDataRowNotFound(Guid rowId, string instanceIdentifier)
+        => Error.NotFound(
+            WorkflowErrorCodes.NotFoundInstanceData,
+            $"Data row \"{rowId}\" not found for instance \"{instanceIdentifier}\"",
+            target: rowId.ToString());
+
     #endregion
 
     #region Workflow Definition Errors
@@ -345,6 +357,33 @@ public static class WorkflowErrors
             target: instanceId.ToString());
 
     /// <summary>
+    /// A <c>history: none</c> parent started a SubFlow child whose definition keeps full history (vnext#1006).
+    /// </summary>
+    public static Error HistoryNoneSubFlowChildNotEligible(string childFlow, string childVersion, string? parentFlow)
+        => Error.Validation(
+            WorkflowErrorCodes.HistoryNoneSubFlowChildNotEligible,
+            $"SubFlow '{childFlow}@{childVersion}' cannot start under parent '{parentFlow}' with history 'none': the child definition must also declare history 'none'",
+            target: childFlow);
+
+    /// <summary>
+    /// Retry is not available for an instance of a <c>history: none</c> flow (vnext#1006).
+    /// </summary>
+    public static Error HistoryNoneRetryNotSupported(Guid instanceId, string flow)
+        => Error.Conflict(
+            WorkflowErrorCodes.HistoryNoneRetryNotSupported,
+            $"Instance {instanceId} of flow '{flow}' runs with history 'none'; retry needs the transition history that such a flow never writes",
+            target: instanceId.ToString());
+
+    /// <summary>
+    /// A <c>history: none</c> stage came to rest at a non-Finish state (vnext#1006).
+    /// </summary>
+    public static Error HistoryNoneNotTerminal(Guid instanceId, string state)
+        => Error.Validation(
+            WorkflowErrorCodes.HistoryNoneNotTerminal,
+            $"Instance {instanceId} runs with history 'none' and came to rest at non-Finish state '{state}'; a one-shot flow must reach a Finish state",
+            target: state);
+
+    /// <summary>
     /// A request introduced a value carrying the reserved <c>ENCRYPTED:AES256:</c> prefix at <paramref name="path"/>
     /// that is not the token already stored there. The value is never echoed.
     /// </summary>
@@ -364,6 +403,34 @@ public static class WorkflowErrors
             WorkflowErrorCodes.EncryptionKeyUnavailable,
             $"An encrypted field of instance \"{instanceId}\" cannot be decrypted (path \"{path}\"); its key is not available on this host",
             target: instanceId.ToString());
+
+    /// <summary>The binding holding <c>x-storage</c> files is unavailable; transient, nothing was persisted.</summary>
+    public static Error FileStoreUnavailable(string component)
+        => Error.Transient(
+            WorkflowErrorCodes.FileStoreUnavailable,
+            $"File store \"{component}\" is unavailable; the request was not applied and can be retried",
+            target: component);
+
+    /// <summary>An <c>x-storage</c> node is malformed or references a file not stored at that path.</summary>
+    public static Error FileReferenceInvalid(string path, string reason)
+        => Error.Validation(
+            WorkflowErrorCodes.FileReferenceInvalid,
+            $"The file at \"{path}\" is invalid: {reason}",
+            target: path);
+
+    /// <summary>The master schema could not be resolved, so the x-storage paths of the request are unknown.</summary>
+    public static Error FileSchemaUnavailable(string schemaKey)
+        => Error.Transient(
+            WorkflowErrorCodes.FileSchemaUnavailable,
+            $"Master schema \"{schemaKey}\" could not be resolved; the request may carry x-storage files and was not applied, it can be retried",
+            target: schemaKey);
+
+    /// <summary>The file is not referenced by the instance's latest data.</summary>
+    public static Error FileNotFound(string file)
+        => Error.NotFound(
+            WorkflowErrorCodes.FileNotFound,
+            $"File \"{file}\" is not referenced by this instance",
+            target: file);
 
     /// <summary>
     /// Instance is Busy: a transition is already queued or executing.

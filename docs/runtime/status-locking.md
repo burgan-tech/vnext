@@ -19,7 +19,7 @@ Busy at the accept, and why `updateData` takes no lock at all.
   **gone**. They came from the old whole-chain lock model; with a millisecond-scale status lock a
   reserved transition no longer needs its own key to get past a Busy main flow.
 - **`AcceptAsync`'s callback runs with the lock HELD** — never call `ReserveAsync`/`TakeOverAsync`/
-  `ReserveSubflowChainAsync`/`Release*` from inside it. `InstanceStatusLock` is a single-attempt,
+  `Release*` from inside it. `InstanceStatusLock` is a single-attempt,
   non-reentrant `TryAcquire`; the nested call would simply fail to acquire.
 - The duplicate-active-job guard shares that critical section because its check-then-insert has
   **no DB constraint** behind it. A partial unique index cannot replace it: a `$self` auto loop and
@@ -39,8 +39,13 @@ Busy at the accept, and why `updateData` takes no lock at all.
 - There is **no duplicate transition-record guard** downstream. Duplicate *requests* are stopped
   only by the accept-time active-job guard; duplicate *hops* by the per-hop policy checks.
 
+A forwardable transition on a parent with an active `S` SubFlow never reaches this lock on the parent:
+the [transition proxy](../architecture/subflow-transition-proxy.md) forwards it and the **leaf** takes
+the one status lock. (Async still pre-stamps the parent's `EffectiveStatus` outside the lock, in its own
+UoW, and no longer reserves the chain.)
+
 ## Related
 
 - [Workflow Execution Pipeline](../architecture/workflow-execution-pipeline.md) — admission and the Busy ownership marker.
-- [Accept-Time Chain Reserve](../architecture/subflow-chain-reserve.md) — the subflow-forward variant of the async accept.
+- [SubFlow Transition Proxy](../architecture/subflow-transition-proxy.md) — a parent with an active SubFlow takes no lock and flips no Busy for a forwardable transition; only the leaf admits it. The old chain reserve is on the [LEGACY page](../architecture/subflow-chain-reserve.md).
 - [Async Transition Execution Modes](../architecture/async-transition-execution-modes.md)

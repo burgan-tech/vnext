@@ -153,7 +153,9 @@ public sealed class InstanceController(
             StrictIdempotency = true,
             // This surface is called only by a parent runtime, which reads IsSuccess from the
             // response and nothing else — never project attributes here.
-            SuppressResponseEnrichment = true
+            SuppressResponseEnrichment = true,
+            // Cross-domain child start from a parent runtime (subflow input mapping): runtime-produced.
+            TrustedPayload = true
         };
         var httpContext = httpContextAccessor.HttpContext;
         if (httpContext is not null)
@@ -281,6 +283,11 @@ public sealed class InstanceController(
     /// <summary>
     /// Marks an instance Busy and recursively propagates to nested SubFlows.
     /// Internal endpoint for cross-domain SubFlow busy propagation.
+    /// <para>
+    /// LEGACY receiving side: this runtime's accepts no longer reserve a SubFlow chain, so only an
+    /// older-version parent still calls it. Kept until the <c>subflow-chain-reserve-claim</c>
+    /// deprecation (vnext-meta) is removed.
+    /// </para>
     /// </summary>
     /// <param name="domain">Target workflow domain.</param>
     /// <param name="workflow">Target workflow definition key.</param>
@@ -384,6 +391,8 @@ public sealed class InstanceController(
     /// Releases an accept-time SubFlow chain reserve, recursively propagating to nested SubFlows.
     /// Internal-only compensation endpoint — the mirror of <see cref="MarkBusyAsync"/>. Levels
     /// holding an open SubFlow correlation are Busy by design and are recursed past, not released.
+    /// LEGACY receiving side, like <see cref="MarkBusyAsync"/>: reached only by the compensation of a
+    /// chain reserve an older-version runtime took (<c>subflow-chain-reserve-claim</c> deprecation).
     /// </summary>
     /// <param name="domain">Target workflow domain.</param>
     /// <param name="workflow">Target workflow definition key.</param>
@@ -489,6 +498,43 @@ public sealed class InstanceController(
         // instance maps to 204 No Content — deliberately NOT 404, which would be indistinguishable
         // from a misrouted request or a wrong app id. Absence is data; a wrong route is a fault.
         return FromResult(result);
+    }
+
+    /// <summary>
+    /// Reads an x-storage file of one instance for <c>ScriptBase.GetFileAsync</c> in another domain.
+    /// Internal-to-internal, same posture as <c>internal/related-data</c>: no caller identity, no queryRoles and no
+    /// x-roles check (trusted network; service authentication is on the security roadmap — see
+    /// docs/contracts/api-and-service-contracts.md). Never expose this route publicly. The handle is still looked up in
+    /// the instance's latest data, so the binding and object key never come from the caller.
+    /// </summary>
+    /// <response code="200">The raw bytes; <c>ETag</c> and <c>X-File-Handle</c> (base64 UTF-8 JSON of the handle) set.</response>
+    /// <response code="404">The file is not referenced by the instance's latest data, or the instance does not exist.</response>
+    /// <response code="503">The file store is unavailable.</response>
+    [ApiExplorerSettings(IgnoreApi = true)]
+    [HttpGet("{domain}/workflows/{workflow}/instances/{instance}/internal/file")]
+    public async Task<IActionResult> GetInternalFileAsync(
+        [FromRoute] string domain,
+        [FromRoute] string workflow,
+        [FromRoute] string instance,
+        [FromQuery, Required] string file,
+        [FromServices] BBT.Workflow.Files.IInstanceFileAppService fileAppService,
+        CancellationToken cancellationToken = default)
+    {
+        var result = await fileAppService.ReadAsync(
+            new BBT.Workflow.Files.InstanceFileRequest(domain, workflow, instance, file, IfNoneMatch: null, Authorization: null),
+            cancellationToken);
+        if (!result.IsSuccess)
+            return FromResult(result);
+
+        var content = result.Value!;
+        Response.Headers[HeadersConstants.ETag] = $"\"{content.Handle.ETag}\"";
+        Response.Headers[HeadersConstants.XFileHandle] = Convert.ToBase64String(
+            System.Text.Encoding.UTF8.GetBytes(content.Handle.ToJsonNode().ToJsonString()));
+        // The stored mimeType is client-supplied; an unparseable one is served as opaque bytes.
+        var contentType = Microsoft.Net.Http.Headers.MediaTypeHeaderValue.TryParse(content.Handle.MimeType, out _)
+            ? content.Handle.MimeType!
+            : "application/octet-stream";
+        return File(content.Bytes!, contentType);
     }
 
     /// <summary>
@@ -1223,6 +1269,94 @@ public sealed class InstanceController(
         };
 
         var response = await queryAppService.GetInstanceIncidentsAsync(input, cancellationToken);
+        return response.ToActionResult(HttpContext);
+    }
+
+    /// <summary>
+    /// Pages the instance data history (one row per data write), newest first. Each row's data goes
+    /// through the same per-caller exposure as the <c>data</c> function (field filtering and secret
+    /// handling), never the raw stored form. Not gated here: <c>queryRoles</c> is answered by
+    /// <c>authorize?queryRoles=true</c>, which the gateway consults before forwarding. Hidden from the
+    /// public Swagger group: it serves local-development tooling (vNext Forge Instance Monitor).
+    /// </summary>
+    /// <param name="domain">Domain key</param>
+    /// <param name="workflow">Workflow key</param>
+    /// <param name="instance">Instance id or business key</param>
+    /// <param name="page">1-based page number (default 1)</param>
+    /// <param name="pageSize">Page size (default 20, max 100)</param>
+    /// <param name="includeData">When false, rows carry metadata only and no data (default true)</param>
+    /// <param name="cancellationToken">Cancellation token</param>
+    [ApiExplorerSettings(IgnoreApi = true)]
+    [HttpGet("{domain}/workflows/{workflow}/instances/{instance}/data/history")]
+    public async Task<IActionResult> GetInstanceDataHistoryAsync(
+        [FromRoute] string domain,
+        [FromRoute] string workflow,
+        [FromRoute] string instance,
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 20,
+        [FromQuery] bool includeData = true,
+        CancellationToken cancellationToken = default)
+    {
+        var requestContext = HttpContext.GetRequestBindingContext();
+
+        // Same provider-resolved roles as the state/data functions; the read has no role gate of its own.
+        var callerRoles = await callerRoleResolver.ResolveRolesAsync(requestContext.Headers, cancellationToken);
+        if (!callerRoles.IsSuccess)
+            return FromResult(BBT.Aether.Results.Result.Fail(callerRoles.Error));
+
+        var input = new GetInstanceDataHistoryInput
+        {
+            Domain = domain,
+            Workflow = workflow,
+            Instance = instance,
+            Page = page,
+            PageSize = pageSize,
+            IncludeData = includeData,
+            Headers = requestContext.Headers,
+            QueryParameters = requestContext.QueryParameters,
+            Roles = callerRoles.Value
+        };
+
+        var response = await queryAppService.GetInstanceDataHistoryAsync(input, cancellationToken);
+        return response.ToActionResult(HttpContext);
+    }
+
+    /// <summary>
+    /// Returns one row of the instance data history, with its data exposed per caller exactly like the
+    /// <c>data</c> function. Answers 404 when the row does not exist or belongs to another instance.
+    /// </summary>
+    /// <param name="domain">Domain key</param>
+    /// <param name="workflow">Workflow key</param>
+    /// <param name="instance">Instance id or business key</param>
+    /// <param name="rowId">Data history row id</param>
+    /// <param name="cancellationToken">Cancellation token</param>
+    [ApiExplorerSettings(IgnoreApi = true)]
+    [HttpGet("{domain}/workflows/{workflow}/instances/{instance}/data/history/{rowId:guid}")]
+    public async Task<IActionResult> GetInstanceDataHistoryRowAsync(
+        [FromRoute] string domain,
+        [FromRoute] string workflow,
+        [FromRoute] string instance,
+        [FromRoute] Guid rowId,
+        CancellationToken cancellationToken = default)
+    {
+        var requestContext = HttpContext.GetRequestBindingContext();
+
+        var callerRoles = await callerRoleResolver.ResolveRolesAsync(requestContext.Headers, cancellationToken);
+        if (!callerRoles.IsSuccess)
+            return FromResult(BBT.Aether.Results.Result.Fail(callerRoles.Error));
+
+        var input = new GetInstanceDataHistoryRowInput
+        {
+            Domain = domain,
+            Workflow = workflow,
+            Instance = instance,
+            RowId = rowId,
+            Headers = requestContext.Headers,
+            QueryParameters = requestContext.QueryParameters,
+            Roles = callerRoles.Value
+        };
+
+        var response = await queryAppService.GetInstanceDataHistoryRowAsync(input, cancellationToken);
         return response.ToActionResult(HttpContext);
     }
 

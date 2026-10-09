@@ -287,6 +287,81 @@ public sealed class AuthorizeAppServiceSubflowTests : IDisposable
         (await AuthorizeAckAsync()).Value!.Allowed.ShouldBeTrue();
     }
 
+    // ------------------------------------------------- parent-owned shared transitions
+
+    /// <summary>A parent in <c>waiting</c> (CurrentState, which the proxy reads) with an open SubFlow.</summary>
+    private static Instance ParentInWaitingWithActiveSubflow()
+    {
+        var instance = ParentWithActiveSubflow();
+        instance.ChangeState(StateFactory.CreateDefault("waiting", StateType.SubFlow));
+        return instance;
+    }
+
+    private void GivenParentWithSharedTransition(Instance instance, string availableIn)
+    {
+        var workflow = BuildParentWorkflow();
+        var shared = Transition.Create("escalate", null, "$self", TriggerType.Manual, "Patch");
+        shared.AddAvailableIn(availableIn);
+        workflow.AddSharedTransition(shared);
+        _instanceRepository.FindByIdentifierAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(instance);
+        _componentCache.GetFlowAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+            .Returns(Result<WorkflowDefinition>.Ok(workflow));
+    }
+
+    private Task<Result<AuthorizeOutput>> AuthorizeTransitionAsync(string transitionKey) =>
+        _sut.GetAuthorizeResultForInstanceAsync(
+            Domain, Flow, Guid.NewGuid().ToString(), role: string.Empty,
+            transitionKey: transitionKey, functionKey: null, version: null,
+            checkQueryRoles: false, checkAck: false,
+            requestContext: new AuthorizationRequestContext(new Dictionary<string, string?>()));
+
+    /// <summary>
+    /// A shared transition available in the parent's current state runs on the parent (the proxy
+    /// does not forward it), so authorize answers on the parent and does not descend.
+    /// </summary>
+    [Fact]
+    public async Task SharedTransitionAvailableInCurrentState_IsAnsweredOnTheParent()
+    {
+        GivenParentWithSharedTransition(ParentInWaitingWithActiveSubflow(), availableIn: "waiting");
+        // The leaf would deny and the parent allows: the verdict must be the parent's.
+        GivenLeafVerdict(false);
+        _authManager.IsTransitionAllowedInStateAsync(
+                Arg.Any<WorkflowDefinition>(), Arg.Is<Transition>(t => t.Key == "escalate"), "waiting",
+                Arg.Any<Instance?>(), Arg.Any<IReadOnlyCollection<string>?>(),
+                Arg.Any<AuthorizationRequestContext?>(), Arg.Any<CancellationToken>())
+            .Returns(true);
+
+        var result = await AuthorizeTransitionAsync("escalate");
+
+        result.IsSuccess.ShouldBeTrue();
+        result.Value!.Allowed.ShouldBeTrue();
+        await _gateway.DidNotReceive().GetAuthorizeResultForInstanceAsync(
+            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(),
+            Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<bool>(), Arg.Any<bool>(),
+            Arg.Any<AuthorizationRequestContext?>(), Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// Same predicate as the proxy: a shared transition the parent's current state does NOT offer is
+    /// forwarded to the active SubFlow at execution, so authorize descends for it too (it used to be
+    /// answered — and denied — on the parent).
+    /// </summary>
+    [Fact]
+    public async Task SharedTransitionNotAvailableInCurrentState_Descends()
+    {
+        GivenParentWithSharedTransition(ParentInWaitingWithActiveSubflow(), availableIn: "some-other-state");
+        GivenLeafVerdict(true);
+
+        var result = await AuthorizeTransitionAsync("escalate");
+
+        result.Value!.Allowed.ShouldBeTrue();
+        await _gateway.Received(1).GetAuthorizeResultForInstanceAsync(
+            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(),
+            Arg.Is<string?>("escalate"), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<bool>(), Arg.Any<bool>(),
+            Arg.Any<AuthorizationRequestContext?>(), Arg.Any<CancellationToken>());
+    }
+
     // ------------------------------------------------------------- target validation
 
     [Fact]

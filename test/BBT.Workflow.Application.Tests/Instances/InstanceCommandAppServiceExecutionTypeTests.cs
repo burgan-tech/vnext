@@ -91,6 +91,9 @@ public sealed class InstanceCommandAppServiceExecutionTypeTests : IDisposable
             longPollAckResumeService: Substitute.For<ILongPollAckResumeService>(),
             instanceCommandGateway: Substitute.For<IInstanceCommandGateway>(),
             workflowOutputMappingService: Substitute.For<IWorkflowOutputMappingService>(),
+            fileOffloadService: BBT.Workflow.Application.Files.FileTestDoubles.PassThroughOffload(),
+            rawBodyProvider: Substitute.For<BBT.Workflow.Scripting.IRequestRawBodyProvider>(),
+            subflowProxyService: Substitute.For<BBT.Workflow.SubFlow.ISubflowProxyService>(),
             logger: Substitute.For<ILogger<InstanceCommandAppService>>());
     }
 
@@ -150,6 +153,24 @@ public sealed class InstanceCommandAppServiceExecutionTypeTests : IDisposable
 
         _captured!.Mode.ShouldBe(ExecMode.Sync);        // forced sync preserved, definition ignored
         _captured.CallerMode.ShouldBe(ExecMode.Sync);
+    }
+
+    /// <summary>
+    /// x-storage: a DirectTrigger transition carries a body the flow authored (TrustedPayload). The flag
+    /// must reach the execution context, or its references are echo-checked as a client's and rejected.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task TransitionAsync_CarriesTheTrustedPayloadFlagToTheExecutionContext(bool trusted)
+    {
+        SetupInstanceAndWorkflow(WithSharedTransition(executionType: null));
+        var input = Input(sync: true);
+        input.TrustedPayload = trusted;
+
+        await _service.TransitionAsync(Guid.NewGuid().ToString(), "go", input, CancellationToken.None);
+
+        _captured!.TrustedPayload.ShouldBe(trusted);
     }
 
     private void SetupInstanceAndWorkflow(Definitions.Workflow workflow)

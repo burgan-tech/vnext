@@ -4,6 +4,7 @@ using BBT.Aether.Uow;
 using BBT.Workflow.BackgroundJobs;
 using BBT.Workflow.Execution.Continuations;
 using BBT.Workflow.Execution.Validation;
+using BBT.Workflow.Files;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Telemetry;
@@ -33,6 +34,8 @@ public class TransitionPipeline
     private readonly ITransitionAdmissionService _admissionService;
     private readonly IInstanceStatusLock _statusLock;
     private readonly ILogger<TransitionPipeline> _logger;
+    private readonly IInstanceDataWriteService? _instanceDataWriteService;
+    private readonly IFileAdmission _fileAdmission;
 
     /// <summary>
     /// Maximum allowed chain depth for automatic transitions.
@@ -72,10 +75,13 @@ public class TransitionPipeline
         IStateNotificationScheduler stateNotificationScheduler,
         ITransitionAdmissionService admissionService,
         IInstanceStatusLock statusLock,
+        IFileAdmission fileAdmission,
         ILogger<TransitionPipeline> logger,
-        ISubItemEventDataResolver? subItemDataResolver = null)
+        ISubItemEventDataResolver? subItemDataResolver = null,
+        IInstanceDataWriteService? instanceDataWriteService = null)
     {
         _subItemDataResolver = subItemDataResolver;
+        _instanceDataWriteService = instanceDataWriteService;
         _executor = executor;
         _continuationDispatcher = continuationDispatcher;
         _busyMarker = busyMarker;
@@ -88,6 +94,7 @@ public class TransitionPipeline
         _stateNotificationScheduler = stateNotificationScheduler;
         _admissionService = admissionService;
         _statusLock = statusLock;
+        _fileAdmission = fileAdmission;
         _logger = logger;
     }
 
@@ -132,6 +139,19 @@ public class TransitionPipeline
             : await _validationService.ValidateAsync(context, cancellationToken);
         if (!validationResult.IsSuccess)
             return Result<TransitionExecutionContext>.Fail(validationResult.Error);
+
+        // x-storage: swap file content for handles before anything is recorded (transition body,
+        // data, job payload). Only at the request's single validation point — a job re-entry and the
+        // start path carry a payload that was already swapped (the async accept / the start before
+        // the instance row). A request this parent relays to its active SubFlow is left for the leaf.
+        // An older-version parent's relay (ChainReservedRelay) is pre-reserved but was swapped
+        // nowhere, so it is swapped here even though IsPreReserved skips the schema.
+        if (!payloadAlreadyValidated || workflowContext.ChainReservedRelay)
+        {
+            var files = await _fileAdmission.ApplyAsync(context, workflowContext, cancellationToken);
+            if (!files.IsSuccess)
+                return Result<TransitionExecutionContext>.Fail(files.Error);
+        }
 
         if (context.SkipImmediateExecution)
             return Result<TransitionExecutionContext>.Ok(context);
@@ -192,10 +212,9 @@ public class TransitionPipeline
                 // which runs the same admission logic in its own context. It does NOT own the
                 // parent's status.
                 //
-                // Deliberately NO chain reserve here, unlike the async accept: a sync caller
-                // blocks until the relay has actually reached the leaf, so there is no window in
-                // which it could observe a stale Active. Reserving the chain here would only
-                // widen the stranded-Busy surface.
+                // No chain reserve here, and none on the async accept either any more: the leaf
+                // runs its own admission when the relay reaches it (a client request is proxied
+                // there at intake and does not get here at all).
                 if (_admissionService.IsSubflowForward(context))
                     return await RunChainAsync(context, cancellationToken);
 
@@ -241,9 +260,10 @@ public class TransitionPipeline
             if (context.ChainDepth > MaxChainDepth)
             {
                 _logger.TransitionChainDepthExceeded(context.ChainDepth, MaxChainDepth, context.TransitionKey);
-                return Result<TransitionExecutionContext>.Fail(
+                return await FailChainAsync(context,
                     WorkflowErrors.TransitionChainDepthExceeded(
-                        context.ChainDepth, MaxChainDepth, context.TransitionKey));
+                        context.ChainDepth, MaxChainDepth, context.TransitionKey),
+                    cancellationToken);
             }
 
             // Execute pipeline steps for this transition
@@ -318,6 +338,10 @@ public class TransitionPipeline
             // Do not consume the jobs: it returns the intact directives to the runner.
             if (context.Directives.PostCommitJobs.Count > 0)
             {
+                // history: none — the handoff ends the stage; HandleSubFlowStep already wrote the
+                // buffer, this only covers a handoff that did not go through it.
+                await FlushBufferedDataAsync(context, cancellationToken);
+
                 // Keep the continuation intact so the runner awaits it after commit and child handoff.
                 return Result<TransitionExecutionContext>.Ok(context);
             }
@@ -335,11 +359,15 @@ public class TransitionPipeline
                 if (reservedForHandoff)
                     await _admissionService.ReleaseReservationAsync(context, cancellationToken);
 
-                return Result<TransitionExecutionContext>.Fail(continuationResult.Error);
+                return await FailChainAsync(context, continuationResult.Error, cancellationToken);
             }
 
             if (continuationResult.Value is null)
             {
+                // history: none — a one-shot stage must end at Finish (or hand off to a SubFlow).
+                if (await SettleHistoryNoneStageAsync(context, cancellationToken))
+                    return Result<TransitionExecutionContext>.Ok(context);
+
                 // The inline chain is complete; apply the deferred status.
                 await TransitionSettlement.ApplyAsync(
                     context,
@@ -357,9 +385,92 @@ public class TransitionPipeline
             // Rebuild and validate the next chained transition context (single source of truth).
             var nextContextResult = await CreateAndValidateContextAsync(continuationResult.Value, context, cancellationToken);
             if (!nextContextResult.IsSuccess)
-                return Result<TransitionExecutionContext>.Fail(nextContextResult.Error);
+                return await FailChainAsync(context, nextContextResult.Error, cancellationToken);
 
             context = nextContextResult.Value!;
+        }
+    }
+
+    /// <summary>
+    /// Ends a chain that cannot continue. A <c>history: none</c> instance (vnext#1006) is faulted with
+    /// its buffered data written — returning the failure alone would leave it Busy with nothing
+    /// persisted. Every other instance keeps the existing behaviour: the failure is returned.
+    /// </summary>
+    private async Task<Result<TransitionExecutionContext>> FailChainAsync(
+        TransitionExecutionContext context,
+        Error error,
+        CancellationToken cancellationToken)
+    {
+        if (!context.Instance.IsDataBuffered)
+            return Result<TransitionExecutionContext>.Fail(error);
+
+        Activity.Current.MarkFaultedOnLocalChain(error.Code, error.Message);
+        await MarkInstanceFaultedAsync(context, error, cancellationToken);
+
+        return IsClientFacingError(error)
+            ? Result<TransitionExecutionContext>.Fail(error)
+            : Result<TransitionExecutionContext>.Ok(context);
+    }
+
+    /// <summary>
+    /// The rest point of a <c>history: none</c> stage (vnext#1006). Finish already wrote the data.
+    /// A stage that rests with an open SubFlow, or under a non-owner, only writes its buffer. Any
+    /// other rest is a non-Finish state the one-shot flow cannot leave: the instance is faulted with
+    /// <c>HistoryNoneNotTerminal</c> and its buffered data written. Returns true when it faulted.
+    /// </summary>
+    private async Task<bool> SettleHistoryNoneStageAsync(
+        TransitionExecutionContext context,
+        CancellationToken cancellationToken)
+    {
+        if (!context.Instance.IsDataBuffered || context.Instance.IsCompleted)
+            return false;
+
+        if (!context.OwnsStatus || TransitionSettlement.HasOpenSubFlow(context))
+        {
+            await FlushBufferedDataAsync(context, cancellationToken);
+            return false;
+        }
+
+        var state = context.Instance.GetCurrentState;
+        _logger.HistoryNoneStageFaulted(context.InstanceId, context.WorkflowKey, state);
+        var error = WorkflowErrors.HistoryNoneNotTerminal(context.InstanceId, state);
+        Activity.Current.MarkFaultedOnLocalChain(error.Code, error.Message);
+        await MarkInstanceFaultedAsync(context, error, cancellationToken);
+        return true;
+    }
+
+    /// <summary>Writes the buffered data of a <c>history: none</c> instance, if any (vnext#1006).</summary>
+    private async Task FlushBufferedDataAsync(TransitionExecutionContext context, CancellationToken cancellationToken)
+    {
+        if (context.Instance.IsDataBuffered && _instanceDataWriteService is not null)
+            await _instanceDataWriteService.FlushAsync(context.Instance, context.Workflow, null, cancellationToken);
+    }
+
+    /// <summary>
+    /// Fault-path flush of a <c>history: none</c> instance's buffer, in a unit of work of its own so a
+    /// failed write cannot leave the fault's context dirty. Best effort: a failure is logged and the
+    /// fault proceeds without the data (accepted, vnext#1006).
+    /// </summary>
+    /// <remarks>
+    /// Flushed through a SNAPSHOT (it shares the buffer): the write runs on another DbContext, and
+    /// handing it the stage's tracked aggregate would put the persisted row into that aggregate's
+    /// navigation — the stage's own commit then inserts it a second time (23505 PK_InstancesData).
+    /// </remarks>
+    private async Task FlushBufferedDataBestEffortAsync(TransitionExecutionContext context, CancellationToken cancellationToken)
+    {
+        if (!context.Instance.IsDataBuffered || _instanceDataWriteService is null)
+            return;
+
+        try
+        {
+            await using var flushUow = _uowManager.Begin(
+                new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew });
+            await _instanceDataWriteService.FlushAsync(context.Instance.CreateSnapshot(), context.Workflow, null, cancellationToken);
+            await flushUow.CommitAsync(cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.InstanceDataBufferFlushFailed(ex, context.InstanceId);
         }
     }
 
@@ -447,6 +558,9 @@ public class TransitionPipeline
         activity.SetResultError(error.Code, error.Message);
 
         await using var statusScope = await _statusLock.AcquireAsync(context.LockKey, cancellationToken);
+
+        // history: none — write the buffered data before the reload below picks up the instance.
+        await FlushBufferedDataBestEffortAsync(context, cancellationToken);
 
         await using var faultUow = _uowManager.Begin(
             new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew });

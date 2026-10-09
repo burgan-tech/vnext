@@ -113,6 +113,7 @@ services:
       "--app-id", "vnext-app",
       "--app-port", "5000",
       "--resources-path", "./components",
+      "--max-body-size", "64Mi",
       "--dapr-grpc-port", "42111",
       "--dapr-http-port", "42110",
       "--scheduler-host-address", "dapr-scheduler:50007",
@@ -120,6 +121,7 @@ services:
     volumes:
       - "../../etc/orchestration/dapr/components:/components"
       - "../../etc/orchestration/dapr/config.yaml:/dapr-config.yaml"
+      - "./data/blobs:/blobs"
     network_mode: "service:vnext-app"
     depends_on:
       - vnext-app

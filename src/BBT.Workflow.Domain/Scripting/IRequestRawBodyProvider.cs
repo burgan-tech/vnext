@@ -1,3 +1,5 @@
+using System.Text.Json;
+
 namespace BBT.Workflow.Scripting;
 
 /// <summary>
@@ -13,4 +15,16 @@ public interface IRequestRawBodyProvider
     /// (e.g. purely internal executions with neither an HTTP request nor a job scope).
     /// </summary>
     string? GetRawBody();
+
+    /// <summary>
+    /// Replaces the business payload inside the raw body seen by the rest of the current request: the
+    /// x-storage admission swaps file <c>content</c> for handles, and scripts must never see the bytes.
+    /// When the captured body is a standard <c>{ key, tags, stage, attributes }</c> envelope only its
+    /// <c>attributes</c> member is rewritten; a free-form (raw-mode) body is replaced by
+    /// <paramref name="attributes"/> whole. Only the live request is affected, never an ambient job scope.
+    /// Hosts without a request body keep the default no-op.
+    /// </summary>
+    void ReplaceRawBodyAttributes(JsonElement? attributes)
+    {
+    }
 }

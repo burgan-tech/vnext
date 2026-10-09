@@ -24,11 +24,13 @@ using BBT.Workflow.Telemetry;
 using BBT.Workflow.Execution.Transitions.Services;
 using BBT.Workflow.Execution.Validation;
 using BBT.Workflow.Extentions;
+using BBT.Workflow.Files;
 using BBT.Workflow.Headers;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Definitions.Timer;
 using Dapr.Jobs.Models;
 using BBT.Workflow.Scripting;
+using BBT.Workflow.SubFlow;
 using BBT.Workflow.Tasks.Evaluation;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
@@ -62,6 +64,9 @@ public sealed class InstanceCommandAppService(
     ILongPollAckResumeService longPollAckResumeService,
     IInstanceCommandGateway instanceCommandGateway,
     IWorkflowOutputMappingService workflowOutputMappingService,
+    IFileOffloadService fileOffloadService,
+    IRequestRawBodyProvider rawBodyProvider,
+    ISubflowProxyService subflowProxyService,
     ILogger<InstanceCommandAppService> logger)
     : ApplicationService(serviceProvider), IInstanceCommandAppService
 {
@@ -77,6 +82,21 @@ public sealed class InstanceCommandAppService(
             return Result<StartInstanceOutput>.Fail(workflowResult.Error);
 
         var workflow = workflowResult.Value!;
+
+        // A history-none parent only starts history-none SubFlow children (vnext#1006). Checked before
+        // anything is persisted; the parent faults through its post-commit coordination path.
+        if (input.Instance.ExtraProperties.RequiresHistoryNoneChild() && !workflow.SuppressesHistory)
+        {
+            var parentFlow = input.Instance.ExtraProperties.TryGetValue(DomainConsts.MetaDataKeys.Flow, out var flow)
+                ? flow?.ToString()
+                : null;
+            var parentId = input.Instance.ExtraProperties.TryGetValue(DomainConsts.MetaDataKeys.Id, out var id)
+                ? id?.ToString()
+                : null;
+            logger.SubFlowChildHistoryNotSuppressed(parentId, workflow.Key, workflow.Version);
+            return Result<StartInstanceOutput>.Fail(
+                WorkflowErrors.HistoryNoneSubFlowChildNotEligible(workflow.Key, workflow.Version, parentFlow));
+        }
 
         // The start request opened the activation episode (the request middleware seeded its start
         // from the server span); name the trigger and the transition now that both are known.
@@ -268,7 +288,7 @@ public sealed class InstanceCommandAppService(
 
     /// <summary>
     /// Step 3: Prepares the instance (create, configure, persist).
-    /// Railway chain: Create Instance → Validate → Map Data → Persist
+    /// Railway chain: Create Instance → Validate → x-storage swap → Persist → Map Data
     /// </summary>
     private async Task<Result<(Definitions.Workflow Workflow, Instance Instance)>> PrepareInstanceAsync(
         Definitions.Workflow workflow,
@@ -296,6 +316,7 @@ public sealed class InstanceCommandAppService(
                 input.Instance.Callback,
                 cancellationToken)
             .ThenAsync(instance => ValidateStartTransitionAsync(workflow, instance, input, cancellationToken))
+            .ThenAsync(instance => OffloadStartFilesAsync(workflow, instance, input, cancellationToken))
             .ThenAsync(instance => PersistInstanceAsync(workflow, instance, cancellationToken))
             .ThenAsync(data => MapAndAppendInstanceDataAsync(data, input, cancellationToken));
 
@@ -337,6 +358,64 @@ public sealed class InstanceCommandAppService(
     }
 
     /// <summary>
+    /// x-storage on start (spec §3): swap file content for handles after validation and before the
+    /// instance row exists, so a store failure creates no instance and a retry with the same key is not
+    /// turned into an idempotent no-op. The start transition later runs with
+    /// <c>PayloadSchemaValidated</c> and reuses the swapped attributes. A start has no LatestData, so an
+    /// external content-less reference is always rejected.
+    /// </summary>
+    private async Task<Result<Instance>> OffloadStartFilesAsync(
+        Definitions.Workflow workflow,
+        Instance instance,
+        StartInstanceInput input,
+        CancellationToken cancellationToken)
+    {
+        // Not applicable ⇒ no work and no span (trace-span-tree: non-applicable steps leave no trace).
+        if (input.Instance.Attributes is not { ValueKind: JsonValueKind.Object })
+            return Result<Instance>.Ok(instance);
+        // Nothing file-shaped in the attributes ⇒ nothing to swap or check, whatever the schema declares: no schema load.
+        if (!FileNodeWalker.AnyFileShapedNode(input.Instance.Attributes.Value))
+            return Result<Instance>.Ok(instance);
+        // A master schema that cannot be loaded fails closed (503 FileSchemaUnavailable, no instance row) when the
+        // attributes could carry a file; otherwise the start proceeds with no fields.
+        var resolved = FileStorageFields.ForPayload(
+            await fileOffloadService.GetFieldsAsync(workflow, cancellationToken), input.Instance.Attributes.Value);
+        if (!resolved.IsSuccess)
+            return Result<Instance>.Fail(resolved.Error);
+        var fields = resolved.Value!;
+        if (fields.Count == 0)
+            return Result<Instance>.Ok(instance);
+
+        using var activity = PipelineStepActivityHelper.StartTransitionActivity(
+            "Files.Offload", workflow.StartTransition?.Key);
+        var result = await fileOffloadService.OffloadAsync(new FileOffloadRequest(
+            workflow,
+            instance.Id,
+            input.Instance.Attributes,
+            LatestData: null,
+            input.TrustedPayload ? FileOffloadMode.Trusted : FileOffloadMode.External,
+            fields), cancellationToken);
+        if (!result.IsSuccess)
+        {
+            activity?.SetStatus(ActivityStatusCode.Error, result.Error.Code);
+            return Result<Instance>.Fail(result.Error);
+        }
+
+        if (result.Value!.Changed)
+        {
+            input.Instance.Attributes = result.Value.Payload;
+            // Scripts read ScriptContext.RawBody, which is whatever the provider returns: a client start
+            // must expose the handles, never the bytes (the envelope's other members are kept). A trusted
+            // start (subflow input, trigger task) has no raw body of its own and must not overwrite the
+            // outer request's.
+            if (!input.TrustedPayload)
+                rawBodyProvider.ReplaceRawBodyAttributes(result.Value.Payload);
+        }
+
+        return Result<Instance>.Ok(instance);
+    }
+
+    /// <summary>
     /// Persists the instance to the repository (data-less — the initial data version is
     /// appended AFTERWARDS through the write service, so its row lock has a row to grab).
     /// Infrastructure errors (DB connection, etc.) propagate to middleware - not wrapped in Result.
@@ -373,7 +452,9 @@ public sealed class InstanceCommandAppService(
                 cancellationToken)
             .TapAsync(async mappedData =>
             {
-                if (mappedData != null)
+                // history: none (vnext#1006) writes no initial row: the start transition maps the same
+                // payload again in the pipeline, where the data is buffered until the single write.
+                if (mappedData != null && !data.Workflow.SuppressesHistory)
                 {
                     await instanceDataWriteService.AppendAsync(
                         data.Instance,
@@ -636,8 +717,9 @@ public sealed class InstanceCommandAppService(
         //    bound Flow/FlowVersion, so the workflow definition is resolved ONCE here (from the
         //    component cache) and reused for the rest of the request. Classification decides the
         //    fast-fail: cancel/exit/updateData are exempt, and a Busy parent with an active
-        //    SubFlow is admitted so the pipeline can forward the request to the subflow. This is
-        //    a fast-fail only — the authoritative decision is the reserve under the status lock.
+        //    SubFlow is not rejected here — a forwardable request is proxied to the subflow below
+        //    (step 3), anything else runs on the parent. This is a fast-fail only — the
+        //    authoritative decision is the reserve under the status lock.
         InstanceExecutionSnapshot? snapshot;
         Definitions.Workflow? workflowDefinition = null;
         // Named because it is the head of every transition request and used to sit unattributed
@@ -699,6 +781,33 @@ public sealed class InstanceCommandAppService(
                 instance));
         }
 
+        // 3) A parent with an active SubFlow is a proxy for a forwardable transition: no lock, no
+        //    Busy, no job here. It resolves the mode (its own definition, else the caller's flag) and
+        //    the child admits the request in exactly that mode — validation, x-storage swap, Busy CAS,
+        //    its own job. A child that is itself a parent proxies again, so the leaf is reached
+        //    level by level. Non-forwardable keys (updateData/cancel/exit/timeout, a shared transition
+        //    available in this state, an old-version relay that claims a chain reserve) run here.
+        var proxied = await subflowProxyService.TryProxyAsync(
+            snapshot, workflowDefinition!, transitionKey, input, cancellationToken);
+        if (proxied is { } proxyResult)
+        {
+            if (!proxyResult.IsSuccess)
+                return proxyResult;
+
+            var proxiedOutput = proxyResult.Value!;
+            AddTransitionHeader(proxiedOutput, snapshot.Flow!, snapshot.FlowVersion);
+
+            // Same response contract as the run-here path below: a sync client gets the parent's
+            // enriched body (the status stays the child's — enrichment only lifts a Busy that has
+            // meanwhile settled terminal); an async client and a runtime-internal relay get identity.
+            if (proxiedOutput.ExecutedAsync != true && !input.SuppressResponseEnrichment)
+                return await EnrichSyncOutputAsync(proxiedOutput, proxiedOutput.Id, workflowDefinition,
+                    new AuthorizationRequestContext(input.Headers), cancellationToken);
+
+            proxiedOutput.Key = snapshot.Key;
+            return proxyResult;
+        }
+
         var context = BuildTransitionContext(snapshot, transitionKey, input, workflowDefinition!);
 
         // No validation here. Validation belongs to the execution entry, and both entries run it
@@ -737,25 +846,12 @@ public sealed class InstanceCommandAppService(
         TransitionInput input,
         Definitions.Workflow workflow)
     {
-        // #1003: the definition is the source of truth for sync/async — a transition's executionType
-        // (inner) wins over the flow's (outer), and either overrides the caller's sync query parameter.
-        // Absent any definition, the caller's mode stands (pre-#1003 behaviour). CallerMode always keeps
-        // what the caller asked for, so the requested-vs-effective divergence is visible on the trace.
-        // EXCEPT runtime-internal calls: the same-domain subflow forward and the cross-domain relay set
-        // SuppressResponseEnrichment and force sync=true so the parent forwards synchronously into the
-        // active child — executionType must NOT flip that to async.
-        var callerMode = input.Sync ? ExecMode.Sync : ExecMode.Async;
-        var effectiveMode = callerMode;
-        if (!input.SuppressResponseEnrichment)
-        {
-            // Alias-aware: a well-known transition (cancel/updateData/exit) invoked by its reserved alias
-            // while the workflow uses a custom key resolves here too, matching the pipeline's own lookup.
-            var transition = workflow.ResolveWellKnownTransition(transitionKey)
-                             ?? workflow.FindTransitionInContext(transitionKey);
-            effectiveMode = ExecutionModeResolver.Resolve(
-                transition?.ExecutionType, workflow.ExecutionType, callerMode);
-            TagExecutionMode(callerMode, effectiveMode, transition?.ExecutionType, workflow.ExecutionType);
-        }
+        // #1003: the definition is the source of truth for sync/async — see TransitionRequestMode,
+        // shared with the SubFlow proxy. CallerMode always keeps what the caller asked for, so the
+        // requested-vs-effective divergence is visible on the trace. Runtime-internal calls
+        // (SuppressResponseEnrichment: the subflow forward, the cross-domain relay, the proxy) carry
+        // the mode decided one level up as the sync flag and are not re-resolved here.
+        var (callerMode, effectiveMode) = TransitionRequestMode.Resolve(workflow, transitionKey, input);
 
         return new WorkflowExecutionContext
         {
@@ -790,7 +886,15 @@ public sealed class InstanceCommandAppService(
             // accept pre-set nor reserves a second time — and it still settles the status at the
             // end, because OwnerReentry sets OwnsStatus.
             IsPreReserved = input.ChainReserved,
-            SubflowChainReserved = input.ChainReserved
+            SubflowChainReserved = input.ChainReserved,
+
+            // ...but its body is still an unswapped client payload: the older parent's accept left
+            // the x-storage swap to the leaf. Tells the pipeline to swap it despite IsPreReserved.
+            ChainReservedRelay = input.ChainReserved,
+
+            // Server-only (never bound from a request): a DirectTrigger transition carries a body the
+            // flow authored, so its x-storage references are kept as is instead of echo-checked.
+            TrustedPayload = input.TrustedPayload
         };
     }
 
@@ -804,22 +908,7 @@ public sealed class InstanceCommandAppService(
         ExecMode effective,
         Definitions.ExecutionType? transitionExecutionType,
         Definitions.ExecutionType? flowExecutionType)
-    {
-        var activity = System.Diagnostics.Activity.Current;
-        if (activity is null)
-        {
-            return;
-        }
-
-        activity.SetTag(TelemetryConstants.TagNames.ExecutionRequested, ToModeTag(requested));
-        activity.SetTag(TelemetryConstants.TagNames.ExecutionEffective, ToModeTag(effective));
-        if (ExecutionModeResolver.IsOverriddenByDefinition(transitionExecutionType, flowExecutionType, requested))
-        {
-            activity.SetTag(TelemetryConstants.TagNames.ExecutionOverridden, true);
-        }
-    }
-
-    private static string ToModeTag(ExecMode mode) => mode == ExecMode.Async ? "ASYNC" : "SYNC";
+        => TransitionRequestMode.Tag(requested, effective, transitionExecutionType, flowExecutionType);
 
     /// <summary>
     /// Adds workflow header to the transition response using instance flow and version.

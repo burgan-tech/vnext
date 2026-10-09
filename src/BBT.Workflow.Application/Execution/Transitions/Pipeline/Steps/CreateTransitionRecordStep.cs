@@ -1,6 +1,8 @@
 using BBT.Aether.Guids;
 using BBT.Workflow.Execution.Transitions.Services;
 using BBT.Workflow.Definitions;
+using BBT.Workflow.ExceptionHandling;
+using BBT.Workflow.Files;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Runtime;
 using System.Text.Json;
@@ -21,6 +23,7 @@ public sealed class CreateTransitionRecordStep(
     IGuidGenerator guidGenerator,
     ITransitionDataMapper transitionDataMapper,
     IRuntimeInfoProvider runtimeInfoProvider,
+    IFileOffloadService fileOffloadService,
     ILogger<CreateTransitionRecordStep> logger) : ITransitionStep
 {
     /// <inheritdoc />
@@ -46,7 +49,8 @@ public sealed class CreateTransitionRecordStep(
         // the original record cannot be found, fall back to normal creation — a retry must not
         // fail on a missing audit row.
         var isReusedRecord = false;
-        if (context.RetryOfTransitionRecordId is { } retriedRecordId)
+        var suppressesHistory = context.Workflow.SuppressesHistory;
+        if (context.RetryOfTransitionRecordId is { } retriedRecordId && !suppressesHistory)
         {
             var original = await instanceTransitionRepository.FindAsync(
                 retriedRecordId, true, cancellationToken);
@@ -68,7 +72,7 @@ public sealed class CreateTransitionRecordStep(
             .TapAsync(mappedData => AppendMappedDataAsync(
                 context, mappedData, transition, instanceTransition, cancellationToken))
             .TapAsync(_ => PersistTransitionRecordAsync(
-                context.Instance, instanceTransition, isReusedRecord, cancellationToken))
+                context.Instance, instanceTransition, isReusedRecord, suppressesHistory, cancellationToken))
             .Tap(_ => UpdateContextItems(context, instanceTransition, isReusedRecord))
             .Map(_ => StepOutcome.Continue());
     }
@@ -81,10 +85,20 @@ public sealed class CreateTransitionRecordStep(
         Instance instance,
         InstanceTransition instanceTransition,
         bool isReusedRecord,
+        bool suppressesHistory,
         CancellationToken cancellationToken)
     {
         using var activity = PipelineStepActivityHelper.StartTransitionActivity(
             "TransitionRecord.Persist", instanceTransition.TransitionId);
+
+        // history: none (vnext#1006): the record stays in memory (scripts still read
+        // CurrentTransition); only the instance's own field changes (key, tags, stage) are saved.
+        if (suppressesHistory)
+        {
+            await instanceRepository.UpdateAsync(instance, true, cancellationToken);
+            return;
+        }
+
         await instanceRepository.UpdateAsync(instance, false, cancellationToken);
         if (isReusedRecord)
             await instanceTransitionRepository.UpdateAsync(instanceTransition, true, cancellationToken);
@@ -185,6 +199,11 @@ public sealed class CreateTransitionRecordStep(
             context.Instance.SetStage(context.Stage);
         }
 
+        if (mappedData != null && transition?.Mapping is not null)
+        {
+            mappedData = await OffloadMappedFilesAsync(context, mappedData, cancellationToken);
+        }
+
         if (mappedData != null)
         {
             await instanceDataWriteService.AppendAsync(
@@ -199,6 +218,55 @@ public sealed class CreateTransitionRecordStep(
                 instanceTransition.SetBody(new JsonData(mappedData));
             }
         }
+    }
+
+    /// <summary>
+    /// x-storage defence in depth (spec §3): <c>content</c> a transition mapping produces is offloaded (Trusted)
+    /// before it reaches the data funnel or the transition record body. Runs only for a mapped transition: the
+    /// field lookup loads the master schema through the component cache once; no <c>x-storage</c> field ⇒ no
+    /// conversion and no span. Otherwise a read-only probe over the element decides — only a <c>content</c> or a
+    /// <c>file</c> member at an <c>x-storage</c> path opens the <c>Files.Offload</c> span and calls the offload (content is
+    /// stored, a file handle is validated). A failure throws (<see cref="FileOffloadFailure"/>) and follows the
+    /// pipeline's normal error path; a master schema that cannot be loaded throws
+    /// <see cref="FileSchemaUnavailableException"/> when the mapped data could carry a file.
+    /// </summary>
+    private async Task<object?> OffloadMappedFilesAsync(
+        TransitionExecutionContext context,
+        object mappedData,
+        CancellationToken cancellationToken)
+    {
+        var element = mappedData is JsonElement e
+            ? e
+            : JsonSerializer.SerializeToElement(mappedData, JsonSerializerConstants.JsonOptions);
+        // Nothing file-shaped anywhere ⇒ nothing to offload or validate whatever the schema says: no schema load.
+        if (element.ValueKind != JsonValueKind.Object || !FileNodeWalker.AnyFileShapedNode(element))
+            return mappedData;
+
+        var fieldsResult = await fileOffloadService.GetFieldsAsync(context.Workflow, cancellationToken);
+        if (fieldsResult.IsSuccess && fieldsResult.Value!.Count == 0)
+            return mappedData;
+
+        // Master schema unavailable: fail closed only when the mapped data could carry a file.
+        var resolved = FileStorageFields.ForPayload(fieldsResult, element);
+        if (!resolved.IsSuccess)
+            throw new FileSchemaUnavailableException(resolved.Error.Target ?? context.Workflow.Schema?.Key ?? string.Empty);
+        var fields = resolved.Value!;
+
+        // Read-only probe: no content and no file reference at any x-storage path ⇒ nothing to offload or validate,
+        // no mutable DOM, no span.
+        if (!FileNodeWalker.AnyContentOrFile(element, fields))
+            return mappedData;
+
+        using var activity = PipelineStepActivityHelper.StartTransitionActivity("Files.Offload", context.TransitionKey);
+        var offload = await fileOffloadService.OffloadAsync(new FileOffloadRequest(
+            context.Workflow, context.Instance.Id, element, LatestData: null, FileOffloadMode.Trusted, fields), cancellationToken);
+        if (!offload.IsSuccess)
+        {
+            activity?.SetStatus(System.Diagnostics.ActivityStatusCode.Error, offload.Error.Code);
+            throw FileOffloadFailure.ToException(offload.Error);
+        }
+
+        return offload.Value!.Changed ? offload.Value.Payload : mappedData;
     }
 
     /// <summary>

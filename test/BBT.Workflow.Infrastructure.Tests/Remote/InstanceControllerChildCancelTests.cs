@@ -197,6 +197,7 @@ public sealed class InstanceControllerChildCancelTests
         captured!.Sync.ShouldBeTrue();
         captured.StrictIdempotency.ShouldBeTrue();
         captured.SuppressResponseEnrichment.ShouldBeTrue();
+        captured.TrustedPayload.ShouldBeTrue(); // cross-domain child start from a parent runtime
     }
 
     [Fact]
@@ -226,6 +227,7 @@ public sealed class InstanceControllerChildCancelTests
         captured!.Sync.ShouldBeTrue();
         captured.ChainReserved.ShouldBeTrue();
         captured.SuppressResponseEnrichment.ShouldBeTrue();
+        captured.TrustedPayload.ShouldBeFalse(); // the forward relays a client body: EXTERNAL
     }
 
     private static InstanceController CreateController(

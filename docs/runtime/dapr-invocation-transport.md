@@ -13,18 +13,14 @@
 
 | Path | Transport | Why |
 |---|---|---|
-| Orchestration → Execution task invoke | gRPC proxy mode (opt-in per env) | Typed internal contract, single inbound surface, supported path |
+| Orchestration → Execution task invoke | Dapr HTTP service invocation (`DaprServiceInvocationClient` → `POST api/v1/execution/invoke/{type}/{key}`) | The only transport. The opt-in gRPC proxy mode was removed in 0.0.100 (issue #1056) — see "History: gRPC proxy mode (removed)" |
 | DaprServiceTask → external domain apps | HTTP API (unchanged) | gRPC→HTTP invocation is deprecated for removal; targets are HTTP apps |
-| App → sidecar state/lock/pubsub calls | SDK-chosen (unchanged) | Deferred — evaluate after the above lands |
+| App → sidecar state/lock/pubsub calls | SDK-chosen (unchanged) | Not in scope of this document |
 | Cross-domain `Remote*` services (orchestrator → other domain's orchestrator) | `DaprClient.CreateInvokeHttpClient()` (SDK `InvocationHandler`, HTTP to the sidecar), opt-in via `ServiceDiscovery:Provider=dapr` | The whole `DaprClient.InvokeMethod*` family is `[Obsolete]` in 1.17; `CreateInvokeHttpClient` is the surface its message points at. Targets are HTTP/JSON controllers, so gRPC on the first hop is not available. See "Cross-domain Remote* services" below. |
 
-> **Formerly a known limitation, now fixed (2026-08-26):** gRPC proxy mode used to produce **two
-> disconnected traces per task invocation** — root-caused to Dapr's AppCallback hop delivering a
-> duplicated, W3C-invalid `traceparent` to the app. Dapr still sends that malformed header, but the
-> Execution host now tolerates it via `DuplicateTolerantTraceContextPropagator`, and gRPC
-> invocations produce **one whole trace tree**, verified live. Business correctness unchanged
-> (`MoneyTransferTests` `5/5` on both transports). See "RESOLVED (was: KNOWN LIMITATION)" under
-> Verification for the evidence and the reasoning behind the fix's placement.
+> **Dapr sidecar gRPC is not what was removed.** Sidecar-to-sidecar traffic is always gRPC, the
+> apps still talk to their sidecar's gRPC API (`DAPR_GRPC_PORT`) for state, lock and pub/sub, and
+> OTLP export may still use gRPC. Only the app-level Orchestration → Execution gRPC service is gone.
 
 ## The three hops (why "protocol: http" in Helm was never the knob)
 
@@ -50,7 +46,7 @@ is configured by `dapr.io/app-protocol`:
 So "protocol: http" in a Helm chart only ever controlled hop 3 for whichever app it was set on —
 never the calling app's own outbound transport, and never the sidecar-to-sidecar leg. Flipping it
 would not have moved `DaprServiceTask` to gRPC; only the SDK method the task calls does that, and
-that method choice is what Decision 1 below turns on.
+that method choice is what the DaprServiceTask verdict below turns on.
 
 ## DaprServiceTask: the evidence
 
@@ -78,7 +74,7 @@ All verified against primary sources on 2026-08-26.
   `Client.InvokeServiceAsync` — the deprecated API. Separately,
   `DaprClient.CreateInvocationInvoker(appId, daprEndpoint, daprApiToken, grpcChannelOptions)`
   exists as the SDK's proxy-mode entry point — the thing the deprecation notice itself points
-  callers toward, and the mechanism Decision 2 uses for Orchestration → Execution.
+  callers toward.
 
 **Why this breaks `DaprServiceTask` specifically.** `DaprServiceTask`'s public contract is built
 around free HTTP semantics: caller-chosen verb, query string, request/response headers,
@@ -97,79 +93,52 @@ runtime-source evidence inline, so it does not need to be re-litigated from scra
 it comes up.
 
 **Re-open condition.** Revisit only if/when `DaprServiceTask`'s targets themselves start speaking
-gRPC. At that point per-target proxy mode — the same `CreateInvocationInvoker` mechanism Decision 2
-below builds for Orchestration → Execution — is the road back in, and this work's machinery is
-exactly what it would reuse. Nothing about today's HTTP-target contract changes until then.
-
-## Orchestration → Execution: the design
+gRPC. At that point per-target proxy mode (`CreateInvocationInvoker`) is the road back in. Nothing
+about today's HTTP-target contract changes until then.
+## Orchestration → Execution
 
 Execution's Dapr-inbound surface is a single endpoint
-(`POST api/v{version}/execution/invoke/{type}/{key}`, `ExecutionController`) with no `[Topic]`
-subscriptions, no job callbacks, and no other inbound service invocation — a narrow, typed, fully
-internal contract, unlike `DaprServiceTask`'s open-ended external HTTP targets. That difference is
-what makes gRPC viable here in a way it is not for `DaprServiceTask`: proxy mode, not
-`InvokeMethodGrpcAsync`, is the path the deprecation notice itself points to — Execution hosts a
-real gRPC service, Orchestration's `RemoteInvokerService` calls it through
-`DaprClient.CreateInvocationInvoker`, and the sidecars pass the gRPC call through end-to-end
-instead of degrading it to HTTP at any hop.
+(`POST api/v{version}/execution/invoke/{type}/{key}`, `ExecutionController` → `TaskInvokeHandler`)
+with no `[Topic]` subscriptions, no job callbacks and no other inbound service invocation.
+Orchestration's `RemoteInvokerService` reaches it through `DaprServiceInvocationClient`
+(`DaprClient.CreateInvokeHttpClient()`), i.e. HTTP to its own sidecar, gRPC + mTLS between the
+sidecars, and HTTP from Execution's sidecar to the app (`dapr.io/app-protocol: http`, the default).
 
-Both server surfaces stay alive on Execution, but **on two separate cleartext ports, not one**.
-The original design assumed a single `Protocols: Http1AndHttp2` Kestrel endpoint could serve both;
-Task 6 verification proved that unworkable and it was corrected in the same task. The constraint:
-**without TLS there is no ALPN to negotiate HTTP/1.1 vs HTTP/2, and Kestrel does not byte-sniff the
-client preface to multiplex both on one cleartext port — it just downgrades the whole endpoint to
-HTTP/1.1.** (Confirmed directly: `curl --http2-prior-knowledge` against a cleartext
-`Http1AndHttp2`-configured endpoint fails with *"Remote peer returned unexpected data while we
-expected SETTINGS frame"*, and Kestrel itself logs `Http2DisabledWithHttp1AndNoTls` at startup —
-*"The endpoint **is** configured to use HTTP/1.1 and HTTP/2 ... Connections to this endpoint will
-use HTTP/1.1."* The config is honored; the protocol simply cannot be negotiated without TLS.)
+Execution hosts one HTTP/1.1 surface — the controller, health probes and swagger — on the port its
+hosting URL declares (`ASPNETCORE_URLS`: `http://+:5000` in the image and the Helm chart,
+`4202` locally). `Kestrel:Limits` is the only Kestrel configuration in code.
 
-So Execution's `Program.cs` opens two explicit `ListenAnyIP` endpoints: an HTTP/1.1-only port
-(the existing controller, health probes, swagger) and an Http2-only h2c port (`Kestrel:GrpcPort`,
-default `4212` — the gRPC `TaskInvoker` service). The HTTP/1.1 port is deliberately **not** a
-second bespoke key — registering any code-based `Listen*` endpoint makes Kestrel discard the
-hosting URLs wholesale, so `Program.cs` parses the port back out of the hosting-URL configuration
-(`ASPNETCORE_URLS`/`--urls`) instead, keeping that variable — the platform's long-standing way of
-declaring this port, set by `vnext.commonEnvVars` in Helm and by `applicationUrl` in
-launchSettings — the single source of truth (default `4202` only when no hosting URL is
-configured at all). `Kestrel:GrpcPort` stays a real, standalone key because the app's gRPC listen
-port is new information with no pre-existing environment variable — it is not, and cannot be,
-`DAPR_GRPC_PORT`: that is the *sidecar's* own API port, carried identically to every service by
-`vnext.commonEnvVars`, which the app calls *out* to Dapr on; an app listening there would collide
-with its own sidecar. `Kestrel:GrpcPort` is plain configuration (overridable via env vars, e.g.
-`Kestrel__GrpcPort`, or `appsettings.{Environment}.json`), not hardcoded in code. A comment at the Kestrel configuration
-site in `Program.cs` quotes the constraint so it is not "simplified" back to one port.
+The wire contract is plain JSON: the request is `TaskInvokeRequest { Envelope, TraceContext }`, the
+response is `TaskInvokeResponse { Success, ErrorMessage, Result, ExecutionDurationMs }`
+(`TaskDtoWireContractParityTests` pins the two DTO families to each other).
 
-Which delivery path actually works is decided by **two things that must move together**:
-`dapr.io/app-protocol` on the Execution pod (`http` → HTTP-API invocation works, proxy mode
-doesn't; `grpc` → proxy mode works, HTTP-API delivery breaks because the sidecar routes to an
-AppCallback that isn't implemented there) **and** `dapr.io/app-port`, which must point at whichever
-port actually speaks that protocol (`4202` for `http`, `4212` for `grpc` in this app's default
-config). Setting only one of the two breaks the pod: `app-protocol: grpc` with `app-port: 4202`
-dials h2c against an HTTP/1.1-only socket and fails at the transport layer before any application
-code runs (this exact failure was reproduced and is documented in Verification below); the
-reverse — `app-protocol: http` with `app-port: 4212` — fails the sidecar's own TCP-listen probe
-against an endpoint that never speaks HTTP/1.1. Because the switch is a Helm value rather than a
-code path, rollback is a config flip and not a rebuild — with the caveat that an old, HTTP-only
-Orchestration cannot reach a `grpc`-flipped Execution, so both ship in the same Helm release and
-the flip is atomic per environment, not engineered around. **Task 7 (Helm) must carry both
-annotations in lockstep, plus expose the Execution container's second port** (`4212` by default) —
-setting `app-protocol` without also moving `app-port` and opening the container port is the failure
-mode most likely to be reintroduced there.
+`RemoteInvokerService` reads `ExecutionApi:AppId` and `ExecutionApi:InvocationTimeoutSeconds = 60`,
+and performs no transport retry by design: the sidecar resiliency policy for this call is
+circuit-breaker-only, because retrying would re-invoke tasks that can have side effects — a decision
+recorded in the class's own remarks, not an oversight.
 
-Today's wire contract, unchanged by this design, is plain JSON: the request is
-`TaskInvokeRequest { Envelope, TraceContext }`, the response is
-`TaskInvokeResponse { Success, ErrorMessage, Result, ExecutionDurationMs }`. The payload stays
-JSON-in-bytes under proxy mode rather than being modelled in protobuf — `TaskEnvelope.Binding` is a
-`JsonElement` and `TaskInvokeResponse.Data` is `object?`, and re-modelling either in proto would
-change serialization semantics, which this migration is explicitly not allowed to do.
+### History: gRPC proxy mode (removed)
 
-Orchestration's current client for this hop, `RemoteInvokerService`, is configured with
-`ExecutionApi:AppId` and `ExecutionApi:InvocationTimeoutSeconds = 60`, and it performs no
-transport retry by design: the sidecar resiliency policy for this call is circuit-breaker-only,
-because retrying would re-invoke tasks that can have side effects — a decision recorded in the
-class's own remarks, not an oversight. Proxy mode does not touch either of these: the same app-id,
-the same 60-second budget, and the same no-retry policy carry over to the gRPC path unchanged.
+From 0.0.87 to 0.0.99 this hop could optionally run as a Dapr gRPC proxy-mode call: a
+`task_invoker.proto` `TaskInvoker` service on Execution, a `GrpcTaskInvokerClientProvider` on
+Orchestration, selected by `ExecutionApi:Transport = grpc`. Because Kestrel cannot negotiate HTTP/1.1
+and HTTP/2 on one cleartext port (no ALPN without TLS), Execution bound a second, HTTP/2-only h2c port
+(`Kestrel:GrpcPort`, Helm `execution.grpcPort`), and an environment had to move three settings
+together: `ExecutionApi__Transport=grpc`, `dapr.io/app-protocol: grpc` and `dapr.io/app-port` →
+the gRPC port. No shipped default ever did, and after issue #1007 most hot task types run in-process
+on Orchestration and never cross this hop, so the stack was removed in 0.0.100 (issue #1056).
+
+What that means now:
+
+- `ExecutionApi:Transport` is not read; a leftover `grpc` value is ignored and the call goes over HTTP.
+- Execution binds no h2c port and serves no gRPC service. An environment that had moved the
+  Execution sidecar to `app-protocol: grpc` and the gRPC port must return to `http` and the HTTP port
+  (the Helm chart defaults).
+- Recorded in `vnext-meta/deprecations.json` as `execution-grpc-transport-removed`.
+
+The design notes and the verification passes are in the git history of this file (before #1056).
+The one finding that outlives the transport — Dapr's duplicated `traceparent` — is kept below,
+because `DuplicateTolerantTraceContextPropagator` still depends on it.
 
 ## Cross-domain Remote* services: DaprClient, HTTP to the sidecar, and why not gRPC (2026-09)
 
@@ -199,8 +168,8 @@ requires `TRequest : IMessage` (Protobuf) and a callee implementing Dapr's AppCa
 service; the orchestrator is an HTTP/JSON app and implements neither — and the method is obsolete
 anyway. So the SDK contributes the sidecar contract (endpoint, token, invoke URI) while the sidecar
 contributes Name Resolution, sidecar-to-sidecar gRPC + mTLS, and the `resiliency-cross-domain.yaml`
-circuit breaker. Moving these endpoints to gRPC is the same shape as Orchestration → Execution above
-(a gRPC surface on the callee + Dapr gRPC proxying) and is a separate piece of work.
+circuit breaker. Moving these endpoints to gRPC would need a gRPC surface on the callee plus Dapr gRPC
+proxying, and is a separate piece of work.
 
 **Two details pinned by `DaprRemoteTransportTests`** — which run the SDK's real
 `InvocationHandler` over a recording stub, so they observe exactly what the sidecar would receive:
@@ -221,75 +190,13 @@ circuit breaker. Moving these endpoints to gRPC is the same shape as Orchestrati
 host — receives Dapr's duplicated `traceparent` and tolerates it through
 `DuplicateTolerantTraceContextPropagator` (installed in all four hosts' `Program.cs`). Each
 cross-domain call therefore gains a caller-sidecar and a callee-sidecar span under one trace; the
-callee sidecar's own span remains unreachable from the AppCallback header, exactly as documented
-for Orchestration → Execution above.
+callee sidecar's own span remains unreachable from the AppCallback header, as documented in
+"Dapr's duplicated `traceparent`" below.
+## Dapr's duplicated `traceparent` (found on the gRPC hop, still tolerated)
 
-## Verification
-
-Performed 2026-08-26 against a locally built runtime (`dotnet run --launch-profile http`, all four
-apps) with `vnext-execution-dapr` recreated per state below, traces read from Elastic
-(`localhost:9200`, `.ds-traces-apm*`), MoneyTransfer integration test suite
-(`vnext-example/tests/Core.IntegrationTests`, filter `MoneyTransferTests`) run against
-`localhost:4201`. This section covers two passes: an initial flip that surfaced a real defect, and
-the corrected two-port design that fixed it.
-
-### Pass 1 — single-port `Http1AndHttp2`, as originally designed: did not verify
-
-With `ExecutionApi:Transport: grpc` and `--app-protocol grpc` (`--app-port 4202`, one Kestrel
-endpoint), `MoneyTransferTests` gave `Failed: 2, Passed: 3` — not `5/5`. The orchestration-side
-gRPC client span (`bbt.workflow.execution.v1.TaskInvoker/Invoke`, `GrpcNetClient` instrumentation)
-was present and correctly parented under `Task.Invoke`, proving the client hop was real and not a
-silent HTTP fallback. But the call never reached Execution's application code: the Execution-side
-transaction had zero children and completed in 106µs. Root cause, confirmed directly: Kestrel's
-`Http2DisabledWithHttp1AndNoTls` warning at startup, and independently reproduced with
-`curl --http2-prior-knowledge http://localhost:4202/health` failing with *"Remote peer returned
-unexpected data while we expected SETTINGS frame."* A cleartext `Http1AndHttp2` endpoint cannot
-actually serve both protocols — see the constraint explained above under Decision 2.
-
-This was corrected in the same task (Program.cs / appsettings.json now split into two ports, see
-above) rather than left as an open gap, once the precise mechanism was confirmed.
-
-### Pass 2 — two ports (4202 HTTP/1.1, 4212 h2c gRPC): verified end-to-end for business correctness
-
-With the fix in place — HTTP/1.1 on `4202` (from `ASPNETCORE_URLS`, Http1 only),
-`Kestrel:GrpcPort=4212` (Http2 only), sidecar `--app-port 4212` + `--app-protocol grpc` — startup
-no longer logs any Kestrel HTTP/2 warning. Direct, independent confirmation of both ports before
-running any test:
-
-```
-$ curl -s -o /dev/null -w "%{http_version} %{http_code}\n" http://localhost:4202/health
-1.1 200
-$ curl --http2-prior-knowledge http://localhost:4202/health   # correctly rejected — HTTP/1.1-only now
-Remote peer returned unexpected data while we expected SETTINGS frame.
-$ curl --http2-prior-knowledge http://localhost:4212/         # succeeds — real ASP.NET Core pipeline
-HTTP/2 404  (x-trace-id, x-span-id, traceparent headers present — reached the app, not just Kestrel)
-$ curl -s -o /dev/null -w "%{http_version} %{http_code}\n" http://localhost:4212/health  # correctly rejected — Http2-only now
-1.1 400
-```
-
-Sidecar log confirms it dialed the right port for the right protocol:
-```
-application protocol: grpc. waiting on port 4212.
-application discovered on port 4212
-```
-
-`MoneyTransferTests`: **`Passed! - Failed: 0, Passed: 5, Skipped: 0, Total: 5, Duration: 6 s`**
-(2026-08-26T14:08:16Z). Business result is correct end-to-end over gRPC.
-
-**Execution's server-side span tree is confirmed to exist and be correctly shaped.** For the
-successful `execute-transfer` invocation, Elastic holds:
-
-```
-Microsoft.AspNetCore  POST /bbt.workflow.execution.v1.TaskInvoker/Invoke     [transaction, id 66b837b9446e02bd, parent=None]
-└─ Invoke.http/execute-transfer (BBT.Workflow.Execution.Invokers)             [span]
-   └─ POST (System.Net.Http)  ← outbound call to the provider (MockLab)       [span]
-```
-
-This is exactly the shape Step 3 of the original brief asked for — the server transaction is the
-gRPC method, not `POST api/v{version}/execution/invoke/{type}/{key}`, and `Invoke.{taskType}/{taskKey}`
-hangs beneath it.
-
-### RESOLVED (was: KNOWN LIMITATION) — gRPC proxy mode split every task invocation into two traces
+> Historical evidence: this was found and verified on the removed gRPC proxy-mode hop ("Task 6",
+> 2026-08-26). The propagator stays installed in every host because the same malformed header also
+> reaches HTTP callees (see "Trace shape" under Cross-domain `Remote*` services).
 
 **Status: fixed and verified live on 2026-08-26.** gRPC proxy-mode invocations now produce **one
 whole trace tree**, with Execution's server transaction parented inside the caller's trace. The
@@ -298,7 +205,7 @@ underlying Dapr defect is unchanged — the sidecar still delivers a malformed, 
 got here is preserved below, unedited in substance, because the *reason* the mitigation lives where
 it lives is the valuable part.
 
-#### What was broken
+### What was broken
 
 Every task invocation over gRPC proxy mode yielded two separate top-level traces where the HTTP
 path produces one continuous trace. Orchestration's own trace (e.g.
@@ -313,7 +220,7 @@ freshly-rooted** trace (e.g. `0f21fe1b6eb06dfe3a6d4dc5bed24a1b`, `parent: None`)
 from the Dapr sidecar's own Go gRPC client, not a raw proxy of the original stream. Timestamps
 (~40ms apart) and durations matched — one logical call, split into two traces.
 
-#### Root cause, confirmed empirically — three things were tested in order
+### Root cause, confirmed empirically — three things were tested in order
 
 1. *Hypothesis: the caller never sends `traceparent` on the wire.* Disproven directly. A temporary
    diagnostic on Execution's gRPC service (`context.RequestHeaders`) showed `traceparent` present
@@ -341,7 +248,7 @@ from the Dapr sidecar's own Go gRPC client, not a raw proxy of the original stre
 **This remains true.** Dapr still sends the malformed header; nothing below changes that. What
 changed is that the runtime no longer throws the whole value away.
 
-#### Why the body-based fallback could never close it
+### Why the body-based fallback could never close it
 
 `TaskInvokeHandler.HandleAsync` calls `RestoreActivityFromBodyIfDetached(traceContext)`, using the
 trace context carried in the *request body* (`TaskTraceContext.TraceParent`/`TraceState` — a clean,
@@ -359,7 +266,7 @@ non-null, already-rooted activity. The only thing available at that point is exa
 already does: link, don't re-parent. That fallback stays in place as a defence in depth; on the
 fixed path it simply never fires, because the wire context now matches.
 
-#### The mitigation: a duplicate-tolerant propagator
+### The mitigation: a duplicate-tolerant propagator
 
 `src/BBT.Workflow.HttpApi.Shared/Telemetry/DuplicateTolerantTraceContextPropagator.cs`, installed in
 `execution/BBT.Workflow.Execution.HttpApi.Host/Program.cs`.
@@ -424,7 +331,7 @@ Unit tests: `test/BBT.Workflow.Application.Tests/Telemetry/DuplicateTolerantTrac
 delegation-parity test against the default propagator for both `Inject` and the well-formed
 extraction path.
 
-#### Live verification — before and after
+### Live verification — before and after
 
 Both measured on the same `MoneyTransferTests` scenario, in gRPC proxy mode, in the same
 environment. Query: Elastic `http://localhost:9200`, indices `.ds-traces-apm*,traces-apm*`.
@@ -488,10 +395,9 @@ introduces no new orphan pattern.
 
 **Business correctness, both transports:** `MoneyTransferTests` `Failed: 0, Passed: 5` over gRPC
 (2026-08-26T15:56Z) and `Failed: 0, Passed: 5` again after reverting to the HTTP default
-(2026-08-26T16:0xZ). gRPC remains **opt-in**; the committed state is `ExecutionApi:Transport = http`
-with the sidecar on `--app-port 4202` and no `--app-protocol`.
+(2026-08-26T16:0xZ). The gRPC transport itself was removed in 0.0.100 (issue #1056).
 
-#### What is still true
+### What is still true
 
 - Dapr still sends a duplicated, W3C-invalid `traceparent` on the AppCallback hop. This is a Dapr
   defect, external to this repository, and the propagator is a **tolerance layer**, not a cure. If
@@ -503,64 +409,3 @@ with the sidecar on `--app-port 4202` and no `--app-protocol`.
 - If Dapr ever starts appending values from *different* traces, the propagator treats the header as
   absent and the old split-trace behavior returns — deliberately, since guessing between unrelated
   traces would be worse than a clean re-root.
-
-### Rollback proof (Step 4), re-run after the fix
-
-The fix changed which files and ports are load-bearing, so the rollback was re-verified rather than
-assumed still valid. Reverted, in the running environment only: `ExecutionApi:Transport: "http"`,
-sidecar `--app-port` back to `4202`, `--app-protocol` removed. Recreated sidecar, rebuilt +
-restarted orchestration, reran the identical filter:
-
-```
-Passed!  - Failed: 0, Passed: 5, Skipped: 0, Total: 5, Duration: 5 s
-```
-(2026-08-26T14:13:25Z)
-
-Both switches were then restored to the committed gRPC state (`Transport: grpc`,
-`--app-port 4212` + `--app-protocol grpc`), sidecar recreated, orchestration rebuilt and restarted;
-`/health` returns 200 in that final state. Execution's dual-port Kestrel configuration does not need
-to change for rollback — both ports stay open regardless of which transport Orchestration is
-configured to use; only Orchestration's `Transport` setting and the sidecar's two flags move.
-
-### Bottom line
-
-Config flip mechanics work as designed and are proven safe to flip in both directions, three times
-now. The gRPC client path is proven real. The single-port Kestrel design in the original spec was
-proven unworkable and corrected to two ports, with that fix itself verified independently (both
-ports probed directly) before being verified through the test suite (`5/5`). Business-level
-end-to-end correctness over gRPC is now proven: `MoneyTransferTests` passes, Execution's real
-task-invoker work happens, with correct data, on the correct port, via the correct protocol.
-
-**Distributed trace continuity across the gRPC hop is now proven, having first been disproven and
-then fixed.** The investigation correctly root-caused the split to Dapr's AppCallback hop delivering
-a duplicated, W3C-invalid `traceparent` — external to this repository — and correctly concluded that
-nothing at or after `TaskInvokeHandler` could repair it, because `Activity.ParentId` is immutable
-once ASP.NET Core's hosting layer has started the request's `Activity`. What that reasoning missed is
-that `DistributedContextPropagator.Current` runs *before* hosting starts that `Activity`, and is
-therefore a seam that does exist. `DuplicateTolerantTraceContextPropagator` (installed in the
-Execution host's `Program.cs`) collapses the duplicated header to a single valid value while leaving
-well-formed input untouched. Verified live: Execution's `Microsoft.AspNetCore` transaction now
-carries the caller's `trace.id` and a non-null `parent.id`, the caller's trace grew from 84 to 117
-documents as Execution's spans moved into it, and the `span.links` / `vnext_trace_mismatch` fallback
-no longer fires. Dapr's defect is unchanged; the runtime now tolerates it. Full before/after evidence
-in the "RESOLVED (was: KNOWN LIMITATION)" section above.
-
-### For Task 7 (Helm)
-
-A deployment must set, together, never independently:
-- `dapr.io/app-protocol: "grpc"` on the Execution pod annotation.
-- `dapr.io/app-port` pointed at Execution's **gRPC** container port (`4212` by default here,
-  configurable via `Kestrel:GrpcPort` / `Kestrel__GrpcPort`), not its HTTP port.
-- The container must expose **both** ports — `4202` (HTTP/1.1: controller, health probes, swagger)
-  stays needed regardless of transport (health probes, direct debugging), and `4212` (h2c gRPC) is
-  the new one Task 7 must add to the container's port list / service definition.
-
-Setting `app-protocol: grpc` without moving `app-port` to `4212` reproduces Pass 1's failure exactly
-(h2c dial against an HTTP/1.1-only port, near-instant transport-layer failure, task result silently
-becomes `{success:false, statusCode:500}`). Setting `app-port: 4212` without `app-protocol: grpc`
-breaks the sidecar's own startup TCP-listen probe against a port that never speaks HTTP/1.1. Both
-ports are relocatable — the HTTP/1.1 port via `ASPNETCORE_URLS`/`--urls` (the platform's existing
-mechanism, not a Kestrel-specific key), the gRPC port via `Kestrel:GrpcPort` in `appsettings.json`
-(overridable per-environment) — so Helm can also relocate the ports themselves if `4202`/`4212`
-collide with something else in a given cluster — as long as the two Dapr annotations are updated
-to match.
