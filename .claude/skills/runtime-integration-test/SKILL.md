@@ -24,7 +24,8 @@ not bring up infrastructure on your own.
 2. **Check what is running.** `cd etc/docker && ./run-docker.sh status`; read
    `ai-docs/local-environments/*.md`. Never restart a running stack. If another compose file owns the
    infra (cross-domain lab), stop and report.
-3. **Bring the runtime up.** `./run-docker.sh up <domain> [--offset N]` (runbook in `AGENTS.md`), then
+3. **Bring the runtime up.** `./run-docker.sh up <domain> [--offset N]` — or `--with <d1,d2>` to co-host
+   several domains on one host set when the scenario does not need a Dapr hop between them (runbook in `AGENTS.md`), then
    read `ai-docs/local-environments/<domain>.md` for the base URL — do not recompute ports. On a fresh
    database, load the **system flows** (`@burgan-tech/vnext-core-runtime`) once through the domain's init
    container (runbook step 5) — the test SDK publishes only the domain's own components, never these.

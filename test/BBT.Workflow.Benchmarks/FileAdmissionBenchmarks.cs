@@ -212,5 +212,13 @@ public class FileAdmissionBenchmarks
         public string Version => "bench";
         public void Check(string requestDomain) { }
         public bool IsDomainMatch(string? requestDomain) => true;
+        public IReadOnlyList<string> HostedDomains => [FileAdmissionBenchmarks.Domain];
+        public IDisposable UseDomain(string domain) => NullScope.Instance;
+
+        private sealed class NullScope : IDisposable
+        {
+            public static readonly NullScope Instance = new();
+            public void Dispose() { }
+        }
     }
 }

@@ -1,3 +1,4 @@
+using BBT.Workflow.Runtime;
 using System.Diagnostics;
 using BBT.Aether.BackgroundJob;
 using BBT.Aether.MultiSchema;
@@ -25,6 +26,8 @@ public sealed class LongPollAckTimeoutJobHandler(
 
     public async Task HandleAsync(LongPollAckTimeoutPayload args, CancellationToken cancellationToken)
     {
+        // Serve the job as the domain that scheduled it (multi-domain hosting).
+        using var domainScope = DomainScope.Begin(args.Domain);
         using var activity = BackgroundJobActivityHelper.StartDeferredActivity("LongPollAckTimeout.Execute", args);
         // An ack-timeout firing opens its own activation episode — see TransitionTimerJobHandler.
         using var episode = WorkflowTraceLane.UseEpisode(TelemetryConstants.ActivationTriggers.AckTimeout, transitionKey: null);

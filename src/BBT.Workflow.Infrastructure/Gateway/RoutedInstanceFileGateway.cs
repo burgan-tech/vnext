@@ -19,6 +19,6 @@ public sealed class RoutedInstanceFileGateway(
     public Task<Result<InstanceFileContent>> ReadAsync(
         string domain, string flow, string instance, string file, CancellationToken cancellationToken) =>
         runtimeInfoProvider.IsDomainMatch(domain)
-            ? local.ReadAsync(domain, flow, instance, file, cancellationToken)
+            ? LocalDomainCall.Run(domain, () => local.ReadAsync(domain, flow, instance, file, cancellationToken))
             : remote.ReadAsync(domain, flow, instance, file, cancellationToken);
 }

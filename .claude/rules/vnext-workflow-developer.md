@@ -240,6 +240,16 @@ The plan is built from `ExcludedStepOrders` alone (`TransitionExecutor.BuildExec
   duplicate-job guard. Do not bring back `{LockKey}:enqueue` or per-kind lock keys.
 - Full guide: `docs/runtime/status-locking.md`.
 
+## Multi-domain hosting (`APP_DOMAINS`)
+
+- `APP_DOMAIN` is the primary (names the app-ids); `APP_DOMAINS` adds co-hosted domains, one database.
+  `Check`/`IsDomainMatch` mean "hosted here"; `.Domain` is the current `DomainScope`, else the primary.
+- Every entry point opens the scope (middleware, publish, job handlers, `RuntimeCacheBackend`, `LocalDomainCall`,
+  trigger local path, DbMigrator). A new entry point that reads `.Domain` or touches a schema must open it too.
+- Co-hosted calls are in-process. A co-hosted domain's schemas are `<domain>_`-prefixed (`DomainSchemaNameFormatter`);
+  single domain and the primary keep the default names — never change that. Open the scope BEFORE `currentSchema.Change`.
+- Full guide: `docs/runtime/multi-domain-hosting.md`.
+
 ## Status / State / Type Semantics
 
 Enum values (Instance Status, State Types, State Sub Types, Trigger Types): `AGENTS.md` § Status / State / Type Semantics.

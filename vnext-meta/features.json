@@ -14,6 +14,12 @@
       ],
       "documentation": "docs/runtime/history-mode.md"
     },
+    "multiDomainHosting": {
+      "since": "0.0.100",
+      "status": "experimental",
+      "description": "One runtime set (orchestration, execution, inbox, outbox) can serve several domains on ONE database. APP_DOMAIN stays required and is the primary (it names the Dapr app-ids); APP_DOMAINS (comma-separated) adds co-hosted domains, and every host including the DbMigrator gets both. OPT-IN and BACKWARD COMPATIBLE: with APP_DOMAIN alone nothing changes, and the primary domain of a pool keeps exactly today's schema names. A co-hosted domain's flow and definition schemas are prefixed '<domain>_' (mobile_navigations, mobile_sys_flows), so domains may reuse flow and component keys; sys_queues and sys_metrics stay shared. Domain checks (Check/IsDomainMatch) accept every hosted domain; IRuntimeInfoProvider.Domain (and the script surface context.Runtime.Domain) returns the domain of the current request, job or relayed call. Calls between co-hosted domains run in-process; every hosted domain registers in discovery with the pool's app-id. Local inbox/outbox pubsub consumerID becomes {appID} (was the shared 'vnext-workers'). Not wired into the Helm chart yet.",
+      "documentation": "docs/runtime/multi-domain-hosting.md"
+    },
     "roleGrantCombinators": {
       "since": "0.0.99",
       "status": "stable",

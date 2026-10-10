@@ -38,7 +38,7 @@ public sealed class RoutedInstanceQueryGateway : IInstanceQueryGateway
         CancellationToken cancellationToken = default)
     {
         return _runtimeInfoProvider.IsDomainMatch(input.Domain)
-            ? _local.GetInstanceAsync(input, cancellationToken)
+            ? LocalDomainCall.Run(input.Domain, () => _local.GetInstanceAsync(input, cancellationToken))
             : _remote.GetInstanceAsync(input, cancellationToken);
     }
 
@@ -48,7 +48,7 @@ public sealed class RoutedInstanceQueryGateway : IInstanceQueryGateway
         CancellationToken cancellationToken = default)
     {
         return _runtimeInfoProvider.IsDomainMatch(input.Domain)
-            ? _local.GetInstanceDataAsync(input, cancellationToken)
+            ? LocalDomainCall.Run(input.Domain, () => _local.GetInstanceDataAsync(input, cancellationToken))
             : _remote.GetInstanceDataAsync(input, cancellationToken);
     }
 
@@ -58,7 +58,7 @@ public sealed class RoutedInstanceQueryGateway : IInstanceQueryGateway
         CancellationToken cancellationToken = default)
     {
         return _runtimeInfoProvider.IsDomainMatch(input.Domain)
-            ? _local.GetInstanceListAsync(input, cancellationToken)
+            ? LocalDomainCall.Run(input.Domain, () => _local.GetInstanceListAsync(input, cancellationToken))
             : _remote.GetInstanceListAsync(input, cancellationToken);
     }
 
@@ -68,7 +68,7 @@ public sealed class RoutedInstanceQueryGateway : IInstanceQueryGateway
         CancellationToken cancellationToken = default)
     {
         return _runtimeInfoProvider.IsDomainMatch(input.Domain)
-            ? _local.GetInstanceHistoryAsync(input, cancellationToken)
+            ? LocalDomainCall.Run(input.Domain, () => _local.GetInstanceHistoryAsync(input, cancellationToken))
             : _remote.GetInstanceHistoryAsync(input, cancellationToken);
     }
 
@@ -78,7 +78,7 @@ public sealed class RoutedInstanceQueryGateway : IInstanceQueryGateway
         CancellationToken cancellationToken = default)
     {
         return _runtimeInfoProvider.IsDomainMatch(input.Domain)
-            ? _local.GetFunctionWithStateAsync(input, cancellationToken)
+            ? LocalDomainCall.Run(input.Domain, () => _local.GetFunctionWithStateAsync(input, cancellationToken))
             : _remote.GetFunctionWithStateAsync(input, cancellationToken);
     }
 
@@ -89,7 +89,7 @@ public sealed class RoutedInstanceQueryGateway : IInstanceQueryGateway
         CancellationToken cancellationToken = default)
     {
         return _runtimeInfoProvider.IsDomainMatch(input.Domain)
-            ? _local.GetFunctionWithViewAsync(input, transitionKey, cancellationToken)
+            ? LocalDomainCall.Run(input.Domain, () => _local.GetFunctionWithViewAsync(input, transitionKey, cancellationToken))
             : _remote.GetFunctionWithViewAsync(input, transitionKey, cancellationToken);
     }
 
@@ -100,7 +100,7 @@ public sealed class RoutedInstanceQueryGateway : IInstanceQueryGateway
         CancellationToken cancellationToken = default)
     {
         return _runtimeInfoProvider.IsDomainMatch(input.Domain)
-            ? _local.GetFunctionWithSchemaAsync(input, transitionKey, cancellationToken)
+            ? LocalDomainCall.Run(input.Domain, () => _local.GetFunctionWithSchemaAsync(input, transitionKey, cancellationToken))
             : _remote.GetFunctionWithSchemaAsync(input, transitionKey, cancellationToken);
     }
 
@@ -110,7 +110,7 @@ public sealed class RoutedInstanceQueryGateway : IInstanceQueryGateway
         CancellationToken cancellationToken = default)
     {
         return _runtimeInfoProvider.IsDomainMatch(input.Domain)
-            ? _local.GetFunctionWithExtensionsAsync(input, cancellationToken)
+            ? LocalDomainCall.Run(input.Domain, () => _local.GetFunctionWithExtensionsAsync(input, cancellationToken))
             : _remote.GetFunctionWithExtensionsAsync(input, cancellationToken);
     }
 
@@ -120,7 +120,7 @@ public sealed class RoutedInstanceQueryGateway : IInstanceQueryGateway
         CancellationToken cancellationToken = default)
     {
         return _runtimeInfoProvider.IsDomainMatch(input.Domain)
-            ? _local.GetFunctionWithMasterAsync(input, cancellationToken)
+            ? LocalDomainCall.Run(input.Domain, () => _local.GetFunctionWithMasterAsync(input, cancellationToken))
             : _remote.GetFunctionWithMasterAsync(input, cancellationToken);
     }
 }

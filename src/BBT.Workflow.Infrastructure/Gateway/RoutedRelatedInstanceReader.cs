@@ -30,7 +30,7 @@ public sealed class RoutedRelatedInstanceReader(
         CancellationToken cancellationToken = default)
     {
         if (_runtimeInfoProvider.IsDomainMatch(reference.Domain))
-            return _local.ReadAsync(reference, cancellationToken);
+            return LocalDomainCall.Run(reference.Domain, () => _local.ReadAsync(reference, cancellationToken));
 
         // The reader only ever sees the target's reference, not the instance whose script triggered
         // this read, so the log identifies the target being read rather than the caller.

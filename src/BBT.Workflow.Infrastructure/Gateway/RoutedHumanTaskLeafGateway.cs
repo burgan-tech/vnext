@@ -21,7 +21,7 @@ public sealed class RoutedHumanTaskLeafGateway(
         CancellationToken cancellationToken = default)
     {
         return runtimeInfoProvider.IsDomainMatch(domain)
-            ? local.ResolveAsync(domain, flow, request, cancellationToken)
+            ? LocalDomainCall.Run(domain, () => local.ResolveAsync(domain, flow, request, cancellationToken))
             : remote.ResolveAsync(domain, flow, request, cancellationToken);
     }
 }

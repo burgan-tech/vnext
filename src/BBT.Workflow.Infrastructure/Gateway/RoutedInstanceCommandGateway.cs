@@ -38,7 +38,7 @@ public sealed class RoutedInstanceCommandGateway : IInstanceCommandGateway
         CancellationToken cancellationToken = default)
     {
         return _runtimeInfoProvider.IsDomainMatch(input.Domain)
-            ? _local.StartAsync(input, cancellationToken)
+            ? LocalDomainCall.Run(input.Domain, () => _local.StartAsync(input, cancellationToken))
             : _remote.StartAsync(input, cancellationToken);
     }
 
@@ -48,7 +48,7 @@ public sealed class RoutedInstanceCommandGateway : IInstanceCommandGateway
         CancellationToken cancellationToken = default)
     {
         return _runtimeInfoProvider.IsDomainMatch(input.Domain)
-            ? _local.StartSubAsync(input, cancellationToken)
+            ? LocalDomainCall.Run(input.Domain, () => _local.StartSubAsync(input, cancellationToken))
             : _remote.StartSubAsync(input, cancellationToken);
     }
 
@@ -60,7 +60,7 @@ public sealed class RoutedInstanceCommandGateway : IInstanceCommandGateway
         CancellationToken cancellationToken = default)
     {
         return _runtimeInfoProvider.IsDomainMatch(input.Domain)
-            ? _local.TransitionAsync(instanceId, transitionKey, input, cancellationToken)
+            ? LocalDomainCall.Run(input.Domain, () => _local.TransitionAsync(instanceId, transitionKey, input, cancellationToken))
             : _remote.TransitionAsync(instanceId, transitionKey, input, cancellationToken);
     }
 
@@ -73,7 +73,7 @@ public sealed class RoutedInstanceCommandGateway : IInstanceCommandGateway
         CancellationToken cancellationToken = default)
     {
         return _runtimeInfoProvider.IsDomainMatch(domain)
-            ? _local.CancelChildAsync(instanceId, domain, flow, input, cancellationToken)
+            ? LocalDomainCall.Run(domain, () => _local.CancelChildAsync(instanceId, domain, flow, input, cancellationToken))
             : _remote.CancelChildAsync(instanceId, domain, flow, input, cancellationToken);
     }
 
@@ -83,7 +83,7 @@ public sealed class RoutedInstanceCommandGateway : IInstanceCommandGateway
         CancellationToken cancellationToken = default)
     {
         return _runtimeInfoProvider.IsDomainMatch(input.Domain)
-            ? _local.CompleteAsync(input, cancellationToken)
+            ? LocalDomainCall.Run(input.Domain, () => _local.CompleteAsync(input, cancellationToken))
             : _remote.CompleteAsync(input, cancellationToken);
     }
 
@@ -93,7 +93,7 @@ public sealed class RoutedInstanceCommandGateway : IInstanceCommandGateway
         CancellationToken cancellationToken = default)
     {
         return _runtimeInfoProvider.IsDomainMatch(input.Domain)
-            ? _local.UpdateSubFlowStateAsync(input, cancellationToken)
+            ? LocalDomainCall.Run(input.Domain, () => _local.UpdateSubFlowStateAsync(input, cancellationToken))
             : _remote.UpdateSubFlowStateAsync(input, cancellationToken);
     }
 
@@ -103,7 +103,7 @@ public sealed class RoutedInstanceCommandGateway : IInstanceCommandGateway
         CancellationToken cancellationToken = default)
     {
         return _runtimeInfoProvider.IsDomainMatch(input.Domain)
-            ? _local.FaultAsync(input, cancellationToken)
+            ? LocalDomainCall.Run(input.Domain, () => _local.FaultAsync(input, cancellationToken))
             : _remote.FaultAsync(input, cancellationToken);
     }
 
@@ -113,7 +113,7 @@ public sealed class RoutedInstanceCommandGateway : IInstanceCommandGateway
         CancellationToken cancellationToken = default)
     {
         return _runtimeInfoProvider.IsDomainMatch(input.Domain)
-            ? _local.CancelAsync(input, cancellationToken)
+            ? LocalDomainCall.Run(input.Domain, () => _local.CancelAsync(input, cancellationToken))
             : _remote.CancelAsync(input, cancellationToken);
     }
 
@@ -123,7 +123,7 @@ public sealed class RoutedInstanceCommandGateway : IInstanceCommandGateway
         CancellationToken cancellationToken = default)
     {
         return _runtimeInfoProvider.IsDomainMatch(input.Domain)
-            ? _local.MarkBusyAsync(input, cancellationToken)
+            ? LocalDomainCall.Run(input.Domain, () => _local.MarkBusyAsync(input, cancellationToken))
             : _remote.MarkBusyAsync(input, cancellationToken);
     }
 
@@ -135,7 +135,7 @@ public sealed class RoutedInstanceCommandGateway : IInstanceCommandGateway
         CancellationToken cancellationToken = default)
     {
         return _runtimeInfoProvider.IsDomainMatch(input.Domain)
-            ? _local.ForwardTransitionAsync(instanceId, transitionKey, input, cancellationToken)
+            ? LocalDomainCall.Run(input.Domain, () => _local.ForwardTransitionAsync(instanceId, transitionKey, input, cancellationToken))
             : _remote.ForwardTransitionAsync(instanceId, transitionKey, input, cancellationToken);
     }
 
@@ -145,7 +145,7 @@ public sealed class RoutedInstanceCommandGateway : IInstanceCommandGateway
         CancellationToken cancellationToken = default)
     {
         return _runtimeInfoProvider.IsDomainMatch(input.Domain)
-            ? _local.ReleaseBusyAsync(input, cancellationToken)
+            ? LocalDomainCall.Run(input.Domain, () => _local.ReleaseBusyAsync(input, cancellationToken))
             : _remote.ReleaseBusyAsync(input, cancellationToken);
     }
 
@@ -155,7 +155,7 @@ public sealed class RoutedInstanceCommandGateway : IInstanceCommandGateway
         CancellationToken cancellationToken = default)
     {
         return _runtimeInfoProvider.IsDomainMatch(input.Domain)
-            ? _local.AcknowledgeLongPollAsync(input, cancellationToken)
+            ? LocalDomainCall.Run(input.Domain, () => _local.AcknowledgeLongPollAsync(input, cancellationToken))
             : _remote.AcknowledgeLongPollAsync(input, cancellationToken);
     }
 }
