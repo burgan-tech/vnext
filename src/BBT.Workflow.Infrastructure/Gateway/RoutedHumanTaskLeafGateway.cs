@@ -11,7 +11,8 @@ namespace BBT.Workflow.Gateway;
 public sealed class RoutedHumanTaskLeafGateway(
     IRuntimeInfoProvider runtimeInfoProvider,
     LocalHumanTaskLeafGateway local,
-    RemoteHumanTaskLeafGateway remote) : IHumanTaskLeafGateway
+    RemoteHumanTaskLeafGateway remote,
+    ICoHostedDatabaseBoundary? databaseBoundary = null) : IHumanTaskLeafGateway
 {
     /// <inheritdoc />
     public Task<Result<IReadOnlyList<HumanTaskLeafResult>>> ResolveAsync(
@@ -21,7 +22,7 @@ public sealed class RoutedHumanTaskLeafGateway(
         CancellationToken cancellationToken = default)
     {
         return runtimeInfoProvider.IsDomainMatch(domain)
-            ? LocalDomainCall.Run(domain, () => local.ResolveAsync(domain, flow, request, cancellationToken))
+            ? LocalDomainCall.Run(databaseBoundary, domain, () => local.ResolveAsync(domain, flow, request, cancellationToken))
             : remote.ResolveAsync(domain, flow, request, cancellationToken);
     }
 }

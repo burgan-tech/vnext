@@ -1,3 +1,4 @@
+using BBT.Workflow.Runtime;
 using System.Diagnostics;
 using System.Text.Json;
 using BBT.Aether.BackgroundJob;
@@ -59,7 +60,8 @@ public sealed class AsyncTransitionStrategy(
     ITransitionEnqueueGateway enqueueGateway,
     IFileAdmission fileAdmission,
     IOptions<WorkflowExecutionOptions> executionOptions,
-    ILogger<AsyncTransitionStrategy> logger) : ITransitionStrategy
+    ILogger<AsyncTransitionStrategy> logger,
+    IRuntimeInfoProvider? runtimeInfoProvider = null) : ITransitionStrategy
 {
     public ExecMode Mode => ExecMode.Async;
 
@@ -158,7 +160,7 @@ public sealed class AsyncTransitionStrategy(
         var jobId = Guid.NewGuid();
         var sourceStateKey = ctx.Current?.Key ?? string.Empty;
         var jobName = JobName.ForAsyncTransition(
-            ctx.InstanceId, sourceStateKey, context.TransitionKey, jobId);
+            ctx.InstanceId, sourceStateKey, context.TransitionKey, jobId, runtimeInfoProvider.JobDomain(ctx.Domain));
         EnrichTelemetry(activity, ctx, jobName.Value);
 
         // Both set inside the under-lock callback, read after it. The handle is non-null only when

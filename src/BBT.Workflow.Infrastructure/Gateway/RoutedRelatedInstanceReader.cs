@@ -17,7 +17,8 @@ public sealed class RoutedRelatedInstanceReader(
     IRuntimeInfoProvider runtimeInfoProvider,
     [FromKeyedServices(RelatedReaderKeys.Local)] IRelatedInstanceReader local,
     [FromKeyedServices(RelatedReaderKeys.Remote)] IRelatedInstanceReader remote,
-    ILogger<RoutedRelatedInstanceReader> logger) : IRelatedInstanceReader
+    ILogger<RoutedRelatedInstanceReader> logger,
+    ICoHostedDatabaseBoundary? databaseBoundary = null) : IRelatedInstanceReader
 {
     private readonly IRuntimeInfoProvider _runtimeInfoProvider = runtimeInfoProvider;
     private readonly IRelatedInstanceReader _local = local;
@@ -30,7 +31,7 @@ public sealed class RoutedRelatedInstanceReader(
         CancellationToken cancellationToken = default)
     {
         if (_runtimeInfoProvider.IsDomainMatch(reference.Domain))
-            return LocalDomainCall.Run(reference.Domain, () => _local.ReadAsync(reference, cancellationToken));
+            return LocalDomainCall.Run(databaseBoundary, reference.Domain, () => _local.ReadAsync(reference, cancellationToken));
 
         // The reader only ever sees the target's reference, not the instance whose script triggered
         // this read, so the log identifies the target being read rather than the caller.

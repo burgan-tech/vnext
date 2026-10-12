@@ -166,6 +166,13 @@ public static class WorkflowApiBaseServiceCollectionExtensions
                     .ConfigureWarnings(w => w.Ignore(RelationalEventId.PendingModelChangesWarning));
             });
 
+        // Multi-domain hosting: a co-hosted domain may have its own database
+        // (ConnectionStrings:Domains:<domain>). No such entry → the default database, as before.
+        services.AddDomainDatabases(configuration);
+        services.RouteToDomainDatabase<WorkflowDbContext>();
+        services.RouteToDomainDatabase<MessagingDbContext>();
+        services.RouteToDomainDatabase<MetricsDbContext>();
+
         return services;
     }
 
@@ -220,6 +227,9 @@ public static class WorkflowApiBaseServiceCollectionExtensions
         }, withHostedService: withHostedService);
 
         services.AddDaprJobScheduler();
+
+        // Dedicated domain databases: arm and claim each database's jobs (no-op with one database).
+        services.FanOutBackgroundJobsPerDomainDatabase();
 
         return services;
     }

@@ -14,14 +14,17 @@ schema or table name.
 |---|---|
 | `APP_DOMAIN` | **Primary** domain, required. It names this runtime's Dapr app-ids (`vnext-{APP_DOMAIN}-app`, `-execution-app`, …), so the pool is addressed by its primary domain. |
 | `APP_DOMAINS` | Comma-separated **co-hosted** domains, optional. Duplicates and the primary are collapsed. |
+| `ConnectionStrings:Default` | The primary's database, and every co-hosted domain without an entry below. |
+| `ConnectionStrings:Domains:<domain>` | Optional. A co-hosted domain's **own** database (env `ConnectionStrings__Domains__<domain>`). See [Database per domain](#database-per-domain). |
 
 Every host of the pool — orchestration, execution, inbox, outbox **and the DbMigrator** — gets the same
-two values. All of them use one connection string: the primary's database.
+values. Without any `ConnectionStrings:Domains` entry all domains share the primary's database.
 
 Locally:
 
 ```bash
-cd etc/docker && ./run-docker.sh up core --with partner,sales
+cd etc/docker && ./run-docker.sh up core --with partner,sales   # shared database
+cd etc/docker && ./run-docker.sh up core --with partner,sales=vNext_Sales   # sales in its own database
 cd ../vnext-example
 wf domain use partner && wf sync      # every co-hosted domain is registered in wf with the same API and DB
 ```
@@ -53,9 +56,49 @@ the co-hosted domains.
   domain's `sys_flows` — once per hosted domain. Publish migrates a new flow's schema under the
   component's domain. The `schema-migration:{schema}` lock is keyed on the physical (prefixed) name.
 
-A domain that moves from its own database into a pool as a **co-hosted** domain starts with empty
-prefixed schemas; its data is not moved automatically. Re-publish its components and re-seed, or copy
-the schemas with a renaming migration of your own.
+A domain that moves from its own database into a pool on the **shared** database starts with empty
+prefixed schemas; its data is not moved automatically. To keep its data, give it a dedicated database
+instead (next section).
+
+## Database per domain
+
+A co-hosted domain can keep **its own database**: `ConnectionStrings:Domains:<domain>`. The two modes
+mix in one pool; a domain without an entry shares the primary's database as above.
+
+| | Shared database | Dedicated database |
+|---|---|---|
+| Schema names | `<domain>_` prefix | **default names**, exactly the single-domain layout |
+| `sys_queues` (outbox, jobs, inbox, locks) / `sys_metrics` | shared with the primary | its own copy in its database |
+| Existing domain database | data must be re-published / re-seeded | **reused as is** — point the entry at it |
+
+- **One unit-of-work root, one database.** Aether's root holds one connection, so the runtime never
+  lets a root span two databases:
+  - `DomainAwareDbContextConfigurator<T>` decorates Aether's configurator for `WorkflowDbContext`,
+    `MessagingDbContext` and `MetricsDbContext` and picks the current domain's connection, a pure
+    pass-through on the default database;
+  - `CoHostedDatabaseBoundary` runs a routed gateway's local branch for a domain in **another** database
+    in a detached (`RequiresNew`, non-transactional) root;
+  - command and retry gateways already open their own root.
+
+  A transactional root always stays inside one domain, so outbox and job rows stay atomic with that
+  domain's data.
+- **Per-database background work.**
+  - The outbox worker's processor (`DomainFanOutOutboxProcessor`) and the orchestration job arming
+    (`DomainFanOutBackgroundJobArmingProcessor`) run once per distinct database under one of its
+    domains' scope. Aether's pollers are kept; a failing database does not starve the others.
+  - **The job name carries the domain.** A multi-domain process names its background jobs
+    `vnext.job.v2.{domain}.{type}…` (`JobName`); a single-domain process keeps `vnext.job.v1…`, exactly
+    as before. The Dapr job hands only its name back (the payload is by reference), and
+    `DomainScopedJobExecutionBridge` opens that domain's scope from it before Aether claims the job, so
+    the claim reads the right database — no lookup.
+  - The inbox stays on the primary's database: its rows are forwarded by HTTP and are not written in a
+    domain transaction.
+- **Migration and health.** `DbMigrator` migrates `sys_queues` / `sys_metrics` once per database and
+  the flow schemas per domain. `MultiSchemaMigrator` and the attribute-index catalog use the domain's
+  connection. Orchestration adds one `database-<domain>` health check per dedicated database.
+- **Validation.** An entry for a domain that is not hosted, or for the primary, fails at startup.
+- **Configuration reaches every host.** Orchestration, outbox worker and DbMigrator need the
+  `ConnectionStrings:Domains:*` entries (`run-docker.sh --with d=db` sets them on all hosts).
 
 ## How the runtime knows which domain it is serving
 
@@ -82,7 +125,8 @@ the schemas with a renaming migration of your own.
 
 ## Code
 
-- `src/BBT.Workflow.Domain/Runtime/IRuntimeInfoProvider.cs`, `DomainScope.cs`, `DomainSchemaNameFormatter.cs`
+- `src/BBT.Workflow.Domain/Runtime/IRuntimeInfoProvider.cs`, `DomainScope.cs`, `DomainSchemaNameFormatter.cs`, `DomainDatabaseResolver.cs`
+- `src/BBT.Workflow.Infrastructure/Data/DomainAwareDbContextConfigurator.cs`, `DomainDatabaseFanOut.cs`, `DomainScopedJobExecutionBridge.cs`; `Gateway/CoHostedDatabaseBoundary.cs`; `Microsoft/Extensions/DependencyInjection/DomainDatabaseServiceCollectionExtensions.cs`
 - `src/BBT.Workflow.HttpApi.Shared/Middlewares/Runtime/DomainResolutionMiddleware.cs`
 - `src/BBT.Workflow.Infrastructure/Gateway/LocalDomainCall.cs`, `Routed*Gateway.cs`
 - `src/BBT.Workflow.Infrastructure/Schemas/SchemaMigrationOrchestrator.cs`, `workers/BBT.Workflow.DbMigrator/SchemaMigrationRunner.cs`

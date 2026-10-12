@@ -13,12 +13,13 @@ namespace BBT.Workflow.Gateway;
 public sealed class RoutedInstanceFileGateway(
     IRuntimeInfoProvider runtimeInfoProvider,
     [FromKeyedServices(InstanceFileGatewayKeys.Local)] IInstanceFileGateway local,
-    [FromKeyedServices(InstanceFileGatewayKeys.Remote)] IInstanceFileGateway remote) : IInstanceFileGateway
+    [FromKeyedServices(InstanceFileGatewayKeys.Remote)] IInstanceFileGateway remote,
+    ICoHostedDatabaseBoundary? databaseBoundary = null) : IInstanceFileGateway
 {
     /// <inheritdoc />
     public Task<Result<InstanceFileContent>> ReadAsync(
         string domain, string flow, string instance, string file, CancellationToken cancellationToken) =>
         runtimeInfoProvider.IsDomainMatch(domain)
-            ? LocalDomainCall.Run(domain, () => local.ReadAsync(domain, flow, instance, file, cancellationToken))
+            ? LocalDomainCall.Run(databaseBoundary, domain, () => local.ReadAsync(domain, flow, instance, file, cancellationToken))
             : remote.ReadAsync(domain, flow, instance, file, cancellationToken);
 }

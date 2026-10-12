@@ -1,3 +1,4 @@
+using BBT.Workflow.Runtime;
 using BBT.Aether.MultiSchema;
 using BBT.Workflow.Data;
 using Microsoft.EntityFrameworkCore;
@@ -27,7 +28,8 @@ public sealed class MultiSchemaMigrator<TContext>(
     ISchemaNameFormatter schemaNameFormatter,
     ILogger<MultiSchemaMigrator<TContext>> logger,
     ICurrentSchema currentSchema,
-    IOptions<SchemaMigrationOptions> options
+    IOptions<SchemaMigrationOptions> options,
+    IDomainDatabaseResolver? databaseResolver = null
 ) : IMultiSchemaMigrator<TContext>
     where TContext : DbContext
 {
@@ -41,7 +43,9 @@ public sealed class MultiSchemaMigrator<TContext>(
 
         logger.LogInformation("Starting migration for schema: {Schema}", schemaName);
 
-        var connectionString = configuration.GetConnectionString("Default")
+        // The current domain's database: a co-hosted domain may have its own (ConnectionStrings:Domains).
+        var connectionString = (databaseResolver?.HasDedicatedDatabase() == true ? databaseResolver.ConnectionStringFor() : null)
+            ?? configuration.GetConnectionString("Default")
             ?? throw new InvalidOperationException("Connection string 'Default' is not configured.");
 
         var optionsBuilder = new DbContextOptionsBuilder<WorkflowDbContext>();

@@ -146,7 +146,7 @@ public sealed class ScheduleTransitionsStep(
     /// <summary>
     /// Builds scheduling info from context and timer schedule.
     /// </summary>
-    private static TransitionSchedulingInfo BuildSchedulingInfo(
+    private TransitionSchedulingInfo BuildSchedulingInfo(
         TransitionExecutionContext context,
         Transition scheduledTransition,
         TimerSchedule timerSchedule)
@@ -158,7 +158,8 @@ public sealed class ScheduleTransitionsStep(
         // entry is deleted BY NAME once the previous one-shot fires — a shared name would let the
         // firing timer delete the freshly armed one. It is a uniquifier only; nothing looks it up.
         var jobName = JobName.ForScheduledTransition(
-            context.InstanceId, context.Target!.Key, scheduledTransition.Key, Guid.NewGuid());
+            context.InstanceId, context.Target!.Key, scheduledTransition.Key, Guid.NewGuid(),
+            runtimeInfoProvider.JobDomain(context.Domain));
         var activity = Activity.Current;
 
         var payload = new TransitionTimerPayload

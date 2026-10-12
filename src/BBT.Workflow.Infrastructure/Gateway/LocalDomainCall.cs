@@ -21,4 +21,12 @@ internal static class LocalDomainCall
             return call();
         }
     }
+
+    /// <summary>
+    /// Starts <paramref name="call"/> as <paramref name="domain"/> through <paramref name="boundary"/>, which also
+    /// opens a unit-of-work root of its own when the domain lives in another database; without a boundary
+    /// (single database, or a gateway built by hand) it is <see cref="Run{T}"/>.
+    /// </summary>
+    public static Task<TResult> Run<TResult>(ICoHostedDatabaseBoundary? boundary, string? domain, Func<Task<TResult>> call) =>
+        boundary is null ? Run(domain, call) : boundary.RunAsync(domain, call);
 }

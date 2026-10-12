@@ -19,6 +19,10 @@ public static class GatewayServiceCollectionExtensions
     /// <returns>The <see cref="IServiceCollection" /> so that additional calls can be chained.</returns>
     public static IServiceCollection AddInstanceGatewayServices(this IServiceCollection services)
     {
+        // Co-hosted domain in another database (ConnectionStrings:Domains:<domain>): its local branch
+        // runs in a unit-of-work root of its own. Same database → no extra root.
+        services.AddScoped<ICoHostedDatabaseBoundary, CoHostedDatabaseBoundary>();
+
         // Local gateways - execute locally with schema context
         services.AddScoped<LocalInstanceCommandGateway>();
         services.AddScoped<LocalInstanceQueryGateway>();

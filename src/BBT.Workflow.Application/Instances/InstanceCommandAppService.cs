@@ -578,7 +578,7 @@ public sealed class InstanceCommandAppService(
 
         try
         {
-            var jobName = JobName.ForTimeout(instance.Id);
+            var jobName = JobName.ForTimeout(instance.Id, runtimeInfoProvider.JobDomain(workflow.Domain));
             scheduleActivity?.SetTag(TelemetryConstants.TagNames.JobName, jobName.Value);
             var activity = Activity.Current;
             var payload = new WorkflowTimeoutPayload

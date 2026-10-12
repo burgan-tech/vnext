@@ -1,3 +1,4 @@
+using BBT.Workflow.Runtime;
 using System.Diagnostics;
 using BBT.Aether.Results;
 using BBT.Workflow.BackgroundJobs.Payloads;
@@ -28,7 +29,8 @@ namespace BBT.Workflow.Execution.Continuations;
 /// </summary>
 public sealed class EnqueueContinuationStrategy(
     IInstanceJobRepository jobRepository,
-    ITransitionEnqueueGateway enqueueGateway) : IContinuationStrategy
+    ITransitionEnqueueGateway enqueueGateway,
+    IRuntimeInfoProvider? runtimeInfoProvider = null) : IContinuationStrategy
 {
     /// <inheritdoc />
     public ContinuationMode Mode => ContinuationMode.Enqueue;
@@ -54,7 +56,7 @@ public sealed class EnqueueContinuationStrategy(
         // otherwise delete the next iteration's trigger and leave the instance Busy for good.
         var sourceStateKey = current.Target?.Key ?? current.Current?.Key ?? string.Empty;
         var jobName = JobName.ForAsyncTransition(
-            current.InstanceId, sourceStateKey, next.TransitionKey, jobId);
+            current.InstanceId, sourceStateKey, next.TransitionKey, jobId, runtimeInfoProvider.JobDomain(current.Domain));
         var jobNameValue = jobName.Value;
 
         // Durable intent for the active-job guard / reaper — atomic with the transition commit

@@ -11,6 +11,13 @@ namespace BBT.Workflow.Instances;
 /// <para>
 /// Wire format: <c>vnext.job.v1.{type}.{instanceId}[.{sourceState}].{key}[.{invocation}]</c>
 /// </para>
+/// <para>
+/// Multi-domain hosting writes the domain into the name: <c>vnext.job.v2.{domain}.{type}…</c>, the rest
+/// unchanged. The Dapr job carries its payload by reference, so the name is the only job information
+/// Dapr hands back on the callback; the domain in it tells which domain (and database) the job belongs
+/// to before Aether claims it. A single-domain process passes no domain and keeps writing v1, so its job
+/// names are exactly as before; the parser reads both versions.
+/// </para>
 /// <list type="bullet">
 ///   <item>Delimiter is <c>.</c> — accepted by Dapr's Jobs API (the name becomes the
 ///   <c>/job/{name}</c> callback route). Every field uses only <c>[A-Za-z0-9_-]</c>, so the whole
@@ -54,6 +61,7 @@ namespace BBT.Workflow.Instances;
 public sealed record JobName
 {
     private const string Prefix = "vnext.job.v1";
+    private const string DomainPrefix = "vnext.job.v2";
     private const char Delimiter = '.';
 
     /// <summary>Dapr-safe wire spelling of <see cref="WellKnownStateKeys.Start"/> in the source-state segment.</summary>
@@ -68,8 +76,10 @@ public sealed record JobName
         string? sourceState,
         string? transitionKey,
         string? invocation,
-        string value)
+        string value,
+        string? domain = null)
     {
+        Domain = domain;
         Type = type;
         InstanceId = instanceId;
         SourceState = sourceState;
@@ -77,6 +87,12 @@ public sealed record JobName
         Invocation = invocation;
         Value = value;
     }
+
+    /// <summary>
+    /// The domain the job belongs to (multi-domain hosting, <c>vnext.job.v2</c>); <c>null</c> for a
+    /// single-domain (<c>vnext.job.v1</c>) name.
+    /// </summary>
+    public string? Domain { get; }
 
     /// <summary>The job kind decoded from the name.</summary>
     public JobType Type { get; }
@@ -118,37 +134,37 @@ public sealed record JobName
     /// Pass the job's own id so the name and the durable <c>InstanceJob</c> row stay traceable.
     /// </summary>
     public static JobName ForAsyncTransition(
-        Guid instanceId, string sourceState, string transitionKey, Guid invocationId)
+        Guid instanceId, string sourceState, string transitionKey, Guid invocationId, string? domain = null)
         => BuildScopedTransition(
-            JobType.AsyncTransition, instanceId, sourceState, transitionKey, invocationId);
+            JobType.AsyncTransition, instanceId, sourceState, transitionKey, invocationId, domain);
 
     /// <summary>
     /// Builds the name of a timer-based scheduled transition job, scoped by the source state and the
     /// invocation (see <see cref="ForAsyncTransition"/> — a re-entered state re-arms the same timer).
     /// </summary>
     public static JobName ForScheduledTransition(
-        Guid instanceId, string sourceState, string transitionKey, Guid invocationId)
+        Guid instanceId, string sourceState, string transitionKey, Guid invocationId, string? domain = null)
         => BuildScopedTransition(
-            JobType.ScheduledTransition, instanceId, sourceState, transitionKey, invocationId);
+            JobType.ScheduledTransition, instanceId, sourceState, transitionKey, invocationId, domain);
 
     /// <summary>Builds the name of a workflow timeout job.</summary>
-    public static JobName ForTimeout(Guid instanceId)
-        => Build(JobType.Timeout, instanceId, sourceState: null, transitionKey: null, invocation: null);
+    public static JobName ForTimeout(Guid instanceId, string? domain = null)
+        => Build(JobType.Timeout, instanceId, sourceState: null, transitionKey: null, invocation: null, domain);
 
     /// <summary>Builds the name of a long-poll acknowledge fallback job.</summary>
-    public static JobName ForLongPollAck(Guid instanceId)
+    public static JobName ForLongPollAck(Guid instanceId, string? domain = null)
         => Build(JobType.LongPollAck, instanceId, sourceState: null,
             transitionKey: ValidateKey(LongPollAckConstants.JobKey, nameof(LongPollAckConstants.JobKey)),
-            invocation: null);
+            invocation: null, domain);
 
     /// <summary>Builds the name of a state-level notification dispatch job.</summary>
-    public static JobName ForStateNotify(Guid instanceId, string stateKey)
+    public static JobName ForStateNotify(Guid instanceId, string stateKey, string? domain = null)
         => Build(JobType.StateNotify, instanceId, sourceState: null,
-            transitionKey: ValidateKey(stateKey, nameof(stateKey)), invocation: null);
+            transitionKey: ValidateKey(stateKey, nameof(stateKey)), invocation: null, domain);
 
     /// <summary>
     /// Attempts to parse a structured job name. Returns <c>false</c> for any value that does not
-    /// match the <c>vnext.job.v1</c> scheme (e.g. foreign names).
+    /// match the <c>vnext.job.v1</c> or <c>vnext.job.v2</c> (with domain) scheme (e.g. foreign names).
     /// </summary>
     public static bool TryParse(string? value, out JobName result)
     {
@@ -158,15 +174,33 @@ public sealed record JobName
             return false;
         }
 
-        var expectedPrefix = Prefix + Delimiter; // "vnext.job.v1."
-        if (!value.StartsWith(expectedPrefix, StringComparison.Ordinal))
+        // v1: vnext.job.v1.{type}…   v2 (multi-domain): vnext.job.v2.{domain}.{type}…
+        string? domain = null;
+        string body;
+        if (value.StartsWith(Prefix + Delimiter, StringComparison.Ordinal))
+        {
+            body = value[(Prefix.Length + 1)..];
+        }
+        else if (value.StartsWith(DomainPrefix + Delimiter, StringComparison.Ordinal))
+        {
+            var rest = value[(DomainPrefix.Length + 1)..];
+            var cut = rest.IndexOf(Delimiter);
+            if (cut <= 0 || !IsSafe(rest[..cut]))
+            {
+                return false;
+            }
+
+            domain = rest[..cut];
+            body = rest[(cut + 1)..];
+        }
+        else
         {
             return false;
         }
 
         // {type}.{instanceId}[.{sourceState}].{key}[.{invocation}] — every field is a plain,
         // delimiter-free token, so counting the split segments is unambiguous.
-        var parts = value[expectedPrefix.Length..].Split(Delimiter);
+        var parts = body.Split(Delimiter);
         if (parts.Length < 2)
         {
             return false;
@@ -235,7 +269,7 @@ public sealed record JobName
                 return false;
         }
 
-        result = new JobName(type, instanceId, sourceState, transitionKey, invocation, value);
+        result = new JobName(type, instanceId, sourceState, transitionKey, invocation, value, domain);
         return true;
     }
 
@@ -249,7 +283,7 @@ public sealed record JobName
     public override string ToString() => Value;
 
     private static JobName BuildScopedTransition(
-        JobType type, Guid instanceId, string sourceState, string transitionKey, Guid invocationId)
+        JobType type, Guid instanceId, string sourceState, string transitionKey, Guid invocationId, string? domain)
     {
         ValidateKey(transitionKey, nameof(transitionKey));
 
@@ -269,13 +303,17 @@ public sealed record JobName
             ? null
             : invocationId.ToString("N")[..InvocationLength];
 
-        return Build(type, instanceId, source, transitionKey, invocation);
+        return Build(type, instanceId, source, transitionKey, invocation, domain);
     }
 
     private static JobName Build(
-        JobType type, Guid instanceId, string? sourceState, string? transitionKey, string? invocation)
+        JobType type, Guid instanceId, string? sourceState, string? transitionKey, string? invocation,
+        string? domain = null)
     {
-        var builder = new StringBuilder(Prefix)
+        var builder = domain is null
+            ? new StringBuilder(Prefix)
+            : new StringBuilder(DomainPrefix).Append(Delimiter).Append(ValidateKey(domain, nameof(domain)));
+        builder
             .Append(Delimiter).Append(ToWireCode(type))
             .Append(Delimiter).Append(instanceId.ToString("N"));
 
@@ -303,7 +341,7 @@ public sealed record JobName
                 nameof(transitionKey));
         }
 
-        return new JobName(type, instanceId, sourceState, transitionKey, invocation, value);
+        return new JobName(type, instanceId, sourceState, transitionKey, invocation, value, domain);
     }
 
     /// <summary>
