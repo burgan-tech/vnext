@@ -1,6 +1,7 @@
 using System;
 using BBT.Aether.MultiSchema;
 using BBT.Workflow.Runtime;
+using Microsoft.Extensions.Options;
 using Shouldly;
 using Xunit;
 
@@ -89,6 +90,26 @@ public sealed class DomainSchemaNameFormatterTests
         using (DomainScope.Begin("sales"))
         {
             Pool().Format("navigations").ShouldBe("navigations");
+        }
+    }
+
+    [Fact]
+    public void CoHostedDomainWithItsOwnDatabase_KeepsTheDefaultNames()
+    {
+        var runtime = new RuntimeInfoProvider("1.0.0", domains: "mobile,fraud", domain: "staff");
+        var options = new DomainDatabaseOptions { DefaultConnectionString = "Host=db;Database=vNext_Staff" };
+        options.Domains["mobile"] = "Host=db;Database=vNext_Mobile";
+        var sut = new DomainSchemaNameFormatter(runtime, new DomainDatabaseResolver(runtime, Options.Create(options)));
+
+        using (DomainScope.Begin("mobile"))
+        {
+            sut.Format("navigations").ShouldBe("navigations");
+            sut.Format("sys-flows").ShouldBe("sys_flows");
+        }
+
+        using (DomainScope.Begin("fraud")) // shared database → still prefixed
+        {
+            sut.Format("navigations").ShouldBe("fraud_navigations");
         }
     }
 

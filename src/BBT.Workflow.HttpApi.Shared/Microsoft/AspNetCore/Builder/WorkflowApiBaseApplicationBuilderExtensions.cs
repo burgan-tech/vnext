@@ -70,7 +70,8 @@ public static class WorkflowApiBaseApplicationBuilderExtensions
     
     public static void MigrateMessagingDbContext(this IServiceProvider services)
     {
-        AsyncHelper.RunSync(async () =>
+        // Once per database: a co-hosted domain with its own database has its own copy.
+        ForEachDomainDatabase(services, async () =>
         {
             await using var scope = services.CreateAsyncScope();
 
@@ -92,7 +93,8 @@ public static class WorkflowApiBaseApplicationBuilderExtensions
     /// </summary>
     public static void MigrateMetricsDbContext(this IServiceProvider services)
     {
-        AsyncHelper.RunSync(async () =>
+        // Once per database: a co-hosted domain with its own database has its own copy.
+        ForEachDomainDatabase(services, async () =>
         {
             await using var scope = services.CreateAsyncScope();
 
@@ -103,6 +105,31 @@ public static class WorkflowApiBaseApplicationBuilderExtensions
                                        ?? new SchemaMigrationOptions();
                 dbContext.Database.SetCommandTimeout(migrationOptions.CommandTimeoutSeconds);
                 await dbContext.Database.MigrateAsync();
+            }
+        });
+    }
+
+    /// <summary>
+    /// Runs <paramref name="migrate"/> once per distinct database (multi-domain hosting with dedicated
+    /// databases), under one of its domains' scope; with one database it runs once, as before.
+    /// </summary>
+    private static void ForEachDomainDatabase(IServiceProvider services, Func<Task> migrate)
+    {
+        AsyncHelper.RunSync(async () =>
+        {
+            var databases = services.GetService<IDomainDatabaseResolver>()?.DatabaseRepresentatives;
+            if (databases is not { Count: > 1 })
+            {
+                await migrate();
+                return;
+            }
+
+            foreach (var domain in databases)
+            {
+                using (DomainScope.Begin(domain))
+                {
+                    await migrate();
+                }
             }
         });
     }

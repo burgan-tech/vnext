@@ -248,6 +248,8 @@ The plan is built from `ExcludedStepOrders` alone (`TransitionExecutor.BuildExec
   trigger local path, DbMigrator). A new entry point that reads `.Domain` or touches a schema must open it too.
 - Co-hosted calls are in-process. A co-hosted domain's schemas are `<domain>_`-prefixed (`DomainSchemaNameFormatter`);
   single domain and the primary keep the default names — never change that. Open the scope BEFORE `currentSchema.Change`.
+- `ConnectionStrings:Domains:<d>` gives a co-hosted domain its own database (default names, own `sys_queues`).
+  One unit-of-work root = one database: cross-database local calls go through `CoHostedDatabaseBoundary`.
 - Full guide: `docs/runtime/multi-domain-hosting.md`.
 
 ## Status / State / Type Semantics

@@ -77,6 +77,12 @@ public static class OutboxWorkerServiceCollectionExtensions
             options => configuration.GetSection("Aether:Outbox").Bind(options),
             withHostedService: true);
 
+        // Multi-domain hosting with dedicated databases (ConnectionStrings:Domains:<domain>): every
+        // database's sys_queues has its own outbox rows. One database → unchanged.
+        services.AddDomainDatabases(configuration);
+        services.RouteToDomainDatabase<MessagingDbContext>();
+        services.FanOutOutboxPerDomainDatabase();
+
         return services;
     }
 }

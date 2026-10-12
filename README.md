@@ -64,12 +64,13 @@ Port offsets follow [vnext-runtime](https://github.com/burgan-tech/vnext-runtime
 keeps the sidecars from `docker-compose.yml`; any other domain gets `base + offset` app ports, its own
 `<service>-<domain>` sidecar containers and `vnext-<domain>-…` Dapr app-ids. Offsets that would collide
 with core or another registered domain are refused (`--help` has the table). Flags: `--no-build`,
-`--skip-migrate`, `--db <name>`, `--offset N`, `--with <d1,d2>`.
+`--skip-migrate`, `--db <name>`, `--offset N`, `--with <d1,d2=db>`.
 
 When several domains are needed at once, `--with` is the lighter option: the primary domain's hosts also
 serve the listed domains (`APP_DOMAINS`), on the primary's database and sidecars, so each extra domain
 costs nothing in Docker. Co-hosted domains get `<domain>_`-prefixed schemas, so they may reuse flow and
-component keys; the primary keeps its schema names unchanged. Every co-hosted domain is
+component keys; the primary keeps its schema names unchanged. `d=db` gives a co-hosted domain its own
+database instead (default schema names, an existing domain database reused as is). Every co-hosted domain is
 registered in `wf` with the same API and database. See
 [Multi-Domain Hosting](docs/runtime/multi-domain-hosting.md).
 

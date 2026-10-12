@@ -58,7 +58,8 @@ Commands run without a terminal, so the script never prompts — pass everything
    free multiple of 10 (`./run-docker.sh plan X --offset N` shows ports and app-ids; it refuses collisions).
    Tell the user the offset you picked before starting. Several domains at once and memory is tight →
    co-host them on one host set instead: `./run-docker.sh up <primary> --with X,Y` (one database, co-hosted
-   domains in `<domain>_`-prefixed schemas; [Multi-Domain Hosting](docs/runtime/multi-domain-hosting.md)).
+   domains in `<domain>_`-prefixed schemas; `Y=vNext_Y` keeps Y in its own database;
+   [Multi-Domain Hosting](docs/runtime/multi-domain-hosting.md)).
 3. `./run-docker.sh up X --offset N` (`--no-build` only if the build is
    known to be fresh). It brings up infra + sidecars, runs DbMigrator, starts the hosts and waits for
    `/health`. Expect a few minutes on a cold build.

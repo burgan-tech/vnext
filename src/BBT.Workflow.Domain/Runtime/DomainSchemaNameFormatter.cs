@@ -15,9 +15,14 @@ namespace BBT.Workflow.Runtime;
 /// produces, so existing databases are read and written unchanged.
 /// </para>
 /// <para>
+/// A co-hosted domain with a <b>dedicated database</b> (<c>ConnectionStrings:Domains:&lt;domain&gt;</c>,
+/// <see cref="IDomainDatabaseResolver"/>) is not prefixed either: its database holds only its own
+/// schemas, so it keeps the single-domain layout and an existing domain database is reused unchanged.
+/// </para>
+/// <para>
 /// <c>sys_queues</c> and <c>sys_metrics</c> are never prefixed: the outbox, inbox, background jobs,
-/// distributed locks and function metrics are shared by every domain of a pool, and their rows carry the
-/// domain themselves.
+/// distributed locks and function metrics are shared by every domain of one database, and their rows
+/// carry the domain themselves. A dedicated database has its own copy of both.
 /// </para>
 /// <para>
 /// Aether's <c>CurrentSchema.Change</c> formats the name at the moment the scope opens, so the domain
@@ -26,7 +31,9 @@ namespace BBT.Workflow.Runtime;
 /// name and then pass the result to <c>Change</c> again.
 /// </para>
 /// </remarks>
-public sealed class DomainSchemaNameFormatter(IRuntimeInfoProvider runtimeInfoProvider) : ISchemaNameFormatter
+public sealed class DomainSchemaNameFormatter(
+    IRuntimeInfoProvider runtimeInfoProvider,
+    IDomainDatabaseResolver? databaseResolver = null) : ISchemaNameFormatter
 {
     private const int MaxLength = 63; // PostgreSQL identifier limit
 
@@ -74,6 +81,11 @@ public sealed class DomainSchemaNameFormatter(IRuntimeInfoProvider runtimeInfoPr
 
         var current = runtimeInfoProvider.Domain;
         if (string.Equals(current, hosted[0], StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        if (databaseResolver?.HasDedicatedDatabase(current) == true)
         {
             return null;
         }

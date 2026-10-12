@@ -15,6 +15,7 @@ public sealed class RoutedInstanceQueryGateway : IInstanceQueryGateway
     private readonly LocalInstanceQueryGateway _local;
     private readonly RemoteInstanceQueryGateway _remote;
     private readonly IRuntimeInfoProvider _runtimeInfoProvider;
+    private readonly ICoHostedDatabaseBoundary? _databaseBoundary;
 
     /// <summary>
     /// Initializes a new instance of RoutedInstanceQueryGateway.
@@ -22,11 +23,14 @@ public sealed class RoutedInstanceQueryGateway : IInstanceQueryGateway
     /// <param name="local">The local gateway for same-domain execution.</param>
     /// <param name="remote">The remote gateway for cross-domain execution.</param>
     /// <param name="runtimeInfoProvider">Provider for runtime domain information.</param>
+    /// <param name="databaseBoundary">Opens a new unit-of-work root for a co-hosted domain in another database.</param>
     public RoutedInstanceQueryGateway(
         LocalInstanceQueryGateway local,
         RemoteInstanceQueryGateway remote,
-        IRuntimeInfoProvider runtimeInfoProvider)
+        IRuntimeInfoProvider runtimeInfoProvider,
+        ICoHostedDatabaseBoundary? databaseBoundary = null)
     {
+        _databaseBoundary = databaseBoundary;
         _local = local;
         _remote = remote;
         _runtimeInfoProvider = runtimeInfoProvider;
@@ -38,7 +42,7 @@ public sealed class RoutedInstanceQueryGateway : IInstanceQueryGateway
         CancellationToken cancellationToken = default)
     {
         return _runtimeInfoProvider.IsDomainMatch(input.Domain)
-            ? LocalDomainCall.Run(input.Domain, () => _local.GetInstanceAsync(input, cancellationToken))
+            ? LocalDomainCall.Run(_databaseBoundary, input.Domain, () => _local.GetInstanceAsync(input, cancellationToken))
             : _remote.GetInstanceAsync(input, cancellationToken);
     }
 
@@ -48,7 +52,7 @@ public sealed class RoutedInstanceQueryGateway : IInstanceQueryGateway
         CancellationToken cancellationToken = default)
     {
         return _runtimeInfoProvider.IsDomainMatch(input.Domain)
-            ? LocalDomainCall.Run(input.Domain, () => _local.GetInstanceDataAsync(input, cancellationToken))
+            ? LocalDomainCall.Run(_databaseBoundary, input.Domain, () => _local.GetInstanceDataAsync(input, cancellationToken))
             : _remote.GetInstanceDataAsync(input, cancellationToken);
     }
 
@@ -58,7 +62,7 @@ public sealed class RoutedInstanceQueryGateway : IInstanceQueryGateway
         CancellationToken cancellationToken = default)
     {
         return _runtimeInfoProvider.IsDomainMatch(input.Domain)
-            ? LocalDomainCall.Run(input.Domain, () => _local.GetInstanceListAsync(input, cancellationToken))
+            ? LocalDomainCall.Run(_databaseBoundary, input.Domain, () => _local.GetInstanceListAsync(input, cancellationToken))
             : _remote.GetInstanceListAsync(input, cancellationToken);
     }
 
@@ -68,7 +72,7 @@ public sealed class RoutedInstanceQueryGateway : IInstanceQueryGateway
         CancellationToken cancellationToken = default)
     {
         return _runtimeInfoProvider.IsDomainMatch(input.Domain)
-            ? LocalDomainCall.Run(input.Domain, () => _local.GetInstanceHistoryAsync(input, cancellationToken))
+            ? LocalDomainCall.Run(_databaseBoundary, input.Domain, () => _local.GetInstanceHistoryAsync(input, cancellationToken))
             : _remote.GetInstanceHistoryAsync(input, cancellationToken);
     }
 
@@ -78,7 +82,7 @@ public sealed class RoutedInstanceQueryGateway : IInstanceQueryGateway
         CancellationToken cancellationToken = default)
     {
         return _runtimeInfoProvider.IsDomainMatch(input.Domain)
-            ? LocalDomainCall.Run(input.Domain, () => _local.GetFunctionWithStateAsync(input, cancellationToken))
+            ? LocalDomainCall.Run(_databaseBoundary, input.Domain, () => _local.GetFunctionWithStateAsync(input, cancellationToken))
             : _remote.GetFunctionWithStateAsync(input, cancellationToken);
     }
 
@@ -89,7 +93,7 @@ public sealed class RoutedInstanceQueryGateway : IInstanceQueryGateway
         CancellationToken cancellationToken = default)
     {
         return _runtimeInfoProvider.IsDomainMatch(input.Domain)
-            ? LocalDomainCall.Run(input.Domain, () => _local.GetFunctionWithViewAsync(input, transitionKey, cancellationToken))
+            ? LocalDomainCall.Run(_databaseBoundary, input.Domain, () => _local.GetFunctionWithViewAsync(input, transitionKey, cancellationToken))
             : _remote.GetFunctionWithViewAsync(input, transitionKey, cancellationToken);
     }
 
@@ -100,7 +104,7 @@ public sealed class RoutedInstanceQueryGateway : IInstanceQueryGateway
         CancellationToken cancellationToken = default)
     {
         return _runtimeInfoProvider.IsDomainMatch(input.Domain)
-            ? LocalDomainCall.Run(input.Domain, () => _local.GetFunctionWithSchemaAsync(input, transitionKey, cancellationToken))
+            ? LocalDomainCall.Run(_databaseBoundary, input.Domain, () => _local.GetFunctionWithSchemaAsync(input, transitionKey, cancellationToken))
             : _remote.GetFunctionWithSchemaAsync(input, transitionKey, cancellationToken);
     }
 
@@ -110,7 +114,7 @@ public sealed class RoutedInstanceQueryGateway : IInstanceQueryGateway
         CancellationToken cancellationToken = default)
     {
         return _runtimeInfoProvider.IsDomainMatch(input.Domain)
-            ? LocalDomainCall.Run(input.Domain, () => _local.GetFunctionWithExtensionsAsync(input, cancellationToken))
+            ? LocalDomainCall.Run(_databaseBoundary, input.Domain, () => _local.GetFunctionWithExtensionsAsync(input, cancellationToken))
             : _remote.GetFunctionWithExtensionsAsync(input, cancellationToken);
     }
 
@@ -120,7 +124,7 @@ public sealed class RoutedInstanceQueryGateway : IInstanceQueryGateway
         CancellationToken cancellationToken = default)
     {
         return _runtimeInfoProvider.IsDomainMatch(input.Domain)
-            ? LocalDomainCall.Run(input.Domain, () => _local.GetFunctionWithMasterAsync(input, cancellationToken))
+            ? LocalDomainCall.Run(_databaseBoundary, input.Domain, () => _local.GetFunctionWithMasterAsync(input, cancellationToken))
             : _remote.GetFunctionWithMasterAsync(input, cancellationToken);
     }
 }

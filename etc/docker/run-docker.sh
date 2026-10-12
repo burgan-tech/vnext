@@ -7,8 +7,9 @@
 #   ./run-docker.sh stage [domain]      # same with release images        (dev/stage: one domain at a time)
 #
 # Local hosts, one or MORE domains side by side (infra in docker, runtime as locally built binaries):
-#   ./run-docker.sh up [domain] [--offset N] [--no-build] [--skip-migrate] [--db <name>] [--with <d1,d2>]
-#                                                  # --with: ONE host set serves the co-hosted domains too
+#   ./run-docker.sh up [domain] [--offset N] [--no-build] [--skip-migrate] [--db <name>] [--with <d1,d2=db>]
+#                                                  # --with: ONE host set serves the co-hosted domains too;
+#                                                  # d=db gives that domain its own database
 #                                                  # (APP_DOMAINS, same database) — docs/runtime/multi-domain-hosting.md
 #   ./run-docker.sh plan <domain> [--offset N]     # show ports / app-ids / env, write the sidecar compose — start nothing
 #   ./run-docker.sh switch <domain>                # stop every running domain, then `up <domain>`
@@ -83,6 +84,8 @@ dom_dir() { printf '%s/%s' "$DOMAINS" "$1"; }
 stored() { cat "$(dom_dir "$1")/$2" 2>/dev/null || true; }   # stored <domain> <key>
 # co-hosted domains of a primary (multi-domain hosting): --with wins, else what the last up stored
 cohosted() { if [ -n "${WITH_ARG+x}" ]; then printf '%s' "$WITH_ARG"; else stored "$1" cohosted; fi; }
+cohosted_names() { cohosted "$1" | tr ',' '\n' | cut -d= -f1 | paste -sd, -; }      # without =db
+cohosted_db() { { cohosted "$1" | tr ',' '\n' | grep -E "^$2=" || true; } | head -1 | cut -d= -f2-; }   # <primary> <domain> → own db or empty
 registered_domains() { local d; for d in "$DOMAINS"/*/; do [ -f "$d/offset" ] && basename "$d"; done 2>/dev/null; return 0; }
 domain_running() {   # any live pid for this domain
   local p; for p in "$(dom_dir "$1")"/pids/*.pid; do [ -f "$p" ] && pid_alive "$(cat "$p")" && return 0; done; return 1
@@ -181,7 +184,15 @@ load_env() {
   ENVS=()
   while IFS= read -r line; do [ -n "$line" ] && ENVS+=("$line"); done < <(profile_env "$project" "$profile")
   ENVS+=("APP_DOMAIN=$domain")
-  [ -n "$(cohosted "$domain")" ] && ENVS+=("APP_DOMAINS=$(cohosted "$domain")")
+  [ -n "$(cohosted "$domain")" ] && ENVS+=("APP_DOMAINS=$(cohosted_names "$domain")")
+  # d=db → that co-hosted domain's own database (ConnectionStrings:Domains:<d>), for every host with a database
+  if [ "$(f "$row" 5)" = 1 ]; then
+    local co co_db
+    for co in $(cohosted_names "$domain" | tr ',' ' '); do
+      co_db="$(cohosted_db "$domain" "$co")"
+      [ -n "$co_db" ] && ENVS+=("ConnectionStrings__Domains__$co=$(connection_string "$project" "$co_db")")
+    done
+  fi
   [ "$(f "$row" 5)" = 1 ] && ENVS+=("ConnectionStrings__Default=$(connection_string "$project" "$db")")
   if [ "$offset" != 0 ]; then
     ENVS+=("DAPR_APP_ID=$(app_id "$(f "$row" 8)" "$domain" "$offset")")
@@ -433,7 +444,7 @@ write_record() {   # <domain> <running|stopped>
 |---|---|
 | Status | **$status** ($now) |
 | Port offset | $offset |
-| Co-hosted domains | $([ -n "$(stored "$domain" cohosted)" ] && printf '\`%s\` (same hosts and database; \`wf domain use <d>\` per domain)' "$(stored "$domain" cohosted)" || printf 'none') |
+| Co-hosted domains | $([ -n "$(stored "$domain" cohosted)" ] && printf '\`%s\` (same hosts; d=db has its own database, others share; \`wf domain use <d>\` per domain)' "$(stored "$domain" cohosted)" || printf 'none') |
 | Database | \`$db\` on localhost:5432 (postgres/postgres) |
 | Base URL | http://localhost:$(app_port 4201 "$offset") |
 | Init (package publisher) | http://localhost:$(init_port "$offset") (\`$(init_name "$domain" "$offset")\`) |
@@ -540,7 +551,7 @@ cmd_up() {
   wait_healthy "$offset"
   printf '%s' "$domain" > "$STATE/last"
   register_wf_domain "$domain" "$offset" "$db"
-  local co; for co in $(cohosted "$domain" | tr ',' ' '); do register_wf_domain "$co" "$offset" "$db"; done
+  local co; for co in $(cohosted_names "$domain" | tr ',' ' '); do local co_db; co_db="$(cohosted_db "$domain" "$co")"; register_wf_domain "$co" "$offset" "${co_db:-$db}"; done
   write_record "$domain" running
   printf '\n\033[1;32mready\033[0m  %s  →  http://localhost:%s   record: %s\n\n' "$domain" "$(app_port 4201 "$offset")" "$RECORDS/$domain.md"
 }
@@ -614,7 +625,8 @@ while [ $# -gt 0 ]; do
     --offset)       shift; OFFSET_ARG="${1:-}"; [ -n "$OFFSET_ARG" ] || die "--offset needs a value" ;;
     --db)           shift; DB_OVERRIDE="${1:-}"; [ -n "$DB_OVERRIDE" ] || die "--db needs a value" ;;
     --with)         shift; WITH_ARG="${1:-}"
-                    [[ "$WITH_ARG" =~ ^[A-Za-z0-9_-]+(,[A-Za-z0-9_-]+)*$ ]] || die "--with needs a comma-separated domain list" ;;
+                    [[ "$WITH_ARG" =~ ^[A-Za-z0-9_-]+(=[A-Za-z0-9_]+)?(,[A-Za-z0-9_-]+(=[A-Za-z0-9_]+)?)*$ ]] \
+                      || die "--with needs a comma-separated domain list (d or d=database)" ;;
     -h|--help)      usage 0 ;;
     -*)             die "unknown flag: $1" ;;
     *)              POSITIONAL+=("$1") ;;
