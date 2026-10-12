@@ -92,7 +92,10 @@ public static class DomainDatabaseServiceCollectionExtensions
         if (services.Any(d => d.ServiceType == typeof(IJobExecutionBridge)))
         {
             services.Decorate<IJobExecutionBridge>((inner, sp) =>
-                new DomainScopedJobExecutionBridge(inner, sp.GetRequiredService<IDomainDatabaseResolver>()));
+                new DomainScopedJobExecutionBridge(
+                    inner,
+                    sp.GetRequiredService<IDomainDatabaseResolver>(),
+                    sp.GetService<BackgroundJobOptions>()?.Schema ?? "sys_queues"));
         }
 
         return services;

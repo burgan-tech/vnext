@@ -144,9 +144,22 @@ public sealed class DomainDatabaseRoutingTests
     [InlineData("""{"domain":"mobile"}""", "mobile")]
     [InlineData("""{"type":"job","data":{"workflow":"x"}}""", null)]
     [InlineData("not json", null)]
+    // How the Dapr job delivers it: data is base64 of the serialized payload ({"domain":"sample","workflow":"north-star"}).
+    [InlineData("""{"specVersion":"1.0","type":"flow.transition","data":"eyJkb21haW4iOiJzYW1wbGUiLCJ3b3JrZmxvdyI6Im5vcnRoLXN0YXIifQ=="}""", "sample")]
     public void JobBridge_ReadsTheDomainFromThePayload(string payload, string? expected)
     {
         DomainScopedJobExecutionBridge.TryReadDomain(Encoding.UTF8.GetBytes(payload)).ShouldBe(expected);
+    }
+
+    [Fact]
+    public void JobBridge_ReadsTheJobIdOfAPayloadByReference()
+    {
+        // The shape the Dapr job actually delivers: no data, the job row is referenced by id.
+        var payload = Encoding.UTF8.GetBytes(
+            """{"specVersion":"1.0","type":"flow.transition","schema":"north_star","extensions":{"payloadref":true,"jobid":"dad544ca-93f1-4b16-a051-9fb6b0aee564"}}""");
+
+        DomainScopedJobExecutionBridge.TryReadDomain(payload).ShouldBeNull();
+        DomainScopedJobExecutionBridge.TryReadJobId(payload).ShouldBe(Guid.Parse("dad544ca-93f1-4b16-a051-9fb6b0aee564"));
     }
 
     [Fact]
