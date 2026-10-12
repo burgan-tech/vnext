@@ -1,3 +1,4 @@
+using BBT.Workflow.Runtime;
 using System.Diagnostics;
 using BBT.Workflow.Logging;
 using System.Text.Json;
@@ -24,7 +25,8 @@ namespace BBT.Workflow.BackgroundJobs;
 public sealed class StateNotificationScheduler(
     IBackgroundJobService backgroundJobService,
     IInstanceJobRepository jobRepository,
-    IOptions<WorkflowExecutionOptions> executionOptions) : IStateNotificationScheduler
+    IOptions<WorkflowExecutionOptions> executionOptions,
+    IRuntimeInfoProvider? runtimeInfoProvider = null) : IStateNotificationScheduler
 {
     /// <inheritdoc />
     public async Task ScheduleAsync(
@@ -33,7 +35,7 @@ public sealed class StateNotificationScheduler(
     {
         var instanceId = context.InstanceId;
         var stateKey = context.Target!.Key;
-        var jobName = JobName.ForStateNotify(instanceId, stateKey);
+        var jobName = JobName.ForStateNotify(instanceId, stateKey, runtimeInfoProvider.JobDomain(context.Domain));
         var activity = Activity.Current;
 
         var payload = new StateNotifyPayload

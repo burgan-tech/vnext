@@ -139,31 +139,10 @@ public sealed class DomainDatabaseRoutingTests
     // ---- job bridge ----
 
     [Theory]
-    [InlineData("""{"type":"job","schema":"navigations","data":{"domain":"mobile","workflow":"x"}}""", "mobile")]
-    [InlineData("""{"type":"job","data":"{\"Domain\":\"fraud\"}"}""", "fraud")]
-    [InlineData("""{"domain":"mobile"}""", "mobile")]
-    [InlineData("""{"type":"job","data":{"workflow":"x"}}""", null)]
-    [InlineData("not json", null)]
-    // How the Dapr job delivers it: data is base64 of the serialized payload ({"domain":"sample","workflow":"north-star"}).
-    [InlineData("""{"specVersion":"1.0","type":"flow.transition","data":"eyJkb21haW4iOiJzYW1wbGUiLCJ3b3JrZmxvdyI6Im5vcnRoLXN0YXIifQ=="}""", "sample")]
-    public void JobBridge_ReadsTheDomainFromThePayload(string payload, string? expected)
-    {
-        DomainScopedJobExecutionBridge.TryReadDomain(Encoding.UTF8.GetBytes(payload)).ShouldBe(expected);
-    }
-
-    [Fact]
-    public void JobBridge_ReadsTheJobIdOfAPayloadByReference()
-    {
-        // The shape the Dapr job actually delivers: no data, the job row is referenced by id.
-        var payload = Encoding.UTF8.GetBytes(
-            """{"specVersion":"1.0","type":"flow.transition","schema":"north_star","extensions":{"payloadref":true,"jobid":"dad544ca-93f1-4b16-a051-9fb6b0aee564"}}""");
-
-        DomainScopedJobExecutionBridge.TryReadDomain(payload).ShouldBeNull();
-        DomainScopedJobExecutionBridge.TryReadJobId(payload).ShouldBe(Guid.Parse("dad544ca-93f1-4b16-a051-9fb6b0aee564"));
-    }
-
-    [Fact]
-    public async Task JobBridge_OpensTheScopeBeforeTheInnerBridgeClaims()
+    [InlineData("vnext.job.v2.mobile.tx.0fde85e796514487b3ee817ca9ae61d6._start.create.093bceb7", "mobile")]
+    [InlineData("vnext.job.v1.tx.0fde85e796514487b3ee817ca9ae61d6._start.create.093bceb7", null)]
+    [InlineData("foreign-job", null)]
+    public async Task JobBridge_OpensTheScopeOfTheDomainInTheJobName(string jobName, string? expected)
     {
         string? seen = "unset";
         var inner = Substitute.For<IJobExecutionBridge>();
@@ -174,10 +153,9 @@ public sealed class DomainDatabaseRoutingTests
                 return Task.CompletedTask;
             });
 
-        await new DomainScopedJobExecutionBridge(inner, Resolver(mobileDedicated: true))
-            .ExecuteAsync("job-1", Encoding.UTF8.GetBytes("""{"type":"job","data":{"domain":"mobile"}}"""), CancellationToken.None);
+        await new DomainScopedJobExecutionBridge(inner).ExecuteAsync(jobName, ReadOnlyMemory<byte>.Empty, CancellationToken.None);
 
-        seen.ShouldBe("mobile");
+        seen.ShouldBe(expected);
     }
 
     // ---- gateway boundary ----

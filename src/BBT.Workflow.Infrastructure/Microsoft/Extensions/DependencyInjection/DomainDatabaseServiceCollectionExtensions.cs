@@ -83,7 +83,8 @@ public static class DomainDatabaseServiceCollectionExtensions
             new DomainFanOutOutboxProcessor(inner, sp.GetRequiredService<IDomainDatabaseResolver>()));
 
     /// <summary>
-    /// Arms every database's background jobs and claims each Dapr job in its domain's database. Call after
+    /// Arms every database's background jobs and claims each Dapr job in its domain's database (the domain
+    /// travels in the job name, <c>vnext.job.v2</c>). Call after
     /// <c>AddAetherBackgroundJob</c> / <c>AddDaprJobScheduler</c>. One database → unchanged behaviour.
     /// </summary>
     public static IServiceCollection FanOutBackgroundJobsPerDomainDatabase(this IServiceCollection services)
@@ -91,11 +92,7 @@ public static class DomainDatabaseServiceCollectionExtensions
         services.Replace(ServiceDescriptor.Singleton<BackgroundJobArmingProcessor, DomainFanOutBackgroundJobArmingProcessor>());
         if (services.Any(d => d.ServiceType == typeof(IJobExecutionBridge)))
         {
-            services.Decorate<IJobExecutionBridge>((inner, sp) =>
-                new DomainScopedJobExecutionBridge(
-                    inner,
-                    sp.GetRequiredService<IDomainDatabaseResolver>(),
-                    sp.GetService<BackgroundJobOptions>()?.Schema ?? "sys_queues"));
+            services.Decorate<IJobExecutionBridge>((inner, _) => new DomainScopedJobExecutionBridge(inner));
         }
 
         return services;

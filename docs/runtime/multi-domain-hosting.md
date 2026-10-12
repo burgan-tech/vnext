@@ -86,8 +86,11 @@ mix in one pool; a domain without an entry shares the primary's database as abov
   - The outbox worker's processor (`DomainFanOutOutboxProcessor`) and the orchestration job arming
     (`DomainFanOutBackgroundJobArmingProcessor`) run once per distinct database under one of its
     domains' scope. Aether's pollers are kept; a failing database does not starve the others.
-  - `DomainScopedJobExecutionBridge` opens the job's domain scope (from the payload's `domain`) before
-    Aether claims the Dapr job.
+  - **The job name carries the domain.** A multi-domain process names its background jobs
+    `vnext.job.v2.{domain}.{type}…` (`JobName`); a single-domain process keeps `vnext.job.v1…`, exactly
+    as before. The Dapr job hands only its name back (the payload is by reference), and
+    `DomainScopedJobExecutionBridge` opens that domain's scope from it before Aether claims the job, so
+    the claim reads the right database — no lookup.
   - The inbox stays on the primary's database: its rows are forwarded by HTTP and are not written in a
     domain transaction.
 - **Migration and health.** `DbMigrator` migrates `sys_queues` / `sys_metrics` once per database and
