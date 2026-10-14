@@ -9,6 +9,7 @@ using BBT.Workflow;
 using BBT.Workflow.BackgroundJobs.Handlers;
 using BBT.Workflow.Data;
 using BBT.Workflow.Headers;
+using BBT.Workflow.HttpApi.Shared.Events;
 using BBT.Workflow.HttpApi.Shared.Telemetry;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Schemas;
@@ -402,14 +403,7 @@ public static class WorkflowApiBaseServiceCollectionExtensions
 
     public static IServiceCollection AddEventBus(this IServiceCollection services, IConfiguration configuration)
     {
-        services.AddEventBusWithHooks(options =>
-            {
-                options.DefaultSource =
-                    $"urn:vnext:{configuration.GetValue<string?>("ApplicationName")?.ToLowerInvariant()}";
-                options.PrefixEnvironmentToTopic = true;
-                options.PubSubName = configuration["DAPR_PUBSUB_STORE_NAME"]!;
-            }
-        );
+        services.AddEventBusWithHooks(options => WorkflowEventBusConfiguration.Apply(options, configuration));
         return services;
     }
 

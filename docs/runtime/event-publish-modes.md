@@ -241,6 +241,29 @@ them.
 | Async + cross domain | ~10–30 ms — direct service invocation, never the outbox loop |
 | Crash between commit and relay (rare) | Inbox backup: ~100–300 ms; lost-nudge tail = one idle poll interval (currently 5 s idle / 10 s max in vnext config — a tunable knob, deliberately left unchanged by this work) |
 
+## Topic naming
+
+Every runtime topic is `vnext.{domain}.{environment}.{eventName}.v{version}` — for example
+`vnext.core.production.instance.sub.completed.v1` or `vnext.core.development.aether.outbox.wakeup.v1`.
+
+- `{domain}` is `APP_DOMAIN` (the primary domain). Co-hosted domains (`APP_DOMAINS`) run in the same
+  processes and use the same broker user, so they publish and subscribe on the primary's topics.
+- `{environment}` is `ASPNETCORE_ENVIRONMENT`, lower-cased; unset means `production`, the same
+  default the .NET host applies.
+- The prefix is built once, in `WorkflowEventBusConfiguration.Apply`, and handed to Aether as
+  `AetherEventBusOptions.TopicPrefix`. Aether's `TopicNameFormatter` is the only place a topic name is
+  assembled: the publisher (`DefaultTopicNameStrategy`) and the subscription list (`/dapr/subscribe`,
+  built by `EventHandlerAutoDiscovery`) both go through it, so they cannot disagree.
+- Why the prefix: the Kafka broker grants each domain's user `vnext.{domain}.*` on topics and consumer
+  groups. A topic outside the prefix is refused, so every runtime topic must carry it. The consumer
+  group is set by the Helm chart's Kafka component (`consumerID`), not by the runtime.
+- The outbox stores a message's topic when it is written (`ExtraProperties["TopicName"]`). Rows written
+  before a topic-name change are still sent to the old name — drain the outbox before rolling out such
+  a change.
+- Topics a domain authors itself (a `DaprPubSubTask`'s `topic`, a domain-owned Dapr `Subscription`) are
+  used verbatim; the runtime adds no prefix to them. Under Kafka they must follow the same
+  `vnext.{domain}.{environment}.*` shape, or be granted to the domain explicitly.
+
 ## Wakeup signal
 
 Publishing an outbox row and waiting for the next poll tick used to be the only path from
@@ -299,7 +322,7 @@ keep it from polluting a transition's trace:
   [Trace/Span Tree § EF Core instrumentation](trace-span-tree.md#ef-core-instrumentation-the-worker-poll-cost-resolved)).
 - **Dapr sidecar spans are a separate, unaddressed layer** — the two mechanisms above only cover
   spans vnext's own code emits. The Dapr sidecar still instruments its own hop for the wakeup
-  topic (`pubsub/{env}.aether.outbox.wakeup.v1`) independently of the app-level server span, so a
+  topic (`pubsub/vnext.{domain}.{env}.aether.outbox.wakeup.v1`) independently of the app-level server span, so a
   tiny standalone trace per nudge (sidecar publish → sidecar deliver) remains visible in the
   backend even after the app-side exclusion above. If that volume bothers a dashboard, the knob is
   an OTel-collector filter dropping that span name before export — the same pattern already used
