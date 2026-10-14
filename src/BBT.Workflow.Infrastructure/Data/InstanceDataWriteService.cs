@@ -219,6 +219,7 @@ public sealed class InstanceDataWriteService(
     {
         var head = await ReadHeadAsync(context, instance.Id, cancellationToken);
         var schema = ResolveSchema(schemaLoad, head);
+        delta = StripComputedFields(schema, delta);
         var (encryption, plainHead, sanitizedDelta) =
             await PrepareEncryptionAsync(context, instance.Id, schema, head, delta, cancellationToken);
 
@@ -318,7 +319,7 @@ public sealed class InstanceDataWriteService(
             var head = await ReadHeadAsync(context, instance.Id, cancellationToken);
             var schema = ResolveSchema(schemaLoad, head);
             var (encryption, _, sanitized) =
-                await PrepareEncryptionAsync(context, instance.Id, schema, head, data, cancellationToken);
+                await PrepareEncryptionAsync(context, instance.Id, schema, head, StripComputedFields(schema, data), cancellationToken);
             var content = encryption.Secret is { } secret
                 ? protector!.ApplyHashes(sanitized, encryption.Paths.Hash, secret)
                 : sanitized;
@@ -714,6 +715,37 @@ public sealed class InstanceDataWriteService(
         }
 
         return Task.CompletedTask;
+    }
+
+    // ── x-computed ───────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Drops the master schema's runtime <c>x-computed</c> fields from what is about to be stored: they are evaluated on
+    /// every read (<c>IComputedFieldReadService</c>) and never persisted, so a value a client echoes back — or a stale
+    /// one in a mapping's output — never reaches instance data.
+    /// </summary>
+    private static JsonData StripComputedFields(SchemaDefinition? schema, JsonData data)
+    {
+        if (schema is null)
+            return data;
+
+        var rules = Definitions.Schemas.ComputedFieldParser.GetRules(schema);
+        if (rules.Count == 0 || data.JsonElement.ValueKind != System.Text.Json.JsonValueKind.Object)
+            return data;
+
+        System.Text.Json.Nodes.JsonObject? root = null;
+        foreach (var rule in rules)
+        {
+            root ??= System.Text.Json.Nodes.JsonNode.Parse(data.Json)!.AsObject();
+            System.Text.Json.Nodes.JsonNode? parent = root;
+            foreach (var segment in rule.ParentPath.Length == 0 ? [] : rule.ParentPath.Split('.'))
+                parent = parent is System.Text.Json.Nodes.JsonObject obj && obj.TryGetPropertyValue(segment, out var next) ? next : null;
+
+            (parent as System.Text.Json.Nodes.JsonObject)?.Remove(rule.Name);
+        }
+
+        var stripped = System.Text.Json.JsonSerializer.SerializeToElement(root);
+        return System.Text.Json.JsonElement.DeepEquals(stripped, data.JsonElement) ? data : JsonData.FromElement(stripped);
     }
 
     // ── x-encryption (hash, encrypt) ─────────────────────────────────────────

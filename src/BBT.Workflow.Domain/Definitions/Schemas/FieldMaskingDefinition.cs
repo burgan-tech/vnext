@@ -37,6 +37,11 @@ public sealed record FieldExposureError(string Keyword, string Message);
 /// <c>hash</c> takes <c>params.algorithm</c> only; <c>encrypt</c> takes no params (algorithm fixed, key from host
 /// configuration). Salts and keys are never schema content. Whether the host can actually encrypt (an active
 /// key) is checked by the application-layer validator.</para>
+/// <para><c>x-encryption.source</c> says WHO encrypts: <c>runtime</c> (the default when absent) is the at-rest rule
+/// above; <c>client</c> is an in-transit declaration the client honours — it seals the value to the recipient's public
+/// key before the request leaves. The runtime does nothing with a <c>client</c> rule (no write-time encryption, no read
+/// transform, no filter refusal) on any schema, the master included; here it only checks the members (<c>key</c> and
+/// <c>algorithm</c> required, the at-rest members refused).</para>
 /// </summary>
 public static class FieldMaskingDefinition
 {
@@ -46,7 +51,19 @@ public static class FieldMaskingDefinition
     private static readonly HashSet<string> ReplaceParams = new(StringComparer.Ordinal) { "value" };
     private static readonly HashSet<string> MaskingKeys = new(StringComparer.Ordinal) { "operator", "params", "roles" };
     private static readonly HashSet<string> EncryptionKeys = new(StringComparer.Ordinal)
-        { "type", "params", "roles", "purpose", "redactInLogs", "retentionDays" };
+        { SourceKey, "type", "params", "roles", "purpose", "redactInLogs", "retentionDays" };
+    private static readonly HashSet<string> ClientEncryptionKeys = new(StringComparer.Ordinal)
+        { SourceKey, "key", "algorithm", "into", "encoding", "nonce", "envelope", "purpose" };
+    private static readonly HashSet<string> ClientAlgorithms = new(StringComparer.Ordinal)
+        { "HPKE-P256-SHA256-AES128GCM", "RSA-OAEP-256" };
+    private static readonly HashSet<string> ClientEncodings = new(StringComparer.Ordinal) { "base64", "base64url" };
+    private const string SourceKey = "source";
+
+    /// <summary><c>x-encryption.source</c> of the at-rest rule the runtime applies (the default when absent).</summary>
+    public const string RuntimeSource = "runtime";
+
+    /// <summary><c>x-encryption.source</c> of an in-transit rule the client applies; the runtime ignores it.</summary>
+    public const string ClientSource = "client";
     private const string NoneType = "none";
     private static readonly string[] HashIncompatibleKeywords =
         ["pattern", "format", "minLength", "maxLength", "enum", "const"];
@@ -65,6 +82,16 @@ public static class FieldMaskingDefinition
         return errors;
     }
 
+    /// <summary>
+    /// True when the <c>x-encryption</c> declaration is a client-sourced (in-transit) rule. Exact, case-sensitive match:
+    /// any other spelling stays a runtime rule, so a misspelled source fails closed into the at-rest path.
+    /// </summary>
+    public static bool IsClientSourced(JsonElement encryption)
+        => encryption.ValueKind == JsonValueKind.Object &&
+           encryption.TryGetProperty(SourceKey, out var source) &&
+           source.ValueKind == JsonValueKind.String &&
+           source.GetString() == ClientSource;
+
     private static void Visit(JsonElement node, string path, bool reachable, List<FieldExposureError> errors)
     {
         if (node.ValueKind == JsonValueKind.Array)
@@ -81,7 +108,12 @@ public static class FieldMaskingDefinition
             ValidateMasking(node, masking, path, reachable, errors);
 
         if (node.TryGetProperty(Encryption, out var encryption))
-            ValidateEncryption(node, encryption, path, reachable, errors);
+        {
+            if (IsClientSourced(encryption))
+                ValidateClientEncryption(encryption, path, errors);
+            else
+                ValidateEncryption(node, encryption, path, reachable, errors);
+        }
 
         foreach (var property in node.EnumerateObject())
         {
@@ -221,8 +253,14 @@ public static class FieldMaskingDefinition
         foreach (var key in encryption.EnumerateObject())
         {
             if (!EncryptionKeys.Contains(key.Name))
-                Error($"x-encryption does not support '{key.Name}'. Allowed: type, params, roles, purpose, redactInLogs, retentionDays.");
+                Error(ClientEncryptionKeys.Contains(key.Name)
+                    ? $"x-encryption.{key.Name} belongs to source 'client'; a runtime (at-rest) rule does not accept it."
+                    : $"x-encryption does not support '{key.Name}'. Allowed: source, type, params, roles, purpose, redactInLogs, retentionDays.");
         }
+
+        if (encryption.TryGetProperty(SourceKey, out var source) &&
+            (source.ValueKind != JsonValueKind.String || source.GetString() != RuntimeSource))
+            Error($"x-encryption.source must be '{RuntimeSource}' or '{ClientSource}'.");
 
         var type = encryption.TryGetProperty("type", out var typeElement) && typeElement.ValueKind == JsonValueKind.String
             ? typeElement.GetString()
@@ -293,6 +331,52 @@ public static class FieldMaskingDefinition
         if (encryption.TryGetProperty("retentionDays", out var retention) &&
             (retention.ValueKind != JsonValueKind.Number || !retention.TryGetInt32(out var days) || days < 1))
             Error("x-encryption.retentionDays must be a positive integer.");
+    }
+
+    /// <summary>
+    /// A client-sourced rule, on any schema: the client seals the value, the runtime never touches it. Only the members are checked —
+    /// the suite and key address are the client's contract (the vocabulary describes them).
+    /// </summary>
+    private static void ValidateClientEncryption(
+        JsonElement encryption, string path, List<FieldExposureError> errors)
+    {
+        var where = Where(path);
+        void Error(string message) => errors.Add(new FieldExposureError(Encryption, $"Field '{where}': {message}"));
+
+        foreach (var key in encryption.EnumerateObject())
+        {
+            if (!ClientEncryptionKeys.Contains(key.Name))
+                Error(EncryptionKeys.Contains(key.Name)
+                    ? $"x-encryption.{key.Name} belongs to source 'runtime' (at rest); a client rule does not accept it."
+                    : $"x-encryption does not support '{key.Name}'. Allowed for source 'client': key, algorithm, into, encoding, nonce, envelope, purpose.");
+        }
+
+        if (!encryption.TryGetProperty("key", out var keyElement) ||
+            keyElement.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(keyElement.GetString()))
+            Error("x-encryption.key is required for source 'client': the address of the recipient's public key.");
+
+        if (!encryption.TryGetProperty("algorithm", out var algorithm) ||
+            algorithm.ValueKind != JsonValueKind.String || !ClientAlgorithms.Contains(algorithm.GetString()!))
+            Error("x-encryption.algorithm is required for source 'client': 'HPKE-P256-SHA256-AES128GCM' or 'RSA-OAEP-256'.");
+
+        foreach (var name in new[] { "into", "nonce" })
+        {
+            if (encryption.TryGetProperty(name, out var value) &&
+                (value.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(value.GetString())))
+                Error($"x-encryption.{name} must be a non-empty string.");
+        }
+
+        if (encryption.TryGetProperty("encoding", out var encoding) &&
+            (encoding.ValueKind != JsonValueKind.String || !ClientEncodings.Contains(encoding.GetString()!)))
+            Error("x-encryption.encoding must be 'base64' or 'base64url'.");
+
+        if (encryption.TryGetProperty("envelope", out var envelope) &&
+            (envelope.ValueKind != JsonValueKind.String || envelope.GetString() != "publicKey"))
+            Error("x-encryption.envelope must be 'publicKey'.");
+
+        if (encryption.TryGetProperty("purpose", out var purpose) &&
+            (purpose.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(purpose.GetString())))
+            Error("x-encryption.purpose must be a non-empty string.");
     }
 
     private static void ValidateHashParams(JsonElement encryption, Action<string> error)
@@ -418,9 +502,10 @@ public static class FieldMaskingDefinition
         return hasString;
     }
 
-    private static bool IsActiveEncryption(JsonElement encryption)
-        => encryption.ValueKind != JsonValueKind.Object ||
+    /// <summary>An at-rest rule other than <c>none</c>. A client-sourced rule is never active: the runtime does not apply it.</summary>
+    internal static bool IsActiveEncryption(JsonElement encryption)
+        => !IsClientSourced(encryption) && (encryption.ValueKind != JsonValueKind.Object ||
            !encryption.TryGetProperty("type", out var type) ||
            type.ValueKind != JsonValueKind.String ||
-           !string.Equals(type.GetString(), NoneType, StringComparison.OrdinalIgnoreCase);
+           !string.Equals(type.GetString(), NoneType, StringComparison.OrdinalIgnoreCase));
 }
