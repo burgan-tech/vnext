@@ -4896,6 +4896,9 @@ public static partial class WorkflowLogs
         this ILogger logger,
         Exception exception);
 
+    // 60017–60018 are taken by BBT.Workflow.Modules.Scripting's ScriptPluginLogs (plugin load
+    // failures); that module cannot reference this file. The next id in this block is 60019.
+
     #endregion
 
     #region Function Contract (800xx)

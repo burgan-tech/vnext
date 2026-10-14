@@ -14,6 +14,7 @@ using System.Threading.Tasks;
 using BBT.Workflow.Scripting.Functions;
 using BBT.Workflow.Scripting.Sandbox;
 using Microsoft.CodeAnalysis;
+using Microsoft.Extensions.Logging;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 
@@ -31,14 +32,17 @@ namespace BBT.Workflow.Scripting.Evaluators;
 public class CSharpEvaluator : IEvaluator
 {
     private readonly ScriptSandboxOptions _sandbox;
+    private readonly ILogger? _logger;
 
     /// <summary>
     /// Creates a new evaluator. When <paramref name="sandboxOptions"/> is null or has
     /// <c>Enabled = false</c>, the legacy (non-sandboxed) compile path is used.
+    /// <paramref name="logger"/> receives plugin load failures (see <see cref="ScriptPluginLoadContext"/>).
     /// </summary>
-    public CSharpEvaluator(ScriptSandboxOptions? sandboxOptions = null)
+    public CSharpEvaluator(ScriptSandboxOptions? sandboxOptions = null, ILogger<CSharpEvaluator>? logger = null)
     {
         _sandbox = sandboxOptions ?? new ScriptSandboxOptions { Enabled = false };
+        _logger = logger;
     }
 
     /// <summary>
@@ -399,7 +403,7 @@ public class CSharpEvaluator : IEvaluator
     private AssemblyLoadContext SharedScriptContext() =>
         SharedScriptContexts.GetOrAdd(
             _sandbox.ResolvePluginDirectory(),
-            _ => new ScriptAssemblyLoadContext("SharedScripts", ScriptPluginLoadContext.For(_sandbox), isCollectible: false));
+            _ => new ScriptAssemblyLoadContext("SharedScripts", ScriptPluginLoadContext.For(_sandbox, _logger), isCollectible: false));
 
     private static Assembly? FindLoadedAssembly(AssemblyLoadContext context, string assemblyName)
     {

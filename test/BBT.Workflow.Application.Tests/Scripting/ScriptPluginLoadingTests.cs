@@ -148,6 +148,45 @@ public sealed class ScriptPluginLoadingTests : IDisposable
         plugins.Resolve(name, includeFrameworkNames: false).ShouldBeNull();
     }
 
+    /// <summary>
+    /// An unloadable plugin DLL still falls back to default resolution (the old preload's per-file
+    /// tolerance), but no longer silently: the failure is logged with the file, once per name.
+    /// </summary>
+    [Fact]
+    public void UnloadablePluginDll_FallsBack_AndIsLoggedOnce()
+    {
+        const string brokenName = "Acme.Broken";
+        File.WriteAllBytes(Path.Combine(_pluginDirectory, brokenName + ".dll"), [1, 2, 3, 4]);
+        var logger = new CapturingLogger();
+        var plugins = ScriptPluginLoadContext.For(Sandbox(), logger)!;
+        var name = new System.Reflection.AssemblyName(brokenName);
+
+        plugins.Resolve(name, includeFrameworkNames: false).ShouldBeNull();
+        plugins.Resolve(name, includeFrameworkNames: false).ShouldBeNull();
+
+        var warning = logger.Entries.ShouldHaveSingleItem();
+        warning.Level.ShouldBe(Microsoft.Extensions.Logging.LogLevel.Warning);
+        warning.Message.ShouldContain(brokenName);
+        warning.Exception.ShouldBeOfType<BadImageFormatException>();
+    }
+
+    private sealed class CapturingLogger : Microsoft.Extensions.Logging.ILogger
+    {
+        public System.Collections.Concurrent.ConcurrentQueue<(Microsoft.Extensions.Logging.LogLevel Level, string Message, Exception? Exception)> Entries { get; } = new();
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            Microsoft.Extensions.Logging.LogLevel logLevel,
+            Microsoft.Extensions.Logging.EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter) =>
+            Entries.Enqueue((logLevel, formatter(state, exception), exception));
+    }
+
     [Fact]
     public void PluginAddedAfterFirstLookup_IsFoundOnRescan()
     {

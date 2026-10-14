@@ -3,6 +3,8 @@ using System.Collections.Concurrent;
 using System.Reflection;
 using System.Runtime.Loader;
 using BBT.Workflow.Scripting.Sandbox;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace BBT.Workflow.Scripting.Evaluators;
 
@@ -30,19 +32,32 @@ internal sealed class ScriptPluginLoadContext : AssemblyLoadContext
 
     private readonly ScriptSandboxOptions _options;
 
+    /// <summary>Names already reported, so a failing plugin logs once rather than on every lookup.</summary>
+    private readonly ConcurrentDictionary<string, byte> _reported = new(StringComparer.OrdinalIgnoreCase);
+
+    private volatile ILogger _logger = NullLogger.Instance;
+
     private ScriptPluginLoadContext(ScriptSandboxOptions options, string directory)
         : base($"ScriptPlugins:{directory}", isCollectible: false)
     {
         _options = options;
     }
 
-    /// <summary>The plugin context for <paramref name="options"/>' directory; null when none is configured.</summary>
-    public static ScriptPluginLoadContext? For(ScriptSandboxOptions options)
+    /// <summary>
+    /// The plugin context for <paramref name="options"/>' directory; null when none is configured.
+    /// The context is process-wide, so the first real <paramref name="logger"/> supplied is kept.
+    /// </summary>
+    public static ScriptPluginLoadContext? For(ScriptSandboxOptions options, ILogger? logger = null)
     {
         var directory = options.ResolvePluginDirectory();
-        return string.IsNullOrEmpty(directory)
-            ? null
-            : ByDirectory.GetOrAdd(directory, dir => new ScriptPluginLoadContext(options, dir));
+        if (string.IsNullOrEmpty(directory))
+            return null;
+
+        var context = ByDirectory.GetOrAdd(directory, dir => new ScriptPluginLoadContext(options, dir));
+        if (logger is not null && context._logger is NullLogger)
+            context._logger = logger;
+
+        return context;
     }
 
     /// <summary>
@@ -68,8 +83,11 @@ internal sealed class ScriptPluginLoadContext : AssemblyLoadContext
         }
         catch (Exception ex) when (ex is BadImageFormatException or System.IO.FileLoadException or System.IO.FileNotFoundException)
         {
-            // An unloadable plugin DLL falls back to default resolution — the old preload ignored such
-            // DLLs per file in the same way.
+            // An unloadable plugin DLL falls back to default resolution, as the old preload did per
+            // file — but logged, so the real cause (a stub or wrong-version DLL) is not lost behind
+            // the FileNotFoundException the script sees later. Load below usually reported it first.
+            if (_reported.TryAdd(name, 0))
+                ScriptPluginLogs.ScriptPluginResolveFailed(_logger, ex, name);
             return null;
         }
     }
@@ -88,7 +106,9 @@ internal sealed class ScriptPluginLoadContext : AssemblyLoadContext
         catch (Exception ex) when (ex is BadImageFormatException or System.IO.FileLoadException or System.IO.FileNotFoundException)
         {
             // Same per-file tolerance as Resolve: an unloadable copy (a framework DLL dumped into the
-            // plugin directory, say) falls back to the host's own assembly.
+            // plugin directory, say) falls back to the host's own assembly. Logged once per name.
+            if (_reported.TryAdd(name, 0))
+                ScriptPluginLogs.ScriptPluginLoadFailed(_logger, ex, name, path);
             return null;
         }
     }

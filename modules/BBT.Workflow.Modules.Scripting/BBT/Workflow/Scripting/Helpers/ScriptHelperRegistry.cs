@@ -10,6 +10,7 @@ using System.Threading.Tasks;
 using BBT.Workflow.Scripting.Evaluators;
 using BBT.Workflow.Scripting.Sandbox;
 using Microsoft.CodeAnalysis;
+using Microsoft.Extensions.Logging;
 
 namespace BBT.Workflow.Scripting.Helpers;
 
@@ -24,7 +25,10 @@ namespace BBT.Workflow.Scripting.Helpers;
 /// registry is a singleton a cached fault would be replayed for the whole process lifetime, so faulted
 /// entries are evicted and their load context unloaded.
 /// </summary>
-public sealed class ScriptHelperRegistry(IEvaluator evaluator, ScriptSandboxOptions? sandboxOptions = null)
+public sealed class ScriptHelperRegistry(
+    IEvaluator evaluator,
+    ScriptSandboxOptions? sandboxOptions = null,
+    ILogger<ScriptHelperRegistry>? logger = null)
     : IScriptHelperRegistry, IDisposable
 {
     private readonly ScriptSandboxOptions _sandbox = sandboxOptions ?? new ScriptSandboxOptions { Enabled = false };
@@ -119,7 +123,7 @@ public sealed class ScriptHelperRegistry(IEvaluator evaluator, ScriptSandboxOpti
         IEnumerable<string> baseUsings)
     {
         var alc = new ScriptAssemblyLoadContext(
-            $"Helpers_{key[..8]}", ScriptPluginLoadContext.For(_sandbox), pluginsOverrideFramework: true);
+            $"Helpers_{key[..8]}", ScriptPluginLoadContext.For(_sandbox, logger), pluginsOverrideFramework: true);
 
         try
         {
