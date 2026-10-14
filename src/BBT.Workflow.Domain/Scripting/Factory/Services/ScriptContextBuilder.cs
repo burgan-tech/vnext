@@ -249,6 +249,7 @@ internal sealed class ScriptContextBuilder(
             .SetMetadata(_metadata)
             .SetDefinitions(_definitions)
             .SetCurrentTransition(scriptTransitionRequest)
+            .SetCancellationToken(cancellationToken)
             .Build();
     }
 

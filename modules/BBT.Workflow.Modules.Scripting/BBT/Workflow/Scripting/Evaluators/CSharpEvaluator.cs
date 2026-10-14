@@ -334,7 +334,7 @@ public class CSharpEvaluator : IEvaluator
         // unloaded — each one only paid its own loader heap and creation cost. One shared context
         // carries every no-helper script; assembly simple names are the full cache-key hash, so
         // collisions are impossible and the reuse scan below stays exact.
-        var context = loadContext ?? SharedScriptContext;
+        var context = loadContext ?? SharedScriptContext();
 
         // Reuse over reload. An assembly already loaded here under this name IS this compilation
         // (the name is the full hash of the compilation inputs), and a shared context cannot unload
@@ -390,10 +390,16 @@ public class CSharpEvaluator : IEvaluator
     /// The process-wide load context for scripts compiled without a helper set. One context instead
     /// of one per script: nothing ever unloaded the per-script contexts (see the load-site comment),
     /// so they only multiplied loader heaps. Deliberately non-collectible — collectibility was
-    /// decorative under the pinning described above.
+    /// decorative under the pinning described above. One per plugin directory (in practice one per
+    /// process), because the context delegates plugin names to that directory's plugin context.
     /// </summary>
-    private static readonly AssemblyLoadContext SharedScriptContext =
-        new("SharedScripts", isCollectible: false);
+    private static readonly ConcurrentDictionary<string, AssemblyLoadContext> SharedScriptContexts =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    private AssemblyLoadContext SharedScriptContext() =>
+        SharedScriptContexts.GetOrAdd(
+            _sandbox.ResolvePluginDirectory(),
+            _ => new ScriptAssemblyLoadContext("SharedScripts", ScriptPluginLoadContext.For(_sandbox), isCollectible: false));
 
     private static Assembly? FindLoadedAssembly(AssemblyLoadContext context, string assemblyName)
     {

@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
-using System.IO;
 using System.Linq;
 using System.Runtime.Loader;
 using System.Security.Cryptography;
@@ -18,8 +17,8 @@ namespace BBT.Workflow.Scripting.Helpers;
 /// Default <see cref="IScriptHelperRegistry"/>. Each distinct (helpers + grant) content hash gets its
 /// own collectible <see cref="AssemblyLoadContext"/> into which the helper assembly — and later the
 /// consuming mapping — are loaded, so a superseded set can be unloaded independently. Operator-mounted
-/// plugin DLLs are preloaded into each set's context so helper code can resolve them at runtime even
-/// though the host does not reference them.
+/// plugin DLLs are not copied into the set's context: it delegates them to the process-wide
+/// <see cref="ScriptPluginLoadContext"/>, so every helper set shares one copy of each plugin.
 ///
 /// A failed build is never cached: <see cref="Lazy{T}"/> retains the factory's exception, and since this
 /// registry is a singleton a cached fault would be replayed for the whole process lifetime, so faulted
@@ -119,12 +118,11 @@ public sealed class ScriptHelperRegistry(IEvaluator evaluator, ScriptSandboxOpti
         IEnumerable<MetadataReference> contractReferences,
         IEnumerable<string> baseUsings)
     {
-        var alc = new ScriptAssemblyLoadContext($"Helpers_{key[..8]}");
+        var alc = new ScriptAssemblyLoadContext(
+            $"Helpers_{key[..8]}", ScriptPluginLoadContext.For(_sandbox), pluginsOverrideFramework: true);
 
         try
         {
-            PreloadPlugins(alc);
-
             var compiled = evaluator.CompileHelpers(
                 sources: helpers.Select(h => (h.Path, h.Code)).ToList(),
                 loadContext: alc,
@@ -137,7 +135,7 @@ public sealed class ScriptHelperRegistry(IEvaluator evaluator, ScriptSandboxOpti
         }
         catch
         {
-            // A failed build must not leak its collectible context and preloaded plugin assemblies.
+            // A failed build must not leak its collectible context.
             TryUnload(alc);
             throw;
         }
@@ -150,29 +148,6 @@ public sealed class ScriptHelperRegistry(IEvaluator evaluator, ScriptSandboxOpti
     private void Evict(string key, Lazy<Task<HelperSet>> lazy)
     {
         _cache.TryRemove(new KeyValuePair<string, Lazy<Task<HelperSet>>>(key, lazy));
-    }
-
-    /// <summary>
-    /// Loads operator-approved third-party DLLs from the plugin directory into the set's context so
-    /// compiled helpers resolve them at runtime. Failures are ignored per-DLL (best effort).
-    /// </summary>
-    private void PreloadPlugins(AssemblyLoadContext context)
-    {
-        var dir = _sandbox.ResolvePluginDirectory();
-        if (string.IsNullOrEmpty(dir) || !Directory.Exists(dir))
-            return;
-
-        foreach (var dll in Directory.EnumerateFiles(dir, "*.dll"))
-        {
-            try
-            {
-                context.LoadFromAssemblyPath(dll);
-            }
-            catch
-            {
-                // A bad/duplicate plugin DLL must not break helper compilation.
-            }
-        }
     }
 
     private static string HashOf(IReadOnlyList<HelperSource> helpers, IReadOnlyList<string>? allowedAssemblies)
