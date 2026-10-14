@@ -14,6 +14,7 @@ using System.Threading.Tasks;
 using BBT.Workflow.Scripting.Functions;
 using BBT.Workflow.Scripting.Sandbox;
 using Microsoft.CodeAnalysis;
+using Microsoft.Extensions.Logging;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 
@@ -31,14 +32,17 @@ namespace BBT.Workflow.Scripting.Evaluators;
 public class CSharpEvaluator : IEvaluator
 {
     private readonly ScriptSandboxOptions _sandbox;
+    private readonly ILogger? _logger;
 
     /// <summary>
     /// Creates a new evaluator. When <paramref name="sandboxOptions"/> is null or has
     /// <c>Enabled = false</c>, the legacy (non-sandboxed) compile path is used.
+    /// <paramref name="logger"/> receives plugin load failures (see <see cref="ScriptPluginLoadContext"/>).
     /// </summary>
-    public CSharpEvaluator(ScriptSandboxOptions? sandboxOptions = null)
+    public CSharpEvaluator(ScriptSandboxOptions? sandboxOptions = null, ILogger<CSharpEvaluator>? logger = null)
     {
         _sandbox = sandboxOptions ?? new ScriptSandboxOptions { Enabled = false };
+        _logger = logger;
     }
 
     /// <summary>
@@ -334,7 +338,7 @@ public class CSharpEvaluator : IEvaluator
         // unloaded — each one only paid its own loader heap and creation cost. One shared context
         // carries every no-helper script; assembly simple names are the full cache-key hash, so
         // collisions are impossible and the reuse scan below stays exact.
-        var context = loadContext ?? SharedScriptContext;
+        var context = loadContext ?? SharedScriptContext();
 
         // Reuse over reload. An assembly already loaded here under this name IS this compilation
         // (the name is the full hash of the compilation inputs), and a shared context cannot unload
@@ -390,10 +394,16 @@ public class CSharpEvaluator : IEvaluator
     /// The process-wide load context for scripts compiled without a helper set. One context instead
     /// of one per script: nothing ever unloaded the per-script contexts (see the load-site comment),
     /// so they only multiplied loader heaps. Deliberately non-collectible — collectibility was
-    /// decorative under the pinning described above.
+    /// decorative under the pinning described above. One per plugin directory (in practice one per
+    /// process), because the context delegates plugin names to that directory's plugin context.
     /// </summary>
-    private static readonly AssemblyLoadContext SharedScriptContext =
-        new("SharedScripts", isCollectible: false);
+    private static readonly ConcurrentDictionary<string, AssemblyLoadContext> SharedScriptContexts =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    private AssemblyLoadContext SharedScriptContext() =>
+        SharedScriptContexts.GetOrAdd(
+            _sandbox.ResolvePluginDirectory(),
+            _ => new ScriptAssemblyLoadContext("SharedScripts", ScriptPluginLoadContext.For(_sandbox, _logger), isCollectible: false));
 
     private static Assembly? FindLoadedAssembly(AssemblyLoadContext context, string assemblyName)
     {

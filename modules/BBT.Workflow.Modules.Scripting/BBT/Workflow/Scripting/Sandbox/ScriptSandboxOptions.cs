@@ -42,6 +42,14 @@ public sealed class ScriptSandboxOptions
     public string PluginDirectory { get; set; } = "plugins";
 
     /// <summary>
+    /// Minimum seconds between two re-reads of <see cref="PluginDirectory"/> triggered by a lookup that
+    /// found no matching DLL. Lets a pod that started before the plugin volume was populated pick the
+    /// DLLs up without a restart, while a name that never resolves costs at most one directory listing
+    /// per interval. <c>0</c> re-reads on every miss. A DLL that was found once is never re-read.
+    /// </summary>
+    public int PluginRescanIntervalSeconds { get; set; } = 30;
+
+    /// <summary>
     /// Global baseline of simple assembly names (no extension) that scripts may reference.
     /// A per-mapping grant is merged on top of this for an individual compile.
     /// </summary>

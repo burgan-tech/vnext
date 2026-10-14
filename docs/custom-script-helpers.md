@@ -132,6 +132,7 @@ in Dynamic Expresso terms instead.
     "Enabled": false,
     "AllowUnsafe": false,
     "PluginDirectory": "/app/assemblies",
+    "PluginRescanIntervalSeconds": 30,
     "AllowedAssemblies": [ "System.Private.CoreLib", "System.Runtime", "System.Collections", "System.Linq", "System.Linq.Expressions", "System.Text.RegularExpressions", "Microsoft.CSharp", "System.ObjectModel", "netstandard" ],
     "BannedNamespaces": []
   }
@@ -155,9 +156,12 @@ in Dynamic Expresso terms instead.
   `sys-flows.states[0].onEntries[1].mapping.scripts.allowedAssemblies[0]`. Use the simple name without
   `.dll`. The check does not compile the script: a script that needs an assembly it never declares
   still fails only at run time. The check runs whatever `Scripting:Sandbox:Enabled` says: even though a
-  sandbox-off compile ignores the grant, a declared name that does not resolve is rejected. The
-  plugin-directory listing is read once per process, so a DLL mounted after start reports as
-  unavailable until restart (same as compile).
+  sandbox-off compile ignores the grant, a declared name that does not resolve is rejected. A name the
+  plugin-directory listing does not hold re-reads the directory, at most once per
+  `PluginRescanIntervalSeconds` — a DLL mounted after start is found without a restart (compile and
+  load use the same listing). A component rejected before the DLL arrived must be published again.
+- **`PluginRescanIntervalSeconds`** (default `30`, `0` = re-read on every miss) — minimum gap between two
+  re-reads of `PluginDirectory` triggered by a miss. A name that was found once is never re-read.
 - **`BannedNamespaces`** — *adds* to the mandatory platform baseline; it cannot remove an entry.
 
 ### Mandatory banned namespaces (non-overridable)
@@ -173,9 +177,41 @@ async are available to mappings.
 ## 4. Third-party / NuGet assemblies (operator-curated only)
 
 There is **no** per-flow DLL upload or nupkg download. An operator mounts approved DLLs into
-`Scripting:Sandbox:PluginDirectory` (a Docker volume), allow-lists them in `AllowedAssemblies` (or a
-flow grants them per-mapping). The runtime loads them dynamically into the helper-set load context.
-The banned-namespace analyzer still runs on the script source.
+`Scripting:Sandbox:PluginDirectory` (a Docker volume; Helm `orchestrator.plugins`), allow-lists them in
+`AllowedAssemblies` (or a mapping grants them in `scripts.allowedAssemblies`). The banned-namespace
+analyzer still runs on the script source; it does not run on the plugin itself — mounting a database
+driver grants database (network) access to every mapping that lists it.
+
+### How a plugin is loaded
+
+- **Once per process.** Plugin DLLs live in one non-collectible load context per plugin directory
+  (`ScriptPluginLoadContext`). Script and helper-set contexts delegate plugin names to it, so every script
+  and helper set shares one copy of each plugin — one static state, one connection pool for a database
+  driver. A helper republish no longer loads a fresh copy beside the old one.
+- **With or without a helper.** A mapping may use a plugin type directly; it no longer needs a
+  `sys-mappings` helper in between. (Before, only helper sets preloaded plugins, and a helper-less
+  mapping compiled but failed at run time with `FileNotFoundException`.)
+- **Framework/host names.** A name the runtime itself ships (framework or host dependency — Npgsql,
+  `Microsoft.Extensions.*`, …) compiles against the host's copy. At run time a helper set still prefers a
+  same-named DLL from the plugin directory (its behaviour since it preloaded every plugin DLL); a
+  helper-less script keeps the host's copy. Inside the plugin context a plugin's own dependencies resolve
+  from the plugin directory first, then from the host. A DLL that cannot be loaded is skipped.
+- **Driver dependencies.** Mount the whole dependency chain the runtime does not already ship. For a
+  driver whose NuGet package carries platform-specific builds (Microsoft.Data.SqlClient) use the
+  `runtimes/unix/lib/<tfm>/` copy or `dotnet publish -r linux-x64` output — the `lib/` copy is a stub
+  that throws `PlatformNotSupportedException`. SqlClient also refuses
+  `DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1` on some versions; the Alpine images then need ICU.
+- **Adding vs replacing a DLL.** A DLL added to the plugin directory after start is found without a
+  restart (see `PluginRescanIntervalSeconds`). Replacing an already loaded DLL with a new version — or
+  removing it — needs a restart: the process keeps the copy it loaded. (Before, republishing a helper
+  could load the new file into a fresh helper set, but the compile still used the cached old metadata and
+  the old copy stayed in memory, so it was never a supported upgrade path.)
+- **Cancellation.** A script that calls a driver passes `context.CancellationToken` (the request/job token)
+  so a cancelled operation stops the query; otherwise only the driver's own command timeout bounds it.
+
+Worked example and end-to-end test: vnext-example `plugins/ScriptPluginLab.Sql` (Npgsql + Dapper,
+PostgreSQL) and `tests/Core.IntegrationTests/Tests/ScriptPluginLab` — helper-less and helper paths,
+single loaded copy, cancellation token.
 
 ## 5. Caching & memory
 

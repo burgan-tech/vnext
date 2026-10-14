@@ -28,6 +28,7 @@ entire runtime. Side effects should remain explicit through approved helpers.
 | Contract | Notes |
 | --- | --- |
 | `ScriptContext` | Runtime data passed into condition, mapping, and task scripts. |
+| `ScriptContext.CancellationToken` | The token of the operation the context was built for (request, transition job, event delivery), set by `ScriptContextBuilder.BuildAsync` and copied into parallel branches. Scripts doing their own I/O (a plugin database driver) pass it on. A property, not a handler parameter: adding a parameter to the mapping interfaces would break every published script. |
 | `ScriptBase` | Helper functions for secrets, logging, config, dynamic objects, XML, and collections. |
 | `IScriptServices` | Provides Dapr client, logger, and configuration to approved helpers. |
 | `CSharpEvaluator` | Compiles and evaluates script code. |
