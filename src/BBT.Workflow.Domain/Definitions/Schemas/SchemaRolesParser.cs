@@ -130,13 +130,17 @@ public static class SchemaRolesParser
 
     /// <summary>
     /// Reads an <c>x-encryption</c> declaration of <c>type: "hash"</c> or <c>"encrypt"</c>. Any other type (or shape)
-    /// yields no rule. Case is tolerated here and rejected at publish (<see cref="FieldMaskingDefinition"/>): a
+    /// yields no rule, and so does a <c>source: "client"</c> declaration (in transit, applied by the client). Case is tolerated here and rejected at publish (<see cref="FieldMaskingDefinition"/>): a
     /// declaration that slipped past the validator must still fail closed rather than serve the value in clear.
     /// </summary>
     internal static bool TryParseEncryptionRule(JsonElement encryption, out FieldMaskRule rule)
     {
         rule = null!;
         if (encryption.ValueKind != JsonValueKind.Object)
+            return false;
+
+        // source 'client' is sealed by the client before the request leaves; nothing for the runtime to apply.
+        if (FieldMaskingDefinition.IsClientSourced(encryption))
             return false;
 
         var type = ReadString(encryption, "type")?.Trim();

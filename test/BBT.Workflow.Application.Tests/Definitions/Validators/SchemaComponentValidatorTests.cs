@@ -66,24 +66,106 @@ public class SchemaComponentValidatorTests
     }
 
     [Fact]
-    public void Validate_ShouldReturnError_ForMissingType()
+    public void Validate_ShouldAccept_MissingType_WithoutWarning()
     {
-        // Arrange
-        var schemaJson = """
-        {
-            "schema": {
-                "type": "object"
-            }
-        }
-        """;
-        var attributes = JsonDocument.Parse(schemaJson).RootElement;
+        // attributes.type is an optional role: absent means "no role" (a schema serving more than one role).
+        var attributes = JsonDocument.Parse("""{ "schema": { "type": "object" } }""").RootElement;
 
-        // Act
         var result = _validator.Validate(attributes);
 
-        // Assert
+        result.IsValid.ShouldBeTrue();
+        result.Warnings.ShouldBeEmpty();
+    }
+
+    [Theory]
+    [InlineData("master")]
+    [InlineData("transition")]
+    [InlineData("component")]
+    [InlineData("function")]
+    [InlineData("")]
+    public void Validate_ShouldAccept_RoleTypes_WithoutWarning(string type)
+    {
+        var attributes = JsonDocument.Parse($$"""{ "type": "{{type}}", "schema": { "type": "object" } }""").RootElement;
+
+        var result = _validator.Validate(attributes);
+
+        result.IsValid.ShouldBeTrue();
+        result.Warnings.ShouldBeEmpty();
+    }
+
+    [Theory]
+    [InlineData("workflow")]
+    [InlineData("schema")]
+    [InlineData("Master")]
+    public void Validate_ShouldWarn_ForLegacyType(string type)
+    {
+        // Legacy free-text values still publish this release; the warning names the roles to migrate to.
+        var attributes = JsonDocument.Parse($$"""{ "type": "{{type}}", "schema": { "type": "object" } }""").RootElement;
+
+        var result = _validator.Validate(attributes);
+
+        result.IsValid.ShouldBeTrue();
+        result.Warnings.ShouldHaveSingleItem().ErrorMessage!.ShouldContain($"attributes.type '{type}' is not a schema role");
+    }
+
+    [Fact]
+    public void Validate_ShouldRefuse_FilterOperatorQueryTokens_NamingTheDeclaration()
+    {
+        var attributes = JsonDocument.Parse("""
+        {
+            "type": "master",
+            "schema": { "type": "object", "properties": {
+                "amount": { "type": "number", "x-filterOperators": ["eq", "ge"] } } }
+        }
+        """).RootElement;
+
+        var result = _validator.Validate(attributes);
+
         result.IsValid.ShouldBeFalse();
-        result.ValidationErrors.ShouldContain(e => e.MemberNames.Contains("SchemaDefinition.Type"));
+        var error = result.ValidationErrors.ShouldHaveSingleItem();
+        error.ErrorMessage.ShouldBe("Field 'amount': x-filterOperators value 'ge' is not a declaration name; declare 'gte'.");
+        error.MemberNames.ShouldContain("schema.x-filterOperators");
+    }
+
+    [Fact]
+    public void Validate_ShouldRefuse_RuntimeComputedOnATransitionSchema()
+    {
+        var attributes = JsonDocument.Parse("""
+        {
+            "type": "transition",
+            "schema": { "type": "object", "properties": {
+                "a": { "type": "number" }, "b": { "type": "number" },
+                "total": { "type": "number", "x-computed": { "evaluatedBy": "runtime",
+                           "fallback": { "arithmetic": { "op": "add", "fields": ["a", "b"] } } } } } }
+        }
+        """).RootElement;
+
+        var result = _validator.Validate(attributes);
+
+        result.IsValid.ShouldBeFalse();
+        result.ValidationErrors.ShouldHaveSingleItem().MemberNames.ShouldContain("schema.x-computed");
+    }
+
+    [Theory]
+    [InlineData("transition")]
+    [InlineData("master")]
+    public void Validate_ShouldAccept_ClientEncryption_WithoutAnEncryptionHost(string type)
+    {
+        // A client rule is accepted on any schema and never applied by the runtime, so a host without
+        // write-time encryption accepts it (the CanEncrypt refusal only concerns runtime rules).
+        var attributes = JsonDocument.Parse($$"""
+        {
+            "type": "{{type}}",
+            "schema": { "type": "object", "properties": {
+                "password": { "type": "string", "x-encryption": { "source": "client",
+                    "key": "urn:client:context:read:device:memory:device.hpke.publicKey",
+                    "algorithm": "HPKE-P256-SHA256-AES128GCM", "into": "passwordEnc", "envelope": "publicKey" } } } }
+        }
+        """).RootElement;
+
+        var result = _validator.Validate(attributes);
+
+        result.IsValid.ShouldBeTrue(string.Join(" | ", result.ValidationErrors.Select(e => e.ErrorMessage)));
     }
 
     [Fact]
