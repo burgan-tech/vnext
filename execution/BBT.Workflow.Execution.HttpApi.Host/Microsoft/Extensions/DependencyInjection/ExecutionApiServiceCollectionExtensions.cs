@@ -1,4 +1,5 @@
 using BBT.Workflow.Execution.Invocation;
+using BBT.Workflow.HttpApi.Shared.Events;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.HealthChecks;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
@@ -25,13 +26,7 @@ public static class ExecutionApiServiceCollectionExtensions
             .AddAetherInfrastructure()
             .AddAspNetCoreModules(configuration)
             .AddDaprClients()
-            .AddAetherEventBus(opt =>
-            {
-                opt.DefaultSource =
-                    $"urn:vnext:{configuration.GetValue<string?>("ApplicationName")?.ToLowerInvariant()}";
-                opt.PrefixEnvironmentToTopic = true;
-                opt.PubSubName = configuration["DAPR_PUBSUB_STORE_NAME"]!;
-            })
+            .AddAetherEventBus(opt => WorkflowEventBusConfiguration.Apply(opt, configuration))
             .AppMapper()
             .AddTelemetry(configuration)
             .AddExceptionHandling()

@@ -1,6 +1,7 @@
 using BBT.Aether.AspNetCore.MultiSchema;
 using BBT.Aether.Uow.EntityFrameworkCore;
 using BBT.Workflow.Data;
+using BBT.Workflow.HttpApi.Shared.Events;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Configuration;
@@ -22,13 +23,7 @@ public static class OutboxWorkerServiceCollectionExtensions
             .AddDomainModule()
             .AddAspNetCoreModules(configuration)
             .AddDaprClients()
-            .AddAetherEventBus(options =>
-            {
-                options.DefaultSource =
-                    $"urn:vnext:{configuration.GetValue<string?>("ApplicationName")?.ToLowerInvariant()}";
-                options.PrefixEnvironmentToTopic = true;
-                options.PubSubName = configuration["DAPR_PUBSUB_STORE_NAME"]!;
-            })
+            .AddAetherEventBus(options => WorkflowEventBusConfiguration.Apply(options, configuration))
             .AddOutboxMessagingContext(configuration)
             .AddTelemetry(configuration)
             .AddExceptionHandling()
