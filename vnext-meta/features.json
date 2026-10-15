@@ -1,5 +1,5 @@
 {
-  "runtimeVersion": "0.0.99",
+  "runtimeVersion": "0.0.100",
   "engine": {
     "historyMode": {
       "since": "0.0.100",
@@ -503,7 +503,7 @@
       "documentation": "docs/runtime/script-context-and-engine.md"
     },
     "scheduledWorkflowStart": {
-      "since": "0.0.99",
+      "since": "0.0.100",
       "status": "stable",
       "description": "POST {domain}/workflows/{workflow}/instances/schedule starts a new instance when an external scheduler fires. Built for a Dapr bindings.cron component whose `route` points at it; any caller that can POST works. The tick carries no body and Dapr forwards none of the component's metadata, so seed data travels as query parameters (always strings) and `scheduleId` / `version` / `sync` are reserved. An optional `version` pins the workflow version; omitted, the latest published version starts. The instance key is derived from the tick as {scheduleId}-{yyyyMMddTHHmmssZ}, truncated to the second because replicas stamp readTimeUTC from their own clocks; an over-long scope is shortened with an 8-char SHA-256 digest so the key fits Instances.Key (100). Assumes Dapr delivers a tick to ONE replica: the runtime takes no lock of its own. A redelivery whose instance is still active is absorbed by the start path's key idempotency; a redelivery after that instance COMPLETED would create a second instance, which is an accepted, documented limit. Answers the Dapr protocol body (SUCCESS / DROP); a cron tick is never redelivered, so a dropped occurrence is lost. PURELY ADDITIVE: no existing endpoint, contract or workflow definition changes, and a workflow needs no event.mapping to be schedulable.",
       "documentation": "docs/domain/scheduled-workflow-start.md"
@@ -518,9 +518,29 @@
         "HEAD {domain}/workflows/{workflow}/instances/{instance}/functions/file?file={guid}"
       ],
       "relatedConfig": [
-        "FileStorage:KeyPrefix"
+        "FileStorage:KeyPrefix",
+        "FileStorage:AllowedBindings"
       ],
       "documentation": "docs/runtime/file-storage.md"
+    },
+    "schemaRoleType": {
+      "since": "0.0.100",
+      "status": "stable",
+      "schemaPath": "schema.attributes.type",
+      "description": "The schema component's attributes.type is an optional ROLE: 'master' (a flow's master/data schema, record vocabulary), 'transition' (a transition body, input vocabulary), 'function' (a function inputSchema, input vocabulary) or 'component' (an embedded view's own dataSchema, component vocabulary). Absent or \"\" publishes cleanly and applies no role (use it for a schema that serves more than one role). Any other value (legacy 'schema', 'workflow', 'view', 'headers' ...) still publishes, with a WARNING naming the roles; it will be refused in a later release (deprecation schema-attributes-type-legacy-values). Before 0.0.100 a missing type was a publish error ('Schema type is required.'). x-indexed stays master-only. The keyword-by-role gate is enforced by @burgan-tech/vnext-schema 0.0.56 (role vocabularies, addVocabularies); the runtime validates what it applies, whatever the type."
+    },
+    "fieldEncryptionSource": {
+      "since": "0.0.100",
+      "status": "stable",
+      "schemaPath": "schema.attributes.schema.properties[].x-encryption.source",
+      "description": "x-encryption.source: 'runtime' (the default when absent, exact and case-sensitive) keeps the at-rest behaviour of fieldEncryption. 'client' (the former x-encrypt proposal) is an in-transit declaration the client honours by sealing the value before it sends it; it is accepted on any schema, the master included, and NEVER handled by the runtime: no write-time encryption, no read mask, no encrypted-path filter refusal, no CanEncrypt publish check, and the value is stored as sent. Publish validates the client members only: key and algorithm required (HPKE-P256-SHA256-AES128GCM | RSA-OAEP-256), optional into, encoding (base64 | base64url), nonce, envelope (publicKey), purpose; at-rest members on a client rule and client members on a runtime rule are refused, as is any other source value.",
+      "documentation": "docs/domain/field-masking.md"
+    },
+    "computedFields": {
+      "since": "0.0.100",
+      "status": "stable",
+      "schemaPath": "schema.attributes.schema.properties[].x-computed",
+      "description": "x-computed { evaluatedBy, cases?, fallback?, whenAbsent? } declares a derived, NEVER-STORED field. evaluatedBy 'runtime' is always on (no flag): every runtime computed field of the workflow's master schema is evaluated on each read surface that returns instance data (instance GET / list, data function, data history, sync start / transition output, GetInstance / GetInstances / GetInstanceData tasks) over the caller's ALREADY-EXPOSED view (after x-roles, x-masking, x-encryption), so it never reveals a field the caller cannot see; the write funnel drops it. Each case / the fallback is exactly one join { fields>=1, separator (default ' ') } or arithmetic { op: add|subtract|multiply|divide, fields>=2 } over sibling properties; the first case whose when condition matches wins; an unresolvable result becomes whenAbsent ('empty' -> \"\", default, or 'null'). PUBLISH: 'server' is refused as renamed to 'runtime'; a runtime computed field is refused on transition / function / component schemas, at the root, under items / $defs / combinators, in required, next to x-indexed / x-filterOperators / x-sortable / x-storage / x-roles / x-masking / at-rest x-encryption, and when it references a computed field (chain) or an at-rest encrypted field. evaluatedBy 'client' is accepted and not evaluated. Known limit: InstanceTransitions.Body keeps the request body as sent."
     }
   }
 }

@@ -287,6 +287,39 @@
       "title": "Publish rejects malformed schema x-roles entries and function roles with a malformed dynamic path",
       "description": "A schema x-roles entry that is malformed (missing grant, wrong shape, unknown grant value, or a $user. / $userBehalfOf. / $role. reference whose path is malformed) and a function.roles entry with a malformed dynamic path are now rejected at publish with the reason. Before, the runtime silently skipped such an x-roles entry and a malformed dynamic path never matched anything, so a deny written that way never fired.",
       "action": "Fix the grant (give it a grant of allow or deny, exactly one of role / allOf / anyOf, and a well-formed dynamic path such as $user.$.context.Instance.CreatedBy) before re-publishing."
+    },
+    {
+      "id": "publish-rejects-filter-operator-tokens",
+      "type": "behavior",
+      "component": "schema",
+      "path": "schema.attributes.schema.properties[].x-filterOperators",
+      "since": "0.0.100",
+      "severity": "error",
+      "title": "Publish rejects x-filterOperators values that are not declaration names",
+      "description": "x-filterOperators is now validated at publish, at every placement ($defs and combinators included). A value must be one of the 14 declaration names: eq, neq, gt, gte, lt, lte, between, contains, startsWith, endsWith, in, nin, isNull, includes. A query token or a case variant (ne, ge, le, like, match, startswith, endswith, isnull, EQ ...) is refused with the name to declare; an unknown value, a duplicate or a non-string is refused too. Before, such a schema published and then failed ('Operator 'ge' is not allowed') or never matched every list filter on the field. Seed / import publish is affected the same way.",
+      "action": "Rename the declared values: ne -> neq, ge -> gte, le -> lte, like / match -> contains, startswith -> startsWith, endswith -> endsWith, isnull -> isNull. Query strings are unchanged: clients keep sending the query tokens."
+    },
+    {
+      "id": "computed-evaluated-by-server-renamed",
+      "type": "behavior",
+      "component": "schema",
+      "path": "schema.attributes.schema.properties[].x-computed.evaluatedBy",
+      "since": "0.0.100",
+      "severity": "error",
+      "title": "x-computed.evaluatedBy 'server' is refused; use 'runtime'",
+      "description": "The proposal's 'server' value was renamed to 'runtime' when runtime evaluation shipped. Publish answers \"x-computed.evaluatedBy 'server' has been renamed; use 'runtime'.\"",
+      "action": "Replace evaluatedBy: 'server' with evaluatedBy: 'runtime' and re-publish."
+    },
+    {
+      "id": "runtime-topics-domain-environment-prefix",
+      "type": "behavior",
+      "component": "runtime",
+      "path": "Dapr pub/sub topics of the runtime (outbox, inbox, orchestration, execution)",
+      "since": "0.0.100",
+      "severity": "warning",
+      "title": "Runtime topics are named vnext.{domain}.{environment}.{event}.v{n}",
+      "description": "Every runtime topic is now vnext.{APP_DOMAIN}.{ASPNETCORE_ENVIRONMENT lower-cased, unset = production}.{event}.v{n} (e.g. vnext.core.production.instance.sub.completed.v1), so a Kafka ACL can grant each domain's user vnext.{domain}.* on topics and consumer groups. A host fails fast at start without APP_DOMAIN. Messages left on the old topics are not consumed after the upgrade, and outbox rows written before the upgrade carry the old topic name. Domain-authored topics (DaprPubSubTask.topic, domain Subscription resources) are used verbatim and must follow the same shape under Kafka.",
+      "action": "Drain the outbox before rolling out. Under Kafka, give each host a consumer group inside vnext.{domain}.* (Helm global.externalKafka.metadata.<host> consumerID / consumerGroup); left unset, Dapr uses the app-id, which the ACL refuses."
     }
   ]
 }
