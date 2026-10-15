@@ -182,6 +182,13 @@ public static class InstanceUrlTemplates
     public const string RelatedDataTemplate = "/{0}/workflows/{1}/instances/{2}/internal/related-data";
 
     /// <summary>
+    /// Internal x-storage file read template (service-to-service, no authorization; the file id travels
+    /// in the <c>file</c> query parameter).
+    /// {0} = domain, {1} = workflow, {2} = instance
+    /// </summary>
+    public const string InternalFileTemplate = "/{0}/workflows/{1}/instances/{2}/internal/file";
+
+    /// <summary>
     /// Internal batched related-instance data read template.
     /// {0} = domain, {1} = workflow
     /// </summary>
@@ -503,6 +510,12 @@ public static class InstanceUrlTemplates
     /// </summary>
     public static string RelatedData(string domain, string workflow, string instance, string? apiVersionPrefix = null)
         => BuildUrl(RelatedDataTemplate, apiVersionPrefix, domain, workflow, instance);
+
+    /// <summary>
+    /// Generates URL for the internal x-storage file read endpoint (without the <c>file</c> query parameter).
+    /// </summary>
+    public static string InternalFile(string domain, string workflow, string instance, string? apiVersionPrefix = null)
+        => BuildUrl(InternalFileTemplate, apiVersionPrefix, domain, workflow, instance);
 
     /// <summary>
     /// Generates URL for the internal batched related-instance data read endpoint.

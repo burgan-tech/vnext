@@ -80,6 +80,7 @@ public static class OrchestrationApiServiceCollectionExtensions
         services.AddScoped<IInstanceFunctionHandler, CatalogFunctionHandler>();
         services.AddScoped<IInstanceFunctionHandler, TaskHistoryFunctionHandler>();
         services.AddScoped<IInstanceFunctionHandler, ActionHistoryFunctionHandler>();
+        services.AddScoped<IInstanceFunctionHandler, FileFunctionHandler>();
         services.AddScoped<IInstanceFunctionHandlerFactory, InstanceFunctionHandlerFactory>();
 
         services.AddScoped<IDomainFunctionHandler, HumanTaskFunctionHandler>();
@@ -113,6 +114,27 @@ public static class OrchestrationApiServiceCollectionExtensions
             failureStatus: HealthStatus.Unhealthy,
             tags: ["ready"],
             timeout: TimeSpan.FromSeconds(2)));
+
+        // Multi-domain hosting: one probe per co-hosted domain with its own database.
+        foreach (var entry in configuration.GetSection(DomainDatabaseServiceCollectionExtensions.DomainsSection).GetChildren())
+        {
+            if (string.IsNullOrWhiteSpace(entry.Value))
+            {
+                continue;
+            }
+
+            var domainConnectionString = entry.Value;
+            CachedHealthCheck? cached = null; // one instance per database: TTL state must survive probes
+            services.AddHealthChecks().Add(new HealthCheckRegistration(
+                name: $"database-{entry.Key}",
+                factory: sp => cached ??= new CachedHealthCheck(
+                    new NpgSqlHealthCheck(new NpgSqlHealthCheckOptions(domainConnectionString)),
+                    sp.GetRequiredService<IOptions<HealthCheckCacheOptions>>().Value.Ttl,
+                    TimeProvider.System),
+                failureStatus: HealthStatus.Unhealthy,
+                tags: ["ready"],
+                timeout: TimeSpan.FromSeconds(2)));
+        }
 
         return services;
     }

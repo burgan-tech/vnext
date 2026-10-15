@@ -15,6 +15,7 @@ public sealed class RoutedAuthorizeGateway : IAuthorizeGateway
     private readonly LocalAuthorizeGateway _local;
     private readonly RemoteAuthorizeGateway _remote;
     private readonly IRuntimeInfoProvider _runtimeInfoProvider;
+    private readonly ICoHostedDatabaseBoundary? _databaseBoundary;
 
     /// <summary>
     /// Initializes a new instance of RoutedAuthorizeGateway.
@@ -22,11 +23,14 @@ public sealed class RoutedAuthorizeGateway : IAuthorizeGateway
     /// <param name="local">The local gateway for same-domain execution.</param>
     /// <param name="remote">The remote gateway for cross-domain execution.</param>
     /// <param name="runtimeInfoProvider">Provider for runtime domain information.</param>
+    /// <param name="databaseBoundary">Opens a new unit-of-work root for a co-hosted domain in another database.</param>
     public RoutedAuthorizeGateway(
         LocalAuthorizeGateway local,
         RemoteAuthorizeGateway remote,
-        IRuntimeInfoProvider runtimeInfoProvider)
+        IRuntimeInfoProvider runtimeInfoProvider,
+        ICoHostedDatabaseBoundary? databaseBoundary = null)
     {
+        _databaseBoundary = databaseBoundary;
         _local = local;
         _remote = remote;
         _runtimeInfoProvider = runtimeInfoProvider;
@@ -47,7 +51,7 @@ public sealed class RoutedAuthorizeGateway : IAuthorizeGateway
         CancellationToken cancellationToken = default)
     {
         return _runtimeInfoProvider.IsDomainMatch(domain)
-            ? _local.GetAuthorizeResultForInstanceAsync(domain, workflow, instanceId, role, transitionKey, functionKey, version, checkQueryRoles, checkAck, requestContext, cancellationToken)
+            ? LocalDomainCall.Run(_databaseBoundary, domain, () => _local.GetAuthorizeResultForInstanceAsync(domain, workflow, instanceId, role, transitionKey, functionKey, version, checkQueryRoles, checkAck, requestContext, cancellationToken))
             : _remote.GetAuthorizeResultForInstanceAsync(domain, workflow, instanceId, role, transitionKey, functionKey, version, checkQueryRoles, checkAck, requestContext, cancellationToken);
     }
 
@@ -60,7 +64,7 @@ public sealed class RoutedAuthorizeGateway : IAuthorizeGateway
         CancellationToken cancellationToken = default)
     {
         return _runtimeInfoProvider.IsDomainMatch(domain)
-            ? _local.GetAuthorizationMatrixForInstanceAsync(domain, workflow, instanceId, version, cancellationToken)
+            ? LocalDomainCall.Run(_databaseBoundary, domain, () => _local.GetAuthorizationMatrixForInstanceAsync(domain, workflow, instanceId, version, cancellationToken))
             : _remote.GetAuthorizationMatrixForInstanceAsync(domain, workflow, instanceId, version, cancellationToken);
     }
 }

@@ -39,8 +39,16 @@ public sealed class SchemaMigrationRunner(
 
         try
         {
-            await MigrateSystemSchemasAsync(cancellationToken);
-            await MigrateDomainSchemasAsync(cancellationToken);
+            // Multi-domain hosting: each hosted domain has its own definition and flow schemas
+            // (co-hosted ones prefixed by DomainSchemaNameFormatter), so both phases run per domain.
+            foreach (var domain in HostedDomains())
+            {
+                using (DomainScope.Begin(domain))
+                {
+                    await MigrateSystemSchemasAsync(cancellationToken);
+                    await MigrateDomainSchemasAsync(cancellationToken);
+                }
+            }
 
             // Only after both phases have fully completed (all parallel tasks finished) we decide.
             var failed = Volatile.Read(ref _failedSchemaCount);
@@ -61,6 +69,13 @@ public sealed class SchemaMigrationRunner(
             logger.LogError(ex, "Critical error during schema migration");
             throw;
         }
+    }
+
+    private IReadOnlyList<string?> HostedDomains()
+    {
+        using var scope = scopeFactory.CreateScope();
+        var hosted = scope.ServiceProvider.GetService<IRuntimeInfoProvider>()?.HostedDomains;
+        return hosted is { Count: > 0 } ? [.. hosted] : [null];
     }
 
     private async Task MigrateSystemSchemasAsync(CancellationToken cancellationToken)

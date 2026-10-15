@@ -14,8 +14,8 @@ namespace BBT.Workflow.Scripting.Sandbox;
 /// allow-list (global baseline ∪ per-mapping grant) is kept.
 /// <para>
 /// Everything expensive is cached process-wide: the TPA map (immutable for the process lifetime),
-/// the plugin-directory listing (operator-mounted at deploy time — a changed directory needs a
-/// restart, same rule as the plugin DLLs themselves), and each <see cref="MetadataReference"/>
+/// the plugin-directory listing (<see cref="ScriptPluginDirectory"/>: re-read on a miss, at most once
+/// per rescan interval), and each <see cref="MetadataReference"/>
 /// (a CreateFromFile re-opens and re-decodes the PE metadata; before this cache every single
 /// compile in the sandboxed host paid filesystem I/O plus ~20 metadata decodes).
 /// </para>
@@ -30,10 +30,6 @@ public static class SandboxedReferenceSet
     private static readonly Lazy<Dictionary<string, string>> TpaMap = new(
         BuildTpaMap, LazyThreadSafetyMode.ExecutionAndPublication);
 
-    /// <summary>One listing per plugin directory, taken on first use.</summary>
-    private static readonly ConcurrentDictionary<string, Dictionary<string, string>> PluginMapsByDirectory =
-        new(StringComparer.OrdinalIgnoreCase);
-
     /// <summary>
     /// Effective allow-list = global baseline ∪ the per-mapping grant. Only assemblies that are
     /// actually available (framework TPA or mounted plugins) can resolve; banned-namespace usage
@@ -46,13 +42,12 @@ public static class SandboxedReferenceSet
             allowed.UnionWith(grant);
 
         var tpa = TpaMap.Value;
-        var plugins = PluginMap(options.ResolvePluginDirectory());
 
         var refs = new List<MetadataReference>(allowed.Count);
         foreach (var name in allowed)
         {
             // Framework assemblies always win over a same-named plugin.
-            if (tpa.TryGetValue(name, out var path) || plugins.TryGetValue(name, out path))
+            if (tpa.TryGetValue(name, out var path) || ScriptPluginDirectory.TryGetPath(options, name, out path))
                 refs.Add(ReferenceByPath.GetOrAdd(path, static p => MetadataReference.CreateFromFile(p)));
         }
 
@@ -69,9 +64,15 @@ public static class SandboxedReferenceSet
         if (string.IsNullOrWhiteSpace(simpleName))
             return false;
 
-        return TpaMap.Value.ContainsKey(simpleName)
-               || PluginMap(options.ResolvePluginDirectory()).ContainsKey(simpleName);
+        return IsFrameworkAssembly(simpleName)
+               || ScriptPluginDirectory.TryGetPath(options, simpleName, out _);
     }
+
+    /// <summary>
+    /// True when <paramref name="simpleName"/> is a Trusted Platform Assembly (framework or host
+    /// dependency). Such a name never resolves from the plugin directory — at compile time or at load time.
+    /// </summary>
+    internal static bool IsFrameworkAssembly(string simpleName) => TpaMap.Value.ContainsKey(simpleName);
 
     private static Dictionary<string, string> BuildTpaMap()
     {
@@ -83,22 +84,5 @@ public static class SandboxedReferenceSet
             map[Path.GetFileNameWithoutExtension(path)] = path;
 
         return map;
-    }
-
-    /// <summary>Dynamically-loaded third-party DLLs from the plugin directory, listed once.</summary>
-    private static Dictionary<string, string> PluginMap(string pluginDirectory)
-    {
-        if (string.IsNullOrEmpty(pluginDirectory))
-            return [];
-
-        return PluginMapsByDirectory.GetOrAdd(pluginDirectory, static dir =>
-        {
-            var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            if (Directory.Exists(dir))
-                foreach (var dll in Directory.EnumerateFiles(dir, "*.dll"))
-                    map.TryAdd(Path.GetFileNameWithoutExtension(dll), dll);
-
-            return map;
-        });
     }
 }

@@ -244,7 +244,8 @@ public sealed class StartTriggerTaskExecutor : TriggerTaskExecutorBase<StartTask
                 Attributes = task.Body,
                 Tags = task.TriggerTags
             },
-            Headers = headers
+            Headers = headers,
+            TrustedPayload = true // task body is authored by the flow, not a client
         };
     }
 }

@@ -1,5 +1,6 @@
 using BBT.Aether.Results;
 using BBT.Workflow.Execution.PostCommit;
+using BBT.Workflow.Execution.Transitions;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
 
@@ -20,23 +21,12 @@ public class ForwardToActiveSubflowStep : ITransitionStep
         TransitionExecutionContext context,
         CancellationToken cancellationToken)
     {
-        // Skip if no active subflow - early return for non-applicable case
-        if (!HasActiveSubflow(context))
-        {
-            return Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.ContinueNoWork()));
-        }
-
-        // Parent shared transition available in current state: execute on parent, do not forward
-        if (IsParentSharedTransition(context))
-        {
-            return Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.ContinueNoWork()));
-        }
-
-        // updateData always executes on the instance it targets — the parent's data is updated
-        // and the parent's own auto transitions may advance with it. It is never forwarded to
-        // (or resumed on) the active subflow; a subflow's data is updated by addressing the
-        // subflow instance directly.
-        if (context.IsUpdateDataTransition())
+        // Not forwarded: no active subflow; a parent shared transition available in the current
+        // state (it runs on the parent); or updateData — it always executes on the instance it
+        // targets: the parent's data is updated and the parent's own auto transitions may advance
+        // with it, never forwarded to (or resumed on) the active subflow. The rule is shared with
+        // the x-storage file admission, which leaves a forwarded payload for the leaf to swap.
+        if (!SubflowForwardRule.WillForward(context))
         {
             return Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.ContinueNoWork()));
         }
@@ -56,11 +46,13 @@ public class ForwardToActiveSubflowStep : ITransitionStep
             context.DataElement,
             context.Headers.ToDictionary(),
             context.RouteValues.ToDictionary(),
-            // Claim the accept-time chain reserve, and ONLY that: without it the leaf — which the
-            // accept already flipped to Busy so a long-polling client sees work in progress —
-            // would reject this relay with a 409 for being Busy. Never claim a reserve that was
-            // not taken (sync origin, cancel/exit/timeout accepts), or the relay would barge past
-            // a leaf that is Busy for its own reasons.
+            // False for every request this runtime admits: its accept no longer reserves the chain,
+            // so the forward reaches the leaf as a normal request and the leaf runs its own admission.
+            // True only for a chain reserve an OLDER runtime took — a parent job its accept enqueued
+            // before the upgrade, or an older parent's relay passing through this level — whose leaf
+            // that accept already flipped Busy: dropping the claim there would make the leaf 409 its
+            // own reserve. Never claim a reserve that was not taken, or the relay would barge past a
+            // leaf that is Busy for its own reasons. (vnext-meta: subflow-chain-reserve-claim.)
             context.SubflowChainReserved));
 
         // Set initial client response (will be updated by handler if forward succeeds)
@@ -84,18 +76,4 @@ public class ForwardToActiveSubflowStep : ITransitionStep
 
         return Task.FromResult(Result<StepOutcome>.Ok(outcome));
     }
-
-    /// <summary>
-    /// Checks if context has an active subflow.
-    /// </summary>
-    private static bool HasActiveSubflow(TransitionExecutionContext context)
-        => context.Instance.HasActiveSubFlow || context.Instance.Subflow != null;
-
-    /// <summary>
-    /// Returns true if the requested transition is a parent shared transition (and was validated, so available in current state).
-    /// When true, the transition runs on the parent; we do not forward to the active subflow.
-    /// </summary>
-    private static bool IsParentSharedTransition(TransitionExecutionContext context)
-        => context.Transition != null &&
-           context.Workflow.FindSharedTransition(context.TransitionKey) != null;
 }

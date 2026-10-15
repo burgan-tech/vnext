@@ -14,6 +14,11 @@ public class DomainConsts
         public const string State = "parent.state";
         public const string FlowType = "parent.flowtype";
         public const string Transition = "parent.transition";
+        /// <summary>
+        /// Stamped by a <c>history: none</c> parent on its SubFlow child start (vnext#1006); the child
+        /// refuses to start unless its own definition is <c>history: none</c> too.
+        /// </summary>
+        public const string History = "parent.history";
         public const string Sync = "sync";
         public const string Callback = "callback";
         public const string TimeoutOverride = "subflow.timeout_override";

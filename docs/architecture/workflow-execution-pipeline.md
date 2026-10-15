@@ -17,7 +17,7 @@ load unrelated state or make policy decisions that belong to profile resolution.
 | Order | Step | Responsibility |
 | --- | --- | --- |
 | 5 | Preflight | Cancel/exit detection and already-completed guard. |
-| 10 | Forward to active subflow | Forward parent transitions into an active subflow when applicable. Does not forward `updateData` or parent shared `$self` transitions. |
+| 10 | Forward to active subflow | Queue a post-commit forward to an active subflow when the transition reaches the pipeline. Normally the [transition proxy](subflow-transition-proxy.md) has already forwarded it before the pipeline; this step covers the proxy-declined race and legacy jobs. Does not forward `updateData` or a parent shared transition available in the current state. |
 | 19 | Set Busy | Mark the instance Busy during transition execution. |
 | 20 | Create transition | Persist the transition attempt and duplicate guard. |
 | 21 | Parent update-data data-only | When a parent has an open SubFlow correlation, persist update data and skip state lifecycle/epilogue. |
@@ -38,7 +38,7 @@ load unrelated state or make policy decisions that belong to profile resolution.
 | 112 | Resolve available | Resolve deferred Active status. |
 
 There is no step at order 9 (`HandleUpdateDataPreflightStep` was removed). Parent `updateData`
-handling is: `ForwardToActiveSubflowStep` does not forward it, and `HandleUpdateDataDataOnlyStep`
+handling is: neither the proxy nor `ForwardToActiveSubflowStep` forwards it, and `HandleUpdateDataDataOnlyStep`
 (21) skips to Finalize when the parent has an open SubFlow correlation.
 
 `StepOutcome` controls execution:

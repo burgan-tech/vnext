@@ -245,6 +245,19 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Compare-and-set on <see cref="Instance.EffectiveStatus"/> alone: writes
+    /// <paramref name="effectiveStatus"/> only while the column still holds
+    /// <paramref name="expected"/> and the row is not terminal. For undoing a stamp this caller wrote
+    /// itself — a value the level below has already replaced must not be overwritten.
+    /// </summary>
+    /// <returns>True when this call changed the column.</returns>
+    Task<bool> TryCompareAndSetEffectiveStatusAsync(
+        Guid instanceId,
+        InstanceStatus expected,
+        InstanceStatus effectiveStatus,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Aggregate-aware variant of <see cref="TryMarkBusyAsync(Guid,CancellationToken)"/> for
     /// callers holding the change-tracked instance (pipeline steps, settlement): on a successful CAS
     /// it applies <c>Busy()</c> in memory AND aligns the change tracker's baseline for the status
@@ -563,5 +576,32 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
         string key,
         int skip,
         int take,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Pages the data rows of one instance, newest first (<c>EnteredAt DESC, Id DESC</c>). No-tracking read;
+    /// whether a next page exists comes from reading one extra row, never from a COUNT. The rows are the STORED
+    /// form — callers serve them only through <c>IInstanceDataReadService.ExposeAsync</c>.
+    /// </summary>
+    /// <param name="instanceId">Owning instance identifier.</param>
+    /// <param name="page">1-based page number.</param>
+    /// <param name="pageSize">Page size.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<HateoasPagedList<InstanceData>> GetDataHistoryPagedAsync(
+        Guid instanceId,
+        int page,
+        int pageSize,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// One data row of one instance, no-tracking. Returns <c>null</c> when no row has <paramref name="rowId"/> or
+    /// the row belongs to a different instance — a row is never served across instances.
+    /// </summary>
+    /// <param name="instanceId">Owning instance identifier.</param>
+    /// <param name="rowId">The data row's id.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<InstanceData?> FindDataRowAsync(
+        Guid instanceId,
+        Guid rowId,
         CancellationToken cancellationToken = default);
 }

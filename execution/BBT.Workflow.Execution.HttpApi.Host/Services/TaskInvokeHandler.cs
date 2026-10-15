@@ -5,10 +5,9 @@ using BBT.Workflow.Logging;
 namespace BBT.Workflow.Execution.Invocation;
 
 /// <summary>
-/// Shared task-invocation logic for the Execution service. Both the HTTP controller and the
-/// gRPC service front this handler so the two transports execute the exact same behavior —
+/// Task-invocation logic for the Execution service, fronted by the HTTP invoke controller:
 /// identity-claim normalization, trace/activity restoration and tagging, logging scope, and the
-/// registry invocation — instead of each transport re-implementing it and drifting apart.
+/// registry invocation.
 /// </summary>
 public sealed class TaskInvokeHandler(
     ITaskInvokerRegistry invokerRegistry,
@@ -43,7 +42,7 @@ public sealed class TaskInvokeHandler(
 
         using var restoredActivity = RestoreActivityFromBodyIfDetached(traceContext);
 
-        // The ASP.NET/gRPC transaction — captured BEFORE the child span below so every
+        // The ASP.NET transaction — captured BEFORE the child span below so every
         // SetTag/SetBaggage keeps landing on the TRANSACTION document. Elastic prod queries
         // filter execution transactions by labels.vnext_task_key; letting the child span become
         // Activity.Current first would silently move those labels off the transaction.
@@ -51,7 +50,7 @@ public sealed class TaskInvokeHandler(
 
         // Everything from here (tagging, registry resolution, invocation, response mapping) is
         // inside one always-on span; the remaining head of the transaction is then pure
-        // transport work (model binding / protobuf parse / middleware), measurable by
+        // transport work (model binding / middleware), measurable by
         // subtraction. Closes the 57.8 ms unattributed head found in trace 036088b9….
         using var handleActivity = ActivitySource.StartActivity(
             "Execution.HandleInvoke", ActivityKind.Internal);

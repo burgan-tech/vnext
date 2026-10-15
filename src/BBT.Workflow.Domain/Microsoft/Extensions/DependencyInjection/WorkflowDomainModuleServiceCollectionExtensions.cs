@@ -1,9 +1,11 @@
+using BBT.Aether.MultiSchema;
 using BBT.Workflow.Canonicalization;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Definitions.Validators;
 using BBT.Workflow.Rules;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Validation;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace Microsoft.Extensions.DependencyInjection;
 
@@ -34,6 +36,12 @@ public static class WorkflowDomainModuleServiceCollectionExtensions
         });
 
         services.AddSingleton<IRuntimeInfoProvider, RuntimeInfoProvider>();
+        // Bound from ConnectionStrings:Default / ConnectionStrings:Domains:* by the hosts that own a database.
+        services.AddOptions<DomainDatabaseOptions>();
+        services.AddSingleton<IDomainDatabaseResolver, DomainDatabaseResolver>();
+        // Replace, not TryAdd: Aether registers its default formatter with TryAdd, in whichever order
+        // the modules are added. Identical names for a single domain; see DomainSchemaNameFormatter.
+        services.Replace(ServiceDescriptor.Singleton<ISchemaNameFormatter, DomainSchemaNameFormatter>());
         services.AddSingleton<WorkflowValidator>();
         services.AddSingleton<IResultRuleEngine<State>, ResultRuleEngine<State>>();
         services.AddSingleton<IJsonSchemaValidator, CachedJsonSchemaValidator>();

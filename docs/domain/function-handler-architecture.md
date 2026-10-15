@@ -167,7 +167,7 @@ either: a denied caller gets `403`, not an empty description. A slot that resolv
 content route is `404` (`Function:800004`); an unrecognized `target` is `400` (`Function:800005`).
 
 **Built-in system functions are not describable.** `state`, `view`, `data`, `schema`, `authorize`,
-`permissions`, `instance-correlation`, `human-task`, `master` and `catalog` have no `sys-functions` component, so
+`permissions`, `instance-correlation`, `human-task`, `master`, `catalog` and `file` have no `sys-functions` component, so
 `/info` returns `404` for them.
 
 `GET {domain}/functions` still returns each function's full component definition for tooling that
@@ -340,8 +340,13 @@ function declares `roles`, the caller's roles are evaluated via
 `ITransitionAuthorizationManager.IsAnyRoleAllowedForGrantsAsync` at the single execution chokepoint
 (`FunctionAppService.ExecuteFunctionAsync`, covering both instance- and domain-scoped custom
 functions). No allow → **HTTP 403** (`WorkflowErrors.FunctionAccessDenied`); no `roles` → allow.
-Built-in functions (state/data/view/schema/authorize/permissions/instance-correlation/extensions, `human-task`)
+Built-in functions (state/data/view/schema/authorize/permissions/instance-correlation/extensions/file, `human-task`)
 are **excluded** — they use their own handlers and never flow through `FunctionAppService`.
+
+**Reserved names.** A system-function key (`state`, `view`, `data`, `schema`, `extensions`, `authorize`, `permissions`,
+`instance-correlation`, `human-task`, `master`, `catalog`, `tasks`, `actions`, `file`) is dispatched to its handler before any
+custom function is looked up, so a custom function with one of these keys is shadowed. `file` serves an x-storage file of
+the instance: `GET|HEAD .../instances/{instance}/functions/file?file=<guid>` (raw bytes, ETag/304, Range/206/416).
 
 ## Failure Modes
 

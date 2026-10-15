@@ -1,6 +1,7 @@
 using BBT.Aether.AspNetCore.MultiSchema;
 using BBT.Aether.Uow.EntityFrameworkCore;
 using BBT.Workflow.Data;
+using BBT.Workflow.HttpApi.Shared.Events;
 using BBT.Workflow.Workers.Inbox.Forwarding;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
@@ -32,13 +33,7 @@ public static class InboxWorkerServiceCollectionExtensions
             .AddDomainModule()                       // IRuntimeInfoProvider + domain primitives (no infra deps)
             .AddAspNetCoreModules(configuration)     // AddAetherCore (UoW + multi-schema), AspNetCore, controllers
             .AddDaprClients()
-            .AddAetherEventBus(options =>
-            {
-                options.DefaultSource =
-                    $"urn:vnext:{configuration.GetValue<string?>("ApplicationName")?.ToLowerInvariant()}";
-                options.PrefixEnvironmentToTopic = true;
-                options.PubSubName = configuration["DAPR_PUBSUB_STORE_NAME"]!;
-            })
+            .AddAetherEventBus(options => WorkflowEventBusConfiguration.Apply(options, configuration))
             .AddInboxMessagingDbContext(configuration)
             .AddTelemetry(configuration)
             .AddExceptionHandling()

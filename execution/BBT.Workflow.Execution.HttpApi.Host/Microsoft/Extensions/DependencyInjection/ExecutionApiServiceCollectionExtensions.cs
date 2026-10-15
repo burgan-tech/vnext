@@ -1,4 +1,5 @@
 using BBT.Workflow.Execution.Invocation;
+using BBT.Workflow.HttpApi.Shared.Events;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.HealthChecks;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
@@ -25,13 +26,7 @@ public static class ExecutionApiServiceCollectionExtensions
             .AddAetherInfrastructure()
             .AddAspNetCoreModules(configuration)
             .AddDaprClients()
-            .AddAetherEventBus(opt =>
-            {
-                opt.DefaultSource =
-                    $"urn:vnext:{configuration.GetValue<string?>("ApplicationName")?.ToLowerInvariant()}";
-                opt.PrefixEnvironmentToTopic = true;
-                opt.PubSubName = configuration["DAPR_PUBSUB_STORE_NAME"]!;
-            })
+            .AddAetherEventBus(opt => WorkflowEventBusConfiguration.Apply(opt, configuration))
             .AppMapper()
             .AddTelemetry(configuration)
             .AddExceptionHandling()
@@ -41,16 +36,6 @@ public static class ExecutionApiServiceCollectionExtensions
 
         services.AddSingleton<IRuntimeInfoProvider, RuntimeInfoProvider>();
         services.AddScoped<TaskInvokeHandler>();
-
-        services.AddGrpc(options =>
-        {
-            // Aligned with the sidecar's http-max-request-size: "64" (MB). Envelopes no longer
-            // carry the instance data (dead-weight removal from TaskTraceContext), so typical
-            // payloads are small; the headroom stays for large authored bindings and large
-            // downstream responses on the send side.
-            options.MaxReceiveMessageSize = 64 * 1024 * 1024;
-            options.MaxSendMessageSize = 64 * 1024 * 1024;
-        });
 
         return services;
     }

@@ -111,6 +111,8 @@ public static class PipelineServiceCollectionExtensions
         // Pipeline
         services.AddScoped<TransitionExecutor>();
         services.AddScoped<TransitionPipeline>();
+        // x-storage swap at sync and async transition admission (spec §3).
+        services.AddScoped<BBT.Workflow.Files.IFileAdmission, BBT.Workflow.Files.FileAdmission>();
 
         // Error Boundary Services (used by TaskCoordinator for task-level error handling)
         services.AddScoped<IErrorNormalizer, ErrorNormalizer>();

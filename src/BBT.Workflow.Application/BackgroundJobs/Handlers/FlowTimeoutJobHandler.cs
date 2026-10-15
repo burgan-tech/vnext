@@ -35,6 +35,8 @@ public sealed class FlowTimeoutJobHandler(
 
     public async Task HandleAsync(WorkflowTimeoutPayload args, CancellationToken cancellationToken)
     {
+        // Serve the job as the domain that scheduled it (multi-domain hosting).
+        using var domainScope = DomainScope.Begin(args.Domain);
         using var activity = BackgroundJobActivityHelper.StartDeferredActivity("TimeoutJob.Execute", args);
         // A timeout firing opens its own activation episode — see TransitionTimerJobHandler.
         using var episode = WorkflowTraceLane.UseEpisode(TelemetryConstants.ActivationTriggers.Timeout, WellKnownTransitionKeys.Timeout);

@@ -85,6 +85,33 @@ public class TransitionJobHandlerTests
     };
 
     /// <summary>
+    /// Ruling 17's other half: a job re-entry is pre-reserved (and may carry an older accept's chain
+    /// claim), but its payload was swapped at the accept that enqueued it, so it is NEVER marked as a
+    /// chain-reserved relay — that flag is what makes the leaf's pipeline swap a pre-reserved body.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task HandleAsync_JobReentry_IsPreReservedButNeverAChainReservedRelay(bool chainReserved)
+    {
+        var payload = CreatePayload();
+        payload.SubflowChainReserved = chainReserved;
+        WorkflowExecutionContext? captured = null;
+        _executionService
+            .Setup(s => s.ExecuteTransitionAsync(
+                It.IsAny<WorkflowExecutionContext>(), It.IsAny<CancellationToken>()))
+            .Callback<WorkflowExecutionContext, CancellationToken>((c, _) => captured = c)
+            .ReturnsAsync(Result<TransitionOutput>.Ok(new TransitionOutput()));
+
+        await CreateHandler().HandleAsync(payload, CancellationToken.None);
+
+        Assert.NotNull(captured);
+        Assert.True(captured.IsPreReserved);
+        Assert.Equal(chainReserved, captured.SubflowChainReserved);
+        Assert.False(captured.ChainReservedRelay);
+    }
+
+    /// <summary>
     /// The job span IS the transaction in APM, so it must name the transition it runs. Before this,
     /// every transition job showed up as the same "TransitionJob.Execute" transaction and the key
     /// was only reachable as a tag — which is also why a redundant <c>transition/{key}</c> child

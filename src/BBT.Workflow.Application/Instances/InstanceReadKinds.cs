@@ -46,6 +46,9 @@ public static class InstanceReadKinds
     /// <summary>The paged incident history of one instance.</summary>
     public const string IncidentHistory = "incidentHistory";
 
+    /// <summary>The paged data-row history of one instance, and its single-row read.</summary>
+    public const string DataHistory = "dataHistory";
+
     /// <summary>The instance-correlation tree — recursive, so its own duration says how deep it went.</summary>
     public const string InstanceCorrelation = "instanceCorrelation";
 

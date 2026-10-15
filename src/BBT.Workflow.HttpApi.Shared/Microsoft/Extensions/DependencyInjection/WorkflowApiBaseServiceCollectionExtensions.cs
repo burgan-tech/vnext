@@ -9,6 +9,7 @@ using BBT.Workflow;
 using BBT.Workflow.BackgroundJobs.Handlers;
 using BBT.Workflow.Data;
 using BBT.Workflow.Headers;
+using BBT.Workflow.HttpApi.Shared.Events;
 using BBT.Workflow.HttpApi.Shared.Telemetry;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Schemas;
@@ -166,6 +167,13 @@ public static class WorkflowApiBaseServiceCollectionExtensions
                     .ConfigureWarnings(w => w.Ignore(RelationalEventId.PendingModelChangesWarning));
             });
 
+        // Multi-domain hosting: a co-hosted domain may have its own database
+        // (ConnectionStrings:Domains:<domain>). No such entry → the default database, as before.
+        services.AddDomainDatabases(configuration);
+        services.RouteToDomainDatabase<WorkflowDbContext>();
+        services.RouteToDomainDatabase<MessagingDbContext>();
+        services.RouteToDomainDatabase<MetricsDbContext>();
+
         return services;
     }
 
@@ -220,6 +228,9 @@ public static class WorkflowApiBaseServiceCollectionExtensions
         }, withHostedService: withHostedService);
 
         services.AddDaprJobScheduler();
+
+        // Dedicated domain databases: arm and claim each database's jobs (no-op with one database).
+        services.FanOutBackgroundJobsPerDomainDatabase();
 
         return services;
     }
@@ -392,14 +403,7 @@ public static class WorkflowApiBaseServiceCollectionExtensions
 
     public static IServiceCollection AddEventBus(this IServiceCollection services, IConfiguration configuration)
     {
-        services.AddEventBusWithHooks(options =>
-            {
-                options.DefaultSource =
-                    $"urn:vnext:{configuration.GetValue<string?>("ApplicationName")?.ToLowerInvariant()}";
-                options.PrefixEnvironmentToTopic = true;
-                options.PubSubName = configuration["DAPR_PUBSUB_STORE_NAME"]!;
-            }
-        );
+        services.AddEventBusWithHooks(options => WorkflowEventBusConfiguration.Apply(options, configuration));
         return services;
     }
 
@@ -430,6 +434,15 @@ public static class WorkflowApiBaseServiceCollectionExtensions
             opt.Map(WorkflowErrorCodes.EncryptionKeyUnavailable, HttpStatusCode.ServiceUnavailable);
             opt.Map(WorkflowErrorCodes.EncryptionSchemaUnavailable, HttpStatusCode.ServiceUnavailable);
             opt.Map(WorkflowErrorCodes.EncryptedValueReserved, HttpStatusCode.BadRequest);
+            // x-storage file offload: binding failure is transient (503); a malformed node is the caller's error.
+            opt.Map(WorkflowErrorCodes.FileStoreUnavailable, HttpStatusCode.ServiceUnavailable);
+            opt.Map(WorkflowErrorCodes.FileReferenceInvalid, HttpStatusCode.BadRequest);
+            opt.Map(WorkflowErrorCodes.FileNotFound, HttpStatusCode.NotFound);
+            opt.Map(WorkflowErrorCodes.FileSchemaUnavailable, HttpStatusCode.ServiceUnavailable);
+            // history: none (vnext#1006): an ineligible SubFlow child is the author's error; retry is
+            // a conflict with the flow's declared mode.
+            opt.Map(WorkflowErrorCodes.HistoryNoneSubFlowChildNotEligible, HttpStatusCode.BadRequest);
+            opt.Map(WorkflowErrorCodes.HistoryNoneRetryNotSupported, HttpStatusCode.Conflict);
             // A filter/sort/groupBy the master schema refuses (x-filterOperators, x-sortable, and every
             // x-encryption "encrypt" path) is the caller's error. It surfaced as 500 before.
             opt.Map(WorkflowErrorCodes.SchemaFilterValidation, HttpStatusCode.BadRequest);
@@ -459,6 +472,7 @@ public static class WorkflowApiBaseServiceCollectionExtensions
     public static IServiceCollection AddRuntimeMiddleware(this IServiceCollection services)
     {
         services.AddScoped<WorkflowRuntimeMiddleware>();
+        services.AddScoped<DomainResolutionMiddleware>();
 
         return services;
     }

@@ -15,9 +15,9 @@ namespace BBT.Workflow.Application.Tests.Tasks;
 /// <c>BBT.Workflow.Execution.Abstractions</c>).
 ///
 /// The two families are bridged ONLY by JSON being structural (property name + JSON-shape) on
-/// both the HTTP transport and the gRPC proxy-mode transport's JSON payload envelope -- there is
-/// no shared base type or contract interface enforcing them to agree. A property added to one
-/// side and not mirrored on the other silently drops on the wire on BOTH transports: the sender
+/// the HTTP invoke transport -- there is no shared base type or contract interface enforcing
+/// them to agree. A property added to one side and not mirrored on the other silently drops on
+/// the wire: the sender
 /// serializes a field the receiver's type has no matching property for, so deserialization just
 /// leaves it out, with no error anywhere.
 ///

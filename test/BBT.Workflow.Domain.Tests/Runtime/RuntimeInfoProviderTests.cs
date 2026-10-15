@@ -1,4 +1,5 @@
 using System;
+using System.Threading.Tasks;
 using BBT.Aether;
 using BBT.Workflow.ExceptionHandling;
 using BBT.Workflow.Runtime;
@@ -110,5 +111,94 @@ public class RuntimeInfoProviderTests : IDisposable
 
         // Act & Assert
         Should.Throw<NotFoundDomainException>(() => provider.Check("wrong-domain"));
+    }
+
+    // ---- multi-domain hosting (APP_DOMAIN primary + APP_DOMAINS co-hosted) ----
+
+    [Fact]
+    public void HostedDomains_SingleDomain_IsJustAppDomain()
+    {
+        var provider = new RuntimeInfoProvider("1.0.0", domains: null, domain: "core");
+
+        provider.HostedDomains.ShouldBe(["core"]);
+        provider.Domain.ShouldBe("core");
+    }
+
+    [Fact]
+    public void HostedDomains_AppDomainIsPrimaryAndDuplicatesCollapse()
+    {
+        var provider = new RuntimeInfoProvider("1.0.0", domains: " partner, CORE ,sales,partner", domain: "core");
+
+        provider.HostedDomains.ShouldBe(["core", "partner", "sales"]);
+        provider.Domain.ShouldBe("core");
+    }
+
+    [Fact]
+    public void Constructor_WhenOnlyAppDomainsSet_ShouldThrow()
+    {
+        // APP_DOMAIN names the Dapr app-ids, so the pool cannot run without a primary.
+        Should.Throw<AetherException>(() => new RuntimeInfoProvider("1.0.0", domains: "core,partner", domain: null));
+    }
+
+    [Fact]
+    public void IsDomainMatch_And_Check_AcceptEveryHostedDomain()
+    {
+        var provider = new RuntimeInfoProvider("1.0.0", domains: "partner", domain: "core");
+
+        provider.IsDomainMatch("Partner").ShouldBeTrue();
+        provider.IsDomainMatch("core").ShouldBeTrue();
+        provider.IsDomainMatch("sales").ShouldBeFalse();
+        Should.NotThrow(() => provider.Check("partner"));
+        Should.Throw<NotFoundDomainException>(() => provider.Check("sales"));
+    }
+
+    [Fact]
+    public void UseDomain_ScopesDomainAndRestoresOnDispose()
+    {
+        var provider = new RuntimeInfoProvider("1.0.0", domains: "partner", domain: "core");
+
+        using (provider.UseDomain("PARTNER"))
+        {
+            provider.Domain.ShouldBe("partner"); // hosted spelling, not the request's
+        }
+
+        provider.Domain.ShouldBe("core");
+    }
+
+    [Fact]
+    public void UseDomain_ForeignDomain_Throws()
+    {
+        var provider = new RuntimeInfoProvider("1.0.0", domains: "partner", domain: "core");
+
+        Should.Throw<NotFoundDomainException>(() => provider.UseDomain("sales"));
+    }
+
+    [Fact]
+    public void Domain_IgnoresAScopeOpenedForAForeignDomain()
+    {
+        var provider = new RuntimeInfoProvider("1.0.0", domains: "partner", domain: "core");
+
+        using (DomainScope.Begin("sales"))
+        {
+            provider.Domain.ShouldBe("core");
+        }
+    }
+
+    [Fact]
+    public async Task DomainScope_FlowsAcrossAwaitAndDoesNotLeakToTheCaller()
+    {
+        var provider = new RuntimeInfoProvider("1.0.0", domains: "partner", domain: "core");
+
+        async Task<string> ReadInsideScopeAsync()
+        {
+            using (DomainScope.Begin("partner"))
+            {
+                await Task.Yield();
+                return provider.Domain;
+            }
+        }
+
+        (await ReadInsideScopeAsync()).ShouldBe("partner");
+        provider.Domain.ShouldBe("core");
     }
 }

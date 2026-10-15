@@ -1,6 +1,7 @@
 using BBT.Aether.AspNetCore.MultiSchema;
 using BBT.Aether.Uow.EntityFrameworkCore;
 using BBT.Workflow.Data;
+using BBT.Workflow.HttpApi.Shared.Events;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Configuration;
@@ -22,13 +23,7 @@ public static class OutboxWorkerServiceCollectionExtensions
             .AddDomainModule()
             .AddAspNetCoreModules(configuration)
             .AddDaprClients()
-            .AddAetherEventBus(options =>
-            {
-                options.DefaultSource =
-                    $"urn:vnext:{configuration.GetValue<string?>("ApplicationName")?.ToLowerInvariant()}";
-                options.PrefixEnvironmentToTopic = true;
-                options.PubSubName = configuration["DAPR_PUBSUB_STORE_NAME"]!;
-            })
+            .AddAetherEventBus(options => WorkflowEventBusConfiguration.Apply(options, configuration))
             .AddOutboxMessagingContext(configuration)
             .AddTelemetry(configuration)
             .AddExceptionHandling()
@@ -76,6 +71,12 @@ public static class OutboxWorkerServiceCollectionExtensions
         services.AddAetherOutbox<MessagingDbContext>(
             options => configuration.GetSection("Aether:Outbox").Bind(options),
             withHostedService: true);
+
+        // Multi-domain hosting with dedicated databases (ConnectionStrings:Domains:<domain>): every
+        // database's sys_queues has its own outbox rows. One database → unchanged.
+        services.AddDomainDatabases(configuration);
+        services.RouteToDomainDatabase<MessagingDbContext>();
+        services.FanOutOutboxPerDomainDatabase();
 
         return services;
     }

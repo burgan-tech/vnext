@@ -375,7 +375,8 @@ public sealed class SubProcessTaskExecutor : TriggerTaskExecutorBase<SubProcessT
                     ExtraProperties = BuildExtraProperties(context, task)
                 },
                 Headers = headers,
-                StrictIdempotency = true // Service-to-service call: return 409 if active instance exists
+                StrictIdempotency = true, // Service-to-service call: return 409 if active instance exists
+                TrustedPayload = true // task body is authored by the flow, not a client
             };
     }
 

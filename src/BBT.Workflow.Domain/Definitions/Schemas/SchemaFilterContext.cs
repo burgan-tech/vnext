@@ -6,7 +6,11 @@ namespace BBT.Workflow.Definitions.Schemas;
 /// </summary>
 public sealed class SchemaFilterContext
 {
-    private static readonly Dictionary<string, string> InternalToSchemaOperatorMap = new(StringComparer.OrdinalIgnoreCase)
+    /// <summary>
+    /// Query operator token → the name a schema declares in <c>x-filterOperators</c>. Shared with the publish-time
+    /// check (<see cref="FilterOperatorDefinition"/>), which refuses a declaration spelled as a query token.
+    /// </summary>
+    internal static readonly Dictionary<string, string> InternalToSchemaOperatorMap = new(StringComparer.OrdinalIgnoreCase)
     {
         ["eq"] = "eq",
         ["ne"] = "neq",

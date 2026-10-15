@@ -241,16 +241,20 @@ public sealed class TransitionRunner(
 
         // ForwardToSubflowJob: order 10 skips to Finalize on failure, so the parent changed no
         // state. Undo exactly what the accept flipped, i.e. only when the accept marked the whole
-        // chain Busy down to the leaf — a sync-origin forward never sets that flag (see
-        // TransitionPipeline's IsSubflowForward branch), and there is no other Busy of this run's
-        // own to release on this path.
+        // chain Busy down to the leaf. This runtime's accepts never do that any more (the parent
+        // proxies to the leaf), so for every new request the flag is false and this is a no-op;
+        // it stays for jobs an OLDER runtime's accept enqueued with the chain reserve (in flight
+        // across an upgrade, or relayed by an older parent), until the subflow-chain-reserve-claim
+        // deprecation is removed. A sync-origin forward never sets the flag, and there is no other
+        // Busy of this run's own to release on this path.
         await ReleaseChainReserveAsync(
             snapshot, coreOutput.ExecutionContext.SubflowChainReserved, error, cancellationToken);
     }
 
     /// <summary>
     /// Compensates an accept-time subflow chain reserve after post-commit work failed without a
-    /// fault request.
+    /// fault request. Only an older runtime's accept still takes that reserve (legacy claim, kept
+    /// for in-flight jobs and older parents).
     /// <para>
     /// Deliberately NOT run on the fault path: <c>Instance.Fault</c> already cascades downward,
     /// raising <c>ChildSubflowFaultRequestedEvent</c> for every active SubFlow correlation, so the

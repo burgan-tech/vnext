@@ -275,4 +275,57 @@ public class JobNameTests
         Assert.Throws<ArgumentException>(
             () => JobName.ForAsyncTransition(Instance, sourceState, "go", Invocation));
     }
+
+    // ---- multi-domain hosting: the domain travels in the name (vnext.job.v2) ----
+
+    [Fact]
+    public void WithoutDomain_TheNameIsExactlyTheV1Name()
+    {
+        Assert.Equal(
+            JobName.ForAsyncTransition(Instance, "draft", "submit", Invocation).Value,
+            JobName.ForAsyncTransition(Instance, "draft", "submit", Invocation, domain: null).Value);
+        Assert.StartsWith("vnext.job.v1.", JobName.ForTimeout(Instance).Value);
+        Assert.Null(JobName.Parse(JobName.ForTimeout(Instance).Value).Domain);
+    }
+
+    [Fact]
+    public void WithDomain_WritesV2_AndRoundTripsEveryField()
+    {
+        var name = JobName.ForAsyncTransition(Instance, "draft", "submit", Invocation, domain: "mobile");
+
+        Assert.Equal($"vnext.job.v2.mobile.tx.{InstanceN}.draft.submit.{InvocationSegment}", name.Value);
+
+        var parsed = JobName.Parse(name.Value);
+        Assert.Equal("mobile", parsed.Domain);
+        Assert.Equal(JobType.AsyncTransition, parsed.Type);
+        Assert.Equal(Instance, parsed.InstanceId);
+        Assert.Equal("draft", parsed.SourceState);
+        Assert.Equal("submit", parsed.TransitionKey);
+        Assert.Equal(InvocationSegment, parsed.Invocation);
+    }
+
+    [Fact]
+    public void WithDomain_EveryJobKindRoundTrips()
+    {
+        Assert.Equal("mobile", JobName.Parse(JobName.ForTimeout(Instance, "mobile").Value).Domain);
+        Assert.Equal("mobile", JobName.Parse(JobName.ForLongPollAck(Instance, "mobile").Value).Domain);
+        Assert.Equal("mobile", JobName.Parse(JobName.ForStateNotify(Instance, "review", "mobile").Value).Domain);
+        Assert.Equal("mobile", JobName.Parse(
+            JobName.ForScheduledTransition(Instance, "review", "expire", Invocation, "mobile").Value).Domain);
+    }
+
+    [Theory]
+    [InlineData("vnext.job.v2..tx.550e8400e29b41d4a716446655440000")]
+    [InlineData("vnext.job.v2.mo$bile.tx.550e8400e29b41d4a716446655440000")]
+    [InlineData("vnext.job.v3.mobile.tx.550e8400e29b41d4a716446655440000")]
+    public void MalformedV2Names_DoNotParse(string value)
+    {
+        Assert.False(JobName.TryParse(value, out _));
+    }
+
+    [Fact]
+    public void UnsafeDomain_IsRejectedByTheBuilder()
+    {
+        Assert.Throws<ArgumentException>(() => JobName.ForTimeout(Instance, "mo.bile"));
+    }
 }

@@ -67,6 +67,9 @@ public static class RemoteServiceExtensions
         // Same shape again: the correlation hop gateway holds its own IRemoteTransport shell.
         services.AddRemoteService<Gateway.RemoteInstanceCorrelationGateway, Gateway.RemoteInstanceCorrelationGateway>(
             options, RemoteServiceProfile.Read);
+        // x-storage file reads for ScriptBase.GetFileAsync across domains: same shape, its own shell.
+        services.AddRemoteService<Gateway.RemoteInstanceFileGateway, Gateway.RemoteInstanceFileGateway>(
+            options, RemoteServiceProfile.Read);
 
         return services;
     }

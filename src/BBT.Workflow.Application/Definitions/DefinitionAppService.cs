@@ -34,6 +34,9 @@ public sealed class DefinitionAppService(
     public async Task<Result> PublishAsync(PublishInput input, CancellationToken cancellationToken = default)
     {
         runtimeInfoProvider.Check(input.Domain);
+        // The publish route carries no {domain}: serve the call as the component's domain, so a
+        // co-hosted domain's definitions land in its own (prefixed) schemas.
+        using var domainScope = runtimeInfoProvider.UseDomain(input.Domain);
         using (currentSchema.Change(input.Flow))
         {
             if (input.Flow == RuntimeSysSchemaInfo.Flows)

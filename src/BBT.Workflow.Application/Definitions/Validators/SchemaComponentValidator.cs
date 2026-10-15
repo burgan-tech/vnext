@@ -9,7 +9,10 @@ namespace BBT.Workflow.Definitions.Validators;
 /// <summary>
 /// Validates workflow schema components (sys-schemas).
 /// Ensures schema definitions are properly structured and contain required fields, and that the
-/// field-exposure vocabulary (<c>x-indexed</c>, <c>x-masking</c>, <c>x-encryption</c>) is one the runtime can honour.
+/// field-exposure vocabulary (<c>x-indexed</c>, <c>x-masking</c>, <c>x-encryption</c>), the query vocabulary
+/// (<c>x-filterOperators</c>) and <c>x-computed</c> are ones the runtime can honour.
+/// <para><c>attributes.type</c> is the schema's role (<see cref="SchemaRoleTypes"/>) and is optional. A value outside
+/// the roles is accepted with a warning for now and will be refused in a later release.</para>
 /// </summary>
 /// <param name="maskingEngine">
 /// Optional: hosts without the Infrastructure module (none today publish components) still validate the
@@ -40,10 +43,14 @@ public sealed class SchemaComponentValidator(
                 return result;
             }
 
-            // Validate required type field
-            if (string.IsNullOrWhiteSpace(schema.Type))
+            // attributes.type is an optional role; a legacy free-text value still publishes, with a warning.
+            if (!SchemaRoleTypes.IsValid(schema.Type))
             {
-                result.AddError("Schema type is required.", $"{nameof(SchemaDefinition)}.{nameof(SchemaDefinition.Type)}");
+                result.Warnings.Add(new System.ComponentModel.DataAnnotations.ValidationResult(
+                    $"attributes.type '{schema.Type}' is not a schema role ({string.Join(", ", SchemaRoleTypes.All)}) and will be " +
+                    "refused in a future release; use 'master' for a flow's data schema, 'transition' / 'function' for a request " +
+                    "body, 'component' for an embedded view's dataSchema, or omit it.",
+                    [$"{nameof(SchemaDefinition)}.{nameof(SchemaDefinition.Type)}"]));
             }
 
             // Validate schema definition exists
@@ -63,6 +70,12 @@ public sealed class SchemaComponentValidator(
 
                 ValidateRoleGrants(schema.Schema, result);
                 ValidateMasking(schema, result);
+                foreach (var message in FileStorageSchemaParser.Validate(schema.Schema))
+                    result.AddError(message, $"schema.{FileStorageSchemaParser.Keyword}");
+                foreach (var message in FilterOperatorDefinition.Validate(schema.Schema))
+                    result.AddError(message, $"schema.{FilterOperatorDefinition.Keyword}");
+                foreach (var message in ComputedFieldDefinition.Validate(schema.Schema, schema.Type))
+                    result.AddError(message, $"schema.{ComputedFieldParser.Keyword}");
             }
 
             return result;

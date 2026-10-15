@@ -1,5 +1,3 @@
-using BBT.Workflow.Execution.Invocation;
-
 namespace Microsoft.AspNetCore.Builder;
 
 /// <summary>
@@ -28,13 +26,6 @@ public static class ExecutionApiApplicationBuilderExtensions
         app.UseAppResponseCompression();
         app.UseCloudEvents();
         app.MapSubscribeHandler();
-        // gRPC surface of the task-invoke endpoint (see TaskInvokerGrpcService). NOT served on
-        // the same Kestrel endpoint as the HTTP controller -- Kestrel binds two separate
-        // cleartext endpoints, one HTTP/1.1-only and one HTTP/2-only h2c, because without TLS
-        // there's no ALPN to multiplex both on one port. See the Kestrel endpoint-configuration
-        // comment in Program.cs for the full explanation of why, and Kestrel:GrpcPort for which
-        // port this service actually listens on.
-        app.MapGrpcService<TaskInvokerGrpcService>();
         app.UseHttpsRedirection();
         app.UseCorrelationId();
         app.UseParentInstanceIdEnrichment();

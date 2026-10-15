@@ -504,6 +504,70 @@ public class TransitionAdmissionServiceTests
     }
 
     [Fact]
+    public async Task AcceptAsync_SubflowForward_ShouldNotReserveTheChain()
+    {
+        // The parent proxies to the leaf now; an entry that still reaches the async accept with a
+        // forwardable key enqueues a parent job with NO flip and NO chain reserve — its forward runs
+        // the leaf's own admission. (Was: MarkBusyWithPropagation + AcceptFlip.ChainReserved.)
+        SetupAcquiredLock();
+        var context = CreateContext();
+        context.Instance.Busy();
+        AddActiveSubflowCorrelation(context.Instance);
+
+        var seen = AcceptFlip.Reserved;
+        var result = await CreateService().AcceptAsync(
+            context, (flip, _) => { seen = flip; return Task.FromResult(Result.Ok()); });
+
+        result.IsSuccess.ShouldBeTrue();
+        seen.ShouldBe(AcceptFlip.None);
+        await _busyManager.DidNotReceive().MarkBusyWithPropagationAsync(
+            Arg.Any<Guid>(), Arg.Any<CancellationToken>());
+        await _busyManager.DidNotReceive().TryMarkBusyWithPropagationAsync(
+            Arg.Any<Guid>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task AcceptAsync_SubflowForward_WhenCallbackFails_ShouldCompensateNothing()
+    {
+        // No flip was taken, so nothing may be released — neither the parent (Busy for its
+        // subflow's lifetime) nor the chain below it.
+        SetupAcquiredLock();
+        var context = CreateContext();
+        context.Instance.Busy();
+        AddActiveSubflowCorrelation(context.Instance);
+
+        var result = await CreateService().AcceptAsync(
+            context, (_, _) => Task.FromResult(Result.Fail(Error.Validation("x", "boom"))));
+
+        result.IsSuccess.ShouldBeFalse();
+        await _busyManager.DidNotReceive().ReleaseWithPropagationAsync(
+            Arg.Any<Guid>(), Arg.Any<CancellationToken>());
+        await _busyManager.DidNotReceive().TryReleaseAsync(
+            Arg.Any<Guid>(), Arg.Any<CancellationToken>(), Arg.Any<InstanceStatus?>());
+    }
+
+    [Fact]
+    public async Task AcceptAsync_RelayCarryingAnOlderParentsChainClaim_IsAnOwnerReentry()
+    {
+        // Receiving side kept (deprecation subflow-chain-reserve-claim): a relay an older parent sent
+        // with ChainReserved enters pre-reserved, so admission neither 409s on the Busy that parent's
+        // reserve pre-set nor flips again.
+        SetupAcquiredLock();
+        var context = CreateContext();
+        context.Instance.Busy();
+        context.IsPreReserved = true;
+        context.SubflowChainReserved = true;
+
+        var seen = AcceptFlip.Reserved;
+        var result = await CreateService().AcceptAsync(
+            context, (flip, _) => { seen = flip; return Task.FromResult(Result.Ok()); });
+
+        result.IsSuccess.ShouldBeTrue();
+        seen.ShouldBe(AcceptFlip.None);
+        CreateService().Classify(context).ShouldBe(AdmissionKind.OwnerReentry);
+    }
+
+    [Fact]
     public async Task AcceptAsync_OwnerReentry_ShouldNotFlipAgain()
     {
         SetupAcquiredLock();

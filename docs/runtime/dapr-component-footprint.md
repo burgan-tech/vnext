@@ -96,8 +96,11 @@ Two apparent mismatches are correct and must be left alone:
   `vnext-pubsub` is consumed through `vnext-pubsub-outbox`. The per-worker names exist to let the
   workers carry their own settings. The Helm chart collapses them to one `-pubsub` component; both
   shapes are valid.
-- **The inbox and outbox share `consumerID: "vnext-workers"`.** Redis Streams consumer groups are
-  per-stream, and the two workers subscribe to disjoint topics.
+- **The inbox and outbox use `consumerID: "{appID}"`**, one Redis Streams consumer group per worker
+  app-id, as the Helm chart does by default. A fixed shared value (`vnext-workers`, before multi-domain
+  hosting) made two domains' inbox workers on one Redis competing consumers of the same group: an event
+  could land on the wrong domain's worker and be dropped by its domain guard. See
+  [multi-domain hosting](multi-domain-hosting.md).
 
 ## What changed in the runtime repo (0.0.90)
 

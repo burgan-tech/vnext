@@ -22,11 +22,13 @@ public static class DaprPubSubStatus
 }
 
 /// <summary>
-/// Response body of the pub/sub event delivery endpoint
-/// (<c>POST /{domain}/workflows/{workflow}/instances/events</c>).
+/// Response body of the Dapr-driven instance endpoints: event delivery
+/// (<c>POST /{domain}/workflows/{workflow}/instances/events</c>) and scheduled start
+/// (<c>POST /{domain}/workflows/{workflow}/instances/schedule</c>).
 /// </summary>
 /// <remarks>
-/// This endpoint is driven by Dapr pub/sub subscriptions, so its body is a protocol contract before
+/// These endpoints are driven by Dapr (a pub/sub subscription, or a cron input
+/// binding routed at the schedule endpoint), so the body is a protocol contract before
 /// it is a payload: the top-level <c>status</c> field is consumed by Dapr itself. Instance DTOs
 /// (<c>StartInstanceOutput</c> / <c>TransitionOutput</c>) must never be returned here — their
 /// <c>status</c> property serializes to an <c>InstanceStatus</c> code (<c>"A"</c>, <c>"B"</c>, …),

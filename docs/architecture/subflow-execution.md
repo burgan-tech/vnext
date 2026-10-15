@@ -88,17 +88,25 @@ in admission.
 
 ## Forwarding to an Active Child
 
-When a parent receives a transition while it has an active SubFlow correlation,
-`ForwardToActiveSubflowStep` queues `ForwardToSubflowJob`. After the parent stage commits,
-`ForwardToSubflowJobHandler` creates a child `TransitionInput` with `sync=true` and invokes
-`IInstanceCommandGateway.ForwardTransitionAsync`.
+When a parent receives a transition while it has an active `S` SubFlow correlation, the **transition
+proxy** (`SubflowProxyService`, called from `InstanceCommandAppService.TransitionAsync` before the parent
+pipeline) forwards a forwardable key straight to the child via
+`IInstanceCommandGateway.ForwardTransitionAsync`, in the mode the parent resolved (`executionType`, else
+the caller's `sync`). The parent takes no lock, flips no Busy and enqueues no job; it answers with its
+own id and the child's status, and the leaf admits, validates (and swaps x-storage files) and runs the
+transition itself. An async request pre-stamps the parent's `EffectiveStatus` `Busy` so polling never sees
+a stale `Active`. Full contract, limits and the old-parent compatibility path:
+[SubFlow Transition Proxy](subflow-transition-proxy.md).
 
-For cross-domain forwarding, the chain-reserve claim travels in the internal request body. It is
-never accepted from a public header. Async acceptance may reserve the active chain before returning
-202 so polling sees the leaf as Busy; the forwarded child call then claims that reservation.
+`ForwardToActiveSubflowStep` (order 10) and `ForwardToSubflowJobHandler` remain for the rare request the
+proxy declines but the pipeline still forwards (a snapshot/aggregate race) and for a parent job an older
+runtime's accept enqueued. They create a child `TransitionInput` with `sync=true`. Cross-domain, an
+older parent's chain-reserve claim still travels only in the internal request body
+(`internal/subflow-forward`), never a public header; see
+[the LEGACY reserve page](subflow-chain-reserve.md).
 
-A nested chain forwards one level at a time: every level re-runs its own pipeline up to order 10
-and awaits the level below. On the way back up, an **intermediate** level skips its post-commit
+A nested chain forwards one level at a time: every level proxies (or, on the legacy path, re-runs its
+own pipeline up to order 10) and awaits the level below. On the way back up, an **intermediate** level skips its post-commit
 settlement (`TransitionRunner.IsSettleFreeForwardRelay`) when three things hold: its caller is an
 identity-only relay (`WorkflowExecutionContext.IdentityOnlyResponse`, set from
 `SuppressResponseEnrichment`), its only post-commit job was the forward, and the child's own
@@ -167,12 +175,13 @@ read. Do not replace these reads with the old parent object: it may still say Bu
 - Terminal settlement uses a durable settled marker/guard to absorb relay/Inbox duplicates.
 - Resume failure reopens the correlation and republishes/rearms terminal delivery subject to its
   retry cap.
-- Chain reservation is compensated if forwarding cannot hand ownership to the child.
+- A proxy pre-stamp of the parent `EffectiveStatus` is reverted (compare-and-set) if the forward fails.
+  An older accept's chain reservation is still compensated if its forward cannot hand ownership to the child.
 - Cross-domain calls must retain parent/root identity, correlation, lane and activation fields.
 
 ## Change Safety
 
-- Keep start, forward and descended retry calls synchronous unless this runtime contract is changed
+- Keep start, legacy-path forward and descended retry calls synchronous unless this runtime contract is changed
   together with polling, ownership and terminal propagation tests.
 - Do not move child work back under the parent transition transaction or status lock.
 - Do not carry an EF-tracked parent across the post-commit boundary.

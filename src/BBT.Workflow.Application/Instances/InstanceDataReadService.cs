@@ -7,13 +7,15 @@ namespace BBT.Workflow.Instances;
 /// <summary>
 /// Scoped implementation of <see cref="IInstanceDataReadService"/>: the field exposure pass over the row as stored, with
 /// the stored form as the fallback. A row carrying <c>encrypt</c> tokens is opened here, on demand, so an exempt caller can
-/// be served the plaintext — the row itself is never decrypted in place.
+/// be served the plaintext — the row itself is never decrypted in place. The master schema's runtime <c>x-computed</c>
+/// fields are added last, over the exposed view (<see cref="IComputedFieldReadService"/>).
 /// </summary>
 public sealed class InstanceDataReadService(
     ISchemaFieldFilterService fieldFilter,
     IInstanceSecretPreloader? secretPreloader = null,
     IInstanceDataProtector? protector = null,
-    ICurrentSchema? currentSchema = null) : IInstanceDataReadService
+    ICurrentSchema? currentSchema = null,
+    IComputedFieldReadService? computedFields = null) : IInstanceDataReadService
 {
     /// <inheritdoc />
     public async Task<JsonElement?> ExposeAsync(
@@ -29,7 +31,7 @@ public sealed class InstanceDataReadService(
         if (secretPreloader is not null && EncryptedValueFormat.MayContainToken(row.Data.Json))
             await secretPreloader.PreloadAsync([instance.Id], cancellationToken);
 
-        return await ExposeRowAsync(fieldFilter, protector, currentSchema, workflow, instance, row, requestContext, cancellationToken);
+        return await ExposeRowAsync(fieldFilter, protector, currentSchema, computedFields, workflow, instance, row, requestContext, cancellationToken);
     }
 
     /// <inheritdoc />
@@ -38,6 +40,7 @@ public sealed class InstanceDataReadService(
         secretPreloader,
         protector,
         currentSchema,
+        computedFields,
         page);
 
     private static readonly IReadOnlyDictionary<string, string> NoTokens = new Dictionary<string, string>(0);
@@ -46,6 +49,7 @@ public sealed class InstanceDataReadService(
         ISchemaFieldFilterService filter,
         IInstanceDataProtector? protector,
         ICurrentSchema? currentSchema,
+        IComputedFieldReadService? computedFields,
         Definitions.Workflow? workflow,
         Instance instance,
         InstanceData row,
@@ -63,8 +67,13 @@ public sealed class InstanceDataReadService(
             tokens = view.Tokens;
         }
 
-        var exposed = await filter.ApplyAsync(workflow, plain.JsonElement, instance, requestContext, cancellationToken, tokens);
-        return exposed ?? row.Data.JsonElement;
+        var exposed = await filter.ApplyAsync(workflow, plain.JsonElement, instance, requestContext, cancellationToken, tokens)
+                      ?? row.Data.JsonElement;
+
+        // Computed from the exposed view, never from the plaintext: a computed value shows only what this caller sees.
+        return computedFields is null
+            ? exposed
+            : await computedFields.ApplyAsync(workflow, exposed, cancellationToken);
     }
 
     private sealed class PageReader(
@@ -72,6 +81,7 @@ public sealed class InstanceDataReadService(
         IInstanceSecretPreloader? secretPreloader,
         IInstanceDataProtector? protector,
         ICurrentSchema? currentSchema,
+        IComputedFieldReadService? computedFields,
         IReadOnlyCollection<Instance> page) : IInstanceDataPageReader
     {
         private bool _preloaded;
@@ -100,7 +110,7 @@ public sealed class InstanceDataReadService(
                 }
             }
 
-            return await ExposeRowAsync(filter, protector, currentSchema, workflow, instance, row, requestContext, cancellationToken);
+            return await ExposeRowAsync(filter, protector, currentSchema, computedFields, workflow, instance, row, requestContext, cancellationToken);
         }
     }
 }

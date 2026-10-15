@@ -111,7 +111,7 @@ unchanged: `TaskTraceContext.RequestId` on the orchestrator paths, the `x_reques
 when vNext has none (a timer or event hop without a captured request id). APIs such as OHVPS/BKM
 require the header and may require a UUID that is unique per call — vNext's value is per client
 request and, without a client-sent id, Aether's fallback is `HttpContext.TraceIdentifier`, so set
-it in the mapping (`Guid.NewGuid()`) for those APIs. The header was reserved from 0.0.80 to 0.0.97,
+it in the mapping (`Guid.NewGuid()`) for those APIs. The header was reserved from 0.0.80 to 0.0.98,
 which dropped the mapping's value and sent none (`task-binding-x-request-id-dropped`).
 StartTrigger and SubProcess (cross-domain, Execution host) apply **only** this rule
 (`InvokerHelpers.ApplyRequestId`): their calls never carried the workflow-context or identity

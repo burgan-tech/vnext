@@ -19,6 +19,7 @@ using BBT.Workflow.Tasks.Invocation.Local;
 using BBT.Workflow.Tasks.Persistence;
 using BBT.Workflow.Tasks.Persistence.Strategies;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using IConditionEvaluator = BBT.Workflow.Tasks.Evaluation.IConditionEvaluator;
 using ITimerEvaluator = BBT.Workflow.Tasks.Evaluation.ITimerEvaluator;
@@ -94,13 +95,6 @@ public static class TaskServiceCollectionExtensions
             .ValidateDataAnnotations()
             .ValidateOnStart();
         services.TryAddSingleton<FanOutConcurrencyLimiter>();
-
-        // Process-lifetime gRPC channel/client holder for RemoteInvokerService's "grpc"
-        // transport (ExecutionApi:Transport). Singleton so every request-scoped invoker shares
-        // ONE HTTP/2 connection to the Dapr sidecar instead of opening a new channel per scope;
-        // internally lazy (see GrpcTaskInvokerClientProvider) so the default "http" transport
-        // never constructs one.
-        services.TryAddSingleton<GrpcTaskInvokerClientProvider>();
 
         // Service-invocation client for RemoteInvokerService's HTTP transport: the SDK's non-obsolete
         // DaprClient.CreateInvokeHttpClient() (the InvokeMethod* family is [Obsolete] in 1.17). Singleton,
@@ -349,13 +343,16 @@ public static class TaskServiceCollectionExtensions
         // Evaluator is stateless - singleton for efficiency (caches MetadataReferences only).
         // Built via factory so it receives the (singleton) sandbox options.
         services.TryAddSingleton<IEvaluator>(sp =>
-            new CSharpEvaluator(sp.GetRequiredService<ScriptSandboxOptions>()));
+            new CSharpEvaluator(
+                sp.GetRequiredService<ScriptSandboxOptions>(),
+                sp.GetService<ILogger<CSharpEvaluator>>()));
 
         // Helper-set registry is a process-wide singleton (shared collectible ALCs, content-hash cache).
         services.TryAddSingleton<IScriptHelperRegistry>(sp =>
             new ScriptHelperRegistry(
                 sp.GetRequiredService<IEvaluator>(),
-                sp.GetRequiredService<ScriptSandboxOptions>()));
+                sp.GetRequiredService<ScriptSandboxOptions>(),
+                sp.GetService<ILogger<ScriptHelperRegistry>>()));
 
         // Secret bundle cache options — module-local, BindSection pattern like Sandbox/Helpers.
         services.TryAddSingleton(sp => BindSection<SecretCacheOptions>(sp, SecretCacheOptions.SectionName));

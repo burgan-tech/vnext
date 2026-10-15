@@ -34,5 +34,11 @@ public interface IScriptServices
     /// <c>null</c> means uncached direct Dapr access (legacy implementations and bare mocks).
     /// </summary>
     IScriptSecretCache? SecretCache => null;
+
+    /// <summary>
+    /// Reads x-storage files for <c>ScriptBase.GetFileAsync</c>.
+    /// <c>null</c> means file reads are unavailable (hosts without the gateway stack, legacy implementations, bare mocks).
+    /// </summary>
+    IScriptFileReader? FileReader => null;
 }
 

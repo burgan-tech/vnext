@@ -1768,6 +1768,23 @@ public static partial class WorkflowLogs
         string errorMessage);
 
     /// <summary>
+    /// Logs when the SubFlow proxy could not write the parent's EffectiveStatus (the async pre-stamp
+    /// to Busy, or its compare-and-set revert). The forward is not affected; the parent's projection
+    /// catches up at the child's next rest-point notification.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40109,
+        Level = LogLevel.Warning,
+        Message = "Proxy of transition {TransitionKey} to subflow instance {SubflowInstanceId}: writing parent instance {ParentInstanceId} EffectiveStatus={EffectiveStatus} failed")]
+    public static partial void SubFlowProxyEffectiveStatusWriteFailed(
+        this ILogger logger,
+        Exception exception,
+        string transitionKey,
+        Guid subflowInstanceId,
+        Guid parentInstanceId,
+        string effectiveStatus);
+
+    /// <summary>
     /// Logs when a SubFlow fault propagation event is received (upward: child faulted, notifying parent).
     /// </summary>
     [LoggerMessage(
@@ -4184,7 +4201,157 @@ public static partial class WorkflowLogs
         int instanceCount,
         string reason);
 
+    /// <summary>
+    /// Logs that a SubFlow child refused to start: its <c>history: none</c> parent requires a
+    /// <c>history: none</c> child (vnext#1006). The parent faults through post-commit coordination.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20475,
+        Level = LogLevel.Warning,
+        Message = "SubFlow child refused under a history-none parent. ParentInstanceId={ParentInstanceId}, ChildFlow={ChildFlow}, ChildVersion={ChildVersion}")]
+    public static partial void SubFlowChildHistoryNotSuppressed(
+        this ILogger logger,
+        string? parentInstanceId,
+        string childFlow,
+        string childVersion);
 
+    /// <summary>
+    /// Logs that retry was rejected because the instance's flow runs with <c>history: none</c> (vnext#1006).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20476,
+        Level = LogLevel.Information,
+        Message = "Retry rejected for history-none instance. InstanceId={InstanceId}, Flow={Flow}")]
+    public static partial void InstanceRetryRejectedHistoryNone(
+        this ILogger logger,
+        Guid instanceId,
+        string flow);
+
+    /// <summary>
+    /// Logs a data append that was merged into the in-memory buffer of a <c>history: none</c> instance
+    /// instead of being persisted (vnext#1006).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20477,
+        Level = LogLevel.Debug,
+        Message = "Instance data buffered in memory. InstanceId={InstanceId}, Version={Version}")]
+    public static partial void InstanceDataBuffered(
+        this ILogger logger,
+        Guid instanceId,
+        string version);
+
+    /// <summary>
+    /// Logs the single write of a <c>history: none</c> instance's buffered data (vnext#1006).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20478,
+        Level = LogLevel.Information,
+        Message = "Instance data buffer flushed. InstanceId={InstanceId}, Version={Version}, Persisted={Persisted}")]
+    public static partial void InstanceDataBufferFlushed(
+        this ILogger logger,
+        Guid instanceId,
+        string? version,
+        bool persisted);
+
+    /// <summary>
+    /// Logs that the persisted data head moved since the buffer was attached (for example a SubFlow
+    /// output mapping wrote in between); the buffered delta is re-based onto the persisted head.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20479,
+        Level = LogLevel.Warning,
+        Message = "Instance data buffer re-based onto a moved head. InstanceId={InstanceId}, BaseVersion={BaseVersion}, HeadVersion={HeadVersion}")]
+    public static partial void InstanceDataBufferDrift(
+        this ILogger logger,
+        Guid instanceId,
+        string? baseVersion,
+        string? headVersion);
+
+    /// <summary>
+    /// Logs a best-effort buffer flush that failed on the fault path. The fault still proceeds; the
+    /// buffered data is lost (accepted for <c>history: none</c>, vnext#1006).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20480,
+        Level = LogLevel.Error,
+        Message = "Instance data buffer flush failed on the fault path; the fault proceeds without it. InstanceId={InstanceId}")]
+    public static partial void InstanceDataBufferFlushFailed(
+        this ILogger logger,
+        Exception exception,
+        Guid instanceId);
+
+    /// <summary>
+    /// Logs that a <c>history: none</c> stage came to rest at a non-Finish state and is faulted (vnext#1006).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20481,
+        Level = LogLevel.Warning,
+        Message = "History-none stage rested at a non-Finish state; faulting. InstanceId={InstanceId}, Flow={Flow}, State={State}")]
+    public static partial void HistoryNoneStageFaulted(
+        this ILogger logger,
+        Guid instanceId,
+        string flow,
+        string state);
+    /// Logs a scheduler tick arriving at the schedule endpoint. One line per tick per replica, so an
+    /// N-replica deployment logs N of these for the same InstanceKey — that repetition is the signal
+    /// that cross-replica collapsing is doing its job.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20496,
+        Level = LogLevel.Information,
+        Message = "Scheduled start received. Domain={Domain}, Flow={Flow}, ScheduleId={ScheduleId}, InstanceKey={InstanceKey}")]
+    public static partial void ScheduledStartReceived(
+        this ILogger logger,
+        string domain,
+        string flow,
+        string? scheduleId,
+        string instanceKey);
+
+    /// <summary>
+    /// Logs a scheduled start whose tick header was absent or unparsable. The start still proceeds,
+    /// but the instance key falls back to this runtime's own clock, which only collapses calls landing
+    /// in the same second rather than calls belonging to the same tick.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20497,
+        Level = LogLevel.Warning,
+        Message = "Scheduled start has no usable tick header; key derived from the local clock. Domain={Domain}, Flow={Flow}, ScheduleId={ScheduleId}")]
+    public static partial void ScheduledStartTickHeaderMissing(
+        this ILogger logger,
+        string domain,
+        string flow,
+        string? scheduleId);
+
+    /// <summary>
+    /// Logs a scheduled start rejected because the component targets a runtime serving another domain.
+    /// A permanent misconfiguration: nothing retries a cron tick, so this recurs every tick until the
+    /// component is fixed.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20498,
+        Level = LogLevel.Error,
+        Message = "Scheduled start rejected: domain mismatch. Domain={Domain}, Flow={Flow}, Reason={Reason}")]
+    public static partial void ScheduledStartDomainMismatch(
+        this ILogger logger,
+        string domain,
+        string flow,
+        string reason);
+
+    /// <summary>
+    /// Logs a scheduled start that the command service refused (schema validation, policy, or a
+    /// workflow that does not exist). The tick is lost — Dapr's cron binding discards the response and
+    /// never redelivers.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20499,
+        Level = LogLevel.Error,
+        Message = "Scheduled start failed. Domain={Domain}, Flow={Flow}, InstanceKey={InstanceKey}, Reason={Reason}")]
+    public static partial void ScheduledStartFailed(
+        this ILogger logger,
+        string domain,
+        string flow,
+        string instanceKey,
+        string reason);
     /// <summary>
     /// Logs that no provider call was made because the caller carried neither <c>act_sub</c> nor
     /// <c>client_id</c>. Debug: anonymous and device tokens are ordinary traffic, and a Warning on
@@ -4551,6 +4718,81 @@ public static partial class WorkflowLogs
 
     #endregion
   
+    #region File Offload (x-storage, 2049x)
+
+    /// <summary>Logs that an inline file was written to its binding and replaced by a handle. Content is never logged.</summary>
+    [LoggerMessage(
+        EventId = 20490,
+        Level = LogLevel.Information,
+        Message = "File offloaded: instance {InstanceId}, path {Path}, component {Component}, file {File}, size {Size}")]
+    public static partial void FileOffloaded(
+        this ILogger logger,
+        Guid instanceId,
+        string path,
+        string component,
+        string file,
+        long size);
+
+    /// <summary>Logs that the file binding failed an operation.</summary>
+    [LoggerMessage(
+        EventId = 20491,
+        Level = LogLevel.Warning,
+        Message = "File store {Component} failed ({Operation}) for instance {InstanceId}")]
+    public static partial void FileStoreFailed(
+        this ILogger logger,
+        Exception ex,
+        string component,
+        string operation,
+        Guid instanceId);
+
+    /// <summary>Logs that a malformed or foreign file reference was rejected on write.</summary>
+    [LoggerMessage(
+        EventId = 20492,
+        Level = LogLevel.Warning,
+        Message = "File reference rejected: instance {InstanceId}, path {Path}, reason {Reason}")]
+    public static partial void FileReferenceRejected(
+        this ILogger logger,
+        Guid instanceId,
+        string path,
+        string reason);
+
+    /// <summary>Logs a file read through the file function.</summary>
+    [LoggerMessage(
+        EventId = 20493,
+        Level = LogLevel.Information,
+        Message = "File read: domain {Domain}, flow {Flow}, instance {InstanceId}, file {File}, authorized {Authorized}")]
+    public static partial void FileRead(
+        this ILogger logger,
+        string domain,
+        string flow,
+        string instanceId,
+        string file,
+        bool authorized);
+
+    /// <summary>Logs that the master schema could not be loaded, so the flow's x-storage paths are unknown.</summary>
+    [LoggerMessage(
+        EventId = 20494,
+        Level = LogLevel.Warning,
+        Message = "File storage fields unavailable: master schema {SchemaKey} of flow {Flow} could not be loaded ({Reason})")]
+    public static partial void FileSchemaUnavailable(
+        this ILogger logger,
+        string schemaKey,
+        string flow,
+        string reason);
+
+    /// <summary>Logs that a stored file handle failed validation (GUID file id, allowed component) and was not served.</summary>
+    [LoggerMessage(
+        EventId = 20495,
+        Level = LogLevel.Warning,
+        Message = "Stored file handle rejected on read: instance {InstanceId}, path {Path}, component {Component}")]
+    public static partial void FileHandleRejectedOnRead(
+        this ILogger logger,
+        Guid instanceId,
+        string path,
+        string component);
+
+    #endregion
+
     #region Server Configuration
 
     /// <summary>
@@ -4653,6 +4895,9 @@ public static partial class WorkflowLogs
     public static partial void ScriptEngineWarmupFailed(
         this ILogger logger,
         Exception exception);
+
+    // 60017–60018 are taken by BBT.Workflow.Modules.Scripting's ScriptPluginLogs (plugin load
+    // failures); that module cannot reference this file. The next id in this block is 60019.
 
     #endregion
 

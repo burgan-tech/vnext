@@ -78,6 +78,9 @@ writes `ai-docs/local-environments/<domain>.md` — which contains the base URL,
 the exact `VNEXT_BASE_URL=...` line for the tests. Read that record instead of recomputing ports. The
 full procedure, offsets and `wf` registration are in the
 [runbook](../../AGENTS.md#runbook-bring-up-domain-x-for-agents).
+A cross-domain scenario can run its domains co-hosted on one host set (`up <primary> --with <other>`,
+[multi-domain hosting](../runtime/multi-domain-hosting.md)); calls between them then stay in-process, so a
+test that must cross a Dapr hop needs separate domains (`--offset`).
 
 **Manual path (one terminal per host).** Infrastructure first (`./run-docker.sh`, default = infra
 only). Then, if the change carries a migration, DbMigrator **once** — its Dapr sidecar shuts itself

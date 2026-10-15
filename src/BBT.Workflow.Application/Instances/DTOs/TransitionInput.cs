@@ -54,6 +54,13 @@ public sealed class TransitionInput(
     /// forgeable and would defeat the Busy-as-mutex guarantee). Cross-domain forwards carry it in
     /// the body of the internal-only subflow-forward endpoint instead.
     /// </para>
+    /// <para>
+    /// LEGACY: this runtime's accepts no longer reserve the chain (a parent proxies the transition to
+    /// its active SubFlow, whose own admission runs). The claim is still ACCEPTED from older-version
+    /// parents and still sent for a job an older accept enqueued (vnext-meta deprecation
+    /// <c>subflow-chain-reserve-claim</c>). A relay carrying it is not proxied, and its body is still
+    /// run through the x-storage swap at the leaf (<c>WorkflowExecutionContext.ChainReservedRelay</c>).
+    /// </para>
     /// </summary>
     public bool ChainReserved { get; set; }
 
@@ -71,6 +78,13 @@ public sealed class TransitionInput(
     /// </para>
     /// </summary>
     public bool SuppressResponseEnrichment { get; set; }
+
+    /// <summary>
+    /// The payload was produced by the runtime (subflow input mapping, trigger task), not by a client.
+    /// <c>x-storage</c> references in it are kept as is instead of being checked against the instance's data.
+    /// SERVER-ONLY: the public endpoints build the input themselves and never set it.
+    /// </summary>
+    public bool TrustedPayload { get; set; }
 
     /// <summary>
     /// Creates a WorkflowExecutionContext from this TransitionInput for manual transition execution.
@@ -102,7 +116,8 @@ public sealed class TransitionInput(
                 Stage = Data?.Stage,
             },
             IsReentry = false, // Manual transitions are never re-entry
-            IsPreReserved = ChainReserved
+            IsPreReserved = ChainReserved,
+            TrustedPayload = TrustedPayload
         };
     }
 }

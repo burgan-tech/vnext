@@ -4,6 +4,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution;
+using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Execution.Pipeline.Steps;
 using BBT.Workflow.Execution.PostCommit;
 using BBT.Workflow.Instances;
@@ -43,10 +44,12 @@ public class ForwardToActiveSubflowStepTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_WhenAcceptReservedTheChain_ShouldStampTheClaimOnTheJob()
+    public async Task ExecuteAsync_WhenAnOlderAcceptReservedTheChain_ShouldStampTheClaimOnTheJob()
     {
-        // The accept flipped the leaf Busy so a long-polling client sees work in progress; without
-        // the claim the relay would then be rejected by that same leaf with a 409.
+        // Legacy, kept for the rollout (deprecation subflow-chain-reserve-claim): a parent job an
+        // OLDER runtime's accept enqueued with the chain reserve, or an older parent's relay passing
+        // through this level. That accept flipped the leaf Busy; without the claim the relay would be
+        // rejected by that same leaf with a 409 (and E31 would release the reserve, losing the request).
         var step = new ForwardToActiveSubflowStep();
         var context = CreateContextWithActiveSubFlow();
         context.SubflowChainReserved = true;
@@ -60,8 +63,9 @@ public class ForwardToActiveSubflowStepTests
     [Fact]
     public async Task ExecuteAsync_WhenAcceptDidNotReserveTheChain_ShouldNotStampTheClaim()
     {
-        // Claiming a reserve that was never taken would let the relay barge past a leaf that is
-        // Busy for its own reasons.
+        // Every request this runtime admits: its accept no longer reserves the chain, so the forward
+        // reaches the leaf as a normal request. Claiming a reserve that was never taken would let the
+        // relay barge past a leaf that is Busy for its own reasons.
         var step = new ForwardToActiveSubflowStep();
         var context = CreateContextWithActiveSubFlow();
 
@@ -69,6 +73,40 @@ public class ForwardToActiveSubflowStepTests
 
         var job = context.Directives.ConsumePostCommitJobs().Single().ShouldBeOfType<ForwardToSubflowJob>();
         job.ChainReserved.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ParentSharedTransitionAvailableInCurrentState_RunsOnTheParent()
+    {
+        var step = new ForwardToActiveSubflowStep();
+        var context = CreateContextWithActiveSubFlow(transitionKey: "escalate");
+        var shared = Transition.Create("escalate", null, "$self", TriggerType.Manual, "Patch");
+        shared.AddAvailableIn("waiting-child");
+        context.Workflow.AddSharedTransition(shared);
+
+        var result = await step.ExecuteAsync(context, CancellationToken.None);
+
+        result.Value!.SkipToOrder.ShouldBeNull();
+        context.Directives.PostCommitJobs.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ParentSharedTransitionNotAvailableInCurrentState_IsForwarded()
+    {
+        // Same predicate as the intake proxy: a shared transition the parent's current state does not
+        // offer is forwarded like any other key — it used to run on the parent with every policy
+        // validation bypassed (SubFlowBypassSpecification).
+        var step = new ForwardToActiveSubflowStep();
+        var context = CreateContextWithActiveSubFlow(transitionKey: "escalate");
+        var shared = Transition.Create("escalate", null, "$self", TriggerType.Manual, "Patch");
+        shared.AddAvailableIn("some-other-state");
+        context.Workflow.AddSharedTransition(shared);
+
+        var result = await step.ExecuteAsync(context, CancellationToken.None);
+
+        result.Value!.SkipToOrder.ShouldBe(LifecycleOrder.Finalize);
+        context.Directives.ConsumePostCommitJobs().Single().ShouldBeOfType<ForwardToSubflowJob>()
+            .TransitionKey.ShouldBe("escalate");
     }
 
     private static TransitionExecutionContext CreateContextWithActiveSubFlow(

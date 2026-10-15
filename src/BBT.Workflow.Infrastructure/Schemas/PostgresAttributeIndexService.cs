@@ -1,3 +1,4 @@
+using BBT.Workflow.Runtime;
 using System.Security.Cryptography;
 using System.Text;
 using BBT.Aether.DistributedCache;
@@ -17,10 +18,14 @@ namespace BBT.Workflow.Schemas;
 public sealed class PostgresAttributeIndexService(
     IConfiguration configuration, IOptionsMonitor<AttributeIndexOptions> options,
     ICurrentSchema currentSchema, ISchemaNameFormatter schemaNameFormatter,
-    IDistributedCacheService cache, IDistributedLockService locks, ILogger<PostgresAttributeIndexService> logger)
+    IDistributedCacheService cache, IDistributedLockService locks, ILogger<PostgresAttributeIndexService> logger,
+    IDomainDatabaseResolver? databaseResolver = null)
     : IAttributeIndexCatalog
 {
-    private string ConnectionString => configuration.GetConnectionString("Default")
+    // The current domain's database (a co-hosted domain may have its own); the cache key hashes it.
+    private string ConnectionString =>
+        (databaseResolver?.HasDedicatedDatabase() == true ? databaseResolver.ConnectionStringFor() : null)
+        ?? configuration.GetConnectionString("Default")
         ?? throw new InvalidOperationException("ConnectionStrings:Default is required.");
 
     private NpgsqlConnection CreateConnection() => new(ConnectionString);

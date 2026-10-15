@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using BBT.Aether.DependencyInjection;
 using BBT.Workflow.BackgroundJobs;
 using BBT.Workflow.Events;
+using BBT.Workflow.Schedule;
 using BBT.Workflow.Gateway;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Instances.Related;
@@ -115,6 +116,7 @@ public sealed class EventPayloadBindingTests
             transitionJobEnqueuer: Substitute.For<ITransitionJobEnqueuer>(),
             instanceCommandGateway: Substitute.For<IInstanceCommandGateway>(),
             eventAppService: Substitute.For<IEventAppService>(),
+            scheduleAppService: Substitute.For<IInstanceScheduleAppService>(),
             relatedInstanceQueryAppService: Substitute.For<IRelatedInstanceQueryAppService>(),
             humanTaskLeafResolver: Substitute.For<BBT.Workflow.Instances.HumanTask.IHumanTaskLeafResolver>(),
             instanceCorrelationResolver: Substitute.For<BBT.Workflow.Instances.Correlation.IInstanceCorrelationResolver>(),

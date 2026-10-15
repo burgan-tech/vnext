@@ -23,6 +23,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Filters;
 using BBT.Workflow.Authorization;
 using BBT.Workflow.Logging;
+using BBT.Workflow.Schedule;
 
 using BBT.Workflow.Instances.HumanTask;
 
@@ -47,6 +48,7 @@ public sealed class InstanceController(
     ITransitionJobEnqueuer transitionJobEnqueuer,
     IInstanceCommandGateway instanceCommandGateway,
     IEventAppService eventAppService,
+    IInstanceScheduleAppService scheduleAppService,
     IRelatedInstanceQueryAppService relatedInstanceQueryAppService,
     BBT.Workflow.Instances.HumanTask.IHumanTaskLeafResolver humanTaskLeafResolver,
     BBT.Workflow.Instances.Correlation.IInstanceCorrelationResolver instanceCorrelationResolver,
@@ -151,7 +153,9 @@ public sealed class InstanceController(
             StrictIdempotency = true,
             // This surface is called only by a parent runtime, which reads IsSuccess from the
             // response and nothing else — never project attributes here.
-            SuppressResponseEnrichment = true
+            SuppressResponseEnrichment = true,
+            // Cross-domain child start from a parent runtime (subflow input mapping): runtime-produced.
+            TrustedPayload = true
         };
         var httpContext = httpContextAccessor.HttpContext;
         if (httpContext is not null)
@@ -279,6 +283,11 @@ public sealed class InstanceController(
     /// <summary>
     /// Marks an instance Busy and recursively propagates to nested SubFlows.
     /// Internal endpoint for cross-domain SubFlow busy propagation.
+    /// <para>
+    /// LEGACY receiving side: this runtime's accepts no longer reserve a SubFlow chain, so only an
+    /// older-version parent still calls it. Kept until the <c>subflow-chain-reserve-claim</c>
+    /// deprecation (vnext-meta) is removed.
+    /// </para>
     /// </summary>
     /// <param name="domain">Target workflow domain.</param>
     /// <param name="workflow">Target workflow definition key.</param>
@@ -382,6 +391,8 @@ public sealed class InstanceController(
     /// Releases an accept-time SubFlow chain reserve, recursively propagating to nested SubFlows.
     /// Internal-only compensation endpoint — the mirror of <see cref="MarkBusyAsync"/>. Levels
     /// holding an open SubFlow correlation are Busy by design and are recursed past, not released.
+    /// LEGACY receiving side, like <see cref="MarkBusyAsync"/>: reached only by the compensation of a
+    /// chain reserve an older-version runtime took (<c>subflow-chain-reserve-claim</c> deprecation).
     /// </summary>
     /// <param name="domain">Target workflow domain.</param>
     /// <param name="workflow">Target workflow definition key.</param>
@@ -487,6 +498,43 @@ public sealed class InstanceController(
         // instance maps to 204 No Content — deliberately NOT 404, which would be indistinguishable
         // from a misrouted request or a wrong app id. Absence is data; a wrong route is a fault.
         return FromResult(result);
+    }
+
+    /// <summary>
+    /// Reads an x-storage file of one instance for <c>ScriptBase.GetFileAsync</c> in another domain.
+    /// Internal-to-internal, same posture as <c>internal/related-data</c>: no caller identity, no queryRoles and no
+    /// x-roles check (trusted network; service authentication is on the security roadmap — see
+    /// docs/contracts/api-and-service-contracts.md). Never expose this route publicly. The handle is still looked up in
+    /// the instance's latest data, so the binding and object key never come from the caller.
+    /// </summary>
+    /// <response code="200">The raw bytes; <c>ETag</c> and <c>X-File-Handle</c> (base64 UTF-8 JSON of the handle) set.</response>
+    /// <response code="404">The file is not referenced by the instance's latest data, or the instance does not exist.</response>
+    /// <response code="503">The file store is unavailable.</response>
+    [ApiExplorerSettings(IgnoreApi = true)]
+    [HttpGet("{domain}/workflows/{workflow}/instances/{instance}/internal/file")]
+    public async Task<IActionResult> GetInternalFileAsync(
+        [FromRoute] string domain,
+        [FromRoute] string workflow,
+        [FromRoute] string instance,
+        [FromQuery, Required] string file,
+        [FromServices] BBT.Workflow.Files.IInstanceFileAppService fileAppService,
+        CancellationToken cancellationToken = default)
+    {
+        var result = await fileAppService.ReadAsync(
+            new BBT.Workflow.Files.InstanceFileRequest(domain, workflow, instance, file, IfNoneMatch: null, Authorization: null),
+            cancellationToken);
+        if (!result.IsSuccess)
+            return FromResult(result);
+
+        var content = result.Value!;
+        Response.Headers[HeadersConstants.ETag] = $"\"{content.Handle.ETag}\"";
+        Response.Headers[HeadersConstants.XFileHandle] = Convert.ToBase64String(
+            System.Text.Encoding.UTF8.GetBytes(content.Handle.ToJsonNode().ToJsonString()));
+        // The stored mimeType is client-supplied; an unparseable one is served as opaque bytes.
+        var contentType = Microsoft.Net.Http.Headers.MediaTypeHeaderValue.TryParse(content.Handle.MimeType, out _)
+            ? content.Handle.MimeType!
+            : "application/octet-stream";
+        return File(content.Bytes!, contentType);
     }
 
     /// <summary>
@@ -880,6 +928,109 @@ public sealed class InstanceController(
     }
 
     /// <summary>
+    /// Starts a new workflow instance because a schedule fired. Driven by a Dapr cron input binding
+    /// whose <c>route</c> points here; any scheduler able to POST will do.
+    /// Internal integration endpoint — hidden from the public API surface.
+    /// </summary>
+    /// <param name="domain">Target domain.</param>
+    /// <param name="workflow">Target workflow key.</param>
+    /// <param name="scheduleId">
+    /// Identity of the schedule that fired. Keeps two components targeting the same workflow apart when
+    /// their schedules coincide; omit it and coincident ticks of the same workflow collapse into one
+    /// instance.
+    /// </param>
+    /// <param name="version">
+    /// Pins the workflow version to start. Omit to start the latest published version, which is what a
+    /// schedule normally wants; supply one to keep a schedule on a known version across a deployment
+    /// that publishes a newer one. An unknown value is rejected by the start path.
+    /// </param>
+    /// <param name="sync">When true, blocks until the pipeline reaches a rest point.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    /// <remarks>
+    /// <para>
+    /// Separate from <c>instances/events</c> by design. An event delivery carries a message a mapping
+    /// script must interpret; a tick carries only "the time arrived". Routing schedules through the
+    /// event path would force every schedulable workflow to ship an <c>event.mapping</c> script whose
+    /// only job is to invent a key.
+    /// </para>
+    /// <para>
+    /// <b>The body is ignored.</b> Dapr's cron binding sends none, and forwards none of the component's
+    /// own metadata, so seed data travels as query parameters instead: every parameter other than
+    /// <c>scheduleId</c>, <c>version</c> and <c>sync</c> becomes an instance attribute, always as a
+    /// string.
+    /// </para>
+    /// <para>
+    /// <b>Every replica fires.</b> The cron binding has no leader election, so an N-replica deployment
+    /// calls this N times per tick. The instance key is derived from the tick instant carried in the
+    /// <c>readtimeutc</c> header, so all N calls agree on it and the start path's key idempotency
+    /// collapses them into one instance — each caller is answered <c>SUCCESS</c>.
+    /// </para>
+    /// <para>
+    /// The response is an <see cref="EventDeliveryResponse"/>, not an instance envelope, for the same
+    /// reason the event endpoint returns one: a Dapr-shaped body is safe for any Dapr caller. Dapr's
+    /// cron binding discards the response entirely — a failed tick is never redelivered.
+    /// </para>
+    /// </remarks>
+    /// <response code="200">Dapr signal: <c>SUCCESS</c> when the instance was started (or already existed for this tick), <c>DROP</c> when the tick can never be processed.</response>
+    /// <response code="500">Transient failure.</response>
+    [ApiExplorerSettings(IgnoreApi = true)]
+    [HttpPost("{domain}/workflows/{workflow}/instances/schedule")]
+    [ProducesResponseType(typeof(EventDeliveryResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status500InternalServerError)]
+    public async Task<IActionResult> ScheduleStartAsync(
+        [FromRoute] string domain,
+        [FromRoute] string workflow,
+        [FromQuery] string? scheduleId = null,
+        [FromQuery] string? version = null,
+        [FromQuery] bool sync = false,
+        CancellationToken cancellationToken = default)
+    {
+        var input = new ScheduledStartInput
+        {
+            Domain = domain,
+            Workflow = workflow,
+            ScheduleId = scheduleId,
+            Version = version,
+            Sync = sync,
+            Attributes = ReadScheduleAttributes(HttpContext.Request.Query),
+            Headers = HttpContext.Request.Headers
+                .ToDictionary(h => h.Key.ToLower(), h => h.Value.FirstOrDefault())
+        };
+
+        var result = await scheduleAppService.StartAsync(input, cancellationToken);
+        return ScheduledStartResultMapper.ToActionResult(result, input, HttpContext, Logger);
+    }
+
+    /// <summary>
+    /// Query parameters that steer the endpoint itself and must not leak into the started instance's
+    /// data. Everything else in the query string is seed data.
+    /// </summary>
+    private static readonly HashSet<string> ReservedScheduleQueryKeys =
+        new(StringComparer.OrdinalIgnoreCase) { "scheduleId", "version", "sync" };
+
+    /// <summary>
+    /// Projects the query string onto the new instance's initial attributes, dropping the reserved
+    /// keys. A repeated parameter keeps its first value: a schedule's seed data is configuration, and
+    /// silently concatenating duplicates would hide a typo in the component YAML.
+    /// </summary>
+    internal static Dictionary<string, string> ReadScheduleAttributes(IQueryCollection query)
+    {
+        var attributes = new Dictionary<string, string>();
+
+        foreach (var parameter in query)
+        {
+            if (ReservedScheduleQueryKeys.Contains(parameter.Key))
+                continue;
+
+            var value = parameter.Value.FirstOrDefault();
+            if (value is not null)
+                attributes[parameter.Key] = value;
+        }
+
+        return attributes;
+    }
+
+    /// <summary>
     /// Reads the event request body as raw bytes and parses it into a <see cref="JsonElement"/>, ignoring the
     /// request <c>Content-Type</c>. An empty body yields a default (<see cref="JsonValueKind.Undefined"/>) element,
     /// preserving the previous <c>[FromBody]</c> optional-body behaviour. Malformed JSON surfaces as
@@ -1118,6 +1269,94 @@ public sealed class InstanceController(
         };
 
         var response = await queryAppService.GetInstanceIncidentsAsync(input, cancellationToken);
+        return response.ToActionResult(HttpContext);
+    }
+
+    /// <summary>
+    /// Pages the instance data history (one row per data write), newest first. Each row's data goes
+    /// through the same per-caller exposure as the <c>data</c> function (field filtering and secret
+    /// handling), never the raw stored form. Not gated here: <c>queryRoles</c> is answered by
+    /// <c>authorize?queryRoles=true</c>, which the gateway consults before forwarding. Hidden from the
+    /// public Swagger group: it serves local-development tooling (vNext Forge Instance Monitor).
+    /// </summary>
+    /// <param name="domain">Domain key</param>
+    /// <param name="workflow">Workflow key</param>
+    /// <param name="instance">Instance id or business key</param>
+    /// <param name="page">1-based page number (default 1)</param>
+    /// <param name="pageSize">Page size (default 20, max 100)</param>
+    /// <param name="includeData">When false, rows carry metadata only and no data (default true)</param>
+    /// <param name="cancellationToken">Cancellation token</param>
+    [ApiExplorerSettings(IgnoreApi = true)]
+    [HttpGet("{domain}/workflows/{workflow}/instances/{instance}/data/history")]
+    public async Task<IActionResult> GetInstanceDataHistoryAsync(
+        [FromRoute] string domain,
+        [FromRoute] string workflow,
+        [FromRoute] string instance,
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 20,
+        [FromQuery] bool includeData = true,
+        CancellationToken cancellationToken = default)
+    {
+        var requestContext = HttpContext.GetRequestBindingContext();
+
+        // Same provider-resolved roles as the state/data functions; the read has no role gate of its own.
+        var callerRoles = await callerRoleResolver.ResolveRolesAsync(requestContext.Headers, cancellationToken);
+        if (!callerRoles.IsSuccess)
+            return FromResult(BBT.Aether.Results.Result.Fail(callerRoles.Error));
+
+        var input = new GetInstanceDataHistoryInput
+        {
+            Domain = domain,
+            Workflow = workflow,
+            Instance = instance,
+            Page = page,
+            PageSize = pageSize,
+            IncludeData = includeData,
+            Headers = requestContext.Headers,
+            QueryParameters = requestContext.QueryParameters,
+            Roles = callerRoles.Value
+        };
+
+        var response = await queryAppService.GetInstanceDataHistoryAsync(input, cancellationToken);
+        return response.ToActionResult(HttpContext);
+    }
+
+    /// <summary>
+    /// Returns one row of the instance data history, with its data exposed per caller exactly like the
+    /// <c>data</c> function. Answers 404 when the row does not exist or belongs to another instance.
+    /// </summary>
+    /// <param name="domain">Domain key</param>
+    /// <param name="workflow">Workflow key</param>
+    /// <param name="instance">Instance id or business key</param>
+    /// <param name="rowId">Data history row id</param>
+    /// <param name="cancellationToken">Cancellation token</param>
+    [ApiExplorerSettings(IgnoreApi = true)]
+    [HttpGet("{domain}/workflows/{workflow}/instances/{instance}/data/history/{rowId:guid}")]
+    public async Task<IActionResult> GetInstanceDataHistoryRowAsync(
+        [FromRoute] string domain,
+        [FromRoute] string workflow,
+        [FromRoute] string instance,
+        [FromRoute] Guid rowId,
+        CancellationToken cancellationToken = default)
+    {
+        var requestContext = HttpContext.GetRequestBindingContext();
+
+        var callerRoles = await callerRoleResolver.ResolveRolesAsync(requestContext.Headers, cancellationToken);
+        if (!callerRoles.IsSuccess)
+            return FromResult(BBT.Aether.Results.Result.Fail(callerRoles.Error));
+
+        var input = new GetInstanceDataHistoryRowInput
+        {
+            Domain = domain,
+            Workflow = workflow,
+            Instance = instance,
+            RowId = rowId,
+            Headers = requestContext.Headers,
+            QueryParameters = requestContext.QueryParameters,
+            Roles = callerRoles.Value
+        };
+
+        var response = await queryAppService.GetInstanceDataHistoryRowAsync(input, cancellationToken);
         return response.ToActionResult(HttpContext);
     }
 

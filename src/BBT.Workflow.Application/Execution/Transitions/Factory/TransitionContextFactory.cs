@@ -145,6 +145,11 @@ public sealed class TransitionContextFactory(
     {
         var (traceId, spanId) = InitializeTelemetry();
 
+        // history: none (vnext#1006): data appends of this stage merge in memory and are written
+        // once at Finish, SubFlow handoff or fault. Idempotent, so an inline hop keeps the buffer.
+        if (data.Workflow.SuppressesHistory)
+            data.Instance.EnableDataBuffering();
+
         var executionContext = new TransitionExecutionContext
         {
             // Identity

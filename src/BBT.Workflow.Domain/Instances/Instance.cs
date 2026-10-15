@@ -456,6 +456,30 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
     private int _dataMemoCount = -1;
     private InstanceData? _latestRowMemo;
 
+    // history: none (vnext#1006): the in-memory data line, outside the EF navigation. Shared by
+    // reference with every snapshot of this aggregate.
+    private InstanceDataBuffer? _dataBuffer;
+
+    /// <summary>
+    /// The in-memory data buffer of a <c>history: none</c> instance; null when appends persist directly.
+    /// </summary>
+    public InstanceDataBuffer? DataBuffer => _dataBuffer;
+
+    /// <summary>True when data appends of this aggregate are buffered in memory (vnext#1006).</summary>
+    public bool IsDataBuffered => _dataBuffer is not null;
+
+    /// <summary>
+    /// Switches this aggregate to buffered data appends (vnext#1006); idempotent. The current latest
+    /// row becomes the buffer's base.
+    /// </summary>
+    public void EnableDataBuffering()
+    {
+        lock (_dataListLock)
+        {
+            _dataBuffer ??= new InstanceDataBuffer(LatestRowLocked());
+        }
+    }
+
     /// <summary>
     /// Latest data, exactly as stored — an <c>x-encryption.type: "encrypt"</c> field shows its token. A script opens its own
     /// instance's value with <see cref="DecryptAsync"/>.
@@ -545,6 +569,9 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
     /// </summary>
     private InstanceData? LatestRowLocked()
     {
+        if (_dataBuffer?.PendingRow is { } pending)
+            return pending;
+
         if (_dataMemoCount != _dataList.Count)
         {
             _latestRowMemo = _dataList.OrderByDescending(x => x, InstanceDataVersionComparer.Instance).FirstOrDefault();
@@ -632,6 +659,9 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
         // A copy of a script snapshot (parallel branch, refresh) keeps the ability to decrypt its own values.
         snapshot._decryptor = _decryptor;
         snapshot._decryptSchema = _decryptSchema;
+
+        // Shared by reference: every branch appends against one in-memory head (vnext#1006).
+        snapshot._dataBuffer = _dataBuffer;
 
         return snapshot;
     }
@@ -1438,6 +1468,10 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
     {
         lock (_dataListLock)
         {
+            // The buffered pending row is not persisted: it never enters the EF navigation.
+            if (_dataBuffer?.IsPendingRow(row.Id) == true)
+                return;
+
             if (_dataList.Any(d => d.Id == row.Id))
             {
                 if (row.IsLatest)
@@ -1483,6 +1517,11 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
     {
         lock (_dataListLock)
         {
+            // The buffered pending row is the highest version of a history: none instance.
+            if (_dataBuffer?.PendingRow is { } pending
+                && (IsLatestRequest(version) || string.Equals(pending.Version, version, StringComparison.Ordinal)))
+                return pending;
+
             if (_dataList.Count == 0)
                 return null;
 

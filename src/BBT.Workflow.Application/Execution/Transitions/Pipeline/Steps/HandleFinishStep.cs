@@ -16,7 +16,8 @@ namespace BBT.Workflow.Execution.Pipeline.Steps;
 public sealed class HandleFinishStep(
     IInstanceRepository instanceRepository,
     ILogger<HandleFinishStep> logger,
-    ISubItemEventDataResolver? subItemDataResolver = null) : ITransitionStep
+    ISubItemEventDataResolver? subItemDataResolver = null,
+    IInstanceDataWriteService? instanceDataWriteService = null) : ITransitionStep
 {
     /// <inheritdoc />
     public int Order => LifecycleOrder.Finish;
@@ -36,6 +37,24 @@ public sealed class HandleFinishStep(
         var subItemData = context.IsCancelTransition()
             ? null
             : await subItemDataResolver.ResolveOrStoredAsync(context.Instance, cancellationToken);
+
+        // history: none (vnext#1006): the buffered data is written here, once, in the same
+        // transaction as the completion — a Completed instance never commits without its data.
+        if (context.Instance.IsDataBuffered && instanceDataWriteService is not null)
+        {
+            await instanceDataWriteService.FlushAsync(
+                context.Instance,
+                context.Workflow,
+                async ct =>
+                {
+                    UpdateInstanceStatus(context, subItemData);
+                    context.ExtractAndDeferInstanceEvents();
+                    await instanceRepository.UpdateAsync(context.Instance, true, ct);
+                },
+                cancellationToken);
+            context.Items["IsFinishState"] = true;
+            return Result<StepOutcome>.Ok(StepOutcome.Continue());
+        }
 
         // Railway chain: Update status -> Extract events -> Persist -> Mark finish
         return await Result.Ok(context)

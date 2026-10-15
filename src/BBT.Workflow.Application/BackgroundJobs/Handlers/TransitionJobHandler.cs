@@ -1,3 +1,4 @@
+using BBT.Workflow.Runtime;
 using System.Diagnostics;
 using BBT.Aether.BackgroundJob;
 using BBT.Aether.Results;
@@ -36,6 +37,8 @@ public sealed class TransitionJobHandler(
 
     public async Task HandleAsync(TransitionJobPayload args, CancellationToken cancellationToken)
     {
+        // Serve the job as the domain that scheduled it (multi-domain hosting).
+        using var domainScope = DomainScope.Begin(args.Domain);
         // Establish the trace lane BEFORE the span, so everything this hop spawns — the next hop's
         // enqueue, post-commit jobs, subflow handoffs — reads the same anchor and lands as a sibling
         // rather than nesting inside this hop. Reset (not Use): the ambient lane here belongs to the

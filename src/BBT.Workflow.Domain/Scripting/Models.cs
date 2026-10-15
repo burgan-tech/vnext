@@ -346,6 +346,14 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
     public dynamic? Body { get; private set; }
 
     /// <summary>
+    /// Cancellation signal of the operation this context was built for (the request, transition job or
+    /// event delivery). Scripts that do their own I/O — e.g. a database call through a plugin driver —
+    /// pass it on so an abandoned operation stops the call instead of leaving it running.
+    /// <see cref="CancellationToken.None"/> when the context was built without one.
+    /// </summary>
+    public CancellationToken CancellationToken { get; private set; }
+
+    /// <summary>
     /// Contains HTTP headers from transition requests with all header keys normalized to lowercase.
     /// This includes both standard HTTP headers and custom application-specific headers.
     /// </summary>
@@ -804,6 +812,7 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
             Runtime = Runtime,
             Transition = Transition,
             CurrentTransition = CurrentTransition,
+            CancellationToken = CancellationToken,
             // Container copies, values shared; ComparerOf keeps a non-default key comparer alive
             // (today these are plain default-comparer dictionaries — behavior unchanged).
             Definitions = new Dictionary<string, dynamic>(Definitions, ComparerOf(Definitions)),
@@ -1159,6 +1168,12 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
         public Builder SetCurrentTransition(ScriptTransitionRequest? value)
         {
             _context.CurrentTransition = value;
+            return this;
+        }
+
+        public Builder SetCancellationToken(CancellationToken cancellationToken)
+        {
+            _context.CancellationToken = cancellationToken;
             return this;
         }
 

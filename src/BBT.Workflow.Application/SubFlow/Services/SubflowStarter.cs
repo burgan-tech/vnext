@@ -146,6 +146,12 @@ public sealed class SubflowStarter(
             }
         };
 
+        // A history-none parent requires a history-none SubFlow child (vnext#1006). Stamped only for
+        // none, so children of flag-less parents carry exactly the same metadata as before; the child
+        // enforces it at start (InstanceCommandAppService.StartAsync), which works across domains.
+        if (workflow.SuppressesHistory)
+            createInstanceInput.ExtraProperties[DomainConsts.MetaDataKeys.History] = HistoryMode.None.Code;
+
         // Apply timeout override from SubFlow config if present
         if (timeoutOverride != null)
         {
@@ -216,7 +222,9 @@ public sealed class SubflowStarter(
             StrictIdempotency = true, // Service-to-service call: return 409 if active instance exists
             // sync=true awaits the child's activation to a rest point; the response body is read
             // for IsSuccess only (below), so the child must not project attributes/extensions.
-            SuppressResponseEnrichment = true
+            SuppressResponseEnrichment = true,
+            // Payload comes from the subflow input mapping, not a client.
+            TrustedPayload = true
         };
 
         var startResult = await instanceCommandGateway.StartSubAsync(subFlowStartInput, cancellationToken);

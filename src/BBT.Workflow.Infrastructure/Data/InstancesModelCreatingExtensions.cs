@@ -122,6 +122,8 @@ public static class InstancesModelCreatingExtensions
             // Runtime-only marker set by the repository after a latest-only materialization;
             // never persisted.
             b.Ignore(p => p.IsDataPartiallyLoaded);
+            b.Ignore(p => p.DataBuffer);
+            b.Ignore(p => p.IsDataBuffered);
 
             b.HasMany(m => m.DataList)
                 .WithOne()

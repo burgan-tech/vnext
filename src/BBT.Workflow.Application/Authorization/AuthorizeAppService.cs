@@ -3,6 +3,7 @@ using BBT.Aether.Results;
 using BBT.Aether.Users;
 using BBT.Workflow.Caching;
 using BBT.Workflow.Definitions;
+using BBT.Workflow.Definitions.Specifications;
 using BBT.Workflow.Gateway;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
@@ -70,11 +71,12 @@ public sealed class AuthorizeAppService(
             // Parent-retained transitions execute on the parent, so authorize must answer against the
             // parent's definition for exactly those and must not descend. The set matches execution:
             // HandleCancelPreflightStep (order 5) skips to CreateTransition (20), over the forward at
-            // order 10, for cancel and exit; ForwardToActiveSubflowStep excludes updateData and a
-            // shared transition available in the current state. A shared transition NOT available here
-            // is not forwarded either — it is rejected — and EvaluateAuthorizeAsync denies it on the
-            // same availableIn check, so the two surfaces agree without sharing code.
-            if (!string.IsNullOrWhiteSpace(transitionKey) && IsParentOwnedTransition(wf, transitionKey))
+            // order 10, for cancel and exit; the SubFlow proxy and ForwardToActiveSubflowStep exclude
+            // updateData and a shared transition available in the parent's current state. A shared
+            // transition NOT available in the current state is forwarded to the active SubFlow like
+            // any other key, so authorize descends for it too — same predicate as the proxy
+            // (SubFlowBypassSpecification.IsParentSharedTransitionAndAvailable).
+            if (!string.IsNullOrWhiteSpace(transitionKey) && IsParentOwnedTransition(wf, transitionKey, instance.CurrentState))
             {
                 var parentCallerRoles = await GetCallerRolesAsync(role, requestContext, cancellationToken);
                 if (!parentCallerRoles.IsSuccess)
@@ -432,11 +434,13 @@ public sealed class AuthorizeAppService(
     }
 
     /// <summary>
-    /// Returns true if the transition key belongs to the parent workflow's own transitions
-    /// (shared, cancel, updateData, exit) that should be evaluated locally regardless of active SubFlow.
+    /// Returns true if the transition key belongs to the parent workflow's own transitions that run on
+    /// the parent even while a SubFlow is active: cancel, updateData, exit, and a shared transition
+    /// available in the parent's <paramref name="currentState"/> (the SubFlow proxy's predicate). A
+    /// shared transition not available there is forwarded, so it is not parent-owned.
     /// </summary>
-    private static bool IsParentOwnedTransition(Definitions.Workflow wf, string transitionKey) =>
-        wf.SharedTransitions.Any(t => t.Key == transitionKey) ||
+    private static bool IsParentOwnedTransition(Definitions.Workflow wf, string transitionKey, string? currentState) =>
+        SubFlowBypassSpecification.IsParentSharedTransitionAndAvailable(wf, transitionKey, currentState) ||
         wf.Cancel?.Key == transitionKey ||
         wf.UpdateData?.Key == transitionKey ||
         wf.Exit?.Key == transitionKey;

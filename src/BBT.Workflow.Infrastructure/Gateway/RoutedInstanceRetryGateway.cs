@@ -14,6 +14,7 @@ public sealed class RoutedInstanceRetryGateway : IInstanceRetryGateway
     private readonly LocalInstanceRetryGateway _local;
     private readonly RemoteInstanceRetryGateway _remote;
     private readonly IRuntimeInfoProvider _runtimeInfoProvider;
+    private readonly ICoHostedDatabaseBoundary? _databaseBoundary;
 
     /// <summary>
     /// Initializes a new instance of RoutedInstanceRetryGateway.
@@ -21,11 +22,14 @@ public sealed class RoutedInstanceRetryGateway : IInstanceRetryGateway
     /// <param name="local">The local gateway for same-domain execution.</param>
     /// <param name="remote">The remote gateway for cross-domain execution.</param>
     /// <param name="runtimeInfoProvider">Provider for runtime domain information.</param>
+    /// <param name="databaseBoundary">Opens a new unit-of-work root for a co-hosted domain in another database.</param>
     public RoutedInstanceRetryGateway(
         LocalInstanceRetryGateway local,
         RemoteInstanceRetryGateway remote,
-        IRuntimeInfoProvider runtimeInfoProvider)
+        IRuntimeInfoProvider runtimeInfoProvider,
+        ICoHostedDatabaseBoundary? databaseBoundary = null)
     {
+        _databaseBoundary = databaseBoundary;
         _local = local;
         _remote = remote;
         _runtimeInfoProvider = runtimeInfoProvider;
@@ -37,7 +41,7 @@ public sealed class RoutedInstanceRetryGateway : IInstanceRetryGateway
         CancellationToken cancellationToken = default)
     {
         return _runtimeInfoProvider.IsDomainMatch(input.Domain)
-            ? _local.RetryAsync(input, cancellationToken)
+            ? LocalDomainCall.Run(_databaseBoundary, input.Domain, () => _local.RetryAsync(input, cancellationToken))
             : _remote.RetryAsync(input, cancellationToken);
     }
 }

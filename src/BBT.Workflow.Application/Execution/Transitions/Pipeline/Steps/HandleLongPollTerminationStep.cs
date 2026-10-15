@@ -1,3 +1,4 @@
+using BBT.Workflow.Runtime;
 using System.Diagnostics;
 using BBT.Aether.BackgroundJob;
 using BBT.Aether.Guids;
@@ -29,7 +30,8 @@ public sealed class HandleLongPollTerminationStep(
     IGuidGenerator guidGenerator,
     ITransitionAuthorizationManager transitionAuthorizationManager,
     ICallerRoleResolver callerRoleResolver,
-    ILogger<HandleLongPollTerminationStep> logger) : ITransitionStep
+    ILogger<HandleLongPollTerminationStep> logger,
+    IRuntimeInfoProvider? runtimeInfoProvider = null) : ITransitionStep
 {
     /// <inheritdoc />
     public int Order => LifecycleOrder.LongPollTermination;
@@ -139,7 +141,7 @@ public sealed class HandleLongPollTerminationStep(
         int fallbackSeconds,
         CancellationToken cancellationToken)
     {
-        var jobName = JobName.ForLongPollAck(context.InstanceId);
+        var jobName = JobName.ForLongPollAck(context.InstanceId, runtimeInfoProvider.JobDomain(context.Domain));
         var activity = Activity.Current;
 
         var payload = new LongPollAckTimeoutPayload

@@ -111,6 +111,9 @@ cost) and is out of scope here.
   reason. The repository read projects columns in SQL (`InstanceTaskHistoryRow`) so the jsonb
   payloads never leave the database — do not switch it back to materializing the entity, and do not
   add payload fields here.
+- A flow with `attributes.history: "none"` writes no journal: both functions answer `200` with an
+  empty list (the actions function does not answer `404` for an unknown task id there). See
+  [History Mode](history-mode.md).
 - **`InstanceActions` has no writer** (never has, since the initial commit) — the action function
   returns an empty list until one lands. `InstanceTask.FaultedTaskId` is equally never set.
   Full guide: `docs/runtime/instance-task-and-action-history.md`.

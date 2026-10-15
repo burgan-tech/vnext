@@ -98,6 +98,19 @@ public sealed class Workflow : IDomainEntity, IReference, IReferenceSetter, IHas
     public ExecutionType? ExecutionType { get; private set; }
 
     /// <summary>
+    /// Optional history mode (vnext#1006). <c>none</c> marks a one-shot flow that writes no transition or
+    /// task history and buffers its data into a single write; absent or <c>full</c> keeps full history.
+    /// Validated at publish (<see cref="Validators.WorkflowValidator"/>) against the one-shot shape.
+    /// </summary>
+    [JsonInclude]
+    [JsonPropertyName("history")]
+    public HistoryMode? History { get; private set; }
+
+    /// <summary>True when the flow declares <c>history: none</c>.</summary>
+    [JsonIgnore]
+    public bool SuppressesHistory => History?.IsNone == true;
+
+    /// <summary>
     /// Created at
     /// </summary>
     public DateTime CreatedAt { get; private set; }
@@ -315,6 +328,11 @@ public sealed class Workflow : IDomainEntity, IReference, IReferenceSetter, IHas
     public void SetTimeout(WorkflowTimeout timeout)
     {
         Timeout = timeout;
+    }
+
+    public void SetHistory(HistoryMode? history)
+    {
+        History = history;
     }
 
     public void SetOutput(ScriptCode output)

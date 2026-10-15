@@ -44,6 +44,7 @@ public class WorkflowValidator
         ValidateWizardStateTransitions(workflow, result);
         ValidateDefaultAutoTransitions(workflow, result);
         ValidateLongPollInteractions(workflow, result);
+        ValidateHistoryNone(workflow, result);
         foreach (var state in workflow.States)
             ValidateRoleGrants(state.QueryRoles, $"{nameof(Workflow)}.States[{state.Key}].{nameof(State.QueryRoles)}", result);
 
@@ -59,6 +60,161 @@ public class WorkflowValidator
 
         return result;
     }
+
+    #region History None Validations
+
+    private const string HistoryNone = "history 'none'";
+
+    /// <summary>
+    /// Validates the one-shot shape a <c>history: none</c> flow must have (vnext#1006): it starts, runs
+    /// only automatic transitions and always reaches a Finish state. Looks at this definition only —
+    /// SubFlow children are checked at runtime when they start. Every rule is an error.
+    /// </summary>
+    private static void ValidateHistoryNone(Workflow workflow, WorkflowValidationResult result)
+    {
+        if (!workflow.SuppressesHistory)
+            return;
+
+        const string wf = nameof(Workflow);
+
+        if (!workflow.States.Any(s => s.StateType == StateType.Finish))
+        {
+            result.AddError(new ValidationResult(
+                $"A workflow with {HistoryNone} must declare at least one Finish state (stateType 3).",
+                [$"{wf}.{nameof(Workflow.States)}"]));
+        }
+
+        if (workflow.SharedTransitions.Count > 0)
+        {
+            result.AddError(new ValidationResult(
+                $"A workflow with {HistoryNone} cannot declare sharedTransitions: shared transitions are manual, scheduled or event-triggered.",
+                [$"{wf}.{nameof(Workflow.SharedTransitions)}"]));
+        }
+
+        AddClientTransitionError(workflow.Cancel, "cancel", $"{wf}.{nameof(Workflow.Cancel)}", result);
+        AddClientTransitionError(workflow.Exit, "exit", $"{wf}.{nameof(Workflow.Exit)}", result);
+        AddClientTransitionError(workflow.UpdateData, "updateData", $"{wf}.{nameof(Workflow.UpdateData)}", result);
+
+        if (workflow.Timeout is not null)
+        {
+            result.AddError(new ValidationResult(
+                $"A workflow with {HistoryNone} cannot declare a timeout: the timeout is a scheduled transition.",
+                [$"{wf}.{nameof(Workflow.Timeout)}"]));
+        }
+
+        foreach (var state in workflow.States)
+        {
+            var statePath = $"{wf}.{nameof(Workflow.States)}[{state.Key}]";
+
+            if (state.StateType == StateType.Wizard)
+            {
+                result.AddError(new ValidationResult(
+                    $"State '{state.Key}' is a Wizard state; a workflow with {HistoryNone} cannot declare Wizard states.",
+                    [$"{statePath}.{nameof(State.StateType)}"]));
+            }
+
+            if (state.SubType is StateSubType.Suspended or StateSubType.Busy or StateSubType.Human)
+            {
+                result.AddError(new ValidationResult(
+                    $"State '{state.Key}' has subType {(int)state.SubType} ({state.SubType}); a workflow with {HistoryNone} cannot declare Suspended, Busy or Human states.",
+                    [$"{statePath}.{nameof(State.SubType)}"]));
+            }
+
+            if (state.Interaction?.LongPoll is not null)
+            {
+                result.AddError(new ValidationResult(
+                    $"State '{state.Key}' declares interaction.longPoll, which parks the instance; a workflow with {HistoryNone} cannot pause for a client.",
+                    [$"{statePath}.{nameof(State.Interaction)}.{nameof(StateInteraction.LongPoll)}"]));
+            }
+
+            if (state.SubFlow?.HasTimeoutOverride == true)
+            {
+                result.AddError(new ValidationResult(
+                    $"State '{state.Key}' overrides the SubFlow timeout; a workflow with {HistoryNone} cannot schedule a timeout.",
+                    [$"{statePath}.{nameof(State.SubFlow)}.{nameof(SubFlow.Overrides)}.{nameof(SubFlowOverrides.Timeout)}"]));
+            }
+
+            foreach (var transition in state.Transitions)
+            {
+                if (transition.TriggerType == TriggerType.Automatic)
+                    continue;
+
+                result.AddError(new ValidationResult(
+                    $"Transition '{transition.Key}' in state '{state.Key}' has triggerType {(int)transition.TriggerType} ({transition.TriggerType}); a workflow with {HistoryNone} allows only Automatic (1) state transitions.",
+                    [$"{statePath}.{nameof(State.Transitions)}[{transition.Key}].{nameof(Transition.TriggerType)}"]));
+            }
+
+            if (state.StateType != StateType.Finish && state.Transitions.Count == 0)
+            {
+                result.AddError(new ValidationResult(
+                    $"State '{state.Key}' has no transitions; every non-Finish state of a workflow with {HistoryNone} needs at least one automatic transition.",
+                    [$"{statePath}.{nameof(State.Transitions)}"]));
+            }
+        }
+
+        ValidateHistoryNoneFinishReachability(workflow, result);
+    }
+
+    private static void AddClientTransitionError(Transition? transition, string name, string path, WorkflowValidationResult result)
+    {
+        if (transition is null)
+            return;
+
+        result.AddError(new ValidationResult(
+            $"'{name}' is a client-invoked transition and is not allowed in a workflow with {HistoryNone}.",
+            [path]));
+    }
+
+    /// <summary>
+    /// Every state of a <c>history: none</c> flow must be able to reach a Finish state, so the flow always
+    /// ends: walks the transition graph backwards from the Finish states and reports every non-Finish
+    /// state left unvisited (a cycle, a <c>$self</c>-only loop or a dead end). Unknown targets are skipped —
+    /// <see cref="ValidateTransitionInStates"/> already reports them.
+    /// </summary>
+    private static void ValidateHistoryNoneFinishReachability(Workflow workflow, WorkflowValidationResult result)
+    {
+        var states = new Dictionary<string, State>(StringComparer.Ordinal);
+        foreach (var state in workflow.States)
+            states.TryAdd(state.Key, state);
+
+        var finishes = states.Values.Where(s => s.StateType == StateType.Finish).Select(s => s.Key).ToList();
+        if (finishes.Count == 0)
+            return;
+
+        var predecessors = states.Keys.ToDictionary(k => k, _ => new List<string>(), StringComparer.Ordinal);
+        foreach (var state in states.Values)
+        {
+            foreach (var transition in state.Transitions)
+            {
+                var target = transition.Target == WellKnownStateKeys.Self ? state.Key : transition.Target;
+                if (target is not null && predecessors.TryGetValue(target, out var list))
+                    list.Add(state.Key);
+            }
+        }
+
+        var canFinish = new HashSet<string>(finishes, StringComparer.Ordinal);
+        var queue = new Queue<string>(finishes);
+        while (queue.Count > 0)
+        {
+            foreach (var predecessor in predecessors[queue.Dequeue()])
+            {
+                if (canFinish.Add(predecessor))
+                    queue.Enqueue(predecessor);
+            }
+        }
+
+        foreach (var state in states.Values)
+        {
+            if (canFinish.Contains(state.Key) || state.Transitions.Count == 0)
+                continue;
+
+            result.AddError(new ValidationResult(
+                $"State '{state.Key}' cannot reach a Finish state: its automatic transitions only lead into states that never finish (a cycle or dead end). A workflow with {HistoryNone} must always be able to finish.",
+                [$"{nameof(Workflow)}.{nameof(Workflow.States)}[{state.Key}].{nameof(State.Transitions)}"]));
+        }
+    }
+
+    #endregion
 
     #region Workflow Level Validations
 

@@ -1,3 +1,4 @@
+using BBT.Workflow.Runtime;
 using System.Diagnostics;
 using BBT.Aether.BackgroundJob;
 using BBT.Aether.MultiSchema;
@@ -26,6 +27,8 @@ public sealed class TransitionTimerJobHandler(
 
     public async Task HandleAsync(TransitionTimerPayload args, CancellationToken cancellationToken)
     {
+        // Serve the job as the domain that scheduled it (multi-domain hosting).
+        using var domainScope = DomainScope.Begin(args.Domain);
         // Restore trace context from the original request for distributed tracing correlation
         using var activity =
             BackgroundJobActivityHelper.StartDeferredActivity("TransitionTimerJob.Execute", args);

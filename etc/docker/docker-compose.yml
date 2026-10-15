@@ -34,6 +34,7 @@ services:
       "--app-id", "vnext-app",
       "--app-port", "4201",
       "--resources-path", "./components",
+      "--max-body-size", "64Mi",
       "--dapr-grpc-port", "42111",
       "--dapr-http-port", "42110",
       "--scheduler-host-address", "dapr-scheduler:50007",
@@ -45,6 +46,7 @@ services:
     volumes:
       - "../../etc/orchestration/dapr/components:/components"
       - "../../etc/orchestration/dapr/config.yaml:/dapr-config.yaml"
+      - "./data/blobs:/blobs"
     ports:
       - "42110:42110"
       - "42111:42111"
@@ -67,18 +69,7 @@ services:
       "./daprd",
       "--config", "/dapr-config.yaml",
       "--app-id", "vnext-execution-app",
-      # Default (this state): HTTP/1.1 invocation, app-port 4202 -- app-protocol omitted
-      # (http is Dapr's default). This app also serves a second, gRPC-only h2c Kestrel
-      # endpoint on 4212 (see the Kestrel comment in
-      # execution/BBT.Workflow.Execution.HttpApi.Host/Program.cs), but the sidecar below
-      # doesn't use it while app-protocol stays http/unset.
-      #
-      # To turn gRPC proxy-mode invocation ON: set "--app-port" to "4212", add
-      # "--app-protocol", "grpc" back below, AND set ExecutionApi__Transport=grpc on the
-      # orchestration side (env or appsettings). All three must change together. gRPC used
-      # to break distributed-trace continuity; that is FIXED (Dapr still sends a duplicated
-      # traceparent, but DuplicateTolerantTraceContextPropagator in the Execution host
-      # tolerates it) -- see docs/runtime/dapr-invocation-transport.md.
+      # HTTP/1.1 invocation on app-port 4202 -- app-protocol omitted (http is Dapr's default).
       "--app-port", "4202",
       "--resources-path", "./components",
       "--dapr-grpc-port", "43111",

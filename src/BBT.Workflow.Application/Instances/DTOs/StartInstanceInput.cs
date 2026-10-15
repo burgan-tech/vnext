@@ -42,6 +42,13 @@ public sealed class StartInstanceInput(
     public bool SuppressResponseEnrichment { get; set; }
 
     /// <summary>
+    /// The payload was produced by the runtime (subflow input mapping, trigger task), not by a client.
+    /// <c>x-storage</c> references in it are kept as is instead of being checked against the instance's data.
+    /// SERVER-ONLY: the public endpoints build the input themselves and never set it.
+    /// </summary>
+    public bool TrustedPayload { get; set; }
+
+    /// <summary>
     /// Creates a WorkflowExecutionContext from this StartInstanceInput for starting a new workflow instance.
     /// </summary>
     /// <param name="instanceId">The workflow instance identifier</param>
@@ -68,7 +75,8 @@ public sealed class StartInstanceInput(
                 Tags = Instance.Tags,
                 Stage = Instance.Stage
             },
-            IsReentry = false // Start transitions are never re-entry
+            IsReentry = false, // Start transitions are never re-entry
+            TrustedPayload = TrustedPayload
         };
     }
 }

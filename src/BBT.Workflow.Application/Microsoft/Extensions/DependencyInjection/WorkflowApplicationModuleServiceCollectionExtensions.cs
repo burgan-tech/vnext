@@ -17,12 +17,14 @@ using BBT.Workflow.SubFlow;
 using BBT.Workflow.Authorization;
 using BBT.Workflow.BackgroundJobs;
 using BBT.Workflow.Events;
+using BBT.Workflow.Schedule;
 using BBT.Workflow.Functions;
 using BBT.Workflow.Functions.Contracts;
 using Microsoft.Extensions.Options;
 using BBT.Workflow.Functions.Validation;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using BBT.Workflow.Files;
 using Microsoft.Extensions.Logging;
 
 namespace Microsoft.Extensions.DependencyInjection;
@@ -124,6 +126,8 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
         services.AddScoped<IDataFunctionCache, DataFunctionCache>();
         services.AddScoped<IInstanceSchemaFunctionCache, InstanceSchemaFunctionCache>();
         // Application Services
+        services.TryAddScoped<IFileOffloadService, FileOffloadService>();
+        services.TryAddScoped<IInstanceFileAppService, InstanceFileAppService>();
         services.AddScoped<IDefinitionAppService, DefinitionAppService>();
         services.AddScoped<IPublishCompletedAppService, PublishCompletedAppService>();
         services.AddScoped<IInstanceCommandAppService, InstanceCommandAppService>();
@@ -149,6 +153,7 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
         services.AddScoped<IFunctionMetricsAppService, FunctionMetricsAppService>();
         services.AddScoped<IFunctionInfoAppService, FunctionInfoAppService>();
         services.AddScoped<IEventAppService, EventAppService>();
+        services.AddScoped<IInstanceScheduleAppService, InstanceScheduleAppService>();
         services.AddScoped<IInstanceSelectorResolver, InstanceSelectorResolver>();
         services.AddScoped<IComponentDiscoveryAppService, ComponentDiscoveryAppService>();
         services.AddScoped<ITransitionAuthorizationManager, TransitionAuthorizationManager>();
@@ -159,6 +164,7 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
         services.AddScoped<IRepresentationEtagService, RepresentationEtagService>();
         services.AddScoped<ISchemaFieldFilterService, SchemaFieldFilterService>();
         services.AddScoped<BBT.Workflow.Instances.IInstanceDataReadService, BBT.Workflow.Instances.InstanceDataReadService>();
+        services.AddScoped<BBT.Workflow.Instances.IComputedFieldReadService, BBT.Workflow.Instances.ComputedFieldReadService>();
         services.AddScoped<BBT.Workflow.Instances.ISubItemEventDataResolver, BBT.Workflow.Instances.SubItemEventDataResolver>();
         services.AddScoped<IInstanceExtensionService, InstanceExtensionService>();
         services.AddScoped<IWorkflowOutputMappingService, WorkflowOutputMappingService>();
@@ -170,6 +176,7 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
         services.AddScoped<ISubflowStateService, SubflowStateService>();
         services.AddScoped<ISubflowStarter, SubflowStarter>();
         services.AddScoped<ISubflowForwardingService, SubflowForwardingService>();
+        services.AddScoped<ISubflowProxyService, SubflowProxyService>();
         services.AddScoped<IInstanceBusyManager, InstanceBusyManager>();
         services.AddScoped<IChildSubflowCancellationService, ChildSubflowCancellationService>();
         services.AddScoped<IChildSubflowFaultService, ChildSubflowFaultService>();

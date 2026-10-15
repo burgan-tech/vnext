@@ -13,7 +13,7 @@ It is an `IInstanceFunctionHandler` registration dispatched by the `{function}` 
 so a custom function named `instance-correlation` is shadowed, the same rule every system function key
 has. `{instance}` accepts the instance id or business key.
 
-> **Renamed in 0.0.98 — hard break.** This function was previously `…/functions/hierarchy`. There is
+> **Renamed in 0.0.99 — hard break.** This function was previously `…/functions/hierarchy`. There is
 > **no alias**: the old path falls through to custom-function resolution and answers `404`
 > (`Cache:300001`). The name changed because the tree is built purely from `InstanceCorrelation` rows,
 > so it now says what it actually reads. The MCP tool `get_instance_hierarchy` became
@@ -161,6 +161,7 @@ real — only its descendants are in question.**
 | `depth-exceeded` | `MaxDescentDepth` (default 20) ran out. On a graph that cannot legitimately nest that deep, this is the first symptom of a cycle. |
 | `hop-failed` | A hop could not be expanded — most often an unreachable partner domain. **Only that branch is truncated**; the rest of the tree arrives intact and the call still returns 200. |
 | `instance-missing` | The row could not be read in the domain that should own it. READ COMMITTED permits it to vanish between the parent's correlation read and the child's own. |
+| `hop-unsupported` | The partner domain answered 404 on the batch route: it runs a runtime older than the batched correlation walk. Only that branch is truncated; upgrade the partner to expand it. |
 
 A tree whose nodes are all `resolved: true` is complete. Do not treat an empty `children` on an
 unresolved node as "no children" — that conflation is exactly what the old implementation forced on

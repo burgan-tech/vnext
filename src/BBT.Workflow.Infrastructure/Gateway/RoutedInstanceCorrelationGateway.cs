@@ -11,7 +11,8 @@ namespace BBT.Workflow.Gateway;
 public sealed class RoutedInstanceCorrelationGateway(
     IRuntimeInfoProvider runtimeInfoProvider,
     LocalInstanceCorrelationGateway local,
-    RemoteInstanceCorrelationGateway remote) : IInstanceCorrelationGateway
+    RemoteInstanceCorrelationGateway remote,
+    ICoHostedDatabaseBoundary? databaseBoundary = null) : IInstanceCorrelationGateway
 {
     /// <inheritdoc />
     public Task<Result<IReadOnlyList<CorrelationBatchResult>>> ResolveAsync(
@@ -21,7 +22,7 @@ public sealed class RoutedInstanceCorrelationGateway(
         CancellationToken cancellationToken = default)
     {
         return runtimeInfoProvider.IsDomainMatch(domain)
-            ? local.ResolveAsync(domain, flow, request, cancellationToken)
+            ? LocalDomainCall.Run(databaseBoundary, domain, () => local.ResolveAsync(domain, flow, request, cancellationToken))
             : remote.ResolveAsync(domain, flow, request, cancellationToken);
     }
 }
