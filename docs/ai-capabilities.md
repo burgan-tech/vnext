@@ -15,7 +15,7 @@ phrase against the skill's frontmatter `description`. Cursor reads the same `.cl
 | Decide on an architecture or technology choice | [`agent-council`](#2-decision--agent-council) |
 | Review an open PR | [`pr-review`](#3-review) (`#N`, `--no-comment`) |
 | Review a local diff | [`workflow-code-review`](#3-review) |
-| Check a domain package / its flows | [`domain-performance-audit`](#5-domain-package--flow-checks) + plugin `review-components` / `validate-and-fix` |
+| Check a domain package / its flows | [`domain-performance-audit`](#5-domain-package--flow-checks) (→ plugin `domain-check`) + plugin `review-components` / `validate-and-fix` |
 | Prove a runtime change end to end | [`runtime-integration-test`](#4-testing-and-verification) |
 | Test cross-domain behaviour | [`cross-domain-lab`](#4-testing-and-verification) |
 | Open an issue / a PR / write a commit message | [`create-github-issue` / `create-github-pr` / `git-commit-message`](#6-github-and-git) |
@@ -126,17 +126,19 @@ records in `ai-docs/local-environments/<domain>.md`; full runbook in
 
 ## 5. Domain package / flow checks
 
-**`domain-performance-audit`** — [skill](../.claude/skills/domain-performance-audit/SKILL.md) ·
-checks [CHECKS.md](../.claude/skills/domain-performance-audit/CHECKS.md)
+**`domain-performance-audit`** — [skill](../.claude/skills/domain-performance-audit/SKILL.md), a pointer to
+the vnext-ai-toolkit plugin's **`domain-check`** (canonical checks, scanner and report format:
+[burgan-tech/vnext-ai-toolkit](https://github.com/burgan-tech/vnext-ai-toolkit) `skills/domain-check/`)
 
 - **Does:** a static performance audit of a **domain package** (a vnext-template repo such as
   vnext-onboarding) — workflows, tasks, extensions, functions, views, scripts — against the current
   runtime, then a short prioritised report (in Turkish, since it goes to the domain team).
 - **When:** "domain performans", "performans incele", "bu domaini incele", "domain audit".
-- **Run:** *"bu domaini incele: ../vnext-onboarding"*; the scan step is
-  `python3 .claude/skills/domain-performance-audit/scan.py <domain-root> [--json]`.
+- **Run:** `/vnext-ai-toolkit:domain-check <domain-root>` with the plugin installed; otherwise the scan
+  step is `python3 <vnext-ai-toolkit>/skills/domain-check/scan.py <domain-root> [--json]`. From this
+  repo, additionally confirm runtime claims against the code (the pointer skill says how).
 - **Boundary:** read-only, writes nothing to the target. Not for a diff of this repo — use `pr-review` /
-  `workflow-code-review`.
+  `workflow-code-review`. Fix a wrong check in the plugin, not here.
 
 Component correctness (schema validity, references, security) is the vnext-ai-toolkit plugin's job —
 `validate-and-fix`, `review-components`, `security-audit` in [§8](#8-machine-level-plugins-and-tools-if-installed).
