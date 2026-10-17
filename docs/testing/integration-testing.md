@@ -285,9 +285,21 @@ When a behaviour works locally but not in an environment, start the investigatio
 ## 10. Report the result
 
 When the integration run is part of a development, its outcome belongs in the PR body under
-`## Integration test evidence`: scenario(s) run, runtime commit, base URL/offset, passed/failed counts,
-and every remaining red with its cause (an environment defect, a known gap, or a real regression).
-The `create-github-pr` skill carries this section in its template.
+`## E2E evidence`: runtime commit, base URL, passed/failed/skipped counts per suite, and every
+remaining red with its cause (an environment defect, a known gap, or a real regression).
+
+Do not write the block by hand — generate it from the TRX of the run:
+
+```bash
+# in vnext-example: dotnet test ... --logger "trx;LogFileName=e2e.trx"
+node scripts/governance/e2e-evidence.mjs --trx <file>... --runtime-sha <sha> \
+  --base-url http://localhost:<port> [--reds "<cause of every remaining red>"]
+```
+
+The runtime SHA must be one of the PR's commits. When no run was part of the change, the block is
+`- Status: not-run` plus a `- Reason:` line. The `PR Contract` workflow checks the block (rule ids in
+[reviewer: evidence](../code-review/reviewers/evidence.md) §4); the
+`create-github-pr` skill drafts it.
 
 ## 11. Known gaps and pitfalls
 
