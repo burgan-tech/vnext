@@ -77,13 +77,22 @@ function unwrap(value) {
   return value.trim().replace(/^`+|`+$/g, '').trim();
 }
 
+function unwrapWhole(value) {
+  const v = value.trim();
+  const m = /^`([^`]*)`$/.exec(v);
+  return m ? m[1].trim() : v;
+}
+
 const FIELD_RE = /^\s*[-*]\s*(status|runtime|base url|result|reds|reason)\s*:\s*(.*?)\s*$/i;
 
 function readFields(text) {
   const fields = {};
   for (const line of stripComments(text).split('\n')) {
     const m = FIELD_RE.exec(line);
-    if (m) fields[m[1].toLowerCase()] = unwrap(m[2]);
+    if (!m) continue;
+    const key = m[1].toLowerCase();
+    // Runtime and base URL are always code-formatted; free text only loses a wrapping span.
+    fields[key] = key === 'runtime' || key === 'base url' ? unwrap(m[2]) : unwrapWhole(m[2]);
   }
   return fields;
 }

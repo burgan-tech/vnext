@@ -77,6 +77,18 @@ test('parses not-run with reason', () => {
   assert.deepEqual(parseEvidence('').suites, []);
 });
 
+test('keeps inner backticks in reason and reds', () => {
+  const nr = parseEvidence('- Status: not-run\n- Reason: fix `foo`');
+  assert.equal(nr.reason, 'fix `foo`');
+  assert.deepEqual(parseEvidence(renderEvidence(nr)), nr);
+  const run = parseEvidence('- Status: run\n- Reds: `MockLab` down');
+  assert.equal(run.reds, '`MockLab` down');
+  assert.deepEqual(parseEvidence(renderEvidence(run)), run);
+  const run2 = parseEvidence('- Status: run\n- Reds: 2 × timeout in `Foo`');
+  assert.equal(run2.reds, '2 × timeout in `Foo`');
+  assert.deepEqual(parseEvidence(renderEvidence(run2)), run2);
+});
+
 test('parses product table', () => {
   const rows = PRODUCTS.map((p, i) => `| ${p} | ${i % 2 ? 'No' : 'YES'} | ${i % 2 ? '' : 'docs/integration/x/y.md'} |`);
   rows.push('| Extra-Product | maybe | |');
