@@ -6,12 +6,14 @@
 //   --mode warn|enforce                warn (default) prints errors as warnings and exits 0
 import { readFileSync, appendFileSync, existsSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
-import { resolve, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { checkPr } from './lib/pr-contract.mjs';
+import { resolve } from 'node:path';
+import { checkPr, formatAnnotation } from './lib/pr-contract.mjs';
 import { lintMeta } from './lib/meta-lint.mjs';
 
 const COMMITS_CAP = 250;
+
+const NO_DASH = new Set(['pr', 'files-from-git', 'body-file', 'event']);
+const USAGE = '--event <path> | --pr <n> | --body-file <path> --title <t> [--milestone vX.Y.Z] [--files-from-git <base>] [--mode warn|enforce] [--meta-dir <path>] [--repo-root <path>]';
 
 function parseArgs(argv) {
   const out = {};
@@ -20,6 +22,7 @@ function parseArgs(argv) {
     const key = argv[i].slice(2);
     const value = argv[i + 1];
     if (value === undefined || value.startsWith('--')) throw new Error(`--${key} needs a value`);
+    if (NO_DASH.has(key) && value.startsWith('-')) throw new Error(`--${key} value must not start with "-" (usage: ${USAGE})`);
     out[key] = value;
     i++;
   }
@@ -93,7 +96,8 @@ function main() {
   else if (args['body-file']) pr = fromDraft(args);
   else throw new Error('Provide one of --event, --pr or --body-file.');
 
-  const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
+  const repoRoot = resolve(args['repo-root'] ?? '.');
+  const metaDir = resolve(args['meta-dir'] ?? 'vnext-meta');
   const readFile = (p) => {
     const full = resolve(repoRoot, p);
     return existsSync(full) ? readFileSync(full, 'utf8') : null;
@@ -101,12 +105,12 @@ function main() {
 
   const findings = checkPr({ ...pr, readFile });
   const milestone = pr.milestone && /^v\d+\.\d+\.\d+$/.test(pr.milestone.title) ? pr.milestone.title : undefined;
-  findings.push(...lintMeta({ metaDir: resolve(repoRoot, 'vnext-meta'), repoRoot, milestone }));
+  findings.push(...lintMeta({ metaDir, repoRoot, milestone }));
 
   const effective = findings.map((f) => (mode === 'warn' && f.severity === 'error' ? { ...f, severity: 'warning' } : f));
   const inActions = process.env.GITHUB_ACTIONS === 'true';
   for (const f of effective) {
-    if (inActions) console.log(`::${f.severity} title=${f.id}::${f.file}: ${f.message}`.replace(/\r?\n/g, '%0A'));
+    if (inActions) console.log(formatAnnotation(f));
     else console.log(`${f.severity.toUpperCase()} ${f.id} ${f.file}: ${f.message}`);
   }
   if (!inActions && effective.length === 0) console.log('PR contract: no findings.');

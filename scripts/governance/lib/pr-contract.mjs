@@ -157,3 +157,11 @@ function checkMeta(text, pr, add) {
     }
   }
 }
+
+const encodeData = (s) => String(s).replace(/%/g, '%25').replace(/\r/g, '%0D').replace(/\n/g, '%0A');
+const encodeProp = (s) => encodeData(s).replace(/:/g, '%3A').replace(/,/g, '%2C');
+
+/** Formats one finding as a GitHub workflow command (https://docs.github.com/actions/reference/workflow-commands-for-github-actions). */
+export function formatAnnotation(f) {
+  return `::${f.severity} title=${encodeProp(f.id)},file=${encodeProp(f.file)}::${encodeData(f.message)}`;
+}

@@ -6,7 +6,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { checkPr } from '../lib/pr-contract.mjs';
+import { checkPr, formatAnnotation } from '../lib/pr-contract.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const VALID = readFileSync(join(here, 'fixtures', 'pr', 'valid-feat.md'), 'utf8');
@@ -155,14 +155,30 @@ test('CLI smoke: --body-file draft in enforce mode', () => {
   const dir = mkdtempSync(join(tmpdir(), 'prc-'));
   const file = join(dir, 'body.md');
   const cli = join(here, '..', 'pr-contract.mjs');
+  const hermetic = ['--meta-dir', join(here, 'fixtures', 'meta-base', 'meta'), '--repo-root', join(here, 'fixtures', 'meta-base', 'repo')];
   writeFileSync(file, VALID.replace('3f2a9c1e5d', 'abcdef1234'));
-  const bad = spawnSync('node', [cli, '--body-file', file, '--title', 'feat(x): y', '--milestone', 'v0.0.101', '--mode', 'enforce'], { encoding: 'utf8' });
+  const bad = spawnSync('node', [cli, '--body-file', file, '--title', 'feat(x): y', '--milestone', 'v0.0.101', '--mode', 'enforce', ...hermetic], { encoding: 'utf8' });
   assert.equal(bad.status, 1, bad.stdout + bad.stderr);
   assert.match(bad.stdout, /PR-E2E-RUN/);
-  const warn = spawnSync('node', [cli, '--body-file', file, '--title', 'feat(x): y', '--milestone', 'v0.0.101', '--mode', 'warn'], { encoding: 'utf8' });
+  const warn = spawnSync('node', [cli, '--body-file', file, '--title', 'feat(x): y', '--milestone', 'v0.0.101', '--mode', 'warn', ...hermetic], { encoding: 'utf8' });
   assert.equal(warn.status, 0, warn.stdout + warn.stderr);
   assert.match(warn.stdout, /WARNING PR-E2E-RUN/);
-  const rel = spawnSync('node', [cli, '--body-file', file, '--title', 'v0.0.100', '--mode', 'enforce'], { encoding: 'utf8' });
+  const rel = spawnSync('node', [cli, '--body-file', file, '--title', 'v0.0.100', '--mode', 'enforce', ...hermetic], { encoding: 'utf8' });
   assert.equal(rel.status, 0, rel.stdout + rel.stderr);
   assert.doesNotMatch(rel.stdout, /PR-/);
+});
+
+test('annotation encoding follows workflow-command rules', () => {
+  const line = formatAnnotation({ id: 'PR-X', severity: 'error', file: 'a:b,c.md', message: 'has %0A and 100% and\rlone\nnewline' });
+  assert.equal(line, '::error title=PR-X,file=a%3Ab%2Cc.md::has %250A and 100%25 and%0Dlone%0Anewline');
+  assert.equal(line.split('\n').length, 1);
+});
+
+test('CLI rejects option-looking values for path/ref arguments', () => {
+  const cli = join(here, '..', 'pr-contract.mjs');
+  for (const flag of ['--pr', '--files-from-git', '--body-file', '--event']) {
+    const r = spawnSync('node', [cli, flag, '-oops'], { encoding: 'utf8' });
+    assert.equal(r.status, 2, flag + r.stderr);
+    assert.match(r.stderr, /must not start with "-"/);
+  }
 });
