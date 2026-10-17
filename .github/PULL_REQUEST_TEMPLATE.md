@@ -40,23 +40,24 @@ Policy: docs/testing/integration-testing.md §1; block format: §10.
 
 ## Product impact
 <!--
-One row per product, in this order. Needed = yes when the product must change because of this PR.
+One row per product, in this order. Replace every <yes/no> with yes or no; there is no default.
+Needed = yes when the product must change because of this PR.
 A yes row links a handoff: a docs/integration/<product>/<slug>.md file added or changed in this PR
 (convention: docs/integration/README.md), or a https://github.com/burgan-tech/<product>/pull/<n> or
 /issues/<n> URL.
 -->
 | Product | Needed | Handoff |
 |---|---|---|
-| vnext-schema | no | |
-| vnext-forge | no | |
-| vnext-helm-charts | no | |
-| vnext-docs | no | |
-| vnext-workflow-cli | no | |
-| vnext-runtime | no | |
-| vnext-template | no | |
-| vnext-integration-test | no | |
-| vnext-example | no | |
-| vnext-ai-toolkit | no | |
+| vnext-schema | <yes/no> | |
+| vnext-forge | <yes/no> | |
+| vnext-helm-charts | <yes/no> | |
+| vnext-docs | <yes/no> | |
+| vnext-workflow-cli | <yes/no> | |
+| vnext-runtime | <yes/no> | |
+| vnext-template | <yes/no> | |
+| vnext-integration-test | <yes/no> | |
+| vnext-example | <yes/no> | |
+| vnext-ai-toolkit | <yes/no> | |
 
 ## vnext-meta impact
 <!--

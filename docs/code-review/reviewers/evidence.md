@@ -52,7 +52,7 @@ and the skills point here.
 
 | Id | What it checks |
 |---|---|
-| `PR-TITLE` | The title is Conventional Commits (`feat`, `fix`, `perf`, `refactor` = full contract; `test`, `docs`, `chore`, `ci` = light contract, `## Summary` only), at most 72 characters; a release title `vX.Y.Z` is exempt from every rule. |
+| `PR-TITLE` | The title is Conventional Commits (`feat`, `fix`, `perf`, `refactor` = full contract; `test`, `docs`, `chore`, `ci` = light contract, `## Summary` only), at most 72 characters; a release title `vX.Y.Z` is exempt from every `PR-*` rule (the `META-*` lint still runs). |
 | `PR-MILESTONE` | A full-contract PR carries an open milestone named `vX.Y.Z`. |
 | `PR-SECTION` | Each required section (`Summary`, `vNext scope`, `E2E evidence`, `Product impact`, `vnext-meta impact`) exists and is not blank; comments and `<...>` placeholders count as blank. |
 | `PR-E2E-STATUS` | `## E2E evidence` declares `Status: run`, or `Status: not-run` with a `Reason` of at least 10 characters. |

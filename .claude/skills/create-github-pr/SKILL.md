@@ -55,7 +55,8 @@ restore — **stop**, tell the user, and offer the revert described in
     ([integration-testing §10](../../../docs/testing/integration-testing.md#10-report-the-result));
     never write the numbers by hand. Without a run, ask the user for the reason and write
     `- Status: not-run` + `- Reason: <their reason>`.
-  - **`## Product impact`**: for each of the ten rows, look at the diff and propose `yes` or `no` with
+  - **`## Product impact`**: the template ships every row as `<yes/no>` with no default; for each of
+    the ten rows, look at the diff and propose `yes` or `no` with
     a one-line why (new component field or task type → `vnext-schema`, `vnext-forge`, `vnext-docs`; new
     config key → `vnext-helm-charts`; …). For each `yes`, propose a handoff draft at
     `docs/integration/<product>/<slug>.md` from
@@ -66,7 +67,8 @@ restore — **stop**, tell the user, and offer the revert described in
     `not-needed` with the reason.
   - A `BREAKING CHANGE:` footer in any commit ⇒ a `⚠️ Breaking change` note at the top of the body.
   - **Check the draft before showing it**: write the body to a scratch file and run
-    `node scripts/governance/pr-contract.mjs --body-file <draft.md> --title "<title>" --milestone <vX.Y.Z> --files-from-git origin/<base>`.
+    `node scripts/governance/pr-contract.mjs --body-file <draft.md> --title "<title>" --milestone <vX.Y.Z> --files-from-git origin/<base>`
+    (omit `--milestone` for a light-tier PR).
     Show its findings (rule ids: [reviewer: evidence §4](../../../docs/code-review/reviewers/evidence.md))
     together with the draft in Step 3, and offer to fix them; the draft may still be approved with
     findings if the user says so.
