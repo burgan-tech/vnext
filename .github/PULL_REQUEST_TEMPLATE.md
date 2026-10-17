@@ -4,7 +4,7 @@ Title: Conventional Commits, English, imperative, max 72 chars — `<type>(<scop
 Contract tiers (checked by the `PR Contract` workflow, `scripts/governance/pr-contract.mjs`):
 - Full — `feat`, `fix`, `perf`, `refactor` (also with `!`): every required section below is filled
   and the PR carries an open milestone `vX.Y.Z`.
-- Light — `test`, `docs`, `chore`, `ci`: a Conventional title and `## Summary` only; delete the
+- Light — `test`, `docs`, `chore`, `ci`, `style`, `revert` (and GitHub's auto title `Revert "…"`): a Conventional title and `## Summary` only; delete the
   other sections or leave them.
 - Exempt — a release merge titled `vX.Y.Z`.
 Required sections: Summary, vNext scope, E2E evidence, Product impact, vnext-meta impact.

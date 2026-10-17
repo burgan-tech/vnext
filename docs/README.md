@@ -21,7 +21,7 @@ describe the stable mental model, boundaries, failure modes, and change-safety r
 | [Contracts](contracts/api-and-service-contracts.md) | API shapes, validation, compatibility, error behavior. |
 | [Testing](testing/integration-testing.md) | How a runtime change is verified end to end: policy, sibling repos, local runtime, `VNEXT_BASE_URL`, scenario/index obligations, Aether local feed, Helm parity. |
 | [Observability verification](testing/observability-verification.md) | How a locally exercised change is confirmed through the MCP servers: traps, fallbacks when a server is down, OpenObserve query mechanics, the `postgres` connect timeout. |
-| Integration — [FanOutTask (Forge)](integration/forge-fanout-task-implementation.md), [Field protection (vnext-docs + Forge)](integration/field-protection-consumer-revision.md) | Implementation specs for consumer products (Forge Studio, CLI, SDKs) that build against runtime features. |
+| Integration — [FanOutTask (Forge)](integration/forge-fanout-task-implementation.md), [Field protection (vnext-docs + Forge)](integration/field-protection-consumer-revision.md) | Implementation specs for consumer products (Forge Studio, CLI, SDKs) that build against runtime features; the handoff-document [convention](integration/README.md). |
 | [Correlation and Tracing](runtime/correlation-and-tracing.md) | Tracing/correlation contract of the runtime: carriers (`traceparent`, trace lane anchor, activation episode, `X-Request-Id`, `X-Correlation-Id`), the APISIX gateway contract and per-job trace continuation. |
 
 ## Reading Path

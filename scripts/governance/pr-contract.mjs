@@ -18,11 +18,11 @@ const USAGE = '--event <path> | --pr <n> | --body-file <path> --title <t> [--mil
 function parseArgs(argv) {
   const out = {};
   for (let i = 0; i < argv.length; i++) {
-    if (!argv[i].startsWith('--')) throw new Error(`Unexpected argument: ${argv[i]}`);
+    if (!argv[i].startsWith('--')) throw new UsageError(`Unexpected argument: ${argv[i]}`);
     const key = argv[i].slice(2);
     const value = argv[i + 1];
-    if (value === undefined || value.startsWith('--')) throw new Error(`--${key} needs a value`);
-    if (NO_DASH.has(key) && value.startsWith('-')) throw new Error(`--${key} value must not start with "-" (usage: ${USAGE})`);
+    if (value === undefined || value.startsWith('--')) throw new UsageError(`--${key} needs a value`);
+    if (NO_DASH.has(key) && value.startsWith('-')) throw new UsageError(`--${key} value must not start with "-" (usage: ${USAGE})`);
     out[key] = value;
     i++;
   }
@@ -85,16 +85,14 @@ function fromDraft(args) {
   };
 }
 
-function main() {
-  const args = parseArgs(process.argv.slice(2));
-  const mode = args.mode ?? 'warn';
-  if (!['warn', 'enforce'].includes(mode)) throw new Error('--mode must be warn or enforce');
+class UsageError extends Error {}
 
+function main(args, mode) {
   let pr;
   if (args.event) pr = fromEvent(args.event);
   else if (args.pr) pr = fromReplay(args.pr, args.repo);
   else if (args['body-file']) pr = fromDraft(args);
-  else throw new Error('Provide one of --event, --pr or --body-file.');
+  else throw new UsageError('Provide one of --event, --pr or --body-file.');
 
   const repoRoot = resolve(args['repo-root'] ?? '.');
   const metaDir = resolve(args['meta-dir'] ?? 'vnext-meta');
@@ -127,9 +125,20 @@ function main() {
   process.exit(mode === 'enforce' && effective.some((f) => f.severity === 'error') ? 1 : 0);
 }
 
+let args;
+let mode;
 try {
-  main();
+  args = parseArgs(process.argv.slice(2));
+  mode = args.mode ?? 'warn';
+  if (!['warn', 'enforce'].includes(mode)) throw new UsageError('--mode must be warn or enforce');
+  main(args, mode);
 } catch (err) {
-  console.error(`pr-contract: ${err.message}`);
-  process.exit(2);
+  if (err instanceof UsageError || mode !== 'warn') {
+    console.error(`pr-contract: ${err.message}`);
+    process.exit(2);
+  }
+  // Warn mode never blocks: an infrastructure failure (gh api, rate limit, malformed event) is a warning.
+  const encoded = String(err.message).replace(/%/g, '%25').replace(/\r/g, '%0D').replace(/\n/g, '%0A');
+  console.log(`::warning title=PR-CONTRACT-CRASH::${encoded}`);
+  process.exit(0);
 }

@@ -45,7 +45,7 @@ restore — **stop**, tell the user, and offer the revert described in
   section for section. How to fill it:
   - Write every section from the actual commit messages and diff, not from the branch name.
   - The title type picks the contract tier (template header): `feat` / `fix` / `perf` / `refactor`
-    fill every required section; `test` / `docs` / `chore` / `ci` need only `## Summary`. Optional
+    fill every required section; `test` / `docs` / `chore` / `ci` / `style` / `revert` need only `## Summary`. Optional
     sections (`Changes`, `Test Plan`, `Notes`) are removed when empty — never leave placeholder text.
   - **Milestone** (full tier): ask the user, or list the open ones read-only with
     `gh api repos/<owner/repo>/milestones?state=open --jq '.[].title'` and propose the matching

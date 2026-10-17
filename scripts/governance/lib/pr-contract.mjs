@@ -12,7 +12,8 @@ import {
 /** @typedef {{id:string, severity:'error'|'warning', file:string, message:string}} Finding */
 
 const FULL_TYPES = ['feat', 'fix', 'perf', 'refactor'];
-const LIGHT_TYPES = ['test', 'docs', 'chore', 'ci'];
+const LIGHT_TYPES = ['test', 'docs', 'chore', 'ci', 'style', 'revert'];
+const GITHUB_REVERT_RE = /^Revert ".+"$/; // GitHub's auto title for a revert PR; light tier, no length cap
 const TITLE_RE = new RegExp(`^(${[...FULL_TYPES, ...LIGHT_TYPES].join('|')})(\\([^()\\s]+\\))?(!)?: \\S.*$`);
 const RELEASE_RE = /^v\d+\.\d+\.\d+$/;
 const MILESTONE_RE = /^v\d+\.\d+\.\d+$/;
@@ -40,12 +41,13 @@ export function checkPr(pr) {
   const title = (pr.title ?? '').trim();
   if (RELEASE_RE.test(title)) return findings; // release merge PRs are exempt from everything
 
-  const tm = TITLE_RE.exec(title);
-  if (!tm || title.length > 72) {
+  const githubRevert = GITHUB_REVERT_RE.test(title);
+  const tm = githubRevert ? null : TITLE_RE.exec(title);
+  if (!githubRevert && (!tm || title.length > 72)) {
     add('PR-TITLE', 'Title must be Conventional Commits (`type(scope)!: subject`, at most 72 characters) or a release title `vX.Y.Z`.');
     return findings;
   }
-  const light = LIGHT_TYPES.includes(tm[1]);
+  const light = githubRevert || LIGHT_TYPES.includes(tm[1]);
   const sections = parseSections(pr.body ?? '');
 
   const present = (key) => sections.has(key) && !isBlank(sections.get(key));

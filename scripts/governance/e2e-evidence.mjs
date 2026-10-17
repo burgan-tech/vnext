@@ -4,7 +4,7 @@
 // TRX comes from the integration tests in vnext-example:
 //   dotnet test --logger "trx;LogFileName=e2e.trx"
 // Output (stdout) is the block format that parseEvidence in lib/pr-body.mjs reads.
-import { readFileSync } from 'node:fs';
+import { readFileSync, realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { renderEvidence } from './lib/pr-body.mjs';
 
@@ -97,7 +97,7 @@ function main() {
   }));
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
     main();
   } catch (err) {

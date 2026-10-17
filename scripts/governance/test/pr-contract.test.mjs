@@ -74,6 +74,13 @@ for (const [id, over] of CASES) {
   });
 }
 
+for (const title of ['style: tidy', 'revert: undo x', 'Revert "feat: x"']) {
+  test(`light tier accepts ${title}`, () => {
+    const light = pr({ title, milestone: null, body: '## Summary\nOne line.\n', changedFiles: ['a.md'] });
+    assert.deepEqual(checkPr(light), []);
+  });
+}
+
 test('release title is exempt', () => {
   assert.deepEqual(checkPr(pr({ title: 'v0.0.100', milestone: null, body: '', changedFiles: ['vnext-meta/a.json'] })), []);
 });
@@ -181,4 +188,16 @@ test('CLI rejects option-looking values for path/ref arguments', () => {
     assert.equal(r.status, 2, flag + r.stderr);
     assert.match(r.stderr, /must not start with "-"/);
   }
+});
+
+test('CLI: runtime crash is non-blocking in warn mode, exit 2 in enforce', () => {
+  const cli = join(here, '..', 'pr-contract.mjs');
+  const missing = join(tmpdir(), 'prc-no-such-event.json');
+  const warn = spawnSync('node', [cli, '--event', missing, '--mode', 'warn'], { encoding: 'utf8', env: { ...process.env, GITHUB_ACTIONS: 'true' } });
+  assert.equal(warn.status, 0, warn.stdout + warn.stderr);
+  assert.match(warn.stdout, /::warning title=PR-CONTRACT-CRASH::/);
+  const enforce = spawnSync('node', [cli, '--event', missing, '--mode', 'enforce'], { encoding: 'utf8' });
+  assert.equal(enforce.status, 2, enforce.stdout + enforce.stderr);
+  const usage = spawnSync('node', [cli, '--bogus'], { encoding: 'utf8' });
+  assert.equal(usage.status, 2);
 });

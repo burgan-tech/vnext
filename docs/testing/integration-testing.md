@@ -296,7 +296,9 @@ node scripts/governance/e2e-evidence.mjs --trx <file>... --runtime-sha <sha> \
   --base-url http://localhost:<port> [--reds "<cause of every remaining red>"]
 ```
 
-The runtime SHA must be one of the PR's commits. When no run was part of the change, the block is
+The runtime SHA must be one of the PR's commits, so a rebase or force-push invalidates the evidence:
+redo the run or regenerate the block. Replay mode (`pr-contract.mjs --pr <n>`) reads handoff docs from
+the local working tree, not the PR head, so check out the PR branch first. When no run was part of the change, the block is
 `- Status: not-run` plus a `- Reason:` line. The `PR Contract` workflow checks the block (rule ids in
 [reviewer: evidence](../code-review/reviewers/evidence.md) §4); the
 `create-github-pr` skill drafts it.
