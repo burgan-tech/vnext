@@ -151,6 +151,13 @@ jobs:
           sed -i "s|<Version>.*</Version>|<Version>$VERSION</Version>|g" ./common.props
           echo "Updated common.props with version $VERSION"
 
+          # Lint twice: before the stamp (it consumes and deletes the fragments, so only now can their
+          # rules be checked) and after it (the stamped result).
+          if ! node scripts/governance/meta-lint.mjs --milestone "v$VERSION"; then
+            echo "::error::vnext-meta lint failed before stamping $VERSION; nothing was committed or published."
+            exit 1
+          fi
+
           node scripts/governance/meta-stamp.mjs --version "$VERSION" --date "$(date -u +%F)" \
             ${SCHEMA_VERSION:+--schema-version "$SCHEMA_VERSION"} \
             --notes-out "$RUNNER_TEMP/release-notes.json"
