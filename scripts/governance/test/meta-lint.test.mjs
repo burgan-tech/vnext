@@ -4,7 +4,7 @@ import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } f
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { lintMeta, fragmentHash } from '../lib/meta-lint.mjs';
+import { lintMeta, fragmentHash, isFragmentPath } from '../lib/meta-lint.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const BASE = join(here, 'fixtures', 'meta-base');
@@ -331,6 +331,20 @@ test('released fragment: an unparseable or wrongly shaped record is an error nam
 test('fragmentHash is the sha256 hex of the raw bytes', () => {
   assert.equal(fragmentHash('abc'), 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad');
   assert.equal(fragmentHash(Buffer.from('abc')), fragmentHash('abc'));
+});
+
+test('isFragmentPath accepts only vnext-meta/unreleased/<slug>.json', () => {
+  assert.equal(isFragmentPath('vnext-meta/unreleased/my-feature.json'), true);
+  for (const p of [
+    'vnext-meta/unreleased/README.md',
+    'vnext-meta/unreleased/My_Feature.json',
+    'vnext-meta/unreleased/-x.json',
+    'vnext-meta/unreleased/a/b.json',
+    'vnext-meta/features.json',
+    'other/vnext-meta/unreleased/a.json',
+  ]) {
+    assert.equal(isFragmentPath(p), false, p);
+  }
 });
 
 // CI lints the same live data in the contract step, under PR_CONTRACT_MODE control; here it would bypass warn mode.

@@ -88,6 +88,12 @@ export const fragmentHash = (bytes) => createHash('sha256').update(bytes).digest
  */
 export const RELEASED_FRAGMENTS = 'released-fragments.json';
 
+/** True when a repo-relative path is a release fragment, `vnext-meta/unreleased/<slug>.json`. */
+export function isFragmentPath(path) {
+  const m = /^vnext-meta\/([^/]+)\/([^/]+)\.json$/.exec(path);
+  return m !== null && m[1] === FRAGMENT_DIR && SLUG.test(m[2]);
+}
+
 /**
  * Reads `<metaDir>/released-fragments.json`. A missing file is an empty record; an unparseable or wrongly
  * shaped one yields an empty record plus a `problem` (`META-PARSE` / `META-SHAPE`).

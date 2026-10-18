@@ -8,7 +8,7 @@ import {
   parseProductImpact,
   parseMetaImpact,
 } from './pr-body.mjs';
-import { META_FILES, FRAGMENT_DIR } from './meta-lint.mjs';
+import { META_FILES, isFragmentPath } from './meta-lint.mjs';
 
 /** @typedef {{id:string, severity:'error'|'warning', file:string, message:string}} Finding */
 
@@ -146,11 +146,9 @@ function checkHandoffDoc(path, product, pr, add) {
   if (bad.length > 0) add('PR-HANDOFF-DOC', `Handoff doc frontmatter is invalid (${bad.join('; ')}).`, 'error', path);
 }
 
-const META_FRAGMENT_RE = new RegExp(`^vnext-meta/${FRAGMENT_DIR}/[a-z0-9][a-z0-9-]*\\.json$`);
-
 /** A changed path counts as a vnext-meta change only if it is a release fragment or one of the shipped data files. */
 function isMetaChange(f) {
-  return META_FRAGMENT_RE.test(f) || META_FILES.some((name) => f === `vnext-meta/${name}`);
+  return isFragmentPath(f) || META_FILES.some((name) => f === `vnext-meta/${name}`);
 }
 
 function checkMeta(text, pr, add) {
