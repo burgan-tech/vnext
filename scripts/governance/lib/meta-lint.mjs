@@ -47,10 +47,12 @@ const TASK_ENUMS = 'src/BBT.Workflow.Domain/Definitions/Tasks/TaskEnums.cs';
 const FUNCTION_CONSTS = 'src/BBT.Workflow.Domain/Definitions/Functions/FunctionTypeConst.cs';
 const EXTENSION_ENUMS = 'src/BBT.Workflow.Domain/Definitions/Extensions/ExtensionEnums.cs';
 
-const isSemver = (v) => typeof v === 'string' && SEMVER.test(v);
+/** True when `v` is a plain `X.Y.Z` version string. */
+export const isSemver = (v) => typeof v === 'string' && SEMVER.test(v);
 const parts = (v) => v.match(SEMVER).slice(1).map(Number);
 
-function compare(a, b) {
+/** Orders two `X.Y.Z` versions: negative when `a < b`, 0 when equal, positive when `a > b`. */
+export function compareSemver(a, b) {
   const pa = parts(a);
   const pb = parts(b);
   for (let i = 0; i < 3; i++) if (pa[i] !== pb[i]) return pa[i] - pb[i];
@@ -239,7 +241,7 @@ export function lintMeta({ metaDir, repoRoot, milestone }) {
       const entry = manifest.versions[key];
       if (!isSemver(key)) {
         add('META-MANIFEST-ORDER', f, `Manifest key "${key}" is not a semver version.`);
-      } else if (prevKey !== null && isSemver(prevKey) && compare(prevKey, key) <= 0) {
+      } else if (prevKey !== null && isSemver(prevKey) && compareSemver(prevKey, key) <= 0) {
         add('META-MANIFEST-ORDER', f, `Manifest key "${key}" is not strictly below the previous key "${prevKey}".`);
       }
       const date = entry && entry.releasedAt;
@@ -262,7 +264,7 @@ export function lintMeta({ metaDir, repoRoot, milestone }) {
       }
     }
     const valid = manifestKeys.filter(isSemver);
-    newest = valid.length ? valid.reduce((a, b) => (compare(a, b) >= 0 ? a : b)) : null;
+    newest = valid.length ? valid.reduce((a, b) => (compareSemver(a, b) >= 0 ? a : b)) : null;
   }
 
   // META-RUNTIME-VERSION
@@ -288,7 +290,7 @@ export function lintMeta({ metaDir, repoRoot, milestone }) {
         if (value === null) return;
         if (!isSemver(value)) {
           add('META-SINCE', file, `${path} must be null or a semver version, got ${JSON.stringify(value)}.`);
-        } else if (compare(value, newest) <= 0) {
+        } else if (compareSemver(value, newest) <= 0) {
           if (!manifestSet.has(value)) add('META-SINCE', file, `${path} "${value}" is not a release in version-manifest.json.`);
         } else if (ms === null) {
           add('META-SINCE', file, `${path} "${value}" is ahead of the newest release ${newest}; pass --milestone to confirm it.`, 'warning');

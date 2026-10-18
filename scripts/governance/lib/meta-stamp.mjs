@@ -2,7 +2,7 @@
 // into the shipped files and the release manifest. Dependency-free: Node built-ins only.
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { FRAGMENT_DIR, NEXT, RELEASED_FRAGMENTS, readFragments, readReleasedFragments, releasedAs } from './meta-lint.mjs';
+import { FRAGMENT_DIR, NEXT, compareSemver as compare, RELEASED_FRAGMENTS, readFragments, readReleasedFragments, releasedAs } from './meta-lint.mjs';
 
 const SEMVER = /^(\d+)\.(\d+)\.(\d+)$/;
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
@@ -16,12 +16,6 @@ const LISTS = [
 export const releaseNotesUrl = (version) =>
   `https://burgan-tech.github.io/vnext-docs/blog/release-v${version.replaceAll('.', '-')}`;
 
-const compare = (a, b) => {
-  const pa = a.match(SEMVER).slice(1).map(Number);
-  const pb = b.match(SEMVER).slice(1).map(Number);
-  for (let i = 0; i < 3; i++) if (pa[i] !== pb[i]) return pa[i] - pb[i];
-  return 0;
-};
 const maxSemver = (list) => list.reduce((a, b) => (a === undefined || compare(b, a) > 0 ? b : a), undefined);
 const isObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 
