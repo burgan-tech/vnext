@@ -9,6 +9,9 @@ import { fileURLToPath } from 'node:url';
 import { checkPr, formatAnnotation } from '../lib/pr-contract.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
+// The CLI switches to annotation output and appends to the job summary when it runs inside
+// GitHub Actions; spawn it without those variables so the tests behave the same in CI and locally.
+const { GITHUB_ACTIONS: _a, GITHUB_STEP_SUMMARY: _s, ...localEnv } = process.env;
 const VALID = readFileSync(join(here, 'fixtures', 'pr', 'valid-feat.md'), 'utf8');
 const SHA = '3f2a9c1e5d0000000000000000000000000000aa';
 
@@ -164,13 +167,13 @@ test('CLI smoke: --body-file draft in enforce mode', () => {
   const cli = join(here, '..', 'pr-contract.mjs');
   const hermetic = ['--meta-dir', join(here, 'fixtures', 'meta-base', 'meta'), '--repo-root', join(here, 'fixtures', 'meta-base', 'repo')];
   writeFileSync(file, VALID.replace('3f2a9c1e5d', 'abcdef1234'));
-  const bad = spawnSync('node', [cli, '--body-file', file, '--title', 'feat(x): y', '--milestone', 'v0.0.101', '--mode', 'enforce', ...hermetic], { encoding: 'utf8' });
+  const bad = spawnSync('node', [cli, '--body-file', file, '--title', 'feat(x): y', '--milestone', 'v0.0.101', '--mode', 'enforce', ...hermetic], { encoding: 'utf8', env: localEnv });
   assert.equal(bad.status, 1, bad.stdout + bad.stderr);
   assert.match(bad.stdout, /PR-E2E-RUN/);
-  const warn = spawnSync('node', [cli, '--body-file', file, '--title', 'feat(x): y', '--milestone', 'v0.0.101', '--mode', 'warn', ...hermetic], { encoding: 'utf8' });
+  const warn = spawnSync('node', [cli, '--body-file', file, '--title', 'feat(x): y', '--milestone', 'v0.0.101', '--mode', 'warn', ...hermetic], { encoding: 'utf8', env: localEnv });
   assert.equal(warn.status, 0, warn.stdout + warn.stderr);
   assert.match(warn.stdout, /WARNING PR-E2E-RUN/);
-  const rel = spawnSync('node', [cli, '--body-file', file, '--title', 'v0.0.100', '--mode', 'enforce', ...hermetic], { encoding: 'utf8' });
+  const rel = spawnSync('node', [cli, '--body-file', file, '--title', 'v0.0.100', '--mode', 'enforce', ...hermetic], { encoding: 'utf8', env: localEnv });
   assert.equal(rel.status, 0, rel.stdout + rel.stderr);
   assert.doesNotMatch(rel.stdout, /PR-/);
 });
@@ -184,7 +187,7 @@ test('annotation encoding follows workflow-command rules', () => {
 test('CLI rejects option-looking values for path/ref arguments', () => {
   const cli = join(here, '..', 'pr-contract.mjs');
   for (const flag of ['--pr', '--files-from-git', '--body-file', '--event']) {
-    const r = spawnSync('node', [cli, flag, '-oops'], { encoding: 'utf8' });
+    const r = spawnSync('node', [cli, flag, '-oops'], { encoding: 'utf8', env: localEnv });
     assert.equal(r.status, 2, flag + r.stderr);
     assert.match(r.stderr, /must not start with "-"/);
   }
@@ -193,11 +196,11 @@ test('CLI rejects option-looking values for path/ref arguments', () => {
 test('CLI: runtime crash is non-blocking in warn mode, exit 2 in enforce', () => {
   const cli = join(here, '..', 'pr-contract.mjs');
   const missing = join(tmpdir(), 'prc-no-such-event.json');
-  const warn = spawnSync('node', [cli, '--event', missing, '--mode', 'warn'], { encoding: 'utf8', env: { ...process.env, GITHUB_ACTIONS: 'true' } });
+  const warn = spawnSync('node', [cli, '--event', missing, '--mode', 'warn'], { encoding: 'utf8', env: { ...localEnv, GITHUB_ACTIONS: 'true' } });
   assert.equal(warn.status, 0, warn.stdout + warn.stderr);
   assert.match(warn.stdout, /::warning title=PR-CONTRACT-CRASH::/);
-  const enforce = spawnSync('node', [cli, '--event', missing, '--mode', 'enforce'], { encoding: 'utf8' });
+  const enforce = spawnSync('node', [cli, '--event', missing, '--mode', 'enforce'], { encoding: 'utf8', env: localEnv });
   assert.equal(enforce.status, 2, enforce.stdout + enforce.stderr);
-  const usage = spawnSync('node', [cli, '--bogus'], { encoding: 'utf8' });
+  const usage = spawnSync('node', [cli, '--bogus'], { encoding: 'utf8', env: localEnv });
   assert.equal(usage.status, 2);
 });
