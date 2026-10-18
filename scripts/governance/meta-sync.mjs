@@ -19,7 +19,8 @@ const dryRun = flag('--dry-run');
 
 let tmp;
 try {
-  if (!source || !target) throw new Error('usage: --source <meta dir> --target <meta dir> [--dry-run]');
+  // A missing value, or one that is the next flag (`--source --target x`), is a usage error.
+  if ([source, target].some((v) => !v || v.startsWith('--'))) throw new Error('usage: --source <meta dir> --target <meta dir> [--dry-run]');
   let work = resolve(target);
   if (dryRun) {
     tmp = mkdtempSync(join(tmpdir(), 'meta-sync-dry-'));

@@ -1,6 +1,6 @@
 // Brings a patch line's vnext-meta (e.g. release-v1.1 after 1.1.9) back into master's, which may already
 // carry the next minor. Dependency-free: Node built-ins only. Process: docs/governance/release-lines.md.
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { META_FILES, RELEASED_FRAGMENTS, compareSemver, isSemver, readReleasedFragments } from './meta-lint.mjs';
 
@@ -50,9 +50,23 @@ function lowerVersion(target, source) {
   return target;
 }
 
+const SEMVER_TOKEN = /\b\d+\.\d+\.\d+\b/g;
+
+/**
+ * `affectedVersions` ranges with the same shape (equal once every version is a placeholder) take the lower
+ * version at each position, so `>=0.1.0` and `>=0.0.101` become `>=0.0.101`; other shapes keep the target's.
+ */
+function lowerRange(target, source) {
+  if (typeof target !== 'string' || typeof source !== 'string') return target;
+  if (target.replace(SEMVER_TOKEN, '#') !== source.replace(SEMVER_TOKEN, '#')) return target;
+  const theirs = source.match(SEMVER_TOKEN) ?? [];
+  let i = 0;
+  return target.replace(SEMVER_TOKEN, (mine) => lowerVersion(mine, theirs[i++]));
+}
+
 /**
  * Returns a copy of `target` where every lifecycle field (at any depth) takes the lower release of the two
- * sides. Every other field keeps the target's value.
+ * sides, and `affectedVersions` the lower range (see lowerRange). Every other field keeps the target's value.
  */
 function mergeVersions(target, source) {
   if (Array.isArray(target)) {
@@ -62,7 +76,9 @@ function mergeVersions(target, source) {
   return Object.fromEntries(
     Object.entries(target).map(([k, v]) => {
       if (!Object.hasOwn(source, k)) return [k, v];
-      return [k, VERSION_KEYS.has(k) ? lowerVersion(v, source[k]) : mergeVersions(v, source[k])];
+      if (VERSION_KEYS.has(k)) return [k, lowerVersion(v, source[k])];
+      if (k === 'affectedVersions') return [k, lowerRange(v, source[k])];
+      return [k, mergeVersions(v, source[k])];
     }),
   );
 }
@@ -110,13 +126,19 @@ function mergeFeatures(target, source) {
   return out;
 }
 
+const hasId = (item) => isObject(item) && typeof item.id === 'string';
+
+/** Items match by string `id`; an item without one is appended only when no identical item exists. */
 function mergeList(target, source) {
   const items = target.items.map((item) => {
-    const theirs = isObject(item) ? source.items.find((s) => isObject(s) && s.id === item.id) : undefined;
+    const theirs = hasId(item) ? source.items.find((s) => hasId(s) && s.id === item.id) : undefined;
     return theirs ? mergeVersions(item, theirs) : item;
   });
   for (const entry of source.items) {
-    if (isObject(entry) && !items.some((i) => isObject(i) && i.id === entry.id)) items.push(entry);
+    const present = hasId(entry)
+      ? items.some((i) => hasId(i) && i.id === entry.id)
+      : items.some((i) => JSON.stringify(i) === JSON.stringify(entry));
+    if (!present) items.push(entry);
   }
   return { ...target, items };
 }
@@ -127,6 +149,11 @@ function mergeRecord(target, source) {
     if (!Object.hasOwn(record, version)) {
       record = insertDescending(record, version, slugs);
     } else {
+      for (const [slug, hash] of Object.entries(slugs)) {
+        if (Object.hasOwn(record[version], slug) && record[version][slug] !== hash) {
+          throw new Error(`${RELEASED_FRAGMENTS}: fragment ${slug} of release ${version} has a different hash on source and target.`);
+        }
+      }
       const extra = Object.entries(slugs).filter(([slug]) => !Object.hasOwn(record[version], slug));
       if (extra.length) record = { ...record, [version]: { ...record[version], ...Object.fromEntries(extra) } };
     }
@@ -159,8 +186,7 @@ export function syncMeta({ sourceDir, targetDir }) {
   for (const [file, doc] of Object.entries(merged)) {
     if (JSON.stringify(doc) !== JSON.stringify(target.docs[file])) writes.push([file, doc]);
   }
-  const recordExists = existsSync(join(targetDir, RELEASED_FRAGMENTS));
-  if (JSON.stringify(record) !== JSON.stringify(target.record) || (!recordExists && Object.keys(record).length)) {
+  if (JSON.stringify(record) !== JSON.stringify(target.record)) {
     writes.push([RELEASED_FRAGMENTS, record]);
   }
   for (const [file, doc] of writes) {

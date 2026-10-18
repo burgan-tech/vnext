@@ -165,3 +165,76 @@ test('CLI --dry-run leaves the target untouched', () => {
   assert.equal(missing.status, 1);
   assert.match(missing.stderr, /--source/);
 });
+
+const knownIssueFragment = {
+  releaseNote: note('Introduce and track k2.'),
+  knownIssues: [{ id: 'k2', affectedVersions: '>=next', fixedIn: null }],
+};
+
+/** Target stamped 0.1.0 and source stamped 0.0.101 from the same fragment bytes; `edit` runs on the target after its stamp. */
+function bothLines(fragment, edit = () => {}) {
+  const target = setup({ 'shared.json': text(fragment) });
+  stampMeta({ metaDir: target.metaDir, version: '0.1.0', date: '2026-10-10' });
+  edit(target.metaDir);
+  const source = setup({ 'shared.json': text(fragment) });
+  stampMeta({ metaDir: source.metaDir, version: '0.0.101', date: '2026-10-20' });
+  return { target, source };
+}
+const editJson = (metaDir, file, fn) => {
+  const doc = readJson(metaDir, file);
+  fn(doc);
+  writeFileSync(join(metaDir, file), JSON.stringify(doc, null, 2) + '\n');
+};
+
+test('a known issue added on both lines keeps the earliest affected version', () => {
+  const { target, source } = bothLines(knownIssueFragment);
+  syncMeta({ sourceDir: source.metaDir, targetDir: target.metaDir });
+  const k2 = readJson(target.metaDir, 'known-issues.json').items.find((k) => k.id === 'k2');
+  assert.equal(k2.affectedVersions, '>=0.0.101');
+  assert.equal(k2.fixedIn, null);
+  assert.deepEqual(lintMeta({ metaDir: target.metaDir, repoRoot: target.repoRoot }), []);
+});
+
+test('differently shaped affectedVersions keep the target string', () => {
+  const { target, source } = bothLines(knownIssueFragment, (t) =>
+    editJson(t, 'known-issues.json', (d) => { d.items.find((k) => k.id === 'k2').affectedVersions = '>=0.1.0 <0.2.0'; }),
+  );
+  syncMeta({ sourceDir: source.metaDir, targetDir: target.metaDir });
+  assert.equal(readJson(target.metaDir, 'known-issues.json').items.find((k) => k.id === 'k2').affectedVersions, '>=0.1.0 <0.2.0');
+});
+
+test('same slug and version with a different hash throws and writes nothing', () => {
+  const { target, source } = bothLines(featureFragment);
+  // Pretend master also recorded the slug under 0.0.101, with other bytes.
+  editJson(target.metaDir, 'released-fragments.json', (d) => { d['0.0.101'] = { shared: 'f'.repeat(64) }; });
+  const before = snapshot(target.metaDir);
+  assert.throws(() => syncMeta({ sourceDir: source.metaDir, targetDir: target.metaDir }), /shared.*0\.0\.101|0\.0\.101.*shared/);
+  assert.deepEqual(snapshot(target.metaDir), before);
+});
+
+test('items without a string id are matched by content', () => {
+  const target = setup();
+  const source = setup();
+  for (const dir of [target.metaDir, source.metaDir]) {
+    editJson(dir, 'migrations.json', (d) => { d.items.push({ note: 'id-less', since: '0.0.100' }); });
+  }
+  editJson(source.metaDir, 'migrations.json', (d) => { d.items.push({ note: 'other', since: '0.0.99' }, { id: 7, since: '0.0.99' }); });
+  const r = syncMeta({ sourceDir: source.metaDir, targetDir: target.metaDir });
+  assert.deepEqual(readJson(target.metaDir, 'migrations.json').items, [
+    { id: 'm1', since: '0.0.100' },
+    { note: 'id-less', since: '0.0.100' },
+    { note: 'other', since: '0.0.99' },
+    { id: 7, since: '0.0.99' },
+  ]);
+  assert.deepEqual(r.changed, ['migrations.json']);
+  const once = snapshot(target.metaDir);
+  assert.equal(syncMeta({ sourceDir: source.metaDir, targetDir: target.metaDir }).status, 'up-to-date');
+  assert.deepEqual(snapshot(target.metaDir), once);
+});
+
+test('CLI rejects a flag value that is another flag', () => {
+  const target = setup();
+  const r = spawnSync('node', [CLI, '--source', '--target', target.metaDir], { encoding: 'utf8', env: localEnv });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /usage/);
+});
