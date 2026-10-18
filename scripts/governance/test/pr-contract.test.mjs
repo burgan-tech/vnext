@@ -118,6 +118,30 @@ test('meta updated passes when a meta file changed', () => {
   assert.deepEqual(checkPr(pr({ body, changedFiles: ['vnext-meta/features.json'] })), []);
 });
 
+const UPDATED = () => swap('- Status: not-needed\n- Reason: No runtime contract changed in this PR.', '- Status: updated');
+
+test('PR-META: a changed fragment counts as updated', () => {
+  assert.deepEqual(checkPr(pr({ body: UPDATED(), changedFiles: ['vnext-meta/unreleased/my-change.json'] })), []);
+});
+
+test('PR-META: a fragment with not-needed is an error', () => {
+  const f = checkPr(pr({ changedFiles: ['vnext-meta/unreleased/my-change.json'] }));
+  assert.deepEqual(ids(f), ['PR-META']);
+  assert.match(f[0].message, /vnext-meta\/unreleased\/my-change\.json/);
+});
+
+test('PR-META: package-lock.json alone does not count as updated', () => {
+  const f = checkPr(pr({ body: UPDATED(), changedFiles: ['vnext-meta/package-lock.json'] }));
+  assert.deepEqual(ids(f), ['PR-META']);
+  assert.match(f[0].message, /updated/);
+});
+
+test('PR-META: README in unreleased does not count', () => {
+  const f = checkPr(pr({ body: UPDATED(), changedFiles: ['vnext-meta/unreleased/README.md'] }));
+  assert.deepEqual(ids(f), ['PR-META']);
+  assert.match(f[0].message, /updated/);
+});
+
 test('not-run with a real reason passes', () => {
   const body = swap(/- Status: run[\s\S]*?\n\n## Product/.exec(VALID)[0], '- Status: not-run\n- Reason: Governance scripts only, no runtime.\n\n## Product');
   assert.deepEqual(checkPr(pr({ body })), []);
