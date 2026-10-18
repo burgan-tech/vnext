@@ -44,15 +44,28 @@ same day. Remove the label when the forward-port PR is merged.
 - **Latest line:** the existing release back-merge into `master` applies unchanged.
 - **Older lines:** the release workflow's `sync-meta-to-master` job opens or updates the PR
   `meta-sync/vX.Y.Z` (`chore(meta): sync vnext-meta for vX.Y.Z`) to `master`, produced by
-  `meta-sync.mjs`. Merge it promptly: until then `master` does not know the patch release and the
-  next stamp can misorder history.
+  `meta-sync.mjs`. Merge it promptly: the next sync carries every missing row anyway, but until it
+  is merged `master`'s meta and the latest npm package lack the patch release's row and its
+  `fixedIn` values, and `master`'s leftover fragment is not recognised as released.
 - Fragments consumed on both sides become leftovers that the next stamp deletes
   ([format and leftovers](../../vnext-meta/unreleased/README.md)).
 - Limitation: an item or feature key that `master` later deletes comes back on the next sync from an
-  older line that still has it. Delete it on that line too, or fix upstream-first.
+  older line that still has it. Delete it on that line too, or fix upstream-first. Because the
+  lower version wins, a `since`/`fixedIn` that `master` deliberately raised is lowered again by the
+  next sync from an older line; correct it on that line too.
+- If `master`'s copy of a released fragment differs from the released bytes (for example edited
+  while resolving a cherry-pick conflict), the sync job's lint fails (the slug counts as reused,
+  `META-FRAGMENT-RELEASED` as an error) and no PR opens. Delete `master`'s copy of the fragment,
+  then re-run the sync job.
 
-The job uses `master`'s copy of the scripts, so it works only for releases made after this change
-is on `master`.
+## Prerequisite: the line must carry this process
+
+A push or dispatch on `release-vX.Y` runs that branch's own copy of `build-and-publish-images.yml`,
+`meta-stamp` and `meta-lint`; only the `sync-meta-to-master` job's `meta-sync` runs from `master`.
+A line without this change (and the meta-fragment release stamping) would, on its first release that
+is not the highest version, move Docker, npm and GitHub "latest" backwards, roll the chart back and
+open no sync PR. The change must be on every supported `release-vX.Y` before that line's first such
+release. A line cut from `master` after this change merged has it automatically.
 
 ## Channels
 
@@ -72,8 +85,9 @@ can opt in later. Until then patch-line deployments set the image tag through va
 ## Milestones
 
 Each patch release has its own milestone `vX.Y.Z` (for example `v0.0.101` next to `v0.1.0`). The
-backport PR copies the milestone of the original PR; if the patch ships under a different version,
-change it on the backport PR before merging.
+`master` fix PR carries the milestone of the lowest line it ships in (for example `v1.1.9`, not
+`v1.2.0`). The backport keeps the copied milestone, because `PR-HANDOFF-DOC` requires a handoff doc's
+milestone to equal the PR's.
 
 ## Labels a repo admin creates
 
@@ -83,6 +97,7 @@ change it on the backport PR before merging.
 
 ## Release-owner checklist
 
+- [ ] The line already carries this change (see Prerequisite) before its first non-latest release.
 - [ ] The backport PR carries `Backport of #<n>` (or `needs-forward-port` for an emergency fix) and
       the right milestone.
 - [ ] The release is published from the `release-vX.Y` branch; the run shows the expected channels
