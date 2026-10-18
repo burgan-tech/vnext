@@ -10,6 +10,7 @@ Contract tiers (checked by the `PR Contract` workflow, `scripts/governance/pr-co
 Required sections: Summary, vNext scope, E2E evidence, Product impact, vnext-meta impact.
 Optional: Changes, Test Plan, Notes. A `<...>` placeholder counts as blank.
 Rule ids and what each one checks: docs/code-review/reviewers/evidence.md §4.
+PRs into a `release-v*` branch (backports, emergency fixes): docs/governance/release-lines.md.
 
 Generate the E2E evidence block from the TRX of the vnext-example run:
   node scripts/governance/e2e-evidence.mjs --trx <file>... --runtime-sha <sha> --base-url <url> [--reds "<text>"]

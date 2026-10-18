@@ -47,6 +47,10 @@ restore — **stop**, tell the user, and offer the revert described in
   - The title type picks the contract tier (template header): `feat` / `fix` / `perf` / `refactor`
     fill every required section; `test` / `docs` / `chore` / `ci` / `style` / `revert` need only `## Summary`. Optional
     sections (`Changes`, `Test Plan`, `Notes`) are removed when empty — never leave placeholder text.
+  - **Release lines**: a `fix` / `perf` PR that must also ship on an older line proposes the label
+    `backport/release-vX.Y` (added after the PR is opened or merged, with the user's approval). A PR
+    whose base is `release-v*` follows [Release lines](../../../docs/governance/release-lines.md):
+    a line `Backport of #<n>` or the label `needs-forward-port`.
   - **Milestone** (full tier): ask the user, or list the open ones read-only with
     `gh api repos/<owner/repo>/milestones?state=open --jq '.[].title'` and propose the matching
     `vX.Y.Z`.

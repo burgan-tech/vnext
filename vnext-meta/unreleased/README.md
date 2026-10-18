@@ -63,6 +63,12 @@ has to be done by hand:
 - **Slugs are single-use.** A fragment whose slug was recorded by an earlier release but whose content
   differs is an error (lint and stamp): give the new change a new slug.
 
+## Patch lines
+
+A release on an older line (`release-vX.Y`) returns its meta to `master` through the `meta-sync/vX.Y.Z`
+sync PR (`scripts/governance/meta-sync.mjs`) instead of the back-merge, which is only for the latest
+line. Process and the one known limitation: [Release lines](../../docs/governance/release-lines.md).
+
 ## Example
 
 `vnext-meta/unreleased/my-feature.json`:

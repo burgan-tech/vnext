@@ -163,6 +163,8 @@ Rule ids: `PR-*` in [reviewer: evidence §4](code-review/reviewers/evidence.md),
 | [`scripts/governance/e2e-evidence.mjs`](../scripts/governance/e2e-evidence.mjs) | Renders the PR's `## E2E evidence` block from vnext-example TRX files | `--trx <file>... --runtime-sha <sha> --base-url <url> [--reds "<text>"]` |
 | [`scripts/governance/meta-lint.mjs`](../scripts/governance/meta-lint.mjs) | Deterministic lint of `vnext-meta/` (parse, shape, manifest order, `since` timeline, registry keys in code) | `[--milestone vX.Y.Z] [--json]`; also part of every PR Contract run, regardless of title |
 | [`scripts/governance/meta-stamp.mjs`](../scripts/governance/meta-stamp.mjs) | Release stamp: turns `vnext-meta/unreleased/` fragments into versioned data files, adds the manifest row, records and deletes the fragments, deletes back-merge leftovers ([format](../vnext-meta/unreleased/README.md)) | `--version X.Y.Z [--date YYYY-MM-DD] [--schema-version X.Y.Z] [--meta-dir <path>] [--notes-out <file>] [--dry-run]`; CI: the release `prepare` job, lint → stamp → lint |
+| [`scripts/governance/meta-sync.mjs`](../scripts/governance/meta-sync.mjs) | Syncs a patch line's released `vnext-meta/` into master (every manifest row master lacks, union of ids and feature keys, lower version wins) | `--source <dir> --target <dir> [--dry-run]`; CI: `sync-meta-to-master` job of the release workflow, for lines that are not the latest ([process](governance/release-lines.md)) |
+| [`.github/workflows/backport.yml`](../.github/workflows/backport.yml) | Opens a backport PR to `release-vX.Y` for a merged PR labelled `backport/release-vX.Y` | CI: `pull_request_target` on `closed` / `labeled`; process: [Release lines](governance/release-lines.md) |
 
 ## 7. vnext-meta and documentation
 
