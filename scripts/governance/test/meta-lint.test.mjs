@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { cpSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -25,7 +25,11 @@ function lint(mutate = () => {}, milestone) {
     const p = join(dir, path);
     writeFileSync(p, fn(readFileSync(p, 'utf8')));
   };
-  mutate(editJson, editText);
+  const frag = (name, doc) => {
+    mkdirSync(join(metaDir, 'unreleased'), { recursive: true });
+    writeFileSync(join(metaDir, 'unreleased', name), typeof doc === 'string' ? doc : JSON.stringify(doc, null, 2));
+  };
+  mutate(editJson, editText, frag);
   return lintMeta({ metaDir, repoRoot, milestone });
 }
 
@@ -154,6 +158,130 @@ test('META-ID-UNIQUE: duplicate ids', () => {
     json('known-issues.json', (d) => { d.items.push({ ...d.items[0] }); });
   });
   assert.deepEqual(ids(f), ['META-ID-UNIQUE', 'META-ID-UNIQUE']);
+});
+
+const NOTE = { summary: 'A change.', breaking: false, docs: [] };
+const validFragment = () => ({
+  releaseNote: NOTE,
+  schemaVersion: '0.0.57',
+  features: { engine: { newThing: { since: 'next', status: 'stable' } } },
+  migrations: [{ id: 'm-new', since: 'next' }],
+  deprecations: [{ id: 'd-new', deprecatedSince: 'next', removedAt: null }],
+  knownIssues: [{ id: 'k-new', affectedVersions: '>=next', fixedIn: null }],
+  fixes: { knownIssues: ['k1'], deprecationsRemoved: ['d1'] },
+});
+
+test('fragment: valid fragment is clean', () => {
+  assert.deepEqual(lint((_, __, frag) => frag('a.json', validFragment())), []);
+});
+
+test('fragment: releaseNote-only fragment is clean', () => {
+  assert.deepEqual(lint((_, __, frag) => frag('a.json', { releaseNote: NOTE })), []);
+});
+
+test('fragment: missing releaseNote', () => {
+  const f = lint((_, __, frag) => frag('a.json', { migrations: [] }));
+  assert.deepEqual(ids(f), ['META-FRAGMENT']);
+  assert.equal(f[0].file, 'unreleased/a.json');
+});
+
+test('fragment: unknown top-level key', () => {
+  const f = lint((_, __, frag) => frag('a.json', { releaseNote: NOTE, knownIssue: [] }));
+  assert.deepEqual(ids(f), ['META-FRAGMENT']);
+});
+
+test('fragment: since is a version, not next', () => {
+  const f = lint((_, __, frag) => frag('a.json', { releaseNote: NOTE, migrations: [{ id: 'm-new', since: '0.0.101' }] }));
+  assert.deepEqual(ids(f), ['META-FRAGMENT']);
+});
+
+test('fragment: invalid JSON', () => {
+  assert.deepEqual(ids(lint((_, __, frag) => frag('a.json', '{ nope'))), ['META-FRAGMENT']);
+});
+
+test('fragment: bad slug', () => {
+  assert.deepEqual(ids(lint((_, __, frag) => frag('My_Frag.json', { releaseNote: NOTE }))), ['META-FRAGMENT']);
+});
+
+test('fragment: feature key already in features.json', () => {
+  const f = lint((_, __, frag) => frag('a.json', { releaseNote: NOTE, features: { engine: { x: { since: 'next' } } } }));
+  assert.deepEqual(ids(f), ['META-FRAGMENT']);
+});
+
+test('fragment: feature key already in another fragment', () => {
+  const doc = { releaseNote: NOTE, features: { engine: { y: { since: 'next' } } } };
+  const f = lint((_, __, frag) => {
+    frag('a.json', doc);
+    frag('b.json', doc);
+  });
+  assert.deepEqual(ids(f), ['META-FRAGMENT']);
+});
+
+test('fragment: id repeats a stamped id', () => {
+  const f = lint((_, __, frag) => frag('a.json', { releaseNote: NOTE, migrations: [{ id: 'm1', since: 'next' }] }));
+  assert.deepEqual(ids(f), ['META-ID-UNIQUE']);
+});
+
+test('fragment: id repeats across two fragments', () => {
+  const doc = { releaseNote: NOTE, migrations: [{ id: 'm-new', since: 'next' }] };
+  const f = lint((_, __, frag) => {
+    frag('a.json', doc);
+    frag('b.json', doc);
+  });
+  assert.deepEqual(ids(f), ['META-ID-UNIQUE']);
+});
+
+test('fragment: fixes an unknown or already fixed known issue', () => {
+  const unknown = lint((_, __, frag) => frag('a.json', { releaseNote: NOTE, fixes: { knownIssues: ['nope'] } }));
+  assert.deepEqual(ids(unknown), ['META-FRAGMENT']);
+  const fixed = lint((json, _, frag) => {
+    json('known-issues.json', (d) => { d.items[0].fixedIn = '0.0.100'; });
+    frag('a.json', { releaseNote: NOTE, fixes: { knownIssues: ['k1'] } });
+  });
+  assert.deepEqual(ids(fixed), ['META-FRAGMENT']);
+});
+
+test('fragment: fixes an unknown or already removed deprecation', () => {
+  const unknown = lint((_, __, frag) => frag('a.json', { releaseNote: NOTE, fixes: { deprecationsRemoved: ['nope'] } }));
+  assert.deepEqual(ids(unknown), ['META-FRAGMENT']);
+  const removed = lint((json, _, frag) => {
+    json('deprecations.json', (d) => { d.items[0].removedAt = '0.0.100'; });
+    frag('a.json', { releaseNote: NOTE, fixes: { deprecationsRemoved: ['d1'] } });
+  });
+  assert.deepEqual(ids(removed), ['META-FRAGMENT']);
+});
+
+test('fragment: a new known issue cannot be fixed in the same release', () => {
+  const f = lint((_, __, frag) =>
+    frag('a.json', { releaseNote: NOTE, knownIssues: [{ id: 'k-new', affectedVersions: '>=next', fixedIn: null }], fixes: { knownIssues: ['k-new'] } }),
+  );
+  assert.deepEqual(ids(f), ['META-FRAGMENT']);
+});
+
+test('fragment: unknown key inside fixes, bad releaseNote, new-entry lifecycle values', () => {
+  const bad = (doc) => ids(lint((_, __, frag) => frag('a.json', { releaseNote: NOTE, ...doc })));
+  assert.deepEqual(bad({ fixes: { knownIssue: [] } }), ['META-FRAGMENT']);
+  assert.deepEqual(bad({ releaseNote: { summary: '', breaking: false, docs: [] } }), ['META-FRAGMENT']);
+  assert.deepEqual(bad({ releaseNote: { summary: 'x', breaking: 'no', docs: [] } }), ['META-FRAGMENT']);
+  assert.deepEqual(bad({ releaseNote: { summary: 'x', breaking: false, docs: ['http://a'] } }), ['META-FRAGMENT']);
+  assert.deepEqual(bad({ schemaVersion: 'x' }), ['META-FRAGMENT']);
+  assert.deepEqual(bad({ features: { engine: { y: { status: 'stable' } } } }), ['META-FRAGMENT']);
+  assert.deepEqual(bad({ features: { engine: [] } }), ['META-FRAGMENT']);
+  assert.deepEqual(bad({ migrations: [{ since: 'next' }] }), ['META-FRAGMENT']);
+  assert.deepEqual(bad({ deprecations: [{ id: 'd-new', deprecatedSince: 'next', removedAt: '0.0.1' }] }), ['META-FRAGMENT']);
+  assert.deepEqual(bad({ knownIssues: [{ id: 'k-new', affectedVersions: '>=0.0.1', fixedIn: null }] }), ['META-FRAGMENT']);
+  assert.deepEqual(bad({ knownIssues: [{ id: 'k-new', affectedVersions: '>=next', fixedIn: '0.0.1' }] }), ['META-FRAGMENT']);
+});
+
+test('next outside unreleased is an error', () => {
+  const f = lint((json) => json('migrations.json', (d) => { d.items[0].since = 'next'; }));
+  assert.deepEqual(ids(f), ['META-SINCE']);
+  assert.equal(f[0].severity, 'error');
+  assert.match(f[0].message, /unreleased/);
+});
+
+test('README.md in unreleased is ignored', () => {
+  assert.deepEqual(lint((_, __, frag) => frag('README.md', '# notes')), []);
 });
 
 // CI lints the same live data in the contract step, under PR_CONTRACT_MODE control; here it would bypass warn mode.
