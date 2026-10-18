@@ -31,6 +31,7 @@ Do **not** skip categories because the change touched only one file — run all 
 | `security-policy.json` | Policy statements tied to enforcement in code. |
 | `migrations.json` | Migration notes (structure as in repo). |
 | `known-issues.json` | Known issues register (structure as in repo). |
+| `unreleased/*.json` | Version-less release fragments (`"next"` placeholders), stamped at release; format in `vnext-meta/unreleased/README.md`, linted as `META-FRAGMENT`. |
 | `index.js` | Package entry (non-JSON; only if user changed it or asks for full package health). |
 
 ---

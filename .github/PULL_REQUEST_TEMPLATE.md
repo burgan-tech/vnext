@@ -61,7 +61,7 @@ A yes row links a handoff: a docs/integration/<product>/<slug>.md file added or 
 
 ## vnext-meta impact
 <!--
-updated — a vnext-meta/*.json file changes in this PR (run `node scripts/governance/meta-lint.mjs`).
+updated — this PR adds or changes `vnext-meta/unreleased/<slug>.json` (format: `vnext-meta/unreleased/README.md`) or a data file; the release stamps the version (run `node scripts/governance/meta-lint.mjs`).
 not-needed — nothing in vnext-meta describes this change; give the reason.
 -->
 - Status: <updated | not-needed>

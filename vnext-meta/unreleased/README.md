@@ -41,8 +41,10 @@ a stamped file, and rejects any concrete version in a fragment entry (`META-FRAG
 At release time the stamp rewrites each shipped file with the real version: it replaces the value
 `"next"` in `since`, `deprecatedSince`, `enforcedSince`, `fixedIn` and `removedAt`, and the token `next`
 in `affectedVersions`. `fixes.knownIssues` sets `fixedIn` on the named known issue, and
-`fixes.deprecationsRemoved` sets `removedAt` on the named deprecation. The fragments are then deleted
-and their release notes go into the release manifest.
+`fixes.deprecationsRemoved` sets `removedAt` on the named deprecation. The manifest row gets the blog link
+(`https://burgan-tech.github.io/vnext-docs/blog/release-v<x-y-z>`), the fragments are deleted, and the
+`releaseNote` stubs are written by `meta-stamp.mjs --notes-out` to a `release-notes-<version>` workflow
+artifact (input for a later release-blog draft).
 
 ## Back-merge rule
 
