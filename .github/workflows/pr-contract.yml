@@ -3,9 +3,12 @@ name: PR Contract
 on:
   pull_request:
     types: [opened, edited, synchronize, reopened, milestoned, demilestoned, ready_for_review]
+    # Same targets as the `vnext-repo-protect` ruleset (default branch, release-*, sprint-*): once
+    # `pr-contract` is a required check there, a target this list misses would wait on it forever.
     branches:
       - master
-      - "release-v*"
+      - "release-*"
+      - "sprint-*"
 
 permissions:
   contents: read
