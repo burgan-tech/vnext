@@ -254,7 +254,7 @@ test('CLI writes no --notes-out when the version is already stamped', () => {
 test('CLI --dry-run does not touch the meta dir', () => {
   const { metaDir } = setup({ 'all.json': full });
   const before = snapshot(metaDir);
-  const r = spawnSync(process.execPath, [CLI, '--version', '0.0.101', '--date', '2026-10-20', '--meta-dir', metaDir, '--dry-run'], { encoding: 'utf8' });
+  const r = spawnSync(process.execPath, [CLI, '--version', '0.0.101', '--date', '2026-10-20', '--meta-dir', metaDir, '--dry-run'], { encoding: 'utf8', env: localEnv });
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /0\.0\.101/);
   assert.match(r.stdout, /all/);
@@ -264,11 +264,11 @@ test('CLI --dry-run does not touch the meta dir', () => {
 test('CLI stamps and writes --notes-out; bad version exits 1', () => {
   const { dir, metaDir } = setup({ 'all.json': full });
   const out = join(dir, 'notes.json');
-  const r = spawnSync(process.execPath, [CLI, '--version', '0.0.101', '--date', '2026-10-20', '--meta-dir', metaDir, '--notes-out', out], { encoding: 'utf8' });
+  const r = spawnSync(process.execPath, [CLI, '--version', '0.0.101', '--date', '2026-10-20', '--meta-dir', metaDir, '--notes-out', out], { encoding: 'utf8', env: localEnv });
   assert.equal(r.status, 0, r.stderr);
   const notes = JSON.parse(readFileSync(out, 'utf8'));
   assert.deepEqual([notes.version, notes.schemaVersion, notes.date], ['0.0.101', '0.0.57', '2026-10-20']);
   assert.equal(notes.notes[0].slug, 'all');
-  const bad = spawnSync(process.execPath, [CLI, '--version', 'nope', '--meta-dir', metaDir], { encoding: 'utf8' });
+  const bad = spawnSync(process.execPath, [CLI, '--version', 'nope', '--meta-dir', metaDir], { encoding: 'utf8', env: localEnv });
   assert.equal(bad.status, 1);
 });
