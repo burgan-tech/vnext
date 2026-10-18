@@ -2,7 +2,7 @@
 // into the shipped files and the release manifest. Dependency-free: Node built-ins only.
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { FRAGMENT_DIR, NEXT, readFragments } from './meta-lint.mjs';
+import { FRAGMENT_DIR, NEXT, RELEASED_FRAGMENTS, readFragments, readReleasedFragments, releasedAs } from './meta-lint.mjs';
 
 const SEMVER = /^(\d+)\.(\d+)\.(\d+)$/;
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
@@ -41,8 +41,10 @@ const serialize = (doc) => JSON.stringify(doc, null, 2) + '\n';
 
 /**
  * @param {{ metaDir: string, version: string, date: string, schemaVersion?: string }} opts
- * @returns {{ status: 'stamped'|'already-stamped', schemaVersion: string, consumed: string[],
+ * @returns {{ status: 'stamped'|'already-stamped', schemaVersion: string, consumed: string[], leftovers: string[],
  *   notes: { slug: string, summary: string, breaking: boolean, docs: string[] }[] }}
+ *   `consumed` fragments are merged and recorded in released-fragments.json under `version`; `leftovers`
+ *   (byte-identical copies of fragments an earlier release consumed) are only deleted.
  */
 export function stampMeta({ metaDir, version, date, schemaVersion }) {
   if (typeof version !== 'string' || !SEMVER.test(version)) throw new Error(`version must look like X.Y.Z (got ${JSON.stringify(version)}).`);
@@ -54,14 +56,25 @@ export function stampMeta({ metaDir, version, date, schemaVersion }) {
   const manifest = readJson(metaDir, 'version-manifest.json');
   const rows = manifest.versions ?? {};
   if (Object.hasOwn(rows, version)) {
-    return { status: 'already-stamped', schemaVersion: rows[version].schemaVersion, consumed: [], notes: [] };
+    return { status: 'already-stamped', schemaVersion: rows[version].schemaVersion, consumed: [], leftovers: [], notes: [] };
   }
   const newest = maxSemver(Object.keys(rows).filter((k) => SEMVER.test(k)));
   if (newest !== undefined && compare(version, newest) < 0) {
     throw new Error(`version ${version} is lower than the newest release ${newest} and is not in the manifest.`);
   }
 
-  const fragments = readFragments(metaDir);
+  const { record, problem } = readReleasedFragments(metaDir);
+  if (problem) throw new Error(`${RELEASED_FRAGMENTS}: ${problem.message}`);
+  // A byte-identical copy of a fragment an earlier release consumed (the back-merge keeps it) is a leftover:
+  // deleted, never merged again. A released slug with new content must be renamed.
+  const fragments = [];
+  const leftovers = [];
+  for (const f of readFragments(metaDir)) {
+    const released = releasedAs(record, f.slug, f.hash);
+    if (released?.leftover) leftovers.push(f);
+    else if (released) throw new Error(`Fragment ${f.file}: slug already used by release ${released.version}; rename the fragment.`);
+    else fragments.push(f);
+  }
   for (const f of fragments) {
     if (f.doc === null) throw new Error(`Fragment ${f.file} cannot be parsed: ${f.error}`);
     if (!isObject(f.doc)) throw new Error(`Fragment ${f.file} must be a JSON object.`);
@@ -116,12 +129,23 @@ export function stampMeta({ metaDir, version, date, schemaVersion }) {
     ['features.json', features],
     ...LISTS.map(([key, file]) => [file, lists[key]]),
   ];
+  if (fragments.length > 0) {
+    const { [version]: current, ...older } = record;
+    const recorded = { ...current, ...Object.fromEntries(fragments.map((f) => [f.slug, f.hash])) };
+    outputs.push([RELEASED_FRAGMENTS, { [version]: recorded, ...older }]);
+  }
   for (const [file, doc] of outputs) {
     const text = serialize(doc);
     const path = join(metaDir, file);
     if (!existsSync(path) || readFileSync(path, 'utf8') !== text) writeFileSync(path, text);
   }
-  for (const f of fragments) unlinkSync(join(metaDir, FRAGMENT_DIR, f.file));
+  for (const f of [...fragments, ...leftovers]) unlinkSync(join(metaDir, FRAGMENT_DIR, f.file));
 
-  return { status: 'stamped', schemaVersion: effectiveSchema, consumed: fragments.map((f) => f.slug), notes };
+  return {
+    status: 'stamped',
+    schemaVersion: effectiveSchema,
+    consumed: fragments.map((f) => f.slug),
+    leftovers: leftovers.map((f) => f.slug),
+    notes,
+  };
 }

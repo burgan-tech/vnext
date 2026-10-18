@@ -43,6 +43,7 @@ try {
     console.log(`${prefix}runtimeVersion: ${version}`);
     console.log(`${prefix}schemaVersion: ${result.schemaVersion}`);
     console.log(`${prefix}consumed fragments (${result.consumed.length}): ${result.consumed.join(', ') || 'none'}`);
+    console.log(`${prefix}leftover fragments (${result.leftovers.length}): ${result.leftovers.length ? `${result.leftovers.join(', ')} (already released; deleted, not merged)` : 'none'}`);
   }
 } catch (e) {
   console.error(`meta-stamp: ${e.message}`);

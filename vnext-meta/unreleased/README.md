@@ -42,15 +42,26 @@ At release time the stamp rewrites each shipped file with the real version: it r
 `"next"` in `since`, `deprecatedSince`, `enforcedSince`, `fixedIn` and `removedAt`, and the token `next`
 in `affectedVersions`. `fixes.knownIssues` sets `fixedIn` on the named known issue, and
 `fixes.deprecationsRemoved` sets `removedAt` on the named deprecation. The manifest row gets the blog link
-(`https://burgan-tech.github.io/vnext-docs/blog/release-v<x-y-z>`), the fragments are deleted, and the
+(`https://burgan-tech.github.io/vnext-docs/blog/release-v<x-y-z>`), the fragments are recorded (see below)
+and deleted, and the
 `releaseNote` stubs are written by `meta-stamp.mjs --notes-out` to a `release-notes-<version>` workflow
 artifact (input for a later release-blog draft).
 
-## Back-merge rule
+## Released fragments and back-merge leftovers
 
-When a release branch is merged back into the development branch, any fragment the release already
-consumed must be deleted in that merge. A fragment that survives a release would be stamped a second
-time with the next version.
+The stamp records every fragment it consumes in `vnext-meta/released-fragments.json` (tracked, never
+published): `{ "<version>": { "<slug>": "<sha256 of the fragment file's bytes>" } }`, newest version
+first. The release commits the record together with the stamped files.
+
+Merging the release branch back into the development branch can leave a consumed fragment in place
+(the release side deleted a file the merge base never had, so git keeps the development copy). Nothing
+has to be done by hand:
+
+- A fragment byte-identical to a recorded one is a **leftover**. The lint reports it as a warning
+  (`META-FRAGMENT-RELEASED`) and leaves it out of every other check; the next release stamp deletes it
+  without merging it again. Deleting it in a PR is welcome but not required.
+- **Slugs are single-use.** A fragment whose slug was recorded by an earlier release but whose content
+  differs is an error (lint and stamp): give the new change a new slug.
 
 ## Example
 

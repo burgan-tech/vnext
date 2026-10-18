@@ -30,10 +30,12 @@ the sections below say which ids cover them and what is left for the agent.
 | `META-REGISTRY-KEY` | Registry keys are unique per kind and each exists in code (see §3). |
 | `META-ID-UNIQUE` | `id`s are unique in deprecations, migrations and known-issues, across the stamped files and every release fragment. |
 | `META-FRAGMENT` | Each `vnext-meta/unreleased/<slug>.json` fragment: slug, shape, unknown keys, `releaseNote`, version placeholders are `"next"`, feature-key collisions, `fixes` targets exist. Format: [`vnext-meta/unreleased/README.md`](../../../vnext-meta/unreleased/README.md). |
+| `META-FRAGMENT-RELEASED` | Against `vnext-meta/released-fragments.json`: a fragment byte-identical to one a release already consumed (a back-merge leftover) is a **warning** and is left out of every other fragment check; a released slug with different content is an error (slugs are single-use). An unparseable or wrongly shaped record is `META-PARSE` / `META-SHAPE` on that file. |
 
 **Release stamp.** A PR describes a change as a version-less fragment in `vnext-meta/unreleased/`; the
 release's `prepare` job runs `scripts/governance/meta-stamp.mjs --version X.Y.Z`, which writes the real
-version into the shipped files, adds the manifest row and deletes the fragments, then re-lints. The
+version into the shipped files, adds the manifest row, records each consumed fragment's hash in
+`vnext-meta/released-fragments.json` (tracked, never published) and deletes the fragments, then re-lints. The
 recommended path for a new `since` is therefore a fragment; naming the upcoming release through
 `--milestone` stays valid for back-compat.
 

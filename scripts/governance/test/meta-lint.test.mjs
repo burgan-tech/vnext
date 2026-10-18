@@ -1,10 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { lintMeta } from '../lib/meta-lint.mjs';
+import { lintMeta, fragmentHash } from '../lib/meta-lint.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const BASE = join(here, 'fixtures', 'meta-base');
@@ -25,6 +25,7 @@ function lint(mutate = () => {}, milestone) {
     const p = join(dir, path);
     writeFileSync(p, fn(readFileSync(p, 'utf8')));
   };
+  editText.dir = dir;
   const frag = (name, doc) => {
     mkdirSync(join(metaDir, 'unreleased'), { recursive: true });
     writeFileSync(join(metaDir, 'unreleased', name), typeof doc === 'string' ? doc : JSON.stringify(doc, null, 2));
@@ -282,6 +283,54 @@ test('next outside unreleased is an error', () => {
 
 test('README.md in unreleased is ignored', () => {
   assert.deepEqual(lint((_, __, frag) => frag('README.md', '# notes')), []);
+});
+
+const fragText = (doc) => JSON.stringify(doc, null, 2);
+
+test('released fragment: a byte-identical leftover is a warning and joins no collision check', () => {
+  // The leftover repeats a stamped id and feature key, and shares both with a live fragment.
+  const old = { releaseNote: NOTE, features: { engine: { x: { since: 'next' }, y: { since: 'next' } } }, migrations: [{ id: 'm1', since: 'next' }, { id: 'm-new', since: 'next' }] };
+  const live = { releaseNote: NOTE, features: { engine: { y: { since: 'next' } } }, migrations: [{ id: 'm-new', since: 'next' }] };
+  const f = lint((json, _, frag) => {
+    frag('old.json', old);
+    frag('live.json', live);
+    json('released-fragments.json', () => ({ '0.0.100': { old: fragmentHash(fragText(old)) } }));
+  });
+  assert.deepEqual(f.map((x) => [x.id, x.severity, x.file]), [['META-FRAGMENT-RELEASED', 'warning', 'unreleased/old.json']]);
+  assert.match(f[0].message, /0\.0\.100/);
+  assert.match(f[0].message, /delete/i);
+});
+
+test('released fragment: a reused slug with different content is an error', () => {
+  const f = lint((json, _, frag) => {
+    frag('a.json', { releaseNote: NOTE });
+    json('released-fragments.json', () => ({ '0.0.100': { a: 'ab'.repeat(32) } }));
+  });
+  assert.deepEqual(f.map((x) => [x.id, x.severity, x.file]), [['META-FRAGMENT-RELEASED', 'error', 'unreleased/a.json']]);
+  assert.match(f[0].message, /0\.0\.100/);
+  assert.match(f[0].message, /rename/);
+});
+
+test('released fragment: a missing record is an empty record', () => {
+  const f = lint((_, text, frag) => {
+    frag('a.json', { releaseNote: NOTE });
+    rmSync(join(text.dir, 'meta', 'released-fragments.json'));
+  });
+  assert.deepEqual(f, []);
+});
+
+test('released fragment: an unparseable or wrongly shaped record is an error naming it', () => {
+  const parse = lint((_, text) => text('meta/released-fragments.json', () => '{ nope'));
+  assert.deepEqual(parse.map((x) => [x.id, x.file]), [['META-PARSE', 'released-fragments.json']]);
+  for (const bad of [[], { '0.0.100': [] }, { latest: {} }, { '0.0.100': { a: 'xyz' } }, { '0.0.100': { Bad_Slug: 'ab'.repeat(32) } }]) {
+    const f = lint((json) => json('released-fragments.json', () => bad));
+    assert.deepEqual(f.map((x) => [x.id, x.file]), [['META-SHAPE', 'released-fragments.json']], JSON.stringify(bad));
+  }
+});
+
+test('fragmentHash is the sha256 hex of the raw bytes', () => {
+  assert.equal(fragmentHash('abc'), 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad');
+  assert.equal(fragmentHash(Buffer.from('abc')), fragmentHash('abc'));
 });
 
 // CI lints the same live data in the contract step, under PR_CONTRACT_MODE control; here it would bypass warn mode.

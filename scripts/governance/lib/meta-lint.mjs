@@ -2,6 +2,7 @@
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { createRequire } from 'node:module';
+import { createHash } from 'node:crypto';
 
 /**
  * @typedef {Object} Finding
@@ -78,11 +79,63 @@ function readSource(repoRoot, rel, findings) {
   return readFileSync(path, 'utf8');
 }
 
+/** sha256 hex of a fragment file's raw bytes (a string is hashed as UTF-8). */
+export const fragmentHash = (bytes) => createHash('sha256').update(bytes).digest('hex');
+
+/**
+ * Tracked, never published record of the fragments each release consumed:
+ * `{ "<version>": { "<slug>": "<sha256 of the fragment bytes>" } }`, newest version first.
+ */
+export const RELEASED_FRAGMENTS = 'released-fragments.json';
+
+/**
+ * Reads `<metaDir>/released-fragments.json`. A missing file is an empty record; an unparseable or wrongly
+ * shaped one yields an empty record plus a `problem` (`META-PARSE` / `META-SHAPE`).
+ * @param {string} metaDir
+ * @returns {{ record: Record<string, Record<string, string>>, problem?: { id: string, message: string } }}
+ */
+export function readReleasedFragments(metaDir) {
+  const path = join(metaDir, RELEASED_FRAGMENTS);
+  if (!existsSync(path)) return { record: {} };
+  let record;
+  try {
+    record = JSON.parse(readFileSync(path, 'utf8'));
+  } catch (e) {
+    return { record: {}, problem: { id: 'META-PARSE', message: `File is not valid JSON: ${e.message}` } };
+  }
+  const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+  const ok =
+    isObj(record) &&
+    Object.entries(record).every(
+      ([version, slugs]) =>
+        isSemver(version) &&
+        isObj(slugs) &&
+        Object.entries(slugs).every(([slug, hash]) => SLUG.test(slug) && typeof hash === 'string' && /^[0-9a-f]{64}$/.test(hash)),
+    );
+  if (!ok) {
+    return { record: {}, problem: { id: 'META-SHAPE', message: 'Root shape is wrong: expected an object of version -> slug -> sha256 hex.' } };
+  }
+  return { record };
+}
+
+/**
+ * Where a fragment slug was released, if anywhere: `{ version, leftover }`, where `leftover` means the
+ * recorded hash equals `hash` (the file is a byte-identical copy of what that release consumed).
+ * @returns {{ version: string, leftover: boolean } | null}
+ */
+export function releasedAs(record, slug, hash) {
+  for (const [version, slugs] of Object.entries(record)) {
+    if (Object.hasOwn(slugs, slug)) return { version, leftover: slugs[slug] === hash };
+  }
+  return null;
+}
+
 /**
  * Reads every `<metaDir>/unreleased/*.json` fragment, sorted by file name. A missing directory yields `[]`;
  * non-`.json` files (the README) are skipped; an unparseable file yields `doc: null` and an `error`.
+ * `hash` is the sha256 of the file's raw bytes.
  * @param {string} metaDir
- * @returns {{ slug: string, file: string, doc: object|null, error?: string }[]}
+ * @returns {{ slug: string, file: string, hash: string, doc: object|null, error?: string }[]}
  */
 export function readFragments(metaDir) {
   const dir = join(metaDir, FRAGMENT_DIR);
@@ -92,10 +145,12 @@ export function readFragments(metaDir) {
     .sort()
     .map((file) => {
       const slug = file.slice(0, -'.json'.length);
+      const bytes = readFileSync(join(dir, file));
+      const hash = fragmentHash(bytes);
       try {
-        return { slug, file, doc: JSON.parse(readFileSync(join(dir, file), 'utf8')) };
+        return { slug, file, hash, doc: JSON.parse(bytes.toString('utf8')) };
       } catch (e) {
-        return { slug, file, doc: null, error: e.message };
+        return { slug, file, hash, doc: null, error: e.message };
       }
     });
 }
@@ -270,7 +325,23 @@ export function lintMeta({ metaDir, repoRoot, milestone }) {
     }
   }
 
-  lintFragments(readFragments(metaDir), docs, add);
+  const { record, problem } = readReleasedFragments(metaDir);
+  if (problem) add(problem.id, RELEASED_FRAGMENTS, problem.message);
+
+  // META-FRAGMENT-RELEASED: a byte-identical copy of a fragment a release already consumed (the release-branch
+  // back-merge keeps it) is only a warning and joins no other check; a released slug with new content is an error.
+  const fragments = [];
+  for (const fragment of readFragments(metaDir)) {
+    const released = releasedAs(record, fragment.slug, fragment.hash);
+    const file = `${FRAGMENT_DIR}/${fragment.file}`;
+    if (released?.leftover) {
+      add('META-FRAGMENT-RELEASED', file, `Fragment was already released in ${released.version}; delete it (the next release stamp also removes it).`, 'warning');
+      continue;
+    }
+    if (released) add('META-FRAGMENT-RELEASED', file, `Fragment slug already used by release ${released.version}; rename the fragment.`);
+    fragments.push(fragment);
+  }
+  lintFragments(fragments, docs, add);
 
   return findings;
 }
