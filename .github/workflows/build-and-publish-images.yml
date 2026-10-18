@@ -46,6 +46,8 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
       release_sha: ${{ steps.stamp.outputs.release_sha }}
+      release_line: ${{ steps.line.outputs.release_line }}
+      is_latest: ${{ steps.line.outputs.is_latest }}
     steps:
       - name: Generate GitHub App Token
         id: generate_token
@@ -137,6 +139,32 @@ jobs:
 
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "Using version: $VERSION"
+
+      # Parallel release lines (docs/governance/release-lines.md): an older line (e.g. 1.1.9) may ship
+      # after a newer one (1.2.0). Every `latest` channel (Docker tag, npm dist-tag, GitHub "latest"
+      # release, helm chart) only moves when this version is >= the highest stable tag, so it never
+      # goes backwards. Re-publishing the highest version compares equal and stays latest.
+      - name: Resolve release line and latest flag
+        id: line
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          MAJOR_MINOR=$(echo "$VERSION" | cut -d. -f1,2)
+          RELEASE_LINE="release-v${MAJOR_MINOR}"
+
+          HIGHEST=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sed 's/^v//' | sort -V | tail -1 || true)
+
+          if [ -z "$HIGHEST" ]; then
+            IS_LATEST=true
+          elif [ "$(printf '%s\n%s\n' "$HIGHEST" "$VERSION" | sort -V | tail -1)" = "$VERSION" ]; then
+            IS_LATEST=true
+          else
+            IS_LATEST=false
+          fi
+
+          echo "release_line=$RELEASE_LINE" >> "$GITHUB_OUTPUT"
+          echo "is_latest=$IS_LATEST" >> "$GITHUB_OUTPUT"
+          echo "Release line: $RELEASE_LINE; highest stable tag: ${HIGHEST:-none}; is_latest=$IS_LATEST"
 
       - name: Bump version, stamp vnext-meta and commit
         id: stamp
@@ -275,7 +303,7 @@ jobs:
           images: ${{ env.IMAGE_BASE }}/${{ matrix.image }}
           tags: |
             type=raw,value=${{ needs.prepare.outputs.version }}
-            type=raw,value=latest
+            type=raw,value=latest,enable=${{ needs.prepare.outputs.is_latest == 'true' }}
             type=ref,event=branch
             type=sha,prefix={{branch}}-
 
@@ -627,8 +655,9 @@ jobs:
           *⏰ Build run: ${{ github.run_number }}*
           EOF
 
+      # make_latest: an older line's release must not take GitHub's "Latest" badge from a newer one.
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ needs.prepare.outputs.version }}
           name: Release v${{ needs.prepare.outputs.version }}
@@ -636,11 +665,15 @@ jobs:
           draft: false
           prerelease: false
           generate_release_notes: true
+          make_latest: ${{ needs.prepare.outputs.is_latest }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  # Helm writes appVersion from the payload unconditionally, so a non-latest (older line) release would
+  # roll the chart back: skip it. is_latest / release_line ride along for a future line-aware chart.
   trigger-helm:
     needs: [prepare, build-sign-scan, release]
+    if: needs.prepare.outputs.is_latest == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Download Python runner digest
@@ -669,7 +702,7 @@ jobs:
           token: ${{ steps.generate_token.outputs.token }}
           repository: burgan-tech/vnext-helm-charts
           event-type: app-release
-          client-payload: '{"app_version": "${{ needs.prepare.outputs.version }}", "python_runner_image": "ghcr.io/${{ github.repository }}/python-runner", "python_runner_digest": "${{ steps.python_runner.outputs.digest }}"}'
+          client-payload: '{"app_version": "${{ needs.prepare.outputs.version }}", "python_runner_image": "ghcr.io/${{ github.repository }}/python-runner", "python_runner_digest": "${{ steps.python_runner.outputs.digest }}", "is_latest": "${{ needs.prepare.outputs.is_latest }}", "release_line": "${{ needs.prepare.outputs.release_line }}"}'
 
   notify:
     needs: [prepare, build-sign-scan, release]
@@ -737,6 +770,114 @@ jobs:
             echo "3. 📋 GitHub release published with cosign verify commands"
             echo "4. 🔒 Cosign signatures, SBOMs and provenance attestations generated"
           } >> $GITHUB_STEP_SUMMARY
+
+  # The latest line returns its stamped vnext-meta to master by the usual back-merge. An older line
+  # (not latest) must not be back-merged, so its meta (manifest rows, stamped entries, fragment record)
+  # comes back through a PR built by meta-sync. See docs/governance/release-lines.md.
+  # The PR is opened with the App token so the PR Contract workflow runs on it.
+  sync-meta-to-master:
+    needs: [prepare, release]
+    if: needs.prepare.outputs.is_latest != 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Generate GitHub App Token
+        id: generate_token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          repositories: |
+            vnext
+
+      - name: Checkout master
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+          token: ${{ steps.generate_token.outputs.token }}
+
+      # After the master checkout: a later checkout at the workspace root would clean this directory away.
+      - name: Checkout the stamped release commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.release_sha }}
+          path: release-src
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Sync vnext-meta into master
+        id: sync
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          node scripts/governance/meta-sync.mjs --source release-src/vnext-meta --target vnext-meta \
+            | tee "$RUNNER_TEMP/meta-sync.txt"
+
+          # Errors fail the job; warnings (e.g. META-FRAGMENT-RELEASED leftovers) are expected and fine.
+          if ! node scripts/governance/meta-lint.mjs; then
+            echo "::error::vnext-meta lint failed on master after syncing v$VERSION; no PR was opened."
+            exit 1
+          fi
+
+          if [ -z "$(git status --porcelain vnext-meta)" ]; then
+            echo "::notice::master's vnext-meta already holds v$VERSION; no sync PR needed."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          ADDED=$(sed -n 's/^added versions ([0-9]*): //p' "$RUNNER_TEMP/meta-sync.txt")
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+          echo "added_versions=${ADDED:-none}" >> "$GITHUB_OUTPUT"
+          git status --short vnext-meta
+
+      - name: Push the sync branch and open the PR
+        if: steps.sync.outputs.changed == 'true'
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          ADDED_VERSIONS: ${{ steps.sync.outputs.added_versions }}
+          RELEASE_LINE: ${{ needs.prepare.outputs.release_line }}
+          SERVER_URL: ${{ github.server_url }}
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ steps.generate_token.outputs.token }}
+        run: |
+          set -euo pipefail
+          BRANCH="meta-sync/v$VERSION"
+          TITLE="chore(meta): sync vnext-meta for v$VERSION"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git checkout -B "$BRANCH"
+          git add vnext-meta
+          git commit -m "$TITLE"
+          # Force: a re-run rebuilds the branch from the current master; an open PR follows the push.
+          git push --force origin "$BRANCH"
+
+          if [ -n "$(gh pr list --head "$BRANCH" --state open --json number --jq '.[].number')" ]; then
+            echo "::notice::An open PR for $BRANCH already exists; the push updated it."
+            exit 0
+          fi
+
+          cat > "$RUNNER_TEMP/meta-sync-pr.md" <<EOF
+          ## Summary
+
+          Brings the vnext-meta stamped by the \`$RELEASE_LINE\` release **v$VERSION** back to master.
+          That line is not the latest, so it is not back-merged; this PR carries its meta instead.
+
+          - Added manifest versions: $ADDED_VERSIONS
+          - Built by \`scripts/governance/meta-sync.mjs\` (lower version wins for an id both sides hold).
+
+          Process: [docs/governance/release-lines.md]($SERVER_URL/$REPO/blob/master/docs/governance/release-lines.md)
+          EOF
+
+          gh pr create --base master --head "$BRANCH" --title "$TITLE" --body-file "$RUNNER_TEMP/meta-sync-pr.md"
 
   publish-nuget:
     runs-on: ubuntu-latest
@@ -892,8 +1033,12 @@ jobs:
       - name: Set package version
         run: npm version ${{ needs.prepare.outputs.version }} --no-git-tag-version --allow-same-version
 
+      # An older line's release takes its line tag (release-vX.Y) so `latest` never moves backwards.
       - name: Determine npm dist-tag
         id: dist_tag
+        env:
+          IS_LATEST: ${{ needs.prepare.outputs.is_latest }}
+          RELEASE_LINE: ${{ needs.prepare.outputs.release_line }}
         run: |
           VERSION="${{ needs.prepare.outputs.version }}"
           if [[ "$VERSION" == *"-alpha"* ]]; then
@@ -902,8 +1047,10 @@ jobs:
             echo "tag=beta" >> $GITHUB_OUTPUT
           elif [[ "$VERSION" == *"-rc"* ]]; then
             echo "tag=rc" >> $GITHUB_OUTPUT
-          else
+          elif [[ "$IS_LATEST" == "true" ]]; then
             echo "tag=latest" >> $GITHUB_OUTPUT
+          else
+            echo "tag=$RELEASE_LINE" >> $GITHUB_OUTPUT
           fi
 
       - name: Ensure npm supports trusted publishing
