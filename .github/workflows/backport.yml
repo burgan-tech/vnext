@@ -1,0 +1,53 @@
+name: Backport
+
+# Opens a backport PR to a release line when a merged PR carries a `backport/release-vX.Y` label
+# (the label may be added before or after the merge). Process: docs/governance/release-lines.md.
+#
+# Why `pull_request_target` is safe here: the workflow runs from the base branch's definition, checks
+# out the base branch only and never builds, runs or executes anything from the pull request. The
+# action only reads the merged commits through the GitHub API and cherry-picks them with git.
+on:
+  pull_request_target:
+    types: [closed, labeled]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  backport:
+    name: Backport to release line
+    runs-on: ubuntu-latest
+    if: >-
+      github.event.pull_request.merged == true &&
+      contains(join(github.event.pull_request.labels.*.name, ','), 'backport/')
+    steps:
+      # A GitHub App token, not GITHUB_TOKEN: PRs created with GITHUB_TOKEN do not trigger the
+      # `PR Contract` workflow, so the backport PR would never be checked.
+      - name: Generate GitHub App Token
+        id: generate_token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          repositories: |
+            vnext
+
+      - name: Checkout base branch
+        uses: actions/checkout@v4
+        with:
+          token: ${{ steps.generate_token.outputs.token }}
+
+      - name: Open backport PRs
+        uses: korthout/backport-action@v4
+        with:
+          github_token: ${{ steps.generate_token.outputs.token }}
+          label_pattern: '^backport/(release-v\d+\.\d+)$'
+          copy_milestone: true
+          # The first body line is what PR-RELEASE-LINE looks for (`Backport of #<n>`).
+          pull_title: '${pull_title}'
+          pull_description: |-
+            Backport of #${pull_number} to `${target_branch}`.
+
+            ${pull_description}
+          branch_name: 'backport-${pull_number}-to-${target_branch}'
