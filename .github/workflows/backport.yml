@@ -20,6 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     if: >-
       github.event.pull_request.merged == true &&
+      (github.event.action == 'closed' || startsWith(github.event.label.name, 'backport/')) &&
       contains(join(github.event.pull_request.labels.*.name, ','), 'backport/')
     steps:
       # A GitHub App token, not GITHUB_TOKEN: PRs created with GITHUB_TOKEN do not trigger the
