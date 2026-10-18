@@ -491,6 +491,8 @@ jobs:
           fi
 
       - name: Generate changelog
+        env:
+          IS_LATEST: ${{ needs.prepare.outputs.is_latest }}
         run: |
           VERSION="${{ needs.prepare.outputs.version }}"
           REGISTRY="${{ env.REGISTRY }}"
@@ -504,6 +506,12 @@ jobs:
           INBOX_DIGEST="${{ steps.digests.outputs.inbox_digest }}"
           OUTBOX_DIGEST="${{ steps.digests.outputs.outbox_digest }}"
           DBMIG_DIGEST="${{ steps.digests.outputs.dbmig_digest }}"
+
+          # The `latest` tag exists only for the latest release; an older line lists just its own tags.
+          LATEST_TAG_LINE=""
+          if [ "$IS_LATEST" = "true" ]; then
+            LATEST_TAG_LINE=$'\n'"- \`latest\` - Latest stable release"
+          fi
 
           cat > changelog.md <<EOF
           ## BBT Workflow v${VERSION}
@@ -645,8 +653,7 @@ jobs:
 
           ### 🏷️ Available Tags
 
-          - \`v${VERSION}\` - This release
-          - \`latest\` - Latest stable release
+          - \`v${VERSION}\` - This release${LATEST_TAG_LINE}
           - \`${{ github.ref_name }}\` - Branch-specific build
 
           ---
