@@ -81,6 +81,30 @@ test('META-MANIFEST-ORDER: releasedAt increasing down the list', () => {
   assert.ok(ids(f).includes('META-MANIFEST-ORDER'));
 });
 
+/** Manifest with a patch line (0.0.101) released after the next minor (0.1.0). */
+const parallelLines = (date100 = '2026-10-15') => (json) => {
+  json('version-manifest.json', (d) => ({
+    versions: {
+      '0.1.0': { schemaVersion: '0.0.56', releasedAt: '2026-10-10', releaseNotes: 'https://example.com/r010' },
+      '0.0.101': { schemaVersion: '0.0.56', releasedAt: '2026-10-20', releaseNotes: 'https://example.com/r101' },
+      '0.0.100': { ...d.versions['0.0.100'], releasedAt: date100 },
+      '0.0.99': d.versions['0.0.99'],
+    },
+  }));
+  json('features.json', (d) => { d.runtimeVersion = '0.1.0'; });
+};
+
+test('META-MANIFEST-ORDER: a patch line may ship after the next minor', () => {
+  const f = lint(parallelLines());
+  assert.ok(!ids(f).includes('META-MANIFEST-ORDER'), JSON.stringify(f));
+  assert.deepEqual(f, []);
+});
+
+test('META-MANIFEST-ORDER: dates still ordered within a line', () => {
+  const f = lint(parallelLines('2026-10-25'));
+  assert.ok(f.some((x) => x.id === 'META-MANIFEST-ORDER' && x.message.includes('"0.0.100"')), JSON.stringify(f));
+});
+
 test('META-MANIFEST-ENTRY: bad schemaVersion and releaseNotes', () => {
   const f = lint((json) =>
     json('version-manifest.json', (d) => {

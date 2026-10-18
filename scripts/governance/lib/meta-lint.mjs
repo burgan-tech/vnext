@@ -57,6 +57,9 @@ function compare(a, b) {
   return 0;
 }
 
+/** `major.minor` of a semver version: the release line it belongs to. */
+const minorLine = (v) => parts(v).slice(0, 2).join('.');
+
 const camel = (name) => name.charAt(0).toLowerCase() + name.slice(1);
 
 function constValues(text) {
@@ -229,7 +232,9 @@ export function lintMeta({ metaDir, repoRoot, milestone }) {
     manifestKeys = Object.keys(manifest.versions);
     const f = 'version-manifest.json';
     let prevKey = null;
-    let prevDate = null;
+    // releasedAt must not increase down the list within a major.minor line; a patch line (1.1.9) may ship after
+    // the next minor (1.2.0), so dates are only compared against the previous key of the same line.
+    const lastDateByLine = new Map();
     for (const key of manifestKeys) {
       const entry = manifest.versions[key];
       if (!isSemver(key)) {
@@ -240,11 +245,13 @@ export function lintMeta({ metaDir, repoRoot, milestone }) {
       const date = entry && entry.releasedAt;
       if (typeof date !== 'string' || !DATE.test(date)) {
         add('META-MANIFEST-ORDER', f, `"${key}" has a releasedAt that is not YYYY-MM-DD.`);
-      } else {
-        if (prevDate !== null && date > prevDate) {
-          add('META-MANIFEST-ORDER', f, `"${key}" is released after the previous (newer) entry; releasedAt must not increase down the list.`);
+      } else if (isSemver(key)) {
+        const line = minorLine(key);
+        const prevDate = lastDateByLine.get(line);
+        if (prevDate !== undefined && date > prevDate) {
+          add('META-MANIFEST-ORDER', f, `"${key}" is released after the previous (newer) ${line}.x entry; releasedAt must not increase down the list within a line.`);
         }
-        prevDate = date;
+        lastDateByLine.set(line, date);
       }
       prevKey = key;
       if (!entry || !isSemver(entry.schemaVersion)) {
