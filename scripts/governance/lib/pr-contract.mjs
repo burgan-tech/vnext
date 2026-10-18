@@ -18,6 +18,9 @@ const GITHUB_REVERT_RE = /^Revert ".+"$/; // GitHub's auto title for a revert PR
 const TITLE_RE = new RegExp(`^(${[...FULL_TYPES, ...LIGHT_TYPES].join('|')})(\\([^()\\s]+\\))?(!)?: \\S.*$`);
 const RELEASE_RE = /^v\d+\.\d+\.\d+$/;
 const MILESTONE_RE = /^v\d+\.\d+\.\d+$/;
+const RELEASE_LINE_RE = /^release-v\d+\.\d+$/;
+const BACKPORT_RE = /\bBackport of #(\d+)\b/;
+const FORWARD_PORT_LABEL = 'needs-forward-port';
 const MIN_REASON = 10;
 
 const REQUIRED_FULL = ['summary', 'vnext scope', 'e2e evidence', 'product impact', 'vnext-meta impact'];
@@ -63,13 +66,18 @@ export function checkPr(pr) {
     add('PR-MILESTONE', 'Full-contract PRs need an open milestone named vX.Y.Z.');
   }
 
-  checkEvidence(sections.get('e2e evidence') ?? '', pr, add); // a blank section also lacks a Status
+  const backport = BACKPORT_RE.exec(pr.body ?? '');
+  if (RELEASE_LINE_RE.test(pr.baseRef ?? '') && !backport && !(pr.labels ?? []).includes(FORWARD_PORT_LABEL)) {
+    add('PR-RELEASE-LINE', `A PR into ${pr.baseRef} must be a backport (the body starts with a "Backport of #<n>" line, as the backport bot writes it) or an emergency fix carrying the \`${FORWARD_PORT_LABEL}\` label. See docs/governance/release-lines.md.`);
+  }
+
+  checkEvidence(sections.get('e2e evidence') ?? '', pr, add, backport ? backport[1] : null); // a blank section also lacks a Status
   if (present('product impact')) checkProducts(sections.get('product impact'), pr, add);
   if (present('vnext-meta impact')) checkMeta(sections.get('vnext-meta impact'), pr, add);
   return findings;
 }
 
-function checkEvidence(text, pr, add) {
+function checkEvidence(text, pr, add, backportOf = null) {
   const ev = parseEvidence(text);
   if (!ev.status) {
     add('PR-E2E-STATUS', 'E2E evidence must declare `Status: run` or `Status: not-run`.');
@@ -87,6 +95,8 @@ function checkEvidence(text, pr, add) {
   } else if (!(pr.commitShas ?? []).some((c) => c.toLowerCase().startsWith(sha.toLowerCase()))) {
     if (pr.commitsCapped) {
       add('PR-E2E-RUN', 'Runtime SHA not found, but the commit list is capped at 250 so it cannot be verified.', 'warning');
+    } else if (backportOf) {
+      add('PR-E2E-RUN', `Runtime SHA does not match any commit of this backport; the evidence comes from the original PR #${backportOf}.`, 'warning');
     } else {
       add('PR-E2E-RUN', 'Runtime SHA does not match any commit of this PR.');
     }
