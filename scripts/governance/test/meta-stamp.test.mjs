@@ -242,6 +242,15 @@ test('CLI prints leftovers, also under --dry-run', () => {
   assert.match(r.stdout, /leftover fragments \(1\): all/);
 });
 
+test('CLI writes no --notes-out when the version is already stamped', () => {
+  const { dir, metaDir } = setup({ 'all.json': full });
+  const out = join(dir, 'notes.json');
+  const r = spawnSync(process.execPath, [CLI, '--version', '0.0.100', '--date', '2026-10-20', '--meta-dir', metaDir, '--notes-out', out], { encoding: 'utf8', env: localEnv });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /already in the manifest/);
+  assert.equal(existsSync(out), false);
+});
+
 test('CLI --dry-run does not touch the meta dir', () => {
   const { metaDir } = setup({ 'all.json': full });
   const before = snapshot(metaDir);

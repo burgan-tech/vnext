@@ -31,7 +31,8 @@ try {
     work = tmp;
   }
   const result = stampMeta({ metaDir: work, version, date, schemaVersion });
-  if (notesOut) {
+  // Only a run that stamped has notes; an already-stamped re-run writes no file (the upload step ignores a missing one).
+  if (notesOut && result.status === 'stamped') {
     writeFileSync(resolve(notesOut), JSON.stringify({ version, schemaVersion: result.schemaVersion, date, notes: result.notes }, null, 2) + '\n');
   }
   const prefix = dryRun ? '[dry-run] ' : '';
