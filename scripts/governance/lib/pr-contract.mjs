@@ -19,7 +19,7 @@ const TITLE_RE = new RegExp(`^(${[...FULL_TYPES, ...LIGHT_TYPES].join('|')})(\\(
 const RELEASE_RE = /^v\d+\.\d+\.\d+$/;
 const MILESTONE_RE = /^v\d+\.\d+\.\d+$/;
 const RELEASE_LINE_RE = /^release-v\d+\.\d+$/;
-const BACKPORT_RE = /\bBackport of #(\d+)\b/;
+const BACKPORT_RE = /^Backport of #(\d+)\b/m;
 const FORWARD_PORT_LABEL = 'needs-forward-port';
 const MIN_REASON = 10;
 
@@ -68,7 +68,7 @@ export function checkPr(pr) {
 
   const backport = BACKPORT_RE.exec(pr.body ?? '');
   if (RELEASE_LINE_RE.test(pr.baseRef ?? '') && !backport && !(pr.labels ?? []).includes(FORWARD_PORT_LABEL)) {
-    add('PR-RELEASE-LINE', `A PR into ${pr.baseRef} must be a backport (the body starts with a "Backport of #<n>" line, as the backport bot writes it) or an emergency fix carrying the \`${FORWARD_PORT_LABEL}\` label. See docs/governance/release-lines.md.`);
+    add('PR-RELEASE-LINE', `A PR into ${pr.baseRef} must be a backport (the body has a line \`Backport of #<n>\`, as the backport bot writes it) or an emergency fix carrying the \`${FORWARD_PORT_LABEL}\` label. See docs/governance/release-lines.md.`);
   }
 
   checkEvidence(sections.get('e2e evidence') ?? '', pr, add, backport ? backport[1] : null); // a blank section also lacks a Status

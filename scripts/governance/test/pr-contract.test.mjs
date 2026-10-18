@@ -221,6 +221,14 @@ test('release-line PR: full tier into release-vX.Y needs a backport line or the 
   assert.deepEqual(checkPr(pr({ title: 'v1.1.9', ...into })), []);
 });
 
+test('backport detection is anchored to a line start', () => {
+  const into = { baseRef: 'release-v1.1', labels: [] };
+  const mid = checkPr(pr({ ...into, body: `We discuss Backport of #5 in passing.\n\n${VALID}` }));
+  assert.ok(ids(mid).includes('PR-RELEASE-LINE'));
+  const later = checkPr(pr({ ...into, body: `Intro text.\nBackport of #5 to \`release-v1.1\`.\n\n${VALID}` }));
+  assert.ok(!ids(later).includes('PR-RELEASE-LINE'));
+});
+
 test('backport: an E2E SHA outside the PR commits is a warning naming the original PR', () => {
   const body = BACKPORT_BODY(123).replace('3f2a9c1e5d', 'abcdef1234');
   const f = checkPr(pr({ baseRef: 'release-v1.1', body })).filter((x) => x.id === 'PR-E2E-RUN');
