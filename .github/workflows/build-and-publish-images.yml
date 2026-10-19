@@ -109,24 +109,22 @@ jobs:
             BASE_VERSION="${BASH_REMATCH[1]}"
             echo "Base version from branch: $BASE_VERSION"
 
-            PATCH=0
-            while true; do
-              VERSION="${BASE_VERSION}.${PATCH}"
-              TAG="v${VERSION}"
-
-              if git tag -l "$TAG" | grep -q "^$TAG$"; then
-                echo "Version $VERSION already exists, trying next patch version..."
-                PATCH=$((PATCH + 1))
-              else
-                echo "Found available version: $VERSION"
-                break
-              fi
-
-              if [ $PATCH -gt 100 ]; then
-                echo "Error: Could not find available patch version after 100 attempts"
-                exit 1
-              fi
-            done
+            # Next patch = highest stable patch already tagged on this line + 1. Walking up from 0 with
+            # an attempt cap stopped the release once a line reached v0.0.100 (101 tags), and on a
+            # line with a missing tag it would have re-shipped that old number. Pre-release tags
+            # (vX.Y.Z-rc.N) do not count.
+            BASE_REGEX="${BASE_VERSION//./\\.}"
+            HIGHEST=$(git tag -l "v${BASE_VERSION}.*" \
+              | grep -E "^v${BASE_REGEX}\.[0-9]+$" \
+              | sed -E "s/^v${BASE_REGEX}\.//" \
+              | sort -n | tail -n 1)
+            if [[ -z "$HIGHEST" ]]; then
+              PATCH=0
+            else
+              PATCH=$((HIGHEST + 1))
+            fi
+            VERSION="${BASE_VERSION}.${PATCH}"
+            echo "Highest existing patch on ${BASE_VERSION}: ${HIGHEST:-none}; next version: $VERSION"
           else
             echo "Branch name doesn't match release-vX.Y pattern, using version from common.props"
             VERSION=$(grep '<Version>' ./common.props | sed 's/.*<Version>\(.*\)<\/Version>.*/\1/' | head -n 1)
