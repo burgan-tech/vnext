@@ -1,7 +1,0 @@
-{
-  "releaseNote": {
-    "summary": "Runtime images ship ICU and GSSAPI: no more libgssapi_krb5 startup line, and DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=0 now works (needed by SqlClient script plugins).",
-    "breaking": false,
-    "docs": []
-  }
-}
