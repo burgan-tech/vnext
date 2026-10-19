@@ -60,13 +60,14 @@ and the skills point here.
 | `PR-PRODUCT-ROWS` | `## Product impact` has exactly one `yes`/`no` row for each of the ten products and no unknown product. |
 | `PR-HANDOFF` | Each `yes` row links a `docs/integration/<product>/*.md` file changed in this PR, or a PR/issue URL in `burgan-tech/<product>`. |
 | `PR-HANDOFF-DOC` | A linked handoff doc has frontmatter with the right `product`, the PR's `milestone`, and `status` `pending`/`in-progress`/`done` ([convention](../../integration/README.md)). |
-| `PR-META` | `## vnext-meta impact` says `updated` only when a `vnext-meta/*.json` file changed, and `not-needed` (with a reason) only when none did. |
+| `PR-META` | `## vnext-meta impact` says `updated` only when a `vnext-meta/unreleased/<slug>.json` fragment or a shipped `vnext-meta/*.json` data file changed (not `package.json`, `package-lock.json` or a README), and `not-needed` (with a reason) only when none did. |
 | `META-*` | The same run lints `vnext-meta/` on every PR regardless of title (`scripts/governance/meta-lint.mjs`; rule ids in the [`vnext-meta-validator` checks](../../../.claude/skills/vnext-meta-validator/CHECKS.md)). |
 
 What CI cannot judge, and this reviewer does:
 
 - [ ] `evidence/pr-e2e-coverage` — the `## E2E evidence` run actually exercises the change: the suites in the table reach the code paths the diff touches, and a `not-run` reason is true for this diff (a core-process change with `not-run` contradicts §3). A well-formed block that proves something else is a finding.
 - [ ] `evidence/pr-product-impact` — every product marked `no` is really unaffected: a new or changed component field, task type or error code with `vnext-schema` / `vnext-forge` / `vnext-docs` at `no`, a new configuration key with `vnext-helm-charts` at `no`, and so on. A `yes` row's handoff says what the product must do, not just that something changed.
+- [ ] `evidence/pr-meta-fragment` — a feature, migration or deprecation the diff introduces has a fragment entry, and `releaseNote.breaking` matches a `BREAKING CHANGE:` footer in the commits.
 - [ ] `evidence/pr-breaking` — a `BREAKING CHANGE:` footer anywhere in the commits is mirrored by a `⚠️ Breaking change` note in the body.
 
 ## 5. Measurement claims (`evidence/claim-*`)

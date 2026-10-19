@@ -1,7 +1,8 @@
 // Deterministic lint for the vnext-meta package. Dependency-free: Node built-ins only.
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { createRequire } from 'node:module';
+import { createHash } from 'node:crypto';
 
 /**
  * @typedef {Object} Finding
@@ -15,7 +16,22 @@ const SEMVER = /^(\d+)\.(\d+)\.(\d+)$/;
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 const SINCE_KEYS = new Set(['since', 'deprecatedSince', 'enforcedSince', 'fixedIn']);
 
-const FILES = [
+/** Directory (inside the meta dir) holding version-less release fragments. */
+export const FRAGMENT_DIR = 'unreleased';
+/** Placeholder a fragment carries wherever the release version belongs; the release stamp replaces it. */
+export const NEXT = 'next';
+
+const SLUG = /^[a-z0-9][a-z0-9-]*$/;
+const NEXT_TOKEN = /\bnext\b/;
+const FRAGMENT_KEYS = new Set(['releaseNote', 'schemaVersion', 'features', 'migrations', 'deprecations', 'knownIssues', 'fixes']);
+const FRAGMENT_LISTS = [
+  ['deprecations', 'deprecations.json'],
+  ['migrations', 'migrations.json'],
+  ['knownIssues', 'known-issues.json'],
+];
+const FIXES_KEYS = new Set(['knownIssues', 'deprecationsRemoved']);
+
+export const META_FILES = [
   'version-manifest.json',
   'features.json',
   'component-registry.json',
@@ -63,6 +79,88 @@ function readSource(repoRoot, rel, findings) {
   return readFileSync(path, 'utf8');
 }
 
+/** sha256 hex of a fragment file's raw bytes (a string is hashed as UTF-8). */
+export const fragmentHash = (bytes) => createHash('sha256').update(bytes).digest('hex');
+
+/**
+ * Tracked, never published record of the fragments each release consumed:
+ * `{ "<version>": { "<slug>": "<sha256 of the fragment bytes>" } }`, newest version first.
+ */
+export const RELEASED_FRAGMENTS = 'released-fragments.json';
+
+/** True when a repo-relative path is a release fragment, `vnext-meta/unreleased/<slug>.json`. */
+export function isFragmentPath(path) {
+  const m = /^vnext-meta\/([^/]+)\/([^/]+)\.json$/.exec(path);
+  return m !== null && m[1] === FRAGMENT_DIR && SLUG.test(m[2]);
+}
+
+/**
+ * Reads `<metaDir>/released-fragments.json`. A missing file is an empty record; an unparseable or wrongly
+ * shaped one yields an empty record plus a `problem` (`META-PARSE` / `META-SHAPE`).
+ * @param {string} metaDir
+ * @returns {{ record: Record<string, Record<string, string>>, problem?: { id: string, message: string } }}
+ */
+export function readReleasedFragments(metaDir) {
+  const path = join(metaDir, RELEASED_FRAGMENTS);
+  if (!existsSync(path)) return { record: {} };
+  let record;
+  try {
+    record = JSON.parse(readFileSync(path, 'utf8'));
+  } catch (e) {
+    return { record: {}, problem: { id: 'META-PARSE', message: `File is not valid JSON: ${e.message}` } };
+  }
+  const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+  const ok =
+    isObj(record) &&
+    Object.entries(record).every(
+      ([version, slugs]) =>
+        isSemver(version) &&
+        isObj(slugs) &&
+        Object.entries(slugs).every(([slug, hash]) => SLUG.test(slug) && typeof hash === 'string' && /^[0-9a-f]{64}$/.test(hash)),
+    );
+  if (!ok) {
+    return { record: {}, problem: { id: 'META-SHAPE', message: 'Root shape is wrong: expected an object of version -> slug -> sha256 hex.' } };
+  }
+  return { record };
+}
+
+/**
+ * Where a fragment slug was released, if anywhere: `{ version, leftover }`, where `leftover` means the
+ * recorded hash equals `hash` (the file is a byte-identical copy of what that release consumed).
+ * @returns {{ version: string, leftover: boolean } | null}
+ */
+export function releasedAs(record, slug, hash) {
+  for (const [version, slugs] of Object.entries(record)) {
+    if (Object.hasOwn(slugs, slug)) return { version, leftover: slugs[slug] === hash };
+  }
+  return null;
+}
+
+/**
+ * Reads every `<metaDir>/unreleased/*.json` fragment, sorted by file name. A missing directory yields `[]`;
+ * non-`.json` files (the README) are skipped; an unparseable file yields `doc: null` and an `error`.
+ * `hash` is the sha256 of the file's raw bytes.
+ * @param {string} metaDir
+ * @returns {{ slug: string, file: string, hash: string, doc: object|null, error?: string }[]}
+ */
+export function readFragments(metaDir) {
+  const dir = join(metaDir, FRAGMENT_DIR);
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir)
+    .filter((name) => name.endsWith('.json'))
+    .sort()
+    .map((file) => {
+      const slug = file.slice(0, -'.json'.length);
+      const bytes = readFileSync(join(dir, file));
+      const hash = fragmentHash(bytes);
+      try {
+        return { slug, file, hash, doc: JSON.parse(bytes.toString('utf8')) };
+      } catch (e) {
+        return { slug, file, hash, doc: null, error: e.message };
+      }
+    });
+}
+
 /** Walks a parsed JSON value, calling visit(key, value, path) for every property. */
 function walk(node, visit, path = '') {
   if (Array.isArray(node)) {
@@ -87,7 +185,7 @@ export function lintMeta({ metaDir, repoRoot, milestone }) {
 
   // META-PARSE
   const docs = {};
-  for (const file of FILES) {
+  for (const file of META_FILES) {
     const path = join(metaDir, file);
     if (!existsSync(path)) {
       add('META-PARSE', file, 'File is missing from the meta directory.');
@@ -171,6 +269,10 @@ export function lintMeta({ metaDir, repoRoot, milestone }) {
     for (const [file, doc] of Object.entries(docs)) {
       if (file === 'version-manifest.json') continue;
       walk(doc, (key, value, path) => {
+        if (value === NEXT && (key === 'removedAt' || SINCE_KEYS.has(key))) {
+          add('META-SINCE', file, `${path} is "next", which is only valid in vnext-meta/${FRAGMENT_DIR}/, not in a stamped file.`);
+          return;
+        }
         if (key === 'removedAt') {
           if (value !== null && !isSemver(value)) add('META-SINCE', file, `${path} must be null or a semver version.`);
           return;
@@ -229,5 +331,160 @@ export function lintMeta({ metaDir, repoRoot, milestone }) {
     }
   }
 
+  const { record, problem } = readReleasedFragments(metaDir);
+  if (problem) add(problem.id, RELEASED_FRAGMENTS, problem.message);
+
+  // META-FRAGMENT-RELEASED: a byte-identical copy of a fragment a release already consumed (the release-branch
+  // back-merge keeps it) is only a warning and joins no other check; a released slug with new content is an error.
+  const fragments = [];
+  for (const fragment of readFragments(metaDir)) {
+    const released = releasedAs(record, fragment.slug, fragment.hash);
+    const file = `${FRAGMENT_DIR}/${fragment.file}`;
+    if (released?.leftover) {
+      add('META-FRAGMENT-RELEASED', file, `Fragment was already released in ${released.version}; delete it (the next release stamp also removes it).`, 'warning');
+      continue;
+    }
+    if (released) add('META-FRAGMENT-RELEASED', file, `Fragment slug already used by release ${released.version}; rename the fragment.`);
+    fragments.push(fragment);
+  }
+  lintFragments(fragments, docs, add);
+
   return findings;
+}
+
+/**
+ * Fragment rules: `META-FRAGMENT` for format errors, `META-ID-UNIQUE` for ids repeated across stamped files
+ * and fragments. The format itself is documented in vnext-meta/unreleased/README.md.
+ */
+function lintFragments(fragments, docs, add) {
+  const isObj = (v) => v && typeof v === 'object' && !Array.isArray(v);
+  const stampedItems = (file) => (isObj(docs[file]) && Array.isArray(docs[file].items) ? docs[file].items : []);
+  const stampedFeatures = isObj(docs['features.json']) ? docs['features.json'] : {};
+  const seenFeatures = new Set();
+  const seenIds = {};
+  for (const [, file] of FRAGMENT_LISTS) seenIds[file] = new Set(stampedItems(file).map((i) => i && i.id));
+  const knownIssues = stampedItems('known-issues.json');
+  const deprecations = stampedItems('deprecations.json');
+
+  for (const { slug, file: name, doc, error } of fragments) {
+    const file = `${FRAGMENT_DIR}/${name}`;
+    const bad = (message) => add('META-FRAGMENT', file, message);
+    if (!SLUG.test(slug)) bad('Fragment file name must match ^[a-z0-9][a-z0-9-]*$.');
+    if (doc === null) {
+      bad(`Fragment is not valid JSON: ${error}`);
+      continue;
+    }
+    if (!isObj(doc)) {
+      bad('Fragment root must be a JSON object.');
+      continue;
+    }
+    for (const key of Object.keys(doc)) if (!FRAGMENT_KEYS.has(key)) bad(`Unknown top-level key "${key}".`);
+
+    const note = doc.releaseNote;
+    if (!isObj(note)) {
+      bad('releaseNote is required and must be an object.');
+    } else {
+      if (typeof note.summary !== 'string' || note.summary.trim() === '' || note.summary.length > 200) {
+        bad('releaseNote.summary must be a non-empty string of at most 200 characters.');
+      }
+      if (typeof note.breaking !== 'boolean') bad('releaseNote.breaking must be a boolean.');
+      if (!Array.isArray(note.docs) || !note.docs.every((d) => typeof d === 'string' && d.startsWith('https://'))) {
+        bad('releaseNote.docs must be an array of https:// strings.');
+      }
+    }
+    if (doc.schemaVersion !== undefined && !isSemver(doc.schemaVersion)) bad('schemaVersion must be a semver version.');
+
+    // Any lifecycle value inside a new entry must be the placeholder (or null where "open" is meant).
+    const checkLifecycle = (entry, where, handled = []) => {
+      walk(entry, (key, value, path) => {
+        if (handled.includes(path)) return; // top-level keys the caller reports itself
+        if (key === 'removedAt' || key === 'fixedIn') {
+          if (value !== null) bad(`${where}.${path} must be null in a new entry; a fix is declared under "fixes".`);
+        } else if (SINCE_KEYS.has(key) && value !== NEXT && value !== null) {
+          bad(`${where}.${path} must be "next" or null in a fragment, got ${JSON.stringify(value)}.`);
+        }
+      });
+    };
+
+    if (doc.features !== undefined) {
+      if (!isObj(doc.features)) {
+        bad('features must be an object of group -> key -> entry.');
+      } else {
+        for (const [group, keys] of Object.entries(doc.features)) {
+          if (!isObj(keys)) {
+            bad(`features.${group} must be an object of key -> entry.`);
+            continue;
+          }
+          for (const [key, entry] of Object.entries(keys)) {
+            const where = `features.${group}.${key}`;
+            if (!isObj(entry)) {
+              bad(`${where} must be an object.`);
+              continue;
+            }
+            if (entry.since !== NEXT) bad(`${where}.since must be "next".`);
+            checkLifecycle(entry, where, ['since']);
+            const id = `${group}.${key}`;
+            if ((isObj(stampedFeatures[group]) && key in stampedFeatures[group]) || seenFeatures.has(id)) {
+              bad(`${where} already exists in features.json or another fragment.`);
+            }
+            seenFeatures.add(id);
+          }
+        }
+      }
+    }
+
+    for (const [section, target] of FRAGMENT_LISTS) {
+      const list = doc[section];
+      if (list === undefined) continue;
+      if (!Array.isArray(list) || !list.every((e) => isObj(e) && typeof e.id === 'string' && e.id !== '')) {
+        bad(`${section} must be an array of objects that each have a string id.`);
+        continue;
+      }
+      list.forEach((entry, i) => {
+        const where = `${section}[${i}]`;
+        const handled = { migrations: ['since'], deprecations: ['deprecatedSince', 'removedAt'], knownIssues: ['fixedIn'] };
+        checkLifecycle(entry, where, handled[section]);
+        if (section === 'migrations' && entry.since !== NEXT) bad(`${where}.since must be "next".`);
+        if (section === 'deprecations') {
+          if (entry.deprecatedSince !== NEXT) bad(`${where}.deprecatedSince must be "next".`);
+          if (entry.removedAt !== null) bad(`${where}.removedAt must be null.`);
+        }
+        if (section === 'knownIssues') {
+          if (typeof entry.affectedVersions !== 'string' || !NEXT_TOKEN.test(entry.affectedVersions)) {
+            bad(`${where}.affectedVersions must be a string containing "next".`);
+          }
+          if (entry.fixedIn !== null) bad(`${where}.fixedIn must be null.`);
+        }
+        if (seenIds[target].has(entry.id)) add('META-ID-UNIQUE', file, `Duplicate id "${entry.id}" (already in ${target} or another fragment).`);
+        seenIds[target].add(entry.id);
+      });
+    }
+
+    if (doc.fixes !== undefined) {
+      if (!isObj(doc.fixes)) {
+        bad('fixes must be an object.');
+      } else {
+        for (const key of Object.keys(doc.fixes)) if (!FIXES_KEYS.has(key)) bad(`Unknown key "${key}" inside fixes.`);
+        const ids = (key) => {
+          const v = doc.fixes[key];
+          if (v === undefined) return [];
+          if (!Array.isArray(v) || !v.every((x) => typeof x === 'string')) {
+            bad(`fixes.${key} must be an array of string ids.`);
+            return [];
+          }
+          return v;
+        };
+        for (const id of ids('knownIssues')) {
+          if (!knownIssues.some((k) => k && k.id === id && k.fixedIn === null)) {
+            bad(`fixes.knownIssues "${id}" is not an open known issue in known-issues.json.`);
+          }
+        }
+        for (const id of ids('deprecationsRemoved')) {
+          if (!deprecations.some((d) => d && d.id === id && d.removedAt === null)) {
+            bad(`fixes.deprecationsRemoved "${id}" is not a deprecation with removedAt null in deprecations.json.`);
+          }
+        }
+      }
+    }
+  }
 }

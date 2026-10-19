@@ -48,9 +48,11 @@ and [`.claude/rules/vnext-workflow-developer.md`](../../../.claude/rules/vnext-w
 
 ## 5. `vnext-meta` and versioning (`contract/meta-*`)
 
-- [ ] `contract/meta-feature` — a new capability adds an entry to `vnext-meta/features.json` with `since`; a new task/function/extension key adds a `component-registry.json` entry; a new limit adds a `performance-profiles.json` entry whose `sources` point at real C# constants; a new enforced rule adds a `security-policy.json` entry.
-- [ ] `contract/meta-deprecation` — a removal or rename adds `deprecations.json` **and** `migrations.json` entries.
-- [ ] `contract/meta-known-issue` — a shipped limitation is recorded in `known-issues.json` rather than only in the PR description.
+Versioned entries (features, deprecations, migrations, known issues) normally arrive as a release fragment in `vnext-meta/unreleased/<slug>.json` with `"next"` placeholders, which the release stamps into the shipped files ([format](../../../vnext-meta/unreleased/README.md)). Either a fragment or a direct edit of the shipped file satisfies the items below; a direct edit stays valid for corrections to entries already released.
+
+- [ ] `contract/meta-feature` — a new capability adds a `features` entry with `since` (in a fragment, or in `vnext-meta/features.json`); a new task/function/extension key adds a `component-registry.json` entry; a new limit adds a `performance-profiles.json` entry whose `sources` point at real C# constants; a new enforced rule adds a `security-policy.json` entry.
+- [ ] `contract/meta-deprecation` — a removal or rename adds both a deprecation and a migration entry (fragment `deprecations` + `migrations`, or `deprecations.json` + `migrations.json`).
+- [ ] `contract/meta-known-issue` — a shipped limitation is recorded as a known issue (fragment `knownIssues`, or `known-issues.json`) rather than only in the PR description.
 - [ ] `contract/meta-validator` — any edit under `vnext-meta/` means the `vnext-meta-validator` skill must have been run; the PR says so.
 - [ ] `contract/meta-version-bump` — `common.props` `<Version>` is **not** hand-edited in a feature PR; CI bumps it (`chore: bump version to … [skip ci]`). A manual bump is a WARNING with the reason requested.
 

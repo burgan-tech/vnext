@@ -63,8 +63,13 @@ restore — **stop**, tell the user, and offer the revert described in
     [`_template.md`](../../../docs/integration/_template.md) (frontmatter `milestone` = the PR's
     milestone, `status: pending`), or take a PR/issue URL from the user. A new handoff file must be
     committed on the branch before the PR opens — ask before committing it.
-  - **`## vnext-meta impact`**: `updated` when the diff changes `vnext-meta/*.json`, else
-    `not-needed` with the reason.
+  - **`## vnext-meta impact`**: `updated` when the diff adds or changes a
+    `vnext-meta/unreleased/<slug>.json` fragment or a shipped `vnext-meta/*.json` data file, else
+    `not-needed` with the reason. When the diff introduces a feature, migration or deprecation with no
+    fragment, propose a draft at `vnext-meta/unreleased/<slug>.json` per
+    [its README](../../../vnext-meta/unreleased/README.md) (with a `releaseNote` whose `breaking`
+    matches any `BREAKING CHANGE:` footer); a new fragment must be committed on the branch before the
+    PR opens — ask before committing it.
   - A `BREAKING CHANGE:` footer in any commit ⇒ a `⚠️ Breaking change` note at the top of the body.
   - **Check the draft before showing it**: write the body to a scratch file and run
     `node scripts/governance/pr-contract.mjs --body-file <draft.md> --title "<title>" --milestone <vX.Y.Z> --files-from-git origin/<base>`

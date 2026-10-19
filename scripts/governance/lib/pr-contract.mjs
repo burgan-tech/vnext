@@ -8,6 +8,7 @@ import {
   parseProductImpact,
   parseMetaImpact,
 } from './pr-body.mjs';
+import { META_FILES, isFragmentPath } from './meta-lint.mjs';
 
 /** @typedef {{id:string, severity:'error'|'warning', file:string, message:string}} Finding */
 
@@ -145,15 +146,21 @@ function checkHandoffDoc(path, product, pr, add) {
   if (bad.length > 0) add('PR-HANDOFF-DOC', `Handoff doc frontmatter is invalid (${bad.join('; ')}).`, 'error', path);
 }
 
+/** A changed path counts as a vnext-meta change only if it is a release fragment or one of the shipped data files. */
+function isMetaChange(f) {
+  return isFragmentPath(f) || META_FILES.some((name) => f === `vnext-meta/${name}`);
+}
+
 function checkMeta(text, pr, add) {
   const meta = parseMetaImpact(text);
-  const changed = (pr.changedFiles ?? []).some((f) => /^vnext-meta\/.+\.json$/.test(f));
+  const changedFile = (pr.changedFiles ?? []).find(isMetaChange);
+  const changed = changedFile !== undefined;
   if (!meta.status) {
     add('PR-META', 'vnext-meta impact must declare `Status: updated` or `Status: not-needed`.');
   } else if (meta.status === 'updated' && !changed) {
-    add('PR-META', 'Status is "updated" but no vnext-meta/*.json file changed in this PR.');
+    add('PR-META', 'Status is "updated" but no vnext-meta fragment or data file changed in this PR.');
   } else if (meta.status === 'not-needed') {
-    if (changed) add('PR-META', 'Status is "not-needed" but a vnext-meta/*.json file changed in this PR.');
+    if (changed) add('PR-META', `Status is "not-needed" but a vnext-meta fragment or data file changed in this PR (${changedFile}).`);
     else if ((meta.reason ?? '').length < MIN_REASON || /^<.*>$/.test(meta.reason)) {
       add('PR-META', `A not-needed status needs a Reason of at least ${MIN_REASON} characters.`);
     }

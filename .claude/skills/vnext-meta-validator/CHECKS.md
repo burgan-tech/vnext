@@ -12,7 +12,7 @@ The deterministic parts of §1, §2, §3 and §8 are `scripts/governance/meta-li
 
 ```bash
 node scripts/governance/meta-lint.mjs                       # exit 1 on any error
-node scripts/governance/meta-lint.mjs --milestone v0.0.101  # a `since` may name the upcoming release
+node scripts/governance/meta-lint.mjs --milestone v0.0.101  # a `since` may name the upcoming release (back-compat)
 node scripts/governance/meta-lint.mjs --json                # machine-readable findings
 ```
 
@@ -26,9 +26,18 @@ the sections below say which ids cover them and what is left for the agent.
 | `META-MANIFEST-ORDER` | Manifest keys are semver, strictly descending, with `releasedAt` `YYYY-MM-DD` not increasing down the list. |
 | `META-MANIFEST-ENTRY` | Each manifest entry has a semver `schemaVersion` and an `https://` `releaseNotes` link. |
 | `META-RUNTIME-VERSION` | `features.json` `runtimeVersion` equals the newest manifest key. |
-| `META-SINCE` | Every `since` / `deprecatedSince` / `enforcedSince` / `fixedIn` is null or a released version; one ahead of the newest release must equal `--milestone`. |
+| `META-SINCE` | Every `since` / `deprecatedSince` / `enforcedSince` / `fixedIn` is null or a released version; one ahead of the newest release must equal `--milestone`; `"next"` is rejected outside `vnext-meta/unreleased/`. |
 | `META-REGISTRY-KEY` | Registry keys are unique per kind and each exists in code (see §3). |
-| `META-ID-UNIQUE` | `id`s are unique in deprecations, migrations and known-issues. |
+| `META-ID-UNIQUE` | `id`s are unique in deprecations, migrations and known-issues, across the stamped files and every release fragment. |
+| `META-FRAGMENT` | Each `vnext-meta/unreleased/<slug>.json` fragment: slug, shape, unknown keys, `releaseNote`, version placeholders are `"next"`, feature-key collisions, `fixes` targets exist. Format: [`vnext-meta/unreleased/README.md`](../../../vnext-meta/unreleased/README.md). |
+| `META-FRAGMENT-RELEASED` | Against `vnext-meta/released-fragments.json`: a fragment byte-identical to one a release already consumed (a back-merge leftover) is a **warning** and is left out of every other fragment check; a released slug with different content is an error (slugs are single-use). An unparseable or wrongly shaped record is `META-PARSE` / `META-SHAPE` on that file. |
+
+**Release stamp.** A PR describes a change as a version-less fragment in `vnext-meta/unreleased/`; the
+release's `prepare` job runs `scripts/governance/meta-stamp.mjs --version X.Y.Z`, which writes the real
+version into the shipped files, adds the manifest row, records each consumed fragment's hash in
+`vnext-meta/released-fragments.json` (tracked, never published) and deletes the fragments, then re-lints. The
+recommended path for a new `since` is therefore a fragment; naming the upcoming release through
+`--milestone` stays valid for back-compat.
 
 ---
 
@@ -42,7 +51,9 @@ the sections below say which ids cover them and what is left for the agent.
 ### 1.1 `version-manifest.json`
 
 - [ ] `schemaVersion` is the `@burgan-tech/vnext-schema` version that runtime release ships with. It
-  does **not** equal the parent key (`0.0.100` → `0.0.56`); do not flag the difference.
+  does **not** equal the parent key (`0.0.100` → `0.0.56`); do not flag the difference. The release
+  stamp sets it: the highest of the previous row and any fragment's `schemaVersion`, carried over when
+  none, or the `schema_version` dispatch input.
 
 ### 1.2 `package.json`
 

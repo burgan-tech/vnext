@@ -31,6 +31,7 @@ Do **not** skip categories because the change touched only one file — run all 
 | `security-policy.json` | Policy statements tied to enforcement in code. |
 | `migrations.json` | Migration notes (structure as in repo). |
 | `known-issues.json` | Known issues register (structure as in repo). |
+| `unreleased/*.json` | Version-less release fragments (`"next"` placeholders), stamped at release; format in `vnext-meta/unreleased/README.md`, linted as `META-FRAGMENT`. |
 | `index.js` | Package entry (non-JSON; only if user changed it or asks for full package health). |
 
 ---
@@ -39,9 +40,11 @@ Do **not** skip categories because the change touched only one file — run all 
 
 1. **Collect current versions** — Read `common.props` (`<Version>`, the version being developed) and
    the newest key of `vnext-meta/version-manifest.json` (the latest release).
-2. **Run the lint** — `node scripts/governance/meta-lint.mjs` (add `--milestone vX.Y.Z` when meta
-   documents the upcoming release). It covers parsing and the mechanical parts of §1, §2, §3 and §8;
-   the `PR Contract` workflow runs the same lint on every PR.
+2. **Run the lint** — `node scripts/governance/meta-lint.mjs`. The recommended way to document the
+   upcoming release is a fragment in `vnext-meta/unreleased/` with `"next"` placeholders, which needs no
+   flag; `--milestone vX.Y.Z` is kept for back-compat, for a shipped file that already names the
+   upcoming version. It covers parsing and the mechanical parts of §1, §2, §3 and §8; the `PR Contract`
+   workflow runs the same lint on every PR.
 3. **Run checks 1–8** — read [CHECKS.md](CHECKS.md) now; it maps the lint's `META-*` ids to the
    categories and holds the agent checks (§4–§7 entirely, the rest of §1/§2/§8). Run them in order and
    emit **PASS** or **FAIL** per category with evidence.
