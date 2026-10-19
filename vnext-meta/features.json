@@ -541,6 +541,7 @@
       "status": "stable",
       "schemaPath": "schema.attributes.schema.properties[].x-computed",
       "description": "x-computed { evaluatedBy, cases?, fallback?, whenAbsent? } declares a derived, NEVER-STORED field. evaluatedBy 'runtime' is always on (no flag): every runtime computed field of the workflow's master schema is evaluated on each read surface that returns instance data (instance GET / list, data function, data history, sync start / transition output, GetInstance / GetInstances / GetInstanceData tasks) over the caller's ALREADY-EXPOSED view (after x-roles, x-masking, x-encryption), so it never reveals a field the caller cannot see; the write funnel drops it. Each case / the fallback is exactly one join { fields>=1, separator (default ' ') } or arithmetic { op: add|subtract|multiply|divide, fields>=2 } over sibling properties; the first case whose when condition matches wins; an unresolvable result becomes whenAbsent ('empty' -> \"\", default, or 'null'). PUBLISH: 'server' is refused as renamed to 'runtime'; a runtime computed field is refused on transition / function / component schemas, at the root, under items / $defs / combinators, in required, next to x-indexed / x-filterOperators / x-sortable / x-storage / x-roles / x-masking / at-rest x-encryption, and when it references a computed field (chain) or an at-rest encrypted field. evaluatedBy 'client' is accepted and not evaluated. Known limit: InstanceTransitions.Body keeps the request body as sent."
+      "documentation": "docs/runtime/file-storage.md"
     }
   }
 }

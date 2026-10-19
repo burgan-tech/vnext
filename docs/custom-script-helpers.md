@@ -207,6 +207,8 @@ driver grants database (network) access to every mapping that lists it.
   assemblies its base types live in — `System.Data.Common` and `System.ComponentModel.Primitives`
   (`DbConnection : Component`); without the latter the compile fails with `CS0012`. Worked example:
   vnext-example `spl-sqlserver-query` (SqlClient + Dapper, no wrapper assembly).
+  that throws `PlatformNotSupportedException`. SqlClient also refuses
+  `DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1` on some versions; the Alpine images then need ICU.
 - **Adding vs replacing a DLL.** A DLL added to the plugin directory after start is found without a
   restart (see `PluginRescanIntervalSeconds`). Replacing an already loaded DLL with a new version — or
   removing it — needs a restart: the process keeps the copy it loaded. (Before, republishing a helper
