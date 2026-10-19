@@ -42,9 +42,31 @@ The policy is a decision, not a preference — apply the table from the contract
 
 ## 4. PR body evidence (`evidence/pr-*`)
 
-- [ ] `evidence/pr-template` — the body follows `.github/PULL_REQUEST_TEMPLATE.md`. Read that file for the section list; it also permits **removing** a section that genuinely does not apply, so a trimmed body is correct and a body still carrying the template's placeholder text is not.
-- [ ] `evidence/pr-it-section` — when an integration test was required, `## Integration test evidence` names the scenarios run, the runtime commit, the base URL/offset, passed/failed counts, and the cause of every remaining red (contract §10). A section left as the template placeholder counts as missing.
-- [ ] `evidence/pr-title` — Conventional Commits, ≤72 chars, English. A branch-name-derived title (`Feature/...`, `F/...`) is a WARNING.
+The mechanical checks of the PR body run in CI: the `PR Contract` workflow
+(`.github/workflows/pr-contract.yml`) runs `scripts/governance/pr-contract.mjs` on every non-draft PR,
+in `warn` or `enforce` mode (repository variable `PR_CONTRACT_MODE`, default `warn`). **Do not repeat
+these checks** — read the workflow's annotations and job summary (or run
+`node scripts/governance/pr-contract.mjs --pr <n>` locally — replay limits in [integration testing §10](../../testing/integration-testing.md#10-report-the-result)), quote any finding by its id, and spend the
+review on the semantic questions below. This table is the single list of the rule ids; the PR template
+and the skills point here.
+
+| Id | What it checks |
+|---|---|
+| `PR-TITLE` | The title is Conventional Commits (`feat`, `fix`, `perf`, `refactor` = full contract; `test`, `docs`, `chore`, `ci`, `style`, `revert` and GitHub's auto title `Revert "…"` = light contract, `## Summary` only), at most 72 characters; a release title `vX.Y.Z` is exempt from every `PR-*` rule (the `META-*` lint still runs). |
+| `PR-MILESTONE` | A full-contract PR carries an open milestone named `vX.Y.Z`. |
+| `PR-SECTION` | Each required section (`Summary`, `vNext scope`, `E2E evidence`, `Product impact`, `vnext-meta impact`) exists and is not blank; comments and `<...>` placeholders count as blank. |
+| `PR-E2E-STATUS` | `## E2E evidence` declares `Status: run`, or `Status: not-run` with a `Reason` of at least 10 characters. |
+| `PR-E2E-RUN` | A `run` block has a runtime SHA that is one of the PR's commits, a `Result` line, at least one suite row, and a `Reds` line when anything failed. |
+| `PR-PRODUCT-ROWS` | `## Product impact` has exactly one `yes`/`no` row for each of the ten products and no unknown product. |
+| `PR-HANDOFF` | Each `yes` row links a `docs/integration/<product>/*.md` file changed in this PR, or a PR/issue URL in `burgan-tech/<product>`. |
+| `PR-HANDOFF-DOC` | A linked handoff doc has frontmatter with the right `product`, the PR's `milestone`, and `status` `pending`/`in-progress`/`done` ([convention](../../integration/README.md)). |
+| `PR-META` | `## vnext-meta impact` says `updated` only when a `vnext-meta/*.json` file changed, and `not-needed` (with a reason) only when none did. |
+| `META-*` | The same run lints `vnext-meta/` on every PR regardless of title (`scripts/governance/meta-lint.mjs`; rule ids in the [`vnext-meta-validator` checks](../../../.claude/skills/vnext-meta-validator/CHECKS.md)). |
+
+What CI cannot judge, and this reviewer does:
+
+- [ ] `evidence/pr-e2e-coverage` — the `## E2E evidence` run actually exercises the change: the suites in the table reach the code paths the diff touches, and a `not-run` reason is true for this diff (a core-process change with `not-run` contradicts §3). A well-formed block that proves something else is a finding.
+- [ ] `evidence/pr-product-impact` — every product marked `no` is really unaffected: a new or changed component field, task type or error code with `vnext-schema` / `vnext-forge` / `vnext-docs` at `no`, a new configuration key with `vnext-helm-charts` at `no`, and so on. A `yes` row's handoff says what the product must do, not just that something changed.
 - [ ] `evidence/pr-breaking` — a `BREAKING CHANGE:` footer anywhere in the commits is mirrored by a `⚠️ Breaking change` note in the body.
 
 ## 5. Measurement claims (`evidence/claim-*`)

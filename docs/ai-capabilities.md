@@ -153,6 +153,16 @@ Component correctness (schema validity, references, security) is the vnext-ai-to
 
 Nothing is written to GitHub, committed or pushed without an explicit approval.
 
+Governance scripts (Node built-ins only; tests: `node --test "scripts/governance/test/*.test.mjs"`).
+Rule ids: `PR-*` in [reviewer: evidence §4](code-review/reviewers/evidence.md), `META-*` in the
+[`vnext-meta-validator` checks](../.claude/skills/vnext-meta-validator/CHECKS.md).
+
+| Script | Does | Run |
+|---|---|---|
+| [`scripts/governance/pr-contract.mjs`](../scripts/governance/pr-contract.mjs) | Checks a PR body, title, milestone and handoff docs against [the template](../.github/PULL_REQUEST_TEMPLATE.md), then lints `vnext-meta/` | CI: `PR Contract` workflow on every non-draft PR (`PR_CONTRACT_MODE` = `warn` / `enforce`). Locally: `--pr <n>`, or a draft with `--body-file <path> --title "<t>" [--milestone vX.Y.Z] [--files-from-git <base>]` |
+| [`scripts/governance/e2e-evidence.mjs`](../scripts/governance/e2e-evidence.mjs) | Renders the PR's `## E2E evidence` block from vnext-example TRX files | `--trx <file>... --runtime-sha <sha> --base-url <url> [--reds "<text>"]` |
+| [`scripts/governance/meta-lint.mjs`](../scripts/governance/meta-lint.mjs) | Deterministic lint of `vnext-meta/` (parse, shape, manifest order, `since` timeline, registry keys in code) | `[--milestone vX.Y.Z] [--json]`; also part of every PR Contract run, regardless of title |
+
 ## 7. vnext-meta and documentation
 
 | Skill | Does | When | Produces |

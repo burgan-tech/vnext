@@ -1,0 +1,39 @@
+name: PR Contract
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened, milestoned, demilestoned, ready_for_review]
+    # Same targets as the `vnext-repo-protect` ruleset (default branch, release-*, sprint-*): once
+    # `pr-contract` is a required check there, a target this list misses would wait on it forever.
+    branches:
+      - master
+      - "release-*"
+      - "sprint-*"
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: pr-contract-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  pr-contract:
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Run governance script tests
+        run: node --test "scripts/governance/test/*.test.mjs"
+
+      - name: Check the PR contract
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_CONTRACT_MODE: ${{ vars.PR_CONTRACT_MODE || 'warn' }}
+        run: node scripts/governance/pr-contract.mjs --event "$GITHUB_EVENT_PATH" --mode "$PR_CONTRACT_MODE"
