@@ -15,7 +15,7 @@ phrase against the skill's frontmatter `description`. Cursor reads the same `.cl
 | Decide on an architecture or technology choice | [`agent-council`](#2-decision--agent-council) |
 | Review an open PR | [`pr-review`](#3-review) (`#N`, `--no-comment`) |
 | Review a local diff | [`workflow-code-review`](#3-review) |
-| Check a domain package / its flows | [`domain-performance-audit`](#5-domain-package--flow-checks) + plugin `review-components` / `validate-and-fix` |
+| Check a domain package / its flows | [`domain-performance-audit`](#5-domain-package--flow-checks) (→ plugin `domain-check`) + plugin `review-components` / `validate-and-fix` |
 | Prove a runtime change end to end | [`runtime-integration-test`](#4-testing-and-verification) |
 | Test cross-domain behaviour | [`cross-domain-lab`](#4-testing-and-verification) |
 | Open an issue / a PR / write a commit message | [`create-github-issue` / `create-github-pr` / `git-commit-message`](#6-github-and-git) |
@@ -126,17 +126,19 @@ records in `ai-docs/local-environments/<domain>.md`; full runbook in
 
 ## 5. Domain package / flow checks
 
-**`domain-performance-audit`** — [skill](../.claude/skills/domain-performance-audit/SKILL.md) ·
-checks [CHECKS.md](../.claude/skills/domain-performance-audit/CHECKS.md)
+**`domain-performance-audit`** — [skill](../.claude/skills/domain-performance-audit/SKILL.md), a pointer to
+the vnext-ai-toolkit plugin's **`domain-check`** (canonical checks, scanner and report format:
+[burgan-tech/vnext-ai-toolkit](https://github.com/burgan-tech/vnext-ai-toolkit) `skills/domain-check/`)
 
 - **Does:** a static performance audit of a **domain package** (a vnext-template repo such as
   vnext-onboarding) — workflows, tasks, extensions, functions, views, scripts — against the current
   runtime, then a short prioritised report (in Turkish, since it goes to the domain team).
 - **When:** "domain performans", "performans incele", "bu domaini incele", "domain audit".
-- **Run:** *"bu domaini incele: ../vnext-onboarding"*; the scan step is
-  `python3 .claude/skills/domain-performance-audit/scan.py <domain-root> [--json]`.
+- **Run:** `/vnext-ai-toolkit:domain-check <domain-root>` with the plugin installed; otherwise the scan
+  step is `python3 <vnext-ai-toolkit>/skills/domain-check/scan.py <domain-root> [--json]`. From this
+  repo, additionally confirm runtime claims against the code (the pointer skill says how).
 - **Boundary:** read-only, writes nothing to the target. Not for a diff of this repo — use `pr-review` /
-  `workflow-code-review`.
+  `workflow-code-review`. Fix a wrong check in the plugin, not here.
 
 Component correctness (schema validity, references, security) is the vnext-ai-toolkit plugin's job —
 `validate-and-fix`, `review-components`, `security-audit` in [§8](#8-machine-level-plugins-and-tools-if-installed).
@@ -150,6 +152,19 @@ Component correctness (schema validity, references, security) is the vnext-ai-to
 | [`git-commit-message`](../.claude/skills/git-commit-message/SKILL.md) | Conventional Commits message from the staged diff; the single source of commit/PR types | "commit mesajı", "git commit" | Never commits unless asked |
 
 Nothing is written to GitHub, committed or pushed without an explicit approval.
+
+Governance scripts (Node built-ins only; tests: `node --test "scripts/governance/test/*.test.mjs"`).
+Rule ids: `PR-*` in [reviewer: evidence §4](code-review/reviewers/evidence.md), `META-*` in the
+[`vnext-meta-validator` checks](../.claude/skills/vnext-meta-validator/CHECKS.md).
+
+| Script | Does | Run |
+|---|---|---|
+| [`scripts/governance/pr-contract.mjs`](../scripts/governance/pr-contract.mjs) | Checks a PR body, title, milestone and handoff docs against [the template](../.github/PULL_REQUEST_TEMPLATE.md), then lints `vnext-meta/` | CI: `PR Contract` workflow on every non-draft PR (`PR_CONTRACT_MODE` = `warn` / `enforce`). Locally: `--pr <n>`, or a draft with `--body-file <path> --title "<t>" [--milestone vX.Y.Z] [--files-from-git <base>]` |
+| [`scripts/governance/e2e-evidence.mjs`](../scripts/governance/e2e-evidence.mjs) | Renders the PR's `## E2E evidence` block from vnext-example TRX files | `--trx <file>... --runtime-sha <sha> --base-url <url> [--reds "<text>"]` |
+| [`scripts/governance/meta-lint.mjs`](../scripts/governance/meta-lint.mjs) | Deterministic lint of `vnext-meta/` (parse, shape, manifest order, `since` timeline, registry keys in code) | `[--milestone vX.Y.Z] [--json]`; also part of every PR Contract run, regardless of title |
+| [`scripts/governance/meta-stamp.mjs`](../scripts/governance/meta-stamp.mjs) | Release stamp: turns `vnext-meta/unreleased/` fragments into versioned data files, adds the manifest row, records and deletes the fragments, deletes back-merge leftovers ([format](../vnext-meta/unreleased/README.md)) | `--version X.Y.Z [--date YYYY-MM-DD] [--schema-version X.Y.Z] [--meta-dir <path>] [--notes-out <file>] [--dry-run]`; CI: the release `prepare` job, lint → stamp → lint |
+| [`scripts/governance/meta-sync.mjs`](../scripts/governance/meta-sync.mjs) | Syncs a patch line's released `vnext-meta/` into master (every manifest row master lacks, union of ids and feature keys, lower version wins) | `--source <dir> --target <dir> [--dry-run]`; CI: `sync-meta-to-master` job of the release workflow, for lines that are not the latest ([process](governance/release-lines.md)) |
+| [`.github/workflows/backport.yml`](../.github/workflows/backport.yml) | Opens a backport PR to `release-vX.Y` for a merged PR labelled `backport/release-vX.Y` | CI: `pull_request_target` on `closed` / `labeled`; process: [Release lines](governance/release-lines.md) |
 
 ## 7. vnext-meta and documentation
 

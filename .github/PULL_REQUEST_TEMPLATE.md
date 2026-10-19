@@ -1,35 +1,81 @@
 <!--
 Title: Conventional Commits, English, imperative, max 72 chars — `<type>(<scope>): <subject>`
-Types: feat, fix, refactor, perf, test, docs, chore, ci
 
-This template is the shape `create-github-pr` drafts and `pr-review` checks. Remove a section that
-genuinely does not apply rather than leaving its placeholder text in place.
+Contract tiers (checked by the `PR Contract` workflow, `scripts/governance/pr-contract.mjs`):
+- Full — `feat`, `fix`, `perf`, `refactor` (also with `!`): every required section below is filled
+  and the PR carries an open milestone `vX.Y.Z`.
+- Light — `test`, `docs`, `chore`, `ci`, `style`, `revert` (and GitHub's auto title `Revert "…"`): a Conventional title and `## Summary` only; delete the
+  other sections or leave them.
+- Exempt — a release merge titled `vX.Y.Z`.
+Required sections: Summary, vNext scope, E2E evidence, Product impact, vnext-meta impact.
+Optional: Changes, Test Plan, Notes. A `<...>` placeholder counts as blank.
+Rule ids and what each one checks: docs/code-review/reviewers/evidence.md §4.
+PRs into a `release-v*` branch (backports, emergency fixes): docs/governance/release-lines.md.
+
+Generate the E2E evidence block from the TRX of the vnext-example run:
+  node scripts/governance/e2e-evidence.mjs --trx <file>... --runtime-sha <sha> --base-url <url> [--reds "<text>"]
+Check a draft body before opening the PR:
+  node scripts/governance/pr-contract.mjs --body-file <draft.md> --title "<title>" --milestone vX.Y.Z --files-from-git origin/master
 -->
 
 ## Summary
 <!-- 2-4 bullets: what changed and why -->
 -
 
+## vNext scope
+<!-- Which runtime areas this touches (pipeline, transitions, subflows, locking, instance data,
+     error boundary, state function, API contract, hosts, workers …) and whether runtime
+     behaviour changes. "No runtime behaviour change" is a valid answer when it is true. -->
+-
+
+## E2E evidence
+<!--
+Paste the output of `scripts/governance/e2e-evidence.mjs` (Status: run, Runtime, Base URL, Result,
+suite table, Reds). The Runtime SHA must be one of this PR's commits; every failed test needs a Reds
+line. When no run was part of the change, write instead:
+  - Status: not-run
+  - Reason: <why no end-to-end run was needed or possible, at least 10 characters>
+Policy: docs/testing/integration-testing.md §1; block format: §10.
+-->
+- Status: <run | not-run>
+
+## Product impact
+<!--
+One row per product, in this order. Replace every <yes/no> with yes or no; there is no default.
+Needed = yes when the product must change because of this PR.
+A yes row links a handoff: a docs/integration/<product>/<slug>.md file added or changed in this PR
+(convention: docs/integration/README.md), or a https://github.com/burgan-tech/<product>/pull/<n> or
+/issues/<n> URL.
+-->
+| Product | Needed | Handoff |
+|---|---|---|
+| vnext-schema | <yes/no> | |
+| vnext-forge | <yes/no> | |
+| vnext-helm-charts | <yes/no> | |
+| vnext-docs | <yes/no> | |
+| vnext-workflow-cli | <yes/no> | |
+| vnext-runtime | <yes/no> | |
+| vnext-template | <yes/no> | |
+| vnext-integration-test | <yes/no> | |
+| vnext-example | <yes/no> | |
+| vnext-ai-toolkit | <yes/no> | |
+
+## vnext-meta impact
+<!--
+updated — this PR adds or changes `vnext-meta/unreleased/<slug>.json` (format: `vnext-meta/unreleased/README.md`) or a data file; the release stamps the version (run `node scripts/governance/meta-lint.mjs`).
+not-needed — nothing in vnext-meta describes this change; give the reason.
+-->
+- Status: <updated | not-needed>
+- Reason: <only for not-needed>
+
 ## Changes
-<!-- Key files / areas touched -->
+<!-- Optional. Key files / areas touched -->
 -
 
 ## Test Plan
-<!-- How a reviewer verifies this -->
+<!-- Optional. How a reviewer verifies this -->
 - [ ]
 
-## Integration test evidence
-<!--
-Required when the change touches a core process — pipeline, transitions, subflows, locking,
-instance data, error boundary, state function — or carries regression risk.
-Contract: docs/testing/integration-testing.md §10. Remove this section when no integration run
-was part of the change; do not leave it filled with placeholders.
--->
-- Scenario(s): `vnext-example` `Tests/<Scenario>` (`--filter FullyQualifiedName~<Scenario>`)
-- Runtime: commit `<sha>` at `VNEXT_BASE_URL=http://localhost:<port>` (`run-docker.sh up <domain>`)
-- Result: `<passed>/<total>` green; remaining reds and their cause: `<environment defect | known gap | regression>`
-- `TEST-SCENARIOS.md` row added/updated: yes / no
-
 ## Notes
-<!-- Breaking changes (mirror any `BREAKING CHANGE:` footer with a ⚠️ note), migration steps,
-     follow-ups in sibling repos (vnext-helm-charts, vnext-schema, vnext-example). Remove if none. -->
+<!-- Optional. Breaking changes (mirror any `BREAKING CHANGE:` footer with a ⚠️ note), migration
+     steps, follow-ups. Remove if none. -->

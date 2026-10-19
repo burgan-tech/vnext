@@ -1,69 +1,42 @@
 ---
 name: domain-performance-audit
-description: "Performance audit of a vNext domain package (vnext-template repo, e.g. vnext-onboarding) against the current runtime; writes a short prioritised report. Triggers: \"domain performans\", \"performans incele\", \"bu domaini incele\", \"domain audit\". For a diff of this repo use pr-review / workflow-code-review."
+description: "Performance audit of a vNext domain package (e.g. vnext-onboarding). Points to the vnext-ai-toolkit plugin's canonical domain-check and adds runtime-source verification. Triggers: \"domain performans\", \"performans incele\", \"bu domaini incele\", \"domain audit\". For a diff of this repo use pr-review."
 ---
 
-# Domain Performance Audit
+# Domain Performance Audit → vnext-ai-toolkit `domain-check`
 
-Reviews a **domain package** — someone else's repo built on this runtime — and answers one
-question: what is costing time or reliability, and what should they do about it.
+The audit moved to the **vnext-ai-toolkit** plugin, where domain teams can run it inside their own
+package without a runtime checkout ([burgan-tech/vnext-ai-toolkit#27](https://github.com/burgan-tech/vnext-ai-toolkit/issues/27)).
+The plugin copy is canonical: procedure, the 20 checks, the scanner and the report style are in
+`skills/domain-check/{SKILL.md,CHECKS.md,scan.py}` of
+[burgan-tech/vnext-ai-toolkit](https://github.com/burgan-tech/vnext-ai-toolkit). Do not copy them
+back here — fix a wrong check in the plugin repo, so the two cannot drift.
 
-Not a code-quality review. Naming, formatting, try/catch hygiene and clean-code concerns are out
-of scope; domain teams have their own review for that. Stay on runtime cost and runtime capability.
+## Run it
 
-## Scope check first
+- **Plugin installed:** `/vnext-ai-toolkit:domain-check <domain-root> [--config <file>]`, or say
+  "bu domaini incele: ../vnext-onboarding" and follow the plugin's `domain-check` skill.
+- **Plugin not installed:** clone `burgan-tech/vnext-ai-toolkit` and run its scanner directly:
+  `python3 <toolkit>/skills/domain-check/scan.py <domain-root> [--json]`. It is read-only and
+  stdlib-only. Enum labels come from the domain's pinned `@burgan-tech/vnext-schema`
+  (`node_modules`, else the raw-GitHub tag); a `!! ENUM` or `!! SCHEMA` line means a label could not
+  be resolved, and no finding may depend on it.
 
-The target must be a vNext domain package: a repo with `vnext.config.json` at its root and the
-component folders it names. If there is no `vnext.config.json`, stop and say so — this skill has
-nothing to measure.
+## What a platform engineer adds
 
-If the user did not name a path, ask for it. Do not guess between sibling domain repos.
+The plugin cites public docs and the schema, because domain teams have no runtime checkout. From this
+repo you can do more:
 
-## Procedure
+1. **Confirm every "the runtime does X" claim against the code.** `.claude/rules/` and `/docs`
+   describe the runtime; when they disagree with the code, the code wins. A wrong claim costs the
+   domain team real work. If the plugin's `CHECKS.md` is wrong, open an issue or PR on the plugin.
+2. **Compare the domain's `runtimeVersion` with the release it will run on** (`common.props`,
+   `vnext-meta/version-manifest.json`) and drop advice that needs a newer runtime.
+3. **Measurement stays a rule:** the audit is static. Close the report with how to measure
+   (`Instance.Activation`, `Step.*`, `Task.Execute`, `Script.Execute` span durations from
+   OpenObserve, before and after) and never state an unmeasured latency gain — see
+   `.claude/rules/mcp-observability-verification.md`.
 
-1. **Scan.** `python3 <skill-dir>/scan.py <domain-root>` — read-only, stdlib only, writes nothing
-   to the target. `--json` gives the same data machine-readable.
-   Task, trigger, extension and error-action enums are parsed out of this repo's own source at run
-   time (`TaskEnums.cs`, `TransitionEnums.cs`, `ExtensionEnums.cs`, `ErrorAction.cs`), so the
-   scanner cannot drift from the runtime. A `!! ENUM:` line in the output means it could not read
-   one — the numbers are then raw and a finding that depends on a type name must not be written
-   until that is fixed.
-2. **Interpret** the output against [CHECKS.md](CHECKS.md). Every check there names what the
-   scanner prints, why it costs, and what to recommend.
-3. **Verify before claiming.** The scanner measures structure, not intent. Several checks are
-   explicitly "candidate, confirm by reading". Open the file before you write a finding.
-4. **Confirm runtime behaviour against this repo**, never from memory. `.claude/rules/` and
-   `/docs` describe the runtime; when they disagree with the code, the code wins. A finding that
-   says "the runtime does X" and is wrong costs the domain team real work.
-5. **Ask which items to keep.** A raw scan produces more findings than anyone will act on. Offer
-   the list, let the user split it into must / nice-to-have, and write only what they kept.
-6. **Write the report** in the style below.
-
-Read-only with one exception: the report file. Never edit the domain package's components, never
-commit, never push.
-
-## The report
-
-Ask where it goes. Match the target repo's existing convention — `docs/code-reviews/DDMMYY-*.md`
-in vnext-onboarding, numbered `docs/NN-*.md` in vnext-onboarding-ekyc. If the folder has an index,
-offer to add the row; do not edit the index without being asked.
-
-Turkish, and written the way a PO or an architect writes, not the way a template generates:
-
-- Each item is a short heading that reads as a sentence, then a few sentences: what is happening,
-  where it lives, what it costs, what to do. Finish with a bold `**Çözüm:**` line.
-- No repeating `**Dosya:** / **Sorun:** / **Yapılacak:**` scaffolding, no effort/priority table,
-  no "Beklenen sonuç" code block.
-- Numbers carry the argument. "16 HTTP çağrısı, timeout toplamı 205 sn" beats "çok fazla çağrı".
-- Two sections, `## Yapılmalı` and `## Yapılsa iyi olur`, then a one-line order and a short
-  measurement paragraph.
-- Name the runtime capability that solves it (`CacheAsideTask` tip 18, `GetInstancesTask` tip 15,
-  aynı `order` ile paralel çalıştırma, error boundary `action: 1`) — that is the value this audit
-  adds over the domain team reading their own code.
-
-## Measurement
-
-The audit is static. It says where the cost is, not how much it is. Close with how to measure:
-a local run of the domain, then `Instance.Activation`, `Step.*`, `Task.Execute` and
-`Script.Execute` span durations from OpenObserve, before and after. Never state a latency
-improvement that was not measured — see `.claude/rules/mcp-observability-verification.md`.
+The scope is unchanged: read-only, the report file is the only write, never edit the domain package's
+components, never commit, never push. Ask where the report goes and match the target repo's
+convention.

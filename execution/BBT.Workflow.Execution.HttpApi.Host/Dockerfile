@@ -13,8 +13,11 @@ ENV DEBIAN_FRONTEND=noninteractive \
     OPENBLAS_NUM_THREADS=1 \
     MKL_NUM_THREADS=1
 
+# libgssapi-krb5-2: Npgsql probes GSSAPI on every connection; without it the .NET native shim
+# prints "Cannot load library libgssapi_krb5.so.2" to stderr (harmless, but reads as a failure).
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
+        libgssapi-krb5-2 \
         libpython3.12 \
         python3.12 \
         python3.12-venv \

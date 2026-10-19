@@ -1,0 +1,6 @@
+{
+  "versions": {
+    "0.0.100": { "schemaVersion": "0.0.56", "releasedAt": "2026-10-15", "releaseNotes": "https://example.com/r100" },
+    "0.0.99": { "schemaVersion": "0.0.55", "releasedAt": "2026-10-05", "releaseNotes": "https://example.com/r99" }
+  }
+}

@@ -15,13 +15,14 @@ describe the stable mental model, boundaries, failure modes, and change-safety r
 | [AI capabilities](ai-capabilities.md) | Every AI skill, subagent, MCP server, hook and script — when to use it and how to run it. |
 | [Agent Council](agent-council/README.md) | Plan-only decision workflow, roles, session artifacts, evidence gates, and Chair approval. Decision history: [sessions/README.md](agent-council/sessions/README.md). |
 | [Code Review](code-review/README.md) | What a review of this repository checks: the four reviewer checklists, severity and verdict vocabularies, and the noise rules. Single source for the `pr-review` and `workflow-code-review` skills. |
+| [Release lines](governance/release-lines.md) | Parallel patch lines: upstream-first backports, the emergency exception, `latest` channel policy, vnext-meta sync, release-owner checklist. |
 | [Architecture](architecture/system-overview.md) | Runtime shape, service boundaries, dependency direction, routing. |
 | [Domain](domain/instance-data-merge-concept.md) | Instance lifecycle, data versioning, cache context, function-handler behavior. |
 | [Runtime](runtime/task-executors-and-invokers.md) | Task execution, invokers, scripting, remote runtime integration. |
 | [Contracts](contracts/api-and-service-contracts.md) | API shapes, validation, compatibility, error behavior. |
 | [Testing](testing/integration-testing.md) | How a runtime change is verified end to end: policy, sibling repos, local runtime, `VNEXT_BASE_URL`, scenario/index obligations, Aether local feed, Helm parity. |
 | [Observability verification](testing/observability-verification.md) | How a locally exercised change is confirmed through the MCP servers: traps, fallbacks when a server is down, OpenObserve query mechanics, the `postgres` connect timeout. |
-| Integration — [FanOutTask (Forge)](integration/forge-fanout-task-implementation.md), [Field protection (vnext-docs + Forge)](integration/field-protection-consumer-revision.md) | Implementation specs for consumer products (Forge Studio, CLI, SDKs) that build against runtime features. |
+| Integration — [FanOutTask (Forge)](integration/forge-fanout-task-implementation.md), [Field protection (vnext-docs + Forge)](integration/field-protection-consumer-revision.md) | Implementation specs for consumer products (Forge Studio, CLI, SDKs) that build against runtime features; the handoff-document [convention](integration/README.md). |
 | [Correlation and Tracing](runtime/correlation-and-tracing.md) | Tracing/correlation contract of the runtime: carriers (`traceparent`, trace lane anchor, activation episode, `X-Request-Id`, `X-Correlation-Id`), the APISIX gateway contract and per-job trace continuation. |
 
 ## Reading Path

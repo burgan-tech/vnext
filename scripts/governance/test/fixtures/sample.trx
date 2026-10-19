@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<TestRun id="00000000-0000-0000-0000-000000000001" name="sample" xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+  <Results>
+    <UnitTestResult executionId="e1" testId="t1" testName="A_One" outcome="Passed" duration="00:00:01" />
+    <UnitTestResult testId="t2" outcome='Passed' testName="A_Two"></UnitTestResult>
+    <UnitTestResult testId="t3" testName="A_Three" outcome="Failed"><Output><ErrorInfo><Message>boom</Message></ErrorInfo></Output></UnitTestResult>
+    <UnitTestResult testId="t4" testName="B_One" outcome="Passed" />
+    <UnitTestResult testId="t5" testName="B_Two" outcome="NotExecuted" />
+  </Results>
+  <TestDefinitions>
+    <UnitTest name="A_One" id="t1"><Execution id="e1" /><TestMethod codeBase="x.dll" className="Core.IntegrationTests.Alpha.AlphaTests" name="A_One" /></UnitTest>
+    <UnitTest id='t2' name="A_Two"><TestMethod className='Core.IntegrationTests.Alpha.AlphaTests' name="A_Two"/></UnitTest>
+    <UnitTest name="A_Three" id="t3"><TestMethod name="A_Three" className="Core.IntegrationTests.Alpha.AlphaTests" /></UnitTest>
+    <UnitTest name="B_One" id="t4"><TestMethod className="Core.IntegrationTests.BetaTests" name="B_One" /></UnitTest>
+    <UnitTest name="B_Two" id="t5"><TestMethod className="Core.IntegrationTests.BetaTests" name="B_Two" /></UnitTest>
+  </TestDefinitions>
+</TestRun>

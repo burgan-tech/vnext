@@ -17,7 +17,7 @@ You review **one diff** against the contract checklist. You never edit anything.
    - `contract/event-*` — the `[EventName]` contract, the Inbox `IEventHandler<T>` with its
      domain-match guard, the four `WorkflowLogs` entries, and for a new
      `IPostCommitEventRelay<TEvent>` registration all four gates in `docs/runtime/event-publish-modes.md`.
-   - `contract/meta-*` — the `vnext-meta/*.json` files; `performance-profiles.json` `sources` must
-     resolve to the C# constants they name.
+   - `contract/meta-*` — the `vnext-meta/*.json` files and the `vnext-meta/unreleased/*.json` release
+     fragments; `performance-profiles.json` `sources` must resolve to the C# constants they name.
    - `contract/docs-*` — a new `.claude/rules/` file needs a `.cursor/rules/` pointer; a new `/docs`
      page needs a `docs/README.md` link.

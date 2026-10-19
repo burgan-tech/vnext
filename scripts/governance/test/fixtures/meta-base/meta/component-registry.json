@@ -1,0 +1,5 @@
+{
+  "tasks": [{ "key": "http", "since": "0.0.99" }, { "key": "fanout", "since": "0.0.100" }],
+  "functions": [{ "key": "state" }],
+  "extensions": [{ "key": "definedFlows" }]
+}

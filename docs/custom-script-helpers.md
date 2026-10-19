@@ -199,6 +199,14 @@ driver grants database (network) access to every mapping that lists it.
 - **Driver dependencies.** Mount the whole dependency chain the runtime does not already ship. For a
   driver whose NuGet package carries platform-specific builds (Microsoft.Data.SqlClient) use the
   `runtimes/unix/lib/<tfm>/` copy or `dotnet publish -r linux-x64` output — the `lib/` copy is a stub
+  that throws `PlatformNotSupportedException`. SqlClient also refuses invariant globalization
+  (`NotSupportedException: Globalization Invariant Mode is not supported.`), so set
+  `DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=0` (Helm `global.dotnetEnv`). The images ship ICU with full
+  locale data for this (Alpine `icu-libs` + `icu-data-full`; the Execution image's Ubuntu base already
+  has it) but stay invariant by default. A script that uses `SqlConnection` must also grant the framework
+  assemblies its base types live in — `System.Data.Common` and `System.ComponentModel.Primitives`
+  (`DbConnection : Component`); without the latter the compile fails with `CS0012`. Worked example:
+  vnext-example `spl-sqlserver-query` (SqlClient + Dapper, no wrapper assembly).
   that throws `PlatformNotSupportedException`. SqlClient also refuses
   `DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1` on some versions; the Alpine images then need ICU.
 - **Adding vs replacing a DLL.** A DLL added to the plugin directory after start is found without a

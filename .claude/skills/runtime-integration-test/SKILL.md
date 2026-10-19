@@ -63,7 +63,8 @@ not bring up infrastructure on your own.
 10. **Record.** Scenario README + `TEST-SCENARIOS.md` row (or status update) in the same commit as the
    scenario. Deprecated rows are marked, never deleted.
 11. **Report.** Hand the counts, runtime commit, base URL and every remaining red with its cause to the
-    PR body (`## Integration test evidence`, via `create-github-pr`). If the SDK lacked something, name
+    PR body (`## E2E evidence`, generated from the TRX by `scripts/governance/e2e-evidence.mjs`, via
+    `create-github-pr`). If the SDK lacked something, name
     the gap to the user instead of leaving a workaround in the tests.
 
 ## Runtime facts for assertions

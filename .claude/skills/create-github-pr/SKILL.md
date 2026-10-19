@@ -5,8 +5,8 @@ description: "Drafts an English PR title and body from the commits on the curren
 
 # Create GitHub PR
 
-**No `gh` call and no push happen before the user approves the draft.** Everything up to Step 3 is
-local git.
+**No push and no `gh` write happen before the user approves the draft.** Everything up to Step 3 is
+local git, plus one read-only `gh api` call listing open milestones (Step 2).
 
 ## Workflow
 
@@ -44,13 +44,43 @@ restore — **stop**, tell the user, and offer the revert described in
 - **Body**: follows [`.github/PULL_REQUEST_TEMPLATE.md`](../../../.github/PULL_REQUEST_TEMPLATE.md)
   section for section. How to fill it:
   - Write every section from the actual commit messages and diff, not from the branch name.
-  - **Remove** a section that does not apply (`Integration test evidence` when no integration run
-    was part of the change, `Notes` when nothing is breaking or noteworthy) — never leave
-    placeholder text.
-  - `Integration test evidence` is filled from the real run (scenario, runtime commit and
-    `VNEXT_BASE_URL`, pass count, cause of any red) per
-    [integration-testing §10](../../../docs/testing/integration-testing.md#10-report-the-result).
+  - The title type picks the contract tier (template header): `feat` / `fix` / `perf` / `refactor`
+    fill every required section; `test` / `docs` / `chore` / `ci` / `style` / `revert` need only `## Summary`. Optional
+    sections (`Changes`, `Test Plan`, `Notes`) are removed when empty — never leave placeholder text.
+  - **Release lines**: a `fix` / `perf` PR that must also ship on an older line proposes the label
+    `backport/release-vX.Y` (added after the PR is opened or merged, with the user's approval). A PR
+    whose base is `release-v*` follows [Release lines](../../../docs/governance/release-lines.md):
+    a line `Backport of #<n>` or the label `needs-forward-port`.
+  - **Milestone** (full tier): ask the user, or list the open ones read-only with
+    `gh api repos/<owner/repo>/milestones?state=open --jq '.[].title'` and propose the matching
+    `vX.Y.Z`.
+  - **`## E2E evidence`**: when the integration run left a TRX, generate the block with
+    `node scripts/governance/e2e-evidence.mjs --trx <file>... --runtime-sha <sha> --base-url <url> [--reds "<text>"]`
+    ([integration-testing §10](../../../docs/testing/integration-testing.md#10-report-the-result));
+    never write the numbers by hand. Without a run, ask the user for the reason and write
+    `- Status: not-run` + `- Reason: <their reason>`.
+  - **`## Product impact`**: the template ships every row as `<yes/no>` with no default; for each of
+    the ten rows, look at the diff and propose `yes` or `no` with
+    a one-line why (new component field or task type → `vnext-schema`, `vnext-forge`, `vnext-docs`; new
+    config key → `vnext-helm-charts`; …). For each `yes`, propose a handoff draft at
+    `docs/integration/<product>/<slug>.md` from
+    [`_template.md`](../../../docs/integration/_template.md) (frontmatter `milestone` = the PR's
+    milestone, `status: pending`), or take a PR/issue URL from the user. A new handoff file must be
+    committed on the branch before the PR opens — ask before committing it.
+  - **`## vnext-meta impact`**: `updated` when the diff adds or changes a
+    `vnext-meta/unreleased/<slug>.json` fragment or a shipped `vnext-meta/*.json` data file, else
+    `not-needed` with the reason. When the diff introduces a feature, migration or deprecation with no
+    fragment, propose a draft at `vnext-meta/unreleased/<slug>.json` per
+    [its README](../../../vnext-meta/unreleased/README.md) (with a `releaseNote` whose `breaking`
+    matches any `BREAKING CHANGE:` footer); a new fragment must be committed on the branch before the
+    PR opens — ask before committing it.
   - A `BREAKING CHANGE:` footer in any commit ⇒ a `⚠️ Breaking change` note at the top of the body.
+  - **Check the draft before showing it**: write the body to a scratch file and run
+    `node scripts/governance/pr-contract.mjs --body-file <draft.md> --title "<title>" --milestone <vX.Y.Z> --files-from-git origin/<base>`
+    (omit `--milestone` for a light-tier PR).
+    Show its findings (rule ids: [reviewer: evidence §4](../../../docs/code-review/reviewers/evidence.md))
+    together with the draft in Step 3, and offer to fix them; the draft may still be approved with
+    findings if the user says so.
 
 ### Step 3 — Show the draft for approval
 
@@ -63,9 +93,14 @@ restore — **stop**, tell the user, and offer the revert described in
 
 Title:
   <generated title>
+Milestone:
+  <vX.Y.Z | none (light tier)>
 
 Body:
 <generated body>
+
+Contract check (pr-contract.mjs --body-file):
+  <findings, or "no findings">
 
 ────────────────────────────────────────
 Approve this draft? (yes / edit / cancel)
@@ -105,7 +140,8 @@ gh pr create --repo <owner/repo> \
 <body>
 BODY
 )" \
-  --base <base-branch>
+  --base <base-branch> \
+  --milestone "<vX.Y.Z>"        # omit for a light-tier PR without a milestone
 ```
 
 Output the PR URL `gh pr create` returns.

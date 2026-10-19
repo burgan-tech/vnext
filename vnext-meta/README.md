@@ -40,7 +40,7 @@ The package exposes each JSON document as a named export on the default export o
 
 ## Version alignment
 
-The npm package **version should match** the runtime release defined in the repo root `common.props` (`Version`). Consumers should pin `@burgan-tech/vnext-meta` to the same semver as the orchestration/execution hosts they target.
+The npm package **version should match** the runtime release defined in the repo root `common.props` (`Version`). Consumers should pin `@burgan-tech/vnext-meta` to the same semver as the orchestration/execution hosts they target. A pull request does not edit versions in the shipped files: it adds a version-less fragment under `unreleased/`, and the release stamps the real version, the manifest row and `schemaVersion`. See [`unreleased/README.md`](unreleased/README.md).
 
 ## Offline-first design
 

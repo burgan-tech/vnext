@@ -5,29 +5,68 @@ report PASS/FAIL per category with evidence.
 
 ---
 
+## Mechanical checks — run the lint first
+
+The deterministic parts of §1, §2, §3 and §8 are `scripts/governance/meta-lint.mjs`, which the
+`PR Contract` workflow also runs on every PR regardless of its title:
+
+```bash
+node scripts/governance/meta-lint.mjs                       # exit 1 on any error
+node scripts/governance/meta-lint.mjs --milestone v0.0.101  # a `since` may name the upcoming release (back-compat)
+node scripts/governance/meta-lint.mjs --json                # machine-readable findings
+```
+
+Quote every finding by its id in the category it belongs to. Do not re-derive these checks by hand;
+the sections below say which ids cover them and what is left for the agent.
+
+| Id | What it checks |
+|---|---|
+| `META-PARSE` | Every meta JSON file exists and parses; `index.js` can be required. |
+| `META-SHAPE` | Root shapes: manifest `versions` object, features `runtimeVersion` string, registry `tasks` / `functions` / `extensions` arrays, `items` arrays in deprecations / migrations / known-issues. |
+| `META-MANIFEST-ORDER` | Manifest keys are semver, strictly descending, with `releasedAt` `YYYY-MM-DD` not increasing down the list within the same `major.minor` line (a patch line such as 1.1.9 may ship after 1.2.0). |
+| `META-MANIFEST-ENTRY` | Each manifest entry has a semver `schemaVersion` and an `https://` `releaseNotes` link. |
+| `META-RUNTIME-VERSION` | `features.json` `runtimeVersion` equals the newest manifest key. |
+| `META-SINCE` | Every `since` / `deprecatedSince` / `enforcedSince` / `fixedIn` is null or a released version; one ahead of the newest release must equal `--milestone`; `"next"` is rejected outside `vnext-meta/unreleased/`. |
+| `META-REGISTRY-KEY` | Registry keys are unique per kind and each exists in code (see §3). |
+| `META-ID-UNIQUE` | `id`s are unique in deprecations, migrations and known-issues, across the stamped files and every release fragment. |
+| `META-FRAGMENT` | Each `vnext-meta/unreleased/<slug>.json` fragment: slug, shape, unknown keys, `releaseNote`, version placeholders are `"next"`, feature-key collisions, `fixes` targets exist. Format: [`vnext-meta/unreleased/README.md`](../../../vnext-meta/unreleased/README.md). |
+| `META-FRAGMENT-RELEASED` | Against `vnext-meta/released-fragments.json`: a fragment byte-identical to one a release already consumed (a back-merge leftover) is a **warning** and is left out of every other fragment check; a released slug with different content is an error (slugs are single-use). An unparseable or wrongly shaped record is `META-PARSE` / `META-SHAPE` on that file. |
+
+**Release stamp.** A PR describes a change as a version-less fragment in `vnext-meta/unreleased/`; the
+release's `prepare` job runs `scripts/governance/meta-stamp.mjs --version X.Y.Z`, which writes the real
+version into the shipped files, adds the manifest row, records each consumed fragment's hash in
+`vnext-meta/released-fragments.json` (tracked, never published) and deletes the fragments, then re-lints. The
+recommended path for a new `since` is therefore a fragment; naming the upcoming release through
+`--milestone` stays valid for back-compat.
+
+---
+
 ## 1. Schema compliance
 
 **Goal**: Each JSON file matches the **expected structural contract** used by this package (fields, nesting, types).
 
+**Mechanical**: `META-PARSE`, `META-SHAPE`, `META-MANIFEST-ORDER`, `META-MANIFEST-ENTRY`,
+`META-ID-UNIQUE`. **Agent**: the item-level fields below, which the lint does not read.
+
 ### 1.1 `version-manifest.json`
 
-- [ ] Top-level object with `versions` map.
-- [ ] Each version key is a SemVer-like string; value has at least `schemaVersion` (string), `releasedAt` (ISO date string), optional `releaseNotes` (path string).
-- [ ] `schemaVersion` matches the parent key unless documented otherwise.
+- [ ] `schemaVersion` is the `@burgan-tech/vnext-schema` version that runtime release ships with. It
+  does **not** equal the parent key (`0.0.100` → `0.0.56`); do not flag the difference. The release
+  stamp sets it: the highest of the previous row and any fragment's `schemaVersion`, carried over when
+  none, or the `schema_version` dispatch input.
 
 ### 1.2 `package.json`
 
-- [ ] `name`, `version`, `files` array includes all shipped JSON artifacts (per `files` list in repo).
+- [ ] `name` and a `files` array that includes all shipped JSON artifacts. The `version` field is
+  **not** checked: the publish job overwrites it.
 
 ### 1.3 `features.json`
 
-- [ ] Has `runtimeVersion` (string).
 - [ ] Group objects (e.g. `engine`, `api`) contain feature entries; each entry has `since` (string) and descriptive fields (`description` and/or `endpoint` as appropriate).
 - [ ] No empty or malformed feature keys.
 
 ### 1.4 `component-registry.json`
 
-- [ ] Top-level arrays: `tasks`, `functions`, `extensions` (all arrays of objects).
 - [ ] Each item: `key` (string), `since`, `stable` (boolean), `domains` (array), `configSchema` (nullable).
 
 ### 1.5 `performance-profiles.json`
@@ -36,7 +75,7 @@ report PASS/FAIL per category with evidence.
 
 ### 1.6 `deprecations.json`
 
-- [ ] `items` array; each item has identifiers (`id`, `type`, …), version fields (`deprecatedSince`, optional `removedAt`), `severity`, `message`.
+- [ ] Each item has identifiers (`id`, `type`, …), version fields (`deprecatedSince`, optional `removedAt`), `severity`, `message`.
 
 ### 1.7 `security-policy.json`
 
@@ -44,48 +83,44 @@ report PASS/FAIL per category with evidence.
 
 ### 1.8 `migrations.json` / `known-issues.json`
 
-- [ ] Validate against prevailing shapes in-repo (arrays/maps with stable `id` or issue keys); flag unexpected `null` roots or type drift.
+- [ ] Items follow the prevailing in-repo shape; flag unexpected `null` fields or type drift.
 
 ---
 
 ## 2. Version consistency
 
-**Goal**: Published meta versions agree with the **canonical MSBuild version**.
+**Goal**: Version fields agree with the **release timeline in `version-manifest.json`**.
 
-### Sources of truth
+**Mechanical**: `META-RUNTIME-VERSION` (`features.json` `runtimeVersion` == newest manifest key) and
+`META-SINCE` (every version reference is a released version, or the PR milestone). Pass the PR's
+milestone with `--milestone` when meta documents the upcoming release.
 
-- **`common.props`**: `<Version>` — authoritative runtime/package alignment target.
-- **`vnext-meta/package.json`**: `version` must equal `<Version>`.
-- **`vnext-meta/features.json`**: `runtimeVersion` must equal `<Version>` when documenting the current tip (unless intentionally documenting a fork — then FAIL with explanation).
-- **`vnext-meta/version-manifest.json`**: Must contain an entry for the current `<Version>` if that version is released and described in meta; `schemaVersion` inside that entry must match the key.
+Not checked, by design: `vnext-meta/package.json` `version` (the publish job overwrites it, so it never
+equals `common.props`), and `schemaVersion` against the key (§1.1).
 
-### Checks
+**Agent**:
 
-- [ ] `common.props` Version == `package.json` version.
-- [ ] `features.json` `runtimeVersion` == `common.props` Version.
-- [ ] `version-manifest.json` includes current Version with consistent `schemaVersion`.
-- [ ] Scan all `since`, `deprecatedSince`, `enforcedSince`, `releasedAt` references: no impossible ordering (e.g. feature `since` newer than manifest without corresponding manifest entry — use judgment and list anomalies).
+- [ ] `common.props` `<Version>` is the version being developed; when meta already documents it, the
+  manifest has (or the PR adds) its entry. A `since` naming that version without `--milestone` is the
+  lint's warning, not a defect.
 
 ---
 
 ## 3. Component registry alignment
 
-**Goal**: Registry keys mirror **runtime constants and enums**.
+**Goal**: Every registry key exists in code (**registry ⊆ code**). Completeness — every code constant
+having a registry row — is a policy decision and is **not** required; do not FAIL a category for a
+missing row.
 
-### Tasks → `TaskTypes`
+**Mechanical**: `META-REGISTRY-KEY`. Sources:
 
-- **File**: `src/BBT.Workflow.Execution.Abstractions/TaskTypes.cs`
-- **Rule**: Every `public const string` value must appear exactly once as a `tasks[].key` in `component-registry.json`, and **every** `tasks[].key` must match a const value (lowercase naming per file comments).
+| Kind | Valid keys |
+|---|---|
+| `tasks[].key` | `public const string` values in `src/BBT.Workflow.Execution.Abstractions/TaskTypes.cs` ∪ lowercased `TaskType` enum members in `src/BBT.Workflow.Domain/Definitions/Tasks/TaskEnums.cs` |
+| `functions[].key` | `public const string` values in `src/BBT.Workflow.Domain/Definitions/Functions/FunctionTypeConst.cs` |
+| `extensions[].key` | `ExtensionType` enum members in `src/BBT.Workflow.Domain/Definitions/Extensions/ExtensionEnums.cs`, camelCased (`DefinedFlowAndRequested` → `definedFlowAndRequested`) |
 
-### Functions → `FunctionTypeConst`
-
-- **File**: `src/BBT.Workflow.Domain/Definitions/Functions/FunctionTypeConst.cs`
-- **Rule**: Const **values** (e.g. `"state"`, `"permissions"`) must match `functions[].key`. Cover **all** consts; registry must not invent undocumented function keys.
-
-### Extensions → `ExtensionType`
-
-- **File**: `src/BBT.Workflow.Domain/Definitions/Extensions/ExtensionEnums.cs` — enum `ExtensionType`
-- **Rule**: JSON uses **camelCase** keys derived from enum names (`Global` → `global`, `DefinedFlowAndRequested` → `definedFlowAndRequested`). Every enum member must have a registry row and vice versa.
+**Agent**: none beyond quoting the findings. Missing rows may be listed as INFO.
 
 ---
 
@@ -157,10 +192,10 @@ Severity in JSON should align with compiler warning vs error where applicable.
 
 **Goal**: **Shared version references** and identifiers agree across meta files.
 
-### Checks
+**Mechanical**: `META-RUNTIME-VERSION`, `META-SINCE` (every `since`-style field is on the release
+timeline), `META-MANIFEST-ENTRY` (`releaseNotes` is an `https://` link).
 
-- [ ] `runtimeVersion` / `package.json` / `common.props` — aligned (see §2).
-- [ ] All `since` fields reference versions present or plausible on the timeline (`version-manifest.json` optional entries noted).
+### Agent checks
+
 - [ ] `component-registry.json` `since` ≤ features referencing same components where cross-linked.
 - [ ] `performance-profiles.json` profile `since` compatible with manifest.
-- [ ] Links/paths (`releaseNotes`) resolve under repo if stored in-repo.
