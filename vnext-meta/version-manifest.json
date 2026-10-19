@@ -1,5 +1,10 @@
 {
   "versions": {
+    "0.0.101": {
+      "schemaVersion": "0.0.56",
+      "releasedAt": "2026-10-19",
+      "releaseNotes": "https://burgan-tech.github.io/vnext-docs/blog/release-v0-0-101"
+    },
     "0.0.100": {
       "schemaVersion": "0.0.56",
       "releasedAt": "2026-10-15",
