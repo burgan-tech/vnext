@@ -2,6 +2,16 @@
 FROM mcr.microsoft.com/dotnet/aspnet:10.0-alpine3.23 AS base
 WORKDIR /app
 
+# Native libraries the base image leaves out:
+# - krb5-libs: Npgsql probes GSSAPI on every connection (GssEncryptionMode=Prefer by default);
+#   without libgssapi_krb5.so.2 the .NET native shim prints "Cannot load library libgssapi_krb5.so.2"
+#   to stderr. The connection still succeeds, but the line reads as a startup failure.
+# - icu-libs + icu-data-full: lets an operator set DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=0 (needed by
+#   Microsoft.Data.SqlClient in script plugins, which rejects invariant mode). Without ICU the runtime
+#   FailFasts at startup. icu-data-en alone would silently format tr-TR as English. The image default
+#   stays invariant (base image sets DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=true).
+RUN apk add --no-cache krb5-libs icu-libs icu-data-full
+
 # Create non-root user for security
 RUN adduser -D workflowuser && chown -R workflowuser:workflowuser /app
 
