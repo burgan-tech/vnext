@@ -47,15 +47,20 @@ const TASK_ENUMS = 'src/BBT.Workflow.Domain/Definitions/Tasks/TaskEnums.cs';
 const FUNCTION_CONSTS = 'src/BBT.Workflow.Domain/Definitions/Functions/FunctionTypeConst.cs';
 const EXTENSION_ENUMS = 'src/BBT.Workflow.Domain/Definitions/Extensions/ExtensionEnums.cs';
 
-const isSemver = (v) => typeof v === 'string' && SEMVER.test(v);
+/** True when `v` is a plain `X.Y.Z` version string. */
+export const isSemver = (v) => typeof v === 'string' && SEMVER.test(v);
 const parts = (v) => v.match(SEMVER).slice(1).map(Number);
 
-function compare(a, b) {
+/** Orders two `X.Y.Z` versions: negative when `a < b`, 0 when equal, positive when `a > b`. */
+export function compareSemver(a, b) {
   const pa = parts(a);
   const pb = parts(b);
   for (let i = 0; i < 3; i++) if (pa[i] !== pb[i]) return pa[i] - pb[i];
   return 0;
 }
+
+/** `major.minor` of a semver version: the release line it belongs to. */
+const minorLine = (v) => parts(v).slice(0, 2).join('.');
 
 const camel = (name) => name.charAt(0).toLowerCase() + name.slice(1);
 
@@ -229,22 +234,26 @@ export function lintMeta({ metaDir, repoRoot, milestone }) {
     manifestKeys = Object.keys(manifest.versions);
     const f = 'version-manifest.json';
     let prevKey = null;
-    let prevDate = null;
+    // releasedAt must not increase down the list within a major.minor line; a patch line (1.1.9) may ship after
+    // the next minor (1.2.0), so dates are only compared against the previous key of the same line.
+    const lastDateByLine = new Map();
     for (const key of manifestKeys) {
       const entry = manifest.versions[key];
       if (!isSemver(key)) {
         add('META-MANIFEST-ORDER', f, `Manifest key "${key}" is not a semver version.`);
-      } else if (prevKey !== null && isSemver(prevKey) && compare(prevKey, key) <= 0) {
+      } else if (prevKey !== null && isSemver(prevKey) && compareSemver(prevKey, key) <= 0) {
         add('META-MANIFEST-ORDER', f, `Manifest key "${key}" is not strictly below the previous key "${prevKey}".`);
       }
       const date = entry && entry.releasedAt;
       if (typeof date !== 'string' || !DATE.test(date)) {
         add('META-MANIFEST-ORDER', f, `"${key}" has a releasedAt that is not YYYY-MM-DD.`);
-      } else {
-        if (prevDate !== null && date > prevDate) {
-          add('META-MANIFEST-ORDER', f, `"${key}" is released after the previous (newer) entry; releasedAt must not increase down the list.`);
+      } else if (isSemver(key)) {
+        const line = minorLine(key);
+        const prevDate = lastDateByLine.get(line);
+        if (prevDate !== undefined && date > prevDate) {
+          add('META-MANIFEST-ORDER', f, `"${key}" is released after the previous (newer) ${line}.x entry; releasedAt must not increase down the list within a line.`);
         }
-        prevDate = date;
+        lastDateByLine.set(line, date);
       }
       prevKey = key;
       if (!entry || !isSemver(entry.schemaVersion)) {
@@ -255,7 +264,7 @@ export function lintMeta({ metaDir, repoRoot, milestone }) {
       }
     }
     const valid = manifestKeys.filter(isSemver);
-    newest = valid.length ? valid.reduce((a, b) => (compare(a, b) >= 0 ? a : b)) : null;
+    newest = valid.length ? valid.reduce((a, b) => (compareSemver(a, b) >= 0 ? a : b)) : null;
   }
 
   // META-RUNTIME-VERSION
@@ -281,7 +290,7 @@ export function lintMeta({ metaDir, repoRoot, milestone }) {
         if (value === null) return;
         if (!isSemver(value)) {
           add('META-SINCE', file, `${path} must be null or a semver version, got ${JSON.stringify(value)}.`);
-        } else if (compare(value, newest) <= 0) {
+        } else if (compareSemver(value, newest) <= 0) {
           if (!manifestSet.has(value)) add('META-SINCE', file, `${path} "${value}" is not a release in version-manifest.json.`);
         } else if (ms === null) {
           add('META-SINCE', file, `${path} "${value}" is ahead of the newest release ${newest}; pass --milestone to confirm it.`, 'warning');

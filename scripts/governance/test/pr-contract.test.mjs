@@ -202,6 +202,57 @@ test('CLI smoke: --body-file draft in enforce mode', () => {
   assert.doesNotMatch(rel.stdout, /PR-/);
 });
 
+const BACKPORT_BODY = (n = 123) => `Backport of #${n} to \`release-v1.1\`.\n\n${VALID}`;
+
+test('release-line PR: full tier into release-vX.Y needs a backport line or the forward-port label', () => {
+  const into = { baseRef: 'release-v1.1', labels: [] };
+  const f = checkPr(pr(into)).filter((x) => x.id === 'PR-RELEASE-LINE');
+  assert.equal(f.length, 1);
+  assert.equal(f[0].severity, 'error');
+  assert.equal(f[0].file, 'PR');
+  assert.match(f[0].message, /Backport of #/);
+  assert.match(f[0].message, /needs-forward-port/);
+  assert.match(f[0].message, /docs\/governance\/release-lines\.md/);
+  assert.ok(!ids(checkPr(pr({ ...into, body: BACKPORT_BODY() }))).includes('PR-RELEASE-LINE'));
+  assert.ok(!ids(checkPr(pr({ ...into, labels: ['needs-forward-port'] }))).includes('PR-RELEASE-LINE'));
+  assert.ok(!ids(checkPr(pr({ baseRef: 'master', labels: [] }))).includes('PR-RELEASE-LINE'));
+  assert.ok(!ids(checkPr(pr({ baseRef: 'release-v1.1.2', labels: [] }))).includes('PR-RELEASE-LINE'));
+  assert.ok(!ids(checkPr(pr({ title: 'docs: explain it', body: '## Summary\nx\n', ...into }))).includes('PR-RELEASE-LINE'));
+  assert.deepEqual(checkPr(pr({ title: 'v1.1.9', ...into })), []);
+});
+
+test('backport detection is anchored to a line start', () => {
+  const into = { baseRef: 'release-v1.1', labels: [] };
+  const mid = checkPr(pr({ ...into, body: `We discuss Backport of #5 in passing.\n\n${VALID}` }));
+  assert.ok(ids(mid).includes('PR-RELEASE-LINE'));
+  const later = checkPr(pr({ ...into, body: `Intro text.\nBackport of #5 to \`release-v1.1\`.\n\n${VALID}` }));
+  assert.ok(!ids(later).includes('PR-RELEASE-LINE'));
+});
+
+test('backport: an E2E SHA outside the PR commits is a warning naming the original PR', () => {
+  const body = BACKPORT_BODY(123).replace('3f2a9c1e5d', 'abcdef1234');
+  const f = checkPr(pr({ baseRef: 'release-v1.1', body })).filter((x) => x.id === 'PR-E2E-RUN');
+  assert.equal(f.length, 1);
+  assert.equal(f[0].severity, 'warning');
+  assert.match(f[0].message, /original PR #123/);
+  const plain = checkPr(pr({ body: VALID.replace('3f2a9c1e5d', 'abcdef1234') })).filter((x) => x.id === 'PR-E2E-RUN');
+  assert.equal(plain.length, 1);
+  assert.equal(plain[0].severity, 'error');
+});
+
+test('CLI draft passes --base and --labels through', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'prc-'));
+  const file = join(dir, 'body.md');
+  const cli = join(here, '..', 'pr-contract.mjs');
+  const hermetic = ['--meta-dir', join(here, 'fixtures', 'meta-base', 'meta'), '--repo-root', join(here, 'fixtures', 'meta-base', 'repo')];
+  writeFileSync(file, VALID);
+  const common = [cli, '--body-file', file, '--title', 'feat(x): y', '--milestone', 'v0.0.101', '--mode', 'enforce', '--base', 'release-v1.1', ...hermetic];
+  const bare = spawnSync('node', common, { encoding: 'utf8', env: localEnv });
+  assert.match(bare.stdout, /PR-RELEASE-LINE/, bare.stdout + bare.stderr);
+  const labelled = spawnSync('node', [...common, '--labels', ' bug, needs-forward-port ,'], { encoding: 'utf8', env: localEnv });
+  assert.doesNotMatch(labelled.stdout, /PR-RELEASE-LINE/, labelled.stdout + labelled.stderr);
+});
+
 test('annotation encoding follows workflow-command rules', () => {
   const line = formatAnnotation({ id: 'PR-X', severity: 'error', file: 'a:b,c.md', message: 'has %0A and 100% and\rlone\nnewline' });
   assert.equal(line, '::error title=PR-X,file=a%3Ab%2Cc.md::has %250A and 100%25 and%0Dlone%0Anewline');

@@ -56,7 +56,8 @@ and the skills point here.
 | `PR-MILESTONE` | A full-contract PR carries an open milestone named `vX.Y.Z`. |
 | `PR-SECTION` | Each required section (`Summary`, `vNext scope`, `E2E evidence`, `Product impact`, `vnext-meta impact`) exists and is not blank; comments and `<...>` placeholders count as blank. |
 | `PR-E2E-STATUS` | `## E2E evidence` declares `Status: run`, or `Status: not-run` with a `Reason` of at least 10 characters. |
-| `PR-E2E-RUN` | A `run` block has a runtime SHA that is one of the PR's commits, a `Result` line, at least one suite row, and a `Reds` line when anything failed. |
+| `PR-E2E-RUN` | A `run` block has a runtime SHA that is one of the PR's commits (for a backport PR a foreign SHA is only a warning, the evidence comes from the original PR), a `Result` line, at least one suite row, and a `Reds` line when anything failed. |
+| `PR-RELEASE-LINE` | A full-contract PR whose base is a `release-vX.Y` branch is a backport (body has a `Backport of #<n>` line) or an emergency fix carrying the `needs-forward-port` label ([release lines](../../governance/release-lines.md)). |
 | `PR-PRODUCT-ROWS` | `## Product impact` has exactly one `yes`/`no` row for each of the ten products and no unknown product. |
 | `PR-HANDOFF` | Each `yes` row links a `docs/integration/<product>/*.md` file changed in this PR, or a PR/issue URL in `burgan-tech/<product>`. |
 | `PR-HANDOFF-DOC` | A linked handoff doc has frontmatter with the right `product`, the PR's `milestone`, and `status` `pending`/`in-progress`/`done` ([convention](../../integration/README.md)). |

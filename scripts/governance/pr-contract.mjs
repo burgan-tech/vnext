@@ -2,7 +2,8 @@
 // CLI for the PR contract. Input sources:
 //   --event <path>                     GitHub `pull_request` event JSON (files/commits via `gh api`)
 //   --pr <n> [--repo owner/name]       replay a real PR via `gh pr view`
-//   --body-file <path> --title <t> [--milestone vX.Y.Z] [--files-from-git <base>]   local draft
+//   --body-file <path> --title <t> [--milestone vX.Y.Z] [--files-from-git <base>]
+//                      [--base <branch>] [--labels a,b]   local draft
 //   --mode warn|enforce                warn (default) prints errors as warnings and exits 0
 import { readFileSync, appendFileSync, existsSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
@@ -13,7 +14,7 @@ import { lintMeta } from './lib/meta-lint.mjs';
 const COMMITS_CAP = 250;
 
 const NO_DASH = new Set(['pr', 'files-from-git', 'body-file', 'event']);
-const USAGE = '--event <path> | --pr <n> | --body-file <path> --title <t> [--milestone vX.Y.Z] [--files-from-git <base>] [--mode warn|enforce] [--meta-dir <path>] [--repo-root <path>]';
+const USAGE = '--event <path> | --pr <n> | --body-file <path> --title <t> [--milestone vX.Y.Z] [--files-from-git <base>] [--base <branch>] [--labels a,b] [--mode warn|enforce] [--meta-dir <path>] [--repo-root <path>]';
 
 function parseArgs(argv) {
   const out = {};
@@ -48,11 +49,13 @@ function fromEvent(path) {
     commitShas,
     commitsCapped: commitShas.length >= COMMITS_CAP,
     draft: Boolean(p.draft),
+    baseRef: p.base?.ref ?? null,
+    labels: (p.labels ?? []).map((l) => l.name),
   };
 }
 
 function fromReplay(n, repo) {
-  const args = ['pr', 'view', n, '--json', 'title,body,milestone,files,commits'];
+  const args = ['pr', 'view', n, '--json', 'title,body,milestone,files,commits,baseRefName,labels'];
   if (repo) args.push('--repo', repo);
   const p = JSON.parse(run('gh', args));
   const commitShas = (p.commits ?? []).map((c) => c.oid);
@@ -64,6 +67,8 @@ function fromReplay(n, repo) {
     changedFiles: (p.files ?? []).map((f) => f.path),
     commitShas,
     commitsCapped: commitShas.length >= COMMITS_CAP,
+    baseRef: p.baseRefName ?? null,
+    labels: (p.labels ?? []).map((l) => l.name),
   };
 }
 
@@ -82,6 +87,8 @@ function fromDraft(args) {
     changedFiles,
     commitShas,
     commitsCapped: false,
+    baseRef: args.base ?? null,
+    labels: (args.labels ?? '').split(',').map((l) => l.trim()).filter(Boolean),
   };
 }
 

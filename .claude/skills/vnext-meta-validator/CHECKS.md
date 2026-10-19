@@ -23,7 +23,7 @@ the sections below say which ids cover them and what is left for the agent.
 |---|---|
 | `META-PARSE` | Every meta JSON file exists and parses; `index.js` can be required. |
 | `META-SHAPE` | Root shapes: manifest `versions` object, features `runtimeVersion` string, registry `tasks` / `functions` / `extensions` arrays, `items` arrays in deprecations / migrations / known-issues. |
-| `META-MANIFEST-ORDER` | Manifest keys are semver, strictly descending, with `releasedAt` `YYYY-MM-DD` not increasing down the list. |
+| `META-MANIFEST-ORDER` | Manifest keys are semver, strictly descending, with `releasedAt` `YYYY-MM-DD` not increasing down the list within the same `major.minor` line (a patch line such as 1.1.9 may ship after 1.2.0). |
 | `META-MANIFEST-ENTRY` | Each manifest entry has a semver `schemaVersion` and an `https://` `releaseNotes` link. |
 | `META-RUNTIME-VERSION` | `features.json` `runtimeVersion` equals the newest manifest key. |
 | `META-SINCE` | Every `since` / `deprecatedSince` / `enforcedSince` / `fixedIn` is null or a released version; one ahead of the newest release must equal `--milestone`; `"next"` is rejected outside `vnext-meta/unreleased/`. |
