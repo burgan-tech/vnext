@@ -1016,6 +1016,17 @@ public static partial class WorkflowLogs
         this ILogger logger, Exception exception, string jobName, Guid instanceId, string transitionKey);
 
     /// <summary>
+    /// Logs when a timer firing in an interaction wait (a Busy-subtype state declaring an
+    /// <c>interaction</c>) takes over the instance's ownerless Busy instead of being refused as busy.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10181,
+        Level = LogLevel.Information,
+        Message = "Scheduled transition {TransitionKey} took over the parked Busy of instance {InstanceId} in interaction wait {StateKey}")]
+    public static partial void ScheduledTransitionTookOverInteractionWait(
+        this ILogger logger, Guid instanceId, string stateKey, string transitionKey);
+
+    /// <summary>
     /// Logs when task instance resolution fails (for DirectTrigger, GetInstanceData).
     /// </summary>
     [LoggerMessage(
