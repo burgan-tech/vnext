@@ -70,6 +70,32 @@ public class InstanceJob : Entity<Guid>, IHasCreatedAt, IHasModifyTime
     public DateTime CreatedAt { get; set; }
     public DateTime? ModifiedAt { get; set; }
 
+    /// <summary>
+    /// Whether this active job owns — or is about to take — the instance's Busy flag on behalf of a
+    /// transition other than <paramref name="requestingTransitionKey"/>.
+    /// <para>
+    /// An async-transition job is an accept intent or a per-hop chain job: it already holds Busy.
+    /// A scheduled transition holds nothing while it is merely ARMED — the instance rests and the
+    /// timer goes through admission itself when it fires — so it counts only once it is due
+    /// (<see cref="ExecuteAt"/> reached: firing, or about to). A row without <see cref="ExecuteAt"/>
+    /// predates the column; it stays an owner, as before. Counting a far-off timer as an owner made
+    /// an updateData drop a satisfied auto transition in a Busy-subtype wait state whose only
+    /// "owner" was its own timeout, hours away.
+    /// </para>
+    /// </summary>
+    public bool IsLiveTransitionOwner(string requestingTransitionKey, DateTime utcNow)
+    {
+        if (string.Equals(TransitionKey, requestingTransitionKey, StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        return JobType switch
+        {
+            JobType.AsyncTransition => true,
+            JobType.ScheduledTransition => ExecuteAt is null || ExecuteAt <= utcNow,
+            _ => false
+        };
+    }
+
     public void MarkAsProcessed()
     {
         IsActive = false;
