@@ -14,6 +14,7 @@ namespace BBT.Workflow.Execution.PostCommit.Handlers;
 /// </summary>
 public sealed class StartSubflowJobHandler(
     IInstanceRepository instanceRepository,
+    IInstanceCorrelationRepository correlationRepository,
     ISubflowStarter subflowStarter,
     IScriptContextFactory scriptContextFactory,
     IRuntimeInfoProvider runtimeInfoProvider,
@@ -86,6 +87,20 @@ public sealed class StartSubflowJobHandler(
 
             if (startResult.IsSuccess)
             {
+                // Pin the correlation to the version the child actually runs (an authored "1.0" or
+                // "latest" would otherwise be re-resolved on every later read). Null = an older
+                // remote runtime did not report one: the authored reference stays. The write is a
+                // single column, because a sync child has already settled this correlation in its own
+                // scope; the tracked copy is pinned too so a later graph save cannot put the
+                // authored value back.
+                var resolvedVersion = startResult.Value;
+                if (!string.IsNullOrWhiteSpace(resolvedVersion))
+                {
+                    correlation.PinSubFlowVersion(resolvedVersion);
+                    await correlationRepository.TryPinSubFlowVersionAsync(
+                        correlation.Id, resolvedVersion, cancellationToken);
+                }
+
                 if (scriptContext.Mutations.HasChanges)
                 {
                     scriptContext.Mutations.ApplyTo(instance);
@@ -112,7 +127,7 @@ public sealed class StartSubflowJobHandler(
                 logger.SubFlowStarted(job.TargetStateKey, context.InstanceId);
             }
 
-            return startResult;
+            return startResult.IsSuccess ? Result.Ok() : Result.Fail(startResult.Error);
         }
     }
 

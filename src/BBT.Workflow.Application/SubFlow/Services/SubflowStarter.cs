@@ -30,7 +30,7 @@ public sealed class SubflowStarter(
     ILogger<SubflowStarter> logger) : ISubflowStarter
 {
     /// <inheritdoc />
-    public async Task<Result> StartAsync(
+    public async Task<Result<string?>> StartAsync(
         Definitions.Workflow workflow,
         Instance parentInstance,
         State targetState,
@@ -75,7 +75,7 @@ public sealed class SubflowStarter(
             if (!mappingResult.IsSuccess)
             {
                 SubFlowActivityHelper.SetError(activity, mappingResult.Error.Message ?? mappingResult.Error.Code);
-                return Result.Fail(mappingResult.Error);
+                return Result<string?>.Fail(mappingResult.Error);
             }
 
             inputMappingResult = mappingResult.Value;
@@ -99,8 +99,8 @@ public sealed class SubflowStarter(
     /// <summary>
     /// Internal method that contains the common logic for starting SubFlow/SubProcess workflows.
     /// </summary>
-    /// <returns>Result indicating success or failure of the SubFlow start operation.</returns>
-    private async Task<Result> StartSubFlowInternalAsync(
+    /// <returns>Result indicating success or failure; on success the child's resolved flow version (null when not reported).</returns>
+    private async Task<Result<string?>> StartSubFlowInternalAsync(
         Definitions.Workflow workflow,
         Instance parentInstance,
         Reference subFlowReference,
@@ -240,13 +240,13 @@ public sealed class SubflowStarter(
                 error.Code,
                 error.Message ?? string.Empty);
 
-            return Result.Fail(error);
+            return Result<string?>.Fail(error);
         }
 
         SubFlowActivityHelper.SetSuccess(activity);
         logger.SubFlowStarted(subFlowReference.Key, parentInstance.Id);
 
-        return Result.Ok();
+        return Result<string?>.Ok(startResult.Value?.FlowVersion);
     }
 
     /// <summary>

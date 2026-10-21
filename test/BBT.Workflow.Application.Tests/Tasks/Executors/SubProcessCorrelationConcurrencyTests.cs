@@ -256,7 +256,7 @@ public sealed class SubProcessCorrelationConcurrencyTests
         {
             var invocation = (Task<Result>)CreateCorrelation.Invoke(
                 _executor,
-                [_context, _task, Guid.NewGuid(), Guid.NewGuid(), CancellationToken.None])!;
+                [_context, _task, Guid.NewGuid(), Guid.NewGuid(), null, CancellationToken.None])!;
 
             _issued.Add(invocation);
             return invocation;
