@@ -4844,7 +4844,8 @@ public static partial class WorkflowLogs
         this ILogger logger,
         string domain,
         string flow,
-        string errorCode);
+        string errorCode,
+        Exception? exception);
 
     /// <summary>Logs that a flow's cached version registry entry was invalidated.</summary>
     [LoggerMessage(

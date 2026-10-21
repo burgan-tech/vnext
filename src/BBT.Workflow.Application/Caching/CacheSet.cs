@@ -337,7 +337,7 @@ public class CacheSet<T>(
         if (!pointerResult.IsSuccess)
         {
             // Fail closed: falling back to the newest version would activate one nobody activated.
-            logger.VersionRegistryReadFailed(domain, key, pointerResult.Error.Code);
+            logger.VersionRegistryReadFailed(domain, key, pointerResult.Error.Code, null);
             return Result<string?>.Fail(pointerResult.Error);
         }
 
@@ -472,7 +472,7 @@ public class CacheSet<T>(
                 var pointerResult = await _versionPolicy.GetDefaultVersionAsync(domain, key, cancellationToken);
                 if (!pointerResult.IsSuccess)
                 {
-                    logger.VersionRegistryReadFailed(domain, key, pointerResult.Error.Code);
+                    logger.VersionRegistryReadFailed(domain, key, pointerResult.Error.Code, null);
                     return;
                 }
 

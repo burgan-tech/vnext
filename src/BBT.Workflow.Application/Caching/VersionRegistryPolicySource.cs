@@ -27,8 +27,6 @@ public sealed class VersionRegistryPolicySource(
     IServiceScopeFactory scopeFactory,
     ILogger<VersionRegistryPolicySource> logger) : IVersionPolicySource
 {
-    private const string ReadFailedCode = "VersionRegistry.ReadFailed";
-
     private static readonly JsonSerializerOptions EntryOptions = new(JsonSerializerDefaults.Web);
 
     /// <inheritdoc />
@@ -53,9 +51,9 @@ public sealed class VersionRegistryPolicySource(
         {
             throw;
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            return Failed(domain, key, ReadFailedCode, exception: true);
+            return Failed(domain, key, WorkflowErrorCodes.VersionRegistryUnavailable, ex.Message, ex);
         }
     }
 
@@ -76,7 +74,8 @@ public sealed class VersionRegistryPolicySource(
             // that would hit a schema which does not exist.
             return flow.Error.Code == WorkflowErrorCodes.CacheItemNotFound
                 ? Result<string?>.Ok(null)
-                : Failed(domain, key, flow.Error.Code, exception: false);
+                : Failed(domain, key, flow.Error.Code,
+                    $"registry flow lookup failed: {flow.Error.Code}", null);
         }
 
         var currentSchema = services.GetRequiredService<ICurrentSchema>();
@@ -124,11 +123,9 @@ public sealed class VersionRegistryPolicySource(
         return best?.Data;
     }
 
-    private Result<string?> Failed(string domain, string key, string errorCode, bool exception)
+    private Result<string?> Failed(string domain, string key, string errorCode, string reason, Exception? exception)
     {
-        logger.VersionRegistryReadFailed(domain, key, errorCode);
-        return Result<string?>.Fail(Error.Failure(
-            ReadFailedCode,
-            exception ? "Version registry could not be read" : "Version registry flow could not be resolved"));
+        logger.VersionRegistryReadFailed(domain, key, errorCode, exception);
+        return Result<string?>.Fail(WorkflowErrors.VersionRegistryUnavailable(domain, key, reason));
     }
 }

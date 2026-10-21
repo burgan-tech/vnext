@@ -152,6 +152,12 @@ public static class WorkflowErrorCodes
     /// </summary>
     public const string FlowDefaultVersionInvalid = "Instance:100052";
 
+    /// <summary>
+    /// The version registry could not be read (database or registry flow failure), so the flow's default version
+    /// cannot be determined. Transient; the resolution fails instead of falling back to latest. Maps to HTTP 503.
+    /// </summary>
+    public const string VersionRegistryUnavailable = "Instance:100053";
+
     #endregion
     
     #region Transition Errors (100xxx)

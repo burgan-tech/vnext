@@ -439,6 +439,13 @@ public static class WorkflowErrors
             $"The default version \"{pointer}\" registered for flow \"{domain}/{flow}\" does not resolve to a published version",
             target: $"{domain}/{flow}");
 
+    /// <summary>The version registry could not be read, so the flow's default version is unknown.</summary>
+    public static Error VersionRegistryUnavailable(string domain, string flow, string reason)
+        => Error.Transient(
+            WorkflowErrorCodes.VersionRegistryUnavailable,
+            $"The version registry could not be read for flow \"{domain}/{flow}\": {reason}",
+            target: $"{domain}/{flow}");
+
     /// <summary>The file is not referenced by the instance's latest data.</summary>
     public static Error FileNotFound(string file)
         => Error.NotFound(

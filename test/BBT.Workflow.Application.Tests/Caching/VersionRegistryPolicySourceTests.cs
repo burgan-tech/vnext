@@ -174,9 +174,24 @@ public class VersionRegistryPolicySourceTests
         var result = await _sut.GetDefaultVersionAsync(Domain, FlowKey, CancellationToken.None);
 
         result.IsSuccess.ShouldBeFalse();
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.VersionRegistryUnavailable);
+        result.Error.Code.ShouldBe("Instance:100053");
         _logger.ReceivedCalls().ShouldContain(c =>
             c.GetMethodInfo().Name == nameof(ILogger.Log) &&
             c.GetArguments()[2]!.ToString()!.Contains("Version registry read failed"));
+    }
+
+    [Fact]
+    public async Task ReadPointer_ShouldLogException_WhenRepositoryThrows()
+    {
+        var boom = new InvalidOperationException("db down");
+        _repository.GetActiveDataListByKeyAsync(FlowKey, Arg.Any<CancellationToken>()).ThrowsAsync(boom);
+
+        var result = await _sut.GetDefaultVersionAsync(Domain, FlowKey, CancellationToken.None);
+
+        result.Error.Message.ShouldContain("db down");
+        _logger.ReceivedCalls().ShouldContain(c =>
+            c.GetMethodInfo().Name == nameof(ILogger.Log) && ReferenceEquals(c.GetArguments()[3], boom));
     }
 
     [Fact]

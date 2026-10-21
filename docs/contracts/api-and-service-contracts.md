@@ -60,6 +60,7 @@ On `start` and transition bodies for a flow whose master schema declares `x-stor
 | `Instance:100050` `FileSchemaUnavailable` | `503` | The flow's master schema cannot be loaded and the body carries a `content`/`file` member; answered before any persist or `202`, retry. Also on `functions/file` / `internal/file` |
 | `Instance:100051` `FlowVersionNotActivated` | `404` | The requested flow version is published but above the flow's activation ceiling (registry `defaultVersion`); pass the exact version or move the default |
 | `Instance:100052` `FlowDefaultVersionInvalid` | `409` | The flow's registered `defaultVersion` does not resolve to a published version |
+| `Instance:100053` `VersionRegistryUnavailable` | `503` | The version registry could not be read (transient); resolution fails instead of falling back to latest |
 
 ### Custom function verbs and payload validation
 
