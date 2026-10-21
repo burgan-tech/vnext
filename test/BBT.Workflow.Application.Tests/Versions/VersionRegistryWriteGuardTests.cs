@@ -39,17 +39,26 @@ public class VersionRegistryWriteGuardTests
     }
 
     [Theory]
-    [InlineData("""{"type":"Flow","defaultVersion":"latest"}""")]
-    [InlineData("""{"type":"Flow","defaultVersion":"LATEST"}""")]
     [InlineData("""{"type":"Flow","defaultVersion":""}""")]
     [InlineData("""{"type":"Flow","defaultVersion":"   "}""")]
     [InlineData("""{"type":"Flow","defaultVersion":2}""")]
-    public async Task Validate_ShouldReject_LatestOrBlank(string json)
+    public async Task Validate_ShouldReject_BlankOrNonString(string json)
     {
         var result = await _guard.ValidateAsync(Domain, Flow, Parse(json), CancellationToken.None);
 
         result.IsSuccess.ShouldBeFalse();
         result.Error.Code.ShouldBe(WorkflowErrorCodes.FlowDefaultVersionInvalid);
+    }
+
+    [Theory]
+    [InlineData("""{"type":"Flow","defaultVersion":"latest"}""")]
+    [InlineData("""{"type":"Flow","defaultVersion":"LATEST"}""")]
+    public async Task Validate_ShouldAccept_LatestPointer(string json)
+    {
+        var result = await _guard.ValidateAsync(Domain, Flow, Parse(json), CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        await _backend.DidNotReceiveWithAnyArgs().LoadAllByKeyAsync(default!, default!, default);
     }
 
     [Fact]

@@ -8,7 +8,7 @@ using Microsoft.Extensions.Logging;
 namespace BBT.Workflow.Versions;
 
 /// <summary>
-/// Default <see cref="IVersionRegistryWriteGuard"/>: a pointer is writable when it is null, or an accepted
+/// Default <see cref="IVersionRegistryWriteGuard"/>: a pointer is writable when it is automatic (null or "latest"), or an accepted
 /// form that resolves to a published version of the target flow. Published versions are read straight from
 /// the backend, never through <c>CacheSet</c> (that would apply the very policy being written).
 /// </summary>
@@ -40,7 +40,8 @@ public sealed class VersionRegistryWriteGuard(
             return Reject(domain, flowKey, ReadRawPointer(payload));
         }
 
-        if (pointer is null)
+        // null, or "latest" (Automatic, the way to clear): nothing to resolve against published versions.
+        if (DefaultVersionResolver.IsAutomaticPointer(pointer))
             return Result.Ok();
 
         if (!DefaultVersionResolver.IsValidPointer(pointer))

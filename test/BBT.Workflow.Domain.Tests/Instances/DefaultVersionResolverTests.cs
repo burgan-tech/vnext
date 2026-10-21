@@ -11,6 +11,36 @@ public class DefaultVersionResolverTests
     private static readonly string[] Published = ["2.0.0", "2.1.0", "2.1.3", "2.2.0", "2.3.0", "3.0.0"];
 
     [Theory]
+    [InlineData("latest", null)]
+    [InlineData("LATEST", null)]
+    [InlineData("latest", "2")]
+    [InlineData("LATEST", "2")]
+    [InlineData("latest", "2.2.0")]
+    [InlineData("LATEST", "2.2.0")]
+    public void Resolve_ShouldTreatLatestPointerAsAutomatic(string pointer, string? requested)
+    {
+        var expected = DefaultVersionResolver.Resolve(Published, null, requested);
+
+        var result = DefaultVersionResolver.Resolve(Published, pointer, requested);
+
+        result.ShouldBe(expected);
+        result.Source.ShouldBe(VersionResolutionSource.Automatic);
+        result.EffectiveDefault.ShouldBeNull();
+    }
+
+    [Theory]
+    [InlineData(null, true)]
+    [InlineData("latest", true)]
+    [InlineData(" LATEST ", true)]
+    [InlineData("", false)]
+    [InlineData("  ", false)]
+    [InlineData("2.1", false)]
+    public void IsAutomaticPointer_ShouldMatchNullAndLatestOnly(string? pointer, bool expected)
+    {
+        DefaultVersionResolver.IsAutomaticPointer(pointer).ShouldBe(expected);
+    }
+
+    [Theory]
     [InlineData(null, null, "3.0.0", VersionResolutionOutcome.Resolved, VersionResolutionSource.Automatic)]
     [InlineData(null, "2", "2.3.0", VersionResolutionOutcome.Resolved, VersionResolutionSource.Automatic)]
     [InlineData("2.1.0", null, "2.1.0", VersionResolutionOutcome.Resolved, VersionResolutionSource.Default)]
@@ -64,6 +94,8 @@ public class DefaultVersionResolverTests
 
     [Theory]
     [InlineData(null)]
+    [InlineData("latest")]
+    [InlineData("LATEST")]
     [InlineData("2")]
     [InlineData("2.1")]
     [InlineData("2.1.0")]
@@ -76,8 +108,6 @@ public class DefaultVersionResolverTests
     [Theory]
     [InlineData("")]
     [InlineData("  ")]
-    [InlineData("latest")]
-    [InlineData("LATEST")]
     [InlineData("2.x")]
     [InlineData("v2")]
     public void IsValidPointer_ShouldReject(string pointer)

@@ -15,7 +15,7 @@ A flow with no registry instance behaves exactly as before: the policy is **opt-
 | Term | Meaning |
 |---|---|
 | Published | Every version that has a row in `sys-flows`. |
-| Pointer | The `defaultVersion` written in the registry: major (`2`), minor (`2.1`), artifact (`2.1.0`), full (`2.1.0-pkg.1.0.0`) or `null` (Automatic). |
+| Pointer | The `defaultVersion` written in the registry: major (`2`), minor (`2.1`), artifact (`2.1.0`), full (`2.1.0-pkg.1.0.0`) or `"latest"` / `null` (Automatic). |
 | Effective default (D) | The best published match of the pointer. For a partial pointer D moves up by itself when a newer patch of that line is published. |
 | Pending | Published versions above D. |
 | Explicit request | A full (`-pkg.`) or artifact (`2.2.0`) version. It never meets the ceiling, so pending versions are reachable. |
@@ -24,7 +24,7 @@ A flow with no registry instance behaves exactly as before: the policy is **opt-
 
 | Pointer | Mode | New patch in the line | Higher minor or major |
 |---|---|---|---|
-| `null` / no record | Automatic (today's behaviour) | live | live |
+| `"latest"` / `null` / no record | Automatic (today's behaviour) | live | live |
 | `2.1.0` | Exact pin | pending | pending |
 | `2.1` | Minor line | live | pending |
 | `2` | Major line | live | live within `2`, `3.0.0` pending |
@@ -57,7 +57,7 @@ versions bypass it (the registry cannot depend on itself). Policy errors are nev
 Explicit always wins: `DefaultVersionResolver.Resolve` handles a full or artifact request before it
 judges the pointer, so a pointer that matches no published version blocks only `latest`/empty and
 floating requests — an explicit artifact (`2.2.0`) or full `-pkg.` version keeps working and is the way
-around a broken pointer until it is fixed. A pointer of the wrong form (`latest`, blank, a non-string
+around a broken pointer until it is fixed. A pointer of the wrong form (blank, a non-string
 value) is rejected by the registry read itself (409) before resolution. Running instances are unaffected: each is pinned to the resolved version it started with.
 A SubFlow or SubProcess parent stores the child's **resolved** version
 ([SubFlow Execution](../architecture/subflow-execution.md)).
@@ -74,11 +74,11 @@ The registry flow `sys-version-registry` ships with the `vnext-sys-flow` package
 | Field | Rule |
 |---|---|
 | `type` | Informational; the runtime never reads it. |
-| `defaultVersion` | `M`, `M.m`, `M.m.p`, a full `-pkg.` version, or `null` to clear. `latest` and blank are rejected. |
+| `defaultVersion` | `M`, `M.m`, `M.m.p`, a full `-pkg.` version, or `"latest"` (lowercase in the schema) for Automatic. `"latest"` is the way to **clear** a pointer; `null` is valid but only takes effect at create, because the instance-data merge ignores a `null` on a key that already exists ([merge semantics](../domain/instance-data-merge-concept.md)). Blank is rejected. |
 | `reason` | Optional audit text. |
 
 Flow shape: `create` -> `draft` (Initial) -> automatic `register` -> `active`, then a single
-`set-default` transition (`null` clears). There is no final state.
+`set-default` transition (`"latest"` clears; `null` does not on an existing instance). There is no final state.
 
 The pointer is the latest committed data row (`IsLatest`, selected in SQL) of the newest instance with
 the flow key, **whatever its status** (`IInstanceRepository.FindLatestDataByKeyAsync`): a registry
@@ -137,5 +137,5 @@ by full version from the pilot caller version, flip callee's default, then the c
 registries are not atomic: flip the callee first.
 
 **Symptoms.** 404 `100051`: request is above the pointer; use an explicit version or move the pointer.
-409 `100052`: fix the registry pointer (`set-default` to a published version or `null`). 503 `100053`:
+409 `100052`: fix the registry pointer (`set-default` to a published version or `"latest"`). 503 `100053`:
 check the database, then retry.

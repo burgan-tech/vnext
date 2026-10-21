@@ -78,7 +78,7 @@ public static class DefaultVersionResolver
         string? pointer,
         string? requested)
     {
-        if (pointer is null)
+        if (IsAutomaticPointer(pointer))
         {
             return Create(
                 InstanceDataVersionComparer.FindBestMatch(published, requested),
@@ -128,17 +128,25 @@ public static class DefaultVersionResolver
     }
 
     /// <summary>
-    /// Whether <paramref name="pointer"/> is an accepted default-version value: null (clears the
-    /// pointer) or a major, minor, artifact or full version. "latest" and blank are rejected.
+    /// Whether <paramref name="pointer"/> selects Automatic mode: null (no pointer) or the "latest"
+    /// keyword (case-insensitive, trimmed). "latest" is the value that clears a pointer, because the
+    /// instance-data merge ignores a null on a key that already exists. A blank string is NOT automatic.
+    /// </summary>
+    public static bool IsAutomaticPointer(string? pointer) =>
+        pointer is null || (pointer.Trim().Length > 0 && InstanceDataVersionComparer.IsLatestKeyword(pointer.Trim()));
+
+    /// <summary>
+    /// Whether <paramref name="pointer"/> is an accepted default-version value: an automatic pointer
+    /// (null or "latest") or a major, minor, artifact or full version. Blank is rejected.
     /// </summary>
     public static bool IsValidPointer(string? pointer)
     {
-        if (pointer is null)
+        if (IsAutomaticPointer(pointer))
         {
             return true;
         }
 
-        if (string.IsNullOrWhiteSpace(pointer) || InstanceDataVersionComparer.IsLatestKeyword(pointer))
+        if (string.IsNullOrWhiteSpace(pointer))
         {
             return false;
         }

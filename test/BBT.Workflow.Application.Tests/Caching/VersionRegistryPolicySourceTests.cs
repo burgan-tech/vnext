@@ -210,10 +210,23 @@ public class VersionRegistryPolicySourceTests
             c.GetMethodInfo().Name == nameof(ILogger.Log) && ReferenceEquals(c.GetArguments()[3], boom));
     }
 
+    [Theory]
+    [InlineData("latest")]
+    [InlineData("LATEST")]
+    public async Task ReadPointer_ShouldReturnNull_WhenPointerIsLatest(string pointer)
+    {
+        Stored($$"""{"type":"Flow","defaultVersion":"{{pointer}}"}""");
+
+        var result = await _sut.GetDefaultVersionAsync(Domain, FlowKey, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        result.Value.ShouldBeNull();
+    }
+
     [Fact]
     public async Task ReadPointer_ShouldReturnFail_WhenStoredPointerIsInvalid()
     {
-        Stored("""{"type":"Flow","defaultVersion":"latest"}""");
+        Stored("""{"type":"Flow","defaultVersion":"2.x"}""");
 
         var result = await _sut.GetDefaultVersionAsync(Domain, FlowKey, CancellationToken.None);
 

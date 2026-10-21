@@ -113,7 +113,8 @@ public sealed class VersionRegistryPolicySource(
             return PointerInvalid(domain, key, pointer!);
         }
 
-        return Result<string?>.Ok(pointer);
+        // "latest" is the stored spelling of Automatic (the merge cannot clear a key with null): no policy.
+        return Result<string?>.Ok(DefaultVersionResolver.IsAutomaticPointer(pointer) ? null : pointer);
     }
 
     private Result<string?> PointerInvalid(string domain, string key, string pointer)
