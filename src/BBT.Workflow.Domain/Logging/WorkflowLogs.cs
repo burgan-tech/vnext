@@ -1637,6 +1637,21 @@ public static partial class WorkflowLogs
         Guid parentInstanceId);
 
     /// <summary>
+    /// Logs when persisting the child's resolved flow version on the correlation failed or updated no
+    /// row; the child start itself succeeded and the authored version stays.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40995,
+        Level = LogLevel.Warning,
+        Message = "SubFlow version pin to {ResolvedVersion} skipped for correlation {CorrelationId}, parent {ParentInstanceId}: {Reason}")]
+    public static partial void SubFlowVersionPinFailed(
+        this ILogger logger,
+        Guid correlationId,
+        Guid parentInstanceId,
+        string resolvedVersion,
+        string reason);
+
+    /// <summary>
     /// Logs when a SubFlow start operation completes successfully.
     /// </summary>
     [LoggerMessage(

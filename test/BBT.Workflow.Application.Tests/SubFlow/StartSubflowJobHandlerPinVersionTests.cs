@@ -24,8 +24,21 @@ namespace BBT.Workflow.Application.Tests.SubFlow;
 /// </summary>
 public class StartSubflowJobHandlerPinVersionTests
 {
-    private static async Task<(InstanceCorrelation Correlation, IInstanceCorrelationRepository Repository)>
-        RunAsync(string? resolvedVersion)
+    private sealed class CapturingLogger : ILogger<StartSubflowJobHandler>
+    {
+        public System.Collections.Generic.List<(LogLevel Level, string Message)> Entries { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter)
+            => Entries.Add((logLevel, formatter(state, exception)));
+    }
+
+    private static async Task<(InstanceCorrelation Correlation, IInstanceCorrelationRepository Repository, CapturingLogger Logger)>
+        RunAsync(string? resolvedVersion, Action<IInstanceCorrelationRepository>? configureRepository = null)
     {
         var workflow = WorkflowFactory.CreateDefault();
         var parent = Instance.Create(Guid.NewGuid(), workflow.Key, workflow.Version, "parent");
@@ -62,8 +75,10 @@ public class StartSubflowJobHandlerPinVersionTests
             .Returns(Result<string?>.Ok(resolvedVersion));
 
         var correlations = Substitute.For<IInstanceCorrelationRepository>();
+        configureRepository?.Invoke(correlations);
+        var logger = new CapturingLogger();
         var handler = new StartSubflowJobHandler(instances, correlations, starter, factory,
-            Substitute.For<IRuntimeInfoProvider>(), Substitute.For<ILogger<StartSubflowJobHandler>>());
+            Substitute.For<IRuntimeInfoProvider>(), logger);
 
         var context = new TransitionExecutionContext
         {
@@ -82,13 +97,13 @@ public class StartSubflowJobHandlerPinVersionTests
             context, CancellationToken.None);
 
         result.IsSuccess.ShouldBeTrue();
-        return (correlation, correlations);
+        return (correlation, correlations, logger);
     }
 
     [Fact]
     public async Task Start_ShouldPinCorrelation_WhenChildReturnsFlowVersion()
     {
-        var (correlation, repository) = await RunAsync("1.0.3");
+        var (correlation, repository, _) = await RunAsync("1.0.3");
 
         correlation.SubFlowVersion.ShouldBe("1.0.3");
         await repository.Received(1).TryPinSubFlowVersionAsync(
@@ -98,9 +113,37 @@ public class StartSubflowJobHandlerPinVersionTests
     [Fact]
     public async Task Start_ShouldKeepAuthoredVersion_WhenChildReturnsNull()
     {
-        var (correlation, repository) = await RunAsync(null);
+        var (correlation, repository, _) = await RunAsync(null);
 
         correlation.SubFlowVersion.ShouldBe("1.0");
         await repository.DidNotReceiveWithAnyArgs().TryPinSubFlowVersionAsync(default, default!, default);
+    }
+
+    [Fact]
+    public async Task Start_ShouldSucceed_WhenPinThrows()
+    {
+        var (_, _, logger) = await RunAsync("1.0.3", r => r
+            .TryPinSubFlowVersionAsync(Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns<Task<bool>>(_ => throw new InvalidOperationException("db down")));
+
+        logger.Entries.ShouldContain(e => e.Level == LogLevel.Warning && e.Message.Contains("pin"));
+    }
+
+    [Fact]
+    public async Task Start_ShouldSucceed_AndWarn_WhenPinUpdatesNoRow()
+    {
+        var (_, _, logger) = await RunAsync("1.0.3", r => r
+            .TryPinSubFlowVersionAsync(Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(false));
+
+        logger.Entries.ShouldContain(e => e.Level == LogLevel.Warning && e.Message.Contains("no row updated"));
+    }
+
+    [Fact]
+    public async Task Start_ShouldPropagateCancellation_WhenPinCancelled()
+    {
+        await Should.ThrowAsync<OperationCanceledException>(() => RunAsync("1.0.3", r => r
+            .TryPinSubFlowVersionAsync(Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns<Task<bool>>(_ => throw new OperationCanceledException())));
     }
 }

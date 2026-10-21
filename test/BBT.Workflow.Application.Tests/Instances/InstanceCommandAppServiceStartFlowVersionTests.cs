@@ -1,6 +1,3 @@
-using System;
-using System.Threading;
-using System.Threading.Tasks;
 using BBT.Aether.BackgroundJob;
 using BBT.Aether.DependencyInjection;
 using BBT.Aether.Guids;
@@ -9,8 +6,8 @@ using BBT.Aether.Uow;
 using BBT.Aether.Users;
 using BBT.Workflow.Authorization;
 using BBT.Workflow.Caching;
-using BBT.Workflow.Execution;
 using BBT.Workflow.Definitions;
+using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.LongPoll;
 using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Execution.Services;
@@ -26,6 +23,9 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using NSubstitute;
 using Shouldly;
+using System;
+using System.Threading;
+using System.Threading.Tasks;
 using Xunit;
 
 namespace BBT.Workflow.Instances;
@@ -133,6 +133,18 @@ public class InstanceCommandAppServiceStartFlowVersionTests : IDisposable
 
         result.IsSuccess.ShouldBeTrue();
         result.Value!.FlowVersion.ShouldBe("1.0.0");
+    }
+
+    [Fact]
+    public async Task StartAsync_ShouldReturnFlowVersion_WhenResponseEnrichmentSuppressed()
+    {
+        var input = CreateInput("1.0", key: "k-" + Guid.NewGuid());
+        input.SuppressResponseEnrichment = true;
+
+        var result = await _service.StartAsync(input, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue(result.IsSuccess ? null : result.Error.Message);
+        result.Value!.FlowVersion.ShouldBe("1.0.3");
     }
 
     private static StartInstanceInput CreateInput(string version, string key, bool strict = true)

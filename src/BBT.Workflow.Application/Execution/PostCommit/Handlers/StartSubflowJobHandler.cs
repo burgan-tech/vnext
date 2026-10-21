@@ -96,9 +96,24 @@ public sealed class StartSubflowJobHandler(
                 var resolvedVersion = startResult.Value;
                 if (!string.IsNullOrWhiteSpace(resolvedVersion))
                 {
-                    correlation.PinSubFlowVersion(resolvedVersion);
-                    await correlationRepository.TryPinSubFlowVersionAsync(
-                        correlation.Id, resolvedVersion, cancellationToken);
+                    // Best-effort: the child already started, so a failed pin must never fail the
+                    // start. The authored version stays, exactly as if none had been reported.
+                    try
+                    {
+                        correlation.PinSubFlowVersion(resolvedVersion);
+                        var pinned = await correlationRepository.TryPinSubFlowVersionAsync(
+                            correlation.Id, resolvedVersion, cancellationToken);
+                        if (!pinned)
+                        {
+                            logger.SubFlowVersionPinFailed(
+                                correlation.Id, context.InstanceId, resolvedVersion, "no row updated");
+                        }
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException)
+                    {
+                        logger.SubFlowVersionPinFailed(
+                            correlation.Id, context.InstanceId, resolvedVersion, ex.Message);
+                    }
                 }
 
                 if (scriptContext.Mutations.HasChanges)
