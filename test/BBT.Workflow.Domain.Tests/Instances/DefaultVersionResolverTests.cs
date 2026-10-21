@@ -74,6 +74,36 @@ public class DefaultVersionResolverTests
     }
 
     [Theory]
+    [InlineData("2.1.0-pkg.1.0.168", null, "2.1.0-pkg.1.0.168+core", VersionResolutionSource.Default)]
+    [InlineData("2.1.0-pkg.1.0.168", "2.1", "2.1.0-pkg.1.0.168+core", VersionResolutionSource.Ceiling)]
+    [InlineData("2.1.0-pkg.1.0.168", "2.1.0-pkg.1.0.169", "2.1.0-pkg.1.0.169+core", VersionResolutionSource.Explicit)]
+    [InlineData("2.1.0-pkg.1.0.168+core", null, "2.1.0-pkg.1.0.168+core", VersionResolutionSource.Default)]
+    public void Resolve_ShouldMatchFullPointerIgnoringBuildMetadata(
+        string pointer,
+        string? requested,
+        string expectedVersion,
+        VersionResolutionSource expectedSource)
+    {
+        string[] published = ["2.1.0-pkg.1.0.168+core", "2.1.0-pkg.1.0.169+core", "2.2.0-pkg.1.0.170+core"];
+
+        var result = DefaultVersionResolver.Resolve(published, pointer, requested);
+
+        result.Version.ShouldBe(expectedVersion);
+        result.Outcome.ShouldBe(VersionResolutionOutcome.Resolved);
+        result.Source.ShouldBe(expectedSource);
+    }
+
+    [Fact]
+    public void Resolve_ShouldReportPointerInvalid_WhenFullPointerMatchesNoBuild()
+    {
+        string[] published = ["2.1.0-pkg.1.0.168+core", "2.1.0-pkg.1.0.169+core"];
+
+        var result = DefaultVersionResolver.Resolve(published, "2.1.0-pkg.1.0.999", requested: null);
+
+        result.Outcome.ShouldBe(VersionResolutionOutcome.PointerInvalid);
+    }
+
+    [Theory]
     [InlineData("2.1.0", null, "2.1.0-pkg.1.1.0", VersionResolutionSource.Default)]
     [InlineData("2.1.0-pkg.1.0.0", "2", "2.1.0-pkg.1.0.0", VersionResolutionSource.Ceiling)]
     [InlineData("2.1", "2.2.0-pkg.1.0.0", "2.2.0-pkg.1.0.0", VersionResolutionSource.Explicit)]
@@ -100,6 +130,8 @@ public class DefaultVersionResolverTests
     [InlineData("2.1")]
     [InlineData("2.1.0")]
     [InlineData("2.1.0-pkg.1.0.0")]
+    [InlineData("2.1.0-pkg.1.0.168")]
+    [InlineData("2.1.0-pkg.1.0.168+core")]
     public void IsValidPointer_ShouldAccept(string? pointer)
     {
         DefaultVersionResolver.IsValidPointer(pointer).ShouldBeTrue();
@@ -110,6 +142,8 @@ public class DefaultVersionResolverTests
     [InlineData("  ")]
     [InlineData("2.x")]
     [InlineData("v2")]
+    [InlineData("2.1.0-pkg.1.0")]
+    [InlineData("2.1.0-pkg.1")]
     public void IsValidPointer_ShouldReject(string pointer)
     {
         DefaultVersionResolver.IsValidPointer(pointer).ShouldBeFalse();

@@ -111,6 +111,33 @@ public class VersionRegistryWriteGuardTests
         result.IsSuccess.ShouldBeTrue();
     }
 
+    [Theory]
+    [InlineData("2.1.0-pkg.1.0.168")]
+    [InlineData("2.1.0-pkg.1.0.168+core")]
+    public async Task Validate_ShouldAccept_FullPackagePointer(string pointer)
+    {
+        Publish("2.1.0-pkg.1.0.168+core", "2.2.0-pkg.1.0.170+core");
+
+        var result = await _guard.ValidateAsync(
+            Domain, Flow, Parse($$"""{"type":"Flow","defaultVersion":"{{pointer}}"}"""), CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+    }
+
+    [Theory]
+    [InlineData("2.1.0-pkg.1.0")]
+    [InlineData("2.1.0-pkg.1")]
+    public async Task Validate_ShouldReject_PartialPackagePointer(string pointer)
+    {
+        Publish("2.1.0-pkg.1.0.168+core", "2.2.0-pkg.1.0.170+core");
+
+        var result = await _guard.ValidateAsync(
+            Domain, Flow, Parse($$"""{"type":"Flow","defaultVersion":"{{pointer}}"}"""), CancellationToken.None);
+
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.FlowDefaultVersionInvalid);
+    }
+
     [Fact]
     public async Task Validate_ShouldAccept_WhenThereIsNoPayload()
     {

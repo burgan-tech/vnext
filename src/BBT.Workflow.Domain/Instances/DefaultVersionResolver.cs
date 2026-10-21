@@ -86,7 +86,7 @@ public static class DefaultVersionResolver
                 effectiveDefault: null);
         }
 
-        var effectiveDefault = InstanceDataVersionComparer.FindBestMatch(published, pointer);
+        var effectiveDefault = MatchPointer(published, pointer!);
 
         // Explicit always wins: a full or artifact request is checked before the pointer is judged, so it
         // still resolves while the pointer matches nothing (the way out of a broken pointer).
@@ -94,7 +94,9 @@ public static class DefaultVersionResolver
             || InstanceDataVersionComparer.IsArtifactVersion(requested))
         {
             return Create(
-                InstanceDataVersionComparer.FindBestMatch(published, requested),
+                InstanceDataVersionComparer.IsFullVersion(requested)
+                    ? InstanceDataVersionComparer.FindFullVersionMatch(published, requested)
+                    : InstanceDataVersionComparer.FindBestMatch(published, requested),
                 VersionResolutionSource.Explicit,
                 effectiveDefault);
         }
@@ -154,8 +156,17 @@ public static class DefaultVersionResolver
         return InstanceDataVersionComparer.IsMajorOnlyVersion(pointer)
                || InstanceDataVersionComparer.IsPartialVersion(pointer)
                || InstanceDataVersionComparer.IsArtifactVersion(pointer)
-               || InstanceDataVersionComparer.IsFullVersion(pointer);
+               || InstanceDataVersionComparer.IsWellFormedFullVersion(pointer);
     }
+
+    /// <summary>
+    /// A full pointer pins a package build and matches canonically (build metadata ignored), so it is
+    /// written without "+metadata"; every other form keeps the floating match.
+    /// </summary>
+    private static string? MatchPointer(IReadOnlyCollection<string> published, string pointer) =>
+        InstanceDataVersionComparer.IsFullVersion(pointer)
+            ? InstanceDataVersionComparer.FindFullVersionMatch(published, pointer)
+            : InstanceDataVersionComparer.FindBestMatch(published, pointer);
 
     private static DefaultVersionResolution Create(
         string? version,

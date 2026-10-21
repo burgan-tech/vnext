@@ -25,15 +25,22 @@ A flow with no registry instance behaves exactly as before: the policy is **opt-
 | Pointer | Mode | New patch in the line | Higher minor or major |
 |---|---|---|---|
 | `"latest"` / `null` / no record | Automatic (today's behaviour) | live | live |
-| `2.1.0` | Exact pin | pending | pending |
+| `2.1.0-pkg.1.0.168` (full) | Package-build pin | pending | pending |
+| `2.1.0` | Artifact pin: follows re-published package builds of `2.1.0` | pending | pending |
 | `2.1` | Minor line | live | pending |
 | `2` | Major line | live | live within `2`, `3.0.0` pending |
+
+A full version pins one **package build**. Write it without `+metadata` (the registry schema rejects the
+stored `+core` form); matching ignores build metadata, so `2.1.0-pkg.1.0.168` selects the published
+`2.1.0-pkg.1.0.168+core`. An artifact pointer `2.1.0` pins the artifact only: a re-publish under a new
+`-pkg.` build moves D. Partial package forms (`2.1.0-pkg.1.0`, `2.1.0-pkg.1`) are not supported and are
+rejected as an invalid pointer (`Instance:100052`).
 
 ## Resolution
 
 | Request | Result |
 |---|---|
-| Full or artifact version | Exact match, ceiling not applied (pending included); served even while the pointer matches nothing |
+| Full (build metadata ignored) or artifact version | Exact match, ceiling not applied (pending included); served even while the pointer matches nothing |
 | `null`, empty, `latest` | D |
 | `M` or `M.m` | Best published match at or below D |
 | Floating request whose matches are all above D | `Instance:100051` (404) |

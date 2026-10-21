@@ -252,6 +252,26 @@ public partial class InstanceDataVersionComparer : IComparer<InstanceData>
     }
 
     /// <summary>
+    /// Whether <paramref name="version"/> is a well-formed full version:
+    /// <c>MAJOR.MINOR.PATCH[-PRERELEASE]-pkg.X.Y.Z</c> with an optional <c>+metadata</c>. Unlike
+    /// <see cref="IsFullVersion"/> (a "-pkg." substring test) a partial package form such as
+    /// "2.1.0-pkg.1.0" is rejected.
+    /// </summary>
+    public static bool IsWellFormedFullVersion(string? version) =>
+        !string.IsNullOrWhiteSpace(version) && WellFormedFullVersionRegex().IsMatch(version);
+
+    /// <summary>
+    /// Finds the published version whose canonical full form (build metadata ignored) equals that of
+    /// <paramref name="full"/>; ordinal, case-insensitive. Null when none matches.
+    /// </summary>
+    public static string? FindFullVersionMatch(IEnumerable<string> published, string? full)
+    {
+        var wanted = CanonicalFullVersion(full?.Trim());
+        return published.FirstOrDefault(v =>
+            string.Equals(CanonicalFullVersion(v), wanted, StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
     /// Checks if the version is a full version (contains package version).
     /// Alias for <see cref="HasPackageVersion"/>.
     /// </summary>
@@ -615,6 +635,12 @@ public partial class InstanceDataVersionComparer : IComparer<InstanceData>
     /// </remarks>
     [GeneratedRegex(@"^(?<artifact>\d+\.\d+\.\d+(?:-[a-zA-Z0-9]+(?:\.[a-zA-Z0-9]+)*)?)-pkg\.(?<package>\d+\.\d+\.\d+)$", RegexOptions.Compiled)]
     private static partial Regex ExtendedVersionRegex();
+
+    /// <summary>
+    /// Regex pattern for a well-formed full version: MAJOR.MINOR.PATCH[-PRERELEASE]-pkg.X.Y.Z[+METADATA]
+    /// </summary>
+    [GeneratedRegex(@"^\d+\.\d+\.\d+(?:-[a-zA-Z0-9]+(?:\.[a-zA-Z0-9]+)*)?-pkg\.\d+\.\d+\.\d+(?:\+[0-9A-Za-z.\-]+)?$", RegexOptions.Compiled)]
+    private static partial Regex WellFormedFullVersionRegex();
 
     /// <summary>
     /// Regex pattern for artifact version format: MAJOR.MINOR.PATCH[-PRERELEASE]
