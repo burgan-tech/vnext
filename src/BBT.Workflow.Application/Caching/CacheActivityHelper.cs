@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
 
 namespace BBT.Workflow.Caching;
@@ -177,6 +178,29 @@ public static class CacheActivityHelper
         if (activity is not null && !string.IsNullOrEmpty(generation))
             activity.SetTag(TagCacheGeneration, generation);
     }
+
+    /// <summary>
+    /// Records the default-version policy that decided a floating resolution: the pointer (only when one
+    /// is set) and the rule that picked the version, lower-cased (<c>automatic</c>, <c>explicit</c>,
+    /// <c>default</c>, <c>ceiling</c>).
+    /// </summary>
+    public static void SetVersionPolicy(Activity? activity, string? pointer, VersionResolutionSource source)
+    {
+        if (activity is null) return;
+        if (!string.IsNullOrEmpty(pointer))
+            activity.SetTag(TelemetryConstants.TagNames.FlowVersionPointer, pointer);
+        activity.SetTag(TelemetryConstants.TagNames.FlowVersionSource, ToTagValue(source));
+    }
+
+    /// <summary>The lower-case tag value of a <see cref="VersionResolutionSource"/>.</summary>
+    public static string ToTagValue(VersionResolutionSource source) => source switch
+    {
+        VersionResolutionSource.Automatic => "automatic",
+        VersionResolutionSource.Explicit => "explicit",
+        VersionResolutionSource.Default => "default",
+        VersionResolutionSource.Ceiling => "ceiling",
+        _ => source.ToString().ToLowerInvariant()
+    };
 
     /// <summary>
     /// Sets the activity status to Error and records the exception.

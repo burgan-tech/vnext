@@ -24,7 +24,9 @@ public sealed class CacheSetTestHarness
     public const string TestKey = "account-type-selection-view";
     public const string ComponentType = "sys-views";
 
-    public CacheSetTestHarness(Action<ComponentCacheOptions>? configure = null)
+    public CacheSetTestHarness(
+        Action<ComponentCacheOptions>? configure = null,
+        IVersionPolicySource? versionPolicy = null)
     {
         Time = new AdjustableTimeProvider(new DateTimeOffset(2026, 8, 3, 12, 0, 0, TimeSpan.Zero));
         Cache = new FakeDistributedCacheService(Time);
@@ -50,7 +52,8 @@ public sealed class CacheSetTestHarness
             optionsAccessor,
             Time,
             NullLogger<CacheSet<View>>.Instance,
-            L1);
+            L1,
+            versionPolicy);
     }
 
     public AdjustableTimeProvider Time { get; }
@@ -181,6 +184,33 @@ public sealed class CacheSetTestHarness
         {
             Interlocked.Exchange(ref _loadAllCallCount, 0);
             LoadCallCount = 0;
+        }
+    }
+
+    /// <summary>
+    /// <see cref="IVersionPolicySource"/> double: a settable pointer, a switch that makes the read fail,
+    /// and a call counter so "the policy was never consulted" can be asserted.
+    /// </summary>
+    public sealed class FakeVersionPolicySource : IVersionPolicySource
+    {
+        private int _calls;
+
+        /// <summary>The default-version pointer reported; null means automatic.</summary>
+        public string? Pointer { get; set; }
+
+        /// <summary>When true, the read fails as a registry outage would.</summary>
+        public bool Fail { get; set; }
+
+        /// <summary>How many times the pointer was read.</summary>
+        public int Calls => Volatile.Read(ref _calls);
+
+        public Task<Result<string?>> GetDefaultVersionAsync(string domain, string key, CancellationToken ct)
+        {
+            Interlocked.Increment(ref _calls);
+
+            return Task.FromResult(Fail
+                ? Result<string?>.Fail(Error.Transient("Test:RegistryUnavailable", "Simulated registry read failure."))
+                : Result<string?>.Ok(Pointer));
         }
     }
 
