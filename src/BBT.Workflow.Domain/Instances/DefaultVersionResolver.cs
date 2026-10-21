@@ -63,6 +63,10 @@ public static class DefaultVersionResolver
     /// <summary>
     /// Resolves the version a request maps to under the flow's default-version pointer.
     /// </summary>
+    /// <remarks>
+    /// The pointer is NOT validated here: callers must gate it with <c>IsValidPointer</c> first (an invalid
+    /// pointer is a configuration conflict, not something to resolve around).
+    /// </remarks>
     /// <param name="published">All published versions of the flow.</param>
     /// <param name="pointer">The flow's default-version pointer, or null when none is set.</param>
     /// <param name="requested">The requested version (null, "latest", partial, artifact or full).</param>

@@ -23,6 +23,10 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using NSubstitute;
 using Shouldly;
+using BBT.Workflow.Logging;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Linq;
 using System;
 using System.Threading;
 using System.Threading.Tasks;
@@ -145,6 +149,34 @@ public class InstanceCommandAppServiceStartFlowVersionTests : IDisposable
 
         result.IsSuccess.ShouldBeTrue(result.IsSuccess ? null : result.Error.Message);
         result.Value!.FlowVersion.ShouldBe("1.0.3");
+    }
+
+    [Fact]
+    public async Task Start_ShouldTagRequestedVersion()
+    {
+        var root = new Activity("start-tag-root");
+        root.SetIdFormat(ActivityIdFormat.W3C);
+        root.Start();
+        var collected = new List<Activity>();
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == "BBT.Workflow.Pipeline",
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStopped = a =>
+            {
+                if (a.TraceId != root.TraceId) return;
+                lock (collected) collected.Add(a);
+            }
+        };
+        ActivitySource.AddActivityListener(listener);
+
+        var result = await _service.StartAsync(CreateInput("1.0", key: "k-" + Guid.NewGuid()), CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue(result.IsSuccess ? null : result.Error.Message);
+        var create = collected.Single(a => a.DisplayName == "Instance.Create");
+        create.GetTagItem(TelemetryConstants.TagNames.FlowVersionRequested).ShouldBe("1.0");
+        create.GetTagItem(TelemetryConstants.TagNames.FlowVersion).ShouldBe("1.0.3");
+        root.Stop();
     }
 
     private static StartInstanceInput CreateInput(string version, string key, bool strict = true)

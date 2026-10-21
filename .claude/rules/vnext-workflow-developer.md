@@ -252,6 +252,10 @@ The plan is built from `ExcludedStepOrders` alone (`TransitionExecutor.BuildExec
   One unit-of-work root = one database: cross-database local calls go through `CoHostedDatabaseBoundary`.
 - Full guide: `docs/runtime/multi-domain-hosting.md`.
 
+## Flow default version
+
+- A flow's `sys-version-registry` pointer caps floating version requests; `sys-*` and full versions bypass it, a bad pointer fails closed. Full guide: `docs/runtime/flow-default-version.md`.
+
 ## Status / State / Type Semantics
 
 Enum values (Instance Status, State Types, State Sub Types, Trigger Types): `AGENTS.md` § Status / State / Type Semantics.

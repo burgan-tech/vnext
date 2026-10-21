@@ -302,6 +302,8 @@ public sealed class InstanceCommandAppService(
         using var activity = PipelineStepActivityHelper.StartOperationActivity("Instance.Create");
         activity?.SetTag(TelemetryConstants.TagNames.Flow, workflow.Key);
         activity?.SetTag(TelemetryConstants.TagNames.FlowVersion, workflow.Version);
+        // What the caller asked for (floating, "latest" or explicit); FlowVersion above is what it resolved to.
+        activity?.SetTag(TelemetryConstants.TagNames.FlowVersionRequested, input.Version);
         activity?.SetTag(TelemetryConstants.TagNames.InstanceDataAppended, input.Instance.Attributes != null);
 
         await using var uow = UnitOfWorkManager.Begin(
