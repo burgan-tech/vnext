@@ -188,7 +188,8 @@ public sealed class InstanceCommandAppService(
         {
             Id = existingInstance.Id,
             Key = existingInstance.Key,
-            Status = existingInstance.Status
+            Status = existingInstance.Status,
+            FlowVersion = existingInstance.FlowVersion
         });
     }
 
@@ -523,6 +524,7 @@ public sealed class InstanceCommandAppService(
                 Id = data.Instance.Id,
                 Key = data.Instance.Key,
                 Status = transitionOutput.Status,
+                FlowVersion = data.Instance.FlowVersion,
                 // Stamp the effective sync/async outcome from context.Mode (the mode we resolved and
                 // dispatched on) so the controller shapes 200 vs 202 by what actually ran, not the caller's
                 // sync query parameter (#1003). Authoritative here — the output may have been built by the
