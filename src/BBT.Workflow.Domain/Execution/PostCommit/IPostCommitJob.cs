@@ -100,4 +100,11 @@ public sealed record ForwardToSubflowJob(
 /// </summary>
 /// <param name="Domain">The domain of the target flow.</param>
 /// <param name="FlowKey">The target flow key (the registry instance key).</param>
-public sealed record InvalidateVersionPolicyJob(string Domain, string FlowKey) : IPostCommitJob;
+public sealed record InvalidateVersionPolicyJob(string Domain, string FlowKey) : IPostCommitContinuationJob
+{
+    /// <summary>
+    /// The registry transition's own continuation proceeds exactly as if no job existed; the
+    /// coordinator requires every job to declare an owner.
+    /// </summary>
+    public PostCommitContinuationBehavior ContinuationBehavior => PostCommitContinuationBehavior.ContinueParent;
+}

@@ -117,15 +117,15 @@ public static class LifecycleOrder
     public const int Finish = 100;
     
     /// <summary>
-    /// Order for finalizing the transition.
-    /// Updates transition record and performs cleanup operations.
-    /// </summary>
-    /// <summary>
     /// Enqueues the flow cache-generation bump when a <c>sys-version-registry</c> instance's default
     /// pointer may have changed. Runs right before Finalize (109 is free).
     /// </summary>
     public const int VersionRegistryInvalidation = Finalize - 1;
 
+    /// <summary>
+    /// Order for finalizing the transition.
+    /// Updates transition record and performs cleanup operations.
+    /// </summary>
     public const int Finalize = 110;
     
     public const int AfterEpilogueRefresh = Finalize + 1;

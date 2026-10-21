@@ -20,12 +20,25 @@ public sealed class InvalidateVersionPolicyJobHandler(
         TransitionExecutionContext context,
         CancellationToken cancellationToken)
     {
-        // "latest" is not a full version, so this only bumps the generation (no body drop, no warm).
-        var result = await cacheContext.Workflows.InvalidateAsync(
-            job.Domain, job.FlowKey, InstanceDataVersionComparer.LatestKeyword, cancellationToken);
-        if (!result.IsSuccess)
+        // Best effort: the registry data is already committed, so a failed bump must neither fail the
+        // request nor fault the registry instance. Peers pick the change up when the generation
+        // memo/TTL expires.
+        try
         {
-            return result;
+            // "latest" is not a full version, so this only bumps the generation (no body drop, no warm).
+            var result = await cacheContext.Workflows.InvalidateAsync(
+                job.Domain, job.FlowKey, InstanceDataVersionComparer.LatestKeyword, cancellationToken);
+            if (!result.IsSuccess)
+            {
+                logger.VersionRegistryInvalidationFailed(
+                    job.Domain, job.FlowKey, result.Error.Code, null);
+                return Result.Ok();
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.VersionRegistryInvalidationFailed(job.Domain, job.FlowKey, ex.GetType().Name, ex);
+            return Result.Ok();
         }
 
         logger.VersionRegistryInvalidated(job.Domain, job.FlowKey);

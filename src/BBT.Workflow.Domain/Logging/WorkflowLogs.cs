@@ -4857,6 +4857,18 @@ public static partial class WorkflowLogs
         string domain,
         string flow);
 
+    /// <summary>Logs that the post-commit generation bump failed; the registry data is already committed, so the request is not failed.</summary>
+    [LoggerMessage(
+        EventId = 20504,
+        Level = LogLevel.Warning,
+        Message = "Version registry invalidation failed: {Domain}/{Flow} ({Reason})")]
+    public static partial void VersionRegistryInvalidationFailed(
+        this ILogger logger,
+        string domain,
+        string flow,
+        string reason,
+        Exception? exception);
+
     #endregion
 
     #region Server Configuration

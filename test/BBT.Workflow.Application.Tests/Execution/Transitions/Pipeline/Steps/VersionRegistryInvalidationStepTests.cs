@@ -48,6 +48,17 @@ public class VersionRegistryInvalidationStepTests
     }
 
     [Fact]
+    public async Task Step_ShouldDoNothing_WhenRegistryInstanceKeyIsEmpty()
+    {
+        var context = CreateContext(RuntimeSysSchemaInfo.VersionRegistry, null, "set-default");
+
+        var result = await _step.ExecuteAsync(context, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        context.Directives.PostCommitJobs.ShouldBeEmpty();
+    }
+
+    [Fact]
     public async Task Step_ShouldEnqueue_OnStartTransition()
     {
         var context = CreateContext(RuntimeSysSchemaInfo.VersionRegistry, "customer-onboarding", "create",
@@ -60,11 +71,10 @@ public class VersionRegistryInvalidationStepTests
     }
 
     private static TransitionExecutionContext CreateContext(
-        string workflowKey, string instanceKey, string transitionKey,
+        string workflowKey, string? instanceKey, string transitionKey,
         TriggerType trigger = TriggerType.Manual, bool isStart = false)
     {
-        var instance = InstanceFactory.CreateDefault();
-        instance.SetKey(instanceKey);
+        var instance = Instance.Create(Guid.NewGuid(), workflowKey, "1.0.0", instanceKey);
         var workflow = Definitions.Workflow.Create();
         var transition = Transition.Create(transitionKey, "draft", "active", trigger, "Patch");
         return new TransitionExecutionContext
