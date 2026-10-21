@@ -225,6 +225,7 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
 
         // Default-version pointer source for workflow resolution (read from the sys-version-registry flow).
         services.AddSingleton<IVersionPolicySource, VersionRegistryPolicySource>();
+        services.AddSingleton<BBT.Workflow.Versions.IVersionRegistryWriteGuard, BBT.Workflow.Versions.VersionRegistryWriteGuard>();
 
         // Domain Cache Context
         services.AddSingleton<DomainCacheContext>();
