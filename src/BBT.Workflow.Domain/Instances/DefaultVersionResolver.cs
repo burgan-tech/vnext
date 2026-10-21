@@ -32,7 +32,7 @@ public enum VersionResolutionOutcome
     /// <summary>A matching version exists but lies above the default ceiling.</summary>
     NotActivated,
 
-    /// <summary>The default pointer matches no published version.</summary>
+    /// <summary>The default pointer matches no published version (only for a "latest"/empty or floating request).</summary>
     PointerInvalid
 }
 
@@ -42,7 +42,7 @@ public enum VersionResolutionOutcome
 /// <param name="Version">The selected version; null unless the outcome is <see cref="VersionResolutionOutcome.Resolved"/>.</param>
 /// <param name="Outcome">Whether a version was selected, and why not otherwise.</param>
 /// <param name="Source">The rule that decided.</param>
-/// <param name="EffectiveDefault">The version the pointer resolved to; null when there is no pointer or it is invalid.</param>
+/// <param name="EffectiveDefault">The version the pointer resolved to; null when there is no pointer or it matches no published version.</param>
 public readonly record struct DefaultVersionResolution(
     string? Version,
     VersionResolutionOutcome Outcome,
@@ -64,8 +64,11 @@ public static class DefaultVersionResolver
     /// Resolves the version a request maps to under the flow's default-version pointer.
     /// </summary>
     /// <remarks>
-    /// The pointer is NOT validated here: callers must gate it with <c>IsValidPointer</c> first (an invalid
-    /// pointer is a configuration conflict, not something to resolve around).
+    /// The pointer's FORM is NOT validated here: callers must gate it with <c>IsValidPointer</c> first (an
+    /// invalid pointer is a configuration conflict, not something to resolve around). Explicit always wins: a
+    /// full or artifact request resolves before the pointer is matched, so it is served even while the pointer
+    /// matches no published version; only "latest"/empty and floating requests answer
+    /// <see cref="VersionResolutionOutcome.PointerInvalid"/> then.
     /// </remarks>
     /// <param name="published">All published versions of the flow.</param>
     /// <param name="pointer">The flow's default-version pointer, or null when none is set.</param>
@@ -84,12 +87,9 @@ public static class DefaultVersionResolver
         }
 
         var effectiveDefault = InstanceDataVersionComparer.FindBestMatch(published, pointer);
-        if (effectiveDefault is null)
-        {
-            return new DefaultVersionResolution(
-                null, VersionResolutionOutcome.PointerInvalid, VersionResolutionSource.Default, null);
-        }
 
+        // Explicit always wins: a full or artifact request is checked before the pointer is judged, so it
+        // still resolves while the pointer matches nothing (the way out of a broken pointer).
         if (InstanceDataVersionComparer.IsFullVersion(requested)
             || InstanceDataVersionComparer.IsArtifactVersion(requested))
         {
@@ -97,6 +97,12 @@ public static class DefaultVersionResolver
                 InstanceDataVersionComparer.FindBestMatch(published, requested),
                 VersionResolutionSource.Explicit,
                 effectiveDefault);
+        }
+
+        if (effectiveDefault is null)
+        {
+            return new DefaultVersionResolution(
+                null, VersionResolutionOutcome.PointerInvalid, VersionResolutionSource.Default, null);
         }
 
         if (InstanceDataVersionComparer.IsRequestingLatest(requested))

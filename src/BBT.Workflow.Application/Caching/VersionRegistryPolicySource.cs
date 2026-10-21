@@ -16,7 +16,10 @@ namespace BBT.Workflow.Caching;
 /// </summary>
 /// <remarks>
 /// Registry not published in the domain (an older core package) or no instance for the key means no
-/// policy, not an error. Any read failure, or a stored pointer that is not an accepted form, is a
+/// policy, not an error. The pointer is the latest committed row of the newest instance with the key,
+/// whatever its status (<see cref="IInstanceRepository.FindLatestDataByKeyAsync"/>). A read failure is
+/// <c>VersionRegistryUnavailable</c> (503, cause in the log only); a stored pointer that is not an
+/// accepted form, a non-string one included, is <c>FlowDefaultVersionInvalid</c> (409). Both are a
 /// failed result and never a throw: <see cref="CacheSet{T}"/> trusts the source and must not fall back
 /// to <c>latest</c>. The read runs in its own scope and non-transactional unit of work, like
 /// <see cref="RuntimeCacheBackend{T}"/>, so it never shares a caller's DbContext. The schema is entered
@@ -53,7 +56,7 @@ public sealed class VersionRegistryPolicySource(
         }
         catch (Exception ex)
         {
-            return Failed(domain, key, WorkflowErrorCodes.VersionRegistryUnavailable, ex.Message, ex);
+            return Failed(domain, key, WorkflowErrorCodes.VersionRegistryUnavailable, ex);
         }
     }
 
@@ -74,58 +77,63 @@ public sealed class VersionRegistryPolicySource(
             // that would hit a schema which does not exist.
             return flow.Error.Code == WorkflowErrorCodes.CacheItemNotFound
                 ? Result<string?>.Ok(null)
-                : Failed(domain, key, flow.Error.Code,
-                    $"registry flow lookup failed: {flow.Error.Code}", null);
+                : Failed(domain, key, flow.Error.Code, null);
         }
 
         var currentSchema = services.GetRequiredService<ICurrentSchema>();
-        List<InstanceAndDataModel> rows;
+        InstanceData? latest;
         using (currentSchema.Change(RuntimeSysSchemaInfo.VersionRegistry))
         {
+            // Status-independent on purpose: the registry instance is Busy between its commit and the
+            // runner's settle — exactly when the post-commit job bumps the generation — and a Faulted
+            // one still carries its last pointer. A status-filtered read would fail open in both.
             var repository = services.GetRequiredService<IInstanceRepository>();
-            rows = await repository.GetActiveDataListByKeyAsync(key, ct);
+            latest = await repository.FindLatestDataByKeyAsync(key, ct);
         }
 
-        var row = SelectLatest(rows);
-        if (row is null)
+        if (latest is null)
         {
             return Result<string?>.Ok(null);
         }
 
-        var pointer = JsonSerializer.Deserialize<VersionRegistryEntry>(row.Json, EntryOptions)?.DefaultVersion;
+        string? pointer;
+        try
+        {
+            pointer = JsonSerializer.Deserialize<VersionRegistryEntry>(latest.Data.Json, EntryOptions)?.DefaultVersion;
+        }
+        catch (JsonException)
+        {
+            // A non-string defaultVersion is a broken pointer (409), not an unreadable registry (503).
+            return PointerInvalid(domain, key, ReadRawPointer(latest.Data.Json));
+        }
+
         if (!DefaultVersionResolver.IsValidPointer(pointer))
         {
             // The write guard rejects these; reaching one means it was bypassed. Fail closed.
-            logger.FlowDefaultVersionInvalid(domain, key, pointer!);
-            return Result<string?>.Fail(WorkflowErrors.FlowDefaultVersionInvalid(domain, key, pointer!));
+            return PointerInvalid(domain, key, pointer!);
         }
 
         return Result<string?>.Ok(pointer);
     }
 
-    private static JsonData? SelectLatest(List<InstanceAndDataModel> rows)
+    private Result<string?> PointerInvalid(string domain, string key, string pointer)
     {
-        InstanceData? best = null;
-        foreach (var data in rows.Select(r => r.InstanceData).Where(d => d is not null))
-        {
-            if (data.IsLatest)
-            {
-                return data.Data;
-            }
-
-            if (best is null ||
-                InstanceDataVersionComparer.StringVersionComparer.Instance.Compare(data.Version, best.Version) > 0)
-            {
-                best = data;
-            }
-        }
-
-        return best?.Data;
+        logger.FlowDefaultVersionInvalid(domain, key, pointer);
+        return Result<string?>.Fail(WorkflowErrors.FlowDefaultVersionInvalid(domain, key, pointer));
     }
 
-    private Result<string?> Failed(string domain, string key, string errorCode, string reason, Exception? exception)
+    private static string ReadRawPointer(string json)
     {
+        // Same spelling as VersionRegistryWriteGuard: the raw JSON of the stored value names it in the
+        // log and the 409. Only reached after the row parsed as JSON, so Parse does not throw here.
+        using var document = JsonDocument.Parse(json);
+        return document.RootElement.TryGetProperty("defaultVersion", out var raw) ? raw.GetRawText() : string.Empty;
+    }
+
+    private Result<string?> Failed(string domain, string key, string errorCode, Exception? exception)
+    {
+        // The cause goes to the log only: the error's message reaches the client.
         logger.VersionRegistryReadFailed(domain, key, errorCode, exception);
-        return Result<string?>.Fail(WorkflowErrors.VersionRegistryUnavailable(domain, key, reason));
+        return Result<string?>.Fail(WorkflowErrors.VersionRegistryUnavailable(domain, key));
     }
 }

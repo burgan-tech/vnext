@@ -91,8 +91,8 @@ default on; `ComponentCache:L1SizeLimitMb`, default 64). Bytes are deserialized 
 every hit returns a fresh instance, and negative answers are never stored in L1.
 
 The one remaining per-resolution round trip — the generation-token read — can additionally be
-memoized in process (`ComponentCache:GenerationMemoSeconds`, default 0 = off) at the cost of a
-≤N-second cross-pod publish-visibility window; enabling it is a CI/CD contract change, see
+memoized in process (`ComponentCache:GenerationMemoSeconds`, default 5; 0 = off) at the cost of a
+≤N-second cross-pod publish-visibility window; that window is part of the CI/CD contract, see
 [Component Cache Generation Memo](../runtime/component-cache-generation-memo.md).
 
 Version resolution:

@@ -25,6 +25,9 @@ public class DefaultVersionResolverTests
     [InlineData("2", "3", null, VersionResolutionOutcome.NotActivated, VersionResolutionSource.Ceiling)]
     [InlineData("2", "4", null, VersionResolutionOutcome.NotFound, VersionResolutionSource.Ceiling)]
     [InlineData("2.4", null, null, VersionResolutionOutcome.PointerInvalid, VersionResolutionSource.Default)]
+    [InlineData("2.4", "2", null, VersionResolutionOutcome.PointerInvalid, VersionResolutionSource.Default)]
+    [InlineData("2.4", "2.2.0", "2.2.0", VersionResolutionOutcome.Resolved, VersionResolutionSource.Explicit)]
+    [InlineData("2.4", "2.2.0-pkg.1.0.0", null, VersionResolutionOutcome.NotFound, VersionResolutionSource.Explicit)]
     [InlineData("2.1.0", "9.9.9", null, VersionResolutionOutcome.NotFound, VersionResolutionSource.Explicit)]
     public void Resolve_ShouldFollowPolicyTable(
         string? pointer,

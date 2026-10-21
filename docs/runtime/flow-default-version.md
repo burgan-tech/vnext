@@ -33,11 +33,11 @@ A flow with no registry instance behaves exactly as before: the policy is **opt-
 
 | Request | Result |
 |---|---|
-| Full or artifact version | Exact match, ceiling not applied (pending included) |
+| Full or artifact version | Exact match, ceiling not applied (pending included); served even while the pointer matches nothing |
 | `null`, empty, `latest` | D |
 | `M` or `M.m` | Best published match at or below D |
 | Floating request whose matches are all above D | `Instance:100051` (404) |
-| Pointer matches nothing published | `Instance:100052` (409), fail-closed, never replaced by latest |
+| Pointer matches nothing published | `Instance:100052` (409) for `latest`/empty and floating requests, fail-closed, never replaced by latest |
 
 Example, published `2.0.0, 2.1.0, 2.1.3, 2.2.0, 2.3.0, 3.0.0`:
 
@@ -49,13 +49,16 @@ Example, published `2.0.0, 2.1.0, 2.1.3, 2.2.0, 2.3.0, 3.0.0`:
 | `2.1.0` | `2.1.0` | `2.2` | `Instance:100051` |
 | `2.1` | `2.1.3` | `2` | `2.1.3` |
 | `2` | `2.3.0` | `3` | `Instance:100051` |
-| `2.4` (no `2.4.x`) | none | any floating | `Instance:100052` |
+| `2.4` (no `2.4.x`) | none | `latest` / any floating | `Instance:100052` |
+| `2.4` (no `2.4.x`) | none | `2.2.0` | `2.2.0` (explicit) |
 
 Only the `Workflows` cache set applies the policy, only on a backend miss, and `sys-*` keys and full
 versions bypass it (the registry cannot depend on itself). Policy errors are never negative-cached.
-Because the pointer is validated by `DefaultVersionResolver.IsValidPointer` before resolution, a
-broken pointer blocks explicit artifact requests too until it is fixed; full `-pkg.` versions keep
-working. Running instances are unaffected: each is pinned to the resolved version it started with.
+Explicit always wins: `DefaultVersionResolver.Resolve` handles a full or artifact request before it
+judges the pointer, so a pointer that matches no published version blocks only `latest`/empty and
+floating requests — an explicit artifact (`2.2.0`) or full `-pkg.` version keeps working and is the way
+around a broken pointer until it is fixed. A pointer of the wrong form (`latest`, blank, a non-string
+value) is rejected by the registry read itself (409) before resolution. Running instances are unaffected: each is pinned to the resolved version it started with.
 A SubFlow or SubProcess parent stores the child's **resolved** version
 ([SubFlow Execution](../architecture/subflow-execution.md)).
 
@@ -77,8 +80,16 @@ The registry flow `sys-version-registry` ships with the `vnext-sys-flow` package
 Flow shape: `create` -> `draft` (Initial) -> automatic `register` -> `active`, then a single
 `set-default` transition (`null` clears). There is no final state.
 
-Domain without the registry flow (old core package) => Automatic, no error. Registry read failure =>
-`Instance:100053` (503, transient): resolution fails instead of falling back to latest.
+The pointer is the latest committed data row (`IsLatest`, selected in SQL) of the newest instance with
+the flow key, **whatever its status** (`IInstanceRepository.FindLatestDataByKeyAsync`): a registry
+transition commits with the instance Busy and the invalidation job can run before it settles Active, and a
+Faulted registry instance still carries its last pointer — a status-filtered read would fall back to
+latest in both cases.
+
+Domain without the registry flow (old core package) or no instance for the key => Automatic, no error.
+Registry read failure => `Instance:100053` (503, transient, fixed message; the cause is in the 20502 log
+only): resolution fails instead of falling back to latest. A stored `defaultVersion` that is not a string
+is a broken pointer => `Instance:100052` (409), not an outage.
 
 **Future types, key prefix rule (K10).** The instance key is the flow key. Function or other component
 types, when supported, use a prefixed key (`function.{key}`); flows keep the bare key, so v1 data stays
@@ -93,14 +104,14 @@ valid.
   best-effort post-commit `InvalidateVersionPolicyJob` (continuation, `ContinueParent`) that bumps the
   flow's cache generation. A failed bump only logs (EventId 20504).
 - With the per-pod generation memo ([Component Cache Generation Memo](component-cache-generation-memo.md))
-  a pointer change is visible on every pod within about 5 seconds.
+  a pointer change is visible on every pod within ≈ `GenerationMemoSeconds` (default 5 s).
 
 ## Error codes
 
 | Code | Name | HTTP | Meaning |
 |---|---|---|---|
 | `Instance:100051` | FlowVersionNotActivated | 404 | Requested version(s) exist but are above the default. |
-| `Instance:100052` | FlowDefaultVersionInvalid | 409 | Pointer is malformed or matches no published version. |
+| `Instance:100052` | FlowDefaultVersionInvalid | 409 | Pointer is malformed (non-string included) or matches no published version (`latest`/floating requests only). |
 | `Instance:100053` | VersionRegistryUnavailable | 503 | Registry read failed; transient, retry. |
 
 ## Observability
