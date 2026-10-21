@@ -100,6 +100,7 @@ public static class PipelineServiceCollectionExtensions
         services.AddScoped<ITransitionStep, ScheduleTransitionsStep>();
         services.AddScoped<ITransitionStep, RunAutomaticTransitionsStep>();
         services.AddScoped<ITransitionStep, HandleFinishStep>();
+        services.AddScoped<ITransitionStep, VersionRegistryInvalidationStep>();
         services.AddScoped<ITransitionStep, FinalizeTransitionStep>();
         services.AddScoped<ITransitionStep, ResolveAvailableStep>();
 
@@ -123,6 +124,7 @@ public static class PipelineServiceCollectionExtensions
         services.AddScoped<IPostCommitParentMutationService, PostCommitParentMutationService>();
         services.AddScoped<IPostCommitHandler<StartSubflowJob>, StartSubflowJobHandler>();
         services.AddScoped<IPostCommitHandler<ForwardToSubflowJob>, ForwardToSubflowJobHandler>();
+        services.AddScoped<IPostCommitHandler<InvalidateVersionPolicyJob>, InvalidateVersionPolicyJobHandler>();
         services.AddSingleton<IPostCommitFailurePolicy, DefaultPostCommitFailurePolicy>();
 
         // Long-poll termination resume (acknowledge endpoint + fallback timeout job)

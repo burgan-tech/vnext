@@ -93,3 +93,11 @@ public sealed record ForwardToSubflowJob(
 {
     public PostCommitContinuationBehavior ContinuationBehavior => PostCommitContinuationBehavior.HandoffToChild;
 }
+
+/// <summary>
+/// Post-commit job that bumps a flow's cache generation after its default-version pointer in
+/// <c>sys-version-registry</c> changed.
+/// </summary>
+/// <param name="Domain">The domain of the target flow.</param>
+/// <param name="FlowKey">The target flow key (the registry instance key).</param>
+public sealed record InvalidateVersionPolicyJob(string Domain, string FlowKey) : IPostCommitJob;
