@@ -425,6 +425,20 @@ public static class WorkflowErrors
             $"Master schema \"{schemaKey}\" could not be resolved; the request may carry x-storage files and was not applied, it can be retried",
             target: schemaKey);
 
+    /// <summary>The requested flow version is published but above the flow's activation ceiling (default version).</summary>
+    public static Error FlowVersionNotActivated(string domain, string flow, string requested, string effectiveDefault)
+        => Error.NotFound(
+            WorkflowErrorCodes.FlowVersionNotActivated,
+            $"Version \"{requested}\" of flow \"{domain}/{flow}\" is published but not activated; pass the exact version or move the default (current default: \"{effectiveDefault}\")",
+            target: $"{domain}/{flow}@{requested}");
+
+    /// <summary>The flow's registered default version pointer does not resolve to a published version.</summary>
+    public static Error FlowDefaultVersionInvalid(string domain, string flow, string pointer)
+        => Error.Conflict(
+            WorkflowErrorCodes.FlowDefaultVersionInvalid,
+            $"The default version \"{pointer}\" registered for flow \"{domain}/{flow}\" does not resolve to a published version",
+            target: $"{domain}/{flow}");
+
     /// <summary>The file is not referenced by the instance's latest data.</summary>
     public static Error FileNotFound(string file)
         => Error.NotFound(
