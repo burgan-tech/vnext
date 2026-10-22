@@ -57,6 +57,22 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Finds an instance by its identifier (GUID or key) with no related rows at all: no DataList, no
+    /// correlations, no incidents, no tracking. Identifier resolution mirrors
+    /// <see cref="FindByIdentifierAsReadOnlyAsync"/> (id first, then most recent row by key). Intended for
+    /// read paths that only need the instance header — e.g. a cached function whose key is computed before
+    /// deciding whether the full aggregate is needed. The result must never be treated as fully loaded.
+    /// </summary>
+    Task<Instance?> FindByIdentifierLeanAsync(string identifier, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Reads one top-level property of the instance's latest data row as raw JSON, without loading the row
+    /// (a server-side <c>jsonb</c> projection). Returns null when the row or the property is absent.
+    /// </summary>
+    Task<string?> GetLatestDataPropertyJsonAsync(Guid instanceId, string propertyName,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Finds an instance by its identifier (GUID or key) without loading DataList.
     /// Loads ChildCorrelations (active-only) but skips all InstanceData versions.
     /// Non-tracking (AsNoTracking) — intended for monitoring read queries that do not need data history.

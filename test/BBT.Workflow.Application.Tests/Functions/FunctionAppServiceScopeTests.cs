@@ -11,6 +11,7 @@ using BBT.Aether.Users;
 using BBT.Workflow.Authorization;
 using BBT.Workflow.Caching;
 using BBT.Workflow.Definitions;
+using BBT.Workflow.Functions.Caching;
 using BBT.Workflow.Functions.Contracts;
 using BBT.Workflow.Functions.Validation;
 using BBT.Workflow.Instances;
@@ -22,6 +23,7 @@ using BBT.Workflow.Tasks.Evaluators;
 using BBT.Workflow.Tasks.Executors;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using NSubstitute;
 using NSubstitute.ExceptionExtensions;
 using Shouldly;
@@ -53,7 +55,8 @@ public sealed class FunctionAppServiceScopeTests : IDisposable
     private readonly IFunctionRequestValidationService _functionRequestValidationService;
     private readonly IFunctionExecutionJournal _functionExecutionJournal;
     private readonly ICurrentUser _currentUser;
-    private readonly FunctionAppService _service;
+    private readonly IScriptContextFactory _scriptContextFactory;
+    private FunctionAppService _service;
 
     private readonly IServiceProvider _ambientServiceProvider;
     private readonly IServiceProvider? _previousAmbientServiceProvider;
@@ -109,6 +112,7 @@ public sealed class FunctionAppServiceScopeTests : IDisposable
 
         var scriptContextFactory = Substitute.For<IScriptContextFactory>();
         scriptContextFactory.NewBuilder(Arg.Any<IInstanceRepository>()).Returns(builder);
+        _scriptContextFactory = scriptContextFactory;
 
         _taskCoordinator
             .ExecuteAsync(
@@ -120,11 +124,16 @@ public sealed class FunctionAppServiceScopeTests : IDisposable
                 Arg.Any<CancellationToken>())
             .Returns(Result.Ok());
 
-        _service = new FunctionAppService(
+        _service = CreateService(new FunctionCacheOptions());
+    }
+
+    private FunctionAppService CreateService(FunctionCacheOptions cacheOptions)
+    {
+        return new FunctionAppService(
             serviceProvider: _ambientServiceProvider,
             runtimeInfoProvider: Substitute.For<IRuntimeInfoProvider>(),
             instanceRepository: _instanceRepository,
-            scriptContextFactory: scriptContextFactory,
+            scriptContextFactory: _scriptContextFactory,
             componentCacheStore: _componentCacheStore,
             currentSchema: Substitute.For<ICurrentSchema>(),
             taskCoordinator: _taskCoordinator,
@@ -137,7 +146,9 @@ public sealed class FunctionAppServiceScopeTests : IDisposable
             functionAccessPolicy: new FunctionAccessPolicy(),
             functionRequestValidationService: _functionRequestValidationService,
             functionExecutionJournal: _functionExecutionJournal,
-            currentUser: _currentUser);
+            currentUser: _currentUser,
+            functionCacheLocalTier: new FunctionCacheLocalTier(Options.Create(cacheOptions)),
+            functionCacheOptions: Options.Create(cacheOptions));
     }
 
     public void Dispose()
@@ -421,6 +432,9 @@ public sealed class FunctionAppServiceScopeTests : IDisposable
         _instanceRepository
             .FindByIdentifierAsync(Arg.Any<string?>(), Arg.Any<CancellationToken>())
             .Returns((Instance?)null);
+        _instanceRepository
+            .FindByIdentifierLeanAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns((Instance?)null);
 
         var result = await _service.GetFunctionByInstanceAsync(
             FunctionKey, TestFlow, TestDomain, "missing-key");
@@ -529,10 +543,164 @@ public sealed class FunctionAppServiceScopeTests : IDisposable
             Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<TaskTraceContext>(), Arg.Any<CancellationToken>());
     }
 
+    // ─── Lean instance key, L1 tier, single-flight ───────────────────────────────
+
+    private void SetupCacheMissWithWriteBack()
+    {
+        _cacheGateway
+            .GetAsync(Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<TaskTraceContext>(), Arg.Any<CancellationToken>())
+            .Returns(new CacheGetResult(CacheOk: true, Hit: false, Value: default));
+        _cacheGateway
+            .SetAsync(Arg.Any<string>(), Arg.Any<object?>(), Arg.Any<int?>(), Arg.Any<string?>(),
+                Arg.Any<string?>(), Arg.Any<TaskTraceContext>(), Arg.Any<CancellationToken>())
+            .Returns(true);
+    }
+
+    private void SetupCacheHit()
+    {
+        var cached = JsonSerializer.SerializeToElement(
+            new FunctionResponseOutput { Data = new Dictionary<string, object?> { ["v"] = 1 }, StatusCode = 200 },
+            JsonSerializerConstants.JsonOptions);
+        _cacheGateway
+            .GetAsync(Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<TaskTraceContext>(), Arg.Any<CancellationToken>())
+            .Returns(new CacheGetResult(CacheOk: true, Hit: true, Value: cached));
+    }
+
+    [Fact]
+    public async Task ByInstance_CacheHit_ResolvesKeyFromLeanInstance_WithoutFullLoad()
+    {
+        var instance = SetupInstance();
+        SetupFlow(declareFunction: true);
+        SetupCachedFunction(scope: TaskScope.Instance);
+        SetupCacheHit();
+
+        var result = await _service.GetFunctionByInstanceAsync(FunctionKey, TestFlow, TestDomain, instance.Key);
+
+        result.IsSuccess.ShouldBeTrue();
+        await _instanceRepository.Received(1).FindByIdentifierLeanAsync(instance.Key, Arg.Any<CancellationToken>());
+        await _instanceRepository.DidNotReceive().FindByIdentifierAsync(Arg.Any<string?>(), Arg.Any<CancellationToken>());
+        await _taskCoordinator.DidNotReceive().ExecuteAsync(
+            Arg.Any<IEnumerable<OnExecuteTask>>(), Arg.Any<Guid?>(), Arg.Any<TaskTrigger>(),
+            Arg.Any<TaskExecutionOrigin>(), Arg.Any<ScriptContext>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ByInstance_CacheMiss_LoadsFullInstanceById_BeforeRunningTasks()
+    {
+        var instance = SetupInstance();
+        SetupFlow(declareFunction: true);
+        SetupCachedFunction(scope: TaskScope.Instance);
+        SetupCacheMissWithWriteBack();
+
+        var result = await _service.GetFunctionByInstanceAsync(FunctionKey, TestFlow, TestDomain, instance.Key);
+
+        result.IsSuccess.ShouldBeTrue();
+        await _instanceRepository.Received(1).FindByIdentifierAsync(instance.Id.ToString(), Arg.Any<CancellationToken>());
+        await _taskCoordinator.Received(1).ExecuteAsync(
+            Arg.Any<IEnumerable<OnExecuteTask>>(), Arg.Any<Guid?>(), Arg.Any<TaskTrigger>(),
+            Arg.Any<TaskExecutionOrigin>(), Arg.Any<ScriptContext>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ByInstance_KeyExpressionReadsInstanceData_LoadsFullInstanceEvenOnHit()
+    {
+        var instance = SetupInstance();
+        SetupFlow(declareFunction: true);
+        SetupCachedFunction(keyExpressionCode: "\"k:\" + context.Instance.Data.region", scope: TaskScope.Instance);
+        _keyEvaluator.Evaluate(Arg.Any<ScriptCode>(), Arg.Any<ScriptContext>()).Returns(Result<string>.Ok("k:eu"));
+        SetupCacheHit();
+
+        var result = await _service.GetFunctionByInstanceAsync(FunctionKey, TestFlow, TestDomain, instance.Key);
+
+        result.IsSuccess.ShouldBeTrue();
+        await _instanceRepository.Received(1).FindByIdentifierAsync(instance.Id.ToString(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ByInstance_UncachedFunction_StillRunsWithFullInstance()
+    {
+        var instance = SetupInstance();
+        SetupFlow(declareFunction: true);
+        SetupFunction(TaskScope.Instance);
+
+        var result = await _service.GetFunctionByInstanceAsync(FunctionKey, TestFlow, TestDomain, instance.Key);
+
+        result.IsSuccess.ShouldBeTrue();
+        await _instanceRepository.Received(1).FindByIdentifierAsync(instance.Id.ToString(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ByInstance_LeanInstanceKeyDisabled_UsesFullLoadOnly()
+    {
+        _service = CreateService(new FunctionCacheOptions { LeanInstanceKey = false });
+        var instance = SetupInstance();
+        SetupFlow(declareFunction: true);
+        SetupCachedFunction(scope: TaskScope.Instance);
+        SetupCacheHit();
+
+        var result = await _service.GetFunctionByInstanceAsync(FunctionKey, TestFlow, TestDomain, instance.Key);
+
+        result.IsSuccess.ShouldBeTrue();
+        await _instanceRepository.DidNotReceive().FindByIdentifierLeanAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+        await _instanceRepository.Received(1).FindByIdentifierAsync(instance.Key, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task LocalTier_Enabled_ServesRepeatHitsWithoutStateStoreReads()
+    {
+        _service = CreateService(new FunctionCacheOptions { LocalTtlMilliseconds = 60_000 });
+        SetupCachedFunction(generationKey: "dcs:gen");
+        SetupCacheHit();
+
+        (await _service.GetFunctionByKeyAsync(FunctionKey, TestDomain)).IsSuccess.ShouldBeTrue();
+        (await _service.GetFunctionByKeyAsync(FunctionKey, TestDomain)).IsSuccess.ShouldBeTrue();
+
+        // First call: generation + entry from the store; second call: both from the pod's L1.
+        await _cacheGateway.Received(2).GetAsync(
+            Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<TaskTraceContext>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task LocalTier_DisabledByDefault_ReadsStateStoreEveryTime()
+    {
+        SetupCachedFunction();
+        SetupCacheHit();
+
+        await _service.GetFunctionByKeyAsync(FunctionKey, TestDomain);
+        await _service.GetFunctionByKeyAsync(FunctionKey, TestDomain);
+
+        await _cacheGateway.Received(2).GetAsync(
+            Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<TaskTraceContext>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task SingleFlight_ConcurrentMissesForOneKey_ExecuteTasksOnce()
+    {
+        SetupCachedFunction();
+        SetupCacheMissWithWriteBack();
+        var release = new TaskCompletionSource<Result>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _taskCoordinator
+            .ExecuteAsync(
+                Arg.Any<IEnumerable<OnExecuteTask>>(), Arg.Any<Guid?>(), Arg.Any<TaskTrigger>(),
+                Arg.Any<TaskExecutionOrigin>(), Arg.Any<ScriptContext>(), Arg.Any<CancellationToken>())
+            .Returns(_ => release.Task);
+
+        var first = _service.GetFunctionByKeyAsync(FunctionKey, TestDomain);
+        var second = _service.GetFunctionByKeyAsync(FunctionKey, TestDomain);
+        release.SetResult(Result.Ok());
+        var results = await Task.WhenAll(first, second);
+
+        results.ShouldAllBe(r => r.IsSuccess);
+        await _taskCoordinator.Received(1).ExecuteAsync(
+            Arg.Any<IEnumerable<OnExecuteTask>>(), Arg.Any<Guid?>(), Arg.Any<TaskTrigger>(),
+            Arg.Any<TaskExecutionOrigin>(), Arg.Any<ScriptContext>(), Arg.Any<CancellationToken>());
+    }
+
     // ─── Helpers ────────────────────────────────────────────────────────────────
 
     private void SetupCachedFunction(
-        string? generationKey = null, string? keyExpressionCode = null, bool executionLog = true)
+        string? generationKey = null, string? keyExpressionCode = null, bool executionLog = true,
+        TaskScope? scope = null)
     {
         var task = OnExecuteTask.Create(
             1,
@@ -542,7 +710,7 @@ public sealed class FunctionAppServiceScopeTests : IDisposable
             ? null
             : ScriptCode.FromNative(keyExpressionCode, "dynamicExpresso");
         var function = new Function(
-            TaskScope.Domain, task,
+            scope ?? TaskScope.Domain, task,
             cache: new FunctionCache(
                 key: "fn:test", ttlInSeconds: 300, generationKey: generationKey, keyExpression: keyExpression),
             executionLog: executionLog ? ExecutionLogSetting.Enabled : null);
@@ -574,6 +742,9 @@ public sealed class FunctionAppServiceScopeTests : IDisposable
         var instance = Instance.Create(Guid.NewGuid(), TestFlow, TestVersion, "test-key");
         _instanceRepository
             .FindByIdentifierAsync(Arg.Any<string?>(), Arg.Any<CancellationToken>())
+            .Returns(instance);
+        _instanceRepository
+            .FindByIdentifierLeanAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(instance);
         return instance;
     }

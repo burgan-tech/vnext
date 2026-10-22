@@ -19,6 +19,7 @@ using BBT.Workflow.BackgroundJobs;
 using BBT.Workflow.Events;
 using BBT.Workflow.Schedule;
 using BBT.Workflow.Functions;
+using BBT.Workflow.Functions.Caching;
 using BBT.Workflow.Functions.Contracts;
 using Microsoft.Extensions.Options;
 using BBT.Workflow.Functions.Validation;
@@ -139,6 +140,13 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
         services.AddScoped<IFunctionAccessPolicy, FunctionAccessPolicy>();
         services.AddScoped<IFunctionRequestValidationService, FunctionRequestValidationService>();
         services.AddScoped<IFunctionAppService, FunctionAppService>();
+        // Function cache per-pod tier (FunctionCache:*): L1 copy (off unless LocalTtlMilliseconds > 0),
+        // single-flight miss coalescing and the lean instance-key path. One instance per process.
+        services.AddOptions<FunctionCacheOptions>()
+            .BindConfiguration(FunctionCacheOptions.SectionName)
+            .ValidateDataAnnotations()
+            .ValidateOnStart();
+        services.AddSingleton<IFunctionCacheLocalTier, FunctionCacheLocalTier>();
         // Journal tunables (Workflow:FunctionExecutionJournal): QueueCapacity + BatchSize.
         services.AddOptions<FunctionExecutionJournalOptions>()
             .BindConfiguration(FunctionExecutionJournalOptions.SectionName);

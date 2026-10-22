@@ -101,6 +101,27 @@ public sealed class DynamicExpressoValueEvaluatorTests : IDisposable
     }
 
     [Fact]
+    public void VaryKey_ProjectedInstanceVaryBy_TakesPrecedenceOverConfig()
+    {
+        // Lean key path: the instance is loaded without data and its varyBy property arrives via MetaData;
+        // it must win over the config headers exactly as the instance's own varyBy would.
+        var script = ScriptCode.FromNative("varyKey(context)", ConditionScriptLocations.DynamicExpresso);
+        var context = new ScriptContext.Builder(NullLogger<ScriptContext>.Instance)
+            .SetHeaders(new Dictionary<string, string> { ["x-a"] = "1", ["x-tenant"] = "acme" })
+            .SetMetadata(new Dictionary<string, object>
+            {
+                [DynamicExpressoValueEvaluator.VaryByHeadersMetadataKey] = new[] { "x-tenant" },
+                [DynamicExpressoValueEvaluator.InstanceVaryByMetadataKey] = new List<string> { "x-a" }
+            })
+            .Build();
+
+        var result = CreateEvaluator().Evaluate(script, context);
+
+        result.IsSuccess.ShouldBeTrue();
+        result.Value.ShouldBe("v=latest|x-a=1");
+    }
+
+    [Fact]
     public void VaryKey_UsesConfigHeadersAndPrefixes_Canonicalized_WithVersion()
     {
         var script = ScriptCode.FromNative("varyKey(context)", ConditionScriptLocations.DynamicExpresso);

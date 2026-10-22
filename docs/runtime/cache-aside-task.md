@@ -203,11 +203,49 @@ prefix scan / delete is required, so it stays Dapr-store-agnostic. Absent a stam
 }
 ```
 
+### Hot path: lean instance key, per-pod tier, single-flight
+
+Three runtime behaviours make a cached function cheap on a hit and safe on a miss. All are process
+settings (`FunctionCache:*`, `FunctionCacheOptions`); the function definition does not change.
+
+- **Lean instance key** (`LeanInstanceKey`, default `true`). An instance-scoped function used to load the
+  full aggregate (instance + latest data + active correlations, tracked) before even computing the cache
+  key, so a hit cost grew with the instance data size. The instance is now resolved header-only
+  (`IInstanceRepository.FindByIdentifierLeanAsync`: no includes, no tracking); the key is computed from
+  it; the full aggregate is loaded **by id** only on a miss, right before the tasks run. The runtime falls
+  back to the full load up front when the key could read the data: a `keyExpression` /
+  `generationKeyExpression` that mentions a `Data` member, or a request body that must pass input-schema
+  rules. `varyKey()` keeps its precedence — the instance's own `varyBy` data property is projected
+  server-side (`GetLatestDataPropertyJsonAsync`, a `jsonb` `->` read) and handed to `varyKey` through
+  MetaData (`__cacheInstanceVaryBy`), so the lean key is identical to the full one.
+- **Per-pod tier** (`LocalTtlMilliseconds`, default `0` = off). When set, the generation stamp and the
+  cached response are also held in a private, size-bounded (`LocalSizeLimitMb`) in-process copy for that
+  long, so a repeated hit makes no state-store round trip. Responses are kept as serialized bytes — every
+  reader gets its own copy, the same shape a state-store hit deserializes into. Invalidation story:
+  bounded staleness. A generation bump, or any other state-store change, reaches a pod at most
+  `LocalTtlMilliseconds` later. Keep it short (a few seconds).
+- **Single-flight** (`SingleFlight`, default `true`). Concurrent misses for the same final key (generation
+  included) in one pod share one execution; the joining callers get a copy of its successful result. If
+  that execution fails or its request is cancelled, a joining caller runs the function itself, so one
+  caller's failure is never handed to another. This flattens the miss stampede after a TTL expiry or a
+  generation bump.
+
+Measured locally (single orchestrator, telemetry off, `ab -c 30`, cache hit):
+
+| Config | before | lean key | lean key + 2 s L1 |
+|---|---|---|---|
+| 1 version (8 KB data) | 2 675 rps | — | 4 470 rps |
+| 150 versions (570 KB data) | 769 rps | 1 922 rps¹ | 3 975 rps |
+
+¹ multi-process Python loader, which saturates near 2–2.6k rps; the `ab` columns are comparable.
+
 ## References
 
 - `src/BBT.Workflow.Domain/Definitions/Tasks/CacheAsideTask.cs`
 - `src/BBT.Workflow.Application/Tasks/Executors/Cache/CacheAsideTaskExecutor.cs`
 - `src/BBT.Workflow.Application/Tasks/Evaluators/CacheKeyEvaluator.cs`
+- `src/BBT.Workflow.Application/Functions/FunctionAppService.cs` (function-level cache)
+- `src/BBT.Workflow.Application/Functions/Caching/FunctionCacheLocalTier.cs`, `FunctionCacheOptions.cs`
 - `src/BBT.Workflow.Domain/Scripting/Contracts/ICacheKeyMapping.cs`
 - `src/BBT.Workflow.Application/Tasks/Evaluators/DynamicExpressoValueEvaluator.cs`
 - `src/BBT.Workflow.Application/Functions/StateStoreCacheGateway.cs`

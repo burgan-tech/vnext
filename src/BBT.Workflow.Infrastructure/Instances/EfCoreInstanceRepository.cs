@@ -882,6 +882,49 @@ public sealed class EfCoreInstanceRepository(
     }
 
     /// <inheritdoc />
+    public async Task<Instance?> FindByIdentifierLeanAsync(
+        string identifier,
+        CancellationToken cancellationToken = default)
+    {
+        var query = (await GetDbSetAsync()).AsNoTracking();
+
+        if (Guid.TryParse(identifier, out var instanceId))
+        {
+            var response = await query.FirstOrDefaultAsync(i => i.Id == instanceId, cancellationToken);
+            if (response != null)
+                return response;
+        }
+
+        // Same ordering as the detailed resolvers: Key is not unique across terminal/historical rows.
+        return await query
+            .Where(i => i.Key == identifier)
+            .OrderByDescending(i => i.CreatedAt)
+            .FirstOrDefaultAsync(cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async Task<string?> GetLatestDataPropertyJsonAsync(
+        Guid instanceId,
+        string propertyName,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(propertyName);
+        var context = await GetDbContextAsync();
+        var schema = context.CurrentSchemaName ?? DefaultSchemaName;
+
+        // Server-side projection: only the property crosses the wire, not the (possibly large) row.
+        // The property name is a bound parameter; the schema name is the runtime-resolved flow schema.
+        var rows = await context.Database
+            .SqlQueryRaw<string?>(
+                $"SELECT (\"Data\" -> {{1}})::text AS \"Value\" FROM \"{schema}\".\"InstancesData\" " +
+                "WHERE \"InstanceId\" = {0} AND \"IsLatest\" = true",
+                instanceId, propertyName)
+            .ToListAsync(cancellationToken);
+
+        return rows.Count > 0 ? rows[0] : null;
+    }
+
+    /// <inheritdoc />
     public async Task<InstanceStateFingerprint?> GetStateFingerprintAsync(
         string identifier,
         CancellationToken cancellationToken = default)

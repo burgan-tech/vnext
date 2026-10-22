@@ -8,6 +8,7 @@ using BBT.Aether.Results;
 using BBT.Aether.Users;
 using BBT.Workflow.Caching;
 using BBT.Workflow.Definitions;
+using BBT.Workflow.Functions.Caching;
 using BBT.Workflow.Functions.Contracts;
 using BBT.Workflow.Functions.Validation;
 using BBT.Workflow.Instances;
@@ -19,6 +20,7 @@ using BBT.Workflow.Tasks.Coordinator;
 using BBT.Workflow.Tasks.Evaluators;
 using BBT.Workflow.Tasks.Executors;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace BBT.Workflow.Functions;
 
@@ -40,7 +42,9 @@ public sealed class FunctionAppService(
     IFunctionAccessPolicy functionAccessPolicy,
     IFunctionRequestValidationService functionRequestValidationService,
     IFunctionExecutionJournal functionExecutionJournal,
-    ICurrentUser currentUser)
+    ICurrentUser currentUser,
+    IFunctionCacheLocalTier functionCacheLocalTier,
+    IOptions<FunctionCacheOptions> functionCacheOptions)
     : ApplicationService(serviceProvider), IFunctionAppService
 {
     /// <inheritdoc />
@@ -60,7 +64,7 @@ public sealed class FunctionAppService(
             return await componentCacheStore
                 .GetFunctionAsync(domain, key, version, cancellationToken)
                 .BindAsync(function =>
-                    ExecuteFunctionAsync(function, null, null, headers, queryParameters, body, httpMethod, cancellationToken));
+                    ExecuteFunctionAsync(function, null, null, false, headers, queryParameters, body, httpMethod, cancellationToken));
         }
     }
 
@@ -79,21 +83,22 @@ public sealed class FunctionAppService(
         runtimeInfoProvider.Check(domain);
         using (currentSchema.Change(flow))
         {
-            var instance = await instanceRepository.FindByIdentifierAsync(instanceKey, cancellationToken);
+            // Lean first: a cached function can usually compute its key from the instance header alone, and
+            // the full aggregate (data history, correlations) is loaded only when the function actually runs.
+            var leanInstance = functionCacheOptions.Value.LeanInstanceKey;
+            var instance = leanInstance
+                ? await instanceRepository.FindByIdentifierLeanAsync(instanceKey, cancellationToken)
+                : await instanceRepository.FindByIdentifierAsync(instanceKey, cancellationToken);
             if (instance == null)
                 return Result<FunctionResponseOutput>.Fail(WorkflowErrors.InstanceNotFound(instanceKey));
 
-            var rootId = instance.GetRootInstanceId();
-            if (rootId != instance.Id)
-            {
-                Activity.Current?.SetTag(TelemetryConstants.TagNames.RootInstanceId, rootId.ToString());
-                Activity.Current?.SetBaggage(TelemetryConstants.TagNames.RootInstanceId, rootId.ToString());
-            }
+            if (!leanInstance)
+                TagRootInstance(instance);
 
             return await componentCacheStore
                 .GetFlowAsync(domain, flow, instance.FlowVersion, cancellationToken)
                 .BindAsync(workflow =>
-                    ResolveFunctionAndExecuteAsync(domain, key, instance, workflow, headers, queryParameters, body, httpMethod, cancellationToken));
+                    ResolveFunctionAndExecuteAsync(domain, key, instance, workflow, leanInstance, headers, queryParameters, body, httpMethod, cancellationToken));
         }
     }
 
@@ -119,6 +124,7 @@ public sealed class FunctionAppService(
         string key,
         Instance instance,
         Definitions.Workflow workflow,
+        bool instanceIsLean,
         Dictionary<string, string?>? headers,
         Dictionary<string, string?>? queryParameters,
         JsonElement? body,
@@ -129,7 +135,7 @@ public sealed class FunctionAppService(
         return componentCacheStore
             .GetFunctionAsync(domain, key, functionReference?.Version, cancellationToken)
             .BindAsync(function =>
-                ExecuteFunctionAsync(function, instance, workflow, headers, queryParameters, body, httpMethod, cancellationToken));
+                ExecuteFunctionAsync(function, instance, workflow, instanceIsLean, headers, queryParameters, body, httpMethod, cancellationToken));
     }
 
     /// <summary>
@@ -139,6 +145,7 @@ public sealed class FunctionAppService(
         Function function,
         Instance? instance,
         Definitions.Workflow? workflow,
+        bool instanceIsLean,
         Dictionary<string, string?>? headers,
         Dictionary<string, string?>? queryParameters,
         JsonElement? body,
@@ -239,6 +246,17 @@ public sealed class FunctionAppService(
                 WorkflowErrors.FunctionVerbNotAllowed(function.Key, httpMethod!, function.Verbs));
         }
 
+        // A lean instance (header only) is enough to compute the cache key unless the key could read the
+        // instance data or a request body has to be validated against rules that might; then load it all now.
+        if (instance is not null && instanceIsLean && !CanKeyFromLeanInstance(function, body))
+        {
+            var full = await LoadFullInstanceAsync(instance, cancellationToken);
+            if (full is null)
+                return Result<FunctionResponseOutput>.Fail(WorkflowErrors.InstanceNotFound(instance.Key));
+            instance = full;
+            instanceIsLean = false;
+        }
+
         object scriptBody = body.HasValue
             ? (object)body.Value
             : new JsonData("{}");
@@ -250,6 +268,15 @@ public sealed class FunctionAppService(
         {
             metadata[DynamicExpressoValueEvaluator.VaryByHeadersMetadataKey] = cacheConfig.VaryByHeaders;
             metadata[DynamicExpressoValueEvaluator.VaryByPrefixesMetadataKey] = cacheConfig.VaryByHeaderPrefixes;
+
+            // varyKey() prefers the instance's own varyBy data property; without the data loaded, project
+            // just that property so the lean key is identical to the one the full instance would produce.
+            if (instance is not null && instanceIsLean && UsesVaryKey(cacheConfig))
+            {
+                var projected = await ReadInstanceVaryByAsync(instance.Id, cancellationToken);
+                if (projected is { Count: > 0 })
+                    metadata[DynamicExpressoValueEvaluator.InstanceVaryByMetadataKey] = projected;
+            }
         }
 
         // Built once and shared by input-schema rule evaluation, the cache key expression and the tasks.
@@ -328,6 +355,12 @@ public sealed class FunctionAppService(
                     }
                 }
 
+                if (!string.IsNullOrWhiteSpace(cacheKey) && functionCacheLocalTier.TryGetResponse(cache.StoreName, cacheKey) is { } local)
+                {
+                    fromCache = true;
+                    return Result<FunctionResponseOutput>.Ok(local);
+                }
+
                 if (!string.IsNullOrWhiteSpace(cacheKey))
                 {
                     var read = await cacheGateway.GetAsync(cacheKey, cache.StoreName, cache.Consistency, traceContext, cancellationToken);
@@ -348,11 +381,40 @@ public sealed class FunctionAppService(
                         if (cached is not null)
                         {
                             fromCache = true;
+                            functionCacheLocalTier.SetResponse(cache.StoreName, cacheKey, cached);
                             return Result<FunctionResponseOutput>.Ok(cached);
                         }
                     }
                 }
             }
+        }
+
+        // Miss (or uncached): concurrent misses for one key share a single execution in this pod.
+        return string.IsNullOrWhiteSpace(cacheKey)
+            ? await ExecuteMissAsync()
+            : await functionCacheLocalTier.RunOnceAsync(cacheKey!, ExecuteMissAsync, cancellationToken);
+
+        async Task<Result<FunctionResponseOutput>> ExecuteMissAsync()
+        {
+        if (instance is not null && instanceIsLean)
+        {
+            // The key was computed from the instance header; the tasks need the whole aggregate.
+            var full = await LoadFullInstanceAsync(instance, cancellationToken);
+            if (full is null)
+                return Result<FunctionResponseOutput>.Fail(WorkflowErrors.InstanceNotFound(instance.Key));
+            instance = full;
+            instanceIsLean = false;
+
+            var fullContext = await scriptContextFactory.NewBuilder(instanceRepository)
+                .WithWorkflow(workflow)
+                .WithInstance(instance)
+                .WithRuntime(runtimeInfoProvider)
+                .WithBody(scriptBody)
+                .WithHeaders(headers)
+                .WithQueryParameters(queryParameters)
+                .WithMetadata(metadata)
+                .BuildAsync(cancellationToken);
+            scriptContext = fullContext;
         }
 
         Result executeResult;
@@ -424,9 +486,106 @@ public sealed class FunctionAppService(
                     "Function {FunctionKey}: cache write failed; returning the computed result (bypassOnCacheError=true).",
                     function.Key);
             }
+            else
+            {
+                functionCacheLocalTier.SetResponse(writeCache.StoreName, cacheKey!, responseResult.Value);
+            }
         }
 
         return responseResult;
+        }
+        }
+    }
+
+    /// <summary>
+    /// True when the cache key (and its generation key) can be computed from an instance loaded without its
+    /// data: the function caches, no key expression references the instance data, and no request body has
+    /// to pass input-schema rules (which may read it).
+    /// </summary>
+    private static bool CanKeyFromLeanInstance(Function function, JsonElement? body)
+    {
+        if (function.Cache is not { HasKeySource: true } cache)
+            return false;
+        if (function.HasInputSchema && body.HasValue && body.Value.ValueKind is not (JsonValueKind.Undefined or JsonValueKind.Null))
+            return false;
+        return !ReadsInstanceData(cache.KeyExpression) && !ReadsInstanceData(cache.GenerationKeyExpression);
+    }
+
+    /// <summary>
+    /// Conservative textual check: any mention of a <c>Data</c> member (e.g. <c>context.Instance.Data</c>)
+    /// counts as reading the instance data. An unreadable expression also counts — the full load is safe.
+    /// </summary>
+    private static bool ReadsInstanceData(ScriptCode? expression)
+    {
+        if (expression is not { HasMappingCode: true })
+            return false;
+        try
+        {
+            return DataMemberAccess.IsMatch(expression.DecodedCode);
+        }
+        catch (InvalidOperationException)
+        {
+            return true;
+        }
+    }
+
+    private static readonly System.Text.RegularExpressions.Regex DataMemberAccess =
+        new(@"\bData\b", System.Text.RegularExpressions.RegexOptions.Compiled | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+    private static bool UsesVaryKey(FunctionCache cache)
+    {
+        try
+        {
+            return cache.KeyExpression is { HasMappingCode: true } expression
+                   && expression.DecodedCode.Contains("varyKey", StringComparison.Ordinal);
+        }
+        catch (InvalidOperationException)
+        {
+            return true;
+        }
+    }
+
+    /// <summary>Projects the instance's latest <c>varyBy</c> data property (a string array) without loading the data row.</summary>
+    private async Task<List<string>?> ReadInstanceVaryByAsync(Guid instanceId, CancellationToken cancellationToken)
+    {
+        var json = await instanceRepository.GetLatestDataPropertyJsonAsync(instanceId, "varyBy", cancellationToken);
+        if (string.IsNullOrWhiteSpace(json))
+            return null;
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            if (document.RootElement.ValueKind != JsonValueKind.Array)
+                return null;
+            var names = new List<string>();
+            foreach (var item in document.RootElement.EnumerateArray())
+            {
+                if (item.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(item.GetString()))
+                    names.Add(item.GetString()!);
+            }
+            return names;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>Loads the full aggregate for an instance first resolved lean, by its id (the same row).</summary>
+    private async Task<Instance?> LoadFullInstanceAsync(Instance lean, CancellationToken cancellationToken)
+    {
+        var full = await instanceRepository.FindByIdentifierAsync(lean.Id.ToString(), cancellationToken);
+        if (full is not null)
+            TagRootInstance(full);
+        return full;
+    }
+
+    private static void TagRootInstance(Instance instance)
+    {
+        var rootId = instance.GetRootInstanceId();
+        if (rootId != instance.Id)
+        {
+            Activity.Current?.SetTag(TelemetryConstants.TagNames.RootInstanceId, rootId.ToString());
+            Activity.Current?.SetBaggage(TelemetryConstants.TagNames.RootInstanceId, rootId.ToString());
         }
     }
 
@@ -475,13 +634,18 @@ public sealed class FunctionAppService(
         if (string.IsNullOrWhiteSpace(generationKey))
             return Result<string>.Ok("0");
 
+        if (functionCacheLocalTier.TryGetGeneration(cache.StoreName, generationKey, out var held))
+            return Result<string>.Ok(held);
+
         var read = await cacheGateway.GetAsync(generationKey, cache.StoreName, cache.Consistency, traceContext, cancellationToken);
         if (!read.CacheOk)
             return Result<string>.Fail(Error.Failure(
                 WorkflowErrorCodes.ExtensionExecutionFailed,
                 "Cache generation read failed."));
 
-        return Result<string>.Ok(read.Hit ? ExtractGeneration(read.Value) : "0");
+        var generation = read.Hit ? ExtractGeneration(read.Value) : "0";
+        functionCacheLocalTier.SetGeneration(cache.StoreName, generationKey, generation);
+        return Result<string>.Ok(generation);
     }
 
     /// <summary>Extracts the generation stamp from its cached JSON value (number or string).</summary>

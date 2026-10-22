@@ -114,6 +114,13 @@ public sealed class DynamicExpressoValueEvaluator(ILogger<DynamicExpressoValueEv
     /// <summary>MetaData key carrying the vary-by header-name prefixes (domain-supplied cache config).</summary>
     public const string VaryByPrefixesMetadataKey = "__cacheVaryByHeaderPrefixes";
 
+    /// <summary>
+    /// MetaData key carrying the instance's <c>varyBy</c> data property when the instance in the context
+    /// was loaded without its data (function cache lean key path). Read only when the instance data has no
+    /// <c>varyBy</c> of its own, so both paths resolve the same header-name set.
+    /// </summary>
+    public const string InstanceVaryByMetadataKey = "__cacheInstanceVaryBy";
+
     private const string VaryByInstanceDataKey = "varyBy";
     private const string VersionQueryParam = "version";
     private const string DefaultVersion = "latest";
@@ -160,8 +167,14 @@ public sealed class DynamicExpressoValueEvaluator(ILogger<DynamicExpressoValueEv
         if (instanceVaryBy.Count > 0)
             return instanceVaryBy;
 
-        // 2) Domain-supplied config (via MetaData): exact names ∪ prefix matches.
         var meta = AsElement(context.MetaData);
+
+        // 1b) The same property, projected by the caller when the instance was loaded without its data.
+        var projectedVaryBy = ReadStringArray(meta, InstanceVaryByMetadataKey);
+        if (projectedVaryBy.Count > 0)
+            return projectedVaryBy;
+
+        // 2) Domain-supplied config (via MetaData): exact names ∪ prefix matches.
         var configNames = ReadStringArray(meta, VaryByHeadersMetadataKey);
         var configPrefixes = ReadStringArray(meta, VaryByPrefixesMetadataKey);
         if (configNames.Count > 0 || configPrefixes.Count > 0)

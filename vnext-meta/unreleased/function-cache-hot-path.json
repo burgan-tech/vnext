@@ -1,0 +1,16 @@
+{
+  "releaseNote": {
+    "summary": "Cached functions: hits no longer load the full instance, an optional per-pod L1 tier skips state-store reads, and concurrent misses for one key share one execution.",
+    "breaking": false,
+    "docs": []
+  },
+  "features": {
+    "engine": {
+      "functionCacheHotPath": {
+        "since": "next",
+        "status": "stable",
+        "description": "Function read-through cache hot path (FunctionCache:* process settings; function definitions unchanged). (1) Lean instance key (LeanInstanceKey, default true): an instance-scoped function resolves the instance header only (IInstanceRepository.FindByIdentifierLeanAsync: no DataList, no correlations, no tracking), computes the cache key from it, and loads the full aggregate by id only on a miss, before the tasks run; it falls back to the full load up front when keyExpression or generationKeyExpression mentions a Data member, or when a request body must pass input-schema rules. varyKey() keeps its precedence: the instance's own varyBy data property is projected server-side (jsonb ->) and passed through MetaData (__cacheInstanceVaryBy), so the lean key equals the full one. (2) Per-pod L1 tier (LocalTtlMilliseconds, default 0 = off; LocalSizeLimitMb, default 64): the generation stamp and the cached response are also held in a private size-bounded in-process copy for that long, so a repeated hit makes no state-store round trip; responses are kept as serialized bytes so every reader gets its own copy; bounded staleness is the invalidation story - a generation bump reaches a pod at most LocalTtlMilliseconds later. (3) Single-flight (SingleFlight, default true): concurrent misses for the same final key in one pod share one execution; a joining caller gets a copy of a successful result and runs the function itself when that execution fails or is cancelled. Full guide: docs/runtime/cache-aside-task.md § Hot path."
+      }
+    }
+  }
+}
