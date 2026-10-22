@@ -262,13 +262,17 @@ public partial class InstanceDataVersionComparer : IComparer<InstanceData>
 
     /// <summary>
     /// Finds the published version whose canonical full form (build metadata ignored) equals that of
-    /// <paramref name="full"/>; ordinal, case-insensitive. Null when none matches.
+    /// <paramref name="full"/>; case-insensitive. When several collide the ordinally first wins. Null when none matches.
     /// </summary>
     public static string? FindFullVersionMatch(IEnumerable<string> published, string? full)
     {
         var wanted = CanonicalFullVersion(full?.Trim());
-        return published.FirstOrDefault(v =>
-            string.Equals(CanonicalFullVersion(v), wanted, StringComparison.OrdinalIgnoreCase));
+        // Several published versions can share a canonical form (+core / +customer): order ordinally
+        // so the pick is deterministic, the same tie-break as the cache backend's canonical load.
+        return published
+            .Where(v => string.Equals(CanonicalFullVersion(v), wanted, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(v => v, StringComparer.Ordinal)
+            .FirstOrDefault();
     }
 
     /// <summary>

@@ -47,7 +47,22 @@ public sealed class VersionRegistryWriteGuard(
         if (!DefaultVersionResolver.IsValidPointer(pointer))
             return Reject(domain, flowKey, pointer);
 
-        var published = await backend.LoadAllByKeyAsync(domain, flowKey, cancellationToken);
+        Result<List<Definitions.Workflow>> published;
+        try
+        {
+            published = await backend.LoadAllByKeyAsync(domain, flowKey, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // Cause stays in the log; the client gets the fixed 503 text.
+            logger.VersionRegistryReadFailed(domain, flowKey, WorkflowErrorCodes.VersionRegistryUnavailable, ex);
+            return Result.Fail(WorkflowErrors.VersionRegistryUnavailable(domain, flowKey));
+        }
+
         if (!published.IsSuccess)
         {
             // "No such flow" is the caller's typo; anything else is a read failure to surface as is.

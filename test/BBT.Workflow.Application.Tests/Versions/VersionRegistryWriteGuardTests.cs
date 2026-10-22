@@ -17,6 +17,7 @@ using BBT.Workflow.Instances;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Validation;
 using BBT.Workflow.Versions;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using NSubstitute;
 using Shouldly;
@@ -146,6 +147,31 @@ public class VersionRegistryWriteGuardTests
     }
 
     [Fact]
+    public async Task Validate_ShouldReturnUnavailable_WhenBackendThrows()
+    {
+        _backend.LoadAllByKeyAsync(Domain, "boom", Arg.Any<CancellationToken>())
+            .Returns<Task<Result<List<Definitions.Workflow>>>>(_ => throw new InvalidOperationException("redis down"));
+
+        var result = await _guard.ValidateAsync(
+            Domain, "boom", Parse("""{"defaultVersion":"2"}"""), CancellationToken.None);
+
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.VersionRegistryUnavailable);
+    }
+
+    [Fact]
+    public async Task Validate_ShouldPropagateCancellation()
+    {
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+        _backend.LoadAllByKeyAsync(Domain, "boom", Arg.Any<CancellationToken>())
+            .Returns<Task<Result<List<Definitions.Workflow>>>>(_ => throw new OperationCanceledException(cts.Token));
+
+        await Should.ThrowAsync<OperationCanceledException>(() => _guard.ValidateAsync(
+            Domain, "boom", Parse("""{"defaultVersion":"2"}"""), cts.Token));
+    }
+
+    [Fact]
     public async Task Validate_ShouldPropagate_BackendReadFailure()
     {
         _backend.LoadAllByKeyAsync(Domain, "boom", Arg.Any<CancellationToken>())
@@ -226,6 +252,40 @@ public class VersionRegistryWriteGuardTests
             Domain, Flow,
             Arg.Is<JsonElement?>(e => e!.Value.GetProperty("defaultVersion").GetString() == "2.1"),
             Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public void TransitionValidationService_ShouldResolveFromRealRegistrations_WithTheGuardPresent()
+    {
+        // The guard is a required constructor dependency (no optional default that could silently disable it),
+        // and the real registrations supply it.
+        var real = new ServiceCollection();
+        real.AddPipelineServices();
+        real.AddApplicationCacheModule();
+
+        var validation = real.Single(d => d.ServiceType == typeof(ITransitionValidationService));
+        var guardRegistration = real.Single(d => d.ServiceType == typeof(IVersionRegistryWriteGuard));
+
+        IServiceCollection services = new ServiceCollection();
+        services.AddLogging();
+        services.Add(validation);
+        services.Add(guardRegistration);
+        services.AddSingleton(Substitute.For<ICacheBackend<Definitions.Workflow>>());
+        services.AddSingleton(new TransitionExecutionPolicy(
+            new CompositeTransitionSpecification(
+                [], Substitute.For<ILogger<CompositeTransitionSpecification>>())));
+        services.AddSingleton(Substitute.For<IJsonSchemaValidator>());
+        services.AddSingleton(Substitute.For<IComponentCacheStore>());
+
+        using var provider = services.BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true });
+        using var scope = provider.CreateScope();
+
+        var service = scope.ServiceProvider.GetRequiredService<ITransitionValidationService>();
+
+        service.ShouldBeOfType<TransitionValidationService>();
+        scope.ServiceProvider.GetRequiredService<IVersionRegistryWriteGuard>().ShouldBeOfType<VersionRegistryWriteGuard>();
+        typeof(TransitionValidationService).GetConstructors().Single().GetParameters()
+            .Single(p => p.ParameterType == typeof(IVersionRegistryWriteGuard)).IsOptional.ShouldBeFalse();
     }
 
     private void Publish(params string[] versions)

@@ -18,7 +18,7 @@ public class TransitionValidationService(
     TransitionExecutionPolicy transitionExecutionPolicy,
     IJsonSchemaValidator schemaValidator,
     IComponentCacheStore componentCacheStore,
-    IVersionRegistryWriteGuard? versionRegistryWriteGuard = null) : ITransitionValidationService
+    IVersionRegistryWriteGuard versionRegistryWriteGuard) : ITransitionValidationService
 {
     /// <inheritdoc />
     /// <summary>
@@ -91,8 +91,7 @@ public class TransitionValidationService(
         // flow, so it is refused here — with the other request rejections, before admission reserves Busy and
         // before the pipeline runs (a failing pipeline step would fault the registry instance instead).
         // Start (ValidateStartTransitionAsync) and every transition accept both pass through here.
-        if (versionRegistryWriteGuard is not null
-            && string.Equals(context.WorkflowKey, RuntimeSysSchemaInfo.VersionRegistry, StringComparison.Ordinal)
+        if (string.Equals(context.WorkflowKey, RuntimeSysSchemaInfo.VersionRegistry, StringComparison.Ordinal)
             && !string.IsNullOrWhiteSpace(context.Instance?.Key))
         {
             var guardResult = await versionRegistryWriteGuard.ValidateAsync(
