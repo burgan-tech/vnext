@@ -115,7 +115,7 @@ public sealed class SubProcessTaskExecutor : TriggerTaskExecutorBase<SubProcessT
             var subFlowInstanceId = subFlowIdObj is Guid subGuid ? subGuid : Guid.Parse(subFlowIdObj.ToString()!);
             var correlationId = correlationIdObj is Guid corrGuid ? corrGuid : Guid.Parse(correlationIdObj.ToString()!);
             var resolvedVersion = invocationResult.Metadata.TryGetValue(ResolvedVersionMetadataKey, out var versionObj)
-                ? versionObj as string
+                ? ReadMetadataString(versionObj)
                 : null;
 
             // Create and persist correlation
@@ -444,7 +444,16 @@ public sealed class SubProcessTaskExecutor : TriggerTaskExecutorBase<SubProcessT
         return result;
     }
 
-    private const string ResolvedVersionMetadataKey = "SubFlowVersion";
+    private const string ResolvedVersionMetadataKey = SubProcessMetadataKeys.ResolvedFlowVersion;
+
+    // A remote result's metadata is JSON-deserialized (values arrive as JsonElement); the local
+    // path hands the in-memory string straight through.
+    private static string? ReadMetadataString(object? value) => value switch
+    {
+        string text => text,
+        System.Text.Json.JsonElement { ValueKind: System.Text.Json.JsonValueKind.String } element => element.GetString(),
+        _ => null
+    };
 
     private static Dictionary<string, object> SuccessMetadata(
         Guid subFlowInstanceId, Guid correlationId, string? resolvedVersion)

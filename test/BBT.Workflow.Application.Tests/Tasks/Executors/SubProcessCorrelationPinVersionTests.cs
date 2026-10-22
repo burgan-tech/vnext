@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Reflection;
 using System.Text.Json;
 using System.Threading;
@@ -33,7 +34,18 @@ public sealed class SubProcessCorrelationPinVersionTests
         typeof(SubProcessTaskExecutor).GetMethod("CreateCorrelationAsync", BindingFlags.Instance | BindingFlags.NonPublic)
         ?? throw new InvalidOperationException("CreateCorrelationAsync not found.");
 
-    private static async Task<InstanceCorrelation> CreateAsync(string? resolvedVersion)
+    private static readonly MethodInfo PostProcess =
+        typeof(SubProcessTaskExecutor).GetMethod("PostProcessAsync", BindingFlags.Instance | BindingFlags.NonPublic)
+        ?? throw new InvalidOperationException("PostProcessAsync not found.");
+
+    private static Task<InstanceCorrelation> CreateAsync(string? resolvedVersion) =>
+        RunAsync(resolvedVersion, viaPostProcess: false);
+
+    // The remote result's metadata is JSON-deserialized, so its values are JsonElement, not string.
+    private static Task<InstanceCorrelation> CreateFromRemoteMetadataAsync(string? resolvedVersion) =>
+        RunAsync(resolvedVersion, viaPostProcess: true);
+
+    private static async Task<InstanceCorrelation> RunAsync(string? resolvedVersion, bool viaPostProcess)
     {
         var instance = Instance.Create(Guid.NewGuid(), "test-flow", "1.0", "ctx-key");
         instance.ChangeState(State.Create("awaiting", StateType.Intermediate, StateSubType.None, "Patch"));
@@ -59,8 +71,28 @@ public sealed class SubProcessCorrelationPinVersionTests
             OnExecuteTask.Create(1, task, ScriptCode.FromNative(string.Empty)), scriptContext, null,
             TaskTrigger.OnExecute, TaskExecutionOrigin.Flow);
 
-        var result = await (Task<Result>)CreateCorrelation.Invoke(executor,
-            [context, task, Guid.NewGuid(), Guid.NewGuid(), resolvedVersion, CancellationToken.None])!;
+        Task<Result> run;
+        if (viaPostProcess)
+        {
+            var metadata = JsonSerializer.Deserialize<System.Collections.Generic.Dictionary<string, object>>(
+                JsonSerializer.Serialize(new System.Collections.Generic.Dictionary<string, object?>
+                {
+                    ["SubFlowInstanceId"] = Guid.NewGuid(),
+                    ["CorrelationId"] = Guid.NewGuid(),
+                    [SubProcessMetadataKeys.ResolvedFlowVersion] = resolvedVersion
+                }.Where(kv => kv.Value is not null).ToDictionary(kv => kv.Key, kv => kv.Value)),
+                new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
+            var invocation = BBT.Workflow.Tasks.TaskInvocationResult.Success(
+                taskType: "SubProcess", metadata: metadata);
+            run = (Task<Result>)PostProcess.Invoke(executor, [task, invocation, context, CancellationToken.None])!;
+        }
+        else
+        {
+            run = (Task<Result>)CreateCorrelation.Invoke(executor,
+                [context, task, Guid.NewGuid(), Guid.NewGuid(), resolvedVersion, CancellationToken.None])!;
+        }
+
+        var result = await run;
 
         result.IsSuccess.ShouldBeTrue();
         return instance.ChildCorrelations.ShouldHaveSingleItem();
@@ -70,6 +102,18 @@ public sealed class SubProcessCorrelationPinVersionTests
     public async Task Start_ShouldPinCorrelation_WhenChildReturnsFlowVersion()
     {
         (await CreateAsync("1.0.3")).SubFlowVersion.ShouldBe("1.0.3");
+    }
+
+    [Fact]
+    public async Task RemoteResult_ShouldPinCorrelation_ToJsonDeserializedResolvedVersion()
+    {
+        (await CreateFromRemoteMetadataAsync("1.1.0")).SubFlowVersion.ShouldBe("1.1.0");
+    }
+
+    [Fact]
+    public async Task RemoteResult_ShouldFallBackToTriggerVersion_WhenNoVersionReported()
+    {
+        (await CreateFromRemoteMetadataAsync(null)).SubFlowVersion.ShouldBe("1.0");
     }
 
     [Fact]
