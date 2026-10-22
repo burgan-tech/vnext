@@ -238,6 +238,9 @@ The plan is built from `ExcludedStepOrders` alone (`TransitionExecutor.BuildExec
 - The duplicate-active-job guard lives in that critical section; no partial unique index can replace it.
 - cancel/exit/timeout flip Busy at the accept; `updateData` (`Unconditional`) takes NO lock and NO
   duplicate-job guard. Do not bring back `{LockKey}:enqueue` or per-kind lock keys.
+- An interaction wait (`State.IsInteractionWait`: Busy subtype + `interaction`) parks Busy with no owner:
+  updateData's continuation and the state's firing timer take it over. An armed (not yet due) timer is
+  never an owner (`InstanceJob.IsLiveTransitionOwner`). Full guide: `docs/domain/long-poll-termination.md`.
 - Full guide: `docs/runtime/status-locking.md`.
 
 ## Multi-domain hosting (`APP_DOMAINS`)

@@ -1,7 +1,9 @@
 using System.Diagnostics;
+using BBT.Aether.Clock;
 using BBT.Aether.Results;
 using BBT.Aether.Uow;
 using BBT.Workflow.BackgroundJobs;
+using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution.Continuations;
 using BBT.Workflow.Execution.Validation;
 using BBT.Workflow.Files;
@@ -36,6 +38,7 @@ public class TransitionPipeline
     private readonly ILogger<TransitionPipeline> _logger;
     private readonly IInstanceDataWriteService? _instanceDataWriteService;
     private readonly IFileAdmission _fileAdmission;
+    private readonly IClock _clock;
 
     /// <summary>
     /// Maximum allowed chain depth for automatic transitions.
@@ -76,6 +79,7 @@ public class TransitionPipeline
         ITransitionAdmissionService admissionService,
         IInstanceStatusLock statusLock,
         IFileAdmission fileAdmission,
+        IClock clock,
         ILogger<TransitionPipeline> logger,
         ISubItemEventDataResolver? subItemDataResolver = null,
         IInstanceDataWriteService? instanceDataWriteService = null)
@@ -95,6 +99,7 @@ public class TransitionPipeline
         _admissionService = admissionService;
         _statusLock = statusLock;
         _fileAdmission = fileAdmission;
+        _clock = clock;
         _logger = logger;
     }
 
@@ -121,10 +126,17 @@ public class TransitionPipeline
         context.IsPreReserved = workflowContext.IsPreReserved;
         context.SubflowChainReserved = workflowContext.SubflowChainReserved;
 
-        // 2) Cheap Busy pre-check (aggregate already loaded — no extra round trip).
-        var admission = _admissionService.CheckAdmission(context);
-        if (!admission.IsSuccess)
-            return Result<TransitionExecutionContext>.Fail(admission.Error);
+        // 2) Cheap Busy pre-check (aggregate already loaded — no extra round trip). A timer firing
+        //    in an interaction wait is the one Normal request that expects Busy: that state parks
+        //    the instance Busy on purpose and nobody owns the flag, so the timer skips the pre-check
+        //    and takes the Busy over at step 4 instead of being refused.
+        var interactionWaitTimer = await IsInteractionWaitTimerAsync(workflowContext, context, cancellationToken);
+        if (!interactionWaitTimer)
+        {
+            var admission = _admissionService.CheckAdmission(context);
+            if (!admission.IsSuccess)
+                return Result<TransitionExecutionContext>.Fail(admission.Error);
+        }
 
         // 3) Validation. Policy always: state-machine specifications read the CURRENT state, which
         //    changes between hops. Schema only for a request whose payload nobody has validated yet
@@ -206,6 +218,20 @@ public class TransitionPipeline
 
             default: // AdmissionKind.Normal
             {
+                // Interaction-wait timer (step 2): the parked Busy has no owner — take it over
+                // (idempotent flip under the same short lock) and run as the owner.
+                if (interactionWaitTimer)
+                {
+                    var takeover = await _admissionService.TakeOverAsync(context, cancellationToken);
+                    if (!takeover.IsSuccess)
+                        return Result<TransitionExecutionContext>.Fail(takeover.Error);
+
+                    context.OwnsStatus = true;
+                    _logger.ScheduledTransitionTookOverInteractionWait(
+                        context.InstanceId, context.Current.Key, context.TransitionKey);
+                    return await RunChainAsync(context, cancellationToken);
+                }
+
                 // A Busy parent with an active SubFlow is admitted WITHOUT a reserve: the
                 // instance stays Busy for the subflow's lifetime by design, and
                 // ForwardToActiveSubflowStep (order 10) relays the request to the subflow,
@@ -296,9 +322,11 @@ public class TransitionPipeline
             // deliberately never resolves it) — every fan-in wait state is such a state, its
             // Busy has NO owner, and dropping there would stall the gate forever. A Busy with a
             // LIVE owner shows up as an active transition job for a different transition key
-            // (async accept intents and per-hop chain jobs; armed timers count as owners too —
-            // they will fire and re-evaluate). Only that case is dropped: the owner is already
-            // advancing, and every later updateData re-evaluates against fresher data. Parked
+            // (async accept intents and per-hop chain jobs, plus a timer once it is DUE — an
+            // armed timer still waiting holds nothing, and counting it dropped the gate of a
+            // Busy-subtype wait state whose only job was its own hours-away timeout). Only that
+            // case is dropped: the owner is already advancing, and every later updateData
+            // re-evaluates against fresher data. Parked
             // Busy is taken over instead (idempotent flip under the same short lock). An
             // in-process sync chain leaves no job row and is invisible to this probe, and there is
             // NO duplicate transition-record guard downstream to catch the loser — only the
@@ -475,12 +503,42 @@ public class TransitionPipeline
     }
 
     /// <summary>
+    /// Whether this execution is a timer firing in an interaction wait (<see cref="State.IsInteractionWait"/>)
+    /// whose Busy nobody owns. The author parks the instance Busy there to steer the client and waits
+    /// for an outside trigger; the state's scheduled transition is the way out when that trigger never
+    /// comes, and a Busy 409 would consume the timer and leave the instance parked for good.
+    /// </summary>
+    private async Task<bool> IsInteractionWaitTimerAsync(
+        WorkflowExecutionContext workflowContext,
+        TransitionExecutionContext context,
+        CancellationToken cancellationToken)
+    {
+        // The inbound trigger, not the definition's: only the timer job itself carries Scheduled.
+        if (workflowContext.TriggerType != TriggerType.Scheduled)
+            return false;
+
+        // Busy for another reason is never taken over: an open SubFlow owns it for the child's
+        // lifetime, and an armed long-poll ack means the pipeline is paused at step 75 and resumes
+        // through the acknowledge or its fallback (no timer of this state is armed before that).
+        var instance = context.Instance;
+        if (!instance.IsBusy
+            || instance.HasActiveSubFlow
+            || instance.IsAwaitingLongPollAck
+            || context.Current is not { IsInteractionWait: true })
+            return false;
+
+        return !await HasLiveTransitionOwnerAsync(context, cancellationToken);
+    }
+
+    /// <summary>
     /// Whether the instance's Busy has a LIVE owner: an active transition job (async accept
-    /// intent, per-hop chain job, or an armed/firing timer) targeting a DIFFERENT transition
+    /// intent, per-hop chain job, or a DUE timer — see <see cref="InstanceJob.IsLiveTransitionOwner"/>;
+    /// an armed timer that has not reached its time is not an owner) targeting a DIFFERENT transition
     /// than this execution's own. Rows for this execution's own transition key are its own
     /// accept intent (or a concurrent duplicate of it) — neither is a chain owner. Used by the
     /// updateData continuation handoff to tell owned Busy (drop and let the owner advance)
-    /// from parked Busy at an auto-gated rest state (take over, or the gate stalls forever).
+    /// from parked Busy at an auto-gated rest state (take over, or the gate stalls forever), and
+    /// by the interaction-wait timer for the same distinction.
     /// </summary>
     private async Task<bool> HasLiveTransitionOwnerAsync(
         TransitionExecutionContext context,
@@ -489,9 +547,8 @@ public class TransitionPipeline
         var activeJobs = await _instanceJobRepository.GetListActiveAsync(
             context.InstanceId, cancellationToken);
 
-        return activeJobs.Any(job =>
-            job.JobType is JobType.AsyncTransition or JobType.ScheduledTransition
-            && !string.Equals(job.TransitionKey, context.TransitionKey, StringComparison.OrdinalIgnoreCase));
+        var utcNow = _clock.UtcNow;
+        return activeJobs.Any(job => job.IsLiveTransitionOwner(context.TransitionKey, utcNow));
     }
 
     /// <summary>
