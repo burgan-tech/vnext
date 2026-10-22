@@ -1648,6 +1648,21 @@ public static partial class WorkflowLogs
         Guid parentInstanceId);
 
     /// <summary>
+    /// Logs when persisting the child's resolved flow version on the correlation failed or updated no
+    /// row; the child start itself succeeded and the authored version stays.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40995,
+        Level = LogLevel.Warning,
+        Message = "SubFlow version pin to {ResolvedVersion} skipped for correlation {CorrelationId}, parent {ParentInstanceId}: {Reason}")]
+    public static partial void SubFlowVersionPinFailed(
+        this ILogger logger,
+        Guid correlationId,
+        Guid parentInstanceId,
+        string resolvedVersion,
+        string reason);
+
+    /// <summary>
     /// Logs when a SubFlow start operation completes successfully.
     /// </summary>
     [LoggerMessage(
@@ -4801,6 +4816,69 @@ public static partial class WorkflowLogs
         Guid instanceId,
         string path,
         string component);
+
+    #endregion
+
+    #region Flow Version Policy (205xx)
+
+    /// <summary>Logs that a flow version request was resolved through the version policy (default version / ceiling).</summary>
+    [LoggerMessage(
+        EventId = 20500,
+        Level = LogLevel.Debug,
+        Message = "Flow version resolved by policy: {Domain}/{Flow} requested {Requested}, pointer {Pointer}, resolved {Resolved} ({Source})")]
+    public static partial void FlowVersionResolvedByPolicy(
+        this ILogger logger,
+        string domain,
+        string flow,
+        string requested,
+        string? pointer,
+        string resolved,
+        string source);
+
+    /// <summary>Logs that a flow's registered default version does not resolve to a published version.</summary>
+    [LoggerMessage(
+        EventId = 20501,
+        Level = LogLevel.Warning,
+        Message = "Flow default version is invalid: {Domain}/{Flow} pointer {Pointer}")]
+    public static partial void FlowDefaultVersionInvalid(
+        this ILogger logger,
+        string domain,
+        string flow,
+        string pointer);
+
+    /// <summary>Logs that the version registry could not be read; the resolution fails instead of falling back to latest.</summary>
+    [LoggerMessage(
+        EventId = 20502,
+        Level = LogLevel.Warning,
+        Message = "Version registry read failed: {Domain}/{Flow} ({ErrorCode})")]
+    public static partial void VersionRegistryReadFailed(
+        this ILogger logger,
+        string domain,
+        string flow,
+        string errorCode,
+        Exception? exception);
+
+    /// <summary>Logs that a flow's cached version registry entry was invalidated.</summary>
+    [LoggerMessage(
+        EventId = 20503,
+        Level = LogLevel.Information,
+        Message = "Version registry invalidated: {Domain}/{Flow}")]
+    public static partial void VersionRegistryInvalidated(
+        this ILogger logger,
+        string domain,
+        string flow);
+
+    /// <summary>Logs that the post-commit generation bump failed; the registry data is already committed, so the request is not failed.</summary>
+    [LoggerMessage(
+        EventId = 20504,
+        Level = LogLevel.Warning,
+        Message = "Version registry invalidation failed: {Domain}/{Flow} ({Reason})")]
+    public static partial void VersionRegistryInvalidationFailed(
+        this ILogger logger,
+        string domain,
+        string flow,
+        string reason,
+        Exception? exception);
 
     #endregion
 

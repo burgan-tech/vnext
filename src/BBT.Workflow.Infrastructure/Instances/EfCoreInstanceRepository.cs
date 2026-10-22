@@ -1320,6 +1320,30 @@ public sealed class EfCoreInstanceRepository(
             .ToListAsync(cancellationToken);
     }
 
+    /// <inheritdoc />
+    public async Task<InstanceData?> FindLatestDataByKeyAsync(string key,
+        CancellationToken cancellationToken = default)
+    {
+        var context = await GetDbContextAsync();
+
+        // No status filter on purpose: a registry transition commits with the instance Busy, and a
+        // Faulted one still carries the pointer its last committed row set.
+        var newestInstanceId = context.Instances
+            .Where(i => i.Key == key)
+            .OrderByDescending(i => i.CreatedAt)
+            .ThenByDescending(i => i.Id)
+            .Select(i => i.Id)
+            .Take(1);
+
+        return await context.InstancesData
+            .AsNoTracking()
+            .Where(d => newestInstanceId.Contains(d.InstanceId))
+            .OrderByDescending(d => d.IsLatest)
+            .ThenByDescending(d => d.EnteredAt)
+            .ThenByDescending(d => d.VersionNo)
+            .FirstOrDefaultAsync(cancellationToken);
+    }
+
     private async Task<IQueryable<Instance>> GetFilteredQueryAsync(
         string? filter,
         SchemaFilterContext? schemaContext = null,

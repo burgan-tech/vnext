@@ -82,6 +82,12 @@ executor starts the child and creates the correlation itself —
 `SubFlowType.SubProcess` and calls `AddCorrelation` on the tracked parent. That is the only sanctioned
 path to a `P` relationship.
 
+**Correlation version**: `SubFlowVersion` on the correlation holds the child's RESOLVED version, taken
+from the `flowVersion` of the start response, not the authored reference (`1.0` or `latest`). An older
+remote runtime, or a SubProcess started through the remote-invoker path, returns no version and keeps
+the authored reference. The pin is best-effort: it lands right after the start returns (a sync child's
+own resume inside the start still sees the authored value), and a failed pin only logs a warning.
+
 The council session `2026-09-22-sync-subprocess-continuation-admission` closed `VOID` on this rule:
 the sync/async divergence was a **symptom of the invalid definition**, not a runtime defect to patch
 in admission.

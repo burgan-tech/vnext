@@ -14,6 +14,7 @@ namespace BBT.Workflow.Execution.PostCommit.Handlers;
 /// </summary>
 public sealed class StartSubflowJobHandler(
     IInstanceRepository instanceRepository,
+    IInstanceCorrelationRepository correlationRepository,
     ISubflowStarter subflowStarter,
     IScriptContextFactory scriptContextFactory,
     IRuntimeInfoProvider runtimeInfoProvider,
@@ -86,6 +87,35 @@ public sealed class StartSubflowJobHandler(
 
             if (startResult.IsSuccess)
             {
+                // Pin the correlation to the version the child actually runs (an authored "1.0" or
+                // "latest" would otherwise be re-resolved on every later read). Null = an older
+                // remote runtime did not report one: the authored reference stays. The write is a
+                // single column, because a sync child has already settled this correlation in its own
+                // scope; the tracked copy is pinned too so a later graph save cannot put the
+                // authored value back.
+                var resolvedVersion = startResult.Value;
+                if (!string.IsNullOrWhiteSpace(resolvedVersion))
+                {
+                    // Best-effort: the child already started, so a failed pin must never fail the
+                    // start. The authored version stays, exactly as if none had been reported.
+                    try
+                    {
+                        correlation.PinSubFlowVersion(resolvedVersion);
+                        var pinned = await correlationRepository.TryPinSubFlowVersionAsync(
+                            correlation.Id, resolvedVersion, cancellationToken);
+                        if (!pinned)
+                        {
+                            logger.SubFlowVersionPinFailed(
+                                correlation.Id, context.InstanceId, resolvedVersion, "no row updated");
+                        }
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException)
+                    {
+                        logger.SubFlowVersionPinFailed(
+                            correlation.Id, context.InstanceId, resolvedVersion, ex.Message);
+                    }
+                }
+
                 if (scriptContext.Mutations.HasChanges)
                 {
                     scriptContext.Mutations.ApplyTo(instance);
@@ -112,7 +142,7 @@ public sealed class StartSubflowJobHandler(
                 logger.SubFlowStarted(job.TargetStateKey, context.InstanceId);
             }
 
-            return startResult;
+            return startResult.IsSuccess ? Result.Ok() : Result.Fail(startResult.Error);
         }
     }
 

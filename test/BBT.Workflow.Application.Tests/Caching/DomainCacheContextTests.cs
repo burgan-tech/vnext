@@ -32,7 +32,8 @@ public class DomainCacheContextTests
         Options.Create(new ComponentCacheOptions()),
         TimeProvider.System,
         NullLoggerFactory.Instance,
-        Substitute.For<IComponentL1Cache>());
+        Substitute.For<IComponentL1Cache>(),
+        Substitute.For<IVersionPolicySource>());
 
     [Fact]
     public void Set_ByComponentTypeKey_ShouldResolveEveryCachedComponentType()
@@ -72,5 +73,64 @@ public class DomainCacheContextTests
     public void Set_ByComponentTypeKey_ShouldIgnoreCase()
     {
         _context.Set("SYS-VIEWS").ShouldBeSameAs(_context.Views);
+    }
+
+    private static Definitions.Workflow Flow(string key)
+    {
+        var flow = Definitions.Workflow.Create();
+        flow.SetReference(new Reference(key, "core", "sys-flows", "1.0.0"));
+        return flow;
+    }
+
+    private static WorkflowTask TaskItem(string key)
+    {
+        var task = System.Text.Json.JsonSerializer.Deserialize<WorkflowTask>(
+            """{"type":"6","config":{"url":"https://example.com","method":"GET","timeoutSeconds":30,"validateSSL":false}}""",
+            new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true })!;
+        task.SetReference(new Reference(key, "core", "sys-tasks", "1.0.0"));
+        return task;
+    }
+
+    [Fact]
+    public async System.Threading.Tasks.Task DomainCacheContext_ShouldWireRegistryPolicyOnlyForWorkflows()
+    {
+        var policy = Substitute.For<IVersionPolicySource>();
+        policy.GetDefaultVersionAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<System.Threading.CancellationToken>())
+            .Returns(BBT.Aether.Results.Result<string?>.Ok("1.0.0"));
+        var workflowBackend = Substitute.For<ICacheBackend<Definitions.Workflow>>();
+        workflowBackend.LoadAllByKeyAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<System.Threading.CancellationToken>())
+            .Returns(BBT.Aether.Results.Result<System.Collections.Generic.List<Definitions.Workflow>>.Ok([Flow("some-flow")]));
+        var taskBackend = Substitute.For<ICacheBackend<WorkflowTask>>();
+        taskBackend.LoadAllByKeyAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<System.Threading.CancellationToken>())
+            .Returns(BBT.Aether.Results.Result<System.Collections.Generic.List<WorkflowTask>>.Ok([TaskItem("some-task")]));
+
+        var cache = new FakeDistributedCacheService(TimeProvider.System);
+        var optionsAccessor = Options.Create(new ComponentCacheOptions());
+        var context = new DomainCacheContext(
+            cache,
+            workflowBackend,
+            taskBackend,
+            Substitute.For<ICacheBackend<SchemaDefinition>>(),
+            Substitute.For<ICacheBackend<Function>>(),
+            Substitute.For<ICacheBackend<View>>(),
+            Substitute.For<ICacheBackend<Extension>>(),
+            Substitute.For<ICacheBackend<Mapping>>(),
+            new ComponentGenerationProvider(
+                cache,
+                new BBT.Aether.Guids.SequentialGuidGenerator(),
+                optionsAccessor,
+                TimeProvider.System,
+                NullLogger<ComponentGenerationProvider>.Instance),
+            optionsAccessor,
+            TimeProvider.System,
+            NullLoggerFactory.Instance,
+            new ComponentL1Cache(optionsAccessor, TimeProvider.System, NullLogger<ComponentL1Cache>.Instance),
+            policy);
+
+        await context.Workflows.GetByVersionAsync("core", "some-flow", null);
+        await context.Tasks.GetByVersionAsync("core", "some-task", null);
+
+        await policy.Received(1).GetDefaultVersionAsync("core", "some-flow", Arg.Any<System.Threading.CancellationToken>());
+        await policy.DidNotReceive().GetDefaultVersionAsync("core", "some-task", Arg.Any<System.Threading.CancellationToken>());
     }
 }

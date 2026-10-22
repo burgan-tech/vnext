@@ -113,6 +113,16 @@ public interface IInstanceCorrelationRepository : IRepository<InstanceCorrelatio
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Durably pins the correlation to the child's resolved flow version. A single-column write, so a
+    /// child that already completed (and settled the correlation in its own scope while the start call
+    /// was still running) is never overwritten by a stale tracked copy.
+    /// </summary>
+    Task<bool> TryPinSubFlowVersionAsync(
+        Guid correlationId,
+        string resolvedVersion,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Durably marks a completed correlation as fully settled. The terminal outcome predicate
     /// prevents a stale delivery from settling a correlation won by a different outcome.
     /// </summary>

@@ -223,6 +223,10 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
         // by generation, so publish invalidation applies to L1 exactly as it does to L2.
         services.AddSingleton<IComponentL1Cache, ComponentL1Cache>();
 
+        // Default-version pointer source for workflow resolution (read from the sys-version-registry flow).
+        services.AddSingleton<IVersionPolicySource, VersionRegistryPolicySource>();
+        services.AddSingleton<BBT.Workflow.Versions.IVersionRegistryWriteGuard, BBT.Workflow.Versions.VersionRegistryWriteGuard>();
+
         // Domain Cache Context
         services.AddSingleton<DomainCacheContext>();
         services.AddSingleton<IDomainCacheContext>(serviceProvider => serviceProvider.GetRequiredService<DomainCacheContext>());

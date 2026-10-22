@@ -180,6 +180,32 @@ public sealed class PostCommitTransitionCoordinatorTests
             .ExecuteAsync(default!, default!, default);
     }
 
+    [Fact]
+    public async Task CoordinateAsync_WhenOnlyInvalidateVersionPolicyJob_ShouldSucceedAndRunHandler()
+    {
+        var source = CreateContext();
+        var job = new InvalidateVersionPolicyJob("test-domain", "customer-onboarding");
+        source.Directives.EnqueuePostCommit(job);
+        _executor.ExecuteAsync(
+                Arg.Any<IReadOnlyList<IPostCommitJob>>(),
+                source,
+                Arg.Any<CancellationToken>())
+            .Returns(PostCommitResult.Ok());
+        var strategy = new RecordingInlineStrategy();
+        var coordinator = CreateCoordinator(strategy);
+
+        var result = await coordinator.CoordinateAsync(source, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        result.Value!.FaultRequest.ShouldBeNull();
+        result.Value.Error.ShouldBeNull();
+        result.Value.NextContext.ShouldBeNull();
+        await _executor.Received(1).ExecuteAsync(
+            Arg.Is<IReadOnlyList<IPostCommitJob>>(jobs => jobs.Count == 1 && jobs[0].Equals(job)),
+            source,
+            Arg.Any<CancellationToken>());
+    }
+
     private PostCommitTransitionCoordinator CreateCoordinator(IContinuationStrategy inlineStrategy) =>
         new(_executor, new ContinuationDispatcher([inlineStrategy]));
 

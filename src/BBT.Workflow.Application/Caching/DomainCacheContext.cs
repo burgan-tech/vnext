@@ -34,7 +34,8 @@ public class DomainCacheContext : IDomainCacheContext, IDisposable
         IOptions<ComponentCacheOptions> options,
         TimeProvider timeProvider,
         ILoggerFactory loggerFactory,
-        IComponentL1Cache l1Cache)
+        IComponentL1Cache l1Cache,
+        IVersionPolicySource versionPolicy)
     {
         Workflows = new CacheSet<Definitions.Workflow>(
             distributedCache,
@@ -43,7 +44,8 @@ public class DomainCacheContext : IDomainCacheContext, IDisposable
             options,
             timeProvider,
             loggerFactory.CreateLogger<CacheSet<Definitions.Workflow>>(),
-            l1Cache);
+            l1Cache,
+            versionPolicy);
 
         Tasks = new CacheSet<WorkflowTask>(
             distributedCache,

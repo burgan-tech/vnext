@@ -149,6 +149,20 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
     Task<List<InstanceAndDataModel>> GetActiveDataListByKeyAsync(string key,
         CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Returns the latest committed data row of the newest instance with <paramref name="key"/>, whatever
+    /// that instance's status (Active, Busy, Faulted, Passive, Completed), or null when no instance has the
+    /// key or it has no data. One row is selected in SQL — the data history is never loaded.
+    /// </summary>
+    /// <remarks>
+    /// The newest instance is the most recently created one (ties broken by id). Its row is the one marked
+    /// <see cref="InstanceData.IsLatest"/>; a legacy instance without such a row falls back to the last
+    /// entered one. Read without tracking. The caller sets the schema.
+    /// </remarks>
+    /// <param name="key">The instance key.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<InstanceData?> FindLatestDataByKeyAsync(string key, CancellationToken cancellationToken = default);
+
     Task<HateoasPagedList<Instance>> GetPagedResultsAsync(
         int page,
         int pageSize,

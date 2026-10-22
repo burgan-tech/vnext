@@ -114,9 +114,13 @@ public sealed class SubProcessTaskExecutor : TriggerTaskExecutorBase<SubProcessT
 
             var subFlowInstanceId = subFlowIdObj is Guid subGuid ? subGuid : Guid.Parse(subFlowIdObj.ToString()!);
             var correlationId = correlationIdObj is Guid corrGuid ? corrGuid : Guid.Parse(correlationIdObj.ToString()!);
+            var resolvedVersion = invocationResult.Metadata.TryGetValue(ResolvedVersionMetadataKey, out var versionObj)
+                ? ReadMetadataString(versionObj)
+                : null;
 
             // Create and persist correlation
-            return await CreateCorrelationAsync(context, task, correlationId, subFlowInstanceId, cancellationToken);
+            return await CreateCorrelationAsync(
+                context, task, correlationId, subFlowInstanceId, resolvedVersion, cancellationToken);
         }
 
         Logger.LogWarning("SubProcess task {TaskKey} result ignored correlation", task.Key);
@@ -164,11 +168,7 @@ public sealed class SubProcessTaskExecutor : TriggerTaskExecutorBase<SubProcessT
                 },
                 statusCode: 200,
                 taskType: TaskType.ToString(),
-                metadata: new Dictionary<string, object>
-                {
-                    ["SubFlowInstanceId"] = subFlowInstanceId,
-                    ["CorrelationId"] = correlationId
-                });
+                metadata: SuccessMetadata(subFlowInstanceId, correlationId, result.Value?.FlowVersion));
         }
         catch (Exception ex)
         {
@@ -385,6 +385,7 @@ public sealed class SubProcessTaskExecutor : TriggerTaskExecutorBase<SubProcessT
         SubProcessTask task,
         Guid correlationId,
         Guid subFlowInstanceId,
+        string? resolvedVersion,
         CancellationToken cancellationToken)
     {
         var result = await ResultExtensions.TryAsync(
@@ -398,7 +399,9 @@ public sealed class SubProcessTaskExecutor : TriggerTaskExecutorBase<SubProcessT
                     SubFlowType.SubProcess.Code,
                     task.TriggerDomain,
                     task.TriggerFlow,
-                    task.TriggerVersion);
+                    // The child is already started here, so its resolved version is pinned straight away;
+                    // null (an older remote runtime) keeps the authored reference.
+                    string.IsNullOrWhiteSpace(resolvedVersion) ? task.TriggerVersion : resolvedVersion);
 
                 // The whole read-modify-write of the PARENT aggregate goes under the shared
                 // per-instance gate. N fan-out items can be launching subprocesses off the same
@@ -439,6 +442,33 @@ public sealed class SubProcessTaskExecutor : TriggerTaskExecutorBase<SubProcessT
         }
 
         return result;
+    }
+
+    private const string ResolvedVersionMetadataKey = SubProcessMetadataKeys.ResolvedFlowVersion;
+
+    // A remote result's metadata is JSON-deserialized (values arrive as JsonElement); the local
+    // path hands the in-memory string straight through.
+    private static string? ReadMetadataString(object? value) => value switch
+    {
+        string text => text,
+        System.Text.Json.JsonElement { ValueKind: System.Text.Json.JsonValueKind.String } element => element.GetString(),
+        _ => null
+    };
+
+    private static Dictionary<string, object> SuccessMetadata(
+        Guid subFlowInstanceId, Guid correlationId, string? resolvedVersion)
+    {
+        var metadata = new Dictionary<string, object>
+        {
+            ["SubFlowInstanceId"] = subFlowInstanceId,
+            ["CorrelationId"] = correlationId
+        };
+        if (!string.IsNullOrWhiteSpace(resolvedVersion))
+        {
+            metadata[ResolvedVersionMetadataKey] = resolvedVersion;
+        }
+
+        return metadata;
     }
 
     private string? GetCallbackAppId() => _configuration["DAPR_APP_ID"];
