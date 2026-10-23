@@ -206,9 +206,11 @@ prefix scan / delete is required, so it stays Dapr-store-agnostic. Absent a stam
 ### Hot path: lean instance key, per-pod tier, single-flight
 
 Three runtime behaviours make a cached function cheap on a hit and safe on a miss. All are process
-settings (`FunctionCache:*`, `FunctionCacheOptions`); the function definition does not change.
+settings (`FunctionCache:*`, `FunctionCacheOptions`) and **all are off by default**: a runtime upgrade
+changes no domain's behaviour, and a domain opts in through its own deployment's configuration. The
+function definition does not change.
 
-- **Lean instance key** (`LeanInstanceKey`, default `true`). An instance-scoped function used to load the
+- **Lean instance key** (`LeanInstanceKey`, default `false`). An instance-scoped function used to load the
   full aggregate (instance + latest data + active correlations, tracked) before even computing the cache
   key, so a hit cost grew with the instance data size. The instance is now resolved header-only
   (`IInstanceRepository.FindByIdentifierLeanAsync`: no includes, no tracking); the key is computed from
@@ -224,7 +226,7 @@ settings (`FunctionCache:*`, `FunctionCacheOptions`); the function definition do
   reader gets its own copy, the same shape a state-store hit deserializes into. Invalidation story:
   bounded staleness. A generation bump, or any other state-store change, reaches a pod at most
   `LocalTtlMilliseconds` later. Keep it short (a few seconds).
-- **Single-flight** (`SingleFlight`, default `true`). Concurrent misses for the same final key (generation
+- **Single-flight** (`SingleFlight`, default `false`). Concurrent misses for the same final key (generation
   included) in one pod share one execution; the joining callers get a copy of its successful result. If
   that execution fails or its request is cancelled, a joining caller runs the function itself, so one
   caller's failure is never handed to another. This flattens the miss stampede after a TTL expiry or a

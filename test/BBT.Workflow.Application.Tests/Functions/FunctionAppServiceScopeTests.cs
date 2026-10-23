@@ -569,6 +569,7 @@ public sealed class FunctionAppServiceScopeTests : IDisposable
     [Fact]
     public async Task ByInstance_CacheHit_ResolvesKeyFromLeanInstance_WithoutFullLoad()
     {
+        _service = CreateService(new FunctionCacheOptions { LeanInstanceKey = true });
         var instance = SetupInstance();
         SetupFlow(declareFunction: true);
         SetupCachedFunction(scope: TaskScope.Instance);
@@ -587,6 +588,7 @@ public sealed class FunctionAppServiceScopeTests : IDisposable
     [Fact]
     public async Task ByInstance_CacheMiss_LoadsFullInstanceById_BeforeRunningTasks()
     {
+        _service = CreateService(new FunctionCacheOptions { LeanInstanceKey = true });
         var instance = SetupInstance();
         SetupFlow(declareFunction: true);
         SetupCachedFunction(scope: TaskScope.Instance);
@@ -604,6 +606,7 @@ public sealed class FunctionAppServiceScopeTests : IDisposable
     [Fact]
     public async Task ByInstance_KeyExpressionReadsInstanceData_LoadsFullInstanceEvenOnHit()
     {
+        _service = CreateService(new FunctionCacheOptions { LeanInstanceKey = true });
         var instance = SetupInstance();
         SetupFlow(declareFunction: true);
         SetupCachedFunction(keyExpressionCode: "\"k:\" + context.Instance.Data.region", scope: TaskScope.Instance);
@@ -619,6 +622,7 @@ public sealed class FunctionAppServiceScopeTests : IDisposable
     [Fact]
     public async Task ByInstance_UncachedFunction_StillRunsWithFullInstance()
     {
+        _service = CreateService(new FunctionCacheOptions { LeanInstanceKey = true });
         var instance = SetupInstance();
         SetupFlow(declareFunction: true);
         SetupFunction(TaskScope.Instance);
@@ -630,9 +634,9 @@ public sealed class FunctionAppServiceScopeTests : IDisposable
     }
 
     [Fact]
-    public async Task ByInstance_LeanInstanceKeyDisabled_UsesFullLoadOnly()
+    public async Task ByInstance_DefaultOptions_LoadInstanceExactlyAsBefore()
     {
-        _service = CreateService(new FunctionCacheOptions { LeanInstanceKey = false });
+        // Every FunctionCache behaviour is opt-in: with default options a runtime upgrade changes nothing.
         var instance = SetupInstance();
         SetupFlow(declareFunction: true);
         SetupCachedFunction(scope: TaskScope.Instance);
@@ -676,6 +680,7 @@ public sealed class FunctionAppServiceScopeTests : IDisposable
     [Fact]
     public async Task SingleFlight_ConcurrentMissesForOneKey_ExecuteTasksOnce()
     {
+        _service = CreateService(new FunctionCacheOptions { SingleFlight = true });
         SetupCachedFunction();
         SetupCacheMissWithWriteBack();
         var release = new TaskCompletionSource<Result>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -694,6 +699,38 @@ public sealed class FunctionAppServiceScopeTests : IDisposable
         await _taskCoordinator.Received(1).ExecuteAsync(
             Arg.Any<IEnumerable<OnExecuteTask>>(), Arg.Any<Guid?>(), Arg.Any<TaskTrigger>(),
             Arg.Any<TaskExecutionOrigin>(), Arg.Any<ScriptContext>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task SingleFlight_DisabledByDefault_ConcurrentMissesEachExecute()
+    {
+        SetupCachedFunction();
+        SetupCacheMissWithWriteBack();
+        var release = new TaskCompletionSource<Result>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _taskCoordinator
+            .ExecuteAsync(
+                Arg.Any<IEnumerable<OnExecuteTask>>(), Arg.Any<Guid?>(), Arg.Any<TaskTrigger>(),
+                Arg.Any<TaskExecutionOrigin>(), Arg.Any<ScriptContext>(), Arg.Any<CancellationToken>())
+            .Returns(_ => release.Task);
+
+        var first = _service.GetFunctionByKeyAsync(FunctionKey, TestDomain);
+        var second = _service.GetFunctionByKeyAsync(FunctionKey, TestDomain);
+        release.SetResult(Result.Ok());
+        await Task.WhenAll(first, second);
+
+        await _taskCoordinator.Received(2).ExecuteAsync(
+            Arg.Any<IEnumerable<OnExecuteTask>>(), Arg.Any<Guid?>(), Arg.Any<TaskTrigger>(),
+            Arg.Any<TaskExecutionOrigin>(), Arg.Any<ScriptContext>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public void FunctionCacheOptions_DefaultsChangeNothing()
+    {
+        var defaults = new FunctionCacheOptions();
+
+        defaults.LeanInstanceKey.ShouldBeFalse();
+        defaults.SingleFlight.ShouldBeFalse();
+        defaults.LocalTtlMilliseconds.ShouldBe(0);
     }
 
     // ─── Helpers ────────────────────────────────────────────────────────────────
