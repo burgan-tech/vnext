@@ -26,8 +26,11 @@ public enum RowSecurityOutcome
     /// <summary>The caller's role resolution failed: no rows, nothing else evaluated.</summary>
     DeniedResolutionFailed,
 
-    /// <summary>The flow definition (rule set) could not be loaded: no rows.</summary>
-    DeniedRuleSetUnavailable
+    /// <summary>
+    /// The flow definition (rule set) could not be loaded, so whether the flow declares <c>rowSecurity</c> is
+    /// unknown. The read goes on unfiltered, exactly as before row security; only the tag and a warning mark it.
+    /// </summary>
+    RuleSetUnavailable
 }
 
 /// <summary>Observability vocabulary of <see cref="RowSecurityOutcome"/> (controller ruling R-F11).</summary>
@@ -45,7 +48,7 @@ public static class RowSecurityOutcomeExtensions
         RowSecurityOutcome.NoRule => "denied-no-match",
         RowSecurityOutcome.NoContribution => "denied-no-contribution",
         RowSecurityOutcome.DeniedResolutionFailed => "denied-resolution-failed",
-        RowSecurityOutcome.DeniedRuleSetUnavailable => "denied-flow-load",
+        RowSecurityOutcome.RuleSetUnavailable => "flow-load-failed",
         _ => null
     };
 }
@@ -59,7 +62,7 @@ public static class RowSecurityOutcomeExtensions
 /// <param name="MissingParameterNames">Names of the parameters that did not resolve.</param>
 /// <param name="DroppedRules">Applied rules that contributed nothing, with the reason.</param>
 /// <param name="FlowVersion">The flow version the rule set was read from, when known.</param>
-/// <param name="LookupError">The rule-set lookup error for <see cref="RowSecurityOutcome.DeniedRuleSetUnavailable"/>.</param>
+/// <param name="LookupError">The rule-set lookup error for <see cref="RowSecurityOutcome.RuleSetUnavailable"/>.</param>
 public sealed record RowSecurityDecision(
     RowSecurityOutcome Outcome,
     GraphQLFilterNode? Predicate,
@@ -71,7 +74,7 @@ public sealed record RowSecurityDecision(
 {
     /// <summary>True when the request must return no rows, decided without running SQL.</summary>
     public bool ReturnsNoRows => Outcome is RowSecurityOutcome.NoRule or RowSecurityOutcome.NoContribution
-        or RowSecurityOutcome.DeniedResolutionFailed or RowSecurityOutcome.DeniedRuleSetUnavailable;
+        or RowSecurityOutcome.DeniedResolutionFailed;
 }
 
 /// <summary>A rule that applied to the caller but contributed nothing.</summary>

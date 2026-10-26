@@ -156,14 +156,14 @@ public sealed class RowSecurityTelemetryTests : IDisposable
     }
 
     [Fact]
-    public async Task RuleSetUnavailable_Logs20509_WithErrorCode_AndTagsDeniedFlowLoad()
+    public async Task RuleSetUnavailable_Logs20509_WithErrorCode_AndTagsFlowLoadFailed()
     {
         await _svc.DecideAsync(Req(Result<WorkflowDefinition>.Fail(Error.Conflict("Instance:100052", "boom"))));
 
         var entry = _logs.Single(20509);
         entry.Level.ShouldBe(LogLevel.Warning);
         entry.Message.ShouldContain("Instance:100052");
-        Tag("vnext.rowsecurity.outcome").ShouldBe("denied-flow-load");
+        Tag("vnext.rowsecurity.outcome").ShouldBe("flow-load-failed");
         Tag("vnext.rowsecurity.flow_version").ShouldBeNull();
     }
 

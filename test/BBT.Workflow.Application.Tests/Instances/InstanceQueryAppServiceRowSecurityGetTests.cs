@@ -38,7 +38,8 @@ namespace BBT.Workflow.Instances;
 
 /// <summary>
 /// Row security on <see cref="InstanceQueryAppService.GetInstanceAsync"/> (vnext#1107, Task 7): the rule set comes
-/// from <c>GetFlowAsync(domain, workflow, null)</c> (K2), D5 lookup errors go back as is, and an instance the caller
+/// from <c>GetFlowAsync(domain, workflow, null)</c> (K2), a lookup error reads as before (D5 as amended), in-process
+/// callers are not checked, and an instance the caller
 /// may not see answers exactly the missing-instance 404 — decided before extensions, ETag and 304.
 /// </summary>
 public sealed class InstanceQueryAppServiceRowSecurityGetTests : IDisposable
@@ -307,45 +308,43 @@ public sealed class InstanceQueryAppServiceRowSecurityGetTests : IDisposable
     [Theory]
     [InlineData(WorkflowErrorCodes.FlowDefaultVersionInvalid)]
     [InlineData(WorkflowErrorCodes.VersionRegistryUnavailable)]
-    public async Task Get_PointerInvalid_Returns100052_AsIs_ForFlowWithoutRowSecurity(string code) // D5
+    public async Task Get_PointerOrRegistryError_ServesTheInstance_AsBeforeRowSecurity(string code) // D5 amended
     {
         var instance = StubInstance();
         var err = code == WorkflowErrorCodes.FlowDefaultVersionInvalid
             ? Error.Conflict(code, "pointer invalid")
             : Error.Transient(code, "registry down");
         _cache.GetFlowAsync(Domain, "rs-flow", null, Arg.Any<CancellationToken>()).Returns(Result<WorkflowDefinition>.Fail(err));
-        // The instance's own version has no rowSecurity — the denial does not depend on it.
         _cache.GetFlowAsync(Domain, "rs-flow", LatestVersion, Arg.Any<CancellationToken>())
             .Returns(Result<WorkflowDefinition>.Ok(RowSecurityServiceTests.Flow(null, LatestVersion)));
 
         var r = await CreateService().GetInstanceAsync(Input(instance.Id.ToString()));
 
-        r.Result.Error.ShouldBe(err);
-        r.IsNotModified.ShouldBeFalse();
+        r.Result.IsSuccess.ShouldBeTrue();
         await _repo.DidNotReceiveWithAnyArgs().IsVisibleAsync(default, default!, default, default);
         await _resolver.DidNotReceiveWithAnyArgs().ResolveRoleSetAsync(default);
-        await _extensions.DidNotReceiveWithAnyArgs().ProcessExtensionsAsync(default, default!, default!, default, default);
     }
 
+    // ---- scope: endpoint only ----------------------------------------------------------------------------------
+
     /// <summary>
-    /// A rule-set-unavailable decision that carries no lookup error, over a flow lookup that succeeded, has no
-    /// error to return as is. It must still deny (fail closed with the missing-instance 404), never serve the body.
+    /// Tasks, view resolution and triggers build their own input and leave <c>ApplyRowSecurity</c> false: the
+    /// row-secured instance is served without a decision, a probe or a role resolution.
     /// </summary>
     [Fact]
-    public async Task Get_DeniedRuleSetUnavailable_WithoutAnyError_FailsClosedAs404()
+    public async Task Get_InProcessCaller_IsNotChecked_EvenForRowSecuredFlow()
     {
         var instance = StubInstance();
         StubSecuredFlow();
         var service = Substitute.For<IRowSecurityService>();
-        service.DecideAsync(Arg.Any<RowSecurityRequest>(), Arg.Any<CancellationToken>())
-            .Returns(new RowSecurityDecision(RowSecurityOutcome.DeniedRuleSetUnavailable, null, [], [], [], null));
+        var input = Input(instance.Id.ToString()); // no header: the endpoint would answer 404
+        input.ApplyRowSecurity = false;
 
-        var r = await CreateService(rowSecurityService: service).GetInstanceAsync(Input(instance.Id.ToString()));
+        var r = await CreateService(rowSecurityService: service).GetInstanceAsync(input);
 
-        r.Result.IsSuccess.ShouldBeFalse();
-        r.Result.Error!.ShouldBe(WorkflowErrors.InstanceNotFound(instance.Id.ToString()));
+        r.Result.IsSuccess.ShouldBeTrue();
+        await service.DidNotReceiveWithAnyArgs().DecideAsync(default!, default);
         await _repo.DidNotReceiveWithAnyArgs().IsVisibleAsync(default, default!, default, default);
-        await _extensions.DidNotReceiveWithAnyArgs().ProcessExtensionsAsync(default, default!, default!, default, default);
     }
 
     // ---- K2 ----------------------------------------------------------------------------------------------------
@@ -396,7 +395,8 @@ public sealed class InstanceQueryAppServiceRowSecurityGetTests : IDisposable
         {
             Domain = Domain, Workflow = "rs-flow", Page = 1, PageSize = 10,
             Headers = new Dictionary<string, string?> { ["x-branch-code"] = "BR-001" },
-            QueryParameters = new Dictionary<string, string?>()
+            QueryParameters = new Dictionary<string, string?>(),
+            ApplyRowSecurity = true
         });
         var getOld = await service.GetInstanceAsync(Input("old", branch: "BR-001"));
         var getNew = await service.GetInstanceAsync(Input("new", branch: "BR-001"));
@@ -443,7 +443,8 @@ public sealed class InstanceQueryAppServiceRowSecurityGetTests : IDisposable
             Workflow = workflow,
             Instance = identifier,
             Headers = new Dictionary<string, string?>(),
-            QueryParameters = new Dictionary<string, string?>()
+            QueryParameters = new Dictionary<string, string?>(),
+            ApplyRowSecurity = true
         };
         if (branch != null) input.Headers["x-branch-code"] = branch;
         return input;

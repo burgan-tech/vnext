@@ -47,13 +47,14 @@ public sealed class RowSecurityService(
     {
         if (!request.Flow.IsSuccess)
         {
-            // R-F9: only "no published definition" means "nothing to enforce". Every other failure — pointer
-            // invalid (Instance:100052), registry unavailable (Instance:100053), version not activated, a cache
-            // outage — denies, for every flow, and the error goes back to the caller unchanged (D5).
+            // "No published definition" means nothing to enforce. Any other failure — pointer invalid
+            // (Instance:100052), registry unavailable (Instance:100053), a cache outage — leaves it unknown whether
+            // the flow declares rowSecurity; the read goes on unfiltered, as it did before row security (D5 as
+            // amended 2026-10-27: a flow without rowSecurity is never rejected), tagged and logged as a warning.
             return request.Flow.Error.Code == WorkflowErrorCodes.CacheItemNotFound
                 ? NotConfigured
                 : new RowSecurityDecision(
-                    RowSecurityOutcome.DeniedRuleSetUnavailable, null, [], [], [], null, request.Flow.Error);
+                    RowSecurityOutcome.RuleSetUnavailable, null, [], [], [], null, request.Flow.Error);
         }
 
         var flow = request.Flow.Value;
@@ -96,7 +97,7 @@ public sealed class RowSecurityService(
                 request.Domain, request.Workflow, drop.RuleIndex, drop.Reason, string.Join(',', drop.ParameterNames));
         }
 
-        if (decision.Outcome == RowSecurityOutcome.DeniedRuleSetUnavailable)
+        if (decision.Outcome == RowSecurityOutcome.RuleSetUnavailable)
         {
             _logger.RowSecurityRuleSetUnavailable(
                 request.Domain, request.Workflow, decision.LookupError?.Code ?? "unknown");

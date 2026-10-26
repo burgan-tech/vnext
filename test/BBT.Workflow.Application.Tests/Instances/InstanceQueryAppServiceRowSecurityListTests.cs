@@ -36,8 +36,8 @@ using WorkflowDefinition = BBT.Workflow.Definitions.Workflow;
 namespace BBT.Workflow.Instances;
 
 /// <summary>
-/// Row security on <see cref="InstanceQueryAppService.GetInstanceListAsync"/> (vnext#1107, Task 6B): D5 lookup
-/// errors as is, no SQL for a no-rows decision (SG-1), the row predicate on both repository routes, and the
+/// Row security on <see cref="InstanceQueryAppService.GetInstanceListAsync"/> (vnext#1107, Task 6B): only the
+/// public endpoint (ApplyRowSecurity) is filtered, a lookup error reads as before (D5 as amended), no SQL for a no-rows decision (SG-1), the row predicate on both repository routes, and the
 /// NotConfigured path unchanged (C-6). Every "repository not called" test runs once per route (R-F3).
 /// </summary>
 public sealed class InstanceQueryAppServiceRowSecurityListTests : IDisposable
@@ -106,7 +106,7 @@ public sealed class InstanceQueryAppServiceRowSecurityListTests : IDisposable
 
     [Theory]
     [MemberData(nameof(CodesTimesRoutes))]
-    public async Task List_PointerOrRegistryError_IsReturnedAsIs_EvenWithoutRowSecurity(string code, string route) // D5
+    public async Task List_PointerOrRegistryError_ReadsUnfiltered_AsBeforeRowSecurity(string code, string route) // D5 amended
     {
         var err = code == WorkflowErrorCodes.FlowDefaultVersionInvalid
             ? Error.Conflict(code, "pointer invalid")
@@ -116,9 +116,29 @@ public sealed class InstanceQueryAppServiceRowSecurityListTests : IDisposable
 
         var result = await InvokeAsync(ListInput("rs-plain", route));
 
-        result.IsSuccess.ShouldBeFalse();
-        result.Error.ShouldBe(err);
-        AssertRepositoryNotCalled();
+        result.IsSuccess.ShouldBeTrue();
+        CallsNamed().Count().ShouldBe(1);
+        CallsNamed().SelectMany(c => c.GetArguments()).OfType<GraphQLFilterNode>().ShouldBeEmpty();
+        CallsNamed().SelectMany(c => c.GetArguments()).OfType<GraphQLFilterRequest>()
+            .ShouldAllBe(r => r.RowPredicate == null);
+        await _resolver.DidNotReceiveWithAnyArgs().ResolveRoleSetAsync(default);
+    }
+
+    // ---- scope: endpoint only ----------------------------------------------------------------------------------
+
+    [Theory]
+    [MemberData(nameof(Routes))]
+    public async Task List_InProcessCaller_IsNotFiltered_EvenForRowSecuredFlow(string route)
+    {
+        StubSecuredFlow();
+        var input = ListInput("rs-flow", route); // no header: the endpoint would return no rows
+        input.ApplyRowSecurity = false;
+
+        var result = await InvokeAsync(input);
+
+        result.IsSuccess.ShouldBeTrue();
+        CallsNamed().Count().ShouldBe(1);
+        CallsNamed().SelectMany(c => c.GetArguments()).OfType<GraphQLFilterNode>().ShouldBeEmpty();
         await _resolver.DidNotReceiveWithAnyArgs().ResolveRoleSetAsync(default);
     }
 
@@ -325,7 +345,8 @@ public sealed class InstanceQueryAppServiceRowSecurityListTests : IDisposable
             PageSize = 10,
             Filter = route == Envelope ? EnvelopeFilter : null,
             Headers = new Dictionary<string, string?>(),
-            QueryParameters = new Dictionary<string, string?>()
+            QueryParameters = new Dictionary<string, string?>(),
+            ApplyRowSecurity = true
         };
         if (route == GroupBy) input.QueryParameters["groupBy"] = GroupByQuery;
         if (branch != null) input.Headers["x-branch-code"] = branch;

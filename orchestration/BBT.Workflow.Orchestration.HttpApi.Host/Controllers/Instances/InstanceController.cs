@@ -1084,7 +1084,8 @@ public sealed class InstanceController(
             Headers = requestContext.Headers,
             QueryParameters = requestContext.QueryParameters,
             RawHeaders = rawValues.Headers,
-            RawQueryParameters = rawValues.Query
+            RawQueryParameters = rawValues.Query,
+            ApplyRowSecurity = true
         };
 
         var result = await queryAppService.GetInstanceAsync(input, cancellationToken);
@@ -1145,7 +1146,8 @@ public sealed class InstanceController(
             Headers = requestContext.Headers,
             QueryParameters = requestContext.QueryParameters,
             RawHeaders = rawValues.Headers,
-            RawQueryParameters = rawValues.Query
+            RawQueryParameters = rawValues.Query,
+            ApplyRowSecurity = true
         };
 
         var response = await queryAppService.GetInstanceListAsync(input, cancellationToken);

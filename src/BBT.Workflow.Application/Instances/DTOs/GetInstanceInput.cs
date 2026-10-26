@@ -59,6 +59,13 @@ public sealed class GetInstanceInput : IHasDomain
     [JsonIgnore]
     public IReadOnlyDictionary<string, string[]>? RawQueryParameters { get; set; }
 
+    /// <summary>
+    /// Applies the flow's row security (vnext#1107). Set only by the public instance endpoint; every in-process
+    /// caller (tasks, view resolution, triggers) leaves it false and reads unfiltered. Never serialized.
+    /// </summary>
+    [JsonIgnore]
+    public bool ApplyRowSecurity { get; set; }
+
 }
 
 /// <summary>
@@ -130,6 +137,13 @@ public sealed class GetInstanceListInput : IHasDomain
     /// </summary>
     [JsonIgnore]
     public IReadOnlyDictionary<string, string[]>? RawQueryParameters { get; set; }
+
+    /// <summary>
+    /// Applies the flow's row security (vnext#1107). Set only by the public instance endpoint; every in-process
+    /// caller (tasks, view resolution, triggers) leaves it false and reads unfiltered. Never serialized.
+    /// </summary>
+    [JsonIgnore]
+    public bool ApplyRowSecurity { get; set; }
 
     /// <summary>
     /// Gets the groupBy parameter from QueryParameters
