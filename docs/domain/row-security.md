@@ -130,11 +130,18 @@ an unescaped `%` or `_` in a caller-supplied value would change the pattern.
   `"between": ["$.context.QueryParameters.from", "$.context.QueryParameters.to"]`.
 - **Form C, explicit split:** `{ "$param": "<path>", "split": "<separator>" }`. Without `split`, a
   multi-valued source (a repeated header or query key) is taken element by element. Each element is
-  trimmed and empty elements are dropped. `split` on an operator that takes no array is RS-E11;
+  trimmed. An empty element is dropped only for a narrowing `in` (one outside an odd number of `not`);
+  for `nin`, `between`, `ne` and anything under `not`, an empty element drops the whole rule. `split` on an operator that takes no array is RS-E11;
   `between` with anything but exactly two operands is RS-E10.
 
 Values are strings on the wire; each is coerced to the field type from the flow's master schema. A value
 that cannot be coerced drops its rule.
+
+On an **instance column** (`createdBy`, `createdByBehalfOf`, `key`, `status`, `createdAt`, …; not
+`attributes.*`), an `in`, `nin` or `between` value that contains a comma drops its rule, whether it comes
+from a parameter, an identity shorthand or an authored literal. The list engine re-splits these operands
+on `,`, so one value would otherwise become several. `eq` / `ne` on an instance column and every operator
+on a data path keep the comma as part of the one value.
 
 ### Limits
 
@@ -222,9 +229,14 @@ always agree. A `set-default` therefore also switches the row rules in force.
 If that lookup fails for any reason other than "no published definition" (`CacheItemNotFound`) the
 request is **denied for every flow, opted in or not**, and the lookup error is returned as is. This
 includes `Instance:100052` (invalid pointer, 409), `Instance:100053` (registry unavailable, 503) and a
-flow version not activated. It is the one deliberate exception to "a flow without `rowSecurity` is
-unchanged", on the failure path only. No published definition is not a failure: that flow is not
-configured and is not filtered.
+flow version not activated. No published definition is not a failure: that flow is not configured and
+is not filtered.
+
+This is a **behaviour change for every flow**, released as breaking (council decision D5, accepted by the
+requester on 2026-10-23): before this release the list ignored such a lookup error and served rows, and
+GET did not look the flow up at all. GET now always performs one (cached) flow lookup, and a lookup error
+fails both the list and GET of any flow. Successful lookups on a flow without `rowSecurity` leave its
+answers unchanged.
 
 ## Surfaces and behaviour
 
@@ -369,10 +381,17 @@ deployment decision.
 
 ## Rollback
 
-Removing `rowSecurity` from the flow restores today's behaviour (it **widens** visibility). A runtime
-binary rolled back to a version below the one that introduced row security **silently serves every row**
-of opted-in flows (the unknown member is ignored). Before such a rollback, remove `rowSecurity` or close
-the flow with one rule for a role nobody holds, for example `{ "roles": ["row-security-closed"] }`.
+Removing `rowSecurity` from the flow restores today's behaviour (it **widens** visibility).
+
+A runtime older than the release that introduced row security **ignores `rowSecurity` entirely** and
+serves every row of every flow, whatever the definition holds. Nothing in the flow definition protects
+anything on such a runtime: removing `rowSecurity` changes nothing, and "closing" the flow with a rule for
+a role nobody holds changes nothing either, because the old runtime never reads the rules. The only
+protections are:
+
+- do not roll the runtime back below this release while any flow relies on `rowSecurity`; or
+- for as long as an older runtime serves those flows, block or authorize the instance list and the single
+  GET of those flows at the gateway.
 
 ## Related
 
