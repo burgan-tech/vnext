@@ -18,8 +18,11 @@ Phase 1 filters **two surfaces only**:
   aggregations: counts and totals cover visible rows only), and
 - the **single instance GET** (`GET {domain}/workflows/{workflow}/instances/{instance}`),
 
-and, because they go through those two, the `GetInstances` / `GetInstance` trigger tasks (same-domain and
-cross-domain).
+Only a request that arrives at one of these two **public endpoints** is filtered. Every in-process read is
+exempt and sees all rows: same-domain (and co-hosted) `GetInstances` / `GetInstance` / `GetInstanceData`
+trigger tasks, view content resolution, direct-trigger key resolution and transitions. A task that reads
+**another** domain calls that domain's public endpoint over HTTP, so the partner filters it with the
+credential and headers the task presents (see [Cross-domain tasks](#cross-domain-tasks)).
 
 The GET `404` for an excluded instance is a **consistency check with the list, not a confidentiality
 boundary**: row security is not an access boundary for an instance whose id the caller knows.
@@ -32,13 +35,15 @@ instance there even when the list and the GET hide it:
 - `functions/state`, `functions/data`, `functions/view`, `functions/schema`, `functions/master`
 - transition and data history endpoints
 - `internal/*` endpoints
-- the `GetInstanceData` task, `context.Related` in scripts, the human-task list, event correlation
-  selectors
+- same-domain trigger tasks (`GetInstances`, `GetInstance`, `GetInstanceData`), view content resolution,
+  transitions (including a direct trigger by key), `context.Related` in scripts, the human-task list,
+  event correlation selectors
 
 Consequences to design around:
 
 - **Existence oracle.** For an excluded instance, `GET` answers `404` while `functions/data` answers
-  `200`. A caller can therefore confirm an id exists and read its data.
+  `200`, and a transition on it succeeds and returns the instance. A caller can therefore confirm an id
+  exists and read its data.
 - `authorize?queryRoles=true` may admit a caller whom the GET hides: it decides at the SubFlow leaf and
   has no row term.
 - **SubFlow children do not inherit the parent's rules.** A child instance is read through its own flow's
@@ -131,7 +136,7 @@ an unescaped `%` or `_` in a caller-supplied value would change the pattern.
 - **Form C, explicit split:** `{ "$param": "<path>", "split": "<separator>" }`. Without `split`, a
   multi-valued source (a repeated header or query key) is taken element by element. Each element is
   trimmed. An empty element is dropped only for a narrowing `in` (one outside an odd number of `not`);
-  for `nin`, `between`, `ne` and anything under `not`, an empty element drops the whole rule. `split` on an operator that takes no array is RS-E11;
+  for `nin`, `between` and anything under `not`, an empty element drops the whole rule. `split` on an operator that takes no array is RS-E11;
   `between` with anything but exactly two operands is RS-E10.
 
 Values are strings on the wire; each is coerced to the field type from the flow's master schema. A value
@@ -226,17 +231,17 @@ always agree. A `set-default` therefore also switches the row rules in force.
 
 ### Lookup failure
 
-If that lookup fails for any reason other than "no published definition" (`CacheItemNotFound`) the
-request is **denied for every flow, opted in or not**, and the lookup error is returned as is. This
-includes `Instance:100052` (invalid pointer, 409), `Instance:100053` (registry unavailable, 503) and a
-flow version not activated. No published definition is not a failure: that flow is not configured and
-is not filtered.
+`rowSecurity` is optional, so a lookup failure never rejects a read. If the lookup fails for any reason
+other than "no published definition" (`CacheItemNotFound`) — for example `Instance:100052` (invalid
+pointer), `Instance:100053` (registry unavailable) or a flow version not activated — the runtime cannot
+tell whether the flow declares `rowSecurity`, and the read goes on **unfiltered, exactly as before row
+security**. The span carries `vnext.rowsecurity.outcome = flow-load-failed` and warning 20509 is logged
+with the error code, so the window is visible. No published definition is not a failure: that flow is
+not configured, is not filtered and carries no tag.
 
-This is a **behaviour change for every flow**, released as breaking (council decision D5, accepted by the
-requester on 2026-10-23): before this release the list ignored such a lookup error and served rows, and
-GET did not look the flow up at all. GET now always performs one (cached) flow lookup, and a lookup error
-fails both the list and GET of any flow. Successful lookups on a flow without `rowSecurity` leave its
-answers unchanged.
+Accepted cost (D5 as amended by the requester on 2026-10-27, replacing the earlier deny): while the
+lookup fails, a flow that does declare `rowSecurity` is read unfiltered. Alert on 20509. GET now performs
+one cached flow lookup; on success for a flow without `rowSecurity` the answer is unchanged.
 
 ## Surfaces and behaviour
 
@@ -245,14 +250,11 @@ answers unchanged.
   second evaluator.
 - **Single GET.** Probed with the same list compiler as `id = <instance> AND <row predicate>`, before
   extensions and before the ETag comparison (no `304` for an excluded row). An excluded or no-rows instance and a missing
-  one answer the same `404`; only a rule-set lookup failure answers its own error. The probe runs against the instance's latest data, also when `?version=` asks
+  one answer the same `404`. The probe runs against the instance's latest data, also when `?version=` asks
   for an older data version.
-- **Runtime-internal lookups** (direct-trigger key resolution, view content resolution) are not caller
-  reads and are not filtered; no DTO carries a bypass flag.
-- **Trigger tasks** evaluate with the header set they present, which carries only `sub`, `act_sub`,
-  `position`, `client_id` and `role`. A rule parameter header is **not** forwarded automatically: the
-  domain team sets it in the task's input mapping, otherwise the parametrised rule contributes nothing.
-  Query parameters have no task counterpart.
+- **In-process reads are exempt.** Row security runs only when the public endpoint asks for it
+  (`ApplyRowSecurity`, set by the instance controller, never serialized). Same-domain trigger tasks, view
+  content resolution, direct-trigger key resolution and transitions read unfiltered.
 
 ## Gateway precondition
 
@@ -270,8 +272,12 @@ on it restricts nothing against that caller and is **never a boundary**. Publish
 
 ## Cross-domain tasks
 
-A task mapping may set `role`, `sub`, `act_sub` or a rule header, and the target domain trusts the header
-set a calling runtime presents. Reading another domain through a trigger task is therefore as strong as
+A trigger task that reads another domain lands on that domain's public list or GET endpoint and is filtered
+there with the header set it presents, which carries only `sub`, `act_sub`, `position`, `client_id` and
+`role`. A rule parameter header is **not** forwarded automatically: the domain team sets it in the task's
+input mapping, otherwise the parametrised rule contributes nothing. Query parameters have no task
+counterpart. A task mapping may set `role`, `sub`, `act_sub` or a rule header, and the target domain
+trusts the header set a calling runtime presents. Reading another domain through a trigger task is therefore as strong as
 the mapping's author. Domain teams own that mapping.
 
 ## Publish validation
@@ -326,7 +332,7 @@ parameter, header or identity value and never exception text.
 | 20506 | Information | single GET found the instance outside the predicate (answered `404`) |
 | 20507 | Warning | an applicable rule contributed nothing (reason, parameter names) |
 | 20508 | Warning | role resolution failed, request returns no rows |
-| 20509 | Warning | rule set could not be loaded, request denied |
+| 20509 | Warning | rule set could not be loaded, read not filtered |
 | 20510 | Warning | publish: schema checks skipped (RS-W0) |
 | 20511 | Information | publish: SubFlow children do not inherit (RS-W7) |
 
@@ -339,7 +345,7 @@ Span tags on the read span (a flow without `rowSecurity` carries **no** row-secu
 | Tag | Value |
 |---|---|
 | `vnext.rowsecurity.applied` | the read was evaluated |
-| `vnext.rowsecurity.outcome` | `unrestricted`, `filtered`, `excluded`, `denied-no-match`, `denied-no-contribution`, `denied-resolution-failed` or `denied-flow-load` |
+| `vnext.rowsecurity.outcome` | `unrestricted`, `filtered`, `excluded`, `denied-no-match`, `denied-no-contribution`, `denied-resolution-failed` or `flow-load-failed` (lookup failed, read unfiltered) |
 | `vnext.rowsecurity.rules` | matched rule indexes, comma separated |
 | `vnext.rowsecurity.missing_params` | names of the parameters that did not resolve |
 | `vnext.rowsecurity.flow_version` | the resolved rule-set version |
