@@ -141,8 +141,9 @@ public static class RowSecurityPlanner
         if (values.Count != 1)
             return null;
 
+        // A NUL cannot reach PostgreSQL text (22P05 ⇒ 500): such an identity does not resolve (fail closed).
         var value = values[0]?.Trim();
-        return string.IsNullOrEmpty(value) ? null : value;
+        return string.IsNullOrEmpty(value) || value.Contains('\0') ? null : value;
     }
 
     /// <summary>

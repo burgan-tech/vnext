@@ -206,6 +206,37 @@ public class RowSecurityPlannerTableTests
         decision.DroppedRules.ShouldHaveSingleItem().Reason.ShouldBe(RowRuleDropReasons.Missing);
     }
 
+    [Fact]
+    public void IdentityCarryingNul_AddsNoIdentityTerm()
+    {
+        var actorRule = Plan(B, new CallerRoleResolution([], CallerRoleOutcome.Empty), "a\0b", null);
+        actorRule.Outcome.ShouldBe(RowSecurityOutcome.NoRule);
+        actorRule.Predicate.ShouldBeNull();
+        JsonSerializer.Serialize(actorRule).ShouldNotContain("\\u0000");
+
+        var behalfOf = Plan(Definition("""{"roles":["$InstanceBehalfOfStarter"]}"""),
+            new CallerRoleResolution([], CallerRoleOutcome.Empty), "alice", null, userName: "b\0b");
+        behalfOf.Outcome.ShouldBe(RowSecurityOutcome.NoRule);
+        behalfOf.Predicate.ShouldBeNull();
+
+        // With other terms present the NUL identity is simply absent from the predicate.
+        var mixed = Plan(B, new CallerRoleResolution(["branch-staff"], CallerRoleOutcome.Resolved), "a\0b", "BR-001");
+        Render(mixed.Predicate!).ShouldBe("branchCode eq BR-001");
+    }
+
+    [Fact]
+    public void ShorthandCarryingNul_InStaticRule_DropsRule()
+    {
+        var definition = Definition("""{"roles":["r"],"filter":{"createdBy":{"eq":"$InstanceStarter"}}}""");
+
+        var decision = Plan(definition, new CallerRoleResolution(["r"], CallerRoleOutcome.Resolved), "a\0b", null);
+
+        decision.Outcome.ShouldBe(RowSecurityOutcome.NoContribution);
+        decision.Predicate.ShouldBeNull();
+        decision.DroppedRules.ShouldHaveSingleItem().ParameterNames.ShouldBe(["ActorUserName"]);
+        JsonSerializer.Serialize(decision).ShouldNotContain("\\u0000");
+    }
+
     private static RowSecurityDecision PlanSingle(string filter, string[]? headerValues)
     {
         var headers = new Dictionary<string, string[]>();
