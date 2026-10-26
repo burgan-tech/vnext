@@ -340,15 +340,18 @@ public static class GraphQLJsonFilterService
     }
 
     private static string BuildUnifiedPredicate(GraphQLFilterNode node, string column,
-        List<NpgsqlParameter> parameters, ref int index, SchemaFilterContext? context, string? schema = null, bool useLatestJoin = false)
+        List<NpgsqlParameter> parameters, ref int index, SchemaFilterContext? context, string? schema = null, bool useLatestJoin = false,
+        bool policyExempt = false)
     {
+        // Inherited from the first PolicyExempt ancestor: a planner-emitted subtree stays exempt below it.
+        policyExempt |= node.PolicyExempt;
         if (node.NodeType == FilterNodeType.Not)
-            return $"NOT ({BuildUnifiedPredicate(node.Not!, column, parameters, ref index, context, schema, useLatestJoin)})";
+            return $"NOT ({BuildUnifiedPredicate(node.Not!, column, parameters, ref index, context, schema, useLatestJoin, policyExempt)})";
         var parts = new List<string>();
         if (node.NodeType is FilterNodeType.And or FilterNodeType.Or)
         {
             foreach (var child in (node.And ?? node.Or)!)
-                parts.Add(BuildUnifiedPredicate(child, column, parameters, ref index, context, schema, useLatestJoin));
+                parts.Add(BuildUnifiedPredicate(child, column, parameters, ref index, context, schema, useLatestJoin, policyExempt));
             return "(" + string.Join(node.NodeType == FilterNodeType.Or ? " OR " : " AND ", parts) + ")";
         }
         if (node.Attributes == null) throw new FilterCompilationException("Empty logical filter node.");
@@ -358,7 +361,7 @@ public static class GraphQLJsonFilterService
                 parts.AddRange(BuildInstanceFieldConditions(field, condition, parameters, ref index, null));
             else
             {
-                var predicate = string.Join(" AND ", BuildFieldConditions(field, condition, column, parameters, ref index, context));
+                var predicate = string.Join(" AND ", BuildFieldConditions(field, condition, column, parameters, ref index, context, policyExempt));
                 if (string.IsNullOrEmpty(predicate)) throw new FilterCompilationException("Empty attribute predicate.");
                 parts.Add(useLatestJoin ? $"(CASE WHEN _latest.\"Id\" IS NULL THEN NULL ELSE ({predicate}) END)" :
                     schema == null ? $"({predicate})" :
@@ -379,14 +382,17 @@ public static class GraphQLJsonFilterService
         List<string> instanceClauses,
         ref int parameterIndex,
         ILogger? logger = null,
-        SchemaFilterContext? schemaContext = null)
+        SchemaFilterContext? schemaContext = null,
+        bool policyExempt = false)
     {
+        // Inherited from the first PolicyExempt ancestor: a planner-emitted subtree stays exempt below it.
+        policyExempt |= node.PolicyExempt;
         switch (node.NodeType)
         {
             case FilterNodeType.And:
                 foreach (var childNode in node.And!)
                 {
-                    BuildSeparatedClauses(childNode, jsonColumnName, parameters, jsonClauses, instanceClauses, ref parameterIndex, logger, schemaContext);
+                    BuildSeparatedClauses(childNode, jsonColumnName, parameters, jsonClauses, instanceClauses, ref parameterIndex, logger, schemaContext, policyExempt);
                 }
                 break;
 
@@ -395,7 +401,7 @@ public static class GraphQLJsonFilterService
                 var orInstanceClauses = new List<string>();
                 foreach (var childNode in node.Or!)
                 {
-                    BuildSeparatedClauses(childNode, jsonColumnName, parameters, orJsonClauses, orInstanceClauses, ref parameterIndex, logger, schemaContext);
+                    BuildSeparatedClauses(childNode, jsonColumnName, parameters, orJsonClauses, orInstanceClauses, ref parameterIndex, logger, schemaContext, policyExempt);
                 }
                 if (orJsonClauses.Count > 0)
                     jsonClauses.Add($"({string.Join(" OR ", orJsonClauses)})");
@@ -406,7 +412,7 @@ public static class GraphQLJsonFilterService
             case FilterNodeType.Not:
                 var notJsonClauses = new List<string>();
                 var notInstanceClauses = new List<string>();
-                BuildSeparatedClauses(node.Not!, jsonColumnName, parameters, notJsonClauses, notInstanceClauses, ref parameterIndex, logger, schemaContext);
+                BuildSeparatedClauses(node.Not!, jsonColumnName, parameters, notJsonClauses, notInstanceClauses, ref parameterIndex, logger, schemaContext, policyExempt);
                 if (notJsonClauses.Count > 0)
                     jsonClauses.Add($"NOT ({string.Join(" AND ", notJsonClauses)})");
                 if (notInstanceClauses.Count > 0)
@@ -415,7 +421,7 @@ public static class GraphQLJsonFilterService
 
             case FilterNodeType.Condition:
                 var (jsonConditions, instanceConditions) = BuildSeparatedConditionClauses(
-                    node.Attributes!, jsonColumnName, parameters, ref parameterIndex, logger, schemaContext);
+                    node.Attributes!, jsonColumnName, parameters, ref parameterIndex, logger, schemaContext, policyExempt);
                 jsonClauses.AddRange(jsonConditions);
                 instanceClauses.AddRange(instanceConditions);
                 break;
@@ -532,7 +538,8 @@ public static class GraphQLJsonFilterService
         List<NpgsqlParameter> parameters,
         ref int parameterIndex,
         ILogger? logger = null,
-        SchemaFilterContext? schemaContext = null)
+        SchemaFilterContext? schemaContext = null,
+        bool policyExempt = false)
     {
         var jsonConditions = new List<string>();
         var instanceConditions = new List<string>();
@@ -546,7 +553,7 @@ public static class GraphQLJsonFilterService
             }
             else
             {
-                var conditions = BuildFieldConditions(fieldName, fieldCondition, jsonColumnName, parameters, ref parameterIndex, schemaContext);
+                var conditions = BuildFieldConditions(fieldName, fieldCondition, jsonColumnName, parameters, ref parameterIndex, schemaContext, policyExempt);
                 jsonConditions.AddRange(conditions);
             }
         }
@@ -599,12 +606,15 @@ public static class GraphQLJsonFilterService
         string jsonColumnName,
         List<NpgsqlParameter> parameters,
         ref int parameterIndex,
-        SchemaFilterContext? schemaContext = null)
+        SchemaFilterContext? schemaContext = null,
+        bool policyExempt = false)
     {
         var sanitizedField = SanitizeFieldName(fieldName);
         var conditions = new List<string>();
 
-        if (schemaContext != null && condition.GetOperators().Any() && !schemaContext.IsFieldFilterable(sanitizedField))
+        // A policy-exempt (planner-emitted) leaf skips the filterability / operator whitelist only; the
+        // encrypted-path refusal and type casts are applied per operator by AttributeConditionBuilder.
+        if (!policyExempt && schemaContext != null && condition.GetOperators().Any() && !schemaContext.IsFieldFilterable(sanitizedField))
             throw new SchemaFilterValidationException($"Field '{sanitizedField}' is not filterable.");
 
         var operatorList = condition.GetOperators().ToList();
@@ -620,11 +630,11 @@ public static class GraphQLJsonFilterService
 
         foreach (var (op, value) in operatorList)
         {
-            if (schemaContext != null && !schemaContext.IsOperatorAllowed(sanitizedField, op))
+            if (!policyExempt && schemaContext != null && !schemaContext.IsOperatorAllowed(sanitizedField, op))
                 throw new SchemaFilterValidationException($"Operator '{op}' is not allowed for field '{sanitizedField}'.");
 
             var conditionSql = BuildOperatorCondition(
-                sanitizedField, op, value, jsonColumnName, parameters, ref parameterIndex, schemaContext);
+                sanitizedField, op, value, jsonColumnName, parameters, ref parameterIndex, schemaContext, policyExempt);
             
             if (!string.IsNullOrEmpty(conditionSql))
             {
@@ -637,7 +647,7 @@ public static class GraphQLJsonFilterService
             foreach (var (nestedField, nestedValue) in condition.NestedConditions)
             {
                 var nestedConditions = ProcessNestedCondition(
-                    $"{sanitizedField}.{nestedField}", nestedValue, jsonColumnName, parameters, ref parameterIndex, schemaContext);
+                    $"{sanitizedField}.{nestedField}", nestedValue, jsonColumnName, parameters, ref parameterIndex, schemaContext, policyExempt);
                 conditions.AddRange(nestedConditions);
             }
         }
@@ -651,7 +661,8 @@ public static class GraphQLJsonFilterService
         string jsonColumnName,
         List<NpgsqlParameter> parameters,
         ref int parameterIndex,
-        SchemaFilterContext? schemaContext = null)
+        SchemaFilterContext? schemaContext = null,
+        bool policyExempt = false)
     {
         var conditions = new List<string>();
 
@@ -678,7 +689,7 @@ public static class GraphQLJsonFilterService
                             : ConvertJsonElement(prop.Value);
                         var conditionSql = BuildOperatorCondition(
                             fieldPath, opName, opValue, 
-                            jsonColumnName, parameters, ref parameterIndex, schemaContext);
+                            jsonColumnName, parameters, ref parameterIndex, schemaContext, policyExempt);
                         
                         if (!string.IsNullOrEmpty(conditionSql))
                         {
@@ -689,7 +700,7 @@ public static class GraphQLJsonFilterService
                     {
                         var nestedConditions = ProcessNestedCondition(
                             $"{fieldPath}.{prop.Name}", prop.Value, 
-                            jsonColumnName, parameters, ref parameterIndex, schemaContext);
+                            jsonColumnName, parameters, ref parameterIndex, schemaContext, policyExempt);
                         conditions.AddRange(nestedConditions);
                     }
                 }
@@ -729,8 +740,9 @@ public static class GraphQLJsonFilterService
     }
 
     private static string BuildOperatorCondition(string field, string op, object? value,
-        string column, List<NpgsqlParameter> parameters, ref int index, SchemaFilterContext? context = null)
-        => AttributeConditionBuilder.BuildOperatorCondition(field, op, value, column, parameters, ref index, context);
+        string column, List<NpgsqlParameter> parameters, ref int index, SchemaFilterContext? context = null,
+        bool policyExempt = false)
+        => AttributeConditionBuilder.BuildOperatorCondition(field, op, value, column, parameters, ref index, context, policyExempt);
 
     private static string SanitizeFieldName(string field) => AttributeConditionBuilder.SanitizeFieldName(field);
     private static string ConvertOperatorValueToString(object? value) => AttributeConditionBuilder.ConvertOperatorValueToString(value);

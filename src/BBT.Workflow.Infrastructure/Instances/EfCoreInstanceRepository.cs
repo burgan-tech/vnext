@@ -1400,6 +1400,36 @@ public sealed class EfCoreInstanceRepository(
         SchemaFilterContext? schemaContext = null,
         CancellationToken cancellationToken = default)
     {
+        var request = BuildRequestFromString(filter, groupBy, aggregations, sort, schemaContext);
+        return await GetPagedResultsWithGroupsAsync(page, pageSize, request, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async Task<(HateoasPagedList<Instance> PagedList, List<GroupSummary>? Groups)> GetPagedResultsWithGroupsAsync(
+        int page,
+        int pageSize,
+        string? filter,
+        string? groupBy,
+        string? aggregations,
+        string? sort,
+        SchemaFilterContext? schemaContext,
+        Definitions.GraphQL.GraphQLFilterNode rowPredicate,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(rowPredicate);
+        var request = BuildRequestFromString(filter, groupBy, aggregations, sort, schemaContext);
+        request.RowPredicate = rowPredicate;
+        return await GetPagedResultsWithGroupsAsync(page, pageSize, request, cancellationToken);
+    }
+
+    /// <summary>
+    /// Parses the string list route (filter as plain node, envelope or legacy form; groupBy; aggregations; sort)
+    /// into one request. Shared by both string overloads so the row-security route parses exactly like the
+    /// unrestricted one.
+    /// </summary>
+    private static Definitions.GraphQL.GraphQLFilterRequest BuildRequestFromString(
+        string? filter, string? groupBy, string? aggregations, string? sort, SchemaFilterContext? schemaContext)
+    {
         var request = GraphQLFilterParser.ParseRequest(null, groupBy, aggregations);
         if (!string.IsNullOrWhiteSpace(filter))
         {
@@ -1414,8 +1444,48 @@ public sealed class EfCoreInstanceRepository(
         }
         request.OrderBy = GraphQLFilterParser.ParseOrderBy(sort);
         request.SchemaContext = schemaContext;
-        return await GetPagedResultsWithGroupsAsync(page, pageSize, request, cancellationToken);
+        return request;
     }
+
+    /// <summary>
+    /// The single row-security merge point (vnext#1107): returns a request whose filter is the caller's filter
+    /// AND <see cref="Definitions.GraphQL.GraphQLFilterRequest.RowPredicate"/>, or the request itself when it
+    /// carries no row predicate (byte-identical SQL). The caller's request object is not mutated.
+    /// </summary>
+    /// <exception cref="FilterCompilationException">
+    /// The row predicate contains an empty node or an operator-less condition — the engine reads those as
+    /// "no restriction", so they are refused before any SQL is built.
+    /// </exception>
+    private static Definitions.GraphQL.GraphQLFilterRequest ApplyRowPredicate(Definitions.GraphQL.GraphQLFilterRequest request)
+    {
+        var rowPredicate = request.RowPredicate;
+        if (rowPredicate == null)
+            return request;
+        if (ContainsEmptyClause(rowPredicate))
+            throw new FilterCompilationException("row predicate contains an empty clause");
+
+        var callerFilter = request.Filter;
+        return new Definitions.GraphQL.GraphQLFilterRequest
+        {
+            Filter = callerFilter is null || callerFilter.NodeType == Definitions.GraphQL.FilterNodeType.Empty
+                ? rowPredicate
+                : new Definitions.GraphQL.GraphQLFilterNode { And = [callerFilter, rowPredicate] },
+            GroupBy = request.GroupBy,
+            Aggregations = request.Aggregations,
+            OrderBy = request.OrderBy,
+            SchemaContext = request.SchemaContext
+        };
+    }
+
+    private static bool ContainsEmptyClause(Definitions.GraphQL.GraphQLFilterNode node) => node.NodeType switch
+    {
+        Definitions.GraphQL.FilterNodeType.And => node.And!.Exists(ContainsEmptyClause),
+        Definitions.GraphQL.FilterNodeType.Or => node.Or!.Exists(ContainsEmptyClause),
+        Definitions.GraphQL.FilterNodeType.Not => ContainsEmptyClause(node.Not!),
+        Definitions.GraphQL.FilterNodeType.Condition => node.Attributes!.Values.Any(condition =>
+            condition is null || (!condition.GetOperators().Any() && condition.NestedConditions is not { Count: > 0 })),
+        _ => true
+    };
 
     /// <summary>
     /// Gets paged results with optional groups using parsed GraphQL filter request (optimized - avoids parse-serialize cycle)
@@ -1431,7 +1501,7 @@ public sealed class EfCoreInstanceRepository(
 
         var schema = currentSchema.Name ?? DefaultSchemaName;
 
-        request ??= new Definitions.GraphQL.GraphQLFilterRequest();
+        request = ApplyRowPredicate(request ?? new Definitions.GraphQL.GraphQLFilterRequest());
         var readOptions = queryOptions?.CurrentValue ?? new InstanceQueryOptions();
         if (readOptions.IdentityPaging && !readOptions.DisabledSchemas.Contains(schema, StringComparer.Ordinal) &&
             request.GroupBy?.GetFields().Count is not > 0 && request.Aggregations?.HasAggregations != true)

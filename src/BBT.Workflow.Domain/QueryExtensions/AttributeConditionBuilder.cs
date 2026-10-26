@@ -19,11 +19,45 @@ public static class AttributeConditionBuilder
         List<NpgsqlParameter> parameters,
         ref int parameterIndex,
         SchemaFilterContext? schemaContext = null)
+        => BuildOperatorCondition(field, operatorType, value, jsonColumnName, parameters, ref parameterIndex,
+            schemaContext, policyExempt: false);
+
+    /// <summary>
+    /// Builds one parameterized attribute predicate.
+    /// </summary>
+    /// <param name="field">Data attribute path (dot-separated).</param>
+    /// <param name="operatorType">Filter operator token.</param>
+    /// <param name="value">Operator operand.</param>
+    /// <param name="jsonColumnName">JSON column the path is read from.</param>
+    /// <param name="parameters">Parameter list the operand is appended to.</param>
+    /// <param name="parameterIndex">Next positional parameter index.</param>
+    /// <param name="schemaContext">Schema metadata (filterability, operator whitelist, encrypted paths, types).</param>
+    /// <param name="policyExempt">
+    /// True for a runtime-planned row-security subtree (vnext#1107): the schema filterability and operator
+    /// whitelist are skipped because the predicate is policy, not caller input. The encrypted-path refusal and
+    /// the schema type casts still apply.
+    /// </param>
+    /// <returns>The SQL predicate.</returns>
+    public static string BuildOperatorCondition(
+        string field,
+        string operatorType,
+        object? value,
+        string jsonColumnName,
+        List<NpgsqlParameter> parameters,
+        ref int parameterIndex,
+        SchemaFilterContext? schemaContext,
+        bool policyExempt)
     {
         SanitizeFieldName(field);
         InputValidator.ValidateSqlJsonColumnIdentifier(jsonColumnName);
         InputValidator.ValidateOperatorValue(operatorType, value);
-        if (schemaContext != null && (!schemaContext.IsFieldFilterable(field) ||
+        if (policyExempt)
+        {
+            if (schemaContext?.IsEncryptedOrAncestor(field) == true)
+                throw new BBT.Workflow.ExceptionHandling.SchemaFilterValidationException(
+                    $"Field '{field}' is not filterable.");
+        }
+        else if (schemaContext != null && (!schemaContext.IsFieldFilterable(field) ||
             !schemaContext.IsOperatorAllowed(field, operatorType)))
             throw new BBT.Workflow.ExceptionHandling.SchemaFilterValidationException(
                 $"Operator '{operatorType}' is not allowed for field '{field}'.");
