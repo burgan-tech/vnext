@@ -1,6 +1,8 @@
+using System.Globalization;
 using System.Text.Json;
 using BBT.Workflow.Definitions.GraphQL;
 using BBT.Workflow.Definitions.RowSecurity;
+using BBT.Workflow.Definitions.Schemas;
 
 namespace BBT.Workflow.Authorization.RowSecurity;
 
@@ -22,6 +24,11 @@ namespace BBT.Workflow.Authorization.RowSecurity;
 /// (no SQL); one term ⇒ that node; more ⇒ an <c>or</c>. Every emitted node is
 /// <see cref="GraphQLFilterNode.PolicyExempt"/>; an empty node or an operator-less condition is never emitted.</item>
 /// </list>
+/// Parameter failures never widen (spec §4): any failure inside a rule drops the WHOLE rule. Values are trimmed,
+/// blank = missing; only <c>in</c> outside an odd number of <c>not</c> narrows (unresolved elements are left out,
+/// none left drops); <c>nin</c>, <c>ne</c>, <c>between</c> and every operator under <c>not</c> drop on any unresolved
+/// element; a scalar fed several raw values is ambiguous; <see cref="RowSecurityOptions"/> caps, master-schema type
+/// coercion and the protected-path backstop (<see cref="RowSecurityProtectedPaths"/>) each drop the rule.
 /// </remarks>
 public static class RowSecurityPlanner
 {
@@ -140,7 +147,7 @@ public static class RowSecurityPlanner
 
     /// <summary>
     /// Materializes a rule's filter; on any failure records a drop and returns null (the whole rule
-    /// contributes nothing).
+    /// contributes nothing, never a sub-tree).
     /// </summary>
     private static GraphQLFilterNode? TryMaterializeFilter(RowSecurityRule rule, int index, RowSecurityPlanInput input,
         List<RowRuleDrop> drops)
@@ -152,14 +159,70 @@ public static class RowSecurityPlanner
             return null;
         }
 
+        var root = parsed.Value!.Root;
+
+        // Runtime backstop (R-F6(c), R-F14): publish may have skipped the schema-aware check (RS-W0), so a rule
+        // that touches a refused protected path is dropped here whatever its parameters resolve to.
+        var protectedFailure = new MaterializeFailure();
+        if (TouchesRefusedPath(root, input.Exposure, protectedFailure))
+        {
+            drops.Add(new RowRuleDrop(index, RowRuleDropReasons.ProtectedPath, protectedFailure.ParameterNames));
+            return null;
+        }
+
         var failure = new MaterializeFailure();
-        var node = TryMaterialize(parsed.Value!.Root, input, failure);
+        var node = TryMaterialize(root, input, failure, negated: false);
         if (node is not null)
             return node;
 
         drops.Add(new RowRuleDrop(index, failure.Reason ?? RowRuleDropReasons.Invalid, failure.ParameterNames));
         return null;
     }
+
+    private static bool TouchesRefusedPath(RowTemplateNode node, SchemaExposureMetadata exposure, MaterializeFailure failure)
+    {
+        switch (node)
+        {
+            case RowTemplateAnd and:
+                return and.Children.Any(c => TouchesRefusedPath(c, exposure, failure));
+            case RowTemplateOr or:
+                return or.Children.Any(c => TouchesRefusedPath(c, exposure, failure));
+            case RowTemplateNot not:
+                return TouchesRefusedPath(not.Child, exposure, failure);
+            case RowTemplateLeaf leaf when !leaf.IsInstanceColumn:
+            {
+                // One verdict per value source (null = literal); the strongest wins, as at publish.
+                var paths = ParameterPaths(leaf.Value).ToList();
+                var sources = paths.Select(p => (RowParameterSource?)p.Source).ToList();
+                if (sources.Count == 0 || HasLiteral(leaf.Value))
+                    sources.Add(null);
+                var protection = sources.Max(s => RowSecurityProtectedPaths.Classify(leaf.Field, exposure, s));
+                if (!RowSecurityProtectedPaths.IsRefused(protection))
+                    return false;
+
+                foreach (var path in paths)
+                    failure.Fail<object>(RowRuleDropReasons.ProtectedPath, path);
+                return true;
+            }
+            default:
+                return false;
+        }
+    }
+
+    private static bool HasLiteral(RowTemplateValue value) => value switch
+    {
+        RowTemplateValue.Literal => true,
+        RowTemplateValue.Elements e => e.Items.Any(HasLiteral),
+        _ => false
+    };
+
+    private static IEnumerable<RowParameterPath> ParameterPaths(RowTemplateValue value) => value switch
+    {
+        RowTemplateValue.Parameter p => [p.Path],
+        RowTemplateValue.SplitParameter s => [s.Path],
+        RowTemplateValue.Elements e => e.Items.SelectMany(ParameterPaths),
+        _ => []
+    };
 
     private sealed class MaterializeFailure
     {
@@ -180,28 +243,29 @@ public static class RowSecurityPlanner
     /// <summary>
     /// Turns a template node into a policy-exempt filter node, or null when any leaf fails.
     /// </summary>
-    /// <remarks>
-    /// Task 5A semantics are the fail-closed baseline: any unresolved parameter drops the whole rule.
-    /// Task 5B refines leaf resolution (narrowing <c>in</c>, polarity, caps, coercion, protected paths).
-    /// </remarks>
-    private static GraphQLFilterNode? TryMaterialize(RowTemplateNode node, RowSecurityPlanInput input, MaterializeFailure failure)
+    /// <param name="node">The template node.</param>
+    /// <param name="input">The planner input.</param>
+    /// <param name="failure">Collects the first failure reason and the parameter names.</param>
+    /// <param name="negated">True under an odd number of <c>not</c>: no leaf may narrow, every failure drops.</param>
+    private static GraphQLFilterNode? TryMaterialize(RowTemplateNode node, RowSecurityPlanInput input,
+        MaterializeFailure failure, bool negated)
     {
         switch (node)
         {
             case RowTemplateAnd and:
-                var andChildren = MaterializeAll(and.Children, input, failure);
+                var andChildren = MaterializeAll(and.Children, input, failure, negated);
                 return andChildren is null ? null : new GraphQLFilterNode { And = andChildren, PolicyExempt = true };
 
             case RowTemplateOr or:
-                var orChildren = MaterializeAll(or.Children, input, failure);
+                var orChildren = MaterializeAll(or.Children, input, failure, negated);
                 return orChildren is null ? null : new GraphQLFilterNode { Or = orChildren, PolicyExempt = true };
 
             case RowTemplateNot not:
-                var child = TryMaterialize(not.Child, input, failure);
+                var child = TryMaterialize(not.Child, input, failure, !negated);
                 return child is null ? null : new GraphQLFilterNode { Not = child, PolicyExempt = true };
 
             case RowTemplateLeaf leaf:
-                var condition = TryMaterializeLeaf(leaf, input, failure);
+                var condition = TryMaterializeLeaf(leaf, input, failure, negated);
                 return condition is null ? null : Leaf(leaf.Field, condition);
 
             default:
@@ -210,12 +274,12 @@ public static class RowSecurityPlanner
     }
 
     private static List<GraphQLFilterNode>? MaterializeAll(IReadOnlyList<RowTemplateNode> children,
-        RowSecurityPlanInput input, MaterializeFailure failure)
+        RowSecurityPlanInput input, MaterializeFailure failure, bool negated)
     {
         var list = new List<GraphQLFilterNode>(children.Count);
         foreach (var child in children)
         {
-            var node = TryMaterialize(child, input, failure);
+            var node = TryMaterialize(child, input, failure, negated);
             if (node is null)
                 return null;
             list.Add(node);
@@ -230,19 +294,29 @@ public static class RowSecurityPlanner
         PolicyExempt = true
     };
 
-    private static FieldCondition? TryMaterializeLeaf(RowTemplateLeaf leaf, RowSecurityPlanInput input, MaterializeFailure failure)
+    /// <summary>Per-leaf resolution settings.</summary>
+    /// <param name="Narrowing">True only for <c>in</c> outside an odd <c>not</c>: unresolved elements are dropped.</param>
+    /// <param name="FieldType">The master-schema type parameter values are coerced to; null = keep strings.</param>
+    /// <param name="Limits">Caps.</param>
+    private sealed record LeafContext(bool Narrowing, string? FieldType, RowSecurityOptions Limits);
+
+    private static FieldCondition? TryMaterializeLeaf(RowTemplateLeaf leaf, RowSecurityPlanInput input,
+        MaterializeFailure failure, bool negated)
     {
+        // Text operators match on text whatever the field type; everything else is coerced to the field type.
+        var coerced = leaf.Operator is not ("like" or "match" or "startswith" or "endswith");
+        var fieldType = coerced && !leaf.IsInstanceColumn ? input.Schema?.GetFieldMetadata(leaf.Field)?.Type : null;
+        var context = new LeafContext(leaf.Operator == "in" && !negated, fieldType, input.Limits);
+
         switch (leaf.Operator)
         {
             case "in" or "nin" or "between":
             {
-                var values = ResolveArray(leaf.Value, input.Parameters, failure);
+                var values = ResolveArray(leaf.Value, leaf.Operator, input.Parameters, context, failure);
                 if (values is null)
                     return null;
-                if (values.Length == 0)
-                    return failure.Fail<FieldCondition>(RowRuleDropReasons.Missing);
                 if (leaf.Operator == "between" && values.Length != 2)
-                    return failure.Fail<FieldCondition>(RowRuleDropReasons.Arity);
+                    return failure.Fail<FieldCondition>(RowRuleDropReasons.Arity, ParameterPaths(leaf.Value).FirstOrDefault());
 
                 return leaf.Operator switch
                 {
@@ -264,7 +338,7 @@ public static class RowSecurityPlanner
 
             default:
             {
-                var value = ResolveScalar(leaf.Value, input.Parameters, failure);
+                var value = ResolveScalar(leaf.Value, input.Parameters, context, failure);
                 if (value is null)
                     return null;
 
@@ -287,9 +361,10 @@ public static class RowSecurityPlanner
     }
 
     private static string Text(object value) =>
-        Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty;
+        Convert.ToString(value, CultureInfo.InvariantCulture) ?? string.Empty;
 
-    private static object? ResolveScalar(RowTemplateValue value, IRowSecurityParameterSource parameters, MaterializeFailure failure)
+    private static object? ResolveScalar(RowTemplateValue value, IRowSecurityParameterSource parameters,
+        LeafContext context, MaterializeFailure failure)
     {
         switch (value)
         {
@@ -305,7 +380,7 @@ public static class RowSecurityPlanner
                 var single = values.Count == 1 ? values[0]?.Trim() : null;
                 return string.IsNullOrEmpty(single)
                     ? failure.Fail<object>(RowRuleDropReasons.Missing, parameter.Path)
-                    : single;
+                    : Accept(single, parameter.Path, context, failure);
             }
 
             default:
@@ -313,40 +388,132 @@ public static class RowSecurityPlanner
         }
     }
 
-    private static object[]? ResolveArray(RowTemplateValue value, IRowSecurityParameterSource parameters, MaterializeFailure failure)
+    /// <summary>Applies the length cap and the type coercion to one trimmed, non-blank parameter value.</summary>
+    private static object? Accept(string value, RowParameterPath path, LeafContext context, MaterializeFailure failure)
     {
+        if (value.Length > context.Limits.MaxElementLength)
+            return failure.Fail<object>(RowRuleDropReasons.Cap, path);
+        return TryCoerce(value, context.FieldType, out var coerced)
+            ? coerced
+            : failure.Fail<object>(RowRuleDropReasons.Coercion, path);
+    }
+
+    private static object[]? ResolveArray(RowTemplateValue value, string op, IRowSecurityParameterSource parameters,
+        LeafContext context, MaterializeFailure failure)
+    {
+        var items = new List<object>();
         switch (value)
         {
             case RowTemplateValue.Elements elements:
-            {
-                var items = new List<object>(elements.Items.Count);
                 foreach (var item in elements.Items)
                 {
-                    var resolved = ResolveScalar(item, parameters, failure);
-                    if (resolved is null)
+                    if (item is RowTemplateValue.Parameter parameter)
+                    {
+                        var raw = parameters.Get(parameter.Path);
+                        if (raw.Count > 1)
+                        {
+                            // An element is one value; between counts its bounds, the others refuse to guess.
+                            return failure.Fail<object[]>(
+                                op == "between" ? RowRuleDropReasons.Arity : RowRuleDropReasons.Ambiguous, parameter.Path);
+                        }
+
+                        var single = raw.Count == 1 ? raw[0]?.Trim() : null;
+                        if (string.IsNullOrEmpty(single))
+                        {
+                            if (context.Narrowing)
+                                continue; // narrowing in: an unresolved element only removes itself
+                            return failure.Fail<object[]>(RowRuleDropReasons.Missing, parameter.Path);
+                        }
+
+                        if (Accept(single, parameter.Path, context, failure) is not { } accepted)
+                            return null;
+                        items.Add(accepted);
+                    }
+                    else if (ResolveScalar(item, parameters, context, failure) is { } literal)
+                    {
+                        items.Add(literal);
+                    }
+                    else
+                    {
                         return null;
-                    items.Add(resolved);
+                    }
                 }
 
-                return items.ToArray();
-            }
+                if (items.Count == 0)
+                {
+                    var first = ParameterPaths(elements).FirstOrDefault();
+                    return failure.Fail<object[]>(RowRuleDropReasons.Missing, first);
+                }
+
+                break;
 
             case RowTemplateValue.SplitParameter split:
             {
                 var raw = parameters.Get(split.Path);
-                var items = (split.Separator is null
-                    ? raw.Select(v => v?.Trim())
+                var segments = (split.Separator is null
+                    ? raw.Select(v => v?.Trim() ?? string.Empty)
                     : raw.SelectMany(v => (v ?? string.Empty).Split(split.Separator)).Select(v => v.Trim())).ToList();
-                // 5A fail-closed baseline: a blank segment is an unresolved element and drops the rule for
-                // every operator (dropping it silently would widen nin / anything under not). Task 5B adds
-                // the in-only narrowing.
-                if (items.Count == 0 || items.Any(string.IsNullOrEmpty))
+
+                // A blank segment is an unresolved element: narrowing in drops it, nin / anything under not
+                // drops the whole rule (dropping it silently would widen).
+                if (!context.Narrowing && segments.Any(string.IsNullOrEmpty))
                     return failure.Fail<object[]>(RowRuleDropReasons.Missing, split.Path);
-                return items.Cast<object>().ToArray();
+                segments.RemoveAll(string.IsNullOrEmpty);
+                if (segments.Count == 0)
+                    return failure.Fail<object[]>(RowRuleDropReasons.Missing, split.Path);
+                if (segments.Count > context.Limits.MaxElements)
+                    return failure.Fail<object[]>(RowRuleDropReasons.Cap, split.Path);
+
+                foreach (var segment in segments)
+                {
+                    if (Accept(segment, split.Path, context, failure) is not { } accepted)
+                        return null;
+                    items.Add(accepted);
+                }
+
+                break;
             }
 
             default:
                 return failure.Fail<object[]>(RowRuleDropReasons.Invalid);
+        }
+
+        if (items.Count > context.Limits.MaxElements)
+            return failure.Fail<object[]>(RowRuleDropReasons.Cap, ParameterPaths(value).FirstOrDefault());
+
+        return items.ToArray();
+    }
+
+    /// <summary>
+    /// Coerces one request-supplied value to the master-schema field type: <c>number</c> / <c>integer</c> ⇒
+    /// <see cref="decimal"/> (invariant culture, no thousands separator; <c>integer</c> must be integral),
+    /// <c>boolean</c> ⇒ <see cref="bool"/>, anything else (incl. no schema / unknown field) ⇒ the string as is.
+    /// </summary>
+    /// <param name="raw">The trimmed value.</param>
+    /// <param name="type">The JSON Schema type, or null.</param>
+    /// <param name="value">The coerced value.</param>
+    /// <returns>False when the value does not fit the type (the rule is dropped).</returns>
+    internal static bool TryCoerce(string raw, string? type, out object value)
+    {
+        value = raw;
+        switch (type)
+        {
+            case "number" or "integer":
+                if (!decimal.TryParse(raw, NumberStyles.AllowLeadingSign | NumberStyles.AllowDecimalPoint |
+                        NumberStyles.AllowExponent, CultureInfo.InvariantCulture, out var number) ||
+                    (type == "integer" && number != decimal.Truncate(number)))
+                    return false;
+                value = number;
+                return true;
+
+            case "boolean":
+                if (!bool.TryParse(raw, out var flag))
+                    return false;
+                value = flag;
+                return true;
+
+            default:
+                return true;
         }
     }
 
