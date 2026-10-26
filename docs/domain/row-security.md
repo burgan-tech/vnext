@@ -332,6 +332,20 @@ Span tags on the read span (a flow without `rowSecurity` carries **no** row-secu
 `excluded` is written by the single GET after its probe found no visible row; the other values come from
 the decision itself.
 
+## Deployment / cache shape
+
+The rule set travels inside the cached `Workflow` component, and that cache is shared by every pod. A
+runtime that predates row security has no `rowSecurity` member; if it re-writes a flow's cache entry, the
+member is dropped, and a row-security runtime reading that entry would treat the flow as not opted in and
+serve every row. To prevent this, component cache keys carry a shape segment
+(`ComponentCacheShape.Version`, `s2` since row security: `{component}:{domain}:{key}:s2:full:…` and
+`…:s2:res:…`). During a rolling upgrade or a rollback, pods of different shape versions therefore use
+**disjoint** cache keys and each loads the definition from the database in its own shape; no cache flush
+is needed. Generation tokens stay shared, so a publish on either version still invalidates the resolution entries of both (full-version entries are immutable bodies).
+
+This protects the new pods only. A pod running a release below row security still serves every row of an
+opted-in flow, from its own entries or straight from the database — see [Rollback](#rollback).
+
 ## Rollback
 
 Removing `rowSecurity` from the flow restores today's behaviour (it **widens** visibility). A runtime

@@ -82,9 +82,20 @@ Key strategy:
 
 | Key | Shape | Notes |
 | --- | --- | --- |
-| Full | `{component}:{domain}:{key}:full:{canonicalFullVersion}` | Immutable body; TTL is a memory bound only. |
-| Resolution | `{component}:{domain}:{key}:res:{generation}:{spelling}` | Answer to a version request (`latest`, `1`, `1.2`); invalidated wholesale by a generation bump. |
+| Full | `{component}:{domain}:{key}:{shape}:full:{canonicalFullVersion}` | Immutable body; TTL is a memory bound only. |
+| Resolution | `{component}:{domain}:{key}:{shape}:res:{generation}:{spelling}` | Answer to a version request (`latest`, `1`, `1.2`); invalidated wholesale by a generation bump. |
 | Generation | `{component}:{domain}:{key}:gen` | Small token; bumped on publish/invalidate. |
+
+`{shape}` is `ComponentCacheShape.Version` (currently `s2`), one constant for every component type. It
+exists because the cache is shared by every pod: during a rolling upgrade or a rollback, a pod whose entity
+type lacks a member re-writes the entry without it (System.Text.Json drops unknown members), and a newer pod
+would read the member as absent. With the segment, pods of different shapes use disjoint keys and each loads
+from the database in its own shape. **Bump it** when a cached component type gains a member whose absence is
+unsafe — a security filter or an authorization rule, anything where "missing" means "wider" (`s2` was
+introduced for `Workflow.RowSecurity`, see [Row security](row-security.md#deployment--cache-shape)). Purely
+additive members whose absence is harmless need no bump. A bump costs one cold load per component per pod;
+old-shape entries expire on their TTL. The generation token carries no shape and stays shared, so a publish
+on either release invalidates the resolution entries of both.
 
 The L1 cache stores serialized envelopes under these same keys (`ComponentCache:L1Enabled`,
 default on; `ComponentCache:L1SizeLimitMb`, default 64). Bytes are deserialized per read, so
@@ -127,7 +138,9 @@ cache hit/miss counts and approximate cache size/entry gauges by component type.
 - Add a new definition component by extending `IDomainCacheContext`, `DomainCacheContext`,
   DI backend registration, component cast handlers, validators, and `IComponentCacheStore`.
 - Keep cache keys stable; changing key shape invalidates existing Redis entries and breaks the
-  L1 layer's freshness argument, which depends on resolution keys embedding the generation.
+  L1 layer's freshness argument, which depends on resolution keys embedding the generation. The
+  one sanctioned change is a `ComponentCacheShape.Version` bump (see Key strategy), which keeps the
+  generation segment in place.
 - Per-pod in-memory state is allowed only behind `IComponentL1Cache`, where invalidation is
   carried by the key scheme. Do not add other in-memory definition state.
 - Keep cache miss fallback read-only. Publishing remains the write path that populates cache.
