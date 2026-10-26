@@ -737,7 +737,11 @@ public static class GraphQLJsonFilterService
         };
     }
 
-    private static bool IsOperator(string name)
+    /// <summary>
+    /// True when <paramref name="name"/> is a filter operator key inside a nested condition object; any other key
+    /// is a further nested field. Shared with the row-predicate empty-clause guard so both read nesting the same way.
+    /// </summary>
+    internal static bool IsOperator(string name)
     {
         var lowerName = name.ToLowerInvariant();
         return lowerName switch

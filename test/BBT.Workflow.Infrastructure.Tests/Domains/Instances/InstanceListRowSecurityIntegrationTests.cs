@@ -100,7 +100,10 @@ public sealed class InstanceListRowSecurityIntegrationTests(AttributeIndexPostgr
 
     // ── merge guard ───────────────────────────────────────────────────────────────────────────
 
-    public static TheoryData<string> EmptyClauseShapes => new() { "top-empty", "nested-empty", "operatorless" };
+    public static TheoryData<string> EmptyClauseShapes => new()
+    {
+        "top-empty", "nested-empty", "operatorless", "nested-object-operatorless", "nested-object-deep-operatorless"
+    };
 
     [Theory]
     [MemberData(nameof(EmptyClauseShapes))]
@@ -110,6 +113,16 @@ public sealed class InstanceListRowSecurityIntegrationTests(AttributeIndexPostgr
         {
             "top-empty" => new GraphQLFilterNode { PolicyExempt = true },
             "nested-empty" => new GraphQLFilterNode { PolicyExempt = true, Or = [Branch("BR-001"), new GraphQLFilterNode { PolicyExempt = true }] },
+            // A nested object with no operator anywhere compiles to no SQL — empty, like an operator-less leaf.
+            "nested-object-operatorless" => new GraphQLFilterNode
+            {
+                PolicyExempt = true, And = [Branch("BR-001"), Leaf("address", Nested("""{"city":{}}"""))]
+            },
+            "nested-object-deep-operatorless" => new GraphQLFilterNode
+            {
+                PolicyExempt = true,
+                And = [Branch("BR-001"), Leaf("address", Nested("""{"city":{"eq":"x"},"zone":{"code":{}}}"""))]
+            },
             _ => new GraphQLFilterNode { PolicyExempt = true, And = [Branch("BR-001"), Leaf("branchCode", new FieldCondition())] }
         };
         foreach (var identityPaging in new[] { true, false })
@@ -346,6 +359,17 @@ public sealed class InstanceListRowSecurityIntegrationTests(AttributeIndexPostgr
 
     private static GraphQLFilterNode Branch(string code) =>
         new() { PolicyExempt = true, Attributes = new() { ["branchCode"] = new FieldCondition { Eq = code } } };
+
+    /// <summary>A condition carrying only nested field conditions (the JSON-extension-data shape the parser yields).</summary>
+    private static FieldCondition Nested(string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        return new FieldCondition
+        {
+            NestedConditions = document.RootElement.EnumerateObject()
+                .ToDictionary(p => p.Name, p => (object)p.Value.Clone())
+        };
+    }
 
     private static GraphQLFilterNode Leaf(string field, FieldCondition condition) =>
         new() { PolicyExempt = true, Attributes = new() { [field] = condition } };

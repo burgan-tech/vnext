@@ -1505,10 +1505,40 @@ public sealed class EfCoreInstanceRepository(
         Definitions.GraphQL.FilterNodeType.And => node.And!.Exists(ContainsEmptyClause),
         Definitions.GraphQL.FilterNodeType.Or => node.Or!.Exists(ContainsEmptyClause),
         Definitions.GraphQL.FilterNodeType.Not => ContainsEmptyClause(node.Not!),
-        Definitions.GraphQL.FilterNodeType.Condition => node.Attributes!.Values.Any(condition =>
-            condition is null || (!condition.GetOperators().Any() && condition.NestedConditions is not { Count: > 0 })),
+        Definitions.GraphQL.FilterNodeType.Condition => node.Attributes!.Values.Any(IsEmptyCondition),
         _ => true
     };
+
+    /// <summary>
+    /// A field condition that compiles to no SQL somewhere: null, no operator and no nested field, or a nested
+    /// field that is itself empty. Nested conditions are walked the way the compiler walks them, so an
+    /// operator-less nested object never reaches the engine as "no restriction".
+    /// </summary>
+    private static bool IsEmptyCondition(Definitions.GraphQL.FieldCondition? condition) =>
+        condition is null
+        || (!condition.GetOperators().Any() && condition.NestedConditions is not { Count: > 0 })
+        || (condition.NestedConditions is { Count: > 0 } nested && nested.Values.Any(IsEmptyNestedValue));
+
+    /// <summary>
+    /// A nested condition value (JSON extension data). The compiler only reads a JSON object; anything else, an
+    /// object without keys, or an object holding an empty nested field compiles to nothing for that path.
+    /// </summary>
+    private static bool IsEmptyNestedValue(object? value)
+    {
+        if (value is not JsonElement { ValueKind: JsonValueKind.Object } element)
+            return true;
+
+        var any = false;
+        foreach (var property in element.EnumerateObject())
+        {
+            any = true;
+            if (!Definitions.GraphQL.GraphQLJsonFilterService.IsOperator(property.Name)
+                && IsEmptyNestedValue(property.Value))
+                return true;
+        }
+
+        return !any;
+    }
 
     /// <summary>
     /// Gets paged results with optional groups using parsed GraphQL filter request (optimized - avoids parse-serialize cycle)
