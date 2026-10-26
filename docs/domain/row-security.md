@@ -86,7 +86,10 @@ all, byte for byte as before. Any member other than `rules` is a publish error (
   `$InstanceBehalfOfStarter` (`createdByBehalfOf eq <caller user name>`). Same pairing as
   [role grants](role-grant-authorization.md): CreatedBy with the actor, BehalfOf with the user name.
 - Rejected at publish: `$PreviousUser` / `$PreviousBehalfOfUser` (RS-E01), dynamic grants (`$user.`,
-  `$userBehalfOf.`, `$role.`; RS-E02), `allOf` / `anyOf` (RS-E03), any other reserved role (RS-E05).
+  `$userBehalfOf.`, `$role.`; RS-E02), any other reserved role (RS-E05). An `allOf` / `anyOf` object is
+  refused before publish validation: `roles` binds as a list of strings, so the runtime answers
+  `400 App:900006` at JSON binding, and `vnext-schema` validation reports it first. RS-E03 is reserved for
+  this case and is not emitted by the runtime.
 - A static role and a reserved role may not share one rule's `roles` (RS-E04): split into two rules.
 
 ### `rules[].filter`
@@ -268,7 +271,7 @@ live (`ComponentValidationWarning` plus the code in the message).
 |---|---|---|
 | RS-E01 | error | `$PreviousUser` / `$PreviousBehalfOfUser` used as a rule role |
 | RS-E02 | error | dynamic grant (`$user.`, `$userBehalfOf.`, `$role.`) used as a rule role |
-| RS-E03 | error | `allOf` / `anyOf` used as a rule role |
+| RS-E03 | (reserved) | `allOf` / `anyOf` used as a rule role — not emitted by the runtime: refused at JSON binding (`400 App:900006`), reported first by `vnext-schema` |
 | RS-E04 | error | static and reserved roles mixed in one rule |
 | RS-E05 | error | reserved role other than `$InstanceStarter` / `$InstanceBehalfOfStarter` |
 | RS-E06 | error | instance-starter shorthand on a column it does not belong to |
@@ -345,6 +348,24 @@ is needed. Generation tokens stay shared, so a publish on either version still i
 
 This protects the new pods only. A pod running a release below row security still serves every row of an
 opted-in flow, from its own entries or straight from the database — see [Rollback](#rollback).
+
+**Do not force re-publish the same version during a rollout.** Full-version entries are immutable bodies
+kept for `ComponentCache:FullVersionTtlSeconds` (default 1800 s) and are not invalidated by a generation bump.
+While pods of both releases run, force re-publishing an **unchanged version number** (for example to add
+`rowSecurity` to it) can leave a stale `s2` full body served until it expires. Publish a new version
+instead, or wait for the TTL.
+
+**morph-idm.** With `CallerRoleProvider:Provider = morph-idm`, `CallerRoleProvider:MorphIdm:BaseUrl` and
+`CallerRoleProvider:MorphIdm:GetRolesPath` must be configured. A provider that cannot be reached resolves
+to a failed role set, and every opted-in flow then returns no rows (`denied-resolution-failed`).
+
+### Request logging (known platform behaviour)
+
+Aether's `HttpBodyLoggingMiddleware` writes **all request headers** into the request log, redacting only
+its built-in list (`Authorization`, `Cookie`, …) plus `Telemetry:Logging:Body:AdditionalSensitiveHeaderNames`.
+Header values a rule reads (for example `x-branch-code`) therefore appear in request logs unless they are
+listed there. Row security itself never logs a parameter value; whether to redact these headers is a
+deployment decision.
 
 ## Rollback
 

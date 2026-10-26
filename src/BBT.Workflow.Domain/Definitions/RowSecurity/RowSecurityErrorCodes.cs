@@ -17,7 +17,12 @@ public static class RowSecurityErrorCodes
     /// <summary>A dynamic role grant (<c>$user.</c> / <c>$userBehalfOf.</c> / <c>$role.</c>) used as a rule role.</summary>
     public const string E02 = "RS-E02";
 
-    /// <summary>An <c>allOf</c> / <c>anyOf</c> combinator used as a rule role.</summary>
+    /// <summary>
+    /// An <c>allOf</c> / <c>anyOf</c> combinator used as a rule role. <b>Reserved, not emitted by the runtime:</b>
+    /// <c>rules[].roles</c> binds as a string list, so a combinator object is refused at JSON binding
+    /// (<c>400 App:900006</c>) before publish validation runs; <c>vnext-schema</c> validation reports it first.
+    /// Kept so the code stays allocated to this case.
+    /// </summary>
     public const string E03 = "RS-E03";
 
     /// <summary>Static roles mixed with a reserved role in one rule.</summary>
