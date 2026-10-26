@@ -156,6 +156,34 @@ public class RowSecurityPlannerParameterTests
                 limits: new RowSecurityOptions { MaxElements = 2 })
             .DroppedRules.Single().Reason.ShouldBe(RowRuleDropReasons.Cap);
 
+    // ---- NUL in a request value (PostgreSQL 22P05 would answer 500) ---------------------------------------
+
+    [Fact]
+    public void Nul_InScalarHeader_DropsRule() =>
+        AssertNulDrop(Plan(Eq("x-b"), headers: new() { ["x-b"] = ["\0"] }), "x-b");
+
+    [Fact]
+    public void Nul_InScalarQuery_DropsRule() =>
+        AssertNulDrop(Plan(EqQuery("branch"), query: new() { ["branch"] = ["BR\u0000001"] }), "branch");
+
+    [Fact]
+    public void Nul_InNarrowingInElement_DropsRuleNotElement() =>
+        AssertNulDrop(Plan(InA("x-b1", "x-b2"), headers: new() { ["x-b1"] = ["BR-001"], ["x-b2"] = ["a\0b"] }), "x-b2");
+
+    [Fact]
+    public void Nul_InSplitSegment_DropsRule() =>
+        AssertNulDrop(Plan(InSplit("x-b", ","), headers: new() { ["x-b"] = ["BR-001,a\0b"] }), "x-b");
+
+    private static void AssertNulDrop(RowSecurityDecision decision, string parameter)
+    {
+        decision.Outcome.ShouldBe(RowSecurityOutcome.NoContribution);
+        decision.Predicate.ShouldBeNull();
+        var drop = decision.DroppedRules.ShouldHaveSingleItem();
+        drop.Reason.ShouldBe(RowRuleDropReasons.Coercion);
+        drop.ParameterNames.ShouldBe([parameter]);
+        JsonSerializer.Serialize(decision).ShouldNotContain("\\u0000");
+    }
+
     // ---- runtime backstop ----------------------------------------------------------------------------------
 
     [Fact]

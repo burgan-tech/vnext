@@ -95,7 +95,7 @@ public static class RowRuleDropReasons
     /// <summary>A value exceeded <see cref="RowSecurityOptions"/> limits.</summary>
     public const string Cap = "cap";
 
-    /// <summary>A value could not be coerced to the field type.</summary>
+    /// <summary>A value could not be coerced to the field type (incl. a value containing NUL).</summary>
     public const string Coercion = "coercion";
 
     /// <summary>The rule touches a protected (masked / encrypted / role-restricted) path.</summary>

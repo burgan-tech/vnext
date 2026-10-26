@@ -388,11 +388,17 @@ public static class RowSecurityPlanner
         }
     }
 
-    /// <summary>Applies the length cap and the type coercion to one trimmed, non-blank parameter value.</summary>
+    /// <summary>
+    /// Applies the length cap, the NUL check and the type coercion to one trimmed, non-blank parameter value
+    /// (scalar, form-A element or split segment). Every failure drops the whole rule, also under narrowing <c>in</c>.
+    /// </summary>
     private static object? Accept(string value, RowParameterPath path, LeafContext context, MaterializeFailure failure)
     {
         if (value.Length > context.Limits.MaxElementLength)
             return failure.Fail<object>(RowRuleDropReasons.Cap, path);
+        // PostgreSQL text cannot hold NUL (22P05 ⇒ 500); such a value fits no field type.
+        if (value.Contains('\0'))
+            return failure.Fail<object>(RowRuleDropReasons.Coercion, path);
         return TryCoerce(value, context.FieldType, out var coerced)
             ? coerced
             : failure.Fail<object>(RowRuleDropReasons.Coercion, path);
