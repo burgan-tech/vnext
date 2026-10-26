@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using BBT.Workflow.Definitions.RowSecurity;
 using BBT.Workflow.Scripting.Rules;
 
 namespace BBT.Workflow.Definitions.Validators;
@@ -34,6 +35,7 @@ public class WorkflowValidator
         ValidateTransitionInStates(workflow, result, stateKeys);
         ValidateStateCountAndTypes(workflow, result);
         ValidateRoleGrants(workflow.QueryRoles, $"{nameof(Workflow)}.{nameof(Workflow.QueryRoles)}", result);
+        ValidateRowSecurity(workflow, result);
 
         // State level validations
         ValidateStateLabels(workflow, result);
@@ -60,6 +62,30 @@ public class WorkflowValidator
 
         return result;
     }
+
+    #region Row Security Validations
+
+    /// <summary>
+    /// Validates <c>attributes.rowSecurity</c> with the schema-blind rules of
+    /// <see cref="RowSecurityDefinitionRules"/> (vnext#1107). Errors block publishing; warnings are
+    /// logged by the publish path. A flow without row security adds nothing.
+    /// </summary>
+    private static void ValidateRowSecurity(Workflow workflow, WorkflowValidationResult result)
+    {
+        if (workflow.RowSecurity is null)
+            return;
+
+        foreach (var finding in RowSecurityDefinitionRules.Validate(workflow.RowSecurity))
+        {
+            var validation = new ValidationResult($"{finding.Code}: {finding.Message}", [finding.Path]);
+            if (finding.Severity == RowSecurityFindingSeverity.Error)
+                result.AddError(validation);
+            else
+                result.AddWarning(validation);
+        }
+    }
+
+    #endregion
 
     #region History None Validations
 
