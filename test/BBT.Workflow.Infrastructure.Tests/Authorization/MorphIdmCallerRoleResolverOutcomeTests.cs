@@ -207,20 +207,36 @@ public sealed class MorphIdmCallerRoleResolverOutcomeTests
         handler.Calls.ShouldBe(0);
     }
 
-    /// <summary>The role-header part of the memo key is order- and duplicate-insensitive.</summary>
+    /// <summary>
+    /// Header roles come back exactly in header order: <c>SingleRoleOf</c> takes the first one, so reordering
+    /// would change the caller's single role and disagree with the default provider.
+    /// </summary>
     [Fact]
-    public async Task RoleHeader_KeyIsNormalised_ReorderedHeaderSharesTheMemo()
+    public async Task RoleHeader_KeepsHeaderOrder()
     {
         var handler = new StubHandler(_ => Respond(HttpStatusCode.OK, """{"roles":["idm.viewer"]}"""));
         var resolver = Build(handler);
 
-        var first = await resolver.ResolveRoleSetAsync(new Dictionary<string, string?> { ["role"] = "b, a" });
-        var second = await resolver.ResolveRoleSetAsync(new Dictionary<string, string?> { ["role"] = "a,b,a" });
+        var set = await resolver.ResolveRoleSetAsync(new Dictionary<string, string?> { ["role"] = "b, a" });
+        var roles = (await resolver.ResolveRolesAsync(new Dictionary<string, string?> { ["role"] = "b, a" })).Value;
 
-        first.Outcome.ShouldBe(CallerRoleOutcome.FromHeader);
-        second.Outcome.ShouldBe(CallerRoleOutcome.FromHeader);
-        first.Roles.ShouldBe(["a", "b"]);
-        second.Roles.ShouldBe(["a", "b"]);
+        set.Outcome.ShouldBe(CallerRoleOutcome.FromHeader);
+        set.Roles.ShouldBe(["b", "a"]);
+        roles.ShouldBe(["b", "a"]);
+        ICallerRoleResolver.SingleRoleOf(roles).ShouldBe("b");
+        handler.Calls.ShouldBe(0);
+    }
+
+    /// <summary>A header repeating a role keeps the caller's list as sent (trimmed, blanks dropped only).</summary>
+    [Fact]
+    public async Task RoleHeader_WithDuplicate_KeepsCallersList()
+    {
+        var resolver = Build(new StubHandler(_ => Respond(HttpStatusCode.OK, """{"roles":["idm.viewer"]}""")));
+
+        var set = await resolver.ResolveRoleSetAsync(new Dictionary<string, string?> { ["role"] = "a, b, ,a" });
+
+        set.Outcome.ShouldBe(CallerRoleOutcome.FromHeader);
+        set.Roles.ShouldBe(["a", "b", "a"]);
     }
 
     // ── Helpers ─────────────────────────────────────────────────────────────────

@@ -196,8 +196,9 @@ public sealed class MorphIdmCallerRoleResolver : ICallerRoleResolver
                 : null);
 
     /// <summary>
-    /// Joins the normalised <c>role</c> header inside <see cref="CredentialKey.RoleHeader"/>. A control
-    /// character rather than a comma so the key splits back into exactly the roles it was built from.
+    /// Joins the <c>role</c> header roles (header order) inside <see cref="CredentialKey.RoleHeader"/>. A
+    /// control character rather than a comma so the key splits back into exactly the roles, in the order,
+    /// it was built from.
     /// </summary>
     private const char RoleHeaderSeparator = '\u001F';
 
@@ -341,16 +342,13 @@ public sealed class MorphIdmCallerRoleResolver : ICallerRoleResolver
     }
 
     /// <summary>
-    /// The request's <c>role</c> header roles, normalised: blank entries dropped, trimmed, de-duplicated
-    /// and sorted ordinally — the same set in any order or with repeats is the same credential.
+    /// The request's <c>role</c> header roles in header order: blank entries dropped and the rest trimmed,
+    /// nothing else. Order is part of the answer (<c>SingleRoleOf</c> takes the first role), so a reordered
+    /// header is a different credential with its own memo entry.
     /// </summary>
     private string[] RolesFromRequestHeader(IReadOnlyDictionary<string, string?>? headers) =>
         _currentUser.ResolveCallerRoles(headers) is { Length: > 0 } roles
-            ? roles.Where(r => !string.IsNullOrWhiteSpace(r))
-                .Select(r => r.Trim())
-                .Distinct(StringComparer.Ordinal)
-                .Order(StringComparer.Ordinal)
-                .ToArray()
+            ? roles.Where(r => !string.IsNullOrWhiteSpace(r)).Select(r => r.Trim()).ToArray()
             : [];
 
     /// <summary>The ambient identity a captured header dictionary belongs to.</summary>
