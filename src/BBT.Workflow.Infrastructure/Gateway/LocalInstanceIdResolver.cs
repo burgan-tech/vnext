@@ -6,8 +6,8 @@ namespace BBT.Workflow.Gateway;
 
 /// <summary>
 /// Resolves an instance key to its id through the repository in the target flow's schema scope (the same
-/// <c>ExecuteWithWorkflowAsync</c> pattern <see cref="LocalInstanceQueryGateway"/> uses). Reads only the id; applies no
-/// row security because it never returns instance content.
+/// <c>ExecuteWithWorkflowAsync</c> pattern <see cref="LocalInstanceQueryGateway"/> uses). Loads the read-only instance and
+/// returns only its id; applies no row security because it never returns instance content.
 /// </summary>
 public sealed class LocalInstanceIdResolver(IServiceScopeFactory serviceScopeFactory) : IInstanceIdResolver
 {

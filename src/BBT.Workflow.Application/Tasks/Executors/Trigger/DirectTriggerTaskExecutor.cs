@@ -231,7 +231,8 @@ public sealed class DirectTriggerTaskExecutor : TriggerTaskExecutorBase<DirectTr
             return Result<Guid>.Ok(instanceId);
         }
 
-        // Local id-only lookup: reads nothing but the id, so no caller headers and no row-security bypass flag.
+        // Local id-only lookup: returns only the id (it loads the read-only instance), so no caller headers and
+        // no row-security bypass flag.
         var idResult = await _instanceIdResolver.ResolveIdAsync(
             task.TriggerDomain, task.TriggerFlow, instanceIdentifier, cancellationToken);
         if (!idResult.IsSuccess)

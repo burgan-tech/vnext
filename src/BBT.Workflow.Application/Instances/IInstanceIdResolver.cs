@@ -4,8 +4,9 @@ namespace BBT.Workflow.Instances;
 
 /// <summary>
 /// Resolves an instance key to its id inside this runtime's own domain. Local-only: it is never exposed by a
-/// controller or a routed gateway, reads nothing but the id, and takes no caller headers — so it cannot be used
-/// to read instance content and carries no row-security bypass flag (vnext#1107).
+/// controller or a routed gateway, returns only the id (the implementation loads the read-only instance to find
+/// it) and takes no caller headers — so it hands no instance content to its caller and carries no row-security
+/// bypass flag (vnext#1107).
 /// </summary>
 public interface IInstanceIdResolver
 {
