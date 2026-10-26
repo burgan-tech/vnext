@@ -234,6 +234,26 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Row-security probe of the single-instance GET (vnext#1107): true when the instance identified by
+    /// <paramref name="instanceId"/> is a row of the list under <paramref name="predicate"/>. Runs one ids-only
+    /// query through the list compiler (same merge guard, same latest-data join, same schema context), with the
+    /// instance pinned by a typed id condition; visibility is always evaluated on the instance's latest data.
+    /// </summary>
+    /// <param name="instanceId">The resolved instance id (never a business key).</param>
+    /// <param name="predicate">
+    /// Runtime-planned row predicate (planner output: every node policy-exempt, no empty node). A predicate that
+    /// contains an empty node or an operator-less condition is refused before any SQL runs.
+    /// </param>
+    /// <param name="schemaContext">The flow's master-schema filter metadata, as the list passes it.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>True when the instance is visible under <paramref name="predicate"/>.</returns>
+    Task<bool> IsVisibleAsync(
+        Guid instanceId,
+        Definitions.GraphQL.GraphQLFilterNode predicate,
+        SchemaFilterContext? schemaContext,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// The no-tracking twin of <see cref="GetResultAsync"/>: same detailed includes and the same
     /// not-found error, but nothing is attached to the caller's unit of work.
     /// </summary>

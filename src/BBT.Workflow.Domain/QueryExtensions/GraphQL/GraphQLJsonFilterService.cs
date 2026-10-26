@@ -78,7 +78,7 @@ public static class GraphQLJsonFilterService
         GraphQLFilterNode filterNode, string jsonColumnName, string tableName, string schema,
         ISchemaValidator? schemaValidator = null, ILogger? logger = null,
         string? orderByClause = null, SchemaFilterContext? schemaContext = null,
-        int? offset = null, int? limit = null, bool useLatestJoin = false)
+        int? offset = null, int? limit = null, bool useLatestJoin = false, Guid? pinnedInstanceId = null)
     {
         if (schemaValidator != null)
         {
@@ -111,6 +111,16 @@ public static class GraphQLJsonFilterService
             }
 
 
+        }
+
+        if (pinnedInstanceId is { } pinned)
+        {
+            // Row-security GET probe (vnext#1107): the instance is pinned by a uuid-typed parameter, ANDed after the
+            // filter compiled — the caller-facing `id` column condition binds text and cannot be used here.
+            var pinIndex = parameterIndex++;
+            parameters.Add(new NpgsqlParameter { Value = pinned, NpgsqlDbType = NpgsqlTypes.NpgsqlDbType.Uuid });
+            var pin = $"s.\"Id\" = {{{pinIndex}}}";
+            instanceWhereClause = string.IsNullOrEmpty(instanceWhereClause) ? pin : $"({instanceWhereClause}) AND {pin}";
         }
 
         if (string.IsNullOrEmpty(tableName))

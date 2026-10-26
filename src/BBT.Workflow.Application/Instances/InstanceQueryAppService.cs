@@ -158,6 +158,14 @@ public sealed class InstanceQueryAppService(
                 onSuccess: async instance =>
                 {
                     using var instanceScope = BeginInstanceScope(instance);
+
+                    // Row security (vnext#1107) is decided before the body, extensions, ETag and 304: an instance
+                    // the caller may not see answers exactly the missing-instance 404.
+                    if (await CheckGetRowSecurityAsync(input, instance, cancellationToken) is { } rowSecurityError)
+                    {
+                        return ConditionalResult<GetInstanceOutput>.Fail(rowSecurityError);
+                    }
+
                     var instanceData = instance.FindData(input.Version);
                     
                     var result = await BuildInstanceOutputAsync(
@@ -464,11 +472,61 @@ public sealed class InstanceQueryAppService(
     private async Task<(SchemaFilterContext? Ctx, SchemaExposureMetadata Exposure, Result<Definitions.Workflow> Flow)>
         ResolveListMetadataAsync(string domain, string workflow, CancellationToken ct)
     {
+        var flowResult = await componentCacheStore.GetFlowAsync(domain, workflow, null, ct);
+        var (schemaContext, exposure) = await ResolveSchemaMetadataAsync(flowResult, workflow, ct);
+        return (schemaContext, exposure, flowResult);
+    }
+
+    /// <summary>
+    /// Row security of the single-instance GET (vnext#1107). Returns null when the caller may read
+    /// <paramref name="instance"/>, otherwise the error to answer with:
+    /// <list type="bullet">
+    /// <item>the rule-set lookup error as is, for every flow (D5);</item>
+    /// <item><see cref="WorkflowErrors.InstanceNotFound"/> with the caller's identifier — the exact missing-instance
+    /// error — when the decision returns no rows or the probe does not find the instance under the predicate.</item>
+    /// </list>
+    /// The rule set is always <c>GetFlowAsync(domain, workflow, null)</c>, never the instance's own version (K2).
+    /// Schema, exposure and index metadata are loaded only for a flow that declares <c>rowSecurity</c>, so a flow
+    /// without it costs this one cached lookup and nothing else (C-6). The probe runs on the RESOLVED instance id
+    /// and on its latest data, whatever <c>?version=</c> the body is read at.
+    /// </summary>
+    private async Task<Error?> CheckGetRowSecurityAsync(GetInstanceInput input, Instance instance, CancellationToken ct)
+    {
+        if (rowSecurityService is null)
+            return null;
+
+        var flowResult = await componentCacheStore.GetFlowAsync(input.Domain, input.Workflow, null, ct);
+        SchemaFilterContext? schemaContext = null;
+        var exposure = SchemaExposureMetadata.Empty;
+        if (flowResult.IsSuccess && flowResult.Value?.RowSecurity is not null)
+            (schemaContext, exposure) = await ResolveSchemaMetadataAsync(flowResult, input.Workflow, ct);
+
+        var decision = await rowSecurityService.DecideAsync(new RowSecurityRequest(
+            input.Domain, input.Workflow, flowResult, schemaContext, exposure,
+            input.Headers, input.RawHeaders, input.QueryParameters, input.RawQueryParameters), ct);
+
+        return decision switch
+        {
+            { Outcome: RowSecurityOutcome.DeniedRuleSetUnavailable } => decision.LookupError ?? flowResult.Error,
+            { Outcome: RowSecurityOutcome.NotConfigured or RowSecurityOutcome.Unrestricted } => null,
+            { Outcome: RowSecurityOutcome.Filtered, Predicate: { } predicate }
+                when await instanceRepository.IsVisibleAsync(instance.Id, predicate, schemaContext, ct) => null,
+            // No rows, a false probe, or a Filtered decision without a predicate (never planned): fail closed.
+            _ => WorkflowErrors.InstanceNotFound(input.Instance)
+        };
+    }
+
+    /// <summary>
+    /// The master-schema filter / exposure metadata of <paramref name="flowResult"/>'s flow, with the ready
+    /// attribute indexes of the current schema.
+    /// </summary>
+    private async Task<(SchemaFilterContext? Ctx, SchemaExposureMetadata Exposure)> ResolveSchemaMetadataAsync(
+        Result<Definitions.Workflow> flowResult, string workflow, CancellationToken ct)
+    {
         SchemaFilterContext? schemaContext = null;
         var exposure = SchemaExposureMetadata.Empty;
 
         // Resolve schema-driven filter/sort metadata from workflow's master schema
-        var flowResult = await componentCacheStore.GetFlowAsync(domain, workflow, null, ct);
         if (flowResult.IsSuccess && flowResult.Value?.Schema is not null)
         {
             var schemaResult = await componentCacheStore.GetSchemaAsync(flowResult.Value.Schema, ct);
@@ -492,7 +550,7 @@ public sealed class InstanceQueryAppService(
             };
         }
 
-        return (schemaContext, exposure, flowResult);
+        return (schemaContext, exposure);
     }
 
     /// <summary>

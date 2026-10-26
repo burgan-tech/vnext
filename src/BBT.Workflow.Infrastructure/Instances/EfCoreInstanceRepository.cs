@@ -1477,6 +1477,29 @@ public sealed class EfCoreInstanceRepository(
         };
     }
 
+    /// <inheritdoc />
+    public async Task<bool> IsVisibleAsync(
+        Guid instanceId,
+        Definitions.GraphQL.GraphQLFilterNode predicate,
+        SchemaFilterContext? schemaContext,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(predicate);
+        // The same merge point as the list (empty-clause guard included); the instance is pinned inside the compiler
+        // by a uuid-typed condition, never by a caller-style `id` filter (that column binds text).
+        var request = ApplyRowPredicate(new Definitions.GraphQL.GraphQLFilterRequest
+        {
+            RowPredicate = predicate,
+            SchemaContext = schemaContext
+        });
+        var context = await GetDbContextAsync();
+        var schema = currentSchema.Name ?? DefaultSchemaName;
+        var readOptions = queryOptions?.CurrentValue ?? new InstanceQueryOptions();
+        var selected = await UnifiedFilterService.ExecutePageIdsAsync(
+            context, request, schema, 1, 1, schemaValidator, instanceId, readOptions.LatestJoin, cancellationToken);
+        return selected.Ids.Count == 1 && selected.Ids[0] == instanceId;
+    }
+
     private static bool ContainsEmptyClause(Definitions.GraphQL.GraphQLFilterNode node) => node.NodeType switch
     {
         Definitions.GraphQL.FilterNodeType.And => node.And!.Exists(ContainsEmptyClause),

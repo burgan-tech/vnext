@@ -260,6 +260,88 @@ public sealed class InstanceListRowSecurityIntegrationTests(AttributeIndexPostgr
         Normalize(capture.Commands[0]).ShouldBe(BaselineIdentityPageSql);
     }
 
+    // ── single GET probe (Task 7, U-5) ──────────────────────────────────────────────────────
+
+    public static TheoryData<string> AllDefinitionPredicates => new()
+    {
+        "branch-BR-001", "branch-BR-002", "branch-BR-003", "createdBy-column", "definitionB-mixed-or",
+        "definitionB-enforcing-schema", "in-branches", "not-branch", "and-branch-num"
+    };
+
+    private static (GraphQLFilterNode Predicate, SchemaFilterContext? Schema) DefinitionPredicate(string name) => name switch
+    {
+        "branch-BR-001" => (Branch("BR-001"), null),
+        "branch-BR-002" => (Branch("BR-002"), null),
+        "branch-BR-003" => (Branch("BR-003"), null),
+        "createdBy-column" => (Leaf("createdBy", new FieldCondition { Eq = "alice" }), null),
+        "definitionB-mixed-or" => (DefinitionB(), null),
+        "definitionB-enforcing-schema" => (DefinitionB(), EnforcingSchemaWithoutBranchCode()),
+        "in-branches" => (Leaf("branchCode", new FieldCondition { In = ["BR-002", "BR-003"] }), null),
+        "not-branch" => (new GraphQLFilterNode { PolicyExempt = true, Not = Branch("BR-001") }, null),
+        _ => (new GraphQLFilterNode { PolicyExempt = true, And = [Branch("BR-001"), Leaf("num", new FieldCondition { Ge = 20m })] }, null)
+    };
+
+    [Theory]
+    [MemberData(nameof(AllDefinitionPredicates))]
+    public async Task ListGetParity(string name)
+    {
+        var (predicate, schema) = DefinitionPredicate(name);
+        foreach (var latestJoin in new[] { true, false })
+        {
+            var options = new InstanceQueryOptions { LatestJoin = latestJoin };
+            var listIds = await Ids(predicate, null, identityPaging: true, schema);
+            await using var db = CreateContext();
+            var repository = CreateRepository(db, options);
+            foreach (var id in Enumerable.Range(1, Seed.Length).Select(Id))
+                (await repository.IsVisibleAsync(id, predicate, schema)).ShouldBe(listIds.Contains(id), $"{name} {id} latestJoin={latestJoin}");
+        }
+    }
+
+    [Fact]
+    public async Task Probe_UsesLatestData_NotHistory()
+    {
+        // r5's history row says BR-003, its latest row BR-001: visibility follows the latest row only.
+        await using var db = CreateContext();
+        var repository = CreateRepository(db);
+
+        (await repository.IsVisibleAsync(Id(5), Branch("BR-001"), null)).ShouldBeTrue();
+        (await repository.IsVisibleAsync(Id(5), Branch("BR-003"), null)).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task Probe_PinsInstanceByTypedId_OneIdsOnlyQuery_UnknownIdIsInvisible()
+    {
+        var capture = new ReadCapture();
+        await using var db = CreateContext(capture);
+        var repository = CreateRepository(db);
+
+        (await repository.IsVisibleAsync(Id(1), Branch("BR-001"), null)).ShouldBeTrue();
+        capture.Commands.ShouldHaveSingleItem();
+        var sql = Normalize(capture.Commands[0]);
+        sql.ShouldStartWith("SELECT s.\"Id\" AS \"Value\" FROM \"public\".\"Instances\" s");
+        sql.ShouldContain("s.\"Id\" = @p");
+        sql.ShouldContain("LIMIT @p");
+
+        (await repository.IsVisibleAsync(Guid.NewGuid(), Branch("BR-001"), null)).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task Probe_RefusesEmptyRowPredicate_BeforeSql()
+    {
+        var capture = new ReadCapture();
+        await using var db = CreateContext(capture);
+
+        await Should.ThrowAsync<FilterCompilationException>(() =>
+            CreateRepository(db).IsVisibleAsync(Id(1), new GraphQLFilterNode { PolicyExempt = true }, null));
+        capture.Commands.ShouldBeEmpty();
+    }
+
+    private static GraphQLFilterNode DefinitionB() => new()
+    {
+        PolicyExempt = true,
+        Or = [Branch("BR-001"), Leaf("createdBy", new FieldCondition { Eq = "alice" })]
+    };
+
     // ── helpers ──────────────────────────────────────────────────────────────────────────────
 
     private static GraphQLFilterNode Branch(string code) =>
