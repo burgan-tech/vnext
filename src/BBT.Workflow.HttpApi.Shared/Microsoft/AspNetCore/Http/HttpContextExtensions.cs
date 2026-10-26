@@ -12,6 +12,15 @@ public sealed record RequestBindingContext(
     Dictionary<string, string?> QueryParameters);
 
 /// <summary>
+/// The raw, multi-valued request headers and query parameters (keys compared ignoring case).
+/// </summary>
+/// <param name="Headers">Every value of each header.</param>
+/// <param name="Query">Every value of each query parameter.</param>
+public sealed record RawRequestValues(
+    IReadOnlyDictionary<string, string[]> Headers,
+    IReadOnlyDictionary<string, string[]> Query);
+
+/// <summary>
 /// Extensions for HttpContext to extract Workflow-specific information from headers
 /// </summary>
 public static partial class HttpContextExtensions
@@ -54,6 +63,27 @@ public static partial class HttpContextExtensions
         }
 
         return new RequestBindingContext(headers, queryParams);
+    }
+
+    /// <summary>
+    /// Extracts every value of each header and query parameter. Unlike
+    /// <see cref="GetRequestBindingContext"/> nothing is dropped after the first value.
+    /// </summary>
+    /// <param name="context">The HTTP context</param>
+    /// <returns>The raw multi-valued headers and query parameters</returns>
+    public static RawRequestValues GetRawRequestValues(this HttpContext context)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+
+        var headers = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase);
+        foreach (var header in context.Request.Headers)
+            headers[header.Key] = header.Value.ToArray()!;
+
+        var query = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase);
+        foreach (var param in context.Request.Query)
+            query[param.Key] = param.Value.ToArray()!;
+
+        return new RawRequestValues(headers, query);
     }
 
     /// <summary>

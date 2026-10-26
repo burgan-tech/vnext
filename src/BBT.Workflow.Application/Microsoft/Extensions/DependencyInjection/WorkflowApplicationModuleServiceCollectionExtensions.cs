@@ -117,6 +117,8 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
         services.AddScoped<IStateFunctionCache, StateFunctionCache>();
         services.AddOptions<InstanceFunctionCacheOptions>()
             .BindConfiguration(InstanceFunctionCacheOptions.SectionName);
+        services.AddOptions<BBT.Workflow.Authorization.RowSecurity.RowSecurityOptions>()
+            .BindConfiguration(BBT.Workflow.Authorization.RowSecurity.RowSecurityOptions.Section);
         // x-masking kill switch. Folded into the data-function cache generation (key AND ETag).
         services.AddOptions<BBT.Workflow.Authorization.SchemaMaskingOptions>()
             .BindConfiguration(BBT.Workflow.Authorization.SchemaMaskingOptions.SectionName);
