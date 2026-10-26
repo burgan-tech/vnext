@@ -55,6 +55,7 @@ public sealed class InstanceQueryAppServiceRowSecurityGetTests : IDisposable
     private readonly IScriptContextFactory _scriptContextFactory = Substitute.For<IScriptContextFactory>();
     private readonly IRepresentationEtagService _etags = Substitute.For<IRepresentationEtagService>();
     private readonly IAttributeIndexCatalog _indexes = Substitute.For<IAttributeIndexCatalog>();
+    private readonly ILogger<InstanceQueryAppService> _appLogger = Substitute.For<ILogger<InstanceQueryAppService>>();
     private readonly IServiceProvider _ambientServiceProvider;
     private readonly IServiceProvider? _previousAmbientServiceProvider;
 
@@ -104,6 +105,32 @@ public sealed class InstanceQueryAppServiceRowSecurityGetTests : IDisposable
         r.Result.IsSuccess.ShouldBeFalse();
         r.Result.Error!.Code.ShouldBe(WorkflowErrorCodes.NotFoundInstanceData);
         _etags.DidNotReceiveWithAnyArgs().Generate(default!);
+    }
+
+    [Fact]
+    public async Task Get_FalseProbe_OverwritesOutcomeWithExcluded_AndLogs20506()
+    {
+        var instance = StubInstance();
+        StubSecuredFlow();
+        _appLogger.IsEnabled(Arg.Any<LogLevel>()).Returns(true); // LoggerMessage skips a disabled level
+        System.Diagnostics.Activity? read = null;
+        using var listener = new System.Diagnostics.ActivityListener
+        {
+            ShouldListenTo = source => source.Name == "BBT.Workflow.Instances.Read",
+            Sample = (ref System.Diagnostics.ActivityCreationOptions<System.Diagnostics.ActivityContext> _) =>
+                System.Diagnostics.ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStarted = a => read ??= a
+        };
+        System.Diagnostics.ActivitySource.AddActivityListener(listener);
+
+        var r = await CreateService().GetInstanceAsync(Input(instance.Id.ToString(), branch: "BR-001"));
+
+        r.Result.IsSuccess.ShouldBeFalse();
+        read.ShouldNotBeNull();
+        read!.GetTagItem("vnext.rowsecurity.outcome").ShouldBe("excluded");
+        read.GetTagItem("vnext.rowsecurity.applied").ShouldBe(true);
+        _appLogger.ReceivedCalls().Count(c => c.GetMethodInfo().Name == "Log"
+            && c.GetArguments()[0] is LogLevel.Information && c.GetArguments()[1] is EventId { Id: 20506 }).ShouldBe(1);
     }
 
     [Fact]
@@ -440,7 +467,7 @@ public sealed class InstanceQueryAppServiceRowSecurityGetTests : IDisposable
             humanTaskFunctionCache: Substitute.For<Caching.IHumanTaskFunctionCache>(),
             currentUser: currentUser,
             descentLimiter: new HumanTaskDescentLimiter(Options.Create(new HumanTaskFunctionOptions())),
-            logger: Substitute.For<ILogger<InstanceQueryAppService>>(),
+            logger: _appLogger,
             rowSecurityService: withRowSecurity
                 ? new RowSecurityService(_resolver, currentUser, Options.Create(new RowSecurityOptions()))
                 : null);

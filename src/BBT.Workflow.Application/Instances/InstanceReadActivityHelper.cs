@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using BBT.Workflow.Authorization.RowSecurity;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Runtime;
 
@@ -96,6 +97,34 @@ public static class InstanceReadActivityHelper
         transaction.SetTag(TelemetryConstants.TagNames.FunctionKey, kind);
         transaction.SetTag(TelemetryConstants.TagNames.ReadFastPath, outcome);
     }
+
+    /// <summary>
+    /// Tags the row-security decision on the read span (vnext#1107): applied, outcome, matched rule indexes,
+    /// unresolved parameter NAMES and the rule-set version. A flow without <c>rowSecurity</c>
+    /// (<see cref="RowSecurityOutcome.NotConfigured"/>) gets no tag at all, so its spans stay identical to
+    /// before the feature. Never a parameter, header or identity value.
+    /// </summary>
+    public static void SetRowSecurity(Activity? activity, RowSecurityDecision decision)
+    {
+        if (activity is null) return;
+        if (decision.Outcome.ToTagValue() is not { } outcome) return;
+
+        activity.SetTag(TelemetryConstants.TagNames.RowSecurityApplied, true);
+        activity.SetTag(TelemetryConstants.TagNames.RowSecurityOutcome, outcome);
+        if (decision.MatchedRuleIndexes.Count > 0)
+            activity.SetTag(TelemetryConstants.TagNames.RowSecurityRules, string.Join(',', decision.MatchedRuleIndexes));
+        if (decision.MissingParameterNames.Count > 0)
+            activity.SetTag(TelemetryConstants.TagNames.RowSecurityMissingParams, string.Join(',', decision.MissingParameterNames));
+        if (decision.FlowVersion is { Length: > 0 } version)
+            activity.SetTag(TelemetryConstants.TagNames.RowSecurityFlowVersion, version);
+    }
+
+    /// <summary>The value of the outcome tag once a GET probe found the instance outside the caller's predicate.</summary>
+    public const string RowSecurityExcluded = "excluded";
+
+    /// <summary>Overwrites the row-security outcome tag with <see cref="RowSecurityExcluded"/>.</summary>
+    public static void SetRowSecurityExcluded(Activity? activity) =>
+        activity?.SetTag(TelemetryConstants.TagNames.RowSecurityOutcome, RowSecurityExcluded);
 
     /// <summary>Operation name for the human-task candidate scan of one workflow schema.</summary>
     public const string OperationHumanTaskScan = "HumanTask.Scan";

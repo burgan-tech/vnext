@@ -161,7 +161,7 @@ public sealed class InstanceQueryAppService(
 
                     // Row security (vnext#1107) is decided before the body, extensions, ETag and 304: an instance
                     // the caller may not see answers exactly the missing-instance 404.
-                    if (await CheckGetRowSecurityAsync(input, instance, cancellationToken) is { } rowSecurityError)
+                    if (await CheckGetRowSecurityAsync(input, instance, read, cancellationToken) is { } rowSecurityError)
                     {
                         return ConditionalResult<GetInstanceOutput>.Fail(rowSecurityError);
                     }
@@ -254,7 +254,8 @@ public sealed class InstanceQueryAppService(
                     {
                         rowSecurity = await rowSecurityService.DecideAsync(new RowSecurityRequest(
                             input.Domain, input.Workflow, flowResult, schemaContext, exposure,
-                            input.Headers, input.RawHeaders, input.QueryParameters, input.RawQueryParameters), ct);
+                            input.Headers, input.RawHeaders, input.QueryParameters, input.RawQueryParameters,
+                            RowSecuritySurfaces.List, read), ct);
 
                         if (rowSecurity.Outcome == RowSecurityOutcome.DeniedRuleSetUnavailable)
                         {
@@ -490,7 +491,8 @@ public sealed class InstanceQueryAppService(
     /// without it costs this one cached lookup and nothing else (C-6). The probe runs on the RESOLVED instance id
     /// and on its latest data, whatever <c>?version=</c> the body is read at.
     /// </summary>
-    private async Task<Error?> CheckGetRowSecurityAsync(GetInstanceInput input, Instance instance, CancellationToken ct)
+    private async Task<Error?> CheckGetRowSecurityAsync(
+        GetInstanceInput input, Instance instance, Activity? read, CancellationToken ct)
     {
         if (rowSecurityService is null)
             return null;
@@ -503,7 +505,8 @@ public sealed class InstanceQueryAppService(
 
         var decision = await rowSecurityService.DecideAsync(new RowSecurityRequest(
             input.Domain, input.Workflow, flowResult, schemaContext, exposure,
-            input.Headers, input.RawHeaders, input.QueryParameters, input.RawQueryParameters), ct);
+            input.Headers, input.RawHeaders, input.QueryParameters, input.RawQueryParameters,
+            RowSecuritySurfaces.Get, read), ct);
 
         return decision switch
         {
@@ -512,8 +515,25 @@ public sealed class InstanceQueryAppService(
             { Outcome: RowSecurityOutcome.Filtered, Predicate: { } predicate }
                 when await instanceRepository.IsVisibleAsync(instance.Id, predicate, schemaContext, ct) => null,
             // No rows, a false probe, or a Filtered decision without a predicate (never planned): fail closed.
-            _ => WorkflowErrors.InstanceNotFound(input.Instance)
+            _ => ExcludedOrDenied(decision, input, instance, read)
         };
+    }
+
+    /// <summary>
+    /// The fall-through arm of the GET check. A <see cref="RowSecurityOutcome.Filtered"/> decision that got here
+    /// means the probe did not find the instance, so the outcome tag becomes <c>excluded</c> and the exclusion is
+    /// logged; a no-rows decision keeps the <c>denied-*</c> tag the service wrote. Either way the answer is the
+    /// missing-instance error.
+    /// </summary>
+    private Error ExcludedOrDenied(RowSecurityDecision decision, GetInstanceInput input, Instance instance, Activity? read)
+    {
+        if (decision.Outcome == RowSecurityOutcome.Filtered)
+        {
+            InstanceReadActivityHelper.SetRowSecurityExcluded(read ?? Activity.Current);
+            logger.RowSecurityInstanceExcluded(input.Domain, input.Workflow, instance.Id.ToString());
+        }
+
+        return WorkflowErrors.InstanceNotFound(input.Instance);
     }
 
     /// <summary>

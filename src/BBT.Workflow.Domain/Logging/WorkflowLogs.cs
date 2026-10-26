@@ -4884,7 +4884,68 @@ public static partial class WorkflowLogs
 
     #region Row Security (205xx)
 
-    // 20505-20509 are reserved for the row-security read path (vnext#1107).
+    // 20505-20509: the row-security read path (vnext#1107). Parameters are names, rule indexes, error codes
+    // and coarse kinds only — never a parameter, header or identity value and never exception text.
+
+    /// <summary>Logs the row-security decision of one read (only for a flow that declares <c>rowSecurity</c>).</summary>
+    [LoggerMessage(
+        EventId = 20505,
+        Level = LogLevel.Information,
+        Message = "Row security applied: {Domain}/{Flow}@{FlowVersion} {Surface} outcome={Outcome} matchedRules=[{MatchedRules}]")]
+    public static partial void RowSecurityApplied(
+        this ILogger logger,
+        string domain,
+        string flow,
+        string? flowVersion,
+        string surface,
+        string outcome,
+        string matchedRules);
+
+    /// <summary>Logs that a single-instance GET found the instance outside the caller's row predicate (answered as not found).</summary>
+    [LoggerMessage(
+        EventId = 20506,
+        Level = LogLevel.Information,
+        Message = "Row security excluded instance: {Domain}/{Flow} {InstanceId}")]
+    public static partial void RowSecurityInstanceExcluded(
+        this ILogger logger,
+        string domain,
+        string flow,
+        string instanceId);
+
+    /// <summary>Logs that an applicable row-security rule contributed nothing to the read (fail-closed).</summary>
+    [LoggerMessage(
+        EventId = 20507,
+        Level = LogLevel.Warning,
+        Message = "Row security rule dropped: {Domain}/{Flow} rule={RuleIndex} reason={Reason} parameters=[{ParameterNames}]")]
+    public static partial void RowSecurityRuleDropped(
+        this ILogger logger,
+        string domain,
+        string flow,
+        int ruleIndex,
+        string reason,
+        string parameterNames);
+
+    /// <summary>Logs that the caller's role resolution failed, so the read returns no rows.</summary>
+    [LoggerMessage(
+        EventId = 20508,
+        Level = LogLevel.Warning,
+        Message = "Row security denied, role resolution failed: {Domain}/{Flow} kind={FailureKind}")]
+    public static partial void RowSecurityDeniedRoleResolutionFailed(
+        this ILogger logger,
+        string domain,
+        string flow,
+        string failureKind);
+
+    /// <summary>Logs that the flow definition carrying the rule set could not be loaded, so the read is denied.</summary>
+    [LoggerMessage(
+        EventId = 20509,
+        Level = LogLevel.Warning,
+        Message = "Row security rule set unavailable: {Domain}/{Flow} ({ErrorCode})")]
+    public static partial void RowSecurityRuleSetUnavailable(
+        this ILogger logger,
+        string domain,
+        string flow,
+        string errorCode);
 
     /// <summary>
     /// Logs that a flow declaring <c>rowSecurity</c> was published while its master schema could not be

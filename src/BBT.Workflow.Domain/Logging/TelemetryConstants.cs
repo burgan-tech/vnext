@@ -184,6 +184,27 @@ public static class TelemetryConstants
         /// </para>
         /// </summary>
         public const string ReadFastPath = "vnext.read.fastpath";
+
+        /// <summary>
+        /// Row security (vnext#1107) was evaluated for this read. Written only for a flow that declares
+        /// <c>rowSecurity</c>: a flow without it carries no row-security tag at all.
+        /// </summary>
+        public const string RowSecurityApplied = "vnext.rowsecurity.applied";
+
+        /// <summary>
+        /// Row-security outcome: <c>unrestricted</c>, <c>filtered</c>, <c>excluded</c>, <c>denied-no-match</c>,
+        /// <c>denied-no-contribution</c>, <c>denied-resolution-failed</c> or <c>denied-flow-load</c>.
+        /// </summary>
+        public const string RowSecurityOutcome = "vnext.rowsecurity.outcome";
+
+        /// <summary>Indexes of the matched row-security rules, comma separated (<c>0,2</c>). Never values.</summary>
+        public const string RowSecurityRules = "vnext.rowsecurity.rules";
+
+        /// <summary>Names (never values) of the row-security parameters that did not resolve.</summary>
+        public const string RowSecurityMissingParams = "vnext.rowsecurity.missing_params";
+
+        /// <summary>The flow version whose row-security rules applied (the default-version pointer's choice, K2).</summary>
+        public const string RowSecurityFlowVersion = "vnext.rowsecurity.flow_version";
         /// <summary>
         /// How the wait on the per-key build gate ended: <c>build</c> (this request owns the build)
         /// or <c>coalesced</c> (while it waited, the request that held the gate populated the short
