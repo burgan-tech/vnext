@@ -174,6 +174,13 @@ public sealed class Workflow : IDomainEntity, IReference, IReferenceSetter, IHas
     [JsonInclude] [JsonPropertyName("event")]
     public Event? Event { get; private set; }
 
+    /// <summary>
+    /// Optional row-level security (<c>attributes.rowSecurity</c>, vnext#1107): role-scoped filters that
+    /// restrict which instances a caller can list or read. Null means the flow is not row-secured.
+    /// </summary>
+    [JsonInclude] [JsonPropertyName("rowSecurity")]
+    public RowSecurity.RowSecurityDefinition? RowSecurity { get; private set; }
+
 
     [JsonInclude] [JsonPropertyName("labels")]
     private List<LanguageLabel> labels = new();
