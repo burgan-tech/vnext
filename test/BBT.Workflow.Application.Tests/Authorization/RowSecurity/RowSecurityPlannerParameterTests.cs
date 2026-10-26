@@ -305,6 +305,71 @@ public class RowSecurityPlannerParameterTests
         cases[3].MissingParameterNames.ShouldBe(["x-b2"]);
     }
 
+    // ---- I-1: a comma on an instance column ---------------------------------------------------------------
+    // The instance-column compiler joins an array with ',' and splits it again, so one element "a,b" would
+    // become two. The planner drops the rule instead (Coercion), whatever the value's source.
+
+    [Fact]
+    public void Comma_IdentityOnInstanceColumnIn_DropsRule()
+    {
+        var decision = Plan("""{"createdBy":{"in":["$InstanceStarter"]}}""", actor: "alice,bob");
+
+        decision.ReturnsNoRows.ShouldBeTrue();
+        decision.Predicate.ShouldBeNull();
+        var drop = decision.DroppedRules.ShouldHaveSingleItem();
+        drop.Reason.ShouldBe(RowRuleDropReasons.Coercion);
+        drop.ParameterNames.ShouldBe(["ActorUserName"]);
+    }
+
+    [Fact]
+    public void Comma_HeaderElementOnInstanceColumnIn_DropsRule() =>
+        Plan("""{"createdBy":{"in":["$.context.Headers.x-k","u3"]}}""", headers: new() { ["x-k"] = ["k1,k2"] })
+            .DroppedRules.ShouldHaveSingleItem().Reason.ShouldBe(RowRuleDropReasons.Coercion);
+
+    [Fact]
+    public void Comma_HeaderParamOnInstanceColumnIn_DropsRule() =>
+        Plan("""{"key":{"in":{"$param":"$.context.Headers.x-k"}}}""", headers: new() { ["x-k"] = ["k1,k2"] })
+            .DroppedRules.ShouldHaveSingleItem().Reason.ShouldBe(RowRuleDropReasons.Coercion);
+
+    [Fact]
+    public void Comma_SplitSegmentOnInstanceColumnNin_DropsRule() =>
+        Plan("""{"key":{"nin":{"$param":"$.context.Headers.x-k","split":";"}}}""", headers: new() { ["x-k"] = ["k1;k2,k3"] })
+            .DroppedRules.ShouldHaveSingleItem().Reason.ShouldBe(RowRuleDropReasons.Coercion);
+
+    [Fact]
+    public void Comma_BetweenBoundOnInstanceColumn_DropsRule_NoThrow()
+    {
+        var decision = Should.NotThrow(() => Plan(
+            """{"createdAt":{"between":["$.context.Headers.x-from","$.context.Headers.x-to"]}}""",
+            headers: new() { ["x-from"] = ["2026-01-01,2026-01-02"], ["x-to"] = ["2026-12-31"] }));
+
+        decision.ReturnsNoRows.ShouldBeTrue();
+        decision.DroppedRules.ShouldHaveSingleItem().Reason.ShouldBe(RowRuleDropReasons.Coercion);
+    }
+
+    [Fact]
+    public void Comma_AuthoredLiteralOnInstanceColumnIn_DropsRule() =>
+        Plan("""{"createdBy":{"in":["alice,bob"]}}""")
+            .DroppedRules.ShouldHaveSingleItem().Reason.ShouldBe(RowRuleDropReasons.Coercion);
+
+    [Fact]
+    public void Comma_ValueIsNeverInTheDecision()
+    {
+        var decision = Plan("""{"createdBy":{"in":["$.context.Headers.x-k"]}}""", headers: new() { ["x-k"] = [CanaryValue + ",x"] });
+
+        JsonSerializer.Serialize(decision).ShouldNotContain(CanaryValue);
+    }
+
+    [Fact]
+    public void Comma_EqOnInstanceColumn_IsOneValue_Kept() =>
+        Plan("""{"createdBy":{"eq":"$.context.Headers.x-k"}}""", headers: new() { ["x-k"] = ["a,b"] })
+            .Predicate!.Attributes!["createdBy"].Eq.ShouldBe("a,b");
+
+    [Fact]
+    public void Comma_InOnDataField_StaysOneElement() =>
+        Plan(InA("x-b1"), headers: new() { ["x-b1"] = ["BR-001,BR-002"] })
+            .Predicate!.Attributes![Field].In!.ShouldBe(["BR-001,BR-002"]);
+
     // ---- helpers --------------------------------------------------------------------------------------------
 
     private static readonly SchemaFilterContext AmountNumber = SchemaFilterMetadataResolver.Resolve(
@@ -349,12 +414,14 @@ public class RowSecurityPlannerParameterTests
         Dictionary<string, string[]>? query = null,
         SchemaFilterContext? schema = null,
         SchemaExposureMetadata? exposure = null,
-        RowSecurityOptions? limits = null)
+        RowSecurityOptions? limits = null,
+        string? actor = null)
     {
         var definition = JsonSerializer.Deserialize<RowSecurityDefinition>(
             $$"""{"rules":[{"roles":["r"],"filter":{{filter}}}]}""")!;
-        var source = new RequestRowParameterSource(headers ?? new(), null, query ?? new(), null,
-            Substitute.For<ICurrentUser>());
+        var user = Substitute.For<ICurrentUser>();
+        user.ActorUserName.Returns(actor);
+        var source = new RequestRowParameterSource(headers ?? new(), null, query ?? new(), null, user);
 
         return RowSecurityPlanner.Plan(new RowSecurityPlanInput(definition,
             new CallerRoleResolution(["r"], CallerRoleOutcome.Resolved), source, schema,

@@ -8,10 +8,14 @@ using System.Threading.Tasks;
 using BBT.Aether;
 using BBT.Aether.Domain.EntityFrameworkCore;
 using BBT.Aether.MultiSchema;
+using BBT.Aether.Users;
+using BBT.Workflow.Authorization;
+using BBT.Workflow.Authorization.RowSecurity;
 using BBT.Workflow.BackgroundJobs.Options;
 using BBT.Workflow.Data;
 using BBT.Workflow.DataSink;
 using BBT.Workflow.Definitions.GraphQL;
+using BBT.Workflow.Definitions.RowSecurity;
 using BBT.Workflow.Definitions.Schemas;
 using BBT.Workflow.ExceptionHandling;
 using BBT.Workflow.Instances;
@@ -349,6 +353,44 @@ public sealed class InstanceListRowSecurityIntegrationTests(AttributeIndexPostgr
         capture.Commands.ShouldBeEmpty();
     }
 
+    // ── I-1: a comma inside an instance-column array value ─────────────────────────────────────
+
+    [Fact]
+    public async Task CommaIdentity_OnCreatedByIn_NeverReachesSql()
+    {
+        // Hazard pin: the instance-column compiler re-splits an array on ',', so one element "alice,bob"
+        // compiled as is would match alice's AND bob's rows (r1, r3, r4). The planner must never emit it.
+        var raw = Leaf("createdBy", new FieldCondition { In = ["alice,bob"] });
+        (await Ids(raw, null, identityPaging: true)).ShouldBe([Id(1), Id(3), Id(4)]);
+
+        // Planned: the createdBy rule is dropped (Coercion); only the other matched rule (BR-003) remains.
+        var definition = JsonSerializer.Deserialize<RowSecurityDefinition>("""
+          {"rules":[{"roles":["r"],"filter":{"createdBy":{"in":["$InstanceStarter"]}}},
+                    {"roles":["r"],"filter":{"branchCode":{"eq":"BR-003"}}}]}
+          """)!;
+        var user = Substitute.For<ICurrentUser>();
+        user.ActorUserName.Returns("alice,bob");
+        var decision = RowSecurityPlanner.Plan(new RowSecurityPlanInput(definition,
+            new CallerRoleResolution(["r"], CallerRoleOutcome.Resolved),
+            new RequestRowParameterSource(new Dictionary<string, string[]>(), null, null, null, user), null,
+            SchemaExposureMetadata.Empty, new RowSecurityOptions()));
+
+        decision.Outcome.ShouldBe(RowSecurityOutcome.Filtered);
+        decision.DroppedRules.ShouldHaveSingleItem().Reason.ShouldBe(RowRuleDropReasons.Coercion);
+        foreach (var identityPaging in new[] { true, false })
+        {
+            var capture = new ReadCapture();
+            await using var db = CreateContext(capture);
+            var result = await CreateRepository(db, new InstanceQueryOptions { IdentityPaging = identityPaging })
+                .GetPagedResultsWithGroupsAsync(1, 50, (string?)null, null, null, null, null, decision.Predicate);
+
+            result.PagedList.Items.Select(i => i.Id).ShouldBe([Id(6)]);
+            capture.Commands.ShouldNotBeEmpty();
+            capture.ParameterValues.ShouldNotContain(v => v.Contains("alice") || v.Contains("bob"));
+            capture.Commands.ShouldNotContain(c => c.Contains("CreatedBy\" IN", StringComparison.Ordinal));
+        }
+    }
+
     private static GraphQLFilterNode DefinitionB() => new()
     {
         PolicyExempt = true,
@@ -447,10 +489,14 @@ public sealed class InstanceListRowSecurityIntegrationTests(AttributeIndexPostgr
     {
         public List<string> Commands { get; } = [];
 
+        public List<string> ParameterValues { get; } = [];
+
         public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(DbCommand command,
             CommandEventData eventData, InterceptionResult<DbDataReader> result, CancellationToken cancellationToken = default)
         {
             Commands.Add(command.CommandText);
+            foreach (DbParameter parameter in command.Parameters)
+                ParameterValues.Add(Convert.ToString(parameter.Value, System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty);
             return ValueTask.FromResult(result);
         }
     }

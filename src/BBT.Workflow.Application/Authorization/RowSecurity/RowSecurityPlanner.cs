@@ -28,7 +28,9 @@ namespace BBT.Workflow.Authorization.RowSecurity;
 /// blank = missing; only <c>in</c> outside an odd number of <c>not</c> narrows (unresolved elements are left out,
 /// none left drops); <c>nin</c>, <c>ne</c>, <c>between</c> and every operator under <c>not</c> drop on any unresolved
 /// element; a scalar fed several raw values is ambiguous; <see cref="RowSecurityOptions"/> caps, master-schema type
-/// coercion and the protected-path backstop (<see cref="RowSecurityProtectedPaths"/>) each drop the rule.
+/// coercion and the protected-path backstop (<see cref="RowSecurityProtectedPaths"/>) each drop the rule. On an
+/// instance column, an <c>in</c> / <c>nin</c> / <c>between</c> value containing ',' drops the rule too (the list
+/// engine re-splits such operands on ','; one value must stay one element).
 /// </remarks>
 public static class RowSecurityPlanner
 {
@@ -299,7 +301,11 @@ public static class RowSecurityPlanner
     /// <param name="Narrowing">True only for <c>in</c> outside an odd <c>not</c>: unresolved elements are dropped.</param>
     /// <param name="FieldType">The master-schema type parameter values are coerced to; null = keep strings.</param>
     /// <param name="Limits">Caps.</param>
-    private sealed record LeafContext(bool Narrowing, string? FieldType, RowSecurityOptions Limits);
+    /// <param name="RefusesComma">True for <c>in</c> / <c>nin</c> / <c>between</c> on an instance column: the list
+    /// engine joins such an array with ',' and splits it again, so a value carrying a comma would become several
+    /// elements (widening <c>in</c>, bypassing the caps, or throwing on a <c>between</c> bound). Such a value drops
+    /// the rule (<see cref="RowRuleDropReasons.Coercion"/>), whatever its source.</param>
+    private sealed record LeafContext(bool Narrowing, string? FieldType, RowSecurityOptions Limits, bool RefusesComma = false);
 
     private static FieldCondition? TryMaterializeLeaf(RowTemplateLeaf leaf, RowSecurityPlanInput input,
         MaterializeFailure failure, bool negated)
@@ -307,7 +313,8 @@ public static class RowSecurityPlanner
         // Text operators match on text whatever the field type; everything else is coerced to the field type.
         var coerced = leaf.Operator is not ("like" or "match" or "startswith" or "endswith");
         var fieldType = coerced && !leaf.IsInstanceColumn ? input.Schema?.GetFieldMetadata(leaf.Field)?.Type : null;
-        var context = new LeafContext(leaf.Operator == "in" && !negated, fieldType, input.Limits);
+        var context = new LeafContext(leaf.Operator == "in" && !negated, fieldType, input.Limits,
+            RefusesComma: leaf.IsInstanceColumn && leaf.Operator is "in" or "nin" or "between");
 
         switch (leaf.Operator)
         {
@@ -370,7 +377,13 @@ public static class RowSecurityPlanner
         switch (value)
         {
             case RowTemplateValue.Literal literal:
-                return LiteralValue(literal.Value) ?? failure.Fail<object>(RowRuleDropReasons.Invalid);
+                var literalValue = LiteralValue(literal.Value);
+                if (literalValue is null)
+                    return failure.Fail<object>(RowRuleDropReasons.Invalid);
+                // An authored literal is held to the same rule as a request value (publish accepts the comma).
+                return context.RefusesComma && literalValue is string text && text.Contains(',')
+                    ? failure.Fail<object>(RowRuleDropReasons.Coercion)
+                    : literalValue;
 
             case RowTemplateValue.Parameter parameter:
             {
@@ -399,6 +412,9 @@ public static class RowSecurityPlanner
             return failure.Fail<object>(RowRuleDropReasons.Cap, path);
         // PostgreSQL text cannot hold NUL (22P05 ⇒ 500); such a value fits no field type.
         if (value.Contains('\0'))
+            return failure.Fail<object>(RowRuleDropReasons.Coercion, path);
+        // Instance-column array operand: the compiler would re-split it on ',' (see LeafContext.RefusesComma).
+        if (context.RefusesComma && value.Contains(','))
             return failure.Fail<object>(RowRuleDropReasons.Coercion, path);
         return TryCoerce(value, context.FieldType, out var coerced)
             ? coerced
