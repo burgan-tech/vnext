@@ -15,6 +15,7 @@ using BBT.Workflow.Scripting.Sandbox;
 using BBT.Workflow.Extentions;
 using BBT.Workflow.SubFlow;
 using BBT.Workflow.Authorization;
+using BBT.Workflow.Authorization.RowSecurity;
 using BBT.Workflow.BackgroundJobs;
 using BBT.Workflow.Events;
 using BBT.Workflow.Schedule;
@@ -129,6 +130,7 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
         services.TryAddScoped<IFileOffloadService, FileOffloadService>();
         services.TryAddScoped<IInstanceFileAppService, InstanceFileAppService>();
         services.AddScoped<IDefinitionAppService, DefinitionAppService>();
+        services.AddScoped<RowSecurityPublishCheck>();
         services.AddScoped<IPublishCompletedAppService, PublishCompletedAppService>();
         services.AddScoped<IInstanceCommandAppService, InstanceCommandAppService>();
         services.AddScoped<IInstanceQueryAppService, InstanceQueryAppService>();

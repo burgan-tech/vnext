@@ -4882,6 +4882,39 @@ public static partial class WorkflowLogs
 
     #endregion
 
+    #region Row Security (205xx)
+
+    // 20505-20509 are reserved for the row-security read path (vnext#1107).
+
+    /// <summary>
+    /// Logs that a flow declaring <c>rowSecurity</c> was published while its master schema could not be
+    /// resolved: the schema-aware publish checks were skipped (RS-W0) and protected-path rules are dropped
+    /// at read time instead.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20510,
+        Level = LogLevel.Warning,
+        Message = "Row security schema checks skipped at publish: {ComponentKey} (schema {SchemaKey} not resolvable)")]
+    public static partial void RowSecurityPublishSchemaChecksSkipped(
+        this ILogger logger,
+        string componentKey,
+        string schemaKey);
+
+    /// <summary>
+    /// Logs that a flow declaring <c>rowSecurity</c> has a SubFlow state whose child instances do not
+    /// inherit the parent's row security (RS-W7).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20511,
+        Level = LogLevel.Information,
+        Message = "Row security is not inherited by SubFlow children: {ComponentKey} state {StateKey}")]
+    public static partial void RowSecuritySubFlowNotInherited(
+        this ILogger logger,
+        string componentKey,
+        string stateKey);
+
+    #endregion
+
     #region Server Configuration
 
     /// <summary>
