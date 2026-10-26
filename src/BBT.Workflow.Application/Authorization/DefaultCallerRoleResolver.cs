@@ -20,4 +20,18 @@ public sealed class DefaultCallerRoleResolver(ICurrentUser currentUser) : ICalle
         IReadOnlyDictionary<string, string?>? headers,
         CancellationToken cancellationToken = default) =>
         Task.FromResult(Result<string[]?>.Ok(currentUser.ResolveCallerRoles(headers)));
+
+    /// <summary>
+    /// Same source as <see cref="ResolveRolesAsync"/>; a non-empty set is <see cref="CallerRoleOutcome.Resolved"/>,
+    /// none is <see cref="CallerRoleOutcome.Empty"/>. This in-process provider never reports Failed.
+    /// </summary>
+    public Task<CallerRoleResolution> ResolveRoleSetAsync(
+        IReadOnlyDictionary<string, string?>? headers,
+        CancellationToken cancellationToken = default)
+    {
+        var roles = currentUser.ResolveCallerRoles(headers) ?? [];
+        return Task.FromResult(new CallerRoleResolution(
+            roles,
+            roles.Length > 0 ? CallerRoleOutcome.Resolved : CallerRoleOutcome.Empty));
+    }
 }
