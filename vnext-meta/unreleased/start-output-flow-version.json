@@ -1,0 +1,7 @@
+{
+  "releaseNote": {
+    "summary": "The start response carries the resolved flowVersion, and SubFlow correlation stores the child's resolved version.",
+    "breaking": false,
+    "docs": []
+  }
+}

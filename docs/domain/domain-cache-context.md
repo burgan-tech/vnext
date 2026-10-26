@@ -91,13 +91,15 @@ default on; `ComponentCache:L1SizeLimitMb`, default 64). Bytes are deserialized 
 every hit returns a fresh instance, and negative answers are never stored in L1.
 
 The one remaining per-resolution round trip — the generation-token read — can additionally be
-memoized in process (`ComponentCache:GenerationMemoSeconds`, default 0 = off) at the cost of a
-≤N-second cross-pod publish-visibility window; enabling it is a CI/CD contract change, see
+memoized in process (`ComponentCache:GenerationMemoSeconds`, default 5; 0 = off) at the cost of a
+≤N-second cross-pod publish-visibility window; that window is part of the CI/CD contract, see
 [Component Cache Generation Memo](../runtime/component-cache-generation-memo.md).
 
 Version resolution:
 
-- Null, empty, or `latest` resolves to the latest definition.
+- Null, empty, or `latest` resolves to the latest definition, or to the flow's default version when the
+  `sys-version-registry` holds a pointer for it (Workflows set only; see
+  [Flow Default Version](../runtime/flow-default-version.md)).
 - Full versions resolve exact package/build versions.
 - Artifact versions resolve the best matching full version for that artifact.
 
@@ -106,6 +108,8 @@ Version resolution:
 - Unsupported entity types passed to `Set<T>()` throw `NotSupportedException`.
 - Redis read/write errors are logged and traced; reads can still fall back to backend.
 - Backend not-found results return cache not-found errors.
+- Policy errors from the flow default version (`Instance:100051`/`100052`/`100053`) are returned to the caller
+  and **never negative-cached**; a pointer change takes effect through a generation bump.
 - Infrastructure failures from runtime backend are allowed to bubble up.
 - Cache writes return success after logging write errors, so callers should not treat cache
   population as the source of truth.

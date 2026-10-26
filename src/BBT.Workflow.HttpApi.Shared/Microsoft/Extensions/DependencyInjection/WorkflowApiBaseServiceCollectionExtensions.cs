@@ -439,6 +439,11 @@ public static class WorkflowApiBaseServiceCollectionExtensions
             opt.Map(WorkflowErrorCodes.FileReferenceInvalid, HttpStatusCode.BadRequest);
             opt.Map(WorkflowErrorCodes.FileNotFound, HttpStatusCode.NotFound);
             opt.Map(WorkflowErrorCodes.FileSchemaUnavailable, HttpStatusCode.ServiceUnavailable);
+            // flow default version: above the activation ceiling is 404, a broken pointer is a 409
+            // configuration conflict, an unreadable registry is transient (503).
+            opt.Map(WorkflowErrorCodes.FlowVersionNotActivated, HttpStatusCode.NotFound);
+            opt.Map(WorkflowErrorCodes.FlowDefaultVersionInvalid, HttpStatusCode.Conflict);
+            opt.Map(WorkflowErrorCodes.VersionRegistryUnavailable, HttpStatusCode.ServiceUnavailable);
             // history: none (vnext#1006): an ineligible SubFlow child is the author's error; retry is
             // a conflict with the flow's declared mode.
             opt.Map(WorkflowErrorCodes.HistoryNoneSubFlowChildNotEligible, HttpStatusCode.BadRequest);

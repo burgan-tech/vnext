@@ -16,6 +16,12 @@ public static class TelemetryConstants
         public const string Domain = "vnext.domain";
         public const string Flow = "vnext.flow.key";
         public const string FlowVersion = "vnext.flow.version";
+        /// <summary>The flow version as requested (<c>latest</c>, MAJOR, MAJOR.MINOR, artifact or full).</summary>
+        public const string FlowVersionRequested = "vnext.flow.version.requested";
+        /// <summary>The flow's default-version pointer that took part in the resolution, when one is set.</summary>
+        public const string FlowVersionPointer = "vnext.flow.version.pointer";
+        /// <summary>The rule that resolved the flow version: <c>automatic</c>, <c>explicit</c>, <c>default</c> or <c>ceiling</c>.</summary>
+        public const string FlowVersionSource = "vnext.flow.version.source";
         public const string InstanceId = "vnext.instance.id";
         /// <summary>
         /// Vendor-neutral workflow instance identifier used to correlate telemetry

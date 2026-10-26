@@ -975,5 +975,65 @@ public class InstanceDataVersionComparerTests : DomainTestBase<DomainEntryPoint>
             version
         );
     }
-}
 
+    [Theory]
+    [InlineData("1.0.0-pkg.1.0.0")]
+    [InlineData("1.0.0-pkg.1.0.0+core")]
+    [InlineData("1.0.0-pkg.00.01.417+onboarding")]
+    [InlineData("1.0.0-alpha.1-pkg.1.0.0")]
+    public void IsWellFormedFullVersion_ShouldAccept_FullForms(string version)
+    {
+        Assert.True(InstanceDataVersionComparer.IsWellFormedFullVersion(version));
+    }
+
+    [Theory]
+    [InlineData("1.0.0-pkg.1.0")]
+    [InlineData("1.0.0-pkg.1")]
+    [InlineData("1.0.0")]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData(null)]
+    [InlineData(" 1.0.0-pkg.1.0.0 ")]
+    public void IsWellFormedFullVersion_ShouldReject_NonFullForms(string? version)
+    {
+        Assert.False(InstanceDataVersionComparer.IsWellFormedFullVersion(version));
+    }
+
+    [Fact]
+    public void FindFullVersionMatch_ShouldMatchCanonically_IgnoringMetadata()
+    {
+        var published = new[] { "1.0.0-pkg.1.0.0+core", "2.0.0-pkg.1.0.0+core" };
+
+        Assert.Equal("2.0.0-pkg.1.0.0+core",
+            InstanceDataVersionComparer.FindFullVersionMatch(published, "2.0.0-pkg.1.0.0"));
+        Assert.Equal("2.0.0-pkg.1.0.0+core",
+            InstanceDataVersionComparer.FindFullVersionMatch(published, "2.0.0-pkg.1.0.0+other"));
+    }
+
+    [Fact]
+    public void FindFullVersionMatch_ShouldBeCaseInsensitive()
+    {
+        var published = new[] { "1.0.0-Alpha.1-pkg.1.0.0+core" };
+
+        Assert.Equal("1.0.0-Alpha.1-pkg.1.0.0+core",
+            InstanceDataVersionComparer.FindFullVersionMatch(published, "1.0.0-alpha.1-PKG.1.0.0"));
+    }
+
+    [Fact]
+    public void FindFullVersionMatch_ShouldReturnNull_WhenNothingMatches()
+    {
+        Assert.Null(InstanceDataVersionComparer.FindFullVersionMatch(
+            new[] { "1.0.0-pkg.1.0.0+core" }, "3.0.0-pkg.1.0.0"));
+    }
+
+    [Fact]
+    public void FindFullVersionMatch_ShouldPickOrdinallyFirst_WhenCanonicalFormsCollide()
+    {
+        var published = new[] { "2.1.0-pkg.1.0.168+customer", "2.1.0-pkg.1.0.168+core" };
+
+        Assert.Equal("2.1.0-pkg.1.0.168+core",
+            InstanceDataVersionComparer.FindFullVersionMatch(published, "2.1.0-pkg.1.0.168"));
+        Assert.Equal("2.1.0-pkg.1.0.168+core",
+            InstanceDataVersionComparer.FindFullVersionMatch(published.Reverse(), "2.1.0-pkg.1.0.168"));
+    }
+}
