@@ -133,6 +133,7 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
         services.TryAddScoped<IInstanceFileAppService, InstanceFileAppService>();
         services.AddScoped<IDefinitionAppService, DefinitionAppService>();
         services.AddScoped<RowSecurityPublishCheck>();
+        services.AddScoped<BBT.Workflow.Authorization.RowSecurity.IRowSecurityService, BBT.Workflow.Authorization.RowSecurity.RowSecurityService>();
         services.AddScoped<IPublishCompletedAppService, PublishCompletedAppService>();
         services.AddScoped<IInstanceCommandAppService, InstanceCommandAppService>();
         services.AddScoped<IInstanceQueryAppService, InstanceQueryAppService>();

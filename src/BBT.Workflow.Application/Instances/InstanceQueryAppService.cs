@@ -4,6 +4,7 @@ using BBT.Aether.Application.Services;
 using BBT.Aether.Domain.Entities;
 using BBT.Aether.Results;
 using BBT.Workflow.Authorization;
+using BBT.Workflow.Authorization.RowSecurity;
 using BBT.Workflow.Caching;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Logging;
@@ -67,7 +68,8 @@ public sealed class InstanceQueryAppService(
     Caching.IInstanceSchemaFunctionCache instanceSchemaFunctionCache,
     Caching.IHumanTaskFunctionCache humanTaskFunctionCache,
     HumanTask.HumanTaskDescentLimiter descentLimiter,
-    ILogger<InstanceQueryAppService> logger)
+    ILogger<InstanceQueryAppService> logger,
+    IRowSecurityService? rowSecurityService = null)
     : ApplicationService(serviceProvider), IInstanceQueryAppService
 {
     private static readonly ConcurrentDictionary<string, BuildGate> ActiveSubflowBuildGates = new();
@@ -226,37 +228,32 @@ public sealed class InstanceQueryAppService(
                 ToValidationError(validation));
         }
 
-        return await ResultExtensions.TryAsync(
+        Error? rowSecurityDenial = null;
+        var listResult = await ResultExtensions.TryAsync(
             async ct =>
             {
 
-                SchemaFilterContext? schemaContext = null;
-                IReadOnlySet<string> encryptedPaths = new HashSet<string>();
+                SchemaFilterContext? schemaContext;
+                RowSecurityDecision? rowSecurity = null;
                 using (InstanceReadActivityHelper.StartListPhase("metadata"))
                 {
-                    // Resolve schema-driven filter/sort metadata from workflow's master schema
-                    var flowResult = await componentCacheStore.GetFlowAsync(input.Domain, input.Workflow, null, ct);
-                    if (flowResult.IsSuccess && flowResult.Value?.Schema is not null)
-                    {
-                        var schemaResult = await componentCacheStore.GetSchemaAsync(flowResult.Value.Schema, ct);
-                        if (schemaResult.IsSuccess)
-                        {
-                            schemaContext = SchemaFilterMetadataResolver.Resolve(schemaResult.Value!.Schema);
-                            encryptedPaths = SchemaRolesParser.ParseExposure(schemaResult.Value!.Schema).EncryptPaths;
-                        }
-                    }
+                    var (ctx, exposure, flowResult) = await ResolveListMetadataAsync(input.Domain, input.Workflow, ct);
+                    schemaContext = ctx;
 
-                    if (schemaContext != null)
+                    // Row security (vnext#1107). The rule set is the flow GetFlowAsync(domain, workflow, null)
+                    // resolved above (K2). NotConfigured / Unrestricted leave the repository calls below verbatim.
+                    if (rowSecurityService is not null)
                     {
-                        var ready = !schemaContext.Fields.Values.Any(f => f.Indexed)
-                            ? new HashSet<string>()
-                            : await attributeIndexCatalog.GetReadyAsync(currentSchema.Name ?? input.Workflow, ct);
-                        schemaContext = new SchemaFilterContext(schemaContext.Fields)
+                        rowSecurity = await rowSecurityService.DecideAsync(new RowSecurityRequest(
+                            input.Domain, input.Workflow, flowResult, schemaContext, exposure,
+                            input.Headers, input.RawHeaders, input.QueryParameters, input.RawQueryParameters), ct);
+
+                        if (rowSecurity.Outcome == RowSecurityOutcome.DeniedRuleSetUnavailable)
                         {
-                            EnforceFiltering = instanceFilteringOptions.Value.EnforceMasterSchemaFiltering,
-                            ReadyIndexes = ready,
-                            EncryptedPaths = encryptedPaths
-                        };
+                            // D5: the lookup error goes back as is (409 / 503 stay 409 / 503), never an empty page.
+                            rowSecurityDenial = rowSecurity.LookupError ?? flowResult.Error;
+                            return null!;
+                        }
                     }
                 }
 
@@ -305,13 +302,40 @@ public sealed class InstanceQueryAppService(
                 try
                 {
                     using var queryActivity = InstanceReadActivityHelper.StartListPhase("query");
-                    if (parsedRequest != null)
+                    // A Filtered decision without a predicate is never planned; should one appear it denies (fail closed).
+                    if (rowSecurity is { ReturnsNoRows: true } or { Outcome: RowSecurityOutcome.Filtered, Predicate: null })
+                    {
+                        // SG-1: decided without SQL. Same shape as an empty result from the repository: an empty
+                        // page, and an empty group list when grouping or aggregation was requested.
+                        pagedList = new HateoasPagedList<Instance>([], input.Page, input.PageSize, false);
+                        groups = !string.IsNullOrWhiteSpace(groupBy) || !string.IsNullOrWhiteSpace(aggregations)
+                            ? new List<GroupSummary>()
+                            : null;
+                    }
+                    else if (parsedRequest != null)
                     {
                         parsedRequest.SchemaContext = schemaContext;
+                        if (rowSecurity is { Outcome: RowSecurityOutcome.Filtered, Predicate: { } rowPredicate })
+                            parsedRequest.RowPredicate = rowPredicate;
                         var result = await instanceRepository.GetPagedResultsWithGroupsAsync(
                             input.Page,
                             input.PageSize,
                             parsedRequest,
+                            ct);
+                        pagedList = result.PagedList;
+                        groups = result.Groups;
+                    }
+                    else if (rowSecurity is { Outcome: RowSecurityOutcome.Filtered, Predicate: { } rowPredicate })
+                    {
+                        var result = await instanceRepository.GetPagedResultsWithGroupsAsync(
+                            input.Page,
+                            input.PageSize,
+                            input.Filter,
+                            groupBy,
+                            aggregations,
+                            input.Sort,
+                            schemaContext,
+                            rowPredicate,
                             ct);
                         pagedList = result.PagedList;
                         groups = result.Groups;
@@ -426,6 +450,49 @@ public sealed class InstanceQueryAppService(
                 return response;
             },
             cancellationToken);
+
+        return rowSecurityDenial is { } denial
+            ? Result<InstanceListWithGroupsResponse<GetInstanceOutput>>.Fail(denial)
+            : listResult;
+    }
+
+    /// <summary>
+    /// The list's (and GET's) one flow lookup and the master-schema metadata derived from it. The flow call is
+    /// always <c>GetFlowAsync(domain, workflow, null)</c> — the default-version pointer's version, else the latest
+    /// (K2) — and its result is returned unchanged for the row-security decision.
+    /// </summary>
+    private async Task<(SchemaFilterContext? Ctx, SchemaExposureMetadata Exposure, Result<Definitions.Workflow> Flow)>
+        ResolveListMetadataAsync(string domain, string workflow, CancellationToken ct)
+    {
+        SchemaFilterContext? schemaContext = null;
+        var exposure = SchemaExposureMetadata.Empty;
+
+        // Resolve schema-driven filter/sort metadata from workflow's master schema
+        var flowResult = await componentCacheStore.GetFlowAsync(domain, workflow, null, ct);
+        if (flowResult.IsSuccess && flowResult.Value?.Schema is not null)
+        {
+            var schemaResult = await componentCacheStore.GetSchemaAsync(flowResult.Value.Schema, ct);
+            if (schemaResult.IsSuccess)
+            {
+                schemaContext = SchemaFilterMetadataResolver.Resolve(schemaResult.Value!.Schema);
+                exposure = SchemaRolesParser.ParseExposure(schemaResult.Value!.Schema);
+            }
+        }
+
+        if (schemaContext != null)
+        {
+            var ready = !schemaContext.Fields.Values.Any(f => f.Indexed)
+                ? new HashSet<string>()
+                : await attributeIndexCatalog.GetReadyAsync(currentSchema.Name ?? workflow, ct);
+            schemaContext = new SchemaFilterContext(schemaContext.Fields)
+            {
+                EnforceFiltering = instanceFilteringOptions.Value.EnforceMasterSchemaFiltering,
+                ReadyIndexes = ready,
+                EncryptedPaths = exposure.EncryptPaths
+            };
+        }
+
+        return (schemaContext, exposure, flowResult);
     }
 
     /// <summary>
