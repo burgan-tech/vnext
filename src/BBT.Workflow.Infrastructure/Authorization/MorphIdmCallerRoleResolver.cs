@@ -68,13 +68,16 @@ public sealed class MorphIdmCallerRoleResolver : ICallerRoleResolver
     private readonly ConcurrentDictionary<CredentialKey, Lazy<Task<Resolution>>> _resolutions = new();
 
     /// <summary>
-    /// The first non-null header dictionary a caller passed. A surface that passes no headers (several
-    /// read paths pass <c>null</c>) is resolved against it, so it lands on the same credential as the
-    /// surfaces that did pass them — the <c>client_id</c>, <c>position</c> fallback and <c>role</c>
-    /// header otherwise read differently between surfaces of one request. A surface that passes its
-    /// own headers (a trigger task's credential) is always keyed on those.
+    /// The first non-null header dictionary passed under each ambient identity
+    /// (<c>ICurrentUser.ActorUserName</c> + <c>UserName</c>). A surface that passes no headers (several
+    /// read paths pass <c>null</c>) is resolved against the dictionary captured under the SAME identity,
+    /// so it lands on the same credential as the surfaces of that caller that did pass them — the
+    /// <c>client_id</c>, <c>position</c> fallback and <c>role</c> header otherwise read differently
+    /// between surfaces of one request. It never borrows headers captured under another identity: after
+    /// <c>ICurrentUser.Change</c> (a trigger task) a null-header surface must not inherit the earlier
+    /// caller's <c>role</c> header. A surface that passes its own headers is always keyed on those.
     /// </summary>
-    private IReadOnlyDictionary<string, string?>? _fallbackHeaders;
+    private readonly ConcurrentDictionary<IdentityKey, IReadOnlyDictionary<string, string?>> _fallbackHeaders = new();
 
     public MorphIdmCallerRoleResolver(
         HttpClient httpClient,
@@ -135,10 +138,18 @@ public sealed class MorphIdmCallerRoleResolver : ICallerRoleResolver
     /// </summary>
     private async Task<Resolution> ResolveAsync(IReadOnlyDictionary<string, string?>? headers)
     {
+        var identity = new IdentityKey(_currentUser.ActorUserName, _currentUser.UserName);
+        IReadOnlyDictionary<string, string?>? effectiveHeaders;
         if (headers is not null)
-            Interlocked.CompareExchange(ref _fallbackHeaders, headers, null);
+        {
+            _fallbackHeaders.TryAdd(identity, headers);
+            effectiveHeaders = headers;
+        }
+        else
+        {
+            effectiveHeaders = _fallbackHeaders.TryGetValue(identity, out var captured) ? captured : null;
+        }
 
-        var effectiveHeaders = headers ?? _fallbackHeaders;
         var key = BuildKey(effectiveHeaders);
 
         if (_resolutions.TryGetValue(key, out var existing))
@@ -148,7 +159,7 @@ public sealed class MorphIdmCallerRoleResolver : ICallerRoleResolver
         // this credential, so honouring the first caller's token would let one abandoned read cancel
         // the role set out from under the others. The HttpClient timeout is what bounds this call.
         var created = new Lazy<Task<Resolution>>(
-            () => FetchAsync(key, effectiveHeaders, CancellationToken.None),
+            () => FetchAsync(key, CancellationToken.None),
             LazyThreadSafetyMode.ExecutionAndPublication);
         var winner = _resolutions.GetOrAdd(key, created);
 
@@ -180,7 +191,15 @@ public sealed class MorphIdmCallerRoleResolver : ICallerRoleResolver
             Subject: _currentUser.UserName,
             ClientId: HeaderValue(headers, AetherClaimTypes.ClientId),
             Position: _currentUser.Position ?? HeaderValue(headers, AetherClaimTypes.Position),
-            RoleHeader: RolesFromRequestHeader(headers) is { Length: > 0 } roles ? string.Join(",", roles) : null);
+            RoleHeader: RolesFromRequestHeader(headers) is { Length: > 0 } roles
+                ? string.Join(RoleHeaderSeparator, roles)
+                : null);
+
+    /// <summary>
+    /// Joins the normalised <c>role</c> header inside <see cref="CredentialKey.RoleHeader"/>. A control
+    /// character rather than a comma so the key splits back into exactly the roles it was built from.
+    /// </summary>
+    private const char RoleHeaderSeparator = '\u001F';
 
     /// <summary>
     /// Emits the span for a surface that was served the memo. The span is short by construction —
@@ -211,7 +230,6 @@ public sealed class MorphIdmCallerRoleResolver : ICallerRoleResolver
 
     private async Task<Resolution> FetchAsync(
         CredentialKey credential,
-        IReadOnlyDictionary<string, string?>? headers,
         CancellationToken cancellationToken)
     {
         var subject = credential.Subject;
@@ -231,9 +249,11 @@ public sealed class MorphIdmCallerRoleResolver : ICallerRoleResolver
         // service is not asked (2026-09-25 committee decision). Read exactly as the default provider
         // reads it — ICurrentUser.Roles, which the framework parses from the header, else the
         // forwarded dictionary in a scope with no HTTP request. Blank entries do not count as a header.
-        var headerRoles = RolesFromRequestHeader(headers);
-        if (headerRoles.Length > 0)
+        // Taken from the credential key (never re-derived from the headers), so the answer is exactly
+        // the role set the memo entry is keyed on.
+        if (credential.RoleHeader is { } roleHeader)
         {
+            var headerRoles = roleHeader.Split(RoleHeaderSeparator);
             _logger.CallerRolesTakenFromRequestHeader(CallerRoleProviderOptions.MorphIdmProvider, headerRoles.Length);
             AuthorizationActivityHelper.SetFromHeader(activity, headerRoles.Length, memoHit: false);
             return Resolution.Header(headerRoles);
@@ -320,10 +340,21 @@ public sealed class MorphIdmCallerRoleResolver : ICallerRoleResolver
         return Resolution.Failure(failureKind, statusCode);
     }
 
+    /// <summary>
+    /// The request's <c>role</c> header roles, normalised: blank entries dropped, trimmed, de-duplicated
+    /// and sorted ordinally — the same set in any order or with repeats is the same credential.
+    /// </summary>
     private string[] RolesFromRequestHeader(IReadOnlyDictionary<string, string?>? headers) =>
         _currentUser.ResolveCallerRoles(headers) is { Length: > 0 } roles
-            ? roles.Where(r => !string.IsNullOrWhiteSpace(r)).Select(r => r.Trim()).ToArray()
+            ? roles.Where(r => !string.IsNullOrWhiteSpace(r))
+                .Select(r => r.Trim())
+                .Distinct(StringComparer.Ordinal)
+                .Order(StringComparer.Ordinal)
+                .ToArray()
             : [];
+
+    /// <summary>The ambient identity a captured header dictionary belongs to.</summary>
+    private readonly record struct IdentityKey(string? Actor, string? Subject);
 
     /// <summary>
     /// The memoized outcome of one credential's resolution. The roles are what every surface receives;

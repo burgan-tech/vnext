@@ -169,6 +169,60 @@ public sealed class MorphIdmCallerRoleResolverOutcomeTests
         handler.Calls.ShouldBe(0);
     }
 
+    /// <summary>
+    /// A surface that passes no headers borrows only headers captured under the SAME ambient identity.
+    /// Headers carrying a <c>role</c> that one caller passed must not answer a null-header surface after
+    /// the scope switched to another credential (<c>ICurrentUser.Change</c>, a trigger task).
+    /// </summary>
+    [Fact]
+    public async Task NullHeaders_AfterIdentitySwitch_DoNotBorrowAnotherIdentitysRoleHeader()
+    {
+        var handler = new StubHandler(_ => Respond(HttpStatusCode.OK, """{"roles":["idm.viewer"]}"""));
+        var resolver = Build(handler);
+
+        (await resolver.ResolveRoleSetAsync(new Dictionary<string, string?> { ["role"] = "task.approver" }))
+            .Outcome.ShouldBe(CallerRoleOutcome.FromHeader);
+
+        _user.ActorUserName.Returns("rs-idm-branch");
+        _user.UserName.Returns("rs-idm-branch");
+        var set = await resolver.ResolveRoleSetAsync(null);
+
+        set.Outcome.ShouldNotBe(CallerRoleOutcome.FromHeader);
+        set.Roles.ShouldBe(["idm.viewer"]);
+        handler.Calls.ShouldBe(1);
+    }
+
+    /// <summary>The same identity with null headers still lands on the headers it passed earlier.</summary>
+    [Fact]
+    public async Task NullHeaders_SameIdentity_BorrowCapturedHeaders()
+    {
+        var handler = new StubHandler(_ => Respond(HttpStatusCode.OK, """{"roles":["idm.viewer"]}"""));
+        var resolver = Build(handler);
+
+        await resolver.ResolveRoleSetAsync(new Dictionary<string, string?> { ["role"] = "task.approver" });
+        var set = await resolver.ResolveRoleSetAsync(null);
+
+        set.Outcome.ShouldBe(CallerRoleOutcome.FromHeader);
+        set.Roles.ShouldBe(["task.approver"]);
+        handler.Calls.ShouldBe(0);
+    }
+
+    /// <summary>The role-header part of the memo key is order- and duplicate-insensitive.</summary>
+    [Fact]
+    public async Task RoleHeader_KeyIsNormalised_ReorderedHeaderSharesTheMemo()
+    {
+        var handler = new StubHandler(_ => Respond(HttpStatusCode.OK, """{"roles":["idm.viewer"]}"""));
+        var resolver = Build(handler);
+
+        var first = await resolver.ResolveRoleSetAsync(new Dictionary<string, string?> { ["role"] = "b, a" });
+        var second = await resolver.ResolveRoleSetAsync(new Dictionary<string, string?> { ["role"] = "a,b,a" });
+
+        first.Outcome.ShouldBe(CallerRoleOutcome.FromHeader);
+        second.Outcome.ShouldBe(CallerRoleOutcome.FromHeader);
+        first.Roles.ShouldBe(["a", "b"]);
+        second.Roles.ShouldBe(["a", "b"]);
+    }
+
     // ── Helpers ─────────────────────────────────────────────────────────────────
 
     // Typed as the interface on purpose: callers reach ResolveRoleSetAsync through ICallerRoleResolver,
