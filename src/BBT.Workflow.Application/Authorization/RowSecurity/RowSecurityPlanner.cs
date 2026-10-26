@@ -298,13 +298,14 @@ public static class RowSecurityPlanner
 
             case RowTemplateValue.Parameter parameter:
             {
-                var values = ReadTrimmed(parameters, parameter.Path);
-                if (values.Count == 0)
-                    return failure.Fail<object>(RowRuleDropReasons.Missing, parameter.Path);
-                // Never pick a "first value": a scalar fed several values contributes nothing.
+                var values = parameters.Get(parameter.Path);
+                // Never pick a "first value": a scalar fed several raw values contributes nothing.
                 if (values.Count > 1)
                     return failure.Fail<object>(RowRuleDropReasons.Ambiguous, parameter.Path);
-                return values[0];
+                var single = values.Count == 1 ? values[0]?.Trim() : null;
+                return string.IsNullOrEmpty(single)
+                    ? failure.Fail<object>(RowRuleDropReasons.Missing, parameter.Path)
+                    : single;
             }
 
             default:
@@ -333,24 +334,21 @@ public static class RowSecurityPlanner
             case RowTemplateValue.SplitParameter split:
             {
                 var raw = parameters.Get(split.Path);
-                var items = split.Separator is null
+                var items = (split.Separator is null
                     ? raw.Select(v => v?.Trim())
-                    : raw.SelectMany(v => (v ?? string.Empty).Split(split.Separator)).Select(v => v.Trim());
-                var list = items.Where(v => !string.IsNullOrEmpty(v)).Cast<object>().ToArray();
-                return list.Length == 0 ? failure.Fail<object[]>(RowRuleDropReasons.Missing, split.Path) : list;
+                    : raw.SelectMany(v => (v ?? string.Empty).Split(split.Separator)).Select(v => v.Trim())).ToList();
+                // 5A fail-closed baseline: a blank segment is an unresolved element and drops the rule for
+                // every operator (dropping it silently would widen nin / anything under not). Task 5B adds
+                // the in-only narrowing.
+                if (items.Count == 0 || items.Any(string.IsNullOrEmpty))
+                    return failure.Fail<object[]>(RowRuleDropReasons.Missing, split.Path);
+                return items.Cast<object>().ToArray();
             }
 
             default:
                 return failure.Fail<object[]>(RowRuleDropReasons.Invalid);
         }
     }
-
-    private static IReadOnlyList<string> ReadTrimmed(IRowSecurityParameterSource parameters, RowParameterPath path) =>
-        parameters.Get(path)
-            .Select(v => v?.Trim())
-            .Where(v => !string.IsNullOrEmpty(v))
-            .Cast<string>()
-            .ToList();
 
     // Mirrors GraphQLFilterNodeConverter.ReadValue so a planned literal compiles like a wire literal.
     private static object? LiteralValue(JsonElement element) => element.ValueKind switch

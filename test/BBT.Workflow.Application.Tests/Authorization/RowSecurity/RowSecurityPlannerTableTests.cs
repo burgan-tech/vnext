@@ -165,6 +165,57 @@ public class RowSecurityPlannerTableTests
         AllNodes(decision.Predicate!).ShouldAllBe(n => n.NodeType != FilterNodeType.Empty);
     }
 
+    [Fact]
+    public void Nin_WithBlankSplitSegment_DropsRule()
+    {
+        var decision = PlanSingle("""{"x":{"nin":{"$param":"$.context.Headers.x-v","split":","}}}""", ["a,,b"]);
+
+        decision.Outcome.ShouldBe(RowSecurityOutcome.NoContribution);
+        decision.Predicate.ShouldBeNull();
+        decision.DroppedRules.ShouldHaveSingleItem().Reason.ShouldBe(RowRuleDropReasons.Missing);
+    }
+
+    [Fact]
+    public void NotIn_WithBlankSplitSegment_DropsRule()
+    {
+        var decision = PlanSingle("""{"not":{"x":{"in":{"$param":"$.context.Headers.x-v","split":","}}}}""", ["a,,b"]);
+
+        decision.Outcome.ShouldBe(RowSecurityOutcome.NoContribution);
+        decision.Predicate.ShouldBeNull();
+        decision.DroppedRules.ShouldHaveSingleItem().Reason.ShouldBe(RowRuleDropReasons.Missing);
+    }
+
+    [Fact]
+    public void ScalarFedTwoRawValues_IsAmbiguous()
+    {
+        var decision = PlanSingle("""{"x":{"eq":"$.context.Headers.x-v"}}""", ["a", "b"]);
+
+        decision.Outcome.ShouldBe(RowSecurityOutcome.NoContribution);
+        var drop = decision.DroppedRules.ShouldHaveSingleItem();
+        drop.Reason.ShouldBe(RowRuleDropReasons.Ambiguous);
+        drop.ParameterNames.ShouldBe(["x-v"]);
+    }
+
+    [Fact]
+    public void FailedLeafUnderNot_DropsRule()
+    {
+        var decision = PlanSingle("""{"not":{"x":{"eq":"$.context.Headers.x-v"}}}""", null);
+
+        decision.Outcome.ShouldBe(RowSecurityOutcome.NoContribution);
+        decision.Predicate.ShouldBeNull();
+        decision.DroppedRules.ShouldHaveSingleItem().Reason.ShouldBe(RowRuleDropReasons.Missing);
+    }
+
+    private static RowSecurityDecision PlanSingle(string filter, string[]? headerValues)
+    {
+        var headers = new Dictionary<string, string[]>();
+        if (headerValues is not null)
+            headers["x-v"] = headerValues;
+
+        return Plan(Definition($$"""{"roles":["r"],"filter":{{filter}}}"""),
+            new CallerRoleResolution(["r"], CallerRoleOutcome.Resolved), null, null, extraHeaders: headers);
+    }
+
     [Theory]
     [InlineData(RowSecurityOutcome.NotConfigured, null)]
     [InlineData(RowSecurityOutcome.Unrestricted, "unrestricted")]
