@@ -510,7 +510,10 @@ public sealed class InstanceQueryAppService(
 
         return decision switch
         {
-            { Outcome: RowSecurityOutcome.DeniedRuleSetUnavailable } => decision.LookupError ?? flowResult.Error,
+            // D5 error as is; with no error to return, still deny (fail closed) — never serve the instance.
+            { Outcome: RowSecurityOutcome.DeniedRuleSetUnavailable } =>
+                decision.LookupError
+                ?? (flowResult.IsSuccess ? WorkflowErrors.InstanceNotFound(input.Instance) : flowResult.Error),
             { Outcome: RowSecurityOutcome.NotConfigured or RowSecurityOutcome.Unrestricted } => null,
             { Outcome: RowSecurityOutcome.Filtered, Predicate: { } predicate }
                 when await instanceRepository.IsVisibleAsync(instance.Id, predicate, schemaContext, ct) => null,

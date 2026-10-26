@@ -113,13 +113,23 @@ public sealed class InstanceQueryAppServiceRowSecurityGetTests : IDisposable
         var instance = StubInstance();
         StubSecuredFlow();
         _appLogger.IsEnabled(Arg.Any<LogLevel>()).Returns(true); // LoggerMessage skips a disabled level
+        // The listener is process-wide: anchor this test to its own root activity and take only spans
+        // carrying its trace id, so a read span from a test running in parallel is never captured.
+        using var root = new System.Diagnostics.Activity("rowsecurity-get-test-root").Start();
+        var traceId = root.TraceId;
         System.Diagnostics.Activity? read = null;
         using var listener = new System.Diagnostics.ActivityListener
         {
-            ShouldListenTo = source => source.Name == "BBT.Workflow.Instances.Read",
+            ShouldListenTo = source => source.Name == InstanceReadActivityHelper.SourceName,
             Sample = (ref System.Diagnostics.ActivityCreationOptions<System.Diagnostics.ActivityContext> _) =>
                 System.Diagnostics.ActivitySamplingResult.AllDataAndRecorded,
-            ActivityStarted = a => read ??= a
+            ActivityStarted = a =>
+            {
+                if (a.TraceId == traceId)
+                {
+                    Interlocked.CompareExchange(ref read, a, null);
+                }
+            }
         };
         System.Diagnostics.ActivitySource.AddActivityListener(listener);
 
@@ -317,6 +327,27 @@ public sealed class InstanceQueryAppServiceRowSecurityGetTests : IDisposable
         await _extensions.DidNotReceiveWithAnyArgs().ProcessExtensionsAsync(default, default!, default!, default, default);
     }
 
+    /// <summary>
+    /// A rule-set-unavailable decision that carries no lookup error, over a flow lookup that succeeded, has no
+    /// error to return as is. It must still deny (fail closed with the missing-instance 404), never serve the body.
+    /// </summary>
+    [Fact]
+    public async Task Get_DeniedRuleSetUnavailable_WithoutAnyError_FailsClosedAs404()
+    {
+        var instance = StubInstance();
+        StubSecuredFlow();
+        var service = Substitute.For<IRowSecurityService>();
+        service.DecideAsync(Arg.Any<RowSecurityRequest>(), Arg.Any<CancellationToken>())
+            .Returns(new RowSecurityDecision(RowSecurityOutcome.DeniedRuleSetUnavailable, null, [], [], [], null));
+
+        var r = await CreateService(rowSecurityService: service).GetInstanceAsync(Input(instance.Id.ToString()));
+
+        r.Result.IsSuccess.ShouldBeFalse();
+        r.Result.Error!.ShouldBe(WorkflowErrors.InstanceNotFound(instance.Id.ToString()));
+        await _repo.DidNotReceiveWithAnyArgs().IsVisibleAsync(default, default!, default, default);
+        await _extensions.DidNotReceiveWithAnyArgs().ProcessExtensionsAsync(default, default!, default!, default, default);
+    }
+
     // ---- K2 ----------------------------------------------------------------------------------------------------
 
     [Fact]
@@ -422,7 +453,7 @@ public sealed class InstanceQueryAppServiceRowSecurityGetTests : IDisposable
 
     private static string Serialize(object? value) => JsonSerializer.Serialize(value);
 
-    private InstanceQueryAppService CreateService(bool withRowSecurity = true)
+    private InstanceQueryAppService CreateService(bool withRowSecurity = true, IRowSecurityService? rowSecurityService = null)
     {
         var urlTemplateBuilder = Substitute.For<IUrlTemplateBuilder>();
         urlTemplateBuilder.BuildInstanceListUrl(Arg.Any<string>(), Arg.Any<string>()).Returns("/route");
@@ -468,8 +499,8 @@ public sealed class InstanceQueryAppServiceRowSecurityGetTests : IDisposable
             currentUser: currentUser,
             descentLimiter: new HumanTaskDescentLimiter(Options.Create(new HumanTaskFunctionOptions())),
             logger: _appLogger,
-            rowSecurityService: withRowSecurity
+            rowSecurityService: rowSecurityService ?? (withRowSecurity
                 ? new RowSecurityService(_resolver, currentUser, Options.Create(new RowSecurityOptions()))
-                : null);
+                : null));
     }
 }
