@@ -131,11 +131,11 @@ public sealed class TriggerTaskReadCredentialTests
     }
 
     /// <summary>
-    /// Row security (vnext#1107) covers only the public list / GET endpoint: a GetInstance task builds its own
-    /// input and leaves <c>ApplyRowSecurity</c> false, so a local read is never filtered.
+    /// Row security (vnext#1107) applies to the GetInstance task exactly as to the GET endpoint: the task-built
+    /// input asks for it.
     /// </summary>
     [Fact]
-    public async Task GetInstanceTask_LocalRead_DoesNotApplyRowSecurity()
+    public async Task GetInstanceTask_LocalRead_AppliesRowSecurity()
     {
         var task = WorkflowTaskFactory.CreateGetInstanceTask(domain: LocalDomain);
         GetInstanceInput? captured = null;
@@ -152,7 +152,50 @@ public sealed class TriggerTaskReadCredentialTests
                 CancellationToken.None)).IsSuccess.ShouldBeTrue();
 
         captured.ShouldNotBeNull();
-        captured.ApplyRowSecurity.ShouldBeFalse();
+        captured.ApplyRowSecurity.ShouldBeTrue();
+    }
+
+    /// <summary>
+    /// Row security (vnext#1107) inside a local GetInstance read sees the task's credential: an identity rule
+    /// (<c>$InstanceStarter</c> → <c>createdBy = ActorUserName</c>) is planned with the task's actor, never the
+    /// ambient pipeline caller's.
+    /// </summary>
+    [Fact]
+    public async Task RowSecurity_InsideALocalRead_SeesTheTaskCredential()
+    {
+        var task = WorkflowTaskFactory.CreateGetInstanceTask(domain: LocalDomain);
+        task.SetHeaders(new Dictionary<string, string?> { ["sub"] = "svc", ["act_sub"] = "svc-actor" });
+        var resolver = Substitute.For<BBT.Workflow.Authorization.ICallerRoleResolver>();
+        resolver.ResolveRoleSetAsync(Arg.Any<IReadOnlyDictionary<string, string?>?>(), Arg.Any<CancellationToken>())
+            .Returns(new BBT.Workflow.Authorization.CallerRoleResolution([], BBT.Workflow.Authorization.CallerRoleOutcome.Resolved));
+        var rowSecurity = new BBT.Workflow.Authorization.RowSecurity.RowSecurityService(resolver, _currentUser,
+            Microsoft.Extensions.Options.Options.Create(new BBT.Workflow.Authorization.RowSecurity.RowSecurityOptions()));
+        var flow = BBT.Workflow.Authorization.RowSecurity.RowSecurityServiceTests.Flow("""{"roles":["$InstanceStarter"]}""");
+        BBT.Workflow.Authorization.RowSecurity.RowSecurityDecision? decision = null;
+        var gateway = Substitute.For<IInstanceQueryGateway>();
+        gateway.GetInstanceAsync(Arg.Any<GetInstanceInput>(), Arg.Any<CancellationToken>()).Returns(async call =>
+        {
+            var input = call.ArgAt<GetInstanceInput>(0);
+            decision = await rowSecurity.DecideAsync(new BBT.Workflow.Authorization.RowSecurity.RowSecurityRequest(
+                LocalDomain, "rs-flow", Result<BBT.Workflow.Definitions.Workflow>.Ok(flow), null,
+                BBT.Workflow.Definitions.Schemas.SchemaExposureMetadata.Empty,
+                input.Headers, input.RawHeaders, input.QueryParameters, input.RawQueryParameters));
+            return ConditionalResult<GetInstanceOutput>.Success(new GetInstanceOutput());
+        });
+        var runtime = Substitute.For<IRuntimeInfoProvider>();
+        runtime.Domain.Returns(LocalDomain);
+        var executor = new GetInstanceTaskExecutor(Substitute.For<IScriptEngine>(), runtime, Substitute.For<IRemoteInvokerService>(),
+            gateway, Substitute.For<IDomainDiscoveryResolver>(), _currentUser, NullLogger<GetInstanceTaskExecutor>.Instance);
+
+        using (AmbientAuditor())
+            (await executor.ExecuteAsync(Context(task, new Dictionary<string, string> { ["sub"] = "alice", ["act_sub"] = "alice-actor" }),
+                CancellationToken.None)).IsSuccess.ShouldBeTrue();
+
+        decision.ShouldNotBeNull();
+        decision.Outcome.ShouldBe(BBT.Workflow.Authorization.RowSecurity.RowSecurityOutcome.Filtered);
+        var predicate = JsonSerializer.Serialize(decision.Predicate);
+        predicate.ShouldContain("svc-actor");
+        predicate.ShouldNotContain("alice-actor");
     }
 
     private (GetInstanceTaskExecutor Executor, Func<Observed?> Observed) Create()

@@ -18,11 +18,10 @@ Phase 1 filters **two surfaces only**:
   aggregations: counts and totals cover visible rows only), and
 - the **single instance GET** (`GET {domain}/workflows/{workflow}/instances/{instance}`),
 
-Only a request that arrives at one of these two **public endpoints** is filtered. Every in-process read is
-exempt and sees all rows: same-domain (and co-hosted) `GetInstances` / `GetInstance` / `GetInstanceData`
-trigger tasks, view content resolution, direct-trigger key resolution and transitions. A task that reads
-**another** domain calls that domain's public endpoint over HTTP, so the partner filters it with the
-credential and headers the task presents (see [Cross-domain tasks](#cross-domain-tasks)).
+The `GetInstances` and `GetInstance` trigger tasks are filtered by the same rules, same-domain and
+cross-domain alike, with the credential and headers the task presents (see [Trigger tasks](#trigger-tasks)).
+Every other in-process read is exempt and sees all rows: the `GetInstanceData` task, view content
+resolution, direct-trigger key resolution and transitions.
 
 The GET `404` for an excluded instance is a **consistency check with the list, not a confidentiality
 boundary**: row security is not an access boundary for an instance whose id the caller knows.
@@ -35,8 +34,7 @@ instance there even when the list and the GET hide it:
 - `functions/state`, `functions/data`, `functions/view`, `functions/schema`, `functions/master`
 - transition and data history endpoints
 - `internal/*` endpoints
-- same-domain trigger tasks (`GetInstances`, `GetInstance`, `GetInstanceData`), view content resolution,
-  transitions (including a direct trigger by key), `context.Related` in scripts, the human-task list,
+- the `GetInstanceData` task, view content resolution, transitions (including a direct trigger by key), `context.Related` in scripts, the human-task list,
   event correlation selectors
 
 Consequences to design around:
@@ -252,9 +250,9 @@ one cached flow lookup; on success for a flow without `rowSecurity` the answer i
   extensions and before the ETag comparison (no `304` for an excluded row). An excluded or no-rows instance and a missing
   one answer the same `404`. The probe runs against the instance's latest data, also when `?version=` asks
   for an older data version.
-- **In-process reads are exempt.** Row security runs only when the public endpoint asks for it
-  (`ApplyRowSecurity`, set by the instance controller, never serialized). Same-domain trigger tasks, view
-  content resolution, direct-trigger key resolution and transitions read unfiltered.
+- **Who asks for it.** Row security runs only when the caller sets `ApplyRowSecurity` (never serialized):
+  the instance controller and the `GetInstances` / `GetInstance` task executors. The `GetInstanceData` task,
+  view content resolution, direct-trigger key resolution and transitions read unfiltered.
 
 ## Gateway precondition
 
@@ -270,10 +268,11 @@ that the gateway does this: 2026-10-23.
 on it restricts nothing against that caller and is **never a boundary**. Publish rejects it on `x-roles`,
 `x-masking` and `x-encryption` paths (RS-E18 or the stricter code) and logs RS-W6q on every other use.
 
-## Cross-domain tasks
+## Trigger tasks
 
-A trigger task that reads another domain lands on that domain's public list or GET endpoint and is filtered
-there with the header set it presents, which carries only `sub`, `act_sub`, `position`, `client_id` and
+A `GetInstances` / `GetInstance` task is filtered with the header set it presents — in the same domain by
+the local read, in another domain by that domain's public list or GET endpoint. That header set
+carries only `sub`, `act_sub`, `position`, `client_id` and
 `role`. A rule parameter header is **not** forwarded automatically: the domain team sets it in the task's
 input mapping, otherwise the parametrised rule contributes nothing. Query parameters have no task
 counterpart. A task mapping may set `role`, `sub`, `act_sub` or a rule header, and the target domain

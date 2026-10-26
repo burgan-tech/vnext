@@ -60,8 +60,9 @@ public sealed class GetInstanceInput : IHasDomain
     public IReadOnlyDictionary<string, string[]>? RawQueryParameters { get; set; }
 
     /// <summary>
-    /// Applies the flow's row security (vnext#1107). Set only by the public instance endpoint; every in-process
-    /// caller (tasks, view resolution, triggers) leaves it false and reads unfiltered. Never serialized.
+    /// Applies the flow's row security (vnext#1107). Set by the public list / GET endpoint and the GetInstances /
+    /// GetInstance tasks; other in-process callers (view resolution, triggers, GetInstanceData) leave it false.
+    /// Never serialized.
     /// </summary>
     [JsonIgnore]
     public bool ApplyRowSecurity { get; set; }
@@ -139,8 +140,9 @@ public sealed class GetInstanceListInput : IHasDomain
     public IReadOnlyDictionary<string, string[]>? RawQueryParameters { get; set; }
 
     /// <summary>
-    /// Applies the flow's row security (vnext#1107). Set only by the public instance endpoint; every in-process
-    /// caller (tasks, view resolution, triggers) leaves it false and reads unfiltered. Never serialized.
+    /// Applies the flow's row security (vnext#1107). Set by the public list / GET endpoint and the GetInstances /
+    /// GetInstance tasks; other in-process callers (view resolution, triggers, GetInstanceData) leave it false.
+    /// Never serialized.
     /// </summary>
     [JsonIgnore]
     public bool ApplyRowSecurity { get; set; }
