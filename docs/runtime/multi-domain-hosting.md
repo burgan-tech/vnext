@@ -60,6 +60,17 @@ A domain that moves from its own database into a pool on the **shared** database
 prefixed schemas; its data is not moved automatically. To keep its data, give it a dedicated database
 instead (next section).
 
+**Flush the domain's component cache when it changes database.** Component cache keys name the domain,
+not the database (`{component}:{domain}:{key}:…`, in Redis behind the state store's key prefix, e.g.
+`vnext||sys-flows:partner:sys-version-registry:…`). After a move, the runtime keeps serving what was
+cached from the old database — component definitions that the new database does not have. A
+`sys-version-registry` entry left that way makes every start in the domain fail with 503
+`Instance:100053`, because the registry read goes to a schema that does not exist. Two local stacks
+on one Redis (the cross-domain lab and a `run-docker.sh` pool) hit the same thing. Delete the domain's
+generation keys (`{component}:{domain}:{key}:gen`, e.g. `vnext||sys-*:partner:*:gen`): the stale entries
+then become unreachable, and the per-pod
+[generation memo](component-cache-generation-memo.md) picks the change up within its window.
+
 ## Database per domain
 
 A co-hosted domain can keep **its own database**: `ConnectionStrings:Domains:<domain>`. The two modes
