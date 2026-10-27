@@ -19,6 +19,20 @@
       }
     }
   },
+  "migrations": [
+    {
+      "id": "instance-read-fails-on-flow-lookup-error",
+      "type": "behavior",
+      "component": "query",
+      "path": "GET {domain}/workflows/{workflow}/instances, GET {domain}/workflows/{workflow}/instances/{instance}, GetInstances / GetInstance tasks",
+      "since": "next",
+      "severity": "warning",
+      "title": "Instance list, GET and GetInstance(s) tasks fail when the flow definition cannot be loaded",
+      "description": "Applies to every flow, with or without rowSecurity. These reads now look the flow up once (cached, GetFlowAsync with no version: the sys-version-registry default version, else the latest). A lookup failure other than 'no definition' fails the read with that error as is: Instance:100052 (409, invalid default-version pointer), Instance:100053 (503, version registry unavailable) or Instance:100051 (flow version not activated). The read is tagged vnext.rowsecurity.outcome=denied-flow-load and logs warning 20509. Before, the list served rows and GET did not look the flow up. A flow with no published definition, and a successful lookup of a flow without rowSecurity, answer exactly as before.",
+      "action": "Before upgrading, check that every flow's sys-version-registry default-version pointer resolves to a published version (or is 'latest') and that the version registry is reachable; starts and transitions of such a flow already fail with the same error. Watch warning 20509 after the rollout.",
+      "documentation": "docs/domain/row-security.md#lookup-failure"
+    }
+  ],
   "knownIssues": [
     {
       "id": "row-security-instance-surfaces-unfiltered",
