@@ -38,7 +38,7 @@ namespace BBT.Workflow.Instances;
 
 /// <summary>
 /// Row security on <see cref="InstanceQueryAppService.GetInstanceAsync"/> (vnext#1107, Task 7): the rule set comes
-/// from <c>GetFlowAsync(domain, workflow, null)</c> (K2), a lookup error reads as before (D5 as amended), in-process
+/// from <c>GetFlowAsync(domain, workflow, null)</c> (K2), D5 lookup errors go back as is, in-process
 /// callers are not checked, and an instance the caller
 /// may not see answers exactly the missing-instance 404 — decided before extensions, ETag and 304.
 /// </summary>
@@ -308,21 +308,45 @@ public sealed class InstanceQueryAppServiceRowSecurityGetTests : IDisposable
     [Theory]
     [InlineData(WorkflowErrorCodes.FlowDefaultVersionInvalid)]
     [InlineData(WorkflowErrorCodes.VersionRegistryUnavailable)]
-    public async Task Get_PointerOrRegistryError_ServesTheInstance_AsBeforeRowSecurity(string code) // D5 amended
+    public async Task Get_PointerOrRegistryError_IsReturnedAsIs_ForFlowWithoutRowSecurity(string code) // D5
     {
         var instance = StubInstance();
         var err = code == WorkflowErrorCodes.FlowDefaultVersionInvalid
             ? Error.Conflict(code, "pointer invalid")
             : Error.Transient(code, "registry down");
         _cache.GetFlowAsync(Domain, "rs-flow", null, Arg.Any<CancellationToken>()).Returns(Result<WorkflowDefinition>.Fail(err));
+        // The instance's own version has no rowSecurity — the denial does not depend on it.
         _cache.GetFlowAsync(Domain, "rs-flow", LatestVersion, Arg.Any<CancellationToken>())
             .Returns(Result<WorkflowDefinition>.Ok(RowSecurityServiceTests.Flow(null, LatestVersion)));
 
         var r = await CreateService().GetInstanceAsync(Input(instance.Id.ToString()));
 
-        r.Result.IsSuccess.ShouldBeTrue();
+        r.Result.Error.ShouldBe(err);
+        r.IsNotModified.ShouldBeFalse();
         await _repo.DidNotReceiveWithAnyArgs().IsVisibleAsync(default, default!, default, default);
         await _resolver.DidNotReceiveWithAnyArgs().ResolveRoleSetAsync(default);
+        await _extensions.DidNotReceiveWithAnyArgs().ProcessExtensionsAsync(default, default!, default!, default, default);
+    }
+
+    /// <summary>
+    /// A rule-set-unavailable decision that carries no lookup error, over a flow lookup that succeeded, has no
+    /// error to return as is. It must still deny (fail closed with the missing-instance 404), never serve the body.
+    /// </summary>
+    [Fact]
+    public async Task Get_DeniedRuleSetUnavailable_WithoutAnyError_FailsClosedAs404()
+    {
+        var instance = StubInstance();
+        StubSecuredFlow();
+        var service = Substitute.For<IRowSecurityService>();
+        service.DecideAsync(Arg.Any<RowSecurityRequest>(), Arg.Any<CancellationToken>())
+            .Returns(new RowSecurityDecision(RowSecurityOutcome.DeniedRuleSetUnavailable, null, [], [], [], null));
+
+        var r = await CreateService(rowSecurityService: service).GetInstanceAsync(Input(instance.Id.ToString()));
+
+        r.Result.IsSuccess.ShouldBeFalse();
+        r.Result.Error!.ShouldBe(WorkflowErrors.InstanceNotFound(instance.Id.ToString()));
+        await _repo.DidNotReceiveWithAnyArgs().IsVisibleAsync(default, default!, default, default);
+        await _extensions.DidNotReceiveWithAnyArgs().ProcessExtensionsAsync(default, default!, default!, default, default);
     }
 
     // ---- scope: endpoint only ----------------------------------------------------------------------------------

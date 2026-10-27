@@ -4936,11 +4936,11 @@ public static partial class WorkflowLogs
         string flow,
         string failureKind);
 
-    /// <summary>Logs that the flow definition carrying the rule set could not be loaded, so the read went on unfiltered.</summary>
+    /// <summary>Logs that the flow definition carrying the rule set could not be loaded, so the read is denied.</summary>
     [LoggerMessage(
         EventId = 20509,
         Level = LogLevel.Warning,
-        Message = "Row security rule set unavailable, read not filtered: {Domain}/{Flow} ({ErrorCode})")]
+        Message = "Row security rule set unavailable, read denied: {Domain}/{Flow} ({ErrorCode})")]
     public static partial void RowSecurityRuleSetUnavailable(
         this ILogger logger,
         string domain,

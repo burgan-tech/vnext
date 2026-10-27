@@ -14,7 +14,7 @@ using WorkflowDefinition = BBT.Workflow.Definitions.Workflow;
 namespace BBT.Workflow.Authorization.RowSecurity;
 
 /// <summary>
-/// <see cref="RowSecurityService"/>: lookup-failure mapping (R-F9 / D5 as amended), NotConfigured before role resolution
+/// <see cref="RowSecurityService"/>: lookup-failure mapping (R-F9 / D5), NotConfigured before role resolution
 /// (C-6), the rule set and version come from the lookup handed in (K2), and the planner decides the rest.
 /// </summary>
 public sealed class RowSecurityServiceTests
@@ -70,33 +70,33 @@ public sealed class RowSecurityServiceTests
     }
 
     [Fact]
-    public async Task Decide_FlowLookupFailsWithNonNotFound_ReadsUnfiltered_CarryingTheError() // U-1, D5 amended
+    public async Task Decide_FlowLookupFailsWithNonNotFound_ReturnsLookupError_ForEveryFlow() // U-1, D5
     {
         var err = Error.Failure("cache", "down");
 
         var d = await _svc.DecideAsync(Req(Result<WorkflowDefinition>.Fail(err)));
 
-        d.Outcome.ShouldBe(RowSecurityOutcome.RuleSetUnavailable);
+        d.Outcome.ShouldBe(RowSecurityOutcome.DeniedRuleSetUnavailable);
         d.LookupError.ShouldBe(err);
         d.Predicate.ShouldBeNull();
-        d.ReturnsNoRows.ShouldBeFalse();
+        d.ReturnsNoRows.ShouldBeTrue();
         await _resolver.DidNotReceiveWithAnyArgs().ResolveRoleSetAsync(default);
     }
 
-    [Theory] // Any error other than "no published definition" is RuleSetUnavailable — NotFound-typed ones included.
+    [Theory] // R-F9: any error other than "no published definition" denies — NotFound-typed ones included.
     [InlineData(WorkflowErrorCodes.FlowDefaultVersionInvalid)]
     [InlineData(WorkflowErrorCodes.VersionRegistryUnavailable)]
     [InlineData(WorkflowErrorCodes.FlowVersionNotActivated)]
     [InlineData("Other:999")]
-    public async Task Decide_AnyLookupErrorButCacheItemNotFound_IsRuleSetUnavailable_EvenAsNotFoundType(string code)
+    public async Task Decide_AnyLookupErrorButCacheItemNotFound_IsDenied_EvenAsNotFoundType(string code)
     {
         foreach (var err in new[] { Error.NotFound(code, "x"), Error.Conflict(code, "x"), Error.Transient(code, "x") })
         {
             var d = await _svc.DecideAsync(Req(Result<WorkflowDefinition>.Fail(err)));
 
-            d.Outcome.ShouldBe(RowSecurityOutcome.RuleSetUnavailable);
+            d.Outcome.ShouldBe(RowSecurityOutcome.DeniedRuleSetUnavailable);
             d.LookupError.ShouldBe(err);
-            d.ReturnsNoRows.ShouldBeFalse();
+            d.ReturnsNoRows.ShouldBeTrue();
         }
     }
 

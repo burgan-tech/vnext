@@ -55,8 +55,8 @@ public interface IRowSecurityService
     /// <list type="bullet">
     /// <item>Rule-set lookup failed with <c>CacheItemNotFound</c>, or the flow declares no <c>rowSecurity</c>
     /// ⇒ <see cref="RowSecurityOutcome.NotConfigured"/>, decided before any role resolution.</item>
-    /// <item>Any other lookup failure ⇒ <see cref="RowSecurityOutcome.RuleSetUnavailable"/> carrying the
-    /// lookup error: the caller reads unfiltered, as before row security (D5 as amended).</item>
+    /// <item>Any other lookup failure ⇒ <see cref="RowSecurityOutcome.DeniedRuleSetUnavailable"/> carrying the
+    /// lookup error unchanged; the read fails with it, for every flow (D5).</item>
     /// <item>Otherwise the caller's role set is resolved and <see cref="RowSecurityPlanner"/> decides.</item>
     /// </list>
     /// </summary>

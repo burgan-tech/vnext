@@ -80,7 +80,7 @@ Workflow-level, inside `attributes`:
 **There is no `default`. A flow with `rowSecurity` is deny by default.** A caller no static rule matches
 sees nothing beyond the identity rules the author declared. "Role X sees everything" is written as an
 explicit unfiltered rule (`{ "roles": ["hq-auditor"] }`). A flow without `rowSecurity` is not filtered at
-all, byte for byte as before. Any member other than `rules` is a publish error (RS-E12).
+all, byte for byte as before — unless its definition cannot be loaded ([Lookup failure](#lookup-failure)). Any member other than `rules` is a publish error (RS-E12).
 
 ### `rules[].roles`
 
@@ -229,17 +229,24 @@ always agree. A `set-default` therefore also switches the row rules in force.
 
 ### Lookup failure
 
-`rowSecurity` is optional, so a lookup failure never rejects a read. If the lookup fails for any reason
-other than "no published definition" (`CacheItemNotFound`) — for example `Instance:100052` (invalid
-pointer), `Instance:100053` (registry unavailable) or a flow version not activated — the runtime cannot
-tell whether the flow declares `rowSecurity`, and the read goes on **unfiltered, exactly as before row
-security**. The span carries `vnext.rowsecurity.outcome = flow-load-failed` and warning 20509 is logged
-with the error code, so the window is visible. No published definition is not a failure: that flow is
-not configured, is not filtered and carries no tag.
+Three cases, decided by the lookup alone:
 
-Accepted cost (D5 as amended by the requester on 2026-10-27, replacing the earlier deny): while the
-lookup fails, a flow that does declare `rowSecurity` is read unfiltered. Alert on 20509. GET now performs
-one cached flow lookup; on success for a flow without `rowSecurity` the answer is unchanged.
+| Lookup result | Read |
+|---|---|
+| Flow loaded, declares `rowSecurity` | Filtered by the rules |
+| Flow loaded, no `rowSecurity` — or no published definition (`CacheItemNotFound`) | Unfiltered, exactly as before row security; no tag |
+| Any other failure — `Instance:100052` 409 (invalid default-version pointer), `Instance:100053` 503 (registry unavailable), `Instance:100051` (version not activated), a cache outage | **Fails** with the lookup error as is |
+
+A failed lookup fails the read for **every** flow, with or without `rowSecurity`: the rule set is inside
+the definition that could not be read, and without its flow no instance of it is readable. Starts and
+transitions of that flow already fail with the same error. The span carries
+`vnext.rowsecurity.outcome = denied-flow-load` and warning 20509 is logged with the error code. The list
+answers the error, never an empty page; GET answers it before the ETag. The GetInstance / GetInstances
+tasks fail like any other read error (cross-domain, the partner's endpoint answers the same error).
+
+This is a behaviour change for flows without `rowSecurity` (D5, requester-confirmed 2026-10-27): before,
+the list served rows through such an error and GET did not look the flow up. Surfaces that do not apply
+row security (view resolution, triggers, GetInstanceData, functions) are not affected.
 
 ## Surfaces and behaviour
 
@@ -331,7 +338,7 @@ parameter, header or identity value and never exception text.
 | 20506 | Information | single GET found the instance outside the predicate (answered `404`) |
 | 20507 | Warning | an applicable rule contributed nothing (reason, parameter names) |
 | 20508 | Warning | role resolution failed, request returns no rows |
-| 20509 | Warning | rule set could not be loaded, read not filtered |
+| 20509 | Warning | rule set could not be loaded, read denied with the lookup error |
 | 20510 | Warning | publish: schema checks skipped (RS-W0) |
 | 20511 | Information | publish: SubFlow children do not inherit (RS-W7) |
 
@@ -344,7 +351,7 @@ Span tags on the read span (a flow without `rowSecurity` carries **no** row-secu
 | Tag | Value |
 |---|---|
 | `vnext.rowsecurity.applied` | the read was evaluated |
-| `vnext.rowsecurity.outcome` | `unrestricted`, `filtered`, `excluded`, `denied-no-match`, `denied-no-contribution`, `denied-resolution-failed` or `flow-load-failed` (lookup failed, read unfiltered) |
+| `vnext.rowsecurity.outcome` | `unrestricted`, `filtered`, `excluded`, `denied-no-match`, `denied-no-contribution`, `denied-resolution-failed` or `denied-flow-load` (lookup failed, read failed with its error) |
 | `vnext.rowsecurity.rules` | matched rule indexes, comma separated |
 | `vnext.rowsecurity.missing_params` | names of the parameters that did not resolve |
 | `vnext.rowsecurity.flow_version` | the resolved rule-set version |

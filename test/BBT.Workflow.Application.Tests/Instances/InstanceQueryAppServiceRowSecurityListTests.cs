@@ -37,7 +37,7 @@ namespace BBT.Workflow.Instances;
 
 /// <summary>
 /// Row security on <see cref="InstanceQueryAppService.GetInstanceListAsync"/> (vnext#1107, Task 6B): only the
-/// public endpoint (ApplyRowSecurity) is filtered, a lookup error reads as before (D5 as amended), no SQL for a no-rows decision (SG-1), the row predicate on both repository routes, and the
+/// public endpoint and the GetInstances task (ApplyRowSecurity) are filtered, D5 lookup errors go back as is, no SQL for a no-rows decision (SG-1), the row predicate on both repository routes, and the
 /// NotConfigured path unchanged (C-6). Every "repository not called" test runs once per route (R-F3).
 /// </summary>
 public sealed class InstanceQueryAppServiceRowSecurityListTests : IDisposable
@@ -106,7 +106,7 @@ public sealed class InstanceQueryAppServiceRowSecurityListTests : IDisposable
 
     [Theory]
     [MemberData(nameof(CodesTimesRoutes))]
-    public async Task List_PointerOrRegistryError_ReadsUnfiltered_AsBeforeRowSecurity(string code, string route) // D5 amended
+    public async Task List_PointerOrRegistryError_IsReturnedAsIs_EvenWithoutRowSecurity(string code, string route) // D5
     {
         var err = code == WorkflowErrorCodes.FlowDefaultVersionInvalid
             ? Error.Conflict(code, "pointer invalid")
@@ -116,12 +116,26 @@ public sealed class InstanceQueryAppServiceRowSecurityListTests : IDisposable
 
         var result = await InvokeAsync(ListInput("rs-plain", route));
 
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.ShouldBe(err);
+        AssertRepositoryNotCalled();
+        await _resolver.DidNotReceiveWithAnyArgs().ResolveRoleSetAsync(default);
+    }
+
+    /// <summary>An in-process reader (view resolution, triggers, GetInstanceData) never asks, so a lookup error does not fail it.</summary>
+    [Theory]
+    [MemberData(nameof(Routes))]
+    public async Task List_InProcessCaller_IsNotDenied_OnLookupError(string route)
+    {
+        _cache.GetFlowAsync(Domain, "rs-plain", null, Arg.Any<CancellationToken>())
+            .Returns(Result<WorkflowDefinition>.Fail(Error.Transient(WorkflowErrorCodes.VersionRegistryUnavailable, "down")));
+        var input = ListInput("rs-plain", route);
+        input.ApplyRowSecurity = false;
+
+        var result = await InvokeAsync(input);
+
         result.IsSuccess.ShouldBeTrue();
         CallsNamed().Count().ShouldBe(1);
-        CallsNamed().SelectMany(c => c.GetArguments()).OfType<GraphQLFilterNode>().ShouldBeEmpty();
-        CallsNamed().SelectMany(c => c.GetArguments()).OfType<GraphQLFilterRequest>()
-            .ShouldAllBe(r => r.RowPredicate == null);
-        await _resolver.DidNotReceiveWithAnyArgs().ResolveRoleSetAsync(default);
     }
 
     // ---- scope: endpoint only ----------------------------------------------------------------------------------

@@ -254,7 +254,7 @@ public class RowSecurityPlannerTableTests
     [InlineData(RowSecurityOutcome.NoRule, "denied-no-match")]
     [InlineData(RowSecurityOutcome.NoContribution, "denied-no-contribution")]
     [InlineData(RowSecurityOutcome.DeniedResolutionFailed, "denied-resolution-failed")]
-    [InlineData(RowSecurityOutcome.RuleSetUnavailable, "flow-load-failed")]
+    [InlineData(RowSecurityOutcome.DeniedRuleSetUnavailable, "denied-flow-load")]
     public void Outcome_TagVocabulary(RowSecurityOutcome outcome, string? tag) =>
         outcome.ToTagValue().ShouldBe(tag);
 

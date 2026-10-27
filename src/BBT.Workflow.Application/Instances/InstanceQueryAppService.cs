@@ -236,6 +236,7 @@ public sealed class InstanceQueryAppService(
                 ToValidationError(validation));
         }
 
+        Error? rowSecurityDenial = null;
         var listResult = await ResultExtensions.TryAsync(
             async ct =>
             {
@@ -247,15 +248,22 @@ public sealed class InstanceQueryAppService(
                     var (ctx, exposure, flowResult) = await ResolveListMetadataAsync(input.Domain, input.Workflow, ct);
                     schemaContext = ctx;
 
-                    // Row security (vnext#1107), only for the public list endpoint (ApplyRowSecurity). The rule set
-                    // is the flow GetFlowAsync(domain, workflow, null) resolved above (K2). NotConfigured /
-                    // Unrestricted / RuleSetUnavailable leave the repository calls below verbatim.
+                    // Row security (vnext#1107), only for the public list endpoint and the GetInstances task
+                    // (ApplyRowSecurity). The rule set is the flow GetFlowAsync(domain, workflow, null) resolved
+                    // above (K2). NotConfigured / Unrestricted leave the repository calls below verbatim.
                     if (rowSecurityService is not null && input.ApplyRowSecurity)
                     {
                         rowSecurity = await rowSecurityService.DecideAsync(new RowSecurityRequest(
                             input.Domain, input.Workflow, flowResult, schemaContext, exposure,
                             input.Headers, input.RawHeaders, input.QueryParameters, input.RawQueryParameters,
                             RowSecuritySurfaces.List, read), ct);
+
+                        if (rowSecurity.Outcome == RowSecurityOutcome.DeniedRuleSetUnavailable)
+                        {
+                            // D5: the lookup error goes back as is (409 / 503 stay 409 / 503), never an empty page.
+                            rowSecurityDenial = rowSecurity.LookupError ?? flowResult.Error;
+                            return null!;
+                        }
                     }
                 }
 
@@ -453,7 +461,9 @@ public sealed class InstanceQueryAppService(
             },
             cancellationToken);
 
-        return listResult;
+        return rowSecurityDenial is { } denial
+            ? Result<InstanceListWithGroupsResponse<GetInstanceOutput>>.Fail(denial)
+            : listResult;
     }
 
     /// <summary>
@@ -470,10 +480,11 @@ public sealed class InstanceQueryAppService(
     }
 
     /// <summary>
-    /// Row security of the single-instance GET endpoint (vnext#1107); in-process callers (ApplyRowSecurity false)
-    /// skip it. A rule-set lookup failure reads as before row security (D5 as amended). Returns null when the caller may read
+    /// Row security of the single-instance GET endpoint and the GetInstance task (vnext#1107); other in-process
+    /// callers (ApplyRowSecurity false) skip it. Returns null when the caller may read
     /// <paramref name="instance"/>, otherwise the error to answer with:
     /// <list type="bullet">
+    /// <item>the rule-set lookup error as is, for every flow (D5);</item>
     /// <item><see cref="WorkflowErrors.InstanceNotFound"/> with the caller's identifier — the exact missing-instance
     /// error — when the decision returns no rows or the probe does not find the instance under the predicate.</item>
     /// </list>
@@ -501,8 +512,11 @@ public sealed class InstanceQueryAppService(
 
         return decision switch
         {
-            { Outcome: RowSecurityOutcome.NotConfigured or RowSecurityOutcome.Unrestricted
-                or RowSecurityOutcome.RuleSetUnavailable } => null,
+            // D5 error as is; with no error to return, still deny (fail closed) — never serve the instance.
+            { Outcome: RowSecurityOutcome.DeniedRuleSetUnavailable } =>
+                decision.LookupError
+                ?? (flowResult.IsSuccess ? WorkflowErrors.InstanceNotFound(input.Instance) : flowResult.Error),
+            { Outcome: RowSecurityOutcome.NotConfigured or RowSecurityOutcome.Unrestricted } => null,
             { Outcome: RowSecurityOutcome.Filtered, Predicate: { } predicate }
                 when await instanceRepository.IsVisibleAsync(instance.Id, predicate, schemaContext, ct) => null,
             // No rows, a false probe, or a Filtered decision without a predicate (never planned): fail closed.
