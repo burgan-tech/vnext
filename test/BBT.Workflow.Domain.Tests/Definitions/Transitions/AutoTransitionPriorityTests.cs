@@ -22,6 +22,14 @@ public class AutoTransitionPriorityTests : DomainTestBase<DomainEntryPoint>
     }
 
     [Fact]
+    public void AutoTransitions_MixedTriggerKindNaAndAbsent_KeepsDeclarationOrder()
+    {
+        var state = StateWith(Auto("a", triggerKind: 0), Auto("b"));
+
+        state.AutoTransitions.Select(t => t.Key).ToArray().ShouldBe(["a", "b"]);
+    }
+
+    [Fact]
     public void AutoTransitions_LowerPriorityComesFirst()
     {
         var state = StateWith(Auto("a", 30), Auto("b", 10), Auto("c", 20));

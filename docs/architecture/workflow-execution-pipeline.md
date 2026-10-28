@@ -143,9 +143,12 @@ rest are not evaluated.
 
 - Transitions that are not the `DefaultAutoTransition` come first, sorted by `Transition.EffectivePriority`
   ascending. `EffectivePriority` is `Priority ?? 100`, so a transition without `priority` sorts as 100.
-- The sort is stable: transitions with the same effective priority keep their declaration order, which is
-  how a state without any `priority` behaved before the field existed.
-- The `DefaultAutoTransition` is always last and is taken only when no other rule was satisfied.
+- The sort is stable: transitions with the same effective priority keep their declaration order. A state
+  without any `priority` is therefore evaluated in declaration order with the default auto transition last.
+  Earlier runtimes additionally placed a transition with no `triggerKind` ahead of one with an explicit
+  `triggerKind: 0`, regardless of array position; that quirk is gone.
+- The `DefaultAutoTransition` is the automatic transition with `triggerKind: 10`. It is always last and is
+  taken only when no other rule was satisfied.
 - `priority` is an integer of at least 1 and is valid only on an automatic transition that is not the
   `DefaultAutoTransition`. `WorkflowValidator` rejects a value below 1, and a `priority` on a manual,
   shared or start transition or on the default one, with a publish error. It warns when automatic
