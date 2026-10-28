@@ -129,6 +129,8 @@ public sealed class TaskInvocationDiRegistrationTests
         services.AddSingleton(Substitute.For<IRuntimeInfoProvider>());
         services.AddScoped(_ => Substitute.For<IInstanceCommandGateway>());
         services.AddScoped(_ => Substitute.For<IInstanceQueryGateway>());
+        // Same registration AddInstanceGatewayServices makes in production (needs only IServiceScopeFactory).
+        services.AddScoped<IInstanceIdResolver, BBT.Workflow.Gateway.LocalInstanceIdResolver>();
         services.AddSingleton(Substitute.For<IGuidGenerator>());
         services.AddScoped(_ => Substitute.For<IDomainDiscoveryResolver>());
         // Aether multi-schema scope, read by CacheKeyEvaluator (registered by AddTaskHandlers).

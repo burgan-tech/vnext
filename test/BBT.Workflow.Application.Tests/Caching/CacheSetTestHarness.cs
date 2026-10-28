@@ -99,10 +99,10 @@ public sealed class CacheSetTestHarness
         => Generations.GetAsync(ComponentType, TestDomain, TestKey);
 
     public string FullKey(string version)
-        => $"{ComponentType}:{TestDomain}:{TestKey}:full:{InstanceDataVersionComparer.CanonicalFullVersion(version)}";
+        => $"{ComponentType}:{TestDomain}:{TestKey}:{ComponentCacheShape.Version}:full:{InstanceDataVersionComparer.CanonicalFullVersion(version)}";
 
     public string ResolutionKey(string generation, string spelling)
-        => $"{ComponentType}:{TestDomain}:{TestKey}:res:{generation}:{spelling}";
+        => $"{ComponentType}:{TestDomain}:{TestKey}:{ComponentCacheShape.Version}:res:{generation}:{spelling}";
 
     public string GenerationKey()
         => $"{ComponentType}:{TestDomain}:{TestKey}:gen";
@@ -116,7 +116,7 @@ public sealed class CacheSetTestHarness
     /// <summary>Live resolution keys, with the generation segment stripped to the trailing spelling.</summary>
     public IReadOnlyList<string> ResolutionSpellingsInCache()
     {
-        var prefix = $"{ComponentType}:{TestDomain}:{TestKey}:res:";
+        var prefix = $"{ComponentType}:{TestDomain}:{TestKey}:{ComponentCacheShape.Version}:res:";
         return Cache.Keys
             .Where(k => k.StartsWith(prefix, StringComparison.Ordinal))
             .Select(k => k[prefix.Length..])

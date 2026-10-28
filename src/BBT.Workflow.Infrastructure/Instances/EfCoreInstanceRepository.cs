@@ -1400,6 +1400,36 @@ public sealed class EfCoreInstanceRepository(
         SchemaFilterContext? schemaContext = null,
         CancellationToken cancellationToken = default)
     {
+        var request = BuildRequestFromString(filter, groupBy, aggregations, sort, schemaContext);
+        return await GetPagedResultsWithGroupsAsync(page, pageSize, request, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async Task<(HateoasPagedList<Instance> PagedList, List<GroupSummary>? Groups)> GetPagedResultsWithGroupsAsync(
+        int page,
+        int pageSize,
+        string? filter,
+        string? groupBy,
+        string? aggregations,
+        string? sort,
+        SchemaFilterContext? schemaContext,
+        Definitions.GraphQL.GraphQLFilterNode rowPredicate,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(rowPredicate);
+        var request = BuildRequestFromString(filter, groupBy, aggregations, sort, schemaContext);
+        request.RowPredicate = rowPredicate;
+        return await GetPagedResultsWithGroupsAsync(page, pageSize, request, cancellationToken);
+    }
+
+    /// <summary>
+    /// Parses the string list route (filter as plain node, envelope or legacy form; groupBy; aggregations; sort)
+    /// into one request. Shared by both string overloads so the row-security route parses exactly like the
+    /// unrestricted one.
+    /// </summary>
+    private static Definitions.GraphQL.GraphQLFilterRequest BuildRequestFromString(
+        string? filter, string? groupBy, string? aggregations, string? sort, SchemaFilterContext? schemaContext)
+    {
         var request = GraphQLFilterParser.ParseRequest(null, groupBy, aggregations);
         if (!string.IsNullOrWhiteSpace(filter))
         {
@@ -1414,7 +1444,100 @@ public sealed class EfCoreInstanceRepository(
         }
         request.OrderBy = GraphQLFilterParser.ParseOrderBy(sort);
         request.SchemaContext = schemaContext;
-        return await GetPagedResultsWithGroupsAsync(page, pageSize, request, cancellationToken);
+        return request;
+    }
+
+    /// <summary>
+    /// The single row-security merge point (vnext#1107): returns a request whose filter is the caller's filter
+    /// AND <see cref="Definitions.GraphQL.GraphQLFilterRequest.RowPredicate"/>, or the request itself when it
+    /// carries no row predicate (byte-identical SQL). The caller's request object is not mutated.
+    /// </summary>
+    /// <exception cref="FilterCompilationException">
+    /// The row predicate contains an empty node or an operator-less condition — the engine reads those as
+    /// "no restriction", so they are refused before any SQL is built.
+    /// </exception>
+    private static Definitions.GraphQL.GraphQLFilterRequest ApplyRowPredicate(Definitions.GraphQL.GraphQLFilterRequest request)
+    {
+        var rowPredicate = request.RowPredicate;
+        if (rowPredicate == null)
+            return request;
+        if (ContainsEmptyClause(rowPredicate))
+            throw new FilterCompilationException("row predicate contains an empty clause");
+
+        var callerFilter = request.Filter;
+        return new Definitions.GraphQL.GraphQLFilterRequest
+        {
+            Filter = callerFilter is null || callerFilter.NodeType == Definitions.GraphQL.FilterNodeType.Empty
+                ? rowPredicate
+                : new Definitions.GraphQL.GraphQLFilterNode { And = [callerFilter, rowPredicate] },
+            GroupBy = request.GroupBy,
+            Aggregations = request.Aggregations,
+            OrderBy = request.OrderBy,
+            SchemaContext = request.SchemaContext
+        };
+    }
+
+    /// <inheritdoc />
+    public async Task<bool> IsVisibleAsync(
+        Guid instanceId,
+        Definitions.GraphQL.GraphQLFilterNode predicate,
+        SchemaFilterContext? schemaContext,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(predicate);
+        // The same merge point as the list (empty-clause guard included); the instance is pinned inside the compiler
+        // by a uuid-typed condition, never by a caller-style `id` filter (that column binds text).
+        var request = ApplyRowPredicate(new Definitions.GraphQL.GraphQLFilterRequest
+        {
+            RowPredicate = predicate,
+            SchemaContext = schemaContext
+        });
+        var context = await GetDbContextAsync();
+        var schema = currentSchema.Name ?? DefaultSchemaName;
+        var readOptions = queryOptions?.CurrentValue ?? new InstanceQueryOptions();
+        var selected = await UnifiedFilterService.ExecutePageIdsAsync(
+            context, request, schema, 1, 1, schemaValidator, instanceId, readOptions.LatestJoin, cancellationToken);
+        return selected.Ids.Count == 1 && selected.Ids[0] == instanceId;
+    }
+
+    private static bool ContainsEmptyClause(Definitions.GraphQL.GraphQLFilterNode node) => node.NodeType switch
+    {
+        Definitions.GraphQL.FilterNodeType.And => node.And!.Exists(ContainsEmptyClause),
+        Definitions.GraphQL.FilterNodeType.Or => node.Or!.Exists(ContainsEmptyClause),
+        Definitions.GraphQL.FilterNodeType.Not => ContainsEmptyClause(node.Not!),
+        Definitions.GraphQL.FilterNodeType.Condition => node.Attributes!.Values.Any(IsEmptyCondition),
+        _ => true
+    };
+
+    /// <summary>
+    /// A field condition that compiles to no SQL somewhere: null, no operator and no nested field, or a nested
+    /// field that is itself empty. Nested conditions are walked the way the compiler walks them, so an
+    /// operator-less nested object never reaches the engine as "no restriction".
+    /// </summary>
+    private static bool IsEmptyCondition(Definitions.GraphQL.FieldCondition? condition) =>
+        condition is null
+        || (!condition.GetOperators().Any() && condition.NestedConditions is not { Count: > 0 })
+        || (condition.NestedConditions is { Count: > 0 } nested && nested.Values.Any(IsEmptyNestedValue));
+
+    /// <summary>
+    /// A nested condition value (JSON extension data). The compiler only reads a JSON object; anything else, an
+    /// object without keys, or an object holding an empty nested field compiles to nothing for that path.
+    /// </summary>
+    private static bool IsEmptyNestedValue(object? value)
+    {
+        if (value is not JsonElement { ValueKind: JsonValueKind.Object } element)
+            return true;
+
+        var any = false;
+        foreach (var property in element.EnumerateObject())
+        {
+            any = true;
+            if (!Definitions.GraphQL.GraphQLJsonFilterService.IsOperator(property.Name)
+                && IsEmptyNestedValue(property.Value))
+                return true;
+        }
+
+        return !any;
     }
 
     /// <summary>
@@ -1431,7 +1554,7 @@ public sealed class EfCoreInstanceRepository(
 
         var schema = currentSchema.Name ?? DefaultSchemaName;
 
-        request ??= new Definitions.GraphQL.GraphQLFilterRequest();
+        request = ApplyRowPredicate(request ?? new Definitions.GraphQL.GraphQLFilterRequest());
         var readOptions = queryOptions?.CurrentValue ?? new InstanceQueryOptions();
         if (readOptions.IdentityPaging && !readOptions.DisabledSchemas.Contains(schema, StringComparer.Ordinal) &&
             request.GroupBy?.GetFields().Count is not > 0 && request.Aggregations?.HasAggregations != true)

@@ -2299,15 +2299,21 @@ public class InstanceQueryAppServiceStateTests : IDisposable
     [Fact]
     public async Task GetInstanceStateAsync_304Branch_CreatesNoSpansAndTagsTheTransaction()
     {
-        var collected = new List<Activity>();
+        var collected = new System.Collections.Concurrent.ConcurrentQueue<Activity>();
+        ActivityTraceId? traceId = null;
         using var listener = new ActivityListener
         {
             // Every vNext source, not just the read one: the budget is "nothing of ours", so a span
-            // added later under any other helper has to fail this too.
+            // added later under any other helper has to fail this too. The listener is process-wide,
+            // so only spans under this test's transaction (its trace id) count — not a parallel test's.
             ShouldListenTo = source => source.Name.StartsWith("BBT.Workflow.", StringComparison.Ordinal),
             Sample = (ref ActivityCreationOptions<ActivityContext> _) =>
                 ActivitySamplingResult.AllDataAndRecorded,
-            ActivityStopped = collected.Add
+            ActivityStopped = a =>
+            {
+                if (a.TraceId == traceId)
+                    collected.Enqueue(a);
+            }
         };
         ActivitySource.AddActivityListener(listener);
 
@@ -2324,6 +2330,7 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         ActivitySource.AddActivityListener(serverListener);
 
         using var transaction = serverSource.StartActivity("GET /functions/state");
+        traceId = transaction!.TraceId;
 
         var instanceId = Guid.NewGuid();
         EnableCache();

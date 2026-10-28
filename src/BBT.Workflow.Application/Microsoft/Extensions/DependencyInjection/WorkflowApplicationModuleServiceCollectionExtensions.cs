@@ -15,6 +15,7 @@ using BBT.Workflow.Scripting.Sandbox;
 using BBT.Workflow.Extentions;
 using BBT.Workflow.SubFlow;
 using BBT.Workflow.Authorization;
+using BBT.Workflow.Authorization.RowSecurity;
 using BBT.Workflow.BackgroundJobs;
 using BBT.Workflow.Events;
 using BBT.Workflow.Schedule;
@@ -116,6 +117,8 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
         services.AddScoped<IStateFunctionCache, StateFunctionCache>();
         services.AddOptions<InstanceFunctionCacheOptions>()
             .BindConfiguration(InstanceFunctionCacheOptions.SectionName);
+        services.AddOptions<BBT.Workflow.Authorization.RowSecurity.RowSecurityOptions>()
+            .BindConfiguration(BBT.Workflow.Authorization.RowSecurity.RowSecurityOptions.Section);
         // x-masking kill switch. Folded into the data-function cache generation (key AND ETag).
         services.AddOptions<BBT.Workflow.Authorization.SchemaMaskingOptions>()
             .BindConfiguration(BBT.Workflow.Authorization.SchemaMaskingOptions.SectionName);
@@ -129,6 +132,8 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
         services.TryAddScoped<IFileOffloadService, FileOffloadService>();
         services.TryAddScoped<IInstanceFileAppService, InstanceFileAppService>();
         services.AddScoped<IDefinitionAppService, DefinitionAppService>();
+        services.AddScoped<RowSecurityPublishCheck>();
+        services.AddScoped<BBT.Workflow.Authorization.RowSecurity.IRowSecurityService, BBT.Workflow.Authorization.RowSecurity.RowSecurityService>();
         services.AddScoped<IPublishCompletedAppService, PublishCompletedAppService>();
         services.AddScoped<IInstanceCommandAppService, InstanceCommandAppService>();
         services.AddScoped<IInstanceQueryAppService, InstanceQueryAppService>();

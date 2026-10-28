@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
@@ -27,7 +28,13 @@ public sealed class SubflowDescentTracingTests : IDisposable
     private const string TargetFlow = "chain-busy-middle";
 
     private readonly ActivityListener _listener;
-    private readonly List<Activity> _captured = [];
+    private readonly ConcurrentQueue<Activity> _captured = new();
+
+    /// <summary>
+    /// Per-test root: descent spans inherit its trace id. The listener is process-wide and other test
+    /// classes emit spans on the same source in parallel, so only this trace's spans are collected.
+    /// </summary>
+    private readonly Activity _root;
 
     public SubflowDescentTracingTests()
     {
@@ -39,8 +46,13 @@ public sealed class SubflowDescentTracingTests : IDisposable
             // for every later test in the process.
             ShouldListenTo = source => source.Name == InstanceReadActivityHelper.SourceName,
             Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllData,
-            ActivityStopped = activity => _captured.Add(activity)
+            ActivityStopped = activity =>
+            {
+                if (activity.TraceId == _root.TraceId)
+                    _captured.Enqueue(activity);
+            }
         };
+        _root = new Activity("subflow-descent-test-root").Start();
         ActivitySource.AddActivityListener(_listener);
 
         // A collector that is not listening turns every assertion below into a vacuous pass.
@@ -48,7 +60,11 @@ public sealed class SubflowDescentTracingTests : IDisposable
             throw new InvalidOperationException("listener registered but the source has none");
     }
 
-    public void Dispose() => _listener.Dispose();
+    public void Dispose()
+    {
+        _listener.Dispose();
+        _root.Stop();
+    }
 
     // ── span shape ───────────────────────────────────────────────────────────
 
@@ -269,6 +285,6 @@ public sealed class SubflowDescentTracingTests : IDisposable
 
     private static object? Tag(Activity activity, string name) => activity.GetTagItem(name);
 
-    private static void Tag(List<Activity> captured, int expectedCount) =>
+    private static void Tag(IReadOnlyCollection<Activity> captured, int expectedCount) =>
         captured.Count.ShouldBe(expectedCount);
 }

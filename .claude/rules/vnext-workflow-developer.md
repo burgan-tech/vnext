@@ -255,6 +255,13 @@ The plan is built from `ExcludedStepOrders` alone (`TransitionExecutor.BuildExec
   One unit-of-work root = one database: cross-database local calls go through `CoHostedDatabaseBoundary`.
 - Full guide: `docs/runtime/multi-domain-hosting.md`.
 
+## Row Security (`attributes.rowSecurity`)
+
+- A flow with `rowSecurity` is deny by default (no `default`); rules are role-keyed, ORed, ANDed with the caller's filter. Rule set = `GetFlowAsync(domain, workflow, null)` (default version else latest); no `rowSecurity` (or no published definition) reads unfiltered; any other lookup failure fails the read with that error for every flow (tag `denied-flow-load`, warning 20509).
+- One compiler: the predicate is ANDed at the repository merge point; GET probes with `id AND predicate` before the ETag. Parameter failures never widen.
+- Applied by the public list + single GET endpoints and the GetInstances / GetInstance tasks (same- and cross-domain), via opt-in `ApplyRowSecurity` (`[JsonIgnore]`). GetInstanceData, view resolution, transitions and state/data/view/schema/master/history/`internal/*` read unfiltered — a documented known gap, not a boundary.
+- Full guide: `docs/domain/row-security.md`.
+
 ## Flow default version
 
 - A flow's `sys-version-registry` pointer caps floating version requests; `sys-*` and full versions bypass it, a bad pointer fails closed. Full guide: `docs/runtime/flow-default-version.md`.

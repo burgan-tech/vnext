@@ -1,3 +1,4 @@
+using BBT.Workflow.Instances;
 using BBT.Workflow.Files;
 using BBT.Workflow.Gateway;
 using BBT.Workflow.Scripting.Functions;
@@ -26,6 +27,8 @@ public static class GatewayServiceCollectionExtensions
         // Local gateways - execute locally with schema context
         services.AddScoped<LocalInstanceCommandGateway>();
         services.AddScoped<LocalInstanceQueryGateway>();
+        // Local-only key -> id lookup for DirectTrigger; deliberately has no routed/remote form.
+        services.AddScoped<IInstanceIdResolver, LocalInstanceIdResolver>();
 
         // Remote gateways - delegate to HTTP clients
         services.AddScoped<RemoteInstanceCommandGateway>();

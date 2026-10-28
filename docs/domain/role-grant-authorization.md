@@ -17,6 +17,9 @@ Two rows above were wrong for several releases and are corrected here: custom-fu
 being role-gated when `FunctionAccessPolicy` was reduced to scope enforcement (`WorkflowErrors.FunctionAccessDenied`
 has had no production caller since), and the human-task list reads `queryRoles`, not `transition.roles`.
 
+Row-level visibility (which instances a role sees on the list and the single GET) is a separate
+mechanism: see [Row Security](row-security.md).
+
 ## `queryRoles` is enforced at the gateway, not in this runtime
 
 `queryRoles` is fully alive as a **definition** and as an **answer**: it is still evaluated, in full,

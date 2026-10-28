@@ -32,6 +32,12 @@ namespace BBT.Workflow.Caching;
 /// which request spellings its component participates in — <see cref="InstanceDataVersionComparer.FindBestMatch"/>
 /// also accepts leading-zero package-version aliases, and could accept more forms later — so instead of
 /// listing them, replacing the token makes all of them unreachable at once.
+/// <para>
+/// Both kinds are prefixed by the shape segment <see cref="ComponentCacheShape.Version"/>
+/// (<c>{component}:{domain}:{key}:{shape}:full:…</c>, <c>…:{shape}:res:…</c>), so pods of releases whose
+/// entity types differ never read each other's bodies. The L1 tier reuses these keys. The generation token
+/// (<c>…:gen</c>) carries no shape: it is opaque and stays shared.
+/// </para>
 /// </remarks>
 /// <typeparam name="T">The type of entity to cache</typeparam>
 public class CacheSet<T>(
@@ -678,10 +684,10 @@ public class CacheSet<T>(
     };
 
     private static string CreateFullKey(string domain, string key, string fullVersion)
-        => $"{ComponentKeyName}:{domain}:{key}:full:{InstanceDataVersionComparer.CanonicalFullVersion(fullVersion)}";
+        => $"{ComponentKeyName}:{domain}:{key}:{ComponentCacheShape.Version}:full:{InstanceDataVersionComparer.CanonicalFullVersion(fullVersion)}";
 
     private static string CreateResolutionKey(string domain, string key, string generation, string spelling)
-        => $"{ComponentKeyName}:{domain}:{key}:res:{generation}:{spelling}";
+        => $"{ComponentKeyName}:{domain}:{key}:{ComponentCacheShape.Version}:res:{generation}:{spelling}";
 
     private static string LegacyLatestKey(string domain, string key)
         => $"{ComponentKeyName}:{domain}:{key}:latest";
