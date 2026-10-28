@@ -22,8 +22,9 @@ public sealed class DaprBindingFileBlobStore(
     {
         var request = new BindingRequest(component, "create") { Data = bytes };
         AddKey(request, file);
+        // bindings.aws.s3 reads exactly "Content-Type" (components-contrib metatadataContentType); bindings.localstorage ignores it.
         if (!string.IsNullOrWhiteSpace(mimeType))
-            request.Metadata["contentType"] = mimeType;
+            request.Metadata["Content-Type"] = mimeType;
         try
         {
             await daprClient.InvokeBindingAsync(request, cancellationToken);
