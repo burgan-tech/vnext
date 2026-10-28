@@ -1,0 +1,7 @@
+{
+  "releaseNote": {
+    "summary": "A component schema without $schema is now evaluated as JSON Schema Draft 2020-12, so x-* vocabulary keywords (x-storage, x-roles, ...) no longer fail the first write with a 500.",
+    "breaking": false,
+    "docs": []
+  }
+}

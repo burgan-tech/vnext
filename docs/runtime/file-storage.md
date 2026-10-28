@@ -33,6 +33,9 @@ On a master-schema **property**, or on the `items` schema of an array property:
   its `properties` or `required` is a publish error: `content` never reaches master-schema validation.
 - Placement is enforced at publish by `FileStorageSchemaParser.Validate` (and by the vnext-schema
   `x-storage` rule, which can lag the runtime).
+- A master schema without `$schema` is evaluated as Draft 2020-12, which ignores vocabulary keywords such as
+  `x-storage` (`JsonSchemaBuild`). Before this, JsonSchema.Net's v1 default refused them: the schema published, and
+  the first write failed with a 500 after its files were already stored. Declaring `$schema` is still recommended.
 
 ## Shapes
 

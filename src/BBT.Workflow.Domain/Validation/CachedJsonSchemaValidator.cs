@@ -63,14 +63,9 @@ public sealed class CachedJsonSchemaValidator : IJsonSchemaValidator
     /// <returns>A built JsonSchema ready for evaluation</returns>
     private static JsonSchema BuildSchema(JsonElement jsonSchema)
     {
-        // Use BuildOptions with isolated SchemaRegistry to prevent global $id conflicts
-        var options = new BuildOptions
-        {
-            SchemaRegistry = new SchemaRegistry() // Instance-level registry per schema
-        };
-        
+        // Isolated SchemaRegistry (no global $id conflicts) and a dialect for schemas without $schema.
         var schemaWithoutVocabulary = JsonSchemaVocabularySanitizer.RemoveVocabularyKeywords(jsonSchema);
-        return JsonSchema.Build(schemaWithoutVocabulary, options);
+        return JsonSchema.Build(schemaWithoutVocabulary, JsonSchemaBuild.Options());
     }
 
     /// <summary>
