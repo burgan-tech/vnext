@@ -135,6 +135,29 @@ means "no state change" in only one of them:
 - A parent with an open SubFlow correlation short-circuits earlier, at
   `HandleUpdateDataDataOnlyStep (21)` — data only, nothing else.
 
+### Automatic transition order
+
+`RunAutomaticTransitionsStep (80)` evaluates the current state's automatic transitions in the order
+`State.AutoTransitions` returns them, and the **first transition whose rule is satisfied wins**; the
+rest are not evaluated.
+
+- Transitions that are not the `DefaultAutoTransition` come first, sorted by `Transition.EffectivePriority`
+  ascending. `EffectivePriority` is `Priority ?? 100`, so a transition without `priority` sorts as 100.
+- The sort is stable: transitions with the same effective priority keep their declaration order, which is
+  how a state without any `priority` behaved before the field existed.
+- The `DefaultAutoTransition` is always last and is taken only when no other rule was satisfied.
+- `priority` is an integer of at least 1 and is valid only on an automatic transition that is not the
+  `DefaultAutoTransition`. `WorkflowValidator` rejects a value below 1, and a `priority` on a manual,
+  shared or start transition or on the default one, with a publish error. It warns when automatic
+  transitions of a state share an effective priority, but only if at least one of them has an explicit
+  `priority`.
+
+Evaluation is sequential, so put cheap and likely-to-match rules at a low priority number: a rule
+that is expensive to evaluate is only paid for when everything before it was not satisfied.
+
+If a rule's script throws, the step fails and the lower-priority rules are **not** evaluated; a
+throwing rule is not skipped. The failure follows the error boundary like any other step failure.
+
 ### Epilogue order: Auto before Schedule
 
 **The epilogue order is Auto → Schedule.** When Auto selected a winner (`Directives.NextTransition`
