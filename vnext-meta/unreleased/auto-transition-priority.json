@@ -14,5 +14,19 @@
         "documentation": "docs/architecture/workflow-execution-pipeline.md"
       }
     }
-  }
+  },
+  "migrations": [
+    {
+      "id": "auto-transition-absent-trigger-kind-order",
+      "type": "behavior",
+      "component": "workflow",
+      "path": "workflow.attributes.states[].transitions[] (triggerType 1)",
+      "since": "next",
+      "severity": "info",
+      "title": "Automatic transitions without triggerKind no longer run before those with triggerKind 0",
+      "description": "The Auto step used to sort a state's automatic transitions by the nullable triggerKind, so a transition with no triggerKind was evaluated before one with an explicit triggerKind 0, and the DefaultAutoTransition (triggerKind 10) came last. Now non-default automatic transitions are ordered by priority (absent = 100), then declaration order; the DefaultAutoTransition is still last. A state that mixes an absent triggerKind with an explicit 0 and has more than one satisfiable rule can pick a different winner. Flows that do not mix the two evaluate exactly as before.",
+      "action": "Before upgrading, look for states whose automatic transitions mix an absent triggerKind with triggerKind 0. Where more than one rule can be true at once, either declare them in the intended order or give the one that must win a lower priority.",
+      "documentation": "docs/architecture/workflow-execution-pipeline.md"
+    }
+  ]
 }

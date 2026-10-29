@@ -1981,6 +1981,18 @@ public class WorkflowValidatorTests : DomainTestBase<DomainEntryPoint>
     }
 
     [Fact]
+    public void Validate_ShouldFail_WhenPriorityOnAutomaticStartTransition()
+    {
+        var workflow = DeserializeWorkflow(PriorityWorkflowJson(
+            stateTransitions: "[]", startPriority: 5, startTriggerType: "automatic"));
+
+        var result = _validator.Validate(workflow);
+
+        result.ValidationErrors.ShouldContain(e =>
+            e.ErrorMessage!.Contains("only allowed on state-level automatic transitions", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Validate_ShouldFail_WhenPriorityOnSharedTransition()
     {
         var workflow = DeserializeWorkflow(PriorityWorkflowJson(
@@ -2062,7 +2074,8 @@ public class WorkflowValidatorTests : DomainTestBase<DomainEntryPoint>
     private static string PriorityWorkflowJson(
         string stateTransitions,
         string sharedTransitions = "[]",
-        int? startPriority = null)
+        int? startPriority = null,
+        string startTriggerType = "manual")
     {
         var startPriorityJson = startPriority is null ? "" : $", \"priority\": {startPriority}";
         return $$"""
@@ -2087,7 +2100,7 @@ public class WorkflowValidatorTests : DomainTestBase<DomainEntryPoint>
             "startTransition": {
                 "key": "start",
                 "target": "initial",
-                "triggerType": "manual",
+                "triggerType": "{{startTriggerType}}",
                 "labels": [{"label": "Start", "language": "en"}]{{startPriorityJson}}
             }
         }

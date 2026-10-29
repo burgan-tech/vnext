@@ -22,6 +22,12 @@ namespace BBT.Workflow.Application.Tests.Execution.Transitions.Pipeline.Steps;
 /// </summary>
 public class RunAutomaticTransitionsStepPriorityTests
 {
+    private static readonly System.Text.Json.JsonSerializerOptions JsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true,
+        Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() }
+    };
+
     private readonly IAutoConditionEvaluator _evaluator = Substitute.For<IAutoConditionEvaluator>();
     private readonly RunAutomaticTransitionsStep _step;
 
@@ -146,12 +152,7 @@ public class RunAutomaticTransitionsStepPriorityTests
         }
         """;
 
-        var options = new System.Text.Json.JsonSerializerOptions
-        {
-            PropertyNameCaseInsensitive = true,
-            Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() }
-        };
-        var workflow = System.Text.Json.JsonSerializer.Deserialize<Definitions.Workflow>(json, options)!;
+        var workflow = System.Text.Json.JsonSerializer.Deserialize<Definitions.Workflow>(json, JsonOptions)!;
 
         workflow.SetReference(new Reference(key, domain, "sys-flows", "1.0.0"));
         return workflow;

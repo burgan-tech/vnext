@@ -704,18 +704,19 @@ public class WorkflowValidator
     /// - A DefaultAutoTransition cannot carry a priority (it is always evaluated last)
     /// - Warns when non-default automatic transitions tie on priority in a state that uses explicit priorities
     /// </summary>
-    private void ValidateAutoTransitionPriorities(Workflow workflow, WorkflowValidationResult result)
+    private static void ValidateAutoTransitionPriorities(Workflow workflow, WorkflowValidationResult result)
     {
         foreach (var state in workflow.States)
         {
             var statePath = $"{nameof(Workflow)}.{nameof(Workflow.States)}[{state.Key}].{nameof(State.Transitions)}";
 
-            foreach (var transition in state.Transitions.Where(t =>
-                         t.TriggerKind == TransitionKind.DefaultAutoTransition && t.Priority != null))
+            foreach (var key in state.Transitions
+                         .Where(t => t.TriggerKind == TransitionKind.DefaultAutoTransition && t.Priority != null)
+                         .Select(t => t.Key))
             {
                 result.AddError(new ValidationResult(
-                    $"DefaultAutoTransition '{transition.Key}' in state '{state.Key}' cannot have a priority; it is always evaluated last.",
-                    [$"{statePath}[{transition.Key}].{nameof(Transition.Priority)}"]));
+                    $"DefaultAutoTransition '{key}' in state '{state.Key}' cannot have a priority; it is always evaluated last.",
+                    [$"{statePath}[{key}].{nameof(Transition.Priority)}"]));
             }
 
             var autoTransitions = state.Transitions
@@ -799,7 +800,7 @@ public class WorkflowValidator
         // Validate StartTransition - should not have AvailableIn (it's not a shared transition)
         if (workflow.StartTransition != null)
         {
-            ValidateSingleTransition(workflow.StartTransition, "StartTransition", result, isSharedTransition: false);
+            ValidateSingleTransition(workflow.StartTransition, "StartTransition", result, isSharedTransition: false, isStateTransition: false);
         }
 
         // Validate well-known workflow-level transitions — AvailableIn is allowed (same as shared transitions).
@@ -831,7 +832,7 @@ public class WorkflowValidator
         {
             foreach (var transition in state.Transitions)
             {
-                ValidateSingleTransition(transition, $"States[{state.Key}].Transitions[{transition.Key}]", result, isSharedTransition: false);
+                ValidateSingleTransition(transition, $"States[{state.Key}].Transitions[{transition.Key}]", result, isSharedTransition: false, isStateTransition: true);
             }
         }
     }
@@ -843,7 +844,8 @@ public class WorkflowValidator
         Transition transition,
         string transitionPath,
         WorkflowValidationResult result,
-        bool isSharedTransition)
+        bool isSharedTransition,
+        bool isStateTransition = false)
     {
         var basePath = $"{nameof(Workflow)}.{transitionPath}";
 
@@ -864,7 +866,7 @@ public class WorkflowValidator
                     [$"{basePath}.{nameof(Transition.Priority)}"]));
             }
 
-            if (transition.TriggerType != TriggerType.Automatic || isSharedTransition)
+            if (transition.TriggerType != TriggerType.Automatic || !isStateTransition)
             {
                 result.AddError(new ValidationResult(
                     $"Transition '{transition.Key}' has a priority, but priority is only allowed on state-level automatic transitions.",
