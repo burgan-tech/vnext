@@ -724,7 +724,7 @@ public class WorkflowValidator
                 .ToList();
 
             // Two unprioritized transitions are the normal legacy shape; only flag ties once priorities are in use.
-            if (!autoTransitions.Any(t => t.Priority != null))
+            if (autoTransitions.TrueForAll(t => t.Priority == null))
                 continue;
 
             foreach (var group in autoTransitions.GroupBy(t => t.EffectivePriority).Where(g => g.Count() > 1))
