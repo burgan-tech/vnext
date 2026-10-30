@@ -386,7 +386,55 @@ keep it from polluting a transition's trace:
   `SubflowTerminalRearmExhausted` (40128, Error), `SubFlowStateChangeParentNotFound` (40129, Warning),
   `SubFlowStateChangeCorrelationNotFound` (40130, Warning), `SubFlowStateChangeOutOfOrder` (40131,
   Warning), `SubFlowStateChangeLockNotAcquired` (40132, Warning), `PostCommitEventRelayTimedOut`
-  (40133, Warning), `PostCommitEventRelayDepthExceeded` (40134, Warning).
+  (40133, Warning), `PostCommitEventRelayDepthExceeded` (40134, Warning), `SubFlowCarriedHeadersFiltered` (40140, Debug).
+
+## Carried headers on sub-item terminal events
+
+The three terminal events `instance.sub.completed`, `instance.sub.faulted` and `instance.sub.canceled`
+carry an optional `CarriedHeaders` map: the request headers of the call that settled the child, so the
+parent's output mapping (and, opt-in, its resume) can read what the child's caller sent. The field is
+additive and optional; a consumer that ignores it sees the event as before.
+
+- **Carried set.** Every request header except the deny floor and the framework exclusions. Both are
+  enforced in code (`CarriedHeaderPolicy`, `src/BBT.Workflow.Application/SubFlow/Headers/`), compared
+  case-insensitively, and keys are stored lower-cased.
+  - Deny floor: any name containing `authorization`, `cookie`, `token`, `secret` or `session`, plus every
+    name in `AdditionalDenied` (exact match). Configuration can add to the floor, never remove from it.
+  - Framework exclusions (correctness, not secrecy): `x-subflow-depth`, `x-parent-instance-id`,
+    `x-root-instance-id`, `x-workflow-instance-id`, `x-correlation-id`, `traceparent`, `tracestate`,
+    `baggage`, `host`, `transfer-encoding`, `connection`, `keep-alive`, and the prefixes `content-`,
+    `dapr-`, `grpc-`.
+  - Caps: at most `MaxEntries` (64) entries and `MaxValueLength` (4096) characters per value. An
+    over-long value is dropped; entries past the entry cap are dropped; both are counted, not logged.
+- **`role` is always carried and applied** (requester amendment RA-1). There is no `Role` option.
+- **Denylist, not allowlist** (RA-2). A header that is neither on the floor nor excluded travels, so a
+  secret in an unusually named header (say `x-api-key`) is carried unless it is listed in
+  `AdditionalDenied`. Accepted risk: the gateway or the operator owns that list. Values reach the
+  outbox row, the Inbox body and the parent's output mapping.
+- **Four copy sites.** The set is captured once at the producer (`HandleFinishStep`, and the request-hop
+  fault paths; a parent fault forwards its own carried set to the grandparent), then copied verbatim at
+  the post-commit relay, the Inbox body and the re-arm rebuild. Every receiver filters it again before
+  use, because the event is untrusted input.
+- **Switches** (section `Workflow:SubFlow:CarriedHeaders`):
+
+  | Key | Default | Effect |
+  |---|---|---|
+  | `Emit` | `true` | `false`: producers write no headers on terminal events. |
+  | `ExposeToOutputMapping` | `true` | The completion and fault output mapping reads them as `context.Headers`. |
+  | `ApplyToResume` | `false` | Applies them to the parent's resume request for completion, fault and cancel. `Actor = System` is unchanged; `ScriptResponse.Headers` gets no resume semantics. |
+  | `AdditionalDenied` | `[]` | Extra names denied (exact, case-insensitive). |
+  | `MaxEntries` / `MaxValueLength` | `64` / `4096` | Caps above. |
+
+- **`null` and empty.** If the filtered set is empty the producer writes `null`; a consumer treats `null`
+  and `{}` the same (empty dictionary). Timer, timeout, job-timeout-recovery and cascade settlements have
+  no caller request, so they carry `null`. The internal `/complete`, `/fault`, `/cancel` request's own
+  HTTP headers are never read; only the body field counts.
+- **Never logged.** Header values are never logged or put on a span. The span tag
+  `vnext.subflow.carried_header_count` carries the count; `SubFlowCarriedHeadersFiltered` (40140, Debug)
+  reports kept / denied / overflow counts only.
+
+How the output mapping and resume see these headers:
+[Subflow Execution](../architecture/subflow-execution.md#carried-headers-from-the-child).
 
 ## Accepted risks
 

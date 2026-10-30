@@ -1,0 +1,17 @@
+{
+  "releaseNote": {
+    "summary": "SubFlow terminal events now carry the settling request's headers so the parent's output mapping can read them; applying them to the parent resume is opt-in.",
+    "breaking": false,
+    "docs": []
+  },
+  "features": {
+    "engine": {
+      "subflowCarriedHeaders": {
+        "since": "next",
+        "status": "stable",
+        "description": "instance.sub.completed / faulted / canceled carry an optional CarriedHeaders map: the request headers of the call that settled the child (a parent fault forwards its own set to the grandparent). Carried: every header except a deny floor (names containing authorization, cookie, token, secret or session, plus AdditionalDenied, exact, case-insensitive; config can only add) and framework exclusions (x-subflow-depth, x-parent-instance-id, x-root-instance-id, x-workflow-instance-id, x-correlation-id, traceparent, tracestate, baggage, host, transfer-encoding, connection, keep-alive, and the prefixes content-, dapr-, grpc-). role is always carried. It is a denylist: a secret in an unusually named header travels unless listed in AdditionalDenied. Keys are lower-cased; caps 64 entries and 4096 characters per value; an empty filtered set is null (timer, timeout, job-timeout recovery and cascade settlements carry null). Configuration section Workflow:SubFlow:CarriedHeaders: Emit (default true), ExposeToOutputMapping (default true; completion and fault output mapping read them as context.Headers), ApplyToResume (default false; applies them to the parent resume of completion, fault and cancel, Actor stays System), AdditionalDenied (default []), MaxEntries (default 64), MaxValueLength (default 4096). Header values are never logged or tagged; span tag vnext.subflow.carried_header_count and log 40140 carry counts only. PURELY ADDITIVE: the event field is optional and an older consumer ignores it. Behaviour change with defaults: an output mapping that read an empty context.Headers now sees the child's headers.",
+        "documentation": "docs/runtime/event-publish-modes.md"
+      }
+    }
+  }
+}
