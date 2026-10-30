@@ -278,7 +278,8 @@ public sealed class EfCoreInstanceRepository(
         CancellationToken cancellationToken = default)
     {
         // One no-tracking row: the parent's projection columns plus the open correlation's watermark
-        // as a correlated sub-select. No includes, no row lock (plain READ COMMITTED), no write.
+        // and a closed-correlation flag as correlated sub-selects. No includes, no row lock (plain
+        // READ COMMITTED), no write.
         var dbSet = await GetDbSetAsync();
         var row = await dbSet
             .AsNoTracking()
@@ -292,7 +293,9 @@ public sealed class EfCoreInstanceRepository(
                 Correlation = i.ChildCorrelations
                     .Where(c => c.SubFlowInstanceId == subInstanceId && !c.IsCompleted)
                     .Select(c => new { c.SubFlowCurrentState, c.SubFlowNotificationSeq, c.SubFlowStateChangedAt })
-                    .FirstOrDefault()
+                    .FirstOrDefault(),
+                HasClosedCorrelation = i.ChildCorrelations
+                    .Any(c => c.SubFlowInstanceId == subInstanceId && c.IsCompleted)
             })
             .FirstOrDefaultAsync(cancellationToken);
 
@@ -307,7 +310,8 @@ public sealed class EfCoreInstanceRepository(
             row.Correlation is not null,
             row.Correlation?.SubFlowCurrentState,
             row.Correlation?.SubFlowNotificationSeq ?? 0,
-            row.Correlation?.SubFlowStateChangedAt);
+            row.Correlation?.SubFlowStateChangedAt,
+            row.HasClosedCorrelation);
     }
 
     /// <inheritdoc />

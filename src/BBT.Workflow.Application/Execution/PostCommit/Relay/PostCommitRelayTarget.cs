@@ -17,12 +17,17 @@ namespace BBT.Workflow.Execution.PostCommit.Relay;
 /// historical behaviour. A value bounds the call with a linked CTS and reports
 /// <see cref="PostCommitRelayOutcomes.Timeout"/> instead of blocking the child's hop on a slow
 /// remote.</param>
+/// <param name="SkipReason">Set when the relay declines THIS event: the dispatcher does not call
+/// <see cref="IPostCommitEventRelay{TEvent}.RelayAsync"/>, reports
+/// <see cref="PostCommitRelayOutcomes.Skipped"/> and the event travels the outbox alone, exactly as
+/// an unregistered type does. <c>null</c> relays as usual.</param>
 public readonly record struct PostCommitRelayTarget(
     string Domain,
     Guid ParentInstanceId,
     Guid SubInstanceId,
     bool? Sync = null,
-    TimeSpan? RemoteTimeout = null);
+    TimeSpan? RemoteTimeout = null,
+    string? SkipReason = null);
 
 /// <summary>Outcome values written to <c>vnext.relay.outcome</c>.</summary>
 public static class PostCommitRelayOutcomes
@@ -33,7 +38,10 @@ public static class PostCommitRelayOutcomes
     /// <summary>The relay threw, or the command returned a failed <c>Result</c>.</summary>
     public const string Failed = "failed";
 
-    /// <summary>No relay is registered for the event type — it travels the outbox only.</summary>
+    /// <summary>
+    /// The relay declined this event (<see cref="PostCommitRelayTarget.SkipReason"/>) — it travels the
+    /// outbox only. An event type with no registered relay is skipped the same way, but opens no span.
+    /// </summary>
     public const string Skipped = "skipped";
 
     /// <summary>The cross-domain leg exceeded the relay's own bound.</summary>

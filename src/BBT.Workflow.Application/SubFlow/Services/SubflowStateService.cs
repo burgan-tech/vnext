@@ -98,6 +98,17 @@ public sealed class SubflowStateService(
         // terminal paths', so there is no lock-order inversion between them.
         var lockKey = $"vnext:{input.Domain}:{input.Flow}:{input.ParentInstanceId}:sub:{input.SubInstanceId:N}";
 
+        // The child's terminal Completed status belongs to the terminal event raised in the same
+        // commit, whose settlement records the final state and re-derives this parent's projection.
+        // Applying it here is a no-op after that settlement and a wrong projection before it — on
+        // either delivery path. Decided from the input alone: no read, no lock.
+        if (SubStateTerminalStatus.IsSupersededByTerminalEvent(input.NewStatus))
+        {
+            logger.SubFlowStateChangeTerminalSuperseded(input.SubInstanceId, input.ParentInstanceId, input.NewStatus!);
+            activity?.SetTag("vnext.subflow.result", SubStateTerminalStatus.SupersededReason);
+            return null;
+        }
+
         // The backup delivery of a notification the relay already committed is the usual contender
         // for this lock, and applying it changes nothing. Recognise that from the committed rows
         // first, without the lock. Relay deliveries skip this read: they are almost always first.
@@ -222,10 +233,13 @@ public sealed class SubflowStateService(
     /// <summary>
     /// Whether the committed rows already reflect this notification, read without the lock. True for
     /// (a) a stale delivery — the same ordering predicate as the locked path; safe unlocked because
-    /// the watermark only moves forward, under the lock — and (b) an exact duplicate whose values the
-    /// parent and its correlation already carry, which the locked path would re-apply as a no-op.
-    /// Anything else (parent missing, correlation closed, projection different) returns false and
-    /// takes the locked path, which owns every write and every not-found answer.
+    /// the watermark only moves forward, under the lock — (b) an exact duplicate whose values the
+    /// parent and its correlation already carry, which the locked path would re-apply as a no-op, and
+    /// (c) a correlation a terminal settlement has already closed, which the locked path would answer
+    /// with "not found" and no write — only a SubFlow child publishes on this channel, so the closed
+    /// row is always that child's own. Anything else (parent missing, no correlation at all,
+    /// projection different) returns false and takes the locked path, which owns every write and
+    /// every genuine not-found answer.
     /// </summary>
     private async Task<bool> IsAlreadyAppliedAsync(
         SubFlowStateChangedInput input,
@@ -234,8 +248,22 @@ public sealed class SubflowStateService(
     {
         var probe = await instanceRepository.ProbeSubflowStateAsync(
             input.ParentInstanceId, input.SubInstanceId, cancellationToken);
-        if (probe is not { HasOpenCorrelation: true })
+        if (probe is null)
             return false;
+
+        if (!probe.HasOpenCorrelation)
+        {
+            if (!probe.HasClosedCorrelation)
+                return false;
+
+            // A late backup for a child whose terminal settlement already ran: the same "nothing to
+            // write" the locked path would reach, minus the lock it would contend for with that
+            // settlement. A settlement reverted afterwards re-publishes its terminal event, so
+            // nothing this drop skips is lost (the locked path drops it identically).
+            logger.SubFlowStateChangeBackupAlreadyApplied(input.SubInstanceId, input.ParentInstanceId, "correlation_closed");
+            activity?.SetTag("vnext.subflow.result", "backup_correlation_closed");
+            return true;
+        }
 
         var bothSequenced = input.NotificationSeq > 0 && probe.SubFlowNotificationSeq > 0;
         var eventStamp = TruncateToMicroseconds(input.ChangedAt);

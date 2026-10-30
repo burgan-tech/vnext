@@ -530,20 +530,83 @@ public sealed class SubflowStateServiceTests
             x => x.UpdateAsync(parent, true, It.IsAny<CancellationToken>()), Times.Once);
     }
 
-    /// <summary>Not-found answers stay the locked path's: the probe only ever short-circuits a write.</summary>
+    /// <summary>
+    /// A child with no correlation at all is a genuine not-found, and those answers stay the locked
+    /// path's: the probe only short-circuits what the locked path would also leave unwritten.
+    /// </summary>
     [Fact]
-    public async Task A_Backup_For_A_Closed_Correlation_Falls_Through_To_The_Locked_Path()
+    public async Task A_Backup_With_No_Correlation_At_All_Falls_Through_To_The_Locked_Path()
     {
         var parent = CreateParent(out var subInstanceId);
         Loads(parent, subInstanceId);
         var input = Backup(Input(parent.Id, subInstanceId, DateTime.UtcNow));
-        Probes(parent.Id, subInstanceId, AppliedProbe(input) with { HasOpenCorrelation = false });
+        Probes(parent.Id, subInstanceId, AppliedProbe(input) with { HasOpenCorrelation = false, HasClosedCorrelation = false });
 
         await CreateSut().UpdateParentStateAsync(input);
 
         _instanceRepository.Verify(
             x => x.FindForSubflowStateChangeAsync(parent.Id, subInstanceId, It.IsAny<CancellationToken>()),
             Times.Once);
+    }
+
+    /// <summary>
+    /// The late backup this channel produced most: its child's terminal settlement already closed the
+    /// correlation. The locked path would load, find nothing open and write nothing — after contending
+    /// for the lock with that settlement. Dropped before the lock instead.
+    /// </summary>
+    [Fact]
+    public async Task A_Backup_For_A_Closed_Correlation_Is_Dropped_Without_The_Lock()
+    {
+        var parentId = Guid.NewGuid();
+        var subInstanceId = Guid.NewGuid();
+        var input = Backup(Input(parentId, subInstanceId, DateTime.UtcNow, newStatus: "A", notificationSeq: 4));
+        Probes(parentId, subInstanceId, AppliedProbe(input) with { HasOpenCorrelation = false, HasClosedCorrelation = true });
+
+        await CreateSut().UpdateParentStateAsync(input);
+
+        VerifyNoLockNoLoadNoWrite();
+    }
+
+    // ─── terminal Completed: superseded by the terminal event ─────────────────
+
+    /// <summary>
+    /// The child's terminal Completed status is the terminal event's to settle. Neither delivery
+    /// path reads, locks or writes for it — not the relay (which the dispatcher no longer even
+    /// sends), and not the backup, which could otherwise win the race against the terminal
+    /// settlement and project a finished child onto a parent about to resume.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_Terminal_Completed_Notification_Is_Dropped_Before_Any_Read_Or_Lock(bool backup)
+    {
+        var parentId = Guid.NewGuid();
+        var subInstanceId = Guid.NewGuid();
+        var input = Input(parentId, subInstanceId, DateTime.UtcNow, newStatus: "C", notificationSeq: 9, newState: "done");
+        if (backup)
+            input = Backup(input);
+
+        await CreateSut().UpdateParentStateAsync(input);
+
+        VerifyNoLockNoLoadNoWrite();
+        _instanceRepository.Verify(
+            x => x.ProbeSubflowStateAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    /// <summary>Only Completed is superseded; any other reported status still applies.</summary>
+    [Fact]
+    public async Task A_Non_Terminal_Status_Still_Applies()
+    {
+        var parent = CreateParent(out var subInstanceId);
+        Loads(parent, subInstanceId);
+
+        await CreateSut().UpdateParentStateAsync(
+            Input(parent.Id, subInstanceId, DateTime.UtcNow, newStatus: "A", notificationSeq: 1));
+
+        parent.GetEffectiveState.ShouldBe("child-running");
+        _instanceRepository.Verify(
+            x => x.UpdateAsync(parent, true, It.IsAny<CancellationToken>()), Times.Once);
     }
 
     /// <summary>The relay is almost always first; it must not pay an extra read per level.</summary>

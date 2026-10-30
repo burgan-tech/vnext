@@ -107,6 +107,14 @@ public sealed class PostCommitRelayDispatcher(
             var isLocal = runtimeInfoProvider.IsDomainMatch(target.Domain);
             activity?.SetTag(TelemetryConstants.TagNames.RelayRoute, isLocal ? "local" : "remote");
 
+            // The relay declined this particular event; its outbox row is the only delivery.
+            if (target.SkipReason is { } skipReason)
+            {
+                activity?.SetTag(TelemetryConstants.TagNames.RelayOutcome, PostCommitRelayOutcomes.Skipped);
+                logger.PostCommitEventRelaySkipped(eventType.Name, target.SubInstanceId, target.ParentInstanceId, skipReason);
+                return;
+            }
+
             var effectiveToken = cancellationToken;
             if (!isLocal && target.RemoteTimeout is { } remoteTimeout)
             {
