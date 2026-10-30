@@ -26,11 +26,52 @@ public static class InstanceMetadataExtensions
 
         keys.Add(resourceKey);
 
+        var acquiredAt = ReadLockAcquisitionTimes(instance);
+        acquiredAt[resourceKey] = DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture);
+
         var metadata = new ExtraPropertyDictionary(instance.ExtraProperties ?? new ExtraPropertyDictionary())
         {
-            [DomainConsts.MetaDataKeys.ResourceLocks] = JsonSerializer.Serialize(keys)
+            [DomainConsts.MetaDataKeys.ResourceLocks] = JsonSerializer.Serialize(keys),
+            [DomainConsts.MetaDataKeys.ResourceLockAcquiredAt] = JsonSerializer.Serialize(acquiredAt)
         };
         instance.SetMetaData(metadata);
+    }
+
+    /// <summary>
+    /// When this instance acquired <paramref name="resourceKey"/>, or <c>null</c> when it is not
+    /// recorded — an instance that started before the stamp existed, or metadata that will not parse.
+    /// Used to meter how long a lock was actually held, which is the signal that tells a healthy
+    /// release apart from one that only happened when the TTL ran out.
+    /// </summary>
+    public static DateTime? GetResourceLockAcquiredAt(this Instance instance, string resourceKey)
+    {
+        if (instance is null)
+            throw new ArgumentNullException(nameof(instance));
+
+        if (!ReadLockAcquisitionTimes(instance).TryGetValue(resourceKey, out var raw))
+            return null;
+
+        return DateTime.TryParse(
+            raw, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var parsed)
+            ? parsed
+            : null;
+    }
+
+    private static Dictionary<string, string> ReadLockAcquisitionTimes(Instance instance)
+    {
+        var raw = GetString(instance.ExtraProperties, DomainConsts.MetaDataKeys.ResourceLockAcquiredAt);
+        if (string.IsNullOrWhiteSpace(raw))
+            return new Dictionary<string, string>(StringComparer.Ordinal);
+
+        try
+        {
+            return JsonSerializer.Deserialize<Dictionary<string, string>>(raw)
+                   ?? new Dictionary<string, string>(StringComparer.Ordinal);
+        }
+        catch (JsonException)
+        {
+            return new Dictionary<string, string>(StringComparer.Ordinal);
+        }
     }
 
     /// <summary>

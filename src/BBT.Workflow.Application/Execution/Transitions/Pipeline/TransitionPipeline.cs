@@ -5,6 +5,7 @@ using BBT.Aether.Uow;
 using BBT.Workflow.BackgroundJobs;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution.Continuations;
+using BBT.Workflow.Execution.ErrorHandling;
 using BBT.Workflow.Execution.Validation;
 using BBT.Workflow.Files;
 using BBT.Workflow.Instances;
@@ -24,6 +25,8 @@ public class TransitionPipeline
 {
     private readonly TransitionExecutor _executor;
     private readonly ISubItemEventDataResolver? _subItemDataResolver;
+    /// <summary>Optional: when absent, a routable step failure simply faults as before.</summary>
+    private readonly IErrorBoundaryResolver? _errorBoundaryResolver;
     private readonly ContinuationDispatcher _continuationDispatcher;
     private readonly IInstanceBusyManager _busyMarker;
     private readonly ITransitionContextFactory _contextFactory;
@@ -56,11 +59,39 @@ public class TransitionPipeline
     private static readonly HashSet<string> ClientFacingErrorCodes = new(StringComparer.Ordinal)
     {
         WorkflowErrorCodes.ResourceLockConflict,
+        WorkflowErrorCodes.ResourceLockRejected,
         WorkflowErrorCodes.InstanceBusy,
+    };
+
+    /// <summary>
+    /// Step failures that must NOT fault the instance. The step refused to START the work rather than
+    /// failing it half-way, so the instance is exactly as it was: faulting it would destroy healthy work
+    /// over a condition the caller can simply retry. The admission layer compensates the Busy flip when
+    /// the run returns a failure, so the instance settles back to Active on its own.
+    /// Extend deliberately — an entry here means "this error never leaves partial state behind".
+    /// </summary>
+    private static readonly HashSet<string> NonFaultingErrorCodes = new(StringComparer.Ordinal)
+    {
+        WorkflowErrorCodes.ResourceLockRejected,
     };
 
     private static bool IsClientFacingError(Error error)
         => error.Code is not null && ClientFacingErrorCodes.Contains(error.Code);
+
+    private static bool IsNonFaultingError(Error error)
+        => error.Code is not null && NonFaultingErrorCodes.Contains(error.Code);
+
+    /// <summary>
+    /// Pipeline-step failures a workflow may REROUTE through its own <c>errorBoundary</c> instead of
+    /// faulting. Deliberately narrow: a code belongs here only when the step failed BEFORE changing
+    /// anything, so sending the instance down another transition from the state it never left is sound.
+    /// A lock conflict is the first such case — the step refuses at <see cref="LifecycleOrder.ResourceLock"/>,
+    /// which runs before OnExecute, ChangeState and OnEntry.
+    /// </summary>
+    private static readonly HashSet<string> BoundaryRoutableErrorCodes = new(StringComparer.Ordinal)
+    {
+        WorkflowErrorCodes.ResourceLockConflict,
+    };
 
     /// <summary>
     /// Initializes a new instance of the TransitionPipeline.
@@ -82,8 +113,10 @@ public class TransitionPipeline
         IClock clock,
         ILogger<TransitionPipeline> logger,
         ISubItemEventDataResolver? subItemDataResolver = null,
-        IInstanceDataWriteService? instanceDataWriteService = null)
+        IInstanceDataWriteService? instanceDataWriteService = null,
+        IErrorBoundaryResolver? errorBoundaryResolver = null)
     {
+        _errorBoundaryResolver = errorBoundaryResolver;
         _subItemDataResolver = subItemDataResolver;
         _instanceDataWriteService = instanceDataWriteService;
         _executor = executor;
@@ -298,18 +331,44 @@ public class TransitionPipeline
             {
                 // The caller will see success for most faults (below), so the failure has to be
                 // put on the enclosing spans here or the transaction reads as a success.
-                Activity.Current.MarkFaultedOnLocalChain(pipelineResult.Error.Code, pipelineResult.Error.Message);
-
-                await MarkInstanceFaultedAsync(context, pipelineResult.Error, cancellationToken);
-
-                // The instance is now faulted (F) regardless. For caller-actionable errors
-                // (e.g. ResourceLockConflict) propagate the failure so the HTTP layer returns the
-                // mapped status (409) instead of swallowing it into "200 + Status=F". All other
-                // pipeline faults keep the existing 200 + Status=F behavior.
-                if (IsClientFacingError(pipelineResult.Error))
+                // onConflict: Reject — adım işe hiç başlamadı, instance olduğu gibi duruyor.
+                // Fault etmek sağlam bir süreci, çağıranın tekrar deneyebileceği bir durum uğruna
+                // öldürmek olurdu. Fail dönüyoruz; admission katmanı Busy flip'ini telafi ediyor.
+                if (IsNonFaultingError(pipelineResult.Error))
+                {
+                    _logger.LogInformation(
+                        "Transition {TransitionKey} on instance {InstanceId} was rejected without faulting: {ErrorCode}",
+                        context.TransitionKey, context.InstanceId, pipelineResult.Error.Code);
                     return Result<TransitionExecutionContext>.Fail(pipelineResult.Error);
+                }
 
-                return Result<TransitionExecutionContext>.Ok(context);
+                // The workflow may have declared what to do with this failure. When a boundary rule
+                // names a transition, the instance is REROUTED instead of faulted: it never left its
+                // state (see BoundaryRoutableErrorCodes), so another transition out of that same state
+                // is a legitimate continuation, not a patch over broken state. Falls through to the
+                // dispatch below, exactly like a normal auto-chain hop.
+                if (TryRouteByErrorBoundary(context, pipelineResult.Error))
+                {
+                    _logger.LogInformation(
+                        "Transition {TransitionKey} on instance {InstanceId} failed with {ErrorCode} and was rerouted by errorBoundary to {NextTransition}",
+                        context.TransitionKey, context.InstanceId, pipelineResult.Error.Code,
+                        context.Directives.NextTransition?.TransitionKey);
+                }
+                else
+                {
+                    Activity.Current.MarkFaultedOnLocalChain(pipelineResult.Error.Code, pipelineResult.Error.Message);
+
+                    await MarkInstanceFaultedAsync(context, pipelineResult.Error, cancellationToken);
+
+                    // The instance is now faulted (F) regardless. For caller-actionable errors
+                    // (e.g. ResourceLockConflict) propagate the failure so the HTTP layer returns the
+                    // mapped status (409) instead of swallowing it into "200 + Status=F". All other
+                    // pipeline faults keep the existing 200 + Status=F behavior.
+                    if (IsClientFacingError(pipelineResult.Error))
+                        return Result<TransitionExecutionContext>.Fail(pipelineResult.Error);
+
+                    return Result<TransitionExecutionContext>.Ok(context);
+                }
             }
 
             // updateData continuation handoff: updateData never owns the status, so a satisfied
@@ -429,7 +488,7 @@ public class TransitionPipeline
         Error error,
         CancellationToken cancellationToken)
     {
-        if (!context.Instance.IsDataBuffered)
+        if (!context.Instance.IsDataBuffered || IsNonFaultingError(error))
             return Result<TransitionExecutionContext>.Fail(error);
 
         Activity.Current.MarkFaultedOnLocalChain(error.Code, error.Message);
@@ -549,6 +608,68 @@ public class TransitionPipeline
 
         var utcNow = _clock.UtcNow;
         return activeJobs.Any(job => job.IsLiveTransitionOwner(context.TransitionKey, utcNow));
+    }
+
+    /// <summary>
+    /// Asks the workflow's own <c>errorBoundary</c> what to do with a routable step failure and, when a
+    /// rule names a transition, requests it as the chain's next hop. Returns whether the failure was
+    /// rerouted; <c>false</c> leaves the caller on the fault path untouched.
+    ///
+    /// Only <see cref="BoundaryRoutableErrorCodes"/> reach here, so "reroute" never papers over partial
+    /// state. The boundary chain is the same one task failures use — state level first, then global —
+    /// which is what lets a domain write ONE rule (e.g. <c>errorCodes: ["Execution:200010"]</c>) and have
+    /// both its task errors and its lock conflicts honour it.
+    ///
+    /// An incident is recorded so the reroute is visible: without it the instance would move on with no
+    /// trace of why, and the first question after an incident-free reroute is always "what happened?".
+    /// The hop is requested with <see cref="TransitionRequestReasons.ErrorBoundary"/>, which also makes
+    /// FinalizeTransitionStep resolve that incident once the reroute lands.
+    ///
+    /// DEPENDENCY — the ErrorBoundary pipeline profile must keep running the Schedule step. The whole
+    /// point of a reroute is usually "park somewhere and come back", and parking means arming a timer on
+    /// the target state. vnext#842 proposes excluding Auto AND Schedule from that profile: excluding Auto
+    /// is right (it stops cascading error handling), excluding Schedule would silently strand every
+    /// timer-based recovery — the instance would reach its waiting state and never leave it.
+    /// </summary>
+    private bool TryRouteByErrorBoundary(TransitionExecutionContext context, Error error)
+    {
+        if (_errorBoundaryResolver is null || error.Code is null || !BoundaryRoutableErrorCodes.Contains(error.Code))
+            return false;
+
+        var currentState = context.Workflow.GetState(context.Instance.GetCurrentState).Value;
+
+        var resolution = _errorBoundaryResolver.Resolve(
+            new NormalizedError
+            {
+                Code = error.Code,
+                Layer = ErrorLayer.Pipeline,
+                Message = error.Message,
+                Source = ErrorSource.ResultFailure,
+                OriginalCode = error.Code,
+                IsTransient = true,
+            },
+            taskBoundary: null,
+            stateBoundary: currentState?.ErrorBoundary,
+            globalBoundary: context.Workflow.ErrorBoundary);
+
+        if (!resolution.IsHandled || string.IsNullOrWhiteSpace(resolution.TransitionKey))
+            return false;
+
+        context.Instance.AddIncident(InstanceIncidentFactory.Create(
+            state: context.Instance.GetCurrentState,
+            transition: context.TransitionKey,
+            taskKey: null,   // a pipeline step, not a task
+            message: error.Message ?? error.Code,
+            errorCode: error.Code,
+            errorLayer: ErrorLayer.Pipeline.ToString(),
+            boundaryAction: resolution.Action.ToString(),
+            boundaryLevel: resolution.ResolvedAtLevel?.ToString(),
+            traceId: context.TraceId));
+
+        context.Directives.RequestNextTransition(
+            new NextTransitionRequest(resolution.TransitionKey!, TransitionRequestReasons.ErrorBoundary));
+
+        return true;
     }
 
     /// <summary>

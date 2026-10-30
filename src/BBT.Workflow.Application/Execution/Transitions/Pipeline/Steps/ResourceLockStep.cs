@@ -87,7 +87,16 @@ public sealed class ResourceLockStep(
     {
         var acquired = await resourceLockService.AcquireAsync(resourceKey, owner, lockDef.TtlSeconds, ct);
         if (!acquired)
-            return Result<StepOutcome>.Fail(ExecutionErrors.ResourceLockConflict(resourceKey));
+        {
+            // The policy decides what losing the race MEANS, and the two outcomes differ in kind, not
+            // degree: Abort treats it as a failure (the pipeline faults the instance), Reject treats it
+            // as a normal "not your turn" (the pipeline leaves the instance untouched and the admission
+            // layer compensates the Busy flip). Separate error codes keep that difference visible to the
+            // caller instead of hiding it behind one 409.
+            return Result<StepOutcome>.Fail(lockDef.OnConflict == ResourceLockConflictPolicy.Reject
+                ? ExecutionErrors.ResourceLockRejected(resourceKey)
+                : ExecutionErrors.ResourceLockConflict(resourceKey));
+        }
 
         // Record the key on the instance so its terminal cleanup releases the lock automatically,
         // independent of which transition path completes/faults the instance. The pipeline's normal

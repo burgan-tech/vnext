@@ -60,6 +60,9 @@ public class WorkflowValidator
         // Error boundary validations
         ValidateErrorBoundaries(workflow, result, stateKeys);
 
+        // Resource lock validations (and how boundaries interact with them)
+        ValidateResourceLocks(workflow, result);
+
         return result;
     }
 
@@ -1461,4 +1464,187 @@ public class WorkflowValidator
     }
 
     #endregion
+
+    #region Resource Lock Validations
+
+    /// <summary>
+    /// Error codes a resource-lock conflict can surface as. A boundary rule naming one of these is
+    /// handling a lost race, which bounds what the rule may sensibly do (see the Retry check below).
+    /// </summary>
+    private static readonly HashSet<string> ResourceLockConflictCodes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        WorkflowErrorCodes.ResourceLockConflict,
+        WorkflowErrorCodes.ResourceLockRejected,
+    };
+
+    /// <summary>
+    /// Validates resource locks and how error boundaries interact with them. Every rule here covers a
+    /// failure that is otherwise only discovered in production, as a stuck or faulted instance:
+    /// a TTL that cannot protect anything, a boundary that routes nowhere, a lock that silently never
+    /// runs, and a Retry that can only spin.
+    /// </summary>
+    private static void ValidateResourceLocks(Workflow workflow, WorkflowValidationResult result)
+    {
+        foreach (var (transition, path, _) in EnumerateDefinedTransitions(workflow))
+        {
+            var lockDefinition = transition.ResourceLock;
+            if (lockDefinition is null)
+                continue;
+
+            // A lock with no life is not a lock: the key it hands out has already expired, so two
+            // instances can be inside the protected section at once — the exact race it exists to stop.
+            // Release carries no TTL, so it is exempt.
+            if (lockDefinition.Action != ResourceLockAction.Release && lockDefinition.TtlSeconds <= 0)
+            {
+                result.AddError(new ValidationResult(
+                    $"Resource lock on transition '{transition.Key}' must have ttlSeconds greater than 0 for " +
+                    $"action '{lockDefinition.Action}'. Found: {lockDefinition.TtlSeconds}.",
+                    [$"{nameof(Workflow)}.{path}.ResourceLock.{nameof(ResourceLockDefinition.TtlSeconds)}"]));
+            }
+        }
+
+        ValidateErrorBoundaryLockInteractions(workflow, result);
+    }
+
+    /// <summary>
+    /// Checks the three ways a boundary and a lock can be wired together wrongly.
+    /// </summary>
+    private static void ValidateErrorBoundaryLockInteractions(Workflow workflow, WorkflowValidationResult result)
+    {
+        foreach (var (boundary, context, stateKey) in EnumerateRoutableErrorBoundaries(workflow))
+        {
+            for (var i = 0; i < boundary.OnError.Count; i++)
+            {
+                var rule = boundary.OnError[i];
+                var ruleContext = $"{context}.OnError[{i}]";
+
+                // Retry cannot resolve a lost race: the step is retried while the lock is still held by
+                // somebody else, so every attempt fails the same way and the instance faults anyway —
+                // after burning the retry budget. The failure needs a different ROUTE, not another try.
+                if (rule.Action == ErrorAction.Retry && NamesResourceLockConflict(rule))
+                {
+                    result.AddError(new ValidationResult(
+                        "Retry cannot resolve a resource-lock conflict: the step is retried while the lock is " +
+                        "still held by another instance, so every attempt fails the same way. Route the failure " +
+                        "to a waiting state with a scheduled retry instead, or declare onConflict 'Reject' so the " +
+                        "caller repeats the call.",
+                        [$"{ruleContext}.{nameof(ErrorHandlerRule.Action)}"]));
+                }
+
+                if (string.IsNullOrEmpty(rule.Transition))
+                    continue;
+
+                // A state boundary may only route to a transition the instance can actually take from
+                // that state — it never left it. Naming one that belongs to another state leaves the
+                // instance stuck where it is, with no incident naming the reason.
+                if (stateKey is not null && !IsTransitionAvailableFrom(workflow, rule.Transition, stateKey))
+                {
+                    result.AddError(new ValidationResult(
+                        $"Error boundary on state '{stateKey}' routes to transition '{rule.Transition}', which is " +
+                        $"not available from that state. Declare it on the state, or as a shared transition whose " +
+                        $"availableIn contains '{stateKey}'.",
+                        [$"{ruleContext}.{nameof(ErrorHandlerRule.Transition)}"]));
+                }
+
+                // The ErrorBoundary pipeline profile excludes the ResourceLock step, so a lock declared on
+                // a transition reached THROUGH a boundary never runs. The definition reads as protected
+                // and is not — a warning rather than an error, since the routing itself still works.
+                if (FindTransitionByKey(workflow, rule.Transition)?.ResourceLock is not null)
+                {
+                    result.AddWarning(new ValidationResult(
+                        $"Transition '{rule.Transition}' declares a resource lock but is used as an error-boundary " +
+                        $"target. The ErrorBoundary pipeline profile skips the resource-lock step, so that lock " +
+                        $"never runs when the transition is reached this way.",
+                        [$"{ruleContext}.{nameof(ErrorHandlerRule.Transition)}"]));
+                }
+            }
+        }
+    }
+
+    private static bool NamesResourceLockConflict(ErrorHandlerRule rule) =>
+        rule.ErrorCodes is { Count: > 0 } codes && codes.Any(ResourceLockConflictCodes.Contains);
+
+    /// <summary>
+    /// Boundaries a pipeline failure can be routed by: the workflow's own and each state's. Task
+    /// boundaries are left out on purpose — a resource-lock failure never comes from a task.
+    /// </summary>
+    private static IEnumerable<(ErrorBoundary Boundary, string Context, string? StateKey)>
+        EnumerateRoutableErrorBoundaries(Workflow workflow)
+    {
+        if (workflow.ErrorBoundary is not null)
+            yield return (workflow.ErrorBoundary, $"{nameof(Workflow)}.{nameof(Workflow.ErrorBoundary)}", null);
+
+        foreach (var state in workflow.States)
+        {
+            if (state.ErrorBoundary is not null)
+            {
+                yield return (
+                    state.ErrorBoundary,
+                    $"{nameof(Workflow)}.{nameof(Workflow.States)}[{state.Key}].{nameof(State.ErrorBoundary)}",
+                    state.Key);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Every transition the definition declares, with the path the validator reports it under and the
+    /// state that owns it (null for workflow-level and shared transitions, which no single state owns).
+    /// </summary>
+    private static IEnumerable<(Transition Transition, string Path, string? OwningState)>
+        EnumerateDefinedTransitions(Workflow workflow)
+    {
+        if (workflow.StartTransition is not null)
+            yield return (workflow.StartTransition, "StartTransition", null);
+
+        if (workflow.Cancel is not null)
+            yield return (workflow.Cancel, "Cancel", null);
+
+        if (workflow.UpdateData is not null)
+            yield return (workflow.UpdateData, "UpdateData", null);
+
+        if (workflow.Exit is not null)
+            yield return (workflow.Exit, "Exit", null);
+
+        foreach (var transition in workflow.SharedTransitions)
+            yield return (transition, $"SharedTransitions[{transition.Key}]", null);
+
+        foreach (var state in workflow.States)
+        {
+            foreach (var transition in state.Transitions)
+                yield return (transition, $"States[{state.Key}].Transitions[{transition.Key}]", state.Key);
+        }
+    }
+
+    private static Transition? FindTransitionByKey(Workflow workflow, string transitionKey) =>
+        EnumerateDefinedTransitions(workflow)
+            .FirstOrDefault(entry => string.Equals(entry.Transition.Key, transitionKey, StringComparison.Ordinal))
+            .Transition;
+
+    /// <summary>
+    /// Whether an instance sitting in <paramref name="stateKey"/> could take this transition. The start
+    /// transition is deliberately excluded: it only ever runs as the instance is created.
+    /// </summary>
+    private static bool IsTransitionAvailableFrom(Workflow workflow, string transitionKey, string stateKey)
+    {
+        var state = workflow.States.FirstOrDefault(s => string.Equals(s.Key, stateKey, StringComparison.Ordinal));
+        if (state is not null && state.Transitions.Any(t => string.Equals(t.Key, transitionKey, StringComparison.Ordinal)))
+            return true;
+
+        var shared = workflow.SharedTransitions
+            .FirstOrDefault(t => string.Equals(t.Key, transitionKey, StringComparison.Ordinal));
+        if (shared is not null)
+            return shared.AvailableIn.Count == 0
+                || shared.AvailableIn.Any(entry => string.Equals(entry.State, stateKey, StringComparison.Ordinal));
+
+        // The well-known workflow-level transitions are reachable from anywhere.
+        return IsWellKnownWorkflowTransition(workflow, transitionKey);
+    }
+
+    private static bool IsWellKnownWorkflowTransition(Workflow workflow, string transitionKey) =>
+        string.Equals(workflow.Cancel?.Key, transitionKey, StringComparison.Ordinal)
+        || string.Equals(workflow.UpdateData?.Key, transitionKey, StringComparison.Ordinal)
+        || string.Equals(workflow.Exit?.Key, transitionKey, StringComparison.Ordinal);
+
+    #endregion
+
 }

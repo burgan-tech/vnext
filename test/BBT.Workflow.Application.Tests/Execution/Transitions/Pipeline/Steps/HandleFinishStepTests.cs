@@ -2,6 +2,7 @@ using System;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using BBT.Aether.Uow;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.Pipeline.Steps;
@@ -67,6 +68,130 @@ public class HandleFinishStepTests
         completedInsideFlush.ShouldBeTrue();
         await repository.Received(1).UpdateAsync(instance, true, CancellationToken.None);
         context.Items["IsFinishState"].ShouldBe(true);
+    }
+
+
+    /// <summary>
+    /// The lock is handed back on the ambient unit of work's OnCompleted, not inline. Releasing before
+    /// the commit would announce "the section is free" for a transition that can still roll back, and
+    /// a second instance could walk straight into it.
+    /// </summary>
+    [Fact]
+    public async Task ExecuteAsync_Finish_ReleasesTrackedLocksOnlyAfterTheCommit()
+    {
+        var repository = Substitute.For<IInstanceRepository>();
+        var locks = Substitute.For<IResourceLockService>();
+        var (uowManager, completeAsync) = CreateUowManagerCapturingOnCompleted();
+        var instance = InstanceFactory.CreateDefault();
+        instance.TrackResourceLock("txnlimit:a");
+        instance.TrackResourceLock("txnlimit:b");
+        var step = new HandleFinishStep(
+            repository, Substitute.For<ILogger<HandleFinishStep>>(),
+            resourceLockService: locks, uowManager: uowManager);
+
+        var result = await step.ExecuteAsync(CreateFinishContext(instance), CancellationToken.None);
+
+        // The step itself must not have freed anything yet — the transaction is still open.
+        result.IsSuccess.ShouldBeTrue();
+        await locks.DidNotReceive().ReleaseAsync(
+            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+
+        await completeAsync();
+
+        var owner = instance.Id.ToString();
+        await locks.Received(1).ReleaseAsync("txnlimit:a", owner, Arg.Any<CancellationToken>());
+        await locks.Received(1).ReleaseAsync("txnlimit:b", owner, Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// Cancel is a terminal path too, so it hands the locks back on the same hook.
+    /// </summary>
+    [Fact]
+    public async Task ExecuteAsync_Cancel_ReleasesTrackedLocksAfterTheCommit()
+    {
+        var repository = Substitute.For<IInstanceRepository>();
+        var locks = Substitute.For<IResourceLockService>();
+        var (uowManager, completeAsync) = CreateUowManagerCapturingOnCompleted();
+        var instance = CreateSubItem();
+        instance.TrackResourceLock("txnlimit:c");
+        var step = new HandleFinishStep(
+            repository, Substitute.For<ILogger<HandleFinishStep>>(),
+            resourceLockService: locks, uowManager: uowManager);
+
+        await step.ExecuteAsync(
+            CreateCancelContext(instance, TerminationContext.Direct(Guid.NewGuid())), CancellationToken.None);
+        await completeAsync();
+
+        await locks.Received(1).ReleaseAsync(
+            "txnlimit:c", instance.Id.ToString(), Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// A release that throws must never take down a transition that already committed — the TTL is the
+    /// safety net, and the remaining keys are still attempted.
+    /// </summary>
+    [Fact]
+    public async Task ExecuteAsync_Finish_WhenAReleaseThrows_StillReleasesTheRest()
+    {
+        var repository = Substitute.For<IInstanceRepository>();
+        var locks = Substitute.For<IResourceLockService>();
+        locks.ReleaseAsync("txnlimit:a", Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns<Task<bool>>(_ => throw new InvalidOperationException("lock store down"));
+        var (uowManager, completeAsync) = CreateUowManagerCapturingOnCompleted();
+        var instance = InstanceFactory.CreateDefault();
+        instance.TrackResourceLock("txnlimit:a");
+        instance.TrackResourceLock("txnlimit:b");
+        var step = new HandleFinishStep(
+            repository, Substitute.For<ILogger<HandleFinishStep>>(),
+            resourceLockService: locks, uowManager: uowManager);
+
+        await step.ExecuteAsync(CreateFinishContext(instance), CancellationToken.None);
+        await Should.NotThrowAsync(completeAsync);
+
+        await locks.Received(1).ReleaseAsync("txnlimit:b", instance.Id.ToString(), Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// An instance that never took a lock must not arm anything — no hook, no call.
+    /// </summary>
+    [Fact]
+    public async Task ExecuteAsync_Finish_WithNoTrackedLocks_ArmsNothing()
+    {
+        var repository = Substitute.For<IInstanceRepository>();
+        var locks = Substitute.For<IResourceLockService>();
+        var uow = Substitute.For<IUnitOfWork>();
+        var uowManager = Substitute.For<IUnitOfWorkManager>();
+        uowManager.Current.Returns(uow);
+        var step = new HandleFinishStep(
+            repository, Substitute.For<ILogger<HandleFinishStep>>(),
+            resourceLockService: locks, uowManager: uowManager);
+
+        await step.ExecuteAsync(CreateFinishContext(InstanceFactory.CreateDefault()), CancellationToken.None);
+
+        uow.DidNotReceive().OnCompleted(Arg.Any<Func<IUnitOfWork, Task>>());
+        await locks.DidNotReceive().ReleaseAsync(
+            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// A unit-of-work manager whose Current hands back a UoW that captures its OnCompleted callback,
+    /// plus the func that runs it — standing in for the commit.
+    /// </summary>
+    private static (IUnitOfWorkManager Manager, Func<Task> CompleteAsync) CreateUowManagerCapturingOnCompleted()
+    {
+        var uow = Substitute.For<IUnitOfWork>();
+        Func<IUnitOfWork, Task>? captured = null;
+        uow.When(u => u.OnCompleted(Arg.Any<Func<IUnitOfWork, Task>>()))
+            .Do(call => captured = call.ArgAt<Func<IUnitOfWork, Task>>(0));
+
+        var manager = Substitute.For<IUnitOfWorkManager>();
+        manager.Current.Returns(uow);
+
+        return (manager, async () =>
+        {
+            captured.ShouldNotBeNull("the step never armed an OnCompleted callback");
+            await captured!(uow);
+        });
     }
 
     private static TransitionExecutionContext CreateFinishContext(Instance instance)
