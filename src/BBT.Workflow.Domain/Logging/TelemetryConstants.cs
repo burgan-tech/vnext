@@ -242,6 +242,11 @@ public static class TelemetryConstants
         /// </summary>
         public const string SubflowInstanceId = "vnext.subflow.instance.id";
         /// <summary>
+        /// Number of request headers carried from the settled SubFlow child that the parent resume
+        /// context received (count only, never names or values).
+        /// </summary>
+        public const string SubflowCarriedHeaderCount = "vnext.subflow.carried_header_count";
+        /// <summary>
         /// Root (ancestor) instance ID — the top-level flow in a nested subflow chain (A→B→C→D always carries A's ID).
         /// </summary>
         public const string RootInstanceId = "vnext.root.instance.id";

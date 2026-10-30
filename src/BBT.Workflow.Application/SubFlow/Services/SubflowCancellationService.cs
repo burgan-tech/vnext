@@ -12,12 +12,14 @@ using BBT.Workflow.Instances;
 using BBT.Workflow.Instances.Events;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Shared;
+using BBT.Workflow.SubFlow.Headers;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 namespace BBT.Workflow.SubFlow;
 
 /// <inheritdoc cref="ISubflowCancellationService" />
+/// <remarks>Carried headers: the optional policy re-filters the headers carried from the child's settlement for output mapping and the resume context; null disables header carry, production DI always supplies it.</remarks>
 public sealed class SubflowCancellationService(
     IUnitOfWorkManager uowManager,
     IComponentCacheStore componentCacheStore,
@@ -27,7 +29,8 @@ public sealed class SubflowCancellationService(
     ISubItemTerminalGuard terminalGuard,
     IDistributedEventBus eventBus,
     IOptions<WorkflowExecutionOptions> executionOptions,
-    ILogger<SubflowCancellationService> logger)
+    ILogger<SubflowCancellationService> logger,
+    ICarriedHeaderPolicy? carriedHeaderPolicy = null)
     : ISubflowCancellationService
 {
     /// <summary>
@@ -235,6 +238,7 @@ public sealed class SubflowCancellationService(
             parentWorkflow!,
             input,
             lockKey,
+            activity,
             cancellationToken);
 
         await MarkSettlementBestEffortAsync(
@@ -270,10 +274,14 @@ public sealed class SubflowCancellationService(
         Definitions.Workflow parentWorkflow,
         SubItemCanceledInput input,
         string parentLockKey,
+        Activity? activity,
         CancellationToken cancellationToken)
     {
         try
         {
+            var resumeHeaders = carriedHeaderPolicy.ResolveResumeHeaders(input.CarriedHeaders);
+            SubFlowActivityHelper.SetCarriedHeaderCount(activity, resumeHeaders.Count);
+
             var context = new WorkflowExecutionContext
             {
                 Domain = parentWorkflow.Domain,
@@ -284,6 +292,7 @@ public sealed class SubflowCancellationService(
                 TriggerType = TriggerType.Automatic,
                 Mode = ExecMode.Resume,
                 CallerMode = input.Sync ? ExecMode.Sync : ExecMode.Async,
+                Headers = resumeHeaders,
                 Actor = ExecutionActor.System,
                 RequestedAt = DateTimeOffset.UtcNow,
                 Execution = new ExecutionInfo

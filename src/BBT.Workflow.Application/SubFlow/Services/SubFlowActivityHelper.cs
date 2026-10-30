@@ -52,6 +52,13 @@ public static class SubFlowActivityHelper
             traceState: Activity.Current?.TraceStateString);
 
     /// <summary>
+    /// Tags the resume activity with how many carried headers the parent resume received. Count
+    /// only: header names and values never reach a span.
+    /// </summary>
+    public static void SetCarriedHeaderCount(Activity? activity, int count)
+        => activity?.SetTag(TelemetryConstants.TagNames.SubflowCarriedHeaderCount, count);
+
+    /// <summary>
     /// Enriches the activity with SubFlow completion context.
     /// </summary>
     /// <param name="activity">The activity to enrich.</param>
