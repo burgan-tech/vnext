@@ -622,6 +622,14 @@ public class TransitionPipeline
     ///
     /// An incident is recorded so the reroute is visible: without it the instance would move on with no
     /// trace of why, and the first question after an incident-free reroute is always "what happened?".
+    /// The hop is requested with <see cref="TransitionRequestReasons.ErrorBoundary"/>, which also makes
+    /// FinalizeTransitionStep resolve that incident once the reroute lands.
+    ///
+    /// DEPENDENCY — the ErrorBoundary pipeline profile must keep running the Schedule step. The whole
+    /// point of a reroute is usually "park somewhere and come back", and parking means arming a timer on
+    /// the target state. vnext#842 proposes excluding Auto AND Schedule from that profile: excluding Auto
+    /// is right (it stops cascading error handling), excluding Schedule would silently strand every
+    /// timer-based recovery — the instance would reach its waiting state and never leave it.
     /// </summary>
     private bool TryRouteByErrorBoundary(TransitionExecutionContext context, Error error)
     {
