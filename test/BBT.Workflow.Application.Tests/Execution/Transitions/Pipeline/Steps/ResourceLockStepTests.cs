@@ -103,6 +103,31 @@ public class ResourceLockStepTests
         context.Instance.GetTrackedResourceLocks().ShouldBeEmpty();
     }
 
+    /// <summary>
+    /// onConflict: Reject — losing the race is not a FAILURE, it is "not your turn". The step answers with
+    /// a different code (Execution:200011) so the pipeline leaves the instance untouched and the caller can
+    /// retry the very same call. Abort's code (200010) means "your instance is dead, start over".
+    /// </summary>
+    [Fact]
+    public async Task ExecuteAsync_Acquire_WhenConflictAndPolicyIsReject_ShouldFailWithRejectedCode()
+    {
+        var context = CreateContext(new ResourceLockDefinition(
+            ScriptCode.FromNative("return \"seat:concert1:A1\";"),
+            ResourceLockAction.Acquire,
+            DefaultTtl,
+            ResourceLockConflictPolicy.Reject));
+        SetupScriptEngine(TestResourceKey);
+        _resourceLockService
+            .AcquireAsync(TestResourceKey, Arg.Any<string>(), DefaultTtl, Arg.Any<CancellationToken>())
+            .Returns(false);
+
+        var result = await _step.ExecuteAsync(context, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.ResourceLockRejected);
+        context.Instance.GetTrackedResourceLocks().ShouldBeEmpty();
+    }
+
     [Fact]
     public async Task ExecuteAsync_Release_WhenSuccessful_ShouldContinue()
     {

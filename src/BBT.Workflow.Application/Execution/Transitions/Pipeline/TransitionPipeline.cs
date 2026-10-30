@@ -56,11 +56,27 @@ public class TransitionPipeline
     private static readonly HashSet<string> ClientFacingErrorCodes = new(StringComparer.Ordinal)
     {
         WorkflowErrorCodes.ResourceLockConflict,
+        WorkflowErrorCodes.ResourceLockRejected,
         WorkflowErrorCodes.InstanceBusy,
+    };
+
+    /// <summary>
+    /// Step failures that must NOT fault the instance. The step refused to START the work rather than
+    /// failing it half-way, so the instance is exactly as it was: faulting it would destroy healthy work
+    /// over a condition the caller can simply retry. The admission layer compensates the Busy flip when
+    /// the run returns a failure, so the instance settles back to Active on its own.
+    /// Extend deliberately — an entry here means "this error never leaves partial state behind".
+    /// </summary>
+    private static readonly HashSet<string> NonFaultingErrorCodes = new(StringComparer.Ordinal)
+    {
+        WorkflowErrorCodes.ResourceLockRejected,
     };
 
     private static bool IsClientFacingError(Error error)
         => error.Code is not null && ClientFacingErrorCodes.Contains(error.Code);
+
+    private static bool IsNonFaultingError(Error error)
+        => error.Code is not null && NonFaultingErrorCodes.Contains(error.Code);
 
     /// <summary>
     /// Initializes a new instance of the TransitionPipeline.
@@ -298,6 +314,17 @@ public class TransitionPipeline
             {
                 // The caller will see success for most faults (below), so the failure has to be
                 // put on the enclosing spans here or the transaction reads as a success.
+                // onConflict: Reject — adım işe hiç başlamadı, instance olduğu gibi duruyor.
+                // Fault etmek sağlam bir süreci, çağıranın tekrar deneyebileceği bir durum uğruna
+                // öldürmek olurdu. Fail dönüyoruz; admission katmanı Busy flip'ini telafi ediyor.
+                if (IsNonFaultingError(pipelineResult.Error))
+                {
+                    _logger.LogInformation(
+                        "Transition {TransitionKey} on instance {InstanceId} was rejected without faulting: {ErrorCode}",
+                        context.TransitionKey, context.InstanceId, pipelineResult.Error.Code);
+                    return Result<TransitionExecutionContext>.Fail(pipelineResult.Error);
+                }
+
                 Activity.Current.MarkFaultedOnLocalChain(pipelineResult.Error.Code, pipelineResult.Error.Message);
 
                 await MarkInstanceFaultedAsync(context, pipelineResult.Error, cancellationToken);
@@ -429,7 +456,7 @@ public class TransitionPipeline
         Error error,
         CancellationToken cancellationToken)
     {
-        if (!context.Instance.IsDataBuffered)
+        if (!context.Instance.IsDataBuffered || IsNonFaultingError(error))
             return Result<TransitionExecutionContext>.Fail(error);
 
         Activity.Current.MarkFaultedOnLocalChain(error.Code, error.Message);
