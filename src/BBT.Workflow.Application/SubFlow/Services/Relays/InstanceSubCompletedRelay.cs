@@ -45,6 +45,7 @@ public sealed class InstanceSubCompletedRelay(IInstanceCommandGateway instanceCo
             EpisodeTrigger = eventData.EpisodeTrigger,
             EpisodeTransitionKey = eventData.EpisodeTransitionKey,
             EpisodeTraceRoot = eventData.EpisodeTraceRoot,
+            CarriedHeaders = eventData.CarriedHeaders,
             RearmAttempt = eventData.RearmAttempt
         };
     }

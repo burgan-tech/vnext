@@ -144,6 +144,13 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
         services.AddScoped<IFunctionAccessPolicy, FunctionAccessPolicy>();
         services.AddScoped<IFunctionRequestValidationService, FunctionRequestValidationService>();
         services.AddScoped<IFunctionAppService, FunctionAppService>();
+        // Carried-header policy (Workflow:SubFlow:CarriedHeaders): headers of the settling request ride the terminal event to the parent.
+        services.AddOptions<BBT.Workflow.SubFlow.Headers.SubFlowCarriedHeadersOptions>()
+            .BindConfiguration(BBT.Workflow.SubFlow.Headers.SubFlowCarriedHeadersOptions.SectionName)
+            .Validate(o => o.AdditionalDenied is not null && o.MaxEntries > 0 && o.MaxValueLength > 0,
+                "Workflow:SubFlow:CarriedHeaders requires a non-null AdditionalDenied and positive MaxEntries and MaxValueLength.")
+            .ValidateOnStart();
+        services.AddSingleton<BBT.Workflow.SubFlow.Headers.ICarriedHeaderPolicy, BBT.Workflow.SubFlow.Headers.CarriedHeaderPolicy>();
         // Journal tunables (Workflow:FunctionExecutionJournal): QueueCapacity + BatchSize.
         services.AddOptions<FunctionExecutionJournalOptions>()
             .BindConfiguration(FunctionExecutionJournalOptions.SectionName);

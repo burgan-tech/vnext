@@ -405,7 +405,8 @@ keep it from polluting a transition's trace:
   Warning), `SubFlowStateChangeLockNotAcquired` (40132, Warning), `PostCommitEventRelayTimedOut`
   (40133, Warning), `PostCommitEventRelayDepthExceeded` (40134, Warning),
   `SubFlowStateChangeBackupAlreadyApplied` (40137, Debug), `PostCommitEventRelaySkipped` (40138,
-  Debug), `SubFlowStateChangeTerminalSuperseded` (40139, Debug).
+  Debug), `SubFlowStateChangeTerminalSuperseded` (40139, Debug),
+  `SubFlowCarriedHeadersFiltered` (40140, Debug).
 - **Aether's per-attempt lock log**: `DaprDistributedLockService.TryAcquireLockAsync` logs
   `Failed to acquire lock for resource …` at Warning on every unsuccessful attempt — contention, not
   failure, and the bounded retry in `TransitionLockScopeFactory` already logs each retry at Debug
@@ -416,6 +417,59 @@ keep it from polluting a transition's trace:
   force; a chart that replaces the whole `Logging` section must carry it (follow-up for
   `vnext-helm-charts`: `docs/integration/vnext-helm-charts/aether-lock-log-level.md`). Side effect: the
   Dapr handle's `ExtendAsync is not supported` Warning, logged under the same category, is hidden too.
+
+## Carried headers on sub-item terminal events
+
+The three terminal events `instance.sub.completed`, `instance.sub.faulted` and `instance.sub.canceled`
+carry an optional `CarriedHeaders` map: the request headers of the call that settled the child, so the
+parent's output mapping and its resume can read what the child's caller sent. The field is
+additive and optional; a consumer that ignores it sees the event as before.
+
+- **Carried set.** Every request header except the deny floor and the framework exclusions. Both are
+  enforced in code (`CarriedHeaderPolicy`, `src/BBT.Workflow.Application/SubFlow/Headers/`), compared
+  case-insensitively, and keys are stored lower-cased.
+  - Deny floor: any name containing `authorization`, `cookie`, `token`, `secret` or `session`, plus every
+    name in `AdditionalDenied` (exact match). Configuration can add to the floor, never remove from it.
+  - Framework exclusions (correctness, not secrecy): `x-subflow-depth`, `x-parent-instance-id`,
+    `x-root-instance-id`, `x-workflow-instance-id`, `x-correlation-id`, `traceparent`, `tracestate`,
+    `baggage`, `host`, `transfer-encoding`, `connection`, `keep-alive`, and the prefixes `content-`,
+    `dapr-`, `grpc-`.
+  - Caps: at most `MaxEntries` (64) entries and `MaxValueLength` (4096) characters per value. An
+    over-long value is dropped and counted as "denied"; entries past the entry cap are dropped and counted as "overflow". Both counts appear in log 40140; header values are never logged.
+- **`role` is always carried and applied** (requester amendment RA-1). There is no `Role` option.
+- **Denylist, not allowlist** (RA-2). A header that is neither on the floor nor excluded travels, so a
+  secret in an unusually named header (say `x-api-key`) is carried unless it is listed in
+  `AdditionalDenied`. Accepted risk: the gateway or the operator owns that list. Values reach the
+  outbox row, the Inbox body and the parent's output mapping.
+- **Four copy sites.** The set is captured once at the producer (`HandleFinishStep`, and the request-hop
+  fault paths), only for sub-item instances (a root instance has no parent to carry them to), then copied
+  verbatim at the post-commit relay, the Inbox body and the re-arm rebuild. Every receiver filters it
+  again before use, because the event is untrusted input.
+- **Upward parent fault.** When the parent itself faults because of the child's settlement (parent
+  workflow could not be loaded, output mapping failed, abort boundary), the received set is re-captured
+  through the local policy before it goes to the grandparent: `Emit=false` yields `null`, and the deny
+  floor and caps apply again, so a forged `/complete` body cannot smuggle `authorization` upward.
+- **Switches** (section `Workflow:SubFlow:CarriedHeaders`):
+
+  | Key | Default | Effect |
+  |---|---|---|
+  | `Emit` | `true` | `false`: producers write no headers on terminal events. |
+  | `ExposeToOutputMapping` | `true` | The completion and fault output mapping reads them as `context.Headers`. |
+  | `ApplyToResume` | `true` | Applies them to the parent's resume request for completion, fault and cancel (`false` for a domain that wants the stricter behaviour). `Actor = System` is unchanged; `ScriptResponse.Headers` gets no resume semantics. |
+  | `AdditionalDenied` | `[]` | Extra names denied (exact, case-insensitive). |
+  | `MaxEntries` / `MaxValueLength` | `64` / `4096` | Caps above. |
+
+- **`null` and empty.** If the filtered set is empty the producer writes `null`; a consumer treats `null`
+  and `{}` the same (empty dictionary). Timer, timeout and job-timeout-recovery settlements, and the *downward*
+  cancel/fault cascades, have no caller request, so they carry `null`; an *upward* parent fault instead
+  forwards the re-filtered child set (above). The internal `/complete`, `/fault`, `/cancel` request's own
+  HTTP headers are never read; only the body field counts.
+- **Never logged.** Header values are never logged or put on a span. The span tag
+  `vnext.subflow.carried_header_count` carries the count; `SubFlowCarriedHeadersFiltered` (40140, Debug)
+  reports kept / denied / overflow counts only.
+
+How the output mapping and resume see these headers:
+[Subflow Execution](../architecture/subflow-execution.md#carried-headers-from-the-child).
 
 ## Accepted risks
 

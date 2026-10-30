@@ -7,6 +7,10 @@ using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.Pipeline.Steps;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Instances.Events;
+using BBT.Workflow.SubFlow.Headers;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
+using System.Collections.Generic;
 using Microsoft.Extensions.Logging;
 using NSubstitute;
 using Shouldly;
@@ -69,7 +73,85 @@ public class HandleFinishStepTests
         context.Items["IsFinishState"].ShouldBe(true);
     }
 
-    private static TransitionExecutionContext CreateFinishContext(Instance instance)
+    private static HandleFinishStep CreateStepWithPolicy(bool emit = true)
+    {
+        var policy = new CarriedHeaderPolicy(
+            Options.Create(new SubFlowCarriedHeadersOptions { Emit = emit }),
+            NullLogger<CarriedHeaderPolicy>.Instance);
+        return new HandleFinishStep(Substitute.For<IInstanceRepository>(),
+            Substitute.For<ILogger<HandleFinishStep>>(), carriedHeaderPolicy: policy);
+    }
+
+    private static Dictionary<string, string?> Hdrs() => new()
+    {
+        ["sub"] = "u1", ["authorization"] = "Bearer x", ["x-custom"] = "v"
+    };
+
+    [Fact]
+    public async Task Finish_Passes_Captured_Headers_To_Complete()
+    {
+        var step = CreateStepWithPolicy();
+        var context = CreateFinishContext(CreateSubItem(), Hdrs());
+
+        (await step.ExecuteAsync(context, CancellationToken.None)).IsSuccess.ShouldBeTrue();
+
+        var evt = context.Directives.ConsumeDeferredEvents().Select(x => x.Event)
+            .OfType<InstanceSubCompletedEvent>().Single();
+        evt.CarriedHeaders.ShouldNotBeNull();
+        evt.CarriedHeaders!.Keys.OrderBy(k => k).ShouldBe(new[] { "sub", "x-custom" });
+    }
+
+    [Fact]
+    public async Task Cancel_Transition_Passes_Captured_Headers_To_Cancel()
+    {
+        var step = CreateStepWithPolicy();
+        var context = CreateCancelContext(CreateSubItem(), TerminationContext.Direct(Guid.NewGuid()), Hdrs());
+
+        (await step.ExecuteAsync(context, CancellationToken.None)).IsSuccess.ShouldBeTrue();
+
+        var evt = context.Directives.ConsumeDeferredEvents().Select(x => x.Event)
+            .OfType<InstanceSubCanceledEvent>().Single();
+        evt.CarriedHeaders!.Keys.OrderBy(k => k).ShouldBe(new[] { "sub", "x-custom" });
+    }
+
+    [Fact]
+    public async Task Empty_Context_Headers_Yields_Null()
+    {
+        var step = CreateStepWithPolicy();
+        var context = CreateFinishContext(CreateSubItem(), new Dictionary<string, string?>());
+
+        (await step.ExecuteAsync(context, CancellationToken.None)).IsSuccess.ShouldBeTrue();
+
+        context.Directives.ConsumeDeferredEvents().Select(x => x.Event)
+            .OfType<InstanceSubCompletedEvent>().Single().CarriedHeaders.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task Emit_Off_Yields_Null()
+    {
+        var step = CreateStepWithPolicy(emit: false);
+        var context = CreateFinishContext(CreateSubItem(), Hdrs());
+
+        (await step.ExecuteAsync(context, CancellationToken.None)).IsSuccess.ShouldBeTrue();
+
+        context.Directives.ConsumeDeferredEvents().Select(x => x.Event)
+            .OfType<InstanceSubCompletedEvent>().Single().CarriedHeaders.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task Root_Instance_Finish_Never_Captures_Headers()
+    {
+        var policy = Substitute.For<ICarriedHeaderPolicy>();
+        var step = new HandleFinishStep(Substitute.For<IInstanceRepository>(),
+            Substitute.For<ILogger<HandleFinishStep>>(), carriedHeaderPolicy: policy);
+        var context = CreateFinishContext(InstanceFactory.CreateDefault(), Hdrs());
+
+        (await step.ExecuteAsync(context, CancellationToken.None)).IsSuccess.ShouldBeTrue();
+
+        policy.DidNotReceiveWithAnyArgs().Capture(default);
+    }
+
+    private static TransitionExecutionContext CreateFinishContext(Instance instance, Dictionary<string, string?>? headers = null)
     {
         var workflow = Definitions.Workflow.Create();
         workflow.SetHistory(HistoryMode.None);
@@ -86,6 +168,7 @@ public class HandleFinishStepTests
             RequestedAt = DateTimeOffset.UtcNow,
             Workflow = workflow,
             Current = StateFactory.CreateDefault("work"),
+            Headers = headers ?? new Dictionary<string, string?>(),
             Target = StateFactory.CreateDefault("done", StateType.Finish),
             Transition = transition,
             Instance = instance,
@@ -96,7 +179,8 @@ public class HandleFinishStepTests
 
     private static TransitionExecutionContext CreateCancelContext(
         Instance instance,
-        TerminationContext termination)
+        TerminationContext termination,
+        Dictionary<string, string?>? headers = null)
     {
         var workflow = Definitions.Workflow.Create();
         var transition = Transition.Create(
@@ -117,6 +201,7 @@ public class HandleFinishStepTests
             Instance = instance,
             CallerMode = ExecMode.Sync,
             Termination = termination,
+            Headers = headers ?? new Dictionary<string, string?>(),
             TraceId = Guid.NewGuid().ToString("N"),
             SpanId = Guid.NewGuid().ToString("N")[..16]
         };

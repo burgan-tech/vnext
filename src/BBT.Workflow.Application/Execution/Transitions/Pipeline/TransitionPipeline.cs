@@ -9,6 +9,7 @@ using BBT.Workflow.Execution.Validation;
 using BBT.Workflow.Files;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
+using BBT.Workflow.SubFlow.Headers;
 using BBT.Workflow.Telemetry;
 using Microsoft.Extensions.Logging;
 
@@ -24,6 +25,7 @@ public class TransitionPipeline
 {
     private readonly TransitionExecutor _executor;
     private readonly ISubItemEventDataResolver? _subItemDataResolver;
+    private readonly ICarriedHeaderPolicy? _carriedHeaderPolicy;
     private readonly ContinuationDispatcher _continuationDispatcher;
     private readonly IInstanceBusyManager _busyMarker;
     private readonly ITransitionContextFactory _contextFactory;
@@ -65,6 +67,7 @@ public class TransitionPipeline
     /// <summary>
     /// Initializes a new instance of the TransitionPipeline.
     /// </summary>
+    /// <param name="carriedHeaderPolicy">Filters the request headers that ride the terminal event to the parent; null disables header capture, production DI always supplies it.</param>
     public TransitionPipeline(
         TransitionExecutor executor,
         ContinuationDispatcher continuationDispatcher,
@@ -82,8 +85,10 @@ public class TransitionPipeline
         IClock clock,
         ILogger<TransitionPipeline> logger,
         ISubItemEventDataResolver? subItemDataResolver = null,
-        IInstanceDataWriteService? instanceDataWriteService = null)
+        IInstanceDataWriteService? instanceDataWriteService = null,
+        ICarriedHeaderPolicy? carriedHeaderPolicy = null)
     {
+        _carriedHeaderPolicy = carriedHeaderPolicy;
         _subItemDataResolver = subItemDataResolver;
         _instanceDataWriteService = instanceDataWriteService;
         _executor = executor;
@@ -656,7 +661,8 @@ public class TransitionPipeline
         }
 
         instance.Fault(context.Domain, context.CallerMode == ExecMode.Sync,
-            subItemData: await _subItemDataResolver.ResolveOrStoredAsync(instance, cancellationToken));
+            subItemData: await _subItemDataResolver.ResolveOrStoredAsync(instance, cancellationToken),
+            carriedHeaders: _carriedHeaderPolicy?.Capture(context.Headers));
         await _instanceRepository.UpdateAsync(instance, true, cancellationToken);
         ActivityContext commitContext;
         using (var commitActivity = PipelineStepActivityHelper.StartTransitionActivity(

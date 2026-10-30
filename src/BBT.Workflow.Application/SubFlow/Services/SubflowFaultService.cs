@@ -12,12 +12,14 @@ using BBT.Workflow.Instances;
 using BBT.Workflow.Instances.Events;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Shared;
+using BBT.Workflow.SubFlow.Headers;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 namespace BBT.Workflow.SubFlow;
 
 /// <inheritdoc cref="ISubflowFaultService" />
+/// <remarks>Carried headers: the optional policy re-filters the headers carried from the child's settlement for output mapping and the resume context; null disables header carry, production DI always supplies it.</remarks>
 public sealed class SubflowFaultService(
     IUnitOfWorkManager uowManager,
     IComponentCacheStore componentCacheStore,
@@ -31,7 +33,8 @@ public sealed class SubflowFaultService(
     IDistributedEventBus eventBus,
     IOptions<WorkflowExecutionOptions> executionOptions,
     ILogger<SubflowFaultService> logger,
-    ISubItemEventDataResolver? subItemDataResolver = null)
+    ISubItemEventDataResolver? subItemDataResolver = null,
+    ICarriedHeaderPolicy? carriedHeaderPolicy = null)
     : ISubflowFaultService
 {
     /// <summary>
@@ -217,7 +220,8 @@ public sealed class SubflowFaultService(
                     {
                         RecordIncident(parentInstance, input, ErrorAction.Abort, null);
                         parentInstance.Fault(input.Domain, input.Sync,
-                            subItemData: await subItemDataResolver.ResolveOrStoredAsync(parentInstance, cancellationToken));
+                            subItemData: await subItemDataResolver.ResolveOrStoredAsync(parentInstance, cancellationToken),
+                            carriedHeaders: carriedHeaderPolicy?.Capture(input.CarriedHeaders));
                         correlation.MarkSettled(input.FaultedAt);
                         await instanceRepository.UpdateAsync(parentInstance, true, cancellationToken);
                         await uow.CommitAsync(cancellationToken);
@@ -256,7 +260,8 @@ public sealed class SubflowFaultService(
                     else if (string.IsNullOrWhiteSpace(actionResult.TransitionKey))
                     {
                         parentInstance.Fault(input.Domain, input.Sync,
-                            subItemData: await subItemDataResolver.ResolveOrStoredAsync(parentInstance, cancellationToken));
+                            subItemData: await subItemDataResolver.ResolveOrStoredAsync(parentInstance, cancellationToken),
+                            carriedHeaders: carriedHeaderPolicy?.Capture(input.CarriedHeaders));
                     }
 
                     var mappingResult = await outputMappingService.ApplyAsync(
@@ -264,7 +269,8 @@ public sealed class SubflowFaultService(
                         parentWorkflow,
                         correlation.ParentState,
                         input.InstanceData,
-                        cancellationToken);
+                        cancellationToken,
+                        input.CarriedHeaders);
 
                     // Output-mapping failures are permanent at this boundary. Recoverable
                     // assembly-load contention is handled locally by CSharpEvaluator. Failure is
@@ -414,7 +420,8 @@ public sealed class SubflowFaultService(
                 parentWorkflow,
                 transitionKey,
                 isErrorBoundaryTransition: true,
-                originalInput.Sync);
+                originalInput.Sync,
+                originalInput.CarriedHeaders);
 
             var result = await workflowExecutionService.ExecuteTransitionAsync(input, cancellationToken);
             if (!result.IsSuccess)
@@ -463,7 +470,9 @@ public sealed class SubflowFaultService(
                 parentWorkflow,
                 transitionKey: string.Empty,
                 isErrorBoundaryTransition: false,
-                originalInput.Sync);
+                originalInput.Sync,
+                originalInput.CarriedHeaders);
+            SubFlowActivityHelper.SetCarriedHeaderCount(resumeActivity, input.Headers.Count);
             input.Mode = ExecMode.Resume;
             input.Execution!.ResumeFrom = LifecycleOrder.ClearBusyOnResumeStep;
             input.Execution.IsSubFlowResume = true;
@@ -490,12 +499,13 @@ public sealed class SubflowFaultService(
         }
     }
 
-    private static WorkflowExecutionContext CreateWorkflowExecutionContext(
+    private WorkflowExecutionContext CreateWorkflowExecutionContext(
         Instance parentInstance,
         Definitions.Workflow parentWorkflow,
         string transitionKey,
         bool isErrorBoundaryTransition,
-        bool sync)
+        bool sync,
+        IReadOnlyDictionary<string, string?>? carriedHeaders)
     {
         return new WorkflowExecutionContext
         {
@@ -509,7 +519,7 @@ public sealed class SubflowFaultService(
             // Preserve the faulting chain's caller mode so the parent's error-boundary
             // resume keeps starting/forwarding subflows synchronously when the caller was sync=true.
             CallerMode = sync ? ExecMode.Sync : ExecMode.Async,
-            Headers = new Dictionary<string, string?>(),
+            Headers = carriedHeaderPolicy.ResolveResumeHeaders(carriedHeaders),
             Actor = ExecutionActor.System,
             RequestedAt = DateTimeOffset.UtcNow,
             Execution = new ExecutionInfo
@@ -592,7 +602,7 @@ public sealed class SubflowFaultService(
     /// <c>SubflowTerminalRelay.MapToSubFlowFaultedInput</c> (verbatim field copy) — so a re-arm
     /// publishes the same fact the original delivery carried.
     /// </summary>
-    private static InstanceSubFaultedEvent BuildTerminalEventFromInput(
+    internal static InstanceSubFaultedEvent BuildTerminalEventFromInput(
         SubFlowFaultedInput input,
         int rearmAttempt) => new()
     {
@@ -630,6 +640,7 @@ public sealed class SubflowFaultService(
         EpisodeTrigger = input.EpisodeTrigger,
         EpisodeTransitionKey = input.EpisodeTransitionKey,
         EpisodeTraceRoot = input.EpisodeTraceRoot,
+        CarriedHeaders = input.CarriedHeaders,
         RearmAttempt = rearmAttempt
     };
 }

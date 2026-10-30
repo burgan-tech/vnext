@@ -11,6 +11,9 @@ using BBT.Workflow.Logging;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.SubFlow;
+using BBT.Workflow.SubFlow.Headers;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using Microsoft.CodeAnalysis;
 using Microsoft.Extensions.Logging;
 using Moq;
@@ -166,7 +169,86 @@ public sealed class SubflowOutputMappingServiceTests
             .Returns(builder.Object);
     }
 
-    private SubflowOutputMappingService CreateService()
+    [Theory]
+    [InlineData(true, true)]
+    [InlineData(false, false)]
+    public async Task ApplyPreparedAsync_ExposesCarriedHeadersToOutputHandler_OnlyWhenEnabled(bool expose, bool expectSeen)
+    {
+        var parentInstance = CreateParentInstance();
+        var parentWorkflow = CreateParentWorkflowWithMapping();
+        IReadOnlyDictionary<string, string?>? applied = null;
+        var builder = new Mock<IScriptContextBuilder>();
+        builder.Setup(x => x.WithWorkflow(It.IsAny<Definitions.Workflow>())).Returns(builder.Object);
+        builder.Setup(x => x.WithInstance(It.IsAny<Instance>())).Returns(builder.Object);
+        builder.Setup(x => x.WithRuntime(It.IsAny<IRuntimeInfoProvider>())).Returns(builder.Object);
+        builder.Setup(x => x.WithBody(It.IsAny<object>())).Returns(builder.Object);
+        builder.Setup(x => x.WithHeaders(It.IsAny<Dictionary<string, string?>?>()))
+            .Callback<Dictionary<string, string?>?>(h => applied = h)
+            .Returns(builder.Object);
+        builder.Setup(x => x.BuildAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ScriptContext(Mock.Of<ILogger<ScriptContext>>()));
+        _scriptContextFactory
+            .Setup(x => x.NewBuilder(It.IsAny<IInstanceRepository>()))
+            .Returns(builder.Object);
+
+        var policy = new CarriedHeaderPolicy(
+            Options.Create(new SubFlowCarriedHeadersOptions { ExposeToOutputMapping = expose }),
+            NullLogger<CarriedHeaderPolicy>.Instance);
+        var service = CreateService(policy);
+        var plan = (await service.PrepareAsync(parentInstance.Id, parentWorkflow, "waiting-child")).Value!;
+
+        var result = await service.ApplyPreparedAsync(
+            parentInstance, parentWorkflow, plan, CreateChildData(),
+            new Dictionary<string, string?> { ["sub"] = "u1", ["authorization"] = "Bearer forged" },
+            CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        if (expectSeen)
+        {
+            applied.ShouldNotBeNull();
+            applied["sub"].ShouldBe("u1");
+            applied.ContainsKey("authorization").ShouldBeFalse();
+        }
+        else
+        {
+            applied.ShouldBeNull();
+        }
+    }
+
+    [Fact]
+    public async Task ApplyAsync_FaultPath_ExposesCarriedHeadersToOutputHandler()
+    {
+        var parentInstance = CreateParentInstance();
+        var parentWorkflow = CreateParentWorkflowWithMapping();
+        Dictionary<string, string?>? applied = null;
+        var builder = new Mock<IScriptContextBuilder>();
+        builder.Setup(x => x.WithWorkflow(It.IsAny<Definitions.Workflow>())).Returns(builder.Object);
+        builder.Setup(x => x.WithInstance(It.IsAny<Instance>())).Returns(builder.Object);
+        builder.Setup(x => x.WithRuntime(It.IsAny<IRuntimeInfoProvider>())).Returns(builder.Object);
+        builder.Setup(x => x.WithBody(It.IsAny<object>())).Returns(builder.Object);
+        builder.Setup(x => x.WithHeaders(It.IsAny<Dictionary<string, string?>?>()))
+            .Callback<Dictionary<string, string?>?>(h => applied = h)
+            .Returns(builder.Object);
+        builder.Setup(x => x.BuildAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ScriptContext(Mock.Of<ILogger<ScriptContext>>()));
+        _scriptContextFactory
+            .Setup(x => x.NewBuilder(It.IsAny<IInstanceRepository>()))
+            .Returns(builder.Object);
+        var policy = new CarriedHeaderPolicy(
+            Options.Create(new SubFlowCarriedHeadersOptions { ExposeToOutputMapping = true }),
+            NullLogger<CarriedHeaderPolicy>.Instance);
+
+        var result = await CreateService(policy).ApplyAsync(
+            parentInstance, parentWorkflow, "waiting-child", CreateChildData(),
+            CancellationToken.None,
+            new Dictionary<string, string?> { ["sub"] = "u1" });
+
+        result.IsSuccess.ShouldBeTrue();
+        applied.ShouldNotBeNull();
+        applied["sub"].ShouldBe("u1");
+    }
+
+    private SubflowOutputMappingService CreateService(ICarriedHeaderPolicy? policy = null)
         => new(
             _instanceRepository.Object,
             _instanceDataWriteService.Object,
@@ -174,7 +256,8 @@ public sealed class SubflowOutputMappingServiceTests
             _scriptContextFactory.Object,
             _runtimeInfoProvider.Object,
             _guidGenerator.Object,
-            _logger.Object);
+            _logger.Object,
+            policy);
 
     private static Instance CreateParentInstance()
         => Instance.Create(Guid.NewGuid(), "parent-flow", "1.0.0", "parent-key");

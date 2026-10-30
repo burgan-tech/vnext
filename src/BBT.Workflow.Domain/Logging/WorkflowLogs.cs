@@ -1705,6 +1705,19 @@ public static partial class WorkflowLogs
         string errorMessage);
 
     /// <summary>
+    /// Logs the outcome of filtering carried headers (counts only, never values).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40140,
+        Level = LogLevel.Debug,
+        Message = "SubFlow carried headers filtered: kept {Kept}, denied {Denied}, overflow {Overflow}")]
+    public static partial void SubFlowCarriedHeadersFiltered(
+        this ILogger logger,
+        int kept,
+        int denied,
+        int overflow);
+
+    /// <summary>
     /// Logs when instance is not found during subflow start.
     /// </summary>
     [LoggerMessage(

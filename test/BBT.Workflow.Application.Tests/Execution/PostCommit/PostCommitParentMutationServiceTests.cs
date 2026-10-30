@@ -11,7 +11,10 @@ using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Execution.PostCommit;
 using BBT.Workflow.Instances;
+using BBT.Workflow.Instances.Events;
 using BBT.Workflow.Logging;
+using BBT.Workflow.SubFlow.Headers;
+using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using Shouldly;
@@ -276,6 +279,33 @@ public sealed class PostCommitParentMutationServiceTests
             Arg.Any<CancellationToken>());
     }
 
+    [Fact]
+    public async Task FaultAsync_Stamps_Filtered_Source_Headers_On_SubFaultedEvent()
+    {
+        var authoritative = CreateBusyInstance();
+        authoritative.ExtraProperties[DomainConsts.MetaDataKeys.FlowType] = WorkflowType.SubFlow.Code;
+        authoritative.ExtraProperties[DomainConsts.MetaDataKeys.Id] = Guid.NewGuid().ToString();
+        authoritative.ExtraProperties[DomainConsts.MetaDataKeys.Domain] = "parent-domain";
+        authoritative.ExtraProperties[DomainConsts.MetaDataKeys.Flow] = "parent-flow";
+        authoritative.ExtraProperties[DomainConsts.MetaDataKeys.Version] = "1.0.0";
+        var policy = new CarriedHeaderPolicy(
+            Options.Create(new SubFlowCarriedHeadersOptions()), NullLogger<CarriedHeaderPolicy>.Instance);
+        var fixture = CreateFixture(authoritative, policy: policy);
+        var snapshot = CreateSnapshot(authoritative.Id, headers: new Dictionary<string, string?>
+        {
+            ["sub"] = "u1", ["Authorization"] = "Bearer x", ["X-Custom"] = "v"
+        });
+
+        var result = await fixture.Service.FaultAsync(
+            snapshot, new PostCommitFaultRequest("PostCommit:Dependency", "failed", "stack"), CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        var evt = authoritative.GetDomainEvents().Select(e => e.Event).OfType<InstanceSubFaultedEvent>().Single();
+        evt.CarriedHeaders.ShouldNotBeNull();
+        evt.CarriedHeaders!.OrderBy(k => k.Key).ToDictionary(k => k.Key, k => k.Value)
+            .ShouldBe(new Dictionary<string, string?> { ["sub"] = "u1", ["x-custom"] = "v" });
+    }
+
     [Theory]
     [InlineData("completed")]
     [InlineData("faulted")]
@@ -308,7 +338,8 @@ public sealed class PostCommitParentMutationServiceTests
         Instance authoritative,
         List<string>? calls = null,
         bool lockAcquired = true,
-        Definitions.Workflow? workflow = null)
+        Definitions.Workflow? workflow = null,
+        ICarriedHeaderPolicy? policy = null)
     {
         calls ??= [];
         workflow ??= CreateWorkflow(State.Create("state", StateType.Intermediate, StateSubType.None, VersionStrategy.IncreaseMinor.Code));
@@ -373,7 +404,8 @@ public sealed class PostCommitParentMutationServiceTests
             repository,
             statusLock,
             notificationScheduler,
-            NullLogger<PostCommitParentMutationService>.Instance);
+            NullLogger<PostCommitParentMutationService>.Instance,
+            carriedHeaderPolicy: policy);
 
         return new Fixture(service, repository, uowManager, statusLock, notificationScheduler);
     }
@@ -388,7 +420,8 @@ public sealed class PostCommitParentMutationServiceTests
     private static PostCommitParentSnapshot CreateSnapshot(
         Guid instanceId,
         Definitions.Workflow? workflow = null,
-        ExecMode callerMode = ExecMode.Sync) => new(
+        ExecMode callerMode = ExecMode.Sync,
+        Dictionary<string, string?>? headers = null) => new(
         Domain,
         WorkflowKey,
         WorkflowVersion,
@@ -396,7 +429,7 @@ public sealed class PostCommitParentMutationServiceTests
         "source-transition",
         callerMode,
         "trace-id",
-        new Dictionary<string, string?> { ["userId"] = "42" },
+        headers ?? new Dictionary<string, string?> { ["userId"] = "42" },
         new Dictionary<string, string?> { ["route"] = "value" },
         null,
         workflow ?? CreateWorkflow(

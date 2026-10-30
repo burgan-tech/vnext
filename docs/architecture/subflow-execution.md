@@ -158,6 +158,23 @@ commands still keep their explicit contract value.
 
 **Completion window.** If subflow is in terminal status (`Completed`/`Faulted`/`Passive`) while parent correlation is still open, State function shows **parent** main-flow transitions instead of subflow terminal view.
 
+## Carried Headers from the Child
+
+The child's terminal event carries the headers of the request that settled it; the contract, deny
+floor, caps and switches live in
+[Event Publish Modes](../runtime/event-publish-modes.md#carried-headers-on-sub-item-terminal-events).
+
+- **Output mapping.** On both the completion and the fault path the parent's output mapping reads them
+  as `context.Headers` (when `ExposeToOutputMapping`, default on), re-filtered on the parent side. With
+  nothing carried the dictionary is empty.
+- **Resume.** Completion, fault and cancel resumes apply them (`ApplyToResume`, default on; a domain
+  that wants the stricter behaviour sets it to `false`), so the resumed hop's conditions, tasks and the
+  next subflow's input mapping see the finisher's request. `Actor` stays `System`.
+- **Timer and cascade.** A timeout, timer, job-timeout recovery or downward cancel/fault cascade has no
+  caller request, so its event carries `null` and the mapping sees an empty set. An upward parent fault
+  (parent load or output-mapping failure) forwards the child's set to the grandparent after re-filtering
+  it through the local policy (`Emit=false` yields `null`). Only sub-item instances capture headers.
+
 ## Retry
 
 When retry descends from a faulted parent into its active child, `InstanceRetryAppService` builds
@@ -207,4 +224,5 @@ read. Do not replace these reads with the old parent object: it may still say Bu
 - `src/BBT.Workflow.Application/SubFlow/Services/Relays/`
 - `src/BBT.Workflow.Application/Instances/InstanceRetryAppService.cs`
 - [Event Publish Modes](../runtime/event-publish-modes.md)
+- `src/BBT.Workflow.Application/SubFlow/Headers/`
 - [Inline Auto-Chain Context Reuse](inline-chain-context-reuse.md)

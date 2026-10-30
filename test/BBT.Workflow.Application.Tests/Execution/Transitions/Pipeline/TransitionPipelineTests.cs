@@ -17,6 +17,10 @@ using BBT.Workflow.Execution.Validation;
 using BBT.Workflow.Files;
 using BBT.Workflow.Application.Files;
 using BBT.Workflow.Instances;
+using BBT.Workflow.Instances.Events;
+using BBT.Workflow.SubFlow.Headers;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Shared;
 using Microsoft.Extensions.Logging;
@@ -1392,6 +1396,40 @@ public class TransitionPipelineTests
     #region Fault Handling Tests
 
     [Fact]
+    public async Task RunAsync_WhenStepFails_Stamps_Filtered_Request_Headers_On_SubFaultedEvent()
+    {
+        var policy = new CarriedHeaderPolicy(
+            Options.Create(new SubFlowCarriedHeadersOptions()), NullLogger<CarriedHeaderPolicy>.Instance);
+        var pipeline = new TransitionPipeline(
+            new TransitionExecutor(_mockSteps, Substitute.For<ILogger<TransitionExecutor>>()),
+            new ContinuationDispatcher(new IContinuationStrategy[] { new InlineContinuationStrategy() }),
+            _mockBusyMarker, _mockContextFactory, _mockInstanceRepository, _mockInstanceJobRepository,
+            _mockUowManager, _mockValidationService, new PipelineProfileResolver(),
+            _mockStateNotificationScheduler, _mockAdmissionService, _mockStatusLock, _fileAdmission,
+            _clock, _mockLogger, carriedHeaderPolicy: policy);
+        var context = CreateTransitionExecutionContext(headers: new Dictionary<string, string?>
+        {
+            ["sub"] = "u1", ["Authorization"] = "Bearer x", ["X-Custom"] = "v"
+        });
+        var instance = context.Instance;
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.FlowType] = WorkflowType.SubFlow.Code;
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.Id] = Guid.NewGuid().ToString();
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.Domain] = "parent-domain";
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.Flow] = "parent-flow";
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.Version] = "1.0.0";
+        SetupContextFactory(context);
+        SetupStepsToSucceed();
+        _mockSteps[0].ExecuteAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(Result<StepOutcome>.Fail(Error.Failure("step.failed", "boom"))));
+
+        await pipeline.RunAsync(CreateWorkflowExecutionContext(context), CancellationToken.None);
+
+        var evt = instance.GetDomainEvents().Select(e => e.Event).OfType<InstanceSubFaultedEvent>().Single();
+        evt.CarriedHeaders!.OrderBy(k => k.Key).ToDictionary(k => k.Key, k => k.Value)
+            .ShouldBe(new Dictionary<string, string?> { ["sub"] = "u1", ["x-custom"] = "v" });
+    }
+
+    [Fact]
     public async Task RunAsync_WhenStepFails_ShouldMarkInstanceFaultedWithSuccessResult()
     {
         // Arrange
@@ -1744,7 +1782,8 @@ public class TransitionPipelineTests
         };
     }
 
-    private TransitionExecutionContext CreateTransitionExecutionContext(string transitionKey = "test-transition")
+    private TransitionExecutionContext CreateTransitionExecutionContext(
+        string transitionKey = "test-transition", Dictionary<string, string?>? headers = null)
     {
         var instanceId = Guid.NewGuid();
         var workflowKey = "test-workflow";
@@ -1771,6 +1810,7 @@ public class TransitionPipelineTests
             Transition = transition,
             Instance = instance,
             Data = null,
+            Headers = headers ?? new Dictionary<string, string?>(),
             TraceId = Guid.NewGuid().ToString("N"),
             SpanId = Guid.NewGuid().ToString("N")[..16]
         };

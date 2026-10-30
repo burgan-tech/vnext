@@ -15,10 +15,12 @@ using Microsoft.Extensions.Options;
 using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Execution.Services;
 using BBT.Workflow.Shared;
+using BBT.Workflow.SubFlow.Headers;
 
 namespace BBT.Workflow.SubFlow;
 
 /// <inheritdoc cref="ISubflowCompletionService" />
+/// <remarks>Carried headers: the optional policy re-filters the headers carried from the child's settlement for output mapping and the resume context; null disables header carry, production DI always supplies it.</remarks>
 public sealed class SubflowCompletionService(
     IUnitOfWorkManager uowManager,
     IComponentCacheStore componentCacheStore,
@@ -32,7 +34,8 @@ public sealed class SubflowCompletionService(
     IDistributedEventBus eventBus,
     IOptions<WorkflowExecutionOptions> executionOptions,
     ILogger<SubflowCompletionService> logger,
-    ISubItemEventDataResolver? subItemDataResolver = null)
+    ISubItemEventDataResolver? subItemDataResolver = null,
+    ICarriedHeaderPolicy? carriedHeaderPolicy = null)
     : ISubflowCompletionService
 {
     /// <summary>
@@ -276,7 +279,8 @@ public sealed class SubflowCompletionService(
                             stackTrace: parentWorkflowResult.Error.Detail);
                         parentInstance.AddIncident(loadIncident);
                         parentInstance.Fault(completedInput.Domain, completedInput.Sync,
-                            subItemData: await subItemDataResolver.ResolveOrStoredAsync(parentInstance, cancellationToken));
+                            subItemData: await subItemDataResolver.ResolveOrStoredAsync(parentInstance, cancellationToken),
+                            carriedHeaders: carriedHeaderPolicy?.Capture(completedInput.CarriedHeaders));
                         await instanceRepository.UpdateAsync(parentInstance, true, cancellationToken);
                         await correlationUow.CommitAsync(cancellationToken);
                         return;
@@ -298,6 +302,7 @@ public sealed class SubflowCompletionService(
                         parentWorkflow,
                         mappingPreparation.Value!,
                         completedInput.InstanceData,
+                        completedInput.CarriedHeaders,
                         cancellationToken)
                         : Result.Fail(mappingPreparation.Error);
 
@@ -318,7 +323,8 @@ public sealed class SubflowCompletionService(
                             stackTrace: mappingResult.Error.Detail);
                         parentInstance.AddIncident(incident);
                         parentInstance.Fault(completedInput.Domain, completedInput.Sync,
-                            subItemData: await subItemDataResolver.ResolveOrStoredAsync(parentInstance, cancellationToken));
+                            subItemData: await subItemDataResolver.ResolveOrStoredAsync(parentInstance, cancellationToken),
+                            carriedHeaders: carriedHeaderPolicy?.Capture(completedInput.CarriedHeaders));
                         await instanceRepository.UpdateAsync(parentInstance, true, cancellationToken);
                         await correlationUow.CommitAsync(cancellationToken);
                         return;
@@ -407,6 +413,9 @@ public sealed class SubflowCompletionService(
             resumeActivity?.SetTag(TelemetryConstants.TagNames.InstanceId, parentInstance.Id.ToString());
             resumeActivity?.SetTag(TelemetryConstants.TagNames.SubflowInstanceId, subInstanceId.ToString());
 
+            var resumeHeaders = carriedHeaderPolicy.ResolveResumeHeaders(completedInput.CarriedHeaders);
+            SubFlowActivityHelper.SetCarriedHeaderCount(resumeActivity, resumeHeaders.Count);
+
             var input = new WorkflowExecutionContext
             {
                 Domain = parentWorkflow.Domain,
@@ -419,7 +428,7 @@ public sealed class SubflowCompletionService(
                 // Preserve the completing chain's caller mode so the resumed parent chain
                 // keeps starting/forwarding subflows synchronously when the caller was sync=true.
                 CallerMode = completedInput.Sync ? ExecMode.Sync : ExecMode.Async,
-                Headers = new Dictionary<string, string?>(),
+                Headers = resumeHeaders,
                 Actor = ExecutionActor.System,
                 RequestedAt = DateTimeOffset.UtcNow,
                 Execution = new ExecutionInfo
@@ -586,7 +595,7 @@ public sealed class SubflowCompletionService(
     /// <c>SubflowTerminalRelay.MapToFlowCompletedInput</c> (verbatim field copy, including the
     /// trace-lane anchors) — so a re-arm publishes the same fact the original delivery carried.
     /// </summary>
-    private static InstanceSubCompletedEvent BuildTerminalEventFromInput(
+    internal static InstanceSubCompletedEvent BuildTerminalEventFromInput(
         FlowCompletedInput input,
         int rearmAttempt) => new()
     {
@@ -607,6 +616,7 @@ public sealed class SubflowCompletionService(
         EpisodeTrigger = input.EpisodeTrigger,
         EpisodeTransitionKey = input.EpisodeTransitionKey,
         EpisodeTraceRoot = input.EpisodeTraceRoot,
+        CarriedHeaders = input.CarriedHeaders,
         RearmAttempt = rearmAttempt
     };
 

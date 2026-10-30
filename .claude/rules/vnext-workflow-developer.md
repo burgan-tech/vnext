@@ -289,6 +289,8 @@ Enum values (Instance Status, State Types, State Sub Types, Trigger Types): `AGE
 - Runtime child calls force `sync=true` and set `SuppressResponseEnrichment` (identity-only answer) —
   never read attributes off a sub-start or forward response.
 - Completion window: child terminal while parent correlation open ⇒ state function shows parent transitions.
+- Terminal events carry the settling request's headers (deny floor, `ApplyToResume` default on):
+  `docs/runtime/event-publish-modes.md#carried-headers-on-sub-item-terminal-events`.
 - Full guide: `docs/architecture/subflow-execution.md`.
 - **Initial state is optional:** with none declared the instance is born in the implicit `$start` state and
   `startTransition.target` (mandatory, a declared state key) decides the entry; see
