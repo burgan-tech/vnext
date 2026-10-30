@@ -97,12 +97,9 @@ public sealed class CarriedHeaderPolicy(
             }
         }
 
-        foreach (var name in additional)
+        if (additional.Any(name => string.Equals(name, lower, StringComparison.OrdinalIgnoreCase)))
         {
-            if (string.Equals(name, lower, StringComparison.OrdinalIgnoreCase))
-            {
-                return true;
-            }
+            return true;
         }
 
         return false;

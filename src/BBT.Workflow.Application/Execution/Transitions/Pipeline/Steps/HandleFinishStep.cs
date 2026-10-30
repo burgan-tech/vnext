@@ -14,6 +14,10 @@ namespace BBT.Workflow.Execution.Pipeline.Steps;
 /// Uses Result pattern for exception-free error handling.
 /// SubItem completion events are now published as domain events via Instance.Complete().
 /// </summary>
+/// <param name="instanceRepository">Persists the finished instance.</param>
+/// <param name="logger">Step logger.</param>
+/// <param name="subItemDataResolver">Opens the data a sub-item hands its parent; null uses the stored row.</param>
+/// <param name="instanceDataWriteService">Flushes buffered data for <c>history: none</c> flows.</param>
 /// <param name="carriedHeaderPolicy">Filters the request headers that ride the terminal event to the parent; null disables header capture, production DI always supplies it.</param>
 public sealed class HandleFinishStep(
     IInstanceRepository instanceRepository,
