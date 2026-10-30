@@ -410,10 +410,12 @@ keep it from polluting a transition's trace:
   `Failed to acquire lock for resource …` at Warning on every unsuccessful attempt — contention, not
   failure, and the bounded retry in `TransitionLockScopeFactory` already logs each retry at Debug
   (`TransitionLockRetryScheduled`) and exhaustion once at Warning (`InstanceLockFailed`). The
-  orchestration host sets that category to `Error` in `appsettings.json` (errors still surface); the
-  same override is needed in Helm values where `Logging__LogLevel__*` is set per environment. Side
-  effect: the Dapr handle's `ExtendAsync is not supported` Warning, logged under the same category,
-  is hidden too.
+  orchestration host sets that category to `Error` in `appsettings.json` (errors still surface). Only
+  orchestration needs it: it is the only host that takes the sub-item lock — the Inbox worker forwards
+  backup deliveries to orchestration over HTTP. A per-category environment variable leaves the entry in
+  force; a chart that replaces the whole `Logging` section must carry it (follow-up for
+  `vnext-helm-charts`: `docs/integration/vnext-helm-charts/aether-lock-log-level.md`). Side effect: the
+  Dapr handle's `ExtendAsync is not supported` Warning, logged under the same category, is hidden too.
 
 ## Accepted risks
 

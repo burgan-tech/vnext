@@ -609,6 +609,31 @@ public sealed class SubflowStateServiceTests
             x => x.UpdateAsync(parent, true, It.IsAny<CancellationToken>()), Times.Once);
     }
 
+    /// <summary>
+    /// A notification without a recognisable status (an older publisher, an empty or unknown code) is
+    /// not treated as terminal: it keeps the old handling and takes the locked path.
+    /// </summary>
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("X")]
+    public async Task A_Notification_Without_A_Known_Status_Keeps_The_Locked_Path(string? newStatus)
+    {
+        var parent = CreateParent(out var subInstanceId);
+        Loads(parent, subInstanceId);
+
+        await CreateSut().UpdateParentStateAsync(
+            Input(parent.Id, subInstanceId, DateTime.UtcNow, newStatus: newStatus, notificationSeq: 1, newState: "done"));
+
+        _lockScopeFactory.Verify(
+            x => x.AcquireAsync(It.IsAny<string>(), It.IsAny<LockAcquireWait>(), It.IsAny<CancellationToken>()),
+            Times.Once);
+        _instanceRepository.Verify(
+            x => x.FindForSubflowStateChangeAsync(parent.Id, subInstanceId, It.IsAny<CancellationToken>()),
+            Times.Once);
+        parent.GetEffectiveState.ShouldBe("done");
+    }
+
     /// <summary>The relay is almost always first; it must not pay an extra read per level.</summary>
     [Fact]
     public async Task A_Relay_Delivery_Never_Probes()

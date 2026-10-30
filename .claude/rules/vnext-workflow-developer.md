@@ -307,7 +307,8 @@ Enum values (Instance Status, State Types, State Sub Types, Trigger Types): `AGE
 - `Instance.ChangeState` only ARMS the event; `Instance.PublishPendingSubStateChange()` publishes it
   once per episode at the rest point. Excluded: open SubFlow correlation, `Faulted`. A terminal
   `Completed` notification is published but never applied — relay skips it, the receiver drops it
-  (`SubStateTerminalStatus`); the terminal event owns it.
+  (`SubStateTerminalStatus`); the terminal event owns it
+  (`docs/runtime/event-publish-modes.md#substate-changed-is-emitted-once-per-activation-episode`).
 - Never remove the explicit flush at creation in `InstanceCommandAppService` — it is the parent's only
   notification when the start transition targets the initial state.
 - `SubflowStateService` takes the per-sub-item lock; equal `ChangedAt` is re-applied, only older rejected.
