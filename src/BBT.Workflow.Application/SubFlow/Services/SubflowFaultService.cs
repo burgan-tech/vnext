@@ -594,7 +594,7 @@ public sealed class SubflowFaultService(
     /// <c>SubflowTerminalRelay.MapToSubFlowFaultedInput</c> (verbatim field copy) — so a re-arm
     /// publishes the same fact the original delivery carried.
     /// </summary>
-    private static InstanceSubFaultedEvent BuildTerminalEventFromInput(
+    internal static InstanceSubFaultedEvent BuildTerminalEventFromInput(
         SubFlowFaultedInput input,
         int rearmAttempt) => new()
     {
@@ -632,6 +632,7 @@ public sealed class SubflowFaultService(
         EpisodeTrigger = input.EpisodeTrigger,
         EpisodeTransitionKey = input.EpisodeTransitionKey,
         EpisodeTraceRoot = input.EpisodeTraceRoot,
+        CarriedHeaders = input.CarriedHeaders,
         RearmAttempt = rearmAttempt
     };
 }

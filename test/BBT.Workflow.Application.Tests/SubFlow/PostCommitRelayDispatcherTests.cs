@@ -82,7 +82,7 @@ public sealed class PostCommitRelayDispatcherTests : IDisposable
     private static PostCommitRelayDispatcher Dispatcher(IServiceProvider provider, IRuntimeInfoProvider runtime) =>
         new(provider, runtime, NullLogger<PostCommitRelayDispatcher>.Instance);
 
-    private static InstanceSubCompletedEvent CompletedEvent(bool sync = false) => new()
+    private static InstanceSubCompletedEvent CompletedEvent(bool sync = false, Dictionary<string, string?>? carriedHeaders = null) => new()
     {
         InstanceId = Guid.NewGuid(),
         Domain = "orders",
@@ -91,7 +91,8 @@ public sealed class PostCommitRelayDispatcherTests : IDisposable
         SubInstanceId = Guid.NewGuid(),
         CompletedState = "done",
         CompletedAt = DateTime.UtcNow,
-        Sync = sync
+        Sync = sync,
+        CarriedHeaders = carriedHeaders
     };
 
     private static InstanceSubStateChangedEvent StateChangedEvent() => new()
@@ -166,6 +167,52 @@ public sealed class PostCommitRelayDispatcherTests : IDisposable
             Arg.Any<CancellationToken>());
         await gateway.Received(1).CancelAsync(
             Arg.Is<SubItemCanceledInput>(i => i.SubInstanceId == canceled.SubInstanceId),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Relays_Carry_CarriedHeaders_Verbatim()
+    {
+        var gateway = Substitute.For<IInstanceCommandGateway>();
+        gateway.CompleteAsync(Arg.Any<FlowCompletedInput>(), Arg.Any<CancellationToken>()).Returns(Result.Ok());
+        gateway.FaultAsync(Arg.Any<SubFlowFaultedInput>(), Arg.Any<CancellationToken>()).Returns(Result.Ok());
+        gateway.CancelAsync(Arg.Any<SubItemCanceledInput>(), Arg.Any<CancellationToken>()).Returns(Result.Ok());
+        var sut = Dispatcher(Registrations(gateway), MatchingRuntime());
+
+        var headers = new Dictionary<string, string?> { ["x-a"] = "1", ["x-b"] = null };
+        var completed = CompletedEvent(carriedHeaders: headers);
+        var faulted = new InstanceSubFaultedEvent
+        {
+            InstanceId = Guid.NewGuid(), Domain = "orders", Flow = "order-flow", Version = "1.0.0",
+            SubInstanceId = Guid.NewGuid(), FaultedState = "error", FaultedAt = DateTime.UtcNow,
+            CarriedHeaders = headers
+        };
+        var canceled = new InstanceSubCanceledEvent
+        {
+            InstanceId = Guid.NewGuid(), Domain = "orders", Flow = "order-flow", Version = "1.0.0",
+            SubInstanceId = Guid.NewGuid(), CanceledState = "canceled", CanceledAt = DateTime.UtcNow,
+            SubItemType = SubItemType.SubFlow, TerminationOrigin = TerminationOrigin.Direct,
+            InitiatorInstanceId = Guid.NewGuid(), CascadeId = Guid.NewGuid(),
+            CarriedHeaders = headers
+        };
+        var completedNull = CompletedEvent();
+
+        await sut.RelayAsync([Envelope(completed), Envelope(faulted), Envelope(canceled), Envelope(completedNull)],
+            CancellationToken.None);
+
+        await gateway.Received(1).CompleteAsync(
+            Arg.Is<FlowCompletedInput>(i => i.SubInstanceId == completed.SubInstanceId
+                && i.CarriedHeaders != null && i.CarriedHeaders.Count == 2
+                && i.CarriedHeaders["x-a"] == "1" && i.CarriedHeaders["x-b"] == null),
+            Arg.Any<CancellationToken>());
+        await gateway.Received(1).FaultAsync(
+            Arg.Is<SubFlowFaultedInput>(i => i.CarriedHeaders != null && i.CarriedHeaders["x-a"] == "1"),
+            Arg.Any<CancellationToken>());
+        await gateway.Received(1).CancelAsync(
+            Arg.Is<SubItemCanceledInput>(i => i.CarriedHeaders != null && i.CarriedHeaders["x-a"] == "1"),
+            Arg.Any<CancellationToken>());
+        await gateway.Received(1).CompleteAsync(
+            Arg.Is<FlowCompletedInput>(i => i.SubInstanceId == completedNull.SubInstanceId && i.CarriedHeaders == null),
             Arg.Any<CancellationToken>());
     }
 

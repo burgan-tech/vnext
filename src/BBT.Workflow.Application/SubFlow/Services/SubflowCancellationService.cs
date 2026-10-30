@@ -394,7 +394,7 @@ public sealed class SubflowCancellationService(
     /// <see cref="CancellationAsync"/>), so this is the only kind the revert path ever sees. The
     /// input carries no <c>SubItemType</c> field to round-trip because of that invariant.
     /// </remarks>
-    private static InstanceSubCanceledEvent BuildTerminalEventFromInput(
+    internal static InstanceSubCanceledEvent BuildTerminalEventFromInput(
         SubItemCanceledInput input,
         int rearmAttempt)
     {
@@ -420,6 +420,7 @@ public sealed class SubflowCancellationService(
             EpisodeTrigger = input.EpisodeTrigger,
             EpisodeTransitionKey = input.EpisodeTransitionKey,
             EpisodeTraceRoot = input.EpisodeTraceRoot,
+            CarriedHeaders = input.CarriedHeaders,
             RearmAttempt = rearmAttempt
         };
     }

@@ -588,7 +588,7 @@ public sealed class SubflowCompletionService(
     /// <c>SubflowTerminalRelay.MapToFlowCompletedInput</c> (verbatim field copy, including the
     /// trace-lane anchors) — so a re-arm publishes the same fact the original delivery carried.
     /// </summary>
-    private static InstanceSubCompletedEvent BuildTerminalEventFromInput(
+    internal static InstanceSubCompletedEvent BuildTerminalEventFromInput(
         FlowCompletedInput input,
         int rearmAttempt) => new()
     {
@@ -609,6 +609,7 @@ public sealed class SubflowCompletionService(
         EpisodeTrigger = input.EpisodeTrigger,
         EpisodeTransitionKey = input.EpisodeTransitionKey,
         EpisodeTraceRoot = input.EpisodeTraceRoot,
+        CarriedHeaders = input.CarriedHeaders,
         RearmAttempt = rearmAttempt
     };
 
