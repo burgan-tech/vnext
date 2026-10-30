@@ -240,6 +240,37 @@ public sealed class PostCommitRelayDispatcherTests : IDisposable
             Arg.Any<CancellationToken>());
     }
 
+    /// <summary>
+    /// A child's terminal Completed status is not relayed: the terminal event raised in the same
+    /// commit is relayed just before it and owns that transition. The span still reports the skip.
+    /// </summary>
+    [Fact]
+    public async Task Does_Not_Relay_A_SubStateChanged_Reporting_Terminal_Completed()
+    {
+        var gateway = Substitute.For<IInstanceCommandGateway>();
+        var sut = Dispatcher(Registrations(gateway), MatchingRuntime());
+
+        var evt = new InstanceSubStateChangedEvent
+        {
+            ParentInstanceId = Guid.NewGuid(),
+            SubInstanceId = Guid.NewGuid(),
+            Domain = "orders",
+            Flow = "order-flow",
+            Version = "1.0.0",
+            NewState = "done",
+            PreviousState = "running",
+            NewStateType = 3,
+            NewStateSubType = 1,
+            ChangedAt = DateTime.UtcNow,
+            NewStatus = "C"
+        };
+        await sut.RelayAsync([Envelope(evt)], CancellationToken.None);
+
+        gateway.ReceivedCalls().ShouldBeEmpty();
+        var span = _collected.Single(a => a.DisplayName == "PostCommit.EventRelay");
+        span.GetTagItem(TelemetryConstants.TagNames.RelayOutcome).ShouldBe(PostCommitRelayOutcomes.Skipped);
+    }
+
     [Fact]
     public async Task Skips_Events_With_No_Registered_Relay()
     {

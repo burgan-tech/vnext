@@ -1549,6 +1549,22 @@ public static partial class WorkflowLogs
         string reason);
 
     /// <summary>
+    /// Logs when a SubFlow state change reporting the child's terminal <c>Completed</c> status is
+    /// dropped before the lock: the terminal event (<c>sub:completed</c> / <c>sub:canceled</c>) owns
+    /// that transition, writes the child's final state onto the correlation and re-derives the
+    /// parent's projection itself.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40139,
+        Level = LogLevel.Debug,
+        Message = "SubFlow state event for {SubInstanceId} reports terminal status {NewStatus} to parent {ParentInstanceId}; superseded by the terminal event, skipped without taking the lock")]
+    public static partial void SubFlowStateChangeTerminalSuperseded(
+        this ILogger logger,
+        Guid subInstanceId,
+        Guid parentInstanceId,
+        string newStatus);
+
+    /// <summary>
     /// Logs when a SubFlow state changed event is received by the hook.
     /// </summary>
     [LoggerMessage(
@@ -1980,6 +1996,21 @@ public static partial class WorkflowLogs
         this ILogger logger,
         string eventName,
         int depth);
+
+    /// <summary>
+    /// Logs when a registered relay declined one event (<c>PostCommitRelayTarget.SkipReason</c>). The
+    /// event still travels the outbox; only the immediate command is not sent.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40138,
+        Level = LogLevel.Debug,
+        Message = "Post-commit relay skipped for {EventName} (sub {SubInstanceId} -> parent {ParentInstanceId}): {Reason}")]
+    public static partial void PostCommitEventRelaySkipped(
+        this ILogger logger,
+        string eventName,
+        Guid subInstanceId,
+        Guid parentInstanceId,
+        string reason);
 
     /// <summary>
     /// Logs when a terminal-revert re-publishes the subflow terminal event as a durable-delivery

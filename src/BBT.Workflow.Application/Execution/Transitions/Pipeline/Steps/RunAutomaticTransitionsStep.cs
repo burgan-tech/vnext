@@ -6,8 +6,8 @@ namespace BBT.Workflow.Execution.Pipeline.Steps;
 
 /// <summary>
 /// Pipeline step that evaluates and executes automatic transitions.
-/// Evaluates all automatic transition conditions and requests the first satisfied transition
-/// to be executed via sync dispatch chain.
+/// Evaluates the state's automatic transitions in <c>State.AutoTransitions</c> order (priority, then
+/// declaration, default last) and requests the first satisfied one to be executed via sync dispatch chain.
 /// </summary>
 public sealed class RunAutomaticTransitionsStep(
     IAutoConditionEvaluator autoConditionEvaluator,
@@ -98,9 +98,9 @@ public sealed class RunAutomaticTransitionsStep(
         CancellationToken cancellationToken)
     {
         var evaluations = new List<AutoConditionEvaluation>();
-        var orderedTransitions = context.Target!.AutoTransitions.OrderBy(t => t.TriggerKind);
 
-        foreach (var automaticTransition in orderedTransitions)
+        // State.AutoTransitions is already in evaluation order; do not re-sort here.
+        foreach (var automaticTransition in context.Target!.AutoTransitions)
         {
             var evalResult = await autoConditionEvaluator.EvaluateAsync(
                 automaticTransition,
