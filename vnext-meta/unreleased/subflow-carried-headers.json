@@ -9,9 +9,29 @@
       "subflowCarriedHeaders": {
         "since": "next",
         "status": "stable",
-        "description": "instance.sub.completed / faulted / canceled carry an optional CarriedHeaders map: the request headers of the call that settled the child (a parent fault caused by the child re-captures the forwarded set through the local policy before sending it to the grandparent, so Emit=false yields null and the floor applies again; captures happen only for sub-item instances). Carried: every header except a deny floor (names containing authorization, cookie, token, secret or session, plus AdditionalDenied, exact, case-insensitive; config can only add) and framework exclusions (x-subflow-depth, x-parent-instance-id, x-root-instance-id, x-workflow-instance-id, x-correlation-id, traceparent, tracestate, baggage, host, transfer-encoding, connection, keep-alive, and the prefixes content-, dapr-, grpc-). role is always carried. It is a denylist: a secret in an unusually named header travels unless listed in AdditionalDenied. Keys are lower-cased; caps 64 entries and 4096 characters per value; an empty filtered set is null (timer, timeout, job-timeout recovery and downward cancel/fault cascade settlements carry null). Configuration section Workflow:SubFlow:CarriedHeaders: Emit (default true), ExposeToOutputMapping (default true; completion and fault output mapping read them as context.Headers), ApplyToResume (default true; applies them to the parent resume of completion, fault and cancel, Actor stays System; false opts out), AdditionalDenied (default []), MaxEntries (default 64), MaxValueLength (default 4096). Header values are never logged or tagged; span tag vnext.subflow.carried_header_count and log 40140 carry counts only (over-long values count as denied, entries past MaxEntries as overflow). PURELY ADDITIVE: the event field is optional and an older consumer ignores it. Behaviour change with defaults: an output mapping that read an empty context.Headers now sees the child's headers, and the parent's resumed hop (conditions, tasks with caller-credential forwarding, the next subflow's input mapping) now runs with the finisher's headers instead of none; set ApplyToResume=false to keep the old resume.",
+        "description": "instance.sub.completed / faulted / canceled carry an optional CarriedHeaders map: the request headers of the call that settled the child (a parent fault caused by the child re-captures the forwarded set through the local policy before sending it to the grandparent, so Emit=false yields null and the floor applies again; captures happen only for sub-item instances). Carried: every header except a deny floor (names containing authorization, cookie, token, secret or session, plus AdditionalDenied, exact, case-insensitive; config can only add) and framework exclusions (x-subflow-depth, x-parent-instance-id, x-root-instance-id, x-workflow-instance-id, x-correlation-id, traceparent, tracestate, baggage, host, transfer-encoding, connection, keep-alive, and the prefixes content-, dapr-, grpc-). role is always carried. It is a denylist: a secret in an unusually named header travels unless listed in AdditionalDenied. Keys are lower-cased; caps 64 entries and 4096 characters per value; an empty filtered set is null (timer, timeout, job-timeout recovery and downward cancel/fault cascade settlements carry null). Configuration section Workflow:SubFlow:CarriedHeaders: Emit (default true), ExposeToOutputMapping (default true; completion and fault output mapping read them as context.Headers), ApplyToResume (default true; applies them to the parent resume of completion, fault and cancel, Actor stays System; false opts out), AdditionalDenied (default []), MaxEntries (default 64), MaxValueLength (default 4096). Header values are never logged or tagged; span tag vnext.subflow.carried_header_count and log 40140 carry counts only (over-long values count as denied, entries past MaxEntries as overflow). The event contract change is additive (an optional field; an older consumer ignores it, unit-tested through the runtime event and HTTP serializers); the default-on resume is a behaviour change, see the migration subflow-resume-carried-headers. Behaviour change with defaults: an output mapping that read an empty context.Headers now sees the child's headers, and the parent's resumed hop (conditions, tasks with caller-credential forwarding, the next subflow's input mapping) now runs with the finisher's headers instead of none; set ApplyToResume=false to keep the old resume.",
         "documentation": "docs/runtime/event-publish-modes.md"
       }
     }
-  }
+  },
+  "migrations": [
+    {
+      "id": "subflow-resume-carried-headers",
+      "type": "behavior",
+      "component": "runtime",
+      "path": "SubFlow parent resume (completion, fault, cancel) and the parent's SubFlow output mapping",
+      "since": "next",
+      "severity": "warning",
+      "title": "Parent resume runs with the headers of the request that settled the child",
+      "description": "Before: the parent's output mapping saw no context.Headers and the parent's resumed hop ran with empty headers. Now: the output mapping sees the child's settling-request headers (deny floor and framework headers removed), and with Workflow:SubFlow:CarriedHeaders:ApplyToResume=true (default) the resumed hop's auto conditions, onEntry tasks (caller-credential forwarding: sub, act_sub, role, position, client_id) and the next subflow's input mapping run with them. To keep the old resume set Workflow__SubFlow__CarriedHeaders__ApplyToResume=false; Emit=false disables carrying altogether."
+    }
+  ],
+  "knownIssues": [
+    {
+      "id": "subflow-carried-headers-denylist",
+      "affectedVersions": ">=next",
+      "fixedIn": null,
+      "description": "Carried headers use a denylist: a credential in a header whose name contains none of authorization, cookie, token, secret or session (for example x-api-key, password) is carried to the outbox, the broker and the parent unless listed in Workflow:SubFlow:CarriedHeaders:AdditionalDenied, which matches exact names only."
+    }
+  ]
 }
