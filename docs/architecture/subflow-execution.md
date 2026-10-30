@@ -167,8 +167,9 @@ floor, caps and switches live in
 - **Output mapping.** On both the completion and the fault path the parent's output mapping reads them
   as `context.Headers` (when `ExposeToOutputMapping`, default on), re-filtered on the parent side. With
   nothing carried the dictionary is empty.
-- **Resume.** The parent's resume request does not inherit them unless `ApplyToResume` is on (default
-  off); then completion, fault and cancel resumes apply them, `Actor` stays `System`.
+- **Resume.** Completion, fault and cancel resumes apply them (`ApplyToResume`, default on; a domain
+  that wants the stricter behaviour sets it to `false`), so the resumed hop's conditions, tasks and the
+  next subflow's input mapping see the finisher's request. `Actor` stays `System`.
 - **Timer and cascade.** A timeout, timer, job-timeout recovery or downward cancel/fault cascade has no
   caller request, so its event carries `null` and the mapping sees an empty set. An upward parent fault
   (parent load or output-mapping failure) forwards the child's set to the grandparent after re-filtering

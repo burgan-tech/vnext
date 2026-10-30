@@ -22,6 +22,15 @@ public class CarriedHeaderPolicyTests
         names.ToDictionary(n => n, _ => (string?)"v", StringComparer.Ordinal);
 
     [Fact]
+    public void Defaults_Emit_Expose_And_ApplyToResume_On()
+    {
+        var policy = Create();
+
+        policy.ExposeToOutputMapping.ShouldBeTrue();
+        policy.ApplyToResume.ShouldBeTrue();
+    }
+
+    [Fact]
     public void Keeps_Identity_And_Custom_Headers()
     {
         var names = new[] { "sub", "act_sub", "role", "position", "client_id", "accept-language", "x-custom" };

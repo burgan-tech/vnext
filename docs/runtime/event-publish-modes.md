@@ -392,7 +392,7 @@ keep it from polluting a transition's trace:
 
 The three terminal events `instance.sub.completed`, `instance.sub.faulted` and `instance.sub.canceled`
 carry an optional `CarriedHeaders` map: the request headers of the call that settled the child, so the
-parent's output mapping (and, opt-in, its resume) can read what the child's caller sent. The field is
+parent's output mapping and its resume can read what the child's caller sent. The field is
 additive and optional; a consumer that ignores it sees the event as before.
 
 - **Carried set.** Every request header except the deny floor and the framework exclusions. Both are
@@ -425,7 +425,7 @@ additive and optional; a consumer that ignores it sees the event as before.
   |---|---|---|
   | `Emit` | `true` | `false`: producers write no headers on terminal events. |
   | `ExposeToOutputMapping` | `true` | The completion and fault output mapping reads them as `context.Headers`. |
-  | `ApplyToResume` | `false` | Applies them to the parent's resume request for completion, fault and cancel. `Actor = System` is unchanged; `ScriptResponse.Headers` gets no resume semantics. |
+  | `ApplyToResume` | `true` | Applies them to the parent's resume request for completion, fault and cancel (`false` for a domain that wants the stricter behaviour). `Actor = System` is unchanged; `ScriptResponse.Headers` gets no resume semantics. |
   | `AdditionalDenied` | `[]` | Extra names denied (exact, case-insensitive). |
   | `MaxEntries` / `MaxValueLength` | `64` / `4096` | Caps above. |
 
