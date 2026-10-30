@@ -169,7 +169,7 @@ public static class WorkflowErrorCodes
     /// <see cref="ResourceLockConflict"/> on purpose: that one leaves a FAULTED instance behind, this one
     /// leaves the instance untouched, so a client may retry the very same call.
     /// </summary>
-    public const string ResourceLockRejected = "Execution:200011";
+    public const string ResourceLockRejected = "Execution:200014";
     public const string ResourceLockKeyEmpty = "Execution:200011";
     public const string ResourceLockKeyResolutionFailed = "Execution:200012";
     public const string ResourceLockInvalidAction = "Execution:200013";

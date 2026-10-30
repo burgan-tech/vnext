@@ -374,7 +374,7 @@ public static class WorkflowApiBaseServiceCollectionExtensions
             BBT.Workflow.Infrastructure.Execution.Locks.IPostgreSqlDistributedLockService,
             BBT.Workflow.Infrastructure.Execution.Locks.NpgsqlDistributedLockService>();
 
-        services.AddResourceLock(lockStoreName);
+        services.AddResourceLock(configuration, lockStoreName);
         return services;
     }
 
@@ -390,8 +390,35 @@ public static class WorkflowApiBaseServiceCollectionExtensions
         return services;
     }
 
-    public static IServiceCollection AddResourceLock(this IServiceCollection services, string lockStoreName)
+    /// <summary>
+    /// Registers the transition-level resource lock store. <c>ResourceLock:Provider</c> picks the
+    /// implementation: <c>dapr</c> (the default, unchanged behaviour) or <c>postgres</c>.
+    /// <para>
+    /// The Postgres lease store is the one that can RENEW a held lock. The Dapr Redis component uses
+    /// <c>SET NX</c> and rejects a re-acquire even from the owner, so <c>Extend</c> there cannot work
+    /// while the lock is held — a protected section longer than its TTL loses the lock mid-flight.
+    /// Opt in per domain when locks must outlive a single short operation.
+    /// </para>
+    /// </summary>
+    public static IServiceCollection AddResourceLock(
+        this IServiceCollection services, IConfiguration configuration, string lockStoreName)
     {
+        var provider = configuration["ResourceLock:Provider"];
+
+        if (string.Equals(provider, "postgres", StringComparison.OrdinalIgnoreCase))
+        {
+            var connectionString = configuration.GetConnectionString("Default")
+                ?? throw new InvalidOperationException(
+                    "ConnectionStrings:Default is required when ResourceLock:Provider is 'postgres'.");
+
+            services.AddScoped<BBT.Workflow.Execution.IResourceLockService>(sp =>
+                new BBT.Workflow.Infrastructure.Execution.ResourceLock.NpgsqlResourceLockService(
+                    connectionString,
+                    sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<
+                        BBT.Workflow.Infrastructure.Execution.ResourceLock.NpgsqlResourceLockService>>()));
+            return services;
+        }
+
         services.AddScoped<BBT.Workflow.Execution.IResourceLockService>(sp =>
             new BBT.Workflow.Infrastructure.Execution.ResourceLock.DaprResourceLockService(
                 sp.GetRequiredService<Dapr.Client.DaprClient>(),
