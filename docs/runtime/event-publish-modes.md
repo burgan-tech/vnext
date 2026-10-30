@@ -104,6 +104,21 @@ child's, so the parent's own move into the SubFlow state is superseded by the ch
 travelling up) and **Faulted** (`InstanceSubFaultedEvent` already carries the faulted state upward;
 this channel reports progression, not failure).
 
+A notification reporting the child's terminal **`Completed`** status (finish state, cancel or exit) is
+still published — the outbox keeps it as a fact for `instance.sub.*` subscribers — but it is **not
+applied**: the relay declines it (`skipped`, reason `terminal_superseded`) and `SubflowStateService`
+drops it on either delivery path before any read or lock. The terminal event raised in the same
+commit owns that transition. `HandleFinishStep` (100) defers it before `TransitionSettlement` adds
+the state change, the dispatcher relays in order, and its settlement records the child's final state
+on the correlation, closes it and re-derives the parent's projection — moving every parent
+fingerprint member the long-poll ETag reads. So the state change only ever arrived after that, to an
+already-closed correlation (`Correlation not found`, no write), or — when the terminal relay failed
+or the backup won the race — projected a finished child onto a parent about to resume, and on a
+nested chain carried it to the grandparent, which the terminal settlement never corrects upward.
+SubProcess children are unaffected: `PublishPendingSubStateChange` never publishes for them
+(`IsSubFlow`). A notification without `NewStatus` (a publisher that predates the field) keeps the
+old handling.
+
 Instance **creation** flushes explicitly: it pre-positions the instance into its initial state and
 commits in a unit of work that has no settlement. That is load-bearing when a child's start
 transition targets its own initial state — nothing moves afterwards, so this is the parent's only
@@ -152,8 +167,10 @@ Implementation notes for the coalescing:
 - **The Inbox BACKUP checks before it locks** (`SubFlowStateChangedInput.IsBackupDelivery`, set only
   by `InstanceSubStateChangedEventHandler`). One no-tracking `ProbeSubflowStateAsync` row: stale by
   the same predicate, or the same notification (seq, else µs stamp) whose values the parent and the
-  open correlation already carry ⇒ dropped with no lock, no transaction, no write; anything else takes
-  the locked path. It is a plain READ COMMITTED select — no row lock, no write — so it does not
+  open correlation already carry, or a child whose correlation a terminal settlement has already
+  closed (`HasClosedCorrelation`, reason `correlation_closed` — the locked path would answer
+  not-found and write nothing) ⇒ dropped with no lock, no transaction, no write; anything else
+  (including a child with no correlation at all) takes the locked path. It is a plain READ COMMITTED select — no row lock, no write — so it does not
   reintroduce the forbidden correlation-first CAS, and recovery is intact (an uncommitted first apply
   leaves an older watermark). A backup that loses the lock re-probes before throwing. Relay
   deliveries never probe.
@@ -386,7 +403,19 @@ keep it from polluting a transition's trace:
   `SubflowTerminalRearmExhausted` (40128, Error), `SubFlowStateChangeParentNotFound` (40129, Warning),
   `SubFlowStateChangeCorrelationNotFound` (40130, Warning), `SubFlowStateChangeOutOfOrder` (40131,
   Warning), `SubFlowStateChangeLockNotAcquired` (40132, Warning), `PostCommitEventRelayTimedOut`
-  (40133, Warning), `PostCommitEventRelayDepthExceeded` (40134, Warning).
+  (40133, Warning), `PostCommitEventRelayDepthExceeded` (40134, Warning),
+  `SubFlowStateChangeBackupAlreadyApplied` (40137, Debug), `PostCommitEventRelaySkipped` (40138,
+  Debug), `SubFlowStateChangeTerminalSuperseded` (40139, Debug).
+- **Aether's per-attempt lock log**: `DaprDistributedLockService.TryAcquireLockAsync` logs
+  `Failed to acquire lock for resource …` at Warning on every unsuccessful attempt — contention, not
+  failure, and the bounded retry in `TransitionLockScopeFactory` already logs each retry at Debug
+  (`TransitionLockRetryScheduled`) and exhaustion once at Warning (`InstanceLockFailed`). The
+  orchestration host sets that category to `Error` in `appsettings.json` (errors still surface). Only
+  orchestration needs it: it is the only host that takes the sub-item lock — the Inbox worker forwards
+  backup deliveries to orchestration over HTTP. A per-category environment variable leaves the entry in
+  force; a chart that replaces the whole `Logging` section must carry it (follow-up for
+  `vnext-helm-charts`: `docs/integration/vnext-helm-charts/aether-lock-log-level.md`). Side effect: the
+  Dapr handle's `ExtendAsync is not supported` Warning, logged under the same category, is hidden too.
 
 ## Accepted risks
 
