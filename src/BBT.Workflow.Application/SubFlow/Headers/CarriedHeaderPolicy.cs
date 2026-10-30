@@ -87,7 +87,7 @@ public sealed class CarriedHeaderPolicy(
         return result;
     }
 
-    private static bool IsDenied(string lower, string[] additional)
+    private static bool IsDenied(string lower, List<string> additional)
     {
         foreach (var s in DeniedSubstrings)
         {

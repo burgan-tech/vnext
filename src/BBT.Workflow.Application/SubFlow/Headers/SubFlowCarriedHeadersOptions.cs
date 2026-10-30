@@ -24,7 +24,7 @@ public sealed class SubFlowCarriedHeadersOptions
     public bool ApplyToResume { get; set; } = true;
 
     /// <summary>Extra header names to deny, matched exactly and case-insensitively. Adds to the floor only.</summary>
-    public string[] AdditionalDenied { get; set; } = [];
+    public List<string> AdditionalDenied { get; set; } = [];
 
     /// <summary>Maximum number of carried entries; overflow is dropped and counted.</summary>
     public int MaxEntries { get; set; } = 64;
