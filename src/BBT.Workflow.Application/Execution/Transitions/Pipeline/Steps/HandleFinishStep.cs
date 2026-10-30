@@ -97,8 +97,9 @@ public sealed class HandleFinishStep(
     /// </summary>
     private void UpdateInstanceStatus(TransitionExecutionContext context, System.Text.Json.JsonElement? subItemData)
     {
-        // The headers of the request that settles this child ride the terminal event to the parent.
-        var carriedHeaders = carriedHeaderPolicy?.Capture(context.Headers);
+        // The headers of the request that settles this child ride the terminal event to the parent;
+        // a root instance has no parent to carry them to.
+        var carriedHeaders = context.Instance.IsSubItem ? carriedHeaderPolicy?.Capture(context.Headers) : null;
         if (context.IsCancelTransition())
         {
             logger.InstanceCanceling(context.Instance.Id);

@@ -777,6 +777,60 @@ public sealed class SubflowCompletionServiceTests
         _uow.Verify(x => x.CommitAsync(It.IsAny<CancellationToken>()), Times.Once);
     }
 
+
+    [Theory]
+    [InlineData(true, new[] { "sub" })]
+    [InlineData(false, null)]
+    public async Task CompletionAsync_ParentFaultCascade_RefiltersCarriedHeadersThroughLocalPolicy(
+        bool emit, string[]? expectedKeys)
+    {
+        var parent = CreateParentInstance(out var subInstanceId, SubFlowType.SubFlow);
+        MakeSubFlowChild(parent);
+        SetupCompletedCorrelationPath(parent);
+        _outputMappingService
+            .Setup(x => x.ApplyPreparedAsync(
+                It.IsAny<Instance>(), It.IsAny<Definitions.Workflow>(), It.IsAny<SubflowOutputMappingPlan>(),
+                It.IsAny<JsonElement?>(), It.IsAny<IReadOnlyDictionary<string, string?>?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result.Fail(WorkflowErrors.SubFlowOutputMappingFailed(
+                parent.Id, "mapping script is invalid", "at Mapping.OutputHandler()")));
+
+        await CreateService(CreateEmitPolicy(emit)).CompletionAsync(
+            CreateInput(parent.Id, subInstanceId) with { CarriedHeaders = ForgedHeaders() });
+
+        var forwarded = GrandparentHeaders(parent);
+        if (expectedKeys is null)
+        {
+            forwarded.ShouldBeNull();
+        }
+        else
+        {
+            forwarded.ShouldNotBeNull();
+            forwarded.Keys.ShouldBe(expectedKeys);
+        }
+    }
+
+    private static void MakeSubFlowChild(Instance instance)
+    {
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.FlowType] = WorkflowType.SubFlow.Code;
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.Id] = Guid.NewGuid().ToString();
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.Domain] = "bank";
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.Flow] = "grandparent-flow";
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.Version] = "1.0.0";
+    }
+
+    private static Dictionary<string, string?> ForgedHeaders() => new()
+    {
+        ["authorization"] = "Bearer forged", ["sub"] = "u1"
+    };
+
+    private static CarriedHeaderPolicy CreateEmitPolicy(bool emit) => new(
+        Options.Create(new SubFlowCarriedHeadersOptions { Emit = emit }),
+        NullLogger<CarriedHeaderPolicy>.Instance);
+
+    private static Dictionary<string, string?>? GrandparentHeaders(Instance parent) =>
+        parent.GetDomainEvents().Select(e => e.Event).OfType<InstanceSubFaultedEvent>().Single().CarriedHeaders;
+
     private static Instance CloneParentWithCompletedCorrelation(Instance source, Guid subInstanceId)
     {
         var clone = Instance.Create(source.Id, "parent-flow", "1.0.0", "parent-key");

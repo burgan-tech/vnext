@@ -169,8 +169,10 @@ floor, caps and switches live in
   nothing carried the dictionary is empty.
 - **Resume.** The parent's resume request does not inherit them unless `ApplyToResume` is on (default
   off); then completion, fault and cancel resumes apply them, `Actor` stays `System`.
-- **Timer and cascade.** A timeout, timer, job-timeout recovery or cascade settlement has no caller
-  request, so its event carries `null` and the mapping sees an empty set.
+- **Timer and cascade.** A timeout, timer, job-timeout recovery or downward cancel/fault cascade has no
+  caller request, so its event carries `null` and the mapping sees an empty set. An upward parent fault
+  (parent load or output-mapping failure) forwards the child's set to the grandparent after re-filtering
+  it through the local policy (`Emit=false` yields `null`). Only sub-item instances capture headers.
 
 ## Retry
 

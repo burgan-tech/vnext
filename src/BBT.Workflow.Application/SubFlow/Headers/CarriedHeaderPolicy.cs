@@ -54,7 +54,7 @@ public sealed class CarriedHeaderPolicy(
             return result;
         }
 
-        var additional = _options.AdditionalDenied;
+        var additional = _options.AdditionalDenied ?? [];
         int denied = 0, overflow = 0;
         foreach (var (key, value) in source)
         {

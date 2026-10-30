@@ -138,6 +138,19 @@ public class HandleFinishStepTests
             .OfType<InstanceSubCompletedEvent>().Single().CarriedHeaders.ShouldBeNull();
     }
 
+    [Fact]
+    public async Task Root_Instance_Finish_Never_Captures_Headers()
+    {
+        var policy = Substitute.For<ICarriedHeaderPolicy>();
+        var step = new HandleFinishStep(Substitute.For<IInstanceRepository>(),
+            Substitute.For<ILogger<HandleFinishStep>>(), carriedHeaderPolicy: policy);
+        var context = CreateFinishContext(InstanceFactory.CreateDefault(), Hdrs());
+
+        (await step.ExecuteAsync(context, CancellationToken.None)).IsSuccess.ShouldBeTrue();
+
+        policy.DidNotReceiveWithAnyArgs().Capture(default);
+    }
+
     private static TransitionExecutionContext CreateFinishContext(Instance instance, Dictionary<string, string?>? headers = null)
     {
         var workflow = Definitions.Workflow.Create();

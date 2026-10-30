@@ -280,7 +280,7 @@ public sealed class SubflowCompletionService(
                         parentInstance.AddIncident(loadIncident);
                         parentInstance.Fault(completedInput.Domain, completedInput.Sync,
                             subItemData: await subItemDataResolver.ResolveOrStoredAsync(parentInstance, cancellationToken),
-                            carriedHeaders: completedInput.CarriedHeaders);
+                            carriedHeaders: carriedHeaderPolicy?.Capture(completedInput.CarriedHeaders));
                         await instanceRepository.UpdateAsync(parentInstance, true, cancellationToken);
                         await correlationUow.CommitAsync(cancellationToken);
                         return;
@@ -324,7 +324,7 @@ public sealed class SubflowCompletionService(
                         parentInstance.AddIncident(incident);
                         parentInstance.Fault(completedInput.Domain, completedInput.Sync,
                             subItemData: await subItemDataResolver.ResolveOrStoredAsync(parentInstance, cancellationToken),
-                            carriedHeaders: completedInput.CarriedHeaders);
+                            carriedHeaders: carriedHeaderPolicy?.Capture(completedInput.CarriedHeaders));
                         await instanceRepository.UpdateAsync(parentInstance, true, cancellationToken);
                         await correlationUow.CommitAsync(cancellationToken);
                         return;

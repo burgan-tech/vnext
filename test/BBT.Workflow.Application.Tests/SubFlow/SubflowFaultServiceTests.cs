@@ -758,6 +758,62 @@ public sealed class SubflowFaultServiceTests
         return box;
     }
 
+
+    [Theory]
+    [InlineData(true, new[] { "sub" })]
+    [InlineData(false, null)]
+    public async Task FaultAsync_ParentFaultCascade_RefiltersCarriedHeadersThroughLocalPolicy(
+        bool emit, string[]? expectedKeys)
+    {
+        var parentInstance = CreateParentInstance(out var subInstanceId);
+        MakeSubFlowChild(parentInstance);
+        SetupParentInstance(parentInstance);
+        _instanceRepository
+            .Setup(x => x.UpdateAsync(parentInstance, true, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(parentInstance);
+        // Parent workflow definition cannot be loaded: the parent faults and the error climbs upward.
+        _componentCacheStore
+            .Setup(x => x.GetFlowAsync("bank", "parent-flow", "1.0.0", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result<Definitions.Workflow>.Fail(
+                Error.NotFound(WorkflowErrorCodes.NotFoundWorkflow, "not found", "parent-flow")));
+        var input = CreateInput(parentInstance.Id, subInstanceId, CreateJsonElement("""{"childStatus":"Faulted"}"""))
+            with { CarriedHeaders = ForgedHeaders() };
+
+        await CreateService(CreateEmitPolicy(emit)).FaultAsync(input, CancellationToken.None);
+
+        var forwarded = GrandparentHeaders(parentInstance);
+        if (expectedKeys is null)
+        {
+            forwarded.ShouldBeNull();
+        }
+        else
+        {
+            forwarded.ShouldNotBeNull();
+            forwarded.Keys.ShouldBe(expectedKeys);
+        }
+    }
+
+    private static void MakeSubFlowChild(Instance instance)
+    {
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.FlowType] = WorkflowType.SubFlow.Code;
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.Id] = Guid.NewGuid().ToString();
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.Domain] = "bank";
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.Flow] = "grandparent-flow";
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.Version] = "1.0.0";
+    }
+
+    private static Dictionary<string, string?> ForgedHeaders() => new()
+    {
+        ["authorization"] = "Bearer forged", ["sub"] = "u1"
+    };
+
+    private static CarriedHeaderPolicy CreateEmitPolicy(bool emit) => new(
+        Options.Create(new SubFlowCarriedHeadersOptions { Emit = emit }),
+        NullLogger<CarriedHeaderPolicy>.Instance);
+
+    private static Dictionary<string, string?>? GrandparentHeaders(Instance parent) =>
+        parent.GetDomainEvents().Select(e => e.Event).OfType<InstanceSubFaultedEvent>().Single().CarriedHeaders;
+
     private static CarriedHeaderPolicy CreatePolicy(bool applyToResume) => new(
         Options.Create(new SubFlowCarriedHeadersOptions { ApplyToResume = applyToResume }),
         NullLogger<CarriedHeaderPolicy>.Instance);

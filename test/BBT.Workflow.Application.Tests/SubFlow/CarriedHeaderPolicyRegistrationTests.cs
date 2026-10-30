@@ -3,6 +3,7 @@ using BBT.Workflow.Execution.Pipeline.Steps;
 using BBT.Workflow.SubFlow.Headers;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using Shouldly;
 using Xunit;
 
@@ -55,5 +56,48 @@ public sealed class CarriedHeaderPolicyRegistrationTests
             producer.GetConstructors().Single().GetParameters()
                 .ShouldContain(p => p.ParameterType == typeof(ICarriedHeaderPolicy));
         }
+    }
+
+    [Theory]
+    [InlineData(0, 4096, false)]
+    [InlineData(64, 0, false)]
+    [InlineData(-1, 4096, false)]
+    [InlineData(64, 4096, true)]
+    public void Options_Validation_Requires_Positive_Caps(int maxEntries, int maxValueLength, bool valid)
+    {
+        using var provider = BuildProviderWith(o =>
+        {
+            o.MaxEntries = maxEntries;
+            o.MaxValueLength = maxValueLength;
+        });
+
+        var read = () => provider.GetRequiredService<IOptions<SubFlowCarriedHeadersOptions>>().Value;
+        if (valid)
+        {
+            read.ShouldNotThrow();
+        }
+        else
+        {
+            read.ShouldThrow<OptionsValidationException>();
+        }
+    }
+
+    [Fact]
+    public void Options_Validation_Rejects_Null_AdditionalDenied()
+    {
+        using var provider = BuildProviderWith(o => o.AdditionalDenied = null!);
+
+        Should.Throw<OptionsValidationException>(
+            () => provider.GetRequiredService<IOptions<SubFlowCarriedHeadersOptions>>().Value);
+    }
+
+    private static ServiceProvider BuildProviderWith(System.Action<SubFlowCarriedHeadersOptions> configure)
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton<Microsoft.Extensions.Configuration.IConfiguration>(
+            new Microsoft.Extensions.Configuration.ConfigurationBuilder().Build());
+        services.AddApplicationModule();
+        services.Configure(configure);
+        return services.BuildServiceProvider();
     }
 }

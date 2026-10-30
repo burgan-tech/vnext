@@ -405,16 +405,20 @@ additive and optional; a consumer that ignores it sees the event as before.
     `baggage`, `host`, `transfer-encoding`, `connection`, `keep-alive`, and the prefixes `content-`,
     `dapr-`, `grpc-`.
   - Caps: at most `MaxEntries` (64) entries and `MaxValueLength` (4096) characters per value. An
-    over-long value is dropped; entries past the entry cap are dropped; both are counted, not logged.
+    over-long value is dropped and counted as "denied"; entries past the entry cap are dropped and counted as "overflow". Both counts appear in log 40140; header values are never logged.
 - **`role` is always carried and applied** (requester amendment RA-1). There is no `Role` option.
 - **Denylist, not allowlist** (RA-2). A header that is neither on the floor nor excluded travels, so a
   secret in an unusually named header (say `x-api-key`) is carried unless it is listed in
   `AdditionalDenied`. Accepted risk: the gateway or the operator owns that list. Values reach the
   outbox row, the Inbox body and the parent's output mapping.
 - **Four copy sites.** The set is captured once at the producer (`HandleFinishStep`, and the request-hop
-  fault paths; a parent fault forwards its own carried set to the grandparent), then copied verbatim at
-  the post-commit relay, the Inbox body and the re-arm rebuild. Every receiver filters it again before
-  use, because the event is untrusted input.
+  fault paths), only for sub-item instances (a root instance has no parent to carry them to), then copied
+  verbatim at the post-commit relay, the Inbox body and the re-arm rebuild. Every receiver filters it
+  again before use, because the event is untrusted input.
+- **Upward parent fault.** When the parent itself faults because of the child's settlement (parent
+  workflow could not be loaded, output mapping failed, abort boundary), the received set is re-captured
+  through the local policy before it goes to the grandparent: `Emit=false` yields `null`, and the deny
+  floor and caps apply again, so a forged `/complete` body cannot smuggle `authorization` upward.
 - **Switches** (section `Workflow:SubFlow:CarriedHeaders`):
 
   | Key | Default | Effect |
@@ -426,8 +430,9 @@ additive and optional; a consumer that ignores it sees the event as before.
   | `MaxEntries` / `MaxValueLength` | `64` / `4096` | Caps above. |
 
 - **`null` and empty.** If the filtered set is empty the producer writes `null`; a consumer treats `null`
-  and `{}` the same (empty dictionary). Timer, timeout, job-timeout-recovery and cascade settlements have
-  no caller request, so they carry `null`. The internal `/complete`, `/fault`, `/cancel` request's own
+  and `{}` the same (empty dictionary). Timer, timeout and job-timeout-recovery settlements, and the *downward*
+  cancel/fault cascades, have no caller request, so they carry `null`; an *upward* parent fault instead
+  forwards the re-filtered child set (above). The internal `/complete`, `/fault`, `/cancel` request's own
   HTTP headers are never read; only the body field counts.
 - **Never logged.** Header values are never logged or put on a span. The span tag
   `vnext.subflow.carried_header_count` carries the count; `SubFlowCarriedHeadersFiltered` (40140, Debug)

@@ -97,4 +97,22 @@ public class CarriedHeaderPolicyTests
         empty.ContainsKey("SUB").ShouldBeFalse();
         p.Apply(new Dictionary<string, string?> { ["Sub"] = "u1" }).ContainsKey("SUB").ShouldBeTrue();
     }
+
+    [Fact]
+    public void Apply_Refilters_Forged_Headers()
+    {
+        var r = Create().Apply(new Dictionary<string, string?>
+        {
+            ["authorization"] = "x", ["x-subflow-depth"] = "3", ["sub"] = "u1"
+        });
+        r.Keys.ShouldBe(["sub"]);
+    }
+
+    [Fact]
+    public void Null_AdditionalDenied_Does_Not_Throw()
+    {
+        var p = Create(o => o.AdditionalDenied = null!);
+        p.Capture(H("sub", "Authorization"))!.Keys.ShouldBe(["sub"]);
+        p.Apply(H("sub")).Keys.ShouldBe(["sub"]);
+    }
 }
