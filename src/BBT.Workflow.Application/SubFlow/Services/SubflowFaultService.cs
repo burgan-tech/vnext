@@ -217,7 +217,8 @@ public sealed class SubflowFaultService(
                     {
                         RecordIncident(parentInstance, input, ErrorAction.Abort, null);
                         parentInstance.Fault(input.Domain, input.Sync,
-                            subItemData: await subItemDataResolver.ResolveOrStoredAsync(parentInstance, cancellationToken));
+                            subItemData: await subItemDataResolver.ResolveOrStoredAsync(parentInstance, cancellationToken),
+                            carriedHeaders: input.CarriedHeaders);
                         correlation.MarkSettled(input.FaultedAt);
                         await instanceRepository.UpdateAsync(parentInstance, true, cancellationToken);
                         await uow.CommitAsync(cancellationToken);
@@ -256,7 +257,8 @@ public sealed class SubflowFaultService(
                     else if (string.IsNullOrWhiteSpace(actionResult.TransitionKey))
                     {
                         parentInstance.Fault(input.Domain, input.Sync,
-                            subItemData: await subItemDataResolver.ResolveOrStoredAsync(parentInstance, cancellationToken));
+                            subItemData: await subItemDataResolver.ResolveOrStoredAsync(parentInstance, cancellationToken),
+                            carriedHeaders: input.CarriedHeaders);
                     }
 
                     var mappingResult = await outputMappingService.ApplyAsync(

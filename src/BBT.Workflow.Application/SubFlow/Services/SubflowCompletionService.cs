@@ -276,7 +276,8 @@ public sealed class SubflowCompletionService(
                             stackTrace: parentWorkflowResult.Error.Detail);
                         parentInstance.AddIncident(loadIncident);
                         parentInstance.Fault(completedInput.Domain, completedInput.Sync,
-                            subItemData: await subItemDataResolver.ResolveOrStoredAsync(parentInstance, cancellationToken));
+                            subItemData: await subItemDataResolver.ResolveOrStoredAsync(parentInstance, cancellationToken),
+                            carriedHeaders: completedInput.CarriedHeaders);
                         await instanceRepository.UpdateAsync(parentInstance, true, cancellationToken);
                         await correlationUow.CommitAsync(cancellationToken);
                         return;
@@ -318,7 +319,8 @@ public sealed class SubflowCompletionService(
                             stackTrace: mappingResult.Error.Detail);
                         parentInstance.AddIncident(incident);
                         parentInstance.Fault(completedInput.Domain, completedInput.Sync,
-                            subItemData: await subItemDataResolver.ResolveOrStoredAsync(parentInstance, cancellationToken));
+                            subItemData: await subItemDataResolver.ResolveOrStoredAsync(parentInstance, cancellationToken),
+                            carriedHeaders: completedInput.CarriedHeaders);
                         await instanceRepository.UpdateAsync(parentInstance, true, cancellationToken);
                         await correlationUow.CommitAsync(cancellationToken);
                         return;

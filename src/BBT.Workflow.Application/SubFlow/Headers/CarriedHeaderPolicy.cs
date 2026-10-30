@@ -76,7 +76,7 @@ public sealed class CarriedHeaderPolicy(
                 continue;
             }
 
-            result[key] = value;
+            result[lower] = value;
         }
 
         if (denied > 0 || overflow > 0)

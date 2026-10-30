@@ -2,6 +2,7 @@ using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
+using BBT.Workflow.SubFlow.Headers;
 using Microsoft.Extensions.Logging;
 
 namespace BBT.Workflow.Execution.Pipeline.Steps;
@@ -13,11 +14,13 @@ namespace BBT.Workflow.Execution.Pipeline.Steps;
 /// Uses Result pattern for exception-free error handling.
 /// SubItem completion events are now published as domain events via Instance.Complete().
 /// </summary>
+/// <param name="carriedHeaderPolicy">Filters the request headers that ride the terminal event to the parent; null disables header capture, production DI always supplies it.</param>
 public sealed class HandleFinishStep(
     IInstanceRepository instanceRepository,
     ILogger<HandleFinishStep> logger,
     ISubItemEventDataResolver? subItemDataResolver = null,
-    IInstanceDataWriteService? instanceDataWriteService = null) : ITransitionStep
+    IInstanceDataWriteService? instanceDataWriteService = null,
+    ICarriedHeaderPolicy? carriedHeaderPolicy = null) : ITransitionStep
 {
     /// <inheritdoc />
     public int Order => LifecycleOrder.Finish;
@@ -94,18 +97,22 @@ public sealed class HandleFinishStep(
     /// </summary>
     private void UpdateInstanceStatus(TransitionExecutionContext context, System.Text.Json.JsonElement? subItemData)
     {
+        // The headers of the request that settles this child ride the terminal event to the parent.
+        var carriedHeaders = carriedHeaderPolicy?.Capture(context.Headers);
         if (context.IsCancelTransition())
         {
             logger.InstanceCanceling(context.Instance.Id);
             context.Instance.Cancel(
                 context.Domain,
                 context.CallerMode == ExecMode.Sync,
-                context.Termination);
+                context.Termination,
+                carriedHeaders: carriedHeaders);
         }
         else
         {
             logger.InstanceCompleting(context.Instance.Id);
-            context.Instance.Complete(context.Domain, context.CallerMode == ExecMode.Sync, subItemData);
+            context.Instance.Complete(context.Domain, context.CallerMode == ExecMode.Sync, subItemData,
+                carriedHeaders: carriedHeaders);
         }
     }
 }

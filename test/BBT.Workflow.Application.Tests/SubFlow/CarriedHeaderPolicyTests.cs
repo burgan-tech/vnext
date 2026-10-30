@@ -52,7 +52,7 @@ public class CarriedHeaderPolicyTests
     public void Applies_AdditionalDenied_Exactly()
     {
         var r = Create(o => o.AdditionalDenied = ["x-api-key"]).Capture(H("x-api-key", "X-Api-Keys"))!;
-        r.Keys.ShouldBe(["X-Api-Keys"]);
+        r.Keys.ShouldBe(["x-api-keys"]);
     }
 
     [Fact]
@@ -71,6 +71,13 @@ public class CarriedHeaderPolicyTests
     {
         var r = Create().Capture(H(Enumerable.Range(0, 70).Select(i => $"x-h{i}").ToArray()))!;
         r.Count.ShouldBe(64);
+    }
+
+    [Fact]
+    public void Capture_Lowercases_Keys()
+    {
+        var r = Create().Capture(H("X-Custom"))!;
+        r.Keys.ShouldBe(new[] { "x-custom" });
     }
 
     [Fact]
