@@ -24,7 +24,8 @@ public sealed class FileOffloadService(
     IFileBlobStore blobStore,
     IRuntimeInfoProvider runtimeInfoProvider,
     IOptions<FileStorageOptions> options,
-    ILogger<FileOffloadService> logger) : IFileOffloadService
+    ILogger<FileOffloadService> logger,
+    IFileStagingStore? staging = null) : IFileOffloadService
 {
     /// <summary>A stored <c>name</c> is capped to this many characters (the extension is kept when it is short).</summary>
     internal const int MaxNameLength = 255;
@@ -43,6 +44,7 @@ public sealed class FileOffloadService(
     private sealed record StorePlan(JsonObject Node, string Path, FileStorageField Field, byte[] Bytes, string? Name, string? MimeType)
         : Plan(Node, Path);
     private sealed record ReplacePlan(JsonObject Node, string Path, FileHandle Match) : Plan(Node, Path);
+    private sealed record StagedPlan(JsonObject Node, string Path, StagedFile Staged) : Plan(Node, Path);
 
     public async Task<Result<IReadOnlyList<FileStorageField>>> GetFieldsAsync(Definitions.Workflow workflow, CancellationToken cancellationToken)
     {
@@ -95,57 +97,29 @@ public sealed class FileOffloadService(
 
         // Pass 1: validate everything and plan; a rejected request writes nothing.
         var plans = new List<Plan>();
+        var claimed = new HashSet<string>(StringComparer.Ordinal);
         foreach (var field in fields)
         {
             foreach (var (node, path) in FileNodeWalker.Find(root, field).ToList())
             {
-                var hasContent = node.ContainsKey("content");
-                var hasFile = node.ContainsKey("file");
-
-                if (hasContent && hasFile)
-                    return Invalid(request, path, "'content' and 'file' cannot be sent together");
-
-                if (hasContent)
-                {
-                    if (node["content"] is not JsonValue cv || !cv.TryGetValue<string>(out var b64))
-                        return Invalid(request, path, "'content' must be a base64 string");
-                    byte[] bytes;
-                    try { bytes = Convert.FromBase64String(b64); }
-                    catch (FormatException) { return Invalid(request, path, "'content' is not valid base64"); }
-                    plans.Add(new StorePlan(node, path, field, bytes,
-                        NormalizeName(ReadString(node, "name")), NormalizeMediaType(ReadString(node, "mimeType"))));
-                    continue;
-                }
-
-                if (!hasFile)
-                    continue;
-
-                if (request.Mode == FileOffloadMode.Trusted)
-                {
-                    // Kept as is, but only a handle the runtime could have written: a GUID file id in a component
-                    // the flow declares or the deployment allows (FileStorage:AllowedBindings).
-                    if (FileHandle.TryRead(node) is not { } trusted || !trusted.IsAllowed(allowed))
-                        return Invalid(request, path, "the file reference is not a valid handle of an allowed component");
-                    continue;
-                }
-
-                var fileId = ReadString(node, "file");
-                var match = fileId is null
-                    ? null
-                    : FileNodeWalker.Find(stored, field)
-                        .Select(h => FileHandle.TryRead(h.Node))
-                        .FirstOrDefault(h => h is not null && string.Equals(h.File, fileId, StringComparison.Ordinal));
-                if (match is null)
-                    return Invalid(request, path, "the referenced file is not stored at this path on this instance");
-                // The stored record is not trusted on its own either: an invalid stored handle is never echoed.
-                if (!match.IsAllowed(allowed))
-                    return Invalid(request, path, "the stored file reference is not a valid handle of an allowed component");
-                plans.Add(new ReplacePlan(node, path, match));
+                var (plan, rejection) = await PlanAsync(request, field, node, path, stored, allowed, claimed, cancellationToken);
+                if (rejection is not null)
+                    return Invalid(request, path, rejection);
+                if (plan is not null)
+                    plans.Add(plan);
             }
         }
 
         if (plans.Count == 0)
             return Unchanged(request);
+
+        // A streamed upload is single-use: take every referenced ticket atomically before anything is written, so two
+        // requests referencing the same file cannot both claim it. A request that fails after this point puts its
+        // tickets back.
+        var staged = plans.OfType<StagedPlan>().ToList();
+        var taken = await TakeStagedAsync(staged, cancellationToken);
+        if (taken is not null)
+            return Invalid(request, taken.Path, "the referenced file is not stored at this path on this instance");
 
         // Pass 2: write blobs, then swap nodes.
         foreach (var plan in plans)
@@ -155,11 +129,19 @@ public sealed class FileOffloadService(
                 case StorePlan sp:
                     var handle = await StoreAsync(request, sp, cancellationToken);
                     if (!handle.IsSuccess)
+                    {
+                        await RestoreStagedAsync(staged, cancellationToken);
                         return Result<FileOffloadResult>.Fail(handle.Error);
+                    }
                     Replace(sp.Node, handle.Value!);
                     break;
                 case ReplacePlan rp:
                     Replace(rp.Node, rp.Match.ToJsonNode().AsObject());
+                    break;
+                case StagedPlan stp:
+                    var owner = new FileOwner(runtimeInfoProvider.Domain, request.Workflow.Key, request.InstanceId.ToString());
+                    Replace(stp.Node, stp.Staged.ToHandle(owner).ToJsonNode().AsObject());
+                    logger.FileUploadClaimed(request.InstanceId, stp.Path, stp.Staged.Component, stp.Staged.File);
                     break;
             }
         }
@@ -168,10 +150,113 @@ public sealed class FileOffloadService(
     }
 
     /// <summary>
+    /// The plan for one file node, or the reason it is refused. A node with neither <c>content</c> nor <c>file</c>, and a
+    /// valid handle in a Trusted payload, need no plan.
+    /// </summary>
+    private async Task<(Plan? Plan, string? Rejection)> PlanAsync(
+        FileOffloadRequest request, FileStorageField field, JsonObject node, string path, JsonObject? stored,
+        IReadOnlySet<string> allowed, HashSet<string> claimed, CancellationToken cancellationToken)
+    {
+        var hasContent = node.ContainsKey("content");
+        var hasFile = node.ContainsKey("file");
+
+        if (hasContent && hasFile)
+            return (null, "'content' and 'file' cannot be sent together");
+
+        if (hasContent)
+            return PlanInline(request, field, node, path);
+
+        if (!hasFile)
+            return (null, null);
+
+        if (request.Mode == FileOffloadMode.Trusted)
+        {
+            // Kept as is, but only a handle the runtime could have written: a GUID file id in a component
+            // the flow declares or the deployment allows (FileStorage:AllowedBindings).
+            return FileHandle.TryRead(node) is { } trusted && trusted.IsAllowed(allowed)
+                ? (null, null)
+                : (null, "the file reference is not a valid handle of an allowed component");
+        }
+
+        var fileId = ReadString(node, "file");
+        var match = fileId is null
+            ? null
+            : FileNodeWalker.Find(stored, field)
+                .Select(h => FileHandle.TryRead(h.Node))
+                .FirstOrDefault(h => h is not null && string.Equals(h.File, fileId, StringComparison.Ordinal));
+        if (match is null)
+        {
+            // Not an echo: it can only be a streamed upload staged for this flow and path, claimed once.
+            var staged = await FindStagedAsync(request, field, fileId, cancellationToken);
+            return staged is not null && claimed.Add(staged.File)
+                ? (new StagedPlan(node, path, staged), null)
+                : (null, "the referenced file is not stored at this path on this instance");
+        }
+        // The stored record is not trusted on its own either: an invalid stored handle is never echoed.
+        return match.IsAllowed(allowed)
+            ? (new ReplacePlan(node, path, match), null)
+            : (null, "the stored file reference is not a valid handle of an allowed component");
+    }
+
+    private static (Plan? Plan, string? Rejection) PlanInline(
+        FileOffloadRequest request, FileStorageField field, JsonObject node, string path)
+    {
+        // x-storage.transport "stream": a client sends the bytes to the upload endpoint, never inline.
+        if (request.Mode == FileOffloadMode.External && !field.AcceptsInline)
+            return (null, "the field accepts streamed uploads only (x-storage.transport is \"stream\"); upload the file and reference its 'file'");
+        if (node["content"] is not JsonValue cv || !cv.TryGetValue<string>(out var b64))
+            return (null, "'content' must be a base64 string");
+        if (FromBase64(b64) is not { } bytes)
+            return (null, "'content' is not valid base64");
+        return (new StorePlan(node, path, field, bytes,
+            NormalizeName(ReadString(node, "name")), NormalizeMediaType(ReadString(node, "mimeType"))), null);
+    }
+
+    /// <summary>
+    /// Takes every staged ticket of <paramref name="plans"/> out of the store; null when all were taken, else the first
+    /// plan whose ticket was gone (another request claimed it meanwhile). The ones taken before it are put back.
+    /// </summary>
+    private async Task<StagedPlan?> TakeStagedAsync(List<StagedPlan> plans, CancellationToken cancellationToken)
+    {
+        for (var i = 0; i < plans.Count; i++)
+        {
+            if (await staging!.TakeAsync(plans[i].Staged.Domain, plans[i].Staged.File, cancellationToken) is not null)
+                continue;
+            await RestoreStagedAsync(plans.GetRange(0, i), cancellationToken);
+            return plans[i];
+        }
+        return null;
+    }
+
+    private async Task RestoreStagedAsync(List<StagedPlan> plans, CancellationToken cancellationToken)
+    {
+        foreach (var plan in plans)
+            await staging!.RestoreAsync(plan.Staged, cancellationToken);
+    }
+
+    /// <summary>
+    /// The staged upload <paramref name="fileId"/> when the field takes streamed uploads and the upload was made for
+    /// this flow, this path and the field's component; null otherwise (the reference is then refused).
+    /// </summary>
+    private async Task<StagedFile?> FindStagedAsync(
+        FileOffloadRequest request, FileStorageField field, string? fileId, CancellationToken cancellationToken)
+    {
+        if (staging is null || !field.AcceptsStream || !FileHandle.IsFileId(fileId))
+            return null;
+        var staged = await staging.GetAsync(runtimeInfoProvider.Domain, fileId!, cancellationToken);
+        return staged is not null
+               && string.Equals(staged.Flow, request.Workflow.Key, StringComparison.Ordinal)
+               && string.Equals(staged.Path, field.Path, StringComparison.Ordinal)
+               && string.Equals(staged.Component, field.Binding, StringComparison.Ordinal)
+            ? staged
+            : null;
+    }
+
+    /// <summary>
     /// The client-declared media type, normalised (<c>type/subtype</c> plus parameters, as the header parser prints it),
     /// or null when it does not parse — the read side then serves <c>application/octet-stream</c>.
     /// </summary>
-    internal static string? NormalizeMediaType(string? mimeType)
+    public static string? NormalizeMediaType(string? mimeType)
     {
         if (string.IsNullOrWhiteSpace(mimeType)
             || !System.Net.Http.Headers.MediaTypeHeaderValue.TryParse(mimeType.Trim(), out var parsed)
@@ -185,7 +270,7 @@ public sealed class FileOffloadService(
     /// The client-declared file name with control characters replaced and capped at <see cref="MaxNameLength"/>
     /// characters; a short extension survives the cut (<c>very-long…name.pdf</c>).
     /// </summary>
-    internal static string? NormalizeName(string? name)
+    public static string? NormalizeName(string? name)
     {
         if (name is null)
             return null;
@@ -204,6 +289,12 @@ public sealed class FileOffloadService(
     private static int CutAt(string value, int length)
         => length > 0 && char.IsHighSurrogate(value[length - 1]) ? length - 1 : length;
 
+    private static byte[]? FromBase64(string value)
+    {
+        try { return Convert.FromBase64String(value); }
+        catch (FormatException) { return null; }
+    }
+
     private static string? ReadString(JsonObject node, string name)
         => node[name] is JsonValue v && v.TryGetValue<string>(out var s) ? s : null;
 
@@ -221,9 +312,15 @@ public sealed class FileOffloadService(
         return Result<JsonObject>.Ok(handle.ToJsonNode().AsObject());
     }
 
+    /// <summary>
+    /// Swaps only the file members of <paramref name="target"/>: <c>content</c> is dropped and every handle member is
+    /// written from <paramref name="source"/> (the handle wins its own members, e.g. a client-sent <c>size</c>). Any
+    /// other member the client put on the node stays — a FilePicker row's <c>documentType</c> must reach the mapping
+    /// (vnext-client-sdk-core#137).
+    /// </summary>
     private static void Replace(JsonObject target, JsonObject source)
     {
-        target.Clear();
+        target.Remove("content");
         foreach (var (key, value) in source.ToList())
         {
             source.Remove(key);

@@ -22,9 +22,12 @@ On a master-schema **property**, or on the `items` schema of an array property:
   "doc": { "type": "object", "x-storage": { "binding": "vnext-blob-s3" } } } } }
 ```
 
-- `binding` names a Dapr output binding component on the **orchestration** sidecar
-  (`bindings.localstorage` locally, `bindings.aws.s3` or MinIO elsewhere). Required, non-empty string; no
-  other member is allowed.
+- `binding` names the store component: a Dapr output binding on the **orchestration** sidecar
+  (`bindings.localstorage` locally, `bindings.aws.s3` or MinIO elsewhere). The runtime reaches every store through
+  its Dapr binding and carries no store SDK. Required, non-empty string.
+- `transport` (optional) chooses how a client may send the bytes: `inline` (default: base64 `content` in the JSON
+  body), `stream` (a [streamed upload](#streamed-uploads-transport) referenced by `file`; inline `content` from a
+  client is refused) or `any` (both). No other member is allowed.
 - Reachable only through nested `properties`, plus **one** array level (`files[]`, and a property inside
   that array's item schema such as `documents[].doc`). Not under `$defs`, combinators (`allOf`/`anyOf`/`oneOf`),
   conditionals, nested arrays, the schema root, or inside another file node. A misplaced declaration is a
@@ -76,7 +79,13 @@ On a master-schema **property**, or on the `items` schema of an array property:
 - Object key in the component: `{FileStorage:KeyPrefix}{file}`.
 
 **Echo** (a client that read the instance and sends the field back): `{ "file": "<guid>", ... }` with no
-`content`. The runtime replaces the node with the **stored** handle (any client-sent metadata is discarded).
+`content`. The runtime writes the **stored** handle's members over the node (a client-sent `size`, `mimeType` or
+`eTag` is discarded).
+
+**Other members of the node are kept** (vnext-client-sdk-core#137). The swap drops `content` and writes the seven
+handle members; anything else the client put on the same object (a FilePicker row's `documentType`, per-file
+metadata) stays and reaches the mapping and the record. A strict master schema (`additionalProperties: false` on the
+file node) must declare such members under the node's `properties`.
 
 ## Write rules
 
@@ -84,7 +93,7 @@ Applied per `x-storage` node of an incoming payload:
 
 | Node | External payload (client body) | Trusted payload (runtime-produced) |
 |---|---|---|
-| `content` present, `file` absent | Decode base64 (invalid or non-string: `400`), `create` in the binding, node becomes the handle | same |
+| `content` present, `file` absent | Decode base64 (invalid or non-string: `400`), `create` in the binding, `content` is replaced by the handle members (other members kept) | same |
 | `content` and `file` both present | `400` `FileReferenceInvalid` | `400` `FileReferenceInvalid` |
 | `content` absent, `file` present | The same `file` id must exist at the same path in the instance's `LatestData` (arrays: any element of the same array) **and the stored handle must be valid**. Found: node becomes the stored handle. Not found or invalid: `400` `FileReferenceInvalid`. A `start` has no `LatestData`, so always `400` | Kept as is when it is a **valid handle**; otherwise `400` `FileReferenceInvalid` |
 | `null` / absent | Field cleared; nothing is deleted from the store | same |
@@ -114,6 +123,56 @@ Applied per `x-storage` node of an incoming payload:
 | `Instance:100048` | `FileReferenceInvalid` | 400 | Both `content` and `file`, bad base64, non-string `content`, unknown/foreign reference, missing `file` query on `functions/file` |
 | `Instance:100049` | `FileNotFound` | 404 | `functions/file`/`internal/file`: the file is not in this instance's `LatestData`, the stored handle there is invalid, or its path is hidden by `x-roles` |
 | `Instance:100050` | `FileSchemaUnavailable` | 503 | The flow's master schema could not be loaded and the payload carries a `content`/`file` member (write), or a file was read (`functions/file`, `internal/file`); nothing was applied, retry |
+
+## Streamed uploads (`transport`)
+
+A field declared with `"transport": "stream"` or `"any"` takes its bytes from a separate upload request instead of a
+base64 string in the JSON body, so a file is never inflated by base64, never held in a JSON body, and is bounded by
+`FileStorage:Upload:MaxBytes` (default 64 MiB, the orchestration sidecar's `--max-body-size`; raise both together)
+rather than the 10 MiB JSON body limit.
+
+```http
+POST /api/v1/{domain}/workflows/{flow}/files?path=files[]&name=scan.tiff[&version=1.0.0]
+Content-Type: image/tiff
+Content-Length: 31457280
+
+<raw bytes>
+```
+
+```json
+201 Created
+{ "file": "6f1c…", "component": "vnext-blob-s3", "path": "files[]", "name": "scan.tiff", "mimeType": "image/tiff",
+  "size": 31457280, "eTag": "<sha256 of the bytes received>", "expiresAt": "2026-10-31T13:00:00+00:00" }
+```
+
+Then reference the upload where the field lives, in a start or transition body, before `expiresAt`:
+
+```json
+{ "attributes": { "files": [ { "file": "6f1c…", "documentType": "invoice" } ] } }
+```
+
+- `path` is the field path as the schema folds it: `passport`, `customer.tax`, `files[]`, `documents[].doc`. Unknown
+  path, a field whose `transport` is `inline`, or a missing `Content-Length` is `400` `Instance:100048`. A body above
+  `MaxBytes` is `413` before any byte is stored. A store failure is `503` `Instance:100047`.
+- The body is read from the request stream into one buffer of exactly `Content-Length` bytes (never a JSON string,
+  never base64), hashed, and handed to the field's Dapr binding as one message: a Dapr output binding takes the whole
+  object, so the hop to the sidecar is buffered. `size` and `eTag` are computed from the bytes received, never taken
+  from the client; a body shorter or longer than its `Content-Length` is not stored.
+- The upload is **staged** in the distributed cache (`vnext:{domain}:file-upload:{file}`) for
+  `FileStorage:Upload:TicketTtlMinutes` (default 60). Nothing about it is in any instance yet.
+- On the start or transition, a content-less `{ "file": … }` that is not an echo of the instance's own `LatestData` is
+  looked up among the staged uploads. It is accepted only for the **same flow, path and component** it was uploaded for,
+  once: the ticket is taken out of the staging store atomically (read and removed under a lock keyed by the file id)
+  before anything is written, so of two requests claiming the same upload at once only one gets it; the other is `400`.
+  The swap writes the handle with this instance as `owner`; a request that fails after the take (a store failure) puts
+  the ticket back until it expires. The same upload twice in one body, an expired or unknown id, or an upload made for
+  another path is `400` `Instance:100048`. Other members of the
+  node (`documentType`) are kept, as for inline uploads.
+- Knowing the GUID is the claim: it is random and only the uploader received it. The upload route carries no runtime
+  authorization, like `start`; gate it at the gateway the same way.
+- The route is excluded from raw-body capture (`RawRequestBodyBufferingMiddleware`, which would otherwise read the
+  request into memory first) and raises the request size limit to `MaxBytes` for itself only. Aether's body logging
+  does not read the request while request-body logging is off; it buffers only the small ticket response.
 
 ## Where the swap happens
 
@@ -178,6 +237,33 @@ After schema validation, before anything is persisted or enqueued:
 - `Content-Encoding: identity` is set on purpose: compression and `Range` do not mix (the response
   compression middleware would gzip an already-sliced `206` body), and a pre-set encoding makes it skip the
   response.
+- **Streamed.** The body is written from a stream (`IInstanceFileAppService.OpenAsync` → `FileStreamResult`) over the
+  binding's `get`, which is the whole object, [verified](#integrity-of-what-the-store-returns) before a byte is served.
+  `Range` is sliced from that buffer (a network saving, not a memory saving).
+- **Response buffering by Aether's body-logging middleware.** `UseHttpBodyLogging` copies every response that is not in
+  `Telemetry:Logging:ExcludedPaths` into a `MemoryStream` before sending it, even with body logging off, so a
+  downloaded file is held in memory once more on its way out. Adding `/functions/file$` and
+  `/internal/file$` to that list removes the copy, but Aether's tracing filter uses the **same** list
+  (`Logging.ExcludedPaths ∪ Tracing.ExcludedPaths`): the routes then lose their HTTP server span. The shipped
+  configuration keeps the spans; an operator who prefers the memory saving adds the two patterns. The clean fix is in
+  Aether (skip the response copy when response-body logging is off).
+
+### Integrity of what the store returns
+
+Every read (`functions/file`, `internal/file`, `GetFileAsync`) checks the stored
+bytes against the handle before serving them (`StoredFileVerifier`, vnext-client-sdk-core#145):
+
+| Stored bytes | Result |
+|---|---|
+| Length = `size` and sha256 = `eTag` | Served |
+| A complete `aws-chunked` frame whose payload matches the handle | The payload is served; warning `20512` `FileRecoveredFromChunkedFrame` |
+| Anything else | `503` `Instance:100047` `FileStoreUnavailable`; error `20513` `FileIntegrityMismatch` names the stored and expected sizes |
+
+Why the frame case exists: Dapr 1.17+ `bindings.aws.s3` sends every upload over TLS as `aws-chunked` with a CRC32
+trailer (`STREAMING-UNSIGNED-PAYLOAD-TRAILER`), and an S3-compatible server that does not decode that encoding stores
+the frame itself (a 6265-byte PDF becomes a 6309-byte object). Over plain HTTP the binding signs the full payload and
+stores the bytes as sent. See [S3 writes through Dapr](#s3-writes-through-dapr-aws-chunked) for why the runtime
+cannot stop the framing on write and what an operator can do.
 
 ### `GetFileAsync` and `internal/file` (service-to-service)
 
@@ -194,28 +280,108 @@ from the caller. Whoever owns ingress/NetworkPolicy must keep the route unreacha
 `GetFileAsync` is a scripting API, and scripts run only in the Orchestration host; the Execution host has no
 file reader, so the call is unavailable there (in practice never reached).
 
+## Processing files in scripts
+
+A script reads a stored file, processes it with System.IO streams and writes the result back as an x-storage file
+(vnext-client-sdk-core#142-A):
+
+```csharp
+var source = await GetFileAsync(context.Runtime.Domain, context.Instance.Flow, context.Instance.Id.ToString(), handle.file);
+using var input = source.OpenRead();                    // read-only, seekable MemoryStream over the verified bytes
+var output = new MemoryStream();
+// … hand input/output to a plugin library (PDF, TIFF, image) mounted in Scripting:Sandbox:PluginDirectory …
+output.Position = 0;
+var converted = await PutFileAsync(context.Runtime.Domain, context.Instance.Flow, context.Instance.Id.ToString(),
+    "vnext-blob-s3", output, "converted.pdf", "application/pdf");
+return new ScriptResponse { Data = new { convertedDocument = converted } };   // an x-storage path of the master schema
+```
+
+- `ScriptFile.OpenRead()` wraps the bytes in a new read-only stream on every call. The sandbox allows the System.IO
+  stream types, not the file system ([custom-script-helpers § Stream types](../custom-script-helpers.md)).
+- `PutFileAsync(domain, flow, instance, component, byte[] | Stream, name?, mimeType?)` stores the bytes and returns a
+  `ScriptStoredFile` in the persisted handle shape (`component`, `file`, `name`, `mimeType`, `size`, `eTag`, `owner`).
+  Size and eTag are computed from the bytes written. Placed at an x-storage path of the mapping or task output, it is a
+  valid handle in the Trusted swap and is kept as is. Rules: the domain must be served here; the component must be an
+  `x-storage` binding of that flow (latest version) or in `FileStorage:AllowedBindings`; the size is capped by
+  `FileStorage:Upload:MaxBytes`. A refusal or a store failure throws (the task fails like any helper failure). A stream
+  that cannot report its length is buffered first.
+- `FileObjectKey(file)` answers the object key of a stored file (`FileStorage:KeyPrefix` + file id; a non-GUID is
+  refused) for a `DaprBinding` task that reads, lists or deletes it (see [Deleting and listing](#deleting-and-listing-objects)).
+- An object a script writes but no output keeps is an orphan, like any unreferenced object.
+
+## Deleting and listing objects
+
+The runtime has no delete endpoint and never deletes an object (`file-store-no-delete`). A flow that owns retention
+deletes, reads or lists objects itself with a `DaprBinding` task (type `2`) on the store's Dapr binding component
+(vnext-client-sdk-core#142-B/D):
+
+- **Reach the component.** x-storage components are scoped to the orchestration app-id, while binding tasks run in
+  the Execution service by default. Either set `Workflow:TaskInvocation:Modes:daprbinding = Local` (the task then runs
+  from the orchestration sidecar, `LocalDaprBindingTaskInvoker`), or scope the component to the Execution app-id too.
+- **Name the object.** In the input mapping, set the per-call shape on the task:
+  `task.SetMetadata(new() { ["key"] = FileObjectKey(handle.file) })` (`bindings.aws.s3`; `fileName` for
+  `bindings.localstorage`), and `task.SetOperation("delete" | "get" | "list")` / `task.SetData(…)` when the definition
+  does not fix them. `FileObjectKey` is `FileStorage:KeyPrefix` + file id.
+- **Read the answer.** The task's response reaches the output mapping: `Data` is the binding's body as JSON when it
+  parses (e.g. `list`), as text, or as base64 (`get` of a binary object); `Metadata["DataEncoding"]` says which;
+  `Headers` holds the binding's response metadata. A failure carries the sidecar's reason (for example
+  `couldn't find output binding …`) instead of the generic Dapr client message.
+- **Clear the field.** After a delete, set the field to `null` (an `updateData` or a mapping): a handle whose object is
+  gone answers `503` (the binding reports a missing object like an outage).
+
+Retention tied to the instance ("delete seven days after completion") cannot run on the completed instance itself (a
+completed instance takes no transition): run it from a scheduled housekeeping flow that queries completed instances
+(`GetInstances`) and deletes their objects, or keep the instance in a retention state with a timeout before its finish.
+
 ## Configuration
 
 | Where | Setting |
 |---|---|
 | Runtime | `FileStorage:KeyPrefix` (string, default empty): prepended to every object key, e.g. `vnext-runtime/` in a shared bucket. **Never change it after the first write**: stored handles carry no key, so existing objects become unreachable |
+| Runtime | `FileStorage:Upload:MaxBytes` (default 67108864, the sidecar's `--max-body-size`) and `FileStorage:Upload:TicketTtlMinutes` (default 60): [streamed uploads](#streamed-uploads-transport) |
 | Runtime | `FileStorage:AllowedBindings` (string list, default empty): binding components a handle may name besides the flow's own declared `x-storage` bindings, for files handed across flows (SubFlow input, a mapping copying a parent's handle). **Helm deployments list their `blobStorageComponents` names here** (`FileStorage__AllowedBindings__0=...`) |
 | Helm (`vnext-helm-charts`) | `global.blobStorageComponents: []`, rendered like `pubsubComponents`; scoped to the **orchestrator** app id only |
 | Local | `etc/orchestration/dapr/components/vnext-blob-local.yaml` (`bindings.localstorage`, `rootPath: /blobs`); orchestration sidecar started with `--max-body-size 64Mi` (all compose files) |
 
+## S3 writes through Dapr (aws-chunked)
+
+The runtime never talks to a store directly: every write is a `create` on the component's Dapr binding. Since Dapr
+1.17, `bindings.aws.s3` uploads through the AWS SDK's transfer manager, which is built without options
+(`transfermanager.New(s3Client)` in components-contrib `bindings/aws/s3/s3.go`, unchanged on `main`) and therefore
+always adds a CRC32 checksum. Over `https://` the SDK sends that checksum as a trailer, so the body goes out as
+`Content-Encoding: aws-chunked` with `x-amz-content-sha256: STREAMING-UNSIGNED-PAYLOAD-TRAILER`. AWS S3, MinIO, Ceph,
+LocalStack, s3mock, moto and SeaweedFS decode it; a store that does not keeps the frame as the object
+(vnext-client-sdk-core#145). The transfer manager's checksum setting takes precedence over the SDK configuration, so
+`AWS_REQUEST_CHECKSUM_CALCULATION=when_required` on the sidecar does **not** remove it (measured: daprd 1.18.2 stores
+6309 bytes for a 6265-byte file with and without it). No component metadata controls it.
+
+What the runtime does: every read is [verified](#integrity-of-what-the-store-returns), and a framed object whose payload
+matches its handle is served unframed, so files written through Dapr 1.17+ read back exactly. What it cannot do is
+store the object unframed. A consumer that reads the bucket directly (not through vNext) sees the frame. Operator
+options, in order of preference:
+
+| Option | Effect |
+|---|---|
+| Use a store that decodes `aws-chunked` (enable trailer/streaming-signature support on it) | Objects are stored as the file; nothing else changes |
+| Reach the store over `http://` inside a trusted network (`disableSSL: "true"`) | The SDK signs the full payload, no frame; traffic is unencrypted |
+| Pin the orchestration sidecar to daprd 1.16.x (`dapr.io/sidecar-image`) | 1.16 uploads unframed; a stopgap that holds back every other Dapr fix |
+| Upstream: let components-contrib pass a checksum option to the transfer manager | The real fix; needs a Dapr release |
+
 ## Dapr limits
 
 - The binding `get` is **buffered**: the whole object is read into memory, so a `Range` request is an
-  in-memory slice (a network saving, not a memory saving).
+  in-memory slice (a network saving, not a memory saving). The same holds for `create`: one message per object.
 - **Request size.** A client request first hits Kestrel `Kestrel:Limits:MaxRequestBodySize` (10485760 = 10 MiB
   in the orchestration and execution `appsettings.json`; the raw-body buffer is bound to it). Oversize
   requests get `413` before any swap. Base64 inflates the file by about 4/3, so one request carries roughly
   7.5 MiB of file unless a host raises the limit (raise it together with the sidecar's).
 - The sidecar's `--max-body-size 64Mi` applies to the binding call and the Dapr hops, not to the client
   request; the remote gateway enforces the same 64 MiB cap on a cross-domain `internal/file` read.
-- Large-body behaviour of the Dapr binding path (dapr/dapr#9177) is **unverified** here: the measurement
-  that would settle it is pending (integration window). Do not quote a throughput or size claim for files
-  near the cap until it has run.
+- The runtime's Dapr client has no receive cap of its own (gRPC's 4 MB default is lifted in `AddDaprClients`): before,
+  a binding `get` of an object above 4 MB failed with `ResourceExhausted` and the read answered `503`. The sidecar's
+  `--max-body-size` is the bound in both directions.
+- Measured locally (daprd 1.16.19, MinIO): a 30 MiB file uploads and reads back through `bindings.aws.s3`
+  (FileStreamingLab). Files near the 64 MiB cap and throughput (dapr/dapr#9177) are not measured.
 
 ## Known limitations
 
@@ -232,6 +398,7 @@ file reader, so the call is unavailable there (in practice never reached).
 | Overlapping async proxy revert | Two overlapping async requests on one parent: one failed-forward revert can clear the other's Busy stamp (self-heals on the next child notification) |
 | Missing object looks like an outage | A `get` of an object that is gone from the store reports `503`, like an outage |
 | Master schema unavailable is a `503` | No longer fails open: a payload carrying a `content`/`file` member is refused with `503` `FileSchemaUnavailable` while the master schema cannot be loaded (see Write rules); payloads without one proceed |
+| Unclaimed streamed uploads | An upload never referenced before its ticket expires leaves its object in the store; the staging entry expires, the object does not (use the store's lifecycle rules, as for other orphans) |
 | Duplicate property names | A payload with duplicate member names in a file node is handled inconsistently between the content probe and the swap |
 | Master schema reused as a transition schema | A transition schema validates the **write** shape. If a flow reuses its master schema as a transition schema, the `x-storage` nodes describe the persisted handle and cannot declare `content` (publish error), so a strict (`additionalProperties: false`) node rejects the upload. Give transitions their own schema for file fields |
 

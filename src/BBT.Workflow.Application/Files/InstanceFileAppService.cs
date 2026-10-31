@@ -37,6 +37,47 @@ public sealed class InstanceFileAppService(
     /// <inheritdoc />
     public async Task<Result<InstanceFileContent>> ReadAsync(InstanceFileRequest request, CancellationToken cancellationToken)
     {
+        var resolved = await ResolveAsync(request, cancellationToken);
+        if (!resolved.IsSuccess)
+            return Result<InstanceFileContent>.Fail(resolved.Error);
+        var (instanceId, handle, path) = resolved.Value;
+
+        if (MatchesIfNoneMatch(request.IfNoneMatch, handle.ETag))
+            return Result<InstanceFileContent>.Ok(new InstanceFileContent(handle, path, null, NotModified: true));
+
+        var bytes = await ReadVerifiedAsync(instanceId, handle, cancellationToken);
+        return bytes.IsSuccess
+            ? Result<InstanceFileContent>.Ok(new InstanceFileContent(handle, path, bytes.Value, NotModified: false))
+            : Result<InstanceFileContent>.Fail(bytes.Error);
+    }
+
+    /// <inheritdoc />
+    public async Task<Result<InstanceFileStream>> OpenAsync(InstanceFileRequest request, CancellationToken cancellationToken)
+    {
+        var resolved = await ResolveAsync(request, cancellationToken);
+        if (!resolved.IsSuccess)
+            return Result<InstanceFileStream>.Fail(resolved.Error);
+        var (instanceId, handle, path) = resolved.Value;
+
+        if (MatchesIfNoneMatch(request.IfNoneMatch, handle.ETag))
+            return Result<InstanceFileStream>.Ok(new InstanceFileStream(handle, path, null, NotModified: true));
+
+        // A Dapr binding answers the whole object: it is verified (and recovered from an aws-chunked frame) before a
+        // byte is served, then streamed to the response from memory.
+        var bytes = await ReadVerifiedAsync(instanceId, handle, cancellationToken);
+        return bytes.IsSuccess
+            ? Result<InstanceFileStream>.Ok(new InstanceFileStream(
+                handle, path, new MemoryStream(bytes.Value!, writable: false), NotModified: false))
+            : Result<InstanceFileStream>.Fail(bytes.Error);
+    }
+
+    /// <summary>
+    /// The lookup and authorization both reads share: the handle at one of the flow's x-storage paths in the latest
+    /// data, after the state's queryRoles (403) and the path's x-roles (404) when the caller is public.
+    /// </summary>
+    private async Task<Result<(Guid InstanceId, FileHandle Handle, string Path)>> ResolveAsync(
+        InstanceFileRequest request, CancellationToken cancellationToken)
+    {
         ArgumentNullException.ThrowIfNull(request);
         // Same treatment as the data/state functions: a route domain that is not this runtime's is 404 (NotFoundDomain).
         runtimeInfoProvider.Check(request.Domain);
@@ -44,11 +85,11 @@ public sealed class InstanceFileAppService(
         var instance = await instanceRepository.FindByIdentifierAsReadOnlyAsync(request.Instance, cancellationToken);
         // A different flow sharing the schema must not serve this route's files.
         if (instance is null || !string.Equals(instance.Flow, request.Flow, StringComparison.Ordinal))
-            return Result<InstanceFileContent>.Fail(WorkflowErrors.FileNotFound(request.File));
+            return Result<(Guid, FileHandle, string)>.Fail(WorkflowErrors.FileNotFound(request.File));
 
         var flow = await componentCacheStore.GetFlowAsync(request.Domain, instance.Flow, instance.FlowVersion, cancellationToken);
         if (!flow.IsSuccess)
-            return Result<InstanceFileContent>.Fail(flow.Error);
+            return Result<(Guid, FileHandle, string)>.Fail(flow.Error);
         var workflow = flow.Value!;
 
         // The state's queryRoles are decided BEFORE the file is located: a denied caller gets 403 whether or not the
@@ -58,30 +99,50 @@ public sealed class InstanceFileAppService(
         {
             var allowed = await AuthorizeQueryAsync(workflow, instance, authorization, cancellationToken);
             if (!allowed.IsSuccess)
-                return Result<InstanceFileContent>.Fail(allowed.Error);
+                return Result<(Guid, FileHandle, string)>.Fail(allowed.Error);
             callerRoles = allowed.Value!;
         }
 
         var located = await LocateAsync(workflow, instance, request.File, cancellationToken);
         if (!located.IsSuccess)
-            return Result<InstanceFileContent>.Fail(located.Error);
+            return Result<(Guid, FileHandle, string)>.Fail(located.Error);
         if (located.Value is not { } found)
-            return Result<InstanceFileContent>.Fail(WorkflowErrors.FileNotFound(request.File));
+            return Result<(Guid, FileHandle, string)>.Fail(WorkflowErrors.FileNotFound(request.File));
         var (handle, path, field) = found;
 
         if (request.Authorization is { } pathAuthorization
             && !await IsPathVisibleAsync(workflow, instance, field, callerRoles!, pathAuthorization, cancellationToken))
-            return Result<InstanceFileContent>.Fail(WorkflowErrors.FileNotFound(request.File));
+            return Result<(Guid, FileHandle, string)>.Fail(WorkflowErrors.FileNotFound(request.File));
 
         logger.FileRead(request.Domain, instance.Flow, instance.Id.ToString(), handle.File, request.Authorization is not null);
+        return Result<(Guid, FileHandle, string)>.Ok((instance.Id, handle, path));
+    }
 
-        if (MatchesIfNoneMatch(request.IfNoneMatch, handle.ETag))
-            return Result<InstanceFileContent>.Ok(new InstanceFileContent(handle, path, null, NotModified: true));
-
+    private async Task<Result<byte[]>> ReadVerifiedAsync(Guid instanceId, FileHandle handle, CancellationToken cancellationToken)
+    {
         var bytes = await blobStore.GetAsync(handle.Component, handle.File, cancellationToken);
-        return bytes.IsSuccess
-            ? Result<InstanceFileContent>.Ok(new InstanceFileContent(handle, path, bytes.Value, NotModified: false))
-            : Result<InstanceFileContent>.Fail(bytes.Error);
+        return bytes.IsSuccess ? Verify(instanceId, handle, bytes.Value!) : Result<byte[]>.Fail(bytes.Error);
+    }
+
+    /// <summary>
+    /// The stored bytes are never trusted to be the file: they must match the handle's <c>size</c> and <c>eTag</c>
+    /// (vnext-client-sdk-core#145). An aws-chunked framed object whose payload matches is recovered; anything else is
+    /// <c>FileStoreUnavailable</c> (503) with the reason in the log, never a silently corrupt body.
+    /// </summary>
+    private Result<byte[]> Verify(Guid instanceId, FileHandle handle, byte[] stored)
+    {
+        var check = StoredFileVerifier.Check(handle, stored);
+        switch (check.State)
+        {
+            case StoredFileState.Intact:
+                return Result<byte[]>.Ok(check.Content!);
+            case StoredFileState.RecoveredFromChunkedFrame:
+                logger.FileRecoveredFromChunkedFrame(instanceId, handle.Component, handle.File, stored.LongLength, handle.Size);
+                return Result<byte[]>.Ok(check.Content!);
+            default:
+                logger.FileIntegrityMismatch(instanceId, handle.Component, handle.File, stored.LongLength, handle.Size, handle.ETag);
+                return Result<byte[]>.Fail(WorkflowErrors.FileStoreUnavailable(handle.Component));
+        }
     }
 
     /// <summary>

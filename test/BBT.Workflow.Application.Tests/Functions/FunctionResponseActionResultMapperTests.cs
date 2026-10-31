@@ -95,4 +95,43 @@ public sealed class FunctionResponseActionResultMapperTests
         contentResult.Content!.ShouldContain("\"a\"");
         contentResult.Content!.ShouldContain("1");
     }
+
+    // vnext-client-sdk-core#99/#142-E: binary raw bodies are written as bytes — in process and after a cache hit.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async System.Threading.Tasks.Task ToActionResult_BinaryBody_IsWrittenAsBytes(bool afterCacheRoundTrip)
+    {
+        var pdf = new byte[] { 0x25, 0x50, 0x44, 0x46, 0x80, 0xFF, 0x00 };
+        var output = new FunctionResponseOutput
+        {
+            Data = pdf,
+            IsBinary = true,
+            Headers = new Dictionary<string, string> { ["Content-Type"] = "application/pdf" },
+        };
+        if (afterCacheRoundTrip)
+            output = System.Text.Json.JsonSerializer.Deserialize<FunctionResponseOutput>(System.Text.Json.JsonSerializer.Serialize(output))!;
+
+        var httpContext = new DefaultHttpContext();
+        var body = new System.IO.MemoryStream();
+        httpContext.Response.Body = body;
+        var actionResult = FunctionResponseActionResultMapper.ToActionResult(Result<FunctionResponseOutput>.Ok(output), httpContext);
+        await actionResult.ExecuteResultAsync(new ActionContext(httpContext, new Microsoft.AspNetCore.Routing.RouteData(),
+            new Microsoft.AspNetCore.Mvc.Abstractions.ActionDescriptor()));
+
+        body.ToArray().ShouldBe(pdf);
+        httpContext.Response.ContentType.ShouldBe("application/pdf");
+        httpContext.Response.ContentLength.ShouldBe(pdf.Length);
+    }
+
+    [Fact]
+    public async System.Threading.Tasks.Task ToActionResult_BinaryBodyWithoutAType_IsOctetStream()
+    {
+        var httpContext = new DefaultHttpContext { Response = { Body = new System.IO.MemoryStream() } };
+        var actionResult = FunctionResponseActionResultMapper.ToActionResult(
+            Result<FunctionResponseOutput>.Ok(new FunctionResponseOutput { Data = new byte[] { 1 }, IsBinary = true }), httpContext);
+        await actionResult.ExecuteResultAsync(new ActionContext(httpContext, new Microsoft.AspNetCore.Routing.RouteData(),
+            new Microsoft.AspNetCore.Mvc.Abstractions.ActionDescriptor()));
+        httpContext.Response.ContentType.ShouldBe("application/octet-stream");
+    }
 }

@@ -653,6 +653,33 @@ public sealed class FunctionAppService(
         int? outputStatusCode = null)
     {
         var (singleStatusCode, singleHeaders) = ExtractSingleTaskHttpMetadata(function, scriptContext);
+        var headers = NormalizeHeaders(outputHeaders) ?? singleHeaders;
+
+        // A binary body (bytes, or a file read with GetFileAsync) is written as bytes. A ScriptFile without an
+        // explicit Content-Type answers with its own media type.
+        var binary = data switch
+        {
+            byte[] bytes => bytes,
+            Scripting.Functions.ScriptFile file => file.Content,
+            _ => null,
+        };
+        if (binary is not null)
+        {
+            if (data is Scripting.Functions.ScriptFile { MimeType: { } fileType }
+                && !string.IsNullOrWhiteSpace(fileType)
+                && headers?.Keys.Any(k => string.Equals(k, "Content-Type", StringComparison.OrdinalIgnoreCase)) != true)
+            {
+                headers = new Dictionary<string, string>(headers ?? [], StringComparer.OrdinalIgnoreCase) { ["Content-Type"] = fileType };
+            }
+
+            return new FunctionResponseOutput
+            {
+                Data = binary,
+                StatusCode = outputStatusCode ?? singleStatusCode,
+                Headers = headers,
+                IsBinary = true,
+            };
+        }
 
         // Output script may set its own headers/status (multi-task scenario); when it does,
         // prefer them. Otherwise fall back to single-task metadata (existing behavior preserved).
@@ -660,7 +687,7 @@ public sealed class FunctionAppService(
         {
             Data = data,
             StatusCode = outputStatusCode ?? singleStatusCode,
-            Headers = NormalizeHeaders(outputHeaders) ?? singleHeaders
+            Headers = headers
         };
     }
 

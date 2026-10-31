@@ -4861,6 +4861,87 @@ public static partial class WorkflowLogs
         string path,
         string component);
 
+    /// <summary>
+    /// Logs that an x-storage object was stored inside an aws-chunked frame (a Dapr 1.17+ S3 upload kept as is by a
+    /// server that does not decode it) and the decoded payload, which matches the handle, was served instead.
+    /// The 2049x block is full; file events continue above the 205xx block.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20512,
+        Level = LogLevel.Warning,
+        Message = "File {File} in {Component} of instance {InstanceId} is stored aws-chunked framed ({StoredLength} bytes for {Size}); the decoded payload matches its handle and is served")]
+    public static partial void FileRecoveredFromChunkedFrame(
+        this ILogger logger,
+        Guid instanceId,
+        string component,
+        string file,
+        long storedLength,
+        long size);
+
+    /// <summary>Logs that the bytes read from the store do not match the handle (size or sha256); they are not served.</summary>
+    [LoggerMessage(
+        EventId = 20513,
+        Level = LogLevel.Error,
+        Message = "File {File} in {Component} of instance {InstanceId} does not match its handle: stored {StoredLength} bytes, handle {Size} bytes / eTag {ETag}; the read is refused")]
+    public static partial void FileIntegrityMismatch(
+        this ILogger logger,
+        Guid instanceId,
+        string component,
+        string file,
+        long storedLength,
+        long size,
+        string eTag);
+
+    /// <summary>Logs a streamed upload stored and staged for a start or transition. Content is never logged.</summary>
+    [LoggerMessage(
+        EventId = 20515,
+        Level = LogLevel.Information,
+        Message = "File uploaded: flow {Flow}, path {Path}, component {Component}, file {File}, size {Size}")]
+    public static partial void FileUploaded(
+        this ILogger logger,
+        string flow,
+        string path,
+        string component,
+        string file,
+        long size);
+
+    /// <summary>Logs a streamed upload refused before anything was stored.</summary>
+    [LoggerMessage(
+        EventId = 20516,
+        Level = LogLevel.Warning,
+        Message = "File upload rejected: flow {Flow}, path {Path}, reason {Reason}")]
+    public static partial void FileUploadRejected(
+        this ILogger logger,
+        string flow,
+        string path,
+        string reason);
+
+    /// <summary>Logs a staged upload claimed by an instance: it became that instance's handle.</summary>
+    [LoggerMessage(
+        EventId = 20517,
+        Level = LogLevel.Information,
+        Message = "Uploaded file claimed: instance {InstanceId}, path {Path}, component {Component}, file {File}")]
+    public static partial void FileUploadClaimed(
+        this ILogger logger,
+        Guid instanceId,
+        string path,
+        string component,
+        string file);
+
+    /// <summary>Logs a file a script stored with PutFileAsync. Content is never logged.</summary>
+    [LoggerMessage(
+        EventId = 20518,
+        Level = LogLevel.Information,
+        Message = "File written by script: domain {Domain}, flow {Flow}, instance {Instance}, component {Component}, file {File}, size {Size}")]
+    public static partial void FileWrittenByScript(
+        this ILogger logger,
+        string domain,
+        string flow,
+        string instance,
+        string component,
+        string file,
+        long size);
+
     #endregion
 
     #region Flow Version Policy (205xx)

@@ -68,6 +68,65 @@ public abstract class ScriptBase
             .ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Stores bytes a script produced (a converted, merged or compressed document) as an x-storage file of the
+    /// instance <paramref name="instance"/> of <paramref name="domain"/>/<paramref name="flow"/> — the owner recorded in
+    /// the handle, normally the script's own instance (<c>context.Runtime.Domain</c>, <c>context.Instance.Flow</c>,
+    /// <c>context.Instance.Id</c>). <paramref name="component"/> must be an x-storage binding of that flow or in
+    /// <c>FileStorage:AllowedBindings</c>. Put the returned handle at an x-storage path of the mapping's output: the
+    /// runtime keeps it as the field's handle (the bytes never enter the record).
+    /// </summary>
+    /// <returns>The stored file's handle; size and eTag are computed from the bytes written.</returns>
+    /// <exception cref="InvalidOperationException">No file writer is injected, or the write failed.</exception>
+    protected Task<ScriptStoredFile> PutFileAsync(
+        string domain, string flow, string instance, string component, byte[] content, string? name = null, string? mimeType = null)
+    {
+        ArgumentNullException.ThrowIfNull(content);
+        return PutFileAsync(domain, flow, instance, component, new System.IO.MemoryStream(content, writable: false), name, mimeType);
+    }
+
+    /// <summary>
+    /// <see cref="PutFileAsync(string, string, string, string, byte[], string?, string?)"/> for a stream; a stream that
+    /// cannot report its length is buffered first.
+    /// </summary>
+    protected async Task<ScriptStoredFile> PutFileAsync(
+        string domain, string flow, string instance, string component, System.IO.Stream content, string? name = null, string? mimeType = null)
+    {
+        if (Services?.FileWriter is not { } writer)
+            throw new InvalidOperationException("File writer is not available. Ensure services are injected.");
+
+        ArgumentException.ThrowIfNullOrWhiteSpace(domain);
+        ArgumentException.ThrowIfNullOrWhiteSpace(flow);
+        ArgumentException.ThrowIfNullOrWhiteSpace(instance);
+        ArgumentException.ThrowIfNullOrWhiteSpace(component);
+        ArgumentNullException.ThrowIfNull(content);
+
+        if (!content.CanSeek)
+        {
+            var buffered = new System.IO.MemoryStream();
+            await content.CopyToAsync(buffered).ConfigureAwait(false);
+            buffered.Position = 0;
+            content = buffered;
+        }
+
+        return await writer.WriteAsync(domain, flow, instance, component, content, content.Length - content.Position,
+            name, mimeType, System.Threading.CancellationToken.None).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// The object key of the stored file <paramref name="file"/> (the handle's <c>file</c>) in its store, for a
+    /// <c>DaprBinding</c> task that deletes, reads or lists it: set it as the binding's <c>key</c> (S3) or
+    /// <c>fileName</c> (local storage) metadata. Includes <c>FileStorage:KeyPrefix</c>.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">No file writer is injected.</exception>
+    protected string FileObjectKey(string file)
+    {
+        if (Services?.FileWriter is not { } writer)
+            throw new InvalidOperationException("File writer is not available. Ensure services are injected.");
+        ArgumentException.ThrowIfNullOrWhiteSpace(file);
+        return writer.ObjectKey(file);
+    }
+
     #endregion
 
     #region Secret Functions

@@ -114,9 +114,13 @@ public static class WorkflowInfrastructureModuleServiceCollectionExtensions
             sp => sp.GetRequiredService<BBT.Workflow.Encryption.InstanceDataProtector>());
         services.TryAddScoped<IInstanceSecretPreloader, BBT.Workflow.Encryption.InstanceSecretPreloader>();
         
-        // x-storage blob store over a Dapr output binding; KeyPrefix is the only setting.
+        // x-storage blob store: always the Dapr output binding named by the component (no store SDK in the runtime).
         services.AddOptions<BBT.Workflow.Files.FileStorageOptions>()
-            .BindConfiguration(BBT.Workflow.Files.FileStorageOptions.Section);
+            .BindConfiguration(BBT.Workflow.Files.FileStorageOptions.Section)
+            .ValidateOnStart();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            Microsoft.Extensions.Options.IValidateOptions<BBT.Workflow.Files.FileStorageOptions>,
+            BBT.Workflow.Files.FileStorageOptionsValidator>());
         services.TryAddSingleton<BBT.Workflow.Files.IFileBlobStore, BBT.Workflow.Files.DaprBindingFileBlobStore>();
 
         // Explicit InstanceData persist path (per-instance FOR UPDATE lock + versioning).

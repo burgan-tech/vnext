@@ -131,6 +131,8 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
         // Application Services
         services.TryAddScoped<IFileOffloadService, FileOffloadService>();
         services.TryAddScoped<IInstanceFileAppService, InstanceFileAppService>();
+        services.TryAddScoped<IFileStagingStore, DistributedFileStagingStore>();
+        services.TryAddScoped<IFileUploadAppService, FileUploadAppService>();
         services.AddScoped<IDefinitionAppService, DefinitionAppService>();
         services.AddScoped<RowSecurityPublishCheck>();
         services.AddScoped<BBT.Workflow.Authorization.RowSecurity.IRowSecurityService, BBT.Workflow.Authorization.RowSecurity.RowSecurityService>();

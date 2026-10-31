@@ -52,7 +52,7 @@ public class SandboxedScriptingTests
     public async Task Sandbox_Blocks_Banned_Namespace()
     {
         var evaluator = new CSharpEvaluator(EnabledSandbox());
-        const string code = "public class C : ISandboxTestCalc { public int Calc() { var s = new System.IO.MemoryStream(); return (int)s.Length; } }";
+        const string code = "public class C : ISandboxTestCalc { public int Calc() { var s = System.IO.File.Exists(\"x\"); return s ? 1 : 0; } }";
 
         var ex = await Should.ThrowAsync<ScriptCompilationException>(async () =>
             await evaluator.CompileToInstanceAsync<ISandboxTestCalc>(code, extraReferences: [ContractRef]));
@@ -107,7 +107,7 @@ public class SandboxedScriptingTests
         var options = EnabledSandbox();
         options.BannedNamespaces = [];
         var evaluator = new CSharpEvaluator(options);
-        const string code = "public class C : ISandboxTestCalc { public int Calc() { var s = new System.IO.MemoryStream(); return (int)s.Length; } }";
+        const string code = "public class C : ISandboxTestCalc { public int Calc() { var s = System.IO.File.Exists(\"x\"); return s ? 1 : 0; } }";
 
         await Should.ThrowAsync<ScriptCompilationException>(async () =>
             await evaluator.CompileToInstanceAsync<ISandboxTestCalc>(code, extraReferences: [ContractRef]));
@@ -165,7 +165,7 @@ public class SandboxedScriptingTests
         // Even with the sandbox disabled, the mandatory bans are always enforced so mapping code can
         // never use IO/network/reflection/etc.
         var evaluator = new CSharpEvaluator(new ScriptSandboxOptions { Enabled = false });
-        const string code = "public class C : ISandboxTestCalc { public int Calc() { var s = new System.IO.MemoryStream(); return 42; } }";
+        const string code = "public class C : ISandboxTestCalc { public int Calc() { var s = System.IO.File.Exists(\"x\"); return 42; } }";
 
         var ex = await Should.ThrowAsync<ScriptCompilationException>(async () =>
             await evaluator.CompileToInstanceAsync<ISandboxTestCalc>(

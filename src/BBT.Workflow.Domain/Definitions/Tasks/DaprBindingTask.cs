@@ -41,6 +41,32 @@ public sealed class DaprBindingTask : WorkflowTask
     public JsonElement? Data { get; private set; }
 
     /// <summary>
+    /// Sets the binding operation from a mapping (e.g. <c>get</c>, <c>list</c>, <c>delete</c>), like the other
+    /// routable task types expose their call shape to scripts.
+    /// </summary>
+    public void SetOperation(string operation)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(operation);
+        Operation = operation;
+    }
+
+    /// <summary>Sets the request data sent to the binding (serialized as JSON).</summary>
+    public void SetData(dynamic? data)
+    {
+        Data = data is null ? null : JsonSerializer.SerializeToElement(data);
+    }
+
+    /// <summary>
+    /// Replaces the binding metadata from a mapping — the per-call values a definition cannot know, such as the
+    /// object <c>key</c> of the x-storage file to read or delete (<c>ScriptBase.FileObjectKey(file)</c>).
+    /// </summary>
+    public void SetMetadata(Dictionary<string, string?> metadata)
+    {
+        ArgumentNullException.ThrowIfNull(metadata);
+        Metadata = JsonSerializer.SerializeToElement(metadata);
+    }
+
+    /// <summary>
     /// Internal property setters for object pooling
     /// </summary>
     internal void SetBindingNameInternal(string bindingName) => BindingName = bindingName;

@@ -15,6 +15,9 @@ public sealed class FileStorageOptions
     /// </summary>
     public List<string> AllowedBindings { get; set; } = [];
 
+    /// <summary>Streamed uploads (<c>POST …/workflows/{flow}/files</c>, <c>x-storage.transport</c> <c>stream</c>/<c>any</c>).</summary>
+    public FileUploadOptions Upload { get; set; } = new();
+
     /// <summary>The components a handle may name for a flow whose declared x-storage fields are <paramref name="fields"/>.</summary>
     public IReadOnlySet<string> AllowedComponents(IReadOnlyList<Definitions.Schemas.FileStorageField> fields)
     {
@@ -23,4 +26,18 @@ public sealed class FileStorageOptions
             allowed.Add(field.Binding);
         return allowed;
     }
+}
+
+/// <summary>Limits of the streamed upload endpoint.</summary>
+public sealed class FileUploadOptions
+{
+    /// <summary>
+    /// Largest accepted upload in bytes (default 64 MiB, the orchestration sidecar's shipped <c>--max-body-size</c>: the
+    /// file reaches the store as one binding message). Larger requests answer 413 before any byte is stored. Raise it
+    /// together with the sidecar's limit.
+    /// </summary>
+    public long MaxBytes { get; set; } = 64L * 1024 * 1024;
+
+    /// <summary>Minutes an uploaded file may wait to be referenced by a start or transition (default 60).</summary>
+    public int TicketTtlMinutes { get; set; } = 60;
 }
