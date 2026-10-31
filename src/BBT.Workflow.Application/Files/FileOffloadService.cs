@@ -102,63 +102,24 @@ public sealed class FileOffloadService(
         {
             foreach (var (node, path) in FileNodeWalker.Find(root, field).ToList())
             {
-                var hasContent = node.ContainsKey("content");
-                var hasFile = node.ContainsKey("file");
-
-                if (hasContent && hasFile)
-                    return Invalid(request, path, "'content' and 'file' cannot be sent together");
-
-                if (hasContent)
-                {
-                    // x-storage.transport "stream": a client sends the bytes to the upload endpoint, never inline.
-                    if (request.Mode == FileOffloadMode.External && !field.AcceptsInline)
-                        return Invalid(request, path, "the field accepts streamed uploads only (x-storage.transport is \"stream\"); upload the file and reference its 'file'");
-                    if (node["content"] is not JsonValue cv || !cv.TryGetValue<string>(out var b64))
-                        return Invalid(request, path, "'content' must be a base64 string");
-                    byte[] bytes;
-                    try { bytes = Convert.FromBase64String(b64); }
-                    catch (FormatException) { return Invalid(request, path, "'content' is not valid base64"); }
-                    plans.Add(new StorePlan(node, path, field, bytes,
-                        NormalizeName(ReadString(node, "name")), NormalizeMediaType(ReadString(node, "mimeType"))));
-                    continue;
-                }
-
-                if (!hasFile)
-                    continue;
-
-                if (request.Mode == FileOffloadMode.Trusted)
-                {
-                    // Kept as is, but only a handle the runtime could have written: a GUID file id in a component
-                    // the flow declares or the deployment allows (FileStorage:AllowedBindings).
-                    if (FileHandle.TryRead(node) is not { } trusted || !trusted.IsAllowed(allowed))
-                        return Invalid(request, path, "the file reference is not a valid handle of an allowed component");
-                    continue;
-                }
-
-                var fileId = ReadString(node, "file");
-                var match = fileId is null
-                    ? null
-                    : FileNodeWalker.Find(stored, field)
-                        .Select(h => FileHandle.TryRead(h.Node))
-                        .FirstOrDefault(h => h is not null && string.Equals(h.File, fileId, StringComparison.Ordinal));
-                if (match is null)
-                {
-                    // Not an echo: it can only be a streamed upload staged for this flow and path, claimed once.
-                    var staged = await FindStagedAsync(request, field, fileId, cancellationToken);
-                    if (staged is null || !claimed.Add(staged.File))
-                        return Invalid(request, path, "the referenced file is not stored at this path on this instance");
-                    plans.Add(new StagedPlan(node, path, staged));
-                    continue;
-                }
-                // The stored record is not trusted on its own either: an invalid stored handle is never echoed.
-                if (!match.IsAllowed(allowed))
-                    return Invalid(request, path, "the stored file reference is not a valid handle of an allowed component");
-                plans.Add(new ReplacePlan(node, path, match));
+                var (plan, rejection) = await PlanAsync(request, field, node, path, stored, allowed, claimed, cancellationToken);
+                if (rejection is not null)
+                    return Invalid(request, path, rejection);
+                if (plan is not null)
+                    plans.Add(plan);
             }
         }
 
         if (plans.Count == 0)
             return Unchanged(request);
+
+        // A streamed upload is single-use: take every referenced ticket atomically before anything is written, so two
+        // requests referencing the same file cannot both claim it. A request that fails after this point puts its
+        // tickets back.
+        var staged = plans.OfType<StagedPlan>().ToList();
+        var taken = await TakeStagedAsync(staged, cancellationToken);
+        if (taken is not null)
+            return Invalid(request, taken.Path, "the referenced file is not stored at this path on this instance");
 
         // Pass 2: write blobs, then swap nodes.
         foreach (var plan in plans)
@@ -168,7 +129,10 @@ public sealed class FileOffloadService(
                 case StorePlan sp:
                     var handle = await StoreAsync(request, sp, cancellationToken);
                     if (!handle.IsSuccess)
+                    {
+                        await RestoreStagedAsync(staged, cancellationToken);
                         return Result<FileOffloadResult>.Fail(handle.Error);
+                    }
                     Replace(sp.Node, handle.Value!);
                     break;
                 case ReplacePlan rp:
@@ -182,11 +146,93 @@ public sealed class FileOffloadService(
             }
         }
 
-        // A claimed upload is single-use: no other instance can reference it after this one did.
-        foreach (var stp in plans.OfType<StagedPlan>())
-            await staging!.RemoveAsync(stp.Staged.Domain, stp.Staged.File, cancellationToken);
-
         return Result<FileOffloadResult>.Ok(new FileOffloadResult(JsonSerializer.SerializeToElement(root), true));
+    }
+
+    /// <summary>
+    /// The plan for one file node, or the reason it is refused. A node with neither <c>content</c> nor <c>file</c>, and a
+    /// valid handle in a Trusted payload, need no plan.
+    /// </summary>
+    private async Task<(Plan? Plan, string? Rejection)> PlanAsync(
+        FileOffloadRequest request, FileStorageField field, JsonObject node, string path, JsonObject? stored,
+        IReadOnlySet<string> allowed, HashSet<string> claimed, CancellationToken cancellationToken)
+    {
+        var hasContent = node.ContainsKey("content");
+        var hasFile = node.ContainsKey("file");
+
+        if (hasContent && hasFile)
+            return (null, "'content' and 'file' cannot be sent together");
+
+        if (hasContent)
+            return PlanInline(request, field, node, path);
+
+        if (!hasFile)
+            return (null, null);
+
+        if (request.Mode == FileOffloadMode.Trusted)
+        {
+            // Kept as is, but only a handle the runtime could have written: a GUID file id in a component
+            // the flow declares or the deployment allows (FileStorage:AllowedBindings).
+            return FileHandle.TryRead(node) is { } trusted && trusted.IsAllowed(allowed)
+                ? (null, null)
+                : (null, "the file reference is not a valid handle of an allowed component");
+        }
+
+        var fileId = ReadString(node, "file");
+        var match = fileId is null
+            ? null
+            : FileNodeWalker.Find(stored, field)
+                .Select(h => FileHandle.TryRead(h.Node))
+                .FirstOrDefault(h => h is not null && string.Equals(h.File, fileId, StringComparison.Ordinal));
+        if (match is null)
+        {
+            // Not an echo: it can only be a streamed upload staged for this flow and path, claimed once.
+            var staged = await FindStagedAsync(request, field, fileId, cancellationToken);
+            return staged is not null && claimed.Add(staged.File)
+                ? (new StagedPlan(node, path, staged), null)
+                : (null, "the referenced file is not stored at this path on this instance");
+        }
+        // The stored record is not trusted on its own either: an invalid stored handle is never echoed.
+        return match.IsAllowed(allowed)
+            ? (new ReplacePlan(node, path, match), null)
+            : (null, "the stored file reference is not a valid handle of an allowed component");
+    }
+
+    private static (Plan? Plan, string? Rejection) PlanInline(
+        FileOffloadRequest request, FileStorageField field, JsonObject node, string path)
+    {
+        // x-storage.transport "stream": a client sends the bytes to the upload endpoint, never inline.
+        if (request.Mode == FileOffloadMode.External && !field.AcceptsInline)
+            return (null, "the field accepts streamed uploads only (x-storage.transport is \"stream\"); upload the file and reference its 'file'");
+        if (node["content"] is not JsonValue cv || !cv.TryGetValue<string>(out var b64))
+            return (null, "'content' must be a base64 string");
+        byte[] bytes;
+        try { bytes = Convert.FromBase64String(b64); }
+        catch (FormatException) { return (null, "'content' is not valid base64"); }
+        return (new StorePlan(node, path, field, bytes,
+            NormalizeName(ReadString(node, "name")), NormalizeMediaType(ReadString(node, "mimeType"))), null);
+    }
+
+    /// <summary>
+    /// Takes every staged ticket of <paramref name="plans"/> out of the store; null when all were taken, else the first
+    /// plan whose ticket was gone (another request claimed it meanwhile). The ones taken before it are put back.
+    /// </summary>
+    private async Task<StagedPlan?> TakeStagedAsync(List<StagedPlan> plans, CancellationToken cancellationToken)
+    {
+        for (var i = 0; i < plans.Count; i++)
+        {
+            if (await staging!.TakeAsync(plans[i].Staged.Domain, plans[i].Staged.File, cancellationToken) is not null)
+                continue;
+            await RestoreStagedAsync(plans.GetRange(0, i), cancellationToken);
+            return plans[i];
+        }
+        return null;
+    }
+
+    private async Task RestoreStagedAsync(List<StagedPlan> plans, CancellationToken cancellationToken)
+    {
+        foreach (var plan in plans)
+            await staging!.RestoreAsync(plan.Staged, cancellationToken);
     }
 
     /// <summary>

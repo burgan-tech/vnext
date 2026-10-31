@@ -50,7 +50,9 @@ public sealed class FileStreamedUploadTests
         public Task SaveAsync(StagedFile staged, TimeSpan ttl, CancellationToken ct) { Entries[staged.File] = staged; return Task.CompletedTask; }
         public Task<StagedFile?> GetAsync(string domain, string file, CancellationToken ct)
             => Task.FromResult(Entries.TryGetValue(file, out var s) && s.Domain == domain ? s : null);
-        public Task RemoveAsync(string domain, string file, CancellationToken ct) { Entries.Remove(file); return Task.CompletedTask; }
+        public Task<StagedFile?> TakeAsync(string domain, string file, CancellationToken ct)
+            => Task.FromResult(Entries.Remove(file, out var s) && s.Domain == domain ? s : null);
+        public Task RestoreAsync(StagedFile staged, CancellationToken ct) { Entries[staged.File] = staged; return Task.CompletedTask; }
     }
 
     private StagedFile Stage(string path, string flow = "kyc", string component = "store-a")
@@ -88,6 +90,39 @@ public sealed class FileStreamedUploadTests
         _staging.Entries.ShouldNotContainKey(staged.File);
 
         (await Offload($$"""{ "files": [ { "file": "{{staged.File}}" } ] }""")).Error.Code.ShouldBe(WorkflowErrorCodes.FileReferenceInvalid);
+    }
+
+    [Fact]
+    public async Task TicketTakenByAnotherRequestAfterTheLookup_IsRefused_AndTheOthersAreRestored()
+    {
+        // Two staged uploads; the second is claimed by a concurrent request between this one's lookup and its take.
+        var first = Stage("files[]");
+        var second = Stage("files[]");
+        var staging = Substitute.For<IFileStagingStore>();
+        staging.GetAsync("core", Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(ci => _staging.Entries.GetValueOrDefault(ci.ArgAt<string>(1)));
+        staging.TakeAsync("core", first.File, Arg.Any<CancellationToken>()).Returns(first);
+        staging.TakeAsync("core", second.File, Arg.Any<CancellationToken>()).Returns((StagedFile?)null);
+        var (sut, workflow) = FileOffloadTestFactory.Create(Master, _store, domain: "core", flow: "kyc", staging: staging);
+
+        var r = await sut.OffloadAsync(new(workflow, Guid.NewGuid(),
+            Json($$"""{ "files": [ { "file": "{{first.File}}" }, { "file": "{{second.File}}" } ] }"""), null, FileOffloadMode.External), default);
+
+        r.Error.Code.ShouldBe(WorkflowErrorCodes.FileReferenceInvalid);
+        await staging.Received(1).RestoreAsync(first, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task StoreFailureAfterTheTake_PutsTheTicketBack()
+    {
+        var staged = Stage("files[]");
+        _store.PutAsync(default!, default!, default, default, default)
+            .ReturnsForAnyArgs(Result.Fail(WorkflowErrors.FileStoreUnavailable("store-a")));
+
+        var r = await Offload($$"""{ "files": [ { "file": "{{staged.File}}" }, { "content": "AQID" } ] }""");
+
+        r.Error.Code.ShouldBe(WorkflowErrorCodes.FileStoreUnavailable);
+        _staging.Entries.ShouldContainKey(staged.File);
     }
 
     [Fact]

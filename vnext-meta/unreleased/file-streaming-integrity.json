@@ -9,7 +9,7 @@
       "fileStreamedUploads": {
         "since": "next",
         "status": "stable",
-        "description": "x-storage.transport: inline (default, base64 content in the JSON body) | stream | any. For stream/any fields, POST /api/v1/{domain}/workflows/{flow}/files?path=&name=[&version=] reads the raw body (Content-Type = media type, Content-Length required; no JSON, no base64) into one buffer of Content-Length bytes and stores it through the field's Dapr binding (one binding message) and answers 201 with a ticket {file, component, path, name, mimeType, size, eTag, expiresAt}; size and eTag come from the bytes received. The upload is staged in the distributed cache (vnext:{domain}:file-upload:{file}) for FileStorage:Upload:TicketTtlMinutes (default 60); a start or transition claims it once by sending { file } at the same path (same flow and component), the swap stamps the instance as owner and keeps the node's other members. A stream-only field refuses inline content from a client (400 Instance:100048). Limit FileStorage:Upload:MaxBytes (default 64 MiB = the sidecar's --max-body-size, 413 above it). The route skips raw-body capture (RawRequestBodyBufferingMiddleware).",
+        "description": "x-storage.transport: inline (default, base64 content in the JSON body) | stream | any. For stream/any fields, POST /api/v1/{domain}/workflows/{flow}/files?path=&name=[&version=] reads the raw body (Content-Type = media type, Content-Length required; no JSON, no base64) into one buffer of Content-Length bytes and stores it through the field's Dapr binding (one binding message) and answers 201 with a ticket {file, component, path, name, mimeType, size, eTag, expiresAt}; size and eTag come from the bytes received. The upload is staged in the distributed cache (vnext:{domain}:file-upload:{file}) for FileStorage:Upload:TicketTtlMinutes (default 60); a start or transition claims it once by sending { file } at the same path (same flow and component; the ticket is taken atomically, so two concurrent claims cannot both succeed, and a request that fails afterwards puts it back), the swap stamps the instance as owner and keeps the node's other members. A stream-only field refuses inline content from a client (400 Instance:100048). Limit FileStorage:Upload:MaxBytes (default 64 MiB = the sidecar's --max-body-size, 413 above it). The route skips raw-body capture (RawRequestBodyBufferingMiddleware).",
         "documentation": "docs/runtime/file-storage.md"
       },
       "fileReadIntegrity": {
@@ -102,12 +102,6 @@
       "affectedVersions": ">=next",
       "fixedIn": null,
       "description": "A streamed upload that no start or transition claims before its ticket expires leaves its object in the store (the staging entry expires, the object does not). Use the store's lifecycle rules, as for other x-storage orphans."
-    },
-    {
-      "id": "file-staged-upload-concurrent-claim",
-      "affectedVersions": ">=next",
-      "fixedIn": null,
-      "description": "Two requests that reference the same staged upload at the same moment can both pass the lookup before either removes it; the file then has two referencing instances (owner: whichever swapped). Reference an upload from one request."
     },
     {
       "id": "script-sandbox-reflection-gaps",

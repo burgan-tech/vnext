@@ -162,8 +162,11 @@ Then reference the upload where the field lives, in a start or transition body, 
   `FileStorage:Upload:TicketTtlMinutes` (default 60). Nothing about it is in any instance yet.
 - On the start or transition, a content-less `{ "file": … }` that is not an echo of the instance's own `LatestData` is
   looked up among the staged uploads. It is accepted only for the **same flow, path and component** it was uploaded for,
-  once: the swap writes the handle with this instance as `owner` and removes the staging entry. The same upload twice in
-  one body, an expired or unknown id, or an upload made for another path is `400` `Instance:100048`. Other members of the
+  once: the ticket is taken out of the staging store atomically (read and removed under a lock keyed by the file id)
+  before anything is written, so of two requests claiming the same upload at once only one gets it; the other is `400`.
+  The swap writes the handle with this instance as `owner`; a request that fails after the take (a store failure) puts
+  the ticket back until it expires. The same upload twice in one body, an expired or unknown id, or an upload made for
+  another path is `400` `Instance:100048`. Other members of the
   node (`documentType`) are kept, as for inline uploads.
 - Knowing the GUID is the claim: it is random and only the uploader received it. The upload route carries no runtime
   authorization, like `start`; gate it at the gateway the same way.
@@ -396,7 +399,6 @@ options, in order of preference:
 | Missing object looks like an outage | A `get` of an object that is gone from the store reports `503`, like an outage |
 | Master schema unavailable is a `503` | No longer fails open: a payload carrying a `content`/`file` member is refused with `503` `FileSchemaUnavailable` while the master schema cannot be loaded (see Write rules); payloads without one proceed |
 | Unclaimed streamed uploads | An upload never referenced before its ticket expires leaves its object in the store; the staging entry expires, the object does not (use the store's lifecycle rules, as for other orphans) |
-| Concurrent claims of one upload | Two requests referencing the same staged upload at the same moment can both pass the lookup before either removes it; the file then has two referencing instances (owner: whichever swapped). Reference an upload from one request |
 | Duplicate property names | A payload with duplicate member names in a file node is handled inconsistently between the content probe and the swap |
 | Master schema reused as a transition schema | A transition schema validates the **write** shape. If a flow reuses its master schema as a transition schema, the `x-storage` nodes describe the persisted handle and cannot declare `content` (publish error), so a strict (`additionalProperties: false`) node rejects the upload. Give transitions their own schema for file fields |
 
