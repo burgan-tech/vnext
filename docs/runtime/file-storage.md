@@ -76,7 +76,13 @@ On a master-schema **property**, or on the `items` schema of an array property:
 - Object key in the component: `{FileStorage:KeyPrefix}{file}`.
 
 **Echo** (a client that read the instance and sends the field back): `{ "file": "<guid>", ... }` with no
-`content`. The runtime replaces the node with the **stored** handle (any client-sent metadata is discarded).
+`content`. The runtime writes the **stored** handle's members over the node (a client-sent `size`, `mimeType` or
+`eTag` is discarded).
+
+**Other members of the node are kept** (vnext-client-sdk-core#137). The swap drops `content` and writes the seven
+handle members; anything else the client put on the same object (a FilePicker row's `documentType`, per-file
+metadata) stays and reaches the mapping and the record. A strict master schema (`additionalProperties: false` on the
+file node) must declare such members under the node's `properties`.
 
 ## Write rules
 
@@ -84,7 +90,7 @@ Applied per `x-storage` node of an incoming payload:
 
 | Node | External payload (client body) | Trusted payload (runtime-produced) |
 |---|---|---|
-| `content` present, `file` absent | Decode base64 (invalid or non-string: `400`), `create` in the binding, node becomes the handle | same |
+| `content` present, `file` absent | Decode base64 (invalid or non-string: `400`), `create` in the binding, `content` is replaced by the handle members (other members kept) | same |
 | `content` and `file` both present | `400` `FileReferenceInvalid` | `400` `FileReferenceInvalid` |
 | `content` absent, `file` present | The same `file` id must exist at the same path in the instance's `LatestData` (arrays: any element of the same array) **and the stored handle must be valid**. Found: node becomes the stored handle. Not found or invalid: `400` `FileReferenceInvalid`. A `start` has no `LatestData`, so always `400` | Kept as is when it is a **valid handle**; otherwise `400` `FileReferenceInvalid` |
 | `null` / absent | Field cleared; nothing is deleted from the store | same |

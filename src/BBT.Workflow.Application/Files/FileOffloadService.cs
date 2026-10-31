@@ -221,9 +221,15 @@ public sealed class FileOffloadService(
         return Result<JsonObject>.Ok(handle.ToJsonNode().AsObject());
     }
 
+    /// <summary>
+    /// Swaps only the file members of <paramref name="target"/>: <c>content</c> is dropped and every handle member is
+    /// written from <paramref name="source"/> (the handle wins its own members, e.g. a client-sent <c>size</c>). Any
+    /// other member the client put on the node stays — a FilePicker row's <c>documentType</c> must reach the mapping
+    /// (vnext-client-sdk-core#137).
+    /// </summary>
     private static void Replace(JsonObject target, JsonObject source)
     {
-        target.Clear();
+        target.Remove("content");
         foreach (var (key, value) in source.ToList())
         {
             source.Remove(key);

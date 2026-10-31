@@ -332,4 +332,36 @@ public sealed class FileOffloadServiceTests
         fb.ShouldBeSameAs(fa);
         fc.ShouldNotBeSameAs(fa);
     }
+
+    // vnext-client-sdk-core#137: a FilePicker row carries client fields beside the file (documentType); the swap
+    // replaces only the file members and keeps the rest of the node, so the mapping still sees them.
+    [Fact]
+    public async Task Content_KeepsTheClientMembersBesideTheHandle()
+    {
+        var payload = Json("""{ "files": [ { "name": "a.pdf", "mimeType": "application/pdf", "size": 3, "content": "AQID", "documentType": "x", "meta": { "page": 2 } } ] }""");
+
+        var r = (await _sut.OffloadAsync(new(_workflow, Guid.NewGuid(), payload, null, FileOffloadMode.External), default)).Value!;
+
+        var node = r.Payload!.Value.GetProperty("files")[0];
+        node.TryGetProperty("content", out _).ShouldBeFalse();
+        node.GetProperty("documentType").GetString().ShouldBe("x");
+        node.GetProperty("meta").GetProperty("page").GetInt32().ShouldBe(2);
+        foreach (var member in new[] { "component", "file", "name", "mimeType", "size", "eTag", "owner" })
+            node.TryGetProperty(member, out _).ShouldBeTrue(member);
+        node.GetProperty("size").GetInt64().ShouldBe(3);
+    }
+
+    [Fact]
+    public async Task Echo_KeepsTheClientMembers_ButTheStoredHandleWinsItsOwnMembers()
+    {
+        var stored = Json("""{ "files": [ { "component": "vnext-blob-local", "file": "0b9f6f3e-1c1a-4a7e-9c55-3f1d2a6b7c80", "name": "a.pdf", "mimeType": "application/pdf", "size": 3, "eTag": "e", "owner": { "domain": "core", "flow": "kyc", "instance": "i" }, "documentType": "old" } ] }""");
+        var payload = Json("""{ "files": [ { "file": "0b9f6f3e-1c1a-4a7e-9c55-3f1d2a6b7c80", "size": 999, "documentType": "new" } ] }""");
+
+        var r = (await _sut.OffloadAsync(new(_workflow, Guid.NewGuid(), payload, stored, FileOffloadMode.External), default)).Value!;
+
+        var node = r.Payload!.Value.GetProperty("files")[0];
+        node.GetProperty("documentType").GetString().ShouldBe("new");
+        node.GetProperty("size").GetInt64().ShouldBe(3);
+        node.GetProperty("eTag").GetString().ShouldBe("e");
+    }
 }
