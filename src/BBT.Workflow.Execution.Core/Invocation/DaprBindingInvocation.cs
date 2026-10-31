@@ -26,13 +26,17 @@ public static class DaprBindingInvocation
 {
     private static readonly ActivitySource InvokerActivitySource = new("BBT.Workflow.Execution.Invokers");
 
-    /// <summary>Invokes the binding; never throws.</summary>
+    /// <summary>
+    /// Invokes the binding; never throws. <paramref name="onFailure"/> receives the exception behind a failed result
+    /// (not a cancellation), so the caller can log it with its stack trace.
+    /// </summary>
     public static async Task<TaskInvocationResult> ExecuteAsync(
         DaprClient daprClient,
         DaprBindingTaskBinding binding,
         string taskType,
         CancellationToken cancellationToken,
-        string? taskKey = null)
+        string? taskKey = null,
+        Action<Exception>? onFailure = null)
     {
         var startTimestamp = Stopwatch.GetTimestamp();
         var prepareActivity = InvokerActivitySource.StartActivity("Invoke.Prepare", ActivityKind.Internal);
@@ -98,6 +102,7 @@ public static class DaprBindingInvocation
         catch (Exception ex)
         {
             prepareActivity?.Dispose();
+            onFailure?.Invoke(ex);
             return TaskInvocationResult.Failure(
                 error: Reason(ex),
                 executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,

@@ -54,7 +54,9 @@ public sealed class DaprBindingTaskInvoker(
     {
         // The call, the response shaping and the failure reason are the shared core's (DaprBindingInvocation), the
         // same body the Orchestrator's in-process path runs; this host only meters and logs.
-        var result = await DaprBindingInvocation.ExecuteAsync(daprClient, binding, TaskType, cancellationToken, taskKey);
+        Exception? failure = null;
+        var result = await DaprBindingInvocation.ExecuteAsync(daprClient, binding, TaskType, cancellationToken, taskKey,
+            onFailure: ex => failure = ex);
         var operation = result.Metadata?.TryGetValue("Operation", out var op) == true ? op?.ToString() ?? binding.Operation : binding.Operation;
 
         if (result.IsSuccess)
@@ -70,7 +72,7 @@ public sealed class DaprBindingTaskInvoker(
         else
         {
             _metrics.RecordDaprBindingInvocation(binding.BindingName, operation, "failure");
-            logger.LogError("Dapr binding invocation failed: {BindingName}, Operation: {Operation}, Reason: {Reason}",
+            logger.LogError(failure, "Dapr binding invocation failed: {BindingName}, Operation: {Operation}, Reason: {Reason}",
                 binding.BindingName, operation, result.ErrorMessage);
         }
 
