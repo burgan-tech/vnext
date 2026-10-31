@@ -55,15 +55,15 @@ internal static class ResponseOutputWriter
         }
     }
 
-    /// <summary>
-    /// Resolves the response Content-Type from author-supplied headers (case-insensitive),
-    /// falling back to <c>application/json</c> when absent or empty.
-    /// </summary>
     /// <summary>True when the author-supplied headers carry a non-empty Content-Type (case-insensitive).</summary>
     public static bool HasContentType(IReadOnlyDictionary<string, string>? headers)
         => headers is not null && headers.Any(h =>
             string.Equals(h.Key, ContentTypeHeader, StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(h.Value));
 
+    /// <summary>
+    /// Resolves the response Content-Type from author-supplied headers (case-insensitive),
+    /// falling back to <c>application/json</c> when absent or empty.
+    /// </summary>
     public static string ResolveContentType(IReadOnlyDictionary<string, string>? headers)
     {
         if (headers is not null)

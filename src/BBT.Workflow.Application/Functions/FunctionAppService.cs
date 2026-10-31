@@ -667,7 +667,7 @@ public sealed class FunctionAppService(
         {
             if (data is Scripting.Functions.ScriptFile { MimeType: { } fileType }
                 && !string.IsNullOrWhiteSpace(fileType)
-                && !(headers?.Keys.Any(k => string.Equals(k, "Content-Type", StringComparison.OrdinalIgnoreCase)) ?? false))
+                && headers?.Keys.Any(k => string.Equals(k, "Content-Type", StringComparison.OrdinalIgnoreCase)) != true)
             {
                 headers = new Dictionary<string, string>(headers ?? [], StringComparer.OrdinalIgnoreCase) { ["Content-Type"] = fileType };
             }
