@@ -8,7 +8,7 @@ status: pending
 
 ## Context
 
-- vNext PR: branch `claude/vnext-file-upload-streaming-f7c134` (vnext-client-sdk-core #137, #142, #145)
+- vNext PR: https://github.com/burgan-tech/vnext/pull/1144 (vnext-client-sdk-core #137, #142, #145)
 - Milestone: v0.0.102
 
 ## What changed in the runtime
