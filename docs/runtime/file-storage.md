@@ -128,7 +128,8 @@ Applied per `x-storage` node of an incoming payload:
 
 A field declared with `"transport": "stream"` or `"any"` takes its bytes from a separate upload request instead of a
 base64 string in the JSON body, so a file is never inflated by base64, never held in a JSON body, and is bounded by
-`FileStorage:Upload:MaxBytes` (default 100 MiB) rather than the 10 MiB JSON body limit.
+`FileStorage:Upload:MaxBytes` (default 64 MiB, the orchestration sidecar's `--max-body-size`; raise both together)
+rather than the 10 MiB JSON body limit.
 
 ```http
 POST /api/v1/{domain}/workflows/{flow}/files?path=files[]&name=scan.tiff[&version=1.0.0]
@@ -334,7 +335,7 @@ completed instance takes no transition): run it from a scheduled housekeeping fl
 | Where | Setting |
 |---|---|
 | Runtime | `FileStorage:KeyPrefix` (string, default empty): prepended to every object key, e.g. `vnext-runtime/` in a shared bucket. **Never change it after the first write**: stored handles carry no key, so existing objects become unreachable |
-| Runtime | `FileStorage:Upload:MaxBytes` (default 104857600) and `FileStorage:Upload:TicketTtlMinutes` (default 60): [streamed uploads](#streamed-uploads-transport) |
+| Runtime | `FileStorage:Upload:MaxBytes` (default 67108864, the sidecar's `--max-body-size`) and `FileStorage:Upload:TicketTtlMinutes` (default 60): [streamed uploads](#streamed-uploads-transport) |
 | Runtime | `FileStorage:AllowedBindings` (string list, default empty): binding components a handle may name besides the flow's own declared `x-storage` bindings, for files handed across flows (SubFlow input, a mapping copying a parent's handle). **Helm deployments list their `blobStorageComponents` names here** (`FileStorage__AllowedBindings__0=...`) |
 | Helm (`vnext-helm-charts`) | `global.blobStorageComponents: []`, rendered like `pubsubComponents`; scoped to the **orchestrator** app id only |
 | Local | `etc/orchestration/dapr/components/vnext-blob-local.yaml` (`bindings.localstorage`, `rootPath: /blobs`); orchestration sidecar started with `--max-body-size 64Mi` (all compose files) |
@@ -373,9 +374,11 @@ options, in order of preference:
   7.5 MiB of file unless a host raises the limit (raise it together with the sidecar's).
 - The sidecar's `--max-body-size 64Mi` applies to the binding call and the Dapr hops, not to the client
   request; the remote gateway enforces the same 64 MiB cap on a cross-domain `internal/file` read.
-- Large-body behaviour of the Dapr binding path (dapr/dapr#9177) is **unverified** here: the measurement
-  that would settle it is pending (integration window). Do not quote a throughput or size claim for files
-  near the cap until it has run.
+- The runtime's Dapr client has no receive cap of its own (gRPC's 4 MB default is lifted in `AddDaprClients`): before,
+  a binding `get` of an object above 4 MB failed with `ResourceExhausted` and the read answered `503`. The sidecar's
+  `--max-body-size` is the bound in both directions.
+- Measured locally (daprd 1.16.19, MinIO): a 30 MiB file uploads and reads back through `bindings.aws.s3`
+  (FileStreamingLab). Files near the 64 MiB cap and throughput (dapr/dapr#9177) are not measured.
 
 ## Known limitations
 

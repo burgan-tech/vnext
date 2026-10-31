@@ -31,8 +31,12 @@ public sealed class FileStorageOptions
 /// <summary>Limits of the streamed upload endpoint.</summary>
 public sealed class FileUploadOptions
 {
-    /// <summary>Largest accepted upload in bytes (default 100 MiB). Larger requests answer 413 before any byte is stored.</summary>
-    public long MaxBytes { get; set; } = 100L * 1024 * 1024;
+    /// <summary>
+    /// Largest accepted upload in bytes (default 64 MiB, the orchestration sidecar's shipped <c>--max-body-size</c>: the
+    /// file reaches the store as one binding message). Larger requests answer 413 before any byte is stored. Raise it
+    /// together with the sidecar's limit.
+    /// </summary>
+    public long MaxBytes { get; set; } = 64L * 1024 * 1024;
 
     /// <summary>Minutes an uploaded file may wait to be referenced by a start or transition (default 60).</summary>
     public int TicketTtlMinutes { get; set; } = 60;
