@@ -226,6 +226,48 @@ file reader, so the call is unavailable there (in practice never reached).
 | Helm (`vnext-helm-charts`) | `global.blobStorageComponents: []`, rendered like `pubsubComponents`; scoped to the **orchestrator** app id only |
 | Local | `etc/orchestration/dapr/components/vnext-blob-local.yaml` (`bindings.localstorage`, `rootPath: /blobs`); orchestration sidecar started with `--max-body-size 64Mi` (all compose files) |
 
+## Store providers
+
+Each `x-storage` component is reached through one of two providers, chosen per component in
+`FileStorage:Stores:{component}`. The master schema does not change: `x-storage.binding` names the component either way.
+
+| Provider | When | Writes | Reads |
+|---|---|---|---|
+| `dapr` (default, also every component with no entry) | Local disk (`bindings.localstorage`), any Dapr binding | One gRPC message to the orchestration sidecar: the whole body is buffered (sidecar `--max-body-size`) | `get` is buffered; integrity checked against the handle |
+| `s3` | An S3 or S3-compatible store (MinIO, Ceph, a bank's internal S3) | Streamed with a known `Content-Length`; over HTTPS the body goes out raw (`UNSIGNED-PAYLOAD`, no aws-chunked framing, no checksum trailer); a HEAD after the PUT checks the stored size (mismatch: the object is deleted, `503`) | Lazily ranged GETs: `Range` is served by the store, not sliced in memory; a missing object is `404` `FileNotFound` |
+
+```json
+"FileStorage": {
+  "Stores": {
+    "vnext-blob-s3": {
+      "Provider": "s3",
+      "ServiceUrl": "https://s3.example.com",
+      "Bucket": "vnext-documents",
+      "Region": "us-east-1",
+      "ForcePathStyle": true,
+      "AccessKey": "<from a secret>",
+      "SecretKey": "<from a secret>",
+      "CaCertificatePath": "/etc/vnext/s3-ca.pem"
+    }
+  }
+}
+```
+
+- `AccessKey`/`SecretKey` empty: the AWS SDK default credential chain (environment, web identity, instance role).
+- `CaCertificatePath`: a PEM bundle of the CA that issued the store's certificate, for an internal CA the host does not
+  trust. The chain is validated against those roots only; a host-name mismatch is never accepted.
+- Checksums are calculated and validated only when an operation requires them (`WHEN_REQUIRED`). The SDK default
+  (a CRC32 trailer on every upload) is the framing a server without trailer support stores as the object.
+- Over plain `http://` the SDK must sign the payload of a stream it cannot rewind, which it does with signed
+  aws-chunked chunks. Use HTTP only for a local store that decodes them (MinIO does); production stores use HTTPS.
+- `KeyPrefix` applies to both providers, so a component can move from `dapr` (`bindings.aws.s3`) to `s3` on the
+  same bucket: existing objects keep their keys. Objects that `bindings.aws.s3` stored framed are still recovered on
+  read ([integrity](#integrity-of-what-the-store-returns)).
+- Keep the Dapr binding component as well when flows delete or list objects with a `DaprBinding` task (see
+  [Deleting and listing](#deleting-and-listing-objects)).
+- The start fails on a broken entry (`FileStorageOptionsValidator`): an unknown provider, an `s3` store without a
+  `Bucket`, a malformed `ServiceUrl` or a missing `CaCertificatePath` file.
+
 ## Dapr limits
 
 - The binding `get` is **buffered**: the whole object is read into memory, so a `Range` request is an

@@ -199,6 +199,10 @@ public class FileAdmissionBenchmarks
             => throw new NotSupportedException();
         public Task<Result<byte[]>> GetAsync(string component, string file, CancellationToken cancellationToken)
             => throw new NotSupportedException();
+        public Task<Result<StoredBlob>> PutStreamAsync(string component, string file, System.IO.Stream content, long length, string? mimeType, CancellationToken cancellationToken)
+            => throw new NotSupportedException();
+        public Task<Result<BlobReadStream>> OpenReadAsync(string component, string file, CancellationToken cancellationToken)
+            => throw new NotSupportedException();
     }
 
     private sealed class NoopRawBody : IRequestRawBodyProvider

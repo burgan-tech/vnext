@@ -53,6 +53,45 @@ public sealed class DaprBindingFileBlobStore(
         }
     }
 
+    /// <summary>
+    /// A Dapr output binding takes one gRPC message, so the body is buffered (bounded by <paramref name="length"/>,
+    /// itself bounded by <c>FileStorage:Upload:MaxBytes</c> and the sidecar's <c>--max-body-size</c>) and hashed, then
+    /// stored with <see cref="PutAsync"/>.
+    /// </summary>
+    public async Task<Result<StoredBlob>> PutStreamAsync(
+        string component, string file, Stream content, long length, string? mimeType, CancellationToken cancellationToken)
+    {
+        if (length is < 0 or > int.MaxValue)
+            return Result<StoredBlob>.Fail(WorkflowErrors.FileStoreUnavailable(component));
+
+        var buffer = new byte[length];
+        var read = 0;
+        while (read < buffer.Length)
+        {
+            var n = await content.ReadAsync(buffer.AsMemory(read), cancellationToken);
+            if (n == 0)
+                break;
+            read += n;
+        }
+        // A body shorter or longer than its declared length is not stored.
+        if (read != buffer.Length || await content.ReadAsync(new byte[1], cancellationToken) != 0)
+            return Result<StoredBlob>.Fail(WorkflowErrors.FileReferenceInvalid("body", "the body length does not match Content-Length"));
+
+        var put = await PutAsync(component, file, buffer, mimeType, cancellationToken);
+        return put.IsSuccess
+            ? Result<StoredBlob>.Ok(new StoredBlob(length, Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(buffer))))
+            : Result<StoredBlob>.Fail(put.Error);
+    }
+
+    /// <summary>The binding <c>get</c> is buffered: the whole object, as a seekable read-only stream.</summary>
+    public async Task<Result<BlobReadStream>> OpenReadAsync(string component, string file, CancellationToken cancellationToken)
+    {
+        var bytes = await GetAsync(component, file, cancellationToken);
+        return bytes.IsSuccess
+            ? Result<BlobReadStream>.Ok(new BlobReadStream(new MemoryStream(bytes.Value!, writable: false), bytes.Value!.LongLength, IsBuffered: true))
+            : Result<BlobReadStream>.Fail(bytes.Error);
+    }
+
     private void AddKey(BindingRequest request, string file)
     {
         var key = _prefix + file;
