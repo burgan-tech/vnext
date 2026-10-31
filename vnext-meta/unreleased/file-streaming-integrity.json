@@ -15,7 +15,7 @@
       "fileStreamedUploads": {
         "since": "next",
         "status": "stable",
-        "description": "x-storage.transport: inline (default, base64 content in the JSON body) | stream | any. For stream/any fields, POST /api/v1/{domain}/workflows/{flow}/files?path=&name=[&version=] streams the raw body (Content-Type = media type, Content-Length required) into the field's store and answers 201 with a ticket {file, component, path, name, mimeType, size, eTag, expiresAt}; size and eTag come from the bytes received. The upload is staged in the distributed cache (vnext:{domain}:file-upload:{file}) for FileStorage:Upload:TicketTtlMinutes (default 60); a start or transition claims it once by sending { file } at the same path (same flow and component), the swap stamps the instance as owner and keeps the node's other members. A stream-only field refuses inline content from a client (400 Instance:100048). Limit FileStorage:Upload:MaxBytes (default 100 MiB, 413 above it). The route skips raw-body capture and Aether body logging.",
+        "description": "x-storage.transport: inline (default, base64 content in the JSON body) | stream | any. For stream/any fields, POST /api/v1/{domain}/workflows/{flow}/files?path=&name=[&version=] streams the raw body (Content-Type = media type, Content-Length required) into the field's store and answers 201 with a ticket {file, component, path, name, mimeType, size, eTag, expiresAt}; size and eTag come from the bytes received. The upload is staged in the distributed cache (vnext:{domain}:file-upload:{file}) for FileStorage:Upload:TicketTtlMinutes (default 60); a start or transition claims it once by sending { file } at the same path (same flow and component), the swap stamps the instance as owner and keeps the node's other members. A stream-only field refuses inline content from a client (400 Instance:100048). Limit FileStorage:Upload:MaxBytes (default 100 MiB, 413 above it). The route skips raw-body capture (RawRequestBodyBufferingMiddleware).",
         "documentation": "docs/runtime/file-storage.md"
       },
       "fileReadIntegrity": {
@@ -114,6 +114,12 @@
       "affectedVersions": ">=next",
       "fixedIn": null,
       "description": "Environment.GetEnvironmentVariable, Type.GetProperty, Type.Assembly, AppDomain and AssemblyLoadContext remain allowed because shipped packages use them (vnext-sys-flow, morph-idm); combined with dynamic they still reach reflection. The analyzer guards against accidental and low-effort misuse; isolation is the host's (read-only file system, no secrets on disk, egress policy, curated plugin directory)."
+    },
+    {
+      "id": "file-download-response-buffered-by-body-logging",
+      "affectedVersions": ">=next",
+      "fixedIn": null,
+      "description": "Aether's HttpBodyLoggingMiddleware copies every response not in Telemetry:Logging:ExcludedPaths into memory before sending it, even with body logging off, so a functions/file or internal/file download is held in memory once (the store read itself streams). Excluding the two routes removes the copy but also their HTTP server spans, because Aether's tracing filter uses Logging.ExcludedPaths as well. Shipped configuration keeps the spans; the fix belongs in Aether."
     }
   ]
 }

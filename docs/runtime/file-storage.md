@@ -165,8 +165,9 @@ Then reference the upload where the field lives, in a start or transition body, 
   node (`documentType`) are kept, as for inline uploads.
 - Knowing the GUID is the claim: it is random and only the uploader received it. The upload route carries no runtime
   authorization, like `start`; gate it at the gateway the same way.
-- The route is excluded from raw-body capture (`RawRequestBodyBufferingMiddleware`) and from Aether body logging, and
-  raises the request size limit to `MaxBytes` for itself only.
+- The route is excluded from raw-body capture (`RawRequestBodyBufferingMiddleware`, which would otherwise read the
+  request into memory first) and raises the request size limit to `MaxBytes` for itself only. Aether's body logging
+  does not read the request while request-body logging is off; it buffers only the small ticket response.
 
 ## Where the swap happens
 
@@ -235,9 +236,13 @@ After schema validation, before anything is persisted or enqueued:
   [`s3` provider](#store-providers) the stream fetches ranged GETs lazily, so a `Range` or a `HEAD` never loads the
   whole object; its length must equal the handle's `size`, otherwise the object is read whole and
   [verified](#integrity-of-what-the-store-returns). With a Dapr binding the object is the verified, buffered `get`.
-- `functions/file` and `internal/file` are in the Aether `Telemetry:Logging:ExcludedPaths` of the orchestration host:
-  the body-logging middleware otherwise copies every response into memory before sending it, even with body logging
-  off. Traces are still recorded (`Telemetry:Tracing:ExcludedPaths` is unchanged).
+- **Response buffering by Aether's body-logging middleware.** `UseHttpBodyLogging` copies every response that is not in
+  `Telemetry:Logging:ExcludedPaths` into a `MemoryStream` before sending it, even with body logging off, so a
+  downloaded file is held in memory once on its way out (the store read itself streams). Adding `/functions/file$` and
+  `/internal/file$` to that list removes the copy, but Aether's tracing filter uses the **same** list
+  (`Logging.ExcludedPaths ∪ Tracing.ExcludedPaths`): the routes then lose their HTTP server span. The shipped
+  configuration keeps the spans; an operator who prefers the memory saving adds the two patterns. The clean fix is in
+  Aether (skip the response copy when response-body logging is off).
 
 ### Integrity of what the store returns
 
