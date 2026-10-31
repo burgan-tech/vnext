@@ -1,0 +1,119 @@
+{
+  "releaseNote": {
+    "summary": "x-storage: S3 provider with streaming, definition-based streamed uploads, verified reads (aws-chunked recovery), script stream types and write-back, binding task responses, raw binary function bodies.",
+    "breaking": false,
+    "docs": []
+  },
+  "features": {
+    "engine": {
+      "fileStoreS3Provider": {
+        "since": "next",
+        "status": "stable",
+        "description": "FileStorage:Stores:{component}:Provider = s3 reaches an S3-compatible store directly (AWSSDK.S3) instead of the Dapr output binding of the same name. Checksums only WHEN_REQUIRED; over HTTPS the body is streamed raw (UNSIGNED-PAYLOAD, no aws-chunked framing, no CRC32 trailer), so the stored object is the file byte for byte on servers that do not decode aws-chunked (vnext-client-sdk-core#145). A HEAD after every PUT checks the stored size (mismatch: object deleted, 503). Reads open a lazily ranged stream; a missing object is 404. Settings: ServiceUrl, Region, Bucket (required), AccessKey/SecretKey (empty: SDK default chain), ForcePathStyle (default true), CaCertificatePath (custom root trust). A broken entry fails the start. Components without an entry stay Dapr bindings.",
+        "documentation": "docs/runtime/file-storage.md"
+      },
+      "fileStreamedUploads": {
+        "since": "next",
+        "status": "stable",
+        "description": "x-storage.transport: inline (default, base64 content in the JSON body) | stream | any. For stream/any fields, POST /api/v1/{domain}/workflows/{flow}/files?path=&name=[&version=] streams the raw body (Content-Type = media type, Content-Length required) into the field's store and answers 201 with a ticket {file, component, path, name, mimeType, size, eTag, expiresAt}; size and eTag come from the bytes received. The upload is staged in the distributed cache (vnext:{domain}:file-upload:{file}) for FileStorage:Upload:TicketTtlMinutes (default 60); a start or transition claims it once by sending { file } at the same path (same flow and component), the swap stamps the instance as owner and keeps the node's other members. A stream-only field refuses inline content from a client (400 Instance:100048). Limit FileStorage:Upload:MaxBytes (default 100 MiB, 413 above it). The route skips raw-body capture and Aether body logging.",
+        "documentation": "docs/runtime/file-storage.md"
+      },
+      "fileReadIntegrity": {
+        "since": "next",
+        "status": "stable",
+        "description": "Every buffered x-storage read (functions/file through a Dapr binding, internal/file, GetFileAsync) checks the stored bytes against the handle's size and sha256 eTag. A complete aws-chunked frame whose payload matches is decoded and served (warning 20512), which recovers objects Dapr 1.17+ bindings.aws.s3 stored framed; anything else is 503 Instance:100047 (error 20513) instead of a silently corrupt body. functions/file and internal/file now stream (FileStreamResult); with the s3 provider the stream's length is checked against the handle.",
+        "documentation": "docs/runtime/file-storage.md"
+      },
+      "scriptFileStreams": {
+        "since": "next",
+        "status": "stable",
+        "description": "The script sandbox allows the in-memory System.IO stream types (Stream, MemoryStream, BufferedStream, Binary/Stream/String readers and writers, TextReader/TextWriter, SeekOrigin, IOException family) and the System.IO.Compression streams (GZip, Deflate, Brotli, ZLib, ZipArchive; the assembly must be granted). File, FileStream, Directory, Path and the rest of System.IO stay banned. New member-level bans in any namespace: StreamReader/StreamWriter path constructors, non-generic Activator, static Type.GetType(string), Type.GetMethod(s)/GetConstructor(s)/GetMember(s)/GetField(s)/GetEvent(s)/FindMembers/GetDefaultMembers/TypeInitializer/InvokeMember, Environment.Exit/FailFast/SetEnvironmentVariable. ScriptFile.OpenRead() wraps a read file in a read-only stream; ScriptBase.PutFileAsync(domain, flow, instance, component, bytes|stream, name, mimeType) stores a processed file and returns its handle; ScriptBase.FileObjectKey(file) names the object key for a DaprBinding task.",
+        "documentation": "docs/custom-script-helpers.md"
+      },
+      "daprBindingTaskResponse": {
+        "since": "next",
+        "status": "stable",
+        "description": "A DaprBinding task returns the binding's answer to its output mapping: Data is the body as JSON when it parses, else text, else base64 (Metadata.DataEncoding = json|text|base64|none), Headers is the response metadata, and a failure carries the sidecar's gRPC status detail. An unmapped binding task still adds no instance data. The call runs through DaprBindingInvocation (shared by both hosts); Workflow:TaskInvocation:Modes:daprbinding = Local runs it from the orchestration sidecar, where x-storage components live (default stays Remote).",
+        "documentation": "docs/runtime/task-invocation-routing.md"
+      },
+      "rawFunctionBinaryBody": {
+        "since": "next",
+        "status": "stable",
+        "description": "A rawResponse function whose output Data is a byte[] or a ScriptFile answers the bytes (Content-Length, the author's Content-Type, else the file's mimeType, else application/octet-stream) instead of a quoted base64 JSON string (vnext-client-sdk-core#99). FunctionResponseOutput.IsBinary keeps a function response cache hit binary.",
+        "documentation": "docs/domain/function-handler-architecture.md"
+      }
+    }
+  },
+  "migrations": [
+    {
+      "id": "file-offload-keeps-client-members",
+      "type": "behavior",
+      "component": "runtime",
+      "path": "schema x-storage (FileOffloadService)",
+      "since": "next",
+      "severity": "info",
+      "title": "The x-storage swap keeps the client's other members of the file node",
+      "description": "Before: the swap cleared the file node, so members a client put beside the file (a FilePicker row's documentType) were dropped before the mapping ran (vnext-client-sdk-core#137). Now only content is removed and the seven handle members are written; other members stay. A master schema with additionalProperties: false on the file node must declare those members."
+    },
+    {
+      "id": "file-read-integrity-503",
+      "type": "behavior",
+      "component": "runtime",
+      "path": "functions/file, internal/file, GetFileAsync",
+      "since": "next",
+      "severity": "warning",
+      "title": "Stored bytes that do not match the handle are refused instead of served",
+      "description": "Before: whatever the store returned was served (an aws-chunked framed object 44+ bytes longer than the file, with an ETag naming the original). Now the bytes must match the handle's size and sha256; a framed object whose payload matches is recovered, anything else answers 503 Instance:100047 and logs 20513."
+    },
+    {
+      "id": "script-sandbox-member-bans",
+      "type": "behavior",
+      "component": "runtime",
+      "path": "Scripting sandbox (BannedApiAnalyzer)",
+      "since": "next",
+      "severity": "warning",
+      "title": "Reflection-by-name, non-generic Activator and process termination no longer compile in scripts",
+      "description": "Activator (non-generic members), static Type.GetType(string), Type.GetMethod(s)/GetConstructor(s)/GetMember(s)/GetField(s)/GetEvent(s)/FindMembers/GetDefaultMembers/TypeInitializer/InvokeMember and Environment.Exit/FailFast/SetEnvironmentVariable are rejected at compile (\"banned member\"). None of them was found in any shipped domain package (source and base64-embedded code, 2026-10-31). The System.IO stream types became usable at the same time."
+    },
+    {
+      "id": "function-raw-byte-array-body",
+      "type": "behavior",
+      "component": "runtime",
+      "path": "Custom functions with rawResponse: true",
+      "since": "next",
+      "severity": "info",
+      "title": "A byte[] raw body is written as bytes",
+      "description": "Before: a byte[] output was serialized as a quoted base64 JSON string with Content-Type application/json. Now the bytes are written as is (application/octet-stream unless the output sets a Content-Type). A client that decoded the base64 string must read the body as bytes."
+    },
+    {
+      "id": "daprbinding-task-output-mapping-data",
+      "type": "behavior",
+      "component": "runtime",
+      "path": "DaprBinding task output mapping",
+      "since": "next",
+      "severity": "info",
+      "title": "The output mapping of a DaprBinding task sees the binding's answer",
+      "description": "Before: the task response carried no data (only BindingName/Operation metadata). Now Data, Headers and Metadata.DataEncoding carry the binding's answer. An unmapped task still adds no instance data."
+    }
+  ],
+  "knownIssues": [
+    {
+      "id": "file-staged-upload-orphans",
+      "affectedVersions": ">=next",
+      "fixedIn": null,
+      "description": "A streamed upload that no start or transition claims before its ticket expires leaves its object in the store (the staging entry expires, the object does not). Use the store's lifecycle rules, as for other x-storage orphans."
+    },
+    {
+      "id": "file-staged-upload-concurrent-claim",
+      "affectedVersions": ">=next",
+      "fixedIn": null,
+      "description": "Two requests that reference the same staged upload at the same moment can both pass the lookup before either removes it; the file then has two referencing instances (owner: whichever swapped). Reference an upload from one request."
+    },
+    {
+      "id": "script-sandbox-reflection-gaps",
+      "affectedVersions": ">=next",
+      "fixedIn": null,
+      "description": "Environment.GetEnvironmentVariable, Type.GetProperty, Type.Assembly, AppDomain and AssemblyLoadContext remain allowed because shipped packages use them (vnext-sys-flow, morph-idm); combined with dynamic they still reach reflection. The analyzer guards against accidental and low-effort misuse; isolation is the host's (read-only file system, no secrets on disk, egress policy, curated plugin directory)."
+    }
+  ]
+}

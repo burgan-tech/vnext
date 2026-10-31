@@ -153,7 +153,10 @@ The plan is built from `ExcludedStepOrders` alone (`TransitionExecutor.BuildExec
   Swap runs after schema validation, before persist/enqueue; a forwarded request is swapped at the leaf; External
   bodies are reference-checked against `LatestData`, Trusted (runtime-produced) ones are not. Codes
   `Instance:100047` (503) / `100048` (400) / `100049` (404). Reads: `functions/file` (`queryRoles` + `x-roles`),
-  `internal/file` has no auth. Full guide: `docs/runtime/file-storage.md`.
+  `internal/file` has no auth; every buffered read is verified against `size`+`eTag` (never serve unverified bytes).
+- Swap keeps the node's non-handle members. Provider per component (`FileStorage:Stores`, `dapr` | `s3`);
+  `x-storage.transport` `inline|stream|any` gates `POST …/workflows/{flow}/files` (staged, claimed once). Scripts:
+  stream carve-outs + member bans live in `BannedApiAnalyzer` only. Full guide: `docs/runtime/file-storage.md`.
 
 ## Task / Action History (system functions)
 
