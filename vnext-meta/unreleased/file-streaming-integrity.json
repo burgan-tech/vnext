@@ -10,6 +10,14 @@
         "since": "next",
         "status": "stable",
         "description": "x-storage.transport: inline (default, base64 content in the JSON body) | stream | any. For stream/any fields, POST /api/v1/{domain}/workflows/{flow}/files?path=&name=[&version=] reads the raw body (Content-Type = media type, Content-Length required; no JSON, no base64) into one buffer of Content-Length bytes and stores it through the field's Dapr binding (one binding message) and answers 201 with a ticket {file, component, path, name, mimeType, size, eTag, expiresAt}; size and eTag come from the bytes received. The upload is staged in the distributed cache (vnext:{domain}:file-upload:{file}) for FileStorage:Upload:TicketTtlMinutes (default 60); a start or transition claims it once by sending { file } at the same path (same flow and component; the ticket is taken atomically, so two concurrent claims cannot both succeed, and a request that fails afterwards puts it back), the swap stamps the instance as owner and keeps the node's other members. A stream-only field refuses inline content from a client (400 Instance:100048). Limit FileStorage:Upload:MaxBytes (default 64 MiB = the sidecar's --max-body-size, 413 above it). The route skips raw-body capture (RawRequestBodyBufferingMiddleware).",
+        "schemaPath": "schema.attributes.schema.properties[].x-storage.transport | schema.attributes.schema.properties[].items.x-storage.transport",
+        "apiEndpoints": [
+          "POST {domain}/workflows/{workflow}/files?path={field}&name={name}"
+        ],
+        "relatedConfig": [
+          "FileStorage:Upload:MaxBytes",
+          "FileStorage:Upload:TicketTtlMinutes"
+        ],
         "documentation": "docs/runtime/file-storage.md"
       },
       "fileReadIntegrity": {
@@ -28,6 +36,9 @@
         "since": "next",
         "status": "stable",
         "description": "A DaprBinding task returns the binding's answer to its output mapping: Data is the body as JSON when it parses, else text, else base64 (Metadata.DataEncoding = json|text|base64|none), Headers is the response metadata, and a failure carries the sidecar's gRPC status detail. An unmapped binding task still adds no instance data. Mappings can set the per-call shape: DaprBindingTask.SetOperation / SetData / SetMetadata (e.g. the object key from ScriptBase.FileObjectKey). The call runs through DaprBindingInvocation (shared by both hosts); Workflow:TaskInvocation:Modes:daprbinding = Local runs it from the orchestration sidecar, where x-storage components live (default stays Remote).",
+        "relatedConfig": [
+          "Workflow:TaskInvocation:Modes:daprbinding"
+        ],
         "documentation": "docs/runtime/task-invocation-routing.md"
       },
       "rawFunctionBinaryBody": {

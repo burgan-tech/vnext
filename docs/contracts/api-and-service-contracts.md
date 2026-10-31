@@ -35,6 +35,7 @@ contracts. Remote services call public runtime APIs rather than internal reposit
 | `GET /{domain}/workflows/{workflow}/instances/{instance}/functions/view` | Backend-driven view selection. |
 | `GET /{domain}/workflows/{workflow}/instances/{instance}/functions/schema` | Transition-aware schema. |
 | `GET\|HEAD /{domain}/workflows/{workflow}/instances/{instance}/functions/file?file={guid}` | Raw bytes of an `x-storage` file of this instance (latest data only, no SubFlow descent). State `queryRoles` -> `403` (decided before the file is located), `x-roles` on the path, an unknown or invalid stored handle -> `404` (`Instance:100049`), missing `file` -> `400` (`Instance:100048`), store down -> `503` (`Instance:100047`), master schema unavailable -> `503` (`Instance:100050`), foreign `{domain}` -> `NotFoundDomain`. `ETag`/`If-None-Match` `304`, `Range` `206`/`416`, `Accept-Ranges`, `Content-Disposition` (`attachment` for HTML/SVG/XML/script types), `Content-Security-Policy: sandbox; default-src 'none'`, unparseable stored type -> `application/octet-stream`, `Content-Encoding: identity`. See [File Storage](../runtime/file-storage.md). |
+| `POST /{domain}/workflows/{workflow}/files?path={field}&name={name}[&version=]` | Streamed upload for an `x-storage` field whose `transport` is `stream` or `any`: the raw body (`Content-Type` = the file's media type, `Content-Length` required) is stored through the field's Dapr binding and answered `201` with a ticket `{ file, component, path, name, mimeType, size, eTag, expiresAt }` (`size`/`eTag` from the bytes received). A start or transition claims it once by sending `{ "file": "<ticket.file>" }` at the same path (same flow and component) before `expiresAt`. Unknown path, an `inline`-only field, no `Content-Length` or a body that does not match it -> `400` (`Instance:100048`); body above `FileStorage:Upload:MaxBytes` -> `413` (plain `ProblemDetails`, no `Instance:` code, nothing stored); store down -> `503` (`Instance:100047`). No runtime authorization, like `start`. See [File Storage](../runtime/file-storage.md#streamed-uploads-transport). |
 | `PATCH /{domain}/workflows/{workflow}/instances/{instance}/transitions/{transition}` | Runs a transition sync or async. |
 | `GET /{domain}/functions` | Lists domain function definitions, including `verbs[]` and input/output schema and view references. |
 | `GET\|POST\|PATCH\|DELETE /{domain}/functions/{function}` | Invokes a custom domain function. `GET /{function}` invokes — it is not a metadata route. |
@@ -49,13 +50,14 @@ contracts. Remote services call public runtime APIs rather than internal reposit
 
 ### File storage errors (`x-storage`)
 
-On `start` and transition bodies for a flow whose master schema declares `x-storage`
-([File Storage](../runtime/file-storage.md)):
+On `start` and transition bodies for a flow whose master schema declares `x-storage`, and on the streamed upload
+route ([File Storage](../runtime/file-storage.md)):
 
 | Code | HTTP | When |
 | --- | --- | --- |
-| `Instance:100048` `FileReferenceInvalid` | `400` | `content` and `file` together, invalid base64, a content-less reference that is not at the same path in the instance's latest data (always on `start`), or a `file` node that is not a valid handle (GUID file id, allowed component) |
-| `Instance:100047` `FileStoreUnavailable` | `503` | The binding failed; answered synchronously before any `202`, a failing `start` creates no instance |
+| `Instance:100048` `FileReferenceInvalid` | `400` | `content` and `file` together, invalid base64, a content-less reference that is neither at the same path in the instance's latest data nor an unclaimed streamed upload made for this flow, path and component (always on `start` unless it is such an upload), inline `content` for a `transport: stream` field, or a `file` node that is not a valid handle (GUID file id, allowed component). On `POST …/files`: unknown path, an `inline`-only field, no `Content-Length`, or a body that does not match it |
+| `Instance:100047` `FileStoreUnavailable` | `503` | The binding failed; answered synchronously before any `202`, a failing `start` creates no instance. Also when stored bytes do not match their handle (`size`/sha256) on `functions/file`, `internal/file` and `GetFileAsync`; nothing is served |
+| — (`413`) | `413` | `POST …/files` with a body above `FileStorage:Upload:MaxBytes`; plain `ProblemDetails` without an `Instance:` code, decided from `Content-Length` before any byte is read |
 | `Instance:100049` `FileNotFound` | `404` | `functions/file` / `internal/file` only |
 | `Instance:100050` `FileSchemaUnavailable` | `503` | The flow's master schema cannot be loaded and the body carries a `content`/`file` member; answered before any persist or `202`, retry. Also on `functions/file` / `internal/file` |
 | `Instance:100051` `FlowVersionNotActivated` | `404` | The requested flow version is published but above the flow's activation ceiling (registry `defaultVersion`); pass the exact version or move the default |
