@@ -300,6 +300,29 @@ return new ScriptResponse { Data = new { convertedDocument = converted } };   //
   refused) for a `DaprBinding` task that reads, lists or deletes it (see [Deleting and listing](#deleting-and-listing-objects)).
 - An object a script writes but no output keeps is an orphan, like any unreferenced object.
 
+## Deleting and listing objects
+
+The runtime has no delete endpoint and never deletes an object (`file-store-no-delete`). A flow that owns retention
+deletes, reads or lists objects itself with a `DaprBinding` task (type `2`) on the store's Dapr binding component
+(vnext-client-sdk-core#142-B/D):
+
+- **Reach the component.** x-storage components are scoped to the orchestration app-id, while binding tasks run in
+  the Execution service by default. Either set `Workflow:TaskInvocation:Modes:daprbinding = Local` (the task then runs
+  from the orchestration sidecar, `LocalDaprBindingTaskInvoker`), or scope the component to the Execution app-id too.
+  A component served by the `s3` provider still needs a Dapr binding component on the same bucket for these tasks.
+- **Name the object.** Use `FileObjectKey(handle.file)` in the input mapping (`FileStorage:KeyPrefix` + file id) as the
+  `key` metadata (`bindings.aws.s3`) or `fileName` (`bindings.localstorage`).
+- **Read the answer.** The task's response reaches the output mapping: `Data` is the binding's body as JSON when it
+  parses (e.g. `list`), as text, or as base64 (`get` of a binary object); `Metadata["DataEncoding"]` says which;
+  `Headers` holds the binding's response metadata. A failure carries the sidecar's reason (for example
+  `couldn't find output binding …`) instead of the generic Dapr client message.
+- **Clear the field.** After a delete, set the field to `null` (an `updateData` or a mapping): a handle whose object is
+  gone answers `404` with the `s3` provider and `503` through a Dapr binding.
+
+Retention tied to the instance ("delete seven days after completion") cannot run on the completed instance itself (a
+completed instance takes no transition): run it from a scheduled housekeeping flow that queries completed instances
+(`GetInstances`) and deletes their objects, or keep the instance in a retention state with a timeout before its finish.
+
 ## Configuration
 
 | Where | Setting |

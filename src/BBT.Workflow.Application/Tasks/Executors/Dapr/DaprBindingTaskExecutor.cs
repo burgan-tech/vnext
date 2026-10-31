@@ -4,18 +4,22 @@ using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Scripting;
+using BBT.Workflow.Tasks.Invocation;
 using BBT.Workflow.Tasks.Mapping;
 using Microsoft.Extensions.Logging;
 
 namespace BBT.Workflow.Tasks.Executors;
 
 /// <summary>
-/// Executor for Dapr binding tasks.
-/// Handles input mapping locally, then delegates to RemoteInvokerService for execution.
+/// Executor for Dapr binding tasks. Handles input mapping locally, then dispatches the call through
+/// <see cref="ITaskInvocationDispatcher"/>: the Execution service (default) or the in-process
+/// <c>LocalDaprBindingTaskInvoker</c> (<c>Workflow:TaskInvocation:Modes:daprbinding = Local</c>). Either way the
+/// output mapping sees the binding's response (data, metadata), not only that the call happened.
 /// </summary>
 public sealed class DaprBindingTaskExecutor : TaskExecutorBase<DaprBindingTask>
 {
     private readonly IRemoteInvokerService _remoteInvoker;
+    private readonly ITaskInvocationDispatcher _dispatcher;
     private readonly IScriptEngine _scriptEngine;
 
     /// <summary>
@@ -23,11 +27,13 @@ public sealed class DaprBindingTaskExecutor : TaskExecutorBase<DaprBindingTask>
     /// </summary>
     public DaprBindingTaskExecutor(
         IRemoteInvokerService remoteInvoker,
+        ITaskInvocationDispatcher dispatcher,
         IScriptEngine scriptEngine,
         ILogger<DaprBindingTaskExecutor> logger)
         : base(logger)
     {
         _remoteInvoker = remoteInvoker;
+        _dispatcher = dispatcher;
         _scriptEngine = scriptEngine;
     }
 
@@ -86,12 +92,8 @@ public sealed class DaprBindingTaskExecutor : TaskExecutorBase<DaprBindingTask>
 
         var traceContext = _remoteInvoker.CreateTraceContext(context.ScriptContext);
 
-        var result = await _remoteInvoker.InvokeAsync(
-            TaskTypes.DaprBinding,
-            task.Key,
-            envelopeResult.Value!,
-            traceContext,
-            cancellationToken);
+        var result = await _dispatcher.DispatchAsync(
+            task, TaskTypes.DaprBinding, envelopeResult.Value!, traceContext, cancellationToken);
 
         if (!result.IsSuccess)
         {
