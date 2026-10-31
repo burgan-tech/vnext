@@ -117,9 +117,10 @@ public static class BannedApiAnalyzer
     /// </summary>
     internal static string? IsBannedMember(ISymbol? symbol)
     {
-        if (symbol is null)
+        // Cheap name test first: the analyzer binds every name in the script, and a display string is not free.
+        if (symbol?.ContainingType is not { Name: "StreamReader" or "StreamWriter" or "Activator" or "Type" or "Environment" } containing)
             return null;
-        var type = symbol.ContainingType?.OriginalDefinition.ToDisplayString();
+        var type = containing.OriginalDefinition.ToDisplayString();
         switch (type)
         {
             // A path-taking constructor of an allowed stream type opens the file.
@@ -271,13 +272,8 @@ public static class BannedApiAnalyzer
         if (type?.ContainingNamespace is not { IsGlobalNamespace: false } ns)
             return null;
 
-        // A carved-out type (and its members) is allowed under a banned namespace; its own path-opening members are
-        // caught by IsBannedMember before this runs.
-        if (MandatoryAllowedTypes.Contains(type.OriginalDefinition.ToDisplayString()))
-            return null;
-
         if (namespaceVerdicts.TryGetValue(ns, out var verdict))
-            return verdict;
+            return verdict is null || IsCarvedOut(type) ? null : verdict;
 
         var name = ns.ToDisplayString();
 
@@ -286,6 +282,13 @@ public static class BannedApiAnalyzer
             : banned.FirstOrDefault(b => name == b || name.StartsWith(b + ".", System.StringComparison.Ordinal));
 
         namespaceVerdicts[ns] = verdict;
-        return verdict;
+        return verdict is null || IsCarvedOut(type) ? null : verdict;
     }
+
+    /// <summary>
+    /// A carved-out type (and its members) is allowed under a banned namespace; its own path-opening members are caught
+    /// by <see cref="IsBannedMember"/> first. Only reached on a banned-namespace hit, so the display string is rare.
+    /// </summary>
+    private static bool IsCarvedOut(ITypeSymbol type)
+        => MandatoryAllowedTypes.Contains(type.OriginalDefinition.ToDisplayString());
 }
