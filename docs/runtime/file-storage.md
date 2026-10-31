@@ -23,8 +23,8 @@ On a master-schema **property**, or on the `items` schema of an array property:
 ```
 
 - `binding` names the store component: a Dapr output binding on the **orchestration** sidecar
-  (`bindings.localstorage` locally, `bindings.aws.s3` or MinIO elsewhere), or an `s3` store configured under
-  `FileStorage:Stores` (see [Store providers](#store-providers)). Required, non-empty string.
+  (`bindings.localstorage` locally, `bindings.aws.s3` or MinIO elsewhere). The runtime reaches every store through
+  its Dapr binding and carries no store SDK. Required, non-empty string.
 - `transport` (optional) chooses how a client may send the bytes: `inline` (default: base64 `content` in the JSON
   body), `stream` (a [streamed upload](#streamed-uploads-transport) referenced by `file`; inline `content` from a
   client is refused) or `any` (both). No other member is allowed.
@@ -153,9 +153,10 @@ Then reference the upload where the field lives, in a start or transition body, 
 - `path` is the field path as the schema folds it: `passport`, `customer.tax`, `files[]`, `documents[].doc`. Unknown
   path, a field whose `transport` is `inline`, or a missing `Content-Length` is `400` `Instance:100048`. A body above
   `MaxBytes` is `413` before any byte is stored. A store failure is `503` `Instance:100047`.
-- The body goes to the field's store as it arrives. With the [`s3` provider](#store-providers) it is streamed end to
-  end; with a Dapr binding it is buffered once (the binding takes one message). `size` and `eTag` are computed from the
-  bytes received, never taken from the client.
+- The body is read from the request stream into one buffer of exactly `Content-Length` bytes (never a JSON string,
+  never base64), hashed, and handed to the field's Dapr binding as one message: a Dapr output binding takes the whole
+  object, so the hop to the sidecar is buffered. `size` and `eTag` are computed from the bytes received, never taken
+  from the client; a body shorter or longer than its `Content-Length` is not stored.
 - The upload is **staged** in the distributed cache (`vnext:{domain}:file-upload:{file}`) for
   `FileStorage:Upload:TicketTtlMinutes` (default 60). Nothing about it is in any instance yet.
 - On the start or transition, a content-less `{ "file": … }` that is not an echo of the instance's own `LatestData` is
@@ -232,13 +233,12 @@ After schema validation, before anything is persisted or enqueued:
 - `Content-Encoding: identity` is set on purpose: compression and `Range` do not mix (the response
   compression middleware would gzip an already-sliced `206` body), and a pre-set encoding makes it skip the
   response.
-- **Streamed.** The body is written from a stream (`IInstanceFileAppService.OpenAsync` → `FileStreamResult`). With the
-  [`s3` provider](#store-providers) the stream fetches ranged GETs lazily, so a `Range` or a `HEAD` never loads the
-  whole object; its length must equal the handle's `size`, otherwise the object is read whole and
-  [verified](#integrity-of-what-the-store-returns). With a Dapr binding the object is the verified, buffered `get`.
+- **Streamed.** The body is written from a stream (`IInstanceFileAppService.OpenAsync` → `FileStreamResult`) over the
+  binding's `get`, which is the whole object, [verified](#integrity-of-what-the-store-returns) before a byte is served.
+  `Range` is sliced from that buffer (a network saving, not a memory saving).
 - **Response buffering by Aether's body-logging middleware.** `UseHttpBodyLogging` copies every response that is not in
   `Telemetry:Logging:ExcludedPaths` into a `MemoryStream` before sending it, even with body logging off, so a
-  downloaded file is held in memory once on its way out (the store read itself streams). Adding `/functions/file$` and
+  downloaded file is held in memory once more on its way out. Adding `/functions/file$` and
   `/internal/file$` to that list removes the copy, but Aether's tracing filter uses the **same** list
   (`Logging.ExcludedPaths ∪ Tracing.ExcludedPaths`): the routes then lose their HTTP server span. The shipped
   configuration keeps the spans; an operator who prefers the memory saving adds the two patterns. The clean fix is in
@@ -246,7 +246,7 @@ After schema validation, before anything is persisted or enqueued:
 
 ### Integrity of what the store returns
 
-Every buffered read (`functions/file` through the Dapr binding, `internal/file`, `GetFileAsync`) checks the stored
+Every read (`functions/file`, `internal/file`, `GetFileAsync`) checks the stored
 bytes against the handle before serving them (`StoredFileVerifier`, vnext-client-sdk-core#145):
 
 | Stored bytes | Result |
@@ -258,8 +258,8 @@ bytes against the handle before serving them (`StoredFileVerifier`, vnext-client
 Why the frame case exists: Dapr 1.17+ `bindings.aws.s3` sends every upload over TLS as `aws-chunked` with a CRC32
 trailer (`STREAMING-UNSIGNED-PAYLOAD-TRAILER`), and an S3-compatible server that does not decode that encoding stores
 the frame itself (a 6265-byte PDF becomes a 6309-byte object). Over plain HTTP the binding signs the full payload and
-stores the bytes as sent. The recovery reads objects already stored that way; the
-[`s3` provider](#store-providers) stops new ones from being framed.
+stores the bytes as sent. See [S3 writes through Dapr](#s3-writes-through-dapr-aws-chunked) for why the runtime
+cannot stop the framing on write and what an operator can do.
 
 ### `GetFileAsync` and `internal/file` (service-to-service)
 
@@ -314,7 +314,6 @@ deletes, reads or lists objects itself with a `DaprBinding` task (type `2`) on t
 - **Reach the component.** x-storage components are scoped to the orchestration app-id, while binding tasks run in
   the Execution service by default. Either set `Workflow:TaskInvocation:Modes:daprbinding = Local` (the task then runs
   from the orchestration sidecar, `LocalDaprBindingTaskInvoker`), or scope the component to the Execution app-id too.
-  A component served by the `s3` provider still needs a Dapr binding component on the same bucket for these tasks.
 - **Name the object.** In the input mapping, set the per-call shape on the task:
   `task.SetMetadata(new() { ["key"] = FileObjectKey(handle.file) })` (`bindings.aws.s3`; `fileName` for
   `bindings.localstorage`), and `task.SetOperation("delete" | "get" | "list")` / `task.SetData(…)` when the definition
@@ -324,7 +323,7 @@ deletes, reads or lists objects itself with a `DaprBinding` task (type `2`) on t
   `Headers` holds the binding's response metadata. A failure carries the sidecar's reason (for example
   `couldn't find output binding …`) instead of the generic Dapr client message.
 - **Clear the field.** After a delete, set the field to `null` (an `updateData` or a mapping): a handle whose object is
-  gone answers `404` with the `s3` provider and `503` through a Dapr binding.
+  gone answers `503` (the binding reports a missing object like an outage).
 
 Retention tied to the instance ("delete seven days after completion") cannot run on the completed instance itself (a
 completed instance takes no transition): run it from a scheduled housekeeping flow that queries completed instances
@@ -335,58 +334,39 @@ completed instance takes no transition): run it from a scheduled housekeeping fl
 | Where | Setting |
 |---|---|
 | Runtime | `FileStorage:KeyPrefix` (string, default empty): prepended to every object key, e.g. `vnext-runtime/` in a shared bucket. **Never change it after the first write**: stored handles carry no key, so existing objects become unreachable |
-| Runtime | `FileStorage:Stores:{component}` (provider per component, default Dapr binding): see [Store providers](#store-providers) |
 | Runtime | `FileStorage:Upload:MaxBytes` (default 104857600) and `FileStorage:Upload:TicketTtlMinutes` (default 60): [streamed uploads](#streamed-uploads-transport) |
 | Runtime | `FileStorage:AllowedBindings` (string list, default empty): binding components a handle may name besides the flow's own declared `x-storage` bindings, for files handed across flows (SubFlow input, a mapping copying a parent's handle). **Helm deployments list their `blobStorageComponents` names here** (`FileStorage__AllowedBindings__0=...`) |
 | Helm (`vnext-helm-charts`) | `global.blobStorageComponents: []`, rendered like `pubsubComponents`; scoped to the **orchestrator** app id only |
 | Local | `etc/orchestration/dapr/components/vnext-blob-local.yaml` (`bindings.localstorage`, `rootPath: /blobs`); orchestration sidecar started with `--max-body-size 64Mi` (all compose files) |
 
-## Store providers
+## S3 writes through Dapr (aws-chunked)
 
-Each `x-storage` component is reached through one of two providers, chosen per component in
-`FileStorage:Stores:{component}`. The master schema does not change: `x-storage.binding` names the component either way.
+The runtime never talks to a store directly: every write is a `create` on the component's Dapr binding. Since Dapr
+1.17, `bindings.aws.s3` uploads through the AWS SDK's transfer manager, which is built without options
+(`transfermanager.New(s3Client)` in components-contrib `bindings/aws/s3/s3.go`, unchanged on `main`) and therefore
+always adds a CRC32 checksum. Over `https://` the SDK sends that checksum as a trailer, so the body goes out as
+`Content-Encoding: aws-chunked` with `x-amz-content-sha256: STREAMING-UNSIGNED-PAYLOAD-TRAILER`. AWS S3, MinIO, Ceph,
+LocalStack, s3mock, moto and SeaweedFS decode it; a store that does not keeps the frame as the object
+(vnext-client-sdk-core#145). The transfer manager's checksum setting takes precedence over the SDK configuration, so
+`AWS_REQUEST_CHECKSUM_CALCULATION=when_required` on the sidecar does **not** remove it (measured: daprd 1.18.2 stores
+6309 bytes for a 6265-byte file with and without it). No component metadata controls it.
 
-| Provider | When | Writes | Reads |
-|---|---|---|---|
-| `dapr` (default, also every component with no entry) | Local disk (`bindings.localstorage`), any Dapr binding | One gRPC message to the orchestration sidecar: the whole body is buffered (sidecar `--max-body-size`) | `get` is buffered; integrity checked against the handle |
-| `s3` | An S3 or S3-compatible store (MinIO, Ceph, a bank's internal S3) | Streamed with a known `Content-Length`; over HTTPS the body goes out raw (`UNSIGNED-PAYLOAD`, no aws-chunked framing, no checksum trailer); a HEAD after the PUT checks the stored size (mismatch: the object is deleted, `503`) | Lazily ranged GETs: `Range` is served by the store, not sliced in memory; a missing object is `404` `FileNotFound` |
+What the runtime does: every read is [verified](#integrity-of-what-the-store-returns), and a framed object whose payload
+matches its handle is served unframed, so files written through Dapr 1.17+ read back exactly. What it cannot do is
+store the object unframed. A consumer that reads the bucket directly (not through vNext) sees the frame. Operator
+options, in order of preference:
 
-```json
-"FileStorage": {
-  "Stores": {
-    "vnext-blob-s3": {
-      "Provider": "s3",
-      "ServiceUrl": "https://s3.example.com",
-      "Bucket": "vnext-documents",
-      "Region": "us-east-1",
-      "ForcePathStyle": true,
-      "AccessKey": "<from a secret>",
-      "SecretKey": "<from a secret>",
-      "CaCertificatePath": "/etc/vnext/s3-ca.pem"
-    }
-  }
-}
-```
-
-- `AccessKey`/`SecretKey` empty: the AWS SDK default credential chain (environment, web identity, instance role).
-- `CaCertificatePath`: a PEM bundle of the CA that issued the store's certificate, for an internal CA the host does not
-  trust. The chain is validated against those roots only; a host-name mismatch is never accepted.
-- Checksums are calculated and validated only when an operation requires them (`WHEN_REQUIRED`). The SDK default
-  (a CRC32 trailer on every upload) is the framing a server without trailer support stores as the object.
-- Over plain `http://` the SDK must sign the payload of a stream it cannot rewind, which it does with signed
-  aws-chunked chunks. Use HTTP only for a local store that decodes them (MinIO does); production stores use HTTPS.
-- `KeyPrefix` applies to both providers, so a component can move from `dapr` (`bindings.aws.s3`) to `s3` on the
-  same bucket: existing objects keep their keys. Objects that `bindings.aws.s3` stored framed are still recovered on
-  read ([integrity](#integrity-of-what-the-store-returns)).
-- Keep the Dapr binding component as well when flows delete or list objects with a `DaprBinding` task (see
-  [Deleting and listing](#deleting-and-listing-objects)).
-- The start fails on a broken entry (`FileStorageOptionsValidator`): an unknown provider, an `s3` store without a
-  `Bucket`, a malformed `ServiceUrl` or a missing `CaCertificatePath` file.
+| Option | Effect |
+|---|---|
+| Use a store that decodes `aws-chunked` (enable trailer/streaming-signature support on it) | Objects are stored as the file; nothing else changes |
+| Reach the store over `http://` inside a trusted network (`disableSSL: "true"`) | The SDK signs the full payload, no frame; traffic is unencrypted |
+| Pin the orchestration sidecar to daprd 1.16.x (`dapr.io/sidecar-image`) | 1.16 uploads unframed; a stopgap that holds back every other Dapr fix |
+| Upstream: let components-contrib pass a checksum option to the transfer manager | The real fix; needs a Dapr release |
 
 ## Dapr limits
 
 - The binding `get` is **buffered**: the whole object is read into memory, so a `Range` request is an
-  in-memory slice (a network saving, not a memory saving). The `s3` provider has no such limit.
+  in-memory slice (a network saving, not a memory saving). The same holds for `create`: one message per object.
 - **Request size.** A client request first hits Kestrel `Kestrel:Limits:MaxRequestBodySize` (10485760 = 10 MiB
   in the orchestration and execution `appsettings.json`; the raw-body buffer is bound to it). Oversize
   requests get `413` before any swap. Base64 inflates the file by about 4/3, so one request carries roughly

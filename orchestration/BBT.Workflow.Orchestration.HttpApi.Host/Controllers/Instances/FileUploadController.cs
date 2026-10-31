@@ -18,11 +18,11 @@ public sealed class FileUploadController(
     IOptions<FileStorageOptions> options) : AetherControllerBase
 {
     /// <summary>
-    /// Streams the raw request body into the store of the flow's <c>x-storage</c> field at <paramref name="path"/>
+    /// Stores the raw request body in the store of the flow's <c>x-storage</c> field at <paramref name="path"/>
     /// and answers a ticket. Reference the ticket's <c>file</c> at the same path in a start or transition body
     /// (<c>{ "file": "&lt;guid&gt;" }</c>, other members of the node are kept) before <c>expiresAt</c>; the swap stamps
-    /// the instance as owner. The body is never buffered by the runtime when the field's store uses the <c>s3</c>
-    /// provider. The file's media type is the request's <c>Content-Type</c>.
+    /// the instance as owner. The body is read once into a buffer of <c>Content-Length</c> bytes and stored as one
+    /// Dapr binding message (no JSON, no base64). The file's media type is the request's <c>Content-Type</c>.
     /// </summary>
     /// <param name="domain">Domain served by this runtime.</param>
     /// <param name="workflow">Flow key whose master schema declares the field.</param>

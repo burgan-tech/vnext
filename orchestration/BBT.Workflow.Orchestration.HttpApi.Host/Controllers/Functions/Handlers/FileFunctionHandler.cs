@@ -66,8 +66,7 @@ public sealed class FileFunctionHandler(IInstanceFileAppService fileAppService) 
         headers[HeaderNames.ContentEncoding] = "identity";
 
         // FileStreamResult handles Range (206/416), If-Range and Accept-Ranges over the seekable stream, and disposes
-        // it. With the s3 provider the stream fetches ranges lazily (HEAD and a range never load the whole object);
-        // with a Dapr binding it is the verified, buffered object.
+        // it. The stream is the verified object the Dapr binding answered (a range is a slice of it).
         return new FileStreamResult(content.Content!, contentType)
         {
             EntityTag = etag,

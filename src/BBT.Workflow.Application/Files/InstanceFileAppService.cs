@@ -62,35 +62,13 @@ public sealed class InstanceFileAppService(
         if (MatchesIfNoneMatch(request.IfNoneMatch, handle.ETag))
             return Result<InstanceFileStream>.Ok(new InstanceFileStream(handle, path, null, NotModified: true));
 
-        var opened = await blobStore.OpenReadAsync(handle.Component, handle.File, cancellationToken);
-        if (!opened.IsSuccess)
-            return Result<InstanceFileStream>.Fail(opened.Error);
-        var blob = opened.Value!;
-
-        // A streaming store serves the object as is once its length is the handle's (the s3 provider checked the
-        // stored size when it wrote it). Anything else is read whole and verified, which also recovers an object a
-        // Dapr 1.17+ S3 binding stored aws-chunked framed.
-        if (!blob.IsBuffered && blob.Length == handle.Size)
-            return Result<InstanceFileStream>.Ok(new InstanceFileStream(handle, path, blob.Content, NotModified: false));
-
-        byte[] stored;
-        await using (blob.Content)
-        {
-            if (blob.Content is MemoryStream buffered)
-                stored = buffered.ToArray();
-            else
-            {
-                var copy = new MemoryStream();
-                await blob.Content.CopyToAsync(copy, cancellationToken);
-                stored = copy.ToArray();
-            }
-        }
-
-        var verified = Verify(instanceId, handle, stored);
-        return verified.IsSuccess
+        // A Dapr binding answers the whole object: it is verified (and recovered from an aws-chunked frame) before a
+        // byte is served, then streamed to the response from memory.
+        var bytes = await ReadVerifiedAsync(instanceId, handle, cancellationToken);
+        return bytes.IsSuccess
             ? Result<InstanceFileStream>.Ok(new InstanceFileStream(
-                handle, path, new MemoryStream(verified.Value!, writable: false), NotModified: false))
-            : Result<InstanceFileStream>.Fail(verified.Error);
+                handle, path, new MemoryStream(bytes.Value!, writable: false), NotModified: false))
+            : Result<InstanceFileStream>.Fail(bytes.Error);
     }
 
     /// <summary>

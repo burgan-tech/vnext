@@ -15,8 +15,6 @@
         <HealthChecksPackageVersion>9.0.0</HealthChecksPackageVersion>
         <!-- Dapr packages -->
         <DaprPackageVersion>1.17.9</DaprPackageVersion>
-        <!-- AWS SDK for the x-storage 's3' provider (FileStorage:Stores) -->
-        <AwsSdkS3PackageVersion>4.0.104.8</AwsSdkS3PackageVersion>
         <!-- Ulid -->
         <UlidPackageVersion>1.4.1</UlidPackageVersion>
         <!-- JsonSchema.NET -->

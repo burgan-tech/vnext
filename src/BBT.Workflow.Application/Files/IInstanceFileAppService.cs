@@ -56,8 +56,8 @@ public interface IInstanceFileAppService
     Task<Result<InstanceFileContent>> ReadAsync(InstanceFileRequest request, CancellationToken cancellationToken);
 
     /// <summary>
-    /// Opens the file for serving: a streaming store answers a lazily ranged stream whose length was checked against
-    /// the handle; a buffering store's bytes are verified like <see cref="ReadAsync"/>. Same lookup and authorization.
+    /// Opens the file for serving: the binding's answer, verified like <see cref="ReadAsync"/>, as a read-only seekable
+    /// stream (Range is served from it). Same lookup and authorization.
     /// </summary>
     Task<Result<InstanceFileStream>> OpenAsync(InstanceFileRequest request, CancellationToken cancellationToken);
 }

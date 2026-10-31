@@ -1,27 +1,21 @@
 {
   "releaseNote": {
-    "summary": "x-storage: S3 provider with streaming, definition-based streamed uploads, verified reads (aws-chunked recovery), script stream types and write-back, binding task responses, raw binary function bodies.",
+    "summary": "x-storage: streamed uploads, verified reads (aws-chunked recovery), script stream types and write-back, binding task responses, raw binary function bodies; stores stay Dapr bindings.",
     "breaking": false,
     "docs": []
   },
   "features": {
     "engine": {
-      "fileStoreS3Provider": {
-        "since": "next",
-        "status": "stable",
-        "description": "FileStorage:Stores:{component}:Provider = s3 reaches an S3-compatible store directly (AWSSDK.S3) instead of the Dapr output binding of the same name. Checksums only WHEN_REQUIRED; over HTTPS the body is streamed raw (UNSIGNED-PAYLOAD, no aws-chunked framing, no CRC32 trailer), so the stored object is the file byte for byte on servers that do not decode aws-chunked (vnext-client-sdk-core#145). A HEAD after every PUT checks the stored size (mismatch: object deleted, 503). Reads open a lazily ranged stream; a missing object is 404. Settings: ServiceUrl, Region, Bucket (required), AccessKey/SecretKey (empty: SDK default chain), ForcePathStyle (default true), CaCertificatePath (custom root trust). A broken entry fails the start. Components without an entry stay Dapr bindings.",
-        "documentation": "docs/runtime/file-storage.md"
-      },
       "fileStreamedUploads": {
         "since": "next",
         "status": "stable",
-        "description": "x-storage.transport: inline (default, base64 content in the JSON body) | stream | any. For stream/any fields, POST /api/v1/{domain}/workflows/{flow}/files?path=&name=[&version=] streams the raw body (Content-Type = media type, Content-Length required) into the field's store and answers 201 with a ticket {file, component, path, name, mimeType, size, eTag, expiresAt}; size and eTag come from the bytes received. The upload is staged in the distributed cache (vnext:{domain}:file-upload:{file}) for FileStorage:Upload:TicketTtlMinutes (default 60); a start or transition claims it once by sending { file } at the same path (same flow and component), the swap stamps the instance as owner and keeps the node's other members. A stream-only field refuses inline content from a client (400 Instance:100048). Limit FileStorage:Upload:MaxBytes (default 100 MiB, 413 above it). The route skips raw-body capture (RawRequestBodyBufferingMiddleware).",
+        "description": "x-storage.transport: inline (default, base64 content in the JSON body) | stream | any. For stream/any fields, POST /api/v1/{domain}/workflows/{flow}/files?path=&name=[&version=] reads the raw body (Content-Type = media type, Content-Length required; no JSON, no base64) into one buffer of Content-Length bytes and stores it through the field's Dapr binding (one binding message) and answers 201 with a ticket {file, component, path, name, mimeType, size, eTag, expiresAt}; size and eTag come from the bytes received. The upload is staged in the distributed cache (vnext:{domain}:file-upload:{file}) for FileStorage:Upload:TicketTtlMinutes (default 60); a start or transition claims it once by sending { file } at the same path (same flow and component), the swap stamps the instance as owner and keeps the node's other members. A stream-only field refuses inline content from a client (400 Instance:100048). Limit FileStorage:Upload:MaxBytes (default 100 MiB, 413 above it). The route skips raw-body capture (RawRequestBodyBufferingMiddleware).",
         "documentation": "docs/runtime/file-storage.md"
       },
       "fileReadIntegrity": {
         "since": "next",
         "status": "stable",
-        "description": "Every buffered x-storage read (functions/file through a Dapr binding, internal/file, GetFileAsync) checks the stored bytes against the handle's size and sha256 eTag. A complete aws-chunked frame whose payload matches is decoded and served (warning 20512), which recovers objects Dapr 1.17+ bindings.aws.s3 stored framed; anything else is 503 Instance:100047 (error 20513) instead of a silently corrupt body. functions/file and internal/file now stream (FileStreamResult); with the s3 provider the stream's length is checked against the handle.",
+        "description": "Every x-storage read (functions/file, internal/file, GetFileAsync) checks the stored bytes against the handle's size and sha256 eTag. A complete aws-chunked frame whose payload matches is decoded and served (warning 20512), which recovers objects Dapr 1.17+ bindings.aws.s3 stored framed; anything else is 503 Instance:100047 (error 20513) instead of a silently corrupt body. functions/file and internal/file now answer through FileStreamResult over the verified binding get.",
         "documentation": "docs/runtime/file-storage.md"
       },
       "scriptFileStreams": {
@@ -98,6 +92,12 @@
   ],
   "knownIssues": [
     {
+      "id": "dapr-s3-binding-frames-tls-uploads",
+      "affectedVersions": ">=next",
+      "fixedIn": null,
+      "description": "Dapr 1.17+ bindings.aws.s3 builds its transfer manager without options, so every https upload carries a CRC32 trailer as Content-Encoding: aws-chunked; a store that does not decode it keeps the frame as the object (vnext-client-sdk-core#145; any runtime version on a daprd 1.17+ sidecar). AWS_REQUEST_CHECKSUM_CALCULATION on the sidecar does not change it and no component metadata does. The runtime recovers such objects on read; a consumer reading the bucket directly sees the frame. Use a store that decodes aws-chunked, an http endpoint in a trusted network, or pin the sidecar to daprd 1.16.x until components-contrib exposes the option."
+    },
+    {
       "id": "file-staged-upload-orphans",
       "affectedVersions": ">=next",
       "fixedIn": null,
@@ -119,7 +119,7 @@
       "id": "file-download-response-buffered-by-body-logging",
       "affectedVersions": ">=next",
       "fixedIn": null,
-      "description": "Aether's HttpBodyLoggingMiddleware copies every response not in Telemetry:Logging:ExcludedPaths into memory before sending it, even with body logging off, so a functions/file or internal/file download is held in memory once (the store read itself streams). Excluding the two routes removes the copy but also their HTTP server spans, because Aether's tracing filter uses Logging.ExcludedPaths as well. Shipped configuration keeps the spans; the fix belongs in Aether."
+      "description": "Aether's HttpBodyLoggingMiddleware copies every response not in Telemetry:Logging:ExcludedPaths into memory before sending it, even with body logging off, so a functions/file or internal/file download is held in memory once once more after the binding get. Excluding the two routes removes the copy but also their HTTP server spans, because Aether's tracing filter uses Logging.ExcludedPaths as well. Shipped configuration keeps the spans; the fix belongs in Aether."
     }
   ]
 }

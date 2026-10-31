@@ -4892,18 +4892,6 @@ public static partial class WorkflowLogs
         long size,
         string eTag);
 
-    /// <summary>Logs that an object written to a store does not have the size that was sent; it is deleted and the write fails.</summary>
-    [LoggerMessage(
-        EventId = 20514,
-        Level = LogLevel.Error,
-        Message = "File {File} written to {Component} has {StoredLength} bytes, {Size} were sent; the object is deleted and the write refused")]
-    public static partial void FileStoredSizeMismatch(
-        this ILogger logger,
-        string component,
-        string file,
-        long storedLength,
-        long size);
-
     /// <summary>Logs a streamed upload stored and staged for a start or transition. Content is never logged.</summary>
     [LoggerMessage(
         EventId = 20515,

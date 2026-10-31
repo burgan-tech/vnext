@@ -83,15 +83,6 @@ public sealed class DaprBindingFileBlobStore(
             : Result<StoredBlob>.Fail(put.Error);
     }
 
-    /// <summary>The binding <c>get</c> is buffered: the whole object, as a seekable read-only stream.</summary>
-    public async Task<Result<BlobReadStream>> OpenReadAsync(string component, string file, CancellationToken cancellationToken)
-    {
-        var bytes = await GetAsync(component, file, cancellationToken);
-        return bytes.IsSuccess
-            ? Result<BlobReadStream>.Ok(new BlobReadStream(new MemoryStream(bytes.Value!, writable: false), bytes.Value!.LongLength, IsBuffered: true))
-            : Result<BlobReadStream>.Fail(bytes.Error);
-    }
-
     private void AddKey(BindingRequest request, string file)
     {
         var key = _prefix + file;
