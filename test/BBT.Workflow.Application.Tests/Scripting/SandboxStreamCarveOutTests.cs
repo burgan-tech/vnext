@@ -120,3 +120,42 @@ public class SandboxStreamCarveOutTests
     [InlineData("return Environment.NewLine.Length > 0 ? 1 : 1;")]
     public async Task UsagesShippedPackagesRelyOn_StillCompile(string body) => (await Compile(body)).Calc().ShouldBe(1);
 }
+
+/// <summary>A mapping that reads a file, processes it through streams and writes it back compiles under the sandbox.</summary>
+public class SandboxFileRoundTripCompileTests
+{
+    [Fact]
+    public async Task ScriptBaseFileApis_WithStreams_Compile()
+    {
+        var options = new ScriptSandboxOptions
+        {
+            Enabled = true,
+            AllowedAssemblies = { "System.Private.CoreLib", "System.Runtime", "System.Collections", "System.Linq", "netstandard" },
+        };
+        const string code = """
+            using System.IO;
+            using System.Threading.Tasks;
+            using BBT.Workflow.Scripting;
+            using BBT.Workflow.Scripting.Functions;
+            public class C : ScriptBase, ISandboxTestCalc
+            {
+                public int Calc() => 0;
+                public async Task<ScriptStoredFile> Convert(string d, string f, string i, string file)
+                {
+                    var source = await GetFileAsync(d, f, i, file);
+                    using var reader = new BinaryReader(source.OpenRead());
+                    var output = new MemoryStream();
+                    using (var writer = new BinaryWriter(output, System.Text.Encoding.UTF8, leaveOpen: true))
+                        writer.Write(reader.ReadBytes((int)source.Size));
+                    output.Position = 0;
+                    var key = FileObjectKey(file);
+                    return await PutFileAsync(d, f, i, "store", output, "out.bin", "application/octet-stream");
+                }
+            }
+            """;
+        var compiled = await new BBT.Workflow.Scripting.Evaluators.CSharpEvaluator(options).CompileToInstanceAsync<ISandboxTestCalc>(
+            code, extraReferences: [Microsoft.CodeAnalysis.MetadataReference.CreateFromFile(typeof(ISandboxTestCalc).Assembly.Location),
+                                    Microsoft.CodeAnalysis.MetadataReference.CreateFromFile(typeof(BBT.Workflow.Scripting.Functions.ScriptBase).Assembly.Location)]);
+        compiled.Instance.ShouldNotBeNull();
+    }
+}

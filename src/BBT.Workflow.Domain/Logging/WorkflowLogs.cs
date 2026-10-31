@@ -4940,6 +4940,20 @@ public static partial class WorkflowLogs
         string component,
         string file);
 
+    /// <summary>Logs a file a script stored with PutFileAsync. Content is never logged.</summary>
+    [LoggerMessage(
+        EventId = 20518,
+        Level = LogLevel.Information,
+        Message = "File written by script: domain {Domain}, flow {Flow}, instance {Instance}, component {Component}, file {File}, size {Size}")]
+    public static partial void FileWrittenByScript(
+        this ILogger logger,
+        string domain,
+        string flow,
+        string instance,
+        string component,
+        string file,
+        long size);
+
     #endregion
 
     #region Flow Version Policy (205xx)

@@ -271,6 +271,35 @@ from the caller. Whoever owns ingress/NetworkPolicy must keep the route unreacha
 `GetFileAsync` is a scripting API, and scripts run only in the Orchestration host; the Execution host has no
 file reader, so the call is unavailable there (in practice never reached).
 
+## Processing files in scripts
+
+A script reads a stored file, processes it with System.IO streams and writes the result back as an x-storage file
+(vnext-client-sdk-core#142-A):
+
+```csharp
+var source = await GetFileAsync(context.Runtime.Domain, context.Instance.Flow, context.Instance.Id.ToString(), handle.file);
+using var input = source.OpenRead();                    // read-only, seekable MemoryStream over the verified bytes
+var output = new MemoryStream();
+// … hand input/output to a plugin library (PDF, TIFF, image) mounted in Scripting:Sandbox:PluginDirectory …
+output.Position = 0;
+var converted = await PutFileAsync(context.Runtime.Domain, context.Instance.Flow, context.Instance.Id.ToString(),
+    "vnext-blob-s3", output, "converted.pdf", "application/pdf");
+return new ScriptResponse { Data = new { convertedDocument = converted } };   // an x-storage path of the master schema
+```
+
+- `ScriptFile.OpenRead()` wraps the bytes in a new read-only stream on every call. The sandbox allows the System.IO
+  stream types, not the file system ([custom-script-helpers § Stream types](../custom-script-helpers.md)).
+- `PutFileAsync(domain, flow, instance, component, byte[] | Stream, name?, mimeType?)` stores the bytes and returns a
+  `ScriptStoredFile` in the persisted handle shape (`component`, `file`, `name`, `mimeType`, `size`, `eTag`, `owner`).
+  Size and eTag are computed from the bytes written. Placed at an x-storage path of the mapping or task output, it is a
+  valid handle in the Trusted swap and is kept as is. Rules: the domain must be served here; the component must be an
+  `x-storage` binding of that flow (latest version) or in `FileStorage:AllowedBindings`; the size is capped by
+  `FileStorage:Upload:MaxBytes`. A refusal or a store failure throws (the task fails like any helper failure). A stream
+  that cannot report its length is buffered first.
+- `FileObjectKey(file)` answers the object key of a stored file (`FileStorage:KeyPrefix` + file id; a non-GUID is
+  refused) for a `DaprBinding` task that reads, lists or deletes it (see [Deleting and listing](#deleting-and-listing-objects)).
+- An object a script writes but no output keeps is an orphan, like any unreferenced object.
+
 ## Configuration
 
 | Where | Setting |

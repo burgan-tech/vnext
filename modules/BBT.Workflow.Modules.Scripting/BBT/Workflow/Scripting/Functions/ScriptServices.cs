@@ -15,12 +15,14 @@ namespace BBT.Workflow.Scripting.Functions;
 /// <param name="configuration">The configuration for accessing application settings</param>
 /// <param name="secretCache">The singleton secret bundle cache shared across request scopes</param>
 /// <param name="fileReader">The x-storage file reader; optional, absent on hosts without the gateway stack</param>
+/// <param name="fileWriter">The x-storage file writer; optional, absent on hosts without the file stack</param>
 public sealed class ScriptServices(
     DaprClient daprClient,
     ILogger<ScriptServices> logger,
     IConfiguration configuration,
     IScriptSecretCache secretCache,
-    IScriptFileReader? fileReader = null) : IScriptServices
+    IScriptFileReader? fileReader = null,
+    IScriptFileWriter? fileWriter = null) : IScriptServices
 {
     /// <inheritdoc />
     public DaprClient DaprClient { get; } = daprClient ?? throw new ArgumentNullException(nameof(daprClient));
@@ -36,5 +38,8 @@ public sealed class ScriptServices(
 
     /// <inheritdoc />
     public IScriptFileReader? FileReader { get; } = fileReader;
+
+    /// <inheritdoc />
+    public IScriptFileWriter? FileWriter { get; } = fileWriter;
 }
 

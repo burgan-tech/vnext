@@ -40,5 +40,11 @@ public interface IScriptServices
     /// <c>null</c> means file reads are unavailable (hosts without the gateway stack, legacy implementations, bare mocks).
     /// </summary>
     IScriptFileReader? FileReader => null;
+
+    /// <summary>
+    /// Writes x-storage files for <c>ScriptBase.PutFileAsync</c> and names object keys (<c>FileObjectKey</c>).
+    /// <c>null</c> means file writes are unavailable (hosts without the file stack, legacy implementations, bare mocks).
+    /// </summary>
+    IScriptFileWriter? FileWriter => null;
 }
 

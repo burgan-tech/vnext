@@ -211,7 +211,7 @@ public sealed class FileOffloadService(
     /// The client-declared media type, normalised (<c>type/subtype</c> plus parameters, as the header parser prints it),
     /// or null when it does not parse — the read side then serves <c>application/octet-stream</c>.
     /// </summary>
-    internal static string? NormalizeMediaType(string? mimeType)
+    public static string? NormalizeMediaType(string? mimeType)
     {
         if (string.IsNullOrWhiteSpace(mimeType)
             || !System.Net.Http.Headers.MediaTypeHeaderValue.TryParse(mimeType.Trim(), out var parsed)
@@ -225,7 +225,7 @@ public sealed class FileOffloadService(
     /// The client-declared file name with control characters replaced and capped at <see cref="MaxNameLength"/>
     /// characters; a short extension survives the cut (<c>very-long…name.pdf</c>).
     /// </summary>
-    internal static string? NormalizeName(string? name)
+    public static string? NormalizeName(string? name)
     {
         if (name is null)
             return null;
