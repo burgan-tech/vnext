@@ -520,7 +520,7 @@ public sealed class InstanceController(
         [FromServices] BBT.Workflow.Files.IInstanceFileAppService fileAppService,
         CancellationToken cancellationToken = default)
     {
-        var result = await fileAppService.ReadAsync(
+        var result = await fileAppService.OpenAsync(
             new BBT.Workflow.Files.InstanceFileRequest(domain, workflow, instance, file, IfNoneMatch: null, Authorization: null),
             cancellationToken);
         if (!result.IsSuccess)
@@ -534,7 +534,7 @@ public sealed class InstanceController(
         var contentType = Microsoft.Net.Http.Headers.MediaTypeHeaderValue.TryParse(content.Handle.MimeType, out _)
             ? content.Handle.MimeType!
             : "application/octet-stream";
-        return File(content.Bytes!, contentType);
+        return File(content.Content!, contentType);
     }
 
     /// <summary>

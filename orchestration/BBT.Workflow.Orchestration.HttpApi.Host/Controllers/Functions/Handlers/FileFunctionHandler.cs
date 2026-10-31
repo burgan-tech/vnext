@@ -29,7 +29,7 @@ public sealed class FileFunctionHandler(IInstanceFileAppService fileAppService) 
                 .ToActionResult(request.HttpContext);
         }
 
-        var result = await fileAppService.ReadAsync(
+        var result = await fileAppService.OpenAsync(
             new InstanceFileRequest(
                 request.Domain,
                 request.Workflow,
@@ -65,9 +65,10 @@ public sealed class FileFunctionHandler(IInstanceFileAppService fileAppService) 
         // pre-set Content-Encoding makes ResponseCompression skip this response (text/plain, svg, json, xml).
         headers[HeaderNames.ContentEncoding] = "identity";
 
-        // FileContentResult handles Range (206/416), If-Range and Accept-Ranges. The binding read is buffered,
-        // so a range is an in-memory slice (network saving, not memory saving).
-        return new FileContentResult(content.Bytes!, contentType)
+        // FileStreamResult handles Range (206/416), If-Range and Accept-Ranges over the seekable stream, and disposes
+        // it. With the s3 provider the stream fetches ranges lazily (HEAD and a range never load the whole object);
+        // with a Dapr binding it is the verified, buffered object.
+        return new FileStreamResult(content.Content!, contentType)
         {
             EntityTag = etag,
             EnableRangeProcessing = true,

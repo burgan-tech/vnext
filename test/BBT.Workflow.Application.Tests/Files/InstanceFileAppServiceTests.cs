@@ -495,4 +495,59 @@ public sealed class InstanceFileAppServiceTests
         result.IsSuccess.ShouldBeFalse();
         result.Error.Code.ShouldBe(WorkflowErrorCodes.FileStoreUnavailable);
     }
+
+    // Streaming reads (functions/file, internal/file).
+    private sealed class NonBufferedStream(byte[] bytes) : System.IO.MemoryStream(bytes) { }
+
+    [Fact]
+    public async Task Open_StreamingStoreWithTheHandlesLength_ServesTheStoreStreamUntouched()
+    {
+        Seed("1.0.0", $$"""{ "passport": {{Handle(F1)}} }""");
+        var stream = new NonBufferedStream(Bytes);
+        _store.OpenReadAsync(Binding, F1, Arg.Any<CancellationToken>())
+            .Returns(Result<BlobReadStream>.Ok(new BlobReadStream(stream, 3, IsBuffered: false)));
+
+        var result = await _sut.OpenAsync(Request(F1), CancellationToken.None);
+
+        result.Value!.Content.ShouldBeSameAs(stream);
+        stream.Position.ShouldBe(0);
+        await _store.DidNotReceiveWithAnyArgs().GetAsync(default!, default!, default);
+    }
+
+    [Fact]
+    public async Task Open_StreamingStoreWithAnotherLength_IsReadAndRecoveredFromAFrame()
+    {
+        Seed("1.0.0", $$"""{ "passport": {{Handle(F1)}} }""");
+        var frame = System.Text.Encoding.ASCII.GetBytes("3\r\n").Concat(Bytes)
+            .Concat(System.Text.Encoding.ASCII.GetBytes("\r\n0\r\nx-amz-checksum-crc32:AbCd1234\r\n\r\n")).ToArray();
+        _store.OpenReadAsync(Binding, F1, Arg.Any<CancellationToken>())
+            .Returns(Result<BlobReadStream>.Ok(new BlobReadStream(new NonBufferedStream(frame), frame.Length, IsBuffered: false)));
+
+        var result = await _sut.OpenAsync(Request(F1), CancellationToken.None);
+
+        var served = new System.IO.MemoryStream();
+        await result.Value!.Content!.CopyToAsync(served);
+        served.ToArray().ShouldBe(Bytes);
+    }
+
+    [Fact]
+    public async Task Open_BufferedStoreWithChangedBytes_Is503()
+    {
+        Seed("1.0.0", $$"""{ "passport": {{Handle(F1)}} }""");
+        _store.OpenReadAsync(Binding, F1, Arg.Any<CancellationToken>())
+            .Returns(Result<BlobReadStream>.Ok(new BlobReadStream(new System.IO.MemoryStream(new byte[] { 9, 9, 9 }), 3, IsBuffered: true)));
+
+        (await _sut.OpenAsync(Request(F1), CancellationToken.None)).Error.Code.ShouldBe(WorkflowErrorCodes.FileStoreUnavailable);
+    }
+
+    [Fact]
+    public async Task Open_IfNoneMatch_DoesNotOpenTheStore()
+    {
+        Seed("1.0.0", $$"""{ "passport": {{Handle(F1)}} }""");
+
+        var result = await _sut.OpenAsync(Request(F1, ifNoneMatch: $"\"{ETag}\""), CancellationToken.None);
+
+        result.Value!.NotModified.ShouldBeTrue();
+        await _store.DidNotReceiveWithAnyArgs().OpenReadAsync(default!, default!, default);
+    }
 }

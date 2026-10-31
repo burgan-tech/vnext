@@ -33,12 +33,31 @@ public sealed record InstanceFileRequest(
 /// <param name="NotModified">The caller's <c>If-None-Match</c> matched; no store read was made.</param>
 public sealed record InstanceFileContent(FileHandle Handle, string Path, byte[]? Bytes, bool NotModified);
 
+/// <summary>An opened x-storage file, for serving it without loading it into memory.</summary>
+/// <param name="Handle">The handle as stored in the instance's latest data.</param>
+/// <param name="Path">The concrete data path the handle was found at (e.g. <c>files[1]</c>).</param>
+/// <param name="Content">
+/// A seekable stream of exactly <see cref="FileHandle.Size"/> bytes that the caller disposes; <c>null</c> when
+/// <paramref name="NotModified"/>.
+/// </param>
+/// <param name="NotModified">The caller's <c>If-None-Match</c> matched; the store was not opened.</param>
+public sealed record InstanceFileStream(FileHandle Handle, string Path, Stream? Content, bool NotModified);
+
 /// <summary>
 /// Reads an x-storage file of ONE instance. The handle is looked up only in that instance's latest data at
 /// its schema's x-storage paths, so the binding and object key never come from the caller.
 /// </summary>
 public interface IInstanceFileAppService
 {
-    /// <summary>Reads the file; must run inside the instance flow's schema scope.</summary>
+    /// <summary>
+    /// Reads the whole file into memory, verified against the handle (size + sha256); must run inside the instance
+    /// flow's schema scope. For scripts (<c>GetFileAsync</c>) and service-to-service reads.
+    /// </summary>
     Task<Result<InstanceFileContent>> ReadAsync(InstanceFileRequest request, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Opens the file for serving: a streaming store answers a lazily ranged stream whose length was checked against
+    /// the handle; a buffering store's bytes are verified like <see cref="ReadAsync"/>. Same lookup and authorization.
+    /// </summary>
+    Task<Result<InstanceFileStream>> OpenAsync(InstanceFileRequest request, CancellationToken cancellationToken);
 }

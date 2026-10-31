@@ -184,6 +184,13 @@ After schema validation, before anything is persisted or enqueued:
 - `Content-Encoding: identity` is set on purpose: compression and `Range` do not mix (the response
   compression middleware would gzip an already-sliced `206` body), and a pre-set encoding makes it skip the
   response.
+- **Streamed.** The body is written from a stream (`IInstanceFileAppService.OpenAsync` → `FileStreamResult`). With the
+  [`s3` provider](#store-providers) the stream fetches ranged GETs lazily, so a `Range` or a `HEAD` never loads the
+  whole object; its length must equal the handle's `size`, otherwise the object is read whole and
+  [verified](#integrity-of-what-the-store-returns). With a Dapr binding the object is the verified, buffered `get`.
+- `functions/file` and `internal/file` are in the Aether `Telemetry:Logging:ExcludedPaths` of the orchestration host:
+  the body-logging middleware otherwise copies every response into memory before sending it, even with body logging
+  off. Traces are still recorded (`Telemetry:Tracing:ExcludedPaths` is unchanged).
 
 ### Integrity of what the store returns
 
@@ -271,7 +278,7 @@ Each `x-storage` component is reached through one of two providers, chosen per c
 ## Dapr limits
 
 - The binding `get` is **buffered**: the whole object is read into memory, so a `Range` request is an
-  in-memory slice (a network saving, not a memory saving).
+  in-memory slice (a network saving, not a memory saving). The `s3` provider has no such limit.
 - **Request size.** A client request first hits Kestrel `Kestrel:Limits:MaxRequestBodySize` (10485760 = 10 MiB
   in the orchestration and execution `appsettings.json`; the raw-body buffer is bound to it). Oversize
   requests get `413` before any swap. Base64 inflates the file by about 4/3, so one request carries roughly
