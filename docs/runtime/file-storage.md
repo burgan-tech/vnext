@@ -185,6 +185,23 @@ After schema validation, before anything is persisted or enqueued:
   compression middleware would gzip an already-sliced `206` body), and a pre-set encoding makes it skip the
   response.
 
+### Integrity of what the store returns
+
+Every buffered read (`functions/file` through the Dapr binding, `internal/file`, `GetFileAsync`) checks the stored
+bytes against the handle before serving them (`StoredFileVerifier`, vnext-client-sdk-core#145):
+
+| Stored bytes | Result |
+|---|---|
+| Length = `size` and sha256 = `eTag` | Served |
+| A complete `aws-chunked` frame whose payload matches the handle | The payload is served; warning `20512` `FileRecoveredFromChunkedFrame` |
+| Anything else | `503` `Instance:100047` `FileStoreUnavailable`; error `20513` `FileIntegrityMismatch` names the stored and expected sizes |
+
+Why the frame case exists: Dapr 1.17+ `bindings.aws.s3` sends every upload over TLS as `aws-chunked` with a CRC32
+trailer (`STREAMING-UNSIGNED-PAYLOAD-TRAILER`), and an S3-compatible server that does not decode that encoding stores
+the frame itself (a 6265-byte PDF becomes a 6309-byte object). Over plain HTTP the binding signs the full payload and
+stores the bytes as sent. The recovery reads objects already stored that way; the
+[`s3` provider](#store-providers) stops new ones from being framed.
+
 ### `GetFileAsync` and `internal/file` (service-to-service)
 
 `ScriptBase.GetFileAsync(domain, flow, instance, file)` returns `ScriptFile { Content, Name, MimeType, Size,

@@ -30,7 +30,7 @@ public sealed class InstanceFileAppServiceTests
     private const string Domain = "core";
     private const string Flow = "kyc";
     private const string Binding = "vnext-blob-local";
-    private const string ETag = "abc123";
+    private const string ETag = "039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81";
 
     private const string MasterSchema = """
         { "type": "object", "properties": {
@@ -202,9 +202,9 @@ public sealed class InstanceFileAppServiceTests
     }
 
     [Theory]
-    [InlineData("\"abc123\"")]
-    [InlineData("W/\"abc123\"")]
-    [InlineData("\"zzz\", \"abc123\"")]
+    [InlineData("\"039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81\"")]
+    [InlineData("W/\"039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81\"")]
+    [InlineData("\"zzz\", \"039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81\"")]
     [InlineData("*")]
     public async Task IfNoneMatchOnTheETag_IsNotModified_WithoutAStoreRead(string ifNoneMatch)
     {
@@ -219,7 +219,7 @@ public sealed class InstanceFileAppServiceTests
     }
 
     [Theory]
-    [InlineData("abc123")]
+    [InlineData("039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81")]
     [InlineData("\"other\"")]
     public async Task IfNoneMatchOnAnotherTagOrUnquoted_ReadsTheStore(string ifNoneMatch)
     {
@@ -464,5 +464,35 @@ public sealed class InstanceFileAppServiceTests
         var row = (InstanceData)ctor.Invoke([Guid.NewGuid(), _instance.Id, version, new JsonData(json), true]);
         typeof(Instance).GetMethod("AcceptPersistedData", BindingFlags.Instance | BindingFlags.NonPublic)!
             .Invoke(_instance, [row]);
+    }
+
+    // vnext-client-sdk-core#145 — the read path verifies the stored bytes against the handle.
+    [Fact]
+    public async Task StoredBytesThatAreAnAwsChunkedFrameOfTheFile_AreRecovered()
+    {
+        Seed("1.0.0", $$"""{ "passport": {{Handle(F1)}} }""");
+        var frame = System.Text.Encoding.ASCII.GetBytes("3\r\n").Concat(Bytes)
+            .Concat(System.Text.Encoding.ASCII.GetBytes("\r\n0\r\nx-amz-checksum-crc32:AbCd1234\r\n\r\n")).ToArray();
+        _store.GetAsync(Binding, F1, Arg.Any<CancellationToken>()).Returns(Result<byte[]>.Ok(frame));
+
+        var result = await _sut.ReadAsync(Request(F1), CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        result.Value!.Bytes.ShouldBe(Bytes);
+    }
+
+    [Theory]
+    [InlineData(new byte[] { 1, 2 })]            // shorter than the handle
+    [InlineData(new byte[] { 1, 2, 4 })]         // same length, other bytes
+    [InlineData(new byte[] { 1, 2, 3, 4 })]      // longer, not a frame
+    public async Task StoredBytesThatDoNotMatchTheHandle_AreRefusedWith503(byte[] stored)
+    {
+        Seed("1.0.0", $$"""{ "passport": {{Handle(F1)}} }""");
+        _store.GetAsync(Binding, F1, Arg.Any<CancellationToken>()).Returns(Result<byte[]>.Ok(stored));
+
+        var result = await _sut.ReadAsync(Request(F1), CancellationToken.None);
+
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.FileStoreUnavailable);
     }
 }

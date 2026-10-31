@@ -79,9 +79,34 @@ public sealed class InstanceFileAppService(
             return Result<InstanceFileContent>.Ok(new InstanceFileContent(handle, path, null, NotModified: true));
 
         var bytes = await blobStore.GetAsync(handle.Component, handle.File, cancellationToken);
-        return bytes.IsSuccess
-            ? Result<InstanceFileContent>.Ok(new InstanceFileContent(handle, path, bytes.Value, NotModified: false))
-            : Result<InstanceFileContent>.Fail(bytes.Error);
+        if (!bytes.IsSuccess)
+            return Result<InstanceFileContent>.Fail(bytes.Error);
+
+        var verified = Verify(instance.Id, handle, bytes.Value!);
+        return verified.IsSuccess
+            ? Result<InstanceFileContent>.Ok(new InstanceFileContent(handle, path, verified.Value, NotModified: false))
+            : Result<InstanceFileContent>.Fail(verified.Error);
+    }
+
+    /// <summary>
+    /// The stored bytes are never trusted to be the file: they must match the handle's <c>size</c> and <c>eTag</c>
+    /// (vnext-client-sdk-core#145). An aws-chunked framed object whose payload matches is recovered; anything else is
+    /// <c>FileStoreUnavailable</c> (503) with the reason in the log, never a silently corrupt body.
+    /// </summary>
+    private Result<byte[]> Verify(Guid instanceId, FileHandle handle, byte[] stored)
+    {
+        var check = StoredFileVerifier.Check(handle, stored);
+        switch (check.State)
+        {
+            case StoredFileState.Intact:
+                return Result<byte[]>.Ok(check.Content!);
+            case StoredFileState.RecoveredFromChunkedFrame:
+                logger.FileRecoveredFromChunkedFrame(instanceId, handle.Component, handle.File, stored.LongLength, handle.Size);
+                return Result<byte[]>.Ok(check.Content!);
+            default:
+                logger.FileIntegrityMismatch(instanceId, handle.Component, handle.File, stored.LongLength, handle.Size, handle.ETag);
+                return Result<byte[]>.Fail(WorkflowErrors.FileStoreUnavailable(handle.Component));
+        }
     }
 
     /// <summary>
