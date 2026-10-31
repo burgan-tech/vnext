@@ -174,6 +174,40 @@ interop, or registry access. `DllImport` and `unsafe` are rejected. `System.Thre
 `System.Threading.Tasks`) are **allowed** — threading/synchronization primitives and `Task`-based
 async are available to mappings.
 
+### Stream types allowed under `System.IO` (carve-out)
+
+Scripts process a file's bytes in memory (vnext-client-sdk-core#142-A: read with `GetFileAsync`, convert, write back
+with `PutFileAsync`). These types are allowed although their namespace is banned, because none of them opens a path,
+a handle or a socket on its own (`BannedApiAnalyzer.MandatoryAllowedTypes`):
+
+| Namespace | Allowed types |
+|---|---|
+| `System.IO` | `Stream`, `MemoryStream`, `BufferedStream`, `BinaryReader`, `BinaryWriter`, `TextReader`, `TextWriter`, `StringReader`, `StringWriter`, `StreamReader`, `StreamWriter`, `SeekOrigin`, `IOException`, `EndOfStreamException`, `InvalidDataException` |
+| `System.IO.Compression` | `GZipStream`, `DeflateStream`, `BrotliStream`, `ZLibStream`, `CompressionLevel`, `CompressionMode`, `ZipArchive`, `ZipArchiveEntry`, `ZipArchiveMode` (the `System.IO.Compression` assembly must be in `AllowedAssemblies` or the mapping's `scripts.allowedAssemblies`) |
+
+Everything else under `System.IO` stays banned: `File`, `FileStream`, `FileInfo`, `Directory`, `Path`, `DriveInfo`,
+`UnmanagedMemoryStream`, pipes, memory-mapped files, `System.IO.Compression.ZipFile`.
+
+### Banned members (any namespace)
+
+Member-level bans close the routes from an allowed type to what the namespace ban forbids; a reflection object can be
+invoked through `dynamic`, which leaves no symbol for the analyzer (`BannedApiAnalyzer.IsBannedMember`):
+
+| Member | Why |
+|---|---|
+| `StreamReader(string path, …)`, `StreamWriter(string path, …)` | Open a file by path |
+| `Activator` (every non-generic member) | Instantiates any type from a `Type` object; `Activator.CreateInstance<T>()` stays allowed (it names `T`) |
+| `Type.GetType(string …)` (static), `GetTypeFromProgID`, `GetTypeFromCLSID` | A banned type by name |
+| `Type.GetMethod(s)`, `GetConstructor(s)`, `GetMember(s)`, `GetField(s)`, `GetEvent(s)`, `FindMembers`, `GetDefaultMembers`, `TypeInitializer`, `InvokeMember` | Reflection objects invocable through `dynamic` |
+| `Environment.Exit`, `Environment.FailFast`, `Environment.SetEnvironmentVariable` | Terminate the host or change its environment |
+
+Measured against every shipped domain package (source and base64-embedded code) before banning: none of these
+members is used. **Known gaps, kept because shipped packages use them:** `Environment.GetEnvironmentVariable`
+(vnext-sys-flow), `Type.GetProperty`, `Type.Assembly`, `AppDomain`, `AssemblyLoadContext` (morph-idm). Combined with
+`dynamic` (`Microsoft.CSharp` is in the baseline) they still reach reflection, so the analyzer is a guard against
+accidental and low-effort misuse, not an isolation boundary: the host (read-only root file system, no secrets on disk,
+an egress policy, an operator-curated plugin directory) is.
+
 ## 4. Third-party / NuGet assemblies (operator-curated only)
 
 There is **no** per-flow DLL upload or nupkg download. An operator mounts approved DLLs into
