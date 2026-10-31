@@ -117,7 +117,10 @@ public sealed class DaprBindingTaskExecutor : TaskExecutorBase<DaprBindingTask>
         var mapping = context.OnExecuteTask.Mapping;
         if (mapping is null || !mapping.HasMappingCode)
         {
-            return Result<object?>.Ok(invocationResult.Data);
+            // Without an output mapping a binding task contributes no instance data, as before the binding's answer
+            // was returned: an unmapped create/notify task must not start merging the binding's response (an S3
+            // location, an HTTP body) into the instance. Only an output mapping reads the answer.
+            return Result<object?>.Ok(null);
         }
 
         UpdateScriptContextWithResponse(task.Key, invocationResult, context.ScriptContext, context.ResponseVariableKey);
