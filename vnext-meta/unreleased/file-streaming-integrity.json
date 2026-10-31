@@ -33,7 +33,7 @@
       "daprBindingTaskResponse": {
         "since": "next",
         "status": "stable",
-        "description": "A DaprBinding task returns the binding's answer to its output mapping: Data is the body as JSON when it parses, else text, else base64 (Metadata.DataEncoding = json|text|base64|none), Headers is the response metadata, and a failure carries the sidecar's gRPC status detail. An unmapped binding task still adds no instance data. The call runs through DaprBindingInvocation (shared by both hosts); Workflow:TaskInvocation:Modes:daprbinding = Local runs it from the orchestration sidecar, where x-storage components live (default stays Remote).",
+        "description": "A DaprBinding task returns the binding's answer to its output mapping: Data is the body as JSON when it parses, else text, else base64 (Metadata.DataEncoding = json|text|base64|none), Headers is the response metadata, and a failure carries the sidecar's gRPC status detail. An unmapped binding task still adds no instance data. Mappings can set the per-call shape: DaprBindingTask.SetOperation / SetData / SetMetadata (e.g. the object key from ScriptBase.FileObjectKey). The call runs through DaprBindingInvocation (shared by both hosts); Workflow:TaskInvocation:Modes:daprbinding = Local runs it from the orchestration sidecar, where x-storage components live (default stays Remote).",
         "documentation": "docs/runtime/task-invocation-routing.md"
       },
       "rawFunctionBinaryBody": {
