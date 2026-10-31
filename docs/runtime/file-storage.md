@@ -22,9 +22,12 @@ On a master-schema **property**, or on the `items` schema of an array property:
   "doc": { "type": "object", "x-storage": { "binding": "vnext-blob-s3" } } } } }
 ```
 
-- `binding` names a Dapr output binding component on the **orchestration** sidecar
-  (`bindings.localstorage` locally, `bindings.aws.s3` or MinIO elsewhere). Required, non-empty string; no
-  other member is allowed.
+- `binding` names the store component: a Dapr output binding on the **orchestration** sidecar
+  (`bindings.localstorage` locally, `bindings.aws.s3` or MinIO elsewhere), or an `s3` store configured under
+  `FileStorage:Stores` (see [Store providers](#store-providers)). Required, non-empty string.
+- `transport` (optional) chooses how a client may send the bytes: `inline` (default: base64 `content` in the JSON
+  body), `stream` (a [streamed upload](#streamed-uploads-transport) referenced by `file`; inline `content` from a
+  client is refused) or `any` (both). No other member is allowed.
 - Reachable only through nested `properties`, plus **one** array level (`files[]`, and a property inside
   that array's item schema such as `documents[].doc`). Not under `$defs`, combinators (`allOf`/`anyOf`/`oneOf`),
   conditionals, nested arrays, the schema root, or inside another file node. A misplaced declaration is a
@@ -120,6 +123,50 @@ Applied per `x-storage` node of an incoming payload:
 | `Instance:100048` | `FileReferenceInvalid` | 400 | Both `content` and `file`, bad base64, non-string `content`, unknown/foreign reference, missing `file` query on `functions/file` |
 | `Instance:100049` | `FileNotFound` | 404 | `functions/file`/`internal/file`: the file is not in this instance's `LatestData`, the stored handle there is invalid, or its path is hidden by `x-roles` |
 | `Instance:100050` | `FileSchemaUnavailable` | 503 | The flow's master schema could not be loaded and the payload carries a `content`/`file` member (write), or a file was read (`functions/file`, `internal/file`); nothing was applied, retry |
+
+## Streamed uploads (`transport`)
+
+A field declared with `"transport": "stream"` or `"any"` takes its bytes from a separate upload request instead of a
+base64 string in the JSON body, so a file is never inflated by base64, never held in a JSON body, and is bounded by
+`FileStorage:Upload:MaxBytes` (default 100 MiB) rather than the 10 MiB JSON body limit.
+
+```http
+POST /api/v1/{domain}/workflows/{flow}/files?path=files[]&name=scan.tiff[&version=1.0.0]
+Content-Type: image/tiff
+Content-Length: 31457280
+
+<raw bytes>
+```
+
+```json
+201 Created
+{ "file": "6f1c…", "component": "vnext-blob-s3", "path": "files[]", "name": "scan.tiff", "mimeType": "image/tiff",
+  "size": 31457280, "eTag": "<sha256 of the bytes received>", "expiresAt": "2026-10-31T13:00:00+00:00" }
+```
+
+Then reference the upload where the field lives, in a start or transition body, before `expiresAt`:
+
+```json
+{ "attributes": { "files": [ { "file": "6f1c…", "documentType": "invoice" } ] } }
+```
+
+- `path` is the field path as the schema folds it: `passport`, `customer.tax`, `files[]`, `documents[].doc`. Unknown
+  path, a field whose `transport` is `inline`, or a missing `Content-Length` is `400` `Instance:100048`. A body above
+  `MaxBytes` is `413` before any byte is stored. A store failure is `503` `Instance:100047`.
+- The body goes to the field's store as it arrives. With the [`s3` provider](#store-providers) it is streamed end to
+  end; with a Dapr binding it is buffered once (the binding takes one message). `size` and `eTag` are computed from the
+  bytes received, never taken from the client.
+- The upload is **staged** in the distributed cache (`vnext:{domain}:file-upload:{file}`) for
+  `FileStorage:Upload:TicketTtlMinutes` (default 60). Nothing about it is in any instance yet.
+- On the start or transition, a content-less `{ "file": … }` that is not an echo of the instance's own `LatestData` is
+  looked up among the staged uploads. It is accepted only for the **same flow, path and component** it was uploaded for,
+  once: the swap writes the handle with this instance as `owner` and removes the staging entry. The same upload twice in
+  one body, an expired or unknown id, or an upload made for another path is `400` `Instance:100048`. Other members of the
+  node (`documentType`) are kept, as for inline uploads.
+- Knowing the GUID is the claim: it is random and only the uploader received it. The upload route carries no runtime
+  authorization, like `start`; gate it at the gateway the same way.
+- The route is excluded from raw-body capture (`RawRequestBodyBufferingMiddleware`) and from Aether body logging, and
+  raises the request size limit to `MaxBytes` for itself only.
 
 ## Where the swap happens
 
@@ -229,6 +276,8 @@ file reader, so the call is unavailable there (in practice never reached).
 | Where | Setting |
 |---|---|
 | Runtime | `FileStorage:KeyPrefix` (string, default empty): prepended to every object key, e.g. `vnext-runtime/` in a shared bucket. **Never change it after the first write**: stored handles carry no key, so existing objects become unreachable |
+| Runtime | `FileStorage:Stores:{component}` (provider per component, default Dapr binding): see [Store providers](#store-providers) |
+| Runtime | `FileStorage:Upload:MaxBytes` (default 104857600) and `FileStorage:Upload:TicketTtlMinutes` (default 60): [streamed uploads](#streamed-uploads-transport) |
 | Runtime | `FileStorage:AllowedBindings` (string list, default empty): binding components a handle may name besides the flow's own declared `x-storage` bindings, for files handed across flows (SubFlow input, a mapping copying a parent's handle). **Helm deployments list their `blobStorageComponents` names here** (`FileStorage__AllowedBindings__0=...`) |
 | Helm (`vnext-helm-charts`) | `global.blobStorageComponents: []`, rendered like `pubsubComponents`; scoped to the **orchestrator** app id only |
 | Local | `etc/orchestration/dapr/components/vnext-blob-local.yaml` (`bindings.localstorage`, `rootPath: /blobs`); orchestration sidecar started with `--max-body-size 64Mi` (all compose files) |
@@ -304,6 +353,8 @@ Each `x-storage` component is reached through one of two providers, chosen per c
 | Overlapping async proxy revert | Two overlapping async requests on one parent: one failed-forward revert can clear the other's Busy stamp (self-heals on the next child notification) |
 | Missing object looks like an outage | A `get` of an object that is gone from the store reports `503`, like an outage |
 | Master schema unavailable is a `503` | No longer fails open: a payload carrying a `content`/`file` member is refused with `503` `FileSchemaUnavailable` while the master schema cannot be loaded (see Write rules); payloads without one proceed |
+| Unclaimed streamed uploads | An upload never referenced before its ticket expires leaves its object in the store; the staging entry expires, the object does not (use the store's lifecycle rules, as for other orphans) |
+| Concurrent claims of one upload | Two requests referencing the same staged upload at the same moment can both pass the lookup before either removes it; the file then has two referencing instances (owner: whichever swapped). Reference an upload from one request |
 | Duplicate property names | A payload with duplicate member names in a file node is handled inconsistently between the content probe and the swap |
 | Master schema reused as a transition schema | A transition schema validates the **write** shape. If a flow reuses its master schema as a transition schema, the `x-storage` nodes describe the persisted handle and cannot declare `content` (publish error), so a strict (`additionalProperties: false`) node rejects the upload. Give transitions their own schema for file fields |
 

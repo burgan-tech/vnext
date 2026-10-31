@@ -64,4 +64,25 @@ public class RawRequestBodyBufferingMiddlewareTests
 
         context.Items.ContainsKey(RawRequestBodyBufferingMiddleware.RawBodyItemsKey).ShouldBeFalse();
     }
+
+    [Theory]
+    [InlineData("/api/v1/core/workflows/kyc/files", false)]
+    [InlineData("/api/v1/core/workflows/kyc/instances/start", true)]
+    [InlineData("/api/v1/core/workflows/kyc/files/extra", true)]
+    public async Task InvokeAsync_StreamedUploadRoute_IsNotCaptured(string path, bool captured)
+    {
+        var context = BuildContext("POST", Body);
+        context.Request.Path = path;
+        var original = context.Request.Body;
+        Stream? seen = null;
+
+        var middleware = new RawRequestBodyBufferingMiddleware(
+            ctx => { seen = ctx.Request.Body; return Task.CompletedTask; },
+            Options.Create(new RawRequestBodyBufferingOptions()));
+        await middleware.InvokeAsync(context);
+
+        context.Items.ContainsKey(RawRequestBodyBufferingMiddleware.RawBodyItemsKey).ShouldBe(captured);
+        if (!captured)
+            seen.ShouldBeSameAs(original);
+    }
 }

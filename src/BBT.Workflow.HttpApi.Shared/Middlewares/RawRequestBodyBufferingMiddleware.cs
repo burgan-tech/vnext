@@ -66,8 +66,28 @@ public sealed class RawRequestBodyBufferingMiddleware(
         await next(context);
     }
 
+    /// <summary>
+    /// The streamed x-storage upload (<c>POST /api/v{n}/{domain}/workflows/{flow}/files</c>): its body is the file,
+    /// read once by the endpoint straight into the store, and is neither a signed JSON document nor capped by the
+    /// JSON body limit.
+    /// </summary>
+    internal static bool IsStreamedUpload(HttpRequest request)
+    {
+        if (!HttpMethods.IsPost(request.Method))
+            return false;
+        var segments = (request.Path.Value ?? string.Empty).Split('/', StringSplitOptions.RemoveEmptyEntries);
+        return segments.Length == 6
+               && segments[0] == "api"
+               && segments[1].StartsWith('v')
+               && segments[3] == "workflows"
+               && segments[5] == "files";
+    }
+
     private bool ShouldCapture(HttpRequest request)
     {
+        if (IsStreamedUpload(request))
+            return false;
+
         if (!HttpMethods.IsPost(request.Method)
             && !HttpMethods.IsPut(request.Method)
             && !HttpMethods.IsPatch(request.Method)

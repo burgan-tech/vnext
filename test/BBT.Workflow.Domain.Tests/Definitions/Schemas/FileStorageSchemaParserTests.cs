@@ -95,4 +95,29 @@ public sealed class FileStorageSchemaParserTests
     [InlineData(""" "f": { "type": "object", "then": { "x-storage": { "binding": "b" } } } """)]
     public void Validate_RejectsKeywordUnderCombinatorsAndConditionals(string properties)
         => FileStorageSchemaParser.Validate(Schema(properties)).Single().ShouldContain("reachable");
+
+    // Streamed uploads: x-storage.transport decides which channels a client may use (default inline).
+    [Theory]
+    [InlineData("", FileTransport.Inline)]
+    [InlineData(""", "transport": "inline" """, FileTransport.Inline)]
+    [InlineData(""", "transport": "stream" """, FileTransport.Stream)]
+    [InlineData(""", "transport": "any" """, FileTransport.Any)]
+    public void Parse_ReadsTheTransport(string transport, FileTransport expected)
+    {
+        var field = FileStorageSchemaParser.Parse(Schema($$""" "f": { "type": "object", "x-storage": { "binding": "b"{{transport}} } } """)).ShouldHaveSingleItem();
+        field.Transport.ShouldBe(expected);
+        field.AcceptsInline.ShouldBe(expected != FileTransport.Stream);
+        field.AcceptsStream.ShouldBe(expected != FileTransport.Inline);
+    }
+
+    [Theory]
+    [InlineData("\"chunked\"")]
+    [InlineData("1")]
+    [InlineData("null")]
+    public void Validate_RejectsAnUnknownTransport_AndParseSkipsTheField(string transport)
+    {
+        var schema = Schema($$""" "f": { "type": "object", "x-storage": { "binding": "b", "transport": {{transport}} } } """);
+        FileStorageSchemaParser.Validate(schema).ShouldHaveSingleItem().ShouldContain("transport");
+        FileStorageSchemaParser.Parse(schema).ShouldBeEmpty();
+    }
 }

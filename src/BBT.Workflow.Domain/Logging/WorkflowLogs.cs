@@ -4904,6 +4904,42 @@ public static partial class WorkflowLogs
         long storedLength,
         long size);
 
+    /// <summary>Logs a streamed upload stored and staged for a start or transition. Content is never logged.</summary>
+    [LoggerMessage(
+        EventId = 20515,
+        Level = LogLevel.Information,
+        Message = "File uploaded: flow {Flow}, path {Path}, component {Component}, file {File}, size {Size}")]
+    public static partial void FileUploaded(
+        this ILogger logger,
+        string flow,
+        string path,
+        string component,
+        string file,
+        long size);
+
+    /// <summary>Logs a streamed upload refused before anything was stored.</summary>
+    [LoggerMessage(
+        EventId = 20516,
+        Level = LogLevel.Warning,
+        Message = "File upload rejected: flow {Flow}, path {Path}, reason {Reason}")]
+    public static partial void FileUploadRejected(
+        this ILogger logger,
+        string flow,
+        string path,
+        string reason);
+
+    /// <summary>Logs a staged upload claimed by an instance: it became that instance's handle.</summary>
+    [LoggerMessage(
+        EventId = 20517,
+        Level = LogLevel.Information,
+        Message = "Uploaded file claimed: instance {InstanceId}, path {Path}, component {Component}, file {File}")]
+    public static partial void FileUploadClaimed(
+        this ILogger logger,
+        Guid instanceId,
+        string path,
+        string component,
+        string file);
+
     #endregion
 
     #region Flow Version Policy (205xx)

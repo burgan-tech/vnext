@@ -2,13 +2,36 @@ using System.Text.Json;
 
 namespace BBT.Workflow.Definitions.Schemas;
 
-/// <summary>A master-schema location whose file bytes live in a Dapr binding instead of the record.</summary>
+/// <summary>How a client may send the bytes of an <c>x-storage</c> field (<c>x-storage.transport</c>).</summary>
+public enum FileTransport
+{
+    /// <summary>Base64 <c>content</c> inside the request body (default; the only channel before streaming).</summary>
+    Inline,
+
+    /// <summary>
+    /// A streamed upload to <c>POST …/workflows/{flow}/files?path=</c>; the body then references the uploaded
+    /// <c>file</c>. Inline <c>content</c> from a client is refused (a runtime-produced payload may still carry it).
+    /// </summary>
+    Stream,
+
+    /// <summary>Either channel.</summary>
+    Any,
+}
+
+/// <summary>A master-schema location whose file bytes live in a store instead of the record.</summary>
 /// <param name="Segments">Property names from the root; <c>"[]"</c> means every element of the array.</param>
-/// <param name="Binding">The Dapr binding component name (<c>x-storage.binding</c>).</param>
-public sealed record FileStorageField(IReadOnlyList<string> Segments, string Binding)
+/// <param name="Binding">The store component name (<c>x-storage.binding</c>).</param>
+/// <param name="Transport">The upload channels a client may use (<c>x-storage.transport</c>, default inline).</param>
+public sealed record FileStorageField(IReadOnlyList<string> Segments, string Binding, FileTransport Transport = FileTransport.Inline)
 {
     /// <summary>Dot path with array markers folded: <c>files[]</c>, <c>customer.tax</c>.</summary>
     public string Path { get; } = string.Join('.', Segments).Replace(".[]", "[]", StringComparison.Ordinal);
+
+    /// <summary>A client may send base64 <c>content</c>.</summary>
+    public bool AcceptsInline => Transport != FileTransport.Stream;
+
+    /// <summary>A client may reference a streamed upload.</summary>
+    public bool AcceptsStream => Transport != FileTransport.Inline;
 }
 
 /// <summary>
@@ -66,8 +89,9 @@ public static class FileStorageSchemaParser
         {
             var path = new FileStorageField(segments, string.Empty).Path;
             var binding = ReadBinding(declaration, path, schema, errors);
-            if (binding is not null)
-                fields?.Add(new FileStorageField(segments, binding));
+            var transport = ReadTransport(declaration, path, errors);
+            if (binding is not null && transport is not null)
+                fields?.Add(new FileStorageField(segments, binding, transport.Value));
             if (errors is not null && schema.TryGetProperty("properties", out var inner) && ContainsKeyword(inner))
                 errors.Add($"Field '{path}': {Keyword} cannot be declared inside another {Keyword} file node.");
             return; // a file node has no further file nodes beneath it
@@ -93,12 +117,12 @@ public static class FileStorageSchemaParser
     {
         if (declaration.ValueKind != JsonValueKind.Object)
         {
-            errors?.Add($"Field '{path}': {Keyword} must be an object {{ \"binding\": \"<component>\" }}.");
+            errors?.Add($"Field '{path}': {Keyword} must be an object {{ \"binding\": \"<component>\", \"transport\": \"inline|stream|any\" }}.");
             return null;
         }
 
         foreach (var member in declaration.EnumerateObject())
-            if (member.Name != "binding")
+            if (member.Name is not ("binding" or "transport"))
                 errors?.Add($"Field '{path}': {Keyword} has unknown member '{member.Name}'.");
 
         var binding = declaration.TryGetProperty("binding", out var b) && b.ValueKind == JsonValueKind.String
@@ -122,6 +146,23 @@ public static class FileStorageSchemaParser
             errors?.Add($"Field '{path}': the master schema describes the persisted handle; 'content' is never stored and may not be declared.");
 
         return binding;
+    }
+
+    /// <summary><c>inline</c> (also when absent), <c>stream</c> or <c>any</c>; anything else is a publish error.</summary>
+    private static FileTransport? ReadTransport(JsonElement declaration, string path, List<string>? errors)
+    {
+        if (declaration.ValueKind != JsonValueKind.Object || !declaration.TryGetProperty("transport", out var t))
+            return FileTransport.Inline;
+        var value = t.ValueKind == JsonValueKind.String ? t.GetString() : null;
+        switch (value)
+        {
+            case "inline": return FileTransport.Inline;
+            case "stream": return FileTransport.Stream;
+            case "any": return FileTransport.Any;
+            default:
+                errors?.Add($"Field '{path}': {Keyword}.transport must be \"inline\", \"stream\" or \"any\".");
+                return null;
+        }
     }
 
     private static bool ContainsKeyword(JsonElement node) =>
