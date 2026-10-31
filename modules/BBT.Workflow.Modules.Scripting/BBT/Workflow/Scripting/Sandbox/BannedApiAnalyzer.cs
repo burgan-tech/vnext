@@ -190,53 +190,23 @@ public static class BannedApiAnalyzer
             // One walk over the tree covers all three checks.
             foreach (var node in root.DescendantNodes())
             {
-                switch (node)
+                // 1. Banned namespace usage — a banned symbol is always reached through a name
+                // (simple or generic), a member access, an object creation, or an attribute;
+                // every other expression kind only combines values those nodes already produced.
+                if (node is SimpleNameSyntax or MemberAccessExpressionSyntax or BaseObjectCreationExpressionSyntax
+                    or AttributeSyntax)
                 {
-                    // 1. Banned namespace usage — a banned symbol is always reached through a name
-                    // (simple or generic), a member access, an object creation, or an attribute;
-                    // every other expression kind only combines values those nodes already produced.
-                    case SimpleNameSyntax or MemberAccessExpressionSyntax or BaseObjectCreationExpressionSyntax
-                        or AttributeSyntax:
-                    {
-                        var symbol = model.GetSymbolInfo(node).Symbol;
-
-                        // Member-level bans first: they apply inside allowed namespaces and allowed types too.
-                        if (IsBannedMember(symbol) is { } bannedMember)
-                        {
-                            var memberLine = node.GetLocation().GetLineSpan().StartLinePosition.Line + 1;
-                            violations.Add(
-                                $"{Path.GetFileName(tree.FilePath)}({memberLine}): banned member '{bannedMember}' via '{symbol}'");
-                            break;
-                        }
-
-                        var hit = BannedHitOf(symbol, banned, allowedCarveOuts, namespaceVerdicts);
-                        if (hit is null)
-                            break;
-
-                        // Member-level carve-outs (benign metadata reads) win over the banned
-                        // prefixes. Only evaluated after a banned hit — the ToString is not free.
-                        if (symbol is not null && MandatoryAllowedMembers.Contains(symbol.ToString()))
-                            break;
-
-                        var line = node.GetLocation().GetLineSpan().StartLinePosition.Line + 1;
-                        violations.Add(
-                            $"{Path.GetFileName(tree.FilePath)}({line}): banned namespace '{hit}' via '{symbol}'");
-                        break;
-                    }
-
-                    // 2. P/Invoke.
-                    case MethodDeclarationSyntax method:
-                    {
-                        if (method.AttributeLists.SelectMany(a => a.Attributes)
-                            .Any(a => a.Name.ToString().Contains("DllImport")))
-                        {
-                            var line = method.GetLocation().GetLineSpan().StartLinePosition.Line + 1;
-                            violations.Add(
-                                $"{Path.GetFileName(tree.FilePath)}({line}): P/Invoke (DllImport) is not allowed");
-                        }
-
-                        break;
-                    }
+                    if (NameViolation(model, node, tree, banned, allowedCarveOuts, namespaceVerdicts) is { } violation)
+                        violations.Add(violation);
+                }
+                // 2. P/Invoke.
+                else if (node is MethodDeclarationSyntax method
+                         && method.AttributeLists.SelectMany(a => a.Attributes)
+                             .Any(a => a.Name.ToString().Contains("DllImport")))
+                {
+                    var line = method.GetLocation().GetLineSpan().StartLinePosition.Line + 1;
+                    violations.Add(
+                        $"{Path.GetFileName(tree.FilePath)}({line}): P/Invoke (DllImport) is not allowed");
                 }
             }
 
@@ -249,6 +219,34 @@ public static class BannedApiAnalyzer
         }
 
         return violations.Distinct().ToList();
+    }
+
+    /// <summary>The violation a name, member access, object creation or attribute node causes, or null.</summary>
+    private static string? NameViolation(
+        SemanticModel model,
+        SyntaxNode node,
+        SyntaxTree tree,
+        List<string> banned,
+        IReadOnlyList<string> allowedCarveOuts,
+        Dictionary<INamespaceSymbol, string?> namespaceVerdicts)
+    {
+        var symbol = model.GetSymbolInfo(node).Symbol;
+        var line = node.GetLocation().GetLineSpan().StartLinePosition.Line + 1;
+
+        // Member-level bans first: they apply inside allowed namespaces and allowed types too.
+        if (IsBannedMember(symbol) is { } bannedMember)
+            return $"{Path.GetFileName(tree.FilePath)}({line}): banned member '{bannedMember}' via '{symbol}'";
+
+        var hit = BannedHitOf(symbol, banned, allowedCarveOuts, namespaceVerdicts);
+        if (hit is null)
+            return null;
+
+        // Member-level carve-outs (benign metadata reads) win over the banned
+        // prefixes. Only evaluated after a banned hit — the ToString is not free.
+        if (symbol is not null && MandatoryAllowedMembers.Contains(symbol.ToString()))
+            return null;
+
+        return $"{Path.GetFileName(tree.FilePath)}({line}): banned namespace '{hit}' via '{symbol}'";
     }
 
     /// <summary>

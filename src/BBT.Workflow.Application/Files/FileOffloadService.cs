@@ -206,9 +206,8 @@ public sealed class FileOffloadService(
             return (null, "the field accepts streamed uploads only (x-storage.transport is \"stream\"); upload the file and reference its 'file'");
         if (node["content"] is not JsonValue cv || !cv.TryGetValue<string>(out var b64))
             return (null, "'content' must be a base64 string");
-        byte[] bytes;
-        try { bytes = Convert.FromBase64String(b64); }
-        catch (FormatException) { return (null, "'content' is not valid base64"); }
+        if (FromBase64(b64) is not { } bytes)
+            return (null, "'content' is not valid base64");
         return (new StorePlan(node, path, field, bytes,
             NormalizeName(ReadString(node, "name")), NormalizeMediaType(ReadString(node, "mimeType"))), null);
     }
@@ -289,6 +288,12 @@ public sealed class FileOffloadService(
     // Never split a surrogate pair: the handle is serialized as JSON.
     private static int CutAt(string value, int length)
         => length > 0 && char.IsHighSurrogate(value[length - 1]) ? length - 1 : length;
+
+    private static byte[]? FromBase64(string value)
+    {
+        try { return Convert.FromBase64String(value); }
+        catch (FormatException) { return null; }
+    }
 
     private static string? ReadString(JsonObject node, string name)
         => node[name] is JsonValue v && v.TryGetValue<string>(out var s) ? s : null;
