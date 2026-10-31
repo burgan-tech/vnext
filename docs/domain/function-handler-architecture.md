@@ -348,6 +348,21 @@ are **excluded** — they use their own handlers and never flow through `Functio
 custom function is looked up, so a custom function with one of these keys is shadowed. `file` serves an x-storage file of
 the instance: `GET|HEAD .../instances/{instance}/functions/file?file=<guid>` (raw bytes, ETag/304, Range/206/416).
 
+## Raw responses (`rawResponse: true`)
+
+A raw function answers its output's `Data` unwrapped, with the output's headers and status code:
+
+| `Data` | Body | `Content-Type` when the output sets none |
+|---|---|---|
+| object, array, number | JSON | `application/json` |
+| `string` | the string verbatim | `application/json` (set your own for XML, CSV, …) |
+| `byte[]` | the bytes as is (vnext-client-sdk-core#99, #142-E) | `application/octet-stream` |
+| `ScriptFile` (from `GetFileAsync`) | the file's bytes | the file's `mimeType` |
+
+Before this, a `byte[]` was serialized as a quoted base64 string. Binary responses carry `IsBinary` in
+`FunctionResponseOutput`, so a function response cache hit still answers bytes, not the cached base64. Text and object
+responses are unchanged.
+
 ## Failure Modes
 
 - Unknown function falls back to generic function lookup.
