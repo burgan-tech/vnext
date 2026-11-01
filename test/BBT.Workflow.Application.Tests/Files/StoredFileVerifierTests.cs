@@ -8,8 +8,8 @@ using Xunit;
 namespace BBT.Workflow.Files;
 
 /// <summary>
-/// vnext-client-sdk-core#145: Dapr 1.17+ <c>bindings.aws.s3</c> frames every TLS upload as aws-chunked with a CRC32
-/// trailer, and a server that does not decode it stores the frame (6265-byte PDF → 6309-byte object). The read path
+/// vnext-client-sdk-core#145: a Dapr binding may frame an upload in HTTP/1.1 chunked framing with a checksum
+/// trailer, and a store that does not decode it stores the frame (6265-byte PDF → 6309-byte object). The read path
 /// must serve the file, never the frame, and refuse bytes that are neither.
 /// </summary>
 public sealed class StoredFileVerifierTests
@@ -26,7 +26,7 @@ public sealed class StoredFileVerifierTests
         "vnext-blob-s3", Guid.NewGuid().ToString(), "a.pdf", "application/pdf", file.LongLength,
         Convert.ToHexStringLower(SHA256.HashData(file)), new FileOwner("core", "kyc", Guid.NewGuid().ToString()));
 
-    /// <summary>The exact frame observed on the bank's S3: one chunk, the zero chunk, one CRC32 trailer.</summary>
+    /// <summary>The exact bytes observed on the bank's store: one chunk, the zero chunk, one CRC32 trailer as sent.</summary>
     private static byte[] BankFrame(byte[] file) =>
         Encoding.ASCII.GetBytes($"{file.Length:x}\r\n")
             .Concat(file)
@@ -106,12 +106,12 @@ public sealed class StoredFileVerifierTests
     [InlineData("3\r\nabcX\n0\r\n\r\n")]                   // chunk not closed by CRLF
     [InlineData("3\r\nabc\r\n0\r\nno-colon\r\n\r\n")]      // malformed trailer
     public void MalformedFrames_DoNotDecode(string body)
-        => AwsChunkedPayload.TryDecode(Encoding.ASCII.GetBytes(body), out _).ShouldBeFalse();
+        => HttpChunkedPayload.TryDecode(Encoding.ASCII.GetBytes(body), out _).ShouldBeFalse();
 
     [Fact]
     public void FrameWithoutTrailers_Decodes()
     {
-        AwsChunkedPayload.TryDecode("3\r\nabc\r\n0\r\n\r\n"u8, out var payload).ShouldBeTrue();
+        HttpChunkedPayload.TryDecode("3\r\nabc\r\n0\r\n\r\n"u8, out var payload).ShouldBeTrue();
         payload.ShouldBe("abc"u8.ToArray());
     }
 }

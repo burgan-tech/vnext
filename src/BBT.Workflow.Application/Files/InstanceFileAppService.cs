@@ -62,7 +62,7 @@ public sealed class InstanceFileAppService(
         if (MatchesIfNoneMatch(request.IfNoneMatch, handle.ETag))
             return Result<InstanceFileStream>.Ok(new InstanceFileStream(handle, path, null, NotModified: true));
 
-        // A Dapr binding answers the whole object: it is verified (and recovered from an aws-chunked frame) before a
+        // A Dapr binding answers the whole object: it is verified (and recovered from a chunked frame) before a
         // byte is served, then streamed to the response from memory.
         var bytes = await ReadVerifiedAsync(instanceId, handle, cancellationToken);
         return bytes.IsSuccess
@@ -126,7 +126,7 @@ public sealed class InstanceFileAppService(
 
     /// <summary>
     /// The stored bytes are never trusted to be the file: they must match the handle's <c>size</c> and <c>eTag</c>
-    /// (vnext-client-sdk-core#145). An aws-chunked framed object whose payload matches is recovered; anything else is
+    /// (vnext-client-sdk-core#145). A chunked-framed object whose payload matches is recovered; anything else is
     /// <c>FileStoreUnavailable</c> (503) with the reason in the log, never a silently corrupt body.
     /// </summary>
     private Result<byte[]> Verify(Guid instanceId, FileHandle handle, byte[] stored)

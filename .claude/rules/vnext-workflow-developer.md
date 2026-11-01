@@ -155,7 +155,7 @@ The plan is built from `ExcludedStepOrders` alone (`TransitionExecutor.BuildExec
   `Instance:100047` (503) / `100048` (400) / `100049` (404). Reads: `functions/file` (`queryRoles` + `x-roles`),
   `internal/file` has no auth; every read is verified against `size`+`eTag` (never serve unverified bytes).
 - Swap keeps the node's non-handle members. Every store is its Dapr binding, never a store SDK; reads recover
-  Dapr 1.17+ aws-chunked frames. `x-storage.transport` `inline|stream|any` gates `POST …/workflows/{flow}/files`
+  chunked frames a Dapr binding wrote. `x-storage.transport` `inline|stream|any` gates `POST …/workflows/{flow}/files`
   (staged, claimed once). Scripts: stream carve-outs + member bans live in `BannedApiAnalyzer` only.
   Full guide: `docs/runtime/file-storage.md`.
 

@@ -468,11 +468,11 @@ public sealed class InstanceFileAppServiceTests
 
     // vnext-client-sdk-core#145 — the read path verifies the stored bytes against the handle.
     [Fact]
-    public async Task StoredBytesThatAreAnAwsChunkedFrameOfTheFile_AreRecovered()
+    public async Task StoredBytesThatAreAChunkedFrameOfTheFile_AreRecovered()
     {
         Seed("1.0.0", $$"""{ "passport": {{Handle(F1)}} }""");
         var frame = System.Text.Encoding.ASCII.GetBytes("3\r\n").Concat(Bytes)
-            .Concat(System.Text.Encoding.ASCII.GetBytes("\r\n0\r\nx-amz-checksum-crc32:AbCd1234\r\n\r\n")).ToArray();
+            .Concat(System.Text.Encoding.ASCII.GetBytes("\r\n0\r\nchecksum-crc32:AbCd1234\r\n\r\n")).ToArray();
         _store.GetAsync(Binding, F1, Arg.Any<CancellationToken>()).Returns(Result<byte[]>.Ok(frame));
 
         var result = await _sut.ReadAsync(Request(F1), CancellationToken.None);
@@ -511,11 +511,11 @@ public sealed class InstanceFileAppServiceTests
     }
 
     [Fact]
-    public async Task Open_AwsChunkedFramedObject_IsRecovered()
+    public async Task Open_ChunkedFramedObject_IsRecovered()
     {
         Seed("1.0.0", $$"""{ "passport": {{Handle(F1)}} }""");
         var frame = System.Text.Encoding.ASCII.GetBytes("3\r\n").Concat(Bytes)
-            .Concat(System.Text.Encoding.ASCII.GetBytes("\r\n0\r\nx-amz-checksum-crc32:AbCd1234\r\n\r\n")).ToArray();
+            .Concat(System.Text.Encoding.ASCII.GetBytes("\r\n0\r\nchecksum-crc32:AbCd1234\r\n\r\n")).ToArray();
         _store.GetAsync(Binding, F1, Arg.Any<CancellationToken>()).Returns(Result<byte[]>.Ok(frame));
 
         var result = await _sut.OpenAsync(Request(F1), CancellationToken.None);

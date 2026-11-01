@@ -8,7 +8,7 @@ namespace BBT.Workflow.Files;
 
 /// <summary>
 /// <see cref="IFileBlobStore"/> over a Dapr output binding. Sends raw bytes over gRPC (no base64 metadata), and both
-/// <c>key</c> (bindings.aws.s3) and <c>fileName</c> (bindings.localstorage) so one call shape fits either component.
+/// <c>key</c> (the S3 binding) and <c>fileName</c> (the local storage binding) so one call shape fits either component.
 /// Deliberately not <c>DaprBindingTaskInvoker</c>: that one JSON-deserializes the body and drops the response.
 /// </summary>
 public sealed class DaprBindingFileBlobStore(
@@ -22,7 +22,7 @@ public sealed class DaprBindingFileBlobStore(
     {
         var request = new BindingRequest(component, "create") { Data = bytes };
         AddKey(request, file);
-        // bindings.aws.s3 reads exactly "Content-Type" (components-contrib metatadataContentType); bindings.localstorage ignores it.
+        // The S3 binding reads exactly "Content-Type" (components-contrib metatadataContentType); local storage ignores it.
         if (!string.IsNullOrWhiteSpace(mimeType))
             request.Metadata["Content-Type"] = mimeType;
         try

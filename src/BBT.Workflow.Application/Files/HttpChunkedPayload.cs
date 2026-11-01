@@ -3,18 +3,18 @@ using System.Buffers;
 namespace BBT.Workflow.Files;
 
 /// <summary>
-/// Decodes an HTTP/1.1 <c>aws-chunked</c> request body (<c>&lt;hex-size&gt;[;ext]\r\n&lt;data&gt;\r\n … 0\r\n[trailers]\r\n</c>),
-/// the framing Dapr 1.17+ <c>bindings.aws.s3</c> puts on every upload over TLS
-/// (<c>STREAMING-UNSIGNED-PAYLOAD-TRAILER</c>, CRC32 trailer). An S3 server that does not decode the frame stores it
-/// as the object, 44+ bytes longer than the file (vnext-client-sdk-core#145). Only a body that is a COMPLETE frame
+/// Decodes a body in HTTP/1.1 chunked framing with a trailer block
+/// (<c>&lt;hex-size&gt;[;ext]\r\n&lt;data&gt;\r\n … 0\r\n[trailers]\r\n</c>). A Dapr binding may send an upload
+/// in this framing with a checksum trailer, and a store that does not decode it keeps the frame as the object, longer
+/// than the file (vnext-client-sdk-core#145). Only a body that is a COMPLETE frame
 /// decodes: every chunk header parses, every chunk ends in CRLF, the zero chunk and the trailer block close it, and
 /// nothing follows. Whether the decoded bytes are the file is the caller's check (size + sha256 against the handle).
 /// </summary>
-public static class AwsChunkedPayload
+public static class HttpChunkedPayload
 {
     private const int MaxHexDigits = 16;
 
-    /// <summary>True and the decoded payload when <paramref name="body"/> is one complete aws-chunked frame.</summary>
+    /// <summary>True and the decoded payload when <paramref name="body"/> is one complete chunked frame.</summary>
     public static bool TryDecode(ReadOnlySpan<byte> body, out byte[] payload)
     {
         payload = [];

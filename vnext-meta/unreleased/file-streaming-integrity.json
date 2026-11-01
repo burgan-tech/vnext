@@ -1,6 +1,6 @@
 {
   "releaseNote": {
-    "summary": "x-storage: streamed uploads, verified reads (aws-chunked recovery), script stream types and write-back, binding task responses, raw binary function bodies; stores stay Dapr bindings.",
+    "summary": "x-storage: streamed uploads, verified reads (chunked-frame recovery), script stream types and write-back, binding task responses, raw binary function bodies; stores stay Dapr bindings.",
     "breaking": false,
     "docs": []
   },

@@ -4862,14 +4862,14 @@ public static partial class WorkflowLogs
         string component);
 
     /// <summary>
-    /// Logs that an x-storage object was stored inside an aws-chunked frame (a Dapr 1.17+ S3 upload kept as is by a
-    /// server that does not decode it) and the decoded payload, which matches the handle, was served instead.
+    /// Logs that an x-storage object was stored inside an HTTP/1.1 chunked frame (an upload a Dapr binding framed, kept
+    /// as is by a store that does not decode it) and the decoded payload, which matches the handle, was served instead.
     /// The 2049x block is full; file events continue above the 205xx block.
     /// </summary>
     [LoggerMessage(
         EventId = 20512,
         Level = LogLevel.Warning,
-        Message = "File {File} in {Component} of instance {InstanceId} is stored aws-chunked framed ({StoredLength} bytes for {Size}); the decoded payload matches its handle and is served")]
+        Message = "File {File} in {Component} of instance {InstanceId} is stored in a chunked frame ({StoredLength} bytes for {Size}); the decoded payload matches its handle and is served")]
     public static partial void FileRecoveredFromChunkedFrame(
         this ILogger logger,
         Guid instanceId,

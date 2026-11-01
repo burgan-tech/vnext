@@ -9,8 +9,8 @@ public enum StoredFileState
     Intact,
 
     /// <summary>
-    /// The object is the file inside an <c>aws-chunked</c> frame (a Dapr 1.17+ S3 upload stored by a server that does
-    /// not decode it); the decoded payload matches the handle and is served instead.
+    /// The object is the file inside an HTTP/1.1 chunked frame (an upload a Dapr binding framed, stored by a store that
+    /// does not decode it); the decoded payload matches the handle and is served instead.
     /// </summary>
     RecoveredFromChunkedFrame,
 
@@ -28,7 +28,7 @@ public readonly record struct StoredFileCheck(StoredFileState State, byte[]? Con
 /// </summary>
 public static class StoredFileVerifier
 {
-    /// <summary>Verifies <paramref name="stored"/>, recovering the file from an aws-chunked frame when that is what was stored.</summary>
+    /// <summary>Verifies <paramref name="stored"/>, recovering the file from a chunked frame when that is what was stored.</summary>
     public static StoredFileCheck Check(FileHandle handle, byte[] stored)
     {
         ArgumentNullException.ThrowIfNull(handle);
@@ -39,7 +39,7 @@ public static class StoredFileVerifier
 
         // A frame is always longer than its payload; anything not longer cannot be one.
         if (stored.LongLength > handle.Size
-            && AwsChunkedPayload.TryDecode(stored, out var payload)
+            && HttpChunkedPayload.TryDecode(stored, out var payload)
             && Matches(handle, payload))
             return new StoredFileCheck(StoredFileState.RecoveredFromChunkedFrame, payload);
 
