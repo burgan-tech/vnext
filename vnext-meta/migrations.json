@@ -320,6 +320,90 @@
       "title": "Runtime topics are named vnext.{domain}.{environment}.{event}.v{n}",
       "description": "Every runtime topic is now vnext.{APP_DOMAIN}.{ASPNETCORE_ENVIRONMENT lower-cased, unset = production}.{event}.v{n} (e.g. vnext.core.production.instance.sub.completed.v1), so a Kafka ACL can grant each domain's user vnext.{domain}.* on topics and consumer groups. A host fails fast at start without APP_DOMAIN. Messages left on the old topics are not consumed after the upgrade, and outbox rows written before the upgrade carry the old topic name. Domain-authored topics (DaprPubSubTask.topic, domain Subscription resources) are used verbatim and must follow the same shape under Kafka.",
       "action": "Drain the outbox before rolling out. Under Kafka, give each host a consumer group inside vnext.{domain}.* (Helm global.externalKafka.metadata.<host> consumerID / consumerGroup); left unset, Dapr uses the app-id, which the ACL refuses."
+    },
+    {
+      "id": "auto-transition-absent-trigger-kind-order",
+      "type": "behavior",
+      "component": "workflow",
+      "path": "workflow.attributes.states[].transitions[] (triggerType 1)",
+      "since": "0.0.102",
+      "severity": "info",
+      "title": "Automatic transitions without triggerKind no longer run before those with triggerKind 0",
+      "description": "The Auto step used to sort a state's automatic transitions by the nullable triggerKind, so a transition with no triggerKind was evaluated before one with an explicit triggerKind 0, and the DefaultAutoTransition (triggerKind 10) came last. Now non-default automatic transitions are ordered by priority (absent = 100), then declaration order; the DefaultAutoTransition is still last. A state that mixes an absent triggerKind with an explicit 0 and has more than one satisfiable rule can pick a different winner. Flows that do not mix the two evaluate exactly as before.",
+      "action": "Before upgrading, look for states whose automatic transitions mix an absent triggerKind with triggerKind 0. Where more than one rule can be true at once, either declare them in the intended order or give the one that must win a lower priority.",
+      "documentation": "docs/architecture/workflow-execution-pipeline.md"
+    },
+    {
+      "id": "file-offload-keeps-client-members",
+      "type": "behavior",
+      "component": "runtime",
+      "path": "schema x-storage (FileOffloadService)",
+      "since": "0.0.102",
+      "severity": "info",
+      "title": "The x-storage swap keeps the client's other members of the file node",
+      "description": "Before: the swap cleared the file node, so members a client put beside the file (a FilePicker row's documentType) were dropped before the mapping ran (vnext-client-sdk-core#137). Now only content is removed and the seven handle members are written; other members stay. A master schema with additionalProperties: false on the file node must declare those members."
+    },
+    {
+      "id": "file-read-integrity-503",
+      "type": "behavior",
+      "component": "runtime",
+      "path": "functions/file, internal/file, GetFileAsync",
+      "since": "0.0.102",
+      "severity": "warning",
+      "title": "Stored bytes that do not match the handle are refused instead of served",
+      "description": "Before: whatever the store returned was served (an aws-chunked framed object 44+ bytes longer than the file, with an ETag naming the original). Now the bytes must match the handle's size and sha256; a framed object whose payload matches is recovered, anything else answers 503 Instance:100047 and logs 20513."
+    },
+    {
+      "id": "script-sandbox-member-bans",
+      "type": "behavior",
+      "component": "runtime",
+      "path": "Scripting sandbox (BannedApiAnalyzer)",
+      "since": "0.0.102",
+      "severity": "warning",
+      "title": "Reflection-by-name, non-generic Activator and process termination no longer compile in scripts",
+      "description": "Activator (non-generic members), static Type.GetType(string), Type.GetMethod(s)/GetConstructor(s)/GetMember(s)/GetField(s)/GetEvent(s)/FindMembers/GetDefaultMembers/TypeInitializer/InvokeMember and Environment.Exit/FailFast/SetEnvironmentVariable are rejected at compile (\"banned member\"). None of them was found in any shipped domain package (source and base64-embedded code, 2026-10-31). The System.IO stream types became usable at the same time."
+    },
+    {
+      "id": "function-raw-byte-array-body",
+      "type": "behavior",
+      "component": "runtime",
+      "path": "Custom functions with rawResponse: true",
+      "since": "0.0.102",
+      "severity": "info",
+      "title": "A byte[] raw body is written as bytes",
+      "description": "Before: a byte[] output was serialized as a quoted base64 JSON string with Content-Type application/json. Now the bytes are written as is (application/octet-stream unless the output sets a Content-Type). A client that decoded the base64 string must read the body as bytes."
+    },
+    {
+      "id": "daprbinding-task-output-mapping-data",
+      "type": "behavior",
+      "component": "runtime",
+      "path": "DaprBinding task output mapping",
+      "since": "0.0.102",
+      "severity": "info",
+      "title": "The output mapping of a DaprBinding task sees the binding's answer",
+      "description": "Before: the task response carried no data (only BindingName/Operation metadata). Now Data, Headers and Metadata.DataEncoding carry the binding's answer. An unmapped task still adds no instance data."
+    },
+    {
+      "id": "instance-read-fails-on-flow-lookup-error",
+      "type": "behavior",
+      "component": "query",
+      "path": "GET {domain}/workflows/{workflow}/instances, GET {domain}/workflows/{workflow}/instances/{instance}, GetInstances / GetInstance tasks",
+      "since": "0.0.102",
+      "severity": "warning",
+      "title": "Instance list, GET and GetInstance(s) tasks fail when the flow definition cannot be loaded",
+      "description": "Applies to every flow, with or without rowSecurity. These reads now look the flow up once (cached, GetFlowAsync with no version: the sys-version-registry default version, else the latest). A lookup failure other than 'no definition' fails the read with that error as is: Instance:100052 (409, invalid default-version pointer), Instance:100053 (503, version registry unavailable) or Instance:100051 (flow version not activated). The read is tagged vnext.rowsecurity.outcome=denied-flow-load and logs warning 20509. Before, the list served rows and GET did not look the flow up. A flow with no published definition, and a successful lookup of a flow without rowSecurity, answer exactly as before.",
+      "action": "Before upgrading, check that every flow's sys-version-registry default-version pointer resolves to a published version (or is 'latest') and that the version registry is reachable; starts and transitions of such a flow already fail with the same error. Watch warning 20509 after the rollout.",
+      "documentation": "docs/domain/row-security.md#lookup-failure"
+    },
+    {
+      "id": "subflow-resume-carried-headers",
+      "type": "behavior",
+      "component": "runtime",
+      "path": "SubFlow parent resume (completion, fault, cancel) and the parent's SubFlow output mapping",
+      "since": "0.0.102",
+      "severity": "warning",
+      "title": "Parent resume runs with the headers of the request that settled the child",
+      "description": "Before: the parent's output mapping saw no context.Headers and the parent's resumed hop ran with empty headers. Now: the output mapping sees the child's settling-request headers (deny floor and framework headers removed), and with Workflow:SubFlow:CarriedHeaders:ApplyToResume=true (default) the resumed hop's auto conditions, onEntry tasks (caller-credential forwarding: sub, act_sub, role, position, client_id) and the next subflow's input mapping run with them. To keep the old resume set Workflow__SubFlow__CarriedHeaders__ApplyToResume=false; Emit=false disables carrying altogether."
     }
   ]
 }

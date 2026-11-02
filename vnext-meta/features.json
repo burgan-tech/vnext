@@ -1,5 +1,5 @@
 {
-  "runtimeVersion": "0.0.101",
+  "runtimeVersion": "0.0.102",
   "engine": {
     "historyMode": {
       "since": "0.0.100",
@@ -541,6 +541,117 @@
       "status": "stable",
       "schemaPath": "schema.attributes.schema.properties[].x-computed",
       "description": "x-computed { evaluatedBy, cases?, fallback?, whenAbsent? } declares a derived, NEVER-STORED field. evaluatedBy 'runtime' is always on (no flag): every runtime computed field of the workflow's master schema is evaluated on each read surface that returns instance data (instance GET / list, data function, data history, sync start / transition output, GetInstance / GetInstances / GetInstanceData tasks) over the caller's ALREADY-EXPOSED view (after x-roles, x-masking, x-encryption), so it never reveals a field the caller cannot see; the write funnel drops it. Each case / the fallback is exactly one join { fields>=1, separator (default ' ') } or arithmetic { op: add|subtract|multiply|divide, fields>=2 } over sibling properties; the first case whose when condition matches wins; an unresolvable result becomes whenAbsent ('empty' -> \"\", default, or 'null'). PUBLISH: 'server' is refused as renamed to 'runtime'; a runtime computed field is refused on transition / function / component schemas, at the root, under items / $defs / combinators, in required, next to x-indexed / x-filterOperators / x-sortable / x-storage / x-roles / x-masking / at-rest x-encryption, and when it references a computed field (chain) or an at-rest encrypted field. evaluatedBy 'client' is accepted and not evaluated. Known limit: InstanceTransitions.Body keeps the request body as sent."
+    },
+    "autoTransitionPriority": {
+      "since": "0.0.102",
+      "status": "stable",
+      "description": "An automatic transition may declare an optional integer priority (minimum 1). The Auto step evaluates a state's automatic transitions in ascending priority order and the first satisfied rule wins; a transition without priority counts as 100, transitions with equal priority keep their declaration order (stable sort), and the DefaultAutoTransition is always evaluated last. Evaluation is sequential, so cheap and likely rules belong at a low priority number. If a rule's script throws, the step fails and lower-priority rules are not evaluated. The publish validator rejects a priority below 1 and a priority on a manual, shared or start transition or on the DefaultAutoTransition; it warns when automatic transitions of a state share an effective priority, only when at least one of them has an explicit priority. A runtime older than this release ignores priority and evaluates in array order, except that a transition with an absent triggerKind was evaluated before one with an explicit triggerKind 0 and the default (triggerKind 10) came last, so a flow that depends on priority must not be rolled back below it. Requires the runtime version that ships this entry and a vnext-schema release containing transition.priority.",
+      "schemaPath": "workflow.attributes.states[].transitions[].priority",
+      "documentation": "docs/architecture/workflow-execution-pipeline.md"
+    },
+    "bookkeepingCommitReduction": {
+      "since": "0.0.102",
+      "status": "stable",
+      "description": "The pipeline hop's unit of work is not transactional, so every bookkeeping write is its own autocommit transaction and its own WAL fsync. Measured on digital-investment at 14 starts/s: 48 write commits per start, write commands 3-3.5x slower than reads (4.4 ms vs 1.3 ms), 79 percent of a request's database time. Four changes cut the commit count without touching instance state, data or outbox durability. (1) Task journal, one write per task: StandardTaskPersistenceStrategy no longer inserts a busy InstanceTasks row at creation and updates it at completion; the row is inserted once at completion with its final status, business status, payloads and timings, or - on a retry that found the previous attempt's row through the ExecutionKey probe - updated set-based. A task interrupted by a crash leaves no row and is re-executed on retry, which is what the reused busy row led to as well. The only observable difference: functions/tasks no longer lists a task while it is running (status busy). (2) A hop that enters a Finish state with no OnEntry tasks no longer saves the state change in ChangeStateStep and again in HandleFinishStep; the single save in HandleFinishStep carries both. (3) InstanceDataWriteService acknowledges the demoted previous latest row in the change tracker after an append, so a tracked aggregate's next SaveChanges no longer emits a second UPDATE InstancesData SET IsLatest = false WHERE Id. (4) New WorkflowExecution:Bookkeeping:AsynchronousCommit (default false): when true, the task journal write and the transition record insert/completion run in a transaction that commits with SET LOCAL synchronous_commit = off - visible immediately, no fsync on the request path, flushed by the WAL writer or by the connection's next synchronous commit; a database crash can lose the last few hundred milliseconds of those bookkeeping rows only. The wrapper costs three extra round-trips, so it pays off where fsync latency exceeds roughly three network round-trips; measure before enabling. The local compose Postgres additionally runs with commit_delay=1000 (group commit, no durability loss), the recommended starting point for any environment where the runtime's many small commits contend.",
+      "relatedConfig": [
+        "WorkflowExecution:Bookkeeping:AsynchronousCommit"
+      ],
+      "documentation": "docs/runtime/instance-task-and-action-history.md"
+    },
+    "fileStreamedUploads": {
+      "since": "0.0.102",
+      "status": "stable",
+      "description": "x-storage.transport: inline (default, base64 content in the JSON body) | stream | any. For stream/any fields, POST /api/v1/{domain}/workflows/{flow}/files?path=&name=[&version=] reads the raw body (Content-Type = media type, Content-Length required; no JSON, no base64) into one buffer of Content-Length bytes and stores it through the field's Dapr binding (one binding message) and answers 201 with a ticket {file, component, path, name, mimeType, size, eTag, expiresAt}; size and eTag come from the bytes received. The upload is staged in the distributed cache (vnext:{domain}:file-upload:{file}) for FileStorage:Upload:TicketTtlMinutes (default 60); a start or transition claims it once by sending { file } at the same path (same flow and component; the ticket is taken atomically, so two concurrent claims cannot both succeed, and a request that fails afterwards puts it back), the swap stamps the instance as owner and keeps the node's other members. A stream-only field refuses inline content from a client (400 Instance:100048). Limit FileStorage:Upload:MaxBytes (default 64 MiB = the sidecar's --max-body-size, 413 above it). The route skips raw-body capture (RawRequestBodyBufferingMiddleware).",
+      "schemaPath": "schema.attributes.schema.properties[].x-storage.transport | schema.attributes.schema.properties[].items.x-storage.transport",
+      "apiEndpoints": [
+        "POST {domain}/workflows/{workflow}/files?path={field}&name={name}"
+      ],
+      "relatedConfig": [
+        "FileStorage:Upload:MaxBytes",
+        "FileStorage:Upload:TicketTtlMinutes"
+      ],
+      "documentation": "docs/runtime/file-storage.md"
+    },
+    "fileReadIntegrity": {
+      "since": "0.0.102",
+      "status": "stable",
+      "description": "Every x-storage read (functions/file, internal/file, GetFileAsync) checks the stored bytes against the handle's size and sha256 eTag. A complete aws-chunked frame whose payload matches is decoded and served (warning 20512), which recovers objects Dapr 1.17+ bindings.aws.s3 stored framed; anything else is 503 Instance:100047 (error 20513) instead of a silently corrupt body. functions/file and internal/file now answer through FileStreamResult over the verified binding get. The Dapr client no longer caps a received message at gRPC's 4 MB default, so a file above 4 MB reads back (it was 503 ResourceExhausted).",
+      "documentation": "docs/runtime/file-storage.md"
+    },
+    "scriptFileStreams": {
+      "since": "0.0.102",
+      "status": "stable",
+      "description": "The script sandbox allows the in-memory System.IO stream types (Stream, MemoryStream, BufferedStream, Binary/Stream/String readers and writers, TextReader/TextWriter, SeekOrigin, IOException family) and the System.IO.Compression streams (GZip, Deflate, Brotli, ZLib, ZipArchive; the assembly must be granted). File, FileStream, Directory, Path and the rest of System.IO stay banned. New member-level bans in any namespace: StreamReader/StreamWriter path constructors, non-generic Activator, static Type.GetType(string), Type.GetMethod(s)/GetConstructor(s)/GetMember(s)/GetField(s)/GetEvent(s)/FindMembers/GetDefaultMembers/TypeInitializer/InvokeMember, Environment.Exit/FailFast/SetEnvironmentVariable. ScriptFile.OpenRead() wraps a read file in a read-only stream; ScriptBase.PutFileAsync(domain, flow, instance, component, bytes|stream, name, mimeType) stores a processed file and returns its handle; ScriptBase.FileObjectKey(file) names the object key for a DaprBinding task.",
+      "documentation": "docs/custom-script-helpers.md"
+    },
+    "daprBindingTaskResponse": {
+      "since": "0.0.102",
+      "status": "stable",
+      "description": "A DaprBinding task returns the binding's answer to its output mapping: Data is the body as JSON when it parses, else text, else base64 (Metadata.DataEncoding = json|text|base64|none), Headers is the response metadata, and a failure carries the sidecar's gRPC status detail. An unmapped binding task still adds no instance data. Mappings can set the per-call shape: DaprBindingTask.SetOperation / SetData / SetMetadata (e.g. the object key from ScriptBase.FileObjectKey). The call runs through DaprBindingInvocation (shared by both hosts); Workflow:TaskInvocation:Modes:daprbinding = Local runs it from the orchestration sidecar, where x-storage components live (default stays Remote).",
+      "relatedConfig": [
+        "Workflow:TaskInvocation:Modes:daprbinding"
+      ],
+      "documentation": "docs/runtime/task-invocation-routing.md"
+    },
+    "rawFunctionBinaryBody": {
+      "since": "0.0.102",
+      "status": "stable",
+      "description": "A rawResponse function whose output Data is a byte[] or a ScriptFile answers the bytes (Content-Length, the author's Content-Type, else the file's mimeType, else application/octet-stream) instead of a quoted base64 JSON string (vnext-client-sdk-core#99). FunctionResponseOutput.IsBinary keeps a function response cache hit binary.",
+      "documentation": "docs/domain/function-handler-architecture.md"
+    },
+    "flowDefaultVersion": {
+      "since": "0.0.102",
+      "status": "stable",
+      "description": "Publish != Activate. A flow's default-version pointer lives in the sys-version-registry system flow (instance key = flow key, data {type:'Flow', defaultVersion: 'M'|'M.m'|'M.m.p'|'M.m.p-pkg.x.y.z'|'latest'|null, reason?}; 'latest' (case-insensitive) means Automatic and is the value that clears a pointer because the instance-data merge ignores null on an existing key, blank is rejected, type is informational). With a pointer P, the effective default D is the best published match of P: null/empty/latest requests resolve to D, 'M' / 'M.m' requests resolve to the best match at or below D, and versions above D stay pending - reachable only by an explicit full ('-pkg.') or artifact ('2.2.0') request. A request that only matches pending versions answers Instance:100051 (404); a pointer that matches no published version answers Instance:100052 (409) and fails closed for floating requests (explicit full and artifact requests are still served; a full-version pointer is matched ignoring build metadata). An unreadable registry answers Instance:100053 (503, transient, never negative-cached). Flows without a registry instance, sys-* flows and domains whose core package has no registry flow keep today's behaviour exactly. A pointer change invalidates the flow's resolution through a best-effort post-commit job (generation bump, at most ~5 s cross-pod propagation); writes to the registry flow are validated before admission (Instance:100052, the registry instance stays Active). SubFlow correlation stores the child's resolved version. Telemetry: Instance.Create span tag vnext.flow.version.requested; cache span tags vnext.flow.version.pointer / .source (automatic|explicit|default|ceiling). Requires the vnext-sys-flow package that ships sys-version-registry; an older package behaves as Automatic.",
+      "documentation": "docs/runtime/flow-default-version.md"
+    },
+    "httpTaskClientPool": {
+      "since": "0.0.102",
+      "status": "stable",
+      "description": "The named HTTP clients every http/soap task (and the deprecated type-22 External HTTP task) sends through are now built on a pooled SocketsHttpHandler by one shared factory (WorkflowHttpMessageHandlerFactory) on both hosts, registered with an infinite handler lifetime. Before, IHttpClientFactory rotated an HttpClientHandler every two minutes, which discarded every warm TCP+TLS connection to the gateway at low traffic and made the next task pay the handshake again (measured 244 ms first call vs 76 ms warm to one APISIX host). Connection retirement is now per connection: Workflow:TaskInvocation:PooledConnectionLifetimeSeconds (default 600, bounds how long a DNS or gateway change can go unnoticed) and Workflow:TaskInvocation:PooledConnectionIdleTimeoutSeconds (default 120, keep it below the gateway's keep-alive timeout) join the existing Workflow:TaskInvocation:MaxConnectionsPerServer (default 50) on Orchestration. The Execution host's equivalent clients, whose cap was a hardcoded 10, read the same three dials from a new WorkflowHttpClient section (WorkflowHttpClientOptions) with the same defaults, so a task sees one connection policy whichever host performs the call; an environment that overrides one host's cap should override the other to match before reverting a hot single-target type to Remote.",
+      "relatedConfig": [
+        "Workflow:TaskInvocation:MaxConnectionsPerServer",
+        "Workflow:TaskInvocation:PooledConnectionLifetimeSeconds",
+        "Workflow:TaskInvocation:PooledConnectionIdleTimeoutSeconds",
+        "WorkflowHttpClient:MaxConnectionsPerServer",
+        "WorkflowHttpClient:PooledConnectionLifetimeSeconds",
+        "WorkflowHttpClient:PooledConnectionIdleTimeoutSeconds"
+      ],
+      "schemaPath": "task.type=6|16|22",
+      "documentation": "docs/runtime/task-invocation-routing.md"
+    },
+    "subItemTerminalLockWaitReprobe": {
+      "since": "0.0.102",
+      "status": "stable",
+      "description": "The SubFlow completion, fault and cancellation services take a bounded wait on the per-sub-item terminal lock because every terminal signal is delivered twice by design (post-commit relay plus Inbox backup). That wait's backoff is linear in its base delay, and the base was 120 ms (4 attempts): the backup that landed while the relay still held the lock slept 120-240 ms before its first retry, for a critical section of a few tens of milliseconds, and then found the correlation already closed (digital-investment, 2026-11-02: 2 of 11 sequential starts, 154 and 169 ms each). WorkflowExecutionOptions:SubItemTerminalLockRetry now defaults to 10 attempts x 20 ms (same ~1 s budget, 20-40 ms first retry), and the wait re-probes the correlation after every sleep through LockAcquireWait.KeepWaiting (wired by SubItemTerminalGuardExtensions.WhileCorrelationOpen): once the lock-free probe answers settled the wait is abandoned (Lock.Acquire span tag vnext.lock.wait_abandoned=true, subflow result correlation_already_settled_during_wait) instead of acquiring the lock only to load the parent and discover the work done. A not-acquired answer is re-probed once more before it becomes a SubflowTerminalLockNotAcquiredException, so an abandoned wait never turns into a broker redelivery. The state channel's own backoff (SubItemStateLockRetry, 10 x 10 ms) is unchanged.",
+      "relatedConfig": [
+        "WorkflowExecution:SubItemTerminalLockRetry:MaxAttempts",
+        "WorkflowExecution:SubItemTerminalLockRetry:BaseDelayMilliseconds"
+      ],
+      "documentation": "docs/runtime/event-publish-modes.md"
+    },
+    "instanceDataAppendPipelining": {
+      "since": "0.0.102",
+      "status": "stable",
+      "description": "Every InstanceData version — a task output, a transition payload, a subflow output mapping — is persisted the moment it is produced inside its own short transaction (immediate per-record persistence; unchanged). That transaction used to cost six database round-trips in sequence: SET LOCAL timeouts, SELECT ... FOR UPDATE on the parent Instances row, the head SELECT, MAX(VersionNo) on same-version appends, UPDATE IsLatest=false, and the EF INSERT. InstanceDataWriteService now sends the lock prologue as ONE NpgsqlBatch (both SET LOCAL statements, the FOR UPDATE, and a head SELECT that also carries the head line's MAX(VersionNo)) and the demote UPDATE plus a hand-written INSERT as a second batch, so an append is two round-trips plus BEGIN/COMMIT. The statements are pipelined, not merged: they still execute strictly in order on the server and each takes its own READ COMMITTED snapshot, so the head is read only after the row lock is granted — a single SELECT ... FOR UPDATE joining the head was rejected because its joined rows would come from a snapshot taken before the lock wait ended. The row lock, the no-change dedup, the master-schema validation, x-encryption, x-storage offload, the history: none buffer and the unique indexes are unchanged; lock_timeout still surfaces as 55P03 -> Instance:100035 (409) and statement_timeout as 503. The inserted row is attached to the DbContext as Unchanged so a tracked aggregate's relationship fixup sees it as persisted. Two new spans replace the per-command Db.* children of Instance.AppendData: Db.LockAndReadHead and Db.InsertInstanceData (BBT.Workflow.Pipeline source, span.category=business). Measured on digital-investment: 105 database commands per start before the change (7 per task, 8 per transition).",
+      "documentation": "docs/architecture/inline-chain-context-reuse.md"
+    },
+    "rowSecurity": {
+      "since": "0.0.102",
+      "status": "experimental",
+      "description": "A flow declares attributes.rowSecurity.rules (role-keyed row filters in the list-engine filter language, with $.context.Headers / QueryParameters / CurrentUser parameters and the $InstanceStarter / $InstanceBehalfOfStarter identity rules). There is no default: a flow with rowSecurity is deny by default, and 'role X sees everything' is an explicit unfiltered rule; a flow without it is not filtered. A caller sees the OR of the matched static rules' filters plus declared identity rules, ANDed with their own filter; a failed role resolution yields no rows at all, and a failed parameter drops only the rule that reads it; neither ever widens the result. The rule set is the flow's default version (sys-version-registry pointer) when set, else the latest, read with GetFlowAsync(domain, workflow, null) for instances of every version. The public instance list (including groupBy and aggregations), the single GET endpoint (an excluded instance answers the same 404 as a missing one, before the ETag) and the GetInstances / GetInstance tasks (same- and cross-domain, with the task's credential) apply it. The GetInstanceData task, view content resolution, transitions and direct triggers read unfiltered. Behaviour change for EVERY flow, opted in or not (D5, requester-confirmed 2026-10-27): the list, GET and those tasks now perform one cached flow lookup, and a lookup failure other than 'no definition' (for example Instance:100052 409 invalid default-version pointer, Instance:100053 503 version registry unavailable, Instance:100051 flow version not activated) fails the read with that error as is, tagged vnext.rowsecurity.outcome=denied-flow-load with warning 20509; before, the list served rows and GET did not look the flow up. Without its flow no instance of it is readable; starts and transitions of that flow already fail with the same error. When the lookup succeeds, a flow without rowSecurity answers exactly as before. The component cache keys gain a shape segment, so the first reads after the upgrade miss the cache once. Requires a gateway that strips or overwrites the role header and every header a rule reads; QueryParameters are client-controlled. Publish warnings (RS-W*) are log-only. A runtime older than this release ignores rowSecurity entirely and serves every row; the only protections on rollback are not rolling back below this release, or blocking/authorizing the list and GET of those flows at the gateway. Requires the runtime version that ships this entry and a vnext-schema release containing workflow.attributes.rowSecurity.",
+      "schemaPath": "workflow.attributes.rowSecurity",
+      "documentation": "docs/domain/row-security.md",
+      "apiEndpoints": [
+        "GET {domain}/workflows/{workflow}/instances",
+        "GET {domain}/workflows/{workflow}/instances/{instance}"
+      ]
+    },
+    "subflowCarriedHeaders": {
+      "since": "0.0.102",
+      "status": "stable",
+      "description": "instance.sub.completed / faulted / canceled carry an optional CarriedHeaders map: the request headers of the call that settled the child (a parent fault caused by the child re-captures the forwarded set through the local policy before sending it to the grandparent, so Emit=false yields null and the floor applies again; captures happen only for sub-item instances). Carried: every header except a deny floor (names containing authorization, cookie, token, secret or session, plus AdditionalDenied, exact, case-insensitive; config can only add) and framework exclusions (x-subflow-depth, x-parent-instance-id, x-root-instance-id, x-workflow-instance-id, x-correlation-id, traceparent, tracestate, baggage, host, transfer-encoding, connection, keep-alive, and the prefixes content-, dapr-, grpc-). role is always carried. It is a denylist: a secret in an unusually named header travels unless listed in AdditionalDenied. Keys are lower-cased; caps 64 entries and 4096 characters per value; an empty filtered set is null (timer, timeout, job-timeout recovery and downward cancel/fault cascade settlements carry null). Configuration section Workflow:SubFlow:CarriedHeaders: Emit (default true), ExposeToOutputMapping (default true; completion and fault output mapping read them as context.Headers), ApplyToResume (default true; applies them to the parent resume of completion, fault and cancel, Actor stays System; false opts out), AdditionalDenied (default []), MaxEntries (default 64), MaxValueLength (default 4096). Header values are never logged or tagged; span tag vnext.subflow.carried_header_count and log 40140 carry counts only (over-long values count as denied, entries past MaxEntries as overflow). The event contract change is additive (an optional field; an older consumer ignores it, unit-tested through the runtime event and HTTP serializers); the default-on resume is a behaviour change, see the migration subflow-resume-carried-headers. Behaviour change with defaults: an output mapping that read an empty context.Headers now sees the child's headers, and the parent's resumed hop (conditions, tasks with caller-credential forwarding, the next subflow's input mapping) now runs with the finisher's headers instead of none; set ApplyToResume=false to keep the old resume.",
+      "documentation": "docs/runtime/event-publish-modes.md"
     }
   }
 }
