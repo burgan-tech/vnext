@@ -83,10 +83,18 @@ jobs:
 
       - name: Install Cursor CLI
         if: env.HAS_AUTH == 'true' && steps.collect.outputs.issues != ''
-        # The installer always fetches the latest CLI; it publishes no pinned-version URL.
+        # Pinned package, verified before it runs. To upgrade: read the version from
+        # https://cursor.com/install, then `curl -fsSL <url> | shasum -a 256` for the new hash.
+        env:
+          CURSOR_CLI_VERSION: 2026.10.22-27dcf5f
+          CURSOR_CLI_SHA256: 85296944e4600a83c4b764f578d1502bf9c416db200d33a593e8f3ecabfdc294
         run: |
-          curl https://cursor.com/install -fsS | bash
-          echo "$HOME/.cursor/bin" >> "$GITHUB_PATH"
+          pkg="$RUNNER_TEMP/cursor-cli.tar.gz"
+          curl -fsSL -o "$pkg" "https://downloads.cursor.com/lab/$CURSOR_CLI_VERSION/linux/x64/agent-cli-package.tar.gz"
+          echo "$CURSOR_CLI_SHA256  $pkg" | sha256sum --check --strict
+          mkdir -p "$RUNNER_TEMP/cursor-cli"
+          tar --strip-components=1 -xzf "$pkg" -C "$RUNNER_TEMP/cursor-cli"
+          echo "$RUNNER_TEMP/cursor-cli" >> "$GITHUB_PATH"
 
       - name: Triage with Cursor (read-only)
         if: env.HAS_AUTH == 'true' && steps.collect.outputs.issues != ''
@@ -121,7 +129,7 @@ jobs:
           JSON
           for n in $ISSUES; do
             echo "::group::Issue #$n"
-            timeout 900 agent -p --trust --mode ask --output-format json --model "$TRIAGE_MODEL" \
+            timeout 900 cursor-agent -p --trust --mode ask --output-format json --model "$TRIAGE_MODEL" \
               "Follow .github/triage/TRIAGE.md for the single input file .triage/in/$n.json. Answer with the result JSON object only." \
               > ".triage/out/$n.json" \
               || echo "::warning::Cursor agent exited non-zero on #$n"
