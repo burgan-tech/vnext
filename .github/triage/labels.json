@@ -22,7 +22,11 @@
     { "name": "area:cross-domain", "color": "1d76db", "description": "Discovery, cross-domain invocation" },
     { "name": "area:api", "color": "1d76db", "description": "Public HTTP contract, definitions, publish" },
     { "name": "area:observability", "color": "1d76db", "description": "Traces, spans, metrics, logging" },
-    { "name": "area:infra", "color": "1d76db", "description": "Docker, Dapr components, DB migrations, Helm" }
+    { "name": "area:infra", "color": "1d76db", "description": "Docker, Dapr components, DB migrations, Helm" },
+    { "name": "area:cache", "color": "1d76db", "description": "Component, function and response caches, L1 tiers, invalidation" },
+    { "name": "area:security", "color": "1d76db", "description": "Secrets, encryption, script sandbox, vulnerabilities" },
+    { "name": "area:configuration", "color": "1d76db", "description": "appsettings, options, environment variables, feature flags" },
+    { "name": "area:performance", "color": "1d76db", "description": "Latency, throughput, allocations, DB and Redis cost" }
   ],
   "priorities": [
     { "name": "priority:P0", "color": "b60205", "description": "Production down or data loss; set by a maintainer only" },

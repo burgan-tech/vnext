@@ -4,6 +4,7 @@ name: Issue Triage
 # The Cursor agent reads the issue snapshot and the code and prints a JSON result; it has no
 # shell, write, network or GitHub access. scripts/triage/apply.mjs validates that result against
 # .github/triage/labels.json and is the only step that writes to GitHub.
+# Runs on issue events; a manual run triages one issue or sweeps untriaged open issues.
 # Mode: repository variable TRIAGE_MODE = dry-run (default: comment only) | apply.
 # Auth: secret CURSOR_API_KEY (the shared CI Cursor account); without it the job is a no-op.
 # Model: repository variable TRIAGE_MODEL overrides the pinned default (`agent --list-models`).
@@ -11,8 +12,6 @@ name: Issue Triage
 on:
   issues:
     types: [opened, edited, reopened]
-  schedule:
-    - cron: '0 3 * * *'   # 06:00 Europe/Istanbul: sweep untriaged open issues
   workflow_dispatch:
     inputs:
       issue:

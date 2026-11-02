@@ -168,7 +168,8 @@ Rule ids: `PR-*` in [reviewer: evidence §4](code-review/reviewers/evidence.md),
 
 **Issue triage** — the one automation that writes to GitHub without a per-action approval, and only
 to issues: [`.github/workflows/issue-triage.yml`](../.github/workflows/issue-triage.yml) runs on
-issue `opened` / `edited` / `reopened` and a daily sweep (06:00 TR, at most 20 untriaged issues). A
+issue `opened` / `edited` / `reopened`, and on a manual run for one issue or a sweep of at most 20
+untriaged ones. A
 read-only Cursor CLI run (`agent -p --mode ask`, no `--force`) follows
 [`.github/triage/TRIAGE.md`](../.github/triage/TRIAGE.md) and prints a JSON result; [`scripts/triage/apply.mjs`](../scripts/triage/apply.mjs) validates it against
 [`.github/triage/labels.json`](../.github/triage/labels.json) and upserts one sticky comment, and in

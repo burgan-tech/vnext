@@ -47,7 +47,7 @@ capability) · `refactor` · `performance` · `documentation` · `question`.
 | `area:locking` | Busy flag / status lock code under `src/BBT.Workflow.Application/Execution/`, `Instances/` |
 | `area:instance-data` | `src/BBT.Workflow.Application/Instances/`, `src/BBT.Workflow.Domain/` instance data |
 | `area:state-function` | `src/BBT.Workflow.Application/Functions/`, `RepresentationEtag/` |
-| `area:authorization` | `src/BBT.Workflow.Application/Authorization/`, `Security/` |
+| `area:authorization` | `src/BBT.Workflow.Application/Authorization/`, `src/BBT.Workflow.Infrastructure/Authorization/` |
 | `area:error-boundary` | `src/BBT.Workflow.Application/Execution/ErrorHandling/` |
 | `area:tasks` | `src/BBT.Workflow.Application/Tasks/`, `src/BBT.Workflow.Execution*/`, `execution/` |
 | `area:scripting` | `modules/BBT.Workflow.Modules.Scripting/`, `src/BBT.Workflow.Application/Scripting/` |
@@ -57,6 +57,13 @@ capability) · `refactor` · `performance` · `documentation` · `question`.
 | `area:api` | `orchestration/BBT.Workflow.Orchestration.HttpApi.Host/`, `src/BBT.Workflow.Application/Definitions/` |
 | `area:observability` | `src/BBT.Workflow.Application/Telemetry/`, `src/BBT.Workflow.Domain/Logging/WorkflowLogs.cs` |
 | `area:infra` | `etc/docker/`, `workers/BBT.Workflow.DbMigrator/`, Dapr components |
+| `area:cache` | `src/BBT.Workflow.Application/Caching/`, `src/BBT.Workflow.Domain/Caching/`, `src/BBT.Workflow.Application/Instances/Caching/`, `src/BBT.Workflow.Application/Tasks/Executors/Cache/` |
+| `area:security` | `src/BBT.Workflow.Application/Security/`, `src/BBT.Workflow.Domain/Security/`, `src/BBT.Workflow.Infrastructure/Security/`, `src/BBT.Workflow.Infrastructure/Encryption/` |
+| `area:configuration` | `appsettings*.json` under `orchestration/`, `execution/`, `workers/`; `*Options.cs` classes |
+| `area:performance` | The hot path the issue names; `test/BBT.Workflow.Benchmarks/` |
+
+`area:performance` marks *where* a slowdown lives and can sit beside any kind (a `bug` that is a
+regression); the `performance` kind is for work whose goal is to make something faster.
 
 **priority** (one): `priority:P0` production down or data loss (a maintainer must confirm; it is
 shown, not applied) · `priority:P1` severe, blocks a team or release · `priority:P2` normal ·
