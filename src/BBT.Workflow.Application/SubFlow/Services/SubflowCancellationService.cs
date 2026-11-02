@@ -124,12 +124,27 @@ public sealed class SubflowCancellationService(
         }
 
         // Bounded wait rather than fail-fast: absorbs duplicates that collide with the original
-        // while its transaction is still open.
+        // while its transaction is still open. Re-probes between attempts and stops waiting once
+        // the holder has committed — see SubflowCompletionService.
+        var terminalLockWait = TerminalLockWait.WhileCorrelationOpen(
+            terminalGuard, input.InstanceId, input.SubInstanceId, SubItemTerminalOutcome.Canceled);
         await using (var lockScope = await transitionLockScopeFactory.AcquireAsync(
-                         lockKey, TerminalLockWait, cancellationToken))
+                         lockKey, terminalLockWait, cancellationToken))
         {
             if (!lockScope.IsAcquired)
             {
+                var lateProbe = await terminalGuard.ProbeAsync(
+                    input.InstanceId, input.SubInstanceId, SubItemTerminalOutcome.Canceled, cancellationToken);
+                if (lateProbe != SubItemTerminalProbe.Proceed)
+                {
+                    activity?.SetTag("vnext.subflow.result",
+                        lateProbe == SubItemTerminalProbe.AlreadySettled
+                            ? "correlation_already_settled_during_wait"
+                            : "terminal_outcome_conflict_during_wait");
+                    SubFlowActivityHelper.SetSuccess(activity);
+                    return;
+                }
+
                 logger.SubItemTerminalLockNotAcquired(lockKey, SubItemTerminalOutcome.Canceled.ToString());
                 throw new SubflowTerminalLockNotAcquiredException(
                     input.Domain,

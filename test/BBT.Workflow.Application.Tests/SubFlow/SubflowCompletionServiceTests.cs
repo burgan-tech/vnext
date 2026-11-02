@@ -124,6 +124,55 @@ public sealed class SubflowCompletionServiceTests
     }
 
     [Fact]
+    public async Task CompletionAsync_WhenLockWaitEndsAndHolderHasSettled_ShouldNoOpInsteadOfThrowing()
+    {
+        // The backup that collided with the relay: the pre-lock probe still saw the correlation
+        // open, the wait was abandoned (or exhausted) and by then the relay had committed. One more
+        // lock-free probe must turn that into a no-op, never into a redelivery cycle.
+        var input = CreateInput(Guid.NewGuid(), Guid.NewGuid());
+        _lockScope.SetupGet(x => x.IsAcquired).Returns(false);
+        _terminalGuard
+            .SetupSequence(x => x.ProbeAsync(
+                input.InstanceId, input.SubInstanceId,
+                SubItemTerminalOutcome.Completed, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SubItemTerminalProbe.Proceed)
+            .ReturnsAsync(SubItemTerminalProbe.AlreadySettled);
+
+        await CreateService().CompletionAsync(input);
+
+        _instanceRepository.VerifyNoOtherCalls();
+    }
+
+    [Fact]
+    public async Task CompletionAsync_ShouldHandTheLockWaitTheCorrelationProbe()
+    {
+        // The wait re-probes between attempts through LockAcquireWait.KeepWaiting; it must be the
+        // terminal guard's probe for THIS correlation, answering "keep waiting" only while open.
+        var input = CreateInput(Guid.NewGuid(), Guid.NewGuid());
+        LockAcquireWait? captured = null;
+        _lockScopeFactory
+            .Setup(x => x.AcquireAsync(It.IsAny<string>(), It.IsAny<LockAcquireWait>(), It.IsAny<CancellationToken>()))
+            .Callback((string _, LockAcquireWait wait, CancellationToken _) => captured = wait)
+            .ReturnsAsync(_lockScope.Object);
+        _lockScope.SetupGet(x => x.IsAcquired).Returns(false);
+        _terminalGuard
+            .SetupSequence(x => x.ProbeAsync(
+                input.InstanceId, input.SubInstanceId,
+                SubItemTerminalOutcome.Completed, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SubItemTerminalProbe.Proceed)        // pre-lock
+            .ReturnsAsync(SubItemTerminalProbe.AlreadySettled) // late probe (the mocked factory never asks KeepWaiting)
+            .ReturnsAsync(SubItemTerminalProbe.Proceed)        // KeepWaiting, asked below
+            .ReturnsAsync(SubItemTerminalProbe.AlreadySettled); // KeepWaiting, asked below
+
+        await CreateService().CompletionAsync(input);
+
+        captured.ShouldNotBeNull();
+        captured.Value.KeepWaiting.ShouldNotBeNull();
+        (await captured.Value.KeepWaiting!(CancellationToken.None)).ShouldBeTrue();
+        (await captured.Value.KeepWaiting!(CancellationToken.None)).ShouldBeFalse();
+    }
+
+    [Fact]
     public async Task CompletionAsync_WhenPreLockProbeReportsSettled_ShouldNoOpWithoutTakingLock()
     {
         var input = CreateInput(Guid.NewGuid(), Guid.NewGuid());

@@ -80,8 +80,12 @@ post-commit work. If the parent continues afterward, the next stage enters a new
 
 `InstanceDataWriteService.PersistAsync` calls `Instance.AcceptPersistedData`, so data written by
 one hop is reflected in the aggregate used by the next hop. The write path's row lock, latest-head
-read and version-number reads remain intact. Context reuse removes aggregate rehydration; it does
-not weaken instance-data concurrency rules.
+read and version-number reads remain intact — since the append pipelining they travel in two network
+round-trips instead of six (`SET LOCAL` + `FOR UPDATE` + head/line-max read in one `NpgsqlBatch`,
+demote + `INSERT` in a second; see `Db.LockAndReadHead` / `Db.InsertInstanceData` in
+[trace-span-tree](../runtime/trace-span-tree.md)), but every statement still executes in the same
+order with its own snapshot. Context reuse removes aggregate rehydration; it does not weaken
+instance-data concurrency rules.
 
 Before building a later hop, the pipeline also preserves the active-instance terminal guard and
 cancellation check that the storage-backed path used to provide.

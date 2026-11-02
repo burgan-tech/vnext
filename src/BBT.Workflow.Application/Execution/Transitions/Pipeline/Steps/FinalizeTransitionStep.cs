@@ -10,7 +10,8 @@ namespace BBT.Workflow.Execution.Pipeline.Steps;
 /// Updates the transition record and performs cleanup operations.
 /// </summary>
 public sealed class FinalizeTransitionStep(
-    IInstanceTransitionRepository instanceTransitionRepository) : ITransitionStep
+    IInstanceTransitionRepository instanceTransitionRepository,
+    Persistence.IBookkeepingWriter? bookkeepingWriter = null) : ITransitionStep
 {
     /// <inheritdoc />
     public int Order => LifecycleOrder.Finalize;
@@ -117,10 +118,16 @@ public sealed class FinalizeTransitionStep(
     /// </summary>
     private async Task UpdateTransitionIfExistsAsync(InstanceTransition? transition, CancellationToken cancellationToken)
     {
-        if (transition != null)
-        {
+        if (transition == null)
+            return;
+
+        // Bookkeeping: may commit asynchronously under WorkflowExecution:Bookkeeping — see
+        // BookkeepingWriteOptions. The instance's own state and status writes are not affected.
+        if (bookkeepingWriter is null)
             await instanceTransitionRepository.UpdateCompletedAsync(transition, cancellationToken);
-        }
+        else
+            await bookkeepingWriter.RunAsync(
+                ct => instanceTransitionRepository.UpdateCompletedAsync(transition, ct), cancellationToken);
     }
 
     /// <summary>
