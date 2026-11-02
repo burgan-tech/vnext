@@ -56,7 +56,13 @@ public static class WorkflowApiBaseServiceCollectionExtensions
     /// <returns>The service collection for chaining</returns>
     public static IServiceCollection AddDaprClients(this IServiceCollection services)
     {
-        services.AddDaprClient();
+        // No client-side receive cap: gRPC's 4 MB default refused every binding answer above it (an x-storage file read
+        // back through its Dapr binding). The sidecar's --max-body-size bounds what it sends.
+        services.AddDaprClient(builder => builder.UseGrpcChannelOptions(new Grpc.Net.Client.GrpcChannelOptions
+        {
+            ThrowOperationCanceledOnCancellation = true,
+            MaxReceiveMessageSize = null,
+        }));
         services.AddDaprJobsClient();
         return services;
     }

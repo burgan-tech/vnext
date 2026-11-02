@@ -87,6 +87,7 @@ public static class GatewayServiceCollectionExtensions
         // scripting services: ScriptServices takes it as an optional dependency, so a host without the gateway
         // stack simply gets scripts whose GetFileAsync reports the reader as unavailable.
         services.TryAddScoped<IScriptFileReader, ScriptFileReader>();
+        services.TryAddScoped<IScriptFileWriter, ScriptFileWriter>();
 
         return services;
     }

@@ -117,6 +117,7 @@ for what it bounds and why it matters most for `daprservice`/`statestore`.
 | `daprservice` | Dapr service invocation (type `3`) | `LocalDaprServiceTaskInvoker` | Calls another domain app directly from Orchestration instead of relaying through Execution. |
 | `soap` | SOAP (type `16`) | `LocalSoapTaskInvoker` | Shares the same named HTTP clients (and the same connection cap) as `http`. |
 | `statestore` | State Store (type `17`) | `LocalStateStoreTaskInvoker` | Runs through `StateStoreInvocation` over the shared `IStateStoreClient`; also backs the function response cache (`StateStoreCacheGateway`). See [State Store Task](state-store-task.md). |
+| `daprbinding` | Dapr Binding (type `2`) | `LocalDaprBindingTaskInvoker` | Runs through `DaprBindingInvocation`, the core the Execution service's `DaprBindingTaskInvoker` shares. **Not in the shipped `Modes`** (stays Remote): binding components scoped to the Execution app-id would break if flipped. Set `"daprbinding": "Local"` for flows that read, list or delete x-storage objects, whose components live on the orchestration sidecar ([File Storage § Deleting and listing](file-storage.md#deleting-and-listing-objects)). |
 
 **Cache-Aside (type `18`) has no wire type of its own.** Its executor runs the read-through in
 Orchestration; the cache get/set goes through `IStateStoreCacheGateway` (the same gateway as the
