@@ -166,6 +166,20 @@ Rule ids: `PR-*` in [reviewer: evidence §4](code-review/reviewers/evidence.md),
 | [`scripts/governance/meta-sync.mjs`](../scripts/governance/meta-sync.mjs) | Syncs a patch line's released `vnext-meta/` into master (every manifest row master lacks, union of ids and feature keys, lower version wins) | `--source <dir> --target <dir> [--dry-run]`; CI: `sync-meta-to-master` job of the release workflow, for lines that are not the latest ([process](governance/release-lines.md)) |
 | [`.github/workflows/backport.yml`](../.github/workflows/backport.yml) | Opens a backport PR to `release-vX.Y` for a merged PR labelled `backport/release-vX.Y` | CI: `pull_request_target` on `closed` / `labeled`; process: [Release lines](governance/release-lines.md) |
 
+**Issue triage** — the one automation that writes to GitHub without a per-action approval, and only
+to issues: [`.github/workflows/issue-triage.yml`](../.github/workflows/issue-triage.yml) runs on
+issue `opened` / `edited` / `reopened` and a daily sweep (06:00 TR, at most 20 untriaged issues). A
+read-only Cursor CLI run (`agent -p --mode ask`, no `--force`) follows
+[`.github/triage/TRIAGE.md`](../.github/triage/TRIAGE.md) and prints a JSON result; [`scripts/triage/apply.mjs`](../scripts/triage/apply.mjs) validates it against
+[`.github/triage/labels.json`](../.github/triage/labels.json) and upserts one sticky comment, and in
+`apply` mode adds labels (never removes one, never overrides a human kind / priority / type, never
+applies `priority:P0`) and sets the issue type. Repository variable `TRIAGE_MODE` = `dry-run`
+(default, comment only) / `apply`; secret `CURSOR_API_KEY` (the
+shared CI Cursor account), without which the job is a no-op; `TRIAGE_MODEL` overrides the pinned model
+(`claude-sonnet-5-5-medium`; names from `agent --list-models`). Labels: `node scripts/triage/sync-labels.mjs [--apply]`. Tests:
+`node --test "scripts/triage/test/*.test.mjs"`. Issue text is untrusted (public repo): the agent has
+no shell, write, network or GitHub access, and a changed working tree blocks the apply step.
+
 ## 7. vnext-meta and documentation
 
 | Skill | Does | When | Produces |

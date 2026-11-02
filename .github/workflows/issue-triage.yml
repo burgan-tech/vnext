@@ -1,0 +1,151 @@
+name: Issue Triage
+
+# Enriches issues with a type, labels and a sticky "AI triage" comment.
+# The Cursor agent reads the issue snapshot and the code and prints a JSON result; it has no
+# shell, write, network or GitHub access. scripts/triage/apply.mjs validates that result against
+# .github/triage/labels.json and is the only step that writes to GitHub.
+# Mode: repository variable TRIAGE_MODE = dry-run (default: comment only) | apply.
+# Auth: secret CURSOR_API_KEY (the shared CI Cursor account); without it the job is a no-op.
+# Model: repository variable TRIAGE_MODEL overrides the pinned default (`agent --list-models`).
+
+on:
+  issues:
+    types: [opened, edited, reopened]
+  schedule:
+    - cron: '0 3 * * *'   # 06:00 Europe/Istanbul: sweep untriaged open issues
+  workflow_dispatch:
+    inputs:
+      issue:
+        description: 'Issue number (empty = sweep)'
+        required: false
+      limit:
+        description: 'Sweep limit'
+        required: false
+        default: '20'
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: issue-triage-${{ github.event.issue.number || inputs.issue || 'sweep' }}
+  cancel-in-progress: ${{ github.event_name == 'issues' }}
+
+jobs:
+  triage:
+    if: github.event_name != 'issues' || !endsWith(github.event.issue.user.login, '[bot]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TRIAGE_MODE: ${{ vars.TRIAGE_MODE || 'dry-run' }}
+      TRIAGE_MODEL: ${{ vars.TRIAGE_MODEL || 'claude-sonnet-5-5-medium' }}
+      HAS_AUTH: ${{ secrets.CURSOR_API_KEY != '' }}
+    steps:
+      - name: Check credentials
+        if: env.HAS_AUTH != 'true'
+        run: echo "::notice::CURSOR_API_KEY not set; issue triage skipped."
+
+      - uses: actions/checkout@v4
+        if: env.HAS_AUTH == 'true'
+        with:
+          # The agent can read the working tree; keep the token out of .git/config.
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        if: env.HAS_AUTH == 'true'
+        with:
+          node-version: '24'
+
+      - name: Run triage script tests
+        if: env.HAS_AUTH == 'true'
+        run: node --test "scripts/triage/test/*.test.mjs"
+
+      - name: Collect issues
+        id: collect
+        if: env.HAS_AUTH == 'true'
+        env:
+          ISSUE: ${{ github.event.issue.number || inputs.issue }}
+          LIMIT: ${{ inputs.limit || '20' }}
+        run: |
+          if [ -n "$ISSUE" ]; then
+            node scripts/triage/collect.mjs --issue "$ISSUE"
+          else
+            node scripts/triage/collect.mjs --sweep --limit "$LIMIT"
+          fi
+
+      - name: Stage trusted tooling
+        # apply.mjs and the taxonomy run from this copy, taken before the agent can touch the tree.
+        if: env.HAS_AUTH == 'true' && steps.collect.outputs.issues != ''
+        run: |
+          mkdir -p "$RUNNER_TEMP/triage-tools/scripts" "$RUNNER_TEMP/triage-tools/taxonomy"
+          cp -R scripts/triage "$RUNNER_TEMP/triage-tools/scripts/"
+          cp .github/triage/labels.json "$RUNNER_TEMP/triage-tools/taxonomy/labels.json"
+
+      - name: Install Cursor CLI
+        if: env.HAS_AUTH == 'true' && steps.collect.outputs.issues != ''
+        # The installer always fetches the latest CLI; it publishes no pinned-version URL.
+        run: |
+          curl https://cursor.com/install -fsS | bash
+          echo "$HOME/.cursor/bin" >> "$GITHUB_PATH"
+
+      - name: Triage with Cursor (read-only)
+        if: env.HAS_AUTH == 'true' && steps.collect.outputs.issues != ''
+        env:
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+          ISSUES: ${{ steps.collect.outputs.issues }}
+        run: |
+          mkdir -p .triage/out
+          # Global CLI config outside the checkout. The agent gets no --force: every tool that needs
+          # approval (shell, writes) is refused in print mode, and the deny list refuses them again
+          # together with reads outside the code. The agent prints its result; this step saves it.
+          export CURSOR_CONFIG_DIR="$RUNNER_TEMP/cursor-config"
+          mkdir -p "$CURSOR_CONFIG_DIR"
+          cat > "$CURSOR_CONFIG_DIR/cli-config.json" <<'JSON'
+          {
+            "version": 1,
+            "editor": { "vimMode": false },
+            "permissions": {
+              "allow": ["Read(**)"],
+              "deny": [
+                "Shell(*)", "Write(**)", "Write(/**)", "WebFetch(*)", "Mcp(*:*)",
+                "Read(.git/**)", "Read(.triage/out/**)",
+                "Read(/proc/**)", "Read(/sys/**)", "Read(/etc/**)", "Read(/root/**)",
+                "Read(/tmp/**)", "Read(/opt/**)", "Read(/usr/**)", "Read(/var/**)",
+                "Read(/home/runner/.cursor/**)", "Read(/home/runner/.config/**)", "Read(/home/runner/.ssh/**)",
+                "Read(/home/runner/.docker/**)", "Read(/home/runner/.npm/**)", "Read(/home/runner/.npmrc)",
+                "Read(/home/runner/.gitconfig)",
+                "Read(/home/runner/work/_temp/**)", "Read(/home/runner/work/_actions/**)"
+              ]
+            }
+          }
+          JSON
+          for n in $ISSUES; do
+            echo "::group::Issue #$n"
+            timeout 900 agent -p --trust --mode ask --output-format json --model "$TRIAGE_MODEL" \
+              "Follow .github/triage/TRIAGE.md for the single input file .triage/in/$n.json. Answer with the result JSON object only." \
+              > ".triage/out/$n.json" \
+              || echo "::warning::Cursor agent exited non-zero on #$n"
+            echo "::endgroup::"
+          done
+
+      - name: Check the agent left the tree untouched
+        if: env.HAS_AUTH == 'true' && steps.collect.outputs.issues != ''
+        run: |
+          dirty="$(git status --porcelain --untracked-files=all)"
+          if [ -n "$dirty" ]; then
+            echo "::error::The triage agent changed files outside .triage/; nothing is written to GitHub."
+            echo "$dirty"
+            exit 1
+          fi
+
+      - name: Apply results
+        if: env.HAS_AUTH == 'true' && steps.collect.outputs.issues != ''
+        env:
+          TRIAGE_REDACT: |
+            ${{ secrets.CURSOR_API_KEY }}
+            ${{ github.token }}
+        run: |
+          node "$RUNNER_TEMP/triage-tools/scripts/triage/apply.mjs" \
+            --mode "$TRIAGE_MODE" \
+            --taxonomy "$RUNNER_TEMP/triage-tools/taxonomy/labels.json"
