@@ -667,6 +667,30 @@ public sealed class InstanceDataWriteService(
         // AcceptPersistedData is Id-idempotent.
         context.InstancesData.Attach(row);
         instance.AcceptPersistedData(row);
+
+        // AcceptPersistedData also flips the previous latest row's IsLatest in memory. When that row
+        // is tracked (an aggregate loaded with its data), the tracker now sees a modification the
+        // demote above has ALREADY written, and the next SaveChanges on this context would emit a
+        // second, redundant `UPDATE InstancesData SET IsLatest = false WHERE Id = …` — one more
+        // autocommit per hop (measured: once per start). Tell the tracker the column is in sync.
+        if (demoteStaleLatest)
+            AcknowledgeDemotedRows(context, row);
+    }
+
+    private static void AcknowledgeDemotedRows(WorkflowDbContext context, InstanceData inserted)
+    {
+        foreach (var entry in context.ChangeTracker.Entries<InstanceData>())
+        {
+            if (entry.Entity.InstanceId != inserted.InstanceId || entry.Entity.Id == inserted.Id)
+                continue;
+
+            var isLatest = entry.Property(nameof(InstanceData.IsLatest));
+            if (!isLatest.IsModified || entry.Entity.IsLatest)
+                continue;
+
+            isLatest.OriginalValue = false;
+            isLatest.IsModified = false;
+        }
     }
 
     /// <summary>

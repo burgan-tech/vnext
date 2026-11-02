@@ -121,6 +121,7 @@ public static class WorkflowInfrastructureModuleServiceCollectionExtensions
 
         // Explicit InstanceData persist path (per-instance FOR UPDATE lock + versioning).
         services.AddScoped<IInstanceDataWriteService, InstanceDataWriteService>();
+        services.AddScoped<BBT.Workflow.Execution.Persistence.IBookkeepingWriter, BookkeepingWriter>();
 
         // You can register your repositories here.
         services.AddScoped<IInstanceRepository, EfCoreInstanceRepository>();

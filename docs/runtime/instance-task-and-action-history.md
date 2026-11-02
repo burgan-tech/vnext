@@ -49,7 +49,7 @@ Each item projects one `InstanceTask` journal row joined with its owning transit
       "triggerType": "manual",       // the TRANSITION's trigger — NOT the task's hook (see below)
       "hook": "onExecute",           // the task's phase: onExecute | onEntry | onExit | …; null on legacy rows
       "order": 0,                    // task's order within its hook group (equal ⇒ parallel); null on legacy rows
-      "status": "completed",         // platform status: waiting | busy | completed | faulted
+      "status": "completed",         // platform status: completed | faulted (waiting | busy only on rows written before the single-write journal, see below)
       "businessStatus": "success",   // business outcome: unknown | success | failed
       "startedAt": "…", "finishedAt": "…", "durationMs": 184.2,
       "error": null                  // fault reason, only on a faulted row; never a stack trace
@@ -131,3 +131,15 @@ cost) and is out of scope here.
   is untouched and nothing new participates in the fingerprint ETag.
 - No gateway/remote plumbing and no subflow descent: like the incident history, the functions
   always answer for the addressed instance only.
+
+## One write per task
+
+The journal row is written **once, at completion** (`StandardTaskPersistenceStrategy`), with its final
+`status`, `businessStatus`, payloads and timings. A task is therefore not listed by `functions/tasks`
+while it runs: the `busy` row that used to be inserted at creation and updated at completion cost every
+task a second autocommit transaction — a second WAL fsync on the request path. A retry that finds the
+previous attempt's row (by `ExecutionKey`) updates it set-based instead of inserting a second one; a task
+interrupted by a crash leaves no row and is re-executed, which is also what the reused `busy` row led to.
+Under `WorkflowExecution:Bookkeeping:AsynchronousCommit` the write commits with
+`synchronous_commit = off` (visible immediately, flushed by the WAL writer or the connection's next
+synchronous commit); see `BookkeepingWriteOptions`.

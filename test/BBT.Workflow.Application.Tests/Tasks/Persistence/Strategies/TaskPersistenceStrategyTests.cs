@@ -6,6 +6,7 @@ using BBT.Aether.Results;
 using BBT.Aether.Uow;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Instances;
+using BBT.Workflow.Shared;
 using NSubstitute;
 using Shouldly;
 using Xunit;
@@ -62,18 +63,20 @@ public class TaskPersistenceStrategyTests
     }
 
     [Fact]
-    public async Task StandardTaskPersistenceStrategy_HandleCreationAsync_ShouldCallRepositoryInsert()
+    public async Task StandardTaskPersistenceStrategy_HandleCreationAsync_ProbesButDoesNotInsert()
     {
-        // Arrange
+        // One write per task: creation only resolves which entity the completion will write. A
+        // first execution leaves the caller's entity unwritten; the "busy" row is gone on purpose
+        // (it cost every task a second autocommit transaction, i.e. a second WAL fsync).
         var strategy = CreateStandardStrategy();
 
-        // Act
         var persisted = await strategy.HandleCreationAsync(
             _instanceTask, TaskTrigger.OnExecute, 1, cancellationToken: CancellationToken.None);
 
-        // Assert
-        await _mockRepository.Received(1).InsertAsync(_instanceTask, true, CancellationToken.None);
         persisted.ShouldBeSameAs(_instanceTask);
+        await _mockRepository.Received(1).FindByTransitionAndTaskAsync(
+            _instanceTask.TransitionId, _instanceTask.TaskId, TaskTrigger.OnExecute, 1, CancellationToken.None);
+        await _mockRepository.DidNotReceiveWithAnyArgs().InsertAsync(default!, default, default);
         // No database transaction: the per-instance Busy/CAS mutex already serializes task
         // execution, and InstanceTask raises no domain events for a transaction to coordinate.
         _unitOfWorkManager.Received(1).Begin(Arg.Is<UnitOfWorkOptions>(options =>
@@ -82,11 +85,10 @@ public class TaskPersistenceStrategyTests
     }
 
     [Fact]
-    public async Task StandardTaskPersistenceStrategy_HandleCreationAsync_WithSkipLookup_InsertsWithoutProbing()
+    public async Task StandardTaskPersistenceStrategy_HandleCreationAsync_WithSkipLookup_TouchesNothing()
     {
         // A freshly inserted transition record cannot have journal rows, so the caller may skip
-        // the idempotency probe entirely — the guaranteed-empty SELECT per task is the cost this
-        // flag exists to remove.
+        // the idempotency probe entirely — with no insert at creation either, the step is free.
         var strategy = CreateStandardStrategy();
 
         var persisted = await strategy.HandleCreationAsync(
@@ -94,8 +96,8 @@ public class TaskPersistenceStrategyTests
 
         persisted.ShouldBeSameAs(_instanceTask);
         await _mockRepository.DidNotReceiveWithAnyArgs().FindByTransitionAndTaskAsync(default, default!, default, default, default);
-        await _mockRepository.Received(1).InsertAsync(_instanceTask, true, CancellationToken.None);
-        await _unitOfWork.Received(1).CommitAsync(CancellationToken.None);
+        await _mockRepository.DidNotReceiveWithAnyArgs().InsertAsync(default!, default, default);
+        _unitOfWorkManager.DidNotReceiveWithAnyArgs().Begin(default!);
     }
 
     [Fact]
@@ -121,22 +123,61 @@ public class TaskPersistenceStrategyTests
     }
 
     [Fact]
-    public async Task StandardTaskPersistenceStrategy_HandleCompletionAsync_ShouldCallRepositoryUpdate()
+    public async Task StandardTaskPersistenceStrategy_HandleCompletionAsync_FirstExecution_InsertsOnce()
     {
-        // Arrange
+        // The journal's only hot write: the row lands with its final state in ONE insert.
         var strategy = CreateStandardStrategy();
+        await strategy.HandleCreationAsync(
+            _instanceTask, TaskTrigger.OnExecute, 1, skipLookup: true, cancellationToken: CancellationToken.None);
+        _instanceTask.Completed(new JsonData("{}"), isBusinessSuccess: true);
 
-        // Act
         await strategy.HandleCompletionAsync(_instanceTask, CancellationToken.None);
 
-        // Assert — one set-based completion write, never a full-row attach-and-update
-        await _mockRepository.Received(1).MarkCompletedAsync(_instanceTask, CancellationToken.None);
+        await _mockRepository.Received(1).InsertAsync(_instanceTask, true, CancellationToken.None);
+        await _mockRepository.DidNotReceiveWithAnyArgs().MarkCompletedAsync(default!, default);
         await _mockRepository.DidNotReceiveWithAnyArgs().UpdateAsync(default!, default, default);
-        // No database transaction: MarkCompletedAsync is one set-based UPDATE with nothing else
-        // to coordinate alongside it.
         _unitOfWorkManager.Received(1).Begin(Arg.Is<UnitOfWorkOptions>(options =>
             options.Scope == UnitOfWorkScopeOption.RequiresNew && !options.IsTransactional));
         await _unitOfWork.Received(1).CommitAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task StandardTaskPersistenceStrategy_HandleCompletionAsync_ReusedRow_UpdatesSetBased()
+    {
+        // A retry found the previous attempt's row: completion updates it set-based, never a
+        // full-row attach-and-update, and never a second insert.
+        var existing = new InstanceTask(
+            Guid.NewGuid(), _instanceTask.TransitionId, _instanceTask.TaskId, TaskTrigger.OnExecute, 1);
+        _mockRepository.FindByTransitionAndTaskAsync(
+                _instanceTask.TransitionId, _instanceTask.TaskId, TaskTrigger.OnExecute, 1, CancellationToken.None)
+            .Returns(existing);
+        var strategy = CreateStandardStrategy();
+        var reused = await strategy.HandleCreationAsync(
+            _instanceTask, TaskTrigger.OnExecute, 1, cancellationToken: CancellationToken.None);
+        reused.Completed(new JsonData("{}"), isBusinessSuccess: true);
+
+        await strategy.HandleCompletionAsync(reused, CancellationToken.None);
+
+        await _mockRepository.Received(1).MarkCompletedAsync(reused, CancellationToken.None);
+        await _mockRepository.DidNotReceiveWithAnyArgs().InsertAsync(default!, default, default);
+        await _mockRepository.DidNotReceiveWithAnyArgs().UpdateAsync(default!, default, default);
+    }
+
+    [Fact]
+    public async Task StandardTaskPersistenceStrategy_HandleCompletionAsync_RunsThroughTheBookkeepingWriter()
+    {
+        // The commit policy (synchronous or asynchronous commit) is the writer's; the strategy
+        // only hands it the write.
+        var writer = Substitute.For<BBT.Workflow.Execution.Persistence.IBookkeepingWriter>();
+        writer.RunAsync(Arg.Any<Func<CancellationToken, Task>>(), Arg.Any<CancellationToken>())
+            .Returns(call => call.Arg<Func<CancellationToken, Task>>()(call.Arg<CancellationToken>()));
+        var strategy = new StandardTaskPersistenceStrategy(_mockRepository, _unitOfWorkManager, writer);
+        _instanceTask.Completed(new JsonData("{}"), isBusinessSuccess: true);
+
+        await strategy.HandleCompletionAsync(_instanceTask, CancellationToken.None);
+
+        await writer.Received(1).RunAsync(Arg.Any<Func<CancellationToken, Task>>(), CancellationToken.None);
+        await _mockRepository.Received(1).InsertAsync(_instanceTask, true, CancellationToken.None);
     }
 
     [Fact]

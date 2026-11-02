@@ -77,6 +77,12 @@ public sealed class WorkflowExecutionOptions
     public InstanceDataWriteOptions InstanceDataWrite { get; set; } = new();
 
     /// <summary>
+    /// How the pipeline's bookkeeping rows (task journal, transition record) are committed. See
+    /// <see cref="BookkeepingWriteOptions"/>.
+    /// </summary>
+    public BookkeepingWriteOptions Bookkeeping { get; set; } = new();
+
+    /// <summary>
     /// When enabled, same-domain subflow forwarding/resume runs in-process through the canonical
     /// TransitionRunner entry (child scope, RequiresNew, reload-by-id, ambient context re-established)
     /// instead of over Dapr. Cross-domain always uses Dapr. Default: false (S9). The full in-process
@@ -141,6 +147,36 @@ public sealed class TransitionJobFailurePolicyOptions
 {
     public int MaxRetries { get; set; } = 5;
     public int IntervalSeconds { get; set; } = 30;
+}
+
+/// <summary>
+/// Commit policy of the pipeline's bookkeeping writes — the task journal row
+/// (<c>InstanceTasks</c>) and the transition record (<c>InstanceTransitions</c> insert and
+/// completion). Section <c>WorkflowExecution:Bookkeeping</c>.
+/// <para>
+/// The hop's unit of work is not transactional, so every one of these writes is its own
+/// autocommit transaction and pays a WAL fsync. Measured on digital-investment under 14 starts/s:
+/// 48 writes per start, write commands 3–3.5× slower than reads (4.4 ms vs 1.3 ms), 79 % of the
+/// request's database time. Instance state, data and outbox rows are never affected by this policy.
+/// </para>
+/// </summary>
+public sealed class BookkeepingWriteOptions
+{
+    /// <summary>
+    /// <c>true</c> wraps each bookkeeping write in a transaction that commits with
+    /// <c>synchronous_commit = off</c> (PostgreSQL asynchronous commit): the row is visible at
+    /// once but its WAL is flushed by the WAL writer (<c>wal_writer_delay</c>, 200 ms default) or by
+    /// the next synchronous commit on the connection, so a database crash can lose the last few
+    /// hundred milliseconds of journal / transition-record rows — never instance state or data.
+    /// Retry re-executes a task whose journal row is missing; its data append then dedups.
+    /// <para>
+    /// Cost model: the wrapper is BEGIN + SET LOCAL + write + COMMIT (four round-trips) with no
+    /// fsync, against one round-trip plus an fsync. It pays off when the fsync latency exceeds
+    /// roughly three network round-trips — true on local disks and most SANs, not on a database
+    /// behind a high-latency link. Default off; measure before enabling in an environment.
+    /// </para>
+    /// </summary>
+    public bool AsynchronousCommit { get; set; }
 }
 
 /// <summary>

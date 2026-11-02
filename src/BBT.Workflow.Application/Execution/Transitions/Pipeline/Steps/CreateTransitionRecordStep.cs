@@ -24,7 +24,8 @@ public sealed class CreateTransitionRecordStep(
     ITransitionDataMapper transitionDataMapper,
     IRuntimeInfoProvider runtimeInfoProvider,
     IFileOffloadService fileOffloadService,
-    ILogger<CreateTransitionRecordStep> logger) : ITransitionStep
+    ILogger<CreateTransitionRecordStep> logger,
+    Persistence.IBookkeepingWriter? bookkeepingWriter = null) : ITransitionStep
 {
     /// <inheritdoc />
     public int Order => LifecycleOrder.CreateTransition;
@@ -100,10 +101,17 @@ public sealed class CreateTransitionRecordStep(
         }
 
         await instanceRepository.UpdateAsync(instance, false, cancellationToken);
-        if (isReusedRecord)
-            await instanceTransitionRepository.UpdateAsync(instanceTransition, true, cancellationToken);
+
+        // Bookkeeping: the record (and the instance field changes riding the same save) may commit
+        // asynchronously under WorkflowExecution:Bookkeeping — see BookkeepingWriteOptions.
+        Func<CancellationToken, Task> write = isReusedRecord
+            ? ct => instanceTransitionRepository.UpdateAsync(instanceTransition, true, ct)
+            : ct => instanceTransitionRepository.InsertAsync(instanceTransition, saveChanges: true, ct);
+
+        if (bookkeepingWriter is null)
+            await write(cancellationToken);
         else
-            await instanceTransitionRepository.InsertAsync(instanceTransition, saveChanges: true, cancellationToken);
+            await bookkeepingWriter.RunAsync(write, cancellationToken);
     }
 
     /// <summary>
