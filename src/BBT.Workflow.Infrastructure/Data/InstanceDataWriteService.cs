@@ -14,6 +14,7 @@ using BBT.Workflow.Logging;
 using BBT.Workflow.Shared.Merging;
 using BBT.Workflow.Validation;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -196,9 +197,9 @@ public sealed class InstanceDataWriteService(
     {
         var context = await dbContextProvider.GetDbContextAsync();
 
-        return await RunLockedAsync(context, instance.Id, cancellationToken, async () =>
+        return await RunLockedAsync(context, instance.Id, cancellationToken, async head =>
         {
-            var row = await AppendLockedAsync(context, instance, delta, versionStrategy, schemaLoad, versionResolver, cancellationToken);
+            var row = await AppendLockedAsync(context, instance, head, delta, versionStrategy, schemaLoad, versionResolver, cancellationToken);
 
             // Runs inside the row-lock transaction, so a flush and the caller's own save commit together.
             if (afterPersist is not null)
@@ -211,13 +212,13 @@ public sealed class InstanceDataWriteService(
     private async Task<InstanceData?> AppendLockedAsync(
         WorkflowDbContext context,
         Instance instance,
+        InstanceDataHeadRow? head,
         JsonData delta,
         VersionStrategy? versionStrategy,
         SchemaLoad schemaLoad,
         Func<InstanceDataHeadRow?, string>? versionResolver,
         CancellationToken cancellationToken)
     {
-        var head = await ReadHeadAsync(context, instance.Id, cancellationToken);
         var schema = ResolveSchema(schemaLoad, head);
         delta = StripComputedFields(schema, delta);
         var (encryption, plainHead, sanitizedDelta) =
@@ -262,11 +263,12 @@ public sealed class InstanceDataWriteService(
         // VersionNo is line-scoped: the next ordinal WITHIN the target Version string.
         var row = new InstanceData(Guid.NewGuid(), instance.Id, plan.Version, stored, dataHash, isLatest: true)
         {
-            // A new semantic-version line always starts at one. Only same-version appends
-            // need MAX(VersionNo), which removes one query from every version increment.
+            // A new semantic-version line always starts at one. A same-version append continues
+            // the head's line, whose MAX(VersionNo) the head read already carried (LineMax) —
+            // no second query under the lock.
             VersionNo = head is null || !string.Equals(plan.Version, head.Version, StringComparison.Ordinal)
                 ? 1
-                : await ReadLineMaxAsync(context, instance.Id, plan.Version, cancellationToken) + 1
+                : head.LineMax + 1
         };
 
         await PersistAsync(context, instance, row, demoteStaleLatest: head is not null, cancellationToken);
@@ -303,7 +305,7 @@ public sealed class InstanceDataWriteService(
 
         var context = await dbContextProvider.GetDbContextAsync();
 
-        var result = await RunLockedAsync<InstanceData>(context, instance.Id, cancellationToken, async () =>
+        var result = await RunLockedAsync<InstanceData>(context, instance.Id, cancellationToken, async head =>
         {
             // Publish-path dedup: the same explicit version is written once, ever.
             var existing = await context.InstancesData
@@ -316,7 +318,6 @@ public sealed class InstanceDataWriteService(
                 return existing;
             }
 
-            var head = await ReadHeadAsync(context, instance.Id, cancellationToken);
             var schema = ResolveSchema(schemaLoad, head);
             var (encryption, _, sanitized) =
                 await PrepareEncryptionAsync(context, instance.Id, schema, head, StripComputedFields(schema, data), cancellationToken);
@@ -338,7 +339,11 @@ public sealed class InstanceDataWriteService(
 
             var row = new InstanceData(id, instance.Id, version, stored, dataHash, takesLatest)
             {
-                VersionNo = await ReadLineMaxAsync(context, instance.Id, version, cancellationToken) + 1
+                // The head read carries its own line's maximum; any other line is read here (publish
+                // path, rare — an explicit version is usually a new line).
+                VersionNo = head is not null && string.Equals(version, head.Version, StringComparison.Ordinal)
+                    ? head.LineMax + 1
+                    : await ReadLineMaxAsync(context, instance.Id, version, cancellationToken) + 1
             };
 
             await PersistAsync(context, instance, row, demoteStaleLatest: takesLatest && head is not null, cancellationToken);
@@ -438,13 +443,14 @@ public sealed class InstanceDataWriteService(
     /// Runs <paramref name="body"/> inside the row-lock scope: within the ambient transaction
     /// when one is open, otherwise inside a local transaction committed on success. SET LOCAL
     /// timeouts and the Postgres error mapping (lock wait → 409, statement timeout → 503) wrap
-    /// the whole scope.
+    /// the whole scope. The body receives the authoritative head, read under the lock in the
+    /// same network round-trip that took it (<see cref="LockAndReadHeadAsync"/>).
     /// </summary>
     private async Task<T?> RunLockedAsync<T>(
         WorkflowDbContext context,
         Guid instanceId,
         CancellationToken cancellationToken,
-        Func<Task<T?>> body) where T : class
+        Func<InstanceDataHeadRow?, Task<T?>> body) where T : class
     {
         var gate = ContextGates.GetValue(context, static _ => new SemaphoreSlim(1, 1));
         await gate.WaitAsync(cancellationToken);
@@ -462,7 +468,7 @@ public sealed class InstanceDataWriteService(
         WorkflowDbContext context,
         Guid instanceId,
         CancellationToken cancellationToken,
-        Func<Task<T?>> body) where T : class
+        Func<InstanceDataHeadRow?, Task<T?>> body) where T : class
     {
         var options = executionOptions.Value.InstanceDataWrite;
         var schema = SanitizeIdentifier(context.CurrentSchemaName ?? "public");
@@ -476,21 +482,9 @@ public sealed class InstanceDataWriteService(
         {
             try
             {
-                // Transaction-scoped timeouts (SET LOCAL — PgBouncer transaction-mode safe).
-                await context.Database.ExecuteSqlRawAsync(
-                    $"SET LOCAL lock_timeout = '{options.LockTimeoutMs}ms'; " +
-                    $"SET LOCAL statement_timeout = '{options.StatementTimeoutMs}ms';",
-                    cancellationToken);
+                var head = await LockAndReadHeadAsync(context, schema, instanceId, options, cancellationToken);
 
-                // Lock the parent Instances row — every InstanceData writer for this instance
-                // serializes here until the enclosing transaction commits. A brand-new instance
-                // matches no row (no competitor can see it yet).
-                await context.Database.ExecuteSqlRawAsync(
-                    $"SELECT 1 FROM \"{schema}\".\"Instances\" WHERE \"Id\" = {{0}} FOR UPDATE",
-                    [instanceId],
-                    cancellationToken);
-
-                var result = await body();
+                var result = await body(head);
 
                 if (transaction is not null)
                     await transaction.CommitAsync(cancellationToken);
@@ -511,21 +505,82 @@ public sealed class InstanceDataWriteService(
     }
 
     /// <summary>
-    /// Reads the authoritative head under the lock — the semantic version plus the content and
-    /// its hash, which the merge, the no-change dedup and the version increment all need.
+    /// The lock prologue as ONE network round-trip: the transaction-scoped timeouts (SET LOCAL —
+    /// PgBouncer transaction-mode safe), the parent <c>Instances</c> row lock, and the authoritative
+    /// head read — semantic version, content, its hash and the head line's current MAX(VersionNo),
+    /// which the merge, the no-change dedup, the version increment and the ordinal all need.
+    /// <para>
+    /// Pipelined through <see cref="NpgsqlBatch"/> (extended protocol): the statements still run
+    /// strictly one after another on the server, so the head SELECT starts only after the
+    /// <c>FOR UPDATE</c> has been granted and takes its own READ COMMITTED snapshot — exactly the
+    /// ordering three separate commands gave, minus two round-trips. They are NOT merged into one
+    /// statement on purpose: a single <c>SELECT … FOR UPDATE</c> joining the head would read the
+    /// joined rows from a snapshot taken before the lock wait ended, and a writer that committed
+    /// during that wait would be missed.
+    /// </para>
+    /// <para>
+    /// Every InstanceData writer for this instance serializes on the row lock until the enclosing
+    /// transaction commits. A brand-new instance matches no row (no competitor can see it yet) and
+    /// has no head. A lock wait beyond <c>lock_timeout</c> surfaces as 55P03 from the batch and is
+    /// mapped by the caller exactly as before.
+    /// </para>
     /// </summary>
-    private async Task<InstanceDataHeadRow?> ReadHeadAsync(
+    private static async Task<InstanceDataHeadRow?> LockAndReadHeadAsync(
         WorkflowDbContext context,
+        string schema,
         Guid instanceId,
+        InstanceDataWriteOptions options,
         CancellationToken cancellationToken)
     {
-        var schema = SanitizeIdentifier(context.CurrentSchemaName ?? "public");
-        return await context.Database.SqlQueryRaw<InstanceDataHeadRow>(
-                $"SELECT \"Version\", \"DataHash\", \"Data\"::text AS \"Data\" " +
-                $"FROM \"{schema}\".\"InstancesData\" WHERE \"InstanceId\" = {{0}} AND \"IsLatest\"",
-                instanceId)
-            .FirstOrDefaultAsync(cancellationToken);
+        using var activity = PipelineStepActivityHelper.StartOperationActivity("Db.LockAndReadHead");
+        activity?.SetTag(TelemetryConstants.TagNames.InstanceId, instanceId);
+
+        var connection = (NpgsqlConnection)context.Database.GetDbConnection();
+        var transaction = (NpgsqlTransaction?)context.Database.CurrentTransaction?.GetDbTransaction();
+
+        await using var batch = new NpgsqlBatch(connection, transaction);
+        batch.BatchCommands.Add(new NpgsqlBatchCommand($"SET LOCAL lock_timeout = '{options.LockTimeoutMs}ms'"));
+        batch.BatchCommands.Add(new NpgsqlBatchCommand($"SET LOCAL statement_timeout = '{options.StatementTimeoutMs}ms'"));
+
+        var lockCommand = new NpgsqlBatchCommand(
+            $"SELECT 1 FROM \"{schema}\".\"Instances\" WHERE \"Id\" = $1 FOR UPDATE");
+        lockCommand.Parameters.AddWithValue(instanceId);
+        batch.BatchCommands.Add(lockCommand);
+
+        var headCommand = new NpgsqlBatchCommand(
+            $"SELECT d.\"Id\", d.\"Version\", d.\"DataHash\", d.\"Data\"::text, " +
+            $"(SELECT COALESCE(MAX(m.\"VersionNo\"), 0) FROM \"{schema}\".\"InstancesData\" m " +
+            $" WHERE m.\"InstanceId\" = d.\"InstanceId\" AND m.\"Version\" = d.\"Version\") " +
+            $"FROM \"{schema}\".\"InstancesData\" d WHERE d.\"InstanceId\" = $1 AND d.\"IsLatest\"");
+        headCommand.Parameters.AddWithValue(instanceId);
+        batch.BatchCommands.Add(headCommand);
+
+        await using var reader = await batch.ExecuteReaderAsync(cancellationToken);
+
+        // The head is the only result set with five columns; walking by shape rather than by
+        // position keeps this independent of how the driver surfaces the row-less SET results.
+        do
+        {
+            if (reader.FieldCount != HeadColumnCount)
+                continue;
+
+            if (!await reader.ReadAsync(cancellationToken))
+                return null;
+
+            return new InstanceDataHeadRow
+            {
+                Id = reader.GetGuid(0),
+                Version = reader.GetString(1),
+                DataHash = reader.GetString(2),
+                Data = reader.GetString(3),
+                LineMax = reader.GetInt64(4)
+            };
+        } while (await reader.NextResultAsync(cancellationToken));
+
+        return null;
     }
+
+    private const int HeadColumnCount = 5;
 
     /// <summary>
     /// Reads the target version line's current maximum VersionNo under the lock. VersionNo is
@@ -548,8 +603,19 @@ public sealed class InstanceDataWriteService(
     }
 
     /// <summary>
-    /// Demotes the stale latest row when needed, inserts the new row DIRECTLY (never via the
-    /// aggregate navigation), saves, and refreshes the caller's aggregate in-memory state.
+    /// Demotes the stale latest row when needed and inserts the new row DIRECTLY (never via the
+    /// aggregate navigation) — the two statements pipelined in ONE round-trip, executed in order —
+    /// then attaches the row to the context as already persisted and refreshes the caller's
+    /// aggregate in-memory state.
+    /// <para>
+    /// The INSERT is written by hand rather than through <c>SaveChangesAsync</c> so it can share
+    /// the round-trip with the demote; the column list is the entity's whole mapping
+    /// (<c>InstancesModelCreatingExtensions</c>: no audit or concurrency columns), and the
+    /// Testcontainers suite reads every row back through EF. The row is attached as
+    /// <c>Unchanged</c> afterwards for the same reason <c>Add</c> + save used to leave it tracked:
+    /// when the aggregate is tracked in THIS context, relationship fixup must see the row as
+    /// persisted, or the next save would try to insert it again.
+    /// </para>
     /// </summary>
     private async Task PersistAsync(
         WorkflowDbContext context,
@@ -560,23 +626,46 @@ public sealed class InstanceDataWriteService(
     {
         var schema = SanitizeIdentifier(context.CurrentSchemaName ?? "public");
 
+        using var activity = PipelineStepActivityHelper.StartOperationActivity("Db.InsertInstanceData");
+        activity?.SetTag(TelemetryConstants.TagNames.InstanceId, row.InstanceId);
+
+        var connection = (NpgsqlConnection)context.Database.GetDbConnection();
+        var transaction = (NpgsqlTransaction?)context.Database.CurrentTransaction?.GetDbTransaction();
+
+        await using var batch = new NpgsqlBatch(connection, transaction);
+
         if (demoteStaleLatest)
         {
-            var demoted = await context.Database.ExecuteSqlRawAsync(
+            var demote = new NpgsqlBatchCommand(
                 $"UPDATE \"{schema}\".\"InstancesData\" SET \"IsLatest\" = FALSE " +
-                $"WHERE \"InstanceId\" = {{0}} AND \"IsLatest\"",
-                [row.InstanceId],
-                cancellationToken);
-
-            if (demoted > 0)
-                logger.InstanceDataStaleLatestDemoted(row.InstanceId, row.VersionNo);
+                $"WHERE \"InstanceId\" = $1 AND \"IsLatest\"");
+            demote.Parameters.AddWithValue(row.InstanceId);
+            batch.BatchCommands.Add(demote);
         }
 
-        context.InstancesData.Add(row);
-        await context.SaveChangesAsync(cancellationToken);
+        var insert = new NpgsqlBatchCommand(
+            $"INSERT INTO \"{schema}\".\"InstancesData\" " +
+            "(\"Id\", \"InstanceId\", \"Version\", \"VersionNo\", \"IsLatest\", \"ETag\", \"DataHash\", \"Data\", \"EnteredAt\") " +
+            "VALUES ($1, $2, $3, $4, $5, $6, $7, CAST($8 AS jsonb), $9)");
+        insert.Parameters.AddWithValue(row.Id);
+        insert.Parameters.AddWithValue(row.InstanceId);
+        insert.Parameters.AddWithValue(row.Version);
+        insert.Parameters.AddWithValue(row.VersionNo);
+        insert.Parameters.AddWithValue(row.IsLatest);
+        insert.Parameters.AddWithValue(row.ETag);
+        insert.Parameters.AddWithValue(row.DataHash);
+        insert.Parameters.AddWithValue(row.Data.Json);
+        insert.Parameters.AddWithValue(row.EnteredAt);
+        batch.BatchCommands.Add(insert);
 
-        // Refresh the caller's aggregate. When the aggregate is tracked in THIS context, EF
-        // relationship fixup already attached the row — AcceptPersistedData is Id-idempotent.
+        var affected = await batch.ExecuteNonQueryAsync(cancellationToken);
+        if (demoteStaleLatest && affected > 1)
+            logger.InstanceDataStaleLatestDemoted(row.InstanceId, row.VersionNo);
+
+        // Persisted by hand, so tell the tracker so: Unchanged, never Added. When the aggregate is
+        // tracked in THIS context, relationship fixup attaches the row to its collection from here —
+        // AcceptPersistedData is Id-idempotent.
+        context.InstancesData.Attach(row);
         instance.AcceptPersistedData(row);
     }
 
@@ -840,9 +929,17 @@ public sealed class InstanceDataWriteService(
 /// </summary>
 internal sealed class InstanceDataHeadRow
 {
+    /// <summary>The head row's id. <c>Guid.Empty</c> on the in-memory heads the buffer and the encryption view build.</summary>
+    public Guid Id { get; set; }
     public string Version { get; set; } = string.Empty;
     public string DataHash { get; set; } = string.Empty;
     public string Data { get; set; } = string.Empty;
+
+    /// <summary>
+    /// MAX(VersionNo) of the head's own version line, read in the same statement as the head. A
+    /// same-version append continues at <c>LineMax + 1</c> without a second query under the lock.
+    /// </summary>
+    public long LineMax { get; set; }
 }
 
 /// <summary>
