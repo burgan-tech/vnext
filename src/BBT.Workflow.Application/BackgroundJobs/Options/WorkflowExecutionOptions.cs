@@ -102,24 +102,32 @@ public sealed class WorkflowExecutionOptions
     /// transaction cannot see the pending write, so it must wait the short critical section out
     /// rather than fail fast into a full broker re-delivery cycle.
     /// </para>
+    /// <para>
+    /// The backoff is linear in the base delay (<c>base * attempt + jitter(0..base)</c>), so the
+    /// base decides what the FIRST retry costs. It was 4 × 120 ms: the backup that lands while the
+    /// relay still holds the lock slept 120–240 ms before its first retry, for a critical section
+    /// of a few tens of milliseconds, and then did nothing (digital-investment, 2026-11-02: 2 of 11
+    /// sequential starts, 154 and 169 ms each). 10 × 20 ms keeps the same ~1 s budget with a
+    /// 20–40 ms first retry; the services also re-probe the correlation between attempts
+    /// (<c>LockAcquireWait.KeepWaiting</c>) and stop waiting as soon as the holder has committed.
+    /// </para>
     /// </summary>
     public LockConflictRetryOptions SubItemTerminalLockRetry { get; set; } = new()
     {
-        MaxAttempts = 4,
-        BaseDelayMilliseconds = 120
+        MaxAttempts = 10,
+        BaseDelayMilliseconds = 20
     };
 
     /// <summary>
     /// Bounded wait applied when <c>SubflowStateService</c> acquires the same per-subInstance lock
     /// to apply a child's <c>sub:state-changed</c> to its parent.
     /// <para>
-    /// Separate from <see cref="SubItemTerminalLockRetry"/> because the backoff is linear in the base
-    /// delay (<c>base * attempt + jitter(0..base)</c>): at 120 ms even the FIRST retry slept 120–240 ms,
-    /// however briefly the holder kept the lock. On this channel the holder is almost always the other
-    /// delivery of the same event (post-commit relay vs. its Inbox backup), holding it for a few
-    /// milliseconds, and the relay leg sits on a client's synchronous request. Measured on
-    /// subflow-depth-lab: 23 of 883 acquisitions waited, max 241 ms — one retry at the top of the
-    /// jitter. The total budget stays the same order (~0.6 s here vs ~1 s for the terminal wait).
+    /// Separate from <see cref="SubItemTerminalLockRetry"/>: the holder on this channel is almost
+    /// always the other delivery of the same event (post-commit relay vs. its Inbox backup), holding
+    /// the lock for a few milliseconds, and the relay leg sits on a client's synchronous request —
+    /// so the first retry has to be in the 10–20 ms range. Measured on subflow-depth-lab while the
+    /// terminal base was still 120 ms: 23 of 883 acquisitions waited, max 241 ms — one retry at the
+    /// top of the jitter. Budget ~0.6 s here vs ~1 s for the terminal wait.
     /// </para>
     /// </summary>
     public LockConflictRetryOptions SubItemStateLockRetry { get; set; } = new()

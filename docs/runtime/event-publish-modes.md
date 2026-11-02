@@ -175,8 +175,16 @@ Implementation notes for the coalescing:
   leaves an older watermark). A backup that loses the lock re-probes before throwing. Relay
   deliveries never probe.
 - **The state channel has its OWN lock backoff** (`WorkflowExecutionOptions.SubItemStateLockRetry`,
-  10 × 10 ms), not the terminal paths' 120 ms: the wait is `base*attempt + jitter(0..base)`, so at
-  120 ms the first retry alone slept 120–240 ms for a lock held a few ms (measured max 241 ms).
+  10 × 10 ms), not the terminal paths' (`SubItemTerminalLockRetry`, 10 × 20 ms): the wait is
+  `base*attempt + jitter(0..base)`, so the base decides the first retry. The terminal base used to be
+  120 ms, and the first retry alone slept 120–240 ms for a lock held a few ms (measured max 241 ms on
+  the state channel; 154–169 ms backup waits on digital-investment).
+- **The terminal paths re-probe between lock attempts** (`LockAcquireWait.KeepWaiting`, wired by
+  `SubItemTerminalGuardExtensions.WhileCorrelationOpen`): after each backoff sleep the same lock-free
+  correlation probe runs, and once it answers settled the wait is abandoned
+  (`vnext.lock.wait_abandoned=true`, result `correlation_already_settled_during_wait`) instead of
+  acquiring the lock only to load the parent and find the correlation closed. A not-acquired answer is
+  re-probed once more before it becomes a `SubflowTerminalLockNotAcquiredException`.
 - The UoW is `RequiresNew, IsTransactional = true` — not for the lock, for atomicity: without a
   transaction Aether stages the outbox rows *after* `UpdateAsync(autoSave)` already committed the
   Instance row, so the upward event and the state write could diverge.

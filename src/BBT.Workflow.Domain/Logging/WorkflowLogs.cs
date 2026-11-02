@@ -1415,6 +1415,20 @@ public static partial class WorkflowLogs
         int delayMs);
 
     /// <summary>
+    /// Logs when a bounded transition lock wait is abandoned because the caller's
+    /// <c>LockAcquireWait.KeepWaiting</c> check reported the work as no longer needed.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40141,
+        Level = LogLevel.Debug,
+        Message = "Transition lock {LockKey} wait abandoned after attempt {Attempt}/{MaxAttempts}: the holder has settled the work")]
+    public static partial void TransitionLockWaitAbandoned(
+        this ILogger logger,
+        string lockKey,
+        int attempt,
+        int maxAttempts);
+
+    /// <summary>
     /// Logs when a correlation is marked as completed.
     /// </summary>
     [LoggerMessage(

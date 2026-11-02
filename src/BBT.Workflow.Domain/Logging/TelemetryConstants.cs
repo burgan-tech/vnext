@@ -474,6 +474,13 @@ public static class TelemetryConstants
         /// <summary>Whether the single-attempt status-lock acquire succeeded.</summary>
         public const string LockAcquired = "vnext.lock.acquired";
 
+        /// <summary>
+        /// A bounded wait gave up early because the caller's <c>LockAcquireWait.KeepWaiting</c> check
+        /// said the work was no longer needed (the holder — the other delivery — had committed).
+        /// Only ever <c>true</c>; absent on every other acquisition.
+        /// </summary>
+        public const string LockWaitAbandoned = "vnext.lock.wait_abandoned";
+
         /// <summary>Lease seconds requested for the status lock.</summary>
         public const string LockLeaseSeconds = "vnext.lock.lease_seconds";
 

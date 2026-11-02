@@ -157,11 +157,36 @@ public sealed class SubflowCompletionService(
                 // above is impossible and failing immediately would push it into a full broker
                 // re-delivery cycle. The critical section is one short transaction — waiting it out
                 // is far cheaper, and the re-read after acquisition settles the outcome correctly.
+                // Between attempts the wait re-probes the correlation: the holder is almost always
+                // the other delivery of this very signal, and once it has committed this delivery
+                // has nothing left to do — so it stops waiting instead of acquiring the lock only to
+                // load the parent and find the correlation closed.
+                var terminalLockWait = TerminalLockWait.WhileCorrelationOpen(
+                    terminalGuard, completedInput.InstanceId, completedInput.SubInstanceId,
+                    SubItemTerminalOutcome.Completed);
                 await using (var lockScope = await transitionLockScopeFactory.AcquireAsync(
-                                 lockKey, TerminalLockWait, cancellationToken))
+                                 lockKey, terminalLockWait, cancellationToken))
                 {
                     if (!lockScope.IsAcquired)
                     {
+                        // Not acquired is either an abandoned wait (the holder committed) or an
+                        // exhausted one; the same lock-free probe tells them apart, and only the
+                        // latter is worth a redelivery cycle.
+                        var lateProbe = await terminalGuard.ProbeAsync(
+                            completedInput.InstanceId,
+                            completedInput.SubInstanceId,
+                            SubItemTerminalOutcome.Completed,
+                            cancellationToken);
+                        if (lateProbe != SubItemTerminalProbe.Proceed)
+                        {
+                            activity?.SetTag("vnext.subflow.result",
+                                lateProbe == SubItemTerminalProbe.AlreadySettled
+                                    ? "correlation_already_settled_during_wait"
+                                    : "terminal_outcome_conflict_during_wait");
+                            SubFlowActivityHelper.SetSuccess(activity);
+                            return;
+                        }
+
                         logger.SubItemTerminalLockNotAcquired(lockKey, SubItemTerminalOutcome.Completed.ToString());
                         throw new SubflowTerminalLockNotAcquiredException(
                             completedInput.Domain,

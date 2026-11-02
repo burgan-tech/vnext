@@ -105,6 +105,53 @@ public sealed class TransitionLockScopeFactoryTests
     }
 
     [Fact]
+    public async Task AcquireAsync_WhenKeepWaitingSaysNo_ShouldAbandonWithoutAnotherAttempt()
+    {
+        // The backup delivery that collided with the relay: once the relay has committed there is
+        // nothing left to lock for, so the wait stops after the first backoff instead of taking the
+        // lock only to load the parent and find the correlation closed.
+        const string key = "vnext:bank:parent-flow:abandoned";
+        _lockService.TryAcquireLockAsync(key, Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns((IDistributedLockHandle?)null);
+        var probes = 0;
+
+        await using var scope = await CreateFactory().AcquireAsync(
+            key,
+            new LockAcquireWait(10, TimeSpan.FromMilliseconds(1))
+            {
+                KeepWaiting = _ => { probes++; return ValueTask.FromResult(false); }
+            });
+
+        scope.IsAcquired.ShouldBeFalse();
+        probes.ShouldBe(1);
+        await _lockService.Received(1)
+            .TryAcquireLockAsync(key, Arg.Any<int>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task AcquireAsync_WhenKeepWaitingSaysYes_ShouldKeepRetryingAndAskAfterEverySleep()
+    {
+        const string key = "vnext:bank:parent-flow:keep-waiting";
+        var handle = Substitute.For<IDistributedLockHandle>();
+        var attempts = 0;
+        _lockService.TryAcquireLockAsync(key, Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(_ => ++attempts < 3 ? null : handle);
+        var probes = 0;
+
+        await using var scope = await CreateFactory().AcquireAsync(
+            key,
+            new LockAcquireWait(10, TimeSpan.FromMilliseconds(1))
+            {
+                KeepWaiting = _ => { probes++; return ValueTask.FromResult(true); }
+            });
+
+        scope.IsAcquired.ShouldBeTrue();
+        attempts.ShouldBe(3);
+        // Asked after each of the two sleeps, never before the first attempt.
+        probes.ShouldBe(2);
+    }
+
+    [Fact]
     public async Task LegacyImplementation_WithoutWaitOverload_ShouldStillSatisfyTheInterface()
     {
         // BBT.Workflow.Domain ships as a NuGet package, so an implementation written before the
