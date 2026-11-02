@@ -1,4 +1,17 @@
 {
+  "0.0.102": {
+    "auto-transition-priority": "726403c2260ede46ea48aa2dba6f61f55962b7e9a623f8dd090c7133aa27ed72",
+    "bookkeeping-commits": "aabc1b38d8f2cb5bf54d1bedcb2955d0633d07963dab7d3f10f48271d04bd304",
+    "file-streaming-integrity": "66991215b89c22a093c94a771fa1fa547a65ac9b555c47bacd042f25e1c42492",
+    "flow-default-version": "f63a6d048e8939863781331a38b9af21c57d410f1dba3a7cd0a5fc98c7979173",
+    "http-client-pool-and-terminal-lock-wait": "21b834bef6193c854f9f74bbbfec9257cbb761a82215fd689cd5facfd2a84f38",
+    "instance-data-append-pipelining": "ec8b01b8431aa9c2401e400854420963f81147dd9738e7136b9cdeb0054e6e0b",
+    "interaction-wait-busy-takeover": "1d4621e081a559e9b7b7ab5dc5c30303b7bb3fc73b54f1af87f17155f8cbba95",
+    "row-security": "38d43996b57fe68d998f11da4843d4137b0c6c4c07cb244c3c6e05a75a024033",
+    "schema-default-dialect": "1bbff3eb125fa6d21e8ee561518c94b36ce15f2cb19138c157757b7bb77dbeee",
+    "start-output-flow-version": "be10dc5b0146b25483e96d5db0a3bc7565459054dfe9f8f1b928d35e4c867756",
+    "subflow-carried-headers": "d1c301edc8a0bbf853e68fb1aa35459057291ea76038e8b6b25700c75a94f6f7"
+  },
   "0.0.101": {
     "runtime-images-icu-gssapi": "d4c9066e290733fc9edb53b69394dd01ed934cec336ac3953cc1886fa5447a6f"
   }
