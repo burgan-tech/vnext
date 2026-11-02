@@ -19,6 +19,16 @@ internal static class FunctionResponseActionResultMapper
         var output = result.Value!;
         ResponseOutputWriter.ApplyHeaders(output.Headers, httpContext);
 
+        // A binary raw body is written as bytes (vnext-client-sdk-core#99): byte[] in process, base64 after a function
+        // response cache round trip. No author Content-Type ⇒ application/octet-stream, never application/json.
+        if (output.IsBinary == true && BinaryBodyOf(output.Data) is { } bytes)
+        {
+            return new BinaryBodyResult(
+                bytes,
+                ResponseOutputWriter.HasContentType(output.Headers) ? ResponseOutputWriter.ResolveContentType(output.Headers) : "application/octet-stream",
+                output.StatusCode ?? StatusCodes.Status200OK);
+        }
+
         // Use ContentResult (not ObjectResult) so the author-supplied media type is written
         // verbatim. ObjectResult runs content negotiation and the SystemTextJson output formatter
         // appends "; charset=utf-8" to the resolved media type; ContentResult preserves the exact
@@ -64,6 +74,33 @@ internal static class FunctionResponseActionResultMapper
     /// object is serialized with the centralized JSON options for parity with the previous
     /// ObjectResult behavior.
     /// </summary>
+    private static byte[]? BinaryBodyOf(object? data) => data switch
+    {
+        byte[] bytes => bytes,
+        string base64 => TryFromBase64(base64),
+        JsonElement { ValueKind: JsonValueKind.String } element => TryFromBase64(element.GetString()!),
+        _ => null,
+    };
+
+    private static byte[]? TryFromBase64(string value)
+    {
+        try { return Convert.FromBase64String(value); }
+        catch (FormatException) { return null; }
+    }
+
+    /// <summary>Writes the bytes as the response body with the given type and status (no JSON, no charset).</summary>
+    private sealed class BinaryBodyResult(byte[] bytes, string contentType, int statusCode) : IActionResult
+    {
+        public async Task ExecuteResultAsync(ActionContext context)
+        {
+            var response = context.HttpContext.Response;
+            response.StatusCode = statusCode;
+            response.ContentType = contentType;
+            response.ContentLength = bytes.Length;
+            await response.Body.WriteAsync(bytes, context.HttpContext.RequestAborted);
+        }
+    }
+
     private static string? SerializeContent(object? data) => data switch
     {
         null => null,

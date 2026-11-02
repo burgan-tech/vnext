@@ -15,6 +15,7 @@ using BBT.Workflow.Scripting.Sandbox;
 using BBT.Workflow.Extentions;
 using BBT.Workflow.SubFlow;
 using BBT.Workflow.Authorization;
+using BBT.Workflow.Authorization.RowSecurity;
 using BBT.Workflow.BackgroundJobs;
 using BBT.Workflow.Events;
 using BBT.Workflow.Schedule;
@@ -116,6 +117,8 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
         services.AddScoped<IStateFunctionCache, StateFunctionCache>();
         services.AddOptions<InstanceFunctionCacheOptions>()
             .BindConfiguration(InstanceFunctionCacheOptions.SectionName);
+        services.AddOptions<BBT.Workflow.Authorization.RowSecurity.RowSecurityOptions>()
+            .BindConfiguration(BBT.Workflow.Authorization.RowSecurity.RowSecurityOptions.Section);
         // x-masking kill switch. Folded into the data-function cache generation (key AND ETag).
         services.AddOptions<BBT.Workflow.Authorization.SchemaMaskingOptions>()
             .BindConfiguration(BBT.Workflow.Authorization.SchemaMaskingOptions.SectionName);
@@ -128,7 +131,11 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
         // Application Services
         services.TryAddScoped<IFileOffloadService, FileOffloadService>();
         services.TryAddScoped<IInstanceFileAppService, InstanceFileAppService>();
+        services.TryAddScoped<IFileStagingStore, DistributedFileStagingStore>();
+        services.TryAddScoped<IFileUploadAppService, FileUploadAppService>();
         services.AddScoped<IDefinitionAppService, DefinitionAppService>();
+        services.AddScoped<RowSecurityPublishCheck>();
+        services.AddScoped<BBT.Workflow.Authorization.RowSecurity.IRowSecurityService, BBT.Workflow.Authorization.RowSecurity.RowSecurityService>();
         services.AddScoped<IPublishCompletedAppService, PublishCompletedAppService>();
         services.AddScoped<IInstanceCommandAppService, InstanceCommandAppService>();
         services.AddScoped<IInstanceQueryAppService, InstanceQueryAppService>();
@@ -139,6 +146,13 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
         services.AddScoped<IFunctionAccessPolicy, FunctionAccessPolicy>();
         services.AddScoped<IFunctionRequestValidationService, FunctionRequestValidationService>();
         services.AddScoped<IFunctionAppService, FunctionAppService>();
+        // Carried-header policy (Workflow:SubFlow:CarriedHeaders): headers of the settling request ride the terminal event to the parent.
+        services.AddOptions<BBT.Workflow.SubFlow.Headers.SubFlowCarriedHeadersOptions>()
+            .BindConfiguration(BBT.Workflow.SubFlow.Headers.SubFlowCarriedHeadersOptions.SectionName)
+            .Validate(o => o.AdditionalDenied is not null && o.MaxEntries > 0 && o.MaxValueLength > 0,
+                "Workflow:SubFlow:CarriedHeaders requires a non-null AdditionalDenied and positive MaxEntries and MaxValueLength.")
+            .ValidateOnStart();
+        services.AddSingleton<BBT.Workflow.SubFlow.Headers.ICarriedHeaderPolicy, BBT.Workflow.SubFlow.Headers.CarriedHeaderPolicy>();
         // Journal tunables (Workflow:FunctionExecutionJournal): QueueCapacity + BatchSize.
         services.AddOptions<FunctionExecutionJournalOptions>()
             .BindConfiguration(FunctionExecutionJournalOptions.SectionName);
@@ -222,6 +236,10 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
         // In-process envelope cache in front of the distributed store. Resolution entries are keyed
         // by generation, so publish invalidation applies to L1 exactly as it does to L2.
         services.AddSingleton<IComponentL1Cache, ComponentL1Cache>();
+
+        // Default-version pointer source for workflow resolution (read from the sys-version-registry flow).
+        services.AddSingleton<IVersionPolicySource, VersionRegistryPolicySource>();
+        services.AddSingleton<BBT.Workflow.Versions.IVersionRegistryWriteGuard, BBT.Workflow.Versions.VersionRegistryWriteGuard>();
 
         // Domain Cache Context
         services.AddSingleton<DomainCacheContext>();

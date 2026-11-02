@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using BBT.Workflow.Definitions.RowSecurity;
 using BBT.Workflow.Scripting.Rules;
 
 namespace BBT.Workflow.Definitions.Validators;
@@ -34,6 +35,7 @@ public class WorkflowValidator
         ValidateTransitionInStates(workflow, result, stateKeys);
         ValidateStateCountAndTypes(workflow, result);
         ValidateRoleGrants(workflow.QueryRoles, $"{nameof(Workflow)}.{nameof(Workflow.QueryRoles)}", result);
+        ValidateRowSecurity(workflow, result);
 
         // State level validations
         ValidateStateLabels(workflow, result);
@@ -43,6 +45,7 @@ public class WorkflowValidator
         ValidateSubFlowOverrides(workflow, result);
         ValidateWizardStateTransitions(workflow, result);
         ValidateDefaultAutoTransitions(workflow, result);
+        ValidateAutoTransitionPriorities(workflow, result);
         ValidateLongPollInteractions(workflow, result);
         ValidateHistoryNone(workflow, result);
         foreach (var state in workflow.States)
@@ -60,6 +63,30 @@ public class WorkflowValidator
 
         return result;
     }
+
+    #region Row Security Validations
+
+    /// <summary>
+    /// Validates <c>attributes.rowSecurity</c> with the schema-blind rules of
+    /// <see cref="RowSecurityDefinitionRules"/> (vnext#1107). Errors block publishing; warnings are
+    /// logged by the publish path. A flow without row security adds nothing.
+    /// </summary>
+    private static void ValidateRowSecurity(Workflow workflow, WorkflowValidationResult result)
+    {
+        if (workflow.RowSecurity is null)
+            return;
+
+        foreach (var finding in RowSecurityDefinitionRules.Validate(workflow.RowSecurity))
+        {
+            var validation = new ValidationResult($"{finding.Code}: {finding.Message}", [finding.Path]);
+            if (finding.Severity == RowSecurityFindingSeverity.Error)
+                result.AddError(validation);
+            else
+                result.AddWarning(validation);
+        }
+    }
+
+    #endregion
 
     #region History None Validations
 
@@ -672,6 +699,44 @@ public class WorkflowValidator
         }
     }
 
+    /// <summary>
+    /// Validates automatic transition priority within each state:
+    /// - A DefaultAutoTransition cannot carry a priority (it is always evaluated last)
+    /// - Warns when non-default automatic transitions tie on priority in a state that uses explicit priorities
+    /// </summary>
+    private static void ValidateAutoTransitionPriorities(Workflow workflow, WorkflowValidationResult result)
+    {
+        foreach (var state in workflow.States)
+        {
+            var statePath = $"{nameof(Workflow)}.{nameof(Workflow.States)}[{state.Key}].{nameof(State.Transitions)}";
+
+            foreach (var key in state.Transitions
+                         .Where(t => t.TriggerKind == TransitionKind.DefaultAutoTransition && t.Priority != null)
+                         .Select(t => t.Key))
+            {
+                result.AddError(new ValidationResult(
+                    $"DefaultAutoTransition '{key}' in state '{state.Key}' cannot have a priority; it is always evaluated last.",
+                    [$"{statePath}[{key}].{nameof(Transition.Priority)}"]));
+            }
+
+            var autoTransitions = state.Transitions
+                .Where(t => t.TriggerType == TriggerType.Automatic && t.TriggerKind != TransitionKind.DefaultAutoTransition)
+                .ToList();
+
+            // Two unprioritized transitions are the normal legacy shape; only flag ties once priorities are in use.
+            if (autoTransitions.TrueForAll(t => t.Priority == null))
+                continue;
+
+            foreach (var group in autoTransitions.GroupBy(t => t.EffectivePriority).Where(g => g.Count() > 1))
+            {
+                var keys = string.Join(", ", group.Select(t => $"'{t.Key}'"));
+                result.AddWarning(new ValidationResult(
+                    $"Automatic transitions {keys} in state '{state.Key}' share priority {group.Key}; declaration order decides between them.",
+                    [statePath]));
+            }
+        }
+    }
+
     #endregion
 
     #region Transition Level Validations
@@ -735,7 +800,7 @@ public class WorkflowValidator
         // Validate StartTransition - should not have AvailableIn (it's not a shared transition)
         if (workflow.StartTransition != null)
         {
-            ValidateSingleTransition(workflow.StartTransition, "StartTransition", result, isSharedTransition: false);
+            ValidateSingleTransition(workflow.StartTransition, "StartTransition", result, isSharedTransition: false, isStateTransition: false);
         }
 
         // Validate well-known workflow-level transitions — AvailableIn is allowed (same as shared transitions).
@@ -767,7 +832,7 @@ public class WorkflowValidator
         {
             foreach (var transition in state.Transitions)
             {
-                ValidateSingleTransition(transition, $"States[{state.Key}].Transitions[{transition.Key}]", result, isSharedTransition: false);
+                ValidateSingleTransition(transition, $"States[{state.Key}].Transitions[{transition.Key}]", result, isSharedTransition: false, isStateTransition: true);
             }
         }
     }
@@ -779,7 +844,8 @@ public class WorkflowValidator
         Transition transition,
         string transitionPath,
         WorkflowValidationResult result,
-        bool isSharedTransition)
+        bool isSharedTransition,
+        bool isStateTransition = false)
     {
         var basePath = $"{nameof(Workflow)}.{transitionPath}";
 
@@ -789,6 +855,23 @@ public class WorkflowValidator
             result.AddError(new ValidationResult(
                 $"'AvailableIn' is only allowed in shared transitions. Found in '{transitionPath}'.",
                 [$"{basePath}.{nameof(Transition.AvailableIn)}"]));
+        }
+
+        if (transition.Priority is { } priority)
+        {
+            if (priority < 1)
+            {
+                result.AddError(new ValidationResult(
+                    $"Transition '{transition.Key}' has priority {priority}; priority must be at least 1.",
+                    [$"{basePath}.{nameof(Transition.Priority)}"]));
+            }
+
+            if (transition.TriggerType != TriggerType.Automatic || !isStateTransition)
+            {
+                result.AddError(new ValidationResult(
+                    $"Transition '{transition.Key}' has a priority, but priority is only allowed on state-level automatic transitions.",
+                    [$"{basePath}.{nameof(Transition.Priority)}"]));
+            }
         }
 
         ValidateRoleGrants(transition.Roles, $"{basePath}.{nameof(Transition.Roles)}", result);

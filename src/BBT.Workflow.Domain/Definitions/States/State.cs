@@ -150,6 +150,16 @@ public sealed class State : IHasKey
     public bool HasStateNotifications => notifications.Any(n => n.Type == StateNotificationType.State);
 
     /// <summary>
+    /// True for an interaction wait: a <see cref="StateSubType.Busy"/> state that declares an
+    /// <c>interaction</c> (long-poll directive). The author parks the instance Busy on purpose to steer
+    /// the client and waits for an outside trigger (typically an updateData); the Busy has no owner, so
+    /// a scheduled transition that fires there — the way out when that trigger never comes — takes it
+    /// over instead of being refused as busy.
+    /// </summary>
+    [JsonIgnore]
+    public bool IsInteractionWait => SubType == StateSubType.Busy && interaction?.LongPoll is not null;
+
+    /// <summary>
     /// True when entering this state must terminate the client's active long-poll request
     /// (pausing the pipeline until acknowledge or fallback timeout).
     /// <para>
@@ -286,7 +296,15 @@ public sealed class State : IHasKey
         return Transitions.FirstOrDefault(t => t.Key == key);
     }
 
-    public IEnumerable<Transition> AutoTransitions => Transitions.Where(p => p.TriggerType == TriggerType.Automatic);
+    /// <summary>
+    /// The automatic transitions of this state in evaluation order: ascending
+    /// <see cref="Transition.EffectivePriority"/>, ties in declaration order (stable sort), with a
+    /// <see cref="TransitionKind.DefaultAutoTransition"/> always last.
+    /// </summary>
+    public IEnumerable<Transition> AutoTransitions => Transitions
+        .Where(p => p.TriggerType == TriggerType.Automatic)
+        .OrderBy(p => p.TriggerKind == TransitionKind.DefaultAutoTransition ? 1 : 0)
+        .ThenBy(p => p.EffectivePriority);
     
     public IEnumerable<Transition> ScheduledTransitions => Transitions.Where(p => p.TriggerType == TriggerType.Scheduled);
 

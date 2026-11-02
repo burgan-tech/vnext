@@ -1,0 +1,7 @@
+{
+  "releaseNote": {
+    "summary": "Busy-subtype states with an interaction no longer stall: an armed timeout does not block updateData's auto transition, and a firing timeout takes the parked Busy over.",
+    "breaking": false,
+    "docs": []
+  }
+}

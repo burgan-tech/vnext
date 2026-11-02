@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
@@ -24,13 +25,14 @@ public sealed class CacheSetSpanTests : IDisposable
 
     /// <summary>
     /// Root source for the per-test ambient activity. Cache spans inherit its trace id, which is how
-    /// <see cref="Named"/> tells this test's spans apart from every other test's.
+    /// the listener tells this test's spans apart from every other test's.
     /// </summary>
     private static readonly ActivitySource TestSource = new("CacheSetSpanTests");
 
-    private readonly List<Activity> _spans = new();
+    private readonly ConcurrentQueue<Activity> _spans = new();
     private readonly ActivityListener _listener;
     private readonly Activity _root;
+    private ActivityTraceId _traceId;
 
     public CacheSetSpanTests()
     {
@@ -38,7 +40,15 @@ public sealed class CacheSetSpanTests : IDisposable
         {
             ShouldListenTo = source => source.Name is "BBT.Workflow.Cache" or "CacheSetSpanTests",
             Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
-            ActivityStopped = _spans.Add
+            // Filter at capture time: spans of other tests never enter the collection, and the
+            // collection is concurrent because the callback runs on whichever thread stops the span.
+            ActivityStopped = a =>
+            {
+                if (a.TraceId == _traceId)
+                {
+                    _spans.Enqueue(a);
+                }
+            }
         };
         ActivitySource.AddActivityListener(_listener);
 
@@ -47,6 +57,7 @@ public sealed class CacheSetSpanTests : IDisposable
         // filtering on the trace id is what keeps this suite honest — without it these assertions
         // pass alone and fail in a full run, which is worse than having no test at all.
         _root = TestSource.StartActivity("test-root")!;
+        _traceId = _root.TraceId;
     }
 
     public void Dispose()
@@ -56,9 +67,8 @@ public sealed class CacheSetSpanTests : IDisposable
     }
 
     private IEnumerable<Activity> Named(string operation) =>
-        _spans.Where(a => a.TraceId == _root.TraceId
-                          && (a.DisplayName == operation
-                              || a.DisplayName.StartsWith(operation + "/", StringComparison.Ordinal)));
+        _spans.Where(a => a.DisplayName == operation
+                          || a.DisplayName.StartsWith(operation + "/", StringComparison.Ordinal));
 
     private static string? Source(Activity a) =>
         a.GetTagItem("cache.source") as string;

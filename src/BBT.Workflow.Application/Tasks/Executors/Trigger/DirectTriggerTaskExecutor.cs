@@ -25,7 +25,7 @@ namespace BBT.Workflow.Tasks.Executors;
 public sealed class DirectTriggerTaskExecutor : TriggerTaskExecutorBase<DirectTriggerTask>
 {
     private readonly IInstanceCommandGateway _instanceCommandGateway;
-    private readonly IInstanceQueryGateway _instanceQueryGateway;
+    private readonly IInstanceIdResolver _instanceIdResolver;
     private readonly IDomainDiscoveryResolver _endpointResolver;
     private readonly ResiliencePipeline<Result<TransitionOutput>> _retryPipeline;
 
@@ -37,14 +37,14 @@ public sealed class DirectTriggerTaskExecutor : TriggerTaskExecutorBase<DirectTr
         IRuntimeInfoProvider runtimeInfoProvider,
         IRemoteInvokerService remoteInvoker,
         IInstanceCommandGateway instanceCommandGateway,
-        IInstanceQueryGateway instanceQueryGateway,
+        IInstanceIdResolver instanceIdResolver,
         IDomainDiscoveryResolver endpointResolver,
         IResultResiliencePipelineFactory resilienceFactory,
         ILogger<DirectTriggerTaskExecutor> logger)
         : base(scriptEngine, runtimeInfoProvider, remoteInvoker, logger)
     {
         _instanceCommandGateway = instanceCommandGateway;
-        _instanceQueryGateway = instanceQueryGateway;
+        _instanceIdResolver = instanceIdResolver;
         _endpointResolver = endpointResolver;
         _retryPipeline = resilienceFactory.CreatePipeline<TransitionOutput>(
             operationName: "DirectTrigger.ExecuteLocal");
@@ -231,23 +231,18 @@ public sealed class DirectTriggerTaskExecutor : TriggerTaskExecutorBase<DirectTr
             return Result<Guid>.Ok(instanceId);
         }
 
-        // Only the id is read.
-        var queryInput = new GetInstanceInput
-        {
-            Domain = task.TriggerDomain,
-            Workflow = task.TriggerFlow,
-            Instance = instanceIdentifier
-        };
-
-        var instanceResult = await _instanceQueryGateway.GetInstanceAsync(queryInput, cancellationToken);
-        if (!instanceResult.Result.IsSuccess || instanceResult.Result.Value?.Id == null)
+        // Local id-only lookup: returns only the id (it loads the read-only instance), so no caller headers and
+        // no row-security bypass flag.
+        var idResult = await _instanceIdResolver.ResolveIdAsync(
+            task.TriggerDomain, task.TriggerFlow, instanceIdentifier, cancellationToken);
+        if (!idResult.IsSuccess)
         {
             return Result<Guid>.Fail(Error.Validation(
                 WorkflowErrorCodes.TaskExecution,
                 "DirectTrigger instance could not be resolved to a valid identifier"));
         }
 
-        return Result<Guid>.Ok(instanceResult.Result.Value.Id.Value);
+        return Result<Guid>.Ok(idResult.Value);
     }
 
     private async Task<Result<TaskInvocationResult>> ExecuteRemoteAsync(

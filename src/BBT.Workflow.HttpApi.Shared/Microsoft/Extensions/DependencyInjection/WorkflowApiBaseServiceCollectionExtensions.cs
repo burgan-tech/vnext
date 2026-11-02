@@ -56,7 +56,13 @@ public static class WorkflowApiBaseServiceCollectionExtensions
     /// <returns>The service collection for chaining</returns>
     public static IServiceCollection AddDaprClients(this IServiceCollection services)
     {
-        services.AddDaprClient();
+        // No client-side receive cap: gRPC's 4 MB default refused every binding answer above it (an x-storage file read
+        // back through its Dapr binding). The sidecar's --max-body-size bounds what it sends.
+        services.AddDaprClient(builder => builder.UseGrpcChannelOptions(new Grpc.Net.Client.GrpcChannelOptions
+        {
+            ThrowOperationCanceledOnCancellation = true,
+            MaxReceiveMessageSize = null,
+        }));
         services.AddDaprJobsClient();
         return services;
     }
@@ -439,6 +445,11 @@ public static class WorkflowApiBaseServiceCollectionExtensions
             opt.Map(WorkflowErrorCodes.FileReferenceInvalid, HttpStatusCode.BadRequest);
             opt.Map(WorkflowErrorCodes.FileNotFound, HttpStatusCode.NotFound);
             opt.Map(WorkflowErrorCodes.FileSchemaUnavailable, HttpStatusCode.ServiceUnavailable);
+            // flow default version: above the activation ceiling is 404, a broken pointer is a 409
+            // configuration conflict, an unreadable registry is transient (503).
+            opt.Map(WorkflowErrorCodes.FlowVersionNotActivated, HttpStatusCode.NotFound);
+            opt.Map(WorkflowErrorCodes.FlowDefaultVersionInvalid, HttpStatusCode.Conflict);
+            opt.Map(WorkflowErrorCodes.VersionRegistryUnavailable, HttpStatusCode.ServiceUnavailable);
             // history: none (vnext#1006): an ineligible SubFlow child is the author's error; retry is
             // a conflict with the flow's declared mode.
             opt.Map(WorkflowErrorCodes.HistoryNoneSubFlowChildNotEligible, HttpStatusCode.BadRequest);

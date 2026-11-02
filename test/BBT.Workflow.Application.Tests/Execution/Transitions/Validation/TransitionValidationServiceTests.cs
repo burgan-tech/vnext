@@ -51,7 +51,8 @@ public class TransitionValidationServiceTests
         _service = new TransitionValidationService(
             _transitionExecutionPolicy,
             _mockSchemaValidator.Object,
-            _mockComponentCacheStore.Object);
+            _mockComponentCacheStore.Object,
+            Substitute.For<BBT.Workflow.Versions.IVersionRegistryWriteGuard>());
     }
 
     #region ValidateAsync Tests

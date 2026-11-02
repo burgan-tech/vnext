@@ -133,10 +133,19 @@ public sealed class ChangeStateStep(
             return Result<StateTransitionInfo>.Fail(stateResult.Error);
         }
         
-        context.Instance.ChangeState(stateResult.Value!);
+        var target = stateResult.Value!;
+        context.Instance.ChangeState(target);
         context.ExtractAndDeferInstanceEvents();
-        await instanceRepository.UpdateAsync(context.Instance, true, cancellationToken);
-        
+
+        // Entering a Finish state that runs no OnEntry task: nothing between this step (50) and
+        // HandleFinishStep (100) reads the persisted state — no task, no subflow, no automatic
+        // transition, no timer — and HandleFinishStep saves the same tracked aggregate with the
+        // completion columns. Saving here too made every finishing hop pay two autocommit
+        // transactions (two WAL fsyncs) for one row. A Finish state WITH OnEntry tasks keeps the
+        // save: its tasks must run against a persisted state, exactly as any other state's do.
+        var deferToFinish = target.StateType == Definitions.StateType.Finish && target.OnEntries.Count == 0;
+        await instanceRepository.UpdateAsync(context.Instance, !deferToFinish, cancellationToken);
+
         return Result<StateTransitionInfo>.Ok(info);
     }
 

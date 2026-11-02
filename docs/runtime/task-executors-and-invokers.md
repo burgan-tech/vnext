@@ -99,8 +99,10 @@ HttpClient>`). The Execution service's `HttpTaskInvoker` (type 6, remote path),
 `ExternalHttpTaskInvoker` (type 22, always local) are thin wrappers adding host-specific
 logging/metrics and, on the orchestrator side, the mapping to the orchestrator-side
 `TaskInvocationResult` twin. Named clients (`validateSsl: false` selects the SSL-bypass client,
-and its `MaxConnectionsPerServer` cap — configurable via
-`Workflow:TaskInvocation:MaxConnectionsPerServer`, default `50` — is shared by every HTTP/SOAP
+and its pool — `MaxConnectionsPerServer` / `PooledConnectionLifetimeSeconds` /
+`PooledConnectionIdleTimeoutSeconds` under `Workflow:TaskInvocation` on Orchestration, under
+`WorkflowHttpClient` on Execution, defaults `50` / `600` / `120`, one `SocketsHttpHandler` built by
+`WorkflowHttpMessageHandlerFactory` for both hosts — is shared by every HTTP/SOAP
 egress path from Orchestration, type 22 included), header/Content-Type semantics, response
 parsing and accepted-status-code matching are therefore identical by construction across all
 three.

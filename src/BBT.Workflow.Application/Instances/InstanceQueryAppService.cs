@@ -4,6 +4,7 @@ using BBT.Aether.Application.Services;
 using BBT.Aether.Domain.Entities;
 using BBT.Aether.Results;
 using BBT.Workflow.Authorization;
+using BBT.Workflow.Authorization.RowSecurity;
 using BBT.Workflow.Caching;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Logging;
@@ -67,7 +68,8 @@ public sealed class InstanceQueryAppService(
     Caching.IInstanceSchemaFunctionCache instanceSchemaFunctionCache,
     Caching.IHumanTaskFunctionCache humanTaskFunctionCache,
     HumanTask.HumanTaskDescentLimiter descentLimiter,
-    ILogger<InstanceQueryAppService> logger)
+    ILogger<InstanceQueryAppService> logger,
+    IRowSecurityService? rowSecurityService = null)
     : ApplicationService(serviceProvider), IInstanceQueryAppService
 {
     private static readonly ConcurrentDictionary<string, BuildGate> ActiveSubflowBuildGates = new();
@@ -156,6 +158,14 @@ public sealed class InstanceQueryAppService(
                 onSuccess: async instance =>
                 {
                     using var instanceScope = BeginInstanceScope(instance);
+
+                    // Row security (vnext#1107) is decided before the body, extensions, ETag and 304: an instance
+                    // the caller may not see answers exactly the missing-instance 404.
+                    if (await CheckGetRowSecurityAsync(input, instance, read, cancellationToken) is { } rowSecurityError)
+                    {
+                        return ConditionalResult<GetInstanceOutput>.Fail(rowSecurityError);
+                    }
+
                     var instanceData = instance.FindData(input.Version);
                     
                     var result = await BuildInstanceOutputAsync(
@@ -226,37 +236,34 @@ public sealed class InstanceQueryAppService(
                 ToValidationError(validation));
         }
 
-        return await ResultExtensions.TryAsync(
+        Error? rowSecurityDenial = null;
+        var listResult = await ResultExtensions.TryAsync(
             async ct =>
             {
 
-                SchemaFilterContext? schemaContext = null;
-                IReadOnlySet<string> encryptedPaths = new HashSet<string>();
+                SchemaFilterContext? schemaContext;
+                RowSecurityDecision? rowSecurity = null;
                 using (InstanceReadActivityHelper.StartListPhase("metadata"))
                 {
-                    // Resolve schema-driven filter/sort metadata from workflow's master schema
-                    var flowResult = await componentCacheStore.GetFlowAsync(input.Domain, input.Workflow, null, ct);
-                    if (flowResult.IsSuccess && flowResult.Value?.Schema is not null)
-                    {
-                        var schemaResult = await componentCacheStore.GetSchemaAsync(flowResult.Value.Schema, ct);
-                        if (schemaResult.IsSuccess)
-                        {
-                            schemaContext = SchemaFilterMetadataResolver.Resolve(schemaResult.Value!.Schema);
-                            encryptedPaths = SchemaRolesParser.ParseExposure(schemaResult.Value!.Schema).EncryptPaths;
-                        }
-                    }
+                    var (ctx, exposure, flowResult) = await ResolveListMetadataAsync(input.Domain, input.Workflow, ct);
+                    schemaContext = ctx;
 
-                    if (schemaContext != null)
+                    // Row security (vnext#1107), only for the public list endpoint and the GetInstances task
+                    // (ApplyRowSecurity). The rule set is the flow GetFlowAsync(domain, workflow, null) resolved
+                    // above (K2). NotConfigured / Unrestricted leave the repository calls below verbatim.
+                    if (rowSecurityService is not null && input.ApplyRowSecurity)
                     {
-                        var ready = !schemaContext.Fields.Values.Any(f => f.Indexed)
-                            ? new HashSet<string>()
-                            : await attributeIndexCatalog.GetReadyAsync(currentSchema.Name ?? input.Workflow, ct);
-                        schemaContext = new SchemaFilterContext(schemaContext.Fields)
+                        rowSecurity = await rowSecurityService.DecideAsync(new RowSecurityRequest(
+                            input.Domain, input.Workflow, flowResult, schemaContext, exposure,
+                            input.Headers, input.RawHeaders, input.QueryParameters, input.RawQueryParameters,
+                            RowSecuritySurfaces.List, read), ct);
+
+                        if (rowSecurity.Outcome == RowSecurityOutcome.DeniedRuleSetUnavailable)
                         {
-                            EnforceFiltering = instanceFilteringOptions.Value.EnforceMasterSchemaFiltering,
-                            ReadyIndexes = ready,
-                            EncryptedPaths = encryptedPaths
-                        };
+                            // D5: the lookup error goes back as is (409 / 503 stay 409 / 503), never an empty page.
+                            rowSecurityDenial = rowSecurity.LookupError ?? flowResult.Error;
+                            return null!;
+                        }
                     }
                 }
 
@@ -305,13 +312,40 @@ public sealed class InstanceQueryAppService(
                 try
                 {
                     using var queryActivity = InstanceReadActivityHelper.StartListPhase("query");
-                    if (parsedRequest != null)
+                    // A Filtered decision without a predicate is never planned; should one appear it denies (fail closed).
+                    if (rowSecurity is { ReturnsNoRows: true } or { Outcome: RowSecurityOutcome.Filtered, Predicate: null })
+                    {
+                        // SG-1: decided without SQL. Same shape as an empty result from the repository: an empty
+                        // page, and an empty group list when grouping or aggregation was requested.
+                        pagedList = new HateoasPagedList<Instance>([], input.Page, input.PageSize, false);
+                        groups = !string.IsNullOrWhiteSpace(groupBy) || !string.IsNullOrWhiteSpace(aggregations)
+                            ? new List<GroupSummary>()
+                            : null;
+                    }
+                    else if (parsedRequest != null)
                     {
                         parsedRequest.SchemaContext = schemaContext;
+                        if (rowSecurity is { Outcome: RowSecurityOutcome.Filtered, Predicate: { } rowPredicate })
+                            parsedRequest.RowPredicate = rowPredicate;
                         var result = await instanceRepository.GetPagedResultsWithGroupsAsync(
                             input.Page,
                             input.PageSize,
                             parsedRequest,
+                            ct);
+                        pagedList = result.PagedList;
+                        groups = result.Groups;
+                    }
+                    else if (rowSecurity is { Outcome: RowSecurityOutcome.Filtered, Predicate: { } rowPredicate })
+                    {
+                        var result = await instanceRepository.GetPagedResultsWithGroupsAsync(
+                            input.Page,
+                            input.PageSize,
+                            input.Filter,
+                            groupBy,
+                            aggregations,
+                            input.Sort,
+                            schemaContext,
+                            rowPredicate,
                             ct);
                         pagedList = result.PagedList;
                         groups = result.Groups;
@@ -426,6 +460,122 @@ public sealed class InstanceQueryAppService(
                 return response;
             },
             cancellationToken);
+
+        return rowSecurityDenial is { } denial
+            ? Result<InstanceListWithGroupsResponse<GetInstanceOutput>>.Fail(denial)
+            : listResult;
+    }
+
+    /// <summary>
+    /// The list's (and GET's) one flow lookup and the master-schema metadata derived from it. The flow call is
+    /// always <c>GetFlowAsync(domain, workflow, null)</c> — the default-version pointer's version, else the latest
+    /// (K2) — and its result is returned unchanged for the row-security decision.
+    /// </summary>
+    private async Task<(SchemaFilterContext? Ctx, SchemaExposureMetadata Exposure, Result<Definitions.Workflow> Flow)>
+        ResolveListMetadataAsync(string domain, string workflow, CancellationToken ct)
+    {
+        var flowResult = await componentCacheStore.GetFlowAsync(domain, workflow, null, ct);
+        var (schemaContext, exposure) = await ResolveSchemaMetadataAsync(flowResult, workflow, ct);
+        return (schemaContext, exposure, flowResult);
+    }
+
+    /// <summary>
+    /// Row security of the single-instance GET endpoint and the GetInstance task (vnext#1107); other in-process
+    /// callers (ApplyRowSecurity false) skip it. Returns null when the caller may read
+    /// <paramref name="instance"/>, otherwise the error to answer with:
+    /// <list type="bullet">
+    /// <item>the rule-set lookup error as is, for every flow (D5);</item>
+    /// <item><see cref="WorkflowErrors.InstanceNotFound"/> with the caller's identifier — the exact missing-instance
+    /// error — when the decision returns no rows or the probe does not find the instance under the predicate.</item>
+    /// </list>
+    /// The rule set is always <c>GetFlowAsync(domain, workflow, null)</c>, never the instance's own version (K2).
+    /// Schema, exposure and index metadata are loaded only for a flow that declares <c>rowSecurity</c>, so a flow
+    /// without it costs this one cached lookup and nothing else (C-6). The probe runs on the RESOLVED instance id
+    /// and on its latest data, whatever <c>?version=</c> the body is read at.
+    /// </summary>
+    private async Task<Error?> CheckGetRowSecurityAsync(
+        GetInstanceInput input, Instance instance, Activity? read, CancellationToken ct)
+    {
+        if (rowSecurityService is null || !input.ApplyRowSecurity)
+            return null;
+
+        var flowResult = await componentCacheStore.GetFlowAsync(input.Domain, input.Workflow, null, ct);
+        SchemaFilterContext? schemaContext = null;
+        var exposure = SchemaExposureMetadata.Empty;
+        if (flowResult.IsSuccess && flowResult.Value?.RowSecurity is not null)
+            (schemaContext, exposure) = await ResolveSchemaMetadataAsync(flowResult, input.Workflow, ct);
+
+        var decision = await rowSecurityService.DecideAsync(new RowSecurityRequest(
+            input.Domain, input.Workflow, flowResult, schemaContext, exposure,
+            input.Headers, input.RawHeaders, input.QueryParameters, input.RawQueryParameters,
+            RowSecuritySurfaces.Get, read), ct);
+
+        return decision switch
+        {
+            // D5 error as is; with no error to return, still deny (fail closed) — never serve the instance.
+            { Outcome: RowSecurityOutcome.DeniedRuleSetUnavailable } =>
+                decision.LookupError
+                ?? (flowResult.IsSuccess ? WorkflowErrors.InstanceNotFound(input.Instance) : flowResult.Error),
+            { Outcome: RowSecurityOutcome.NotConfigured or RowSecurityOutcome.Unrestricted } => null,
+            { Outcome: RowSecurityOutcome.Filtered, Predicate: { } predicate }
+                when await instanceRepository.IsVisibleAsync(instance.Id, predicate, schemaContext, ct) => null,
+            // No rows, a false probe, or a Filtered decision without a predicate (never planned): fail closed.
+            _ => ExcludedOrDenied(decision, input, instance, read)
+        };
+    }
+
+    /// <summary>
+    /// The fall-through arm of the GET check. A <see cref="RowSecurityOutcome.Filtered"/> decision that got here
+    /// means the probe did not find the instance, so the outcome tag becomes <c>excluded</c> and the exclusion is
+    /// logged; a no-rows decision keeps the <c>denied-*</c> tag the service wrote. Either way the answer is the
+    /// missing-instance error.
+    /// </summary>
+    private Error ExcludedOrDenied(RowSecurityDecision decision, GetInstanceInput input, Instance instance, Activity? read)
+    {
+        if (decision.Outcome == RowSecurityOutcome.Filtered)
+        {
+            InstanceReadActivityHelper.SetRowSecurityExcluded(read ?? Activity.Current);
+            logger.RowSecurityInstanceExcluded(input.Domain, input.Workflow, instance.Id.ToString());
+        }
+
+        return WorkflowErrors.InstanceNotFound(input.Instance);
+    }
+
+    /// <summary>
+    /// The master-schema filter / exposure metadata of <paramref name="flowResult"/>'s flow, with the ready
+    /// attribute indexes of the current schema.
+    /// </summary>
+    private async Task<(SchemaFilterContext? Ctx, SchemaExposureMetadata Exposure)> ResolveSchemaMetadataAsync(
+        Result<Definitions.Workflow> flowResult, string workflow, CancellationToken ct)
+    {
+        SchemaFilterContext? schemaContext = null;
+        var exposure = SchemaExposureMetadata.Empty;
+
+        // Resolve schema-driven filter/sort metadata from workflow's master schema
+        if (flowResult.IsSuccess && flowResult.Value?.Schema is not null)
+        {
+            var schemaResult = await componentCacheStore.GetSchemaAsync(flowResult.Value.Schema, ct);
+            if (schemaResult.IsSuccess)
+            {
+                schemaContext = SchemaFilterMetadataResolver.Resolve(schemaResult.Value!.Schema);
+                exposure = SchemaRolesParser.ParseExposure(schemaResult.Value!.Schema);
+            }
+        }
+
+        if (schemaContext != null)
+        {
+            var ready = !schemaContext.Fields.Values.Any(f => f.Indexed)
+                ? new HashSet<string>()
+                : await attributeIndexCatalog.GetReadyAsync(currentSchema.Name ?? workflow, ct);
+            schemaContext = new SchemaFilterContext(schemaContext.Fields)
+            {
+                EnforceFiltering = instanceFilteringOptions.Value.EnforceMasterSchemaFiltering,
+                ReadyIndexes = ready,
+                EncryptedPaths = exposure.EncryptPaths
+            };
+        }
+
+        return (schemaContext, exposure);
     }
 
     /// <summary>

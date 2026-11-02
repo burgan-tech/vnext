@@ -44,13 +44,17 @@ Every transition body is merged into instance data **deeply and unconditionally*
 is no replace mode, no per-transition opt-out, no schema-level flag
 (`CreateTransitionRecordStep` applies it to every body; the merge is
 `JsonCanonicalizer.MergeAndCanonicalize`, legacy twin `JsonData.Merge` →
-`ObjectMerger.MergeValues`). Two consequences every client team must design for
+`ObjectMerger.MergeValues`). Three consequences every client team must design for
 (finding AB-18, [vnext-client-sdk-core#58](https://github.com/burgan-tech/vnext-client-sdk-core/issues/58)):
 
 - **Objects merge per key, recursively.** A field you did not send survives; a field you
   send overwrites. Sending an *untouched photograph* of a record therefore overwrites every
   field in it with the possibly-stale values you read — send deltas, not snapshots, on
   schema-less transitions.
+- **A `null` never clears an existing key.** A `null` in the delta for a key that already exists leaves
+  the stored value unchanged (`JsonCanonicalizer`); a `null` for a new key is written. Use an explicit
+  sentinel value where "clear" must be expressible (e.g. `defaultVersion: "latest"` in
+  [flow default version](../runtime/flow-default-version.md)).
 - **Arrays are replaced wholesale, never merged element-wise**
   (`CollectionMergeStrategy` — this is also what allows *removing* items from a list). A
   stale `documents` array in any body silently deletes items a concurrent writer added.

@@ -198,6 +198,11 @@ public sealed class SubProcessRemoteInvoker : ITaskInvoker<SubProcessBinding>
         var isSuccess = response.IsSuccessStatusCode
             || AcceptedStatusCodeMatcher.IsAccepted((int)response.StatusCode, binding.AcceptedStatusCodes);
 
+        // The child may have resolved a floating reference ("1", default pointer) to a full version;
+        // report it so the parent's correlation pins to it. Older runtimes send none.
+        if (isSuccess && TryReadFlowVersion(content) is { } flowVersion)
+            metadata[SubProcessMetadataKeys.ResolvedFlowVersion] = flowVersion;
+
         _metrics.RecordTaskExecution(TaskType, isSuccess ? "success" : "failure");
 
         return isSuccess
@@ -218,6 +223,27 @@ public sealed class SubProcessRemoteInvoker : ITaskInvoker<SubProcessBinding>
                 headers: responseHeaders,
                 data: responseData,
                 metadata: metadata);
+    }
+
+    private static string? TryReadFlowVersion(string content)
+    {
+        if (string.IsNullOrWhiteSpace(content))
+            return null;
+
+        try
+        {
+            using var document = JsonDocument.Parse(content);
+            return document.RootElement.ValueKind == JsonValueKind.Object
+                   && document.RootElement.TryGetProperty("flowVersion", out var value)
+                   && value.ValueKind == JsonValueKind.String
+                   && !string.IsNullOrWhiteSpace(value.GetString())
+                ? value.GetString()
+                : null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 
     private static string BuildPath(SubProcessBinding binding)

@@ -1,9 +1,12 @@
+using System.ComponentModel.DataAnnotations;
 using System.Text.Json;
 using BBT.Aether.Application.Services;
 using BBT.Aether.MultiSchema;
 using BBT.Aether.Results;
+using BBT.Workflow.Authorization.RowSecurity;
 using BBT.Workflow.Caching;
 using BBT.Workflow.Definitions.CastHandlers;
+using BBT.Workflow.Definitions.RowSecurity;
 using BBT.Workflow.Definitions.Validators;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
@@ -26,6 +29,7 @@ public sealed class DefinitionAppService(
     ComponentValidatorProcessor componentValidatorProcessor,
     WorkflowCastProcessor castProcessor,
     IDomainCacheContext cacheContext,
+    RowSecurityPublishCheck rowSecurityPublishCheck,
     IServiceScopeFactory scopeFactory,
     IServiceProvider serviceProvider)
     : ApplicationService(serviceProvider), IDefinitionAppService
@@ -80,9 +84,12 @@ public sealed class DefinitionAppService(
         }
     }
 
-    private Result ValidateComponent(PublishInput input)
+    private async Task<Result> ValidateComponentAsync(PublishInput input, CancellationToken cancellationToken)
     {
         var validationResult = componentValidatorProcessor.Validate(input.Flow, input.Attributes);
+
+        if (input.Flow == RuntimeSysSchemaInfo.Flows && DeclaresRowSecurity(input.Attributes))
+            await AddRowSecurityFindingsAsync(input, validationResult, cancellationToken);
 
         foreach (var warning in validationResult.Warnings)
         {
@@ -109,12 +116,49 @@ public sealed class DefinitionAppService(
         return Result.Ok();
     }
 
+    private static bool DeclaresRowSecurity(JsonElement attributes) =>
+        attributes.ValueKind == JsonValueKind.Object &&
+        attributes.EnumerateObject().Any(p => p.Name.Equals("rowSecurity", StringComparison.OrdinalIgnoreCase) &&
+                                              p.Value.ValueKind == JsonValueKind.Object);
+
+    /// <summary>
+    /// Runs the schema- and key-aware row-security checks (<see cref="RowSecurityPublishCheck"/>) and merges
+    /// their findings into <paramref name="validationResult"/>: errors block the publish, warnings are logged
+    /// only. A definition that does not deserialize was already reported by the synchronous validator.
+    /// </summary>
+    private async Task AddRowSecurityFindingsAsync(
+        PublishInput input, ComponentValidationResult validationResult, CancellationToken cancellationToken)
+    {
+        Workflow? workflow;
+        try
+        {
+            workflow = input.Attributes.Deserialize<Workflow>(JsonSerializerConstants.JsonOptions);
+        }
+        catch (Exception ex) when (ex is JsonException or ArgumentException)
+        {
+            return;
+        }
+
+        if (workflow is null)
+            return;
+
+        var findings = await rowSecurityPublishCheck.CheckAsync(input.Key, workflow, cancellationToken);
+        foreach (var finding in findings)
+        {
+            var entry = new ValidationResult($"{finding.Code}: {finding.Message}", [finding.Path]);
+            if (finding.Severity == RowSecurityFindingSeverity.Error)
+                validationResult.AddError(entry);
+            else
+                validationResult.Warnings.Add(entry);
+        }
+    }
+
     private async Task<Result> SaveNewInstanceAsync(
         Instance instance,
         PublishInput input,
         CancellationToken cancellationToken)
     {
-        var validationResult = ValidateComponent(input);
+        var validationResult = await ValidateComponentAsync(input, cancellationToken);
         if (!validationResult.IsSuccess)
             return validationResult;
 
@@ -160,7 +204,7 @@ public sealed class DefinitionAppService(
             return Result.Fail(WorkflowErrors.WorkflowVersionConflict());
         }
 
-        var validationResult = ValidateComponent(input);
+        var validationResult = await ValidateComponentAsync(input, cancellationToken);
         if (!validationResult.IsSuccess)
             return validationResult;
 

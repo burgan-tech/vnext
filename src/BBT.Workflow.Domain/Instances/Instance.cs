@@ -676,7 +676,9 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
     /// The data a SubFlow/SubProcess hands to its parent, already opened by the caller
     /// (<c>ISubItemEventDataResolver</c>): the parent cannot open this instance's tokens. Null means the row as stored.
     /// </param>
-    public void Complete(string domain, bool sync = false, System.Text.Json.JsonElement? subItemData = null)
+    /// <param name="carriedHeaders">Filtered headers of the settling request, stamped only on the <see cref="InstanceSubCompletedEvent"/>; null when none.</param>
+    public void Complete(string domain, bool sync = false, System.Text.Json.JsonElement? subItemData = null,
+        Dictionary<string, string?>? carriedHeaders = null)
     {
         Status = InstanceStatus.Completed;
         CompletedAt = DateTime.UtcNow;
@@ -714,7 +716,8 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
                     CompletedAt = CompletedAt.Value,
                     Duration = Duration,
                     RootInstanceId = rootId != Id ? rootId : (Guid?)null,
-                    Sync = sync
+                    Sync = sync,
+                    CarriedHeaders = carriedHeaders
                 });
             }
         }
@@ -729,8 +732,9 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
     /// <param name="sync">Whether the faulting pipeline chain runs with a synchronous caller (sync=true).</param>
     /// <param name="termination">Typed context for direct or parent-cascaded termination.</param>
     /// <param name="subItemData">See <see cref="Complete"/>: the data handed to the parent, opened by the caller.</param>
+    /// <param name="carriedHeaders">See <see cref="Complete"/>: stamped only on the <see cref="InstanceSubFaultedEvent"/>.</param>
     public void Fault(string domain, bool sync = false, TerminationContext? termination = null,
-        System.Text.Json.JsonElement? subItemData = null)
+        System.Text.Json.JsonElement? subItemData = null, Dictionary<string, string?>? carriedHeaders = null)
     {
         var effectiveTermination = termination ?? TerminationContext.Direct(Id);
         var childTermination = effectiveTermination.AsParentCascade();
@@ -806,7 +810,8 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
                     SubItemType = subItemType,
                     TerminationOrigin = effectiveTermination.Origin,
                     InitiatorInstanceId = effectiveTermination.InitiatorInstanceId,
-                    CascadeId = effectiveTermination.CascadeId
+                    CascadeId = effectiveTermination.CascadeId,
+                    CarriedHeaders = carriedHeaders
                 });
             }
         }
@@ -917,7 +922,9 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
     /// <param name="domain">The domain of the instance.</param>
     /// <param name="sync">Whether the canceling pipeline chain runs with a synchronous caller.</param>
     /// <param name="termination">Typed context for direct or parent-cascaded termination.</param>
-    public void Cancel(string domain, bool sync = false, TerminationContext? termination = null)
+    /// <param name="carriedHeaders">See <see cref="Complete"/>: stamped only on the <see cref="InstanceSubCanceledEvent"/>.</param>
+    public void Cancel(string domain, bool sync = false, TerminationContext? termination = null,
+        Dictionary<string, string?>? carriedHeaders = null)
     {
         var effectiveTermination = termination ?? TerminationContext.Direct(Id);
         var childTermination = effectiveTermination.AsParentCascade();
@@ -959,7 +966,8 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
                     Sync = sync,
                     TerminationOrigin = effectiveTermination.Origin,
                     InitiatorInstanceId = effectiveTermination.InitiatorInstanceId,
-                    CascadeId = effectiveTermination.CascadeId
+                    CascadeId = effectiveTermination.CascadeId,
+                    CarriedHeaders = carriedHeaders
                 });
             }
         }

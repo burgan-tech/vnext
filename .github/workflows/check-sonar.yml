@@ -1,5 +1,9 @@
 name: SonarQube
 on:
+  # A pull request is compared with its target branch's LAST analysis, so the target branches must be analyzed
+  # on every push; without it a PR inherits every master finding since that analysis as "new code".
+  push:
+    branches: [ master, 'release-v*']
   pull_request:
     branches: [ master, 'release-v*']
     types: [opened, synchronize, reopened]

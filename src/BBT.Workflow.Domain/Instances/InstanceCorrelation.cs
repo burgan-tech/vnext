@@ -167,6 +167,24 @@ public sealed class InstanceCorrelation : AuditedEntity<Guid>
     }
 
     /// <summary>
+    /// Replaces the authored child reference ("1.0", "latest") with the full version the child was
+    /// actually started on, so every later read addresses the definition the child runs.
+    /// </summary>
+    /// <param name="resolvedVersion">The child's resolved flow version; never blank.</param>
+    public void PinSubFlowVersion(string resolvedVersion)
+    {
+        resolvedVersion = Check.NotNullOrWhiteSpace(resolvedVersion, nameof(resolvedVersion), WorkflowConstants.MaxVersionLength);
+
+        if (SubFlowVersion == resolvedVersion)
+        {
+            return;
+        }
+
+        SubFlowVersion = resolvedVersion;
+        ModifiedAt = DateTime.UtcNow;
+    }
+
+    /// <summary>
     /// Updates the SubFlow's current state.
     /// Called when SubFlow state changes to keep parent informed.
     /// </summary>

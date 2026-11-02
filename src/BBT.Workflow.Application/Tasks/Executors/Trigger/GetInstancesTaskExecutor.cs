@@ -123,7 +123,9 @@ public sealed class GetInstancesTaskExecutor : TriggerTaskExecutorBase<GetInstan
                 PageSize = task.PageSize,
                 Sort = task.Sort,
                 Filter = task.Filter,
-                Headers = headers
+                Headers = headers,
+                // Row security (vnext#1107) applies to the GetInstances task exactly as to the list endpoint.
+                ApplyRowSecurity = true
             };
 
             Result<InstanceListWithGroupsResponse<GetInstanceOutput>> instanceListResult;

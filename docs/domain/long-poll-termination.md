@@ -152,6 +152,28 @@ change. Enforcement is never stale — the acknowledge evaluates the rule fresh 
    (79) compare-and-clears the token, clears Busy, and the epilogue runs (Schedule → Auto → Finish →
    Finalize → ResolveAvailable) — the pipeline continues exactly where it paused.
 
+## Interaction wait (Busy subtype + timeout)
+
+An author steers the client by declaring `interaction` on a state with `subType: 5` (Busy) and then
+waits for an outside trigger — usually an `updateData` whose data opens an automatic transition. The
+instance rests **Busy** there by design (`ResolveAvailableStep` never resolves a Busy subtype), and
+nobody owns that Busy. `State.IsInteractionWait` names this shape. Two paths leave it:
+
+- **The trigger arrives.** `updateData` is never refused on Busy. When its data satisfies an automatic
+  transition, the continuation handoff reserves the instance and, finding it Busy with no live owner,
+  takes it over and runs the transition. An **armed** timer is not an owner — only a timer whose time
+  has come (`InstanceJob.IsLiveTransitionOwner`); counting a far-off timeout as the owner used to drop
+  the continuation (`Instance:100031`) and leave the instance waiting.
+- **The trigger never arrives.** The state's scheduled transition fires, skips the Busy pre-check and
+  takes the parked Busy over (`TransitionPipeline`, log `ScheduledTransitionTookOverInteractionWait`).
+  It is refused as before when the Busy has a live owner (another transition's job), while a
+  long-poll acknowledge is pending (`IsAwaitingLongPollAck` — this state's timers are armed only after
+  the resume anyway), or when an open SubFlow holds the instance.
+
+Only the timer qualifies — the inbound trigger must be `Scheduled`; a client request in the same state
+is still refused. A Busy-subtype state **without** `interaction` keeps the old rule: its timer is
+refused as busy.
+
 ## SubFlow chain (nested / cross-domain)
 
 When the entered terminate state belongs to a **subflow**, the instance that pauses and arms

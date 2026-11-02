@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -19,8 +20,11 @@ using BBT.Workflow.Execution.Services;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Instances.Events;
 using BBT.Workflow.Logging;
+using BBT.Workflow.Shared;
 using BBT.Workflow.SubFlow;
+using BBT.Workflow.SubFlow.Headers;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Moq;
 using Shouldly;
@@ -653,7 +657,168 @@ public sealed class SubflowFaultServiceTests
         return clone;
     }
 
-    private SubflowFaultService CreateService()
+    [Theory]
+    [InlineData(false, new string[0])]
+    [InlineData(true, new[] { "role", "sub" })]
+    public async Task FaultAsync_ResumeHeaders_FollowApplyToResume(bool applyToResume, string[] expectedKeys)
+    {
+        var parentInstance = CreateParentInstance(out var subInstanceId);
+        var parentWorkflow = CreateParentWorkflow(
+            ErrorBoundary.Builder().OnError(ErrorAction.Ignore).Build());
+        var input = CreateInput(parentInstance.Id, subInstanceId, CreateJsonElement("""{"result":404}""")) with
+        {
+            CarriedHeaders = new Dictionary<string, string?>
+            {
+                ["role"] = "approver", ["sub"] = "u1", ["authorization"] = "Bearer forged"
+            }
+        };
+
+        var captured = SetupCapturingResume(parentInstance, parentWorkflow);
+
+        await CreateService(CreatePolicy(applyToResume)).FaultAsync(input, CancellationToken.None);
+
+        captured.Value.ShouldNotBeNull();
+        captured.Value!.Actor.ShouldBe(ExecutionActor.System);
+        captured.Value.Headers.Keys.OrderBy(k => k).ShouldBe(expectedKeys.OrderBy(k => k));
+    }
+
+    [Fact]
+    public async Task FaultAsync_NotifyBoundaryTransition_GetsAppliedHeaders()
+    {
+        var parentInstance = CreateParentInstance(out var subInstanceId);
+        var parentWorkflow = CreateParentWorkflow(
+            ErrorBoundary.Builder().OnError(ErrorAction.Notify, transition: "error-fallback").Build());
+        var input = CreateInput(parentInstance.Id, subInstanceId, CreateJsonElement("""{"result":404}""")) with
+        {
+            CarriedHeaders = new Dictionary<string, string?> { ["role"] = "approver" }
+        };
+
+        var captured = SetupCapturingResume(parentInstance, parentWorkflow);
+
+        await CreateService(CreatePolicy(applyToResume: true)).FaultAsync(input, CancellationToken.None);
+
+        captured.Value!.TransitionKey.ShouldBe("error-fallback");
+        captured.Value.Headers.Keys.ShouldBe(new[] { "role" });
+    }
+
+    [Fact]
+    public async Task FaultAsync_NullCarriedHeaders_ResumesWithEmptyHeaders()
+    {
+        var parentInstance = CreateParentInstance(out var subInstanceId);
+        var parentWorkflow = CreateParentWorkflow(
+            ErrorBoundary.Builder().OnError(ErrorAction.Ignore).Build());
+        var input = CreateInput(parentInstance.Id, subInstanceId, CreateJsonElement("""{"result":404}"""));
+
+        var captured = SetupCapturingResume(parentInstance, parentWorkflow);
+
+        await CreateService(CreatePolicy(applyToResume: true)).FaultAsync(input, CancellationToken.None);
+
+        captured.Value!.Headers.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task FaultAsync_PassesCarriedHeadersToOutputMapping()
+    {
+        var parentInstance = CreateParentInstance(out var subInstanceId);
+        var parentWorkflow = CreateParentWorkflow(
+            ErrorBoundary.Builder().OnError(ErrorAction.Ignore).Build());
+        var carried = new Dictionary<string, string?> { ["sub"] = "u1" };
+        var input = CreateInput(parentInstance.Id, subInstanceId, CreateJsonElement("""{"result":404}""")) with
+        {
+            CarriedHeaders = carried
+        };
+        SetupCapturingResume(parentInstance, parentWorkflow);
+        _outputMappingService
+            .Setup(x => x.ApplyAsync(
+                It.IsAny<Instance>(), It.IsAny<Definitions.Workflow>(), It.IsAny<string>(),
+                It.IsAny<JsonElement?>(), It.IsAny<CancellationToken>(),
+                It.IsAny<IReadOnlyDictionary<string, string?>?>()))
+            .ReturnsAsync(Result.Ok());
+
+        await CreateService(CreatePolicy(applyToResume: false)).FaultAsync(input, CancellationToken.None);
+
+        _outputMappingService.Verify(x => x.ApplyAsync(
+            parentInstance, parentWorkflow, It.IsAny<string>(), It.IsAny<JsonElement?>(),
+            It.IsAny<CancellationToken>(), carried), Times.Once);
+    }
+
+    private StrongBox<WorkflowExecutionContext?> SetupCapturingResume(
+        Instance parentInstance, Definitions.Workflow parentWorkflow)
+    {
+        var box = new StrongBox<WorkflowExecutionContext?>();
+        SetupParent(parentInstance, parentWorkflow);
+        _workflowExecutionService
+            .Setup(x => x.ExecuteTransitionAsync(It.IsAny<WorkflowExecutionContext>(), It.IsAny<CancellationToken>()))
+            .Callback<WorkflowExecutionContext, CancellationToken>((c, _) => box.Value = c)
+            .ReturnsAsync(Result<TransitionOutput>.Ok(new TransitionOutput
+            {
+                Id = parentInstance.Id,
+                Status = InstanceStatus.Active
+            }));
+        return box;
+    }
+
+
+    [Theory]
+    [InlineData(true, new[] { "sub" })]
+    [InlineData(false, null)]
+    public async Task FaultAsync_ParentFaultCascade_RefiltersCarriedHeadersThroughLocalPolicy(
+        bool emit, string[]? expectedKeys)
+    {
+        var parentInstance = CreateParentInstance(out var subInstanceId);
+        MakeSubFlowChild(parentInstance);
+        SetupParentInstance(parentInstance);
+        _instanceRepository
+            .Setup(x => x.UpdateAsync(parentInstance, true, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(parentInstance);
+        // Parent workflow definition cannot be loaded: the parent faults and the error climbs upward.
+        _componentCacheStore
+            .Setup(x => x.GetFlowAsync("bank", "parent-flow", "1.0.0", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result<Definitions.Workflow>.Fail(
+                Error.NotFound(WorkflowErrorCodes.NotFoundWorkflow, "not found", "parent-flow")));
+        var input = CreateInput(parentInstance.Id, subInstanceId, CreateJsonElement("""{"childStatus":"Faulted"}"""))
+            with { CarriedHeaders = ForgedHeaders() };
+
+        await CreateService(CreateEmitPolicy(emit)).FaultAsync(input, CancellationToken.None);
+
+        var forwarded = GrandparentHeaders(parentInstance);
+        if (expectedKeys is null)
+        {
+            forwarded.ShouldBeNull();
+        }
+        else
+        {
+            forwarded.ShouldNotBeNull();
+            forwarded.Keys.ShouldBe(expectedKeys);
+        }
+    }
+
+    private static void MakeSubFlowChild(Instance instance)
+    {
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.FlowType] = WorkflowType.SubFlow.Code;
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.Id] = Guid.NewGuid().ToString();
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.Domain] = "bank";
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.Flow] = "grandparent-flow";
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.Version] = "1.0.0";
+    }
+
+    private static Dictionary<string, string?> ForgedHeaders() => new()
+    {
+        ["authorization"] = "Bearer forged", ["sub"] = "u1"
+    };
+
+    private static CarriedHeaderPolicy CreateEmitPolicy(bool emit) => new(
+        Options.Create(new SubFlowCarriedHeadersOptions { Emit = emit }),
+        NullLogger<CarriedHeaderPolicy>.Instance);
+
+    private static Dictionary<string, string?>? GrandparentHeaders(Instance parent) =>
+        parent.GetDomainEvents().Select(e => e.Event).OfType<InstanceSubFaultedEvent>().Single().CarriedHeaders;
+
+    private static CarriedHeaderPolicy CreatePolicy(bool applyToResume) => new(
+        Options.Create(new SubFlowCarriedHeadersOptions { ApplyToResume = applyToResume }),
+        NullLogger<CarriedHeaderPolicy>.Instance);
+
+    private SubflowFaultService CreateService(ICarriedHeaderPolicy? policy = null)
     {
         var resolver = new ErrorBoundaryResolver(Mock.Of<ILogger<ErrorBoundaryResolver>>());
         var executor = new ErrorActionExecutor(Mock.Of<ILogger<ErrorActionExecutor>>());
@@ -670,7 +835,8 @@ public sealed class SubflowFaultServiceTests
             _terminalGuard.Object,
             _eventBus.Object,
             Options.Create(new WorkflowExecutionOptions()),
-            _logger.Object);
+            _logger.Object,
+            carriedHeaderPolicy: policy);
     }
 
     private void VerifyTerminalConflictLogged(string existingOutcome)

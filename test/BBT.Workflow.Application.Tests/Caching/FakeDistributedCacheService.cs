@@ -18,7 +18,13 @@ namespace BBT.Workflow.Caching;
 /// express that. Values are serialized on write and deserialized on read so envelope round-tripping
 /// (which is why <see cref="CacheEnvelope{T}"/> exists at all) is exercised rather than bypassed.
 /// </remarks>
-public sealed class FakeDistributedCacheService(TimeProvider timeProvider) : IDistributedCacheService
+/// <param name="timeProvider">Clock that decides expiry.</param>
+/// <param name="serializerOptions">
+/// Serializer options for the round trip; null keeps the System.Text.Json defaults. Pass
+/// <see cref="JsonSerializerDefaults.Web"/> to round-trip the way the Dapr client does in production.
+/// </param>
+public sealed class FakeDistributedCacheService(TimeProvider timeProvider, JsonSerializerOptions? serializerOptions = null)
+    : IDistributedCacheService
 {
     private readonly ConcurrentDictionary<string, Entry> _store = new();
 
@@ -65,7 +71,7 @@ public sealed class FakeDistributedCacheService(TimeProvider timeProvider) : IDi
         if (!_store.TryGetValue(key, out var entry) || IsExpired(entry))
             return Task.FromResult<T?>(default);
 
-        return Task.FromResult(JsonSerializer.Deserialize<T>(entry.Json));
+        return Task.FromResult(JsonSerializer.Deserialize<T>(entry.Json, serializerOptions));
     }
 
     public Task SetAsync<T>(
@@ -85,7 +91,7 @@ public sealed class FakeDistributedCacheService(TimeProvider timeProvider) : IDi
         if (FailWrites?.Invoke(key) == true)
             throw new InvalidOperationException($"Simulated cache write failure for '{key}'.");
 
-        _store[key] = new Entry(JsonSerializer.Serialize(value), options?.AbsoluteExpiration);
+        _store[key] = new Entry(JsonSerializer.Serialize(value, serializerOptions), options?.AbsoluteExpiration);
         return Task.CompletedTask;
     }
 

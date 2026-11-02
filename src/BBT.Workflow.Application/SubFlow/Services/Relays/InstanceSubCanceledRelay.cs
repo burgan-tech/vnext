@@ -45,6 +45,7 @@ public sealed class InstanceSubCanceledRelay(IInstanceCommandGateway instanceCom
         EpisodeTrigger = eventData.EpisodeTrigger,
         EpisodeTransitionKey = eventData.EpisodeTransitionKey,
         EpisodeTraceRoot = eventData.EpisodeTraceRoot,
+        CarriedHeaders = eventData.CarriedHeaders,
         RearmAttempt = eventData.RearmAttempt
     };
 }

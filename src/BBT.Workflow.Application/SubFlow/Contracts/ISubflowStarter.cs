@@ -25,7 +25,10 @@ public interface ISubflowStarter
     /// <param name="context">The script context containing execution data and headers.</param>
     /// <param name="mode">The original request mode, retained for compatibility. Child starts always use sync=true.</param>
     /// <param name="cancellationToken">Token to monitor for cancellation requests.</param>
-    /// <returns>Result indicating success or failure of the sub-flow initiation.</returns>
+    /// <returns>
+    /// Result indicating success or failure of the sub-flow initiation; on success the value is the
+    /// child's resolved flow version, or <c>null</c> when the child runtime did not report one.
+    /// </returns>
     /// <remarks>
     /// <para>
     /// SubFlow (Type: "S"): Creates a separate instance and blocks the parent workflow until completion. 
@@ -36,7 +39,7 @@ public interface ISubflowStarter
     /// The parent workflow can continue immediately after starting the SubProcess.
     /// </para>
     /// </remarks>
-    Task<Result> StartAsync(
+    Task<Result<string?>> StartAsync(
         Definitions.Workflow workflow,
         Instance parentInstance,
         State targetState,

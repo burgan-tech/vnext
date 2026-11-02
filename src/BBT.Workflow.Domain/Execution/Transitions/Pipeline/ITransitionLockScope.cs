@@ -42,6 +42,19 @@ public readonly record struct LockAcquireWait(int MaxAttempts, TimeSpan Delay)
     /// Single attempt, no waiting. Preserves the original fail-fast semantics.
     /// </summary>
     public static LockAcquireWait None => new(1, TimeSpan.Zero);
+
+    /// <summary>
+    /// Asked after every backoff sleep, before the next attempt: <c>false</c> abandons the wait and
+    /// the factory reports the lock as not acquired without trying again.
+    /// <para>
+    /// For a waiter whose holder is usually the other delivery of the same signal (post-commit relay
+    /// vs. its Inbox backup): once the holder has committed, the waiter has nothing left to do, and
+    /// re-acquiring the lock only to load the aggregate and discover that is the cost this hook
+    /// removes. The caller distinguishes "abandoned" from "exhausted" by repeating the same check
+    /// after a not-acquired answer. Null keeps the plain bounded wait.
+    /// </para>
+    /// </summary>
+    public Func<CancellationToken, ValueTask<bool>>? KeepWaiting { get; init; }
 }
 
 /// <summary>

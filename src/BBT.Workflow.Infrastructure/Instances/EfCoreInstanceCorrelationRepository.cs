@@ -112,6 +112,22 @@ public sealed class EfCoreInstanceCorrelationRepository(
     }
 
     /// <inheritdoc />
+    public async Task<bool> TryPinSubFlowVersionAsync(
+        Guid correlationId,
+        string resolvedVersion,
+        CancellationToken cancellationToken = default)
+    {
+        var affected = await (await GetDbSetAsync())
+            .Where(c => c.Id == correlationId)
+            .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(c => c.SubFlowVersion, resolvedVersion)
+                    .SetProperty(c => c.ModifiedAt, DateTime.UtcNow),
+                cancellationToken);
+
+        return affected == 1;
+    }
+
+    /// <inheritdoc />
     public async Task<bool> TryMarkSettledAsync(
         Guid subInstanceId,
         SubItemTerminalOutcome outcome,

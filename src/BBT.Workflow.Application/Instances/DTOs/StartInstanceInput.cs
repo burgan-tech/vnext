@@ -103,6 +103,11 @@ public sealed class CreateInstanceInput: IHasExtraProperties
 
 public sealed class StartInstanceOutput : InstanceOutputBase
 {
+    /// <summary>
+    /// The full flow version the runtime resolved for this instance — a floating request ("1.0")
+    /// answers with the concrete version it landed on. Null from a runtime that predates the field.
+    /// </summary>
+    public string? FlowVersion { get; set; }
 }
 
 /// <summary>

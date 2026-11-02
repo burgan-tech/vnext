@@ -248,7 +248,8 @@ public sealed class TransitionContextSpanTests : IDisposable
         var sut = new TransitionValidationService(
             CreatePolicyWithNoSpecifications(),
             Substitute.For<IJsonSchemaValidator>(),
-            Substitute.For<IComponentCacheStore>());
+            Substitute.For<IComponentCacheStore>(),
+            Substitute.For<BBT.Workflow.Versions.IVersionRegistryWriteGuard>());
 
         var context = CreateValidTransitionContext();
 
@@ -286,7 +287,8 @@ public sealed class TransitionContextSpanTests : IDisposable
         var sut = new TransitionValidationService(
             CreatePolicyWithNoSpecifications(),
             schemaValidator,
-            componentCacheStore);
+            componentCacheStore,
+            Substitute.For<BBT.Workflow.Versions.IVersionRegistryWriteGuard>());
 
         var context = CreateValidTransitionContext();
         typeof(Transition).GetProperty(nameof(Transition.Schema))!.SetValue(context.Transition, schemaRef);

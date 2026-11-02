@@ -80,6 +80,18 @@ public sealed class TransitionLockScopeFactory(
             logger.TransitionLockRetryScheduled(lockKey, attempt, attempts, (int)delay.TotalMilliseconds);
 
             await Task.Delay(delay, cancellationToken);
+
+            // Asked after the sleep, not before it: right after a failed attempt the holder is still
+            // inside its critical section, so the answer is only informative once it has had time
+            // to commit. Abandoning skips the remaining attempts AND the aggregate load a late
+            // acquisition would have paid only to find the work already done.
+            if (wait.KeepWaiting is not null && !await wait.KeepWaiting(cancellationToken))
+            {
+                logger.TransitionLockWaitAbandoned(lockKey, attempt, attempts);
+                activity?.SetTag(TelemetryConstants.TagNames.LockWaitAbandoned, true);
+                activity?.SetTag(TelemetryConstants.TagNames.LockAcquired, false);
+                return TransitionLockScope.NotAcquired(lockKey);
+            }
         }
 
         logger.InstanceLockFailed(lockKey);

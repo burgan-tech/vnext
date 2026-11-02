@@ -119,7 +119,9 @@ public sealed class GetInstanceTaskExecutor : TriggerTaskExecutorBase<GetInstanc
                 Workflow = task.TriggerFlow,
                 Instance = instanceIdentifier,
                 Extensions = task.Extensions,
-                Headers = headers
+                Headers = headers,
+                // Row security (vnext#1107) applies to the GetInstance task exactly as to the GET endpoint.
+                ApplyRowSecurity = true
             };
 
             ConditionalResult<GetInstanceOutput> result;

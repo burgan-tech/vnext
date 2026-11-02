@@ -153,7 +153,11 @@ The plan is built from `ExcludedStepOrders` alone (`TransitionExecutor.BuildExec
   Swap runs after schema validation, before persist/enqueue; a forwarded request is swapped at the leaf; External
   bodies are reference-checked against `LatestData`, Trusted (runtime-produced) ones are not. Codes
   `Instance:100047` (503) / `100048` (400) / `100049` (404). Reads: `functions/file` (`queryRoles` + `x-roles`),
-  `internal/file` has no auth. Full guide: `docs/runtime/file-storage.md`.
+  `internal/file` has no auth; every read is verified against `size`+`eTag` (never serve unverified bytes).
+- Swap keeps the node's non-handle members. Every store is its Dapr binding, never a store SDK; reads recover
+  chunked frames a Dapr binding wrote. `x-storage.transport` `inline|stream|any` gates `POST …/workflows/{flow}/files`
+  (staged, claimed once). Scripts: stream carve-outs + member bans live in `BannedApiAnalyzer` only.
+  Full guide: `docs/runtime/file-storage.md`.
 
 ## Task / Action History (system functions)
 
@@ -238,6 +242,9 @@ The plan is built from `ExcludedStepOrders` alone (`TransitionExecutor.BuildExec
 - The duplicate-active-job guard lives in that critical section; no partial unique index can replace it.
 - cancel/exit/timeout flip Busy at the accept; `updateData` (`Unconditional`) takes NO lock and NO
   duplicate-job guard. Do not bring back `{LockKey}:enqueue` or per-kind lock keys.
+- An interaction wait (`State.IsInteractionWait`: Busy subtype + `interaction`) parks Busy with no owner:
+  updateData's continuation and the state's firing timer take it over. An armed (not yet due) timer is
+  never an owner (`InstanceJob.IsLiveTransitionOwner`). Full guide: `docs/domain/long-poll-termination.md`.
 - Full guide: `docs/runtime/status-locking.md`.
 
 ## Multi-domain hosting (`APP_DOMAINS`)
@@ -251,6 +258,17 @@ The plan is built from `ExcludedStepOrders` alone (`TransitionExecutor.BuildExec
 - `ConnectionStrings:Domains:<d>` gives a co-hosted domain its own database (default names, own `sys_queues`).
   One unit-of-work root = one database: cross-database local calls go through `CoHostedDatabaseBoundary`.
 - Full guide: `docs/runtime/multi-domain-hosting.md`.
+
+## Row Security (`attributes.rowSecurity`)
+
+- A flow with `rowSecurity` is deny by default (no `default`); rules are role-keyed, ORed, ANDed with the caller's filter. Rule set = `GetFlowAsync(domain, workflow, null)` (default version else latest); no `rowSecurity` (or no published definition) reads unfiltered; any other lookup failure fails the read with that error for every flow (tag `denied-flow-load`, warning 20509).
+- One compiler: the predicate is ANDed at the repository merge point; GET probes with `id AND predicate` before the ETag. Parameter failures never widen.
+- Applied by the public list + single GET endpoints and the GetInstances / GetInstance tasks (same- and cross-domain), via opt-in `ApplyRowSecurity` (`[JsonIgnore]`). GetInstanceData, view resolution, transitions and state/data/view/schema/master/history/`internal/*` read unfiltered — a documented known gap, not a boundary.
+- Full guide: `docs/domain/row-security.md`.
+
+## Flow default version
+
+- A flow's `sys-version-registry` pointer caps floating version requests; `sys-*` and full versions bypass it, a bad pointer fails closed. Full guide: `docs/runtime/flow-default-version.md`.
 
 ## Status / State / Type Semantics
 
@@ -275,6 +293,8 @@ Enum values (Instance Status, State Types, State Sub Types, Trigger Types): `AGE
 - Runtime child calls force `sync=true` and set `SuppressResponseEnrichment` (identity-only answer) —
   never read attributes off a sub-start or forward response.
 - Completion window: child terminal while parent correlation open ⇒ state function shows parent transitions.
+- Terminal events carry the settling request's headers (deny floor, `ApplyToResume` default on):
+  `docs/runtime/event-publish-modes.md#carried-headers-on-sub-item-terminal-events`.
 - Full guide: `docs/architecture/subflow-execution.md`.
 - **Initial state is optional:** with none declared the instance is born in the implicit `$start` state and
   `startTransition.target` (mandatory, a declared state key) decides the entry; see
@@ -291,7 +311,10 @@ Enum values (Instance Status, State Types, State Sub Types, Trigger Types): `AGE
 ### `sub:state-changed` and `SubflowStateService`
 
 - `Instance.ChangeState` only ARMS the event; `Instance.PublishPendingSubStateChange()` publishes it
-  once per episode at the rest point. Excluded: open SubFlow correlation, `Faulted`.
+  once per episode at the rest point. Excluded: open SubFlow correlation, `Faulted`. A terminal
+  `Completed` notification is published but never applied — relay skips it, the receiver drops it
+  (`SubStateTerminalStatus`); the terminal event owns it
+  (`docs/runtime/event-publish-modes.md#substate-changed-is-emitted-once-per-activation-episode`).
 - Never remove the explicit flush at creation in `InstanceCommandAppService` — it is the parent's only
   notification when the start transition targets the initial state.
 - `SubflowStateService` takes the per-sub-item lock; equal `ChangedAt` is re-applied, only older rejected.

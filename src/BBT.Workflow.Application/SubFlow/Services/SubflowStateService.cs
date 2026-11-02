@@ -23,6 +23,9 @@ public sealed class SubflowStateService(
 {
     // Its own, short backoff — not the terminal paths' SubItemTerminalLockRetry. See
     // WorkflowExecutionOptions.SubItemStateLockRetry for the measurement behind it.
+    // Span tag recording how a delivery ended (applied, dropped and why, not found).
+    private const string ResultTag = "vnext.subflow.result";
+
     private LockAcquireWait StateLockWait => executionOptions.Value.SubItemStateLockRetry.ToLockAcquireWait();
 
     /// <inheritdoc />
@@ -98,6 +101,17 @@ public sealed class SubflowStateService(
         // terminal paths', so there is no lock-order inversion between them.
         var lockKey = $"vnext:{input.Domain}:{input.Flow}:{input.ParentInstanceId}:sub:{input.SubInstanceId:N}";
 
+        // The child's terminal Completed status belongs to the terminal event raised in the same
+        // commit, whose settlement records the final state and re-derives this parent's projection.
+        // Applying it here is a no-op after that settlement and a wrong projection before it — on
+        // either delivery path. Decided from the input alone: no read, no lock.
+        if (SubStateTerminalStatus.IsSupersededByTerminalEvent(input.NewStatus))
+        {
+            logger.SubFlowStateChangeTerminalSuperseded(input.SubInstanceId, input.ParentInstanceId, input.NewStatus!);
+            activity?.SetTag(ResultTag, SubStateTerminalStatus.SupersededReason);
+            return null;
+        }
+
         // The backup delivery of a notification the relay already committed is the usual contender
         // for this lock, and applying it changes nothing. Recognise that from the committed rows
         // first, without the lock. Relay deliveries skip this read: they are almost always first.
@@ -119,7 +133,7 @@ public sealed class SubflowStateService(
                 return null;
 
             logger.SubFlowStateChangeLockNotAcquired(lockKey, input.SubInstanceId);
-            activity?.SetTag("vnext.subflow.result", "lock_not_acquired");
+            activity?.SetTag(ResultTag, "lock_not_acquired");
             throw new SubflowTerminalLockNotAcquiredException(
                 input.Domain,
                 input.Flow,
@@ -147,7 +161,7 @@ public sealed class SubflowStateService(
         if (parentInstance == null)
         {
             logger.SubFlowStateChangeParentNotFound(input.ParentInstanceId, input.SubInstanceId);
-            activity?.SetTag("vnext.subflow.result", "parent_not_found");
+            activity?.SetTag(ResultTag, "parent_not_found");
             return null;
         }
 
@@ -155,7 +169,7 @@ public sealed class SubflowStateService(
         if (correlation == null)
         {
             logger.SubFlowStateChangeCorrelationNotFound(input.SubInstanceId, input.ParentInstanceId);
-            activity?.SetTag("vnext.subflow.result", "correlation_not_found");
+            activity?.SetTag(ResultTag, "correlation_not_found");
             return null;
         }
 
@@ -188,7 +202,7 @@ public sealed class SubflowStateService(
                 correlation.SubFlowStateChangedAt ?? input.ChangedAt,
                 correlation.SubFlowCurrentState,
                 input.NewState);
-            activity?.SetTag("vnext.subflow.result", "out_of_order");
+            activity?.SetTag(ResultTag, "out_of_order");
             return null;
         }
 
@@ -222,10 +236,13 @@ public sealed class SubflowStateService(
     /// <summary>
     /// Whether the committed rows already reflect this notification, read without the lock. True for
     /// (a) a stale delivery — the same ordering predicate as the locked path; safe unlocked because
-    /// the watermark only moves forward, under the lock — and (b) an exact duplicate whose values the
-    /// parent and its correlation already carry, which the locked path would re-apply as a no-op.
-    /// Anything else (parent missing, correlation closed, projection different) returns false and
-    /// takes the locked path, which owns every write and every not-found answer.
+    /// the watermark only moves forward, under the lock — (b) an exact duplicate whose values the
+    /// parent and its correlation already carry, which the locked path would re-apply as a no-op, and
+    /// (c) a correlation a terminal settlement has already closed, which the locked path would answer
+    /// with "not found" and no write — only a SubFlow child publishes on this channel, so the closed
+    /// row is always that child's own. Anything else (parent missing, no correlation at all,
+    /// projection different) returns false and takes the locked path, which owns every write and
+    /// every genuine not-found answer.
     /// </summary>
     private async Task<bool> IsAlreadyAppliedAsync(
         SubFlowStateChangedInput input,
@@ -234,8 +251,31 @@ public sealed class SubflowStateService(
     {
         var probe = await instanceRepository.ProbeSubflowStateAsync(
             input.ParentInstanceId, input.SubInstanceId, cancellationToken);
-        if (probe is not { HasOpenCorrelation: true })
+        if (probe is null)
             return false;
+
+        var reason = AlreadyAppliedReason(input, probe);
+        if (reason is null)
+            return false;
+
+        logger.SubFlowStateChangeBackupAlreadyApplied(input.SubInstanceId, input.ParentInstanceId, reason);
+        activity?.SetTag(ResultTag, $"backup_{reason}");
+        return true;
+    }
+
+    /// <summary>
+    /// Why the committed rows already reflect <paramref name="input"/> — <c>correlation_closed</c>,
+    /// <c>out_of_order</c> or <c>duplicate</c> — or <c>null</c> when the locked path must decide.
+    /// </summary>
+    private static string? AlreadyAppliedReason(SubFlowStateChangedInput input, SubflowStateProbe probe)
+    {
+        // A late backup for a child whose terminal settlement already ran: the same "nothing to
+        // write" the locked path would reach, minus the lock it would contend for with that
+        // settlement. A settlement reverted afterwards re-publishes its terminal event, so
+        // nothing this drop skips is lost (the locked path drops it identically). No correlation at
+        // all stays the locked path's genuine not-found answer.
+        if (!probe.HasOpenCorrelation)
+            return probe.HasClosedCorrelation ? "correlation_closed" : null;
 
         var bothSequenced = input.NotificationSeq > 0 && probe.SubFlowNotificationSeq > 0;
         var eventStamp = TruncateToMicroseconds(input.ChangedAt);
@@ -244,38 +284,26 @@ public sealed class SubflowStateService(
         var stale = bothSequenced
             ? input.NotificationSeq < probe.SubFlowNotificationSeq
             : storedStamp.HasValue && eventStamp < storedStamp.Value;
-
-        string? reason = null;
         if (stale)
-        {
-            reason = "out_of_order";
-        }
-        else
-        {
-            var sameNotification = bothSequenced
-                ? input.NotificationSeq == probe.SubFlowNotificationSeq
-                : storedStamp == eventStamp;
+            return "out_of_order";
 
-            // Mirrors what the locked path would write: the correlation's recorded state, and
-            // PropagateEffectiveStateToParent's own "nothing moved" test on the parent.
-            var projected =
-                probe.SubFlowCurrentState == input.NewState &&
-                (string.IsNullOrWhiteSpace(probe.EffectiveState) ? string.Empty : probe.EffectiveState) == input.NewState &&
-                probe.EffectiveStateType == input.NewStateType &&
-                probe.EffectiveStateSubType == input.NewStateSubType &&
-                (InstanceStatus.TryFromCode(input.NewStatus) is not { } status || probe.EffectiveStatus.Equals(status));
+        var sameNotification = bothSequenced
+            ? input.NotificationSeq == probe.SubFlowNotificationSeq
+            : storedStamp == eventStamp;
 
-            if (sameNotification && projected)
-                reason = "duplicate";
-        }
-
-        if (reason is null)
-            return false;
-
-        logger.SubFlowStateChangeBackupAlreadyApplied(input.SubInstanceId, input.ParentInstanceId, reason);
-        activity?.SetTag("vnext.subflow.result", $"backup_{reason}");
-        return true;
+        return sameNotification && IsProjected(input, probe) ? "duplicate" : null;
     }
+
+    /// <summary>
+    /// Mirrors what the locked path would write: the correlation's recorded state, and
+    /// PropagateEffectiveStateToParent's own "nothing moved" test on the parent.
+    /// </summary>
+    private static bool IsProjected(SubFlowStateChangedInput input, SubflowStateProbe probe) =>
+        probe.SubFlowCurrentState == input.NewState &&
+        (string.IsNullOrWhiteSpace(probe.EffectiveState) ? string.Empty : probe.EffectiveState) == input.NewState &&
+        probe.EffectiveStateType == input.NewStateType &&
+        probe.EffectiveStateSubType == input.NewStateSubType &&
+        (InstanceStatus.TryFromCode(input.NewStatus) is not { } status || probe.EffectiveStatus.Equals(status));
 
     // Truncates a DateTime to microsecond precision (removes sub-microsecond ticks).
     // PostgreSQL stores timestamps with microsecond precision; .NET DateTime uses 100ns ticks.

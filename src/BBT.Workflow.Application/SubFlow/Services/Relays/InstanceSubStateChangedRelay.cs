@@ -33,10 +33,16 @@ public sealed class InstanceSubStateChangedRelay(IInstanceCommandGateway instanc
 
     /// <inheritdoc />
     /// <remarks>
-    /// The event carries no <c>Sync</c> flag, so that tag stays unwritten for this channel.
+    /// The event carries no <c>Sync</c> flag, so that tag stays unwritten for this channel. A
+    /// notification of the child's terminal <c>Completed</c> status is not relayed: the terminal
+    /// event raised in the same commit is relayed just before it and owns that transition
+    /// (<see cref="SubStateTerminalStatus"/>). The event itself still rides the outbox as a fact.
     /// </remarks>
     public PostCommitRelayTarget Describe(InstanceSubStateChangedEvent @event)
-        => new(@event.Domain, @event.ParentInstanceId, @event.SubInstanceId, Sync: null, RemoteRelayTimeout);
+        => new(@event.Domain, @event.ParentInstanceId, @event.SubInstanceId, Sync: null, RemoteRelayTimeout,
+            SkipReason: SubStateTerminalStatus.IsSupersededByTerminalEvent(@event.NewStatus)
+                ? SubStateTerminalStatus.SupersededReason
+                : null);
 
     /// <inheritdoc />
     public Task<Result> RelayAsync(

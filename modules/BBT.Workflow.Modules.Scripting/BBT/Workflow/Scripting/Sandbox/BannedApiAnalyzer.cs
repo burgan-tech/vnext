@@ -71,6 +71,86 @@ public static class BannedApiAnalyzer
     };
 
     /// <summary>
+    /// Type-level carve-outs under a banned namespace: in-memory stream primitives scripts need to process a file's
+    /// bytes (vnext-client-sdk-core#142-A) — none of them opens a path, a handle or a socket on its own. The members of
+    /// these types that DO open a path are listed in <see cref="IsBannedMember"/> (<c>StreamReader(string path)</c>,
+    /// <c>StreamWriter(string path)</c>). <c>File</c>, <c>FileStream</c>, <c>Directory</c>, <c>Path</c>,
+    /// <c>FileInfo</c>, pipes, memory-mapped files, <c>UnmanagedMemoryStream</c> and
+    /// <c>System.IO.Compression.ZipFile</c> stay banned. The compression types additionally need their assembly
+    /// (<c>System.IO.Compression</c>) in the allow-list or the mapping's grant.
+    /// </summary>
+    public static readonly IReadOnlySet<string> MandatoryAllowedTypes = new HashSet<string>(System.StringComparer.Ordinal)
+    {
+        "System.IO.Stream",
+        "System.IO.MemoryStream",
+        "System.IO.BufferedStream",
+        "System.IO.BinaryReader",
+        "System.IO.BinaryWriter",
+        "System.IO.TextReader",
+        "System.IO.TextWriter",
+        "System.IO.StringReader",
+        "System.IO.StringWriter",
+        "System.IO.StreamReader",
+        "System.IO.StreamWriter",
+        "System.IO.SeekOrigin",
+        "System.IO.IOException",
+        "System.IO.EndOfStreamException",
+        "System.IO.InvalidDataException",
+        "System.IO.Compression.GZipStream",
+        "System.IO.Compression.DeflateStream",
+        "System.IO.Compression.BrotliStream",
+        "System.IO.Compression.ZLibStream",
+        "System.IO.Compression.CompressionLevel",
+        "System.IO.Compression.CompressionMode",
+        "System.IO.Compression.ZipArchive",
+        "System.IO.Compression.ZipArchiveEntry",
+        "System.IO.Compression.ZipArchiveMode",
+    };
+
+    /// <summary>
+    /// Member-level bans that apply whatever the namespace: the routes from an allowed type to the file system, the
+    /// process, or a banned type obtained by name — each one would otherwise let a script reach what the namespace
+    /// ban forbids (a reflection object can be invoked through <c>dynamic</c>, which leaves no symbol behind).
+    /// Measured against every shipped domain package before banning (2026-10-31): none of these is used. Kept on
+    /// purpose because shipped packages use them: <c>Environment.GetEnvironmentVariable</c> (vnext-sys-flow),
+    /// <c>Type.GetProperty</c>, <c>Type.Assembly</c>, <c>AppDomain</c>, <c>AssemblyLoadContext</c> (morph-idm).
+    /// </summary>
+    internal static string? IsBannedMember(ISymbol? symbol)
+    {
+        // Cheap name test first: the analyzer binds every name in the script, and a display string is not free.
+        if (symbol?.ContainingType is not { Name: "StreamReader" or "StreamWriter" or "Activator" or "Type" or "Environment" } containing)
+            return null;
+        var type = containing.OriginalDefinition.ToDisplayString();
+        switch (type)
+        {
+            // A path-taking constructor of an allowed stream type opens the file.
+            case "System.IO.StreamReader" or "System.IO.StreamWriter"
+                when symbol is IMethodSymbol { MethodKind: MethodKind.Constructor } ctor
+                     && ctor.Parameters.Any(p => p.Name == "path"):
+                return $"{type}(string path)";
+
+            // Any type, an allowed one included, instantiated by Type object; CreateInstance<T>() names T and is checked.
+            case "System.Activator" when symbol is IMethodSymbol { IsGenericMethod: false }:
+                return $"System.Activator.{symbol.Name}";
+
+            // A type by name, and the reflection objects that invoke members through dynamic.
+            case "System.Type" when symbol.Name is "GetType" && symbol.IsStatic:
+            case "System.Type" when symbol.Name is "GetTypeFromProgID" or "GetTypeFromCLSID" or "InvokeMember"
+                or "GetMethod" or "GetMethods" or "GetConstructor" or "GetConstructors" or "GetMember" or "GetMembers"
+                or "GetField" or "GetFields" or "GetEvent" or "GetEvents" or "FindMembers" or "GetDefaultMembers"
+                or "TypeInitializer":
+                return $"System.Type.{symbol.Name}";
+
+            // Process termination and environment writes (reads stay allowed: shipped system flows use them).
+            case "System.Environment" when symbol.Name is "Exit" or "FailFast" or "SetEnvironmentVariable":
+                return $"System.Environment.{symbol.Name}";
+
+            default:
+                return null;
+        }
+    }
+
+    /// <summary>
     /// Analyzes the compilation and returns the list of human-readable sandbox violations
     /// (empty when the script is clean).
     /// </summary>
@@ -110,43 +190,23 @@ public static class BannedApiAnalyzer
             // One walk over the tree covers all three checks.
             foreach (var node in root.DescendantNodes())
             {
-                switch (node)
+                // 1. Banned namespace usage — a banned symbol is always reached through a name
+                // (simple or generic), a member access, an object creation, or an attribute;
+                // every other expression kind only combines values those nodes already produced.
+                if (node is SimpleNameSyntax or MemberAccessExpressionSyntax or BaseObjectCreationExpressionSyntax
+                    or AttributeSyntax)
                 {
-                    // 1. Banned namespace usage — a banned symbol is always reached through a name
-                    // (simple or generic), a member access, an object creation, or an attribute;
-                    // every other expression kind only combines values those nodes already produced.
-                    case SimpleNameSyntax or MemberAccessExpressionSyntax or BaseObjectCreationExpressionSyntax
-                        or AttributeSyntax:
-                    {
-                        var symbol = model.GetSymbolInfo(node).Symbol;
-                        var hit = BannedHitOf(symbol, banned, allowedCarveOuts, namespaceVerdicts);
-                        if (hit is null)
-                            break;
-
-                        // Member-level carve-outs (benign metadata reads) win over the banned
-                        // prefixes. Only evaluated after a banned hit — the ToString is not free.
-                        if (symbol is not null && MandatoryAllowedMembers.Contains(symbol.ToString()))
-                            break;
-
-                        var line = node.GetLocation().GetLineSpan().StartLinePosition.Line + 1;
-                        violations.Add(
-                            $"{Path.GetFileName(tree.FilePath)}({line}): banned namespace '{hit}' via '{symbol}'");
-                        break;
-                    }
-
-                    // 2. P/Invoke.
-                    case MethodDeclarationSyntax method:
-                    {
-                        if (method.AttributeLists.SelectMany(a => a.Attributes)
-                            .Any(a => a.Name.ToString().Contains("DllImport")))
-                        {
-                            var line = method.GetLocation().GetLineSpan().StartLinePosition.Line + 1;
-                            violations.Add(
-                                $"{Path.GetFileName(tree.FilePath)}({line}): P/Invoke (DllImport) is not allowed");
-                        }
-
-                        break;
-                    }
+                    if (NameViolation(model, node, tree, banned, allowedCarveOuts, namespaceVerdicts) is { } violation)
+                        violations.Add(violation);
+                }
+                // 2. P/Invoke.
+                else if (node is MethodDeclarationSyntax method
+                         && method.AttributeLists.SelectMany(a => a.Attributes)
+                             .Any(a => a.Name.ToString().Contains("DllImport")))
+                {
+                    var line = method.GetLocation().GetLineSpan().StartLinePosition.Line + 1;
+                    violations.Add(
+                        $"{Path.GetFileName(tree.FilePath)}({line}): P/Invoke (DllImport) is not allowed");
                 }
             }
 
@@ -159,6 +219,34 @@ public static class BannedApiAnalyzer
         }
 
         return violations.Distinct().ToList();
+    }
+
+    /// <summary>The violation a name, member access, object creation or attribute node causes, or null.</summary>
+    private static string? NameViolation(
+        SemanticModel model,
+        SyntaxNode node,
+        SyntaxTree tree,
+        List<string> banned,
+        IReadOnlyList<string> allowedCarveOuts,
+        Dictionary<INamespaceSymbol, string?> namespaceVerdicts)
+    {
+        var symbol = model.GetSymbolInfo(node).Symbol;
+        var line = node.GetLocation().GetLineSpan().StartLinePosition.Line + 1;
+
+        // Member-level bans first: they apply inside allowed namespaces and allowed types too.
+        if (IsBannedMember(symbol) is { } bannedMember)
+            return $"{Path.GetFileName(tree.FilePath)}({line}): banned member '{bannedMember}' via '{symbol}'";
+
+        var hit = BannedHitOf(symbol, banned, allowedCarveOuts, namespaceVerdicts);
+        if (hit is null)
+            return null;
+
+        // Member-level carve-outs (benign metadata reads) win over the banned
+        // prefixes. Only evaluated after a banned hit — the ToString is not free.
+        if (symbol is not null && MandatoryAllowedMembers.Contains(symbol.ToString()))
+            return null;
+
+        return $"{Path.GetFileName(tree.FilePath)}({line}): banned namespace '{hit}' via '{symbol}'";
     }
 
     /// <summary>
@@ -183,7 +271,7 @@ public static class BannedApiAnalyzer
             return null;
 
         if (namespaceVerdicts.TryGetValue(ns, out var verdict))
-            return verdict;
+            return verdict is null || IsCarvedOut(type) ? null : verdict;
 
         var name = ns.ToDisplayString();
 
@@ -192,6 +280,13 @@ public static class BannedApiAnalyzer
             : banned.FirstOrDefault(b => name == b || name.StartsWith(b + ".", System.StringComparison.Ordinal));
 
         namespaceVerdicts[ns] = verdict;
-        return verdict;
+        return verdict is null || IsCarvedOut(type) ? null : verdict;
     }
+
+    /// <summary>
+    /// A carved-out type (and its members) is allowed under a banned namespace; its own path-opening members are caught
+    /// by <see cref="IsBannedMember"/> first. Only reached on a banned-namespace hit, so the display string is rare.
+    /// </summary>
+    private static bool IsCarvedOut(ITypeSymbol type)
+        => MandatoryAllowedTypes.Contains(type.OriginalDefinition.ToDisplayString());
 }

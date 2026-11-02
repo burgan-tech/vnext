@@ -278,7 +278,8 @@ public sealed class EfCoreInstanceRepository(
         CancellationToken cancellationToken = default)
     {
         // One no-tracking row: the parent's projection columns plus the open correlation's watermark
-        // as a correlated sub-select. No includes, no row lock (plain READ COMMITTED), no write.
+        // and a closed-correlation flag as correlated sub-selects. No includes, no row lock (plain
+        // READ COMMITTED), no write.
         var dbSet = await GetDbSetAsync();
         var row = await dbSet
             .AsNoTracking()
@@ -292,7 +293,9 @@ public sealed class EfCoreInstanceRepository(
                 Correlation = i.ChildCorrelations
                     .Where(c => c.SubFlowInstanceId == subInstanceId && !c.IsCompleted)
                     .Select(c => new { c.SubFlowCurrentState, c.SubFlowNotificationSeq, c.SubFlowStateChangedAt })
-                    .FirstOrDefault()
+                    .FirstOrDefault(),
+                HasClosedCorrelation = i.ChildCorrelations
+                    .Any(c => c.SubFlowInstanceId == subInstanceId && c.IsCompleted)
             })
             .FirstOrDefaultAsync(cancellationToken);
 
@@ -307,7 +310,8 @@ public sealed class EfCoreInstanceRepository(
             row.Correlation is not null,
             row.Correlation?.SubFlowCurrentState,
             row.Correlation?.SubFlowNotificationSeq ?? 0,
-            row.Correlation?.SubFlowStateChangedAt);
+            row.Correlation?.SubFlowStateChangedAt,
+            row.HasClosedCorrelation);
     }
 
     /// <inheritdoc />
@@ -1320,6 +1324,30 @@ public sealed class EfCoreInstanceRepository(
             .ToListAsync(cancellationToken);
     }
 
+    /// <inheritdoc />
+    public async Task<InstanceData?> FindLatestDataByKeyAsync(string key,
+        CancellationToken cancellationToken = default)
+    {
+        var context = await GetDbContextAsync();
+
+        // No status filter on purpose: a registry transition commits with the instance Busy, and a
+        // Faulted one still carries the pointer its last committed row set.
+        var newestInstanceId = context.Instances
+            .Where(i => i.Key == key)
+            .OrderByDescending(i => i.CreatedAt)
+            .ThenByDescending(i => i.Id)
+            .Select(i => i.Id)
+            .Take(1);
+
+        return await context.InstancesData
+            .AsNoTracking()
+            .Where(d => newestInstanceId.Contains(d.InstanceId))
+            .OrderByDescending(d => d.IsLatest)
+            .ThenByDescending(d => d.EnteredAt)
+            .ThenByDescending(d => d.VersionNo)
+            .FirstOrDefaultAsync(cancellationToken);
+    }
+
     private async Task<IQueryable<Instance>> GetFilteredQueryAsync(
         string? filter,
         SchemaFilterContext? schemaContext = null,
@@ -1376,6 +1404,36 @@ public sealed class EfCoreInstanceRepository(
         SchemaFilterContext? schemaContext = null,
         CancellationToken cancellationToken = default)
     {
+        var request = BuildRequestFromString(filter, groupBy, aggregations, sort, schemaContext);
+        return await GetPagedResultsWithGroupsAsync(page, pageSize, request, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async Task<(HateoasPagedList<Instance> PagedList, List<GroupSummary>? Groups)> GetPagedResultsWithGroupsAsync(
+        int page,
+        int pageSize,
+        string? filter,
+        string? groupBy,
+        string? aggregations,
+        string? sort,
+        SchemaFilterContext? schemaContext,
+        Definitions.GraphQL.GraphQLFilterNode rowPredicate,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(rowPredicate);
+        var request = BuildRequestFromString(filter, groupBy, aggregations, sort, schemaContext);
+        request.RowPredicate = rowPredicate;
+        return await GetPagedResultsWithGroupsAsync(page, pageSize, request, cancellationToken);
+    }
+
+    /// <summary>
+    /// Parses the string list route (filter as plain node, envelope or legacy form; groupBy; aggregations; sort)
+    /// into one request. Shared by both string overloads so the row-security route parses exactly like the
+    /// unrestricted one.
+    /// </summary>
+    private static Definitions.GraphQL.GraphQLFilterRequest BuildRequestFromString(
+        string? filter, string? groupBy, string? aggregations, string? sort, SchemaFilterContext? schemaContext)
+    {
         var request = GraphQLFilterParser.ParseRequest(null, groupBy, aggregations);
         if (!string.IsNullOrWhiteSpace(filter))
         {
@@ -1390,7 +1448,100 @@ public sealed class EfCoreInstanceRepository(
         }
         request.OrderBy = GraphQLFilterParser.ParseOrderBy(sort);
         request.SchemaContext = schemaContext;
-        return await GetPagedResultsWithGroupsAsync(page, pageSize, request, cancellationToken);
+        return request;
+    }
+
+    /// <summary>
+    /// The single row-security merge point (vnext#1107): returns a request whose filter is the caller's filter
+    /// AND <see cref="Definitions.GraphQL.GraphQLFilterRequest.RowPredicate"/>, or the request itself when it
+    /// carries no row predicate (byte-identical SQL). The caller's request object is not mutated.
+    /// </summary>
+    /// <exception cref="FilterCompilationException">
+    /// The row predicate contains an empty node or an operator-less condition — the engine reads those as
+    /// "no restriction", so they are refused before any SQL is built.
+    /// </exception>
+    private static Definitions.GraphQL.GraphQLFilterRequest ApplyRowPredicate(Definitions.GraphQL.GraphQLFilterRequest request)
+    {
+        var rowPredicate = request.RowPredicate;
+        if (rowPredicate == null)
+            return request;
+        if (ContainsEmptyClause(rowPredicate))
+            throw new FilterCompilationException("row predicate contains an empty clause");
+
+        var callerFilter = request.Filter;
+        return new Definitions.GraphQL.GraphQLFilterRequest
+        {
+            Filter = callerFilter is null || callerFilter.NodeType == Definitions.GraphQL.FilterNodeType.Empty
+                ? rowPredicate
+                : new Definitions.GraphQL.GraphQLFilterNode { And = [callerFilter, rowPredicate] },
+            GroupBy = request.GroupBy,
+            Aggregations = request.Aggregations,
+            OrderBy = request.OrderBy,
+            SchemaContext = request.SchemaContext
+        };
+    }
+
+    /// <inheritdoc />
+    public async Task<bool> IsVisibleAsync(
+        Guid instanceId,
+        Definitions.GraphQL.GraphQLFilterNode predicate,
+        SchemaFilterContext? schemaContext,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(predicate);
+        // The same merge point as the list (empty-clause guard included); the instance is pinned inside the compiler
+        // by a uuid-typed condition, never by a caller-style `id` filter (that column binds text).
+        var request = ApplyRowPredicate(new Definitions.GraphQL.GraphQLFilterRequest
+        {
+            RowPredicate = predicate,
+            SchemaContext = schemaContext
+        });
+        var context = await GetDbContextAsync();
+        var schema = currentSchema.Name ?? DefaultSchemaName;
+        var readOptions = queryOptions?.CurrentValue ?? new InstanceQueryOptions();
+        var selected = await UnifiedFilterService.ExecutePageIdsAsync(
+            context, request, schema, 1, 1, schemaValidator, instanceId, readOptions.LatestJoin, cancellationToken);
+        return selected.Ids.Count == 1 && selected.Ids[0] == instanceId;
+    }
+
+    private static bool ContainsEmptyClause(Definitions.GraphQL.GraphQLFilterNode node) => node.NodeType switch
+    {
+        Definitions.GraphQL.FilterNodeType.And => node.And!.Exists(ContainsEmptyClause),
+        Definitions.GraphQL.FilterNodeType.Or => node.Or!.Exists(ContainsEmptyClause),
+        Definitions.GraphQL.FilterNodeType.Not => ContainsEmptyClause(node.Not!),
+        Definitions.GraphQL.FilterNodeType.Condition => node.Attributes!.Values.Any(IsEmptyCondition),
+        _ => true
+    };
+
+    /// <summary>
+    /// A field condition that compiles to no SQL somewhere: null, no operator and no nested field, or a nested
+    /// field that is itself empty. Nested conditions are walked the way the compiler walks them, so an
+    /// operator-less nested object never reaches the engine as "no restriction".
+    /// </summary>
+    private static bool IsEmptyCondition(Definitions.GraphQL.FieldCondition? condition) =>
+        condition is null
+        || (!condition.GetOperators().Any() && condition.NestedConditions is not { Count: > 0 })
+        || (condition.NestedConditions is { Count: > 0 } nested && nested.Values.Any(IsEmptyNestedValue));
+
+    /// <summary>
+    /// A nested condition value (JSON extension data). The compiler only reads a JSON object; anything else, an
+    /// object without keys, or an object holding an empty nested field compiles to nothing for that path.
+    /// </summary>
+    private static bool IsEmptyNestedValue(object? value)
+    {
+        if (value is not JsonElement { ValueKind: JsonValueKind.Object } element)
+            return true;
+
+        var any = false;
+        foreach (var property in element.EnumerateObject())
+        {
+            any = true;
+            if (!Definitions.GraphQL.GraphQLJsonFilterService.IsOperator(property.Name)
+                && IsEmptyNestedValue(property.Value))
+                return true;
+        }
+
+        return !any;
     }
 
     /// <summary>
@@ -1407,7 +1558,7 @@ public sealed class EfCoreInstanceRepository(
 
         var schema = currentSchema.Name ?? DefaultSchemaName;
 
-        request ??= new Definitions.GraphQL.GraphQLFilterRequest();
+        request = ApplyRowPredicate(request ?? new Definitions.GraphQL.GraphQLFilterRequest());
         var readOptions = queryOptions?.CurrentValue ?? new InstanceQueryOptions();
         if (readOptions.IdentityPaging && !readOptions.DisabledSchemas.Contains(schema, StringComparer.Ordinal) &&
             request.GroupBy?.GetFields().Count is not > 0 && request.Aggregations?.HasAggregations != true)

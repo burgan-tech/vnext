@@ -134,6 +134,13 @@ public class RuntimeSysSchemaInfo(string name, string schema, Type type)
     /// C# script (e.g. a helper class library) that transition mappings can reference.
     /// </summary>
     public const string Mappings = "sys-mappings";
+
+    /// <summary>
+    /// Constant representing the system version registry flow (<c>sys-version-registry</c>). Its instances
+    /// (keyed by flow key) hold each flow's default-version pointer. It is a system flow, not a component
+    /// type, so it is deliberately absent from the CLR-type schema dictionary.
+    /// </summary>
+    public const string VersionRegistry = "sys-version-registry";
 }
 
 /// <summary>
