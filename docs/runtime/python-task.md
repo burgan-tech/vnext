@@ -94,7 +94,7 @@ FROM ${VNEXT_PYTHON_RUNTIME}
 
 USER root
 COPY requirements.txt /tmp/requirements.txt
-RUN pip install --no-cache-dir --require-hashes -r /tmp/requirements.txt && rm /tmp/requirements.txt
+RUN pip install --no-cache-dir --only-binary :all: --require-hashes -r /tmp/requirements.txt && rm /tmp/requirements.txt
 COPY handlers /opt/vnext-python/app/handlers
 USER 65532:65532
 ```
@@ -152,9 +152,11 @@ Failure:
 
 On the vNext side a success makes `output` the task result. A failure is a failed task whose
 `StatusCode` is the HTTP status and whose `ErrorMessage` is `"<code>: <message>"`, so error-boundary
-rules can match on either. Two failures come from Orchestration itself: **503** when the domain
-has no runtime (`Workflow:PythonRuntime:AppId` is empty, no call is made) and **408** when the
-runtime did not answer within `timeoutSeconds + TimeoutGraceSeconds`.
+rules can match on either. Three failures come from Orchestration itself, without the runtime's
+envelope: **503** when the domain has no runtime (`Workflow:PythonRuntime:AppId` is empty, no call
+is made), **413** `request_too_large` when the input after the input mapping exceeds 2 MiB (no call
+is made; publish checks only the authored `config.input`) and **408** when the runtime did not
+answer within `timeoutSeconds + TimeoutGraceSeconds`.
 
 ### `GET v1/health` and `GET v1/manifest`
 
@@ -191,7 +193,9 @@ Runtime container (environment):
   that admits only the Orchestration sidecar. Secrets come from the Dapr secret store or the pod
   environment, never from the task definition.
 - **Timeout layering.** Handler `timeoutMs` < Orchestration wait (`+ TimeoutGraceSeconds`) <
-  transition job budget.
+  transition job budget. The wait is at most 50 + 30 = 80 s and is not validated against
+  `WorkflowExecution:TransitionJobTimeoutSeconds` (default 300); keep the job budget above the longest Python
+  wait in the flow.
 - **Observability.** The call is a Dapr service invocation from Orchestration and is traced like
   any `daprservice` call (`Invoke.Prepare` span plus the sidecar's spans). Payloads are not logged
   on either side.

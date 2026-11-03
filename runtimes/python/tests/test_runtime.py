@@ -45,6 +45,10 @@ class RuntimeContractTests(unittest.TestCase):
             time.sleep(1)
             return {}
 
+        @registry.handler("own_timeout")
+        def own_timeout(input):
+            raise TimeoutError("upstream socket timed out")
+
         @registry.handler("huge")
         def huge(input):
             return "x" * 2048
@@ -85,6 +89,12 @@ class RuntimeContractTests(unittest.TestCase):
         status, body = self.runtime.invoke(request("slow", timeoutMs=100))
         self.assertEqual(504, status)
         self.assertEqual("timeout", body["error"]["code"])
+
+    def test_handler_own_timeout_error_is_422_not_504(self):
+        status, body = self.runtime.invoke(request("own_timeout"))
+        self.assertEqual(422, status)
+        self.assertEqual("handler_error", body["error"]["code"])
+        self.assertIn("TimeoutError: upstream socket timed out", body["error"]["message"])
 
     def test_wrong_contract_version_is_400(self):
         status, body = self.runtime.invoke(request("sum_values", contractVersion="2"))

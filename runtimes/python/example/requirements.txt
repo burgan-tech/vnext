@@ -1,1 +1,1 @@
-# Pin every package (ideally with --require-hashes) so the image is reproducible.
+# Pin every package with hashes (pip-compile --generate-hashes); the image installs wheels only.

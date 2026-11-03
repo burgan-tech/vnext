@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
@@ -78,6 +79,14 @@ public sealed class PythonTaskExecutor(
             return Result<TaskInvocationResult>.Ok(Failure(message, statusCode: 503));
         }
 
+        // The publish-time check sees only the authored config.input; an input mapping can replace it.
+        if (task.Input is { } input && Encoding.UTF8.GetByteCount(input.GetRawText()) > PythonTask.MaxInputBytes)
+        {
+            var sizeMessage = $"request_too_large: Python task input exceeds the {PythonTask.MaxInputBytes}-byte limit.";
+            Logger.TaskInvocationFailed(task.Key, TaskType.ToString(), instanceId, sizeMessage);
+            return Result<TaskInvocationResult>.Ok(Failure(sizeMessage, statusCode: 413));
+        }
+
         var trace = remoteInvoker.CreateTraceContext(context.ScriptContext);
         var timeoutSeconds = Math.Clamp(task.TimeoutSeconds, 1, PythonTask.MaxTimeoutSeconds);
 
@@ -134,9 +143,7 @@ public sealed class PythonTaskExecutor(
             return Result<TaskInvocationResult>.Ok(Reshape(result, output, result.ErrorMessage));
         }
 
-        var failureMessage = errorMessage is null
-            ? result.ErrorMessage
-            : errorCode is null ? errorMessage : $"{errorCode}: {errorMessage}";
+        var failureMessage = FailureMessage(errorCode, errorMessage, result.ErrorMessage);
 
         Logger.TaskInvocationFailed(
             task.Key, TaskType.ToString(), instanceId, failureMessage ?? "Unknown error");
@@ -178,6 +185,16 @@ public sealed class PythonTaskExecutor(
         }
 
         return result;
+    }
+
+    private static string? FailureMessage(string? errorCode, string? errorMessage, string? fallback)
+    {
+        if (errorMessage is null)
+        {
+            return fallback;
+        }
+
+        return errorCode is null ? errorMessage : $"{errorCode}: {errorMessage}";
     }
 
     private static TaskInvocationResult Reshape(TaskInvocationResult source, object? data, string? errorMessage) => new()

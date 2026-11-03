@@ -85,6 +85,20 @@ public sealed class PythonTaskExecutorTests
     }
 
     [Fact]
+    public async Task Invoke_MappedInputOverTheLimit_FailsWith413WithoutCallingTheRuntime()
+    {
+        var handler = new StubHttpMessageHandler(_ => throw new InvalidOperationException("must not be called"));
+
+        var response = await ExecuteAsync(handler, appId: "core-python-runtime",
+            configure: task => task.SetInput(new { blob = new string('x', PythonTask.MaxInputBytes) }));
+
+        response.IsSuccess.ShouldBeFalse();
+        response.StatusCode.ShouldBe(413);
+        ((string)response.ErrorMessage!).ShouldStartWith("request_too_large: ");
+        handler.LastRequest.ShouldBeNull();
+    }
+
+    [Fact]
     public async Task Invoke_RuntimeNeverAnswers_FailsWith408()
     {
         var response = await ExecuteAsync(
@@ -95,12 +109,14 @@ public sealed class PythonTaskExecutorTests
     }
 
     private static async Task<StandardTaskResponse> ExecuteAsync(
-        HttpMessageHandler handler, string appId, int timeoutSeconds = 12, int graceSeconds = 5)
+        HttpMessageHandler handler, string appId, int timeoutSeconds = 12, int graceSeconds = 5,
+        Action<PythonTask>? configure = null)
     {
         var task = PythonTask.Create($$"""
             {"handler":"sum_values","input":{"values":[2,3,5]},"timeoutSeconds":{{timeoutSeconds}}}
             """.ToJsonElement());
         task.SetReference(new Reference("sum", "core", "sys-tasks", "1.0.0"));
+        configure?.Invoke(task);
 
         var remoteInvoker = Substitute.For<IRemoteInvokerService>();
         remoteInvoker.CreateTraceContext(Arg.Any<ScriptContext>())

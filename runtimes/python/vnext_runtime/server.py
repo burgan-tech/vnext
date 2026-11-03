@@ -16,6 +16,7 @@ from . import CONTRACT_VERSION, RUNTIME_VERSION
 from .registry import HandlerContext, call_handler, discover, get_handler, registered_handlers
 
 MAX_TIMEOUT_MS = 50_000
+NOT_FOUND_MESSAGE = "unknown route; the contract serves POST /v1/invoke, GET /v1/health and GET /v1/manifest"
 
 
 class RuntimeConfig:
@@ -60,12 +61,16 @@ class Runtime:
 
         context = HandlerContext.from_request(request.get("context") or {}, timeout_ms)
         future = self._pool.submit(call_handler, fn, request.get("input"), context)
-        try:
-            output = future.result(timeout=timeout_ms / 1000)
-        except concurrent.futures.TimeoutError:
+        # Wait on the future instead of future.result(timeout=...): since Python 3.11
+        # concurrent.futures.TimeoutError IS the builtin TimeoutError, so a handler's own
+        # TimeoutError (a socket call, say) would otherwise read as the runtime's timeout.
+        done, _ = concurrent.futures.wait([future], timeout=timeout_ms / 1000)
+        if not done:
             # A Python thread cannot be killed: the call keeps its worker until it returns.
             # Size VNEXT_PYTHON_MAX_WORKERS and keep handlers inside their timeout.
             return error(HTTPStatus.GATEWAY_TIMEOUT, "timeout", f"handler did not finish within {timeout_ms} ms")
+        try:
+            output = future.result()
         except Exception as exc:  # noqa: BLE001 - every handler failure is a contract error
             return error(HTTPStatus.UNPROCESSABLE_ENTITY, "handler_error", f"{type(exc).__name__}: {exc}")
 
@@ -106,7 +111,7 @@ def make_handler(runtime: Runtime):
 
         def do_POST(self) -> None:  # noqa: N802 - http.server naming
             if self.path.rstrip("/") != "/v1/invoke":
-                self._send(*error(HTTPStatus.NOT_FOUND, "not_found", self.path))
+                self._send(*error(HTTPStatus.NOT_FOUND, "not_found", NOT_FOUND_MESSAGE))
                 return
             length = int(self.headers.get("Content-Length") or 0)
             if length > runtime.config.max_request_bytes:
@@ -122,7 +127,7 @@ def make_handler(runtime: Runtime):
             elif path == "/v1/manifest":
                 self._send(HTTPStatus.OK, runtime.manifest())
             else:
-                self._send(*error(HTTPStatus.NOT_FOUND, "not_found", self.path))
+                self._send(*error(HTTPStatus.NOT_FOUND, "not_found", NOT_FOUND_MESSAGE))
 
         def _send(self, status: int, body: Dict[str, Any]) -> None:
             payload = json.dumps(body).encode("utf-8")
