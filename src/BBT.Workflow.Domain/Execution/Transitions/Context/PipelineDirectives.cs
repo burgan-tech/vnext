@@ -61,6 +61,16 @@ public sealed class PipelineDirectives
     public Guid? SubFlowResumeInstanceId { get; private set; }
 
     /// <summary>
+    /// Gets the terminal outcome of the completing sub item for a subflow-resume execution, when
+    /// the resume hop is to stamp the correlation's settlement marker itself (see
+    /// <c>ClearBusyOnResumeStep</c>). Null when the caller keeps that write.
+    /// </summary>
+    public SubItemTerminalOutcome? SubFlowResumeTerminalOutcome { get; private set; }
+
+    /// <summary>Gets the instant to record as <c>SettledAt</c> alongside <see cref="SubFlowResumeTerminalOutcome"/>.</summary>
+    public DateTime? SubFlowResumeSettledAt { get; private set; }
+
+    /// <summary>
     /// Gets a value indicating whether this execution is resuming from a long-poll acknowledge
     /// (declarative long-poll termination on state entry — client acknowledged or fallback fired).
     /// </summary>
@@ -139,10 +149,18 @@ public sealed class PipelineDirectives
     /// Marks this execution as a subflow resume scenario.
     /// </summary>
     /// <param name="subInstanceId">The completing SubFlow instance id; scopes the resume lock per sub-instance.</param>
-    public void MarkAsSubFlowResume(Guid? subInstanceId = null)
+    /// <param name="terminalOutcome">The completing sub item's terminal outcome when the resume hop
+    /// should stamp the correlation's settlement marker; null leaves the marker to the caller.</param>
+    /// <param name="settledAt">The instant recorded as <c>SettledAt</c> with <paramref name="terminalOutcome"/>.</param>
+    public void MarkAsSubFlowResume(
+        Guid? subInstanceId = null,
+        SubItemTerminalOutcome? terminalOutcome = null,
+        DateTime? settledAt = null)
     {
         IsSubFlowResume = true;
         SubFlowResumeInstanceId = subInstanceId;
+        SubFlowResumeTerminalOutcome = terminalOutcome;
+        SubFlowResumeSettledAt = settledAt;
     }
 
     /// <summary>

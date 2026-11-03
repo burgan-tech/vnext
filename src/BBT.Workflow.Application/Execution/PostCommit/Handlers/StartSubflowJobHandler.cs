@@ -122,22 +122,15 @@ public sealed class StartSubflowJobHandler(
                     await instanceRepository.UpdateAsync(instance, true, cancellationToken);
                 }
 
-                // A sync subflow completes inside StartAsync and resumes/finalizes the parent
-                // in its own scope, so the entity tracked in this scope still reads Busy.
-                // Re-read as no-tracking so the sync response reflects the settled status.
-                if (context.CallerMode == ExecMode.Sync)
-                {
-                    var refreshed = await instanceRepository.FindByIdentifierSlimAsync(
-                        context.InstanceId.ToString(), cancellationToken);
-                    if (refreshed is not null)
-                    {
-                        context.ClientResponse = new ClientResponse
-                        {
-                            Id = context.InstanceId,
-                            Status = refreshed.Status
-                        };
-                    }
-                }
+                // A sync subflow completes inside StartAsync and resumes/finalizes the parent in its
+                // own scope, so the entity tracked here still reads Busy. This handler used to re-read
+                // the parent (no-tracking, 2 SELECTs in their own unit of work) into ClientResponse so
+                // the sync response would carry the settled status — but nothing reads ClientResponse
+                // after the post-commit barrier: the response the runner returns is either the
+                // settlement's own authoritative reload (client-facing caller) or the identity-only
+                // Busy short-circuit (TransitionRunner.IsSettleFreeStartSubflowHandoff). Measured on
+                // morph-idm zeebe-approval (test, 2026-11-03): one such read per SubFlow level, ~100 ms
+                // each, all discarded.
 
                 logger.SubFlowStarted(job.TargetStateKey, context.InstanceId);
             }

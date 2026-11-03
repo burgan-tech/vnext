@@ -199,7 +199,10 @@ public sealed class TransitionContextFactory(
             executionContext.Directives.RequestResumeFrom(input.Execution.ResumeFrom.Value);
 
         if (input.Execution?.IsSubFlowResume == true)
-            executionContext.Directives.MarkAsSubFlowResume(input.Execution.SubFlowResumeInstanceId);
+            executionContext.Directives.MarkAsSubFlowResume(
+                input.Execution.SubFlowResumeInstanceId,
+                input.Execution.SubFlowResumeTerminalOutcome,
+                input.Execution.SubFlowResumeSettledAt);
 
         if (input.Execution?.IsLongPollAckResume == true)
             executionContext.Directives.MarkAsLongPollAckResume();

@@ -2,6 +2,7 @@ using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
+using Microsoft.Extensions.Logging;
 
 namespace BBT.Workflow.Execution.Pipeline.Steps;
 
@@ -11,20 +12,25 @@ namespace BBT.Workflow.Execution.Pipeline.Steps;
 /// 1. Resolves target state first to check SubType
 /// 2. Skips status update if target state is Busy SubType (ChangeState will handle it)
 /// 3. Implements idempotency - only updates DB if status actually changes
+/// 4. Stamps the completing correlation's settlement marker in this hop's own unit of work when the
+///    completion relay handed the terminal outcome in (<see cref="PipelineDirectives.SubFlowResumeTerminalOutcome"/>),
+///    so the relay does not open a separate unit of work for that one write after the resume.
 /// </summary>
-public sealed class ClearBusyOnResumeStep() : ITransitionStep
+public sealed class ClearBusyOnResumeStep(
+    IInstanceCorrelationRepository correlationRepository,
+    ILogger<ClearBusyOnResumeStep> logger) : ITransitionStep
 {
     /// <inheritdoc />
     public int Order => LifecycleOrder.ClearBusyOnResumeStep;
 
     /// <inheritdoc />
-    public Task<Result<StepOutcome>> ExecuteAsync(TransitionExecutionContext context,
+    public async Task<Result<StepOutcome>> ExecuteAsync(TransitionExecutionContext context,
         CancellationToken cancellationToken)
     {
         // Only process this step on an internal resume (SubFlow completion or long-poll acknowledge)
         if (!context.Directives.IsInternalResume)
         {
-            return Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.ContinueNoWork()));
+            return Result<StepOutcome>.Ok(StepOutcome.ContinueNoWork());
         }
 
         // Long-poll acknowledge resume: compare-and-clear the durable ack marker. Acknowledge and
@@ -35,7 +41,7 @@ public sealed class ClearBusyOnResumeStep() : ITransitionStep
         {
             if (!context.Instance.IsAwaitingLongPollAck)
             {
-                return Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.Stop()));
+                return Result<StepOutcome>.Ok(StepOutcome.Stop());
             }
 
             context.Instance.ClearLongPollAck();
@@ -44,10 +50,11 @@ public sealed class ClearBusyOnResumeStep() : ITransitionStep
         // Resolve target state first, then conditionally defer status
         var stateResult = UpdateTargetStateInContext(context);
         if (!stateResult.IsSuccess)
-            return Task.FromResult(Result<StepOutcome>.Fail(stateResult.Error));
+            return Result<StepOutcome>.Fail(stateResult.Error);
 
         ClearBusyIfNeeded(context);
-        return Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.Continue()));
+        await MarkSubItemSettledAsync(context, cancellationToken);
+        return Result<StepOutcome>.Ok(StepOutcome.Continue());
     }
 
     /// <summary>
@@ -84,6 +91,39 @@ public sealed class ClearBusyOnResumeStep() : ITransitionStep
         if (context.Instance is { IsActive: false, IsCompleted: false })
         {
             context.Directives.SetResolvedStatus(InstanceStatus.Active);
+        }
+    }
+
+    /// <summary>
+    /// Durably marks the completing correlation as settled, in this resume hop's unit of work.
+    /// The completion relay used to do this in a separate unit of work after the resume returned —
+    /// one more context, connection rental and round trip per completion for a single set-based
+    /// UPDATE. Writing it here keeps the marker's meaning (the parent's resume reached the database):
+    /// the hop's own commit carries it, and a resume that fails afterwards reverts the correlation,
+    /// which clears the marker again (<c>InstanceCorrelation.Revert</c>). Best-effort, as before: the
+    /// marker only feeds the duplicate-delivery fast path, so a failed write must not fail the resume.
+    /// </summary>
+    private async Task MarkSubItemSettledAsync(TransitionExecutionContext context, CancellationToken cancellationToken)
+    {
+        var directives = context.Directives;
+        if (!directives.IsSubFlowResume ||
+            directives.SubFlowResumeInstanceId is not { } subInstanceId ||
+            directives.SubFlowResumeTerminalOutcome is not { } outcome)
+        {
+            return;
+        }
+
+        try
+        {
+            await correlationRepository.TryMarkSettledAsync(
+                subInstanceId,
+                outcome,
+                directives.SubFlowResumeSettledAt ?? DateTime.UtcNow,
+                cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.SubItemSettlementMarkerWriteFailed(ex, outcome.ToString(), subInstanceId);
         }
     }
 }

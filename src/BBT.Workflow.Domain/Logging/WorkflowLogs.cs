@@ -3767,6 +3767,21 @@ public static partial class WorkflowLogs
         Guid instanceId,
         string state);
 
+    /// <summary>
+    /// Logs when a paused pipeline resumes because the acknowledge fallback job fired — the client
+    /// never posted <c>longpoll/ack</c> inside the <c>fallbackTimeoutSeconds</c> window. Distinct from
+    /// <see cref="LongPollAckResumed"/> (20301, the client acknowledged) so a flow whose every resume
+    /// is this event stands out in the logs.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20308,
+        Level = LogLevel.Information,
+        Message = "Long-poll fallback timeout resumed pipeline for instance {InstanceId} ({Flow}); the client never acknowledged")]
+    public static partial void LongPollFallbackResumed(
+        this ILogger logger,
+        Guid instanceId,
+        string flow);
+
     #endregion
 
     #region State Function Cache
