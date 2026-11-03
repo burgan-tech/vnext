@@ -359,20 +359,26 @@ public sealed class SubflowCompletionService(
                 }
 
                 logger.SubFlowPipelineResumed(parentInstance.Id);
-                await ResumePipelineAsync(
+                var resumed = await ResumePipelineAsync(
                     parentInstance,
                     parentWorkflow!,
                     completedInput,
                     lockKey,
                     cancellationToken);
 
-                // Resume has committed in its own UoW. Marking settlement is deliberately a tiny
-                // set-based write in a new UoW; a marker-write failure must not compensate an
-                // already successful resume, it only forfeits the duplicate fast path.
-                await MarkSettlementBestEffortAsync(
-                    completedInput.SubInstanceId,
-                    completedInput.CompletedAt,
-                    cancellationToken);
+                // A resume that ran its pipeline stamped the settlement marker itself, in its own
+                // unit of work (ClearBusyOnResumeStep, handed the terminal outcome below). Only a
+                // resume that stopped before its first step — the parent completed in between, no
+                // automatic transition matched — leaves the marker to this separate, best-effort
+                // write; a marker-write failure must not compensate an already successful resume,
+                // it only forfeits the duplicate fast path.
+                if (!resumed)
+                {
+                    await MarkSettlementBestEffortAsync(
+                        completedInput.SubInstanceId,
+                        completedInput.CompletedAt,
+                        cancellationToken);
+                }
 
                 SubFlowActivityHelper.SetSuccess(activity);
             }
@@ -416,7 +422,10 @@ public sealed class SubflowCompletionService(
     /// Runs after Phase 1 (correlation + mapping) is committed. TransitionRunner creates its own scope+UoW.
     /// On failure, reverts the correlation in a new UoW so the operation can be retried.
     /// </summary>
-    private async Task ResumePipelineAsync(
+    /// <returns>True when the resume pipeline ran and committed; false on a soft stop
+    /// (<c>AutoTransitionConditionNotMet</c>, <c>InstanceCompleted</c>) whose hop may not have
+    /// reached the settlement-marker write.</returns>
+    private async Task<bool> ResumePipelineAsync(
         Instance parentInstance,
         Definitions.Workflow parentWorkflow,
         FlowCompletedInput completedInput,
@@ -462,7 +471,11 @@ public sealed class SubflowCompletionService(
                     ChainDepth = 0,
                     ResumeFrom = LifecycleOrder.ClearBusyOnResumeStep,
                     IsSubFlowResume = true,
-                    SubFlowResumeInstanceId = subInstanceId
+                    SubFlowResumeInstanceId = subInstanceId,
+                    // The resume hop stamps the correlation's SettledAt in its own unit of work
+                    // (ClearBusyOnResumeStep) instead of this service opening one more after it.
+                    SubFlowResumeTerminalOutcome = SubItemTerminalOutcome.Completed,
+                    SubFlowResumeSettledAt = completedInput.CompletedAt
                 }
             };
 
@@ -493,7 +506,11 @@ public sealed class SubflowCompletionService(
                         result.Error.Code,
                         result.Error.Message ?? "Unknown error");
                 }
+
+                return false;
             }
+
+            return true;
         }
         catch (Exception ex)
         {

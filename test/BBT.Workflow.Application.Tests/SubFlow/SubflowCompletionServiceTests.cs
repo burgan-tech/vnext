@@ -658,6 +658,77 @@ public sealed class SubflowCompletionServiceTests
     }
 
     [Fact]
+    public async Task CompletionAsync_HandsTheTerminalOutcomeToTheResume_AndWritesNoSeparateMarker()
+    {
+        // The resume hop stamps SettledAt in its own unit of work (ClearBusyOnResumeStep); this
+        // service no longer opens one more after the resume for that single write.
+        var parentInstance = CreateParentInstance(out var subInstanceId);
+        var input = CreateInput(parentInstance.Id, subInstanceId);
+        var parentWorkflow = WorkflowFactory.CreateDefault("parent-flow", "bank", "1.0.0");
+
+        _instanceRepository
+            .Setup(x => x.FindWithAllCorrelationsAndDataAsync(parentInstance.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(parentInstance);
+        _instanceRepository
+            .Setup(x => x.UpdateAsync(parentInstance, true, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(parentInstance);
+        _componentCacheStore
+            .Setup(x => x.GetFlowAsync("bank", "parent-flow", "1.0.0", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result<Definitions.Workflow>.Ok(parentWorkflow));
+
+        WorkflowExecutionContext? captured = null;
+        _workflowExecutionService
+            .Setup(x => x.ExecuteTransitionAsync(It.IsAny<WorkflowExecutionContext>(), It.IsAny<CancellationToken>()))
+            .Callback<WorkflowExecutionContext, CancellationToken>((ctx, _) => captured = ctx)
+            .ReturnsAsync(Result<TransitionOutput>.Ok(new TransitionOutput
+            {
+                Id = parentInstance.Id,
+                Status = InstanceStatus.Active
+            }));
+
+        await CreateService().CompletionAsync(input, CancellationToken.None);
+
+        captured.ShouldNotBeNull();
+        captured.Execution!.SubFlowResumeTerminalOutcome.ShouldBe(SubItemTerminalOutcome.Completed);
+        captured.Execution.SubFlowResumeSettledAt.ShouldBe(input.CompletedAt);
+        _correlationRepository.Verify(
+            x => x.TryMarkSettledAsync(It.IsAny<Guid>(), It.IsAny<SubItemTerminalOutcome>(),
+                It.IsAny<DateTime>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task CompletionAsync_WhenResumeStopsSoftly_StillWritesTheMarkerBestEffort()
+    {
+        // No automatic transition matched: the hop may not have reached the marker write, so the
+        // service keeps the separate best-effort write for that case only.
+        var parentInstance = CreateParentInstance(out var subInstanceId);
+        var input = CreateInput(parentInstance.Id, subInstanceId);
+        var parentWorkflow = WorkflowFactory.CreateDefault("parent-flow", "bank", "1.0.0");
+
+        _instanceRepository
+            .Setup(x => x.FindWithAllCorrelationsAndDataAsync(parentInstance.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(parentInstance);
+        _instanceRepository
+            .Setup(x => x.UpdateAsync(parentInstance, true, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(parentInstance);
+        _componentCacheStore
+            .Setup(x => x.GetFlowAsync("bank", "parent-flow", "1.0.0", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result<Definitions.Workflow>.Ok(parentWorkflow));
+        _workflowExecutionService
+            .Setup(x => x.ExecuteTransitionAsync(It.IsAny<WorkflowExecutionContext>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result<TransitionOutput>.Fail(
+                Error.Validation(WorkflowErrorCodes.AutoTransitionConditionNotMet, "no match", "x")));
+
+        await CreateService().CompletionAsync(input, CancellationToken.None);
+
+        _correlationRepository.Verify(
+            x => x.TryMarkSettledAsync(subInstanceId, SubItemTerminalOutcome.Completed,
+                input.CompletedAt, It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
     public async Task CompletionAsync_WhenResumeFails_RevertsCorrelationViaUnfilteredLoad()
     {
         var parentInstance = CreateParentInstance(out var subInstanceId);

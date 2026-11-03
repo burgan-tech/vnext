@@ -207,7 +207,12 @@ read. Do not replace these reads with the old parent object: it may still say Bu
 
 - Child start uses strict idempotency with a preassigned child instance id.
 - Durable correlations identify parent, child, relationship type and terminal outcome.
-- Terminal settlement uses a durable settled marker/guard to absorb relay/Inbox duplicates.
+- Terminal settlement uses a durable settled marker/guard to absorb relay/Inbox duplicates. For a
+  completion the marker (`InstanceCorrelation.SettledAt`) is written by the resume hop itself, in its
+  own unit of work (`ClearBusyOnResumeStep`, handed `ExecutionInfo.SubFlowResumeTerminalOutcome` by
+  `SubflowCompletionService`); the service opens a separate best-effort write only when the resume
+  stopped before its first step (no matching automatic transition, parent completed meanwhile). A
+  resume that fails later reverts the correlation, which clears the marker again.
 - Resume failure reopens the correlation and republishes/rearms terminal delivery subject to its
   retry cap.
 - A proxy pre-stamp of the parent `EffectiveStatus` is reverted (compare-and-set) if the forward fails.

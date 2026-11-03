@@ -151,6 +151,27 @@ public class InstanceCommandAppServiceStartFlowVersionTests : IDisposable
         result.Value!.FlowVersion.ShouldBe("1.0.3");
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task StartAsync_MarksTheExecutionIdentityOnly_ExactlyWhenEnrichmentIsSuppressed(bool suppressed)
+    {
+        // A runtime-internal child start (SubflowStarter) reads only the resolved version back, so
+        // the runner may skip the no-op settlement at that level; a client-facing start still
+        // projects the settled aggregate. The flag used to be set on the transition path only.
+        var input = CreateInput("1.0", key: "k-" + Guid.NewGuid());
+        input.SuppressResponseEnrichment = suppressed;
+        WorkflowExecutionContext? captured = null;
+        _execution.ExecuteTransitionAsync(Arg.Do<WorkflowExecutionContext>(c => captured = c), Arg.Any<CancellationToken>())
+            .Returns(Result<TransitionOutput>.Ok(new TransitionOutput { Id = Guid.NewGuid(), Status = InstanceStatus.Active }));
+
+        var result = await _service.StartAsync(input, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue(result.IsSuccess ? null : result.Error.Message);
+        captured.ShouldNotBeNull();
+        captured.IdentityOnlyResponse.ShouldBe(suppressed);
+    }
+
     [Fact]
     public async Task Start_ShouldTagRequestedVersion()
     {
