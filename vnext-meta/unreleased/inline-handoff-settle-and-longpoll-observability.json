@@ -1,0 +1,23 @@
+{
+  "releaseNote": {
+    "summary": "Intermediate levels of a nested SubFlow start chain skip the no-op post-commit settlement and the discarded parent re-read; long-poll resumes are counted and logged by trigger (ack vs fallback).",
+    "breaking": false,
+    "docs": []
+  },
+  "features": {
+    "engine": {
+      "startSubflowHandoffSettleElision": {
+        "since": "next",
+        "status": "stable",
+        "description": "An intermediate level of a nested SubFlow start chain (identity-only caller, post-commit jobs all StartSubflowJob) no longer takes the status lock, reloads the parent and commits an empty transaction in PostCommit.Settle: the hop that entered the SubFlow state was marked terminal, so no status was deferred and the settle could flip nothing, schedule nothing and publish nothing (TransitionRunner.IsSettleFreeStartSubflowHandoff, the start-chain twin of the forward relay's IsSettleFreeForwardRelay). StartSubflowJobHandler also drops its sync-caller re-read of the parent into ClientResponse, which nothing read after the barrier. The client-facing root still settles from the authoritative reload. Measured on morph-idm zeebe-approval (test, 2026-11-03): nine settles of 58 ms average and four re-reads of ~100 ms in one depth-4 start request. The awaiting span carries vnext.settle.skipped=true.",
+        "documentation": "docs/architecture/subflow-execution.md"
+      },
+      "longPollResumeObservability": {
+        "since": "next",
+        "status": "stable",
+        "description": "A pipeline paused for declarative long-poll termination resumes either because the client posted longpoll/ack or because the fallbackTimeoutSeconds job fired; the two used to share one log line (20301) and no metric. LongPoll.AckResume now carries vnext.activation.trigger (ack | ack-timeout), the counter workflow_longpoll_resume_total (meter BBT.Workflow.Telemetry; tags vnext.domain, vnext.flow.key, vnext.activation.trigger, vnext.longpoll.ack_resume.outcome) counts every resume request, and a fallback-driven resume logs LongPollFallbackResumed (20308) instead of LongPollAckResumed (20301). A flow whose ack-timeout count tracks its resumed count has a client that never acknowledges and pays the whole window on every instance (morph-idm approval, test: 36 of 36).",
+        "documentation": "docs/domain/long-poll-termination.md"
+      }
+    }
+  }
+}

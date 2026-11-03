@@ -246,3 +246,20 @@ The tracked `InstanceJobs` row of the acknowledge fallback (`JobType.LongPollAck
 (state's own or the parent's override). It is persisted for operations and diagnostics only: the
 state body's scheduled entries read `ScheduledTransition` rows and the `timeout` block reads the
 `Timeout` row, so this row never appears on a read surface.
+
+## Observability: acknowledge vs fallback
+
+Both triggers resume through `LongPollAckResumeService`, and a client that never posts
+`longpoll/ack` costs every instance the whole `fallbackTimeoutSeconds` window without failing
+anything — morph-idm `approval` in test (2026-11-03): 36 approves, 0 acks, 36 fallback resumes, each
+approval completing ~60 s after the approve. Three surfaces tell the two apart:
+
+- **Span.** `LongPoll.AckResume` carries `vnext.activation.trigger` = `ack` | `ack-timeout` beside
+  `vnext.longpoll.ack_resume.outcome` (the activation episode of the fallback job is already
+  `ack-timeout`; the ack endpoint's is `ack`).
+- **Metric.** `workflow_longpoll_resume_total` (meter `BBT.Workflow.Telemetry`), tagged
+  `vnext.domain`, `vnext.flow.key`, `vnext.activation.trigger`, `vnext.longpoll.ack_resume.outcome`.
+  A flow whose `ack-timeout`/`resumed` series tracks its `resumed` total has a client that never acks.
+- **Log.** A resume the client asked for logs `LongPollAckResumed` (20301); one the fallback job
+  drove logs `LongPollFallbackResumed` (20308). `LongPollTerminationArmed` (20300) still marks every
+  pause with the window it armed.

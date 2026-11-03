@@ -100,13 +100,15 @@ public sealed class TransitionRunner(
                 continue;
             }
 
-            if (IsSettleFreeForwardRelay(context, coreOutput))
+            if (IsSettleFreeForwardRelay(context, coreOutput) ||
+                IsSettleFreeStartSubflowHandoff(context, coreOutput))
             {
                 Activity.Current?.SetTag(TelemetryConstants.TagNames.SettleSkipped, true);
                 return Result<TransitionOutput>.Ok(new TransitionOutput
                 {
                     Id = parentSnapshot.InstanceId,
-                    Status = InstanceStatus.Busy
+                    Status = InstanceStatus.Busy,
+                    ExecutedAsync = coreOutput.Output.ExecutedAsync
                 });
             }
 
@@ -162,6 +164,36 @@ public sealed class TransitionRunner(
 
         var response = coreOutput.ExecutionContext.ClientResponse;
         return response is { Error: null, SubflowStatus: { } childStatus } && !childStatus.IsTerminal;
+    }
+
+    /// <summary>
+    /// Whether this hop is an intermediate level of a nested SubFlow <b>start</b> chain whose
+    /// settlement could not change anything. The hop that enters a SubFlow state is marked terminal
+    /// by <c>HandleSubFlowStep</c> (skip to Finalize), so <c>ResolveAvailableStep</c> defers no
+    /// status and <c>ContinuationSet.ResolvedStatus</c> is null; every inline hop also gets fresh
+    /// directives, so no earlier hop's resolved status leaks into it. With no resolved status,
+    /// <c>PostCommitParentMutationService.SettleAsync</c> schedules no notification and
+    /// <c>TransitionSettlement</c> flips nothing; whether the child is still running (correlation
+    /// open — no <c>sub:state-changed</c> either) or completed inline and resumed this parent in
+    /// its own scope (parent no longer Busy — no verdict), the settle writes nothing and commits
+    /// nothing. Measured on morph-idm zeebe-approval (test, 2026-11-03): nine such settles of
+    /// 58 ms average in one request, each a status lock, three SELECTs and an empty commit.
+    /// <para>
+    /// Same identity-only gate as the forward relay: the caller is <c>SubflowStarter</c>, which reads
+    /// only the child's resolved version from the response. A client-facing root still settles,
+    /// because its response projects the reloaded aggregate (<c>NeedsLatestDataForSettle</c>). The
+    /// one thing skipped is a telemetry-only <c>BusyParked</c>/<c>BusySubtype</c> verdict for a
+    /// parent that an inline child resumed into another Busy rest — the resume stage that moved it
+    /// there already emitted it.
+    /// </para>
+    /// </summary>
+    private static bool IsSettleFreeStartSubflowHandoff(WorkflowExecutionContext requestContext, TransitionCoreOutput coreOutput)
+    {
+        if (!requestContext.IdentityOnlyResponse)
+            return false;
+
+        var jobs = coreOutput.Continuations.PostCommitJobs;
+        return jobs.Count > 0 && jobs.All(job => job is StartSubflowJob);
     }
 
     private async Task<Result<PostCommitCoordinationResult>> CoordinatePostCommitAsync(

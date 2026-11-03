@@ -123,6 +123,18 @@ settles, and a terminal child always forces the fresh reload. The span awaiting 
 `vnext.settle.skipped=true`. Measured on vnext-example `subflow-depth-lab`: a depth-5 transition
 went from 4 settles, 5 lock pairs and 39 SELECTs to 1, 2 and 30.
 
+The same short-circuit applies to an **intermediate level of a nested start chain**
+(`TransitionRunner.IsSettleFreeStartSubflowHandoff`): an identity-only caller (the level above's
+`SubflowStarter`, which reads only the child's resolved version) whose only post-commit jobs are
+`StartSubflowJob`. The hop that entered the SubFlow state was marked terminal, so no status was
+deferred (`ContinuationSet.ResolvedStatus` is null; every inline hop gets fresh directives), and the
+settle could schedule no notification, flip nothing and publish nothing — whether the child is still
+running or completed inline and resumed this parent in its own scope. The client-facing root still
+settles from the authoritative reload, because its response projects the aggregate. `StartSubflowJobHandler`
+no longer re-reads the parent after a sync child either: that `ClientResponse` had no reader past the
+barrier. Measured on morph-idm `zeebe-approval` (test, 2026-11-03): nine `PostCommit.Settle` spans of
+58 ms average and four discarded re-reads of ~100 ms in one depth-4 start request.
+
 ## Completion and Parent Resume
 
 Child terminal events use two delivery paths:
