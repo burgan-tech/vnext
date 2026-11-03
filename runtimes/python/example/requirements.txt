@@ -1,0 +1,1 @@
+# Pin every package (ideally with --require-hashes) so the image is reproducible.

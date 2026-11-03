@@ -13,7 +13,7 @@ namespace BBT.Workflow.Execution.Core.Invocation;
 /// and accepted-status-code matching are defined exactly once.
 /// <para>
 /// Lives in <c>Execution.Core</c> because the Orchestration host cannot reference
-/// <c>BBT.Workflow.Execution</c> (pythonnet, KubernetesClient, Dapr.AI, a hosted service) and the
+/// <c>BBT.Workflow.Execution</c> (Dapr.AI and the Execution-only invokers) and the
 /// Abstractions assembly stays contract-only. This project carries only the packages both hosts
 /// already accept. Mirrors <c>HttpTaskInvocation</c> exactly: no logging or metrics happen here —
 /// every outcome, including cancellation and transport failure, is returned as a

@@ -51,7 +51,7 @@ config, and what the local path trades away.
 | Cache-aside | `CacheAsideTaskExecutor` (type `18`) | No invoker and no wire type of its own: the read-through runs in the Orchestration executor, cache get/set goes through `IStateStoreCacheGateway` (the `statestore` wire type, so it follows `Modes.statestore`), and the source runs through its own type's executor ([details](cache-aside-task.md)) |
 | Fan-out | `FanOutTaskExecutor` (type `21`) | Orchestrates inner tasks; see [FanOut Task](../domain/fan-out-task.md) |
 | Script | `ScriptTaskExecutor` | Executes in Orchestration through scripting module |
-| Python | `PythonTaskExecutor` | `PythonTaskInvoker` selects an explicit Python.NET, process, or container runtime ([details](python-task.md)) |
+| Python | `PythonTaskExecutor` (type `23`) | No invoker and no Execution hop: the Orchestration executor calls the domain's own Python runtime container over Dapr (`Workflow:PythonRuntime:AppId`) with the v1 runtime contract ([details](python-task.md)) |
 | Human/notification | Human and notification executors | May remain application-owned depending on side effect type |
 
 ## Failure Modes
@@ -68,10 +68,6 @@ config, and what the local path trades away.
 Execution controller begins a log scope with domain, workflow key, instance id, task key,
 and task type from the trace context and envelope. Executors should preserve correlation
 and task metadata when sending remote envelopes.
-
-Python is the first task family with a second runtime registry behind its invoker. The
-`PythonTaskInvoker` resolves exactly one configured `IPythonExecutionRuntime`; a disabled or
-unavailable requested mode is a task failure and never causes a silent mode fallback.
 
 ## External HTTP tasks (type `22`, deprecated)
 
@@ -150,4 +146,3 @@ default Local configuration — see
 - `execution/BBT.Workflow.Execution.HttpApi.Host/Controllers/Executions/ExecutionController.cs`
 - `src/BBT.Workflow.Execution/Invokers/`
 - `src/BBT.Workflow.Execution/Services/TaskInvokerRegistry.cs`
-- `src/BBT.Workflow.Execution/Python/PythonRuntimeRegistry.cs`

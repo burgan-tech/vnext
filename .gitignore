@@ -267,7 +267,6 @@ tempkey.jwk
 # VS History
 *.vshistory*
 *.lock
-!execution/python/requirements.lock
 
 #DNT
 switcher.json

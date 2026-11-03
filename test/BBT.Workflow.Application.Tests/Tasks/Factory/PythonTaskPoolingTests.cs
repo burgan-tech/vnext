@@ -13,8 +13,7 @@ public sealed class PythonTaskPoolingTests
     {
         var source = PythonTask.Create(JsonDocument.Parse("""
             {
-              "script":{"code":"def main(input): return input", "encoding":"NAT"},
-              "executionMode":"process",
+              "handler":"scorer",
               "input":{"value":42},
               "timeoutSeconds":12
             }
@@ -26,12 +25,12 @@ public sealed class PythonTaskPoolingTests
         PoolableTaskRegistry.TryCopyProperties(source, target).ShouldBeTrue();
 
         target.GetTaskType().ShouldBe(TaskType.Python);
-        target.ExecutionMode.ShouldBe("process");
+        target.Handler.ShouldBe("scorer");
         target.Input!.Value.GetProperty("value").GetInt32().ShouldBe(42);
         target.TimeoutSeconds.ShouldBe(12);
 
         target.Reset();
-        target.Script.ShouldBeNull();
+        target.Handler.ShouldBeNull();
         target.Input.ShouldBeNull();
         target.TimeoutSeconds.ShouldBe(PythonTask.DefaultTimeoutSeconds);
     }

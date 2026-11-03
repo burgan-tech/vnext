@@ -715,7 +715,6 @@ public static class TelemetryConstants
         public const string Extensions = "BBT.Workflow.Extensions";
         public const string ExecutionInvokers = "BBT.Workflow.Execution.Invokers";
         public const string Execution = "BBT.Workflow.Execution";
-        public const string ExecutionPython = "BBT.Workflow.Execution.Python";
         public const string WorkersInbox = "BBT.Workflow.Workers.Inbox";
 
         /// <summary>
@@ -742,7 +741,6 @@ public static class TelemetryConstants
             Extensions,
             ExecutionInvokers,
             Execution,
-            ExecutionPython,
             WorkersInbox,
             Gateway
         ];
@@ -770,9 +768,6 @@ public static class TelemetryConstants
                 // The Execution service's own handler span. Only the Execution host runs it; its
                 // wildcard entry covers it there.
                 [Execution] = ["orchestration", "workers-inbox", "workers-outbox"],
-
-                // The Python task runner lives on the Execution host alone.
-                [ExecutionPython] = ["orchestration", "workers-inbox", "workers-outbox"],
 
                 // EventTraceScope's source; only the Inbox worker consumes events, and its own
                 // wildcard covers it there.

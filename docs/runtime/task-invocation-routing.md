@@ -133,8 +133,13 @@ function response cache), which dispatches `statestore` envelopes — so cache I
 own executor and routes by that type's own mode. See [Cache-Aside Task](cache-aside-task.md).
 
 Every other wire type (`daprbinding`, `daprhttpendpoint`, `daprpubsub`, `daprconversation`,
-`python`, trigger/query types, …) has no local invoker today, so the capability gate always
+trigger/query types, …) has no local invoker today, so the capability gate always
 resolves them to `Remote` regardless of configuration.
+
+**Python (type `23`) is outside this router.** It has one path only: `PythonTaskExecutor` calls the
+domain's Python runtime container from Orchestration over Dapr. The Execution host carries no
+Python, so there is no Remote path to fall back to and no `python` entry belongs in `Modes`.
+See [Python Task](python-task.md).
 
 ## What the local path loses
 
