@@ -460,11 +460,18 @@ public partial class InstanceDataVersionComparer : IComparer<InstanceData>
     /// Matching logic:
     /// <list type="number">
     ///     <item><description>If requestedVersion is null/empty or "latest" → returns the latest version</description></item>
-    ///     <item><description>If requestedVersion is a full version → exact match only</description></item>
-    ///     <item><description>If requestedVersion is an artifact version → finds highest pkg version for that artifact; if no artifact match, falls back to package version matching</description></item>
+    ///     <item><description>If requestedVersion is a full version → exact match only (case-insensitive)</description></item>
+    ///     <item><description>If requestedVersion is an artifact version → finds highest pkg version for that artifact. A bare
+    ///     artifact row (e.g. a stored "1.0.0") is a candidate too but ranks below every package-stamped row of the same
+    ///     artifact, so it is returned only when no "-pkg." row exists for that artifact. If no artifact match exists,
+    ///     falls back to package version matching</description></item>
     ///     <item><description>If requestedVersion is a partial version (MAJOR.MINOR) → finds highest version matching the prefix</description></item>
     ///     <item><description>If requestedVersion is a major-only version (e.g., "1") → finds highest version matching the major</description></item>
+    ///     <item><description>Any other spelling → exact match only (case-insensitive)</description></item>
     /// </list>
+    /// The exact-match shortcut never runs ahead of the artifact / partial / major rules: a string-equal row must not
+    /// shadow a higher package-stamped version of the same line (#1164). For those forms an exact match is only the
+    /// last fallback, used when the pattern rule finds nothing (e.g. a bare "1" row requested as "1").
     /// </remarks>
     public static string? FindBestMatch(IEnumerable<string> versions, string? requestedVersion)
     {
@@ -480,65 +487,57 @@ public partial class InstanceDataVersionComparer : IComparer<InstanceData>
                 .FirstOrDefault();
         }
 
-        // 2. Try exact match first
-        var exactMatch = versionList.FirstOrDefault(v => 
-            string.Equals(v, requestedVersion, StringComparison.OrdinalIgnoreCase));
-        if (exactMatch != null)
-            return exactMatch;
-
-        // 3. If requestedVersion is a full version and no exact match → not found
+        // 2. Full version → exact match only. The exact-match shortcut is reserved for full versions:
+        //    for an artifact / partial / major request a string-equal bare row (e.g. a legacy "1.0.0")
+        //    must not shadow a higher package-stamped version of the same line (#1164).
         if (IsFullVersion(requestedVersion))
-            return null;
+            return FindExactMatch(versionList, requestedVersion);
 
-        // 4. If requestedVersion is an artifact version → find highest pkg version,
-        //    falling back to package-version-only match if no artifact match is found.
-        //    This handles cases where the request contains only the package version part
-        //    (e.g., "00.01.417" matching "1.0.0-pkg.00.01.417+onboarding").
+        // 3. Artifact version → highest pkg version for that artifact. MatchesArtifact also admits a
+        //    bare artifact row, which StringVersionComparer ranks below every "-pkg." row of the same
+        //    artifact (a missing package part compares lowest), so the bare row wins only when it is
+        //    the sole row of its artifact. Falls back to a package-version-only match when no artifact
+        //    matches (e.g., "00.01.417" matching "1.0.0-pkg.00.01.417+onboarding").
         if (IsArtifactVersion(requestedVersion))
         {
             var artifactPrefix = $"{requestedVersion}-pkg.";
-            var matched = versionList
-                .Where(v => v.StartsWith(artifactPrefix, StringComparison.Ordinal) || 
-                           MatchesArtifact(v, requestedVersion))
-                .OrderByDescending(v => v, StringVersionComparer.Instance)
-                .FirstOrDefault();
+            var matched = FindHighest(versionList, v =>
+                v.StartsWith(artifactPrefix, StringComparison.Ordinal) ||
+                MatchesArtifact(v, requestedVersion));
 
             if (matched != null)
                 return matched;
 
-            // No artifact match found; try matching as a package version
-            var packageMatched = versionList
-                .Where(v => MatchesPackage(v, requestedVersion))
-                .OrderByDescending(v => v, StringVersionComparer.Instance)
-                .FirstOrDefault();
-
-            return packageMatched;
+            return FindExactMatch(versionList, requestedVersion)
+                   ?? FindHighest(versionList, v => MatchesPackage(v, requestedVersion));
         }
 
-        // 5. If requestedVersion is a partial version (MAJOR.MINOR) → find highest version matching prefix
+        // 4. Partial version (MAJOR.MINOR) → highest version matching the prefix
         if (IsPartialVersion(requestedVersion))
         {
-            var matched = versionList
-                .Where(v => MatchesPartial(v, requestedVersion))
-                .OrderByDescending(v => v, StringVersionComparer.Instance)
-                .FirstOrDefault();
-
-            return matched;
+            return FindHighest(versionList, v => MatchesPartial(v, requestedVersion))
+                   ?? FindExactMatch(versionList, requestedVersion);
         }
 
-        // 6. If requestedVersion is a major-only version (e.g., "1") → find highest version matching major
+        // 5. Major-only version (e.g., "1") → highest version matching the major
         if (IsMajorOnlyVersion(requestedVersion))
         {
-            var matched = versionList
-                .Where(v => MatchesMajor(v, requestedVersion))
-                .OrderByDescending(v => v, StringVersionComparer.Instance)
-                .FirstOrDefault();
-
-            return matched;
+            return FindHighest(versionList, v => MatchesMajor(v, requestedVersion))
+                   ?? FindExactMatch(versionList, requestedVersion);
         }
 
-        return null;
+        // 6. Any other spelling → exact match only
+        return FindExactMatch(versionList, requestedVersion);
     }
+
+    private static string? FindExactMatch(List<string> versions, string? requestedVersion) =>
+        versions.FirstOrDefault(v => string.Equals(v, requestedVersion, StringComparison.OrdinalIgnoreCase));
+
+    private static string? FindHighest(List<string> versions, Func<string, bool> predicate) =>
+        versions
+            .Where(predicate)
+            .OrderByDescending(v => v, StringVersionComparer.Instance)
+            .FirstOrDefault();
 
     /// <summary>
     /// Extracts the artifact version from a full version string.

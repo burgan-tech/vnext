@@ -964,6 +964,167 @@ public class InstanceDataVersionComparerTests : DomainTestBase<DomainEntryPoint>
         Assert.Equal("1.5.0-pkg.3.0.0+core", result);
     }
 
+    // #1164: a bare artifact row must not shadow package-stamped rows of the same artifact.
+    [Fact]
+    public void FindBestMatch_ArtifactRequest_ShouldPreferHighestPackageRow_OverBareArtifactRow()
+    {
+        var versions = new List<string>
+        {
+            "1.0.0",
+            "1.0.0-pkg.0.0.49+x",
+            "1.0.0-pkg.0.0.50+x"
+        };
+
+        var result = InstanceDataVersionComparer.FindBestMatch(versions, "1.0.0");
+
+        Assert.Equal("1.0.0-pkg.0.0.50+x", result);
+    }
+
+    [Fact]
+    public void FindBestMatch_ArtifactRequest_ShouldPreferPackageRow_RegardlessOfCandidateOrder()
+    {
+        var versions = new List<string>
+        {
+            "1.0.0-pkg.0.0.50+morph-touch",
+            "1.0.0-pkg.0.0.36+morph-touch",
+            "1.0.0",
+            "1.0.0-pkg.0.0.38+morph-touch"
+        };
+
+        var result = InstanceDataVersionComparer.FindBestMatch(versions, "1.0.0");
+
+        Assert.Equal("1.0.0-pkg.0.0.50+morph-touch", result);
+    }
+
+    [Fact]
+    public void FindBestMatch_ArtifactRequest_ShouldAgreeWithLatestOrdering_ForTheSameArtifactLine()
+    {
+        // The row the write path flags IsLatest is the highest version of the line; an artifact
+        // request for that line must resolve to the same row.
+        var versions = new List<string>
+        {
+            "1.0.0",
+            "1.0.0-pkg.0.0.49+x",
+            "1.0.0-pkg.0.0.50+x"
+        };
+
+        var latest = InstanceDataVersionComparer.FindBestMatch(versions, "latest");
+        var byArtifact = InstanceDataVersionComparer.FindBestMatch(versions, "1.0.0");
+
+        Assert.Equal(latest, byArtifact);
+    }
+
+    [Fact]
+    public void FindBestMatch_ArtifactRequest_ShouldIgnoreBareRowOfAnotherArtifact()
+    {
+        var versions = new List<string>
+        {
+            "1.0.0",
+            "1.0.1-pkg.0.0.60+x"
+        };
+
+        var result = InstanceDataVersionComparer.FindBestMatch(versions, "1.0.0");
+
+        Assert.Equal("1.0.0", result);
+    }
+
+    [Theory]
+    [InlineData("1.0.0", "1.0.0")]
+    [InlineData("1.0.1", "1.0.1")]
+    public void FindBestMatch_ArtifactRequest_ShouldResolveBareOnlySet_ToTheBareRow(string requested, string expected)
+    {
+        var versions = new List<string> { "1.0.0", "1.0.1", "1.1.0" };
+
+        var result = InstanceDataVersionComparer.FindBestMatch(versions, requested);
+
+        Assert.Equal(expected, result);
+    }
+
+    [Fact]
+    public void FindBestMatch_ArtifactRequest_ShouldBeCaseInsensitive_WithBareAndPackageRows()
+    {
+        var versions = new List<string>
+        {
+            "1.0.0-alpha.1",
+            "1.0.0-alpha.1-pkg.0.0.2+x",
+            "1.0.0-alpha.1-pkg.0.0.3+x"
+        };
+
+        var result = InstanceDataVersionComparer.FindBestMatch(versions, "1.0.0-ALPHA.1");
+
+        Assert.Equal("1.0.0-alpha.1-pkg.0.0.3+x", result);
+    }
+
+    [Fact]
+    public void FindBestMatch_ArtifactRequest_ShouldBeCaseInsensitive_ForBareOnlyRow()
+    {
+        var versions = new List<string> { "1.0.0-alpha.1" };
+
+        var result = InstanceDataVersionComparer.FindBestMatch(versions, "1.0.0-ALPHA.1");
+
+        Assert.Equal("1.0.0-alpha.1", result);
+    }
+
+    [Fact]
+    public void FindBestMatch_FullRequest_ShouldMatchExactlyOnly()
+    {
+        var versions = new List<string>
+        {
+            "1.0.0",
+            "1.0.0-pkg.0.0.49+x",
+            "1.0.0-pkg.0.0.50+x"
+        };
+
+        Assert.Equal("1.0.0-pkg.0.0.49+x", InstanceDataVersionComparer.FindBestMatch(versions, "1.0.0-pkg.0.0.49+X"));
+        Assert.Null(InstanceDataVersionComparer.FindBestMatch(versions, "1.0.0-pkg.0.0.51+x"));
+    }
+
+    [Fact]
+    public void FindBestMatch_PackageOnlyRequest_ShouldStillResolve_WhenBareRowsExist()
+    {
+        var versions = new List<string>
+        {
+            "1.0.0",
+            "1.0.0-pkg.00.01.417+onboarding",
+            "1.0.0-pkg.00.01.418+onboarding"
+        };
+
+        var result = InstanceDataVersionComparer.FindBestMatch(versions, "00.01.417");
+
+        Assert.Equal("1.0.0-pkg.00.01.417+onboarding", result);
+    }
+
+    [Fact]
+    public void FindBestMatch_MajorRequest_ShouldPreferPackageRow_OverBareMajorRow()
+    {
+        var versions = new List<string> { "1", "1.2.0-pkg.0.0.5+x" };
+
+        var result = InstanceDataVersionComparer.FindBestMatch(versions, "1");
+
+        Assert.Equal("1.2.0-pkg.0.0.5+x", result);
+    }
+
+    [Theory]
+    [InlineData("1")]
+    [InlineData("1.0")]
+    public void FindBestMatch_PartialOrMajorRequest_ShouldFallBackToExactRow_WhenNoPatternMatch(string requested)
+    {
+        var versions = new List<string> { requested, "2.0.0-pkg.0.0.1+x" };
+
+        var result = InstanceDataVersionComparer.FindBestMatch(versions, requested);
+
+        Assert.Equal(requested, result);
+    }
+
+    [Fact]
+    public void FindBestMatch_UnrecognizedSpelling_ShouldMatchExactly()
+    {
+        var versions = new List<string> { "v1-custom", "1.0.0-pkg.0.0.1+x" };
+
+        Assert.Equal("v1-custom", InstanceDataVersionComparer.FindBestMatch(versions, "V1-CUSTOM"));
+        Assert.Null(InstanceDataVersionComparer.FindBestMatch(versions, "v2-custom"));
+    }
+
     #endregion
 
     private InstanceData CreateInstanceData(string version)

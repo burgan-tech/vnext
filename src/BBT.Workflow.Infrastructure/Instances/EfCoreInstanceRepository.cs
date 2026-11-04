@@ -1238,9 +1238,12 @@ public sealed class EfCoreInstanceRepository(
     /// <param name="version">The version to search for. Supports:
     /// <list type="bullet">
     ///     <item><description>Full version (e.g., "1.0.0-pkg.1.17.0+account"): Exact match</description></item>
-    ///     <item><description>Artifact version (e.g., "1.0.0" or "1.0.0-alpha.1"): Returns highest pkg version for that artifact</description></item>
+    ///     <item><description>Artifact version (e.g., "1.0.0" or "1.0.0-alpha.1"): Returns highest pkg version for that artifact;
+    ///     a bare artifact row (e.g. "1.0.0") is returned only when no "-pkg." row exists for that artifact</description></item>
     ///     <item><description>Partial version (e.g., "1.0"): Returns highest version matching the prefix</description></item>
     /// </list>
+    /// Non-full requests are resolved by <see cref="InstanceDataVersionComparer.FindBestMatch"/>, which is the single
+    /// source of truth for version precedence.
     /// </param>
     /// <param name="cancellationToken">Token to monitor for cancellation requests</param>
     /// <returns>The matched instance and data model, or null if not found</returns>
