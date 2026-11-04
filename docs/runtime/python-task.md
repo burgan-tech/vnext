@@ -192,6 +192,18 @@ Runtime container (environment):
   filesystem, non-root user, dropped capabilities, no service-account token and a NetworkPolicy
   that admits only the Orchestration sidecar. Secrets come from the Dapr secret store or the pod
   environment, never from the task definition.
+- **Who can reach the runtime.** The server binds `0.0.0.0` inside its pod only so its own Dapr
+  sidecar can reach it; there is no other caller by design. The Helm chart (`pythonRuntime`)
+  enforces this with three controls, all on by default: an ingress NetworkPolicy that admits only
+  this release's Orchestration pods (`pythonRuntime.networkPolicy.enabled: true`), Dapr mTLS
+  between the sidecars (`dapr.mtls.enabled: true`), and pod hardening (non-root,
+  `automountServiceAccountToken: false`). A cluster that needs app-id level allow-listing on top
+  can add a Dapr `Configuration` `accessControl` policy for the runtime's sidecar that admits only
+  the Orchestration app-id.
+- **Load limits.** Request bodies are capped (`MAX_REQUEST_BYTES`; Orchestration rejects mapped
+  input over 2 MiB with 413 before calling), at most `MAX_WORKERS` handler calls run at once per
+  pod, and a call is answered 504 at its timeout. Further calls wait in the pod's queue, and
+  that wait counts against their own timeout.
 - **Timeout layering.** Handler `timeoutMs` < Orchestration wait (`+ TimeoutGraceSeconds`) <
   transition job budget. The wait is at most 50 + 30 = 80 s and is not validated against
   `WorkflowExecution:TransitionJobTimeoutSeconds` (default 300); keep the job budget above the longest Python
