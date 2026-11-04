@@ -47,8 +47,7 @@ public sealed class WorkflowDbContextSchemaModelTests : IAsyncLifetime
 
     async Task IAsyncLifetime.InitializeAsync()
     {
-        _postgres = new PostgreSqlBuilder()
-            .WithImage("postgres:16-alpine")
+        _postgres = new PostgreSqlBuilder("postgres:16-alpine")
             .WithDatabase("testdb").WithUsername("test").WithPassword("test")
             .Build();
         await _postgres.StartAsync();
@@ -148,6 +147,27 @@ public sealed class WorkflowDbContextSchemaModelTests : IAsyncLifetime
         design.UsesSchemaPlaceholderModel.ShouldBeFalse();
         contextA.Model.FindEntityType(typeof(Instance))!.GetSchema().ShouldBe(SchemaA);
         contextB.Model.FindEntityType(typeof(Instance))!.GetSchema().ShouldBe(SchemaB);
+    }
+
+    [Fact]
+    public async Task PlaceholderModelWithoutTheAetherInterceptor_FailsClosed()
+    {
+        // The placeholder model on options that lack Aether's QualifiedNamesCommandInterceptor (a
+        // misconfigured or reordered registration). The command reaches Postgres with the bare placeholder
+        // as its schema; no such schema exists, so it fails instead of reading any flow's rows. The runtime
+        // never creates a schema with that name (DbMigrator and MultiSchemaMigrator use real schema names).
+        var builder = new DbContextOptionsBuilder<WorkflowDbContext>()
+            .UseNpgsql(_postgres.GetConnectionString())
+            .ReplaceService<Microsoft.EntityFrameworkCore.Infrastructure.IModelCacheKeyFactory, SchemaAwareModelCacheKeyFactory>();
+        builder.UseAetherQualifiedNamesModel();
+        var options = builder.Options;
+        await using var context = new WorkflowDbContext(options, new StaticCurrentSchema(SchemaA));
+
+        context.UsesSchemaPlaceholderModel.ShouldBeTrue();
+        var error = await Should.ThrowAsync<PostgresException>(() => context.Set<Instance>().CountAsync());
+        // Postgres reports a qualified name in a missing schema as an undefined relation.
+        error.SqlState.ShouldBe(PostgresErrorCodes.UndefinedTable);
+        error.MessageText.ShouldContain(AetherSchemaModel.Placeholder);
     }
 
     [Theory]

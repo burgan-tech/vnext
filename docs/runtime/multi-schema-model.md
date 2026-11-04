@@ -90,6 +90,7 @@ placeholder.
 - `test/BBT.Workflow.Infrastructure.Tests/Data/WorkflowDbContextSchemaModelTests.cs` (Testcontainers,
   wired through the hosts' `AddDbContext`): migration per schema, one shared model, isolation on
   transactional and non-transactional roots, one compiled query serving every schema, raw SQL composed
-  with the placeholder model, and a span recorded by the real OpenTelemetry EF Core instrumentation that
-  names the schema.
+  with the placeholder model, a span recorded by the real OpenTelemetry EF Core instrumentation that
+  names the schema, and the misconfiguration case: the placeholder model without Aether's interceptor fails
+  closed (`42P01` on `__aether_schema__`, no flow's rows are read).
 - `SchemaPlaceholderStatementTagInterceptorTests`: tag rewriting, bare and quoted placeholder.

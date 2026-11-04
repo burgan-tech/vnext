@@ -37,7 +37,8 @@ public sealed class SchemaPlaceholderStatementTagInterceptor(string schema) : Db
     // only in schema position (followed by a dot) and never inside a longer identifier.
     private static readonly Regex Placeholder = new(
         "(?<![\\w\"])(?:" + Regex.Escape(AetherSchemaModel.QuotedPlaceholder) + "|" + Regex.Escape(AetherSchemaModel.Placeholder) + ")(?=\\.)",
-        RegexOptions.CultureInvariant | RegexOptions.Compiled);
+        RegexOptions.CultureInvariant | RegexOptions.Compiled,
+        TimeSpan.FromMilliseconds(100));
 
     private readonly string _quotedSchema = "\"" + schema.Replace("\"", "\"\"") + "\"";
 
@@ -105,7 +106,14 @@ public sealed class SchemaPlaceholderStatementTagInterceptor(string schema) : Db
             if (activity.GetTagItem(tag) is string text
                 && text.Contains(AetherSchemaModel.Placeholder, StringComparison.Ordinal))
             {
-                activity.SetTag(tag, Placeholder.Replace(text, _quotedSchema));
+                try
+                {
+                    activity.SetTag(tag, Placeholder.Replace(text, _quotedSchema));
+                }
+                catch (RegexMatchTimeoutException)
+                {
+                    // A span tag is never worth failing or stalling the command: keep the original text.
+                }
             }
         }
     }
