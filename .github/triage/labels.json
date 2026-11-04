@@ -48,6 +48,6 @@
       "Priority": { "from": "priority", "values": { "priority:P1": "High", "priority:P2": "Medium", "priority:P3": "Low" } },
       "Effort": { "from": "effort", "values": { "low": "Low", "medium": "Medium", "high": "High" } }
     },
-    "project": { "title": "vNext", "fields": { "Project": "platform" } }
+    "project": { "title": "vNext", "fields": { "Project": "platform", "Priority": { "fromIssueField": "Priority" } } }
   }
 }

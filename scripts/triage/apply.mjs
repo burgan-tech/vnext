@@ -92,6 +92,16 @@ function applyIssueFields(number, fields) {
 }
 
 /**
+ * A project field default is a fixed option name, or `{ "fromIssueField": "<name>" }`: the issue
+ * field's current value (set by a person or just now by applyIssueFields). Null when it has none.
+ */
+function projectFieldValue(number, rule) {
+  if (typeof rule === 'string') return rule;
+  const current = JSON.parse(ghApp(['api', `repos/${repo}/issues/${number}/issue-field-values`]));
+  return current.find((v) => v.issue_field_name === rule.fromIssueField)?.single_select_option?.name ?? null;
+}
+
+/**
  * Adds the issue to the project unless a person already put it in another project, then fills
  * the project's single-select fields that are still empty. Returns what was written.
  */
@@ -111,9 +121,13 @@ function applyProject(issue) {
     ).addProjectV2ItemById.item;
     written.push(p.title);
   }
-  for (const [name, value] of Object.entries(defaults.project.fields ?? {})) {
+  for (const [name, rule] of Object.entries(defaults.project.fields ?? {})) {
+    const value = projectFieldValue(issue.number, rule);
+    if (!value) continue;
     const field = p.fields.nodes.find((f) => f?.name === name);
     const option = field?.options?.find((o) => o.name === value);
+    // A mirrored value the project lacks (Urgent: the project field stops at High) is left empty.
+    if (!option && typeof rule !== 'string') continue;
     if (!option) throw new Error(`project field ${name} has no option ${value}`);
     const set = graphql(
       `query($id: ID!, $name: String!) { node(id: $id) { ... on ProjectV2Item { fieldValueByName(name: $name) { ... on ProjectV2ItemFieldSingleSelectValue { optionId } } } } }`,
