@@ -174,7 +174,11 @@ read-only Cursor CLI run (`agent -p --mode ask`, no `--force`) follows
 [`.github/triage/TRIAGE.md`](../.github/triage/TRIAGE.md) and prints a JSON result; [`scripts/triage/apply.mjs`](../scripts/triage/apply.mjs) validates it against
 [`.github/triage/labels.json`](../.github/triage/labels.json) and upserts one sticky comment, and in
 `apply` mode adds labels (never removes one, never overrides a human kind / priority / type, never
-applies `priority:P0`) and sets the issue type. Repository variable `TRIAGE_MODE` = `dry-run`
+applies `priority:P0`) and sets the issue type; it then fills what is still empty from the `defaults`
+block of `labels.json` — milestone `backlog`, the org issue fields Priority (from the priority label,
+never Urgent) and Effort (the agent's estimate), and the `vNext` org project with `Project` =
+`platform`. Issue fields and the project use the GitHub App token (`APP_ID` / `APP_PRIVATE_KEY`; the
+app needs Issues and Organization projects read/write) and are skipped with a warning without it. Repository variable `TRIAGE_MODE` = `dry-run`
 (default, comment only) / `apply`; secret `CURSOR_API_KEY` (the
 shared CI Cursor account), without which the job is a no-op; `TRIAGE_MODEL` overrides the pinned model
 (`claude-sonnet-5-5-medium`; names from `agent --list-models`). Labels: `node scripts/triage/sync-labels.mjs [--apply]`. Tests:

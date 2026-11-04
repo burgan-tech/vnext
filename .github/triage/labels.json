@@ -41,5 +41,13 @@
     { "name": "ai:needs-human", "color": "b60205", "description": "An agent stopped and needs a maintainer" },
     { "name": "ai:pr-opened", "color": "0e8a16", "description": "The local fix agent opened a draft PR" },
     { "name": "needs-info", "color": "ededed", "description": "The reporter must add information" }
-  ]
+  ],
+  "defaults": {
+    "milestone": "backlog",
+    "issueFields": {
+      "Priority": { "from": "priority", "values": { "priority:P1": "High", "priority:P2": "Medium", "priority:P3": "Low" } },
+      "Effort": { "from": "effort", "values": { "low": "Low", "medium": "Medium", "high": "High" } }
+    },
+    "project": { "title": "vNext", "fields": { "Project": "platform" } }
+  }
 }
