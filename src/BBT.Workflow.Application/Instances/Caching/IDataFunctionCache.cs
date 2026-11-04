@@ -36,6 +36,15 @@ public interface IDataFunctionCache
     string ComputeEtag(GetInstanceDataInput input, InstanceDataFingerprint fingerprint);
 
     /// <summary>
+    /// Same as <see cref="ComputeEtag(GetInstanceDataInput, InstanceDataFingerprint)"/> with the
+    /// representation hash of the active SubFlow's extension output folded in. The SubFlow's output
+    /// can change while the polled instance's own data does not, so without it a client holding an
+    /// ETag would receive 304 forever. <c>null</c>/empty yields exactly the data-only ETag.
+    /// Only the response ETag uses this; the body-cache entry keeps the data-only ETag.
+    /// </summary>
+    string ComputeEtag(GetInstanceDataInput input, InstanceDataFingerprint fingerprint, string? extensionsRepresentation);
+
+    /// <summary>
     /// Resolves the effective TTL: the workflow author's <c>functionCache.ttlSeconds</c> when
     /// positive, otherwise the host default (<c>InstanceFunctionCache:DefaultTtlSeconds</c>).
     /// </summary>

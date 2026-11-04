@@ -1,0 +1,8 @@
+{
+  "releaseNote": {
+    "summary": "Data function: while a SubFlow is active, the ETag now covers the child's extension output, so clients holding an ETag receive changed extensions instead of 304.",
+    "breaking": false,
+    "docs": []
+  },
+  "fixes": {}
+}

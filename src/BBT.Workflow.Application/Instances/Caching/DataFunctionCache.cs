@@ -77,14 +77,24 @@ public sealed class DataFunctionCache(
         $"{KeyPrefix}{input.Domain}:{input.Workflow}:{input.Instance}:{BuildCallerHash(input)}";
 
     /// <inheritdoc />
-    public string ComputeEtag(GetInstanceDataInput input, InstanceDataFingerprint fingerprint)
+    public string ComputeEtag(GetInstanceDataInput input, InstanceDataFingerprint fingerprint) =>
+        ComputeEtag(input, fingerprint, extensionsRepresentation: null);
+
+    /// <inheritdoc />
+    public string ComputeEtag(
+        GetInstanceDataInput input, InstanceDataFingerprint fingerprint, string? extensionsRepresentation)
     {
+        // The extensions component is appended ONLY when present, so every ETag without an active
+        // SubFlow is byte-identical to the one computed before this overload existed.
         var material = string.Join('|',
             Generation,
             fingerprint.Id,
             fingerprint.LatestDataEtag ?? string.Empty,
             fingerprint.FlowVersion ?? string.Empty,
             BuildCallerHash(input));
+
+        if (!string.IsNullOrEmpty(extensionsRepresentation))
+            material += "|ext:" + extensionsRepresentation;
 
         return Convert.ToHexStringLower(
             SHA256.HashData(Encoding.UTF8.GetBytes(material)))[..EtagLength];

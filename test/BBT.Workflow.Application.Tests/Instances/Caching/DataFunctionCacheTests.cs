@@ -59,6 +59,33 @@ public class DataFunctionCacheTests
             "01JD2G4YV0EXAMPLEULID0000A", "1.0.0", "review", HasActiveSubFlow: false);
 
     [Fact]
+    public void ComputeEtag_WithNullOrEmptyExtensionsRepresentation_EqualsDataOnlyEtag()
+    {
+        var sut = CreateSut();
+        var input = CreateInput();
+        var fingerprint = CreateFingerprint();
+
+        var dataOnly = sut.ComputeEtag(input, fingerprint);
+
+        sut.ComputeEtag(input, fingerprint, null).ShouldBe(dataOnly);
+        sut.ComputeEtag(input, fingerprint, string.Empty).ShouldBe(dataOnly);
+    }
+
+    [Fact]
+    public void ComputeEtag_WithExtensionsRepresentation_ChangesWithRepresentationAndIsStable()
+    {
+        var sut = CreateSut();
+        var input = CreateInput();
+        var fingerprint = CreateFingerprint();
+
+        var a = sut.ComputeEtag(input, fingerprint, "hash-a");
+
+        a.ShouldNotBe(sut.ComputeEtag(input, fingerprint));
+        a.ShouldNotBe(sut.ComputeEtag(input, fingerprint, "hash-b"));
+        a.ShouldBe(sut.ComputeEtag(input, fingerprint, "hash-a"));
+    }
+
+    [Fact]
     public void Options_Defaults_AreEnabledWith60SecondDefaultTtl()
     {
         var options = new InstanceFunctionCacheOptions();

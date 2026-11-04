@@ -343,10 +343,21 @@ callerHash = h(roles | actor identity | culture | version)   # extensions delibe
   extension run — including always-on Global extensions); the body cache additionally removes
   the field-filtering cost from every 200.
 
-Accepted staleness (by design — "the critical thing is the data change point"): the ETag does
-not track extension output, so an ETag-holding client receives 304 until the next data write
-or flow migration even if extension output changed in the meantime; clients that need fresh
-extension output call without `If-None-Match` and always get a freshly computed response.
+Accepted staleness (by design — "the critical thing is the data change point"): without an
+active SubFlow the ETag does not track extension output, so an ETag-holding client receives 304
+until the next data write or flow migration even if extension output changed in the meantime;
+clients that need fresh extension output call without `If-None-Match` and always get a freshly
+computed response.
+
+Active SubFlow exception: while the polled instance has an active `S` SubFlow, the extensions
+come from the child and are the only content that changes (the parent sits in one state and
+writes no data). Here the ETag does track them: the fingerprint fast path never answers 304
+(`fingerprint.HasActiveSubFlow`), the full path fetches the child's extension output and folds
+its representation hash into the response ETag (`|ext:<hash>` appended to the material;
+without an active SubFlow the material and ETag are unchanged). Unchanged child output still
+answers 304; changed output answers 200 with the new `extensions` block. The cost is one child
+extension call per poll instead of a single projection query. The body-cache entry keeps the
+data-only ETag and never holds extension output, so fast-path cache validation is unaffected.
 Similarly, state-dependent `queryRoles` outcomes are only re-evaluated when data or flow
 version changes (transitions usually write data, which re-triggers everything).
 

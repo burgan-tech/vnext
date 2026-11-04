@@ -44,6 +44,8 @@ public class InstanceQueryAppServiceDataCacheTests : IDisposable
     private readonly ITransitionAuthorizationManager _transitionAuthorizationManager;
     private readonly ISchemaFieldFilterService _schemaFieldFilterService;
     private readonly Caching.IDataFunctionCache _dataFunctionCache;
+    private readonly IInstanceQueryGateway _instanceQueryGateway = Substitute.For<IInstanceQueryGateway>();
+    private readonly IRepresentationEtagService _representationEtagService = Substitute.For<IRepresentationEtagService>();
     private readonly InstanceQueryAppService _service;
     private readonly IServiceProvider _ambientServiceProvider;
     private readonly IServiceProvider? _previousAmbientServiceProvider;
@@ -122,7 +124,7 @@ public class InstanceQueryAppServiceDataCacheTests : IDisposable
             longPollInteractionGate: NSubstitute.Substitute.For<BBT.Workflow.Execution.LongPoll.ILongPollInteractionGate>(),
             instanceExtensionService: _instanceExtensionService,
             scriptContextFactory: _scriptContextFactory,
-            instanceQueryGateway: Substitute.For<IInstanceQueryGateway>(),
+            instanceQueryGateway: _instanceQueryGateway,
             viewContentResolutionService: Substitute.For<IViewContentResolutionService>(),
             taskConditionService: Substitute.For<ITaskConditionService>(),
             urlTemplateBuilder: Substitute.For<IUrlTemplateBuilder>(),
@@ -130,7 +132,7 @@ public class InstanceQueryAppServiceDataCacheTests : IDisposable
             correlationOptions: Microsoft.Extensions.Options.Options.Create(new BBT.Workflow.Instances.Correlation.InstanceCorrelationOptions()),
             currentSchema: Substitute.For<ICurrentSchema>(),
             transitionAuthorizationManager: _transitionAuthorizationManager,
-            representationEtagService: Substitute.For<IRepresentationEtagService>(),
+            representationEtagService: _representationEtagService,
             instanceDataReadService: new BBT.Workflow.Instances.InstanceDataReadService(_schemaFieldFilterService),
             callerRoleResolver: new DefaultCallerRoleResolver(Substitute.For<ICurrentUser>()),
             paginationLinkGenerator: Substitute.For<BBT.Aether.Application.Pagination.IPaginationLinkGenerator>(),
@@ -403,6 +405,97 @@ public class InstanceQueryAppServiceDataCacheTests : IDisposable
             .FindByIdentifierAsReadOnlyAsync(instance.Id.ToString(), Arg.Any<CancellationToken>());
     }
 
+    /// <summary>
+    /// Active SubFlow: the fingerprint projection cannot see the child's extension output, so a matching
+    /// If-None-Match must NOT be answered 304 from the fast path — the full path decides.
+    /// </summary>
+    [Fact]
+    public async Task GetInstanceDataAsync_WhenActiveSubFlowAndEtagMatchesFingerprint_DoesNotAnswer304FromFastPath()
+    {
+        var (instance, _) = CreateInstanceWithActiveSubFlow();
+        EnableCache();
+        SetupFingerprint(instance.Id, hasActiveSubFlow: true);
+        SetupFullPathMocks(instance);
+        SetupSubFlowExtensions("ext-hash-1");
+
+        var input = CreateInput(instance.Id.ToString());
+        input.IfNoneMatch = "\"etag-current\"";
+
+        var result = await _service.GetInstanceDataAsync(input, CancellationToken.None);
+
+        result.IsNotModified.ShouldBeFalse();
+        result.Result.IsSuccess.ShouldBeTrue();
+        result.Result.Value!.ETag.ShouldBe("etag-ext-ext-hash-1");
+        await _instanceRepository.Received(1)
+            .FindByIdentifierAsReadOnlyAsync(instance.Id.ToString(), Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>Changed child extension output → new ETag → 200 for a client holding the previous one.</summary>
+    [Fact]
+    public async Task GetInstanceDataAsync_WhenActiveSubFlowExtensionsChanged_Returns200WithNewEtag()
+    {
+        var (instance, _) = CreateInstanceWithActiveSubFlow();
+        EnableCache();
+        SetupFingerprint(instance.Id, hasActiveSubFlow: true);
+        SetupFullPathMocks(instance);
+        SetupSubFlowExtensions("ext-hash-2");
+
+        var input = CreateInput(instance.Id.ToString());
+        input.IfNoneMatch = "\"etag-ext-ext-hash-1\"";
+
+        var result = await _service.GetInstanceDataAsync(input, CancellationToken.None);
+
+        result.IsNotModified.ShouldBeFalse();
+        result.Result.Value!.ETag.ShouldBe("etag-ext-ext-hash-2");
+    }
+
+    /// <summary>Unchanged child extension output → same ETag → 304 (no always-200 regression).</summary>
+    [Fact]
+    public async Task GetInstanceDataAsync_WhenActiveSubFlowExtensionsUnchanged_Returns304()
+    {
+        var (instance, _) = CreateInstanceWithActiveSubFlow();
+        EnableCache();
+        SetupFingerprint(instance.Id, hasActiveSubFlow: true);
+        SetupFullPathMocks(instance);
+        SetupSubFlowExtensions("ext-hash-1");
+
+        var input = CreateInput(instance.Id.ToString());
+        input.IfNoneMatch = "\"etag-ext-ext-hash-1\"";
+
+        var result = await _service.GetInstanceDataAsync(input, CancellationToken.None);
+
+        result.IsNotModified.ShouldBeTrue();
+    }
+
+    private (Instance instance, Guid dataId) CreateInstanceWithActiveSubFlow()
+    {
+        var instance = CreateInstanceWithData(out var dataId);
+        instance.AddCorrelation(InstanceCorrelation.Create(
+            id: Guid.NewGuid(),
+            instanceId: instance.Id,
+            parentState: "review",
+            subFlowInstanceId: Guid.NewGuid(),
+            subFlowType: "S",
+            subFlowDomain: "sub-domain",
+            subFlowName: "sub-flow",
+            subFlowVersion: TestVersion));
+        return (instance, dataId);
+    }
+
+    private void SetupSubFlowExtensions(string representationHash)
+    {
+        _instanceQueryGateway
+            .GetFunctionWithExtensionsAsync(Arg.Any<GetFunctionWithInstanceInput>(), Arg.Any<CancellationToken>())
+            .Returns(Result<GetExtensionsOutput>.Ok(new GetExtensionsOutput
+            {
+                Extensions = new Dictionary<string, object> { ["otpInput"] = representationHash }
+            }));
+        _representationEtagService.Generate(Arg.Any<object>()).Returns(representationHash);
+        _dataFunctionCache
+            .ComputeEtag(Arg.Any<GetInstanceDataInput>(), Arg.Any<InstanceDataFingerprint>(), representationHash)
+            .Returns($"etag-ext-{representationHash}");
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     private void EnableCache()
@@ -414,7 +507,7 @@ public class InstanceQueryAppServiceDataCacheTests : IDisposable
             .Returns("etag-current");
     }
 
-    private void SetupFingerprint(Guid instanceId, string? latestDataEtag = "01JD2G4YV0EXAMPLEULID0000A") =>
+    private void SetupFingerprint(Guid instanceId, string? latestDataEtag = "01JD2G4YV0EXAMPLEULID0000A", bool hasActiveSubFlow = false) =>
         _instanceRepository
             .GetDataFingerprintAsync(instanceId.ToString(), Arg.Any<CancellationToken>())
             .Returns(new InstanceDataFingerprint(instanceId, "test-key", latestDataEtag, TestVersion, "review", HasActiveSubFlow: false));

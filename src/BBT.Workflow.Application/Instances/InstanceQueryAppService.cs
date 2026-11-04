@@ -1625,12 +1625,24 @@ public sealed class InstanceQueryAppService(
                         }, dataFunctionCache.ResolveTtlSeconds(flow.Config?.FunctionCache), cancellationToken);
                     }
 
-                    if (!string.IsNullOrEmpty(input.IfNoneMatch) && etag.MatchesIfNoneMatch(input.IfNoneMatch))
+                    // The cache entry above keeps the data-only ETag. The response ETag additionally
+                    // covers the active SubFlow's extension output (empty without a SubFlow, so
+                    // non-SubFlow ETags are unchanged). Pinned-version requests never reach the
+                    // fingerprint fast path, so they take this same extension-aware decision.
+                    var responseEtag = instance.Subflow is not null
+                        ? dataFunctionCache.ComputeEtag(input, isLatestRequest
+                                ? InstanceDataFingerprint.FromInstance(instance)
+                                : new InstanceDataFingerprint(instance.Id, instance.Key, instanceData?.ETag,
+                                    instance.FlowVersion, instance.EffectiveState, instance.HasActiveSubFlow),
+                            representationEtagService.Generate(result.Extensions))
+                        : etag;
+
+                    if (!string.IsNullOrEmpty(input.IfNoneMatch) && responseEtag.MatchesIfNoneMatch(input.IfNoneMatch))
                     {
                         return ConditionalResult<GetInstanceDataOutput>.NotModified();
                     }
 
-                    result.ETag = etag;
+                    result.ETag = responseEtag;
                     return ConditionalResult<GetInstanceDataOutput>.Success(result);
                 },
                 onFailure: ConditionalResult<GetInstanceDataOutput>.Fail);
@@ -1657,7 +1669,12 @@ public sealed class InstanceQueryAppService(
 
         var etag = dataFunctionCache.ComputeEtag(input, fingerprint);
 
-        if (!string.IsNullOrEmpty(input.IfNoneMatch) && etag.MatchesIfNoneMatch(input.IfNoneMatch))
+        // With an active SubFlow the response ETag also covers the child's extension output, which
+        // the projection cannot see — answering 304 here would freeze it behind the client's ETag.
+        // Fall through to the full path (it decides 304 from the extension-aware ETag); the body
+        // cache below still validates against the data-only ETag.
+        if (!fingerprint.HasActiveSubFlow
+            && !string.IsNullOrEmpty(input.IfNoneMatch) && etag.MatchesIfNoneMatch(input.IfNoneMatch))
         {
             logger.DataFunctionEtagNotModified(input.Instance);
             return (ConditionalResult<GetInstanceDataOutput>.NotModified(), null);
