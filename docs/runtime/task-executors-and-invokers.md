@@ -136,6 +136,18 @@ default Local configuration — see
   definition, executor, `[JsonDerivedType]` discriminator, `TaskType` enum member, executor
   registration, and — if it declares `acceptedStatusCodes` — a match in
   `TaskExecutorBase.GetAcceptedStatusCodes` (External HTTP inherits the `HttpTask` arm).
+- **A database path reachable from a task opens its own unit of work.** Same-order tasks run as
+  parallel branches of one pipeline (`TaskCoordinator.ExecuteTaskGroupInParallelAsync`). Each branch
+  gets its own DI scope, but a `DbContext` is bound to the ambient (AsyncLocal) unit of work and keyed
+  by schema — a new scope alone leaves two branches touching one schema on one context, and the second
+  query fails with *"A second operation was started on this context instance"* (vnext#1161: four
+  same-domain `GetInstances` of one flow). Local reads go through `ExecuteReadWithWorkflowAsync`
+  (`LocalInstanceQueryGateway`, `LocalInstanceIdResolver`, `LocalRelatedInstanceReader`,
+  `LocalAuthorizeGateway`, `LocalInstanceFileGateway`) or `ExecuteInIsolatedUnitOfWorkAsync`
+  (`LocalHumanTaskLeafGateway`); writes go through a `RequiresNew` unit of work
+  (`LocalInstanceCommandGateway`, the task journal). A new local gateway or executor database call
+  must do the same. Pinned by `LocalReadGatewayUnitOfWorkIsolationTests` and vnext-example
+  `ParallelVariableKeyLab/TriggerFamilyParallelTests`.
 - Keep bindings strongly typed; do not pass opaque JSON when a stable contract exists.
 - Do not let invokers mutate workflow instance state.
 - Keep task result mapping in executors or application services, not in Execution host controllers.

@@ -8,9 +8,13 @@ namespace BBT.Workflow.Gateway;
 /// <summary>
 /// Local implementation of instance query gateway.
 /// Executes queries locally with proper schema context.
-/// Uses ExecuteInScopeAsync/ExecuteInScopeRawAsync to create fresh scope for each operation
-/// and update AmbientServiceProvider.Current, preventing cross-scope UoW interference.
 /// </summary>
+/// <remarks>
+/// Every read runs through <c>ExecuteReadWithWorkflowAsync</c>: a fresh DI scope AND a fresh unit of work.
+/// The scope alone is not enough — the <c>DbContext</c> is bound to the ambient unit of work and keyed by
+/// schema, so same-order <c>GetInstances</c> / <c>GetInstance</c> / <c>GetInstanceData</c> tasks reading one
+/// flow shared a context and failed with "A second operation was started on this context instance".
+/// </remarks>
 public sealed class LocalInstanceQueryGateway : IInstanceQueryGateway
 {
     private readonly IServiceScopeFactory _serviceScopeFactory;
@@ -29,7 +33,7 @@ public sealed class LocalInstanceQueryGateway : IInstanceQueryGateway
         GetInstanceInput input,
         CancellationToken cancellationToken = default)
     {
-        return _serviceScopeFactory.ExecuteWithWorkflowAsync(input.Domain, input.Workflow, input.Version,
+        return _serviceScopeFactory.ExecuteReadWithWorkflowAsync(input.Domain, input.Workflow, input.Version,
             async (sp, ct) =>
             {
                 var queryService = sp.GetRequiredService<IInstanceQueryAppService>();
@@ -42,7 +46,7 @@ public sealed class LocalInstanceQueryGateway : IInstanceQueryGateway
         GetInstanceDataInput input,
         CancellationToken cancellationToken = default)
     {
-        return _serviceScopeFactory.ExecuteWithWorkflowAsync(input.Domain, input.Workflow, input.Version,
+        return _serviceScopeFactory.ExecuteReadWithWorkflowAsync(input.Domain, input.Workflow, input.Version,
             async (sp, ct) =>
             {
                 var queryService = sp.GetRequiredService<IInstanceQueryAppService>();
@@ -55,7 +59,7 @@ public sealed class LocalInstanceQueryGateway : IInstanceQueryGateway
         GetInstanceListInput input,
         CancellationToken cancellationToken = default)
     {
-        return _serviceScopeFactory.ExecuteWithWorkflowAsync(input.Domain, input.Workflow, input.Version,
+        return _serviceScopeFactory.ExecuteReadWithWorkflowAsync(input.Domain, input.Workflow, input.Version,
             async (sp, ct) =>
             {
                 var queryService = sp.GetRequiredService<IInstanceQueryAppService>();
@@ -68,7 +72,7 @@ public sealed class LocalInstanceQueryGateway : IInstanceQueryGateway
         GetInstanceHistoryInput input,
         CancellationToken cancellationToken = default)
     {
-        return _serviceScopeFactory.ExecuteWithWorkflowAsync(input.Domain, input.Workflow, null,
+        return _serviceScopeFactory.ExecuteReadWithWorkflowAsync(input.Domain, input.Workflow, null,
             async (sp, ct) =>
             {
                 var queryService = sp.GetRequiredService<IInstanceQueryAppService>();
@@ -81,7 +85,7 @@ public sealed class LocalInstanceQueryGateway : IInstanceQueryGateway
         GetFunctionWithInstanceInput input,
         CancellationToken cancellationToken = default)
     {
-        return _serviceScopeFactory.ExecuteWithWorkflowAsync(input.Domain, input.Workflow, input.Version,
+        return _serviceScopeFactory.ExecuteReadWithWorkflowAsync(input.Domain, input.Workflow, input.Version,
             async (sp, ct) =>
             {
                 var queryService = sp.GetRequiredService<IInstanceQueryAppService>();
@@ -108,7 +112,7 @@ public sealed class LocalInstanceQueryGateway : IInstanceQueryGateway
         string? transitionKey,
         CancellationToken cancellationToken = default)
     {
-        return _serviceScopeFactory.ExecuteWithWorkflowAsync(input.Domain, input.Workflow, input.Version,
+        return _serviceScopeFactory.ExecuteReadWithWorkflowAsync(input.Domain, input.Workflow, input.Version,
             async (sp, ct) =>
             {
                 var queryService = sp.GetRequiredService<IInstanceQueryAppService>();
@@ -133,7 +137,7 @@ public sealed class LocalInstanceQueryGateway : IInstanceQueryGateway
         string transitionKey,
         CancellationToken cancellationToken = default)
     {
-        return _serviceScopeFactory.ExecuteWithWorkflowAsync(input.Domain, input.Workflow, input.Version,
+        return _serviceScopeFactory.ExecuteReadWithWorkflowAsync(input.Domain, input.Workflow, input.Version,
             async (sp, ct) =>
             {
                 var queryService = sp.GetRequiredService<IInstanceQueryAppService>();
@@ -157,7 +161,7 @@ public sealed class LocalInstanceQueryGateway : IInstanceQueryGateway
         GetFunctionWithInstanceInput input,
         CancellationToken cancellationToken = default)
     {
-        return _serviceScopeFactory.ExecuteWithWorkflowAsync(input.Domain, input.Workflow, input.Version,
+        return _serviceScopeFactory.ExecuteReadWithWorkflowAsync(input.Domain, input.Workflow, input.Version,
             async (sp, ct) =>
             {
                 var queryService = sp.GetRequiredService<IInstanceQueryAppService>();
@@ -179,7 +183,7 @@ public sealed class LocalInstanceQueryGateway : IInstanceQueryGateway
         GetFunctionWithInstanceInput input,
         CancellationToken cancellationToken = default)
     {
-        return _serviceScopeFactory.ExecuteWithWorkflowAsync(input.Domain, input.Workflow, input.Version,
+        return _serviceScopeFactory.ExecuteReadWithWorkflowAsync(input.Domain, input.Workflow, input.Version,
             async (sp, ct) =>
             {
                 var queryService = sp.GetRequiredService<IInstanceQueryAppService>();
