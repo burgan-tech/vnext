@@ -260,6 +260,9 @@ and `GetAbsenceEntryFilterSpecMapping.csx` / `GetRezervationsFilterSpecMapping.c
 - Event `Selector` filters are automatically scoped to the target workflow (`flow` condition added
   by the runtime).
 - Column names are whitelisted; a typo throws instead of silently matching nothing.
+- The `id` column is a PostgreSQL `uuid`: `eq`, `ne`, `in` and `nin` bind each operand as a uuid
+  and an operand that is not a valid GUID returns HTTP 400 (not a 500 `42883`). Comparison,
+  `between` and text-match operators (`like`, `startswith`, `endswith`) are rejected on `id`.
 - Filter scalar values are limited to 1000 characters (`string.Length` after JSON decoding).
   The limit applies to attributes and instance columns in GraphQL and legacy filters, including
   nested/logical conditions and aggregation envelopes. `in`, `nin`, and `between` check each
