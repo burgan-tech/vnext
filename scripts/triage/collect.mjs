@@ -31,11 +31,13 @@ const ghOne = (path) => JSON.parse(execFileSync('gh', ['api', path], { encoding:
 function toInput(issue, comments) {
   return {
     number: issue.number,
+    nodeId: issue.node_id,
     title: issue.title,
     body: issue.body ?? '',
     author: issue.user?.login,
     labels: (issue.labels ?? []).map((l) => (typeof l === 'string' ? l : l.name)),
     type: issue.type?.name ?? null,
+    milestone: issue.milestone?.title ?? null,
     comments: comments
       .filter((c) => !isTriageComment(c))
       .slice(-20)

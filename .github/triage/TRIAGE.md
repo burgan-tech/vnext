@@ -69,6 +69,10 @@ regression); the `performance` kind is for work whose goal is to make something 
 shown, not applied) · `priority:P1` severe, blocks a team or release · `priority:P2` normal ·
 `priority:P3` low.
 
+**effort** (one): the size of the likely fix, from the code you read — `low` (one or two files,
+no contract change), `medium` (a few files or a new test scenario), `high` (cross-cutting, a
+schema/contract change, or several services). `null` when you cannot tell.
+
 **hotfixCandidate**: `true` only for a `bug` that plausibly affects a released version in
 production and has a narrow fix. A maintainer decides; you only flag it.
 
@@ -82,6 +86,7 @@ subflows, locking, instance data, error boundary, state function (see AGENTS.md 
   "kind": "bug",
   "areas": ["area:subflow", "area:state-function"],
   "priority": "priority:P2",
+  "effort": "medium",
   "hotfixCandidate": false,
   "needsInfo": false,
   "questions": ["Which runtime version?"],
@@ -97,5 +102,6 @@ subflows, locking, instance data, error boundary, state function (see AGENTS.md 
 }
 ```
 
-Rules: one valid JSON object only, no prose around it, no comments; `confidence` is `low`, `medium` or `high`; `questions`
+Rules: one valid JSON object only, no prose around it, no comments; `confidence` and `effort` are
+`low`, `medium` or `high`; `questions`
 only when `needsInfo` is true; no `@` mentions; no Markdown headings inside fields.
