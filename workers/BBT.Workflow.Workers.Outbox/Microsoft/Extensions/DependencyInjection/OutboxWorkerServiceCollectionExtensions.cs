@@ -76,6 +76,7 @@ public static class OutboxWorkerServiceCollectionExtensions
         // database's sys_queues has its own outbox rows. One database → unchanged.
         services.AddDomainDatabases(configuration);
         services.RouteToDomainDatabase<MessagingDbContext>();
+        services.TagStatementsWithSchema<MessagingDbContext>();
         services.FanOutOutboxPerDomainDatabase();
 
         return services;
