@@ -404,6 +404,18 @@
       "severity": "warning",
       "title": "Parent resume runs with the headers of the request that settled the child",
       "description": "Before: the parent's output mapping saw no context.Headers and the parent's resumed hop ran with empty headers. Now: the output mapping sees the child's settling-request headers (deny floor and framework headers removed), and with Workflow:SubFlow:CarriedHeaders:ApplyToResume=true (default) the resumed hop's auto conditions, onEntry tasks (caller-credential forwarding: sub, act_sub, role, position, client_id) and the next subflow's input mapping run with them. To keep the old resume set Workflow__SubFlow__CarriedHeaders__ApplyToResume=false; Emit=false disables carrying altogether."
+    },
+    {
+      "id": "python-task-handler-contract",
+      "type": "behavior",
+      "component": "task",
+      "path": "task.type=23 config",
+      "since": "0.0.103",
+      "severity": "error",
+      "title": "PythonTask config moves from inline script to a handler reference",
+      "description": "PythonTask (type 23) no longer carries code. config.script and config.executionMode are gone; config.handler names a handler registered in the domain's Python runtime image (built FROM ghcr.io/burgan-tech/vnext/python-runtime), config.input and config.timeoutSeconds stay, and the standard InputHandler/OutputHandler mapping now runs. The Execution host's Python section (Python:*) and its pythonNet, process and container modes are removed. The type was experimental and disabled by default; @burgan-tech/vnext-schema 0.0.59 defines the type 23 handler contract.",
+      "action": "Move each Python script into a handler module of the domain's runtime image, replace config.script with config.handler, enable the runtime in the Helm chart (it sets Workflow:PythonRuntime:AppId), and drop Python:* settings from Execution overrides.",
+      "documentation": "docs/runtime/python-task.md"
     }
   ]
 }

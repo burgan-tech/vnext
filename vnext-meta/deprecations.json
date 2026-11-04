@@ -219,6 +219,28 @@
       "replacement": "A schema role: 'master', 'transition', 'function' or 'component' — or omit the field (\"\" is accepted too).",
       "severity": "warning",
       "message": "attributes.type values other than the four roles (schema, workflow, view, headers, SchemaDefinition ...) publish with a warning in this release and will be refused in a later one. @burgan-tech/vnext-schema 0.0.56 (CLI, Forge) already refuses them. Use 'master' for a flow's data schema, 'transition' / 'function' for a request body, 'component' for an embedded view's dataSchema, or omit it for a schema used in more than one role."
+    },
+    {
+      "id": "python-task-inline-script-config",
+      "type": "field",
+      "component": "task",
+      "path": "task.type=23 config.script, config.executionMode",
+      "deprecatedSince": "0.0.103",
+      "removedAt": null,
+      "replacement": "task.type=23 config.handler (a handler registered in the domain's Python runtime image)",
+      "severity": "error",
+      "message": "PythonTask no longer carries inline Python. config.script and config.executionMode are rejected at publish; name a handler registered in the domain's runtime image instead (migration python-task-handler-contract). The type was experimental and disabled by default."
+    },
+    {
+      "id": "execution-python-settings",
+      "type": "field",
+      "component": "runtime",
+      "path": "Execution host Python:* (Python:Enabled, Python:ExecutionMode, Python:Container:*, Python:MaxTimeoutSeconds, ...)",
+      "deprecatedSince": "0.0.103",
+      "removedAt": null,
+      "replacement": "Helm pythonRuntime block; Orchestration Workflow:PythonRuntime:AppId / InvokeMethod / TimeoutGraceSeconds",
+      "severity": "warning",
+      "message": "The Execution host no longer reads any Python:* setting; leftover overrides are ignored (unbound keys). Python runs in the domain's own runtime container and Orchestration calls it, configured by Workflow:PythonRuntime (set by the Helm chart when pythonRuntime is enabled). See migration python-task-handler-contract."
     }
   ]
 }
