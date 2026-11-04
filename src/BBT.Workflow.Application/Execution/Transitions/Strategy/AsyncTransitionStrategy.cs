@@ -487,7 +487,7 @@ public sealed class AsyncTransitionStrategy(
         // Set baggage for propagation across service boundaries
         activity.SetBaggage(TelemetryConstants.TagNames.Domain, ctx.Workflow.Domain);
         activity.SetBaggage(TelemetryConstants.TagNames.Flow, ctx.Workflow.Key);
-        activity.SetBaggage(TelemetryConstants.TagNames.FlowVersion, ctx.Workflow.Version);
+        activity.SetBaggage(TelemetryConstants.TagNames.FlowVersion, BaggageValueFormatter.Format(ctx.Workflow.Version));
         activity.SetBaggage(TelemetryConstants.TagNames.InstanceId, ctx.InstanceId.ToString());
         activity.SetBaggage(TelemetryConstants.TagNames.WorkflowInstanceId, ctx.InstanceId.ToString("D").ToLowerInvariant());
         activity.SetBaggage(TelemetryConstants.TagNames.CorrelationId, ctx.CorrelationId);
