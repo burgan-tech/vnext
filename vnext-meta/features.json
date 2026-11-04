@@ -73,22 +73,12 @@
     "pythonTask": {
       "since": "0.0.80",
       "status": "experimental",
-      "description": "Built-in trusted-code PythonTask (TaskType=23, JSON discriminator '23', Execution route 'python') invokes CPython through one explicit mode: pythonNet, process, or container. PythonTask does not execute Orchestration InputHandler/OutputHandler mappings. The only script contract is main(input), with config.input and the return value transported only as strict JSON; NAT and B64 ScriptCode are accepted while REF and filesystem loading are rejected. Disabled or unavailable modes never fall back. Python.NET is in-process and not a security sandbox; process mode uses an isolated interpreter plus Linux resource limits; container mode creates and removes one hardened runner container per invocation through an explicit Docker Engine or Kubernetes Job/attach driver and is opt-in. Runtime package installation is disabled and both standard runtimes and the multi-arch runner image consume the same transitive hash lock. AllowedModules is a governance policy rather than a security boundary.",
+      "description": "PythonTask (TaskType=23, JSON discriminator '23') calls a named handler in the domain's own Python runtime container. The Orchestration host invokes it directly over Dapr service invocation (Workflow:PythonRuntime:AppId, POST v1/invoke) with the versioned runtime contract (contractVersion 1: handler, input, timeoutMs, context -> status, output | error.code/message); there is no Execution hop and no Python, pythonnet or Kubernetes client in any vNext host image. Code and packages live in the domain image built FROM ghcr.io/burgan-tech/vnext/python-runtime; the task carries only handler, input and timeoutSeconds (1-50). Input and output use the standard InputHandler/OutputHandler mapping. An empty AppId fails the task with 503, a runtime that does not answer in time with 408. The runtime is enabled per domain in the Helm chart.",
       "schemaPath": "task.type=23",
       "relatedConfig": [
-        "Python:Enabled",
-        "Python:DefaultMode",
-        "Python:EnabledModes",
-        "Python:MaxTimeoutSeconds",
-        "Python:MaxCodeBytes",
-        "Python:MaxInputBytes",
-        "Python:MaxOutputBytes",
-        "Python:MaxStdoutBytes",
-        "Python:MaxStderrBytes",
-        "Python:AllowedModules",
-        "Python:PythonNet",
-        "Python:Process",
-        "Python:Container"
+        "Workflow:PythonRuntime:AppId",
+        "Workflow:PythonRuntime:InvokeMethod",
+        "Workflow:PythonRuntime:TimeoutGraceSeconds"
       ]
     },
     "customScriptHelpers": {

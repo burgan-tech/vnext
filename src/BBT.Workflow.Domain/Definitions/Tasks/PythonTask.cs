@@ -4,14 +4,16 @@ using System.Text.Json.Serialization;
 namespace BBT.Workflow.Definitions;
 
 /// <summary>
-/// Executes trusted Python code in the Execution service.
-/// The script must expose <c>main(input)</c> and communicate through JSON values only.
+/// Calls a named handler in the domain's own Python runtime container. The Orchestration host
+/// invokes the runtime directly over Dapr service invocation with the versioned Python runtime
+/// contract; the code and its packages live in the container image, never in the task definition.
+/// Input and output go through the standard task mapping (<c>InputHandler</c> sets
+/// <see cref="Input"/> with <see cref="SetInput"/>, <c>OutputHandler</c> reads the handler output).
 /// </summary>
 public sealed class PythonTask : WorkflowTask
 {
     public const int DefaultTimeoutSeconds = 30;
     public const int MaxTimeoutSeconds = 50;
-    public const int MaxCodeBytes = 256 * 1024;
     public const int MaxInputBytes = 2 * 1024 * 1024;
 
     private PythonTask()
@@ -25,28 +27,21 @@ public sealed class PythonTask : WorkflowTask
     }
 
     /// <summary>
-    /// Inline Python source. Native and Base64 encodings are supported.
+    /// Name of the handler registered in the Python runtime container.
     /// </summary>
-    public ScriptCode? Script { get; private set; }
+    public string? Handler { get; private set; }
 
     /// <summary>
-    /// Optional task-level runtime override: pythonNet, process, or container.
-    /// </summary>
-    public string? ExecutionMode { get; private set; }
-
-    /// <summary>
-    /// JSON input passed to <c>main(input)</c>.
+    /// JSON input passed to the handler. Seeded from <c>config.input</c>; an input mapping may replace it.
     /// </summary>
     public JsonElement? Input { get; private set; }
 
     /// <summary>
-    /// Invocation timeout. The remote invocation budget is larger than this value.
+    /// Handler timeout sent to the runtime; the Orchestration-side call budget is slightly larger.
     /// </summary>
     public int TimeoutSeconds { get; private set; } = DefaultTimeoutSeconds;
 
-    public void SetScript(ScriptCode script) => Script = script;
-
-    public void SetExecutionMode(string? executionMode) => ExecutionMode = executionMode;
+    public void SetHandler(string? handler) => Handler = handler;
 
     public void SetInput(dynamic? input) =>
         Input = JsonSerializer.SerializeToElement(input, JsonSerializerConstants.JsonOptions);
@@ -54,8 +49,7 @@ public sealed class PythonTask : WorkflowTask
     public void SetTimeoutSeconds(int? timeoutSeconds) =>
         TimeoutSeconds = timeoutSeconds ?? DefaultTimeoutSeconds;
 
-    internal void SetScriptInternal(ScriptCode? script) => Script = script;
-    internal void SetExecutionModeInternal(string? executionMode) => ExecutionMode = executionMode;
+    internal void SetHandlerInternal(string? handler) => Handler = handler;
     internal void SetInputInternal(JsonElement? input) => Input = input;
     internal void SetTimeoutSecondsInternal(int timeoutSeconds) => TimeoutSeconds = timeoutSeconds;
 
@@ -63,15 +57,10 @@ public sealed class PythonTask : WorkflowTask
     {
         base.Configure(config);
 
-        if (config.TryGetProperty("script", out var script))
+        if (config.TryGetProperty("handler", out var handler) &&
+            handler.ValueKind == JsonValueKind.String)
         {
-            Script = script.Deserialize<ScriptCode>(JsonSerializerConstants.JsonOptions);
-        }
-
-        if (config.TryGetProperty("executionMode", out var executionMode) &&
-            executionMode.ValueKind == JsonValueKind.String)
-        {
-            ExecutionMode = executionMode.GetString();
+            Handler = handler.GetString();
         }
 
         if (config.TryGetProperty("input", out var input))
@@ -94,8 +83,7 @@ public sealed class PythonTask : WorkflowTask
     {
         var cloned = new PythonTask();
         CopyBaseTo(cloned);
-        cloned.Script = Script;
-        cloned.ExecutionMode = ExecutionMode;
+        cloned.Handler = Handler;
         cloned.Input = Input;
         cloned.TimeoutSeconds = TimeoutSeconds;
         return cloned;
@@ -104,8 +92,7 @@ public sealed class PythonTask : WorkflowTask
     public void CopyFromInternal(PythonTask source)
     {
         source.CopyBaseToInternal(this);
-        SetScriptInternal(source.Script);
-        SetExecutionModeInternal(source.ExecutionMode);
+        SetHandlerInternal(source.Handler);
         SetInputInternal(source.Input);
         SetTimeoutSecondsInternal(source.TimeoutSeconds);
     }
@@ -113,8 +100,7 @@ public sealed class PythonTask : WorkflowTask
     public override void Reset()
     {
         base.Reset();
-        Script = null;
-        ExecutionMode = null;
+        Handler = null;
         Input = null;
         TimeoutSeconds = DefaultTimeoutSeconds;
     }
