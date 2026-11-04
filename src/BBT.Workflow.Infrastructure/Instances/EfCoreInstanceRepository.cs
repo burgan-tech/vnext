@@ -1238,7 +1238,7 @@ public sealed class EfCoreInstanceRepository(
     /// <param name="version">The version to search for. Supports:
     /// <list type="bullet">
     ///     <item><description>Full version (e.g., "1.0.0-pkg.1.17.0+account"): Exact match</description></item>
-    ///     <item><description>Artifact version (e.g., "1.0.0" or "1.0.0-alpha.1"): Returns highest pkg version for that artifact</description></item>
+    ///     <item><description>Artifact version (e.g., "1.0.0" or "1.0.0-alpha.1"): Returns highest pkg version for that artifact; a stored bare artifact row is returned only when no pkg row exists (see <see cref="InstanceDataVersionComparer.FindBestMatch"/>)</description></item>
     ///     <item><description>Partial version (e.g., "1.0"): Returns highest version matching the prefix</description></item>
     /// </list>
     /// </param>
