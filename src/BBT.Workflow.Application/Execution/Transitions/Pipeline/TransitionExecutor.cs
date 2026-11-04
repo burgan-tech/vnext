@@ -191,7 +191,7 @@ public sealed class TransitionExecutor
             context.InstanceId.ToString("D").ToLowerInvariant());
 
         activity.SetBaggage(TelemetryConstants.TagNames.Flow, context.Workflow.Key);
-        activity.SetBaggage(TelemetryConstants.TagNames.FlowVersion, context.Workflow.Version);
+        activity.SetBaggage(TelemetryConstants.TagNames.FlowVersion, BaggageValueFormatter.Format(context.Workflow.Version));
         activity.SetBaggage(TelemetryConstants.TagNames.InstanceId, context.InstanceId.ToString());
         activity.SetBaggage(TelemetryConstants.TagNames.CorrelationId, context.CorrelationId);
         activity.SetBaggage(TelemetryConstants.TagNames.WorkflowInstanceId,
