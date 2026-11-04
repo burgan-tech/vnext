@@ -135,9 +135,10 @@ public static class WorkflowApiBaseServiceCollectionExtensions
 
                 options.ReplaceService<IMigrationsSqlGenerator, MultiSchemaNpgsqlMigrationsSqlGenerator>();
 
-                // SchemaAwareModelCacheKeyFactory replaces SET search_path approach:
-                // a separate compiled model is cached per schema, table names are fully qualified,
-                // no session-level directive is ever sent — PgBouncer transaction-mode safe.
+                // No SET search_path is ever sent (PgBouncer transaction-mode safe). Unit-of-work
+                // contexts share ONE placeholder model that Aether's interceptor qualifies per command;
+                // migration and directly resolved contexts get a model bound to their schema. The
+                // factory keys both forms (docs/runtime/multi-schema-model.md).
                 options.ReplaceService<IModelCacheKeyFactory, SchemaAwareModelCacheKeyFactory>();
             });
 
@@ -179,6 +180,11 @@ public static class WorkflowApiBaseServiceCollectionExtensions
         services.RouteToDomainDatabase<WorkflowDbContext>();
         services.RouteToDomainDatabase<MessagingDbContext>();
         services.RouteToDomainDatabase<MetricsDbContext>();
+
+        // Command spans name the real schema, not Aether's placeholder (docs/runtime/multi-schema-model.md).
+        services.TagStatementsWithSchema<WorkflowDbContext>();
+        services.TagStatementsWithSchema<MessagingDbContext>();
+        services.TagStatementsWithSchema<MetricsDbContext>();
 
         return services;
     }

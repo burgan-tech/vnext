@@ -5,6 +5,7 @@ using BBT.Aether.Domain.Events;
 using BBT.Aether.Events;
 using BBT.Aether.MultiSchema;
 using BBT.Aether.Persistence;
+using BBT.Aether.Uow.EntityFrameworkCore;
 using BBT.Workflow.Data.ValueConverters;
 using BBT.Workflow.Instances;
 using Microsoft.EntityFrameworkCore;
@@ -15,12 +16,24 @@ namespace BBT.Workflow.Data;
 /// Database context for workflow engine persistence.
 /// Supports multi-schema architecture for multi-tenancy.
 ///
-/// Schema isolation is achieved by injecting <see cref="ICurrentSchema"/> and passing the schema
-/// name directly to entity table mappings in <see cref="OnModelCreating"/>. The compiled model is
-/// cached per schema via <c>SchemaAwareModelCacheKeyFactory</c>, so no <c>SET search_path</c>
-/// directive is ever sent — making this context safe under PgBouncer transaction-mode pooling.
+/// Schema isolation never uses <c>SET search_path</c>, so the context is safe under PgBouncer
+/// transaction-mode pooling. It takes one of two forms, depending on how the options were built:
+/// <list type="bullet">
+///   <item><b>Runtime</b> (Aether unit of work, options carry <see cref="AetherSchemaModelOptionsExtension"/>):
+///   tables map to Aether's schema placeholder and <c>QualifiedNamesCommandInterceptor</c> writes the
+///   context's schema into every command. All schemas share ONE model and one compiled-query set.</item>
+///   <item><b>Migration / design time / directly resolved</b> (no extension): the schema from
+///   <see cref="ICurrentSchema"/> is written into the table mappings, so migrations and
+///   <c>EnsureCreated</c> target that schema exactly as before. These models are cached per schema.</item>
+/// </list>
 /// </summary>
 /// <remarks>
+/// <para>
+/// One model per schema at runtime overflowed EF Core's internal cache (<c>SizeLimit</c> 10240; a model
+/// costs 250, a compiled query 10) once a domain had a few dozen flows, so models and queries were
+/// rebuilt on almost every request against a rarely used schema. See
+/// <c>docs/runtime/multi-schema-model.md</c>.
+/// </para>
 /// <para>
 /// <b>DEPRECATED:</b> <see cref="BackgroundJobInfo"/> / <see cref="IHasEfCoreBackgroundJobs"/>
 /// implementasyonu bu context'ten kaldırılacak. Birincil store <c>MessagingDbContext</c>'tir
@@ -40,7 +53,15 @@ public class WorkflowDbContext : AetherDbContext<WorkflowDbContext>, IHasEfCoreB
         : base(options)
     {
         _currentSchema = currentSchema;
+        UsesSchemaPlaceholderModel = options.FindExtension<AetherSchemaModelOptionsExtension>() is not null;
     }
+
+    /// <summary>
+    /// <c>true</c> when the options come from an Aether unit of work: the model maps tables to the schema
+    /// placeholder and is shared by every schema. <c>false</c> for migration, design-time and directly
+    /// resolved contexts, whose model is bound to <see cref="CurrentSchemaName"/>.
+    /// </summary>
+    public bool UsesSchemaPlaceholderModel { get; }
 
     /// <summary>
     /// Gets or sets the workflow instances.
@@ -99,9 +120,9 @@ public class WorkflowDbContext : AetherDbContext<WorkflowDbContext>, IHasEfCoreB
     public virtual DbSet<BackgroundJobInfo> BackgroundJobs { get; set; }
 
     /// <summary>
-    /// Gets the current schema name as seen by this context instance.
-    /// Exposed for <see cref="SchemaAwareModelCacheKeyFactory"/> so it can build
-    /// the cache key without any DI dependency.
+    /// Gets the current schema name as seen by this context instance — the schema its commands target,
+    /// whatever the model form. Read by <see cref="SchemaAwareModelCacheKeyFactory"/>, the migration SQL
+    /// generator and the raw-SQL writers, without any DI dependency.
     /// </summary>
     public string? CurrentSchemaName => _currentSchema?.Name;
 
@@ -110,9 +131,11 @@ public class WorkflowDbContext : AetherDbContext<WorkflowDbContext>, IHasEfCoreB
     {
         builder.HasDefaultSchema(null);
 
+        // With the Aether extension the base sets the placeholder as the default schema.
         base.OnModelCreating(builder);
 
-        var schema = _currentSchema?.Name;
+        // A null schema lets every table inherit that placeholder; the interceptor qualifies it per command.
+        var schema = UsesSchemaPlaceholderModel ? null : _currentSchema?.Name;
         builder.ConfigureWorkflow(schema);
         builder.ConfigureBackgroundJob(schema);
     }
