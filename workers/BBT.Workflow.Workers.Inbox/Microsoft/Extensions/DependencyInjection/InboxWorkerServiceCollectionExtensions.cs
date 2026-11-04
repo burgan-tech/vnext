@@ -80,6 +80,10 @@ public static class InboxWorkerServiceCollectionExtensions
                 .ConfigureWarnings(w => w.Ignore(RelationalEventId.PendingModelChangesWarning));
         });
 
+        // Command spans name sys_queues, not Aether's placeholder. Span tag only: the Inbox keeps the
+        // default database (no RouteToDomainDatabase), as before.
+        services.TagStatementsWithSchema<MessagingDbContext>();
+
         // withHostedService: true → SDK registers InboxBackgroundService with adaptive polling.
         // AetherInboxOptions is a separate class from AetherOutboxOptions (no longer share config).
         // Schema MUST be set — InboxProcessor skips all runs with a warning if Schema is null.

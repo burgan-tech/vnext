@@ -1,0 +1,46 @@
+{
+  "releaseNote": {
+    "summary": "PythonTask now calls the domain's own Python runtime container from Orchestration over Dapr; Python, pythonnet and the Kubernetes client are removed from the Execution image.",
+    "breaking": true,
+    "docs": []
+  },
+  "schemaVersion": "0.0.59",
+  "migrations": [
+    {
+      "id": "python-task-handler-contract",
+      "type": "behavior",
+      "component": "task",
+      "path": "task.type=23 config",
+      "since": "next",
+      "severity": "error",
+      "title": "PythonTask config moves from inline script to a handler reference",
+      "description": "PythonTask (type 23) no longer carries code. config.script and config.executionMode are gone; config.handler names a handler registered in the domain's Python runtime image (built FROM ghcr.io/burgan-tech/vnext/python-runtime), config.input and config.timeoutSeconds stay, and the standard InputHandler/OutputHandler mapping now runs. The Execution host's Python section (Python:*) and its pythonNet, process and container modes are removed. The type was experimental and disabled by default; @burgan-tech/vnext-schema 0.0.59 defines the type 23 handler contract.",
+      "action": "Move each Python script into a handler module of the domain's runtime image, replace config.script with config.handler, enable the runtime in the Helm chart (it sets Workflow:PythonRuntime:AppId), and drop Python:* settings from Execution overrides.",
+      "documentation": "docs/runtime/python-task.md"
+    }
+  ],
+  "deprecations": [
+    {
+      "id": "python-task-inline-script-config",
+      "type": "field",
+      "component": "task",
+      "path": "task.type=23 config.script, config.executionMode",
+      "deprecatedSince": "next",
+      "removedAt": null,
+      "replacement": "task.type=23 config.handler (a handler registered in the domain's Python runtime image)",
+      "severity": "error",
+      "message": "PythonTask no longer carries inline Python. config.script and config.executionMode are rejected at publish; name a handler registered in the domain's runtime image instead (migration python-task-handler-contract). The type was experimental and disabled by default."
+    },
+    {
+      "id": "execution-python-settings",
+      "type": "field",
+      "component": "runtime",
+      "path": "Execution host Python:* (Python:Enabled, Python:ExecutionMode, Python:Container:*, Python:MaxTimeoutSeconds, ...)",
+      "deprecatedSince": "next",
+      "removedAt": null,
+      "replacement": "Helm pythonRuntime block; Orchestration Workflow:PythonRuntime:AppId / InvokeMethod / TimeoutGraceSeconds",
+      "severity": "warning",
+      "message": "The Execution host no longer reads any Python:* setting; leftover overrides are ignored (unbound keys). Python runs in the domain's own runtime container and Orchestration calls it, configured by Workflow:PythonRuntime (set by the Helm chart when pythonRuntime is enabled). See migration python-task-handler-contract."
+    }
+  ]
+}

@@ -37,8 +37,17 @@ public class StartSubflowJobHandlerPinVersionTests
             => Entries.Add((logLevel, formatter(state, exception)));
     }
 
-    private static async Task<(InstanceCorrelation Correlation, IInstanceCorrelationRepository Repository, CapturingLogger Logger)>
-        RunAsync(string? resolvedVersion, Action<IInstanceCorrelationRepository>? configureRepository = null)
+    private sealed record Run(
+        InstanceCorrelation Correlation,
+        IInstanceCorrelationRepository Repository,
+        CapturingLogger Logger,
+        IInstanceRepository Instances,
+        TransitionExecutionContext Context);
+
+    private static async Task<Run> RunAsync(
+        string? resolvedVersion,
+        Action<IInstanceCorrelationRepository>? configureRepository = null,
+        ExecMode callerMode = ExecMode.Async)
     {
         var workflow = WorkflowFactory.CreateDefault();
         var parent = Instance.Create(Guid.NewGuid(), workflow.Key, workflow.Version, "parent");
@@ -89,7 +98,7 @@ public class StartSubflowJobHandlerPinVersionTests
             Workflow = workflow,
             Instance = parent,
             Transition = TransitionFactory.CreateDefault(),
-            CallerMode = ExecMode.Async
+            CallerMode = callerMode
         };
 
         var result = await handler.HandleAsync(
@@ -97,13 +106,13 @@ public class StartSubflowJobHandlerPinVersionTests
             context, CancellationToken.None);
 
         result.IsSuccess.ShouldBeTrue();
-        return (correlation, correlations, logger);
+        return new Run(correlation, correlations, logger, instances, context);
     }
 
     [Fact]
     public async Task Start_ShouldPinCorrelation_WhenChildReturnsFlowVersion()
     {
-        var (correlation, repository, _) = await RunAsync("1.0.3");
+        var (correlation, repository, _, _, _) = await RunAsync("1.0.3");
 
         correlation.SubFlowVersion.ShouldBe("1.0.3");
         await repository.Received(1).TryPinSubFlowVersionAsync(
@@ -113,7 +122,7 @@ public class StartSubflowJobHandlerPinVersionTests
     [Fact]
     public async Task Start_ShouldKeepAuthoredVersion_WhenChildReturnsNull()
     {
-        var (correlation, repository, _) = await RunAsync(null);
+        var (correlation, repository, _, _, _) = await RunAsync(null);
 
         correlation.SubFlowVersion.ShouldBe("1.0");
         await repository.DidNotReceiveWithAnyArgs().TryPinSubFlowVersionAsync(default, default!, default);
@@ -122,7 +131,7 @@ public class StartSubflowJobHandlerPinVersionTests
     [Fact]
     public async Task Start_ShouldSucceed_WhenPinThrows()
     {
-        var (_, _, logger) = await RunAsync("1.0.3", r => r
+        var (_, _, logger, _, _) = await RunAsync("1.0.3", r => r
             .TryPinSubFlowVersionAsync(Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns<Task<bool>>(_ => throw new InvalidOperationException("db down")));
 
@@ -132,7 +141,7 @@ public class StartSubflowJobHandlerPinVersionTests
     [Fact]
     public async Task Start_ShouldSucceed_AndWarn_WhenPinUpdatesNoRow()
     {
-        var (_, _, logger) = await RunAsync("1.0.3", r => r
+        var (_, _, logger, _, _) = await RunAsync("1.0.3", r => r
             .TryPinSubFlowVersionAsync(Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(false));
 
@@ -145,5 +154,17 @@ public class StartSubflowJobHandlerPinVersionTests
         await Should.ThrowAsync<OperationCanceledException>(() => RunAsync("1.0.3", r => r
             .TryPinSubFlowVersionAsync(Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns<Task<bool>>(_ => throw new OperationCanceledException())));
+    }
+
+    [Fact]
+    public async Task Start_ShouldNotReReadTheParent_WhenTheCallerIsSync()
+    {
+        // The sync re-read used to fill ClientResponse for a response nobody reads after the
+        // post-commit barrier: the runner answers from the settlement reload or the identity-only
+        // short-circuit. One fewer unit of work per SubFlow level.
+        var run = await RunAsync("1.0.3", callerMode: ExecMode.Sync);
+
+        await run.Instances.DidNotReceiveWithAnyArgs().FindByIdentifierSlimAsync(default!, default);
+        run.Context.ClientResponse.ShouldBeNull();
     }
 }

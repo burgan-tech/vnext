@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text;
+using System.Text.RegularExpressions;
 using BBT.Workflow.Runtime;
 
 namespace BBT.Workflow.Definitions.Validators;
@@ -8,7 +9,7 @@ namespace BBT.Workflow.Definitions.Validators;
 /// Validates workflow task components (sys-tasks).
 /// Ensures task definitions are properly structured and contain required fields.
 /// </summary>
-public sealed class TaskComponentValidator : IComponentValidator
+public sealed partial class TaskComponentValidator : IComponentValidator
 {
     /// <inheritdoc />
     public bool CanHandle(string componentType) => componentType == RuntimeSysSchemaInfo.Tasks;
@@ -74,55 +75,17 @@ public sealed class TaskComponentValidator : IComponentValidator
 
     private static void ValidatePythonTask(PythonTask task, ComponentValidationResult result)
     {
-        const string scriptMember = $"{nameof(PythonTask)}.{nameof(PythonTask.Script)}";
+        const string handlerMember = $"{nameof(PythonTask)}.{nameof(PythonTask.Handler)}";
 
-        if (task.Script is null)
+        if (string.IsNullOrWhiteSpace(task.Handler))
         {
-            result.AddError("Python task requires a 'script'.", scriptMember);
+            result.AddError("Python task requires a 'handler'.", handlerMember);
         }
-        else
-        {
-            ScriptCodeValidator.Validate(task.Script, scriptMember, result.ValidationErrors);
-
-            if (task.Script.IsReference)
-            {
-                result.AddError("Python task scripts must be inline; REF encoding is not supported.", scriptMember);
-            }
-
-            if (task.Script.Type.Equals(MappingType.Global))
-            {
-                result.AddError("Python task scripts cannot use the Global mapping type.", scriptMember);
-            }
-
-            if (task.Script.Location.Contains('/') || task.Script.Location.Contains('\\'))
-            {
-                result.AddError(
-                    "Python task script location is a diagnostic file name; filesystem paths are not supported.",
-                    scriptMember);
-            }
-
-            try
-            {
-                if (!task.Script.IsReference &&
-                    Encoding.UTF8.GetByteCount(task.Script.DecodedCode) > PythonTask.MaxCodeBytes)
-                {
-                    result.AddError(
-                        $"Python task script exceeds the {PythonTask.MaxCodeBytes}-byte limit.",
-                        scriptMember);
-                }
-            }
-            catch (InvalidOperationException)
-            {
-                // ScriptCodeValidator already emitted the actionable invalid-Base64 error.
-            }
-        }
-
-        if (!string.IsNullOrWhiteSpace(task.ExecutionMode) &&
-            !PythonExecutionModes.All.Contains(task.ExecutionMode, StringComparer.OrdinalIgnoreCase))
+        else if (!PythonHandlerNamePattern().IsMatch(task.Handler))
         {
             result.AddError(
-                "Python task executionMode must be one of: pythonNet, process, container.",
-                $"{nameof(PythonTask)}.{nameof(PythonTask.ExecutionMode)}");
+                "Python task handler must start with a letter or '_' and contain only letters, digits, '_', '.' or '-' (max 128 characters).",
+                handlerMember);
         }
 
         if (task.TimeoutSeconds is < 1 or > PythonTask.MaxTimeoutSeconds)
@@ -140,4 +103,7 @@ public sealed class TaskComponentValidator : IComponentValidator
                 $"{nameof(PythonTask)}.{nameof(PythonTask.Input)}");
         }
     }
+
+    [GeneratedRegex("^[A-Za-z_][A-Za-z0-9_.-]{0,127}$", RegexOptions.CultureInvariant)]
+    private static partial Regex PythonHandlerNamePattern();
 }

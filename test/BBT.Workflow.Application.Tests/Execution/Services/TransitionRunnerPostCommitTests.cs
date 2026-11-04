@@ -236,16 +236,37 @@ public sealed class TransitionRunnerPostCommitTests
     }
 
     [Fact]
-    public async Task RunAsync_IdentityOnlyStartSubflowHop_StillSettles()
+    public async Task RunAsync_IdentityOnlyStartSubflowHop_SkipsTheSettlementAndAnswersBusy()
     {
-        // A StartSubflowJob hop moved the parent into the SubFlow state; it is not a relay.
+        // An intermediate level of a nested SubFlow start chain. The hop that entered the SubFlow
+        // state was marked terminal, so no status was deferred: whether the child is still running
+        // (correlation open) or completed inline and resumed this parent in its own scope, the
+        // settle could flip nothing, publish nothing and commit nothing. The caller is the
+        // SubflowStarter of the level above, which reads only the resolved version.
         var harness = new RunnerHarness(new StagePlan(
             "pipeline",
             PostCommitBehavior: PostCommitContinuationBehavior.HandoffToChild,
-            PostCommitJob: PostCommitJobKind.StartSubflow))
-        {
-            ForwardedChildStatus = InstanceStatus.Active
-        };
+            PostCommitJob: PostCommitJobKind.StartSubflow));
+        var input = harness.CreateInput("auto-to-subflow");
+        input.IdentityOnlyResponse = true;
+
+        var result = await harness.Runner.RunAsync(input);
+
+        result.IsSuccess.ShouldBeTrue();
+        result.Value!.Id.ShouldBe(harness.InstanceId);
+        result.Value.Status.ShouldBe(InstanceStatus.Busy);
+        await harness.ParentMutationService.DidNotReceiveWithAnyArgs().SettleAsync(default!, default!, default);
+    }
+
+    [Fact]
+    public async Task RunAsync_IdentityOnlyHandoffWithANonSubflowJob_StillSettles()
+    {
+        // The short-circuit is keyed on the job list being nothing but StartSubflowJob; any other
+        // post-commit job keeps the authoritative settlement.
+        var harness = new RunnerHarness(new StagePlan(
+            "pipeline",
+            PostCommitBehavior: PostCommitContinuationBehavior.HandoffToChild,
+            PostCommitJob: PostCommitJobKind.Test));
         harness.ParentMutationService.SettleAsync(default!, default!, default)
             .ReturnsForAnyArgs(Result<TransitionOutput>.Ok(new TransitionOutput { Status = InstanceStatus.Busy }));
         var input = harness.CreateInput("auto-to-subflow");
@@ -253,6 +274,24 @@ public sealed class TransitionRunnerPostCommitTests
 
         await harness.Runner.RunAsync(input);
 
+        await harness.ParentMutationService.ReceivedWithAnyArgs(1).SettleAsync(default!, default!, default);
+    }
+
+    [Fact]
+    public async Task RunAsync_ClientFacingStartSubflowHop_StillSettlesFromAFreshReload()
+    {
+        // The client's own request projects the settled aggregate (latest data included) into its
+        // response, and only the authoritative reload can say where an inline child left it.
+        var harness = new RunnerHarness(new StagePlan(
+            "pipeline",
+            PostCommitBehavior: PostCommitContinuationBehavior.HandoffToChild,
+            PostCommitJob: PostCommitJobKind.StartSubflow));
+        harness.ParentMutationService.SettleAsync(default!, default!, default)
+            .ReturnsForAnyArgs(Result<TransitionOutput>.Ok(new TransitionOutput { Status = InstanceStatus.Active }));
+
+        var result = await harness.Runner.RunAsync(harness.CreateInput("auto-to-subflow"));
+
+        result.Value!.Status.ShouldBe(InstanceStatus.Active);
         await harness.ParentMutationService.ReceivedWithAnyArgs(1).SettleAsync(default!, default!, default);
     }
 

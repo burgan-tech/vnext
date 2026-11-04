@@ -6,7 +6,7 @@ namespace BBT.Workflow.Gateway;
 
 /// <summary>
 /// Reads an x-storage file of an instance in this runtime's domain, service-to-service (no authorization).
-/// Establishes the schema scope with <c>ExecuteWithWorkflowAsync</c> — the same pattern
+/// Establishes the schema scope with <c>ExecuteReadWithWorkflowAsync</c> — the same pattern
 /// <see cref="LocalRelatedInstanceReader"/> uses; the version is left to resolve to the latest flow definition
 /// only for the scope, while <see cref="InstanceFileAppService"/> loads the instance's own pinned version.
 /// </summary>
@@ -15,7 +15,7 @@ public sealed class LocalInstanceFileGateway(IServiceScopeFactory serviceScopeFa
     /// <inheritdoc />
     public Task<Result<InstanceFileContent>> ReadAsync(
         string domain, string flow, string instance, string file, CancellationToken cancellationToken) =>
-        serviceScopeFactory.ExecuteWithWorkflowAsync(
+        serviceScopeFactory.ExecuteReadWithWorkflowAsync(
             domain,
             flow,
             null,

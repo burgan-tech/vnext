@@ -14,7 +14,7 @@ namespace BBT.Workflow.Execution.Core.Invocation;
 /// prefix, TTL and consistency/concurrency).
 /// <para>
 /// Lives in <c>Execution.Core</c> because the Orchestration host cannot reference
-/// <c>BBT.Workflow.Execution</c> (pythonnet, KubernetesClient, Dapr.AI, a hosted service) and the
+/// <c>BBT.Workflow.Execution</c> (Dapr.AI and the Execution-only invokers) and the
 /// Abstractions assembly stays contract-only. Mirrors <c>SoapInvocation</c> /
 /// <c>DaprServiceInvocation</c>: no logging or metrics happen here — every outcome, including a
 /// missing store name, cancellation and an unhandled exception, is returned as a

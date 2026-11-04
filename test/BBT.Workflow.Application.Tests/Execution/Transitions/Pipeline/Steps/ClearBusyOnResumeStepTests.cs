@@ -9,6 +9,7 @@ using BBT.Workflow.Instances;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Shared;
 using Microsoft.Extensions.Logging.Abstractions;
+using NSubstitute;
 using Shouldly;
 using Xunit;
 
@@ -24,7 +25,13 @@ public class ClearBusyOnResumeStepTests
     private const string Domain = "test-domain";
     private const string WorkflowKey = "test-workflow";
 
-    private readonly ClearBusyOnResumeStep _step = new();
+    private readonly IInstanceCorrelationRepository _correlations = Substitute.For<IInstanceCorrelationRepository>();
+    private readonly ClearBusyOnResumeStep _step;
+
+    public ClearBusyOnResumeStepTests()
+    {
+        _step = new ClearBusyOnResumeStep(_correlations, NullLogger<ClearBusyOnResumeStep>.Instance);
+    }
 
     [Fact]
     public void Order_ShouldBeClearBusyOnResumeStep()
@@ -170,4 +177,75 @@ public class ClearBusyOnResumeStepTests
         workflow.SetReference(new Reference(WorkflowKey, Domain, "sys-flows", "1.0.0"));
         return workflow;
     }
+
+    [Fact]
+    public async Task ExecuteAsync_OnSubFlowResumeWithTerminalOutcome_ShouldStampSettlementMarkerInThisHop()
+    {
+        // The completion relay hands the outcome in so the marker rides this hop's unit of work
+        // instead of a separate one after the resume.
+        var workflow = CreateWorkflow();
+        var instance = Instance.Create(Guid.NewGuid(), WorkflowKey, "1.0.0");
+        instance.ChangeState(workflow.GetState("state2").Value!);
+        var subInstanceId = Guid.NewGuid();
+        var settledAt = new DateTime(2026, 11, 3, 7, 24, 55, DateTimeKind.Utc);
+        var context = CreateContext(workflow, instance);
+        context.Directives.MarkAsSubFlowResume(subInstanceId, SubItemTerminalOutcome.Completed, settledAt);
+
+        var result = await _step.ExecuteAsync(context, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        await _correlations.Received(1).TryMarkSettledAsync(
+            subInstanceId, SubItemTerminalOutcome.Completed, settledAt, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_OnSubFlowResumeWithoutTerminalOutcome_ShouldLeaveTheMarkerToTheCaller()
+    {
+        var workflow = CreateWorkflow();
+        var instance = Instance.Create(Guid.NewGuid(), WorkflowKey, "1.0.0");
+        instance.ChangeState(workflow.GetState("state2").Value!);
+        var context = CreateContext(workflow, instance);
+        context.Directives.MarkAsSubFlowResume(Guid.NewGuid());
+
+        var result = await _step.ExecuteAsync(context, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        await _correlations.DidNotReceiveWithAnyArgs().TryMarkSettledAsync(default, default, default, default);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenTheMarkerWriteThrows_ShouldStillContinue()
+    {
+        // The marker only feeds the duplicate-delivery fast path; its failure must not fail the resume.
+        var workflow = CreateWorkflow();
+        var instance = Instance.Create(Guid.NewGuid(), WorkflowKey, "1.0.0");
+        instance.ChangeState(workflow.GetState("state2").Value!);
+        var context = CreateContext(workflow, instance);
+        context.Directives.MarkAsSubFlowResume(Guid.NewGuid(), SubItemTerminalOutcome.Completed, DateTime.UtcNow);
+        _correlations.TryMarkSettledAsync(default, default, default, default)
+            .ReturnsForAnyArgs<Task<bool>>(_ => throw new InvalidOperationException("db down"));
+
+        var result = await _step.ExecuteAsync(context, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        result.Value!.StopPipeline.ShouldBeFalse();
+    }
+
+    private static TransitionExecutionContext CreateContext(Definitions.Workflow workflow, Instance instance) => new()
+    {
+        InstanceId = instance.Id,
+        Domain = Domain,
+        WorkflowKey = WorkflowKey,
+        TransitionKey = "resume",
+        Trigger = TriggerType.Manual,
+        Actor = ExecutionActor.System,
+        CorrelationId = Guid.NewGuid().ToString("N"),
+        ExecutionChainId = Guid.NewGuid().ToString("N"),
+        RequestedAt = DateTimeOffset.UtcNow,
+        Workflow = workflow,
+        Current = workflow.GetState("state2").Value!,
+        Instance = instance,
+        TraceId = Guid.NewGuid().ToString("N"),
+        SpanId = Guid.NewGuid().ToString("N")[..16]
+    };
 }

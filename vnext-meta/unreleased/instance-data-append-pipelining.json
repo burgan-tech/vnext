@@ -1,0 +1,17 @@
+{
+  "releaseNote": {
+    "summary": "InstanceData appends take two database round-trips instead of six: lock prologue and head read pipelined in one batch, demote and insert in another; every statement keeps its order and snapshot.",
+    "breaking": false,
+    "docs": []
+  },
+  "features": {
+    "engine": {
+      "instanceDataAppendPipelining": {
+        "since": "next",
+        "status": "stable",
+        "description": "Every InstanceData version — a task output, a transition payload, a subflow output mapping — is persisted the moment it is produced inside its own short transaction (immediate per-record persistence; unchanged). That transaction used to cost six database round-trips in sequence: SET LOCAL timeouts, SELECT ... FOR UPDATE on the parent Instances row, the head SELECT, MAX(VersionNo) on same-version appends, UPDATE IsLatest=false, and the EF INSERT. InstanceDataWriteService now sends the lock prologue as ONE NpgsqlBatch (both SET LOCAL statements, the FOR UPDATE, and a head SELECT that also carries the head line's MAX(VersionNo)) and the demote UPDATE plus a hand-written INSERT as a second batch, so an append is two round-trips plus BEGIN/COMMIT. The statements are pipelined, not merged: they still execute strictly in order on the server and each takes its own READ COMMITTED snapshot, so the head is read only after the row lock is granted — a single SELECT ... FOR UPDATE joining the head was rejected because its joined rows would come from a snapshot taken before the lock wait ended. The row lock, the no-change dedup, the master-schema validation, x-encryption, x-storage offload, the history: none buffer and the unique indexes are unchanged; lock_timeout still surfaces as 55P03 -> Instance:100035 (409) and statement_timeout as 503. The inserted row is attached to the DbContext as Unchanged so a tracked aggregate's relationship fixup sees it as persisted. Two new spans replace the per-command Db.* children of Instance.AppendData: Db.LockAndReadHead and Db.InsertInstanceData (BBT.Workflow.Pipeline source, span.category=business). Measured on digital-investment: 105 database commands per start before the change (7 per task, 8 per transition).",
+        "documentation": "docs/architecture/inline-chain-context-reuse.md"
+      }
+    }
+  }
+}

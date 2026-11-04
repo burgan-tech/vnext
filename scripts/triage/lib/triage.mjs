@@ -17,6 +17,7 @@ const MAX_LIST = 8;
 const MAX_TEXT = 1200;
 const MAX_ITEM = 300;
 const CONFIDENCE = new Set(['low', 'medium', 'high']);
+const EFFORT = new Set(['low', 'medium', 'high']);
 
 const SECRET_RES = [
   /sk-ant-[A-Za-z0-9_-]{8,}/g,
@@ -109,6 +110,7 @@ export function validateResult(raw, taxonomy, { fileExists = () => true, secrets
       type: kind ? kinds.get(kind).type : null,
       areas: pickedAreas.slice(0, MAX_AREAS),
       priority,
+      effort: EFFORT.has(raw?.effort) ? raw.effort : null,
       hotfixCandidate: raw?.hotfixCandidate === true,
       needsInfo: raw?.needsInfo === true,
       questions: sanitizeList(raw?.questions, secrets),
@@ -143,6 +145,7 @@ export function renderComment(result, { mode, repo, sha }) {
     '|---|---|',
     `| Type | ${result.type ?? '—'} |`,
     `| Suggested labels | ${suggested.length ? suggested.map((l) => `\`${l}\``).join(' ') : '—'} |`,
+    `| Effort | ${result.effort ?? '—'} |`,
     `| Hotfix candidate | ${result.hotfixCandidate ? 'yes — maintainer decides' : 'no'} |`,
     `| Integration test | ${result.integrationTestRequired ? 'required' : 'not required'}${result.integrationTestReason ? ` — ${result.integrationTestReason}` : ''} |`,
     `| Confidence | ${result.confidence} |`,
@@ -183,6 +186,26 @@ export function planActions(result, issue, mode, taxonomy) {
 
   const setType = result.type && !issue.type ? result.type : null;
   return mode === 'apply' ? { addLabels, setType } : { addLabels: [], setType: null };
+}
+
+/**
+ * Decides the defaults for what is still empty on the issue: the milestone and the org issue
+ * fields (`issue.fields`: name -> current option name or null). Same rule as planActions: a value
+ * a person already chose is never replaced. The Priority field follows the priority label the
+ * issue already carries, else the agent's suggestion; P0 maps to nothing (maintainer only).
+ */
+export function planDefaults(result, issue, mode, defaults = {}) {
+  if (mode !== 'apply') return { milestone: null, fields: [] };
+  const humanPriority = (issue.labels ?? []).find((l) => l.startsWith('priority:'));
+  const sources = { priority: humanPriority ?? result.priority, effort: result.effort };
+  const fields = [];
+  for (const [name, rule] of Object.entries(defaults.issueFields ?? {})) {
+    if (issue.fields?.[name]) continue;
+    const value = rule.values?.[sources[rule.from]];
+    if (value) fields.push({ name, value });
+  }
+  const milestone = defaults.milestone && !issue.milestone ? defaults.milestone : null;
+  return { milestone, fields };
 }
 
 /** Sweep selection: open issues that are neither triaged nor already carry a bot triage comment. */

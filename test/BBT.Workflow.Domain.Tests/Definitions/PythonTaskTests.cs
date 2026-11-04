@@ -1,5 +1,3 @@
-using System;
-using System.Text;
 using System.Text.Json;
 using Shouldly;
 using Xunit;
@@ -15,12 +13,7 @@ public sealed class PythonTaskTests
             {
               "type": "23",
               "config": {
-                "script": {
-                  "location": "risk.py",
-                  "code": "def main(input):\n    return input",
-                  "encoding": "NAT"
-                },
-                "executionMode": "process",
+                "handler": "credit_score",
                 "input": { "score": 42 },
                 "timeoutSeconds": 12
               }
@@ -31,12 +24,31 @@ public sealed class PythonTaskTests
             .ShouldBeOfType<PythonTask>();
 
         task.GetTaskType().ShouldBe(TaskType.Python);
-        task.Script.ShouldNotBeNull();
-        task.Script!.DecodedCode.ShouldContain("def main");
-        task.Script.Location.ShouldBe("risk.py");
-        task.ExecutionMode.ShouldBe("process");
+        task.Handler.ShouldBe("credit_score");
         task.Input!.Value.GetProperty("score").GetInt32().ShouldBe(42);
         task.TimeoutSeconds.ShouldBe(12);
+    }
+
+    [Fact]
+    public void Deserialize_DefaultsTimeoutAndLeavesInputEmpty()
+    {
+        var task = JsonSerializer.Deserialize<WorkflowTask>(
+                """{"type":"23","config":{"handler":"noop"}}""", JsonSerializerConstants.JsonOptions)
+            .ShouldBeOfType<PythonTask>();
+
+        task.Input.ShouldBeNull();
+        task.TimeoutSeconds.ShouldBe(PythonTask.DefaultTimeoutSeconds);
+    }
+
+    [Fact]
+    public void SetInput_ReplacesTheConfiguredInput()
+    {
+        var task = PythonTask.Create(JsonDocument.Parse("""{"handler":"h","input":{"a":1}}""").RootElement);
+
+        task.SetInput(new { b = 2 });
+
+        task.Input!.Value.TryGetProperty("a", out _).ShouldBeFalse();
+        task.Input!.Value.GetProperty("b").GetInt32().ShouldBe(2);
     }
 
     [Fact]
@@ -44,8 +56,7 @@ public sealed class PythonTaskTests
     {
         var task = PythonTask.Create(JsonDocument.Parse("""
             {
-              "script": {"code":"def main(input): return input", "encoding":"NAT"},
-              "executionMode":"container",
+              "handler":"scorer",
               "input":[1,2],
               "timeoutSeconds":20
             }
@@ -53,33 +64,13 @@ public sealed class PythonTaskTests
         task.SetReference(new Reference("python", "domain", "sys-tasks", "1.0.0"));
 
         var clone = task.CloneTyped();
-        clone.ExecutionMode.ShouldBe("container");
+        clone.Handler.ShouldBe("scorer");
         clone.Input!.Value.GetArrayLength().ShouldBe(2);
         clone.TimeoutSeconds.ShouldBe(20);
-        clone.Script!.DecodedCode.ShouldContain("return input");
 
         clone.Reset();
-        clone.Script.ShouldBeNull();
-        clone.ExecutionMode.ShouldBeNull();
+        clone.Handler.ShouldBeNull();
         clone.Input.ShouldBeNull();
         clone.TimeoutSeconds.ShouldBe(PythonTask.DefaultTimeoutSeconds);
-    }
-
-    [Fact]
-    public void Deserialize_DecodesBase64Script()
-    {
-        const string source = "def main(input): return {'ok': True}";
-        var base64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(source));
-        var json = JsonSerializer.Serialize(new
-        {
-            type = "22",
-            config = new { script = new { code = base64, encoding = "B64" } }
-        });
-
-        var task = JsonSerializer.Deserialize<WorkflowTask>(json, JsonSerializerConstants.JsonOptions)
-            .ShouldBeOfType<PythonTask>();
-
-        task.Script!.DecodedCode.ShouldBe(source);
-        task.TimeoutSeconds.ShouldBe(PythonTask.DefaultTimeoutSeconds);
     }
 }

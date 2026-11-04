@@ -159,6 +159,12 @@ public static class TaskServiceCollectionExtensions
         services.AddTaskExecutor<DaprHttpEndpointTaskExecutor>();
         services.AddTaskExecutor<DaprPubSubTaskExecutor>();
         services.AddTaskExecutor<DaprConversationTaskExecutor>();
+        // Python tasks call the domain's own Python runtime container from this host (no Execution hop);
+        // an empty AppId means the domain has no runtime and Python tasks fail with 503.
+        services.AddOptions<PythonRuntimeOptions>()
+            .BindConfiguration(PythonRuntimeOptions.SectionName)
+            .ValidateDataAnnotations()
+            .ValidateOnStart();
         services.AddTaskExecutor<PythonTaskExecutor>();
 
         // Shared Dapr state-store gateway, also used by the function response cache (issue #1007).

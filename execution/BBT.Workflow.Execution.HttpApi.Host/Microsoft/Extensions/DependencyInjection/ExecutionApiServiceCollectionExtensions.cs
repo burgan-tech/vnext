@@ -1,7 +1,6 @@
 using BBT.Workflow.Execution.Invocation;
 using BBT.Workflow.HttpApi.Shared.Events;
 using BBT.Workflow.Runtime;
-using BBT.Workflow.HealthChecks;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 
 namespace Microsoft.Extensions.DependencyInjection;
@@ -47,8 +46,7 @@ public static class ExecutionApiServiceCollectionExtensions
             
         // Add standard health checks for Workflow APIs
         healthChecksBuilder
-            .AddCheck("self", () => HealthCheckResult.Healthy(), tags: ["live"])
-            .AddCheck<PythonRuntimeHealthCheck>("python", tags: ["ready"]); // Self health check
+            .AddCheck("self", () => HealthCheckResult.Healthy(), tags: ["live"]); // Self health check
         
         return services;
     }

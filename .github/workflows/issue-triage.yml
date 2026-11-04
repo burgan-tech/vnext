@@ -5,7 +5,9 @@ name: Issue Triage
 # shell, write, network or GitHub access. scripts/triage/apply.mjs validates that result against
 # .github/triage/labels.json and is the only step that writes to GitHub.
 # Runs on issue events; a manual run triages one issue or sweeps untriaged open issues.
-# Mode: repository variable TRIAGE_MODE = dry-run (default: comment only) | apply.
+# Mode: repository variable TRIAGE_MODE = dry-run (default: comment only) | apply. In apply mode
+# the empty milestone, org issue fields (Priority, Effort) and org project are filled from the
+# `defaults` block of labels.json; the last two use the GitHub App (APP_ID / APP_PRIVATE_KEY).
 # Auth: secret CURSOR_API_KEY (the shared CI Cursor account); without it the job is a no-op.
 # Model: repository variable TRIAGE_MODEL overrides the pinned default (`agent --list-models`).
 
@@ -146,12 +148,27 @@ jobs:
             exit 1
           fi
 
+      - name: Generate GitHub App token
+        # Org issue fields and the org project need an installation token with Issues and
+        # Organization projects (read and write); GITHUB_TOKEN cannot reach org projects.
+        # Taken after the agent ran, so the agent never has it.
+        id: app
+        if: env.HAS_AUTH == 'true' && steps.collect.outputs.issues != '' && env.TRIAGE_MODE == 'apply'
+        continue-on-error: true
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
       - name: Apply results
         if: env.HAS_AUTH == 'true' && steps.collect.outputs.issues != ''
         env:
+          TRIAGE_APP_TOKEN: ${{ steps.app.outputs.token }}
           TRIAGE_REDACT: |
             ${{ secrets.CURSOR_API_KEY }}
             ${{ github.token }}
+            ${{ steps.app.outputs.token }}
         run: |
           node "$RUNNER_TEMP/triage-tools/scripts/triage/apply.mjs" \
             --mode "$TRIAGE_MODE" \

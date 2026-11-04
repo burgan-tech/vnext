@@ -303,8 +303,13 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
 
     /// <summary>
     /// Executes a group of tasks with same Order in parallel.
-    /// Each task runs in its own DI scope to isolate DbContext instances and avoid
-    /// EF Core thread-safety violations during concurrent SaveChanges/change-tracker operations.
+    /// Each task runs in its own DI scope, which isolates SERVICES but not the DbContext: a context is
+    /// bound to the ambient (AsyncLocal) unit of work, keyed by schema, and that unit of work flows into
+    /// every branch. Every database touch a branch makes therefore has to bring its own unit of work —
+    /// the task journal (<c>RequiresNew</c> in the persistence strategy), the instance command gateway,
+    /// and the local read gateways (<c>ExecuteReadWithWorkflowAsync</c>). A new read path reachable from
+    /// a task must do the same, or two same-order tasks touching one schema fail with "A second operation
+    /// was started on this context instance".
     /// If one task fails, cancels all other tasks and triggers error boundary.
     /// </summary>
     private async Task<Result<TasksExecutionResult>> ExecuteTaskGroupInParallelAsync(
@@ -334,9 +339,8 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
             var branchContext = context.CreateParallelBranch();
             try
             {
-                // Each parallel task gets its own DI scope with an isolated DbContext.
-                // This prevents EF Core thread-safety violations when multiple tasks
-                // perform concurrent InsertAsync/UpdateAsync on InstanceTask entities.
+                // Own DI scope per branch — services only; DbContext isolation comes from the
+                // per-operation unit of work each database path opens (see the method summary).
                 await using var scope = _serviceScopeFactory.CreateAsyncScope();
                 var scopedEngine = scope.ServiceProvider.GetRequiredService<ITaskExecutionEngine>();
 

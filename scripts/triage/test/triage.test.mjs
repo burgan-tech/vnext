@@ -9,6 +9,7 @@ import {
   validateResult,
   renderComment,
   planActions,
+  planDefaults,
   needsTriage,
   isTriageComment,
 } from '../lib/triage.mjs';
@@ -122,4 +123,21 @@ test('only the bot comment with the marker counts as the triage comment', () => 
 
 test('every taxonomy kind maps to an org issue type', () => {
   for (const k of taxonomy.kinds) assert.ok(['Bug', 'Feature', 'Task'].includes(k.type), k.name);
+});
+
+test('defaults fill only what is empty: milestone, Priority from the label, Effort from the agent', () => {
+  const { result } = validateResult({ ...raw, effort: 'high' }, taxonomy);
+  const plan = planDefaults(result, { labels: ['priority:P1'], milestone: null, fields: {} }, 'apply', taxonomy.defaults);
+  assert.equal(plan.milestone, 'backlog');
+  assert.deepEqual(plan.fields, [{ name: 'Priority', value: 'High' }, { name: 'Effort', value: 'High' }]);
+
+  const set = planDefaults(result, { labels: [], milestone: 'v0.0.103', fields: { Priority: 'Urgent', Effort: 'Low' } }, 'apply', taxonomy.defaults);
+  assert.deepEqual(set, { milestone: null, fields: [] });
+});
+
+test('defaults never write Urgent, unknown effort, or anything in dry-run', () => {
+  const { result } = validateResult({ ...raw, priority: 'priority:P0', effort: 'huge' }, taxonomy);
+  assert.equal(result.effort, null);
+  assert.deepEqual(planDefaults(result, { labels: [] }, 'apply', taxonomy.defaults).fields, []);
+  assert.deepEqual(planDefaults(result, { labels: [] }, 'dry-run', taxonomy.defaults), { milestone: null, fields: [] });
 });
