@@ -1,0 +1,7 @@
+{
+  "releaseNote": {
+    "summary": "An artifact-version reference (e.g. \"1.0.0\") now resolves to the highest package-stamped version of that artifact even when a bare \"1.0.0\" row is also stored.",
+    "breaking": false,
+    "docs": []
+  }
+}
