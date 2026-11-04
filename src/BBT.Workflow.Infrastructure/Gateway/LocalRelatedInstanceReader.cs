@@ -7,15 +7,14 @@ namespace BBT.Workflow.Gateway;
 
 /// <summary>
 /// Reads related instances that live in this runtime's domain. Establishes the schema scope with
-/// <c>ExecuteWithWorkflowAsync</c> — the same pattern <see cref="LocalInstanceQueryGateway"/> uses.
+/// <c>ExecuteReadWithWorkflowAsync</c> — the same pattern <see cref="LocalInstanceQueryGateway"/> uses.
 /// </summary>
 /// <remarks>
-/// The fresh scope isolates the <see cref="IServiceProvider"/>, not the database transaction: Aether's
-/// ambient unit of work keys DbContexts by (type, schema) and enlists a newly opened one in the
-/// surrounding transition's connection and transaction. A related read therefore observes the current
-/// transition's uncommitted writes. That is intended — within one transition a script should see the
-/// engine's own in-flight state rather than a stale snapshot — but it is not the isolation the scope
-/// creation might suggest.
+/// Each read gets its own unit of work, not only its own DI scope: Aether keys a DbContext by
+/// (unit of work, type, schema), and the scripts of same-order tasks run as parallel branches that would
+/// otherwise share one context per schema and fail with "A second operation was started on this context
+/// instance". Visibility is unchanged: the transition's unit of work is non-transactional and these reads
+/// are no-tracking, so they read the same saved rows on their own context as they did on the shared one.
 /// </remarks>
 public sealed class LocalRelatedInstanceReader(IServiceScopeFactory serviceScopeFactory) : IRelatedInstanceReader
 {
@@ -23,7 +22,7 @@ public sealed class LocalRelatedInstanceReader(IServiceScopeFactory serviceScope
     public Task<Result<RelatedInstanceSnapshot?>> ReadAsync(
         RelatedInstanceRef reference,
         CancellationToken cancellationToken = default) =>
-        serviceScopeFactory.ExecuteWithWorkflowAsync(
+        serviceScopeFactory.ExecuteReadWithWorkflowAsync(
             reference.Domain,
             reference.Flow,
             reference.FlowVersion,
@@ -56,7 +55,7 @@ public sealed class LocalRelatedInstanceReader(IServiceScopeFactory serviceScope
         foreach (var group in references.GroupBy(reference => (reference.Flow, reference.FlowVersion)))
         {
             var groupRefs = group.ToList();
-            var groupResult = await serviceScopeFactory.ExecuteWithWorkflowAsync(
+            var groupResult = await serviceScopeFactory.ExecuteReadWithWorkflowAsync(
                 groupRefs[0].Domain,
                 group.Key.Flow,
                 group.Key.FlowVersion,
