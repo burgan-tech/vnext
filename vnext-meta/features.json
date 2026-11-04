@@ -1,5 +1,5 @@
 {
-  "runtimeVersion": "0.0.102",
+  "runtimeVersion": "0.0.103",
   "engine": {
     "historyMode": {
       "since": "0.0.100",
@@ -642,6 +642,24 @@
       "status": "stable",
       "description": "instance.sub.completed / faulted / canceled carry an optional CarriedHeaders map: the request headers of the call that settled the child (a parent fault caused by the child re-captures the forwarded set through the local policy before sending it to the grandparent, so Emit=false yields null and the floor applies again; captures happen only for sub-item instances). Carried: every header except a deny floor (names containing authorization, cookie, token, secret or session, plus AdditionalDenied, exact, case-insensitive; config can only add) and framework exclusions (x-subflow-depth, x-parent-instance-id, x-root-instance-id, x-workflow-instance-id, x-correlation-id, traceparent, tracestate, baggage, host, transfer-encoding, connection, keep-alive, and the prefixes content-, dapr-, grpc-). role is always carried. It is a denylist: a secret in an unusually named header travels unless listed in AdditionalDenied. Keys are lower-cased; caps 64 entries and 4096 characters per value; an empty filtered set is null (timer, timeout, job-timeout recovery and downward cancel/fault cascade settlements carry null). Configuration section Workflow:SubFlow:CarriedHeaders: Emit (default true), ExposeToOutputMapping (default true; completion and fault output mapping read them as context.Headers), ApplyToResume (default true; applies them to the parent resume of completion, fault and cancel, Actor stays System; false opts out), AdditionalDenied (default []), MaxEntries (default 64), MaxValueLength (default 4096). Header values are never logged or tagged; span tag vnext.subflow.carried_header_count and log 40140 carry counts only (over-long values count as denied, entries past MaxEntries as overflow). The event contract change is additive (an optional field; an older consumer ignores it, unit-tested through the runtime event and HTTP serializers); the default-on resume is a behaviour change, see the migration subflow-resume-carried-headers. Behaviour change with defaults: an output mapping that read an empty context.Headers now sees the child's headers, and the parent's resumed hop (conditions, tasks with caller-credential forwarding, the next subflow's input mapping) now runs with the finisher's headers instead of none; set ApplyToResume=false to keep the old resume.",
       "documentation": "docs/runtime/event-publish-modes.md"
+    },
+    "startSubflowHandoffSettleElision": {
+      "since": "0.0.103",
+      "status": "stable",
+      "description": "An intermediate level of a nested SubFlow start chain (identity-only caller, post-commit jobs all StartSubflowJob) no longer takes the status lock, reloads the parent and commits an empty transaction in PostCommit.Settle: the hop that entered the SubFlow state was marked terminal, so no status was deferred and the settle could flip nothing, schedule nothing and publish nothing (TransitionRunner.IsSettleFreeStartSubflowHandoff, the start-chain twin of the forward relay's IsSettleFreeForwardRelay). StartSubflowJobHandler also drops its sync-caller re-read of the parent into ClientResponse, which nothing read after the barrier. The client-facing root still settles from the authoritative reload. Measured on morph-idm zeebe-approval (test, 2026-11-03): nine settles of 58 ms average and four re-reads of ~100 ms in one depth-4 start request. The awaiting span carries vnext.settle.skipped=true.",
+      "documentation": "docs/architecture/subflow-execution.md"
+    },
+    "longPollResumeObservability": {
+      "since": "0.0.103",
+      "status": "stable",
+      "description": "A pipeline paused for declarative long-poll termination resumes either because the client posted longpoll/ack or because the fallbackTimeoutSeconds job fired; the two used to share one log line (20301) and no metric. LongPoll.AckResume now carries vnext.activation.trigger (ack | ack-timeout), the counter workflow_longpoll_resume_total (meter BBT.Workflow.Telemetry; tags vnext.domain, vnext.flow.key, vnext.activation.trigger, vnext.longpoll.ack_resume.outcome) counts every resume request, and a fallback-driven resume logs LongPollFallbackResumed (20308) instead of LongPollAckResumed (20301). A flow whose ack-timeout count tracks its resumed count has a client that never acknowledges and pays the whole window on every instance (morph-idm approval, test: 36 of 36).",
+      "documentation": "docs/domain/long-poll-termination.md"
+    },
+    "subflowResumeStampsSettlementMarker": {
+      "since": "0.0.103",
+      "status": "stable",
+      "description": "SubflowCompletionService used to open one more unit of work after the parent's resume for a single set-based UPDATE (InstanceCorrelation.SettledAt, the duplicate-delivery fast-path marker). The completion relay now hands the terminal outcome to the resume (ExecutionInfo.SubFlowResumeTerminalOutcome / SubFlowResumeSettledAt, mirrored on PipelineDirectives) and ClearBusyOnResumeStep stamps the marker inside the resume hop's own unit of work; the meaning is unchanged (the parent's resume reached the database) and a resume that fails afterwards still reverts the correlation, which clears the marker. The separate best-effort write remains only for a resume that stopped before its first step (AutoTransitionConditionNotMet, InstanceCompleted). One fewer DbContext, connection rental and round trip per completion; measured on morph-idm zeebe-approval (test, 2026-11-03) five such writes per ack-timeout chain.",
+      "documentation": "docs/architecture/subflow-execution.md"
     }
   }
 }

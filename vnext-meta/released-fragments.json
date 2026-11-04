@@ -1,4 +1,8 @@
 {
+  "0.0.103": {
+    "inline-handoff-settle-and-longpoll-observability": "9727db0498e0a9894c771c29535f8229f25579453c7b8ba6095b2f839c43ea9d",
+    "python-runtime-container": "bee26cd265056ee3cdd5e065bd0168c53a150b9545ec28a12130a42a52e41e28"
+  },
   "0.0.102": {
     "auto-transition-priority": "726403c2260ede46ea48aa2dba6f61f55962b7e9a623f8dd090c7133aa27ed72",
     "bookkeeping-commits": "aabc1b38d8f2cb5bf54d1bedcb2955d0633d07963dab7d3f10f48271d04bd304",
