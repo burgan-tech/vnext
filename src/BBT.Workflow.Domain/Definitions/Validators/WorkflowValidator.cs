@@ -1513,11 +1513,21 @@ public class WorkflowValidator
                 // instance stuck where it is, with no incident naming the reason.
                 if (stateKey is not null && !IsTransitionAvailableFrom(workflow, rule.Transition, stateKey))
                 {
-                    result.AddError(new ValidationResult(
+                    var finding = new ValidationResult(
                         $"Error boundary on state '{stateKey}' routes to transition '{rule.Transition}', which is " +
                         $"not available from that state. Declare it on the state, or as a shared transition whose " +
                         $"availableIn contains '{stateKey}'.",
-                        [$"{ruleContext}.{nameof(ErrorHandlerRule.Transition)}"]));
+                        [$"{ruleContext}.{nameof(ErrorHandlerRule.Transition)}"]);
+
+                    // An ERROR only where this feature reaches: a rule handling a lock conflict is new
+                    // surface, so nothing published can already depend on it being wrong. The same
+                    // mistake on any other boundary is just as broken, but making it an error here would
+                    // fail definitions that have been live for months over a rule they never agreed to —
+                    // that promotion belongs in its own change, with a migration note.
+                    if (NamesResourceLockConflict(rule))
+                        result.AddError(finding);
+                    else
+                        result.AddWarning(finding);
                 }
 
                 // The ErrorBoundary pipeline profile excludes the ResourceLock step, so a lock declared on

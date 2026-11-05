@@ -1,3 +1,4 @@
+using BBT.Aether.Clock;
 using BBT.Aether.Results;
 using BBT.Aether.Uow;
 using BBT.Workflow.Definitions;
@@ -28,7 +29,8 @@ public sealed class HandleFinishStep(
     ISubItemEventDataResolver? subItemDataResolver = null,
     IInstanceDataWriteService? instanceDataWriteService = null,
     IResourceLockService? resourceLockService = null,
-    IUnitOfWorkManager? uowManager = null) : ITransitionStep
+    IUnitOfWorkManager? uowManager = null,
+    IClock? clock = null) : ITransitionStep
 {
     /// <inheritdoc />
     public int Order => LifecycleOrder.Finish;
@@ -64,7 +66,7 @@ public sealed class HandleFinishStep(
                 },
                 cancellationToken);
             context.Items["IsFinishState"] = true;
-            ArmResourceLockRelease(context);
+            await ArmResourceLockReleaseAsync(context, cancellationToken);
             return Result<StepOutcome>.Ok(StepOutcome.Continue());
         }
 
@@ -74,7 +76,7 @@ public sealed class HandleFinishStep(
             .Tap(ctx => ctx.ExtractAndDeferInstanceEvents())
             .TapAsync(ctx => instanceRepository.UpdateAsync(ctx.Instance, true, cancellationToken))
             .Tap(ctx => ctx.Items["IsFinishState"] = true)
-            .Tap(ArmResourceLockRelease)
+            .TapAsync(ctx => ArmResourceLockReleaseAsync(ctx, cancellationToken))
             .Map(_ => StepOutcome.Continue());
     }
 
@@ -91,7 +93,8 @@ public sealed class HandleFinishStep(
     /// Best-effort by design: the release is idempotent, the TTL is the ultimate safety net, and a lock
     /// that cannot be handed back must never fail a business transition that already committed.
     /// </summary>
-    private void ArmResourceLockRelease(TransitionExecutionContext context)
+    private async Task ArmResourceLockReleaseAsync(
+        TransitionExecutionContext context, CancellationToken cancellationToken)
     {
         if (resourceLockService is null)
             return;
@@ -112,13 +115,15 @@ public sealed class HandleFinishStep(
         if (uow is null)
         {
             // No ambient unit of work: the repository update above stands on its own, so there is no
-            // commit left to wait for. The task is deliberately not awaited — this step is called from a
-            // synchronous Tap and the release must not add latency to a transition that already
-            // succeeded. It cannot fault the process: every key's release is wrapped in its own catch.
-            _ = ReleaseAllAsync(held, owner, instanceId, domain, flowKey, CancellationToken.None);
+            // commit left to wait for. AWAITED on purpose — IResourceLockService is scoped, and letting
+            // the release outlive this step would hand it a DaprClient from a scope that may already be
+            // disposed. The latency is one release call on a path that is already finishing.
+            await ReleaseAllAsync(held, owner, instanceId, domain, flowKey, cancellationToken);
             return;
         }
 
+        // OnCompleted runs while the unit of work — and therefore the scope that owns the lock service
+        // — is still alive.
         uow.OnCompleted(async _ =>
             await ReleaseAllAsync(held, owner, instanceId, domain, flowKey, CancellationToken.None));
     }
@@ -142,7 +147,7 @@ public sealed class HandleFinishStep(
                 if (acquiredAt is { } start)
                 {
                     WorkflowMetrics.ResourceLockHoldDurationMs.Record(
-                        (DateTime.UtcNow - start).TotalMilliseconds,
+                        ((clock?.UtcNow ?? DateTime.UtcNow) - start).TotalMilliseconds,
                         new KeyValuePair<string, object?>(TelemetryConstants.TagNames.Domain, domain),
                         new KeyValuePair<string, object?>(TelemetryConstants.TagNames.Flow, flowKey));
                 }

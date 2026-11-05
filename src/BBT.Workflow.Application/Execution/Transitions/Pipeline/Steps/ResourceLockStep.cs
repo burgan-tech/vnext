@@ -1,3 +1,4 @@
+using BBT.Aether.Clock;
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Instances;
@@ -18,7 +19,8 @@ public sealed class ResourceLockStep(
     IScriptContextFactory scriptContextFactory,
     IInstanceRepository instanceRepository,
     IResourceLockService resourceLockService,
-    IRuntimeInfoProvider runtimeInfoProvider) : ITransitionStep
+    IRuntimeInfoProvider runtimeInfoProvider,
+    IClock? clock = null) : ITransitionStep
 {
     /// <inheritdoc />
     public int Order => LifecycleOrder.ResourceLock;
@@ -103,7 +105,7 @@ public sealed class ResourceLockStep(
         // persistence flushes this ExtraProperties change; if the transition rolls back before commit
         // (or the instance snapshot is absent), the lock's TTL remains the safety net — the same
         // fallback as an un-run explicit Release.
-        context.Instance?.TrackResourceLock(resourceKey);
+        context.Instance?.TrackResourceLock(resourceKey, clock?.UtcNow ?? DateTime.UtcNow);
 
         return Result<StepOutcome>.Ok(StepOutcome.Continue());
     }

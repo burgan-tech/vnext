@@ -400,10 +400,23 @@ public static class WorkflowApiBaseServiceCollectionExtensions
     /// Opt in per domain when locks must outlive a single short operation.
     /// </para>
     /// </summary>
+    /// <param name="configuration">Reads <c>ResourceLock:Provider</c> and, for postgres, the default connection string.</param>
+    /// <param name="lockStoreName">Dapr lock store component name, used by the default provider.</param>
     public static IServiceCollection AddResourceLock(
         this IServiceCollection services, IConfiguration configuration, string lockStoreName)
     {
         var provider = configuration["ResourceLock:Provider"];
+
+        // A typo must not silently downgrade the store. "postgress" would otherwise fall through to
+        // Dapr, where Extend cannot work — the one capability the setting exists to turn on — and the
+        // only symptom would be locks quietly lost mid-flight under load.
+        if (!string.IsNullOrWhiteSpace(provider)
+            && !string.Equals(provider, "postgres", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(provider, "dapr", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                $"Unknown ResourceLock:Provider '{provider}'. Supported values are 'dapr' (default) and 'postgres'.");
+        }
 
         if (string.Equals(provider, "postgres", StringComparison.OrdinalIgnoreCase))
         {
@@ -427,6 +440,14 @@ public static class WorkflowApiBaseServiceCollectionExtensions
                     BBT.Workflow.Infrastructure.Execution.ResourceLock.DaprResourceLockService>>()));
         return services;
     }
+
+    /// <summary>
+    /// Dapr-only registration, kept so a caller outside this repository still compiles. Equivalent to
+    /// the <see cref="IConfiguration"/> overload with no <c>ResourceLock:Provider</c> set.
+    /// </summary>
+    [Obsolete("Use AddResourceLock(services, configuration, lockStoreName); this overload cannot select the Postgres lease provider.")]
+    public static IServiceCollection AddResourceLock(this IServiceCollection services, string lockStoreName)
+        => services.AddResourceLock(new ConfigurationBuilder().Build(), lockStoreName);
 
     public static IServiceCollection AddEventBus(this IServiceCollection services, IConfiguration configuration)
     {

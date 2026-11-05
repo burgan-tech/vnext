@@ -80,6 +80,26 @@ public class WorkflowValidatorResourceLockTests : DomainTestBase<DomainEntryPoin
     }
 
     /// <summary>
+    /// The same mis-wiring on a boundary that has nothing to do with locks is reported, but only as a
+    /// WARNING. The rule is just as true there, yet making it an error would fail definitions that have
+    /// been published for months over a check they never agreed to — promoting it belongs in its own
+    /// change, with a migration note.
+    /// </summary>
+    [Fact]
+    public void Validate_ShouldOnlyWarn_WhenANonLockBoundaryRoutesToATransitionOfAnotherState()
+    {
+        var workflow = CreateWorkflow(boundaryTransition: "elsewhere", boundaryErrorCode: "Task:400007");
+
+        var result = _validator.Validate(workflow);
+
+        result.ValidationErrors.ShouldNotContain(e => e.ErrorMessage!.Contains("not available from that state"));
+        result.Warnings
+            .Where(w => w.ErrorMessage!.Contains("not available from that state"))
+            .ToList()
+            .ShouldHaveSingleItem();
+    }
+
+    /// <summary>
     /// The morph-idm shape: a shared transition whose availableIn names the state carrying the
     /// boundary. This is the wiring the queue depends on, so it must stay valid.
     /// </summary>

@@ -13,7 +13,13 @@ public static class InstanceMetadataExtensions
     /// transition path completes/faults the instance. Idempotent: a key already tracked is ignored.
     /// The key set is stored as a JSON array string under <see cref="DomainConsts.MetaDataKeys.ResourceLocks"/>.
     /// </summary>
-    public static void TrackResourceLock(this Instance instance, string resourceKey)
+    /// <param name="acquiredAt">
+    /// When the lock was taken, supplied by the caller so the Application layer's <c>IClock</c> is the
+    /// single source of time: the hold-duration metric subtracts this value with the same clock, and a
+    /// substituted clock in a test must move both ends together. Null falls back to the wall clock,
+    /// matching the rest of this aggregate.
+    /// </param>
+    public static void TrackResourceLock(this Instance instance, string resourceKey, DateTime? acquiredAt = null)
     {
         if (instance is null)
             throw new ArgumentNullException(nameof(instance));
@@ -26,13 +32,13 @@ public static class InstanceMetadataExtensions
 
         keys.Add(resourceKey);
 
-        var acquiredAt = ReadLockAcquisitionTimes(instance);
-        acquiredAt[resourceKey] = DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture);
+        var acquisitionTimes = ReadLockAcquisitionTimes(instance);
+        acquisitionTimes[resourceKey] = (acquiredAt ?? DateTime.UtcNow).ToString("O", CultureInfo.InvariantCulture);
 
         var metadata = new ExtraPropertyDictionary(instance.ExtraProperties ?? new ExtraPropertyDictionary())
         {
             [DomainConsts.MetaDataKeys.ResourceLocks] = JsonSerializer.Serialize(keys),
-            [DomainConsts.MetaDataKeys.ResourceLockAcquiredAt] = JsonSerializer.Serialize(acquiredAt)
+            [DomainConsts.MetaDataKeys.ResourceLockAcquiredAt] = JsonSerializer.Serialize(acquisitionTimes)
         };
         instance.SetMetaData(metadata);
     }

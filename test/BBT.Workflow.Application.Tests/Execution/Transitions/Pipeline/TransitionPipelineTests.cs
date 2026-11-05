@@ -1924,6 +1924,64 @@ public class TransitionPipelineTests
             Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>());
     }
 
+    /// <summary>
+    /// Reject on a CHAINED hop (hop > 1). The reviewer's question on #1143: "exactly as it was" only
+    /// holds for hop 1 — by hop 2 the earlier hop has already moved the instance. It does, and that is
+    /// fine: the instance rests at a state it legitimately reached, nothing half-done is left behind,
+    /// and the Busy this run reserved is still handed back. What a caller must NOT assume is that a
+    /// retry of the same request resumes from where it started.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_WhenRejectedOnAChainedHop_StillHandsBackTheReservationAndDoesNotFault()
+    {
+        var first = CreateTransitionExecutionContext();
+        var chained = CreateTransitionExecutionContext("auto-transition");
+        var workflowContext = CreateWorkflowExecutionContext(first);
+
+        _mockContextFactory.CreateAsync(Arg.Any<WorkflowExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(Result<TransitionExecutionContext>.Ok(first)));
+        _mockContextFactory.CreateFromPreloaded(Arg.Any<WorkflowExecutionContext>(),
+                Arg.Any<Definitions.Workflow>(), Arg.Any<Instance>())
+            .Returns(_ => Result<TransitionExecutionContext>.Ok(chained));
+
+        // Hop 1 runs clean and hands over to an auto transition; hop 2 loses the lock race.
+        SetupStepsToSucceed();
+        var hop = 0;
+        foreach (var step in _mockSteps)
+        {
+            if (step.Order == LifecycleOrder.Auto)
+            {
+                step.ExecuteAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+                    .Returns(callInfo =>
+                    {
+                        if (++hop == 1)
+                        {
+                            callInfo.ArgAt<TransitionExecutionContext>(0).Directives.RequestNextTransition(
+                                new NextTransitionRequest("auto-transition", "auto"));
+                            return Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.SkipTo(LifecycleOrder.Finalize)));
+                        }
+                        return Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.Continue()));
+                    });
+            }
+        }
+        _mockSteps[0].ExecuteAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(callInfo => ReferenceEquals(callInfo.ArgAt<TransitionExecutionContext>(0), chained)
+                ? Task.FromResult(Result<StepOutcome>.Fail(
+                    Error.Conflict(WorkflowErrorCodes.ResourceLockRejected, "Resource is already locked")))
+                : Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.Continue())));
+
+        var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.ResourceLockRejected);
+        // Not faulted, and the reservation is handed back even though the rejection landed mid-chain.
+        await _mockInstanceRepository.DidNotReceive().UpdateAsync(
+            Arg.Is<Instance>(x => x.Status.Equals(InstanceStatus.Faulted)),
+            Arg.Any<bool>(), Arg.Any<CancellationToken>());
+        await _mockAdmissionService.Received(1).ReleaseReservationAsync(
+            Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>());
+    }
+
     private ITransitionStep CreateMockStep(int order)
     {
         var mockStep = Substitute.For<ITransitionStep>();
