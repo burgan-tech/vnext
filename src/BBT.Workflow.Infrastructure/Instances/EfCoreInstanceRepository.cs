@@ -230,7 +230,7 @@ public sealed class EfCoreInstanceRepository(
         Guid correlationId,
         CancellationToken cancellationToken = default)
     {
-        using var activity = PipelineStepActivityHelper.StartOperationActivity(QueryExecuteSpan);
+        using var activity = PipelineStepActivityHelper.StartOperationActivity("Instance.Query.Execute");
         var dbSet = await GetDbSetAsync();
         var instance = await dbSet
             .Include(i => i.DataList.Where(d => d.IsLatest))
@@ -774,7 +774,7 @@ public sealed class EfCoreInstanceRepository(
     /// </remarks>
     private async Task<IQueryable<Instance>> PrepareDetailedQueryAsync()
     {
-        using var activity = PipelineStepActivityHelper.StartOperationActivity(QueryPrepareSpan);
+        using var activity = PipelineStepActivityHelper.StartOperationActivity("Instance.Query.Prepare");
 
         return await WithDetailsAsync();
     }
@@ -815,7 +815,7 @@ public sealed class EfCoreInstanceRepository(
 
         var query = (await PrepareDetailedQueryAsync())
             .AsSplitQuery();
-        using var activity = PipelineStepActivityHelper.StartOperationActivity(QueryExecuteSpan);
+        using var activity = PipelineStepActivityHelper.StartOperationActivity("Instance.Query.Execute");
 
         if (Guid.TryParse(identifier, out var instanceId))
         {
@@ -902,7 +902,7 @@ public sealed class EfCoreInstanceRepository(
     {
         var query = (await PrepareDetailedQueryAsync())
             .AsSplitQuery();
-        using var activity = PipelineStepActivityHelper.StartOperationActivity(QueryExecuteSpan);
+        using var activity = PipelineStepActivityHelper.StartOperationActivity("Instance.Query.Execute");
 
         // Only non-terminal instances occupy a key (Active or Busy). Terminal rows
         // (Completed/Faulted/Passive) are ignored. OrderByDescending(CreatedAt) keeps the
@@ -947,7 +947,7 @@ public sealed class EfCoreInstanceRepository(
         var query = (await PrepareDetailedQueryAsync())
             .AsNoTracking()
             .AsSplitQuery();
-        using var activity = PipelineStepActivityHelper.StartOperationActivity(QueryExecuteSpan);
+        using var activity = PipelineStepActivityHelper.StartOperationActivity("Instance.Query.Execute");
 
         if (Guid.TryParse(identifier, out var instanceId))
         {

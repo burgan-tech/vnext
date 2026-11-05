@@ -263,7 +263,7 @@ public sealed class InstanceHopLoadShapeTests : IAsyncLifetime
         return new WorkflowDbContext(builder.Options, new StaticCurrentSchema("public"));
     }
 
-    private static IServiceProvider CallerServices(string user)
+    private static ServiceProvider CallerServices(string user)
     {
         var currentUser = Substitute.For<ICurrentUser>();
         currentUser.ActorUserName.Returns(user);
