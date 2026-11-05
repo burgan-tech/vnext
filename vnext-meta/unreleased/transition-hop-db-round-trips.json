@@ -1,0 +1,7 @@
+{
+  "releaseNote": {
+    "summary": "Fewer database commands per transition: no second status write or admission re-read, a two-command instance load, a lean timer-cancel probe and no no-op Busy CAS on subflow resume.",
+    "breaking": false,
+    "docs": []
+  }
+}
