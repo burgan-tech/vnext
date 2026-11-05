@@ -66,8 +66,13 @@ public class TransitionPipeline
     /// <summary>
     /// Step failures that must NOT fault the instance. The step refused to START the work rather than
     /// failing it half-way, so the instance is exactly as it was: faulting it would destroy healthy work
-    /// over a condition the caller can simply retry. The admission layer compensates the Busy flip when
-    /// the run returns a failure, so the instance settles back to Active on its own.
+    /// over a condition the caller can simply retry.
+    ///
+    /// The Busy flip this run took is NOT undone for us — nothing upstream compensates a failure
+    /// returned from inside the chain, and the fault path only clears Busy because faulting rewrites the
+    /// status. So the chain releases the reservation itself before returning; without that the instance
+    /// rests Busy with no owner, which has no automatic recovery on the sync path.
+    ///
     /// Extend deliberately — an entry here means "this error never leaves partial state behind".
     /// </summary>
     private static readonly HashSet<string> NonFaultingErrorCodes = new(StringComparer.Ordinal)
@@ -336,9 +341,16 @@ public class TransitionPipeline
                 // öldürmek olurdu. Fail dönüyoruz; admission katmanı Busy flip'ini telafi ediyor.
                 if (IsNonFaultingError(pipelineResult.Error))
                 {
-                    _logger.LogInformation(
-                        "Transition {TransitionKey} on instance {InstanceId} was rejected without faulting: {ErrorCode}",
-                        context.TransitionKey, context.InstanceId, pipelineResult.Error.Code);
+                    _logger.TransitionRejectedWithoutFaulting(
+                        context.InstanceId, context.TransitionKey, pipelineResult.Error.Code);
+
+                    // Hand the status back. The instance is not faulted and no settle runs on this
+                    // path, so the Busy this run reserved would otherwise stay forever — the caller
+                    // gets its 409 and the instance is wedged. Only when this run owns the status:
+                    // a pre-reserved or subflow-forwarded run is holding somebody else's flip.
+                    if (context.OwnsStatus)
+                        await _admissionService.ReleaseReservationAsync(context, cancellationToken);
+
                     return Result<TransitionExecutionContext>.Fail(pipelineResult.Error);
                 }
 
@@ -349,9 +361,8 @@ public class TransitionPipeline
                 // dispatch below, exactly like a normal auto-chain hop.
                 if (TryRouteByErrorBoundary(context, pipelineResult.Error))
                 {
-                    _logger.LogInformation(
-                        "Transition {TransitionKey} on instance {InstanceId} failed with {ErrorCode} and was rerouted by errorBoundary to {NextTransition}",
-                        context.TransitionKey, context.InstanceId, pipelineResult.Error.Code,
+                    _logger.TransitionReroutedByErrorBoundary(
+                        context.InstanceId, context.TransitionKey, pipelineResult.Error.Code,
                         context.Directives.NextTransition?.TransitionKey);
                 }
                 else

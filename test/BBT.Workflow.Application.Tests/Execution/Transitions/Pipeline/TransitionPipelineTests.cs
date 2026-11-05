@@ -1870,6 +1870,60 @@ public class TransitionPipelineTests
         return System.Text.Json.JsonSerializer.Deserialize<State>(json, JsonSerializerConstants.JsonOptions)!;
     }
 
+
+    /// <summary>
+    /// A rejection must hand the status back. Nothing upstream compensates a failure returned from
+    /// inside the chain, and this path deliberately does not fault — so if the chain kept the Busy it
+    /// reserved, the caller would get its 409 and the instance would rest Busy with NO owner, which has
+    /// no automatic recovery on the sync path. That wedge is the whole reason this test exists.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_WhenResourceLockIsRejected_ShouldHandBackTheBusyReservation()
+    {
+        var context = CreateTransitionExecutionContext();
+        var workflowContext = CreateWorkflowExecutionContext(context);
+        SetupContextFactory(context);
+        SetupStepsToSucceed();
+        _mockSteps[0].ExecuteAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(Result<StepOutcome>.Fail(
+                Error.Conflict(WorkflowErrorCodes.ResourceLockRejected, "Resource is already locked"))));
+
+        var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeFalse();
+        await _mockAdmissionService.Received(1).ReserveAsync(
+            Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>());
+        await _mockAdmissionService.Received(1).ReleaseReservationAsync(
+            Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// updateData never reserves and never settles — it is status-neutral by design. A rejection there
+    /// must not release a flip this run never took, which would free an instance somebody else owns.
+    /// (A pre-reserved run is the opposite case: the accept flipped Busy ON ITS BEHALF, so it does own
+    /// the status and the release above is correct for it.)
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_WhenRejectedWithoutOwningTheStatus_ShouldNotReleaseAReservationItNeverTook()
+    {
+        var context = CreateTransitionExecutionContext("update-parent-data");
+        var workflowContext = CreateWorkflowExecutionContext(context);
+        SetupContextFactory(context);
+        SetupStepsToSucceed();
+        _mockAdmissionService.Classify(Arg.Any<TransitionExecutionContext>())
+            .Returns(AdmissionKind.Unconditional);
+        _mockSteps[0].ExecuteAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(Result<StepOutcome>.Fail(
+                Error.Conflict(WorkflowErrorCodes.ResourceLockRejected, "Resource is already locked"))));
+
+        await _pipeline.RunAsync(workflowContext, CancellationToken.None);
+
+        await _mockAdmissionService.DidNotReceive().ReserveAsync(
+            Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>());
+        await _mockAdmissionService.DidNotReceive().ReleaseReservationAsync(
+            Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>());
+    }
+
     private ITransitionStep CreateMockStep(int order)
     {
         var mockStep = Substitute.For<ITransitionStep>();

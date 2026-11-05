@@ -105,7 +105,7 @@ public class ResourceLockStepTests
 
     /// <summary>
     /// onConflict: Reject — losing the race is not a FAILURE, it is "not your turn". The step answers with
-    /// a different code (Execution:200011) so the pipeline leaves the instance untouched and the caller can
+    /// a different code (Execution:200014) so the pipeline leaves the instance untouched and the caller can
     /// retry the very same call. Abort's code (200010) means "your instance is dead, start over".
     /// </summary>
     [Fact]
