@@ -45,8 +45,7 @@ public sealed class InstanceHopLoadShapeTests : IAsyncLifetime
 
     async Task IAsyncLifetime.InitializeAsync()
     {
-        _postgresContainer = new PostgreSqlBuilder()
-            .WithImage("postgres:16-alpine")
+        _postgresContainer = new PostgreSqlBuilder("postgres:16-alpine")
             .WithDatabase("testdb")
             .WithUsername("test")
             .WithPassword("test")

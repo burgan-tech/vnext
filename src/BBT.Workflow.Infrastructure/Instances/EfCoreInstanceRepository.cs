@@ -41,6 +41,8 @@ public sealed class EfCoreInstanceRepository(
         IInstanceRepository
 {
     private const string DefaultSchemaName = "public";
+    private const string QueryPrepareSpan = "Instance.Query.Prepare";
+    private const string QueryExecuteSpan = "Instance.Query.Execute";
 
     public override async Task<IQueryable<Instance>> WithDetailsAsync()
     {
@@ -228,7 +230,7 @@ public sealed class EfCoreInstanceRepository(
         Guid correlationId,
         CancellationToken cancellationToken = default)
     {
-        using var activity = PipelineStepActivityHelper.StartOperationActivity("Instance.Query.Execute");
+        using var activity = PipelineStepActivityHelper.StartOperationActivity(QueryExecuteSpan);
         var dbSet = await GetDbSetAsync();
         var instance = await dbSet
             .Include(i => i.DataList.Where(d => d.IsLatest))
@@ -546,8 +548,8 @@ public sealed class EfCoreInstanceRepository(
     {
         instance.Busy();
 
-        var dbContext = await GetDbContextAsync();
-        var entry = dbContext.Entry(instance);
+        var context = await GetDbContextAsync();
+        var entry = context.Entry(instance);
         if (entry.State == EntityState.Detached)
         {
             return;
@@ -578,7 +580,7 @@ public sealed class EfCoreInstanceRepository(
     /// </summary>
     private bool WouldStampModificationAudit(EntityEntry<Instance> entry)
     {
-        var currentUser = serviceProvider.GetService<ICurrentUser>();
+        var currentUser = ServiceProvider.GetService<ICurrentUser>();
         return WouldChange(entry.Property(nameof(Instance.ModifiedBy)), currentUser?.ActorUserName)
                || WouldChange(entry.Property(nameof(Instance.ModifiedByBehalfOf)), currentUser?.UserName);
 
@@ -772,7 +774,7 @@ public sealed class EfCoreInstanceRepository(
     /// </remarks>
     private async Task<IQueryable<Instance>> PrepareDetailedQueryAsync()
     {
-        using var activity = PipelineStepActivityHelper.StartOperationActivity("Instance.Query.Prepare");
+        using var activity = PipelineStepActivityHelper.StartOperationActivity(QueryPrepareSpan);
 
         return await WithDetailsAsync();
     }
@@ -813,7 +815,7 @@ public sealed class EfCoreInstanceRepository(
 
         var query = (await PrepareDetailedQueryAsync())
             .AsSplitQuery();
-        using var activity = PipelineStepActivityHelper.StartOperationActivity("Instance.Query.Execute");
+        using var activity = PipelineStepActivityHelper.StartOperationActivity(QueryExecuteSpan);
 
         if (Guid.TryParse(identifier, out var instanceId))
         {
@@ -848,42 +850,50 @@ public sealed class EfCoreInstanceRepository(
         string? identifier,
         CancellationToken cancellationToken)
     {
-        IQueryable<Instance> query;
-        using (PipelineStepActivityHelper.StartOperationActivity("Instance.Query.Prepare"))
+        var query = await PrepareLatestOnlyDetailedQueryAsync();
+
+        using (PipelineStepActivityHelper.StartOperationActivity(QueryExecuteSpan))
         {
-            query = (await base.WithDetailsAsync())
+            var instance = Guid.TryParse(identifier, out var instanceId)
+                ? await query.FirstOrDefaultAsync(p => p.Id == instanceId, cancellationToken)
+                : null;
+
+            // Key is not unique across terminal/historical rows; OrderByDescending(CreatedAt)
+            // keeps the fallback deterministic by returning the most recent instance for the key.
+            instance ??= await query
+                .Where(p => p.Key == identifier)
+                .OrderByDescending(p => p.CreatedAt)
+                .FirstOrDefaultAsync(cancellationToken);
+
+            if (instance is null)
+            {
+                return null;
+            }
+
+            var context = await GetDbContextAsync();
+            await context.Entry(instance)
+                .Collection(i => i.ChildCorrelations)
+                .Query()
+                .Where(c => !c.IsCompleted)
+                .LoadAsync(cancellationToken);
+
+            return MarkIfPartiallyLoaded(instance);
+        }
+    }
+
+    /// <summary>
+    /// The latest-only counterpart of <see cref="PrepareDetailedQueryAsync"/>: the base includes
+    /// plus the at-most-one latest data row, as one single query, under the same
+    /// <c>Instance.Query.Prepare</c> span.
+    /// </summary>
+    private async Task<IQueryable<Instance>> PrepareLatestOnlyDetailedQueryAsync()
+    {
+        using (PipelineStepActivityHelper.StartOperationActivity(QueryPrepareSpan))
+        {
+            return (await base.WithDetailsAsync())
                 .Include(i => i.DataList.Where(d => d.IsLatest))
                 .AsSingleQuery();
         }
-
-        using var activity = PipelineStepActivityHelper.StartOperationActivity("Instance.Query.Execute");
-
-        Instance? instance = null;
-        if (Guid.TryParse(identifier, out var instanceId))
-        {
-            instance = await query.FirstOrDefaultAsync(p => p.Id == instanceId, cancellationToken);
-        }
-
-        // Key is not unique across terminal/historical rows; OrderByDescending(CreatedAt)
-        // keeps the fallback deterministic by returning the most recent instance for the key.
-        instance ??= await query
-            .Where(p => p.Key == identifier)
-            .OrderByDescending(p => p.CreatedAt)
-            .FirstOrDefaultAsync(cancellationToken);
-
-        if (instance is null)
-        {
-            return null;
-        }
-
-        var dbContext = await GetDbContextAsync();
-        await dbContext.Entry(instance)
-            .Collection(i => i.ChildCorrelations)
-            .Query()
-            .Where(c => !c.IsCompleted)
-            .LoadAsync(cancellationToken);
-
-        return MarkIfPartiallyLoaded(instance);
     }
 
     /// <inheritdoc />
@@ -892,7 +902,7 @@ public sealed class EfCoreInstanceRepository(
     {
         var query = (await PrepareDetailedQueryAsync())
             .AsSplitQuery();
-        using var activity = PipelineStepActivityHelper.StartOperationActivity("Instance.Query.Execute");
+        using var activity = PipelineStepActivityHelper.StartOperationActivity(QueryExecuteSpan);
 
         // Only non-terminal instances occupy a key (Active or Busy). Terminal rows
         // (Completed/Faulted/Passive) are ignored. OrderByDescending(CreatedAt) keeps the
@@ -937,7 +947,7 @@ public sealed class EfCoreInstanceRepository(
         var query = (await PrepareDetailedQueryAsync())
             .AsNoTracking()
             .AsSplitQuery();
-        using var activity = PipelineStepActivityHelper.StartOperationActivity("Instance.Query.Execute");
+        using var activity = PipelineStepActivityHelper.StartOperationActivity(QueryExecuteSpan);
 
         if (Guid.TryParse(identifier, out var instanceId))
         {
