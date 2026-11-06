@@ -329,6 +329,129 @@ public class HumanTaskFunctionTests : IDisposable
         result.Value!.Items.ShouldHaveSingleItem().InstanceId.ShouldBe("APP-1");
     }
 
+    /// <summary>
+    /// <c>humanTask.dueBy</c> and <c>humanTask.priority</c> are optional and travel next to the title
+    /// when the leaf's data carries them.
+    /// </summary>
+    [Fact]
+    public async Task DueByAndPriorityAreReadFromTheLeafsHumanTaskData()
+    {
+        var root = WaitingInstanceWithData("APP-1", new
+        {
+            humanTask = new
+            {
+                title = "sign",
+                description = "sign it",
+                dueBy = "2026-11-10T09:30:00+03:00",
+                priority = 2
+            }
+        });
+
+        SchemasAre(FlowKey);
+        FlowResolvesTo(ActionableFlow());
+        CandidatesAre(root);
+
+        var result = await _service.GetHumanTaskInstancesAsync(Domain);
+
+        var item = result.Value!.Items.ShouldHaveSingleItem();
+        item.Title.ShouldBe("sign");
+        item.DueBy.ShouldBe(new DateTimeOffset(2026, 11, 10, 9, 30, 0, TimeSpan.FromHours(3)));
+        item.Priority.ShouldBe(2m);
+    }
+
+    /// <summary>Absent fields stay null; the row itself is unaffected.</summary>
+    [Fact]
+    public async Task MissingDueByAndPriorityStayNull()
+    {
+        var root = WaitingInstance("APP-1", title: "sign");
+
+        SchemasAre(FlowKey);
+        FlowResolvesTo(ActionableFlow());
+        CandidatesAre(root);
+
+        var result = await _service.GetHumanTaskInstancesAsync(Domain);
+
+        var item = result.Value!.Items.ShouldHaveSingleItem();
+        item.Title.ShouldBe("sign");
+        item.DueBy.ShouldBeNull();
+        item.Priority.ShouldBeNull();
+    }
+
+    /// <summary>
+    /// The fields are authored by the domain: a value of the wrong shape is treated as absent and
+    /// never drops the task from the list.
+    /// </summary>
+    [Fact]
+    public async Task MalformedDueByAndPriorityAreTreatedAsAbsentAndTheRowStays()
+    {
+        var root = WaitingInstanceWithData("APP-1", new
+        {
+            humanTask = new { title = "sign", dueBy = "next week", priority = new { level = 1 } }
+        });
+
+        SchemasAre(FlowKey);
+        FlowResolvesTo(ActionableFlow());
+        CandidatesAre(root);
+
+        var result = await _service.GetHumanTaskInstancesAsync(Domain);
+
+        var item = result.Value!.Items.ShouldHaveSingleItem();
+        item.Title.ShouldBe("sign");
+        item.DueBy.ShouldBeNull();
+        item.Priority.ShouldBeNull();
+    }
+
+    /// <summary>A date-only <c>dueBy</c> and a numeric-string <c>priority</c> are accepted.</summary>
+    [Fact]
+    public async Task DateOnlyDueByAndNumericStringPriorityAreAccepted()
+    {
+        var root = WaitingInstanceWithData("APP-1", new
+        {
+            humanTask = new { title = "sign", dueBy = "2026-11-10", priority = "1.5" }
+        });
+
+        SchemasAre(FlowKey);
+        FlowResolvesTo(ActionableFlow());
+        CandidatesAre(root);
+
+        var result = await _service.GetHumanTaskInstancesAsync(Domain);
+
+        var item = result.Value!.Items.ShouldHaveSingleItem();
+        item.DueBy.ShouldNotBeNull();
+        item.DueBy!.Value.Date.ShouldBe(new DateTime(2026, 11, 10));
+        item.Priority.ShouldBe(1.5m);
+    }
+
+    /// <summary>
+    /// A comma-decimal <c>priority</c> is ambiguous with a thousands separator; it reads as absent,
+    /// never as a number ten times larger.
+    /// </summary>
+    [Fact]
+    public async Task ACommaDecimalPriorityStringIsTreatedAsAbsentNotAsAGroupedNumber()
+    {
+        var root = WaitingInstanceWithData("APP-1", new
+        {
+            humanTask = new { title = "sign", priority = "1,5" }
+        });
+
+        SchemasAre(FlowKey);
+        FlowResolvesTo(ActionableFlow());
+        CandidatesAre(root);
+
+        var result = await _service.GetHumanTaskInstancesAsync(Domain);
+
+        var item = result.Value!.Items.ShouldHaveSingleItem();
+        item.Priority.ShouldBeNull();
+    }
+
+    private static Instance WaitingInstanceWithData(string key, object data)
+    {
+        var instance = Instance.Create(Guid.NewGuid(), FlowKey, "1.0.0", key);
+        instance.ChangeState(StateFactory.CreateDefault(HumanState, StateType.Intermediate, StateSubType.Human));
+        instance.SeedData(Guid.NewGuid(), new JsonData(JsonSerializer.SerializeToElement(data)));
+        return instance;
+    }
+
     private void CacheIs(bool enabled, bool allowOverride = true)
     {
         _cache.Enabled.Returns(enabled);

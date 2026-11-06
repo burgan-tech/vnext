@@ -92,7 +92,8 @@ The plan is built from `ExcludedStepOrders` alone (`TransitionExecutor.BuildExec
 - Pipeline steps do NOT call EF `Include` directly — includes are applied at load time:
   `GetActiveAsync` → `GetResultAsync` → `FindByIdentifierAsync` → `EfCoreInstanceRepository.WithDetailsAsync()`
   (`DataList` or latest-only under `WorkflowExecution:LatestOnlyInstanceLoading`, plus
-  `Include(ChildCorrelations.Where(!IsCompleted))`, split queries).
+  `Include(ChildCorrelations.Where(!IsCompleted))`, split queries; under latest-only the tracked
+  finder joins the ≤1 latest row and loads open correlations explicitly — two commands, no jsonb repeat).
 - `GetResultAsync(includeDetails: false)` is lean; history paths use `AsNoTracking` + filtered includes.
 - Post-commit settlement (`FindForPostCommitSettlementAsync(id, includeLatestData)`) always loads open
   correlations; add a new `LatestData` reader to `PostCommitParentMutationService.NeedsLatestDataForSettle`,

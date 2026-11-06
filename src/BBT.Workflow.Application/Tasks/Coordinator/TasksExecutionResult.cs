@@ -43,6 +43,21 @@ public sealed record TasksExecutionResult
     public ExecutionError? TaskError { get; init; }
 
     /// <summary>
+    /// The error of a failure that the error boundary handled with a NON-blocking action
+    /// (<c>Ignore</c> / <c>Log</c>). Informational only: set when the boundary let the task's
+    /// failure through, so a caller that reports per-task outcomes (FanOut items) can still say
+    /// what the task actually answered.
+    /// </summary>
+    /// <remarks>
+    /// Kept apart from <see cref="TaskError"/> on purpose. The pipeline steps and
+    /// <c>TaskCoordinator</c> read <c>IsSuccess == false</c> together with a non-null
+    /// <see cref="TaskError"/> and no <see cref="BoundaryAction"/> as an UNHANDLED failure and fault
+    /// the instance, so carrying the error there would turn every Ignore into a fault. Nothing on
+    /// the pipeline path reads this property.
+    /// </remarks>
+    public ExecutionError? HandledError { get; init; }
+
+    /// <summary>
     /// Gets the boundary action result from error boundary resolution.
     /// Contains the action to take (Abort, Retry, Rollback, Notify, etc.) and transition key.
     /// Set when a task fails and error boundary resolves a policy.

@@ -300,7 +300,7 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
                 ActionExecutionResult.Abort(executionError.ToError(), null, executionError))),
             cancellationToken);
 
-        return ConvertActionResult(actionResult, onExecuteTask, executionError, totalDurationMs);
+        return ConvertActionResult(actionResult, onExecuteTask, executionError, failedResult.Value?.Response, totalDurationMs);
     }
 
     /// <summary>
@@ -310,6 +310,7 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
         ActionExecutionResult actionResult,
         OnExecuteTask onExecuteTask,
         ExecutionError executionError,
+        StandardTaskResponse? capturedResponse,
         long executionDurationMs)
     {
         if (actionResult.ShouldContinue)
@@ -322,9 +323,17 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
                 executionError.StatusCode,
                 executionDurationMs);
 
+            // TaskError stays null — a non-null TaskError without a BoundaryAction is what the
+            // pipeline faults on. The error travels in HandledError instead, and the captured
+            // response (non-null only under CaptureResponse, i.e. FanOut items) is kept so a
+            // handled business failure still hands its payload to the caller.
             return Result<TasksExecutionResult>.Ok(TasksExecutionResult.SuccessWithFailedTasks(
                 [summary],
-                executionDurationMs));
+                executionDurationMs) with
+            {
+                HandledError = executionError,
+                Response = capturedResponse
+            });
         }
 
         // Create boundary result for TasksExecutionResult

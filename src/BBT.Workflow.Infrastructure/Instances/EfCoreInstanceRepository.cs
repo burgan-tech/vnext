@@ -7,6 +7,7 @@ using BBT.Aether;
 using BBT.Aether.Domain.EntityFrameworkCore;
 using BBT.Aether.MultiSchema;
 using BBT.Aether.Results;
+using BBT.Aether.Users;
 using BBT.Workflow.Data;
 using BBT.Workflow.DataSink;
 using BBT.Workflow.Definitions;
@@ -20,6 +21,7 @@ using BBT.Workflow.BackgroundJobs.Options;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.ChangeTracking;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using BBT.Workflow.Definitions.Schemas;
@@ -39,6 +41,8 @@ public sealed class EfCoreInstanceRepository(
         IInstanceRepository
 {
     private const string DefaultSchemaName = "public";
+    private const string QueryPrepareSpan = "Instance.Query.Prepare";
+    private const string QueryExecuteSpan = "Instance.Query.Execute";
 
     public override async Task<IQueryable<Instance>> WithDetailsAsync()
     {
@@ -540,6 +544,66 @@ public sealed class EfCoreInstanceRepository(
     }
 
     /// <inheritdoc />
+    public async Task AcceptPersistedBusyAsync(Instance instance, CancellationToken cancellationToken = default)
+    {
+        instance.Busy();
+
+        var context = await GetDbContextAsync();
+        var entry = context.Entry(instance);
+        if (entry.State == EntityState.Detached)
+        {
+            return;
+        }
+
+        // The redundant status write was ALSO what made the audit interceptor stamp an empty
+        // ModifiedBy / ModifiedByBehalfOf with the caller (it runs only for a Modified entry). On
+        // an instance whose first request changes nothing else — a start that rests in its initial
+        // state — dropping it would leave metadata.modifiedBy empty where it used to name the
+        // caller. So the write is dropped only when that stamp would change nothing; otherwise the
+        // status stays modified and the next flush writes exactly what it always did.
+        if (WouldStampModificationAudit(entry))
+        {
+            return;
+        }
+
+        // Status only: the reserve's CAS may also have written EffectiveStatus, but this method
+        // does not mirror it in memory, so its tracked value and baseline are left as they are.
+        var status = entry.Property(nameof(Instance.Status));
+        status.OriginalValue = instance.Status;
+        status.IsModified = false;
+    }
+
+    /// <summary>
+    /// Whether Aether's <c>AuditInterceptor</c> would change the modification audit columns of
+    /// <paramref name="entry"/> on its next save: it fills <c>ModifiedBy</c> / <c>ModifiedByBehalfOf</c>
+    /// only while they are empty — with the caller, or null (nullable) / a placeholder otherwise.
+    /// </summary>
+    private bool WouldStampModificationAudit(EntityEntry<Instance> entry)
+    {
+        var currentUser = ServiceProvider.GetService<ICurrentUser>();
+        return WouldChange(entry.Property(nameof(Instance.ModifiedBy)), currentUser?.ActorUserName)
+               || WouldChange(entry.Property(nameof(Instance.ModifiedByBehalfOf)), currentUser?.UserName);
+
+        static bool WouldChange(PropertyEntry property, string? value)
+        {
+            var current = property.CurrentValue as string;
+            if (!string.IsNullOrEmpty(current))
+            {
+                return false;
+            }
+
+            if (!string.IsNullOrEmpty(value))
+            {
+                return true;
+            }
+
+            // Empty caller: a nullable column becomes null (a change only from ""), a required one
+            // gets the interceptor's placeholder.
+            return !property.Metadata.IsNullable || current is not null;
+        }
+    }
+
+    /// <inheritdoc />
     public async Task<bool> TryReleaseBusyAsync(Instance instance, CancellationToken cancellationToken = default)
     {
         var effectiveStatus = instance.HasActiveSubFlow ? null : InstanceStatus.Active;
@@ -745,6 +809,11 @@ public sealed class EfCoreInstanceRepository(
         string? identifier,
         CancellationToken cancellationToken = default)
     {
+        if (LatestOnlyLoading)
+        {
+            return await FindByIdentifierLatestOnlyAsync(identifier, cancellationToken);
+        }
+
         var query = (await PrepareDetailedQueryAsync())
             .AsSplitQuery();
         using var activity = PipelineStepActivityHelper.StartOperationActivity("Instance.Query.Execute");
@@ -767,6 +836,65 @@ public sealed class EfCoreInstanceRepository(
             .Where(p => p.Key == identifier)
             .OrderByDescending(p => p.CreatedAt)
             .FirstOrDefaultAsync(cancellationToken));
+    }
+
+    /// <summary>
+    /// The tracked detailed load when latest-only loading is on — the pipeline's hop-1 load
+    /// (<c>GetActiveAsync</c>). Same aggregate shape as the split path (latest data row + open
+    /// child correlations), in two commands instead of three: the latest data row is at most one
+    /// row per instance, so it joins the instance row in a single query with nothing to multiply,
+    /// and the open correlations follow as one explicit collection load keyed on the instance id.
+    /// The correlations are deliberately NOT joined too: an instance with several open
+    /// correlations would repeat the latest data's jsonb once per correlation row.
+    /// </summary>
+    private async Task<Instance?> FindByIdentifierLatestOnlyAsync(
+        string? identifier,
+        CancellationToken cancellationToken)
+    {
+        var query = await PrepareLatestOnlyDetailedQueryAsync();
+
+        using (PipelineStepActivityHelper.StartOperationActivity(QueryExecuteSpan))
+        {
+            var instance = Guid.TryParse(identifier, out var instanceId)
+                ? await query.FirstOrDefaultAsync(p => p.Id == instanceId, cancellationToken)
+                : null;
+
+            // Key is not unique across terminal/historical rows; OrderByDescending(CreatedAt)
+            // keeps the fallback deterministic by returning the most recent instance for the key.
+            instance ??= await query
+                .Where(p => p.Key == identifier)
+                .OrderByDescending(p => p.CreatedAt)
+                .FirstOrDefaultAsync(cancellationToken);
+
+            if (instance is null)
+            {
+                return null;
+            }
+
+            var context = await GetDbContextAsync();
+            await context.Entry(instance)
+                .Collection(i => i.ChildCorrelations)
+                .Query()
+                .Where(c => !c.IsCompleted)
+                .LoadAsync(cancellationToken);
+
+            return MarkIfPartiallyLoaded(instance);
+        }
+    }
+
+    /// <summary>
+    /// The latest-only counterpart of <see cref="PrepareDetailedQueryAsync"/>: the base includes
+    /// plus the at-most-one latest data row, as one single query, under the same
+    /// <c>Instance.Query.Prepare</c> span.
+    /// </summary>
+    private async Task<IQueryable<Instance>> PrepareLatestOnlyDetailedQueryAsync()
+    {
+        using (PipelineStepActivityHelper.StartOperationActivity(QueryPrepareSpan))
+        {
+            return (await base.WithDetailsAsync())
+                .Include(i => i.DataList.Where(d => d.IsLatest))
+                .AsSingleQuery();
+        }
     }
 
     /// <inheritdoc />

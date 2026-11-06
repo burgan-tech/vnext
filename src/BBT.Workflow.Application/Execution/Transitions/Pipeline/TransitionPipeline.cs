@@ -215,7 +215,12 @@ public class TransitionPipeline
                 // SubFlow resume resumes an already-Busy instance; confirm the busy mark.
                 // (Long-poll acknowledge resume is intentionally NOT re-marked: a redundant
                 // resume that no-ops must not strand an already-advanced instance in Busy.)
-                if (context.Directives.IsSubFlowResume)
+                //
+                // The parent of an S SubFlow is Busy for the subflow's whole lifetime, so on the
+                // freshly loaded aggregate the confirm is normally a CAS (Active → Busy) that cannot
+                // match — one UPDATE and one commit per completion for nothing. Issue it only when
+                // the load actually saw the row not Busy.
+                if (context.Directives.IsSubFlowResume && !context.Instance.IsBusy)
                     await _busyMarker.MarkBusyAsync(context.InstanceId, cancellationToken);
 
                 context.OwnsStatus = true;
@@ -252,6 +257,12 @@ public class TransitionPipeline
                 var reserve = await _admissionService.ReserveAsync(context, cancellationToken);
                 if (!reserve.IsSuccess)
                     return Result<TransitionExecutionContext>.Fail(reserve.Error);
+
+                // The reserve's CAS committed Busy in its own unit of work, after this aggregate was
+                // loaded Active. Mirror it here with the tracker's baseline aligned: left to
+                // SetBusyStep's in-memory flip, the status rode the transition-record insert as a
+                // second, guard-less UPDATE of a value the row already holds.
+                await _instanceRepository.AcceptPersistedBusyAsync(context.Instance, cancellationToken);
 
                 context.OwnsStatus = true;
                 return await RunChainAsync(context, cancellationToken);

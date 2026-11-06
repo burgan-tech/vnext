@@ -331,6 +331,19 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
     Task<bool> TryMarkBusyAsync(Instance instance, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Mirrors onto the change-tracked aggregate a Busy flip that a set-based CAS has ALREADY
+    /// committed for this row in another unit of work (sync admission's reserve): applies
+    /// <c>Busy()</c> in memory and aligns the tracker's baseline for the status column, so the
+    /// next SaveChanges in this unit of work does not write <c>Status</c> a second time — without
+    /// it the transition-record insert carried a redundant, guard-less <c>UPDATE Instances SET
+    /// Status</c>. Writes nothing. Call it only right after a CAS that this execution won.
+    /// Exception: while the audit interceptor would still stamp an empty <c>ModifiedBy</c> /
+    /// <c>ModifiedByBehalfOf</c> (the instance's first change), the status stays modified, because
+    /// that stamp rode the same write and <c>metadata.modifiedBy</c> must not change.
+    /// </summary>
+    Task AcceptPersistedBusyAsync(Instance instance, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Aggregate-aware counterpart of <see cref="TryReleaseBusyAsync(Guid,CancellationToken)"/>:
     /// CAS Busy → Active, then <c>Active()</c> in memory with the same change-tracker baseline
     /// alignment as <see cref="TryMarkBusyAsync(Instance,CancellationToken)"/>.

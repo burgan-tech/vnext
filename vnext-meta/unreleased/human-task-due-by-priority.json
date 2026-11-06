@@ -1,0 +1,7 @@
+{
+  "releaseNote": {
+    "summary": "The human-task function returns optional dueBy and priority on each row, read from the leaf's humanTask data; a missing or malformed value is null.",
+    "breaking": false,
+    "docs": []
+  }
+}

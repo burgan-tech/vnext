@@ -484,6 +484,42 @@ flight, and children started before the stamping existed carry no map. That is t
 the state function has always had, so reading it here converges the two surfaces rather than
 inventing a third.
 
+## Response body
+
+A bare JSON array of `HumanTaskItemOutput`, newest `createdAt` first:
+
+```json
+[
+  {
+    "instanceId": "APP-2026-001",
+    "id": "8f1c2a4e-…",
+    "workflow": "account-opening",
+    "title": "Sign the mandate",
+    "description": "Check the documents and sign",
+    "dueBy": "2026-11-10T09:30:00+03:00",
+    "priority": 2,
+    "createdAt": "2026-11-05T10:12:00Z",
+    "vNext": true
+  }
+]
+```
+
+| Field | Source | Absent |
+|---|---|---|
+| `instanceId` | Root's business key; the root's own id for a SubProcess or a key-less instance | — |
+| `id` | Root's own id, always unique | — |
+| `workflow` | Root's flow key | — |
+| `title` / `description` | Leaf's latest data, `humanTask.title` / `.description` | `""` |
+| `dueBy` | Leaf's latest data, `humanTask.dueBy`: an ISO 8601 date or date-time string | `null` |
+| `priority` | Leaf's latest data, `humanTask.priority`: a JSON number, or a numeric string with a `.` decimal point (`"1,5"` reads as absent) | `null` |
+| `createdAt` | Root's creation time, the sort key | — |
+| `vNext` | Always `true` | — |
+
+`dueBy` and `priority` are optional and authored by the domain. A value of the wrong shape is read
+as absent (`null`), never as an error: one malformed field must not drop a task from a banker's list.
+Both fields are additive; a consumer that does not know them ignores them. A leaf in a partner domain
+running an older runtime answers without them, so they read `null` for that row.
+
 ## Bounds and truncation
 
 `HumanTaskFunction:PerSchemaLimit` (200) is enforced in SQL; `ResultCap` (500) applies after
@@ -579,7 +615,7 @@ Two things deliberately left alone, recorded so they are not rediscovered as bug
 
 | Key | `HumanTaskFunctionCache` |
 |---|---|
-| Shape | `human-task:v1:{domain}:{callerScope}:{authHeaderHash}` |
+| Shape | `human-task:v2:{domain}:{callerScope}:{authHeaderHash}` |
 | TTL | `HumanTaskFunctionCache:TtlSeconds` (60) |
 | Kill switch | `Enabled = false` |
 | Override | `X-VNext-Cache-Override` header, honoured while `AllowClientOverride` is true |
@@ -612,7 +648,7 @@ Three spans under the `Instance.Read/humanTasks` envelope, all on the existing
 
 ```
 Instance.Read/humanTasks
-├─ Cache.Get/human-task:v1:…            hit → the tree ends here
+├─ Cache.Get/human-task:v2:…            hit → the tree ends here
 ├─ HumanTask.Scan/ht-a                  candidates=4        ← one per schema, in parallel
 │  └─ Db.SELECT …
 ├─ HumanTask.Descend/ht-a               roots=4 resolved=4 authorized=3
@@ -621,7 +657,7 @@ Instance.Read/humanTasks
 │     ├─ HumanTask.Authorize/ht-b       leaves=2 authorized=2
 │     └─ Subflow.Descend/ht-d           depth=2 transport=remote
 │        └─ …partner answers with a finished result
-└─ Cache.Set/human-task:v1:…
+└─ Cache.Set/human-task:v2:…
 ```
 
 Selection and descent are timed separately because their costs are unrelated: the scan is one query

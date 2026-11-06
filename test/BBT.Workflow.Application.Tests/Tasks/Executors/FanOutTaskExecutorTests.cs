@@ -163,6 +163,26 @@ public sealed class FanOutTaskExecutorTests
     }
 
     [Fact]
+    public async Task Execute_WhenItemBoundaryIgnoresTheFailure_KeepsTheInnerTasksCodeMessageAndPayload()
+    {
+        // Issue #1176: an Ignored item used to arrive as FanOut:ItemFailed with a generic message,
+        // so an OutputHandler could not tell an expected refusal (409) from any other failure.
+        var harness = new FanOutHarness(
+            instanceData: new { documents = new[] { new { id = "ok" }, new { id = "busy" } } },
+            joinPolicy: FanOutJoinPolicy.AllSettled);
+        harness.Engine.HandledFailureOrders.Add(1);
+
+        var response = await harness.ExecuteAsync();
+
+        var failed = harness.ItemResults(response).EnumerateArray()
+            .Single(r => !r.GetProperty("isSuccess").GetBoolean());
+        failed.GetProperty("errorCode").GetString().ShouldEndWith(":409");
+        failed.GetProperty("errorCode").GetString().ShouldStartWith("Task:DirectTrigger:");
+        failed.GetProperty("errorMessage").GetString().ShouldBe("Instance is busy");
+        failed.GetProperty("data").GetProperty("order").GetInt32().ShouldBe(1);
+    }
+
+    [Fact]
     public async Task Execute_WhenAnItemThrows_RecordsItAsFailed_WithoutLosingTheOtherItems()
     {
         var harness = new FanOutHarness(instanceData: FanOutHarness.Documents(3));

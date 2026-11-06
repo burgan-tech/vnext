@@ -492,6 +492,119 @@ public sealed class TaskExecutionEngineTests : IDisposable
     }
 
     /// <summary>
+    /// Issue #1176: a business failure that the boundary Ignores keeps what the task answered. The
+    /// error rides in <c>HandledError</c> — never <c>TaskError</c>, which the pipeline faults on — and
+    /// the captured response (payload included) is carried forward instead of dropped.
+    /// </summary>
+    [Theory]
+    [InlineData(ErrorAction.Ignore)]
+    [InlineData(ErrorAction.Log)]
+    public async Task ExecuteAsync_WhenBoundaryLetsBusinessFailureThrough_KeepsErrorAndResponse_WithoutTaskError(
+        ErrorAction action)
+    {
+        var task = WorkflowTaskFactory.CreateHttpTask("mock-api");
+        ArrangeFailedExecution(task, statusCode: 409, message: "Instance is busy");
+        var errorBoundary = ErrorBoundary.WithRules(new ErrorHandlerRule
+        {
+            Action = action,
+            ErrorCodes = ["409"],
+            Priority = 1
+        });
+        var onExecute = OnExecuteTask.Create(1, task, ScriptCode.FromNative(string.Empty), errorBoundary);
+        var options = new TaskEngineExecutionOptions { CaptureResponse = true, SuppressDataApply = true };
+
+        var result = await CreateEngine().ExecuteAsync(
+            onExecute, Guid.NewGuid(), TaskTrigger.OnEntry, TaskExecutionOrigin.Flow,
+            CreateScriptContext(), options, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        var value = result.Value!;
+        value.HasFailedTasks.ShouldBeTrue();
+        value.BoundaryAction.ShouldBeNull();
+        // TaskError stays null: with it set and no BoundaryAction the pipeline steps fault the instance.
+        value.TaskError.ShouldBeNull();
+        value.HandledError.ShouldNotBeNull();
+        value.HandledError!.StatusCode.ShouldBe(409);
+        value.HandledError.NormalizedError.Code.ShouldStartWith("Task:");
+        value.HandledError.NormalizedError.Code.ShouldEndWith(":mock-api:409");
+        value.HandledError.ErrorMessage.ShouldBe("Instance is busy");
+        value.Response.ShouldNotBeNull();
+        value.Response!.StatusCode.ShouldBe(409);
+    }
+
+    /// <summary>
+    /// The Ignore result carries the response only when the caller asked for capture — the same
+    /// opt-in as every other path.
+    /// </summary>
+    [Fact]
+    public async Task ExecuteAsync_WhenBoundaryIgnoresFailure_WithoutCaptureResponse_DoesNotExposeResponse()
+    {
+        var task = WorkflowTaskFactory.CreateHttpTask("mock-api");
+        ArrangeFailedExecution(task, statusCode: 404, message: "not found");
+        var errorBoundary = ErrorBoundary.WithRules(new ErrorHandlerRule
+        {
+            Action = ErrorAction.Ignore,
+            ErrorCodes = ["404"],
+            Priority = 1
+        });
+        var onExecute = OnExecuteTask.Create(1, task, ScriptCode.FromNative(string.Empty), errorBoundary);
+
+        var result = await CreateEngine().ExecuteAsync(
+            onExecute, Guid.NewGuid(), TaskTrigger.OnEntry, TaskExecutionOrigin.Flow,
+            CreateScriptContext(), CancellationToken.None);
+
+        result.Value!.TaskError.ShouldBeNull();
+        result.Value.HandledError!.StatusCode.ShouldBe(404);
+        result.Value.Response.ShouldBeNull();
+    }
+
+    /// <summary>
+    /// A blocking action is untouched: Abort still reports through <c>TaskError</c> with a
+    /// <c>BoundaryAction</c>, and never through <c>HandledError</c>.
+    /// </summary>
+    [Fact]
+    public async Task ExecuteAsync_WhenBoundaryAbortsFailure_ReportsTaskError_NotHandledError()
+    {
+        var task = WorkflowTaskFactory.CreateHttpTask("mock-api");
+        ArrangeFailedExecution(task, statusCode: 500, message: "boom");
+        var errorBoundary = ErrorBoundary.WithRules(new ErrorHandlerRule
+        {
+            Action = ErrorAction.Abort,
+            ErrorCodes = ["500"],
+            Priority = 1
+        });
+        var onExecute = OnExecuteTask.Create(1, task, ScriptCode.FromNative(string.Empty), errorBoundary);
+
+        var result = await CreateEngine().ExecuteAsync(
+            onExecute, Guid.NewGuid(), TaskTrigger.OnEntry, TaskExecutionOrigin.Flow,
+            CreateScriptContext(), CancellationToken.None);
+
+        result.Value!.TaskError.ShouldNotBeNull();
+        result.Value.BoundaryAction.ShouldNotBeNull();
+        result.Value.HandledError.ShouldBeNull();
+    }
+
+    private void ArrangeFailedExecution(WorkflowTask factoryTask, int statusCode, string message)
+    {
+        _taskFactory.CreateExecutionTaskAsync(Arg.Any<IReference>(), Arg.Any<CancellationToken>())
+            .Returns(Result<WorkflowTask>.Ok(factoryTask));
+
+        var executor = Substitute.For<ITaskExecutor>();
+        executor.ExecuteAsync(Arg.Any<TaskExecutorContext>(), Arg.Any<CancellationToken>())
+            .Returns(Result<StandardTaskResponse>.Ok(new StandardTaskResponse
+            {
+                IsSuccess = false,
+                StatusCode = statusCode,
+                ErrorMessage = message,
+                Data = new Dictionary<string, object> { ["reason"] = message }
+            }));
+        _executorRegistry.GetExecutor(Arg.Any<TaskType>())
+            .Returns(Result<ITaskExecutor>.Ok(executor));
+
+        UsePersistenceStrategy(new TrackingPersistenceStrategy(completionDelay: TimeSpan.Zero));
+    }
+
+    /// <summary>
     /// Without CaptureResponse the response is not surfaced — the capture is strictly opt-in.
     /// </summary>
     [Fact]
