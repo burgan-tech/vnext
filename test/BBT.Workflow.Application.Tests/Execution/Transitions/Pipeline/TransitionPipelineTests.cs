@@ -373,6 +373,38 @@ public class TransitionPipelineTests
         executionOrder.ShouldContain(LifecycleOrder.OnEntry);
     }
 
+    /// <summary>
+    /// A hop that hands off (post-commit work, e.g. a SubFlow start) ends without a settlement, so no Busy
+    /// release closes it: a same-state hop's pending ModifiedAt stamp is applied at the handoff, and the
+    /// runner's commit sends it.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task RunAsync_WhenAHopHandsOff_AppliesOnlyAPendingModifiedAtStamp(bool pending)
+    {
+        var longAgo = new DateTime(2000, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var context = CreateTransitionExecutionContext();
+        var workflowContext = CreateWorkflowExecutionContext(context);
+
+        SetupContextFactory(context);
+        SetupStepsToSucceed();
+        context.Target = CreateStateWithNotification("waiting-for-post-commit");
+        context.Instance.Busy();
+        context.Instance.ModifiedAt = longAgo;
+        context.Directives.EnqueuePostCommit(Substitute.For<IPostCommitJob>());
+        if (pending)
+            context.Directives.DeferModifiedAtStamp();
+
+        var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        if (pending)
+            context.Instance.ModifiedAt.ShouldNotBe(longAgo);
+        else
+            context.Instance.ModifiedAt.ShouldBe(longAgo);
+    }
+
     [Fact]
     public async Task RunAsync_WhenPostCommitJobsAreQueued_ShouldReturnThemWithoutExecutingOrConsumingThem()
     {

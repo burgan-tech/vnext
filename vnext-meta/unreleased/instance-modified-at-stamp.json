@@ -1,0 +1,21 @@
+{
+  "releaseNote": {
+    "summary": "Instance modifiedAt now moves with every transition (same-state, completion, cancel and fault included) and with each data row an updateData writes; an updateData that changes nothing moves nothing.",
+    "breaking": false,
+    "docs": []
+  },
+  "migrations": [
+    {
+      "id": "instance-modified-at-moves-on-every-transition",
+      "type": "behavior",
+      "component": "runtime",
+      "path": "Instance metadata.modifiedAt, modifiedAt filter and sort, LastTouchedAt",
+      "since": "next",
+      "severity": "info",
+      "title": "modifiedAt moves with every transition and every updateData data row",
+      "description": "Before: only the set-based status writes (Busy flip and release, un-fault, effective-status projection and its revert, long-poll arm) moved Instances.ModifiedAt, so a completed, cancelled or faulted instance kept a time from before its final transition started, and an updateData did not move it. Now every transition stamps it, a same-state one included (a completion with the same instant as completedAt), and every data row an updateData writes (request body or task output) stamps its enteredAt, as does a stage, tags or key change; an updateData that changes none of these moves nothing. Filters and sorts on modifiedAt, and reports reading it as 'last change', see the new values; rows written before the upgrade keep their old values.",
+      "action": "No change is required. Re-check consumers that read modifiedAt as the time of the last status change: it is now the time of the last transition or data change.",
+      "documentation": "docs/runtime/instance-filtering-and-queries.md"
+    }
+  ]
+}

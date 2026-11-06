@@ -214,12 +214,20 @@ public sealed class CreateTransitionRecordStep(
 
         if (mappedData != null)
         {
+            // updateData is the one transition whose outcome writes nothing to the instance row: it
+            // does not own the status (no Busy flip of its own) and ChangeStateStep leaves its
+            // ChangeState($self) a no-op save. So its data rows — this body, and its tasks' output
+            // (TaskExecutionEngine) — are the modification and stamp Instances.ModifiedAt: one extra
+            // UPDATE per row, inside that row's insert batch. An automatic transition it hands off to
+            // stamps again through its own Busy flip; that is a later, separate modification. Every
+            // other transition's appends ride on its own outcome stamp.
             await instanceDataWriteService.AppendAsync(
                 context.Instance,
                 new JsonData(mappedData),
                 transition?.VersionStrategy,
                 cancellationToken,
-                context.Workflow);
+                context.Workflow,
+                touchInstance: context.IsUpdateDataTransition());
 
             if (transition?.Mapping is not null)
             {

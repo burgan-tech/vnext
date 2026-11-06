@@ -382,6 +382,12 @@ public class TransitionPipeline
             // Do not consume the jobs: it returns the intact directives to the runner.
             if (context.Directives.PostCommitJobs.Count > 0)
             {
+                // The handoff ends the hop without a settlement, so no Busy release in this unit of work
+                // closes it: a same-state hop's pending ModifiedAt stamp is applied here, and the runner's
+                // commit sends it (see TransitionSettlement for the settled path).
+                if (context.Directives.ModifiedAtStampPending)
+                    context.Instance.MarkModified();
+
                 // history: none — the handoff ends the stage; HandleSubFlowStep already wrote the
                 // buffer, this only covers a handoff that did not go through it.
                 await FlushBufferedDataAsync(context, cancellationToken);

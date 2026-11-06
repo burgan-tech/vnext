@@ -81,6 +81,9 @@ public sealed class HandleLongPollTerminationStep(
             {
                 d.RequestEpilogue(EpilogueMode.Skip);
                 d.MarkTerminal();
+                // The arm's set-based UPDATE above stamped Instances.ModifiedAt: it is the write that
+                // closes this hop, so a same-state hop's pending stamp is not applied again at settlement.
+                d.CloseModifiedAtStamp();
             },
             SkipToOrder = LifecycleOrder.Finalize
         });
