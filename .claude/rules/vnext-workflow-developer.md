@@ -292,7 +292,8 @@ Enum values (Instance Status, State Types, State Sub Types, Trigger Types): `AGE
 - `S`: completion → output mapping → `ResumePipelineAsync` from `ClearBusyOnResumeStep` (79).
   `P`: correlation complete, no parent resume. On resume failure the correlation is reverted in a new UoW.
 - Runtime child calls force `sync=true` and set `SuppressResponseEnrichment` (identity-only answer) —
-  never read attributes off a sub-start or forward response.
+  never read attributes off a sub-start or forward response. A sync one still carries
+  `currentState`/`effectiveState`, copied from the pipeline's instance — never a reload (`docs/runtime/execution-type.md`).
 - Completion window: child terminal while parent correlation open ⇒ state function shows parent transitions.
 - Terminal events carry the settling request's headers (deny floor, `ApplyToResume` default on):
   `docs/runtime/event-publish-modes.md#carried-headers-on-sub-item-terminal-events`.
