@@ -511,7 +511,7 @@ A bare JSON array of `HumanTaskItemOutput`, newest `createdAt` first:
 | `workflow` | Root's flow key | — |
 | `title` / `description` | Leaf's latest data, `humanTask.title` / `.description` | `""` |
 | `dueBy` | Leaf's latest data, `humanTask.dueBy`: an ISO 8601 date or date-time string | `null` |
-| `priority` | Leaf's latest data, `humanTask.priority`: a JSON number or a numeric string | `null` |
+| `priority` | Leaf's latest data, `humanTask.priority`: a JSON number, or a numeric string with a `.` decimal point (`"1,5"` reads as absent) | `null` |
 | `createdAt` | Root's creation time, the sort key | — |
 | `vNext` | Always `true` | — |
 

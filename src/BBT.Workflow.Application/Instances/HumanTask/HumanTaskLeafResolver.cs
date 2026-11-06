@@ -338,12 +338,16 @@ public sealed class HumanTaskLeafResolver(
             ? dueBy
             : null;
 
-    /// <summary>A JSON number, or a numeric string; anything else is treated as absent.</summary>
+    /// <summary>
+    /// A JSON number, or a numeric string with a <c>.</c> decimal point; anything else is treated as
+    /// absent. <see cref="NumberStyles.Float"/> rejects group separators, so a comma-decimal
+    /// <c>"1,5"</c> reads as absent rather than as 15.
+    /// </summary>
     private static decimal? ReadPriority(JsonElement value) => value.ValueKind switch
     {
         JsonValueKind.Number when value.TryGetDecimal(out var number) => number,
         JsonValueKind.String when decimal.TryParse(
-            value.GetString(), NumberStyles.Number, CultureInfo.InvariantCulture, out var parsed) => parsed,
+            value.GetString(), NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed) => parsed,
         _ => null
     };
 

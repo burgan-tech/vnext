@@ -422,6 +422,28 @@ public class HumanTaskFunctionTests : IDisposable
         item.Priority.ShouldBe(1.5m);
     }
 
+    /// <summary>
+    /// A comma-decimal <c>priority</c> is ambiguous with a thousands separator; it reads as absent,
+    /// never as a number ten times larger.
+    /// </summary>
+    [Fact]
+    public async Task ACommaDecimalPriorityStringIsTreatedAsAbsentNotAsAGroupedNumber()
+    {
+        var root = WaitingInstanceWithData("APP-1", new
+        {
+            humanTask = new { title = "sign", priority = "1,5" }
+        });
+
+        SchemasAre(FlowKey);
+        FlowResolvesTo(ActionableFlow());
+        CandidatesAre(root);
+
+        var result = await _service.GetHumanTaskInstancesAsync(Domain);
+
+        var item = result.Value!.Items.ShouldHaveSingleItem();
+        item.Priority.ShouldBeNull();
+    }
+
     private static Instance WaitingInstanceWithData(string key, object data)
     {
         var instance = Instance.Create(Guid.NewGuid(), FlowKey, "1.0.0", key);

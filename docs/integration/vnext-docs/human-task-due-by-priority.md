@@ -22,7 +22,7 @@ Each row of `GET /api/v1/{domain}/functions/human-task` now carries two optional
 
 - `humanTask.dueBy` — an ISO 8601 date (`2026-11-10`) or date-time (`2026-11-10T09:30:00+03:00`)
   string. Served as `dueBy`, a date-time with offset.
-- `humanTask.priority` — a JSON number or a numeric string (`"1.5"`). Served as `priority`, a number.
+- `humanTask.priority` — a JSON number or a numeric string with a `.` decimal point (`"1.5"`; a comma-decimal `"1,5"` reads as absent). Served as `priority`, a number.
 - Both are optional. Absent, or of the wrong shape (`"next week"`, an object), they are served as
   `null`; the row is still listed.
 - The body is still a bare JSON array; the change is additive.
