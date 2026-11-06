@@ -699,10 +699,16 @@ public sealed class FanOutTaskExecutor : TaskExecutorBase<FanOutTask>
                 item.Index, item.ItemKey, false, data, cancelledCode, cancelledMessage, duration);
         }
 
+        // A failure the item's boundary handled non-blockingly (Ignore / Log) carries its error in
+        // HandledError, not TaskError — the engine keeps TaskError null there so the pipeline does
+        // not fault on it. Either one is the inner task's own verdict, and the OutputHandler needs
+        // it to tell an expected refusal (409, 404, …) from any other failure (#1176).
+        var itemError = execution.TaskError ?? execution.HandledError;
+
         return new FanOutItemResult(
             item.Index, item.ItemKey, false, data,
-            execution.TaskError?.NormalizedError.Code ?? FanOutErrorCodes.ItemFailed,
-            execution.TaskError?.ErrorMessage
+            itemError?.NormalizedError.Code ?? FanOutErrorCodes.ItemFailed,
+            itemError?.ErrorMessage
             ?? execution.Response?.ErrorMessage
             ?? $"FanOut item {item.ItemKey} failed.",
             duration);
