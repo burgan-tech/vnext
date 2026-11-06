@@ -3491,6 +3491,28 @@ public static partial class WorkflowLogs
         bool allowed);
 
     /// <summary>
+    /// Logs when <c>authorize?queryRoles=true</c> descended to an active SubFlow whose child instance
+    /// could not be loaded yet, and the deepest existing instance decided instead (vnext#1181).
+    /// </summary>
+    /// <remarks>
+    /// The window opens when the parent commits its SubFlow correlation and closes when the child's row
+    /// is created by the post-commit start job. Without this line a refusal inside that window logged the
+    /// same <c>Allowed: False</c> as a genuine grant refusal and the two could not be told apart.
+    /// </remarks>
+    [LoggerMessage(
+        EventId = 50046,
+        Level = LogLevel.Information,
+        Message = "Authorize leaf missing, decided at deepest existing instance. Domain: {Domain}, Workflow: {Workflow}, Instance: {InstanceId}, MissingSubFlow: {SubFlow}, MissingSubInstance: {SubInstanceId}, Allowed: {Allowed}")]
+    public static partial void AuthorizeLeafMissingFallback(
+        this ILogger logger,
+        string domain,
+        string workflow,
+        string instanceId,
+        string subFlow,
+        string subInstanceId,
+        bool allowed);
+
+    /// <summary>
     /// Logs when authorization matrix system function is invoked.
     /// </summary>
     [LoggerMessage(
