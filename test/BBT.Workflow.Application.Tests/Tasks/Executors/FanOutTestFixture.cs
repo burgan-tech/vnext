@@ -306,6 +306,12 @@ internal sealed class RecordingTaskExecutionEngine : ITaskExecutionEngine
     public HashSet<int> InfrastructureFailureOrders { get; } = [];
 
     /// <summary>
+    /// Orders whose failure the item's boundary handled non-blockingly (Ignore / Log): shaped as the
+    /// real engine returns it — <c>TaskError</c> null, the error in <c>HandledError</c>.
+    /// </summary>
+    public HashSet<int> HandledFailureOrders { get; } = [];
+
+    /// <summary>
     /// Orders whose simulated work ignores the cancellation token and runs to its programmed end.
     /// </summary>
     /// <remarks>
@@ -414,6 +420,36 @@ internal sealed class RecordingTaskExecutionEngine : ITaskExecutionEngine
             {
                 return Result<TasksExecutionResult>.Fail(
                     Error.Failure("Engine:Unavailable", $"engine could not run item {order}"));
+            }
+
+            if (HandledFailureOrders.Contains(order))
+            {
+                var summary = TaskExecutionSummary.Failure(
+                    onExecuteTask.Task.Key, "DirectTrigger", "Instance is busy", 409, 0);
+                return Result<TasksExecutionResult>.Ok(
+                    TasksExecutionResult.SuccessWithFailedTasks([summary]) with
+                    {
+                        HandledError = new ExecutionError
+                        {
+                            TaskKey = onExecuteTask.Task.Key,
+                            TaskType = "DirectTrigger",
+                            StatusCode = 409,
+                            ErrorMessage = "Instance is busy",
+                            NormalizedError = new NormalizedError
+                            {
+                                Code = $"Task:DirectTrigger:{onExecuteTask.Task.Key}:409",
+                                StatusCode = 409,
+                                Message = "Instance is busy"
+                            }
+                        },
+                        Response = new StandardTaskResponse
+                        {
+                            IsSuccess = false,
+                            StatusCode = 409,
+                            ErrorMessage = "Instance is busy",
+                            Data = new Dictionary<string, object?> { ["order"] = order }
+                        }
+                    });
             }
 
             if (FailOrders.Contains(order))
