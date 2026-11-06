@@ -586,9 +586,10 @@ public sealed class EfCoreInstanceRepository(
 
     /// <summary>
     /// The shared CAS: guard in the WHERE, single UPDATE, no aggregate load. ModifiedAt is set
-    /// explicitly because ExecuteUpdate bypasses the audit interceptor — without it the computed
-    /// LastTouchedAt column would stop advancing. ModifiedBy is deliberately NOT re-stamped: a
-    /// Busy flip is a system operation (same rule as InstanceJobs.MarkAsProcessedAsync).
+    /// explicitly: a set-based write never reaches the aggregate's own stamps (Instance.ChangeState,
+    /// Complete, Cancel, Fault), and Aether's audit interceptor fills only a null value — without it
+    /// the computed LastTouchedAt column would stop advancing. ModifiedBy is deliberately NOT
+    /// re-stamped: a Busy flip is a system operation (same rule as InstanceJobs.MarkAsProcessedAsync).
     /// </summary>
     private async Task<bool> TryTransitionStatusAsync(
         Guid instanceId,

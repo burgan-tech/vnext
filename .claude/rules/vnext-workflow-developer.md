@@ -339,6 +339,9 @@ Enum values (Instance Status, State Types, State Sub Types, Trigger Types): `AGE
   (`InstanceDataBuffer`, outside the EF navigation) and flushed at Finish, SubFlow handoff or fault; a
   non-Finish rest faults (`Instance:100046`); a `none` parent needs `none` S children (`Instance:100044`);
   `/retry` → 409. Full guide: `docs/runtime/history-mode.md`.
+- `Instances.ModifiedAt`: never rely on Aether's audit interceptor (null-only), nor on `OwnsStatus`. Stamp on a write the
+  hop makes (`Instance.ChangeState` when it moves, else `DeferModifiedAtStamp` → `TransitionSettlement`; `Complete/Cancel/Fault`;
+  updateData via `AppendAsync(touchInstance)`); a new `ExecuteUpdate` on `Instances` must set it. Full guide: `docs/runtime/instance-filtering-and-queries.md`.
 
 ## Related Instance Access (scripts)
 

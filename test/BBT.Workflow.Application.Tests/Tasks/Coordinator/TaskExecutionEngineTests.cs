@@ -362,6 +362,72 @@ public sealed class TaskExecutionEngineTests : IDisposable
             .AppendAsync(default!, default!, default, default);
     }
 
+    /// <summary>
+    /// updateData has no outcome write of its own, so every data row it writes — a task's output
+    /// included, not only the request body — stamps <c>Instances.ModifiedAt</c>. An updateData whose
+    /// change comes only from its task would otherwise leave the column where it was.
+    /// </summary>
+    [Fact]
+    public async Task Task_output_of_an_updateData_transition_stamps_the_instance()
+    {
+        var task = WorkflowTaskFactory.CreateHttpTask("mock-api");
+        ArrangeSuccessfulExecution(task);
+        var onExecute = OnExecuteTask.Create(1, task, ScriptCode.FromNative(string.Empty));
+
+        var result = await CreateEngine().ExecuteAsync(
+            onExecute, Guid.NewGuid(), TaskTrigger.OnExecute, TaskExecutionOrigin.Flow,
+            CreateScriptContextFor("sync-data"), CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        await _instanceDataWriteService.Received(1).AppendAsync(
+            Arg.Any<Instance>(), Arg.Any<JsonData>(), Arg.Any<VersionStrategy?>(),
+            Arg.Any<CancellationToken>(), Arg.Any<Definitions.Workflow?>(), touchInstance: true);
+    }
+
+    /// <summary>Any other transition's task output rides on that transition's own outcome stamp.</summary>
+    [Fact]
+    public async Task Task_output_of_an_ordinary_transition_does_not_stamp_the_instance()
+    {
+        var task = WorkflowTaskFactory.CreateHttpTask("mock-api");
+        ArrangeSuccessfulExecution(task);
+        var onExecute = OnExecuteTask.Create(1, task, ScriptCode.FromNative(string.Empty));
+
+        var result = await CreateEngine().ExecuteAsync(
+            onExecute, Guid.NewGuid(), TaskTrigger.OnExecute, TaskExecutionOrigin.Flow,
+            CreateScriptContextFor("approve"), CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        await _instanceDataWriteService.Received(1).AppendAsync(
+            Arg.Any<Instance>(), Arg.Any<JsonData>(), Arg.Any<VersionStrategy?>(),
+            Arg.Any<CancellationToken>(), Arg.Any<Definitions.Workflow?>(), touchInstance: false);
+    }
+
+    private static ScriptContext CreateScriptContextFor(string transitionKey)
+    {
+        const string json = """
+                            {
+                                "type": "F", "timeout": null, "labels": [], "functions": [], "features": [],
+                                "states": [ { "key": "state1", "stateType": "Intermediate", "transitions": [] } ],
+                                "sharedTransitions": [], "extensions": [],
+                                "startTransition": {"key": "start", "from": null, "target": "state1", "triggerType": "Manual", "versionStrategy": "Patch", "labels": [], "onExecutionTasks": [], "view": null},
+                                "updateData": {"key": "sync-data", "target": "$self", "triggerType": "Manual", "versionStrategy": "Patch", "labels": []}
+                            }
+                            """;
+        var workflow = JsonSerializer.Deserialize<Definitions.Workflow>(json, new JsonSerializerOptions
+        {
+            PropertyNameCaseInsensitive = true,
+            Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() }
+        })!;
+        workflow.SetReference(new Reference("test-flow", "test-domain", "sys-flows", "1.0.0"));
+
+        return new ScriptContext.Builder(NullLogger<ScriptContext>.Instance)
+            .SetRuntime(Substitute.For<IRuntimeInfoProvider>())
+            .SetWorkflow(workflow)
+            .SetTransition(Transition.Create(transitionKey, "state1", "$self", TriggerType.Manual, "Patch"))
+            .SetInstance(Instance.Create(Guid.NewGuid(), "test-flow", "1.0", "ctx-key"))
+            .Build();
+    }
+
     [Fact]
     public async Task ExecuteAsync_WithPreparedTask_Should_Bypass_Factory_And_Use_JournalTaskKey()
     {

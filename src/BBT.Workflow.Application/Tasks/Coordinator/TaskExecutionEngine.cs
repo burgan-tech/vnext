@@ -508,12 +508,20 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
         // delta.JsonElement immediately, so constructing JsonData from a string would force a parse
         // of the payload we just serialized.
         var delta = JsonData.FromMaterializedObject(response.Data, JsonSerializerConstants.JsonOptions);
+
+        // A task of an updateData transition writes data that IS the instance's modification —
+        // updateData has no outcome write of its own — so its row stamps Instances.ModifiedAt, like
+        // updateData's request body does. Any other transition's task output rides on that
+        // transition's own outcome stamp.
+        var touchInstance = context.Workflow?.IsUpdateDataKey(context.Transition?.Key) == true;
         var persisted = await _instanceDataWriteService.AppendAsync(
-            context.Instance, delta, VersionStrategy.IncreasePatch, cancellationToken, context.Workflow);
+            context.Instance, delta, VersionStrategy.IncreasePatch, cancellationToken, context.Workflow, touchInstance);
 
         // The service refreshed the aggregate it was given (the snapshot). Nothing else to do:
         // the live aggregate in the pipeline scope is fixed up by EF when it shares the
-        // DbContext, and synced from the snapshot at the step boundary otherwise.
+        // DbContext, and synced from the snapshot at the step boundary otherwise — its data, not its
+        // ModifiedAt. That is deliberate: the stamp is already in the database, and copying it onto the
+        // tracked live aggregate would mark the column dirty and send a second UPDATE for it.
         _ = persisted;
     }
 
