@@ -288,6 +288,78 @@ public sealed class InstanceBusyManagerTests
         _uow.Verify(u => u.CommitAsync(It.IsAny<CancellationToken>()), Times.Once);
     }
 
+    // ─── TryMarkBusyWithPropagationAsync(Instance) — the pipeline's reserve ─────────────────
+
+    [Fact]
+    public async Task TryMarkBusyWithPropagationAsync_WithLoadedAggregate_CasesWithoutRereadingTheRow()
+    {
+        var loaded = Instance.Create(Guid.NewGuid(), "test-flow", "1.0.0");
+        _instanceRepository
+            .Setup(r => r.TryMarkBusyAsync(loaded.Id, It.IsAny<CancellationToken>(), It.IsAny<InstanceStatus?>()))
+            .ReturnsAsync(true);
+
+        var outcome = await CreateSut().TryMarkBusyWithPropagationAsync(loaded);
+
+        outcome.ShouldBe(BusyMarkOutcome.Marked);
+        // No subflow below it: this level owns the visible status, so it rides along in the CAS.
+        _instanceRepository.Verify(
+            r => r.TryMarkBusyAsync(loaded.Id, It.IsAny<CancellationToken>(), InstanceStatus.Busy), Times.Once);
+        _uow.Verify(u => u.CommitAsync(It.IsAny<CancellationToken>()), Times.Once);
+        _instanceRepository.Verify(
+            r => r.FindWithActiveSubFlowAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()), Times.Never);
+        _instanceRepository.Verify(
+            r => r.GetExecutionSnapshotAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+        _instanceCommandGateway.Verify(
+            g => g.MarkBusyAsync(It.IsAny<MarkBusyInput>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task TryMarkBusyWithPropagationAsync_WithLoadedAggregate_LostCasOnBusyRow_IsAlreadyBusy()
+    {
+        var loaded = Instance.Create(Guid.NewGuid(), "test-flow", "1.0.0");
+        _instanceRepository
+            .Setup(r => r.TryMarkBusyAsync(loaded.Id, It.IsAny<CancellationToken>(), It.IsAny<InstanceStatus?>()))
+            .ReturnsAsync(false);
+        _instanceRepository
+            .Setup(r => r.GetExecutionSnapshotAsync(loaded.Id.ToString(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new InstanceExecutionSnapshot(
+                loaded.Id, null, InstanceStatus.Busy, "s1", "test-flow", "1.0.0", HasActiveSubFlow: false));
+
+        var outcome = await CreateSut().TryMarkBusyWithPropagationAsync(loaded);
+
+        outcome.ShouldBe(BusyMarkOutcome.AlreadyBusy);
+        _uow.Verify(u => u.CommitAsync(It.IsAny<CancellationToken>()), Times.Never);
+        _instanceCommandGateway.Verify(
+            g => g.MarkBusyAsync(It.IsAny<MarkBusyInput>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Theory]
+    [InlineData("C")]
+    [InlineData("F")]
+    [InlineData(null)]
+    public async Task TryMarkBusyWithPropagationAsync_WithLoadedAggregate_LostCasOnTerminalOrMissingRow_IsSkipped(
+        string? statusCode)
+    {
+        // A row that went terminal (or vanished) between the load and the CAS must still classify
+        // as Skipped, exactly like the re-reading overload — callers answer it differently (409
+        // InstanceBusy vs. InstanceAlreadyCompleted).
+        var loaded = Instance.Create(Guid.NewGuid(), "test-flow", "1.0.0");
+        _instanceRepository
+            .Setup(r => r.TryMarkBusyAsync(loaded.Id, It.IsAny<CancellationToken>(), It.IsAny<InstanceStatus?>()))
+            .ReturnsAsync(false);
+        _instanceRepository
+            .Setup(r => r.GetExecutionSnapshotAsync(loaded.Id.ToString(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(statusCode is null
+                ? null
+                : new InstanceExecutionSnapshot(
+                    loaded.Id, null, InstanceStatus.TryFromCode(statusCode)!, "s1", "test-flow", "1.0.0",
+                    HasActiveSubFlow: false));
+
+        var outcome = await CreateSut().TryMarkBusyWithPropagationAsync(loaded);
+
+        outcome.ShouldBe(BusyMarkOutcome.Skipped);
+    }
+
     // ─── MarkBusyWithPropagationAsync / ReleaseWithPropagationAsync (chain reserve) ──────────
 
     [Fact]
