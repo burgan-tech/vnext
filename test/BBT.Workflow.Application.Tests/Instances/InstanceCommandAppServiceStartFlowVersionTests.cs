@@ -172,6 +172,39 @@ public class InstanceCommandAppServiceStartFlowVersionTests : IDisposable
         captured.IdentityOnlyResponse.ShouldBe(suppressed);
     }
 
+    [Theory]
+    [InlineData(true, "otp-waiting")]
+    [InlineData(false, null)]
+    public async Task StartAsync_IdentityOnlyStart_CarriesTheChildStateOnlyWhenSync(bool sync, string? expected)
+    {
+        // vnext#1182: a cross-domain sub start (identity-only) still answers with the state the
+        // child came to rest in, read off the pipeline's instance — never a reload.
+        var input = new StartInstanceInput(Domain, Flow, "1.0", sync)
+        {
+            Instance = new CreateInstanceInput { Key = "k-" + Guid.NewGuid() },
+            StrictIdempotency = true,
+            SuppressResponseEnrichment = true
+        };
+        var child = Instance.Create(Guid.NewGuid(), Flow, "1.0.3", "child");
+        child.ChangeState(State.Create("otp-waiting", StateType.Intermediate, StateSubType.None, "Patch"));
+        _execution.ExecuteTransitionAsync(Arg.Any<WorkflowExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(Result<TransitionOutput>.Ok(new TransitionOutput
+            {
+                Id = child.Id,
+                Status = InstanceStatus.Active,
+                PipelineInstance = child
+            }));
+
+        var result = await _service.StartAsync(input, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue(result.IsSuccess ? null : result.Error.Message);
+        result.Value!.CurrentState.ShouldBe(expected);
+        result.Value.EffectiveState.ShouldBe(expected);
+        result.Value.Attributes.ShouldBeNull();
+        await _instanceRepository.DidNotReceiveWithAnyArgs()
+            .FindByIdentifierAsReadOnlyAsync(default!, default);
+    }
+
     [Fact]
     public async Task Start_ShouldTagRequestedVersion()
     {
