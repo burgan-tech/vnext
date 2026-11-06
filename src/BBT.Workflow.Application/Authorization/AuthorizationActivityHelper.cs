@@ -215,6 +215,16 @@ public static class AuthorizationActivityHelper
         activity.SetTag(TelemetryConstants.TagNames.AuthRoleCount, roleCount);
     }
 
+    /// <summary>
+    /// Fallback value for <see cref="TelemetryConstants.TagNames.AuthFallback"/>: the active SubFlow's child
+    /// could not be loaded, so the deepest existing instance decided.
+    /// </summary>
+    public const string FallbackLeafMissing = "leaf-missing";
+
+    /// <summary>Marks a decision taken somewhere other than the instance the request descended to.</summary>
+    public static void SetFallback(Activity? activity, string fallback) =>
+        activity?.SetTag(TelemetryConstants.TagNames.AuthFallback, fallback);
+
     /// <summary>Operation name for the conditional previous-manual-transition lookup.</summary>
     public const string OperationPreviousUserLookup = "Auth.PreviousUserLookup";
 
