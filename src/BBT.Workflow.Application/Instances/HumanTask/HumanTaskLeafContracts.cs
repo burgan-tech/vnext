@@ -89,6 +89,12 @@ public sealed class HumanTaskLeafResult
     /// <summary>The leaf's <c>humanTask.description</c>.</summary>
     public string? Description { get; init; }
 
+    /// <summary>The leaf's optional <c>humanTask.dueBy</c>.</summary>
+    public DateTimeOffset? DueBy { get; init; }
+
+    /// <summary>The leaf's optional <c>humanTask.priority</c>.</summary>
+    public decimal? Priority { get; init; }
+
     /// <summary>Domain that owns the leaf — the caller's own when the chain never left it.</summary>
     public string? LeafDomain { get; init; }
 

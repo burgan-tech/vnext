@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Text.Json;
 using BBT.Aether.MultiSchema;
 using BBT.Aether.Results;
@@ -165,6 +166,8 @@ public sealed class HumanTaskLeafResolver(
                         Authorized = answer.Authorized,
                         Title = answer.Title,
                         Description = answer.Description,
+                        DueBy = answer.DueBy,
+                        Priority = answer.Priority,
                         LeafDomain = answer.LeafDomain,
                         LeafFlow = answer.LeafFlow,
                         LeafState = answer.LeafState,
@@ -248,15 +251,17 @@ public sealed class HumanTaskLeafResolver(
         if (!evaluator.IsAnyRoleAllowed(callerRoles, queryRoles))
             return NotAuthorized(instance, domain, flow, state.Key);
 
-        var (title, description) = ReadHumanTask(instance);
+        var text = ReadHumanTask(instance);
 
         return new HumanTaskLeafResult
         {
             InstanceId = instance.Id,
             Resolved = true,
             Authorized = true,
-            Title = title,
-            Description = description,
+            Title = text.Title,
+            Description = text.Description,
+            DueBy = text.DueBy,
+            Priority = text.Priority,
             LeafDomain = domain,
             LeafFlow = flow,
             LeafState = state.Key
@@ -295,27 +300,58 @@ public sealed class HumanTaskLeafResolver(
             LeafState = state
         };
 
-    /// <summary>Reads <c>humanTask.title</c> / <c>.description</c> from the leaf's latest data.</summary>
-    private static (string Title, string Description) ReadHumanTask(Instance instance)
+    /// <summary>
+    /// Reads <c>humanTask.title</c> / <c>.description</c> and the optional <c>.dueBy</c> /
+    /// <c>.priority</c> from the leaf's latest data.
+    /// </summary>
+    internal static HumanTaskText ReadHumanTask(Instance instance)
     {
-        var title = string.Empty;
-        var description = string.Empty;
-
         var latestData = instance.LatestData;
         if (latestData?.Data is null
             || latestData.Data.JsonElement.ValueKind != JsonValueKind.Object
             || !latestData.Data.JsonElement.TryGetProperty("humanTask", out var humanTask)
             || humanTask.ValueKind != JsonValueKind.Object)
         {
-            return (title, description);
+            return HumanTaskText.Empty;
         }
 
-        if (humanTask.TryGetProperty("title", out var titleProp))
-            title = titleProp.GetString() ?? string.Empty;
-        if (humanTask.TryGetProperty("description", out var descriptionProp))
-            description = descriptionProp.GetString() ?? string.Empty;
+        var title = humanTask.TryGetProperty("title", out var titleProp)
+            ? titleProp.GetString() ?? string.Empty
+            : string.Empty;
+        var description = humanTask.TryGetProperty("description", out var descriptionProp)
+            ? descriptionProp.GetString() ?? string.Empty
+            : string.Empty;
 
-        return (title, description);
+        return new HumanTaskText(
+            title,
+            description,
+            humanTask.TryGetProperty("dueBy", out var dueByProp) ? ReadDueBy(dueByProp) : null,
+            humanTask.TryGetProperty("priority", out var priorityProp) ? ReadPriority(priorityProp) : null);
+    }
+
+    /// <summary>
+    /// An ISO 8601 date or date-time string; anything else is treated as absent. The fields are
+    /// optional and authored by the domain — a malformed value must not drop the task from the list.
+    /// </summary>
+    private static DateTimeOffset? ReadDueBy(JsonElement value) =>
+        value.ValueKind == JsonValueKind.String && value.TryGetDateTimeOffset(out var dueBy)
+            ? dueBy
+            : null;
+
+    /// <summary>A JSON number, or a numeric string; anything else is treated as absent.</summary>
+    private static decimal? ReadPriority(JsonElement value) => value.ValueKind switch
+    {
+        JsonValueKind.Number when value.TryGetDecimal(out var number) => number,
+        JsonValueKind.String when decimal.TryParse(
+            value.GetString(), NumberStyles.Number, CultureInfo.InvariantCulture, out var parsed) => parsed,
+        _ => null
+    };
+
+    /// <summary>The human-task fields a leaf's data carries.</summary>
+    internal sealed record HumanTaskText(
+        string Title, string Description, DateTimeOffset? DueBy, decimal? Priority)
+    {
+        public static readonly HumanTaskText Empty = new(string.Empty, string.Empty, null, null);
     }
 
 }
