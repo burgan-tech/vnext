@@ -475,6 +475,11 @@ public sealed class EfCoreInstanceRepository(
         // One statement: the row lock Postgres takes for the UPDATE is what makes two racing
         // updateData continuations see each other — the second one re-evaluates the WHERE after the
         // first commits and finds the claim taken (or the state already moved on).
+        // Deliberately does NOT stamp ModifiedAt (nor does the release below): the claim is internal
+        // bookkeeping, not a change to the instance. The continuation it admits stamps ModifiedAt
+        // through its own writes (docs/runtime/instance-filtering-and-queries.md § modifiedAt), and a
+        // stamp here would move the instance's "last changed" time — and its LastTouchedAt index
+        // entries — for a continuation that may then change nothing.
         var staleBefore = utcNow - ttl;
         var affected = await (await GetDbSetAsync())
             .Where(i => i.Id == instanceId
