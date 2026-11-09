@@ -44,7 +44,16 @@ public class InstanceQueryAppServiceDataCacheTests : IDisposable
     private readonly ITransitionAuthorizationManager _transitionAuthorizationManager;
     private readonly ISchemaFieldFilterService _schemaFieldFilterService;
     private readonly Caching.IDataFunctionCache _dataFunctionCache;
-    private readonly IRepresentationEtagService _representationEtagService = Substitute.For<IRepresentationEtagService>();
+    // Returns a stable body hash by default so the tests that exercise the body-ETag path (any
+    // response carrying extension output) read naturally; tests that care override it.
+    private readonly IRepresentationEtagService _representationEtagService = CreateEtagService();
+
+    private static IRepresentationEtagService CreateEtagService()
+    {
+        var service = Substitute.For<IRepresentationEtagService>();
+        service.Generate(Arg.Any<object>()).Returns("body-hash-1");
+        return service;
+    }
     private readonly InstanceQueryAppService _service;
     private readonly IServiceProvider _ambientServiceProvider;
     private readonly IServiceProvider? _previousAmbientServiceProvider;
@@ -178,6 +187,9 @@ public class InstanceQueryAppServiceDataCacheTests : IDisposable
         var instanceId = Guid.NewGuid();
         EnableCache();
         SetupFingerprint(instanceId);
+        // The 304 decision now needs to know the flow declares no extensions — a flow-declared
+        // (DefinedFlows) extension would run on this very request, which asks for none.
+        SetupFlowMock();
 
         var input = CreateInput(instanceId.ToString());
         input.IfNoneMatch = "\"etag-current\"";
@@ -217,7 +229,9 @@ public class InstanceQueryAppServiceDataCacheTests : IDisposable
         // Data from the cache entry, extensions freshly computed.
         result.Result.Value!.Data!.Value.GetProperty("key").GetString().ShouldBe("cached-value");
         result.Result.Value!.Extensions!["state"].ShouldBe("fresh");
-        result.Result.Value!.ETag.ShouldBe("\"etag-current\"");
+        // The body carries extension output, so its ETag is hashed from the body — the fingerprint
+        // would describe the data portion only and could not detect an extension change.
+        result.Result.Value!.ETag.ShouldBe("\"body-hash-1\"");
         // Field filtering skipped; entry not re-written.
         await _schemaFieldFilterService.DidNotReceive()
             .ApplyAsync(Arg.Any<Definitions.Workflow>(), Arg.Any<System.Text.Json.JsonElement?>(),
@@ -289,6 +303,36 @@ public class InstanceQueryAppServiceDataCacheTests : IDisposable
         result.Result.Value!.ETag.ShouldBe("\"body-hash-1\"");
         await _instanceRepository.Received(1)
             .FindByIdentifierAsReadOnlyAsync(instance.Id.ToString(), Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// The request asks for NO extensions, which is exactly the branch where a flow-declared
+    /// (DefinedFlows) extension executes — <see cref="ExtensionExecutionExtensions.ShouldExecute"/>
+    /// runs it when the requested set is null. So "nothing requested" must not be read as "nothing
+    /// to protect": the fingerprint still cannot see that output, and 304 would serve it stale.
+    /// </summary>
+    [Fact]
+    public async Task GetInstanceDataAsync_WhenFlowDeclaresExtensionAndNoneRequested_BuildsInsteadOf304()
+    {
+        var instance = CreateInstanceWithData(out _);
+        SetupFullPathMocks(instance);
+        SetupFlowMock(declaresExtension: true);
+        EnableCache();
+        SetupFingerprint(instance.Id);
+        _instanceExtensionService.ProcessExtensionsAsync(
+                Arg.Any<string[]?>(), Arg.Any<ScriptContext>(), Arg.Any<Definitions.Workflow>(),
+                Arg.Any<ExtensionScope>(), Arg.Any<CancellationToken>())
+            .Returns(Result<Dictionary<string, object>>.Ok(new Dictionary<string, object> { ["flow-ext"] = "fresh" }));
+
+        var input = CreateInput(instance.Id.ToString());
+        input.IfNoneMatch = "\"etag-current\"";
+
+        var result = await _service.GetInstanceDataAsync(input, CancellationToken.None);
+
+        result.IsNotModified.ShouldBeFalse();
+        result.Result.IsSuccess.ShouldBeTrue();
+        result.Result.Value!.Extensions!["flow-ext"].ShouldBe("fresh");
+        result.Result.Value!.ETag.ShouldBe("\"body-hash-1\"");
     }
 
     /// <summary>
@@ -499,14 +543,26 @@ public class InstanceQueryAppServiceDataCacheTests : IDisposable
             .FindByIdentifierAsReadOnlyAsync(instance.Id.ToString(), Arg.Any<CancellationToken>())
             .Returns(instance);
 
+        SetupFlowMock(workflowTtlSeconds);
+    }
+
+    /// <summary>
+    /// Wires only the component-cache flow lookup, with a flow that declares no extensions. The
+    /// fast path consults it before answering 304, so a test expecting 304 must provide it.
+    /// </summary>
+    private void SetupFlowMock(int? workflowTtlSeconds = null, bool declaresExtension = false)
+    {
         var functionCacheJson = workflowTtlSeconds is not null
             ? $$""", "config": { "functionCache": { "ttlSeconds": {{workflowTtlSeconds}} } }"""
             : string.Empty;
+        var extensionsJson = declaresExtension
+            ? $$"""[{"key": "flow-ext", "domain": "{{TestDomain}}", "flow": "sys-extensions", "version": "1.0.0"}]"""
+            : "[]";
         var json = $$"""
                    {
                        "type": "F"{{functionCacheJson}},
                        "labels": [], "functions": [], "features": [], "states": [],
-                       "sharedTransitions": [], "extensions": [],
+                       "sharedTransitions": [], "extensions": {{extensionsJson}},
                        "startTransition": {"key": "start", "from": null, "target": "review", "triggerType": "Manual", "versionStrategy": "Patch", "labels": [], "onExecutionTasks": [], "view": null}
                    }
                    """;
