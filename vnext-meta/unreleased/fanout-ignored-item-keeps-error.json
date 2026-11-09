@@ -1,7 +1,0 @@
-{
-  "releaseNote": {
-    "summary": "A FanOut item whose errorBoundary Ignores or Logs the failure keeps the inner task's error code, message and data instead of the generic FanOut:ItemFailed.",
-    "breaking": false,
-    "docs": []
-  }
-}
