@@ -1598,13 +1598,20 @@ public sealed class InstanceQueryAppService(
 
                     result.EntityEtag = entityEtag;
 
-                    // Same fingerprint-ETag the fast path computes from the projection query.
-                    // Pinned-version requests hash the RESOLVED row's ETag instead of the latest
-                    // one (a write into that version line creates a new row with a new ULID).
-                    var etag = dataFunctionCache.ComputeEtag(input, isLatestRequest
+                    // Same fingerprint the fast path projects. Pinned-version requests hash the
+                    // RESOLVED row's ETag instead of the latest one (a write into that version line
+                    // creates a new row with a new ULID).
+                    var responseFingerprint = isLatestRequest
                         ? InstanceDataFingerprint.FromInstance(instance)
                         : new InstanceDataFingerprint(instance.Id, instance.Key, instanceData?.ETag,
-                            instance.FlowVersion, instance.EffectiveState, instance.HasActiveSubFlow));
+                            instance.FlowVersion, instance.EffectiveState, instance.HasActiveSubFlow);
+
+                    // Two identities, two questions — see IDataFunctionCache. The representation
+                    // ETag covers the state (extension output follows it); the entry is stamped with
+                    // the data-only identity so a state change that leaves the body untouched does
+                    // not throw that body away.
+                    var etag = dataFunctionCache.ComputeEtag(input, responseFingerprint);
+                    var dataEtag = dataFunctionCache.ComputeDataEtag(input, responseFingerprint);
 
                     // Warm the cache before the 304 decision so a Not-Modified outcome still
                     // stores the entry. Only latest-data responses with an existing data row are
@@ -1619,7 +1626,7 @@ public sealed class InstanceQueryAppService(
                     {
                         await dataFunctionCache.SetAsync(dataCacheKey, new Caching.DataFunctionCacheEntry
                         {
-                            Etag = etag,
+                            Etag = dataEtag,
                             EntityEtag = entityEtag,
                             Data = result.Data
                         }, dataFunctionCache.ResolveTtlSeconds(flow.Config?.FunctionCache), cancellationToken);
@@ -1655,6 +1662,8 @@ public sealed class InstanceQueryAppService(
         if (fingerprint is null)
             return (null, null);
 
+        // The 304 decision is made against the representation ETag (state included, because the
+        // extension output a 304 withholds is derived from it) ...
         var etag = dataFunctionCache.ComputeEtag(input, fingerprint);
 
         if (!string.IsNullOrEmpty(input.IfNoneMatch) && etag.MatchesIfNoneMatch(input.IfNoneMatch))
@@ -1670,9 +1679,14 @@ public sealed class InstanceQueryAppService(
             return (null, null);
         }
 
-        if (!string.Equals(entry.Etag, etag, StringComparison.Ordinal))
+        // ... while the stored body is validated against the data-only identity, so a transition
+        // that moved the state without writing data keeps serving its still-correct payload (the
+        // build then reuses it and skips the x-roles filtering pass).
+        var dataEtag = dataFunctionCache.ComputeDataEtag(input, fingerprint);
+
+        if (!string.Equals(entry.Etag, dataEtag, StringComparison.Ordinal))
         {
-            logger.DataFunctionCacheInvalidated(input.Instance, entry.Etag, etag);
+            logger.DataFunctionCacheInvalidated(input.Instance, entry.Etag, dataEtag);
             return (null, null);
         }
 

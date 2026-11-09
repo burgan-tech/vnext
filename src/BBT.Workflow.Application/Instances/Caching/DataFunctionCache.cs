@@ -83,15 +83,44 @@ public sealed class DataFunctionCache(
             Generation,
             fingerprint.Id,
             fingerprint.LatestDataEtag ?? string.Empty,
+            fingerprint.EffectiveState ?? string.Empty,
             fingerprint.FlowVersion ?? string.Empty,
             BuildCallerHash(input));
 
-        return Convert.ToHexStringLower(
-            SHA256.HashData(Encoding.UTF8.GetBytes(material)))[..EtagLength];
+        return Hash(material);
     }
 
-    // Extensions are deliberately EXCLUDED from the caller scope: the ETag tracks the data
-    // change point only (extension flux never moves it), and requests differing only in the
+    /// <inheritdoc />
+    public string ComputeDataEtag(GetInstanceDataInput input, InstanceDataFingerprint fingerprint)
+    {
+        // Same material MINUS the effective state: an entry holds the field-filtered data payload
+        // only, and a state change does not alter it. See IDataFunctionCache for why the cache
+        // identity and the representation ETag are deliberately different hashes.
+        var material = string.Join('|',
+            Generation,
+            fingerprint.Id,
+            fingerprint.LatestDataEtag ?? string.Empty,
+            fingerprint.FlowVersion ?? string.Empty,
+            BuildCallerHash(input));
+
+        return Hash(material);
+    }
+
+    private static string Hash(string material) =>
+        Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(material)))[..EtagLength];
+
+    // EffectiveState joins the material because enrichment is a function of the instance as the
+    // runtime owns it, not of the data rows alone: an extension reading context.Instance (the
+    // ScriptContext hands it the current state precisely so scripts can make context-aware
+    // decisions) changes its answer the moment the state moves. A transition that writes no data
+    // otherwise left this ETag identical, and the 304 served the previous state's enrichment —
+    // observed as a client replaying the previous state's nextTransition and being rejected.
+    // The schema function's ETag already carries EffectiveState for the same reason; the data
+    // function's omission was the asymmetry. Extension output that varies on anything BEYOND data
+    // and state (wall clock, an external call) is still not tracked — that staleness stays
+    // accepted by design, and such a caller omits If-None-Match.
+    //
+    // Extensions are deliberately EXCLUDED from the caller scope: requests differing only in the
     // requested extension list share one key/ETag — the body cache serves extensionless
     // requests, extension-carrying requests are always rebuilt fresh.
     private string BuildCallerHash(GetInstanceDataInput input) =>
