@@ -415,4 +415,35 @@ public class SchemaComponentValidatorTests
         result.ValidationErrors.ShouldContain(e =>
             e.MemberNames.Contains("schema.x-encryption.roles") && e.ErrorMessage!.Contains("exemption list"));
     }
+
+    [Fact]
+    public void Validate_WhenXMaskingExemptionListsEveryone_ShouldFail()
+    {
+        var result = _validator.Validate(MasterSchema(
+            "\"iban\":{\"type\":\"string\",\"x-masking\":{\"operator\":\"mask\",\"roles\":[{\"role\":\"$Everyone\",\"grant\":\"allow\"}]}}"));
+
+        result.IsValid.ShouldBeFalse();
+        result.ValidationErrors.ShouldContain(e =>
+            e.MemberNames.Contains("schema.x-masking.roles") && e.ErrorMessage!.Contains("would exempt every caller"));
+    }
+
+    [Fact]
+    public void Validate_WhenXEncryptionExemptionListsEveryone_ShouldFail()
+    {
+        var result = _validator.Validate(MasterSchema(
+            "\"e\":{\"type\":\"string\",\"x-encryption\":{\"type\":\"encrypt\",\"roles\":[{\"role\":\"$Everyone\",\"grant\":\"allow\"}]}}"));
+
+        result.IsValid.ShouldBeFalse();
+        result.ValidationErrors.ShouldContain(e =>
+            e.MemberNames.Contains("schema.x-encryption.roles") && e.ErrorMessage!.Contains("would exempt every caller"));
+    }
+
+    [Fact]
+    public void Validate_WhenXRolesDeniesEveryone_ShouldPass()
+    {
+        var result = _validator.Validate(MasterSchema(
+            "\"a\":{\"type\":\"string\",\"x-roles\":[{\"role\":\"$Everyone\",\"grant\":\"deny\"}]}"));
+
+        result.IsValid.ShouldBeTrue(string.Join(" | ", result.ValidationErrors.Select(e => e.ErrorMessage)));
+    }
 }

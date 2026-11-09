@@ -63,6 +63,7 @@ public sealed class RowSecurityDefinitionRulesTests
         { """{"rules":[{"roles":["branch-staff","$InstanceStarter"]}]}""", "RS-E04" },
         { """{"rules":[{"roles":["$InstanceStarter","$InstanceBehalfOfStarter"]}]}""", "RS-E04" },
         { """{"rules":[{"roles":["$Whatever"]}]}""", "RS-E05" },
+        { """{"rules":[{"roles":["$Everyone"]}]}""", "RS-E05" },
         { """{"rules":[{"roles":["a"],"filter":{"attributes":{"x":{"eq":"$InstanceStarter"}}}}]}""", "RS-E06" },
         { """{"rules":[{"roles":["a"],"filter":{"attributes":{"x":{"eq":"$.context.Route.x"}}}}]}""", "RS-E07" },
         { """{"rules":[{"roles":["a"],"filter":{"attributes":{"x":{"eq":"$.context.Query.x"}}}}]}""", "RS-E07" },
@@ -91,6 +92,10 @@ public sealed class RowSecurityDefinitionRulesTests
     [MemberData(nameof(ErrorCases))]
     public void Validate_ReportsExactlyTheExpectedError(string json, string code) =>
         Codes(json).ShouldBe([code]);
+
+    [Fact]
+    public void EveryoneInARule_IsE05() =>
+        Codes("""{"rules":[{"roles":["$Everyone"]}]}""").ShouldBe(["RS-E05"]);
 
     public static TheoryData<string, string> WarningCases => new()
     {
