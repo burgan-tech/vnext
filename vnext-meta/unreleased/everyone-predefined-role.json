@@ -1,6 +1,6 @@
 {
   "releaseNote": {
-    "summary": "Adds the $Everyone predefined role, which matches every caller, so deny $Everyone hides a field or transition from all and allow $Everyone opens it to all.",
+    "summary": "Adds the $Everyone predefined role, matching every caller: deny hides from all, allow opens to all. A static role literally named $Everyone now means every caller.",
     "breaking": false,
     "docs": []
   },

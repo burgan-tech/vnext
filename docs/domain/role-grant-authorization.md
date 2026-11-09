@@ -101,7 +101,7 @@ empty grant set → allowed
 5. **A caller with no roles cannot clear a role-bound deny.** A static role (`blocked`) or a
    `$role.$.context…` reference is a statement about the caller's *roles*; with none to compare,
    "nothing matched" is not evidence that the caller is not the denied one, so the deny refuses.
-   Identity-bound denies — the four predefined roles and `$user.` / `$userBehalfOf.` — match on the
+   Identity-bound denies — the predefined roles and `$user.` / `$userBehalfOf.` — match on the
    caller's identity, not its roles, and keep their normal evaluation. Stated precisely this is the
    three-valued rule of [Combinators](#combinators-allof--anyof): a role-bound leaf is *Unknown* for a
    role-less caller, and a deny fires on Yes **or** Unknown.
@@ -256,7 +256,7 @@ Shape rules, enforced at publish (`RoleGrantDefinitionRules`) and when a schema'
 
 A condition does not always have a yes/no answer. A **role-bound leaf** (a static role or a `$role.`
 reference) is a statement about the caller's *roles*; for a caller with no roles it is neither
-proven nor disproven, so it is **Unknown**. **Identity leaves** — the four predefined roles, `$user.`
+proven nor disproven, so it is **Unknown**. **Identity leaves** — the predefined roles, `$user.`
 and `$userBehalfOf.` — compare the caller's identity, so they are always **Yes** or **No**. On the
 no-instance path (no instance to read the starter or history from) an identity leaf is **No**; `$Everyone`
 reads nothing from an instance and stays **Yes** there too.
@@ -327,7 +327,8 @@ override naming `$InstanceStarter` therefore means the *child's* starter, not th
 
 `$Everyone` is an identity leaf that is **Yes for every caller**: with or without roles, with or without an
 instance loaded. So `deny $Everyone` refuses everybody and `allow $Everyone` admits everybody. A caller
-that holds a role literally named `$Everyone` changes nothing, the decision is made on the grant side.
+that holds a role literally named `$Everyone` changes nothing for a `$Everyone` grant, the decision is made on
+the grant side; what changes is a grant that used to target a static role named `$Everyone` (see below).
 
 - Accepted on every role-grant surface (`transition.roles`, `queryRoles`, `availableIn[].roles`, function
   `roles`, subflow overrides, schema `x-roles`) and as a combinator child.
