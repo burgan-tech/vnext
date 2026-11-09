@@ -465,6 +465,42 @@ public sealed class EfCoreInstanceRepository(
             instanceId, InstanceStatus.Busy, InstanceStatus.Active, cancellationToken, effectiveStatus);
 
     /// <inheritdoc />
+    public async Task<bool> TryClaimContinuationAsync(
+        Guid instanceId,
+        string expectedState,
+        DateTime utcNow,
+        TimeSpan ttl,
+        CancellationToken cancellationToken = default)
+    {
+        // One statement: the row lock Postgres takes for the UPDATE is what makes two racing
+        // updateData continuations see each other — the second one re-evaluates the WHERE after the
+        // first commits and finds the claim taken (or the state already moved on).
+        var staleBefore = utcNow - ttl;
+        var affected = await (await GetDbSetAsync())
+            .Where(i => i.Id == instanceId
+                        && i.Status == InstanceStatus.Busy
+                        && i.CurrentState == expectedState
+                        && (EF.Property<DateTime?>(i, InstanceContinuationClaim.ColumnName) == null
+                            || EF.Property<DateTime?>(i, InstanceContinuationClaim.ColumnName) < staleBefore))
+            .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(i => EF.Property<DateTime?>(i, InstanceContinuationClaim.ColumnName), utcNow),
+                cancellationToken);
+
+        return affected == 1;
+    }
+
+    /// <inheritdoc />
+    public async Task ReleaseContinuationClaimAsync(Guid instanceId, CancellationToken cancellationToken = default)
+    {
+        await (await GetDbSetAsync())
+            .Where(i => i.Id == instanceId
+                        && EF.Property<DateTime?>(i, InstanceContinuationClaim.ColumnName) != null)
+            .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(i => EF.Property<DateTime?>(i, InstanceContinuationClaim.ColumnName), (DateTime?)null),
+                cancellationToken);
+    }
+
+    /// <inheritdoc />
     public async Task SetEffectiveStatusAsync(
         Guid instanceId,
         InstanceStatus effectiveStatus,

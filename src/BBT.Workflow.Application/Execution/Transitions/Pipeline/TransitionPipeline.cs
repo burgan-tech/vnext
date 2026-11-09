@@ -281,7 +281,10 @@ public class TransitionPipeline
     {
         var context = initialContext;
         var hop = 0;
+        var continuationClaimHeld = false;
 
+        try
+        {
         while (true)
         {
             hop++;
@@ -348,6 +351,17 @@ public class TransitionPipeline
             // NO duplicate transition-record guard downstream to catch the loser — only the
             // per-hop policy checks do. Duplicate REQUESTS are stopped one layer up, by the
             // accept-time active-job guard inside the admission lock.
+            //
+            // Parked Busy has no owner, so the live-owner probe cannot tell two updateData
+            // executions of the SAME key apart (each excludes its own key): N children reporting
+            // "ready" within milliseconds all satisfied the gate and all took it over, running the
+            // same chain N times in parallel (measured: contract domain, all-documents-ready two to
+            // three times per contract, duplicated parent notifications and finalize calls). The
+            // takeover is therefore gated by a set-based continuation claim — Busy, still in the
+            // state this execution's auto transition leaves from, and no unexpired claim. One
+            // execution wins; the others drop, because the winner already advances from that state.
+            // The claim is released when this chain ends (it may park again in the same gate and a
+            // later signal must be able to move it); a crashed owner's claim expires after its TTL.
             var reservedForHandoff = false;
             if (context.Directives.NextTransition is { } handoff
                 && !context.OwnsStatus
@@ -358,8 +372,26 @@ public class TransitionPipeline
 
                 if (!handedOff && !await HasLiveTransitionOwnerAsync(context, cancellationToken))
                 {
-                    var takeover = await _admissionService.TakeOverAsync(context, cancellationToken);
-                    handedOff = takeover.IsSuccess;
+                    // The state this execution evaluated its auto gate in (an updateData targets $self,
+                    // so it is also the instance's persisted CurrentState). No state at all cannot
+                    // occur for a parked instance; keep the unclaimed takeover rather than stall.
+                    var stateKey = context.Current?.Key ?? context.Instance.CurrentState;
+                    var claimed = stateKey is null
+                        || await _instanceRepository.TryClaimContinuationAsync(
+                            context.InstanceId, stateKey, _clock.UtcNow,
+                            InstanceContinuationClaim.DefaultTtl, cancellationToken);
+
+                    if (claimed)
+                    {
+                        continuationClaimHeld = stateKey is not null;
+                        var takeover = await _admissionService.TakeOverAsync(context, cancellationToken);
+                        handedOff = takeover.IsSuccess;
+                    }
+                    else
+                    {
+                        _logger.UpdateDataContinuationClaimLost(
+                            context.InstanceId, context.TransitionKey, handoff.TransitionKey, stateKey);
+                    }
                 }
 
                 if (handedOff)
@@ -438,6 +470,28 @@ public class TransitionPipeline
                 return await FailChainAsync(context, nextContextResult.Error, cancellationToken);
 
             context = nextContextResult.Value!;
+        }
+        }
+        finally
+        {
+            if (continuationClaimHeld)
+                await ReleaseContinuationClaimAsync(initialContext.InstanceId);
+        }
+    }
+
+    /// <summary>
+    /// Clears this chain's continuation claim. Not bound to the request's cancellation: a cancelled
+    /// request must still release, or the gate stays closed until the claim's TTL.
+    /// </summary>
+    private async Task ReleaseContinuationClaimAsync(Guid instanceId)
+    {
+        try
+        {
+            await _instanceRepository.ReleaseContinuationClaimAsync(instanceId, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            _logger.UpdateDataContinuationClaimReleaseFailed(ex, instanceId);
         }
     }
 

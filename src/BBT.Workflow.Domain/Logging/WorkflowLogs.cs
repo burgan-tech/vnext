@@ -341,6 +341,36 @@ public static partial class WorkflowLogs
         string? errorCode);
 
     /// <summary>
+    /// Logs when an updateData execution found the instance parked Busy with no live owner but lost
+    /// the continuation claim to a concurrent updateData that satisfied the same auto gate. The
+    /// winner is already running the chain from the same state; running it a second time would
+    /// repeat every side effect of that chain.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10182,
+        Level = LogLevel.Information,
+        Message = "UpdateData {TransitionKey} on instance {InstanceId} lost the continuation claim for {NextTransitionKey} in state {StateKey}; a concurrent continuation owns it")]
+    public static partial void UpdateDataContinuationClaimLost(
+        this ILogger logger,
+        Guid instanceId,
+        string transitionKey,
+        string nextTransitionKey,
+        string? stateKey);
+
+    /// <summary>
+    /// Logs when clearing an updateData continuation claim failed. Harmless for correctness: the
+    /// claim expires after its TTL; until then a later continuation from the same state drops.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10183,
+        Level = LogLevel.Warning,
+        Message = "Failed to release the continuation claim on instance {InstanceId}; it expires after its TTL")]
+    public static partial void UpdateDataContinuationClaimReleaseFailed(
+        this ILogger logger,
+        Exception exception,
+        Guid instanceId);
+
+    /// <summary>
     /// Logs when the InstanceData write funnel could not acquire the per-instance FOR UPDATE
     /// row lock within lock_timeout — a concurrent writer held it for the whole wait budget.
     /// </summary>

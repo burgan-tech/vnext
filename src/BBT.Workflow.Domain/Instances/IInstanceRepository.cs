@@ -299,6 +299,33 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
         InstanceStatus? effectiveStatus = null);
 
     /// <summary>
+    /// Claims the right to continue a parked Busy instance from <paramref name="expectedState"/>:
+    /// a set-based compare-and-set on the instance row that succeeds only while the row is still
+    /// Busy in that state and no other execution holds an unexpired claim. Two <c>updateData</c>
+    /// executions that both find the auto gate satisfied race here, and exactly one wins; the loser
+    /// drops its continuation because the winner is already advancing from the same state.
+    /// </summary>
+    /// <param name="instanceId">The parked instance.</param>
+    /// <param name="expectedState">The state the caller's auto transition leaves from.</param>
+    /// <param name="utcNow">Claim timestamp.</param>
+    /// <param name="ttl">A claim older than this is treated as abandoned (a crashed owner), so the
+    /// gate can never stay closed for longer than the TTL.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>True when this call took the claim.</returns>
+    Task<bool> TryClaimContinuationAsync(
+        Guid instanceId,
+        string expectedState,
+        DateTime utcNow,
+        TimeSpan ttl,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Clears the continuation claim taken by <see cref="TryClaimContinuationAsync"/>. Called when
+    /// the claiming chain ends; best effort — an uncleared claim expires after its TTL.
+    /// </summary>
+    Task ReleaseContinuationClaimAsync(Guid instanceId, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Writes <see cref="Instance.EffectiveStatus"/> alone, for an ancestor whose own status does
     /// not change when the level below it moves. One single-column UPDATE, no aggregate load and no
     /// guard on the current value beyond "not terminal" — the row below is the authority here.
